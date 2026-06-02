@@ -1,6 +1,8 @@
 import * as Select from '@radix-ui/react-select';
-import { ChevronDown, UserPlus, X } from 'lucide-react';
+import { ChevronDown, Trash2, UserPlus } from 'lucide-react';
 import type { AgentDto } from '@silverhand/shared';
+import { AgentAvatar } from '@/components/AgentAvatar';
+import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 
 interface AgentPickerProps {
   candidates: AgentDto[];
@@ -13,24 +15,38 @@ interface AgentPickerProps {
 }
 
 /**
- * Shared channel/conversation agent picker: selected agents render as
- * removable chips, while the Select only offers not-yet-selected agents.
- * The caller owns filtering the candidate pool (all agents for channel
- * creation, channel members for conversation creation).
+ * Shared channel/conversation agent picker. Selected agents render as
+ * full-width rows (avatar + display name + monospace `@handle` + remove
+ * button); the Select dropdown offers not-yet-selected candidates with
+ * the same row layout — visually identical to the rows produced by
+ * `ManageMembersPopover` and `AddConversationMemberPopover`, so users
+ * see the same "member chip" vocabulary regardless of which surface
+ * they encounter it on.
+ *
+ * The caller still owns filtering the candidate pool (all agents for
+ * workspace creation, the workspace's agent members for channel
+ * creation). v1 is agent-only — humans join post-creation through the
+ * member-add popover; the picker name reflects that.
  */
 export function AgentPicker({
   candidates,
   value,
   onChange,
-  placeholder = '添加 agent…',
-  emptyText = '没有可用的 agent',
-  allSelectedText = '已添加全部 agent',
+  placeholder = '添加成员…',
+  emptyText = '没有可用的成员',
+  allSelectedText = '已添加全部成员',
   selectId,
 }: AgentPickerProps): JSX.Element {
   const byId = new Map(candidates.map(a => [a.id, a]));
   const selectedIds = value.filter((id, index) => value.indexOf(id) === index);
   const selectedSet = new Set(selectedIds);
   const available = candidates.filter(a => !selectedSet.has(a.id));
+
+  // Resolve avatars for the whole candidate pool — selected rows and
+  // dropdown items share the same map. The hook caches by
+  // `(id, avatar_url)` so the same agent rendered in both surfaces only
+  // fetches once.
+  const avatars = useAgentAvatarObjectUrls(candidates);
 
   const addAgent = (id: string): void => {
     if (!id || selectedSet.has(id)) return;
@@ -44,19 +60,63 @@ export function AgentPicker({
   return (
     <div className="flex flex-col gap-1.5">
       {selectedIds.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5">
+        <ul className="flex flex-col gap-1">
           {selectedIds.map(id => {
             const agent = byId.get(id);
-            const name = agent?.name ?? id.slice(0, 8);
+            if (!agent) {
+              // Lost reference (candidates rebuilt without this id) —
+              // render a minimal placeholder so the user can still
+              // remove the orphan from `value`.
+              return (
+                <li
+                  key={id}
+                  className="flex items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base px-2 py-1 text-text-muted"
+                >
+                  <span className="truncate text-sm">{id.slice(0, 8)}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeAgent(id)}
+                    aria-label={`移除 ${id.slice(0, 8)}`}
+                    className="ml-auto flex size-6 items-center justify-center rounded-[var(--chip-radius)] text-text-muted hover:bg-bg-hover hover:text-error"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </li>
+              );
+            }
+            const displayName = agent.display_name || agent.name;
             return (
-              <SelectedChip
+              <li
                 key={id}
-                name={name}
-                onRemove={() => removeAgent(id)}
-              />
+                className="flex items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base px-2 py-1"
+              >
+                <AgentAvatar
+                  runtime={agent.runtime}
+                  size={20}
+                  avatarObjectUrl={avatars.get(agent.id) ?? null}
+                  alt={displayName}
+                />
+                <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+                  <span className="truncate text-sm font-medium text-text-primary">
+                    {displayName}
+                  </span>
+                  <span className="truncate font-mono text-[11px] text-text-muted">
+                    @{agent.name}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removeAgent(id)}
+                  aria-label={`移除 @${agent.name}`}
+                  title="移除成员"
+                  className="ml-auto flex size-6 items-center justify-center rounded-[var(--chip-radius)] text-text-muted hover:bg-bg-hover hover:text-error"
+                >
+                  <Trash2 className="size-3.5" />
+                </button>
+              </li>
             );
           })}
-        </div>
+        </ul>
       ) : null}
 
       <Select.Root
@@ -91,18 +151,33 @@ export function AgentPicker({
               ) : available.length === 0 ? (
                 <PickerHint>{allSelectedText}</PickerHint>
               ) : (
-                available.map(a => (
-                  <Select.Item
-                    key={a.id}
-                    value={a.id}
-                    className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-text-primary outline-none data-[highlighted]:bg-bg-hover"
-                  >
-                    <Select.ItemText>@{a.name}</Select.ItemText>
-                    <span className="ml-auto text-[10px] text-text-muted">
-                      {a.runtime}
-                    </span>
-                  </Select.Item>
-                ))
+                available.map(a => {
+                  const displayName = a.display_name || a.name;
+                  return (
+                    <Select.Item
+                      key={a.id}
+                      value={a.id}
+                      className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-text-primary outline-none data-[highlighted]:bg-bg-hover"
+                    >
+                      <AgentAvatar
+                        runtime={a.runtime}
+                        size={18}
+                        avatarObjectUrl={avatars.get(a.id) ?? null}
+                        alt={displayName}
+                      />
+                      <Select.ItemText>
+                        <span className="flex min-w-0 items-baseline gap-1.5">
+                          <span className="truncate font-medium">
+                            {displayName}
+                          </span>
+                          <span className="truncate font-mono text-[11px] text-text-muted">
+                            @{a.name}
+                          </span>
+                        </span>
+                      </Select.ItemText>
+                    </Select.Item>
+                  );
+                })
               )}
             </Select.Viewport>
           </Select.Content>
@@ -117,27 +192,5 @@ function PickerHint({ children }: { children: string }): JSX.Element {
     <div className="px-2 py-2 text-center text-xs italic text-text-muted">
       {children}
     </div>
-  );
-}
-
-function SelectedChip({
-  name,
-  onRemove,
-}: {
-  name: string;
-  onRemove: () => void;
-}): JSX.Element {
-  return (
-    <span className="inline-flex items-center gap-1 rounded-[var(--chip-radius)] border border-accent-base bg-accent-soft px-2 py-0.5 text-xs text-text-primary">
-      @{name}
-      <button
-        type="button"
-        onClick={onRemove}
-        className="text-text-muted hover:text-text-primary"
-        aria-label={`移除 @${name}`}
-      >
-        <X className="size-3" />
-      </button>
-    </span>
   );
 }

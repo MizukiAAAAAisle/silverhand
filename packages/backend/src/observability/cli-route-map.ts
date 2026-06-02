@@ -49,6 +49,8 @@ export const CLI_INVOKE_ROUTES: readonly CliInvokeRoute[] = [
   // channel
   { method: 'POST', suffix: 'create-channel', noun: 'channel', verb: 'create' },
   { method: 'GET', suffix: 'list-channels', noun: 'channel', verb: 'list' },
+  // member
+  { method: 'POST', suffix: 'members', noun: 'member', verb: 'add' },
   // workspace
   { method: 'GET', suffix: 'list-workspaces', noun: 'workspace', verb: 'list' },
   // schedule

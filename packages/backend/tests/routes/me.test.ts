@@ -20,9 +20,9 @@ describe('/api/me + /api/users/:id/avatar', () => {
     t = null;
   });
 
-  it('GET /api/me returns the registered viewer profile', async () => {
-    t = buildTestApp();
-    const res = await http(t).get(apiPaths.me);
+	it('GET /api/me returns the registered viewer profile', async () => {
+		t = buildTestApp();
+		const res = await http(t).get(apiPaths.me);
     expect(res.status).toBe(200);
     const body = (await res.json()) as any;
     // The fixture pre-registers a `local` user (see tests/utils/db.ts).
@@ -33,8 +33,26 @@ describe('/api/me + /api/users/:id/avatar', () => {
     expect(body.name).toBe('local-test');
     expect(body.avatar_url).toBeNull();
     expect(body.registration_required).toBeUndefined();
-    expect(typeof body.created_at).toBe('number');
-  });
+		expect(typeof body.created_at).toBe('number');
+	});
+
+	it('GET /api/users lists registered human profiles', async () => {
+		t = buildTestApp();
+		const res = await http(t).get(apiPaths.users);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as any;
+		expect(body.users.map((u: any) => u.id)).toContain('local');
+		expect(body.users.map((u: any) => u.id)).toContain('teammate');
+		const local = body.users.find((u: any) => u.id === 'local');
+		expect(local).toMatchObject({
+			id: 'local',
+			name: 'local-test',
+			display_name: 'Local Test User',
+			avatar_url: null,
+		});
+		expect(typeof local.created_at).toBe('number');
+		expect(typeof local.updated_at).toBe('number');
+	});
 
   it('PATCH /api/me updates display_name', async () => {
     t = buildTestApp();

@@ -49,6 +49,7 @@ export const SYSTEM_SUBTYPES = [
   'mention_cc',
   'schedule_fire',
   'session_cleared',
+  'conversation_member_added',
   'rename',
   'task_create',
   'task_claim',
@@ -189,6 +190,29 @@ export const TaskSystemActorSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 export type TaskSystemActor = z.infer<typeof TaskSystemActorSchema>;
+
+export const ConversationMemberAddedMetadataSchema = z.object({
+  subtype: z.literal('conversation_member_added'),
+  actor_kind: z.enum(['user', 'agent', 'system']),
+  actor_id: z.string(),
+  actor_name: z.string(),
+  actor_display_name: z.string().nullable(),
+  member_kind: z.enum(['human', 'agent']),
+  member_id: z.string(),
+  member_name: z.string(),
+  member_display_name: z.string().nullable(),
+});
+export type ConversationMemberAddedMetadata = z.infer<
+  typeof ConversationMemberAddedMetadataSchema
+>;
+
+export function readConversationMemberAddedMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): ConversationMemberAddedMetadata | null {
+  if (!metadata) return null;
+  const parsed = ConversationMemberAddedMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data : null;
+}
 
 /**
  * Metadata shape for `task_create` / `task_claim` / `task_unclaim` /

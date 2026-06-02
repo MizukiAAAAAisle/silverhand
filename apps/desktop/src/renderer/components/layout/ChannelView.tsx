@@ -47,6 +47,7 @@ import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
 import { HoverPopover } from '@/components/chat/HoverPopover';
 import { useConversationMembers } from '@/features/conversations/useConversationMembers';
+import { AddConversationMemberPopover } from '@/features/conversations/AddConversationMemberPopover';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import {
   AppDropdownMenu,
@@ -190,6 +191,23 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
   }
   return <ActiveChannelView {...props} conversation={props.conversation} />;
 });
+
+/**
+ * Show the "+ add member" popover when the conversation can take
+ * one. Channels and threads both support adding (a thread inherits
+ * its parent channel's workspace and has its own membership row);
+ * DM channels are single-pair by definition. Closed conversations
+ * are gated out — the route would also reject with
+ * `conversation_closed`, but hiding the trigger keeps the surface
+ * intentional.
+ */
+function canAddMember(
+  conv: { kind: 'channel' | 'dm_channel' | 'thread' },
+  closed: boolean,
+): boolean {
+  if (closed) return false;
+  return conv.kind === 'channel' || conv.kind === 'thread';
+}
 
 // Split out so the React-Query hooks below only mount once a channel
 // exists — keeps hook order stable across the null transition.
@@ -399,6 +417,12 @@ function ActiveChannelView({
               {parentTitle ?? conversation.title}
             </span>
             {memberStrip}
+            {canAddMember(conversation, closed) ? (
+              <AddConversationMemberPopover
+                workspaceId={conversation.workspace_id}
+                conversationId={conversation.id}
+              />
+            ) : null}
             {onJumpToOriginal && anchorMessageId ? (
               <button
                 type="button"
@@ -422,6 +446,12 @@ function ActiveChannelView({
               {conversation.title}
             </span>
             {memberStrip}
+            {canAddMember(conversation, closed) ? (
+              <AddConversationMemberPopover
+                workspaceId={conversation.workspace_id}
+                conversationId={conversation.id}
+              />
+            ) : null}
             {parentTitle ? (
               <span className="flex min-w-0 items-center gap-1 truncate text-xs text-text-muted">
                 <CornerDownRight className="size-3 shrink-0 text-text-muted/60" />

@@ -20,6 +20,7 @@ import { messageCommands } from './message.js';
 import { taskCommands } from './task.js';
 import { threadCommands } from './thread.js';
 import { channelCommands } from './channel.js';
+import { memberCommands } from './member.js';
 import { workspaceCommands } from './workspace.js';
 import { scheduleCommands } from './schedule.js';
 import { fileCommands } from './file.js';
@@ -118,6 +119,12 @@ export const COMMAND_GROUPS: readonly NounGroup[] = [
     noun: 'channel',
     summary: 'Create or list top-level channels in a workspace.',
     commands: channelCommands,
+  },
+  {
+    noun: 'member',
+    summary:
+      'Add an existing workspace member to the current conversation (channel or thread).',
+    commands: memberCommands,
   },
   {
     noun: 'workspace',

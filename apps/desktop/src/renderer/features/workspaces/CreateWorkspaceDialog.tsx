@@ -85,7 +85,7 @@ export function CreateWorkspaceDialog({
         <DialogHeader>
           <DialogTitle>新建 Workspace</DialogTitle>
           <DialogDescription>
-            一个 Workspace 是一个本地工作目录上的多 agent 协作空间。创建后会自动开一个 Onboarding Channel，你在里面通过对话塑造每个 agent 的角色。
+            一个 Workspace 是一个本地工作目录上的协作空间。创建后会自动开一个 Onboarding Channel，你在里面通过对话塑造每个成员的角色。
           </DialogDescription>
         </DialogHeader>
 
@@ -169,7 +169,7 @@ export function CreateWorkspaceDialog({
             </Label>
             {agents.length === 0 ? (
               <span className="text-xs text-text-muted">
-                还没有 agent。可以稍后从 Members 面板加入。
+                还没有可添加的成员。可以稍后从 Members 面板加入。
               </span>
             ) : (
               <AgentPicker
@@ -179,10 +179,10 @@ export function CreateWorkspaceDialog({
                 onChange={setSelectedAgents}
                 placeholder={
                   selectedAgents.length === 0
-                    ? '选择初始 agent…'
-                    : '继续添加 agent…'
+                    ? '选择初始成员…'
+                    : '继续添加成员…'
                 }
-                allSelectedText="已添加全部 agent"
+                allSelectedText="已添加全部成员"
               />
             )}
           </div>

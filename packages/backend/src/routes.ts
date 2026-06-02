@@ -7,6 +7,8 @@ import {
   authPaths,
   internalPaths,
   probePaths,
+  AddConversationMemberByHandleInputSchema,
+  AddConversationMemberInputSchema,
   AddWorkspaceMemberInputSchema,
   AgentCloseThreadInputSchema,
   AgentCreateChannelInputSchema,
@@ -57,6 +59,7 @@ import {
   type AgentReadHistoryDto,
   type AgentSearchMessageHit,
   type AgentSearchMessagesDto,
+  type AddConversationMemberInput,
   type HostStatusResponse,
   type MessageRef,
   type MessageRow,
@@ -65,6 +68,7 @@ import {
   type ReadHistoryTarget,
   type ReadHistoryTargetRef,
   type SendMessageTarget,
+  type UserDto,
   systemSubtype,
   TEMP_CONVERSATION_DEBUG_WINDOW_MS,
   type AgentMaterializationStatus,
@@ -141,7 +145,9 @@ import {
 } from './runtime/agent-runtime-host.js';
 import {
   type AppEnv,
+  type Principal,
   getAgentPrincipal,
+  getPrincipal,
   getUserPrincipal,
   installInternalPrincipalMiddleware,
   installPublicPrincipalMiddleware,
@@ -155,6 +161,7 @@ import {
 import { UserAuthService } from './auth/user-auth-service.js';
 import {
   canAgentAccessWorkspace,
+  canAddConversationMember,
   canDeleteAttachment,
   canEditAgent,
   canManageMembers,
@@ -828,6 +835,363 @@ function scheduleServiceErrorResponse(c: Context, err: unknown): Response | null
 
 function requireViewerUserId(c: Context): string {
   return resolveViewerUserId(c);
+}
+
+function listWorkspaceHumanMemberDtos(
+  ctx: BackendContext,
+  workspaces: WorkspaceRepo,
+  workspaceId: string,
+): UserDto[] {
+  return workspaces
+    .listUserMembers(workspaceId)
+    .map(row => ctx.userService.getDto(row.id))
+    .filter((user): user is UserDto => user !== null);
+}
+
+function workspaceMembersResponse(
+  ctx: BackendContext,
+  workspaces: WorkspaceRepo,
+  workspaceId: string,
+) {
+  return {
+    members: workspaces.listMembers(workspaceId),
+    human_members: listWorkspaceHumanMemberDtos(ctx, workspaces, workspaceId),
+  };
+}
+
+type ResolvedConversationMemberInput =
+  | { kind: 'agent'; agent_id: string }
+  | { kind: 'human'; user_id: string };
+
+function normalizeMemberHandle(handle: string): string {
+  return handle.trim().replace(/^@/, '');
+}
+
+function resolveConversationMemberInput(
+  c: Context,
+  deps: {
+    agents: AgentRepo;
+    users: UserRepo;
+    workspaces: WorkspaceRepo;
+  },
+  input: {
+    workspaceId: string;
+    member: AddConversationMemberInput;
+  },
+): { ok: true; member: ResolvedConversationMemberInput } | { ok: false; response: Response } {
+  if (!('handle' in input.member)) {
+    return { ok: true, member: input.member };
+  }
+
+  const handle = normalizeMemberHandle(input.member.handle);
+  const candidates: Array<{
+    kind: 'agent' | 'human';
+    id: string;
+    display_name: string;
+    handle: string;
+    workspaceMember: boolean;
+  }> = [];
+
+  const agent = deps.agents.getByName(handle);
+  if (agent) {
+    candidates.push({
+      kind: 'agent',
+      id: agent.id,
+      display_name: agent.display_name,
+      handle: `@${agent.name}`,
+      workspaceMember: deps.workspaces.isMember(input.workspaceId, agent.id),
+    });
+  }
+
+  const user = deps.users.getByName(handle);
+  if (user) {
+    candidates.push({
+      kind: 'human',
+      id: user.id,
+      display_name: user.display_name,
+      handle: `@${user.name}`,
+      workspaceMember: deps.workspaces.isUserMember(input.workspaceId, user.id),
+    });
+  }
+
+  if (candidates.length === 0) {
+    return {
+      ok: false,
+      response: c.json({ error: 'candidate not found', code: 'candidate_not_found' }, 404),
+    };
+  }
+
+  const workspaceCandidates = candidates.filter(candidate => candidate.workspaceMember);
+  if (workspaceCandidates.length === 0) {
+    return {
+      ok: false,
+      response: c.json(
+        {
+          error: 'candidate is not a member of this workspace',
+          code: 'workspace_membership_required',
+        },
+        422,
+      ),
+    };
+  }
+
+  if (workspaceCandidates.length > 1) {
+    return {
+      ok: false,
+      response: c.json(
+        {
+          error: 'handle is ambiguous',
+          code: 'handle_ambiguous',
+          candidates: workspaceCandidates.map(candidate => ({
+            kind: candidate.kind,
+            id: candidate.id,
+            display_name: candidate.display_name,
+            handle: candidate.handle,
+          })),
+        },
+        422,
+      ),
+    };
+  }
+
+  const candidate = workspaceCandidates[0];
+  if (!candidate) {
+    throw new Error('resolveConversationMemberInput: expected exactly one workspace candidate');
+  }
+  return {
+    ok: true,
+    member: candidate.kind === 'agent'
+      ? { kind: 'agent', agent_id: candidate.id }
+      : { kind: 'human', user_id: candidate.id },
+  };
+}
+
+type ConversationMemberAddedActorSnapshot = {
+  kind: 'user' | 'agent' | 'system';
+  id: string;
+  name: string;
+  displayName: string | null;
+};
+
+type ConversationMemberAddedMemberSnapshot = {
+  kind: 'human' | 'agent';
+  id: string;
+  name: string;
+  displayName: string | null;
+};
+
+function conversationMemberAddedActorSnapshot(
+  deps: { agents: AgentRepo; users: UserRepo },
+  principal: Principal,
+): ConversationMemberAddedActorSnapshot {
+  if (principal.kind === 'agent') {
+    const agent = deps.agents.get(principal.agentId);
+    return {
+      kind: 'agent',
+      id: principal.agentId,
+      name: agent?.name ?? principal.agentId,
+      displayName: agent?.display_name ?? null,
+    };
+  }
+  if (principal.kind === 'user') {
+    const user = deps.users.get(principal.userId);
+    return {
+      kind: 'user',
+      id: principal.userId,
+      name: user?.name ?? principal.userId,
+      displayName: user?.display_name ?? null,
+    };
+  }
+  return {
+    kind: 'system',
+    id: 'system',
+    name: 'system',
+    displayName: null,
+  };
+}
+
+function conversationMemberAddedAgentSnapshot(agent: {
+  id: string;
+  name: string;
+  display_name?: string | null;
+}): ConversationMemberAddedMemberSnapshot {
+  return {
+    kind: 'agent',
+    id: agent.id,
+    name: agent.name,
+    displayName: agent.display_name ?? null,
+  };
+}
+
+function conversationMemberAddedHumanSnapshot(
+  user: UserDto,
+): ConversationMemberAddedMemberSnapshot {
+  return {
+    kind: 'human',
+    id: user.id,
+    name: user.name,
+    displayName: user.display_name ?? null,
+  };
+}
+
+function conversationMemberAddedContent(input: {
+  actor: ConversationMemberAddedActorSnapshot;
+  member: ConversationMemberAddedMemberSnapshot;
+}): string {
+  return `${conversationMemberAddedLabel(input.actor)} added ${conversationMemberAddedLabel(input.member)} to this conversation.`;
+}
+
+function conversationMemberAddedLabel(
+  participant:
+    | ConversationMemberAddedActorSnapshot
+    | ConversationMemberAddedMemberSnapshot,
+): string {
+  return participant.kind === 'system' ? 'system' : `@${participant.name}`;
+}
+
+function conversationMemberAddedMetadata(input: {
+  actor: ConversationMemberAddedActorSnapshot;
+  member: ConversationMemberAddedMemberSnapshot;
+}): Record<string, unknown> {
+  return {
+    subtype: systemSubtype('conversation_member_added'),
+    actor_kind: input.actor.kind,
+    actor_id: input.actor.id,
+    actor_name: input.actor.name,
+    actor_display_name: input.actor.displayName,
+    member_kind: input.member.kind,
+    member_id: input.member.id,
+    member_name: input.member.name,
+    member_display_name: input.member.displayName,
+  };
+}
+
+function addConversationMember(
+  c: Context,
+  deps: {
+    ctx: BackendContext;
+    agents: AgentRepo;
+    users: UserRepo;
+    workspaces: WorkspaceRepo;
+    conversations: ConversationRepo;
+    messages: MessageRepo;
+    membership: MembershipService;
+  },
+  input: {
+    conversationId: string;
+    principal: Principal;
+    member: AddConversationMemberInput;
+  },
+): Response {
+  const conversation = deps.conversations.get(input.conversationId);
+  if (!conversation) return c.json({ error: 'conversation not found' }, 404);
+  if (conversation.kind !== 'channel' && conversation.kind !== 'thread') {
+    return c.json(
+      {
+        error: 'conversation members can only be added to channels or threads',
+        code: 'conversation_member_add_unsupported',
+      },
+      422,
+    );
+  }
+  if (conversation.closed_at !== null) {
+    return c.json({ error: 'conversation is closed', code: 'conversation_closed' }, 409);
+  }
+  if (!canAddConversationMember(deps.ctx, input.principal, conversation.id)) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const publishMembersChanged = (): void => {
+    deps.ctx.events.publish(conversation.id, {
+      kind: 'conversation_members_changed',
+      payload: {
+        conversation_id: conversation.id,
+        workspace_id: conversation.workspace_id,
+      },
+    });
+    deps.ctx.events.publishToScope(
+      `workspace:${conversation.workspace_id}`,
+      'workspace_channels_changed',
+      {
+        workspace_id: conversation.workspace_id,
+        channel_id: conversation.id,
+      },
+    );
+  };
+  const publishMemberAdded = (message: ReturnType<MessageRepo['insertForConversation']>): void => {
+    deps.ctx.events.publish(conversation.id, {
+      kind: 'message',
+      payload: { message },
+    });
+    publishMembersChanged();
+  };
+
+  const resolved = resolveConversationMemberInput(c, deps, {
+    workspaceId: conversation.workspace_id,
+    member: input.member,
+  });
+  if (!resolved.ok) return resolved.response;
+
+  if (resolved.member.kind === 'agent') {
+    const agent = deps.agents.get(resolved.member.agent_id);
+    if (!agent) {
+      return c.json({ error: 'agent not found', code: 'candidate_not_found' }, 404);
+    }
+    if (!deps.workspaces.isMember(conversation.workspace_id, agent.id)) {
+      return c.json(
+        {
+          error: 'agent is not a member of this workspace',
+          code: 'workspace_membership_required',
+        },
+        422,
+      );
+    }
+    const alreadyMember = deps.conversations.getAgent(conversation.id, agent.id) !== null;
+    if (!alreadyMember) {
+      const actor = conversationMemberAddedActorSnapshot(deps, input.principal);
+      const member = conversationMemberAddedAgentSnapshot(agent);
+      const message = deps.ctx.db.transaction(() => {
+        deps.conversations.addAgent(conversation.id, agent.id);
+        return deps.messages.insertForConversation({
+          conversationId: conversation.id,
+          fromKind: 'system',
+          content: conversationMemberAddedContent({ actor, member }),
+          metadata: conversationMemberAddedMetadata({ actor, member }),
+        });
+      })();
+      publishMemberAdded(message);
+    }
+    return c.json({ members: deps.membership.listMembers(conversation.id) });
+  }
+
+  const user = deps.ctx.userService.getDto(resolved.member.user_id);
+  if (!user) {
+    return c.json({ error: 'user not found', code: 'candidate_not_found' }, 404);
+  }
+  if (!deps.workspaces.isUserMember(conversation.workspace_id, user.id)) {
+    return c.json(
+      {
+        error: 'user is not a member of this workspace',
+        code: 'workspace_membership_required',
+      },
+      422,
+    );
+  }
+  const alreadyMember = deps.conversations.getUser(conversation.id, user.id) !== null;
+  if (!alreadyMember) {
+    const actor = conversationMemberAddedActorSnapshot(deps, input.principal);
+    const member = conversationMemberAddedHumanSnapshot(user);
+    const message = deps.ctx.db.transaction(() => {
+      deps.conversations.addUser(conversation.id, user.id);
+      return deps.messages.insertForConversation({
+        conversationId: conversation.id,
+        fromKind: 'system',
+        content: conversationMemberAddedContent({ actor, member }),
+        metadata: conversationMemberAddedMetadata({ actor, member }),
+      });
+    })();
+    publishMemberAdded(message);
+  }
+  return c.json({ members: deps.membership.listMembers(conversation.id) });
 }
 
 function publicSettingsSnapshot(settings: SettingsRepo): Record<string, string> {
@@ -2422,19 +2786,16 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
   });
 
-  app.get(apiPaths.workspaceMembers(':id'), c => {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'workspace id required' }, 400);
-    const workspace = workspaces.get(id);
-    if (!workspace) return c.json({ error: 'workspace not found' }, 404);
-    if (!canViewWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    if (workspace.workspace_kind === 'agent_home') {
-      return c.json({ members: [] });
-    }
-    return c.json({ members: workspaces.listMembers(workspace.id) });
-  });
+	app.get(apiPaths.workspaceMembers(':id'), c => {
+		const id = c.req.param('id');
+		if (!id) return c.json({ error: 'workspace id required' }, 400);
+		const workspace = workspaces.get(id);
+		if (!workspace) return c.json({ error: 'workspace not found' }, 404);
+		if (!canViewWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
+			return c.json({ error: 'forbidden' }, 403);
+		}
+		return c.json(workspaceMembersResponse(ctx, workspaces, workspace.id));
+	});
 
   app.post(apiPaths.workspaceMembers(':id'), async c => {
     const id = c.req.param('id');
@@ -2447,16 +2808,22 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json({ error: 'forbidden' }, 403);
     }
     const body = await c.req.json().catch(() => ({}));
-    const parsed = AddWorkspaceMemberInputSchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
-    }
-    // D4.e-3 — daemon-mediated L2 seed (I1/I6). Order is fixed (Cindy red
-    // line): fail-fast placement check, then seed L2 on the owning daemon,
-    // and ONLY on seed success insert the `workspace_members` row. A seed
-    // failure returns an error and writes no row — never a "member added but
-    // L2 not seeded" half-state. The backend writes no L2 itself.
-    const agent = agents.get(parsed.data.agent_id);
+		const parsed = AddWorkspaceMemberInputSchema.safeParse(body);
+		if (!parsed.success) {
+			return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+		}
+		if ('kind' in parsed.data && parsed.data.kind === 'human') {
+			const user = ctx.userService.getDto(parsed.data.user_id);
+			if (!user) return c.json({ error: 'user not found' }, 404);
+			const member = workspaces.addUserMember(workspace.id, user.id);
+			return c.json({ member, human_member: user }, 201);
+		}
+		// D4.e-3 — daemon-mediated L2 seed (I1/I6). Order is fixed (Cindy red
+		// line): fail-fast placement check, then seed L2 on the owning daemon,
+		// and ONLY on seed success insert the `workspace_members` row. A seed
+		// failure returns an error and writes no row — never a "member added but
+		// L2 not seeded" half-state. The backend writes no L2 itself.
+		const agent = agents.get(parsed.data.agent_id);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
     const hostId = workspace.workspace_host_id;
     try {
@@ -2925,6 +3292,29 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
     const members = membership.listMembers(conversation.id);
     return c.json({ members });
+  });
+
+  app.post(apiPaths.conversationMembers(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'conversation id required' }, 400);
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = AddConversationMemberInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    return addConversationMember(c, {
+      ctx,
+      agents,
+      users,
+      workspaces,
+      conversations,
+      messages,
+      membership,
+    }, {
+      conversationId: id,
+      principal: getPrincipal(c),
+      member: parsed.data,
+    });
   });
 
   app.get(apiPaths.threadMessages(':id'), c => {
@@ -5109,6 +5499,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   //   - PATCH /api/me only accepts `display_name`. Renaming is not
   //     exposed at any service / route surface.
   //   - Avatar lives on its own routes (POST/DELETE /api/me/avatar)
+  app.get(apiPaths.users, c => {
+    return c.json({ users: ctx.userService.listDtos() });
+  });
+
   app.get(apiPaths.me, c => {
     // Kept defensive for tests or future setup allowlists. Normal C.6+
     // public API traffic reaches this route with a session principal.
@@ -6166,6 +6560,8 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
   const conversations = new ConversationRepo(ctx.db);
   const messages = new MessageRepo(ctx.db);
   const workspaces = new WorkspaceRepo(ctx.db, { workspacesRoot: ctx.workspacesRoot });
+  const users = new UserRepo(ctx.db);
+  const membership = new MembershipService({ agents, users, conversations });
   const taskDeps = { ctx, agents, conversations, messages };
 
   app.use('/internal/conversations/:cid/agents/:aid/*', async (c, next) => {
@@ -6231,6 +6627,28 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
   });
 
   // ── canonical conversation-scoped MCP routes ───────────────────
+  app.post(internalPaths.agentAddConversationMember(':cid', ':aid'), async c => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = AddConversationMemberByHandleInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const principal = getAgentPrincipal(c);
+    return addConversationMember(c, {
+      ctx,
+      agents,
+      users,
+      workspaces,
+      conversations,
+      messages,
+      membership,
+    }, {
+      conversationId: principal.conversationId,
+      principal,
+      member: parsed.data,
+    });
+  });
+
   app.post(internalPaths.agentSendConversationMessage(':cid', ':aid'), async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');

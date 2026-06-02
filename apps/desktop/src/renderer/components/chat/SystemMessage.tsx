@@ -1,8 +1,19 @@
 import { useState, type ComponentType } from 'react';
-import { AtSign, CheckCircle2, ChevronRight, Clock, Quote, RotateCcw, RotateCw, Sprout } from 'lucide-react';
+import {
+  AtSign,
+  CheckCircle2,
+  ChevronRight,
+  Clock,
+  Quote,
+  RotateCcw,
+  RotateCw,
+  Sprout,
+  UserPlus,
+} from 'lucide-react';
 import {
   type ChannelContextMetadata,
   type ChildContextMetadata,
+  type ConversationMemberAddedMetadata,
   type MessageDto,
   type RenameMetadata,
   type ScheduleFireMetadata,
@@ -16,6 +27,7 @@ import {
   type UserDto,
   readChannelContextMetadata,
   readChildContextMetadata,
+  readConversationMemberAddedMetadata,
   readRenameMetadata,
   readScheduleFireMetadata,
   readSessionClearedMetadata,
@@ -1306,6 +1318,53 @@ function RenameRow(props: RendererProps): JSX.Element {
   );
 }
 
+// ─── conversation_member_added row ──────────────────────────────────────
+
+function ConversationMemberAddedRow(props: RendererProps): JSX.Element {
+  const meta = readConversationMemberAddedMetadata(
+    (props.message.metadata ?? null) as Record<string, unknown> | null,
+  );
+  if (!meta) {
+    return <GenericNarrationFallback {...props} />;
+  }
+  return (
+    <div
+      data-conversation-member-added="1"
+      className="flex flex-wrap items-center justify-center gap-1.5 px-4 py-1 text-text-muted"
+    >
+      <UserPlus aria-hidden className="size-3.5 shrink-0 opacity-60" />
+      <span className="text-text-secondary">
+        {participantLabel({
+          kind: meta.actor_kind,
+          name: meta.actor_name,
+          displayName: meta.actor_display_name,
+        })}
+      </span>
+      <span>added</span>
+      <span className="font-medium text-text-primary">
+        {participantLabel({
+          kind: meta.member_kind,
+          name: meta.member_name,
+          displayName: meta.member_display_name,
+        })}
+      </span>
+      <span>to this conversation</span>
+    </div>
+  );
+}
+
+function participantLabel(input: {
+  kind: ConversationMemberAddedMetadata['actor_kind']
+    | ConversationMemberAddedMetadata['member_kind'];
+  name: string;
+  displayName: string | null;
+}): string {
+  if (input.kind === 'system') return 'system';
+  const handle = `@${input.name}`;
+  const display = input.displayName?.trim();
+  return display && display !== input.name ? `${display} ${handle}` : handle;
+}
+
 // ─── Registry ──────────────────────────────────────────────────────────
 
 /**
@@ -1348,6 +1407,7 @@ const systemMessageRenderers: Record<SystemSubtype, SystemMessageRenderer> = {
   // metadata fall through to generic italic narration).
   onboarding: OnboardingRow,
   rename: RenameRow,
+  conversation_member_added: ConversationMemberAddedRow,
   mention_cc: MentionCcCard,
   thread_summary: ThreadSummaryCard,
 };

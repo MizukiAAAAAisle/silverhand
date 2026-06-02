@@ -223,10 +223,16 @@ describe('workspace metadata and membership routes', () => {
       { agent_id: agentId },
     );
     expect(add.status).toBe(201);
+    const taggedAdd = await http(t).post(
+      `/api/workspaces/${workspace.workspace.id}/members`,
+      { kind: 'agent', agent_id: agentId },
+    );
+    expect(taggedAdd.status).toBe(201);
     const list1 = await (
       await http(t).get(`/api/workspaces/${workspace.workspace.id}/members`)
     ).json() as any;
     expect(list1.members.map((m: any) => m.id)).toContain(agentId);
+    expect(list1.human_members.map((m: any) => m.id)).toContain('local');
 
     const rm = await http(t).del(
       `/api/workspaces/${workspace.workspace.id}/members/${agentId}`,
@@ -236,6 +242,56 @@ describe('workspace metadata and membership routes', () => {
       await http(t).get(`/api/workspaces/${workspace.workspace.id}/members`)
     ).json() as any;
     expect(list2.members.map((m: any) => m.id)).not.toContain(agentId);
+  });
+
+  it('adds human workspace members and returns them from the member list', async () => {
+    t = buildTestApp();
+    const workspace = await (
+      await http(t).post('/api/workspaces', { name: 'humans' })
+    ).json() as any;
+    // The test fixture mirrors every fixture user into new workspaces.
+    // Delete one row first so this route proves it can insert humans too.
+    t.ctx.db
+      .prepare(`DELETE FROM workspace_users WHERE workspace_id = ? AND user_id = ?`)
+      .run(workspace.workspace.id, 'teammate');
+
+    const before = await (
+      await http(t).get(`/api/workspaces/${workspace.workspace.id}/members`)
+    ).json() as any;
+    expect(before.human_members.map((m: any) => m.id)).not.toContain('teammate');
+
+    const add = await http(t).post(
+      `/api/workspaces/${workspace.workspace.id}/members`,
+      { kind: 'human', user_id: 'teammate' },
+    );
+    expect(add.status).toBe(201);
+    const addBody = await add.json() as any;
+    expect(addBody.member).toMatchObject({
+      workspace_id: workspace.workspace.id,
+      user_id: 'teammate',
+    });
+    expect(addBody.human_member).toMatchObject({
+      id: 'teammate',
+      name: 'teammate-test',
+      display_name: 'Teammate',
+    });
+
+    const after = await (
+      await http(t).get(`/api/workspaces/${workspace.workspace.id}/members`)
+    ).json() as any;
+    expect(after.human_members.map((m: any) => m.id)).toContain('teammate');
+  });
+
+  it('rejects adding an unknown human workspace member', async () => {
+    t = buildTestApp();
+    const workspace = await (
+      await http(t).post('/api/workspaces', { name: 'unknown-human' })
+    ).json() as any;
+    const res = await http(t).post(
+      `/api/workspaces/${workspace.workspace.id}/members`,
+      { kind: 'human', user_id: 'missing-user' },
+    );
+    expect(res.status).toBe(404);
   });
 });
 

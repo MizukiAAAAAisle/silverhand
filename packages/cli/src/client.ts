@@ -20,6 +20,7 @@ import {
   type AttachmentLocateDto,
   type ClaimTasksInput,
   type ClaimTasksResult,
+  type ConversationMembersResponse,
   type CreateTasksInput,
   type CreateTasksResult,
   type ScheduleCancelInput,
@@ -125,6 +126,31 @@ export class BackendClient {
     return this.request(
       'POST',
       internalPaths.agentCreateChannel(this.env.conversationId, this.env.agentId),
+      input,
+    );
+  }
+
+  /**
+   * Add an existing workspace member (agent or human) to the current
+   * conversation (channel or thread). Server-side handle resolution:
+   * the route resolves the handle against the conversation's workspace
+   * member set, so the CLI never needs to enumerate users / workspace
+   * members.
+   *
+   * The internal route (`POST /internal/conversations/:cid/agents/:aid/members`)
+   * accepts ONLY `{ handle }` — agents cannot supply `{kind,id}` because
+   * resolving an id would require the agent to enumerate the workspace
+   * roster first, which contradicts the bounded read surface invariant.
+   */
+  addConversationMember(input: {
+    handle: string;
+  }): Promise<ConversationMembersResponse> {
+    return this.request(
+      'POST',
+      internalPaths.agentAddConversationMember(
+        this.env.conversationId,
+        this.env.agentId,
+      ),
       input,
     );
   }

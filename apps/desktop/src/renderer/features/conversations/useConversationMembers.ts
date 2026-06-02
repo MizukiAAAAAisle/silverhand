@@ -1,10 +1,16 @@
-import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import {
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from '@tanstack/react-query';
 import {
   apiPaths,
   type ConversationMembersResponse,
   type MemberDto,
 } from '@silverhand/shared';
 import { ApiError, api } from '@/lib/api';
+import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
 
 export type ConversationMembersStatus =
   | 'loading'
@@ -67,10 +73,18 @@ export function mapConversationMembersResult(
  * human viewer (UI-self) by `kind === 'human' && user_id === viewer.id`.
  * This hook does not filter — it returns the full list so other
  * surfaces (popovers, "+N more" overlays) can render every member.
+ *
+ * Realtime invalidation: subscribes to `conversation:{id}` and
+ * invalidates the cache on `conversation_members_changed`. This means
+ * the renderer reseats the strip when a member is added by ANY route
+ * — the local renderer mutation, an agent's `silverhand member add`,
+ * or another window doing the same. `snapshot_required` for the same
+ * scope also triggers a refetch (epoch mismatch / replay gap).
  */
 export function useConversationMembers(
   id: string | null,
 ): ConversationMembersResult {
+  const qc = useQueryClient();
   const query = useQuery<ConversationMembersResponse, Error>({
     queryKey: id ? conversationMembersKey(id) : ['conversation-members', 'none'],
     enabled: !!id,
@@ -86,6 +100,25 @@ export function useConversationMembers(
       return failureCount < 2;
     },
   });
+
+  useEffect(() => {
+    if (!id) return;
+    const scope = `conversation:${id}`;
+    const sub = subscribeWsScope(scope);
+    const unsub = onWsFrame(frame => {
+      if (frame.type === 'event') {
+        if (frame.scope !== scope) return;
+        if (frame.kind !== 'conversation_members_changed') return;
+        void qc.invalidateQueries({ queryKey: conversationMembersKey(id) });
+      } else if (frame.type === 'snapshot_required' && frame.scope === scope) {
+        void qc.invalidateQueries({ queryKey: conversationMembersKey(id) });
+      }
+    });
+    return () => {
+      unsub();
+      sub.unsubscribe();
+    };
+  }, [id, qc]);
 
   return mapConversationMembersResult(id, query);
 }

@@ -18,6 +18,7 @@ type ToolName =
   | 'list_workspaces'
   | 'list_channels'
   | 'search_messages'
+  | 'add_member'
   | 'schedule'
   | 'list_schedules'
   | 'cancel_schedule';
@@ -38,6 +39,7 @@ const CLI_COMMANDS: Record<ToolName, string> = {
   list_workspaces: '`silverhand workspace list`',
   list_channels: '`silverhand channel list`',
   search_messages: '`silverhand message search`',
+  add_member: '`silverhand member add`',
   schedule: '`silverhand schedule create`',
   list_schedules: '`silverhand schedule list`',
   cancel_schedule: '`silverhand schedule cancel`',
@@ -136,6 +138,7 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const createThread = t('create_thread');
   const closeThread = t('close_thread');
   const createChannel = t('create_channel');
+  const addMember = t('add_member');
   const listTasks = t('list_tasks');
   const createTasks = t('create_tasks');
   const claimTasks = t('claim_tasks');
@@ -470,6 +473,37 @@ with all current channel members; it requires \`--title\`,
 \`--context-summary\`, and \`--initial-prompt\`. After calling it, send a
 visible message in the current channel announcing the new channel as
 \`#conv:<channel_id>\`.
+
+## Members (adding a participant to the current conversation)
+
+Use ${addMember} when you want to bring another existing workspace
+member into the conversation you are currently running in. The handle
+namespace is the same as \`@\`-mentions in chat — pass \`--handle <handle>\`
+with or without the leading \`@\`.
+
+\`\`\`bash
+silverhand member add --handle alice
+\`\`\`
+
+The candidate must already be a member of this conversation's
+workspace; the route resolves the handle server-side against the
+workspace member set, so you don't need (and can't) enumerate users
+or workspace members yourself. Use this CLI command — **do not** call
+the backend endpoint directly, that contract is reserved for the
+CLI surface.
+
+Restrictions in v1:
+- Target is always the current conversation — there is no \`--target\`
+  flag because agent tokens are scoped to a single \`(conversation, agent)\`
+  pair.
+- Only \`channel\` and \`thread\` conversations are supported. The
+  current conversation must be a channel or a thread — running this
+  command from a DM fails with
+  \`conversation_member_add_unsupported\`. To add a member to a
+  thread, run the command from inside that thread.
+- The candidate must already exist as a workspace member; if not, the
+  call fails with \`workspace_membership_required\`. Adding someone to
+  the workspace itself is a human-only surface today.
 
 ## Tasks (coordination primitive)
 

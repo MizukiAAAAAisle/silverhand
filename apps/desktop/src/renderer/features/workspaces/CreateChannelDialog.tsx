@@ -148,7 +148,7 @@ export function CreateChannelDialog({
 function DmMemberHint(): JSX.Element {
   return (
     <div className="rounded-md border border-border-subtle bg-bg-floating px-3 py-2 text-xs text-text-secondary">
-      DM Channel 会自动包含 Workspace 对应的 agent，无需选择成员。
+      DM Channel 会自动包含 Workspace 对应的成员，无需选择。
     </div>
   );
 }
@@ -165,9 +165,9 @@ function RegularMemberPicker({
   if (members.length === 0) {
     return (
       <div className="flex flex-col gap-1.5">
-        <Label>成员（Workspace 内的 agent）</Label>
+        <Label>成员</Label>
         <span className="text-xs text-text-muted">
-          这个 Workspace 还没有 agent 成员。先去 Members 面板加。
+          这个 Workspace 还没有成员。先去 Members 面板加。
         </span>
       </div>
     );
@@ -188,9 +188,9 @@ function RegularMemberPicker({
         value={selected}
         onChange={onChange}
         placeholder={
-          selected.length === 0 ? '选择要加入的 agent…' : '继续添加 agent…'
+          selected.length === 0 ? '选择要加入的成员…' : '继续添加成员…'
         }
-        allSelectedText="已添加全部 agent"
+        allSelectedText="已添加全部成员"
       />
     </div>
   );

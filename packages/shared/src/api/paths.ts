@@ -175,6 +175,7 @@ export const apiPaths = {
   // current viewer (the local human user). Pre-authentication the
   // endpoint returns the discriminated `RegistrationRequired` shape so
   // the renderer can mount the auth gate.
+  users: '/api/users',
   me: '/api/me',
   meAvatar: '/api/me/avatar',
   /** Public avatar fetch for any user. Returns the blob bytes (auth
@@ -237,6 +238,9 @@ export const internalPaths = {
   /** Agent searches messages visible from current/workspace/channel scope. */
   agentSearchMessages: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/search-messages`,
+  /** Agent adds an existing workspace member to its current channel. */
+  agentAddConversationMember: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/members`,
 
   // Canonical task endpoints used by the Silverhand CLI.
   agentListConversationTasks: (cid: string, aid: string) =>

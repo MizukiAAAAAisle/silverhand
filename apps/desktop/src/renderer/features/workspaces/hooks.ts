@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import type {
+  AddWorkspaceMemberInput,
   AgentDto,
   ArchivedChannelListItemDto,
   ChannelConversationDto,
@@ -12,7 +13,6 @@ import type {
   UpdateWorkspaceInput,
   UserDto,
   WorkspaceDto,
-  WorkspaceMemberDto,
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
@@ -416,13 +416,17 @@ export function useWorkspaceMemberLists(workspaceId: string | null) {
 export function useAddWorkspaceMember(workspaceId: string | null) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (agentId: string) => {
+    mutationFn: async (input: AddWorkspaceMemberInput) => {
       if (!workspaceId) throw new Error('no workspace selected');
-      const res = await api<{ member: WorkspaceMemberDto }>(
+      // Backend returns `{member, human_member}` for the human branch
+      // and `{member}` for both agent shapes (legacy `{agent_id}` and
+      // tagged `{kind:'agent', agent_id}`). Renderer doesn't need the
+      // exact response — it invalidates the workspace-members query so
+      // the next fetch reseats both `agents` and `humans`.
+      await api<unknown>(
         apiPaths.workspaceMembers(workspaceId),
-        { method: 'POST', body: JSON.stringify({ agent_id: agentId }) },
+        { method: 'POST', body: JSON.stringify(input) },
       );
-      return res.member;
     },
     onSuccess: () => {
       if (workspaceId) qc.invalidateQueries({ queryKey: membersKey(workspaceId) });

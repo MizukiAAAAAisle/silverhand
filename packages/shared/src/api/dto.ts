@@ -327,6 +327,11 @@ export const UserDtoSchema = z.object({
 });
 export type UserDto = z.infer<typeof UserDtoSchema>;
 
+export const UsersResponseSchema = z.object({
+  users: z.array(UserDtoSchema),
+});
+export type UsersResponse = z.infer<typeof UsersResponseSchema>;
+
 /**
  * Pre-authentication shape returned by `GET /api/me` when no user
  * session has been established yet. The renderer
@@ -916,6 +921,34 @@ export type ConversationMembersResponse = z.infer<
   typeof ConversationMembersResponseSchema
 >;
 
+const ConversationMemberHandleSchema = z
+  .string()
+  .trim()
+  .regex(/^@?[a-zA-Z0-9_-]{1,64}$/, {
+    message: 'handle must be @optional alphanumeric / dash / underscore',
+  });
+
+export const AddConversationMemberByIdInputSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('agent'),
+    agent_id: z.string(),
+  }),
+  z.object({
+    kind: z.literal('human'),
+    user_id: z.string(),
+  }),
+]);
+export const AddConversationMemberByHandleInputSchema = z.object({
+  handle: ConversationMemberHandleSchema,
+});
+export const AddConversationMemberInputSchema = z.union([
+  AddConversationMemberByIdInputSchema,
+  AddConversationMemberByHandleInputSchema,
+]);
+export type AddConversationMemberInput = z.infer<
+  typeof AddConversationMemberInputSchema
+>;
+
 export const ClearSessionResponseSchema = z.object({
   ok: z.literal(true),
   prev_cli_session_id: z.string().nullable(),
@@ -994,10 +1027,31 @@ export const ArchivedChannelsDtoSchema = z.object({
 export type ArchivedChannelsDto = z.infer<typeof ArchivedChannelsDtoSchema>;
 
 // ── Workspace membership ─────────────────────────────────────────
-export const AddWorkspaceMemberInputSchema = z.object({
+export const AddWorkspaceAgentMemberInputSchema = z.object({
   agent_id: z.string(),
 });
+export const AddWorkspaceTaggedAgentMemberInputSchema = z.object({
+  kind: z.literal('agent'),
+  agent_id: z.string(),
+});
+export const AddWorkspaceHumanMemberInputSchema = z.object({
+  kind: z.literal('human'),
+  user_id: z.string(),
+});
+export const AddWorkspaceMemberInputSchema = z.union([
+  AddWorkspaceTaggedAgentMemberInputSchema,
+  AddWorkspaceHumanMemberInputSchema,
+  AddWorkspaceAgentMemberInputSchema,
+]);
 export type AddWorkspaceMemberInput = z.infer<typeof AddWorkspaceMemberInputSchema>;
+
+export const WorkspaceMembersResponseSchema = z.object({
+  members: z.array(AgentDtoSchema),
+  human_members: z.array(UserDtoSchema),
+});
+export type WorkspaceMembersResponse = z.infer<
+  typeof WorkspaceMembersResponseSchema
+>;
 
 // Ephemeral per-agent run state used by `agent_activity` realtime events and
 // reconnect snapshots. These rows are not persisted to the messages DB.

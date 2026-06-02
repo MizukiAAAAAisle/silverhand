@@ -62,6 +62,7 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand thread close` | Close the current Thread. |
 | `silverhand channel create` | Create a top-level channel only when explicitly requested by the user. |
 | `silverhand channel list` | List channels, optionally for a workspace id. |
+| `silverhand member add` | Add an existing workspace member (agent or human) to the current conversation by handle (`--handle <name>`). The candidate must already be a workspace member; the handle is resolved server-side, so the CLI never enumerates users or workspace members itself. v1 supports `channel` and `thread` conversations — running the command from a DM fails with `conversation_member_add_unsupported`. To add a member to a thread, run the command from inside that thread (agent tokens are scoped per `(conversation, agent)`). |
 | `silverhand workspace list` | List workspaces the agent can access. |
 | `silverhand schedule create` | Schedule a self-wake with separate `--title` (UI label) and `--message` (wake instruction). Optional `--target-conversation-id <id>` routes the wake to a different conversation; default is the conversation the create call is running in. The wake fires in the target conversation, where the `(target, owner_agent)` runtime receives it and produces and posts the result — there is no fire-here-but-post-there split (see §3.3). |
 | `silverhand schedule list` | List this agent's schedules. |

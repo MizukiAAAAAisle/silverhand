@@ -170,6 +170,14 @@ export function canPostToConversation(
   return true;
 }
 
+export function canAddConversationMember(
+  ctx: BackendContext,
+  principal: Principal,
+  conversationId: string,
+): boolean {
+  return canViewConversation(ctx, principal, conversationId);
+}
+
 /**
  * Profile / avatar edit gate for an agent. v26 added
  * `agents.created_by_user_id` as the source of truth for this; v1
