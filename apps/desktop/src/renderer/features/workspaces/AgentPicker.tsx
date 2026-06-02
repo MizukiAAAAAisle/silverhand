@@ -15,13 +15,16 @@ interface AgentPickerProps {
 }
 
 /**
- * Shared channel/conversation agent picker. Selected agents render as
- * full-width rows (avatar + display name + monospace `@handle` + remove
- * button); the Select dropdown offers not-yet-selected candidates with
- * the same row layout — visually identical to the rows produced by
- * `ManageMembersPopover` and `AddConversationMemberPopover`, so users
- * see the same "member chip" vocabulary regardless of which surface
- * they encounter it on.
+ * Shared channel/conversation agent picker. The add-member Select
+ * trigger stays anchored at the top so it never drifts off-screen as
+ * the selected list grows; selected agents render below it as
+ * full-width rows (avatar + display name + monospace `@handle` +
+ * remove button), and the dropdown offers not-yet-selected candidates
+ * with the same row layout. Visually identical to the rows produced
+ * by `ManageMembersPopover` and `AddConversationMemberPopover`, which
+ * follow the same "input on top, candidates / members below" rule —
+ * so users see the same "member chip" vocabulary and the same
+ * layout grammar regardless of which surface they encounter it on.
  *
  * The caller still owns filtering the candidate pool (all agents for
  * workspace creation, the workspace's agent members for channel
@@ -59,66 +62,6 @@ export function AgentPicker({
 
   return (
     <div className="flex flex-col gap-1.5">
-      {selectedIds.length > 0 ? (
-        <ul className="flex flex-col gap-1">
-          {selectedIds.map(id => {
-            const agent = byId.get(id);
-            if (!agent) {
-              // Lost reference (candidates rebuilt without this id) —
-              // render a minimal placeholder so the user can still
-              // remove the orphan from `value`.
-              return (
-                <li
-                  key={id}
-                  className="flex items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base px-2 py-1 text-text-muted"
-                >
-                  <span className="truncate text-sm">{id.slice(0, 8)}</span>
-                  <button
-                    type="button"
-                    onClick={() => removeAgent(id)}
-                    aria-label={`移除 ${id.slice(0, 8)}`}
-                    className="ml-auto flex size-6 items-center justify-center rounded-[var(--chip-radius)] text-text-muted hover:bg-bg-hover hover:text-error"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
-                </li>
-              );
-            }
-            const displayName = agent.display_name || agent.name;
-            return (
-              <li
-                key={id}
-                className="flex items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base px-2 py-1"
-              >
-                <AgentAvatar
-                  runtime={agent.runtime}
-                  size={20}
-                  avatarObjectUrl={avatars.get(agent.id) ?? null}
-                  alt={displayName}
-                />
-                <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-                  <span className="truncate text-sm font-medium text-text-primary">
-                    {displayName}
-                  </span>
-                  <span className="truncate font-mono text-[11px] text-text-muted">
-                    @{agent.name}
-                  </span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => removeAgent(id)}
-                  aria-label={`移除 @${agent.name}`}
-                  title="移除成员"
-                  className="ml-auto flex size-6 items-center justify-center rounded-[var(--chip-radius)] text-text-muted hover:bg-bg-hover hover:text-error"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      ) : null}
-
       <Select.Root
         value=""
         onValueChange={v => {
@@ -183,6 +126,66 @@ export function AgentPicker({
           </Select.Content>
         </Select.Portal>
       </Select.Root>
+
+      {selectedIds.length > 0 ? (
+        <ul className="flex flex-col gap-1">
+          {selectedIds.map(id => {
+            const agent = byId.get(id);
+            if (!agent) {
+              // Lost reference (candidates rebuilt without this id) —
+              // render a minimal placeholder so the user can still
+              // remove the orphan from `value`.
+              return (
+                <li
+                  key={id}
+                  className="flex items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base px-2 py-1 text-text-muted"
+                >
+                  <span className="truncate text-sm">{id.slice(0, 8)}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeAgent(id)}
+                    aria-label={`移除 ${id.slice(0, 8)}`}
+                    className="ml-auto flex size-6 items-center justify-center rounded-[var(--chip-radius)] text-text-muted hover:bg-bg-hover hover:text-error"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </li>
+              );
+            }
+            const displayName = agent.display_name || agent.name;
+            return (
+              <li
+                key={id}
+                className="flex items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base px-2 py-1"
+              >
+                <AgentAvatar
+                  runtime={agent.runtime}
+                  size={20}
+                  avatarObjectUrl={avatars.get(agent.id) ?? null}
+                  alt={displayName}
+                />
+                <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+                  <span className="truncate text-sm font-medium text-text-primary">
+                    {displayName}
+                  </span>
+                  <span className="truncate font-mono text-[11px] text-text-muted">
+                    @{agent.name}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removeAgent(id)}
+                  aria-label={`移除 @${agent.name}`}
+                  title="移除成员"
+                  className="ml-auto flex size-6 items-center justify-center rounded-[var(--chip-radius)] text-text-muted hover:bg-bg-hover hover:text-error"
+                >
+                  <Trash2 className="size-3.5" />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
     </div>
   );
 }
