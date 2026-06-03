@@ -14,14 +14,15 @@
  * gate are two halves of the same "visible URL form must match the
  * host the daemon actually connects to" invariant.
  *
- * Why these tests live in the backend test runner:
- *   - `@silverhand/shared` is a host-agnostic types/utility package
- *     that ships no test config of its own.
- *   - The backend already imports from `@silverhand/shared` so its
- *     `vitest` config + better-sqlite3 ABI swap dance happens to be
- *     the convenient runner. The classifier itself has zero backend
- *     dependencies; this file is a *unit* test against the shared
- *     module, not a backend integration test.
+ * Why these tests live in the shared test runner:
+ *   - `@silverhand/shared` is a host-agnostic types/utility package;
+ *     contract tests against its modules belong in its own runner so
+ *     ownership and gate boundaries match. (Pre-#1 these were parked
+ *     under the backend runner because shared had no test config of
+ *     its own — that's no longer true.)
+ *   - The classifier itself has zero backend dependencies; this file
+ *     is a *unit* test against the shared module, not a backend
+ *     integration test.
  *
  * Coverage strategy:
  *   1. Every accepted loopback hostname variant + case normalization.

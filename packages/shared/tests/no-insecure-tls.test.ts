@@ -44,14 +44,14 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 // `import.meta.url` based root resolution: this test file lives at
-//   <repo-root>/packages/backend/tests/shared/no-insecure-tls.test.ts
-// so we walk up four levels to land on the repo root. If the file is
+//   <repo-root>/packages/shared/tests/no-insecure-tls.test.ts
+// so we walk up three levels to land on the repo root. If the file is
 // ever moved, this constant MUST be updated — the depth is hardcoded
 // rather than searching for a sentinel file because that's exactly
 // the kind of fragile auto-detection that breaks under workspaces.
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..');
+const REPO_ROOT = resolve(__dirname, '..', '..', '..');
 
 const PRODUCTION_PATHS: ReadonlyArray<string> = [
   'apps/desktop/src/main',

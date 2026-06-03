@@ -1,24 +1,54 @@
 # 测试
 
-后端可独立测试，**不依赖 Electron**。本文档说明运行方式、ABI 切换机制、目录结构与新增测试的约定。
+后端可独立测试，**不依赖 Electron**。本文档说明 gate 形态、ABI 切换机制、目录结构与新增测试的约定。
 
 ---
 
 ## 快速上手
 
 ```bash
-pnpm test                    # 默认：跑 backend 全部测试
-pnpm test -- --watch         # watch 模式
-pnpm test -- repos/conversation   # 只跑匹配文件
+pnpm test                         # 默认：全 gate（6 个包顺序跑，fail-fast）
+pnpm test --scope shared          # 只跑某一个包
+pnpm test --scope backend tests/foo.test.ts -t name   # 包内 targeted
 ```
 
-底层就是 `./scripts/test.sh`，它会：
+底层入口是 `./scripts/test.sh`：
 
-1. 检查 `node_modules/.native-binding-stamp`（记录当前 `better-sqlite3` 是为哪个 ABI 编译的）
-2. 如果 stamp ≠ `node-<当前 node 版本>`，自动 `node-gyp rebuild` 重编 `better-sqlite3`
-3. 跑 `pnpm --filter @silverhand/backend test`
+1. 在所有 vitest 跑起来之前，先把工作区根的 `better-sqlite3` 二进制 swap 成 system Node ABI（缓存命中时是 `cp`，未命中时一次 `node-gyp rebuild` 然后入缓存）
+2. 按下面的顺序 fan-out：
 
-第一次跑会触发重编（30s 左右），之后秒级。
+```
+shared → backend → server → host → cli → desktop
+```
+
+> shared 排第一是因为它是其他所有包的合同来源——shared 的 zod schema / classifier 一旦回归，下游 5 个包的失败都是噪音。
+
+`set -euo pipefail` 让任何一个包失败立即中止剩余的，CI 输出指向真正的根因。
+
+### `--scope`
+
+| Scope          | 跑什么                                |
+|----------------|---------------------------------------|
+| `shared`       | `@silverhand/shared` 合同测试         |
+| `backend`      | backend repos / routes / runtime / 等 |
+| `server`       | `@silverhand/server`                  |
+| `host`         | daemon + driver tests                 |
+| `cli`          | `silverhand` CLI                      |
+| `desktop`      | renderer + main 单测                  |
+| `all`（默认）  | 6 包顺序全跑                          |
+
+包内 targeted（vitest 参数透传）：
+
+```bash
+./scripts/test.sh --scope backend tests/smoke.test.ts
+./scripts/test.sh --scope host tests/spawn-daemon.test.ts -t 'pings'
+```
+
+### 为什么根 `pnpm test` 必须走 `scripts/test.sh`
+
+ABI swap 是工作区级别的副作用：`better-sqlite3` 的 `.node` 二进制只能为**一个** Node ABI 编译。如果有人直接 `pnpm --filter @silverhand/backend test` 而 swap 没跑过，就要么 dlopen 崩溃（electron ABI 在 system node 下被 SIGKILL），要么静默加载错 ABI 的二进制。把 swap 钉死在 `scripts/test.sh` 里、再让根 `pnpm test` 唯一通过它，使「跑任何 vitest 之前一定跑过 swap」成为不依赖调用习惯的不变量——这也是为什么根脚本不去委托给 `pnpm -r run test`。
+
+> 这条不变量也意味着：本地手动跑某个包的 watch 模式时，请用 `./scripts/test.sh --scope <pkg>` 或先 `./scripts/test.sh` 走过一次再 `pnpm --filter @silverhand/<pkg> test:watch`，不要直接 `pnpm --filter ... test:watch` 冷起步。
 
 ---
 
@@ -28,64 +58,68 @@ pnpm test -- repos/conversation   # 只跑匹配文件
 
 | 场景 | 运行时 | ABI |
 |------|--------|-----|
-| `pnpm dev`（Electron 主进程） | Electron 内置的 Node | electron 自己的版本 |
-| `pnpm test`（系统 node 跑 vitest） | 系统 Node 24 | 137 |
+| `pnpm dev`（Electron 主进程） | Electron 内置的 Node | electron 自己的 ABI |
+| `pnpm test`（系统 node 跑 vitest） | 系统 Node | 该 Node 主版本对应的 ABI |
 
-**两者不能共存**——同一个 `.node` 文件不可能同时满足。所以：
+两者不能共存——同一个 `.node` 文件不可能同时满足。所以：
 
-- `scripts/dev.sh` 会确保它编成 **Electron ABI**（`electron-rebuild`），并写 stamp `electron-<ver>`
-- `scripts/test.sh` 会确保它编成 **node ABI**（`node-gyp rebuild`），并写 stamp `node-<ver>`
+- `scripts/dev.sh` 会确保它编成 **Electron ABI**
+- `scripts/test.sh` 会确保它编成 **当前进程 Node ABI**
 
-两个脚本都先读 stamp 决定要不要重编，所以来回切换是「自动且幂等」的：跑完测试后再 `pnpm dev`，会自动重编回 Electron ABI。
+两个脚本都使用 `scripts/_native.sh` 里的 per-ABI 缓存：每个 ABI 的 `.node` 文件独立存在 `node_modules/.native-binding-cache/`，加上一个轻量的 `.active-abi` stamp 和 `.active-sha256` 哈希 sentinel——记录目前 swap 在 `BINDING` 位置的是哪个 ABI、当时的文件哈希是什么。来回切换是「自动且幂等」的：跑完测试后再 `pnpm dev`，会从缓存 `cp` 回 Electron ABI。
 
-> 历史教训：`pnpm exec npm rebuild` 在 pnpm 的 symlink 布局下是 **静默 no-op**，stamp 写了但 `.node` 没动。`test.sh` 现在直接进 `node_modules/.pnpm/better-sqlite3@*/...` 跑 `npx node-gyp@latest rebuild --release`。
+> 历史教训 1：`pnpm exec npm rebuild` 在 pnpm 的 symlink 布局下是 **静默 no-op**，stamp 写了但 `.node` 没动。`test.sh` 现在直接进 `node_modules/.pnpm/better-sqlite3@*/...` 跑 `npx -y node-gyp@^12.3.0 rebuild --release`（node-gyp 版本 pin 到 semver-compatible 主线，避免 `@latest` 飘移）。
+>
+> 历史教训 2：`pnpm install` 重新解压 prebuild 会从我们背后覆盖 `BINDING`。stamp 此时还是旧值，但实际文件已经换了。`_native.sh` 因此除了 stamp 之外，还在 swap 时写一份 `.active-sha256`；`ensure_binding` 启动时会把当前 `BINDING` 的 hash 跟它对，如果不一致就把 stamp 当作 stale 走重 swap 路径。
+>
+> 历史教训 3：macOS 上 `cp` 会失效 ad-hoc code signature，dlopen 时内核 SIGKILL，错误信息和 ABI mismatch 完全一样。`swap_in()` 在 Darwin 上会跟一次 `codesign --sign - --force`。
 
 ---
 
 ## 目录结构
 
+各包独立 vitest，配置都按 `tests/**/*.test.ts` 收（desktop 例外，它收 `src/{renderer,main}/**/*.test.ts`，因为 renderer/main 测试就近放在源码旁边）：
+
 ```
+packages/shared/                   # 跨包合同（zod / classifier / drift guard）
+└── tests/
+    ├── bind-address-scope.test.ts
+    ├── server-url.test.ts
+    ├── system-messages.test.ts
+    ├── tls-policy.test.ts
+    └── no-insecure-tls.test.ts    # 跨包源码扫描的安全策略 gate
+
 packages/backend/
 ├── tests/
 │   ├── utils/
 │   │   ├── db.ts             # in-memory DB + temp dir 夹具
-│   │   ├── app.ts            # Hono app + 假 ConversationManager + http() 包装
-│   │   ├── manager.ts        # 真 ConversationManager + 注入 mock-claude 二进制
-│   │   └── mock-claude.mjs   # 假 claude CLI（chmod +x，env 配置行为）
+│   │   ├── app.ts            # Hono app + FakeConversationManager + http() 包装
+│   │   └── manager.ts        # 真 ConversationManager + 注入 mock-claude 二进制
 │   ├── smoke.test.ts         # 验证测试基建本身
 │   ├── repos/                # L1：仓储层（直接打 in-memory SQLite）
-│   │   ├── host-repo.test.ts
-│   │   ├── agent-repo.test.ts
-│   │   ├── conversation-repo.test.ts
-│   │   ├── conversation-read-repo.test.ts
-│   │   ├── conversation-inbox-repo.test.ts
-│   │   ├── workspace-repo.test.ts
-│   │   ├── workspace-files.test.ts
-│   │   └── message-repo.test.ts
 │   ├── routes/               # L2：HTTP 层（app.fetch + 假 ConversationManager）
-│   │   ├── smoke.test.ts
-│   │   ├── agents.test.ts
-│   │   ├── channels.test.ts
-│   │   ├── workspace-conversation-routes.test.ts
-│   │   ├── tasks.test.ts
-│   │   └── internal.test.ts  # 含 auth-token 校验
-│   ├── manager/              # L3：ConversationManager + 真子进程（mock-claude）
-│   │   ├── smoke.test.ts
-│   │   └── lifecycle.test.ts # start / stop / exit / inbox drain / reconcile
+│   ├── runtime/              # L3：runtime host / dispatcher / fanout
+│   ├── services/             # L2：service 层
+│   ├── observability/        # CLI route map / system-message drift 等漂移 guard
 │   └── drivers/              # Driver 单元测试
-│       ├── codex.test.ts
-│       ├── cursor.test.ts
-│       └── platform-prompt.test.ts
 └── vitest.config.ts
+
+packages/server/tests/
+packages/host/tests/
+packages/cli/tests/
+└── subprocess/               # 真子进程 / 真 daemon 走的慢 lane
+apps/desktop/src/{renderer,main}/**/*.test.ts
 ```
 
 测试分层（参考 `docs/core-design.md` 的后端架构）：
 
 | 层 | 范围 | 状态 |
 |---|---|---|
+| **L0 跨包合同** | `@silverhand/shared` 里的纯函数（zod schema / classifier / drift guard） | ✅ |
 | **L1 Repos** | 单个 repo 直连 in-memory SQLite，验证 SQL / FK / 边界条件 | ✅ |
-| **L2 Routes** | `app.fetch(req)` 对真实 Hono 路由打请求，验证 HTTP 行为；ConversationManager 用假实现避免真 spawn | ✅ |
+| **L2 Routes / Services** | `app.fetch(req)` 对真实 Hono 路由打请求，验证 HTTP 行为；ConversationManager 用假实现避免真 spawn | ✅ |
 | **L3 ConversationManager** | 用 `mock-claude` 假二进制走 spawn → stdin → SSE → DB 全链路 | ✅ |
+| **L3 Daemon e2e** | `packages/host/tests/{e2e-socket,spawn-daemon}.test.ts`：真 socket / 真子进程 | ✅ |
 
 ---
 
@@ -104,11 +138,19 @@ afterEach(() => t.cleanup());
 
 每个 `openTestDb()` 都是独立的 `:memory:` 数据库，测试之间天然隔离。
 
+> ⚠️ Legacy fixture trigger：`openTestDb()` 默认会安装两个 trigger，把 fixture
+> users 自动灌进每个新建的 workspace/conversation 的 `*_users` 表——这是给
+> pre-rewrite 直 repo 测试兜底的兼容路径，**不是生产路径**。新写的、特别是
+> 涉及 membership/权限的测试请用 `openTestDb({ seedAllFixtureMemberships: false })`
+> 或对应的 `buildTestApp({ seedAllFixtureMemberships: false })`，并通过
+> service/route surface 显式建 membership——这才是和生产同路径，能真正捕获
+> "忘加 membership" 的回归。Legacy trigger 会随老测试逐批迁移最终拆除。
+
 L2 路由测试用 `tests/utils/app.ts`：
 
 ```ts
-const t = buildTestApp();          // Hono app + 假 ConversationManager + 临时 dir
-const h = http(t.app);             // get/post/del/json 包装
+const t = buildTestApp({ seedAllFixtureMemberships: false });   // strict fixture
+const h = http(t.app);
 const res = await h.post('/api/agents', { name: 'a', runtime: 'claude' });
 expect(res.status).toBe(201);
 
@@ -119,7 +161,10 @@ expect(t.fake.delivered[0]!.agentId).toBe(...);
 afterEach(() => t.cleanup());      // 关 DB + 删临时 dir
 ```
 
-`FakeConversationManager` 记录所有 `start` / `stop` / `deliverMessage` / `stopAll` 调用，但不会真的 spawn 子进程——L2 测的是路由本身，不是 ConversationManager。
+`FakeConversationManager` `implements AgentRuntimeHost`，记录所有 `start` /
+`stop` / `deliverMessage` / `stopAll` 调用——这条 `implements` 约束是显式的，
+runtime host 接口未来加方法时这里直接 typecheck fail，不能再用 `as unknown as`
+绕过。L2 测的是路由本身，不是 ConversationManager。
 
 L3 测试用 `tests/utils/manager.ts` + `mock-claude.mjs`：
 
@@ -142,11 +187,13 @@ afterEach(() => h.cleanup());
 
 ## 新增测试时的约定
 
-1. **FK 是真的开着的**（`PRAGMA foreign_keys = ON`）。涉及 `agent_id`、`conversation_id`、`message_id` 的字段必须用真实的行 id，不能传字符串字面量。需要 agent/conversation/message 时通过对应 repo 创建。
-2. **不要 mock SQLite**。`better-sqlite3` 同步、快、够用，mock 反而会掩盖 SQL 错误。
-3. **文件系统副作用**用 `makeTempSilverhandDir()`，`afterEach` 清理；不要写到真实 `~/.silverhand/`。
-4. **避免依赖 random id 的字典序**。base64url 随机 id 跨次运行排序不稳定，要断言顺序就显式控制（如 `UPDATE ... SET updated_at = updated_at - 1000`），或断言相对位置（`indexOf(parent) < indexOf(child)`）。
-5. **新文件必须以 `.test.ts` 结尾**才会被 vitest 收。
+1. **测试归属哪个包看依赖.** 如果只 import `@silverhand/shared`，是 L0 合同测试，放 `packages/shared/tests/`。涉及 backend 内部模块或路由 → 放 backend/tests。涉及真 daemon / 子进程 → 放 host/tests 或 cli/tests/subprocess/。renderer/main 单测放 `apps/desktop/src/...` 旁边。
+2. **FK 是真的开着的**（`PRAGMA foreign_keys = ON`）。涉及 `agent_id`、`conversation_id`、`message_id` 的字段必须用真实的行 id，不能传字符串字面量。需要 agent/conversation/message 时通过对应 repo 创建。
+3. **不要 mock SQLite**。`better-sqlite3` 同步、快、够用，mock 反而会掩盖 SQL 错误。
+4. **文件系统副作用**用 `makeTempSilverhandDir()`，`afterEach` 清理；不要写到真实 `~/.silverhand/`。
+5. **避免依赖 random id 的字典序**。base64url 随机 id 跨次运行排序不稳定，要断言顺序就显式控制（如 `UPDATE ... SET updated_at = updated_at - 1000`），或断言相对位置（`indexOf(parent) < indexOf(child)`）。
+6. **新文件必须以 `.test.ts` 结尾**才会被 vitest 收。
+7. **新增 membership/权限相关测试用 strict fixture（`seedAllFixtureMemberships: false`）**，并通过 service/route surface 建 membership。Legacy 默认 fixture 会把所有 user 灌进所有 workspace，这条路径能 trivially 屏蔽掉真实 bug。
 
 ---
 
