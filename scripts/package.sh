@@ -248,6 +248,13 @@ else
   ensure_binding "$ELECTRON_ABI" \
     "pnpm --filter @silverhand/desktop exec electron-rebuild -f -w better-sqlite3" \
     "package (electron $ELECTRON_VERSION)"
+
+  # electron-builder may materialize pnpm dependencies from its own package
+  # copy pipeline after our workspace-level swap. Keep a stable Electron-ABI
+  # snapshot for afterPack to restore into app.asar.unpacked right before
+  # signing, then verify the final app below.
+  export SILVERHAND_ELECTRON_BETTER_SQLITE3_BINDING="$CACHE_DIR/package-abi-$ELECTRON_ABI.node"
+  cp "$BINDING" "$SILVERHAND_ELECTRON_BETTER_SQLITE3_BINDING"
 fi
 
 BUILDER_CONFIG="electron-builder.yml"
@@ -264,6 +271,40 @@ else
   stage_dmgbuild_bundle
   echo "[package] running electron-builder"
   ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --config "$BUILDER_CONFIG" )
+fi
+
+verify_packaged_better_sqlite3() {
+  local app_path="$1"
+  local expected_abi="$2"
+  local electron_bin
+  electron_bin="$(node -p "require('path').join(require('path').dirname(require.resolve('electron/package.json', { paths: ['./apps/desktop'] })), 'dist/Electron.app/Contents/MacOS/Electron')" 2>/dev/null || true)"
+  if [[ -z "$electron_bin" || ! -x "$electron_bin" ]]; then
+    echo "[package] could not resolve Electron binary for native smoke" >&2
+    return 1
+  fi
+  if [[ ! -d "$app_path" ]]; then
+    echo "[package] packaged app missing for native smoke: $app_path" >&2
+    return 1
+  fi
+
+  local app_package_json="$app_path/Contents/Resources/app.asar/package.json"
+  echo "[package] verifying packaged better-sqlite3 under Electron ABI $expected_abi"
+  ELECTRON_RUN_AS_NODE=1 "$electron_bin" -e '
+    const { createRequire } = require("node:module");
+    const expectedAbi = process.argv[2];
+    if (process.versions.modules !== expectedAbi) {
+      throw new Error(`Electron ABI mismatch in smoke: expected ${expectedAbi}, got ${process.versions.modules}`);
+    }
+    const req = createRequire(process.argv[1]);
+    const Database = req("better-sqlite3");
+    new Database(":memory:").close();
+    console.log(`[package] packaged better-sqlite3 ok for ABI ${process.versions.modules}`);
+    process.exit(0);
+  ' "$app_package_json" "$expected_abi"
+}
+
+if [[ "$REMOTE_ONLY" != "1" ]]; then
+  verify_packaged_better_sqlite3 "$ROOT_DIR/apps/desktop/$ARTIFACT_OUTPUT_DIR/mac-arm64/Silverhand.app" "$ELECTRON_ABI"
 fi
 
 echo "[package] artifacts in apps/desktop/$ARTIFACT_OUTPUT_DIR/"
