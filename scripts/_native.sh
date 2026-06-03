@@ -14,7 +14,12 @@
 # Why no in-process probe of the .node file: loading an electron-ABI
 # binding under system node *crashes* the node process (SIGKILL, no JS
 # exception), so a probe-based design corrupts test.sh. The stamp file
-# is the single source of truth — both scripts coordinate through it.
+# is the primary coordination signal — but we *also* record the
+# binding's file size at swap time so we can detect when something
+# external (a fresh `pnpm install` re-extracting the Node-ABI prebuild,
+# a manual `pnpm rebuild`, etc.) has overwritten the .node file behind
+# our back. Without that check the stamp would lie and we'd happily
+# package the wrong ABI binding — burned an afternoon discovering this.
 #
 # Source this file from another script — it sets:
 #   BSQ_DIR     install dir of better-sqlite3 (inside .pnpm/...)
@@ -31,6 +36,15 @@ locate_binding() {
   BINDING="$BSQ_DIR/build/Release/better_sqlite3.node"
   CACHE_DIR="$ROOT_DIR/node_modules/.native-binding-cache"
   mkdir -p "$CACHE_DIR"
+}
+
+# _record_active <abi>: persist both the active ABI stamp and the
+# post-swap binding size. The size sidecar is what protects us from
+# stale stamps when an external `pnpm install` overwrites $BINDING.
+_record_active() {
+  local abi="$1"
+  echo "$abi" > "$CACHE_DIR/.active-abi"
+  stat -f%z "$BINDING" > "$CACHE_DIR/.active-size" 2>/dev/null || true
 }
 
 # swap_in <source>: copy <source> over $BINDING and (on macOS) re-sign,
@@ -54,17 +68,37 @@ ensure_binding() {
   local auto_probe="${4:-0}"
 
   local stamp_file="$CACHE_DIR/.active-abi"
+  local size_file="$CACHE_DIR/.active-size"
   local current=""
   [[ -f "$stamp_file" ]] && current="$(cat "$stamp_file" 2>/dev/null || true)"
   local cached="$CACHE_DIR/abi-$target.node"
 
-  # Stamp says we're already on target. Trust it (we'd have written it
-  # ourselves last time we touched the binding). Backfill the cache if
-  # we've never snapshotted this ABI yet.
+  # Stamp says we're on target. Also verify the binding hasn't been
+  # replaced behind our back (pnpm install re-extracting the prebuild
+  # is the common culprit): the size we recorded at swap time must
+  # still match. Mismatch → treat the stamp as stale and fall through
+  # to swap/build.
+  local stamp_trustworthy=0
   if [[ "$current" == "$target" ]] && [[ -f "$BINDING" ]]; then
+    local expected_size actual_size
+    expected_size="$(cat "$size_file" 2>/dev/null || true)"
+    actual_size="$(stat -f%z "$BINDING" 2>/dev/null || true)"
+    if [[ -n "$expected_size" ]] && [[ "$expected_size" == "$actual_size" ]]; then
+      stamp_trustworthy=1
+    fi
+  fi
+
+  if [[ "$stamp_trustworthy" == "1" ]]; then
     echo "[$label] better-sqlite3 binding already active for ABI $target — skip"
     [[ -f "$cached" ]] || cp "$BINDING" "$cached"
     return 0
+  fi
+
+  # Stamp was stale or absent. If we *had* a stamp but the size moved,
+  # tell the user — silent re-swap was how this bug hid for an afternoon.
+  if [[ "$current" == "$target" ]]; then
+    echo "[$label] active binding size changed since last swap (stamp says ABI $target but file was replaced — probably by pnpm install) — re-swapping"
+    current=""
   fi
 
   # Auto-probe path: only when our target equals the current process's
@@ -75,7 +109,7 @@ ensure_binding() {
     if node -e "const D=require('better-sqlite3'); new D(':memory:').close()" >/dev/null 2>&1; then
       echo "[$label] probed: existing binding works for ABI $target — adopting"
       cp "$BINDING" "$cached"
-      echo "$target" > "$stamp_file"
+      _record_active "$target"
       return 0
     fi
   fi
@@ -83,7 +117,7 @@ ensure_binding() {
   if [[ -f "$cached" ]]; then
     echo "[$label] swapping in cached binding for ABI $target (was: ${current:-none})"
     swap_in "$cached"
-    echo "$target" > "$stamp_file"
+    _record_active "$target"
     return 0
   fi
 
@@ -94,5 +128,5 @@ ensure_binding() {
     return 1
   fi
   cp "$BINDING" "$cached"
-  echo "$target" > "$stamp_file"
+  _record_active "$target"
 }
