@@ -186,6 +186,19 @@ export function AgentProfileCard({
                 {agent.display_name || agent.name}
               </div>
             )}
+            {/* Description as muted subtitle directly under the display
+                name. Different placement from PersonHero (which inlines
+                it after the name) — shiki #task:912 review round 6
+                clarification: in the Identity card the description should
+                sit on its own line below the name, then the handle line. */}
+            {agent.description ? (
+              <p
+                className="mt-1 px-2 truncate text-sm text-text-muted"
+                title={agent.description}
+              >
+                {agent.description}
+              </p>
+            ) : null}
             <div className="mt-1 flex items-center gap-1.5 px-2 text-xs text-text-muted">
               <span className="font-mono">@{agent.name}</span>
               <Lock className="size-3" />
@@ -241,6 +254,12 @@ export function AgentProfileCard({
                 onChange={e => setModel(e.target.value)}
                 onBlur={onCommitModel}
                 placeholder="driver default"
+                // `h-8` matches the sibling `RuntimeSelect` trigger
+                // height (also `h-8`). Without it the bare GhostInput
+                // collapses to its text height (~17.5px) and reads
+                // visibly shorter than the Select beside it in the
+                // 2-col grid (#task:912 review round 6 — shiki).
+                className="h-8"
               />
             ) : (
               <ReadOnlyValue value={agent.model} placeholder="driver default" />

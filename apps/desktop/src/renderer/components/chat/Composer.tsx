@@ -968,7 +968,7 @@ function PickerMenu({
     item => item.kind !== 'channel' && item.inConversation,
   );
   const inHeader =
-    routeKind === 'thread' ? 'IN THIS THREAD' : 'IN THIS CHANNEL';
+    routeKind === 'thread' ? 'THREAD' : 'CHANNEL';
   return (
     <div
       className="absolute bottom-full left-0 mb-1.5 w-64 max-h-64 overflow-y-auto rounded-md border border-border bg-bg-floating p-1 shadow-lg"
@@ -984,10 +984,10 @@ function PickerMenu({
               renders when the IN section is non-empty AND we haven't
               already passed it (i === 0 with at least one IN row). */}
           {i === 0 && hasInSection ? (
-            <SectionHeader label={inHeader} />
+            <SectionHeader label={`IN THIS ${inHeader}`} />
           ) : null}
           {i === headerBoundaryIndex ? (
-            <SectionHeader label="NOT IN" />
+            <SectionHeader label={`NOT IN THIS ${inHeader}`} />
           ) : null}
           <Row
             item={item}

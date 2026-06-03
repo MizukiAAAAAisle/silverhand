@@ -747,7 +747,6 @@ function MemberStrip({
               trigger="hover"
               side="bottom"
               align="end"
-              management
               avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
             >
               <button

@@ -122,6 +122,13 @@
   --border-row-hover: var(--accent);
   --border-row-selected: var(--accent);
 
+  /* ── Control hover border (#task:912 review round 3) ──
+     control surface (TaskFilterBar chip trigger 等) 的 hover 描边。warm
+     与 row hover 同源（accent），pixel-zero。slack-dark 才需要 control
+     单独走 `--border` 10% 白以避免行 hover 的 transparent 把 control
+     hover 抹平。 */
+  --border-control-hover: var(--accent);
+
   /* ── Chrome label utility (§3.7.1) ──
      `.chrome-label` 工具类（global.css）消费这 3 token，给所有
      uppercase + tracked + chrome 字体感的小标签一个统一出口。
@@ -130,6 +137,27 @@
   --font-chrome-label: var(--font-sans);
   --chrome-label-tracking: 0.05em;
   --chrome-label-transform: uppercase;
+
+  /* ── Row radius (review round 2 #task:912) ──
+     Single token for the 5 row-style surfaces (sidebar rows / NavRail /
+     Saved / Schedule card / MessageItem hover). warm-script keeps `0`
+     to preserve current "scan-line" reading texture — the暖纸底色 +
+     soft accent border doesn't strobe at 0 radius. slack-dark sets 6px
+     for Slack-style rounded list rows. See slack-dark.css for the full
+     consumer list. */
+  --row-radius: 0;
+
+  /* ── Profile section radius (review fix #task:912) ──
+     `[data-panel-card="profile-section"]` (Identity / Capabilities /
+     Metadata cards in Agent / Human profile, FileBlock, NotesBlock).
+     warm-script 走 `var(--card-radius)` rounded —— forza6 才是 0 hard-cut
+     poster；该 token 必须显式定义，否则会从 default-theme block 漏 0 过来
+     (slack-dark 暴露这个 latent leak; design-new-theme §3.1 关键 3)。
+     **行为变更注意**：本次显式之前 warm-script profile sections 是直角
+     (forza6 leak)，本次起恢复 8px 圆角 —— 这是 #task:814 引入该 token 时
+     CSS fallback `var(--profile-section-radius, var(--card-radius))` 的
+     原始设计意图。 */
+  --profile-section-radius: var(--card-radius);
 
   /* ── Control + chip radius (§3.7.2 / §3.7.3, PR-8 token promotion) ──
      `--control-radius` 给所有 control surface (input / textarea / button /
@@ -176,6 +204,12 @@
      所以这一波只接 radius，不动 border。 */
   --select-content-radius: 6px;
   --select-item-radius: 4px;
+
+  /* ── Tab segment radius (#task:912 review round 3) ──
+     `[data-panel-tabs] button` 的 active 段圆角。warm 保留 `0` 跟外框
+     6px 形成"硬楔在括号内"的传统 segment 词汇 (跟 forza6 海报感一致)。
+     slack-dark 才转 4px 让 active 段也圆。 */
+  --tab-segment-radius: 0;
 
   /* ── Primary control surface (§3.2.3, PR-10 token promotion) ──
      `Button` default variant (CTA — 各 dialog 的 Create / Save 主按钮)

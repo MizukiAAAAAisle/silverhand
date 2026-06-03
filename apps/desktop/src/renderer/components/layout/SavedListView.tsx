@@ -118,7 +118,10 @@ function SavedItem({
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
         className={
-          'border-2 bg-bg-floating px-4 py-3 transition-colors ' +
+          // Row radius routed via `--row-radius` token (#task:912 review
+          // round 2). Saved items are list records — slack-dark gets
+          // 6px Slack-style rounding; warm/forza6 keep `0`.
+          'rounded-[var(--row-radius)] border-2 bg-bg-floating px-4 py-3 transition-colors ' +
           (hover ? 'border-accent' : 'border-border')
         }
       >

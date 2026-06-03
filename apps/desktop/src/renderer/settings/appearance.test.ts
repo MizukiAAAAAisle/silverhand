@@ -105,6 +105,10 @@ describe('theme markdown token cascade contract', () => {
     new URL('../styles/themes/forza6.css', import.meta.url),
     'utf8',
   );
+  const slackDarkCss = readFileSync(
+    new URL('../styles/themes/slack-dark.css', import.meta.url),
+    'utf8',
+  );
 
   it('imports the default :root theme before themes that override it', () => {
     const themeImports = [...globalCss.matchAll(/@import "\.\/themes\/([^"]+)";/g)].map(
@@ -114,6 +118,7 @@ describe('theme markdown token cascade contract', () => {
     expect(themeImports).toEqual([
       'forza6.css',
       'warm-script.css',
+      'slack-dark.css',
       'forza6-components.css',
     ]);
   });
@@ -121,10 +126,11 @@ describe('theme markdown token cascade contract', () => {
   it('keeps :root only on the default theme', () => {
     expect(forza6Css).toContain(':root,\n[data-theme=\'forza6\']');
     expect(warmScriptCss).not.toContain(':root');
+    expect(slackDarkCss).not.toContain(':root');
   });
 
   it('defaults prose and code markdown font sizes to 14px in every theme', () => {
-    for (const css of [warmScriptCss, forza6Css]) {
+    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
       expect(css).toContain('--md-prose-size: 14px;');
       expect(css).toContain('--md-code-size: 14px;');
     }
@@ -135,7 +141,7 @@ describe('theme markdown token cascade contract', () => {
     // content. The token is intentionally independent of `--md-*-size`
     // so themes can drift system size without dragging markdown.
     // shiki spec msg `cN9u0jopk9w5nafo`.
-    for (const css of [warmScriptCss, forza6Css]) {
+    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
       expect(css).toContain('--system-message-size: 12px;');
     }
   });
@@ -146,7 +152,7 @@ describe('theme markdown token cascade contract', () => {
     // [data-task-ref] in v7). Independent of `--md-code-size` (which
     // drives fenced code blocks) — two surfaces, two sizes.
     // shiki accepted msg `H7DHYMS5mu1xNiJ3`.
-    for (const css of [warmScriptCss, forza6Css]) {
+    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
       expect(css).toContain('--inline-code-size: 0.88em;');
     }
   });
@@ -166,10 +172,63 @@ describe('theme markdown token cascade contract', () => {
       '--text-on-structure',
       '--text-on-dark-pop',
     ];
-    for (const css of [warmScriptCss, forza6Css]) {
+    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
       for (const token of NEW_TOKENS) {
         expect(css).toContain(`${token}:`);
       }
+    }
+  });
+
+  /* Review fix (#task:912): `--profile-section-radius` was added in
+     #task:814 for forza6's poster hard-cut treatment. forza6 sets `0`
+     on its `:root,[data-theme='forza6']` block; the CSS rule in
+     global.css falls back to `var(--card-radius)` if not defined. But
+     because forza6 owns `:root`, themes that didn't redeclare leaked
+     forza6's `0` — silently turning warm-script + slack-dark profile
+     sections into square corners against design intent. This contract
+     test pins the leak shut: every theme MUST declare its own value. */
+  it('every theme explicitly defines the profile-section radius token', () => {
+    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
+      expect(css).toContain('--profile-section-radius:');
+    }
+  });
+
+  /* Review round 2 (#task:912): `--row-radius` covers the 5 row-style
+     surfaces (sidebar rows / NavRail buttons / Saved item / schedule +
+     activity row cards / MessageItem hover frame). Single token because
+     each theme moves all five surfaces in the same direction —
+     warm/forza6 keep `0` (chat-surface scan-line vocabulary); slack-dark
+     uses `6px` for Slack-style subtle list rounding. Same leak-pin
+     reasoning as `--profile-section-radius`: forza6's `:root` block
+     would leak `0` to any theme that forgets to declare. */
+  it('every theme explicitly defines the row-radius token', () => {
+    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
+      expect(css).toContain('--row-radius:');
+    }
+  });
+
+  /* Review round 3 (#task:912): control-surface hover border. The
+     TaskFilterBar trigger had been borrowing `--border-row-hover`
+     (sidebar/NavRail row hover). slack-dark sets that to `transparent`
+     — sidebar rows express hover via bg veil, not stroke — but a
+     borderless control trigger is a hover dead zone. `--border-control-
+     hover` decouples the two surfaces: forza6/warm = same as row hover
+     (poster ink / accent, pixel-zero); slack-dark = `--border` 10% white
+     (visible step up from resting `--border-subtle` 6%). */
+  it('every theme explicitly defines the control-hover border token', () => {
+    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
+      expect(css).toContain('--border-control-hover:');
+    }
+  });
+
+  /* Review round 3 (#task:912): tab-segment radius. `[data-panel-tabs]
+     button` had been hard-coded `border-radius: 0` so forza6's poster
+     "hard wedge inside the bracket" reads. slack-dark wants the active
+     segment rounded to match its hairline-rounded language. Token-route
+     it: forza6 / warm = `0`, slack-dark = `4px`. */
+  it('every theme explicitly defines the tab-segment radius token', () => {
+    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
+      expect(css).toContain('--tab-segment-radius:');
     }
   });
 
@@ -184,7 +243,7 @@ describe('theme markdown token cascade contract', () => {
       '--border-inline-code',
       '--radius-inline-code',
     ];
-    for (const css of [warmScriptCss, forza6Css]) {
+    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
       for (const token of INLINE_CODE_TOKENS) {
         expect(css).toContain(`${token}:`);
       }
@@ -220,7 +279,7 @@ describe('theme markdown token cascade contract', () => {
       '--task-status-closed-text',
       '--task-status-closed-border',
     ];
-    for (const css of [warmScriptCss, forza6Css]) {
+    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
       for (const token of TASK_STATUS_TOKENS) {
         expect(css).toContain(`${token}:`);
       }
@@ -242,7 +301,7 @@ describe('theme markdown token cascade contract', () => {
       '--floating-radius',
       '--floating-item-radius',
     ];
-    for (const css of [warmScriptCss, forza6Css]) {
+    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
       for (const token of FLOATING_FRAME_TOKENS) {
         expect(css).toContain(`${token}:`);
       }
@@ -262,7 +321,7 @@ describe('theme markdown token cascade contract', () => {
       '--border-row-hover',
       '--border-row-selected',
     ];
-    for (const css of [warmScriptCss, forza6Css]) {
+    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
       for (const token of ROW_STATE_TOKENS) {
         expect(css).toContain(`${token}:`);
       }
@@ -282,7 +341,7 @@ describe('theme markdown token cascade contract', () => {
       '--chrome-label-tracking',
       '--chrome-label-transform',
     ];
-    for (const css of [warmScriptCss, forza6Css]) {
+    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
       for (const token of CHROME_LABEL_TOKENS) {
         expect(css).toContain(`${token}:`);
       }
@@ -305,7 +364,7 @@ describe('theme markdown token cascade contract', () => {
      Open a `pill-radius` PR if/when a second pill consumer lands. */
   it('every theme explicitly defines control + chip radius tokens', () => {
     const RADIUS_TOKENS = ['--control-radius', '--chip-radius'];
-    for (const css of [warmScriptCss, forza6Css]) {
+    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
       for (const token of RADIUS_TOKENS) {
         expect(css).toContain(`${token}:`);
       }
@@ -320,7 +379,7 @@ describe('theme markdown token cascade contract', () => {
      doesn't leak the `0` value into warm themes via :root fallback. */
   it('every theme explicitly defines select listbox radius tokens', () => {
     const SELECT_RADIUS_TOKENS = ['--select-content-radius', '--select-item-radius'];
-    for (const css of [warmScriptCss, forza6Css]) {
+    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
       for (const token of SELECT_RADIUS_TOKENS) {
         expect(css).toContain(`${token}:`);
       }
@@ -345,17 +404,17 @@ describe('theme markdown token cascade contract', () => {
       '--bg-control-primary-hover',
       '--text-on-control-primary',
     ];
-    for (const css of [warmScriptCss, forza6Css]) {
+    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
       for (const token of CTA_TOKENS) {
         expect(css).toContain(`${token}:`);
       }
     }
   });
 
-  /* PR follow-up (#task:417): panel radius is token-driven. Every
-     panel hook reads its `border-radius` from `--card-radius` /
-     `--chip-radius` / `--control-radius` (or hard-zero for rows /
-     placeholders) via global.css, so a theme-author change to one
+  /* PR follow-up (#task:417, updated #task:912 review round 2): panel
+     radius is token-driven. Every panel hook reads its `border-radius`
+     from `--card-radius` / `--chip-radius` / `--control-radius` /
+     `--row-radius` via global.css, so a theme-author change to one
      token reaches every panel surface and JSX never carries a
      `rounded-*` class on the hook elements that would fight the
      contract.
@@ -366,8 +425,9 @@ describe('theme markdown token cascade contract', () => {
           `forza6-components.css` (the previous override pass had it
           there and depended on cascade-layer + specificity tricks
           to win over Tailwind — see #task:415 retro).
-       2. Long rows + placeholders are hard zero (chat-surface scan
-          line vocabulary; same as message items / saved items).
+       2. Long rows + placeholders consume `--row-radius` (warm /
+          forza6 = 0 chat-surface scan-line vocabulary; slack-dark =
+          6px Slack-style subtle list rounding).
        3. Static cards consume `--card-radius`; pills consume
           `--chip-radius`; tabs + controls consume `--control-radius`.
           Inner tab segment buttons are explicitly squared so the
@@ -382,11 +442,15 @@ describe('theme markdown token cascade contract', () => {
      unlayered/layered cascade order. */
   it('routes every agent-panel hook radius through global.css tokens', () => {
     // (1) global.css owns the panel radius block.
+    //     `row` + `placeholder` route through `--row-radius` so each
+    //     theme can opt into Slack-style 6px (slack-dark) while warm /
+    //     forza6 stay at 0 (chat-surface scan-line vocabulary). The
+    //     value-side change happens at the theme layer, not here.
     expect(globalCss).toMatch(
-      /\[data-panel-card='row'\][\s\S]{0,200}border-radius:\s*0\b/,
+      /\[data-panel-card='row'\][\s\S]{0,400}border-radius:\s*var\(--row-radius\)/,
     );
     expect(globalCss).toMatch(
-      /\[data-panel-card='placeholder'\][\s\S]{0,200}border-radius:\s*0\b/,
+      /\[data-panel-card='placeholder'\][\s\S]{0,400}border-radius:\s*var\(--row-radius\)/,
     );
     expect(globalCss).toMatch(
       /\[data-panel-card='profile-section'\][\s\S]{0,200}border-radius:\s*var\(--profile-section-radius,\s*var\(--card-radius\)\)/,
@@ -398,7 +462,7 @@ describe('theme markdown token cascade contract', () => {
       /\[data-panel-tabs\][\s\S]{0,200}border-radius:\s*var\(--control-radius\)/,
     );
     expect(globalCss).toMatch(
-      /\[data-panel-tabs\]\s+button[\s\S]{0,200}border-radius:\s*0\b/,
+      /\[data-panel-tabs\]\s+button[\s\S]{0,400}border-radius:\s*var\(--tab-segment-radius\)/,
     );
     expect(globalCss).toMatch(
       /\[data-panel-control\][\s\S]{0,200}border-radius:\s*var\(--control-radius\)/,

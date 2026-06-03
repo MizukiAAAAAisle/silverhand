@@ -198,36 +198,47 @@ interface ColumnSpec {
   status: TaskStatus;
   label: string;
   icon: LucideIcon;
-  /** Color token for the icon — mirrors TaskStatusBadge so the column
-   *  header and the inline badge read as the same vocabulary. */
+  /** Color token for the icon — reads the SAME `--task-status-<status>-text`
+   *  token the inline card chip uses (TaskStatusBadge.tsx via global.css
+   *  `[data-task-status]` rule). Earlier we routed each status through a
+   *  Tailwind utility (`text-warning` / `text-success` etc.) which decoupled
+   *  the column header from the chip — slack-dark made the drift visible
+   *  (header in_review = warning amber but chip in_review = success green).
+   *  Routing both through one token guarantees they can never disagree.
+   *  shiki review #task:912. */
   iconClass: string;
 }
 
 const COLUMNS: ReadonlyArray<ColumnSpec> = [
-  { status: 'todo', label: 'Todo', icon: Circle, iconClass: 'text-text-muted' },
+  {
+    status: 'todo',
+    label: 'Todo',
+    icon: Circle,
+    iconClass: 'text-[color:var(--task-status-todo-text)]',
+  },
   {
     status: 'in_progress',
     label: 'In progress',
     icon: CircleDashed,
-    iconClass: 'text-accent',
+    iconClass: 'text-[color:var(--task-status-in-progress-text)]',
   },
   {
     status: 'in_review',
     label: 'In review',
     icon: CircleEllipsis,
-    iconClass: 'text-warning',
+    iconClass: 'text-[color:var(--task-status-in-review-text)]',
   },
   {
     status: 'done',
     label: 'Done',
     icon: CheckCircle2,
-    iconClass: 'text-success',
+    iconClass: 'text-[color:var(--task-status-done-text)]',
   },
   {
     status: 'closed',
     label: 'Closed',
     icon: Archive,
-    iconClass: 'text-text-muted',
+    iconClass: 'text-[color:var(--task-status-closed-text)]',
   },
 ];
 

@@ -1,4 +1,4 @@
-export const THEME_IDS = ['warm-script', 'forza6'] as const;
+export const THEME_IDS = ['warm-script', 'forza6', 'slack-dark'] as const;
 export type ThemeId = (typeof THEME_IDS)[number];
 
 /** Override a theme's default markdown font family. `undefined` means

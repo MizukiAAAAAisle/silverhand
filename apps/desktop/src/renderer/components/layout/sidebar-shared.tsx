@@ -114,14 +114,28 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
         type="button"
         onClick={onClick}
         className={
-          'sidebar-row-border flex w-full items-center gap-2 border px-2 py-1.5 text-left text-sm transition-colors ' +
+          // `leading-[16px]` matches the icon container's literal-px
+          // height (16px avatar via AgentAvatar / HumanRowIcon). Without
+          // it `text-sm`'s ~20px line-height would inflate the icon
+          // wrapper's line-box past the avatar, leaving the avatar and
+          // the title text on subtly different vertical centers
+          // (#task:912 review round 5: shiki measured icon-wrapper 16×20
+          // vs avatar 16×16, name height 17.5 → ~2px misalignment).
+          'sidebar-row-border flex w-full items-center gap-2 border px-2 py-1.5 text-left text-sm leading-[16px] transition-colors ' +
           (selected
             ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
             : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary') +
           (className ? ` ${className}` : '')
         }
       >
-        {icon ? <span className="shrink-0 text-text-muted">{icon}</span> : null}
+        {icon ? (
+          // `leading-none` neutralizes any inherited line-height on the
+          // wrapper so its height collapses to its content (the 16×16
+          // avatar/glyph). Belt-and-braces with `leading-[16px]` on the
+          // button so the wrapper is pinned to 16px regardless of any
+          // future line-height change above.
+          <span className="inline-flex shrink-0 items-center leading-none text-text-muted">{icon}</span>
+        ) : null}
         <span className={
           'flex min-w-0 flex-1 items-baseline gap-1.5 ' +
           (badge && badge > 0 && !selected ? 'font-semibold text-text-primary' : '')

@@ -165,11 +165,15 @@ const FilterTrigger = forwardRef<
       className={cn(
         'flex max-w-[200px] items-center gap-1.5 rounded-[var(--control-radius)]',
         'border-[length:var(--control-border-width)] px-2 py-1 text-[11px] transition-colors',
-        // Hover always paints the theme's poster hover border
-        // (`--border-row-hover`: forza6 near-black ink / warm accent) —
-        // same hover language as the OptionRow + sidebar rows. Higher
-        // specificity than the resting border, so it wins in both states.
-        'hover:border-[color:var(--border-row-hover)]',
+        // Hover always paints the theme's control hover border
+        // (`--border-control-hover`: forza6 near-black ink / warm
+        // accent / slack-dark `--border` 10% white). Note this is a
+        // CONTROL-surface hover token, not the row-state token —
+        // slack-dark intentionally sets `--border-row-hover:
+        // transparent` (sidebar bg veil expresses hover there), and
+        // we don't want that to bleed into control triggers where the
+        // border is the only hover signal (#task:912 review round 3).
+        'hover:border-[color:var(--border-control-hover)]',
         active
           ? // Non-default value → theme selected-row fill (forza6 festive
             // lime) + on-selected ink + the selected-row border colour

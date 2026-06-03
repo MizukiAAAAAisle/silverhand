@@ -47,7 +47,7 @@ export function AddConversationMemberPopover({
           aria-label="Add member to this conversation"
           title="Add member"
           data-member-chip="add"
-          className="inline-flex size-6 shrink-0 items-center justify-center rounded-none border-0 bg-transparent p-0 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+          className="inline-flex size-6 shrink-0 items-center justify-center rounded-[var(--control-radius)] border-0 bg-transparent p-0 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
         >
           <Plus className="size-3.5" />
         </button>

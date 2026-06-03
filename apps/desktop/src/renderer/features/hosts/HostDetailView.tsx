@@ -845,7 +845,7 @@ function AgentCard({
         type="button"
         onClick={onOpen}
         aria-label={`Open ${agent.display_name} profile`}
-        className="flex w-full items-center gap-3 border-[length:var(--control-border-width)] border-border-subtle bg-bg-floating px-3 py-2.5 text-left transition-colors hover:border-text-primary focus-visible:border-text-primary focus-visible:outline-none"
+        className="flex w-full items-center gap-3 rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border-subtle bg-bg-floating px-3 py-2.5 text-left transition-colors hover:border-text-primary focus-visible:border-text-primary focus-visible:outline-none"
       >
         {knownRuntime.success ? (
           <AgentAvatar

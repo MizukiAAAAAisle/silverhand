@@ -56,21 +56,28 @@ export function PersonHero({
       <div className="shrink-0">{avatar}</div>
 
       <div className="min-w-0 flex-1">
-        <h1 className="truncate font-serif text-lg font-semibold text-text-primary">
-          {displayName}
+        {/* Display name + inline description (subtitle style). The bio
+            sits inline after the name in muted color so it reads as
+            "Norman · Design Engineer" — descriptor of the person, not a
+            separate band below. The full multi-line value still lives
+            in the Capabilities → Description field; here it's a
+            single-line clamp via the parent flex's `truncate`.
+            #task:912 review round 6. */}
+        <h1 className="flex min-w-0 items-baseline gap-2 font-serif text-lg font-semibold text-text-primary">
+          <span className="truncate">{displayName}</span>
+          {hasBio ? (
+            <span
+              className="min-w-0 truncate font-sans text-sm font-normal text-text-muted"
+              title={bio ?? undefined}
+            >
+              {bio}
+            </span>
+          ) : null}
         </h1>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
           <span className="font-mono">@{handle}</span>
           {meta ? <>{meta}</> : null}
         </div>
-        {hasBio ? (
-          <p
-            className="mt-1 truncate text-xs text-text-secondary"
-            title={bio ?? undefined}
-          >
-            {bio}
-          </p>
-        ) : null}
       </div>
 
       {actions ? (

@@ -84,10 +84,11 @@ export function MembersPanel({
           agents.map(a => (
             <SidebarRow
               key={a.id}
+              className="h-[32px]"
               icon={
                 <AgentAvatar
                   runtime={a.runtime}
-                  size={20}
+                  size={16}
                   avatarObjectUrl={agentAvatarUrls.get(a.id) ?? null}
                   alt={a.display_name || a.name}
                 />
@@ -106,19 +107,12 @@ export function MembersPanel({
         {viewer ? (
           <SidebarRow
             key={viewer.id}
+            className="h-[32px]"
             icon={
-              viewerAvatarObjectUrl ? (
-                <span className="grid size-5 place-items-center overflow-hidden rounded-none bg-bg-row-hover">
-                  {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
-                  <img
-                    src={viewerAvatarObjectUrl}
-                    alt=""
-                    className="size-full object-cover"
-                  />
-                </span>
-              ) : (
-                <User className="size-3.5" />
-              )
+              <HumanRowIcon
+                avatarObjectUrl={viewerAvatarObjectUrl}
+                alt={viewer.display_name || viewer.name}
+              />
             }
             title={viewer.display_name || viewer.name}
             subtitle={CURRENT_USER_SUBTITLE}
@@ -133,19 +127,12 @@ export function MembersPanel({
           return (
             <SidebarRow
               key={u.id}
+              className="h-[32px]"
               icon={
-                avatarObjectUrl ? (
-                  <span className="grid size-5 place-items-center overflow-hidden rounded-none bg-bg-row-hover">
-                    {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
-                    <img
-                      src={avatarObjectUrl}
-                      alt=""
-                      className="size-full object-cover"
-                    />
-                  </span>
-                ) : (
-                  <User className="size-3.5" />
-                )
+                <HumanRowIcon
+                  avatarObjectUrl={avatarObjectUrl}
+                  alt={u.display_name || u.name}
+                />
               }
               title={u.display_name || u.name}
               subtitle={`@${u.name}`}
@@ -163,5 +150,44 @@ export function MembersPanel({
 
       <CreateAgentDialog open={open} onOpenChange={setOpen} />
     </>
+  );
+}
+
+/**
+ * 16×16 frame for human rows. Both AGENTS and HUMANS rows pass this
+ * size; MembersPanel targets a 32px-tall row (icon 16 + py-1.5 / 12 +
+ * border 4) for IM-sidebar density (#task:912 review round 5 — earlier
+ * the rows had mismatched icons + ran 36-38.5px tall, which read as
+ * "settings list" rather than "Slack sidebar").
+ *
+ * **Why literal px instead of `size-4`**: the desktop app pins
+ * `html { font-size: 14px }` (global.css), so Tailwind's `size-4`
+ * (`1rem`) would compute to 14px, not 16px. AgentAvatar uses an inline
+ * `style={{ width: size, height: size }}` for the same reason — literal
+ * pixels are theme- and root-font-size-independent. Mirror that here,
+ * including the inline-flex wrapper structure so AGENTS / HUMANS rows
+ * are pixel-identical regardless of avatar fallback.
+ */
+function HumanRowIcon({
+  avatarObjectUrl,
+  alt,
+}: {
+  avatarObjectUrl: string | null | undefined;
+  alt: string;
+}): JSX.Element {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none bg-bg-row-hover"
+      style={{ width: 16, height: 16 }}
+    >
+      {avatarObjectUrl ? (
+        <img src={avatarObjectUrl} alt={alt} className="h-full w-full object-cover" />
+      ) : (
+        // Inner glyph at 10px (≈ 16 × 0.6) — same `size × 0.6` ratio as
+        // AgentAvatar's runtime icons, so the visual mass and baseline
+        // match across AGENTS / HUMANS rows.
+        <User style={{ width: 10, height: 10 }} />
+      )}
+    </span>
   );
 }

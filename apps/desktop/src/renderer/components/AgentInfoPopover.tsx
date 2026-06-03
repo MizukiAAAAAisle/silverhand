@@ -42,9 +42,6 @@ interface AgentInfoPopoverProps {
    *  can move into the popover content. Used by inline mention pills,
    *  message author/avatar controls, and the member strip. */
   trigger?: 'click' | 'hover';
-  /** Header member chips can expose per-agent controls; inline mentions
-   *  and message avatars keep the popover informational. */
-  management?: boolean;
   /**
    * Avatar object URL resolved by the parent's batch hook.
    *
@@ -77,6 +74,14 @@ const HOVER_CLOSE_DELAY_MS = 120;
  * (inline mentions, message author/avatar, and member strip in conversation header). Hover mode is implemented via
  * controlled `open` rather than a separate Radix HoverCard primitive
  * to keep the dep surface narrow.
+ *
+ * Single visual contract — the same card renders on every surface
+ * (header member chip, message stream avatar/author, inline @mention).
+ * Per-conversation management actions render in the top-right when the
+ * viewer can edit the agent and a `conversationId` is provided; that
+ * gating is internal to `AgentManagementActions`. There is no per-call
+ * `management` switch (#task:912 review round 8 — the user noted that
+ * the chip and the message-stream popover should not diverge).
  */
 export function AgentInfoPopover({
   agent,
@@ -86,7 +91,6 @@ export function AgentInfoPopover({
   conversationId,
   routeKind = 'channel',
   trigger = 'click',
-  management = false,
   avatarObjectUrl,
 }: AgentInfoPopoverProps): JSX.Element {
   const [hoverOpen, setHoverOpen] = useState(false);
@@ -149,7 +153,25 @@ export function AgentInfoPopover({
           data-popover-frame="info"
           className="z-50 w-[260px] max-w-[calc(100vw-32px)] rounded-md border border-border bg-bg-floating p-3 shadow-lg outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
-          <div className="flex items-start gap-3">
+          {/* v3 layout (#task:912 review round 7 → round 9 final):
+                avatar | name + ● presence    [↻ ⏻ ⌫]   ← actions top-right
+                       | @handle
+
+              The description was removed from this popover entirely
+              (round 9 final — the user's words: "profile card 直接不
+              展示 description, 头像也跟着变小, 而且 description 长度也不
+              太好控制"). Long-form description copy is hard to truncate
+              cleanly inside a 260px card — it dragged the avatar / card
+              into resizing dances across rounds 7 → 9. The full
+              description still lives in the agent profile's
+              Capabilities section; this card is intentionally a
+              minimal identity preview (avatar / name + presence /
+              handle / actions).
+
+              Avatar is 36px to match the compact two-row layout —
+              `items-center` aligns the avatar between the name and
+              handle rows. Actions stay icon-only top-right. */}
+          <div className="flex items-center gap-3">
             <AgentAvatar
               runtime={agent.runtime}
               size={36}
@@ -157,57 +179,50 @@ export function AgentInfoPopover({
               alt={agent.display_name || agent.name}
             />
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-semibold text-text-primary">
-                {agent.display_name || agent.name}
+              {/* Name + inline presence dot. Presence sits as the
+                  semantic state next to the name; per-conversation
+                  only (without conversationId there's no presence to
+                  show). */}
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="min-w-0 truncate text-sm font-semibold text-text-primary">
+                  {agent.display_name || agent.name}
+                </span>
+                {conversationId ? (
+                  <PresenceInline
+                    agentId={agent.id}
+                    conversationId={conversationId}
+                    routeKind={routeKind}
+                  />
+                ) : null}
               </div>
               <div className="truncate font-mono text-xs text-text-muted">
                 @{agent.name}
               </div>
-              {conversationId ? (
-                <PresenceLine
-                  agentId={agent.id}
+            </div>
+            {/* Top-right icon-only actions. Always rendered when a
+                conversationId is in scope; AgentManagementActions
+                short-circuits to null when the viewer can't edit
+                this agent or the agent isn't a member of this
+                conversation, so unauthorized surfaces stay
+                informational without callers needing a separate gate
+                prop. #task:912 review round 8 — collapsed the prior
+                `management` switch so header chips and message-stream
+                avatars render the same card. `self-start` overrides
+                the row's `items-center` (used to center the avatar
+                against the two text rows) so actions still sit in
+                the top-right corner instead of riding the row's
+                vertical center. */}
+            {conversationId ? (
+              <div className="self-start">
+                <AgentManagementActions
+                  agent={agent}
                   conversationId={conversationId}
                   routeKind={routeKind}
+                  onDialogOpenChange={setManagementDialogOpen}
                 />
-              ) : null}
-            </div>
+              </div>
+            ) : null}
           </div>
-          <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
-            <dt className="text-text-muted">Runtime</dt>
-            <dd className="text-text-primary capitalize">{agent.runtime}</dd>
-            {agent.model ? (
-              <>
-                <dt className="text-text-muted">Model</dt>
-                <dd className="truncate text-text-primary">{agent.model}</dd>
-              </>
-            ) : null}
-            {agent.reasoning_effort ? (
-              <>
-                <dt className="text-text-muted">Effort</dt>
-                <dd className="text-text-primary">{agent.reasoning_effort}</dd>
-              </>
-            ) : null}
-          </dl>
-          {agent.description ? (
-            <p className="mt-2 line-clamp-4 whitespace-pre-wrap text-xs text-text-secondary">
-              {agent.description}
-            </p>
-          ) : null}
-          {conversationId && !management ? (
-            <RetryRow
-              agentId={agent.id}
-              conversationId={conversationId}
-              routeKind={routeKind}
-            />
-          ) : null}
-          {management && conversationId ? (
-            <AgentManagementActions
-              agent={agent}
-              conversationId={conversationId}
-              routeKind={routeKind}
-              onDialogOpenChange={setManagementDialogOpen}
-            />
-          ) : null}
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
@@ -231,7 +246,7 @@ const PRESENCE_DOT: Record<ConversationAgentStatus, string> = {
   crashed: 'bg-error',
 };
 
-function PresenceLine({
+function PresenceInline({
   agentId,
   conversationId,
   routeKind = 'channel',
@@ -242,43 +257,27 @@ function PresenceLine({
 }): JSX.Element {
   const { data: sa = [] } = useChannelAgents(conversationId, routeKind);
   const row = sa.find(s => s.agent_id === agentId);
+  // Rendered inline next to the display name (#task:912 review round 7
+  // — was a standalone row below; the user noted it took a band of
+  // vertical space without earning it). When the agent isn't in this
+  // conversation we still want a faint hint, so we render the muted
+  // dot + "Not here" rather than collapse silently.
   if (!row) {
     return (
-      <div className="mt-1 text-xs text-text-muted">Not in this conversation</div>
+      <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-text-muted">
+        <span className="size-1.5 rounded-full bg-text-muted/40" />
+        Not here
+      </span>
     );
   }
   return (
-    <div className="mt-1 flex items-center gap-1.5 text-xs text-text-muted">
+    <span
+      className="inline-flex shrink-0 items-center gap-1 text-[10px] text-text-muted"
+      title={PRESENCE_LABEL[row.status]}
+    >
       <span className={'size-1.5 rounded-full ' + PRESENCE_DOT[row.status]} />
-      <span>{PRESENCE_LABEL[row.status]}</span>
-    </div>
-  );
-}
-
-function RetryRow({
-  agentId,
-  conversationId,
-  routeKind = 'channel',
-}: {
-  agentId: string;
-  conversationId: string;
-  routeKind?: 'channel' | 'thread';
-}): JSX.Element | null {
-  const { data: sa = [] } = useChannelAgents(conversationId, routeKind);
-  const start = useStartAgent(conversationId, routeKind);
-  const row = sa.find(s => s.agent_id === agentId);
-  if (!row || row.status !== 'crashed') return null;
-  return (
-    <div className="mt-3 border-t border-border-subtle pt-2">
-      <button
-        type="button"
-        onClick={() => start.mutate(agentId)}
-        disabled={start.isPending}
-        className="text-xs text-accent hover:underline disabled:opacity-50"
-      >
-        {start.isPending ? '启动中…' : '重新启动'}
-      </button>
-    </div>
+      {PRESENCE_LABEL[row.status]}
+    </span>
   );
 }
 
@@ -332,37 +331,47 @@ function AgentManagementActions({
   };
 
   return (
-    <div className="mt-3 border-t border-border-subtle pt-2">
-      <div className="flex flex-wrap gap-1.5">
+    <>
+      {/* v3 (#task:912 review round 7) + round 8 + round 9: top-right
+          icon-only action group. No bottom-bar label buttons — the
+          popover stays identity-led and visually light. All three
+          icons sit on a uniform `gap-0.5` grid (round 9 — the user
+          flagged the prior destructive-spacer break against equal
+          spacing; the destructive's hover-red + error tint already
+          carries the warning, the gap doesn't need to). The Restart
+          icon also covers the crashed → restart path; round 8
+          collapsed the standalone RetryRow because the same Restart
+          icon is now always available on every popover surface. */}
+      <div className="flex shrink-0 items-center gap-0.5">
         <button
           type="button"
           onClick={restart}
           disabled={pending}
-          className="inline-flex h-7 items-center gap-1.5 rounded-[var(--control-radius)] px-2 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
+          className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
           title={`Restart ${agentLabel}`}
+          aria-label={`Restart ${agentLabel}`}
         >
           <RefreshCw className="size-3.5" />
-          Restart
         </button>
         <button
           type="button"
           onClick={stopAgent}
           disabled={pending || row.status === 'idle'}
-          className="inline-flex h-7 items-center gap-1.5 rounded-[var(--control-radius)] px-2 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
+          className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
           title={`Stop ${agentLabel}`}
+          aria-label={`Stop ${agentLabel}`}
         >
           <Power className="size-3.5" />
-          Stop
         </button>
         <button
           type="button"
           onClick={() => setDialogOpen(true)}
           disabled={pending}
-          className="inline-flex h-7 items-center gap-1.5 rounded-[var(--control-radius)] px-2 text-xs text-error hover:bg-error/10 disabled:opacity-50"
+          className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-error/70 transition-colors hover:bg-error/10 hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
           title={`Clear ${agentLabel} session`}
+          aria-label={`Clear ${agentLabel} session`}
         >
           <Eraser className="size-3.5" />
-          Clear session
         </button>
       </div>
       <Dialog open={clearOpen} onOpenChange={setDialogOpen}>
@@ -398,6 +407,6 @@ function AgentManagementActions({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 }

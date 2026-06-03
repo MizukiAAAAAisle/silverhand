@@ -419,7 +419,12 @@ export function WorkspaceTasksDrawer({
           aria-modal="true"
           className={cn(
             'flex h-full flex-col',
-            'border-l border-border bg-white shadow-2xl',
+            // bg-bg-primary matches the sibling TasksSection main shell
+            // (`TasksSection.tsx` line 131) so the drawer reads as the
+            // same surface vocabulary cross-theme. Was hardcoded
+            // `bg-white` which baked light-theme paper into every theme
+            // — slack-dark review #task:912.
+            'border-l border-border bg-bg-primary shadow-2xl',
             'transition-transform duration-200 ease-in-out',
             open ? 'translate-x-0' : 'translate-x-full',
           )}
@@ -502,36 +507,43 @@ interface ColumnSpec {
   status: TaskStatus;
   label: string;
   icon: LucideIcon;
-  /** Color token for the icon — kept in sync with TasksSection so both
-   *  surfaces share one status vocabulary. */
+  /** Color token for the icon — reads the SAME `--task-status-<status>-text`
+   *  token the inline card chip uses (TaskStatusBadge.tsx via global.css
+   *  `[data-task-status]` rule). Mirrored in TasksSection.tsx so kanban
+   *  + drawer share one vocabulary. shiki review #task:912. */
   iconClass: string;
 }
 
 const COLUMNS: ReadonlyArray<ColumnSpec> = [
-  { status: 'todo', label: 'Todo', icon: Circle, iconClass: 'text-text-muted' },
+  {
+    status: 'todo',
+    label: 'Todo',
+    icon: Circle,
+    iconClass: 'text-[color:var(--task-status-todo-text)]',
+  },
   {
     status: 'in_progress',
     label: 'In progress',
     icon: CircleDashed,
-    iconClass: 'text-accent',
+    iconClass: 'text-[color:var(--task-status-in-progress-text)]',
   },
   {
     status: 'in_review',
     label: 'In review',
     icon: CircleEllipsis,
-    iconClass: 'text-warning',
+    iconClass: 'text-[color:var(--task-status-in-review-text)]',
   },
   {
     status: 'done',
     label: 'Done',
     icon: CheckCircle2,
-    iconClass: 'text-success',
+    iconClass: 'text-[color:var(--task-status-done-text)]',
   },
   {
     status: 'closed',
     label: 'Closed',
     icon: Archive,
-    iconClass: 'text-text-muted',
+    iconClass: 'text-[color:var(--task-status-closed-text)]',
   },
 ];
 

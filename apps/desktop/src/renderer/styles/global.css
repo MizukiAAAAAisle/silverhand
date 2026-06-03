@@ -10,11 +10,12 @@
    default's tokens into other themes; do both together. */
 @import "./themes/forza6.css";
 @import "./themes/warm-script.css";
+@import "./themes/slack-dark.css";
 
 /* Forza6-only component-layer specialization. Every selector inside is
-   `[data-theme='forza6']`-scoped; warm-script is pixel-identical before
-   and after this import. Must come AFTER forza6.css so token
-   re-assignments inside it (`--bg-channels-sidebar` deep teal etc.)
+   `[data-theme='forza6']`-scoped; warm-script + slack-dark are pixel-
+   identical before and after this import. Must come AFTER forza6.css so
+   token re-assignments inside it (`--bg-channels-sidebar` deep teal etc.)
    beat the PR-1 light-pink defaults. */
 @import "./themes/forza6-components.css";
 
@@ -156,9 +157,17 @@ html, body, #root {
 .scrollbar-hide::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
 /* Sidebar/workspace/channel rows reserve border space even when transparent;
-   themes can tune the stroke weight without touching component classes. */
+   themes can tune the stroke weight without touching component classes.
+   `border-radius: var(--row-radius)` lets each theme decide list-row
+   geometry — warm/forza6 keep `0` (chat-surface scan-line vocabulary),
+   slack-dark uses `6px` for Slack-style subtle list rounding. The same
+   token also drives `[data-panel-card='row']` (schedule cards / agent
+   panel records) and is opt-in inline on NavRail buttons /
+   SavedListView item / MessageItem hover frame so the whole "row
+   vocabulary" stays cross-theme consistent. #task:912 review round 2. */
 .sidebar-row-border {
   border-width: var(--sidebar-row-border-width, 2px);
+  border-radius: var(--row-radius);
 }
 
 ::selection { background: var(--accent-soft); color: var(--text-primary); }
@@ -908,9 +917,11 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 
      [data-panel-tabs]                  Activity / Schedule FilterTabs
                                          outer frame
-       → `var(--control-radius)` (forza6 0, warm 6px). Inner segment
-       buttons stay squared so the active tab reads as a hard wedge
-       inside the bracket regardless of theme.
+       → `var(--control-radius)` (forza6 0, warm/slack-dark 6px). Inner
+       segment buttons consume `var(--tab-segment-radius)` so each theme
+       can pick: forza6 / warm = `0` (hard wedge inside the bracket);
+       slack-dark = `4px` (active segment reads as "embedded" rather
+       than wedged, hairline-rounded language).
 
      [data-panel-control]               GhostInput / GhostTextarea /
                                          Select trigger / Select content
@@ -928,7 +939,10 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    bug they reintroduce is the exact issue this contract removes. */
 [data-panel-card='row'],
 [data-panel-card='placeholder'] {
-  border-radius: 0;
+  /* Routed through `--row-radius` (token contract added #task:912 review
+     round 2). warm/forza6 = 0 (chat-surface scan-line vocab); slack-dark
+     = 6px (Slack-style subtle list rounding). */
+  border-radius: var(--row-radius);
 }
 [data-panel-card='profile-section'] {
   border-radius: var(--profile-section-radius, var(--card-radius));
@@ -940,7 +954,12 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border-radius: var(--control-radius);
 }
 [data-panel-tabs] button {
-  border-radius: 0;
+  /* Routed through `--tab-segment-radius` (#task:912 review round 3).
+     warm/forza6 keep `0` (hard wedge inside the bracket — poster
+     vocabulary); slack-dark sets `4px` so the active segment reads
+     as "embedded" inside the 6px outer rather than as a square wedge,
+     matching its hairline-rounded language. */
+  border-radius: var(--tab-segment-radius);
 }
 [data-panel-control] {
   border-radius: var(--control-radius);

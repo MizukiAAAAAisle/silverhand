@@ -1,0 +1,339 @@
+/* ================================================================
+   Theme: Slack Dark (cool dark IM, deep-aubergine frame, brand-blue active)
+   性格：冷黑色阶 chrome（#19171D / #1A1D21）+ 深 aubergine app frame
+   (#350D36，唯一暖色记忆点，对应 Slack 保留的顶 nav 紫红) + Slack
+   品牌蓝 (#1D9BD1 link / #1164A3 active fill) + 高对比浅白前景。
+
+   设计目标（design-new-theme §4.1 三决策）：
+   - **温度**：cool。surface 阶梯 #19171D → #1A1D21 → #232529 → #2C2D30
+     全部 cool blue-black；只有 `--bg-app` aubergine 是暖色 accent，对应
+     Slack 实际产品里"顶 nav 是 aubergine 而 chat 是冷黑"的双层 frame。
+   - **accent 音量**：medium。Slack 蓝是单一焦点信号；mention 红
+     (#E01E5A)、success 绿 (#2EBB85)、CTA 深绿 (#007A5A) 是分工明确
+     的语义 accent，但都不进 chat 读区。
+   - **边界策略**：hairline 派。1px 低 α 描边 (rgba 255/10%) 在所有
+     control / floating / row 上保持可见但克制；luminance 阶梯 + 描边
+     双轨分层，不靠 saturation 跳。
+
+   AA/AAA 对比度（design-new-theme §4.2 硬约束）已逐 token 验证：
+   - text-primary #D1D2D3 on #1A1D21 ≈ 11.31:1 (AAA)
+   - text-secondary #ABABAD on #1A1D21 ≈ 7.20:1 (AAA)
+   - text-muted #8E8E91 on #1A1D21 ≈ 5.23:1 (AA)
+   - accent #1D9BD1 on #1A1D21 ≈ 5.65:1 (AA, 作为 text-accent foreground)
+   - brand-primary #1164A3 + white text ≈ 6.04:1 (AA, 作为 bg-row-selected)
+   - text-on-accent #0F1419 on #1D9BD1 ≈ 6.97:1 (AA) —— 注意 accent
+     在 dark 主题下白字会跌到 3.01:1 fail，必须用近黑 (同 forza6 在
+     hot magenta brand-primary 上用近黑的判断)
+   ================================================================ */
+
+[data-theme='slack-dark'] {
+  /* ── Backgrounds (cool blue-black ladder) ── */
+  --bg-base: #1A1D21;          /* chat read area baseline + global frame */
+  --bg-primary: #1A1D21;       /* sidebar/main column container — same as
+                                  base; dark themes don't need a luminance
+                                  step here, structure comes from gap+border */
+  --bg-elevated: #232529;      /* 一级容器（card 休眠态、segment 容器、
+                                  Settings 面板小块） */
+  --bg-surface: #2C2D30;       /* 二级容器（嵌套面板）*/
+  --bg-hover: #27242C;         /* 通用 hover 反馈 — 比 elevated 略冷暗 */
+  --bg-active: #36363B;        /* pressed / active 背景 */
+  /* Selectable-option hover — pickable preview。dark 主题下没有"独立 hue"
+     可选，alias 回 --bg-hover 走单 hover 词汇（forza6 才需要 lime 专项）。*/
+  --bg-option-hover: var(--bg-hover);
+  /* `--bg-selected` 是 NavRail icon active / segment current 的填充；
+     用 brand 蓝 fill + 白字（成对走 --text-on-selected）。*/
+  --bg-selected: var(--brand-primary);
+  --bg-floating: #2C2D30;      /* popover / menu 表面 — 比 hover 更亮一档
+                                  以读出"浮层" */
+  --bg-chat: #1A1D21;          /* main read area — 等于 base，dark 主题
+                                  不像 warm 那样需要 chat 单独取暖白 */
+
+  /* ── Card frame ──
+     8px gap 让 aubergine 暖色从 panel 缝里露出 — 这是 Slack 视觉记忆里
+     的标志性双层 frame（顶 nav aubergine + chat 冷黑）。warm-script 的
+     `--bg-app: #ECE9E2` 是温和米灰；slack-dark 用 deep aubergine 表达
+     "Slack 的紫红血脉"。 */
+  --bg-app: #350D36;
+  --frame-padding: 8px;
+  --card-radius: 8px;
+  /* 暗底 + 暗阴影几乎不可见，但保留 1px 微光以提供"卡片浮在 frame 上"
+     的几何线索；popover/modal 用更强阴影（见下） */
+  --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.40);
+  --splitter-bg: transparent;
+  --splitter-offset: calc((var(--frame-padding) + 4px) / -2);
+  --titlebar-border: transparent;
+
+  /* ── Brand identity ──
+     `--brand-primary: #1164A3` — Slack 深蓝（active channel tile / sidebar
+     row selected fill）。比 `--accent: #1D9BD1` 深一档以容纳白字 AA
+     (white on #1164A3 ≈ 6.04:1)。两个蓝是"surface vs foreground"分工，
+     同 forza6 的 brand pink (#FF2C7A surface) vs accent pink-deep
+     (#B3186A foreground) 同源拆分。 */
+  --brand-primary: #1164A3;
+  --text-on-brand: #FFFFFF;       /* white on #1164A3 ≈ 6.04:1 AA */
+  --text-nav-rail: #B9BBBE;       /* sidebar icon default — ~7.4:1 on
+                                     #19171D AAA */
+  --text-nav-rail-hover: #FFFFFF;
+  --bg-nav-rail-hover: rgba(255, 255, 255, 0.06);
+  --bg-task-tag: var(--brand-primary);
+  --text-on-task-tag: var(--text-on-brand);
+  --border-task-tag: rgba(255, 255, 255, 0.12);
+
+  /* ── Sidebar row state ──
+     selected = brand 蓝实心 + 白字（高显著，"你在哪" 的清晰信号）；
+     hover = 弱白 veil（行扫读时不强抢）。 */
+  --sidebar-row-border-width: 2px;
+  --bg-row-selected: var(--brand-primary);
+  --bg-row-hover: rgba(255, 255, 255, 0.06);
+
+  /* ── Nav rail / sidebar (Slack 双 chrome 模型) ──
+     NavRail + ChannelsSidebar 都用 #19171D（最深，Slack 风格的 column nav
+     一致冷黑）；SessionsSidebar 用 #1A1D21（轻微抬亮，预告进入 chat 读区）；
+     chat = #1A1D21 与 sessions 同色，保证从 sidebar → chat 没有突跳。
+     不走 oklab 渐变（Slack 是直接的 2-tone 切分，不是连续色线）。 */
+  --bg-nav-rail: #19171D;
+  --bg-channels-sidebar: #19171D;
+  --bg-sessions-sidebar: #1A1D21;
+
+  /* ── Islands (code blocks) ──
+     low-luminance HUD —— 比 chat 表面更深，syntax 才能跳出。带轻微冷
+     蓝灰 (#1E1E22 → #181B1E) 与 chat 区有材质差。 */
+  --bg-island: #1E1E22;
+  --bg-island-deep: #181B1E;
+
+  /* ── Text ──
+     #D1D2D3 是 Slack default dark 的主前景色（约 78% 灰）。layered 阶梯：
+     primary #D1D2D3 (AAA) → secondary #ABABAD (AAA) → muted #8E8E91 (AA)。 */
+  --text-primary: #D1D2D3;
+  --text-secondary: #ABABAD;
+  --text-muted: #8E8E91;
+  --text-inverse: #1A1D21;        /* dark text，反色用 — 浅底场景下 */
+  --text-island: #D1D2D3;
+  /* inline-code 字色：暖橙 #E8912D（Slack 实际 inline code 颜色）；
+     在 chip 软底（橙色 12% α）上读起来温暖且与正文/链接蓝有清晰色相区分。 */
+  --text-inline-code: #E8912D;
+
+  /* ── Inline-code chip ──
+     橙色软底 + 同色描边 + 中等圆角。slack-dark 是 hairline 派，描边可见
+     而非 forza6 的实色海报贴纸。 */
+  --bg-inline-code: rgba(232, 145, 45, 0.12);
+  --border-inline-code: 1px solid rgba(232, 145, 45, 0.28);
+  --radius-inline-code: var(--radius-sm);
+
+  /* ── Task status badge (5 × 3 = 15 tokens) ──
+     dark 主题统一走 "soft fill + 同色描边 + chip 内字色 ≥ AA" 的公式，
+     不像 forza6 用饱和实心填充。每个 status 保留语义 hue（design-new-theme
+     §3.2.2 / TaskStatusPill.tsx spec）：
+       todo = neutral gray, in_progress = warning amber/HUD-live, in_review =
+       accent Slack blue ("loud beacon needing human attention"), done =
+       success green ("passed"), closed = transparent + hairline. */
+  --task-status-todo-bg: rgba(171, 171, 173, 0.16);
+  --task-status-todo-text: #ABABAD;
+  --task-status-todo-border: 1px solid rgba(255, 255, 255, 0.10);
+  --task-status-in-progress-bg: rgba(236, 178, 46, 0.18);
+  --task-status-in-progress-text: #ECB22E;        /* warning amber, ~9.4:1 AAA */
+  --task-status-in-progress-border: 1px solid rgba(236, 178, 46, 0.40);
+  --task-status-in-review-bg: rgba(29, 155, 209, 0.20);
+  --task-status-in-review-text: #4FBFE0;          /* accent blue, ~6.5:1 AA — "loud beacon" */
+  --task-status-in-review-border: 1px solid rgba(29, 155, 209, 0.40);
+  --task-status-done-bg: rgba(46, 187, 133, 0.18);
+  --task-status-done-text: #2EBB85;               /* success green, ~6.8:1 AA — "passed" */
+  --task-status-done-border: 1px solid rgba(46, 187, 133, 0.40);
+  /* closed = 终态，最低噪 — 透明底 + muted 字 + subtle 描边。 */
+  --task-status-closed-bg: transparent;
+  --task-status-closed-text: var(--text-muted);
+  --task-status-closed-border: 1px solid var(--border-subtle);
+
+  /* ── Floating frame ──
+     menu / popover / hover-card 共用 hairline 派外框：1px 低 α 白边 +
+     中等圆角；items 用 sm 圆角与外框同心。 */
+  --floating-border: 1px solid rgba(255, 255, 255, 0.10);
+  --floating-radius: var(--radius-md);
+  --floating-item-radius: var(--radius-sm);
+
+  /* ── Row-state border color ──
+     selected 用 low-α 白 hairline（不复用 brand-primary fill 色，否则
+     1px 边在 brand fill 上变隐形 = 跟 fill 同色；同时这个 token 还被
+     SelectionToolbar 借用做"主区按钮 hairline"，复用 brand-primary 会让
+     dark bg-floating 上出现刺眼的亮蓝边，shiki review）。
+     hover 用 transparent — 让 bg veil 单独表达 hover，避免行扫读时
+     border 闪烁。 */
+  --border-row-hover: transparent;
+  --border-row-selected: rgba(255, 255, 255, 0.20);
+
+  /* ── Control hover border (#task:912 review round 3) ──
+     `--border-control-hover` 是 control surface (TaskFilterBar 的 chip
+     trigger 等) hover 时的描边色 —— 与 row hover 解耦。row hover 在
+     slack-dark 走 transparent 让 bg veil 表达 hover，但 control trigger
+     没有 bg veil，描边消失就完全看不出来 hover (shiki review report)。
+     因此独立 token：
+       - forza6 = poster 黑墨 (与 row hover 同步)
+       - warm = accent 暖近黑 (与 row hover 同步)
+       - slack-dark = `--border` 10% 白 (从 resting --border-subtle 6%
+         step up，可见但不抢) */
+  --border-control-hover: var(--border);
+
+  /* ── Chrome label ──
+     Slack 实际的 sidebar group header (DM / WORKSPACES / DIRECT MESSAGES)
+     是 uppercase + sans + 0.05em tracking — 与 warm-script 完全一致，
+     不走 forza6 的 display 字体路线。 */
+  --font-chrome-label: var(--font-sans);
+  --chrome-label-tracking: 0.05em;
+  --chrome-label-transform: uppercase;
+
+  /* ── Row radius (review round 2 #task:912) ──
+     Single token covering the row-style surfaces:
+       1. `.sidebar-row-border` (sidebar list / channels / workspaces /
+          archived panel rows; consumed in global.css)
+       2. `[data-panel-card='row']` and `'placeholder'` (schedule cards,
+          agent panel records; consumed in global.css)
+       3. NavRail icon buttons (inline `rounded-[var(--row-radius)]`)
+       4. SavedListView item card (inline)
+       5. MessageItem hover frame (inline — overrides the original
+          "square corners is intended" hardcode; slack-dark's high-
+          contrast border is too harsh at 0 radius)
+       6. AgentWorkspacePane file tree rows (folder + file buttons;
+          inline — review round 4)
+     Slack 自家 sidebar / saved item / schedule card 都是 ~6px 圆度，对齐
+     `--card-radius: 8px` / `--control-radius: 6px` 同节奏，不变成 tile. */
+  --row-radius: 6px;
+
+  /* ── Profile section radius (review fix #task:912) ──
+     `[data-panel-card="profile-section"]` (Identity / Capabilities /
+     Metadata cards in Agent / Human profile, FileBlock, NotesBlock).
+     Slack 风格走 `var(--card-radius)` rounded —— forza6 才是 0 hard-cut
+     poster 海报；这个 token 必须显式定义，否则会从 default-theme block
+     (`--profile-section-radius: 0`) 漏过来。design-new-theme §3.1
+     关键 3 ("默认主题同时挂在 root 上，新增 token 不能依赖 fallback") 的
+     真实 case —— shiki review 报 slack-dark profile section 直角问题。 */
+  --profile-section-radius: var(--card-radius);
+
+  /* ── Control + chip radius ──
+     dark 不走 forza6 的 hard-cut，保持 light 默认（warm-script pixel-zero
+     复用）。 */
+  --control-radius: 6px;
+  --chip-radius: 4px;
+
+  /* ── Control border width ──
+     1px hairline 派；不走 forza6 的 2px hard-cut。 */
+  --control-border-width: 1px;
+
+  /* ── Select listbox radius ── */
+  --select-content-radius: 6px;
+  --select-item-radius: 4px;
+
+  /* ── Tab segment radius (#task:912 review round 3) ──
+     `[data-panel-tabs] button` 的 active 段圆角。slack-dark 走 4px 让
+     active 段在 6px 外框内显得"嵌入而非楔入"，跟整套 hairline-rounded
+     视觉同步 (shiki review)。warm/forza6 保留 0 (硬楔/海报词汇)。 */
+  --tab-segment-radius: 4px;
+
+  /* ── Primary control surface (CTA) ──
+     Slack 的 Send 按钮是 workhouse green #007A5A — 跟 accent 蓝（link 色）
+     语义解耦。white on #007A5A ≈ 5.34:1 AA pass；hover 进一步加深。 */
+  --bg-control-primary: #007A5A;
+  --bg-control-primary-hover: #006044;
+  --text-on-control-primary: #FFFFFF;
+
+  /* ── Accent (Slack 蓝, foreground primary) ──
+     #1D9BD1 是 Slack 的 link/accent 蓝（"Highlight Color" in their brand
+     guide）。foreground 用，AA 5.65:1 on #1A1D21；surface fill 时白字
+     fail (3.01:1)，所以 `--text-on-accent` 走近黑（同 forza6 在 hot
+     magenta surface 上用近黑的判断）。 */
+  --accent: #1D9BD1;
+  --accent-soft: rgba(29, 155, 209, 0.14);
+  --accent-hover: #4FB7DC;        /* hover 抬亮一档 */
+  --accent-glow: rgba(29, 155, 209, 0.30);
+
+  /* ── Semantic ──
+     Slack-flavored saturated hues — 都是 foreground-primary 色
+     (`text-success` / `text-warning` / `text-error` 在 chat 暗底上 AA pass)。 */
+  --success: #2EBB85;             /* Slack green — 6.81:1 on bg-base AAA */
+  --success-soft: rgba(46, 187, 133, 0.14);
+  --warning: #ECB22E;             /* amber — 9.4:1 AAA */
+  --warning-soft: rgba(236, 178, 46, 0.14);
+  --error: #E01E5A;               /* Slack mention red — 4.8:1 AA */
+  --error-soft: rgba(224, 30, 90, 0.14);
+
+  /* ── Borders (hairline 派) ──
+     低 α 白色 outlines —— 在所有 control / floating / row 上保持可见
+     但不喧宾夺主。border-island 单独略亮一些，让 code 岛轮廓清晰。 */
+  --border: rgba(255, 255, 255, 0.10);
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-island: rgba(255, 255, 255, 0.08);
+  --border-focus: var(--accent);    /* Slack 蓝 focus ring */
+  --border-avatar: rgba(255, 255, 255, 0.12);
+  --border-avatar-width: 1px;
+
+  /* ── On-color foregrounds ──
+     成对维护：每个 -on-* 都对它的 surface 验证过对比度。
+     - text-on-accent #0F1419：accent 蓝太亮，白字会 fail，必须用近黑
+       (~6.97:1) — 这是 dark 主题与 light 主题最关键的差异点。
+     - text-on-success / on-error 用白；text-on-warning 用近黑（amber
+       太亮白字会 fail）。 */
+  --text-on-accent: #0F1419;       /* near-black on #1D9BD1 ≈ 6.97:1 AA */
+  --text-on-success: #0F1419;      /* near-black on #2EBB85 ≈ 7.32:1 AAA */
+  --text-on-warning: #0F1419;      /* near-black on #ECB22E ≈ 9.45:1 AAA */
+  --text-on-error: #FFFFFF;        /* white on #E01E5A ≈ 4.84:1 AA */
+  --text-on-selected: #FFFFFF;     /* white on brand-blue selected ≈ 6.04:1 AA */
+
+  /* ── Overlay ── */
+  --overlay-backdrop: rgba(0, 0, 0, 0.55);
+
+  /* ── Shadows ──
+     dark 主题下浅阴影几乎不可见 —— 用纯黑 + 较高 α 才能给 popover/modal
+     真正的 lift。卡片浮在 aubergine frame 上的微阴影留弱（card-shadow
+     上面已定义）。 */
+  --shadow-base: 0, 0, 0;
+  --shadow-popover:
+    0 8px 24px -8px rgba(var(--shadow-base), 0.50),
+    0 2px 6px -2px rgba(var(--shadow-base), 0.30);
+  --shadow-modal:
+    0 25px 50px -12px rgba(var(--shadow-base), 0.60);
+  --shadow-button: 0 1px 2px 0 rgba(var(--shadow-base), 0.20);
+
+  /* ── Radii ── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+
+  /* ── Fonts ──
+     macOS-native sans 栈 — Slack 历史用 Lato，2024 后大量切到 system
+     UI font (SF Pro on macOS)。我们沿 system stack，不强行 Lato。
+     mono 用 Hack（Slack 内置 code 字体）+ 系统 fallback。 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'Lato', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  --font-serif: var(--font-sans);
+  --font-mono: 'Hack', 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+
+  /* ── Markdown body sizes (cross-theme baseline) ──
+     14/14/12/0.88em 与 forza6 一致 —— design-new-theme §Q 簇说"切主题
+     不应该字号变"，slack-dark 接入时顺手对齐。 */
+  --md-prose-size: 14px;
+  --md-code-size: 14px;
+  --system-message-size: 12px;
+  --inline-code-size: 0.88em;
+
+  /* ── Motion ── */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration: 200ms;
+
+  /* ── Chat default ──
+     14px 与 forza6 / appearance slider 默认对齐（warm-script 仍 15px 是
+     遗留差异，待 Q 簇统一扫描时一并改）。 */
+  --chat-font-size: 14px;
+
+  /* ── Compat: forza6-introduced tokens (design-new-theme §3 关键 3) ──
+     slack-dark 是单 accent / 无纹理 / 无黑结构主题，全部退化到 sibling，
+     避免 forza6 → slack-dark 切换时 festival 值漏过来。 */
+  --font-display: var(--font-sans);
+  --bg-pattern-image: none;
+  --bg-pattern-opacity: 0;
+  --accent-2: var(--accent);
+  --text-on-accent-2: var(--text-on-accent);
+  /* dark 主题下"近黑结构层"应该比 bg-base 更深 —— 用一档真黑给契约
+     完整定义；component 层目前没有 slack-dark 特化消费点。 */
+  --bg-structure-dark: #0E1013;
+  --text-on-structure: var(--text-primary);
+  --text-on-dark-pop: var(--accent);
+}

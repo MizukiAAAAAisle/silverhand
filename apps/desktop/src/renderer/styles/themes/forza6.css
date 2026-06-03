@@ -205,6 +205,11 @@
   --border-row-hover: var(--forza6-ink);
   --border-row-selected: var(--forza6-ink);
 
+  /* ── Control hover border (#task:912 review round 3) ──
+     forza6 control surface (TaskFilterBar chip trigger 等) hover 描边。
+     与 row hover 同源 (poster 黑墨 sticker 边)，pixel-zero。 */
+  --border-control-hover: var(--forza6-ink);
+
   /* ── Chrome label utility (§3.7.1) ──
      forza6 走 display 字体栈 + 稍开的 tracking（0.06em，跟
      `[data-tasks-num]` 等海报感 caps 元素一致）。 */
@@ -221,6 +226,15 @@
      饱和填色 + 软形是状态语义的一种表达），等开 pill-radius 那一波再统一。 */
   --control-radius: 0;
   --chip-radius: 0;
+
+  /* ── Row radius (review round 2 #task:912) ──
+     Single token for the 5 row-style surfaces (sidebar rows / NavRail /
+     Saved / Schedule card / MessageItem hover). forza6 keeps `0`
+     poster vocabulary — hard-cut block aesthetic across all row
+     surfaces, consistent with `--card-radius: 6` / `--control-radius: 0`
+     / `--floating-radius: 0`. slack-dark sets 6px. See slack-dark.css
+     for the full consumer list. */
+  --row-radius: 0;
 
   /* ── Profile section radius (#task:814) ──
      `[data-panel-card="profile-section"]` (Identity / Capabilities /
@@ -245,6 +259,11 @@
      PR-4 边界保留，2px 黑框不进 Select listbox）。 */
   --select-content-radius: 0;
   --select-item-radius: 0;
+
+  /* ── Tab segment radius (#task:912 review round 3) ──
+     `[data-panel-tabs] button` active 段。forza6 海报词汇硬楔 = `0`，
+     跟 control trigger 同节拍。 */
+  --tab-segment-radius: 0;
 
   /* ── Primary control surface (§3.2.3, PR-10 token promotion) ──
      `Button` default variant (CTA — 各 dialog 的 Create / Save 主按钮)

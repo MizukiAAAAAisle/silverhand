@@ -97,6 +97,21 @@ const THEME_META: Record<
     accent: '#D4F523',
     border: '#FF2C7A',
   },
+  'slack-dark': {
+    label: 'Slack Dark',
+    // Cool blue-black chrome (sidebar #19171D) + aubergine app frame
+    // (#350D36, the warm Slack-记忆点) + light gray primary text +
+    // brand blue accent. The 4 swatch dots show the dark surface
+    // ladder (sidebar/chat bg + frame) and the two primary signals
+    // (text + accent). idle tile border is the aubergine — the only
+    // warm beat in the palette, lets the swatch read as "Slack" at
+    // a glance.
+    bg: '#19171D',
+    surface: '#350D36',
+    text: '#D1D2D3',
+    accent: '#1D9BD1',
+    border: '#350D36',
+  },
 };
 
 /** Which sub-page of Settings is visible. The picker lives in the

@@ -131,7 +131,10 @@ export function AgentWorkspacePane({
       </header>
 
       <div
-        className="flex min-h-0 flex-1 overflow-hidden border border-border-subtle bg-bg-floating"
+        // Routed through `--card-radius` so warm/forza6 stay 0 (poster
+        // hard-cut) and slack-dark gets 8px (Slack-style rounded
+        // container with hairline border). #task:912 review round 6.
+        className="flex min-h-0 flex-1 overflow-hidden rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating"
       >
         <aside className="flex w-[280px] shrink-0 flex-col overflow-y-auto border-r border-border-subtle bg-bg-base">
           {treeQuery.isLoading ? (
@@ -262,7 +265,10 @@ function TreeRow({
         type="button"
         onClick={() => onToggle(node.path)}
         className={cn(
-          'flex w-full items-center gap-1.5 py-1 pr-2 text-left text-text-secondary hover:bg-bg-hover',
+          // Row vocabulary — picks up theme `--row-radius` (warm/forza6 = 0
+          // for scan-line, slack-dark = 6px for Slack-style soft list rows).
+          // #task:912 review round 4.
+          'flex w-full items-center gap-1.5 rounded-[var(--row-radius)] py-1 pr-2 text-left text-text-secondary hover:bg-bg-hover',
         )}
         style={{ paddingLeft: indent }}
         title={node.path}
@@ -287,7 +293,10 @@ function TreeRow({
       type="button"
       onClick={() => onSelect(node.path)}
       className={cn(
-        'flex w-full items-center gap-1.5 py-1 pr-2 text-left',
+        // Row vocabulary — see DirNode comment above; same `--row-radius`
+        // token covers folder + file rows so the tree reads as a single
+        // surface. #task:912 review round 4.
+        'flex w-full items-center gap-1.5 rounded-[var(--row-radius)] py-1 pr-2 text-left',
         selected
           ? 'bg-accent-2 text-text-on-accent-2'
           : 'text-text-primary hover:bg-bg-hover',

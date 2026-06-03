@@ -155,7 +155,12 @@ export function MemberPicker({
               candidate.kind === 'agent' ? (
                 <AgentAvatar
                   runtime={candidate.agent.runtime}
-                  size={16}
+                  // 14px avatar inside a 24px chip — see SelectedTag
+                  // comment for rationale (round 9.1: "头像占的太满
+                  // 了, 失去了空间感"). The smaller glyph leaves
+                  // ~5px above/below so the avatar reads as a small
+                  // identity icon rather than a tile.
+                  size={14}
                   avatarObjectUrl={
                     agentAvatars.get(candidate.agent.id) ?? null
                   }
@@ -163,7 +168,7 @@ export function MemberPicker({
                 />
               ) : (
                 <UserAvatar
-                  size={16}
+                  size={14}
                   avatarObjectUrl={
                     humanAvatars.get(candidate.user.id) ?? null
                   }
@@ -291,23 +296,28 @@ function SelectedTag({
 }): JSX.Element {
   // Chip frame is sized by the parent `<li>` (`flex h-6`); the chip
   // span uses `h-full` to fill it edge-to-edge so the chip background
-  // never reveals a stripe of `<li>` above/below it. Avatar wrapper
-  // also uses `h-full items-center` so the 16px avatar centers in
-  // the 24px frame regardless of which avatar primitive (sigil /
-  // photo / tinted square) renders inside. `leading-none` strips
-  // text-xs's intrinsic line-height padding from the visual frame.
+  // never reveals a stripe of `<li>` above/below it. The avatar is
+  // intentionally NOT stretched to the chip height — round 9.1 (the
+  // user noted "头像占的太满了, 失去了空间感"): a 14px avatar in a
+  // 24px chip leaves ~5px above/below + 6px on the left, so the
+  // avatar reads as a glyph floating inside the chip rather than a
+  // face-shaped tile filling the row. `leading-none` strips
+  // text-xs's intrinsic line-height padding so the label visual
+  // height matches the chip frame.
   // Per shiki followup on #task:888: "高度不统一,建议设置一个固定
   // 高度,而不是由内容决定,否则会受到头像影响" + "li 是 24px 了,但
-  // 是内部的 span 没有撑满高度".
+  // 是内部的 span 没有撑满高度" — that's still respected: the
+  // chip span itself is `h-full`; only the avatar is allowed to
+  // be smaller than the frame.
   return (
     <span
       className={
-        'inline-flex h-full max-w-full items-center gap-1.5 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base pl-1 pr-1 text-xs leading-none '
+        'inline-flex h-full max-w-full items-center gap-1.5 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base pl-1.5 pr-1 text-xs leading-none '
         + (muted ? 'text-text-muted' : 'text-text-primary')
       }
     >
       {avatar ? (
-        <span className="flex h-full shrink-0 items-center">{avatar}</span>
+        <span className="inline-flex shrink-0 items-center">{avatar}</span>
       ) : null}
       <span className="flex min-w-0 items-baseline gap-1">
         <span className="truncate font-medium">{displayName}</span>

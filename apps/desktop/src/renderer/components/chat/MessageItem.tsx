@@ -270,7 +270,12 @@ export function MessageItem({
           : undefined
       }
       className={
-        'relative flex items-start gap-3 border-2 px-2 py-1.5 transition-colors ' +
+        // Row radius routed via `--row-radius` token (#task:912 review
+        // round 2). The framed (saved/replying) outer ring picks up
+        // 6px in slack-dark and stays 0 in warm/forza6 — the soft hover
+        // box is invisible at 0 radius anyway, so consistency here is
+        // about *framed* presentations.
+        'relative flex items-start gap-3 rounded-[var(--row-radius)] border-2 px-2 py-1.5 transition-colors ' +
         (selectionMode ? 'cursor-pointer ' : '') +
         (alignRight ? 'flex-row-reverse' : 'flex-row') +
         ' ' +

@@ -53,7 +53,10 @@ export function NavRail({ current, onChange }: NavRailProps): JSX.Element {
             aria-current={selected ? 'page' : undefined}
             onClick={() => onChange(item.id)}
             className={cn(
-              'flex size-9 items-center justify-center border-2 transition-colors',
+              // Row-radius routed via `--row-radius` token (#task:912 review
+              // round 2). warm/forza6 = 0 (square poster/scan-line); slack-dark
+              // = 6px (Slack-style rounded nav button).
+              'flex size-9 items-center justify-center rounded-[var(--row-radius)] border-2 transition-colors',
               selected
                 ? 'border-accent bg-bg-selected text-text-on-selected'
                 : 'border-transparent text-[var(--text-nav-rail,var(--text-secondary))] hover:border-accent hover:bg-[var(--bg-nav-rail-hover,rgba(255,255,255,0.7))] hover:text-[var(--text-nav-rail-hover,var(--text-primary))]',
@@ -71,7 +74,8 @@ export function NavRail({ current, onChange }: NavRailProps): JSX.Element {
         aria-current={settingsSelected ? 'page' : undefined}
         onClick={() => onChange('settings')}
         className={cn(
-          'mt-auto flex size-9 items-center justify-center border-2 transition-colors',
+          // Same `--row-radius` token as nav buttons above (#task:912).
+          'mt-auto flex size-9 items-center justify-center rounded-[var(--row-radius)] border-2 transition-colors',
           settingsSelected
             ? 'border-accent bg-bg-selected text-text-on-selected'
             : 'border-transparent text-[var(--text-nav-rail,var(--text-secondary))] hover:border-accent hover:bg-[var(--bg-nav-rail-hover,rgba(255,255,255,0.7))] hover:text-[var(--text-nav-rail-hover,var(--text-primary))]',
