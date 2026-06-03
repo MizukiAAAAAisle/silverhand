@@ -190,6 +190,13 @@ export interface SupervisorOptions {
    * launcher and are left unchanged.
    */
   localSilverhandCliLauncher?: SilverhandCliLauncher | null;
+  /**
+   * Daemon-local current control-plane origin. In standalone remote-only
+   * mode this comes from the active outbound attachment (Desktop profile /
+   * daemon config), not from backend runtime_start. Embedded mode leaves it
+   * null and uses the backend-provided finalized local URL.
+   */
+  controlPlaneServerUrl?: (() => string | null) | null;
   // ── 3c-b init watchdog + retry/cooldown + compaction knobs ──────
   //
   // Override precedence is fixed (Cindy `-pdNvRYOWip5e9yA`):
@@ -242,6 +249,7 @@ export class Supervisor implements SupervisorContract {
   private readonly runtimePidRootDir: string | null;
   private readonly proxyConfigPath: string | null;
   private readonly localSilverhandCliLauncher: SilverhandCliLauncher | null;
+  private readonly controlPlaneServerUrl: () => string | null;
 
   // ── 3c-b state ─────────────────────────────────────────────────
   /** Sticky per-(conv, agent) init failure counter + cooldown clock.
@@ -280,6 +288,7 @@ export class Supervisor implements SupervisorContract {
     this.runtimePidRootDir = opts.runtimePidRootDir ?? null;
     this.proxyConfigPath = opts.proxyConfigPath ?? null;
     this.localSilverhandCliLauncher = opts.localSilverhandCliLauncher ?? null;
+    this.controlPlaneServerUrl = opts.controlPlaneServerUrl ?? (() => null);
     this.initWatchdogMs = opts.initWatchdogMs ?? null;
     this.initLivenessSilenceMs = opts.initLivenessSilenceMs;
     this.initPreProtocolCapMs = opts.initPreProtocolCapMs;
@@ -448,6 +457,7 @@ export class Supervisor implements SupervisorContract {
       conversationId: params.conversation_id,
       agentId: params.agent_id,
       binDir: spawnPrep.binDir,
+      controlPlaneServerUrl: this.controlPlaneServerUrl(),
       proxyConfig: readDaemonProxyConfig(this.proxyConfigPath, this.logger),
     });
     const startedAt = this.now();

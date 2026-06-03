@@ -492,6 +492,7 @@ export async function bootDaemonWithSupervisor(
       daemonInstanceId,
       runtimePidRootDir: pidRoot,
       runtimeStartResolveDeps,
+      controlPlaneServerUrl,
     }) =>
       new Supervisor({
         emit,
@@ -503,6 +504,8 @@ export async function bootDaemonWithSupervisor(
         daemonInstanceId,
         runtimePidRootDir: pidRoot,
         runtimeStartResolveDeps,
+        controlPlaneServerUrl,
+        localSilverhandCliLauncher: { command: 'true', args: [] },
         // Tight watchdogs so a misbehaving fixture surfaces fast
         // rather than hanging at the production-default 5min cap.
         initLivenessSilenceMs: 10_000,

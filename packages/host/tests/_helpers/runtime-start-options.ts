@@ -72,7 +72,6 @@ export function testStartOptions(overrides: {
     },
     env_policy: {
       silverhand: {
-        server_url: 'http://127.0.0.1:1',
         auth_token: 'test-agent-token',
       },
       silverhand_cli: {

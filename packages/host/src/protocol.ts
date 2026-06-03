@@ -369,7 +369,6 @@ const RuntimeStartEnvPolicySchema = z
   .object({
     silverhand: z
       .object({
-        server_url: z.string().url(),
         auth_token: z.string().min(1),
       })
       .strict(),

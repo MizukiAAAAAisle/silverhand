@@ -16,6 +16,13 @@ export interface DaemonSpawnEnvInput {
   conversationId: string;
   agentId: string;
   binDir: string;
+  /**
+   * Daemon-local control-plane origin from the current outbound attachment.
+   * Standalone backends do not know how this host should reach them; Desktop
+   * writes that URL into daemon config and the daemon owns injecting it into
+   * child CLI env.
+   */
+  controlPlaneServerUrl?: string | null;
   proxyConfig?: DaemonProxyConfig;
   baseProcessEnv?: NodeJS.ProcessEnv;
 }
@@ -34,11 +41,17 @@ export function buildDaemonSpawnEnv(
   }
 
   const currentPath = env.PATH ?? process.env.PATH ?? '';
+  const silverhandServerUrl = input.controlPlaneServerUrl;
+  if (!silverhandServerUrl) {
+    throw new Error(
+      'runtime_start: no silverhand server URL supplied by server and no daemon-local control-plane URL is attached',
+    );
+  }
   return {
     ...env,
     [SILVERHAND_CONVERSATION_ID_ENV]: input.conversationId,
     [SILVERHAND_AGENT_ID_ENV]: input.agentId,
-    [SILVERHAND_SERVER_URL_ENV]: options.env_policy.silverhand.server_url,
+    [SILVERHAND_SERVER_URL_ENV]: silverhandServerUrl,
     [SILVERHAND_AUTH_TOKEN_ENV]: options.env_policy.silverhand.auth_token,
     PATH: currentPath ? `${input.binDir}${delimiter}${currentPath}` : input.binDir,
   };

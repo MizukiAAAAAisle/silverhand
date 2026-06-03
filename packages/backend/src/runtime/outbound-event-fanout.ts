@@ -65,7 +65,6 @@ export interface OutboundRuntimeEventFanoutOptions {
   workspacesRoot: string;
   silverhandCli: SilverhandCliLauncher | null;
   agentTokens: AgentTokenStore;
-  serverUrl: () => string;
   /**
    * D4.e-6 — bounded lazy backfill of the daemon workspace registry before
    * a `runtime_start` dispatch. `runtime_start` carries semantic-only refs;
@@ -1129,7 +1128,6 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       members: this.membership.listMembers(conversation.id),
       workspacesForAgent: this.workspaces.listForAgent(agent.id),
       silverhandCli: this.opts.silverhandCli,
-      serverUrl: this.opts.serverUrl(),
       agentToken: this.opts.agentTokens.issue(conversationId, agentId),
     });
   }

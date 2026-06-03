@@ -830,12 +830,7 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  // P1-2 — the dispatched `runtime_start` carries the resolved server URL,
-  // never a placeholder. The fanout reads `serverUrl()` lazily at dispatch
-  // time; production index.ts wires `() => ctx.serverConfig.url` and only
-  // connects the embedded adapter AFTER the port is bound, so the first
-  // `runtime_start` already ships the real URL.
-  it('runtime_start options.server_url is the resolved serverUrl(), not a placeholder (P1-2)', async () => {
+  it('runtime_start options never carry server_url; the daemon injects host-local URL', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
       enqueueMessage(fix, 'start me');
@@ -847,10 +842,10 @@ describe('OutboundRuntimeEventFanout', () => {
       expect(
         (
           start!.params as {
-            options: { env_policy: { silverhand: { server_url: string } } };
+            options: { env_policy: { silverhand: Record<string, unknown> } };
           }
-        ).options.env_policy.silverhand.server_url,
-      ).toBe('http://127.0.0.1:1');
+        ).options.env_policy.silverhand,
+      ).not.toHaveProperty('server_url');
     } finally {
       fix.cleanup();
     }
@@ -1361,7 +1356,6 @@ function makeFixture(
     workspacesRoot,
     silverhandCli: { command: 'silverhand', args: [] },
     agentTokens: new AgentTokenStore(),
-    serverUrl: () => 'http://127.0.0.1:1',
     activityLog: null,
     ...(backfiller ? { workspaceRegistryBackfiller: backfiller } : {}),
     ...(opts.clearSessionExitTimeoutMs !== undefined

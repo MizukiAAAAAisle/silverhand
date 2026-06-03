@@ -30,6 +30,10 @@
  *   --proxy-config-path <abs>
  *                         optional; daemon-local runtime proxy config.
  *                         Proxy is host-local truth, never server state.
+ *   --control-plane-server-url-path <abs>
+ *                         optional; host-local file whose content is the
+ *                         control-plane origin injected into runtime CLI env.
+ *                         Desktop uses this for embedded loopback boots.
  *   --stderr              optional; mirror log lines to stderr too
  *
  * Stdout:
@@ -63,6 +67,7 @@ interface ParsedArgv {
   runtimePidRootDir: string | null;
   agentHomeRootDir: string | null;
   proxyConfigPath: string | null;
+  controlPlaneServerUrlPath: string | null;
   alsoStderr: boolean;
 }
 
@@ -75,6 +80,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   let runtimePidRootDir: string | null = null;
   let agentHomeRootDir: string | null = null;
   let proxyConfigPath: string | null = null;
+  let controlPlaneServerUrlPath: string | null = null;
   let alsoStderr = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -102,6 +108,9 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
         break;
       case '--proxy-config-path':
         proxyConfigPath = argv[++i] ?? null;
+        break;
+      case '--control-plane-server-url-path':
+        controlPlaneServerUrlPath = argv[++i] ?? null;
         break;
       case '--stderr':
         alsoStderr = true;
@@ -131,6 +140,12 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   if (proxyConfigPath !== null && !proxyConfigPath.startsWith('/')) {
     return { error: '--proxy-config-path must be absolute' };
   }
+  if (
+    controlPlaneServerUrlPath !== null &&
+    !controlPlaneServerUrlPath.startsWith('/')
+  ) {
+    return { error: '--control-plane-server-url-path must be absolute' };
+  }
   return {
     socketPath,
     pidFilePath,
@@ -140,6 +155,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
     runtimePidRootDir,
     agentHomeRootDir,
     proxyConfigPath,
+    controlPlaneServerUrlPath,
     alsoStderr,
   };
 }
@@ -160,6 +176,8 @@ async function main(): Promise<void> {
       runtimePidRootDir: parsed.runtimePidRootDir ?? undefined,
       agentHomeRootDir: parsed.agentHomeRootDir ?? undefined,
       proxyConfigPath: parsed.proxyConfigPath ?? undefined,
+      controlPlaneServerUrlPath:
+        parsed.controlPlaneServerUrlPath ?? undefined,
       installSignals: true,
       writeStdoutHandshake: true,
       alsoStderr: parsed.alsoStderr,

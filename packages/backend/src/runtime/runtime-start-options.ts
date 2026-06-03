@@ -17,7 +17,6 @@ export interface BuildRuntimeStartOptionsInput {
   members: MemberDto[];
   workspacesForAgent: WorkspaceDto[];
   silverhandCli: SilverhandCliLauncher | null;
-  serverUrl: string;
   agentToken: string;
   modelOverride?: string | null;
 }
@@ -62,7 +61,6 @@ export function buildRuntimeStartOptions(
     },
     env_policy: {
       silverhand: {
-        server_url: input.serverUrl,
         auth_token: input.agentToken,
       },
       ...(input.silverhandCli

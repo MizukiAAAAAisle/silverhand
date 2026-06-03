@@ -34,7 +34,14 @@ import {
   type ChildProcess,
   type SpawnOptions,
 } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -164,6 +171,8 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
   const controlSock = join(sockDir, 'd.sock');
   const daemonOutboundSock = join(sockDir, 'o.sock');
   const proxySock = join(sockDir, 'p.sock');
+  const controlPlaneServerUrlPath = join(daemonDir, 'control-plane-server-url');
+  writeFileSync(controlPlaneServerUrlPath, 'http://127.0.0.1:8765\n');
   const expectedSessionId = `d5a4-emb-session-${Date.now()}`;
 
   // Node-spawn the .cjs fixture (mirrors g2-harness defaultSpawnFn).
@@ -199,6 +208,7 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
     writeStdoutHandshake: false,
     daemonIdentityPath: null,
     runtimePidRootDir,
+    controlPlaneServerUrlPath,
     testHooks: { agentMaterializeHomeDir: agentHomeDir },
     supervisorFactory: ({
       emit,
@@ -206,6 +216,7 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
       daemonInstanceId,
       runtimePidRootDir: pidRoot,
       runtimeStartResolveDeps,
+      controlPlaneServerUrl,
     }) =>
       new Supervisor({
         emit,
@@ -216,6 +227,7 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
         daemonInstanceId,
         runtimePidRootDir: pidRoot,
         runtimeStartResolveDeps,
+        controlPlaneServerUrl,
         initLivenessSilenceMs: 10_000,
         initPreProtocolCapMs: 10_000,
         initPostProtocolMs: 10_000,

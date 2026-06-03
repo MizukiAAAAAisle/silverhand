@@ -24,6 +24,7 @@ import {
   installShutdownHandlers,
   releasePidFile,
 } from './lifecycle.js';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { IntentDispatcher } from './dispatcher.js';
@@ -131,6 +132,13 @@ export interface RunDaemonOptions {
    */
   proxyConfigPath?: string | null;
   /**
+   * Host-local control-plane URL file for embedded desktop boots. Desktop
+   * writes the finalized loopback URL after the embedded backend starts;
+   * the daemon reads it at runtime spawn. Standalone remote boots use
+   * `daemon-config.json` / outbound binding instead.
+   */
+  controlPlaneServerUrlPath?: string | null;
+  /**
    * Persistent daemon identity file. Four resolution cases:
    *
    *   - `=== null` — skip reading/creating any identity file; the
@@ -217,6 +225,7 @@ export interface RunDaemonOptions {
         runtimeStartResolveDeps: RuntimeStartResolveDeps;
         proxyConfigPath: string | null;
         localSilverhandCliLauncher: SilverhandCliLauncher | null;
+        controlPlaneServerUrl: () => string | null;
       }) => SupervisorContract)
     | null;
   /**
@@ -291,6 +300,27 @@ export interface RunningDaemon {
   /** Stop the daemon: drain in-flight intents, close socket, release
    *  pid file. Idempotent. Resolves once everything is flushed. */
   stop(reason: string): Promise<void>;
+}
+
+function readControlPlaneServerUrl(
+  filepath: string | null | undefined,
+  logger: DaemonLogger,
+): string | null {
+  if (!filepath) return null;
+  try {
+    const raw = readFileSync(filepath, 'utf8').trim();
+    if (!raw) return null;
+    return new URL(raw).origin;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT') {
+      logger.warn(
+        { filepath, err: (err as Error).message },
+        'failed to read daemon-local control-plane URL; runtime_start will fail if no outbound binding is attached',
+      );
+    }
+    return null;
+  }
 }
 
 export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> {
@@ -505,6 +535,9 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         runtimeStartResolveDeps,
         proxyConfigPath: opts.proxyConfigPath ?? null,
         localSilverhandCliLauncher,
+        controlPlaneServerUrl: () =>
+          outboundSupervisor.currentBinding()?.server_origin ??
+          readControlPlaneServerUrl(opts.controlPlaneServerUrlPath, logger),
       })
     : undefined;
   const dispatcher = new IntentDispatcher({

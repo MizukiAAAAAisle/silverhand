@@ -480,6 +480,7 @@ interface DaemonPaths {
   agentHomeRootDir: string;
   hostConfigPath: string;
   proxyConfigPath: string;
+  controlPlaneServerUrlPath: string;
   /** Local outbound frame socket — the daemon binds it and the embedded
    *  backend dials it for the D5.a R4-unified outbound envelope. */
   localOutboundSocketPath: string;
@@ -499,6 +500,7 @@ function daemonPaths(): DaemonPaths {
     agentHomeRootDir: join(silverhandDir(), 'agents'),
     hostConfigPath: daemonHostConfigPath(silverhandDir()),
     proxyConfigPath: join(silverhandDir(), 'daemon', 'proxy-config.json'),
+    controlPlaneServerUrlPath: join(runDir, 'control-plane-server-url'),
     localOutboundSocketPath: join(runDir, 'daemon-outbound.sock'),
   };
 }
@@ -1910,6 +1912,10 @@ async function bootstrap(): Promise<void> {
       runtimePidRootDir: paths.runtimePidRootDir,
       agentHomeRootDir: paths.agentHomeRootDir,
       proxyConfigPath: paths.proxyConfigPath,
+      controlPlaneServerUrlPath:
+        startupPlan.mode === 'embedded'
+          ? paths.controlPlaneServerUrlPath
+          : null,
       // D5.a-3: the daemon binds its local outbound frame server here so
       // the embedded backend can dial it and speak the same outbound
       // envelope as the standalone WSS path (R4 unification). This is the
@@ -2122,6 +2128,11 @@ async function bootstrap(): Promise<void> {
           outboundSocketPath: paths.localOutboundSocketPath,
         });
         await writeServerConfig(running.context.serverConfig);
+        writeFileSync(
+          paths.controlPlaneServerUrlPath,
+          `${running.context.serverConfig.url}\n`,
+          { mode: 0o600 },
+        );
         return running;
       },
       buildRemoteHandle: input => buildRemoteBackendHandle(input),

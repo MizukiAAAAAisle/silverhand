@@ -301,12 +301,10 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   // CONSTRUCTED synchronously after `serve()` returns (so `outboundAdapter`
   // is non-null before any route handler can run), but its `connect()` is
   // deferred behind this thunk and fired from inside the listen callback,
-  // AFTER `ctx.serverConfig.url` is finalized. Embedded replaces the
-  // placeholder with the real bound URL; standalone preserves a configured
-  // public origin when present. Otherwise the connect — and the
-  // `runtime_start` it eventually carries — could race ahead of URL
-  // finalization and ship a placeholder/bind-only `server_url`. Stays
-  // null for standalone (daemon dials in).
+  // AFTER `ctx.serverConfig.url` is finalized. This is still load-bearing
+  // for event-WS / backend metadata, but `runtime_start` no longer carries
+  // server_url at all: the host daemon injects the control-plane URL locally.
+  // Stays null for standalone (daemon dials in).
   let startEmbeddedOutboundConnect: (() => void) | null = null;
 
   const ctx: BackendContext = {
@@ -601,7 +599,6 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
         workspacesRoot,
         silverhandCli: ctx.silverhandCliLauncher,
         agentTokens: ctx.agentTokens,
-        serverUrl: () => ctx.serverConfig.url,
         logDir: ctx.logDir,
         workspaceRegistryBackfiller: ctx.workspaceRegistryBackfiller,
       });
@@ -622,7 +619,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     // synchronously before the listen callback fires, so `outboundAdapter`
     // is wired before any request can arrive. For embedded the actual
     // `connect()` is deferred to the listen callback (P1-1) so the first
-    // `runtime_start` never ships a placeholder `server_url`.
+    // embedded adapter never observes placeholder backend state.
     if (opts.mode === 'standalone') {
       // Standalone: the daemon dials the backend over WSS; the adapter
       // is a thin view of the `hostWs` controller (owned by this

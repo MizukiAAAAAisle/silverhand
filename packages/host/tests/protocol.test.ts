@@ -295,6 +295,24 @@ describe('protocol — runtime_* registry', () => {
     expect(parsed.success).toBe(true);
   });
 
+  it('runtime_start.options rejects server_url in env_policy; daemon injects it locally', () => {
+    const parsed = RuntimeStartParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: {
+        ...testStartOptions(),
+        env_policy: {
+          ...testStartOptions().env_policy,
+          silverhand: {
+            ...testStartOptions().env_policy.silverhand,
+            server_url: 'https://server.example.test',
+          },
+        },
+      },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
   it('runtime_start rejects empty startup_delivery.delivery_ids', () => {
     const r = RuntimeStartParamsSchema.safeParse({
       conversation_id: 'c1',

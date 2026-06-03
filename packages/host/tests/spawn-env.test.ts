@@ -37,10 +37,7 @@ describe('daemon spawn env', () => {
     const options = testStartOptions({ runtime: 'codex' });
     options.env_policy = {
       ...options.env_policy,
-      silverhand: {
-        server_url: 'http://127.0.0.1:8765',
-        auth_token: 'tok_test_123',
-      },
+      silverhand: { auth_token: 'tok_test_123' },
     };
 
     const env = buildDaemonSpawnEnv({
@@ -49,6 +46,7 @@ describe('daemon spawn env', () => {
       conversationId: 'conv-abc',
       agentId: 'agent-xyz',
       binDir: '/tmp/silverhand-spawn/bin',
+      controlPlaneServerUrl: 'https://remote.example.test',
       proxyConfig: {
         proxy_url: 'http://127.0.0.1:7897',
         proxy_runtimes: ['codex'],
@@ -61,7 +59,7 @@ describe('daemon spawn env', () => {
     expect(env.HTTPS_PROXY).toBe('http://127.0.0.1:7897');
     expect(env[SILVERHAND_CONVERSATION_ID_ENV]).toBe('conv-abc');
     expect(env[SILVERHAND_AGENT_ID_ENV]).toBe('agent-xyz');
-    expect(env[SILVERHAND_SERVER_URL_ENV]).toBe('http://127.0.0.1:8765');
+    expect(env[SILVERHAND_SERVER_URL_ENV]).toBe('https://remote.example.test');
     expect(env[SILVERHAND_AUTH_TOKEN_ENV]).toBe('tok_test_123');
     expect(env.PATH).toBe(
       `/tmp/silverhand-spawn/bin${delimiter}/usr/local/bin:/usr/bin:/bin`,
@@ -78,6 +76,7 @@ describe('daemon spawn env', () => {
       conversationId: options.session.conversation_id,
       agentId: options.agent.id,
       binDir: '/tmp/silverhand-spawn/bin',
+      controlPlaneServerUrl: 'http://127.0.0.1:8765',
       proxyConfig: {
         proxy_url: 'http://127.0.0.1:7897',
         proxy_runtimes: ['codex'],
@@ -87,5 +86,21 @@ describe('daemon spawn env', () => {
 
     expect(env.HTTP_PROXY).toBeUndefined();
     expect(env.HTTPS_PROXY).toBeUndefined();
+  });
+
+  it('fails loud when the daemon has no host-local control-plane URL', () => {
+    const driver = makeDriver(env => ({ ...env }));
+    const options = testStartOptions({ runtime: 'codex' });
+
+    expect(() =>
+      buildDaemonSpawnEnv({
+        driver,
+        options,
+        conversationId: options.session.conversation_id,
+        agentId: options.agent.id,
+        binDir: '/tmp/silverhand-spawn/bin',
+        baseProcessEnv: BASE_ENV,
+      }),
+    ).toThrow(/no silverhand server URL/);
   });
 });

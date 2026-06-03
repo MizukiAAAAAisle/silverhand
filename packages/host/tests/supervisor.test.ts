@@ -174,6 +174,7 @@ function makeSupervisor(opts: {
     runtimePidRootDir: opts.runtimePidRootDir,
     runtimeStartResolveDeps:
       opts.runtimeStartResolveDeps ?? testRuntimeStartResolveDeps(),
+    controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
     emitRawRuntimeOutput: opts.emitRawRuntimeOutput ?? true,
     sigtermToSigkillMs: opts.sigtermToSigkillMs ?? 50,
     sigkillTimeoutMs: opts.sigkillTimeoutMs ?? 200,
@@ -328,6 +329,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
         homeDir,
         workspacePath,
       }),
+      controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,
     });
@@ -461,6 +463,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       driverFor: () => makeFakeDriver(),
       resolveBinary: async () => null,
       runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
+      controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
     });
     await expect(supervisor.start(baseStartParams)).rejects.toThrow(/not found on PATH/);
   });
@@ -884,6 +887,7 @@ describe('Supervisor 3a — hard stop / exit', () => {
       resolveBinary: async (_kind, fallback) => fallback,
       spawnFn,
       runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
+      controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,
     });
@@ -1223,6 +1227,7 @@ function makeSupervisorWithDriver(driver: Driver, opts: {
     resolveBinary: async (_kind, fallback) => fallback,
     spawnFn,
     runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
+    controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
     emitRawRuntimeOutput: opts.emitRawRuntimeOutput ?? true,
     sigtermToSigkillMs: opts.sigtermToSigkillMs ?? 50,
     sigkillTimeoutMs: opts.sigkillTimeoutMs ?? 200,
@@ -1643,6 +1648,7 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred startup_delive
       resolveBinary: async (_kind, fallback) => fallback,
       spawnFn,
       runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
+      controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,
     });
@@ -1990,6 +1996,7 @@ function make3cSupervisor(
     resolveBinary: async (_kind, fallback) => fallback,
     spawnFn,
     runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
+    controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
     sigtermToSigkillMs: opts.sigtermToSigkillMs ?? 50,
     sigkillTimeoutMs: opts.sigkillTimeoutMs ?? 200,
     initWatchdogMs: opts.initWatchdogMs,

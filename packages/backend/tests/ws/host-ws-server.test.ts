@@ -1024,7 +1024,6 @@ function runtimeStartOptions(): unknown {
     },
     env_policy: {
       silverhand: {
-        server_url: 'http://127.0.0.1:8765',
         auth_token: 'agent-token',
       },
       silverhand_cli: {

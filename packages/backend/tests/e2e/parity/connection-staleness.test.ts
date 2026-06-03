@@ -168,7 +168,6 @@ async function makeStandaloneStalenessFixture(): Promise<StandaloneStalenessFixt
     workspacesRoot,
     silverhandCli: { command: 'silverhand', args: [] },
     agentTokens: new AgentTokenStore(),
-    serverUrl: () => 'http://127.0.0.1:1',
     activityLog: null,
   });
   controller = installHostWebSocketServer(httpServer, t.ctx, {

@@ -58,6 +58,7 @@ async function captureSpawnArgs(
     localOutboundSocketPath?: string | null;
     runtimePidRootDir?: string | null;
     agentHomeRootDir?: string | null;
+    controlPlaneServerUrlPath?: string | null;
   } = {},
 ): Promise<readonly string[]> {
   const socketPath = '/tmp/silverhand-fake.sock';
@@ -87,6 +88,9 @@ async function captureSpawnArgs(
       : {}),
     ...(opts.agentHomeRootDir !== undefined
       ? { agentHomeRootDir: opts.agentHomeRootDir }
+      : {}),
+    ...(opts.controlPlaneServerUrlPath !== undefined
+      ? { controlPlaneServerUrlPath: opts.controlPlaneServerUrlPath }
       : {}),
   });
   // Let the supervisor register its stdout listener, then hand it ready.
@@ -148,5 +152,24 @@ describe('spawnDaemonChild — local outbound socket arg forwarding (D5.a-3)', (
 
     const nullArgs = await captureSpawnArgs({ agentHomeRootDir: null });
     expect(nullArgs).not.toContain('--agent-home-root-dir');
+  });
+
+  it('forwards --control-plane-server-url-path when set', async () => {
+    const args = await captureSpawnArgs({
+      controlPlaneServerUrlPath: '/tmp/silverhand-control-plane-url',
+    });
+    const idx = args.indexOf('--control-plane-server-url-path');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe('/tmp/silverhand-control-plane-url');
+  });
+
+  it('omits --control-plane-server-url-path when unset or null', async () => {
+    const unsetArgs = await captureSpawnArgs();
+    expect(unsetArgs).not.toContain('--control-plane-server-url-path');
+
+    const nullArgs = await captureSpawnArgs({
+      controlPlaneServerUrlPath: null,
+    });
+    expect(nullArgs).not.toContain('--control-plane-server-url-path');
   });
 });

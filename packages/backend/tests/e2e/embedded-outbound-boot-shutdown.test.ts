@@ -1,16 +1,12 @@
 /**
  * D5.a-3 P1 regressions (Cindy `KuHXrKuCv9nPU28M`) — real `startBackend`
  * embedded boot + shutdown against a fake local-outbound daemon over a
- * Unix socket. Unlike the fanout unit pins (which prove "whatever
- * `serverUrl()` returns ends up in `runtime_start`"), this exercises the
- * actual `startBackend` BOOT ORDER and SHUTDOWN ORDER.
+ * Unix socket. This exercises the actual `startBackend` BOOT ORDER and
+ * SHUTDOWN ORDER.
  *
- * P1-1 — the embedded adapter must `connect()` only AFTER the listen
- * callback has swapped `ctx.serverConfig.url` from the input placeholder
- * (`http://127.0.0.1:0`) to the real bound URL. We assert the
- * `runtime_start` the daemon receives carries
- * `options.env_policy.silverhand.server_url === running.url`, never the
- * `:0` placeholder.
+ * P1-1 — `runtime_start` carries only server-owned auth bytes. The host
+ * daemon injects `SILVERHAND_SERVER_URL` from host-local Desktop config,
+ * so the backend wire must not carry a server_url at all.
  *
  * P1-2 — `closeActivityLog()` must dispatch `runtime_close_activity_log`
  * WHILE the outbound transport is still connected. We assert the daemon
@@ -213,7 +209,7 @@ describe('D5.a-3 embedded boot + shutdown order (real startBackend)', () => {
     }
   });
 
-  it('runtime_start carries the finalized listen URL (P1-1) and close() dispatches runtime_close_activity_log before transport teardown (P1-2)', async () => {
+  it('runtime_start omits server_url and close() dispatches runtime_close_activity_log before transport teardown', async () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'silverhand-d5a-boot-'));
     const socketPath = join(tmpDir, 'daemon-outbound.sock');
     daemon = new FakeOutboundDaemon(socketPath);
@@ -319,16 +315,14 @@ describe('D5.a-3 embedded boot + shutdown order (real startBackend)', () => {
     // auto-spawns the backlog, so this is what dispatches runtime_start.
     await running.context.runtimeHost.start(conversationId, agentId);
 
-    // ── P1-1 assertion ──
     await waitFor(() => !!daemon!.find('runtime_start'), {
       label: 'runtime_start dispatch',
     });
     const start = daemon.find('runtime_start')!;
     const params = start.params as {
-      options: { env_policy: { silverhand: { server_url: string } } };
+      options: { env_policy: { silverhand: Record<string, unknown> } };
     };
-    expect(params.options.env_policy.silverhand.server_url).toBe(running.url);
-    expect(params.options.env_policy.silverhand.server_url).not.toContain(':0');
+    expect(params.options.env_policy.silverhand).not.toHaveProperty('server_url');
 
     // ── P1-2 assertion ──
     // Close the backend; the daemon must receive runtime_close_activity_log

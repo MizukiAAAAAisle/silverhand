@@ -70,15 +70,15 @@ export type DaemonHostConfig = z.infer<typeof DaemonHostConfigSchema>;
 
 /**
  * Environment variable names the `silverhand` CLI reads at every
- * invocation. Spawned agents inherit these from the backend's
- * ConversationManager (phase 1A/C). The CLI never accepts them as
+ * invocation. Spawned agents inherit these from the host daemon child
+ * spawn env. The CLI never accepts them as
  * arguments — agents must not override them, and the per-(cid, aid)
  * auth token is the integrity boundary that prevents impersonation
  * via a manual env override.
  *
- * These constants are exported here so both the spawn-side (backend
- * conversation-manager) and the read-side (`packages/cli`) reference
- * the same string and cannot drift.
+ * These constants are exported here so both the spawn-side
+ * (`@silverhand/host`) and the read-side (`packages/cli`) reference the
+ * same string and cannot drift.
  */
 export const SILVERHAND_CONVERSATION_ID_ENV = 'SILVERHAND_CONVERSATION_ID';
 export const SILVERHAND_AGENT_ID_ENV = 'SILVERHAND_AGENT_ID';
