@@ -57,7 +57,7 @@ const EXCERPT_LIMIT = 160;
  *    recipient's DM scope.
  *  - Publishes a realtime event for the Mentions conversation.
  *
- * Skipped silently when:
+ * Logged and skipped when:
  *  - mention handle doesn't resolve to an agent
  *  - the agent IS a member of the source conversation (they got the
  *    original — no DM duplicate needed)
@@ -99,25 +99,58 @@ async function deliverOne(
   opts: MentionCcOpts,
 ): Promise<void> {
   const agent = opts.agents.getByName(handle);
-  if (!agent) return; // unknown handle, just text
+  if (!agent) {
+    opts.logger.info(
+      {
+        event: 'mention_cc.skip',
+        reason: 'unknown_handle',
+        handle,
+        sourceConversationId: opts.sourceConversation.id,
+        sourceMessageId: opts.message.id,
+      },
+      'mention-cc: skipping unknown handle',
+    );
+    return; // unknown handle, just text
+  }
 
   // Already a conversation member → they received the original directly.
-  if (sourceMembers.has(agent.id)) return;
+  if (sourceMembers.has(agent.id)) {
+    opts.logger.info(
+      {
+        event: 'mention_cc.skip',
+        reason: 'already_member',
+        handle,
+        agentId: agent.id,
+        sourceConversationId: opts.sourceConversation.id,
+        sourceMessageId: opts.message.id,
+      },
+      'mention-cc: mentioned agent is already a source conversation member; skipping DM copy',
+    );
+    return;
+  }
 
   const dm = opts.conversations.findDmChannelForAgent(agent.id);
   if (!dm) {
     opts.logger.warn(
-      { handle, agentId: agent.id },
+      {
+        event: 'mention_cc.skip',
+        reason: 'missing_agent_dm',
+        handle,
+        agentId: agent.id,
+        sourceConversationId: opts.sourceConversation.id,
+        sourceMessageId: opts.message.id,
+      },
       'mention-cc: mentioned agent has no DM channel; skipping',
     );
     return;
   }
 
-  const mentionsConversation = getOrCreateMentionsConversation(
+  const mentions = getOrCreateMentionsConversation(
     dm,
     agent.id,
     opts.conversations,
   );
+  const mentionsConversation = mentions.conversation;
   // Make sure the agent is a member of the Mentions conversation — addAgent
   // is INSERT OR IGNORE, so re-running is a no-op.
   opts.conversations.addAgent(mentionsConversation.id, agent.id);
@@ -138,7 +171,10 @@ async function deliverOne(
   const humanMemberId =
     opts.message.from_user_id
     ?? singleConversationViewerUserId(opts.conversations, opts.sourceConversation.id);
+  let humanMembershipCreated = false;
   if (humanMemberId) {
+    humanMembershipCreated =
+      opts.conversations.getUser(mentionsConversation.id, humanMemberId) === null;
     opts.conversations.addUser(mentionsConversation.id, humanMemberId);
     // workspace_users is INSERT OR IGNORE — safe to re-run.
     opts.db
@@ -151,7 +187,10 @@ async function deliverOne(
   } else {
     opts.logger.warn(
       {
+        event: 'mention_cc.skip_user_membership',
+        reason: 'unresolved_human_member',
         handle,
+        agentId: agent.id,
         sourceConversationId: opts.sourceConversation.id,
         sourceMessageId: opts.message.id,
       },
@@ -179,6 +218,34 @@ async function deliverOne(
     },
   });
 
+  if (humanMemberId && (mentions.created || humanMembershipCreated)) {
+    opts.events.publishToScope(
+      `workspace:${mentionsConversation.workspace_id}`,
+      'workspace_channels_changed',
+      {
+        workspace_id: mentionsConversation.workspace_id,
+        channel_id: mentionsConversation.id,
+      },
+    );
+  }
+  opts.events.publish(mentionsConversation.id, {
+    kind: 'message',
+    payload: { message: wrapped },
+  });
+  if (
+    humanMemberId
+    && viewerHasNotReadMessage(
+      opts.db,
+      mentionsConversation.id,
+      humanMemberId,
+      wrapped.seq,
+    )
+  ) {
+    opts.events.publishToScope(`viewer:${humanMemberId}`, 'unread_updated', {
+      conversation_id: mentionsConversation.id,
+    });
+  }
+
   // Fire-and-forget start; deliverMessage tolerates "not yet running"
   // by enqueueing to the inbox, so we don't need to await ordering.
   opts.runtimeHost
@@ -191,27 +258,42 @@ async function deliverOne(
     );
   await opts.runtimeHost.deliverMessage(mentionsConversation.id, agent.id, wrapped.id);
 
-  opts.notifications.insert({
-    kind: 'mention_external',
-    userId: humanMemberId,
-    agentId: agent.id,
-    workspaceId: mentionsConversation.workspace_id,
-    conversationId: mentionsConversation.id,
-    messageId: wrapped.id,
-    sourceWorkspaceId: opts.sourceWorkspace.id,
-    sourceConversationId: opts.sourceConversation.id,
-    sourceMessageId: opts.message.id,
-    payload: {
-      source_workspace_name: opts.sourceWorkspace.name,
-      source_conversation_title: opts.sourceConversation.title,
-      mention_excerpt: excerpt(opts.message.content),
-    },
-  });
   if (humanMemberId) {
+    opts.notifications.insert({
+      kind: 'mention_external',
+      userId: humanMemberId,
+      agentId: agent.id,
+      workspaceId: mentionsConversation.workspace_id,
+      conversationId: mentionsConversation.id,
+      messageId: wrapped.id,
+      sourceWorkspaceId: opts.sourceWorkspace.id,
+      sourceConversationId: opts.sourceConversation.id,
+      sourceMessageId: opts.message.id,
+      payload: {
+        source_workspace_name: opts.sourceWorkspace.name,
+        source_conversation_title: opts.sourceConversation.title,
+        mention_excerpt: excerpt(opts.message.content),
+      },
+    });
     opts.events.publishToScope(`viewer:${humanMemberId}`, 'notification', {
       kind: 'mention_external',
       conversation_id: mentionsConversation.id,
+      message_id: wrapped.id,
     });
+  } else {
+    opts.logger.warn(
+      {
+        event: 'mention_cc.skip_notification',
+        reason: 'unresolved_human_member',
+        handle,
+        agentId: agent.id,
+        conversationId: mentionsConversation.id,
+        sourceConversationId: opts.sourceConversation.id,
+        sourceMessageId: opts.message.id,
+        wrappedMessageId: wrapped.id,
+      },
+      'mention-cc: no human member id available; skipping viewer notification insert',
+    );
   }
 }
 
@@ -227,18 +309,38 @@ function getOrCreateMentionsConversation(
   dm: DmChannelDto,
   agentId: string,
   conversations: ConversationRepo,
-): DmChannelDto {
+): { conversation: DmChannelDto; created: boolean } {
   const existing = conversations.findDmChannelForAgent(
     agentId,
     { title: MENTIONS_CHANNEL_TITLE },
   );
-  if (existing) return existing;
-  return conversations.insertDmChannel({
-    workspaceId: dm.workspace_id,
-    workspacePath: dm.workspace_path,
-    title: MENTIONS_CHANNEL_TITLE,
-    agentId,
-  });
+  if (existing) return { conversation: existing, created: false };
+  return {
+    conversation: conversations.insertDmChannel({
+      workspaceId: dm.workspace_id,
+      workspacePath: dm.workspace_path,
+      title: MENTIONS_CHANNEL_TITLE,
+      agentId,
+    }),
+    created: true,
+  };
+}
+
+function viewerHasNotReadMessage(
+  db: Db,
+  conversationId: string,
+  viewerUserId: string,
+  messageSeq: number,
+): boolean {
+  const row = db
+    .prepare<[string, string], { last_read_seq: number }>(
+      `SELECT last_read_seq
+         FROM conversation_reads
+        WHERE user_id = ?
+          AND conversation_id = ?`,
+    )
+    .get(viewerUserId, conversationId);
+  return (row?.last_read_seq ?? 0) < messageSeq;
 }
 
 function renderMentionWrap(agent: { name: string }, opts: MentionCcOpts): string {

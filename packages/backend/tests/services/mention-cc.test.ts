@@ -10,6 +10,7 @@ import { ccMentionsFromUserMessage } from '../../src/mention-cc.js';
 import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
+import type { MessageDto } from '@silverhand/shared';
 
 class FakeConversationManager {
   starts: Array<{ conversationId: string; agentId: string }> = [];
@@ -101,6 +102,22 @@ function bootstrap() {
     aliceDm,
     cleanup: tmp.cleanup,
   };
+}
+
+async function runMentionCc(t: ReturnType<typeof bootstrap>, message: MessageDto) {
+  await ccMentionsFromUserMessage({
+    message,
+    sourceConversation: t.sourceChannel,
+    sourceWorkspace: t.sourceWorkspace,
+    db: t.db,
+    agents: t.agents,
+    conversations: t.conversations,
+    messages: t.messages,
+    notifications: t.notifications,
+    runtimeHost: t.fake as unknown as AgentRuntimeHost,
+    logger: t.logger,
+    events: t.events,
+  });
 }
 
 describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocker fix)', () => {
@@ -355,6 +372,244 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         .all(mentionsDm!.id)
         .map(r => r.user_id);
       expect(dmMembers).toEqual(['teammate']);
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+describe('ccMentionsFromUserMessage — realtime events and skip logging', () => {
+  it('publishes topology, message, unread, and notification events for a newly visible Mentions DM', async () => {
+    const t = bootstrap();
+    try {
+      const userMsg = t.messages.insertForConversation({
+        conversationId: t.sourceChannel.id,
+        fromKind: 'user',
+        fromUserId: 'teammate',
+        content: 'please review this @alice',
+      });
+
+      await runMentionCc(t, userMsg);
+
+      const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
+        title: 'Mentions',
+      });
+      expect(mentionsDm).not.toBeNull();
+
+      const workspaceEvents = t.events.replay(
+        `workspace:${t.aliceHome.id}`,
+        0,
+        'test-epoch',
+      );
+      expect(workspaceEvents).toEqual([
+        expect.objectContaining({
+          kind: 'workspace_channels_changed',
+          payload: {
+            workspace_id: t.aliceHome.id,
+            channel_id: mentionsDm!.id,
+          },
+        }),
+      ]);
+
+      const conversationEvents = t.events.replay(
+        `conversation:${mentionsDm!.id}`,
+        0,
+        'test-epoch',
+      );
+      expect(conversationEvents).toHaveLength(1);
+      expect(conversationEvents[0]).toEqual(
+        expect.objectContaining({
+          kind: 'message',
+          payload: {
+            message: expect.objectContaining({
+              conversation_id: mentionsDm!.id,
+              from_kind: 'system',
+            }),
+          },
+        }),
+      );
+
+      const viewerEvents = t.events.replay('viewer:teammate', 0, 'test-epoch');
+      expect(viewerEvents.map(e => e.kind)).toEqual([
+        'unread_updated',
+        'notification',
+      ]);
+      expect(viewerEvents[0]!.payload).toEqual({
+        conversation_id: mentionsDm!.id,
+      });
+      expect(viewerEvents[1]!.payload).toEqual(
+        expect.objectContaining({
+          kind: 'mention_external',
+          conversation_id: mentionsDm!.id,
+        }),
+      );
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('does not republish workspace_channels_changed when reusing the same Mentions DM membership', async () => {
+    const t = bootstrap();
+    try {
+      const first = t.messages.insertForConversation({
+        conversationId: t.sourceChannel.id,
+        fromKind: 'user',
+        fromUserId: 'teammate',
+        content: 'first @alice',
+      });
+      await runMentionCc(t, first);
+      const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
+        title: 'Mentions',
+      });
+      expect(mentionsDm).not.toBeNull();
+
+      const second = t.messages.insertForConversation({
+        conversationId: t.sourceChannel.id,
+        fromKind: 'user',
+        fromUserId: 'teammate',
+        content: 'second @alice',
+      });
+      await runMentionCc(t, second);
+
+      expect(t.events.currentSeq(`workspace:${t.aliceHome.id}`)).toBe(1);
+      expect(t.events.currentSeq(`conversation:${mentionsDm!.id}`)).toBe(2);
+      expect(t.events.replay('viewer:teammate', 0, 'test-epoch').map(e => e.kind))
+        .toEqual([
+          'unread_updated',
+          'notification',
+          'unread_updated',
+          'notification',
+        ]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('skips unread_updated when the viewer read cursor already covers the wrapped message seq', async () => {
+    const t = bootstrap();
+    try {
+      const first = t.messages.insertForConversation({
+        conversationId: t.sourceChannel.id,
+        fromKind: 'user',
+        fromUserId: 'teammate',
+        content: 'first @alice',
+      });
+      await runMentionCc(t, first);
+      const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
+        title: 'Mentions',
+      });
+      expect(mentionsDm).not.toBeNull();
+
+      t.db
+        .prepare(
+          `INSERT INTO conversation_reads
+             (user_id, conversation_id, last_read_seq, read_at)
+           VALUES (?, ?, ?, ?)`,
+        )
+        .run('teammate', mentionsDm!.id, 99, Date.now());
+      const viewerSeqBeforeSecond = t.events.currentSeq('viewer:teammate');
+
+      const second = t.messages.insertForConversation({
+        conversationId: t.sourceChannel.id,
+        fromKind: 'user',
+        fromUserId: 'teammate',
+        content: 'second @alice',
+      });
+      await runMentionCc(t, second);
+
+      expect(
+        t.events
+          .replay('viewer:teammate', viewerSeqBeforeSecond, 'test-epoch')
+          .map(e => e.kind),
+      ).toEqual(['notification']);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('logs unknown mention handles at info level', async () => {
+    const t = bootstrap();
+    try {
+      const userMsg = t.messages.insertForConversation({
+        conversationId: t.sourceChannel.id,
+        fromKind: 'user',
+        fromUserId: 'teammate',
+        content: 'hey @ghost',
+      });
+
+      await runMentionCc(t, userMsg);
+
+      expect(t.logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'mention_cc.skip',
+          reason: 'unknown_handle',
+          handle: 'ghost',
+        }),
+        expect.any(String),
+      );
+      expect(t.fake.delivered).toHaveLength(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('logs source-member mentions at info level instead of duplicating into a DM', async () => {
+    const t = bootstrap();
+    try {
+      t.conversations.addAgent(t.sourceChannel.id, t.alice.id);
+      const userMsg = t.messages.insertForConversation({
+        conversationId: t.sourceChannel.id,
+        fromKind: 'user',
+        fromUserId: 'teammate',
+        content: 'hey @alice',
+      });
+
+      await runMentionCc(t, userMsg);
+
+      expect(t.logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'mention_cc.skip',
+          reason: 'already_member',
+          handle: 'alice',
+          agentId: t.alice.id,
+        }),
+        expect.any(String),
+      );
+      expect(
+        t.conversations.findDmChannelForAgent(t.alice.id, { title: 'Mentions' }),
+      ).toBeNull();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('logs missing agent DM channels at warn level', async () => {
+    const t = bootstrap();
+    try {
+      const bob = t.agents.create(
+        { name: 'bob', runtime: 'claude' },
+        t.alice.host_id,
+        'local',
+      );
+      const userMsg = t.messages.insertForConversation({
+        conversationId: t.sourceChannel.id,
+        fromKind: 'user',
+        fromUserId: 'teammate',
+        content: 'hey @bob',
+      });
+
+      await runMentionCc(t, userMsg);
+
+      expect(t.logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'mention_cc.skip',
+          reason: 'missing_agent_dm',
+          handle: 'bob',
+          agentId: bob.id,
+        }),
+        expect.any(String),
+      );
+      expect(t.fake.delivered).toHaveLength(0);
     } finally {
       t.cleanup();
     }
