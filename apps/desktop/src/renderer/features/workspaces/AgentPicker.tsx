@@ -289,14 +289,24 @@ function SelectedTag({
   ariaRemoveLabel: string;
   muted?: boolean;
 }): JSX.Element {
+  // Fixed `h-6` (24px) so avatar variants (agent sigil vs human
+  // photo/tinted-fallback) cannot drive the chip height. Per shiki
+  // followup on #task:888: "高度不统一,建议设置一个固定高度,而不是
+  // 由内容决定,否则会受到头像影响". Avatar wrapper uses `h-full
+  // items-center` to center the 16px avatar inside the 24px frame
+  // regardless of the avatar primitive's internal box; text uses
+  // `leading-none` so text-xs / [11px] line-heights don't add stray
+  // baseline space inside the fixed frame.
   return (
     <span
       className={
-        'inline-flex max-w-full items-center gap-1.5 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base py-0.5 pl-1 pr-1 text-xs '
+        'inline-flex h-6 max-w-full items-center gap-1.5 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base pl-1 pr-1 text-xs leading-none '
         + (muted ? 'text-text-muted' : 'text-text-primary')
       }
     >
-      {avatar ? <span className="shrink-0">{avatar}</span> : null}
+      {avatar ? (
+        <span className="flex h-full shrink-0 items-center">{avatar}</span>
+      ) : null}
       <span className="flex min-w-0 items-baseline gap-1">
         <span className="truncate font-medium">{displayName}</span>
         {handle ? (
