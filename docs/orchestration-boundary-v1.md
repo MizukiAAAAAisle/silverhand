@@ -399,18 +399,63 @@ to hint about notes, the **daemon** enumerates and renders locally.
 The server does NOT compose `process.env`. The server ships an **env
 policy** with explicit fields:
 
-- `silverhand: { server_url, auth_token }` — values the daemon applies
-  as `SILVERHAND_SERVER_URL` / `SILVERHAND_AUTH_TOKEN` plus the
-  protocol ids it already has (`conversation_id`, `agent_id`).
-- `silverhand_cli: { command, args, env_vars? }` — launcher metadata
-  for the local `silverhand` shim. `env_vars` is an explicit launcher
-  field, not a generic child env map.
-- `proxy: { url, allowlist }` — the user-configured proxy policy from
-  server settings; daemon applies it only when the runtime is allowed.
+- `silverhand: { auth_token }` — the **server-minted** per-(conversation,
+  agent) credential the daemon applies as `SILVERHAND_AUTH_TOKEN`, plus
+  the protocol ids it already has (`conversation_id`, `agent_id`).
+  Identity/authz is server-owned, so this legitimately rides the wire
+  server→daemon→agent.
+- `silverhand_cli` — launcher metadata for the local `silverhand` shim.
+  **Optional / host-overridable** (Rev 6 LOCK): standalone server does
+  not ship it; the daemon resolves the host-local CLI launcher itself
+  (release `Resources/silverhand-cli/cli.mjs`, dev
+  `packages/cli/dist/cli.js`). If a legacy server still ships a fallback
+  `{ command: 'silverhand', args: [] }`, the daemon overrides it with the
+  host-local launcher — otherwise the per-spawn shim's own dir, prepended
+  to PATH, resolves `silverhand` back to the shim and the shim recurses
+  into itself (the outingguy 2-minute hang, 2026-06-03).
+- `proxy: { url, allowlist }` — the user-configured proxy policy. **Rev 4
+  correction**: proxy is daemon-host local truth (`proxy-config.json`),
+  NOT server state; the daemon reads it locally and applies it only when
+  the runtime is allowed. Kept here only to document that it is NOT on
+  the `runtime_start` wire.
 
 The daemon merges policy into its own `process.env` + per-spawn shim +
 `driver.applyEnv()` (driver-specific env transform; daemon-side only,
 never invoked on the server), spawns the child, wires stdin/stdout.
+
+#### 4.3.1 `SILVERHAND_SERVER_URL` is host-local truth (Rev 6 LOCK, anchor `df5a007`)
+
+**`server_url` is NOT in the env policy and NOT on the `runtime_start`
+wire.** The agent's control-plane origin is host topology — what URL
+*this host* uses to reach the control plane — which the server cannot
+know about itself. So the daemon injects `SILVERHAND_SERVER_URL` from a
+**host-local** source, never echoed down from the server:
+
+- **standalone / remote**: the daemon's live outbound binding
+  `server_origin` (`outboundSupervisor.currentBinding().server_origin`),
+  i.e. the origin the daemon actually WS-attaches to, sourced from
+  Desktop-written `daemon-config.json:server_url`.
+- **embedded**: Desktop writes the finalized loopback URL to a host-local
+  file `<SILVERHAND_DIR>/run/control-plane-server-url` after the embedded
+  backend's listen callback finalizes the bound port; the daemon reads it
+  at spawn (`--control-plane-server-url-path`). `currentBinding()` is null
+  in embedded (no WSS outbound), so the read-file path is reached cleanly;
+  the `local-embedded` sentinel lives only in `resolveRegistryBinding()`
+  (workspace-registry namespacing) and does NOT shadow URL injection.
+- **fail-loud**: if neither source yields a URL, `buildDaemonSpawnEnv`
+  throws rather than injecting a bogus value. Embedded is a main path and
+  must not ride the fallback.
+
+Why this is a LOCK and not a value-fix: before `df5a007` the server
+shipped its own bound URL as `server_url`. Embedded only *appeared*
+correct because bind == loopback == reachable (coincidental
+correctness); standalone bind `0.0.0.0:8080` ≠ reachable (sandbox public
+origin) exposed the model error as a fatal `upstream_unavailable`. The
+field is removed from the wire entirely so the boundary cannot regress to
+"server echoes its own bind address as the host's reach address". This is
+§5.2 calling-boundary applied to `runtime_start`: server ships
+server-minted identity (`auth_token`), host owns its own topology
+(`server_url`, `silverhand_cli`, `proxy`).
 
 ### 4.4 Blob bytes (server-owned in V1 main)
 
@@ -768,6 +813,21 @@ expanded in PR descriptions.
 
 ## 9. Revision history
 
+- 2026-06-03 — **Revision 6 (Alice, codifying shiki-ratified boundary;
+  anchors `b59d345` + `df5a007`, Cindy implementation)**. Remote-only
+  dogfood surfaced a 3-bug chain (recursive `bin/silverhand` shim →
+  fallback launcher → `server_url` shipped from server bind). §4.3
+  rewritten: `silverhand` env policy now carries only the server-minted
+  `auth_token`; `silverhand_cli` is optional/host-overridable; `proxy`
+  noted as host-local (Rev 4). New §4.3.1 LOCK: `SILVERHAND_SERVER_URL`
+  is host-local truth, injected by the daemon (standalone = outbound
+  binding origin; embedded = Desktop-written
+  `run/control-plane-server-url` file), removed from the `runtime_start`
+  wire entirely, fail-loud on absence. Records the embedded
+  coincidental-correctness lesson (bind==loopback==reachable masked the
+  model error until standalone `0.0.0.0:8080` exposed it). §5.2
+  calling-boundary applied to `runtime_start`: server ships identity,
+  host owns topology.
 - 2026-05-26 — **Draft 0 (Alice)**. Skeleton + tables + open questions.
 - 2026-05-26 — **Revision 1 (Alice, post Cindy review
   `hVRVC8SPcc0RZajL` + `67gdFlRuTvPgQGLt`)**. Folds:
