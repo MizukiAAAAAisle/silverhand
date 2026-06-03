@@ -180,12 +180,204 @@ describe('readTaskSystemMetadata + readTaskSystemMetadataPartial', () => {
     ).toBeNull();
   });
 
-  it('both parsers return null for null/undefined', () => {
-    expect(readTaskSystemMetadata(null)).toBeNull();
-    expect(readTaskSystemMetadata(undefined)).toBeNull();
-    expect(readTaskSystemMetadataPartial(null)).toBeNull();
-    expect(readTaskSystemMetadataPartial(undefined)).toBeNull();
+});
+
+interface ParserRejectionCase {
+  parser: string;
+  read: (metadata: Record<string, unknown> | null | undefined) => unknown | null;
+  invalid?: Array<{
+    name: string;
+    metadata: Record<string, unknown> | null | undefined;
+  }>;
+  nullish?: boolean;
+}
+
+const parserRejectionCases: ParserRejectionCase[] = [
+  {
+    parser: 'readTaskSystemMetadata',
+    read: readTaskSystemMetadata,
+    nullish: true,
+  },
+  {
+    parser: 'readTaskSystemMetadataPartial',
+    read: readTaskSystemMetadataPartial,
+    nullish: true,
+  },
+  {
+    parser: 'readSessionClearedMetadata',
+    read: readSessionClearedMetadata,
+    invalid: [
+      {
+        name: 'rows missing required fields',
+        metadata: {
+          subtype: 'session_cleared',
+          agent_name: 'Alice',
+        },
+      },
+      {
+        name: 'rows with wrong subtype literal',
+        metadata: {
+          subtype: 'mention_cc',
+          agent_id: 'a',
+          agent_name: 'A',
+          actor_user_id: null,
+          previous_cli_session_id_prefix: null,
+          was_running: false,
+        },
+      },
+    ],
+    nullish: true,
+  },
+  {
+    parser: 'readScheduleFireMetadata',
+    read: readScheduleFireMetadata,
+    invalid: [
+      {
+        name: 'bad spec_kind',
+        metadata: {
+          subtype: 'schedule_fire',
+          schedule_id: 's-1',
+          spec_kind: 'weekly',
+          actual_fire_at: 1,
+          planned_fire_at: null,
+          missed_count: 0,
+          next_fire_at: null,
+        },
+      },
+      {
+        name: 'rows missing required numeric fields',
+        metadata: {
+          subtype: 'schedule_fire',
+          schedule_id: 's-1',
+          spec_kind: 'interval',
+          actual_fire_at: 1,
+          planned_fire_at: null,
+          missed_count: 0,
+          // next_fire_at missing
+        },
+      },
+    ],
+    nullish: true,
+  },
+  {
+    parser: 'readThreadAnchorMetadata',
+    read: readThreadAnchorMetadata,
+    invalid: [
+      {
+        name: 'unsupported quoted_from_kind values',
+        metadata: {
+          subtype: 'thread_anchor',
+          quoted_message_id: 'msg-1',
+          quoted_conversation_id: 'conv-1',
+          quoted_channel_name: 'version3',
+          quoted_content: 'Quoted body text',
+          quoted_from_kind: 'bot',
+          quoted_from_agent_id: null,
+          quoted_from_user_id: 'local',
+          quoted_agent_name: null,
+          quoted_created_at: 1_700_000_000_000,
+        },
+      },
+      {
+        name: 'rows missing required fields',
+        metadata: {
+          subtype: 'thread_anchor',
+          quoted_message_id: 'msg-1',
+          quoted_conversation_id: 'conv-1',
+          quoted_channel_name: 'version3',
+          quoted_from_kind: 'user',
+          quoted_from_agent_id: null,
+          quoted_from_user_id: 'local',
+          quoted_agent_name: null,
+          quoted_created_at: 1_700_000_000_000,
+        },
+      },
+    ],
+    nullish: true,
+  },
+  {
+    parser: 'readChildContextMetadata',
+    read: readChildContextMetadata,
+    invalid: [
+      {
+        name: 'rows missing summary',
+        metadata: {
+          subtype: 'child_context',
+          parent_conversation_id: 'conv-parent',
+          parent_title: 'feature/cli design',
+        },
+      },
+      {
+        name: 'rows with wrong subtype',
+        metadata: {
+          subtype: 'thread_anchor',
+          parent_conversation_id: 'conv-parent',
+          parent_title: 'feature/cli design',
+          summary: 'PR-1 design discussed in 5 rounds...',
+        },
+      },
+    ],
+    nullish: true,
+  },
+  {
+    parser: 'readChannelContextMetadata',
+    read: readChannelContextMetadata,
+    invalid: [
+      {
+        name: 'rows missing required source_conversation_id',
+        metadata: {
+          subtype: 'channel_context',
+          created_by_agent_id: 'a-cindy',
+        },
+      },
+    ],
+    nullish: true,
+  },
+  {
+    parser: 'readRenameMetadata',
+    read: readRenameMetadata,
+    invalid: [
+      {
+        name: 'rows missing old_name',
+        metadata: { subtype: 'rename', new_name: 'b' },
+      },
+      {
+        name: 'rows missing new_name',
+        metadata: { subtype: 'rename', old_name: 'a' },
+      },
+      {
+        name: 'rows with wrong subtype literal',
+        metadata: {
+          subtype: 'mention_cc',
+          old_name: 'a',
+          new_name: 'b',
+        },
+      },
+    ],
+    nullish: true,
+  },
+];
+
+const invalidParserCases = parserRejectionCases.flatMap(testCase =>
+  (testCase.invalid ?? []).map(invalid => ({
+    parser: testCase.parser,
+    read: testCase.read,
+    ...invalid,
+  })),
+);
+
+describe('metadata parser rejection matrix', () => {
+  it.each(invalidParserCases)('$parser rejects $name', ({ read, metadata }) => {
+    expect(read(metadata)).toBeNull();
   });
+
+  it.each(parserRejectionCases.filter(testCase => testCase.nullish))(
+    '$parser returns null for null/undefined',
+    ({ read }) => {
+      expect(read(null)).toBeNull();
+      expect(read(undefined)).toBeNull();
+    },
+  );
 });
 
 describe('readSessionClearedMetadata', () => {
@@ -218,32 +410,6 @@ describe('readSessionClearedMetadata', () => {
     expect(m!.previous_cli_session_id_prefix).toBeNull();
   });
 
-  it('rejects rows missing required fields', () => {
-    expect(
-      readSessionClearedMetadata({
-        subtype: 'session_cleared',
-        agent_name: 'Alice',
-      }),
-    ).toBeNull();
-  });
-
-  it('rejects rows with wrong subtype literal', () => {
-    expect(
-      readSessionClearedMetadata({
-        subtype: 'mention_cc',
-        agent_id: 'a',
-        agent_name: 'A',
-        actor_user_id: null,
-        previous_cli_session_id_prefix: null,
-        was_running: false,
-      }),
-    ).toBeNull();
-  });
-
-  it('returns null for null/undefined metadata', () => {
-    expect(readSessionClearedMetadata(null)).toBeNull();
-    expect(readSessionClearedMetadata(undefined)).toBeNull();
-  });
 });
 
 describe('readScheduleFireMetadata', () => {
@@ -280,38 +446,6 @@ describe('readScheduleFireMetadata', () => {
     expect(m!.body).toBeUndefined();
   });
 
-  it('rejects bad spec_kind', () => {
-    expect(
-      readScheduleFireMetadata({
-        subtype: 'schedule_fire',
-        schedule_id: 's-1',
-        spec_kind: 'weekly',
-        actual_fire_at: 1,
-        planned_fire_at: null,
-        missed_count: 0,
-        next_fire_at: null,
-      }),
-    ).toBeNull();
-  });
-
-  it('rejects rows missing required numeric fields', () => {
-    expect(
-      readScheduleFireMetadata({
-        subtype: 'schedule_fire',
-        schedule_id: 's-1',
-        spec_kind: 'interval',
-        actual_fire_at: 1,
-        planned_fire_at: null,
-        missed_count: 0,
-        // next_fire_at missing
-      }),
-    ).toBeNull();
-  });
-
-  it('returns null for null/undefined', () => {
-    expect(readScheduleFireMetadata(null)).toBeNull();
-    expect(readScheduleFireMetadata(undefined)).toBeNull();
-  });
 });
 
 describe('readThreadAnchorMetadata', () => {
@@ -348,21 +482,6 @@ describe('readThreadAnchorMetadata', () => {
     expect(m!.quoted_agent_name).toBe('Alice');
   });
 
-  it('rejects unsupported quoted_from_kind values', () => {
-    expect(
-      readThreadAnchorMetadata({ ...valid, quoted_from_kind: 'bot' }),
-    ).toBeNull();
-  });
-
-  it('rejects rows missing required fields', () => {
-    const { quoted_content: _, ...stripped } = valid;
-    expect(readThreadAnchorMetadata(stripped)).toBeNull();
-  });
-
-  it('returns null for null/undefined', () => {
-    expect(readThreadAnchorMetadata(null)).toBeNull();
-    expect(readThreadAnchorMetadata(undefined)).toBeNull();
-  });
 });
 
 describe('readChildContextMetadata', () => {
@@ -379,21 +498,6 @@ describe('readChildContextMetadata', () => {
     expect(m!.parent_title).toBe('feature/cli design');
   });
 
-  it('rejects rows missing summary (legacy pre-PR-5)', () => {
-    const { summary: _, ...stripped } = valid;
-    expect(readChildContextMetadata(stripped)).toBeNull();
-  });
-
-  it('rejects rows with wrong subtype', () => {
-    expect(
-      readChildContextMetadata({ ...valid, subtype: 'thread_anchor' }),
-    ).toBeNull();
-  });
-
-  it('returns null for null/undefined', () => {
-    expect(readChildContextMetadata(null)).toBeNull();
-    expect(readChildContextMetadata(undefined)).toBeNull();
-  });
 });
 
 describe('readChannelContextMetadata', () => {
@@ -423,19 +527,6 @@ describe('readChannelContextMetadata', () => {
     expect(m!.created_by_agent_name).toBeUndefined();
   });
 
-  it('rejects rows missing required source_conversation_id', () => {
-    expect(
-      readChannelContextMetadata({
-        subtype: 'channel_context',
-        created_by_agent_id: 'a-cindy',
-      }),
-    ).toBeNull();
-  });
-
-  it('returns null for null/undefined', () => {
-    expect(readChannelContextMetadata(null)).toBeNull();
-    expect(readChannelContextMetadata(undefined)).toBeNull();
-  });
 });
 
 describe('readRenameMetadata', () => {
@@ -450,27 +541,4 @@ describe('readRenameMetadata', () => {
     expect(m!.new_name).toBe('version3');
   });
 
-  it('rejects rows missing old_name or new_name', () => {
-    expect(
-      readRenameMetadata({ subtype: 'rename', old_name: 'a' }),
-    ).toBeNull();
-    expect(
-      readRenameMetadata({ subtype: 'rename', new_name: 'b' }),
-    ).toBeNull();
-  });
-
-  it('rejects rows with wrong subtype literal', () => {
-    expect(
-      readRenameMetadata({
-        subtype: 'mention_cc',
-        old_name: 'a',
-        new_name: 'b',
-      }),
-    ).toBeNull();
-  });
-
-  it('returns null for null/undefined', () => {
-    expect(readRenameMetadata(null)).toBeNull();
-    expect(readRenameMetadata(undefined)).toBeNull();
-  });
 });

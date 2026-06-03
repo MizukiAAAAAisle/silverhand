@@ -64,487 +64,385 @@ const purgeParams: AgentFilesPurgeParams = {
   workspace_ids: ['ws_1'],
 };
 
-describe('IntentDispatcher.workspace_provision slot', () => {
-  it('routes a valid intent to the handler and returns its result', async () => {
-    const handlerResult: WorkspaceProvisionResult = {
+type DispatcherOptions = ConstructorParameters<typeof IntentDispatcher>[0];
+type RegistryHandlerKey =
+  | 'workspaceProvisionHandler'
+  | 'agentWorkspaceIndexHandler'
+  | 'agentL2SeedHandler'
+  | 'agentFilesPurgeHandler';
+
+interface RegistryIntentCase {
+  label: string;
+  intent:
+    | 'workspace_provision'
+    | 'agent_workspace_index'
+    | 'agent_l2_seed'
+    | 'agent_files_purge';
+  requestPrefix: string;
+  handlerKey: RegistryHandlerKey;
+  params: Record<string, unknown>;
+  result: Record<string, unknown>;
+  errorName: string;
+  typedCodes: readonly string[];
+  makeTypedError: (code: string, message: string) => Error;
+  foreignError: () => Error;
+  malformedParams: Record<string, unknown>;
+  malformedComment: string;
+  bareError?: boolean;
+}
+
+function dispatcherWithHandler(
+  handlerKey: RegistryHandlerKey,
+  handler: (params: never) => unknown,
+): IntentDispatcher {
+  return new IntentDispatcher({
+    logger: silentLogger(),
+    [handlerKey]: handler,
+  } as unknown as DispatcherOptions);
+}
+
+async function expectErrorCode(
+  promise: Promise<Awaited<ReturnType<IntentDispatcher['dispatch']>>>,
+  code: string,
+): Promise<Extract<Awaited<ReturnType<IntentDispatcher['dispatch']>>, { error: unknown }>> {
+  const r = await promise;
+  expect('error' in r).toBe(true);
+  if (!('error' in r)) throw new Error('expected error response');
+  expect(r.error.code).toBe(code);
+  return r;
+}
+
+const registryIntentCases: RegistryIntentCase[] = [
+  {
+    label: 'workspace_provision',
+    intent: 'workspace_provision',
+    requestPrefix: 'req-wp',
+    handlerKey: 'workspaceProvisionHandler',
+    params: provisionParams,
+    result: {
       ok: true,
       provisioned: true,
       bound_workspace_path: '/tmp/managed/ws_1',
-    };
-    let observed: WorkspaceProvisionParams | null = null;
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      workspaceProvisionHandler: params => {
-        observed = params;
-        return handlerResult;
-      },
-    });
-    const r = await d.dispatch('req-wp-1', 'workspace_provision', provisionParams);
-    expect(r).toEqual({ id: 'req-wp-1', result: handlerResult });
-    expect(observed).toEqual(provisionParams);
-  });
+    } satisfies WorkspaceProvisionResult,
+    errorName: 'WorkspaceProvisionError',
+    typedCodes: [
+      'unsupported_kind',
+      'invalid_path',
+      'path_conflict',
+      'fs_quota_exceeded',
+      'fs_unavailable',
+      'registry_unavailable',
+      'internal_error',
+    ],
+    makeTypedError: (code, message) =>
+      new WorkspaceProvisionError(code as never, message),
+    foreignError: () =>
+      // `agent_dir_collision` is an agent_materialize code, NOT a
+      // workspace_provision code. `intentErrorSchema(intent)` must
+      // reject it -> squashed to internal_error.
+      new WorkspaceProvisionError('agent_dir_collision' as never, 'leaked'),
+    malformedParams: { workspace_id: 'ws_1' },
+    malformedComment: 'Missing required `kind`.',
+    bareError: true,
+  },
+  {
+    label: 'agent_workspace_index',
+    intent: 'agent_workspace_index',
+    requestPrefix: 'req-awi',
+    handlerKey: 'agentWorkspaceIndexHandler',
+    params: indexParams,
+    result: {
+      ok: true,
+      entries: [
+        {
+          workspace_id: 'ws_1',
+          agent_dir: '/tmp/ws_1/.silverhand/agents/aid_x',
+        },
+      ],
+      unresolved: [],
+    } satisfies AgentWorkspaceIndexResult,
+    errorName: 'AgentWorkspaceIndexError',
+    typedCodes: ['registry_unavailable', 'internal_error'],
+    makeTypedError: (code, message) =>
+      new AgentWorkspaceIndexError(code as never, message),
+    foreignError: () =>
+      // `unsupported_kind` belongs to workspace_provision, not here.
+      new AgentWorkspaceIndexError('unsupported_kind' as never, 'leaked'),
+    malformedParams: { agent_id: 'aid_x', workspace_ids: 'ws_1' },
+    malformedComment: '`workspace_ids` must be an array.',
+  },
+  {
+    label: 'agent_l2_seed',
+    intent: 'agent_l2_seed',
+    requestPrefix: 'req-l2s',
+    handlerKey: 'agentL2SeedHandler',
+    params: l2SeedParams,
+    result: {
+      ok: true,
+      seeded: true,
+      l2_present: true,
+    } satisfies AgentL2SeedResult,
+    errorName: 'AgentL2SeedError',
+    typedCodes: [
+      'workspace_not_provisioned',
+      'registry_unavailable',
+      'unsupported_template',
+      'fs_unavailable',
+      'internal_error',
+    ],
+    makeTypedError: (code, message) =>
+      new AgentL2SeedError(code as never, message),
+    foreignError: () =>
+      // `unsupported_kind` belongs to workspace_provision, not here.
+      new AgentL2SeedError('unsupported_kind' as never, 'leaked'),
+    malformedParams: { agent_id: 'aid_member' },
+    malformedComment: 'Missing required `workspace_id`.',
+    bareError: true,
+  },
+  {
+    label: 'agent_files_purge',
+    intent: 'agent_files_purge',
+    requestPrefix: 'req-afp',
+    handlerKey: 'agentFilesPurgeHandler',
+    params: purgeParams,
+    result: {
+      ok: true,
+      purged_count: 2,
+      skipped_unprovisioned: 0,
+    } satisfies AgentFilesPurgeResult,
+    errorName: 'AgentFilesPurgeError',
+    typedCodes: ['partial_purge', 'registry_unavailable', 'internal_error'],
+    makeTypedError: (code, message) =>
+      new AgentFilesPurgeError(code as never, message),
+    foreignError: () =>
+      // `workspace_not_provisioned` belongs to agent_l2_seed, not here.
+      new AgentFilesPurgeError('workspace_not_provisioned' as never, 'leaked'),
+    malformedParams: { agent_id: 'aid_member' },
+    malformedComment: 'Missing required `scope`.',
+    bareError: true,
+  },
+];
 
+describe.each(registryIntentCases)(
+  'IntentDispatcher.$label slot',
+  testCase => {
+    it('routes a valid intent to the handler and returns its result', async () => {
+      let observed: unknown = null;
+      const d = dispatcherWithHandler(testCase.handlerKey, params => {
+        observed = params;
+        return testCase.result;
+      });
+
+      const id = `${testCase.requestPrefix}-1`;
+      const r = await d.dispatch(
+        id,
+        testCase.intent,
+        testCase.params as never,
+      );
+
+      expect(r).toEqual({ id, result: testCase.result });
+      expect(observed).toEqual(testCase.params);
+    });
+
+    it.each(testCase.typedCodes)(
+      `preserves typed ${testCase.errorName} code: %s`,
+      async code => {
+        const d = dispatcherWithHandler(testCase.handlerKey, () => {
+          throw testCase.makeTypedError(code, `seeded ${code}`);
+        });
+
+        await expectErrorCode(
+          d.dispatch(
+            `${testCase.requestPrefix}-typed`,
+            testCase.intent,
+            testCase.params as never,
+          ),
+          code,
+        );
+      },
+    );
+
+    it(`re-squashes a foreign typed code not in ${testCase.label} schema`, async () => {
+      const d = dispatcherWithHandler(testCase.handlerKey, () => {
+        // Typed surface is decided by per-intent schema, not by class.
+        throw testCase.foreignError();
+      });
+
+      await expectErrorCode(
+        d.dispatch(
+          `${testCase.requestPrefix}-foreign`,
+          testCase.intent,
+          testCase.params as never,
+        ),
+        'internal_error',
+      );
+    });
+
+    if (testCase.bareError) {
+      it('squashes a bare Error throw to internal_error', async () => {
+        const d = dispatcherWithHandler(testCase.handlerKey, () => {
+          throw new Error('boom');
+        });
+
+        await expectErrorCode(
+          d.dispatch(
+            `${testCase.requestPrefix}-bare`,
+            testCase.intent,
+            testCase.params as never,
+          ),
+          'internal_error',
+        );
+      });
+    }
+
+    it(
+      `rejects malformed params via intentSchemas before invoking the handler (${testCase.malformedComment})`,
+      async () => {
+        let called = false;
+        const d = dispatcherWithHandler(testCase.handlerKey, () => {
+          called = true;
+          throw new Error('unreachable');
+        });
+
+        await expectErrorCode(
+          d.dispatch(
+            `${testCase.requestPrefix}-bad`,
+            testCase.intent,
+            testCase.malformedParams as never,
+          ),
+          'invalid_params',
+        );
+        expect(called).toBe(false);
+      },
+    );
+
+    it('surfaces internal_error when no handler is wired', async () => {
+      const d = new IntentDispatcher({ logger: silentLogger() });
+
+      const r = await expectErrorCode(
+        d.dispatch(
+          `${testCase.requestPrefix}-unwired`,
+          testCase.intent,
+          testCase.params as never,
+        ),
+        'internal_error',
+      );
+      expect(r.error.message).toContain(testCase.intent);
+    });
+  },
+);
+
+describe('IntentDispatcher.workspace_provision extras', () => {
   it('forwards an optional requested_path through to the handler', async () => {
     let observed: WorkspaceProvisionParams | null = null;
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      workspaceProvisionHandler: params => {
-        observed = params;
-        return {
-          ok: true,
-          provisioned: true,
-          bound_workspace_path: '/Users/alice/work/ws',
-        };
-      },
+    const d = dispatcherWithHandler('workspaceProvisionHandler', params => {
+      observed = params;
+      return {
+        ok: true,
+        provisioned: true,
+        bound_workspace_path: '/Users/alice/work/ws',
+      } satisfies WorkspaceProvisionResult;
     });
     const withPath: WorkspaceProvisionParams = {
       workspace_id: 'ws_1',
       kind: 'regular',
       requested_path: '/Users/alice/work/ws',
     };
+
     await d.dispatch('req-wp-path', 'workspace_provision', withPath);
+
     expect(observed).toEqual(withPath);
   });
 
   it('rejects a non-string requested_path via intentSchemas before the handler', async () => {
     let called = false;
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      workspaceProvisionHandler: () => {
-        called = true;
-        throw new Error('unreachable');
-      },
+    const d = dispatcherWithHandler('workspaceProvisionHandler', () => {
+      called = true;
+      throw new Error('unreachable');
     });
-    const r = await d.dispatch('req-wp-badpath', 'workspace_provision', {
-      workspace_id: 'ws_1',
-      kind: 'regular',
-      requested_path: 123,
-    });
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('invalid_params');
+
+    await expectErrorCode(
+      d.dispatch('req-wp-badpath', 'workspace_provision', {
+        workspace_id: 'ws_1',
+        kind: 'regular',
+        requested_path: 123,
+      }),
+      'invalid_params',
+    );
     expect(called).toBe(false);
-  });
-
-  it.each([
-    'unsupported_kind',
-    'invalid_path',
-    'path_conflict',
-    'fs_quota_exceeded',
-    'fs_unavailable',
-    'registry_unavailable',
-    'internal_error',
-  ] as const)('preserves typed WorkspaceProvisionError code: %s', async code => {
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      workspaceProvisionHandler: () => {
-        throw new WorkspaceProvisionError(code, `seeded ${code}`);
-      },
-    });
-    const r = await d.dispatch('req-wp', 'workspace_provision', provisionParams);
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect((r.error as { code: string }).code).toBe(code);
-  });
-
-  it('re-squashes a foreign typed code not in workspace_provision schema', async () => {
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      workspaceProvisionHandler: () => {
-        // `agent_dir_collision` is an agent_materialize code, NOT a
-        // workspace_provision code. `intentErrorSchema(intent)` must
-        // reject it → squashed to internal_error. Typed surface is
-        // decided by the per-intent schema, not the class.
-        throw new WorkspaceProvisionError(
-          'agent_dir_collision' as never,
-          'leaked foreign code',
-        );
-      },
-    });
-    const r = await d.dispatch('req-wp-foreign', 'workspace_provision', provisionParams);
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('internal_error');
-  });
-
-  it('squashes a bare Error throw to internal_error', async () => {
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      workspaceProvisionHandler: () => {
-        throw new Error('boom');
-      },
-    });
-    const r = await d.dispatch('req-wp-bare', 'workspace_provision', provisionParams);
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('internal_error');
-  });
-
-  it('rejects malformed params via intentSchemas before invoking the handler', async () => {
-    let called = false;
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      workspaceProvisionHandler: () => {
-        called = true;
-        throw new Error('unreachable');
-      },
-    });
-    // Missing required `kind`.
-    const r = await d.dispatch('req-wp-bad', 'workspace_provision', {
-      workspace_id: 'ws_1',
-    });
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('invalid_params');
-    expect(called).toBe(false);
-  });
-
-  it('surfaces internal_error when no handler is wired', async () => {
-    const d = new IntentDispatcher({ logger: silentLogger() });
-    const r = await d.dispatch('req-wp-unwired', 'workspace_provision', provisionParams);
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('internal_error');
-    expect(r.error.message).toContain('workspace_provision');
   });
 });
 
-describe('IntentDispatcher.agent_workspace_index slot', () => {
-  it('routes a valid intent to the handler and returns its result', async () => {
-    const handlerResult: AgentWorkspaceIndexResult = {
-      ok: true,
-      entries: [{ workspace_id: 'ws_1', agent_dir: '/tmp/ws_1/.silverhand/agents/aid_x' }],
-      unresolved: [],
-    };
-    let observed: AgentWorkspaceIndexParams | null = null;
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentWorkspaceIndexHandler: params => {
-        observed = params;
-        return handlerResult;
-      },
-    });
-    const r = await d.dispatch('req-awi-1', 'agent_workspace_index', indexParams);
-    expect(r).toEqual({ id: 'req-awi-1', result: handlerResult });
-    expect(observed).toEqual(indexParams);
-  });
-
-  it.each(['registry_unavailable', 'internal_error'] as const)(
-    'preserves typed AgentWorkspaceIndexError code: %s',
-    async code => {
-      const d = new IntentDispatcher({
-        logger: silentLogger(),
-        agentWorkspaceIndexHandler: () => {
-          throw new AgentWorkspaceIndexError(code, `seeded ${code}`);
-        },
-      });
-      const r = await d.dispatch('req-awi', 'agent_workspace_index', indexParams);
-      expect('error' in r).toBe(true);
-      if (!('error' in r)) return;
-      expect((r.error as { code: string }).code).toBe(code);
-    },
-  );
-
-  it('re-squashes a foreign typed code not in agent_workspace_index schema', async () => {
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentWorkspaceIndexHandler: () => {
-        // `unsupported_kind` belongs to workspace_provision, not here.
-        throw new AgentWorkspaceIndexError('unsupported_kind' as never, 'leaked');
-      },
-    });
-    const r = await d.dispatch('req-awi-foreign', 'agent_workspace_index', indexParams);
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('internal_error');
-  });
-
-  it('rejects malformed params via intentSchemas before invoking the handler', async () => {
-    let called = false;
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentWorkspaceIndexHandler: () => {
-        called = true;
-        throw new Error('unreachable');
-      },
-    });
-    // `workspace_ids` must be an array.
-    const r = await d.dispatch('req-awi-bad', 'agent_workspace_index', {
-      agent_id: 'aid_x',
-      workspace_ids: 'ws_1',
-    });
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('invalid_params');
-    expect(called).toBe(false);
-  });
-
-  it('surfaces internal_error when no handler is wired', async () => {
-    const d = new IntentDispatcher({ logger: silentLogger() });
-    const r = await d.dispatch('req-awi-unwired', 'agent_workspace_index', indexParams);
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('internal_error');
-    expect(r.error.message).toContain('agent_workspace_index');
-  });
-});
-
-describe('IntentDispatcher.agent_l2_seed slot', () => {
-  it('routes a valid intent to the handler and returns its result', async () => {
-    const handlerResult: AgentL2SeedResult = {
-      ok: true,
-      seeded: true,
-      l2_present: true,
-    };
-    let observed: AgentL2SeedParams | null = null;
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentL2SeedHandler: params => {
-        observed = params;
-        return handlerResult;
-      },
-    });
-    const r = await d.dispatch('req-l2s-1', 'agent_l2_seed', l2SeedParams);
-    expect(r).toEqual({ id: 'req-l2s-1', result: handlerResult });
-    expect(observed).toEqual(l2SeedParams);
-  });
-
+describe('IntentDispatcher.agent_l2_seed extras', () => {
   it('applies the template_choice default when omitted', async () => {
     let observed: AgentL2SeedParams | null = null;
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentL2SeedHandler: params => {
-        observed = params;
-        return { ok: true, seeded: true, l2_present: true };
-      },
+    const d = dispatcherWithHandler('agentL2SeedHandler', params => {
+      observed = params;
+      return { ok: true, seeded: true, l2_present: true } satisfies AgentL2SeedResult;
     });
+
     await d.dispatch('req-l2s-default', 'agent_l2_seed', {
       agent_id: 'aid_member',
       workspace_id: 'ws_1',
     });
+
     expect((observed as AgentL2SeedParams | null)?.template_choice).toBe('default');
-  });
-
-  it.each([
-    'workspace_not_provisioned',
-    'registry_unavailable',
-    'unsupported_template',
-    'fs_unavailable',
-    'internal_error',
-  ] as const)('preserves typed AgentL2SeedError code: %s', async code => {
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentL2SeedHandler: () => {
-        throw new AgentL2SeedError(code, `seeded ${code}`);
-      },
-    });
-    const r = await d.dispatch('req-l2s', 'agent_l2_seed', l2SeedParams);
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect((r.error as { code: string }).code).toBe(code);
-  });
-
-  it('re-squashes a foreign typed code not in agent_l2_seed schema', async () => {
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentL2SeedHandler: () => {
-        // `unsupported_kind` belongs to workspace_provision, not here.
-        throw new AgentL2SeedError('unsupported_kind' as never, 'leaked');
-      },
-    });
-    const r = await d.dispatch('req-l2s-foreign', 'agent_l2_seed', l2SeedParams);
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('internal_error');
-  });
-
-  it('squashes a bare Error throw to internal_error', async () => {
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentL2SeedHandler: () => {
-        throw new Error('boom');
-      },
-    });
-    const r = await d.dispatch('req-l2s-bare', 'agent_l2_seed', l2SeedParams);
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('internal_error');
   });
 
   it('rejects an out-of-enum template_choice via intentSchemas before the handler', async () => {
     let called = false;
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentL2SeedHandler: () => {
-        called = true;
-        throw new Error('unreachable');
-      },
+    const d = dispatcherWithHandler('agentL2SeedHandler', () => {
+      called = true;
+      throw new Error('unreachable');
     });
-    const r = await d.dispatch('req-l2s-badtpl', 'agent_l2_seed', {
-      agent_id: 'aid_member',
-      workspace_id: 'ws_1',
-      template_choice: 'bogus',
-    });
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('invalid_params');
-    expect(called).toBe(false);
-  });
 
-  it('rejects malformed params via intentSchemas before invoking the handler', async () => {
-    let called = false;
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentL2SeedHandler: () => {
-        called = true;
-        throw new Error('unreachable');
-      },
-    });
-    // Missing required `workspace_id`.
-    const r = await d.dispatch('req-l2s-bad', 'agent_l2_seed', {
-      agent_id: 'aid_member',
-    });
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('invalid_params');
+    await expectErrorCode(
+      d.dispatch('req-l2s-badtpl', 'agent_l2_seed', {
+        agent_id: 'aid_member',
+        workspace_id: 'ws_1',
+        template_choice: 'bogus',
+      }),
+      'invalid_params',
+    );
     expect(called).toBe(false);
-  });
-
-  it('surfaces internal_error when no handler is wired', async () => {
-    const d = new IntentDispatcher({ logger: silentLogger() });
-    const r = await d.dispatch('req-l2s-unwired', 'agent_l2_seed', l2SeedParams);
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('internal_error');
-    expect(r.error.message).toContain('agent_l2_seed');
   });
 });
 
-describe('IntentDispatcher.agent_files_purge slot', () => {
-  it('routes a valid intent to the handler and returns its result', async () => {
-    const handlerResult: AgentFilesPurgeResult = {
-      ok: true,
-      purged_count: 2,
-      skipped_unprovisioned: 0,
-    };
-    let observed: AgentFilesPurgeParams | null = null;
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentFilesPurgeHandler: params => {
-        observed = params;
-        return handlerResult;
-      },
-    });
-    const r = await d.dispatch('req-afp-1', 'agent_files_purge', purgeParams);
-    expect(r).toEqual({ id: 'req-afp-1', result: handlerResult });
-    expect(observed).toEqual(purgeParams);
-  });
-
+describe('IntentDispatcher.agent_files_purge extras', () => {
   it('applies the workspace_ids default ([]) when omitted', async () => {
     let observed: AgentFilesPurgeParams | null = null;
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentFilesPurgeHandler: params => {
-        observed = params;
-        return { ok: true, purged_count: 0, skipped_unprovisioned: 0 };
-      },
+    const d = dispatcherWithHandler('agentFilesPurgeHandler', params => {
+      observed = params;
+      return {
+        ok: true,
+        purged_count: 0,
+        skipped_unprovisioned: 0,
+      } satisfies AgentFilesPurgeResult;
     });
+
     await d.dispatch('req-afp-default', 'agent_files_purge', {
       agent_id: 'aid_member',
       scope: 'all',
     });
+
     expect((observed as AgentFilesPurgeParams | null)?.workspace_ids).toEqual([]);
-  });
-
-  it.each([
-    'partial_purge',
-    'registry_unavailable',
-    'internal_error',
-  ] as const)('preserves typed AgentFilesPurgeError code: %s', async code => {
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentFilesPurgeHandler: () => {
-        throw new AgentFilesPurgeError(code, `purge ${code}`);
-      },
-    });
-    const r = await d.dispatch('req-afp', 'agent_files_purge', purgeParams);
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect((r.error as { code: string }).code).toBe(code);
-  });
-
-  it('re-squashes a foreign typed code not in agent_files_purge schema', async () => {
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentFilesPurgeHandler: () => {
-        // `workspace_not_provisioned` belongs to agent_l2_seed, not here.
-        throw new AgentFilesPurgeError('workspace_not_provisioned' as never, 'leaked');
-      },
-    });
-    const r = await d.dispatch('req-afp-foreign', 'agent_files_purge', purgeParams);
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('internal_error');
-  });
-
-  it('squashes a bare Error throw to internal_error', async () => {
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentFilesPurgeHandler: () => {
-        throw new Error('boom');
-      },
-    });
-    const r = await d.dispatch('req-afp-bare', 'agent_files_purge', purgeParams);
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('internal_error');
   });
 
   it('rejects an out-of-enum scope via intentSchemas before the handler', async () => {
     let called = false;
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentFilesPurgeHandler: () => {
-        called = true;
-        throw new Error('unreachable');
-      },
+    const d = dispatcherWithHandler('agentFilesPurgeHandler', () => {
+      called = true;
+      throw new Error('unreachable');
     });
-    const r = await d.dispatch('req-afp-badscope', 'agent_files_purge', {
-      agent_id: 'aid_member',
-      scope: 'bogus',
-      workspace_ids: ['ws_1'],
-    });
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('invalid_params');
-    expect(called).toBe(false);
-  });
 
-  it('rejects malformed params via intentSchemas before invoking the handler', async () => {
-    let called = false;
-    const d = new IntentDispatcher({
-      logger: silentLogger(),
-      agentFilesPurgeHandler: () => {
-        called = true;
-        throw new Error('unreachable');
-      },
-    });
-    // Missing required `scope`.
-    const r = await d.dispatch('req-afp-bad', 'agent_files_purge', {
-      agent_id: 'aid_member',
-    });
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('invalid_params');
+    await expectErrorCode(
+      d.dispatch('req-afp-badscope', 'agent_files_purge', {
+        agent_id: 'aid_member',
+        scope: 'bogus',
+        workspace_ids: ['ws_1'],
+      }),
+      'invalid_params',
+    );
     expect(called).toBe(false);
-  });
-
-  it('surfaces internal_error when no handler is wired', async () => {
-    const d = new IntentDispatcher({ logger: silentLogger() });
-    const r = await d.dispatch('req-afp-unwired', 'agent_files_purge', purgeParams);
-    expect('error' in r).toBe(true);
-    if (!('error' in r)) return;
-    expect(r.error.code).toBe('internal_error');
-    expect(r.error.message).toContain('agent_files_purge');
   });
 });

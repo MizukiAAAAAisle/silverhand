@@ -88,27 +88,6 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
     t = null;
   });
 
-  describe('host_runtime_disabled (standalone backend, 409) — REMOVED in D4.b P1-1', () => {
-    // The blanket `standaloneMode(ctx)` guard on `start` / `stop`
-    // was lifted in D4.b P1-1. Pre-D4.b the route returned a 409
-    // `host_runtime_disabled` BEFORE placement resolved; post-lift
-    // standalone + attached daemon goes through the same
-    // `ctx.runtimeHost` path as embedded and standalone + no
-    // daemon returns typed `host_attach_pending` (503) via
-    // `OutboundRuntimeEventFanout.connectedConnectionId` →
-    // `HostWsCommandTransportError('transport_no_connection')` →
-    // `mapTransportErrorToPlacement`.
-    //
-    // Negative coverage for "real standalone, no daemon" is in
-    // `packages/backend/tests/e2e/standalone-g2-route-runtime.test.ts`
-    // because the typed error requires the real
-    // `OutboundRuntimeEventFanout`, not the unit fake. The
-    // happy-path "fake handles the call" arm below already pins
-    // that `t.fake.starts` receives the call regardless of
-    // `deploymentMode`.
-    it.skip('removed — see G2 route e2e for the typed_attach_pending negative', () => {});
-  });
-
   describe('local_host_unbound (no claimed host, 409)', () => {
     it('start → local_host_unbound (409) via placement error injected through runtimeHost', async () => {
       t = buildTestApp();
