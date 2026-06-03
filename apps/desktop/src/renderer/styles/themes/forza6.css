@@ -431,10 +431,14 @@
   --font-serif: var(--font-sans);
   --font-mono: 'Space Mono', ui-monospace, monospace;
 
-  /* ── Markdown body ── */
-  --md-prose-font: var(--font-sans);
+  /* ── Markdown body ──
+     Theme defaults live in `--font-sans` / `--font-mono` above and the
+     two `--md-*-size` tokens below; user Appearance overrides land on
+     the separate `--appearance-prose-font` / `--appearance-code-font` /
+     `--appearance-markdown-font-size` slots (settings/apply.ts) so the
+     override name is unambiguous and never collides with the theme
+     primitive. */
   --md-prose-size: 13px;
-  --md-code-font: var(--font-mono);
   --md-code-size: 13px;
 
   /* ── Motion ── */

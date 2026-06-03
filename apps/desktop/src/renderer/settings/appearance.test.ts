@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { applyAppearanceOverrides, MD_TOKENS } from './apply';
+import { applyAppearanceOverrides, APPEARANCE_TOKENS } from './apply';
 import { parseAppearance, parseAppearanceJson } from './parse';
 
 class StyleStub {
@@ -62,7 +62,7 @@ describe('parseAppearance', () => {
 });
 
 describe('applyAppearanceOverrides', () => {
-  it('writes the shared font size into both prose and code tokens', () => {
+  it('writes the shared font size into a single appearance token', () => {
     const style = new StyleStub();
     applyAppearanceOverrides(style, {
       theme: 'warm-script',
@@ -73,10 +73,9 @@ describe('applyAppearanceOverrides', () => {
 
     expect(style.values).toEqual(
       new Map([
-        [MD_TOKENS.PROSE_FONT, 'Georgia, serif'],
-        [MD_TOKENS.PROSE_SIZE, '16px'],
-        [MD_TOKENS.CODE_FONT, 'Menlo, monospace'],
-        [MD_TOKENS.CODE_SIZE, '16px'],
+        [APPEARANCE_TOKENS.PROSE_FONT, 'Georgia, serif'],
+        [APPEARANCE_TOKENS.CODE_FONT, 'Menlo, monospace'],
+        [APPEARANCE_TOKENS.MARKDOWN_FONT_SIZE, '16px'],
       ]),
     );
   });
@@ -86,10 +85,9 @@ describe('applyAppearanceOverrides', () => {
     applyAppearanceOverrides(style, { theme: 'forza6' });
 
     expect(style.removed).toEqual([
-      MD_TOKENS.PROSE_FONT,
-      MD_TOKENS.PROSE_SIZE,
-      MD_TOKENS.CODE_FONT,
-      MD_TOKENS.CODE_SIZE,
+      APPEARANCE_TOKENS.PROSE_FONT,
+      APPEARANCE_TOKENS.CODE_FONT,
+      APPEARANCE_TOKENS.MARKDOWN_FONT_SIZE,
     ]);
   });
 });

@@ -917,8 +917,8 @@ function MarkdownFontControl({
     fontFamily:
       fontValue ||
       (code
-        ? 'var(--md-code-font, var(--font-mono))'
-        : 'var(--md-prose-font, var(--font-sans))'),
+        ? 'var(--appearance-code-font, var(--font-mono))'
+        : 'var(--appearance-prose-font, var(--font-sans))'),
     fontSize: `${previewSize}px`,
   };
 

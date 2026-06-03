@@ -245,7 +245,7 @@
 [data-theme='forza6']
   aside[data-sidebar] .text-text-muted\/70 {
   color: var(--accent);
-  font-family: var(--md-code-font, var(--font-mono));
+  font-family: var(--appearance-code-font, var(--font-mono));
   font-feature-settings: 'tnum';
   opacity: 1;
 }
@@ -253,13 +253,13 @@
 /* ── #4 Display caps on task-ref chips ─────────────────────────────
    Chat task-tag chip — `[data-task-ref]` (TaskRef.tsx). It sits inline
    in the message stream, so its TYPEFACE follows the Appearance prose
-   font (`--md-prose-font`, default `var(--font-sans)`) for a consistent
-   markdown view — same rule as the task-event status pill (shiki). The
-   poster-chip identity (uppercase + tracking + colour + shape) stays;
-   only the font tracks the user's setting. Was a fixed Barlow Condensed
-   (`--forza6-font-task-ref`, since removed). */
+   font (`--appearance-prose-font`, falling back to `var(--font-sans)`)
+   for a consistent markdown view — same rule as the task-event status
+   pill (shiki). The poster-chip identity (uppercase + tracking + colour
+   + shape) stays; only the font tracks the user's setting. Was a fixed
+   Barlow Condensed (`--forza6-font-task-ref`, since removed). */
 [data-theme='forza6'] [data-task-ref] {
-  font-family: var(--md-prose-font, var(--font-sans));
+  font-family: var(--appearance-prose-font, var(--font-sans));
   letter-spacing: 0.10em;
   text-transform: uppercase;
 }
@@ -677,7 +677,7 @@
   color: #0A0A0A;
 }
 [data-theme='forza6'] [data-tasks-column] > header > span:last-of-type {
-  font-family: var(--md-code-font, var(--font-mono));
+  font-family: var(--appearance-code-font, var(--font-mono));
   font-feature-settings: 'tnum';
   color: var(--brand-primary);
   font-weight: 700;
@@ -747,8 +747,8 @@
 
 /* The system-event status pill (TaskStatusPill, `[data-task-event-status]`)
    lives in the chat stream — its row (`.system-message-row`) already runs
-   on the Appearance prose font (`--md-prose-font`), but the rule above
-   forces every `[data-task-status]` consumer onto the forza6 poster
+   on the Appearance prose font (`--appearance-prose-font`), but the rule
+   above forces every `[data-task-status]` consumer onto the forza6 poster
    display face (Rajdhani), so the event pill stayed locked and ignored
    the font setting (shiki). Re-home just the EVENT pill to the prose font
    so it tracks Appearance like the surrounding "moved" text. Board badges
@@ -756,7 +756,7 @@
    keep the poster caps. Equal specificity to the rule above, wins on
    source order; the poster tracking / weight / 0-radius still apply. */
 [data-theme='forza6'] [data-task-event-status] {
-  font-family: var(--md-prose-font, var(--font-sans));
+  font-family: var(--appearance-prose-font, var(--font-sans));
 }
 
 /* Clustered system-event status pills (global.css:573) demote to a

@@ -1,14 +1,24 @@
 import type { AppearanceSettings } from './types';
 
-/** CSS custom property names consumed by `.markdown-body` and its
- *  descendant `code` / `pre`. Each theme defines defaults under its
- *  `[data-theme=…]` block; user overrides land as inline style on the
- *  document root. Removing the inline value falls back to theme. */
-export const MD_TOKENS = {
-  PROSE_FONT: '--md-prose-font',
-  PROSE_SIZE: '--md-prose-size',
-  CODE_FONT: '--md-code-font',
-  CODE_SIZE: '--md-code-size',
+/** CSS custom property names that hold user Appearance overrides.
+ *
+ *  Tokens here are write-only by Appearance and read with a theme
+ *  primitive as the fallback. Themes define their canonical values
+ *  on `--font-sans` / `--font-mono` (fonts) and `--md-prose-size` /
+ *  `--md-code-size` (sizes); consumer rules read e.g.
+ *  `var(--appearance-code-font, var(--font-mono))` so the override
+ *  token's role (override slot) is never confused with the theme
+ *  primitive's role (canonical default). Removing the inline value
+ *  from the document root falls back to the theme primitive.
+ *
+ *  Size is intentionally a single shared slot because the Settings UI
+ *  exposes one slider for both prose and code (the per-side `--md-*-size`
+ *  tokens still let each theme set divergent defaults, but the user
+ *  override applies to both at once). */
+export const APPEARANCE_TOKENS = {
+  PROSE_FONT: '--appearance-prose-font',
+  CODE_FONT: '--appearance-code-font',
+  MARKDOWN_FONT_SIZE: '--appearance-markdown-font-size',
 } as const;
 
 /** Minimum surface needed to apply / clear CSS custom properties.
@@ -28,15 +38,14 @@ export function applyAppearanceOverrides(
 ): void {
   const proseFont = appearance.prose?.fontFamily;
   const codeFont = appearance.code?.fontFamily;
-  // Shared font size — applied identically to both prose and code so
-  // body text and inline / fenced code line up. `undefined` falls back
-  // to the per-theme default in CSS.
+  // Shared font size — applied to a single token so body text and inline
+  // / fenced code line up. `undefined` falls back to the per-theme
+  // default in CSS (`--md-prose-size` / `--md-code-size`).
   const sharedSize = sizePx(appearance.fontSize);
 
-  setOrRemove(target, MD_TOKENS.PROSE_FONT, proseFont);
-  setOrRemove(target, MD_TOKENS.PROSE_SIZE, sharedSize);
-  setOrRemove(target, MD_TOKENS.CODE_FONT, codeFont);
-  setOrRemove(target, MD_TOKENS.CODE_SIZE, sharedSize);
+  setOrRemove(target, APPEARANCE_TOKENS.PROSE_FONT, proseFont);
+  setOrRemove(target, APPEARANCE_TOKENS.CODE_FONT, codeFont);
+  setOrRemove(target, APPEARANCE_TOKENS.MARKDOWN_FONT_SIZE, sharedSize);
 }
 
 function setOrRemove(

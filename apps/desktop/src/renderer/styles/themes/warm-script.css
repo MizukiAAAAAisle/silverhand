@@ -245,11 +245,13 @@
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
   /* ── Markdown body defaults (consumed by `.markdown-body`) ──
-     User-level overrides land as inline style on `<html>` and beat
-     this rule. See settings/apply.ts. */
-  --md-prose-font: var(--font-sans);
+     Theme defaults live in `--font-sans` / `--font-mono` above and the
+     two `--md-*-size` tokens below; user Appearance overrides land on
+     the separate `--appearance-prose-font` / `--appearance-code-font` /
+     `--appearance-markdown-font-size` slots (settings/apply.ts) so the
+     override name is unambiguous and never collides with the theme
+     primitive. See settings/apply.ts. */
   --md-prose-size: 13px;
-  --md-code-font: var(--font-mono);
   --md-code-size: 13px;
 
   /* ── Motion ── */

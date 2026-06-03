@@ -111,11 +111,11 @@ export function SystemMessage(props: SystemMessageProps): JSX.Element {
       ? systemMessageRenderers[resolution.subtype]
       : GenericNarrationFallback;
   // PR-8: every system message renders inside `.system-message-row` so
-  // the user's theme-level prose font (`--md-prose-font` /
-  // `--md-prose-size`) and code font (`--md-code-font`) reach plain-text
-  // rows that don't go through `<Markdown>` (task event rows, schedule
-  // banner pills, rename chips, etc.). `.markdown-body` already pulls
-  // the same vars; this class is the system-row analogue.
+  // the user's theme-level prose font (`--appearance-prose-font` /
+  // `--md-prose-size`) and code font (`--appearance-code-font`) reach
+  // plain-text rows that don't go through `<Markdown>` (task event rows,
+  // schedule banner pills, rename chips, etc.). `.markdown-body` already
+  // pulls the same vars; this class is the system-row analogue.
   // PR-10: also tag with `data-system-event-row="1"` so the activity
   // cluster CSS in `global.css` (`.system-activity-cluster
   // [data-system-event-row="1"] > *`) can demote the inner row body's

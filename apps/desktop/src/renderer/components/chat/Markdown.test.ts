@@ -982,7 +982,7 @@ describe('SystemMessage task event rows (PR-2)', () => {
   it('PR-8: every system message renders inside `.system-message-row` so theme prose font/size cascade', () => {
     // Drift guard: the SystemMessage entry wraps every per-subtype
     // renderer in `<div class="system-message-row">`. global.css attaches
-    // `font-family: var(--md-prose-font, ...)` + `font-size:
+    // `font-family: var(--appearance-prose-font, ...)` + `font-size:
     // var(--md-prose-size, ...)` to that class so plain-text system rows
     // (task events, schedule banners, rename chips) follow the theme's
     // chosen prose font alongside Markdown bodies. Removing this wrapper

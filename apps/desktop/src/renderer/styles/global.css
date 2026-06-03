@@ -81,15 +81,16 @@
 
   --font-sans: var(--font-sans);
   --font-serif: var(--font-serif);
-  /* The `font-mono` utility follows the user's appearance CODE font
-     (`--md-code-font`, set on the document root by applyAppearanceOverrides),
-     falling back to the theme mono stack when unset. Without this, every
-     monospace chrome bit (chat @handles, task `#nnn`, conversation ids,
-     activity-bubble pids) stayed locked to the theme's JetBrains Mono and
-     ignored the Appearance → code-font setting (shiki). `--md-code-font`
-     itself defaults to `var(--font-mono)` per theme, so the fallback is
-     belt-and-suspenders. */
-  --font-mono: var(--md-code-font, var(--font-mono));
+  /* The `font-mono` utility follows the user's Appearance code-font
+     override (`--appearance-code-font`, set on the document root by
+     applyAppearanceOverrides), falling back to the theme mono primitive
+     `--font-mono` when unset. Without this, every monospace chrome bit
+     (chat @handles, task `#nnn`, conversation ids, activity-bubble pids)
+     stayed locked to the theme mono and ignored the Appearance →
+     code-font setting (shiki). The override slot has its own namespace
+     (`--appearance-*`) so its role is unambiguous and never confused
+     with the theme primitive. */
+  --font-mono: var(--appearance-code-font, var(--font-mono));
   --font-display: var(--font-display);
 
   /* New tokens introduced by forza6 — see docs/design-new-theme.md §3.
@@ -214,8 +215,8 @@ button:disabled { cursor: not-allowed; }
   min-width: 0;
   line-height: 1.55;
   overflow-wrap: anywhere;
-  font-family: var(--md-prose-font, var(--font-sans));
-  font-size: var(--md-prose-size, 13px);
+  font-family: var(--appearance-prose-font, var(--font-sans));
+  font-size: var(--appearance-markdown-font-size, var(--md-prose-size, 13px));
 }
 .markdown-body > *:first-child { margin-top: 0; }
 .markdown-body > *:last-child { margin-bottom: 0; }
@@ -233,10 +234,10 @@ button:disabled { cursor: not-allowed; }
    that explicitly set `text-[10px]` / `text-[11px]` keep their fixed
    density; that's intentional.
    Code-flavored leaves inside the row (Tailwind `font-mono`,
-   `<code>`) re-resolve to `--md-code-font` so a custom code font in
-   the theme settings reaches rename `<code>` chips, mono timestamps,
-   and any other monospace ornament without each call site having to
-   thread a CSS variable manually. */
+   `<code>`) re-resolve to `--appearance-code-font` so a custom code
+   font in the theme settings reaches rename `<code>` chips, mono
+   timestamps, and any other monospace ornament without each call site
+   having to thread a CSS variable manually. */
 .system-message-row {
   /* Theme-aware control height for inline chrome inside system audit
      rows (TaskRef chip + TaskStatusPill on `task_status` rows).
@@ -247,9 +248,9 @@ button:disabled { cursor: not-allowed; }
      pixel-aligned. The `1.5` factor matches `line-height: 1.5` below
      so the chrome's height tracks the row's actual text leading.
      Cindy PR-8 follow-up #3 (msg `VOGiR_K30xhSOswD`). */
-  --system-message-control-height: max(18px, calc(var(--md-prose-size, 13px) * 1.5));
-  font-family: var(--md-prose-font, var(--font-sans));
-  font-size: var(--md-prose-size, 13px);
+  --system-message-control-height: max(18px, calc(var(--appearance-markdown-font-size, var(--md-prose-size, 13px)) * 1.5));
+  font-family: var(--appearance-prose-font, var(--font-sans));
+  font-size: var(--appearance-markdown-font-size, var(--md-prose-size, 13px));
   line-height: 1.5;
   /* Column alignment with regular MessageItem rows. shiki PR-10
      follow-up (msg `rhEL2UlGNYG2lgl7`) + Cindy review fix
@@ -313,7 +314,7 @@ button:disabled { cursor: not-allowed; }
 }
 .system-message-row code,
 .system-message-row .font-mono {
-  font-family: var(--md-code-font, var(--font-mono));
+  font-family: var(--appearance-code-font, var(--font-mono));
 }
 /* TaskRef chip + TaskStatusPill inside a system audit row behave as
    chrome (fixed `--system-message-control-height`) so they align
@@ -657,8 +658,8 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   display: inline;
   padding: 0.08em 0.36em;
   margin-inline: 0.15em;
-  font-family: var(--md-code-font, var(--font-mono));
-  font-size: var(--md-code-size, 13px);
+  font-family: var(--appearance-code-font, var(--font-mono));
+  font-size: var(--appearance-markdown-font-size, var(--md-code-size, 13px));
   color: var(--text-inline-code);
   background: var(--bg-inline-code);
   border: var(--border-inline-code);
@@ -690,7 +691,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   padding: 0.25em 0.6em;
   background: var(--bg-island-deep);
   border-bottom: 1px solid var(--border-island);
-  font-family: var(--md-code-font, var(--font-mono));
+  font-family: var(--appearance-code-font, var(--font-mono));
   font-size: 0.75em;
   color: var(--text-island);
   user-select: none;
@@ -718,8 +719,8 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border: 0;
   border-radius: 0;
   color: var(--text-island);
-  font-family: var(--md-code-font, var(--font-mono));
-  font-size: var(--md-code-size, 13px);
+  font-family: var(--appearance-code-font, var(--font-mono));
+  font-size: var(--appearance-markdown-font-size, var(--md-code-size, 13px));
   line-height: 1.5;
 }
 .markdown-body .code-block--expanded pre {
