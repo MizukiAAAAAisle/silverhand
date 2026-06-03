@@ -218,6 +218,39 @@ async function deliverOne(
     },
   });
 
+  if (humanMemberId) {
+    opts.notifications.insert({
+      kind: 'mention_external',
+      userId: humanMemberId,
+      agentId: agent.id,
+      workspaceId: mentionsConversation.workspace_id,
+      conversationId: mentionsConversation.id,
+      messageId: wrapped.id,
+      sourceWorkspaceId: opts.sourceWorkspace.id,
+      sourceConversationId: opts.sourceConversation.id,
+      sourceMessageId: opts.message.id,
+      payload: {
+        source_workspace_name: opts.sourceWorkspace.name,
+        source_conversation_title: opts.sourceConversation.title,
+        mention_excerpt: excerpt(opts.message.content),
+      },
+    });
+  } else {
+    opts.logger.warn(
+      {
+        event: 'mention_cc.skip_notification',
+        reason: 'unresolved_human_member',
+        handle,
+        agentId: agent.id,
+        conversationId: mentionsConversation.id,
+        sourceConversationId: opts.sourceConversation.id,
+        sourceMessageId: opts.message.id,
+        wrappedMessageId: wrapped.id,
+      },
+      'mention-cc: no human member id available; skipping viewer notification insert',
+    );
+  }
+
   if (humanMemberId && (mentions.created || humanMembershipCreated)) {
     opts.events.publishToScope(
       `workspace:${mentionsConversation.workspace_id}`,
@@ -245,6 +278,13 @@ async function deliverOne(
       conversation_id: mentionsConversation.id,
     });
   }
+  if (humanMemberId) {
+    opts.events.publishToScope(`viewer:${humanMemberId}`, 'notification', {
+      kind: 'mention_external',
+      conversation_id: mentionsConversation.id,
+      message_id: wrapped.id,
+    });
+  }
 
   // Fire-and-forget start; deliverMessage tolerates "not yet running"
   // by enqueueing to the inbox, so we don't need to await ordering.
@@ -257,44 +297,6 @@ async function deliverOne(
       ),
     );
   await opts.runtimeHost.deliverMessage(mentionsConversation.id, agent.id, wrapped.id);
-
-  if (humanMemberId) {
-    opts.notifications.insert({
-      kind: 'mention_external',
-      userId: humanMemberId,
-      agentId: agent.id,
-      workspaceId: mentionsConversation.workspace_id,
-      conversationId: mentionsConversation.id,
-      messageId: wrapped.id,
-      sourceWorkspaceId: opts.sourceWorkspace.id,
-      sourceConversationId: opts.sourceConversation.id,
-      sourceMessageId: opts.message.id,
-      payload: {
-        source_workspace_name: opts.sourceWorkspace.name,
-        source_conversation_title: opts.sourceConversation.title,
-        mention_excerpt: excerpt(opts.message.content),
-      },
-    });
-    opts.events.publishToScope(`viewer:${humanMemberId}`, 'notification', {
-      kind: 'mention_external',
-      conversation_id: mentionsConversation.id,
-      message_id: wrapped.id,
-    });
-  } else {
-    opts.logger.warn(
-      {
-        event: 'mention_cc.skip_notification',
-        reason: 'unresolved_human_member',
-        handle,
-        agentId: agent.id,
-        conversationId: mentionsConversation.id,
-        sourceConversationId: opts.sourceConversation.id,
-        sourceMessageId: opts.message.id,
-        wrappedMessageId: wrapped.id,
-      },
-      'mention-cc: no human member id available; skipping viewer notification insert',
-    );
-  }
 }
 
 /**

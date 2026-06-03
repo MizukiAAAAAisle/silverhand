@@ -15,6 +15,7 @@ import type { MessageDto } from '@silverhand/shared';
 class FakeConversationManager {
   starts: Array<{ conversationId: string; agentId: string }> = [];
   delivered: Array<{ conversationId: string; agentId: string; messageId: string }> = [];
+  deliverError: Error | null = null;
 
   async start(conversationId: string, agentId: string): Promise<void> {
     this.starts.push({ conversationId, agentId });
@@ -25,6 +26,7 @@ class FakeConversationManager {
     agentId: string,
     messageId: string,
   ): Promise<void> {
+    if (this.deliverError) throw this.deliverError;
     this.delivered.push({ conversationId, agentId, messageId });
   }
 }
@@ -522,6 +524,55 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
           .replay('viewer:teammate', viewerSeqBeforeSecond, 'test-epoch')
           .map(e => e.kind),
       ).toEqual(['notification']);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('persists notification and publishes viewer events before runtime delivery can fail', async () => {
+    const t = bootstrap();
+    try {
+      t.fake.deliverError = new Error('transport_no_connection');
+      const userMsg = t.messages.insertForConversation({
+        conversationId: t.sourceChannel.id,
+        fromKind: 'user',
+        fromUserId: 'teammate',
+        content: 'please review even if delivery fails @alice',
+      });
+
+      await runMentionCc(t, userMsg);
+
+      const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
+        title: 'Mentions',
+      });
+      expect(mentionsDm).not.toBeNull();
+      const wrappedEvents = t.events.replay(
+        `conversation:${mentionsDm!.id}`,
+        0,
+        'test-epoch',
+      );
+      expect(wrappedEvents).toHaveLength(1);
+
+      const notifications = t.notifications.list({ userId: 'teammate' });
+      expect(notifications).toEqual([
+        expect.objectContaining({
+          kind: 'mention_external',
+          conversation_id: mentionsDm!.id,
+          message_id: expect.any(String),
+        }),
+      ]);
+      expect(t.events.replay('viewer:teammate', 0, 'test-epoch').map(e => e.kind))
+        .toEqual(['unread_updated', 'notification']);
+      expect(t.fake.delivered).toHaveLength(0);
+      expect(t.logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          handle: 'alice',
+          sourceConversationId: t.sourceChannel.id,
+          sourceMessageId: userMsg.id,
+          err: t.fake.deliverError,
+        }),
+        'mention-cc: delivery failed for one recipient; continuing',
+      );
     } finally {
       t.cleanup();
     }
