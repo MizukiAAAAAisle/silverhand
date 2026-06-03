@@ -333,6 +333,31 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'host_outbound_reload' },
   },
   {
+    name: 'request/host_proxy_config_get',
+    description:
+      'Read daemon-local proxy config from the physical host. Empty params; no server-held proxy bytes exist.',
+    frame: enc({
+      id: 'req-host-proxy-get',
+      intent: 'host_proxy_config_get',
+      params: {},
+    }),
+    kind: { kind: 'request', intent: 'host_proxy_config_get' },
+  },
+  {
+    name: 'request/host_proxy_config_set',
+    description:
+      'Write daemon-local proxy config on the physical host. Runtime allowlist is explicit per CLI runtime.',
+    frame: enc({
+      id: 'req-host-proxy-set',
+      intent: 'host_proxy_config_set',
+      params: {
+        proxy_url: 'http://127.0.0.1:7890',
+        proxy_runtimes: ['codex'],
+      },
+    }),
+    kind: { kind: 'request', intent: 'host_proxy_config_set' },
+  },
+  {
     name: 'request/agent_materialize-default',
     description:
       'D4.d D2: server asks daemon to materialize an agent home (L1 dir). Server-allocated agent_id + workspace id, default template, claude runtime. agent_materialize is server↔daemon formal semantics — unlike runtime_*/host_outbound_* this carries business state, not transport plumbing.',
@@ -1043,6 +1068,36 @@ const RESPONSES_SUCCESS: WireFixture[] = [
       },
     }),
     kind: { kind: 'response_success', intent: 'host_outbound_reload' },
+  },
+  {
+    name: 'response/host_proxy_config_get',
+    description:
+      'Daemon-local proxy config read result. Server settings never carry these bytes.',
+    frame: enc({
+      id: 'req-host-proxy-get',
+      result: {
+        config: {
+          proxy_url: 'http://127.0.0.1:7890',
+          proxy_runtimes: ['codex'],
+        },
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_proxy_config_get' },
+  },
+  {
+    name: 'response/host_proxy_config_set',
+    description:
+      'Daemon-local proxy config write result echoes the normalized config.',
+    frame: enc({
+      id: 'req-host-proxy-set',
+      result: {
+        config: {
+          proxy_url: null,
+          proxy_runtimes: [],
+        },
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_proxy_config_set' },
   },
   {
     name: 'response/agent_materialize-ok',

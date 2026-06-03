@@ -46,6 +46,9 @@ import {
   type HostOutboundAttachResult,
   type HostOutboundDetachResult,
   type HostOutboundReloadResult,
+  type HostProxyConfigGetResult,
+  type HostProxyConfigSetParams,
+  type HostProxyConfigSetResult,
   type IntentName,
   type ResponseError,
   type ResponseFrame,
@@ -118,6 +121,12 @@ export interface DispatcherOptions {
   hostOutboundReloadHandler?: () =>
     | HostOutboundReloadResult
     | Promise<HostOutboundReloadResult>;
+  hostProxyConfigGetHandler?: () =>
+    | HostProxyConfigGetResult
+    | Promise<HostProxyConfigGetResult>;
+  hostProxyConfigSetHandler?: (
+    params: HostProxyConfigSetParams,
+  ) => HostProxyConfigSetResult | Promise<HostProxyConfigSetResult>;
   /**
    * D4.d D2 — handler for the `agent_materialize` intent. Unlike
    * the runtime_* family (local supervisor / control) and the
@@ -231,6 +240,14 @@ export class IntentDispatcher {
   private readonly hostOutboundReloadHandler:
     | (() => HostOutboundReloadResult | Promise<HostOutboundReloadResult>)
     | undefined;
+  private readonly hostProxyConfigGetHandler:
+    | (() => HostProxyConfigGetResult | Promise<HostProxyConfigGetResult>)
+    | undefined;
+  private readonly hostProxyConfigSetHandler:
+    | ((
+        params: HostProxyConfigSetParams,
+      ) => HostProxyConfigSetResult | Promise<HostProxyConfigSetResult>)
+    | undefined;
   private readonly agentMaterializeHandler:
     | ((
         params: AgentMaterializeParams,
@@ -288,6 +305,8 @@ export class IntentDispatcher {
     this.hostOutboundAttachHandler = opts.hostOutboundAttachHandler;
     this.hostOutboundDetachHandler = opts.hostOutboundDetachHandler;
     this.hostOutboundReloadHandler = opts.hostOutboundReloadHandler;
+    this.hostProxyConfigGetHandler = opts.hostProxyConfigGetHandler;
+    this.hostProxyConfigSetHandler = opts.hostProxyConfigSetHandler;
     this.agentMaterializeHandler = opts.agentMaterializeHandler;
     this.workspaceProvisionHandler = opts.workspaceProvisionHandler;
     this.agentWorkspaceIndexHandler = opts.agentWorkspaceIndexHandler;
@@ -702,6 +721,12 @@ export class IntentDispatcher {
         // configPath. Hard-rejects `not_attached` via a typed result
         // arm, not via `ResponseError` (business state vs transport).
         return this.requireHostOutboundReloadHandler()();
+      case 'host_proxy_config_get':
+        return this.requireHostProxyConfigGetHandler()();
+      case 'host_proxy_config_set':
+        return this.requireHostProxyConfigSetHandler()(
+          params as HostProxyConfigSetParams,
+        );
       case 'agent_materialize':
         // D4.d D2 — server↔daemon formal semantics. The slot is
         // wired by `runDaemon` to `materializeAgent` from
@@ -802,6 +827,28 @@ export class IntentDispatcher {
       );
     }
     return this.hostOutboundReloadHandler;
+  }
+
+  private requireHostProxyConfigGetHandler(): () =>
+    | HostProxyConfigGetResult
+    | Promise<HostProxyConfigGetResult> {
+    if (!this.hostProxyConfigGetHandler) {
+      throw new Error(
+        'host_proxy_config_get intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.hostProxyConfigGetHandler;
+  }
+
+  private requireHostProxyConfigSetHandler(): (
+    params: HostProxyConfigSetParams,
+  ) => HostProxyConfigSetResult | Promise<HostProxyConfigSetResult> {
+    if (!this.hostProxyConfigSetHandler) {
+      throw new Error(
+        'host_proxy_config_set intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.hostProxyConfigSetHandler;
   }
 
   private requireAgentMaterializeHandler(): (

@@ -3005,4 +3005,29 @@ describe('database migrations', () => {
       }
     });
   });
+
+  describe('migration v38 (drop global proxy settings)', () => {
+    it('removes legacy server-held proxy settings', () => {
+      const db = openDbAt(37);
+      try {
+        db.prepare(
+          `INSERT INTO app_settings (key, value)
+           VALUES
+             ('proxy_url', 'http://127.0.0.1:7890'),
+             ('proxy_runtimes', 'codex'),
+             ('viewer_user_id', 'local')`,
+        ).run();
+
+        runMigrations(db);
+
+        const rows = db
+          .prepare<[], { key: string }>('SELECT key FROM app_settings ORDER BY key')
+          .all()
+          .map(row => row.key);
+        expect(rows).toEqual(['viewer_user_id']);
+      } finally {
+        db.close();
+      }
+    });
+  });
 });

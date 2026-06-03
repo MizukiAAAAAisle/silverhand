@@ -58,6 +58,8 @@ const cataloguedIpcHandlers = [
   'export:savePng',
   'hosts:revoke',
   'hosts:rotate',
+  'hosts:proxyConfig:get',
+  'hosts:proxyConfig:set',
   'notification:show',
   // D4.a Commit 5c-2 — partial_apply_pending state machine IPC.
   // `partialApply:get` returns the in-memory state; `partialApply:retry`

@@ -173,7 +173,6 @@ function makePerimeterFixture(): PerimeterFixture {
     silverhandCli: { command: 'silverhand', args: [] },
     agentTokens: new AgentTokenStore(),
     serverUrl: () => 'http://127.0.0.1:1',
-    proxyPolicy: () => ({ url: null, allowlist: [] }),
     activityLog: null,
   });
 

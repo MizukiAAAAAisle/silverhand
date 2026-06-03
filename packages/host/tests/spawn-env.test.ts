@@ -32,7 +32,7 @@ const BASE_ENV: NodeJS.ProcessEnv = {
 };
 
 describe('daemon spawn env', () => {
-  it('materializes final child env locally from typed env_policy', () => {
+  it('materializes final child env locally from typed env_policy and daemon proxy config', () => {
     const driver = makeDriver(env => ({ ...env, NO_COLOR: '1' }));
     const options = testStartOptions({ runtime: 'codex' });
     options.env_policy = {
@@ -40,10 +40,6 @@ describe('daemon spawn env', () => {
       silverhand: {
         server_url: 'http://127.0.0.1:8765',
         auth_token: 'tok_test_123',
-      },
-      proxy: {
-        url: 'http://127.0.0.1:7897',
-        allowlist: ['codex'],
       },
     };
 
@@ -53,6 +49,10 @@ describe('daemon spawn env', () => {
       conversationId: 'conv-abc',
       agentId: 'agent-xyz',
       binDir: '/tmp/silverhand-spawn/bin',
+      proxyConfig: {
+        proxy_url: 'http://127.0.0.1:7897',
+        proxy_runtimes: ['codex'],
+      },
       baseProcessEnv: BASE_ENV,
     });
 
@@ -71,13 +71,6 @@ describe('daemon spawn env', () => {
   it('does not apply proxy env when the runtime is not allowlisted', () => {
     const driver = makeDriver(env => ({ ...env }));
     const options = testStartOptions({ runtime: 'claude' });
-    options.env_policy = {
-      ...options.env_policy,
-      proxy: {
-        url: 'http://127.0.0.1:7897',
-        allowlist: ['codex'],
-      },
-    };
 
     const env = buildDaemonSpawnEnv({
       driver,
@@ -85,6 +78,10 @@ describe('daemon spawn env', () => {
       conversationId: options.session.conversation_id,
       agentId: options.agent.id,
       binDir: '/tmp/silverhand-spawn/bin',
+      proxyConfig: {
+        proxy_url: 'http://127.0.0.1:7897',
+        proxy_runtimes: ['codex'],
+      },
       baseProcessEnv: BASE_ENV,
     });
 

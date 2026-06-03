@@ -2400,6 +2400,17 @@ export const migrations: Migration[] = [
         WHERE user_id IS NOT NULL;
     `,
   },
+  {
+    version: 38,
+    name: 'drop_global_proxy_settings',
+    // Proxy config is daemon-host local truth. The server no longer reads,
+    // persists, or forwards proxy URL/runtime allowlist; users set it again
+    // from the local Computer detail pane when needed.
+    up: `
+      DELETE FROM app_settings
+       WHERE key IN ('proxy_url', 'proxy_runtimes');
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

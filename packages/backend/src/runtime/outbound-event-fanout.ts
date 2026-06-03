@@ -54,7 +54,6 @@ import {
 import { DbRuntimeStatusProjector } from './status-projector.js';
 import {
   buildRuntimeStartOptions,
-  type RuntimeStartProxyPolicy,
 } from './runtime-start-options.js';
 import type { WorkspaceRegistryBackfiller } from './workspace-registry-backfill.js';
 
@@ -67,7 +66,6 @@ export interface OutboundRuntimeEventFanoutOptions {
   silverhandCli: SilverhandCliLauncher;
   agentTokens: AgentTokenStore;
   serverUrl: () => string;
-  proxyPolicy: () => RuntimeStartProxyPolicy;
   /**
    * D4.e-6 — bounded lazy backfill of the daemon workspace registry before
    * a `runtime_start` dispatch. `runtime_start` carries semantic-only refs;
@@ -1133,7 +1131,6 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       silverhandCli: this.opts.silverhandCli,
       serverUrl: this.opts.serverUrl(),
       agentToken: this.opts.agentTokens.issue(conversationId, agentId),
-      proxy: this.opts.proxyPolicy(),
     });
   }
 

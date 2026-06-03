@@ -374,12 +374,6 @@ const RuntimeStartEnvPolicySchema = z
       })
       .strict(),
     silverhand_cli: SilverhandCliLauncherSchema,
-    proxy: z
-      .object({
-        url: z.string().nullable(),
-        allowlist: z.array(z.string()),
-      })
-      .strict(),
   })
   .strict();
 
@@ -1068,6 +1062,42 @@ export const HostOutboundReloadResultSchema = z.discriminatedUnion('reloaded', [
 export type HostOutboundReloadResult = z.infer<
   typeof HostOutboundReloadResultSchema
 >;
+
+// ── host_proxy_config_* (daemon-host local truth) ──────────────────
+//
+// Proxy configuration is daemon-host local truth: it lives in a file on
+// the physical computer that spawns runtimes. The server must not read,
+// persist, or forward the URL. Desktop main calls these IPC intents only
+// for the current local daemon; renderer gates editability on both host
+// ownership and local reachability.
+
+export const HostProxyConfigSchema = z
+  .object({
+    proxy_url: z.string().nullable(),
+    proxy_runtimes: z.array(RuntimeKindSchema),
+  })
+  .strict();
+export type HostProxyConfig = z.infer<typeof HostProxyConfigSchema>;
+
+export const HostProxyConfigGetParamsSchema = z.object({}).strict();
+export type HostProxyConfigGetParams = z.infer<
+  typeof HostProxyConfigGetParamsSchema
+>;
+
+export const HostProxyConfigGetResultSchema = z
+  .object({ config: HostProxyConfigSchema })
+  .strict();
+export type HostProxyConfigGetResult = z.infer<
+  typeof HostProxyConfigGetResultSchema
+>;
+
+export const HostProxyConfigSetParamsSchema = HostProxyConfigSchema;
+export type HostProxyConfigSetParams = z.infer<
+  typeof HostProxyConfigSetParamsSchema
+>;
+
+export const HostProxyConfigSetResultSchema = HostProxyConfigGetResultSchema;
+export type HostProxyConfigSetResult = HostProxyConfigGetResult;
 
 
 // ── D4.d: agent_materialize (server↔daemon formal semantics) ──────
@@ -1832,6 +1862,14 @@ export const intentSchemas = {
   host_outbound_reload: {
     params: HostOutboundReloadParamsSchema,
     result: HostOutboundReloadResultSchema,
+  },
+  host_proxy_config_get: {
+    params: HostProxyConfigGetParamsSchema,
+    result: HostProxyConfigGetResultSchema,
+  },
+  host_proxy_config_set: {
+    params: HostProxyConfigSetParamsSchema,
+    result: HostProxyConfigSetResultSchema,
   },
   // D4.d D2: agent_materialize is server↔daemon formal semantics
   // (see comment block above `AgentMaterializeParamsSchema`). The

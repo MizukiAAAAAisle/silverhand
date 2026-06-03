@@ -1031,10 +1031,6 @@ function runtimeStartOptions(): unknown {
         command: 'silverhand',
         args: [],
       },
-      proxy: {
-        url: null,
-        allowlist: [],
-      },
     },
   };
 }

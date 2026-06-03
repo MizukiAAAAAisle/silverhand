@@ -62,6 +62,7 @@ import {
   writeRuntimePidfile,
 } from '../runtime-pidfiles.js';
 import { buildDaemonSpawnEnv } from '../spawn-env.js';
+import { readDaemonProxyConfig } from '../proxy-config.js';
 import { prepareSpawnFiles } from '../spawn-prep.js';
 import type { SupervisorContract } from '../supervisor-contract.js';
 import type {
@@ -176,6 +177,7 @@ export interface SupervisorOptions {
    *  null/undefined to disable filesystem pidfiles. */
   daemonInstanceId?: string;
   runtimePidRootDir?: string | null;
+  proxyConfigPath?: string | null;
   // ── 3c-b init watchdog + retry/cooldown + compaction knobs ──────
   //
   // Override precedence is fixed (Cindy `-pdNvRYOWip5e9yA`):
@@ -226,6 +228,7 @@ export class Supervisor implements SupervisorContract {
   private readonly sigkillTimeoutMs: number;
   private readonly daemonInstanceId: string | null;
   private readonly runtimePidRootDir: string | null;
+  private readonly proxyConfigPath: string | null;
 
   // ── 3c-b state ─────────────────────────────────────────────────
   /** Sticky per-(conv, agent) init failure counter + cooldown clock.
@@ -262,6 +265,7 @@ export class Supervisor implements SupervisorContract {
     this.sigkillTimeoutMs = opts.sigkillTimeoutMs ?? DEFAULT_SIGKILL_TIMEOUT_MS;
     this.daemonInstanceId = opts.daemonInstanceId ?? null;
     this.runtimePidRootDir = opts.runtimePidRootDir ?? null;
+    this.proxyConfigPath = opts.proxyConfigPath ?? null;
     this.initWatchdogMs = opts.initWatchdogMs ?? null;
     this.initLivenessSilenceMs = opts.initLivenessSilenceMs;
     this.initPreProtocolCapMs = opts.initPreProtocolCapMs;
@@ -423,6 +427,7 @@ export class Supervisor implements SupervisorContract {
       conversationId: params.conversation_id,
       agentId: params.agent_id,
       binDir: spawnPrep.binDir,
+      proxyConfig: readDaemonProxyConfig(this.proxyConfigPath, this.logger),
     });
     const startedAt = this.now();
 

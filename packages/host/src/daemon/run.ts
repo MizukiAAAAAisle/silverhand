@@ -74,6 +74,10 @@ import {
   reconcileRuntimePidfiles,
 } from './runtime-pidfiles.js';
 import type { SupervisorContract } from './supervisor-contract.js';
+import {
+  readDaemonProxyConfig,
+  writeDaemonProxyConfig,
+} from './proxy-config.js';
 
 export interface RunDaemonOptions {
   /** Absolute path where the daemon should bind its Unix socket. */
@@ -116,6 +120,12 @@ export interface RunDaemonOptions {
    * isolated from the user's normal profile.
    */
   agentHomeRootDir?: string | null;
+  /**
+   * Daemon-local proxy config file. This is host-local truth: Desktop
+   * main edits it through host_proxy_config_* IPC and runtime spawn reads
+   * it locally. Backend/runtime_start never carries proxy bytes.
+   */
+  proxyConfigPath?: string | null;
   /**
    * Persistent daemon identity file. Four resolution cases:
    *
@@ -201,6 +211,7 @@ export interface RunDaemonOptions {
          * workspace registry; the factory threads them into `Supervisor`.
          */
         runtimeStartResolveDeps: RuntimeStartResolveDeps;
+        proxyConfigPath: string | null;
       }) => SupervisorContract)
     | null;
   /**
@@ -472,6 +483,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         daemonInstanceId,
         runtimePidRootDir,
         runtimeStartResolveDeps,
+        proxyConfigPath: opts.proxyConfigPath ?? null,
       })
     : undefined;
   const dispatcher = new IntentDispatcher({
@@ -482,6 +494,17 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     hostOutboundAttachHandler: params => outboundSupervisor.attach(params),
     hostOutboundDetachHandler: () => outboundSupervisor.detach(),
     hostOutboundReloadHandler: () => outboundSupervisor.reload(),
+    hostProxyConfigGetHandler: () => ({
+      config: readDaemonProxyConfig(opts.proxyConfigPath ?? null, logger),
+    }),
+    hostProxyConfigSetHandler: params => {
+      if (!opts.proxyConfigPath) {
+        throw new Error('host proxy config path is not configured');
+      }
+      return {
+        config: writeDaemonProxyConfig(opts.proxyConfigPath, params),
+      };
+    },
     // D4.d D2 — server↔daemon formal semantics. `materializeAgent`
     // owns the §4.6 idempotency decision tree + atomic seed +
     // sentinel write. `homeDir` defaults to the daemon process's

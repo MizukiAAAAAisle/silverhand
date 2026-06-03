@@ -214,7 +214,6 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
     silverhandCli: { command: 'silverhand', args: [] },
     agentTokens: new AgentTokenStore(),
     serverUrl: () => 'http://127.0.0.1:1',
-    proxyPolicy: () => ({ url: null, allowlist: [] }),
     activityLog: null,
   });
   controller = installHostWebSocketServer(httpServer, t.ctx, {

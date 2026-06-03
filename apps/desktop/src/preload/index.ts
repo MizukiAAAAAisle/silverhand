@@ -3,6 +3,7 @@ import type {
   AuthLoginInput,
   AuthSignupInput,
   HostDto,
+  RuntimeKind,
   ServerConnectionProfileView,
   ServerInfo,
   TlsErrorCode,
@@ -105,6 +106,23 @@ export interface BackendUploadRequest {
   fields: BackendUploadField[];
   files: BackendUploadFile[];
 }
+
+export interface DesktopHostProxyConfig {
+  proxy_url: string | null;
+  proxy_runtimes: RuntimeKind[];
+}
+
+export type DesktopHostProxyConfigResult =
+  | { ok: true; config: DesktopHostProxyConfig }
+  | {
+      ok: false;
+      code:
+        | 'not_local_host'
+        | 'daemon_unavailable'
+        | 'daemon_error'
+        | 'invalid_input';
+      message?: string;
+    };
 
 /** Stage B.4 — return shape exposed to the renderer for both
  *  `rotateHostToken` and `revokeHost`. Token bytes are deliberately
@@ -357,6 +375,15 @@ const api = {
     ipcRenderer.invoke('hosts:rotate', input),
   revokeHost: (input: { hostId: string }): Promise<DesktopHostMutationResult> =>
     ipcRenderer.invoke('hosts:revoke', input),
+  getHostProxyConfig: (input: {
+    hostId: string;
+  }): Promise<DesktopHostProxyConfigResult> =>
+    ipcRenderer.invoke('hosts:proxyConfig:get', input),
+  saveHostProxyConfig: (input: {
+    hostId: string;
+    config: DesktopHostProxyConfig;
+  }): Promise<DesktopHostProxyConfigResult> =>
+    ipcRenderer.invoke('hosts:proxyConfig:set', input),
   /** D3.c Commit 3 — Settings "save server URL". Main owns the
    *  full pipeline: classify raw input → atomic write
    *  `daemon-config.json` → `host_outbound_reload` IPC to daemon →

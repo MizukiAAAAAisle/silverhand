@@ -10,6 +10,7 @@ import {
   HostClaimOrCreateResponseSchema,
   HostRevokeResponseSchema,
   HostRotateTokenEmbeddedResponseSchema,
+  RuntimeKindSchema,
   ServerInfoSchema,
   X_SILVERHAND_LEGACY_USER_ID_HEADER,
   X_SILVERHAND_PRINCIPAL_HEADER,
@@ -23,6 +24,7 @@ import {
   type AuthLoginInput,
   type AuthSignupInput,
   type HostDto,
+  type RuntimeKind,
   type ServerConnectionProfile,
   type ServerConnectionProfileView,
   type ServerInfo,
@@ -39,7 +41,12 @@ import {
   DESKTOP_REMOTE_ONLY,
   PACKAGED_DEFAULT_SERVER_URL,
 } from '../build-flags.js';
-import { HostClient, spawnDaemonChild, type DaemonHandle } from '@silverhand/host';
+import {
+  HostClient,
+  HostClientError,
+  spawnDaemonChild,
+  type DaemonHandle,
+} from '@silverhand/host';
 import {
   electronUserDataPath,
   loadOrCreateServerConfig,
@@ -129,6 +136,23 @@ import {
 type BackendHandle =
   | { readonly kind: 'embedded'; readonly running: RunningBackend }
   | RemoteBackendHandle;
+
+interface DesktopHostProxyConfig {
+  proxy_url: string | null;
+  proxy_runtimes: RuntimeKind[];
+}
+
+type DesktopHostProxyConfigResult =
+  | { ok: true; config: DesktopHostProxyConfig }
+  | {
+      ok: false;
+      code:
+        | 'not_local_host'
+        | 'daemon_unavailable'
+        | 'daemon_error'
+        | 'invalid_input';
+      message?: string;
+    };
 
 class RemoteOnlyServerProfileRequiredError extends Error {
   constructor(reason: string) {
@@ -455,6 +479,7 @@ interface DaemonPaths {
   runtimePidRootDir: string;
   agentHomeRootDir: string;
   hostConfigPath: string;
+  proxyConfigPath: string;
   /** Local outbound frame socket — the daemon binds it and the embedded
    *  backend dials it for the D5.a R4-unified outbound envelope. */
   localOutboundSocketPath: string;
@@ -473,6 +498,7 @@ function daemonPaths(): DaemonPaths {
     runtimePidRootDir: join(runDir, 'runtime-pids'),
     agentHomeRootDir: join(silverhandDir(), 'agents'),
     hostConfigPath: daemonHostConfigPath(silverhandDir()),
+    proxyConfigPath: join(silverhandDir(), 'daemon', 'proxy-config.json'),
     localOutboundSocketPath: join(runDir, 'daemon-outbound.sock'),
   };
 }
@@ -1367,6 +1393,91 @@ async function revokeHost(
   };
 }
 
+function normalizeDesktopHostProxyConfig(
+  input: unknown,
+): DesktopHostProxyConfig | null {
+  if (!input || typeof input !== 'object') return null;
+  const obj = input as {
+    proxy_url?: unknown;
+    proxy_runtimes?: unknown;
+  };
+  const rawUrl = obj.proxy_url;
+  if (rawUrl !== null && typeof rawUrl !== 'string') return null;
+  const proxy_url =
+    typeof rawUrl === 'string' && rawUrl.trim().length > 0
+      ? rawUrl.trim()
+      : null;
+  if (!Array.isArray(obj.proxy_runtimes)) return null;
+  const proxy_runtimes: RuntimeKind[] = [];
+  const seen = new Set<string>();
+  for (const value of obj.proxy_runtimes) {
+    const parsed = RuntimeKindSchema.safeParse(value);
+    if (!parsed.success || seen.has(parsed.data)) continue;
+    seen.add(parsed.data);
+    proxy_runtimes.push(parsed.data);
+  }
+  return { proxy_url, proxy_runtimes };
+}
+
+async function getHostProxyConfig(
+  hostId: string,
+): Promise<DesktopHostProxyConfigResult> {
+  if (!hostId || localHostClaim.status !== 'claimed' || hostId !== localHostClaim.hostId) {
+    return { ok: false, code: 'not_local_host' };
+  }
+  if (!hostClient || !hostClient.isConnected()) {
+    return { ok: false, code: 'daemon_unavailable' };
+  }
+  try {
+    const result = await hostClient.hostProxyConfigGet();
+    return { ok: true, config: result.config };
+  } catch (err) {
+    logger?.warn(
+      { err: err instanceof Error ? err.message : String(err), hostId },
+      'host proxy config get failed',
+    );
+    return {
+      ok: false,
+      code:
+        err instanceof HostClientError && err.code === 'disconnected'
+          ? 'daemon_unavailable'
+          : 'daemon_error',
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function saveHostProxyConfig(input: {
+  hostId: string;
+  config: unknown;
+}): Promise<DesktopHostProxyConfigResult> {
+  if (!input.hostId || localHostClaim.status !== 'claimed' || input.hostId !== localHostClaim.hostId) {
+    return { ok: false, code: 'not_local_host' };
+  }
+  const config = normalizeDesktopHostProxyConfig(input.config);
+  if (!config) return { ok: false, code: 'invalid_input' };
+  if (!hostClient || !hostClient.isConnected()) {
+    return { ok: false, code: 'daemon_unavailable' };
+  }
+  try {
+    const result = await hostClient.hostProxyConfigSet(config);
+    return { ok: true, config: result.config };
+  } catch (err) {
+    logger?.warn(
+      { err: err instanceof Error ? err.message : String(err), hostId: input.hostId },
+      'host proxy config set failed',
+    );
+    return {
+      ok: false,
+      code:
+        err instanceof HostClientError && err.code === 'disconnected'
+          ? 'daemon_unavailable'
+          : 'daemon_error',
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 /**
  * D3.c Commit 3 — Settings "save server URL" handler.
  *
@@ -1798,6 +1909,7 @@ async function bootstrap(): Promise<void> {
       logDir: paths.logDir,
       runtimePidRootDir: paths.runtimePidRootDir,
       agentHomeRootDir: paths.agentHomeRootDir,
+      proxyConfigPath: paths.proxyConfigPath,
       // D5.a-3: the daemon binds its local outbound frame server here so
       // the embedded backend can dial it and speak the same outbound
       // envelope as the standalone WSS path (R4 unification). This is the
@@ -2424,6 +2536,19 @@ ipcMain.handle('hosts:rotate', (_event, input: { hostId: string }) =>
 
 ipcMain.handle('hosts:revoke', (_event, input: { hostId: string }) =>
   revokeHost(input?.hostId ?? ''),
+);
+
+ipcMain.handle('hosts:proxyConfig:get', (_event, input: { hostId: string }) =>
+  getHostProxyConfig(input?.hostId ?? ''),
+);
+
+ipcMain.handle(
+  'hosts:proxyConfig:set',
+  (_event, input: { hostId: string; config: unknown }) =>
+    saveHostProxyConfig({
+      hostId: input?.hostId ?? '',
+      config: input?.config,
+    }),
 );
 
 /**

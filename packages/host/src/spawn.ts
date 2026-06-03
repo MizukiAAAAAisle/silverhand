@@ -208,6 +208,8 @@ export interface SpawnDaemonOptions {
    *  SILVERHAND_DIR-scoped path so isolated apps do not materialize
    *  agents under the global user profile. */
   agentHomeRootDir?: string | null;
+  /** Daemon-local runtime proxy config file. */
+  proxyConfigPath?: string | null;
   /** Mirror daemon log lines to stderr too. Default true in dev. */
   alsoStderr?: boolean;
   /** Max time to wait for the `ready` handshake. Default 10_000ms. */
@@ -381,6 +383,9 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
         : []),
       ...(opts.agentHomeRootDir
         ? ['--agent-home-root-dir', opts.agentHomeRootDir]
+        : []),
+      ...(opts.proxyConfigPath
+        ? ['--proxy-config-path', opts.proxyConfigPath]
         : []),
       ...(alsoStderr ? ['--stderr'] : []),
     ];

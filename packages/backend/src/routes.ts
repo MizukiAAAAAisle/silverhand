@@ -103,7 +103,6 @@ import { SavedMessageRepo } from './repos/saved-message-repo.js';
 import { SearchRepo } from './repos/search-repo.js';
 import { ConversationReadRepo } from './repos/conversation-read-repo.js';
 import { ConversationInboxRepo } from './repos/conversation-inbox-repo.js';
-import { SettingsRepo, SETTINGS_KEYS } from './repos/settings-repo.js';
 import { WorkspaceRepo, agentHomeWorkspaceId } from './repos/workspace-repo.js';
 import { ConversationRepo, type RepoError } from './repos/conversation-repo.js';
 import { detectRuntimes } from '@silverhand/host/runtimes';
@@ -1215,10 +1214,8 @@ function addConversationMember(
   return c.json({ members: deps.membership.listMembers(conversation.id) });
 }
 
-function publicSettingsSnapshot(settings: SettingsRepo): Record<string, string> {
-  const out = { ...settings.all() };
-  delete out[SETTINGS_KEYS.VIEWER_USER_ID];
-  return out;
+function publicSettingsSnapshot(): Record<string, string> {
+  return {};
 }
 
 const userServiceErrorStatusMap: Partial<
@@ -1493,7 +1490,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   const attachments = new AttachmentRepo(ctx.db);
   const saved = new SavedMessageRepo(ctx.db);
   const search = new SearchRepo(ctx.db);
-  const settings = new SettingsRepo(ctx.db);
   const conversationInboxes = new ConversationInboxRepo(ctx.db);
   const notifications = new NotificationRepo(ctx.db);
   const conversationReads = new ConversationReadRepo(ctx.db);
@@ -5476,31 +5472,22 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
 
   // Old HTTP route aliases were removed in the hard cutover.
 
-  // ── Host-wide settings ───────────────────────────────────────────
-  // Flat KV. Currently exposes `proxy_url`. Empty string deletes the row.
-  app.get(apiPaths.settings, c =>
-    c.json({ settings: publicSettingsSnapshot(settings) }),
-  );
+  // ── Legacy host-wide settings ────────────────────────────────────
+  // Runtime proxy config moved to daemon-host local truth. The route is
+  // retained as an empty, compatibility-only surface; no public settings
+  // are accepted.
+  app.get(apiPaths.settings, c => c.json({ settings: publicSettingsSnapshot() }));
 
   app.put(apiPaths.settings, async c => {
     const body = await c.req.json().catch(() => null);
     if (!body || typeof body !== 'object') {
       return c.json({ error: 'invalid input' }, 400);
     }
-    const allowed = new Set<string>(Object.values(SETTINGS_KEYS));
-    for (const [k, v] of Object.entries(body as Record<string, unknown>)) {
-      if (k === SETTINGS_KEYS.VIEWER_USER_ID) {
-        return c.json({ error: `unknown settings key: ${k}` }, 400);
-      }
-      if (!allowed.has(k)) {
-        return c.json({ error: `unknown settings key: ${k}` }, 400);
-      }
-      if (typeof v !== 'string') {
-        return c.json({ error: `value for ${k} must be a string` }, 400);
-      }
-      settings.set(k, v);
+    const [firstKey] = Object.keys(body as Record<string, unknown>);
+    if (firstKey) {
+      return c.json({ error: `unknown settings key: ${firstKey}` }, 400);
     }
-    return c.json({ settings: publicSettingsSnapshot(settings) });
+    return c.json({ settings: publicSettingsSnapshot() });
   });
 
   // ── Current viewer (user profile) ────────────────────────────────

@@ -6,6 +6,7 @@ import {
   SILVERHAND_CONVERSATION_ID_ENV,
   SILVERHAND_SERVER_URL_ENV,
 } from '@silverhand/shared';
+import type { DaemonProxyConfig } from './proxy-config.js';
 import type { Driver } from '../drivers/index.js';
 import type { StartOptions } from '../protocol.js';
 
@@ -15,6 +16,7 @@ export interface DaemonSpawnEnvInput {
   conversationId: string;
   agentId: string;
   binDir: string;
+  proxyConfig?: DaemonProxyConfig;
   baseProcessEnv?: NodeJS.ProcessEnv;
 }
 
@@ -24,10 +26,10 @@ export function buildDaemonSpawnEnv(
   const options = input.options;
   let env = input.driver.applyEnv(input.baseProcessEnv ?? process.env);
   if (
-    options.env_policy.proxy.url &&
-    options.env_policy.proxy.allowlist.includes(options.driver.kind)
+    input.proxyConfig?.proxy_url &&
+    input.proxyConfig.proxy_runtimes.includes(options.driver.kind)
   ) {
-    const proxyEnv = expandProxyEnv(options.env_policy.proxy.url);
+    const proxyEnv = expandProxyEnv(input.proxyConfig.proxy_url);
     if (proxyEnv) env = { ...env, ...proxyEnv };
   }
 

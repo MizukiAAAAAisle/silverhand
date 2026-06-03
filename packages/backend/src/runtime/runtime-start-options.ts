@@ -4,15 +4,9 @@ import type {
   ConversationAgentDto,
   ConversationDto,
   MemberDto,
-  RuntimeKind,
   WorkspaceDto,
 } from '@silverhand/shared';
 import type { SilverhandCliLauncher } from '../context.js';
-
-export interface RuntimeStartProxyPolicy {
-  url: string | null;
-  allowlist: readonly RuntimeKind[];
-}
 
 export interface BuildRuntimeStartOptionsInput {
   conversation: ConversationDto;
@@ -25,7 +19,6 @@ export interface BuildRuntimeStartOptionsInput {
   silverhandCli: SilverhandCliLauncher;
   serverUrl: string;
   agentToken: string;
-  proxy: RuntimeStartProxyPolicy;
   modelOverride?: string | null;
 }
 
@@ -78,10 +71,6 @@ export function buildRuntimeStartOptions(
         ...(input.silverhandCli.env
           ? { env_vars: input.silverhandCli.env }
           : {}),
-      },
-      proxy: {
-        url: input.proxy.url,
-        allowlist: [...input.proxy.allowlist],
       },
     },
   };

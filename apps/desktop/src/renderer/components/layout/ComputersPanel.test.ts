@@ -20,6 +20,7 @@ function host(input: {
     name: input.name ?? input.id,
     kind: input.kind ?? 'remote',
     display_label: input.display_label ?? null,
+    creator_user_id: 'viewer',
     created_at: 1,
     last_seen_at: null,
     revoked_at: null,

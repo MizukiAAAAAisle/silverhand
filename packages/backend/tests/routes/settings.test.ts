@@ -26,14 +26,14 @@ describe('GET/PUT /api/settings', () => {
     expect(pointer?.value).toBe('local');
   });
 
-  it('continues to persist ordinary host-wide settings', async () => {
+  it('rejects removed runtime proxy settings', async () => {
     t = buildTestApp();
-    const updated = await (
-      await http(t).put(apiPaths.settings, {
-        proxy_url: 'http://127.0.0.1:7890',
-      })
-    ).json() as any;
-    expect(updated.settings.proxy_url).toBe('http://127.0.0.1:7890');
-    expect(updated.settings.viewer_user_id).toBeUndefined();
+    const denied = await http(t).put(apiPaths.settings, {
+      proxy_url: 'http://127.0.0.1:7890',
+    });
+    expect(denied.status).toBe(400);
+
+    const initial = await (await http(t).get(apiPaths.settings)).json() as any;
+    expect(initial.settings).toEqual({});
   });
 });

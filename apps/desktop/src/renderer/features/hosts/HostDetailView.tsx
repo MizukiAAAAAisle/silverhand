@@ -43,18 +43,22 @@
  * a heavier white treatment here and we don't want that ripple to
  * other profile surfaces.
  *
- * Forward-compat: NO `host.kind === 'local'` branching. shiki: "功能应是
- * hosts 主语的通用功能, 不是 local only" — every screen here renders
- * against generic `HostDto` + `HostStatusResponse`, so dropping in a
- * remote host requires zero diff here.
+ * Forward-compat: NO `host.kind === 'local'` branching for server-backed
+ * host status. shiki: "功能应是 hosts 主语的通用功能, 不是 local only" —
+ * every server-backed screen here renders against generic `HostDto` +
+ * `HostStatusResponse`.
+ *
+ * Exception: proxy config is daemon-host local truth. That form is only
+ * editable when this Desktop can reach the physical daemon for `host.id`;
+ * the server must not carry proxy bytes.
  *
  * Manual-refresh contract: `useHostStatusQuery` pins
  * `staleTime: Infinity` + no focus/interval refetch. The Refresh button
  * invalidates the query key on click.
  */
 import { useQueryClient } from '@tanstack/react-query';
-import { Cpu, Globe, Loader2, Monitor, RefreshCw } from 'lucide-react';
-import { useMemo, type JSX, type ReactNode } from 'react';
+import { Cpu, Globe, Loader2, Monitor, RefreshCw, Save } from 'lucide-react';
+import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import type {
   AgentOnHostDto,
   HostDto,
@@ -64,13 +68,21 @@ import type {
 import { RuntimeKindSchema } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+import {
+  isBackendUnreachable,
+  isRegistrationRequired,
+  useViewerUser,
+} from '@/features/me/hooks';
 import { useNav } from '@/router';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
 import {
   hostStatusKey,
+  useHostProxyConfigQuery,
   useHostStatusQuery,
+  useSaveHostProxyConfigMutation,
   useUpdateHostMutation,
+  type HostProxyConfig,
 } from './hooks';
 import {
   describeHostStatus,
@@ -107,12 +119,16 @@ const TONE_BANNER_CLASS: Record<HostStatusTone, string> = {
   muted: 'border-border-subtle text-text-secondary',
 };
 
+const PROXY_RUNTIMES: RuntimeKind[] = [...RuntimeKindSchema.options];
+
 export interface HostDetailViewProps {
   host: HostDto;
+  localHostId: string | null;
 }
 
-export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
+export function HostDetailView({ host, localHostId }: HostDetailViewProps): JSX.Element {
   const qc = useQueryClient();
+  const viewer = useViewerUser();
   const statusQuery = useHostStatusQuery(host.id);
   const renameMutation = useUpdateHostMutation(host.id);
 
@@ -133,6 +149,16 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
   const trimmedLabel = host.display_label?.trim() ?? '';
   const showStableName =
     trimmedLabel.length > 0 && trimmedLabel !== host.name;
+  const viewerState = viewer.data;
+  const viewerId =
+    viewerState
+    && !isRegistrationRequired(viewerState)
+    && !isBackendUnreachable(viewerState)
+      ? viewerState.id
+      : null;
+  const canEditHostLocalConfig =
+    viewerId !== null && host.creator_user_id === viewerId;
+  const isLocalSelf = host.id === localHostId;
 
   return (
     <main className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-bg-base">
@@ -166,12 +192,172 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
             ) : (
               <OfflineSection status={statusQuery.data} />
             )}
+            {canEditHostLocalConfig ? (
+              <ProxySection hostId={host.id} isLocalSelf={isLocalSelf} />
+            ) : null}
             <RegisteredAgentsSection agents={statusQuery.data.agents} />
           </>
         ) : null}
       </div>
     </main>
   );
+}
+
+/* ─── Proxy (daemon-host local) ─────────────────────────────────── */
+
+function ProxySection({
+  hostId,
+  isLocalSelf,
+}: {
+  hostId: string;
+  isLocalSelf: boolean;
+}): JSX.Element {
+  const query = useHostProxyConfigQuery(hostId, { enabled: isLocalSelf });
+  const saveMutation = useSaveHostProxyConfigMutation(hostId);
+  const [proxyUrl, setProxyUrl] = useState('');
+  const [runtimes, setRuntimes] = useState<RuntimeKind[]>([]);
+  const [message, setMessage] = useState<string | null>(null);
+  const loadedConfig = query.data?.ok ? query.data.config : null;
+  const normalizedRuntimes = normalizeProxyRuntimes(runtimes);
+  const isDirty =
+    !loadedConfig
+    || (proxyUrl.trim() ? proxyUrl.trim() : null) !== loadedConfig.proxy_url
+    || normalizedRuntimes.join('\0')
+      !== normalizeProxyRuntimes(loadedConfig.proxy_runtimes).join('\0');
+
+  useEffect(() => {
+    if (!query.data?.ok) return;
+    setProxyUrl(query.data.config.proxy_url ?? '');
+    setRuntimes(normalizeProxyRuntimes(query.data.config.proxy_runtimes));
+    setMessage(null);
+  }, [query.data]);
+
+  if (!isLocalSelf) {
+    return (
+      <HostSection title="Proxy" muted>
+        <p className="text-sm text-text-muted">
+          Proxy settings are stored on this computer. Open Silverhand on the
+          physical machine that owns this host to edit them.
+        </p>
+      </HostSection>
+    );
+  }
+
+  const toggleRuntime = (runtime: RuntimeKind): void => {
+    setMessage(null);
+    setRuntimes(prev =>
+      normalizeProxyRuntimes(
+        prev.includes(runtime)
+          ? prev.filter(value => value !== runtime)
+          : [...prev, runtime],
+      ),
+    );
+  };
+  const submit = async (): Promise<void> => {
+    setMessage(null);
+    const config: HostProxyConfig = {
+      proxy_url: proxyUrl.trim() ? proxyUrl.trim() : null,
+      proxy_runtimes: normalizedRuntimes,
+    };
+    const result = await saveMutation.mutateAsync(config);
+    if (result.ok) {
+      setMessage('Saved.');
+    } else {
+      setMessage(result.message ?? `Could not save proxy (${result.code}).`);
+    }
+  };
+
+  return (
+    <HostSection title="Proxy">
+      {query.isLoading ? (
+        <div className="flex items-center gap-2 text-sm text-text-muted">
+          <Loader2 className="size-4 animate-spin" aria-hidden />
+          <span>Loading proxy settings…</span>
+        </div>
+      ) : query.isError ? (
+        <Banner tone="error">
+          Could not load proxy settings.
+          {query.error instanceof Error ? ` (${query.error.message})` : ''}
+        </Banner>
+      ) : query.data && !query.data.ok ? (
+        <Banner tone={query.data.code === 'not_local_host' ? 'muted' : 'error'}>
+          {query.data.message ?? `Could not load proxy (${query.data.code}).`}
+        </Banner>
+      ) : (
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={event => {
+            event.preventDefault();
+            void submit();
+          }}
+        >
+          <label className="flex flex-col gap-1.5">
+            <span className="text-[11px] font-medium uppercase tracking-wider text-text-muted">
+              URL
+            </span>
+            <input
+              value={proxyUrl}
+              onChange={event => {
+                setProxyUrl(event.target.value);
+                setMessage(null);
+              }}
+              placeholder="http://127.0.0.1:7890"
+              className="h-9 border border-border-subtle bg-bg-base px-3 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-text-primary"
+            />
+          </label>
+          <div className="flex flex-col gap-2">
+            <span className="text-[11px] font-medium uppercase tracking-wider text-text-muted">
+              Runtimes
+            </span>
+            <div className="flex flex-wrap gap-2">
+              {PROXY_RUNTIMES.map(runtime => {
+                const checked = runtimes.includes(runtime);
+                return (
+                  <button
+                    key={runtime}
+                    type="button"
+                    onClick={() => toggleRuntime(runtime)}
+                    className={cn(
+                      'h-8 border px-3 text-xs font-medium uppercase tracking-wide transition-colors',
+                      checked
+                        ? 'border-text-primary bg-text-primary text-bg-base'
+                        : 'border-border-subtle bg-bg-floating text-text-secondary hover:border-text-primary',
+                    )}
+                    aria-pressed={checked}
+                  >
+                    {runtime}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <Button
+              type="submit"
+              size="sm"
+              disabled={saveMutation.isPending || !isDirty}
+              className="gap-2"
+            >
+              {saveMutation.isPending ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              ) : (
+                <Save className="size-3.5" aria-hidden />
+              )}
+              Save
+            </Button>
+            {message ? (
+              <span className="text-xs text-text-muted">{message}</span>
+            ) : null}
+          </div>
+        </form>
+      )}
+    </HostSection>
+  );
+}
+
+function normalizeProxyRuntimes(values: RuntimeKind[]): RuntimeKind[] {
+  const selected = new Set(values);
+  return PROXY_RUNTIMES.filter(runtime => selected.has(runtime));
 }
 
 /* ─── Hero ──────────────────────────────────────────────────────── */

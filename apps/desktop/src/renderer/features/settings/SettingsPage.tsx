@@ -6,14 +6,12 @@ import {
   type FormEvent,
   type ReactNode,
 } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Check,
   CheckCircle2,
   Code2,
   LogOut,
   Loader2,
-  Network,
   Palette,
   RotateCcw,
   Save,
@@ -22,7 +20,6 @@ import {
   Type,
   User,
 } from 'lucide-react';
-import type { RuntimeKind } from '@silverhand/shared';
 import {
   AVATAR_MAX_SIZE_LABEL,
   validateAvatarFile,
@@ -31,7 +28,6 @@ import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AvatarPickerButton } from '@/components/AvatarPickerButton';
-import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { useAppearance } from '@/hooks/useAppearance';
 import { useBackendInfoSnapshot } from '@/features/hosts/hooks';
@@ -59,8 +55,6 @@ import {
   type FontPreset,
 } from '@/settings/font-presets';
 import { ConnectionPane } from './ConnectionPane';
-
-const settingsKey = ['settings'] as const;
 
 /** 4-color swatch preview and display name for each theme. */
 const THEME_META: Record<
@@ -105,56 +99,32 @@ const THEME_META: Record<
   },
 };
 
-interface SettingsResponse {
-  settings: Record<string, string>;
-}
-
-/** Static list of supported runtimes. Mirrors `RuntimeKindSchema` in
- *  shared/db/schema.ts — keep in sync if a new runtime kind ships. */
-const ALL_RUNTIMES: ReadonlyArray<{ kind: RuntimeKind; label: string }> = [
-  { kind: 'claude', label: 'Claude' },
-  { kind: 'codex', label: 'Codex' },
-  { kind: 'cursor', label: 'Cursor' },
-  { kind: 'gemini', label: 'Gemini' },
-];
-
-/** Comma-separated runtime kinds → trimmed array, drops empties + unknowns. */
-function parseRuntimes(raw: string | undefined | null): RuntimeKind[] {
-  if (!raw) return [];
-  const known = new Set<string>(ALL_RUNTIMES.map(r => r.kind));
-  return raw
-    .split(',')
-    .map(s => s.trim())
-    .filter(s => known.has(s)) as RuntimeKind[];
-}
-
 /** Which sub-page of Settings is visible. The picker lives in the
  *  page-internal sub-nav; selection is local React state, persisted to
  *  localStorage so a refresh stays put. (No URL routing yet — settings
  *  deep-links are rare and the URL slot belongs to the chat router.) */
-type SettingsSection = 'appearance' | 'profile' | 'connection' | 'proxy';
+type SettingsSection = 'appearance' | 'profile' | 'connection';
 const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   'appearance',
   'profile',
   'connection',
-  'proxy',
 ];
 const SETTINGS_SECTION_KEY = 'silverhand:settings-section';
 
 function readPersistedSection(): SettingsSection {
   if (typeof localStorage === 'undefined') return 'appearance';
   const raw = localStorage.getItem(SETTINGS_SECTION_KEY);
-  // Migrate the pre-merge 'server' / 'hosts' sections (now folded into
-  // the single 'connection' pane) so a returning user lands somewhere
-  // valid instead of falling back to 'appearance'.
-  if (raw === 'server' || raw === 'hosts') return 'connection';
+  // Migrate retired sections so returning users land somewhere valid.
+  // `server` / `hosts` folded into Connection; `proxy` moved to the
+  // Computers/Host detail surface because proxy affects runtime hosts,
+  // not app-level settings.
+  if (raw === 'server' || raw === 'hosts' || raw === 'proxy') return 'connection';
   return SETTINGS_SECTIONS.includes(raw as SettingsSection)
     ? (raw as SettingsSection)
     : 'appearance';
 }
 
 export function SettingsPage(): JSX.Element {
-  const qc = useQueryClient();
   const {
     appearance,
     setTheme,
@@ -163,82 +133,12 @@ export function SettingsPage(): JSX.Element {
     resetMarkdownText,
     resetMarkdownFontSize,
   } = useAppearance();
-  const settingsQuery = useQuery({
-    queryKey: settingsKey,
-    queryFn: () => api<SettingsResponse>('/api/settings'),
-  });
 
   const [section, setSection] = useState<SettingsSection>(readPersistedSection);
   useEffect(() => {
     if (typeof localStorage === 'undefined') return;
     localStorage.setItem(SETTINGS_SECTION_KEY, section);
   }, [section]);
-
-  const [proxyUrl, setProxyUrl] = useState('');
-  const [proxyRuntimes, setProxyRuntimes] = useState<Set<RuntimeKind>>(
-    new Set(),
-  );
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-
-  // Seed local form state from server. Re-runs whenever the cached
-  // settings refetch — keeps the page coherent if another tab/window
-  // (or settings PUT elsewhere) updates them.
-  useEffect(() => {
-    if (settingsQuery.data) {
-      setProxyUrl(settingsQuery.data.settings.proxy_url ?? '');
-      setProxyRuntimes(
-        new Set(parseRuntimes(settingsQuery.data.settings.proxy_runtimes)),
-      );
-      setError(null);
-    }
-  }, [settingsQuery.data]);
-
-  const save = useMutation({
-    mutationFn: async (body: Record<string, string>) =>
-      api<SettingsResponse>('/api/settings', {
-        method: 'PUT',
-        body: JSON.stringify(body),
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: settingsKey });
-      setSaved(true);
-      window.setTimeout(() => setSaved(false), 1500);
-    },
-  });
-
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    try {
-      await save.mutateAsync({
-        proxy_url: proxyUrl.trim(),
-        // Stable canonical order so the persisted string doesn't churn
-        // just because the user clicked checkboxes in a different
-        // sequence.
-        proxy_runtimes: ALL_RUNTIMES.filter(r => proxyRuntimes.has(r.kind))
-          .map(r => r.kind)
-          .join(','),
-      });
-    } catch (err) {
-      setError(String(err));
-    }
-  };
-
-  const toggleRuntime = (kind: RuntimeKind, checked: boolean) => {
-    setProxyRuntimes(prev => {
-      const next = new Set(prev);
-      if (checked) next.add(kind);
-      else next.delete(kind);
-      return next;
-    });
-  };
-
-  const proxyEnabled = proxyUrl.trim().length > 0;
-  const allChecked = useMemo(
-    () => ALL_RUNTIMES.every(r => proxyRuntimes.has(r.kind)),
-    [proxyRuntimes],
-  );
 
   return (
     <main
@@ -276,23 +176,8 @@ export function SettingsPage(): JSX.Element {
             />
           ) : section === 'profile' ? (
             <ProfilePane />
-          ) : section === 'connection' ? (
-            <ConnectionPane />
           ) : (
-            <ProxyPane
-              proxyUrl={proxyUrl}
-              setProxyUrl={setProxyUrl}
-              proxyRuntimes={proxyRuntimes}
-              toggleRuntime={toggleRuntime}
-              setProxyRuntimes={setProxyRuntimes}
-              proxyEnabled={proxyEnabled}
-              allChecked={allChecked}
-              settingsLoading={settingsQuery.isLoading}
-              saving={save.isPending}
-              saved={saved}
-              error={error}
-              onSubmit={handleSubmit}
-            />
+            <ConnectionPane />
           )}
         </div>
       </div>
@@ -322,7 +207,6 @@ function SettingsSubNav({
     { id: 'appearance', label: 'Appearance', icon: <Palette className="size-3.5" /> },
     { id: 'profile', label: 'Profile', icon: <User className="size-3.5" /> },
     { id: 'connection', label: 'Connection', icon: <Server className="size-3.5" /> },
-    { id: 'proxy', label: 'Proxy', icon: <Network className="size-3.5" /> },
   ];
 
   return (
@@ -871,178 +755,6 @@ function ProfilePane(): JSX.Element {
   );
 }
 
-/** Proxy pane — wraps its own form because it's the only pane with
- *  unsaved state. Save / status / error footer lives here, not at the
- *  page level, so switching panes doesn't smear concerns across them. */
-function ProxyPane({
-  proxyUrl,
-  setProxyUrl,
-  proxyRuntimes,
-  toggleRuntime,
-  setProxyRuntimes,
-  proxyEnabled,
-  allChecked,
-  settingsLoading,
-  saving,
-  saved,
-  error,
-  onSubmit,
-}: {
-  proxyUrl: string;
-  setProxyUrl: (v: string) => void;
-  proxyRuntimes: Set<RuntimeKind>;
-  toggleRuntime: (kind: RuntimeKind, checked: boolean) => void;
-  setProxyRuntimes: (v: Set<RuntimeKind>) => void;
-  proxyEnabled: boolean;
-  allChecked: boolean;
-  settingsLoading: boolean;
-  saving: boolean;
-  saved: boolean;
-  error: string | null;
-  onSubmit: (e: FormEvent) => void;
-}): JSX.Element {
-  return (
-    <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
-        <div className="mx-auto w-full max-w-3xl">
-          <SettingsSection
-            id="settings-proxy"
-            icon={<Network className="size-4" />}
-            title="Proxy"
-            description="Proxy configuration is injected only into newly spawned agent processes."
-          >
-            <div className="grid gap-5">
-              <div className="grid gap-2">
-                <Label htmlFor="proxy-url">Proxy URL</Label>
-                <Input
-                  id="proxy-url"
-                  value={proxyUrl}
-                  onChange={e => setProxyUrl(e.target.value)}
-                  placeholder="127.0.0.1:7897 / http://... / socks5://..."
-                  disabled={settingsLoading}
-                />
-                <p className="text-xs leading-relaxed text-text-muted">
-                  Expands into <code>http_proxy</code>,{' '}
-                  <code>https_proxy</code>, and <code>all_proxy</code> for
-                  selected runtimes. A bare host:port or <code>http://</code>{' '}
-                  value is treated as a mixed-port proxy;{' '}
-                  <code>socks5://</code> only sets <code>all_proxy</code>.
-                </p>
-              </div>
-
-              <div className="grid gap-2">
-                <div className="flex items-center justify-between gap-3">
-                  <Label>Enabled runtimes</Label>
-                  <button
-                    type="button"
-                    disabled={!proxyEnabled}
-                    className="text-xs font-medium text-text-muted hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
-                    onClick={() => {
-                      if (allChecked) setProxyRuntimes(new Set());
-                      else {
-                        setProxyRuntimes(
-                          new Set(ALL_RUNTIMES.map(r => r.kind)),
-                        );
-                      }
-                    }}
-                  >
-                    {allChecked ? 'Clear all' : 'Select all'}
-                  </button>
-                </div>
-
-                <div
-                  className={cn(
-                    'grid gap-2 sm:grid-cols-2',
-                    !proxyEnabled && 'opacity-55',
-                  )}
-                >
-                  {ALL_RUNTIMES.map(runtime => {
-                    const checked = proxyRuntimes.has(runtime.kind);
-                    return (
-                      <label
-                        key={runtime.kind}
-                        className={cn(
-                          'flex min-w-0 items-center gap-3 rounded-[var(--control-radius)] border px-3 py-2 transition-colors',
-                          proxyEnabled
-                            ? 'cursor-pointer'
-                            : 'cursor-not-allowed',
-                          checked
-                            ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))]'
-                            : 'border-border-subtle bg-bg-floating hover:bg-[var(--bg-option-hover)]',
-                        )}
-                      >
-                        <input
-                          type="checkbox"
-                          className="sr-only"
-                          checked={checked}
-                          onChange={e =>
-                            toggleRuntime(runtime.kind, e.target.checked)
-                          }
-                          disabled={!proxyEnabled}
-                        />
-                        <span
-                          className={cn(
-                            'flex size-4 shrink-0 items-center justify-center rounded-[4px] border',
-                            checked
-                              ? 'border-accent bg-accent text-text-on-accent'
-                              : 'border-border-subtle bg-bg-floating text-transparent',
-                          )}
-                          aria-hidden
-                        >
-                          <Check className="size-3" />
-                        </span>
-                        <AgentAvatar runtime={runtime.kind} size={22} />
-                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
-                          {runtime.label}
-                        </span>
-                        <span className="shrink-0 font-mono text-[11px] text-text-muted">
-                          {runtime.kind}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-                {!proxyEnabled ? (
-                  <p className="text-xs text-text-muted">
-                    Add a Proxy URL before selecting runtimes.
-                  </p>
-                ) : null}
-              </div>
-
-              {/* Save row sits inline with the form content rather than
-                  pinned to a sticky footer — the original bottom anchor
-                  was off-screen on shorter viewports and easy to miss. */}
-              <div className="flex items-center justify-between gap-4 pt-1">
-                <div className="min-w-0 text-xs">
-                  {error ? (
-                    <span className="text-error">{error}</span>
-                  ) : saved ? (
-                    <span className="inline-flex items-center gap-1.5 text-success">
-                      <CheckCircle2 className="size-3.5" />
-                      Saved
-                    </span>
-                  ) : (
-                    <span className="text-text-muted">
-                      Proxy changes save to host settings.
-                    </span>
-                  )}
-                </div>
-                <Button type="submit" disabled={saving || settingsLoading}>
-                  {saving ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <Save className="size-3.5" />
-                  )}
-                  {saving ? 'Saving...' : 'Save settings'}
-                </Button>
-              </div>
-            </div>
-          </SettingsSection>
-        </div>
-      </div>
-    </form>
-  );
-}
 
 /** Shared markdown font size — drives both `--md-prose-size` and
  *  `--md-code-size`. Thumb glides under the cursor (step="any") while

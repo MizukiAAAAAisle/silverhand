@@ -37,6 +37,10 @@ export const HostDtoSchema = z.object({
   /** Last claim-or-create touch timestamp. Null only for legacy /
    *  migration-seeded hosts that have not been claimed yet. */
   last_seen_at: z.number().nullable(),
+  /** User that claimed/created this computer row. Renderer uses this
+   *  to gate host-local controls such as daemon proxy config. Optional
+   *  receive-side default keeps older dev backends parseable. */
+  creator_user_id: z.string().nullable().optional().default(null),
   /** v36 (#task:808): user-facing rename target. `name` stays the
    *  stable normalized identifier; renderer reads `display_label ?? name`.
    *  NULL on rows claimed before v36 and after the user clears the label.

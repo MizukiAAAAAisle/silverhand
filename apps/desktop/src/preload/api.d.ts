@@ -2,6 +2,7 @@ import type {
   AuthLoginInput,
   AuthSignupInput,
   HostDto,
+  RuntimeKind,
   ServerConnectionProfileView,
   ServerInfo,
   TlsErrorCode,
@@ -97,6 +98,23 @@ export interface BackendUploadRequest {
   fields: BackendUploadField[];
   files: BackendUploadFile[];
 }
+
+export interface DesktopHostProxyConfig {
+  proxy_url: string | null;
+  proxy_runtimes: RuntimeKind[];
+}
+
+export type DesktopHostProxyConfigResult =
+  | { ok: true; config: DesktopHostProxyConfig }
+  | {
+      ok: false;
+      code:
+        | 'not_local_host'
+        | 'daemon_unavailable'
+        | 'daemon_error'
+        | 'invalid_input';
+      message?: string;
+    };
 
 /** Stage B.4 — see `apps/desktop/src/preload/index.ts` for the
  *  invariants. Token bytes never appear in this shape. */
@@ -438,6 +456,13 @@ declare global {
       backendUpload(input: BackendUploadRequest): Promise<BackendProxyResponse>;
       rotateHostToken(input: { hostId: string }): Promise<DesktopHostMutationResult>;
       revokeHost(input: { hostId: string }): Promise<DesktopHostMutationResult>;
+      getHostProxyConfig(input: {
+        hostId: string;
+      }): Promise<DesktopHostProxyConfigResult>;
+      saveHostProxyConfig(input: {
+        hostId: string;
+        config: DesktopHostProxyConfig;
+      }): Promise<DesktopHostProxyConfigResult>;
       /**
        * D3.c Commit 3 — Settings "save server URL" entry point. The
        * renderer hands a raw URL string; main classifies, atomically

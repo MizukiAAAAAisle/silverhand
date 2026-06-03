@@ -79,10 +79,6 @@ export function testStartOptions(overrides: {
         command: 'silverhand',
         args: [],
       },
-      proxy: {
-        url: null,
-        allowlist: [],
-      },
     },
   };
 }

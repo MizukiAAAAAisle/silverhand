@@ -1,22 +1,10 @@
 import type { Database as Db } from 'better-sqlite3';
-import { RuntimeKindSchema, type RuntimeKind } from '@silverhand/shared';
 
 /**
- * `app_settings` is a flat key/value store for host-wide preferences.
- * Currently used for:
+ * `app_settings` is a flat key/value store for legacy host-wide
+ * preferences. Runtime proxy settings used to live here, but proxy is now
+ * daemon-host local truth and is read/written through host IPC instead.
  *
- *   - `proxy_url` — when non-empty, the runtime spawn env injects
- *     HTTP_PROXY / HTTPS_PROXY / ALL_PROXY (uppercase + lowercase) into
- *     every spawned agent process whose runtime is in the
- *     `proxy_runtimes` allowlist. Lets users with corporate firewalls /
- *     local proxies point per-runtime CLIs (e.g. just codex) at one URL
- *     without having to remember to `export http_proxy=...` before
- *     `pnpm dev`. Backend reads these settings into typed
- *     `runtime_start.env_policy`; daemon-host applies the proxy env
- *     locally at spawn time so it never needs DB access.
- *   - `proxy_runtimes` — comma-separated runtime kinds (e.g. `codex,cursor`)
- *     that the proxy applies to. Empty/unset = no runtime gets the proxy
- *     even if `proxy_url` is set (explicit opt-in).
  * `viewer_user_id` may still exist in old databases. C.5 stops treating
  * it as a current-viewer bridge; settings routes keep hiding/rejecting
  * the key until a later schema cleanup drops the row entirely.
@@ -59,31 +47,9 @@ export class SettingsRepo {
     return out;
   }
 
-  /** Read the proxy allowlist as a parsed array of runtime kinds.
-   *  Stored as a comma-separated string. Unknown values (e.g. legacy
-   *  agent ids left over from before the migration to runtime-scoped
-   *  allowlists) are silently dropped — `RuntimeKindSchema` is the
-   *  authoritative whitelist. */
-  getProxyRuntimes(): RuntimeKind[] {
-    const raw = this.get(SETTINGS_KEYS.PROXY_RUNTIMES);
-    if (!raw) return [];
-    const out: RuntimeKind[] = [];
-    for (const part of raw.split(',').map(s => s.trim()).filter(Boolean)) {
-      const parsed = RuntimeKindSchema.safeParse(part);
-      if (parsed.success) out.push(parsed.data);
-    }
-    return out;
-  }
 }
 
 export const SETTINGS_KEYS = {
-  /** Proxy URL applied as HTTP_PROXY/HTTPS_PROXY/ALL_PROXY (and lowercase
-   *  variants) to spawned agent processes. Empty = no injection. */
-  PROXY_URL: 'proxy_url',
-  /** Comma-separated runtime kinds (claude/codex/cursor/gemini) that the
-   *  proxy applies to. Empty (or unset) means **no runtime** gets the
-   *  proxy even if `PROXY_URL` is set — explicit opt-in per runtime. */
-  PROXY_RUNTIMES: 'proxy_runtimes',
   /** Deprecated persisted key retained only for hide/reject compatibility. */
   VIEWER_USER_ID: 'viewer_user_id',
 } as const;

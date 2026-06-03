@@ -169,7 +169,7 @@ export const apiPaths = {
   // Per docs/app-layout.md §7.
   messageThread: (id: string) => `/api/messages/${id}/thread`,
 
-  // host-wide app settings (proxy_url etc). Flat KV.
+  // legacy host-wide app settings. Runtime proxy is daemon-local now.
   settings: '/api/settings',
 
   // current viewer (the local human user). Pre-authentication the

@@ -14,6 +14,7 @@ function rowToDto(row: HostRow): HostDto {
     created_at: row.created_at,
     revoked_at: row.revoked_at,
     last_seen_at: row.last_seen_at,
+    creator_user_id: row.user_id,
     display_label: row.display_label,
   };
 }

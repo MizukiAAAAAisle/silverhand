@@ -5,6 +5,7 @@ import {
   HostDtoSchema,
   HostListResponseSchema,
   HostStatusResponseSchema,
+  RuntimeKindSchema,
   UpdateHostInputSchema,
   apiPaths,
   type HostDto,
@@ -23,6 +24,8 @@ export const backendInfoKey = ['backend-info'] as const;
  *  the whole host list. */
 export const hostStatusKey = (hostId: string) =>
   ['host-status', hostId] as const;
+export const hostProxyConfigKey = (hostId: string) =>
+  ['host-proxy-config', hostId] as const;
 
 export interface BackendInfoSnapshot {
   /** D3.c Commit 4 — embedded backend's listen URL (where the
@@ -253,6 +256,67 @@ export function useUpdateHostMutation(hostId: string) {
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: hostsKey });
+    },
+  });
+}
+
+const HostProxyConfigSchema = z
+  .object({
+    proxy_url: z.string().nullable(),
+    proxy_runtimes: z.array(RuntimeKindSchema),
+  })
+  .strict();
+export type HostProxyConfig = z.infer<typeof HostProxyConfigSchema>;
+
+export type HostProxyConfigResult =
+  | { ok: true; config: HostProxyConfig }
+  | {
+      ok: false;
+      code:
+        | 'not_local_host'
+        | 'daemon_unavailable'
+        | 'daemon_error'
+        | 'invalid_input';
+      message?: string;
+    };
+
+export function useHostProxyConfigQuery(
+  hostId: string | null | undefined,
+  options?: { enabled?: boolean },
+) {
+  return useQuery<HostProxyConfigResult>({
+    queryKey: hostProxyConfigKey(hostId ?? '__none__'),
+    queryFn: async () => {
+      const raw = await window.agentHub.getHostProxyConfig({
+        hostId: hostId!,
+      });
+      return raw.ok
+        ? { ok: true, config: HostProxyConfigSchema.parse(raw.config) }
+        : raw;
+    },
+    enabled: (options?.enabled ?? true) && Boolean(hostId),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useSaveHostProxyConfigMutation(hostId: string) {
+  const qc = useQueryClient();
+  return useMutation<HostProxyConfigResult, Error, HostProxyConfig>({
+    mutationFn: async (config: HostProxyConfig) => {
+      const parsed = HostProxyConfigSchema.parse(config);
+      const raw = await window.agentHub.saveHostProxyConfig({
+        hostId,
+        config: parsed,
+      });
+      return raw.ok
+        ? { ok: true, config: HostProxyConfigSchema.parse(raw.config) }
+        : raw;
+    },
+    onSuccess: result => {
+      if (result.ok) {
+        qc.setQueryData(hostProxyConfigKey(hostId), result);
+      }
     },
   });
 }

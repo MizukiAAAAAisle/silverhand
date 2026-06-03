@@ -57,6 +57,7 @@ import {
   type RuntimeClearSessionParams,
   type ConversationLogDebugParams,
   type HostOutboundAttachParams,
+  type HostProxyConfigSetParams,
 } from '../protocol.js';
 import type { DecodedFrame, Transport } from './transport.js';
 import { SocketTransport } from './socket-transport.js';
@@ -463,6 +464,16 @@ export class HostClient {
    */
   hostOutboundReload(): Promise<IntentResult<'host_outbound_reload'>> {
     return this.call('host_outbound_reload', {});
+  }
+
+  hostProxyConfigGet(): Promise<IntentResult<'host_proxy_config_get'>> {
+    return this.call('host_proxy_config_get', {});
+  }
+
+  hostProxyConfigSet(
+    params: HostProxyConfigSetParams,
+  ): Promise<IntentResult<'host_proxy_config_set'>> {
+    return this.call('host_proxy_config_set', params);
   }
 
   /**

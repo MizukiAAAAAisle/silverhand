@@ -27,6 +27,9 @@
  *                         dirs. Desktop passes `<SILVERHAND_DIR>/agents`
  *                         so remote-only smoke apps do not write into
  *                         global `~/.silverhand/agents`.
+ *   --proxy-config-path <abs>
+ *                         optional; daemon-local runtime proxy config.
+ *                         Proxy is host-local truth, never server state.
  *   --stderr              optional; mirror log lines to stderr too
  *
  * Stdout:
@@ -59,6 +62,7 @@ interface ParsedArgv {
   localOutboundSocketPath: string | null;
   runtimePidRootDir: string | null;
   agentHomeRootDir: string | null;
+  proxyConfigPath: string | null;
   alsoStderr: boolean;
 }
 
@@ -70,6 +74,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   let localOutboundSocketPath: string | null = null;
   let runtimePidRootDir: string | null = null;
   let agentHomeRootDir: string | null = null;
+  let proxyConfigPath: string | null = null;
   let alsoStderr = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -94,6 +99,9 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
         break;
       case '--agent-home-root-dir':
         agentHomeRootDir = argv[++i] ?? null;
+        break;
+      case '--proxy-config-path':
+        proxyConfigPath = argv[++i] ?? null;
         break;
       case '--stderr':
         alsoStderr = true;
@@ -120,6 +128,9 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   if (agentHomeRootDir !== null && !agentHomeRootDir.startsWith('/')) {
     return { error: '--agent-home-root-dir must be absolute' };
   }
+  if (proxyConfigPath !== null && !proxyConfigPath.startsWith('/')) {
+    return { error: '--proxy-config-path must be absolute' };
+  }
   return {
     socketPath,
     pidFilePath,
@@ -128,6 +139,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
     localOutboundSocketPath,
     runtimePidRootDir,
     agentHomeRootDir,
+    proxyConfigPath,
     alsoStderr,
   };
 }
@@ -147,6 +159,7 @@ async function main(): Promise<void> {
       localOutboundSocketPath: parsed.localOutboundSocketPath,
       runtimePidRootDir: parsed.runtimePidRootDir ?? undefined,
       agentHomeRootDir: parsed.agentHomeRootDir ?? undefined,
+      proxyConfigPath: parsed.proxyConfigPath ?? undefined,
       installSignals: true,
       writeStdoutHandshake: true,
       alsoStderr: parsed.alsoStderr,

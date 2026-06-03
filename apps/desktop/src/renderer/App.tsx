@@ -1419,7 +1419,11 @@ function RegisteredAppShell(): JSX.Element {
               </nav>
             </aside>
             {selectedHost ? (
-              <HostDetailView key={selectedHost.id} host={selectedHost} />
+              <HostDetailView
+                key={selectedHost.id}
+                host={selectedHost}
+                localHostId={localHostIdForComputers}
+              />
             ) : (
               <main
                 className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
