@@ -745,12 +745,24 @@ function RegisteredAgentsSection({
  * Radius is driven by `--floating-radius` (forza6 = 0, warm =
  * `var(--radius-md)`) — `--card-radius` would be 6px in forza6, which
  * fights the theme's hard-cut poster aesthetic. shiki dogfood
- * `aF5e0z_kHXo1Omv7`: "forza6 主题下是 0 才对".
- * Border is the light subtle stroke; forza6's poster-frame treatment
- * is reserved for `row` cards.
+ * `aF5e0z_kHXo1Omv7`: "forza6 主题下是 0 才对". Inline radius beats
+ * the `[data-panel-card='profile-section']` global rule (CSS
+ * specificity 1000 vs ~10), so opting into that hook for border
+ * vocabulary does NOT change radius.
+ *
+ * Border vocabulary mirrors `ProfileSection` per shiki #task:883
+ * "border 改成和 agent pane 一样,即默认主题灰,hover 主题黑,
+ * forza6 2px": baseline `border-border-subtle` gray, hover transitions
+ * to the stronger `border-border` ink; forza6 amplifies that into a
+ * 2px structural frame + near-black hover via the
+ * `[data-theme='forza6'] [data-panel-card='profile-section']` rule
+ * in `themes/forza6-components.css`. Reusing that hook (rather than
+ * cloning a `host-section` selector) keeps a single forza6
+ * amplification spec for both surfaces.
  *
  * Intentionally NOT reusing the shared `ProfileSection`: shiki dogfood
- * asked for a heavier white treatment here and we don't want that ripple
+ * asked for a heavier white treatment here (solid `bg-bg-floating`,
+ * not the `/50` half-transparent wash) and we don't want that ripple
  * to other profile cards (`AgentProfileCard` / `HumanProfileCard`)
  * unless asked.
  */
@@ -781,7 +793,8 @@ function HostSection({
         </h3>
       </header>
       <div
-        className="border border-border-subtle/60 bg-bg-floating p-4"
+        data-panel-card="profile-section"
+        className="border border-border-subtle bg-bg-floating p-4 transition-colors duration-150 hover:border-border"
         style={{ borderRadius: 'var(--floating-radius)' }}
       >
         {children}
