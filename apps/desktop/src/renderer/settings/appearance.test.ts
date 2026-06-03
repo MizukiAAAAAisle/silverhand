@@ -130,6 +130,16 @@ describe('theme markdown token cascade contract', () => {
     }
   });
 
+  it('defaults system-message-row size to 12px in every theme', () => {
+    // System messages live one tier below markdown body — chrome, not
+    // content. The token is intentionally independent of `--md-*-size`
+    // so themes can drift system size without dragging markdown.
+    // shiki spec msg `cN9u0jopk9w5nafo`.
+    for (const css of [warmScriptCss, forza6Css]) {
+      expect(css).toContain('--system-message-size: 12px;');
+    }
+  });
+
   /* Forza6 introduced 8 new tokens — every theme MUST define them
      explicitly so a theme switch from forza6 doesn't leak the
      festival-only values via :root fallback (design-new-theme §3.1

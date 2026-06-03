@@ -253,6 +253,10 @@
      primitive. See settings/apply.ts. */
   --md-prose-size: 13px;
   --md-code-size: 13px;
+  /* System message row size — one tier below markdown body; chrome,
+     not content. Independent of `--md-*-size` so themes can drift the
+     two without coupling. See forza6.css for the rationale. */
+  --system-message-size: 12px;
 
   /* ── Motion ── */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);

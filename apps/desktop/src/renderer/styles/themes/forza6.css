@@ -440,6 +440,14 @@
      primitive. */
   --md-prose-size: 13px;
   --md-code-size: 13px;
+  /* System message rows (task events, schedule banners, rename chips —
+     anything that goes through `.system-message-row`) live one size
+     tier below markdown body. They're chrome, not content, so the
+     visual hierarchy reads as "subdued audit row < message body". The
+     token is independent of the `--md-*-size` family so a theme can
+     drift system size without dragging markdown along. shiki spec
+     msg `cN9u0jopk9w5nafo`. */
+  --system-message-size: 12px;
 
   /* ── Motion ── */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);

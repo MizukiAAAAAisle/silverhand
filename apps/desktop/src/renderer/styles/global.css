@@ -248,9 +248,9 @@ button:disabled { cursor: not-allowed; }
      pixel-aligned. The `1.5` factor matches `line-height: 1.5` below
      so the chrome's height tracks the row's actual text leading.
      Cindy PR-8 follow-up #3 (msg `VOGiR_K30xhSOswD`). */
-  --system-message-control-height: max(18px, calc(var(--appearance-markdown-font-size, var(--md-prose-size, 13px)) * 1.5));
+  --system-message-control-height: max(18px, calc(var(--appearance-markdown-font-size, var(--system-message-size, 12px)) * 1.5));
   font-family: var(--appearance-prose-font, var(--font-sans));
-  font-size: var(--appearance-markdown-font-size, var(--md-prose-size, 13px));
+  font-size: var(--appearance-markdown-font-size, var(--system-message-size, 12px));
   line-height: 1.5;
   /* Column alignment with regular MessageItem rows. shiki PR-10
      follow-up (msg `rhEL2UlGNYG2lgl7`) + Cindy review fix
