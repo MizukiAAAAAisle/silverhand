@@ -22,6 +22,7 @@ import {
   useViewerAvatarObjectUrl,
   useViewerUser,
 } from './hooks';
+import { useUserAvatarObjectUrl } from '@/features/users/avatar-hooks';
 import { canEditUserProfile } from './permissions';
 
 interface HumanProfileCardProps {
@@ -57,12 +58,17 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
   const update = useUpdateProfile();
   const upload = useUploadAvatar();
   const clear = useClearAvatar();
-  // For v1 single-human, the only reachable user IS the viewer, so the
-  // viewer hook resolves the right blob. v2 multi-human will need a
-  // separate `useUserAvatarObjectUrl(userId)` hook for non-self rows;
-  // we keep the prop boundary clean by routing through a single
-  // resolved url here.
-  const avatarObjectUrl = useViewerAvatarObjectUrl();
+  // Multi-human (Alice audit 2026-06-03 #task:857 P0.8): pick the
+  // resolver by viewer match so visiting another human's profile
+  // renders THEIR avatar, not the viewer's. Self continues to use the
+  // viewer-cached path (works even before /api/users hydrates).
+  const isSelf =
+    viewerForPermissions
+    && !('registration_required' in viewerForPermissions)
+    && viewerForPermissions.id === user.id;
+  const viewerAvatar = useViewerAvatarObjectUrl();
+  const otherAvatar = useUserAvatarObjectUrl({ userId: isSelf ? null : user.id });
+  const avatarObjectUrl = isSelf ? viewerAvatar : otherAvatar;
 
   const [displayName, setDisplayName] = useState(user.display_name);
   const [avatarError, setAvatarError] = useState<string | null>(null);

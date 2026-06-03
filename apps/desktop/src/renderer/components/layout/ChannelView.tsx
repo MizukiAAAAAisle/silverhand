@@ -56,6 +56,11 @@ import {
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import {
+  useUserAvatarObjectUrl,
+  useUserAvatarObjectUrls,
+} from '@/features/users/avatar-hooks';
+import { useUsersById, makeUserNameResolver } from '@/features/users/hooks';
+import {
   useWorkspaces,
   useChannelsForWorkspace,
   useArchivedChannelsForWorkspace,
@@ -74,6 +79,7 @@ import {
   useViewerUser,
 } from '@/features/me/hooks';
 import { useUsers } from '@/features/users/hooks';
+import { canEditAgentProfile } from '@/features/agents/permissions';
 import {
   useChannelAgents,
   useChannelMessages,
@@ -276,6 +282,7 @@ function ActiveChannelView({
     conversation.kind === 'channel' &&
     conversation.parent_conversation_id === null &&
     !!onArchiveChannel;
+  const { data: viewer } = useViewerUser();
   const { data: channelAgents = [] } = useChannelAgents(conversation.id, routeKind);
   const startAgent = useStartAgent(conversation.id, routeKind);
   const stopAgent = useStopAgent(conversation.id, routeKind);
@@ -283,9 +290,21 @@ function ActiveChannelView({
     () => channelAgents.map(agent => agent.agent_id),
     [channelAgents],
   );
+  const canManageAllChannelAgents = useMemo(() => {
+    if (agentIds.length === 0) return false;
+    const viewerForPermissions =
+      viewer && isBackendUnreachable(viewer) ? undefined : viewer;
+    const agentsById = new Map(agents.map(agent => [agent.id, agent]));
+    for (const agentId of agentIds) {
+      const agent = agentsById.get(agentId);
+      if (!agent || !canEditAgentProfile(viewerForPermissions, agent)) return false;
+    }
+    return true;
+  }, [agentIds, agents, viewer]);
   const agentActionDisabled =
     closed ||
     agentIds.length === 0 ||
+    !canManageAllChannelAgents ||
     startAgent.isPending ||
     stopAgent.isPending;
   const restartTitle =
@@ -302,8 +321,12 @@ function ActiveChannelView({
       if (agent.status !== 'active' && agent.status !== 'starting') continue;
       await stopAgent.mutateAsync({ agentId: agent.agent_id, mode: 'hard' });
     }
-    for (const agentId of agentIds) {
-      await startAgent.mutateAsync(agentId);
+    try {
+      for (const agentId of agentIds) {
+        await startAgent.mutateAsync(agentId);
+      }
+    } catch {
+      // useStartAgent owns the visible toast; suppress the discarded click promise.
     }
   }, [agentActionDisabled, agentIds, channelAgents, startAgent, stopAgent]);
   const stopAgents = useCallback(async () => {
@@ -474,26 +497,30 @@ function ActiveChannelView({
         ) : null}
 
         <div data-channel-actions className="ml-auto flex shrink-0 items-center gap-1">
-          <button
-            type="button"
-            onClick={() => void restartAgents()}
-            disabled={agentActionDisabled}
-            aria-label={restartTitle}
-            title={restartTitle}
-            className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
-          >
-            <RefreshCw className="size-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => void stopAgents()}
-            disabled={agentActionDisabled}
-            aria-label={stopTitle}
-            title={stopTitle}
-            className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
-          >
-            <Power className="size-4" />
-          </button>
+          {canManageAllChannelAgents ? (
+            <>
+              <button
+                type="button"
+                onClick={() => void restartAgents()}
+                disabled={agentActionDisabled}
+                aria-label={restartTitle}
+                title={restartTitle}
+                className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
+              >
+                <RefreshCw className="size-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => void stopAgents()}
+                disabled={agentActionDisabled}
+                aria-label={stopTitle}
+                title={stopTitle}
+                className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
+              >
+                <Power className="size-4" />
+              </button>
+            </>
+          ) : null}
           {canToggleArchive ? (
             <AppDropdownMenu
               trigger={
@@ -665,6 +692,24 @@ function MemberStrip({
     });
   }, [membersResult, viewerUserId]);
 
+  // Resolve avatars for the human members so HumanMemberChip can render
+  // real images instead of letter placeholders (multi-human audit
+  // 2026-06-03 #task:857 P0.8). Prefer the conversation member's
+  // denormalized avatar URL, and fall back to the global users directory
+  // for older responses while mixed builds are still possible.
+  const usersById = useUsersById();
+  const humanAvatarSources = useMemo(
+    () =>
+      visibleMembers
+        .filter((m): m is Extract<MemberDto, { kind: 'human' }> => m.kind === 'human')
+        .map(m => ({
+          id: m.user_id,
+          avatar_url: m.avatar_url ?? usersById.get(m.user_id)?.avatar_url ?? null,
+        })),
+    [visibleMembers, usersById],
+  );
+  const humanMemberAvatarUrls = useUserAvatarObjectUrls(humanAvatarSources);
+
   // Empty-state: no agents AND no other humans. Keep the original copy
   // when only the agent side is empty (the strip's pre-PR-C contract).
   if (visibleMembers.length === 0 && conversationAgents.length === 0) {
@@ -729,7 +774,11 @@ function MemberStrip({
           );
         }
         return (
-          <HumanMemberChip key={`human:${member.user_id}`} human={member} />
+          <HumanMemberChip
+            key={`human:${member.user_id}`}
+            human={member}
+            avatarObjectUrl={humanMemberAvatarUrls.get(member.user_id) ?? null}
+          />
         );
       })}
       {overflow.length > 0 ? (
@@ -743,22 +792,30 @@ function MemberStrip({
 }
 
 /**
- * Human chip — same footprint as the agent chip (24px square), but
- * holds the viewer's avatar (current single-human invariant) or a
- * letter placeholder. Hover popover mirrors `HumanMention`'s
- * content so inline `@handle` mentions and header chips read the
- * same.
- *
- * V2 multi-human will need a `usersById` map prop (avatar URL keyed
- * by user id); for now the only resolvable avatar belongs to the
- * viewer, and the viewer is filtered out of the strip anyway, so
- * remote humans always render the placeholder until that prop lands.
+ * Human chip — same footprint as the agent chip (24px square). Renders
+ * the human's actual avatar when the parent has resolved one (multi-human
+ * audit 2026-06-03 #task:857 P0.8) and falls back to the display-name
+ * initial when no avatar is available yet. Hover popover mirrors
+ * `HumanMention`'s content so inline `@handle` mentions and header chips
+ * read the same.
  */
-function HumanMemberChip({ human }: { human: HumanMemberDto }): JSX.Element {
+function HumanMemberChip({
+  human,
+  avatarObjectUrl,
+}: {
+  human: HumanMemberDto;
+  avatarObjectUrl: string | null;
+}): JSX.Element {
   const label = human.display_name?.trim() || human.name;
   const initial = label.charAt(0).toUpperCase();
   return (
-    <HumanInfoPopover human={human} trigger="hover" side="bottom" align="end">
+    <HumanInfoPopover
+      human={human}
+      trigger="hover"
+      side="bottom"
+      align="end"
+      avatarObjectUrl={avatarObjectUrl}
+    >
       <button
         type="button"
         aria-label={`@${human.name}`}
@@ -766,7 +823,17 @@ function HumanMemberChip({ human }: { human: HumanMemberDto }): JSX.Element {
         data-member-id={human.user_id}
         className="relative inline-flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-none border border-border-subtle bg-bg-elevated p-0 text-xs font-medium text-text-muted transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
       >
-        <span aria-hidden>{initial}</span>
+        {avatarObjectUrl ? (
+          // eslint-disable-next-line jsx-a11y/img-redundant-alt
+          <img
+            src={avatarObjectUrl}
+            alt=""
+            className="size-full object-cover"
+            draggable={false}
+          />
+        ) : (
+          <span aria-hidden>{initial}</span>
+        )}
       </button>
     </HumanInfoPopover>
   );
@@ -943,7 +1010,13 @@ function MessageList({
     }
     return byId;
   }, [users, viewer]);
-  const humanAvatarUrls = useAgentAvatarObjectUrls(users);
+  // Resolver fed to MessageItem so foreign-author fallbacks (task
+  // assignees, async-loading author rows) render the actual display
+  // name instead of a raw uuid (multi-human audit 2026-06-03
+  // #task:857 P0.10). Built off the same humansById merge so viewer +
+  // global directory + conversation members all resolve here.
+  const userResolver = useMemo(() => makeUserNameResolver(humansById), [humansById]);
+  const humanAvatarUrls = useUserAvatarObjectUrls(users);
   const startThread = useStartThread(workspaceId);
   const handleCopyMarkdown = useCallback(async (msg: MessageDto): Promise<void> => {
     // Single-message copy semantic: clipboard receives ONLY
@@ -1494,6 +1567,7 @@ function MessageList({
           onToggleSelected={selection.toggle}
           onCopyMarkdown={handleCopyMarkdown}
           onShare={handleShare}
+          userResolver={userResolver}
         />
       );
     },
@@ -1521,6 +1595,7 @@ function MessageList({
       selection.toggle,
       handleCopyMarkdown,
       handleShare,
+      userResolver,
     ],
   );
 

@@ -15,6 +15,7 @@ import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import {
   useChannelsForWorkspace,
   type ChannelListItem,
@@ -258,7 +259,7 @@ export function Composer({
     return out;
   }, [conversationMembers.status, conversationMembers.members, usersById]);
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
-  const humanAvatarUrls = useAgentAvatarObjectUrls(mentionHumans);
+  const humanAvatarUrls = useUserAvatarObjectUrls(mentionHumans);
   // `#` autocomplete is scoped to the *current* conversation's
   // workspace — channel references in chat resolve per-workspace
   // (see Markdown.tsx CHANNEL_PREFIX → ChannelRef), so suggesting

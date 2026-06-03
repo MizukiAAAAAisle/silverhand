@@ -314,29 +314,39 @@ describe('canonical channel/thread routes', () => {
 
   it('lists, saves, and unsaves messages through canonical saved routes', async () => {
     t = buildTestApp();
+    const local = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const alice = http(t, { 'X-Silverhand-User-Id': 'alice' });
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
     const msg = await (
-      await http(t).post(`/api/channels/${channelId}/messages`, {
+      await local.post(`/api/channels/${channelId}/messages`, {
         content: 'save me',
       })
     ).json() as any;
 
-    expect((await (await http(t).get('/api/saved')).json() as any).saved)
+    expect((await (await local.get('/api/saved')).json() as any).saved)
       .toEqual([]);
 
     const saved = await (
-      await http(t).post(`/api/messages/${msg.message.id}/save`)
+      await local.post(`/api/messages/${msg.message.id}/save`)
     ).json() as any;
     expect(saved.saved.message.id).toBe(msg.message.id);
 
-    const listed = await (await http(t).get('/api/saved')).json() as any;
+    const listed = await (await local.get('/api/saved')).json() as any;
     expect(listed.saved).toHaveLength(1);
     expect(listed.saved[0].message.id).toBe(msg.message.id);
 
-    const deleted = await http(t).del(`/api/messages/${msg.message.id}/save`);
+    expect((await (await alice.get('/api/saved')).json() as any).saved).toEqual([]);
+    const aliceSaved = await alice.post(`/api/messages/${msg.message.id}/save`);
+    expect(aliceSaved.status).toBe(201);
+    expect((await (await alice.get('/api/saved')).json() as any).saved)
+      .toHaveLength(1);
+
+    const deleted = await local.del(`/api/messages/${msg.message.id}/save`);
     expect(deleted.status).toBe(204);
-    const afterDelete = await (await http(t).get('/api/saved')).json() as any;
+    const afterDelete = await (await local.get('/api/saved')).json() as any;
     expect(afterDelete.saved).toEqual([]);
+    expect((await (await alice.get('/api/saved')).json() as any).saved)
+      .toHaveLength(1);
   });
 
   it('gates saved-message operations by source conversation visibility', async () => {
@@ -370,6 +380,12 @@ describe('canonical channel/thread routes', () => {
     );
     expect(start.status).toBe(200);
     expect(t.fake.starts).toEqual([{ conversationId: channelId, agentId: agentIds.alice }]);
+    t.fake.starts = [];
+    const nonOwnerStart = await http(t, { 'X-Silverhand-User-Id': 'alice' }).post(
+      `/api/channels/${channelId}/agents/${agentIds.alice}/start`,
+    );
+    expect(nonOwnerStart.status).toBe(403);
+    expect(t.fake.starts).toEqual([]);
 
     const msg = await (
       await http(t).post(`/api/channels/${channelId}/messages`, {
@@ -473,6 +489,12 @@ describe('canonical channel/thread routes', () => {
     const notifications = new NotificationRepo(t.ctx.db);
     notifications.insert({
       kind: 'mention_external',
+      userId: 'local',
+      workspaceId: workspace.id,
+      conversationId: channelId,
+    });
+    notifications.insert({
+      kind: 'mention_external',
       workspaceId: workspace.id,
       conversationId: channelId,
     });
@@ -496,5 +518,7 @@ describe('canonical channel/thread routes', () => {
     expect(second.status).toBe(200);
     expect(await second.json()).toEqual({ marked: 0 });
     expect(events).toEqual([]);
+    const unread = await (await http(t).get('/api/notifications/unread')).json() as any;
+    expect(unread.total).toBe(0);
   });
 });

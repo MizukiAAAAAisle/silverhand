@@ -239,9 +239,10 @@ describe('ConversationMessageService.sendMessage', () => {
       });
       unsubViewer();
 
-      expect(t.notifications.list({ unread: true })).toEqual([
+      expect(t.notifications.list({ userId: 'local', unread: true })).toEqual([
         expect.objectContaining({
           kind: 'mention_self',
+          user_id: 'local',
           conversation_id: t.channel.id,
           message_id: result.message.id,
           source_conversation_id: t.channel.id,
@@ -275,7 +276,7 @@ describe('ConversationMessageService.sendMessage', () => {
         content: 'note to @local-test',
       });
 
-      expect(t.notifications.list({ unread: true })).toEqual([]);
+      expect(t.notifications.list({ userId: 'local', unread: true })).toEqual([]);
     } finally {
       t.cleanup();
     }

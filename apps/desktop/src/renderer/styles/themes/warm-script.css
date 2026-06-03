@@ -1,10 +1,8 @@
 /* ================================================================
    Theme: Warm Script (warm stone-paper, near-black accent)
    性格：旧书页灰底（去黄保温）+ 暖近黑 accent + 品牌黄 nav rail。
-   Default theme — also serves as :root so first paint has tokens.
    ================================================================ */
 
-:root,
 [data-theme='warm-script'] {
   /* ── Backgrounds ── */
   --bg-base: #F8F6F2;

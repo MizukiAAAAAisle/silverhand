@@ -12,6 +12,7 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { setTimeout as setTimer } from 'node:timers';
 import { randomUUID } from 'node:crypto';
+import { stat } from 'node:fs/promises';
 import {
   buildSystemPromptFor,
   type AgentRunState,
@@ -48,8 +49,14 @@ import {
 } from '../../protocol.js';
 import type { DaemonLogger } from '../logger.js';
 import { buildPromptContextFromRuntimeStartOptions } from '../prompt-context.js';
-import type { RuntimeStartResolveDeps } from '../runtime-start-resolve.js';
-import { resolveRuntimeStartPaths } from '../runtime-start-resolve.js';
+import type {
+  ResolvedWorkspaceRef,
+  RuntimeStartResolveDeps,
+} from '../runtime-start-resolve.js';
+import {
+  resolveRuntimeStartPaths,
+  RuntimeStartResolveError,
+} from '../runtime-start-resolve.js';
 import {
   unlinkRuntimePidfile,
   writeRuntimePidfile,
@@ -371,6 +378,7 @@ export class Supervisor implements SupervisorContract {
       startOptions,
       this.runtimeStartResolveDeps,
     );
+    await assertRuntimeStartWorkspacePath(resolvedOptions.workspace);
 
     const driver = this.driverFor(runtimeKind);
     const binary = await this.resolveBinary(runtimeKind, driver.binary);
@@ -438,6 +446,8 @@ export class Supervisor implements SupervisorContract {
           conversationId: params.conversation_id,
           agent_id: params.agent_id,
           runtime: runtimeKind,
+          binary,
+          workspace_path: spawnCtx.workspacePath,
           error_message: err.message,
         },
         'child process emitted error before runtime handle was registered',
@@ -2723,6 +2733,37 @@ function phaseToStatus(phase: RuntimePhase): AgentRunState['status'] {
  */
 function driverReadyToEncode(driver: Driver): boolean {
   return driver.readyToEncode?.() ?? true;
+}
+
+async function assertRuntimeStartWorkspacePath(
+  workspace: ResolvedWorkspaceRef,
+): Promise<void> {
+  try {
+    const st = await stat(workspace.path);
+    if (st.isDirectory()) return;
+    throw new RuntimeStartResolveError(
+      'workspace_path_missing',
+      `runtime_start: resolved ${workspace.kind} workspace "${workspace.name}" ` +
+        `(${workspace.id}) path is not a directory: ${workspace.path}`,
+    );
+  } catch (err) {
+    if (err instanceof RuntimeStartResolveError) throw err;
+    const code = typeof err === 'object' && err !== null && 'code' in err
+      ? String((err as { code?: unknown }).code)
+      : null;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      throw new RuntimeStartResolveError(
+        'workspace_path_missing',
+        `runtime_start: resolved ${workspace.kind} workspace "${workspace.name}" ` +
+          `(${workspace.id}) path does not exist: ${workspace.path}`,
+      );
+    }
+    throw new Error(
+      `runtime_start: failed to access resolved ${workspace.kind} workspace ` +
+        `"${workspace.name}" (${workspace.id}) path ${workspace.path}: ` +
+        (err instanceof Error ? err.message : String(err)),
+    );
+  }
 }
 
 function incrementToolCount(

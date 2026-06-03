@@ -17,6 +17,60 @@ import {
 import { ApiError, api, apiUpload, fetchBackendBlob } from '@/lib/api';
 import { clearCurrentUser, setCurrentUserId } from '@/lib/current-user';
 import { eventWsClient } from '@/lib/ws-client';
+import { clearPlaceMemory } from '@/lib/place-memory';
+
+/**
+ * Multi-human audit 2026-06-03 #task:857 P0.7 (review-fold by Cindy
+ * #task:861). Renderer-local state that is **identity-bound** — its
+ * value reveals or depends on who the previous viewer was. Wiped by
+ * {@link clearViewerLocalState} on every logout so the next signed-in
+ * human starts without inheriting the previous viewer's navigation
+ * history or pending gates.
+ *
+ * Kept INSIDE the file (rather than exported from current-user) so the
+ * full ownership of "what survives a logout" stays in one place; if a
+ * future preference key is added, this list is the diff target.
+ *
+ * Two layers are cleared:
+ *   1. {@link clearPlaceMemory} — last-channel-per-workspace and
+ *      last-thread-per-channel. Maps + disk both wiped.
+ *   2. The `IDENTITY_BOUND_KEYS` list below — small set of localStorage
+ *      keys that surface previous-viewer activity (which settings tab
+ *      was open, whether the setup wizard is pending).
+ *
+ * What intentionally SURVIVES (device-scoped UI ergonomics — Cindy
+ * #task:861 review): theme (`silverhand:appearance`), sidebar
+ * visibility toggles, sidebar/split widths, message layout mode, tasks
+ * drawer width, agent-section collapse state. None of these reveal who
+ * the previous viewer was; they describe how the device's owner likes
+ * the chrome to look. If the product contract ever tightens to "every
+ * logout returns a factory-default shell", expand this list.
+ */
+const IDENTITY_BOUND_KEYS: ReadonlyArray<string> = [
+  // Setup wizard pin — must clear so the next session's gate logic
+  // re-derives from the actual auth state, never inherits a stuck open.
+  'silverhand:open-setup-wizard',
+  // Last-viewed Settings sub-section — identity-bound because it
+  // reveals what the previous viewer was looking at when they signed
+  // out. Defaulting back to the wizard-recommended landing tab is
+  // strictly safer than inheriting.
+  'silverhand:settings-section',
+];
+
+function clearViewerLocalState(): void {
+  // 1. In-memory + disk for the place-memory maps.
+  clearPlaceMemory();
+  // 2. Other identity-bound localStorage keys. Wrap each removal so a
+  //    quota error on one doesn't strand the others.
+  try {
+    for (const key of IDENTITY_BOUND_KEYS) {
+      localStorage.removeItem(key);
+    }
+  } catch {
+    // Quota / disabled storage — nothing to do, in-memory state is
+    // already cleared above.
+  }
+}
 
 const meKey = ['me'] as const;
 
@@ -176,6 +230,7 @@ export function useLogout() {
     mutationFn: () => window.agentHub.logout(),
     onSuccess: () => {
       clearCurrentUser();
+      clearViewerLocalState();
       eventWsClient.disconnect();
       qc.clear();
     },
@@ -303,6 +358,7 @@ export function useLogoutAndDisableHost() {
         logout: () => window.agentHub.logout(),
         onLogoutSuccess: () => {
           clearCurrentUser();
+          clearViewerLocalState();
           eventWsClient.disconnect();
           qc.clear();
         },

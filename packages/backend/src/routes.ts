@@ -281,6 +281,27 @@ function placementErrorResponse(c: Context, err: unknown): Response | null {
   return null;
 }
 
+function runtimeStartErrorResponse(c: Context, err: unknown): Response | null {
+  if (!(err instanceof HostWsCommandResponseError)) return null;
+  if (err.details.commandKind !== 'runtime_start') return null;
+  const code = err.code as string;
+  if (
+    code !== 'workspace_not_provisioned' &&
+    code !== 'workspace_path_missing' &&
+    code !== 'registry_unavailable' &&
+    code !== 'shutting_down'
+  ) {
+    return null;
+  }
+  const status =
+    code === 'workspace_path_missing'
+      ? 409
+      : code === 'shutting_down'
+        ? 503
+        : 502;
+  return c.json({ error: err.message, code }, status);
+}
+
 function hostRuntimeDisabledResponse(
   c: Context,
   action: string,
@@ -1198,24 +1219,6 @@ function publicSettingsSnapshot(settings: SettingsRepo): Record<string, string> 
   const out = { ...settings.all() };
   delete out[SETTINGS_KEYS.VIEWER_USER_ID];
   return out;
-}
-
-function legacyGlobalNotificationUserId(): null {
-  // Stage A.3 bridge: V1 notification writers still mostly create
-  // legacy global rows (`user_id IS NULL`). Keep every reader/writer
-  // call site grep-able until the per-user notification migration.
-  return null;
-}
-
-function listLegacyGlobalNotifications(
-  notifications: NotificationRepo,
-  opts: { unread?: boolean; limit?: number } = {},
-) {
-  return notifications.list({
-    userId: legacyGlobalNotificationUserId(),
-    unread: opts.unread,
-    limit: opts.limit,
-  });
 }
 
 const userServiceErrorStatusMap: Partial<
@@ -3713,12 +3716,12 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!message || !canViewConversation(ctx, getUserPrincipal(c), message.conversation_id)) {
       return c.json({ error: 'message not found' }, 404);
     }
-    const row = saved.save(id);
+    const viewerUserId = requireViewerUserId(c);
+    const row = saved.save(id, viewerUserId);
     if (!row) return c.json({ error: 'message not found' }, 404);
     // Notify the resolved viewer's private scope so the saved list
     // invalidates without polling. Pre-PR1 this was 'viewer:local';
     // routes now resolve the current viewer principal.
-    const viewerUserId = requireViewerUserId(c);
     ctx.events.publishToScope(
       `viewer:${viewerUserId}`,
       'saved_changed',
@@ -3734,8 +3737,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!message || !canViewConversation(ctx, getUserPrincipal(c), message.conversation_id)) {
       return c.json({ error: 'message not found' }, 404);
     }
-    saved.remove(id);
     const viewerUserId = requireViewerUserId(c);
+    saved.remove(id, viewerUserId);
     ctx.events.publishToScope(
       `viewer:${viewerUserId}`,
       'saved_changed',
@@ -3895,6 +3898,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!canPostToConversation(ctx, getUserPrincipal(c), conversationId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    if (!canEditAgent(ctx, getUserPrincipal(c), agentId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     ctx.logger.info(
       { conversationId, agentId },
       'api: start agent requested',
@@ -3919,6 +3925,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       );
       const mapped = placementErrorResponse(c, err);
       if (mapped) return mapped;
+      const startError = runtimeStartErrorResponse(c, err);
+      if (startError) return startError;
       return c.json({ error: msg }, 400);
     }
   }
@@ -3933,6 +3941,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json({ error: 'agent is not a member of this conversation' }, 400);
     }
     if (!canPostToConversation(ctx, getUserPrincipal(c), conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    if (!canEditAgent(ctx, getUserPrincipal(c), agentId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
     const body = await c.req.json().catch(() => ({}));
@@ -3965,6 +3976,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     }
     const principal = getUserPrincipal(c);
     if (!canPostToConversation(ctx, principal, conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    if (!canEditAgent(ctx, principal, agentId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
     ctx.logger.info(
@@ -5600,34 +5614,32 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   });
 
   // ── Notifications ────────────────────────────────────────────────
-  // v1 single-user. user_id is always NULL on writes; reads filter on
-  // `user_id IS NULL` (see NotificationRepo.list). Multi-user migration
-  // will pass through a user id resolved from auth.
   app.get(apiPaths.notifications, c => {
     const unread = c.req.query('unread') === '1';
     const limit = parseLimit(c.req.query('limit'), 100);
+    const viewerUserId = requireViewerUserId(c);
     return c.json({
-      notifications: listLegacyGlobalNotifications(notifications, { unread, limit }),
+      notifications: notifications.list({ userId: viewerUserId, unread, limit }),
     });
   });
 
   // Lightweight endpoint: total unread + per-sidebar-scope counts + the
   // most recent unread pointer so the renderer can jump straight there.
   app.get(apiPaths.notificationsUnread, c => {
+    const viewerUserId = requireViewerUserId(c);
     const total = timedRouteSpan(
       ctx,
       'notifications.unreadCount',
-      {},
-      () => notifications.unreadCount(legacyGlobalNotificationUserId()),
+      { viewerUserId },
+      () => notifications.unreadCount(viewerUserId),
       result => ({ total: result }),
     );
     const byWorkspace = Object.fromEntries(
       timedRouteSpan(
         ctx,
         'notifications.unreadCountsByWorkspace',
-        {},
-        () =>
-          notifications.unreadCountsByWorkspace(legacyGlobalNotificationUserId()),
+        { viewerUserId },
+        () => notifications.unreadCountsByWorkspace(viewerUserId),
         result => ({ workspaceCount: result.size }),
       ).entries(),
     );
@@ -5635,9 +5647,8 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       timedRouteSpan(
         ctx,
         'notifications.latestUnreadByWorkspace',
-        {},
-        () =>
-          notifications.latestUnreadByWorkspace(legacyGlobalNotificationUserId()),
+        { viewerUserId },
+        () => notifications.latestUnreadByWorkspace(viewerUserId),
         result => ({ workspaceCount: result.size }),
       ).entries(),
     );
@@ -5657,22 +5668,23 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     const { id, workspace_id, conversation_id, all } = parsed.data;
+    const viewerUserId = requireViewerUserId(c);
     let marked = 0;
     if (id) {
-      const ok = notifications.markRead(id, legacyGlobalNotificationUserId());
+      const ok = notifications.markRead(id, viewerUserId);
       marked = ok ? 1 : 0;
     } else if (workspace_id) {
       marked = notifications.markWorkspaceRead(
         workspace_id,
-        legacyGlobalNotificationUserId(),
+        viewerUserId,
       );
     } else if (conversation_id) {
       marked = notifications.markConversationRead(
         conversation_id,
-        legacyGlobalNotificationUserId(),
+        viewerUserId,
       );
     } else if (all) {
-      marked = notifications.markAllRead(legacyGlobalNotificationUserId());
+      marked = notifications.markAllRead(viewerUserId);
     } else {
       // Unreachable thanks to the schema refine, but TS doesn't narrow.
       return c.json({ error: 'invalid input' }, 400);
@@ -5680,7 +5692,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     // Push to the resolved viewer's private scope only when unread
     // notification counters changed.
     if (marked > 0) {
-      const viewerUserId = requireViewerUserId(c);
       ctx.events.publishToScope(
         `viewer:${viewerUserId}`,
         'unread_updated',

@@ -1706,8 +1706,9 @@ const AGENT_FILES_PURGE_ERROR_FIXTURES: WireFixture[] = [
 // D4.e-6 runtime_start typed errors. The carve-out that let host paths cross
 // the runtime_start wire is revoked; the daemon now resolves every host path
 // from its registry (regular) / computeAgentDir (agent_home) and fail-closes
-// with one of these two typed codes when a regular workspace is not bound or
-// the registry is unreadable. One fixture per RuntimeStartErrorCode slot.
+// with one of these typed codes when a regular workspace is not bound, a
+// resolved host-local path is missing, or the registry is unreadable. One
+// fixture per RuntimeStartErrorCode slot.
 const RUNTIME_START_ERROR_FIXTURES: WireFixture[] = [
   {
     name: 'response/runtime_start-error-workspace_not_provisioned',
@@ -1718,6 +1719,20 @@ const RUNTIME_START_ERROR_FIXTURES: WireFixture[] = [
       error: {
         code: 'workspace_not_provisioned',
         message: 'workspace ws_custom_7 is not provisioned on this host',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'runtime_start' },
+  },
+  {
+    name: 'response/runtime_start-error-workspace_path_missing',
+    description:
+      'A semantic workspace ref resolved on the daemon, but the host-local cwd no longer exists (for example an agent_home created under another SILVERHAND_DIR). The daemon fails before spawn so the user sees a concrete filesystem cause instead of a pid-less child.',
+    frame: enc({
+      id: 'req-runtime-start-1',
+      error: {
+        code: 'workspace_path_missing',
+        message:
+          'runtime_start: resolved agent_home workspace "Cindy" (agent-home:a1) path does not exist: /tmp/local-silverhand/agents/a1',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'runtime_start' },

@@ -8,6 +8,7 @@ import { UserAvatar } from '@/components/UserAvatar';
 import { ApiError } from '@/lib/api';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { useUsers } from '@/features/users/hooks';
 import {
   useAddWorkspaceMember,
@@ -77,16 +78,18 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
   const agentMembers = memberLists?.agents ?? [];
   const humanMembers = memberLists?.humans ?? [];
   const agentAvatarUrls = useAgentAvatarObjectUrls(agentMembers);
-  // The batch avatar hook is structural over `{id, avatar_url}` and
-  // works for users too. Naming is historical; agents and humans share
-  // the same fetch/dedup path.
-  const humanAvatarUrls = useAgentAvatarObjectUrls(humanMembers);
+  // Human avatars use the user-specific batch hook (multi-human audit
+  // 2026-06-03 #task:857 P0.8). The shape is structurally identical to
+  // the agent batch hook but lives in features/users/avatar-hooks so
+  // human-specific affordances (e.g. preferring `HumanMemberDto.avatar_url`
+  // when Cindy's backend P0 lands) stay in one place.
+  const humanAvatarUrls = useUserAvatarObjectUrls(humanMembers);
   const { data: agents = [] } = useAgents();
   const { data: users = [] } = useUsers();
   // Candidate avatars (the dropdown pool — separate from the
   // enrolled-members map above so cache keys are stable per surface).
   const candidateAgentAvatarUrls = useAgentAvatarObjectUrls(agents);
-  const candidateHumanAvatarUrls = useAgentAvatarObjectUrls(users);
+  const candidateHumanAvatarUrls = useUserAvatarObjectUrls(users);
   const addMember = useAddWorkspaceMember(workspaceId);
   const removeMember = useRemoveWorkspaceMember(workspaceId);
   const [error, setError] = useState<string | null>(null);

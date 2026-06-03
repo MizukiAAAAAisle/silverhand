@@ -206,6 +206,31 @@ async function waitFor(
 }
 
 describe('Supervisor 3a — spawn / status / phase emit', () => {
+  it('fails typed before spawn when the resolved workspace path is missing', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'silverhand-missing-cwd-'));
+    const missingPath = join(parent, 'gone');
+    let spawnCalled = false;
+    const { supervisor } = makeSupervisor({
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+        workspacePath: missingPath,
+      }),
+      spawnFn: () => {
+        spawnCalled = true;
+        throw new Error('spawn should not be called');
+      },
+    });
+
+    try {
+      await expect(supervisor.start(baseStartParams)).rejects.toMatchObject({
+        code: 'workspace_path_missing',
+        message: expect.stringContaining(missingPath),
+      });
+      expect(spawnCalled).toBe(false);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
   it('contains spawn children that report no pid so their async error cannot crash the daemon', async () => {
     const fakeChild = Object.assign(new EventEmitter(), {
       pid: undefined,

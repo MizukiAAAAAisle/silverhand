@@ -193,8 +193,7 @@ async function deliverOne(
 
   opts.notifications.insert({
     kind: 'mention_external',
-    // v1 single-user; multi-user migration will backfill 'local'.
-    userId: null,
+    userId: humanMemberId,
     agentId: agent.id,
     workspaceId: mentionsConversation.workspace_id,
     conversationId: mentionsConversation.id,

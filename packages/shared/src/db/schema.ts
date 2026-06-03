@@ -326,6 +326,7 @@ export interface SessionEventRow {
 
 export interface SavedMessageRow {
   id: string;
+  user_id: string | null;
   message_id: string;
   conversation_id: string;
   workspace_id: string;

@@ -1,4 +1,4 @@
-import type { MemberDto } from '@silverhand/shared';
+import { apiPaths, type MemberDto, type UserRow } from '@silverhand/shared';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
@@ -67,8 +67,15 @@ export class MembershipService {
         user_id: user.id,
         name: user.name,
         display_name: user.display_name,
+        avatar_url: userAvatarUrl(user),
       });
     }
     return out;
   }
+}
+
+function userAvatarUrl(row: UserRow): string | null {
+  return row.avatar_storage_key
+    ? `${apiPaths.userAvatar(row.id)}?v=${row.updated_at}`
+    : null;
 }

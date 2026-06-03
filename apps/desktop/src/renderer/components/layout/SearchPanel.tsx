@@ -12,12 +12,17 @@ import {
   User,
   X,
 } from 'lucide-react';
-import type { AgentDto, SearchResultDto } from '@silverhand/shared';
+import type { AgentDto, SearchResultDto, UserDto } from '@silverhand/shared';
 import { Input, Label } from '@/components/ui/input';
 import { useAgents } from '@/features/agents/hooks';
 import { useMessageSearch } from '@/features/search/hooks';
+import { useUsers, useUsersById, makeUserNameResolver } from '@/features/users/hooks';
 import type { WorkspaceListItem } from '@/features/workspaces/hooks';
-import { formatUserDisplayName, getCurrentUserId } from '@/lib/current-user';
+import {
+  formatUserDisplayName,
+  getCurrentUserId,
+  type UserNameResolver,
+} from '@/lib/current-user';
 import { cn } from '@/lib/cn';
 
 interface SearchPanelProps {
@@ -82,6 +87,12 @@ export function SearchPanel({
   const [senderFilter, setSenderFilter] = useState<SenderFilter>('all');
   const [timeRange, setTimeRange] = useState<TimeRange>('all');
   const { data: agents = [] } = useAgents();
+  const { data: users = [] } = useUsers();
+  // Resolver feeds formatUserDisplayName so message-meta lines and the
+  // sender-filter label render the actual human display name instead of
+  // the raw uuid (multi-human audit 2026-06-03 #task:857 P0.10).
+  const usersById = useUsersById();
+  const userResolver = useMemo(() => makeUserNameResolver(usersById), [usersById]);
 
   const channelQuery = useMemo(
     () => parseWorkspaceFilter(workspaceFilter),
@@ -195,6 +206,8 @@ export function SearchPanel({
             <SenderFilterSelect
               value={senderFilter}
               agents={agents}
+              users={users}
+              userResolver={userResolver}
               onChange={setSenderFilter}
             />
           </FilterBlock>
@@ -237,6 +250,7 @@ export function SearchPanel({
                       result={result}
                       query={query}
                       agentsById={agentsById}
+                      userResolver={userResolver}
                       onClick={() => {
                         if (result.type === 'workspace') {
                           onOpenWorkspace(result.workspace.id);
@@ -369,13 +383,31 @@ function WorkspaceFilterSelect({
 function SenderFilterSelect({
   value,
   agents,
+  users,
+  userResolver,
   onChange,
 }: {
   value: SenderFilter;
   agents: AgentDto[];
+  users: UserDto[];
+  userResolver: UserNameResolver;
   onChange: (value: SenderFilter) => void;
 }): JSX.Element {
-  const selected = senderFilterLabel(value, agents);
+  const selected = senderFilterLabel(value, agents, userResolver);
+  // Sort humans: viewer always first (when known), then alphabetic by
+  // display name so the selector is stable.
+  const viewerId = getCurrentUserId();
+  const sortedUsers = useMemo(() => {
+    const copy = [...users];
+    copy.sort((a, b) => {
+      if (viewerId && a.id === viewerId) return -1;
+      if (viewerId && b.id === viewerId) return 1;
+      const left = (a.display_name || a.name).toLowerCase();
+      const right = (b.display_name || b.name).toLowerCase();
+      return left.localeCompare(right);
+    });
+    return copy;
+  }, [users, viewerId]);
 
   return (
     <Select.Root value={value} onValueChange={v => onChange(v as SenderFilter)}>
@@ -401,14 +433,30 @@ function SenderFilterSelect({
             </SelectItem>
             <Select.Group>
               <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-                Human
+                Humans
               </Select.Label>
-              <SelectItem
-                value={`user:${getCurrentUserId() ?? 'self'}`}
-                icon={<User className="size-3.5" />}
-              >
-                {formatUserDisplayName(getCurrentUserId())}
-              </SelectItem>
+              {sortedUsers.length === 0 ? (
+                // Viewer-less fallback (registration in progress / users
+                // endpoint still loading) — still allow the viewer to
+                // pick "self" so the filter is usable on first paint.
+                <SelectItem
+                  value={`user:${viewerId ?? 'self'}`}
+                  icon={<User className="size-3.5" />}
+                >
+                  {formatUserDisplayName(viewerId, userResolver)}
+                </SelectItem>
+              ) : (
+                sortedUsers.map(user => (
+                  <SelectItem
+                    key={user.id}
+                    value={`user:${user.id}`}
+                    icon={<User className="size-3.5" />}
+                    suffix={user.id === viewerId ? 'you' : undefined}
+                  >
+                    {user.display_name || user.name}
+                  </SelectItem>
+                ))
+              )}
             </Select.Group>
             <Select.Group>
               <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
@@ -513,15 +561,17 @@ function SearchResultRow({
   result,
   query,
   agentsById,
+  userResolver,
   onClick,
 }: {
   result: SearchResultDto;
   query: string;
   agentsById: Map<string, AgentDto>;
+  userResolver: UserNameResolver;
   onClick: () => void;
 }): JSX.Element {
   const icon = resultIcon(result);
-  const meta = resultMeta(result, agentsById);
+  const meta = resultMeta(result, agentsById, userResolver);
   const title = resultTitle(result);
   const excerpt = resultExcerpt(result, query);
 
@@ -633,6 +683,7 @@ function resultIcon(result: SearchResultDto): JSX.Element {
 function resultMeta(
   result: SearchResultDto,
   agentsById: Map<string, AgentDto>,
+  userResolver: UserNameResolver,
 ): string[] {
   if (result.type === 'workspace') {
     return [result.workspace.kind === 'dm' ? 'DM' : 'Workspace'];
@@ -647,7 +698,7 @@ function resultMeta(
   const sender = result.message.from_kind === 'agent'
     ? formatAgentName(result.message.from_agent_id, result.agent_name, agentsById)
     : result.message.from_kind === 'user'
-      ? formatUserDisplayName(result.message.from_user_id)
+      ? formatUserDisplayName(result.message.from_user_id, userResolver)
       : 'system';
   return [
     result.workspace.kind === 'dm' ? 'DM message' : 'Message',
@@ -778,10 +829,11 @@ function workspaceFilterLabel(
 function senderFilterLabel(
   value: SenderFilter,
   agents: AgentDto[],
+  userResolver: UserNameResolver,
 ): { label: string; icon: JSX.Element } {
   if (value.startsWith('user:')) {
     return {
-      label: formatUserDisplayName(value.slice('user:'.length)),
+      label: formatUserDisplayName(value.slice('user:'.length), userResolver),
       icon: <User className="size-3.5" />,
     };
   }

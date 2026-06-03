@@ -7,6 +7,7 @@ import {
   type QueryClient,
 } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import type {
   AgentRunStatesDto,
   AttachmentDto,
@@ -37,6 +38,44 @@ const agentsKey = (cid: string) => ['channels', cid, 'agents'] as const;
 const MESSAGE_PAGE_LIMIT = 100;
 const AROUND_MESSAGE_LIMIT = 100;
 type ConversationRouteKind = 'channel' | 'thread';
+
+function parseApiErrorBody(err: ApiError): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(err.body) as unknown;
+    return parsed && typeof parsed === 'object'
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatStartAgentError(err: unknown): string {
+  if (err instanceof ApiError) {
+    const body = parseApiErrorBody(err);
+    const code = typeof body?.code === 'string' ? body.code : null;
+    const detail =
+      typeof body?.error === 'string'
+        ? body.error
+        : typeof body?.message === 'string'
+          ? body.message
+          : err.body || err.message;
+    if (code === 'host_attach_pending') {
+      return 'Agent 启动失败：daemon host 还未连接，稍后重试。';
+    }
+    if (code === 'workspace_path_missing') {
+      return `Agent 启动失败：${detail}`;
+    }
+    if (code === 'workspace_not_provisioned') {
+      return `Agent 启动失败：workspace 尚未 provision。${detail}`;
+    }
+    if (code === 'registry_unavailable') {
+      return `Agent 启动失败：daemon workspace registry 不可用。${detail}`;
+    }
+    return `Agent 启动失败：${detail}`;
+  }
+  return `Agent 启动失败：${err instanceof Error ? err.message : String(err)}`;
+}
 
 /** Page-param shape for the bidirectional infinite query.
  *  - `undefined` (the initial param) → fetch the latest window.
@@ -712,6 +751,9 @@ export function useStartAgent(
       await api(path, {
         method: 'POST',
       });
+    },
+    onError: err => {
+      toast.error(formatStartAgentError(err));
     },
   });
 }

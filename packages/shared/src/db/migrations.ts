@@ -2369,6 +2369,37 @@ export const migrations: Migration[] = [
       ALTER TABLE hosts ADD COLUMN display_label TEXT;
     `,
   },
+  {
+    version: 37,
+    name: 'saved_messages_user_scope',
+    // Saved messages are viewer-private state. Existing rows predate the
+    // multi-human model; when a registered legacy viewer exists, preserve
+    // their saves under that user, otherwise leave the row unclaimed and
+    // invisible to per-user readers.
+    up: `
+      DROP INDEX IF EXISTS uniq_saved_messages_message;
+
+      ALTER TABLE saved_messages
+        ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE;
+
+      UPDATE saved_messages
+         SET user_id = (SELECT value FROM app_settings WHERE key = 'viewer_user_id')
+       WHERE user_id IS NULL
+         AND EXISTS (
+           SELECT 1
+             FROM users
+            WHERE id = (SELECT value FROM app_settings WHERE key = 'viewer_user_id')
+         );
+
+      CREATE UNIQUE INDEX uniq_saved_messages_user_message
+        ON saved_messages(user_id, message_id)
+        WHERE user_id IS NOT NULL;
+
+      CREATE INDEX idx_saved_messages_user_saved_at
+        ON saved_messages(user_id, saved_at DESC)
+        WHERE user_id IS NOT NULL;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

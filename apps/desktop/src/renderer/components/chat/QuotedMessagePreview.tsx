@@ -1,6 +1,8 @@
+import { useMemo } from 'react';
 import { CornerDownRight } from 'lucide-react';
 import type { MessageDto } from '@silverhand/shared';
 import { useMessage } from '@/features/messages/hooks';
+import { useUsersById, makeUserNameResolver } from '@/features/users/hooks';
 import { formatUserDisplayName } from '@/lib/current-user';
 import { Markdown } from './Markdown';
 import { useRelativeTime } from './useRelativeTime';
@@ -87,6 +89,12 @@ export function QuotedMessagePreview({
   // ready so we don't change hook count between renders. The result
   // gets thrown away on the early-return paths below.
   const { relative, absolute } = useRelativeTime(fields?.createdAt ?? 0);
+  // Resolver for the snapshot's user_id — quoted snapshots store the
+  // raw uuid even when the original message was viewable, so we lean on
+  // the global directory here too (multi-human audit 2026-06-03
+  // #task:857 P0.10).
+  const usersById = useUsersById();
+  const userResolver = useMemo(() => makeUserNameResolver(usersById), [usersById]);
 
   // No snapshot, no fallback id → can't render anything useful.
   if (!fields && !fallbackId) return null;
@@ -98,7 +106,7 @@ export function QuotedMessagePreview({
 
   const isUser = fields.fromKind === 'user';
   const displayName = isUser
-    ? formatUserDisplayName(fields.userId)
+    ? formatUserDisplayName(fields.userId, userResolver)
     : fields.agentName
       ? `@${fields.agentName}`
       : '@agent';

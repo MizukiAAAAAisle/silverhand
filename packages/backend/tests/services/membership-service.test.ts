@@ -142,6 +142,7 @@ describe('MembershipService.listMembers', () => {
           user_id: 'local',
           name: 'local-test',
           display_name: 'Local Test User',
+          avatar_url: null,
         },
       ]);
     } finally {
@@ -203,6 +204,7 @@ describe('MembershipService.listMembers', () => {
           user_id: 'local',
           name: 'local-test',
           display_name: 'Local Test User',
+          avatar_url: null,
         },
       ]);
     } finally {

@@ -456,9 +456,8 @@ describe('protocol — runtime_start D4.e-6 semantic refs + typed errors', () =>
     expect(parsed.success).toBe(false);
   });
 
-  it('runtime_start error taxonomy: accepts its two typed codes + the generic codes, rejects a foreign typed code', () => {
+  it('runtime_start error taxonomy: accepts its typed codes + the generic codes, rejects a foreign typed code', () => {
     const schema = intentErrorSchema('runtime_start');
-    // The two runtime_start-specific codes.
     for (const code of RuntimeStartErrorCodeSchema.options) {
       expect(schema.safeParse({ code, message: 'x' }).success, code).toBe(true);
     }

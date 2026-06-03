@@ -1,6 +1,7 @@
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
+import { useUserAvatarObjectUrl } from '@/features/users/avatar-hooks';
 import { useNav } from '@/router';
 
 interface MentionProps {
@@ -97,12 +98,22 @@ function AgentMention({
 function HumanMention({ human }: { human: UserDto }): JSX.Element {
   const nav = useNav();
   const label = human.display_name?.trim() || human.name;
+  // Multi-human audit 2026-06-03 #task:857 P0.8: resolve the mentioned
+  // human's avatar so the popover renders a real image instead of the
+  // placeholder initial. Per-mention hook — fine in practice because
+  // unique human ids per channel page are small and React Query dedupes
+  // the underlying /api/users fetch.
+  const avatarObjectUrl = useUserAvatarObjectUrl({ userId: human.id });
   // Keep element + classes identical to AgentMention so both mentions
   // share box model, baseline, and focus ring. Human mentions navigate
   // to the members human route; that route resolves both the viewer and
   // other registered humans.
   return (
-    <HumanInfoPopover human={human} trigger="hover">
+    <HumanInfoPopover
+      human={human}
+      trigger="hover"
+      avatarObjectUrl={avatarObjectUrl}
+    >
       <button
         type="button"
         onClick={event => {

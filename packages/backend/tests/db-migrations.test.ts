@@ -2928,4 +2928,81 @@ describe('database migrations', () => {
       }
     });
   });
+
+  describe('migration v37 (saved messages user scope)', () => {
+    it('backfills legacy saved rows to the current viewer and scopes uniqueness per user', () => {
+      const db = openDbAt(36);
+      try {
+        const now = Date.now();
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES
+             ('local', 'local-test', 'Local', ?, ?),
+             ('alice', 'alice-test', 'Alice', ?, ?)`,
+        ).run(now, now, now, now);
+        db.prepare(
+          `INSERT INTO app_settings (key, value)
+           VALUES ('viewer_user_id', 'local')`,
+        ).run();
+        db.prepare(
+          `INSERT INTO hosts (id, name, kind, user_id, created_at)
+           VALUES ('host-local', 'local', 'local', 'local', ?)`,
+        ).run(now);
+        db.prepare(
+          `INSERT INTO workspaces
+             (id, name, description, workspace_kind, workspace_path,
+              workspace_host_id, owner_agent_id, pinned_at, archived_at,
+              created_at, updated_at)
+           VALUES
+             ('ws', 'ws', NULL, 'regular', '/tmp/ws',
+              'host-local', NULL, NULL, NULL, ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO conversations
+             (id, workspace_id, workspace_path, kind, parent_conversation_id,
+              title, status, spawned_by_agent_id, closed_at, close_summary,
+              pinned_at, archived_at, created_at, updated_at)
+           VALUES
+             ('conv', 'ws', '/tmp/ws', 'channel', NULL,
+              'conv', 'idle', NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+        ).run(now, now);
+        db.prepare(
+          `INSERT INTO messages
+             (id, conversation_id, from_kind, from_agent_id, from_user_id,
+              content, metadata, seq, created_at, task_number, task_status,
+              task_assignee_agent_id, task_assignee_user_id, task_title,
+              task_workspace_id, task_closed_at)
+           VALUES
+             ('msg', 'conv', 'user', NULL, 'local',
+              'save me', NULL, 1, ?, NULL, NULL,
+              NULL, NULL, NULL, NULL, NULL)`,
+        ).run(now);
+        db.prepare(
+          `INSERT INTO saved_messages
+             (id, message_id, conversation_id, workspace_id, saved_at)
+           VALUES ('saved-local', 'msg', 'conv', 'ws', ?)`,
+        ).run(now);
+
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT user_id FROM saved_messages WHERE id = 'saved-local'`).get(),
+        ).toEqual({ user_id: 'local' });
+        db.prepare(
+          `INSERT INTO saved_messages
+             (id, user_id, message_id, conversation_id, workspace_id, saved_at)
+           VALUES ('saved-alice', 'alice', 'msg', 'conv', 'ws', ?)`,
+        ).run(now + 1);
+        expect(() =>
+          db.prepare(
+            `INSERT INTO saved_messages
+               (id, user_id, message_id, conversation_id, workspace_id, saved_at)
+             VALUES ('saved-local-dup', 'local', 'msg', 'conv', 'ws', ?)`,
+          ).run(now + 2),
+        ).toThrow(/UNIQUE constraint failed/);
+      } finally {
+        db.close();
+      }
+    });
+  });
 });

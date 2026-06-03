@@ -124,6 +124,7 @@ function extractAttachmentSnapshots(
 const SELECT_JOINED = `
   SELECT
     sm.id              AS id,
+    sm.user_id         AS user_id,
     sm.message_id      AS message_id,
     sm.conversation_id AS conversation_id,
     sm.workspace_id    AS workspace_id,
@@ -181,9 +182,10 @@ export class SavedMessageRepo {
 
   listForUser(userId: string, limit = 200): SavedMessageDto[] {
     const rows = this.db
-      .prepare<[string, number], JoinedRow>(
+      .prepare<[string, string, number], JoinedRow>(
         `${SELECT_JOINED}
-         WHERE EXISTS (
+         WHERE sm.user_id = ?
+           AND EXISTS (
            SELECT 1
              FROM conversation_users cu
             WHERE cu.conversation_id = sm.conversation_id
@@ -192,13 +194,13 @@ export class SavedMessageRepo {
          ORDER BY sm.saved_at DESC
          LIMIT ?`,
       )
-      .all(userId, limit);
+      .all(userId, userId, limit);
     return rows.map(rowToDto);
   }
 
   /** Returns the existing row when the message was already saved
-   *  (UNIQUE(message_id) makes this idempotent on the client). */
-  save(messageId: string): SavedMessageDto | null {
+   *  (UNIQUE(user_id, message_id) makes this idempotent on the client). */
+  save(messageId: string, userId: string): SavedMessageDto | null {
     // Resolve canonical conversation/workspace from the message; INSERT OR
     // IGNORE makes save() idempotent (returns the existing row on duplicate).
     const ctx = this.db
@@ -223,47 +225,53 @@ export class SavedMessageRepo {
     this.db
       .prepare(
         `INSERT OR IGNORE INTO saved_messages
-         (id, message_id, conversation_id, workspace_id, saved_at)
-         VALUES (?, ?, ?, ?, ?)`,
+         (id, user_id, message_id, conversation_id, workspace_id, saved_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
+        userId,
         messageId,
         ctx.conversation_id,
         ctx.workspace_id,
         now,
       );
-    return this.getByMessageId(messageId);
+    return this.getByMessageIdForUser(messageId, userId);
   }
 
-  getByMessageId(messageId: string): SavedMessageDto | null {
+  getByMessageIdForUser(messageId: string, userId: string): SavedMessageDto | null {
     const row = this.db
-      .prepare<[string], JoinedRow>(
-        `${SELECT_JOINED} WHERE sm.message_id = ?`,
+      .prepare<[string, string], JoinedRow>(
+        `${SELECT_JOINED}
+         WHERE sm.message_id = ?
+           AND sm.user_id = ?`,
       )
-      .get(messageId);
+      .get(messageId, userId);
     return row ? rowToDto(row) : null;
   }
 
   /** Returns true when a row was deleted; false when nothing to unsave. */
-  remove(messageId: string): boolean {
+  remove(messageId: string, userId: string): boolean {
     const result = this.db
-      .prepare('DELETE FROM saved_messages WHERE message_id = ?')
-      .run(messageId);
+      .prepare('DELETE FROM saved_messages WHERE message_id = ? AND user_id = ?')
+      .run(messageId, userId);
     return result.changes > 0;
   }
 
   /** Bulk lookup so MessageList can mark which messages are saved
    *  without one round-trip per row. Returns the set of saved message_ids
    *  among the input. */
-  filterSaved(messageIds: string[]): Set<string> {
+  filterSaved(messageIds: string[], userId: string): Set<string> {
     if (messageIds.length === 0) return new Set();
     const placeholders = messageIds.map(() => '?').join(',');
     const rows = this.db
       .prepare<string[], { message_id: string }>(
-        `SELECT message_id FROM saved_messages WHERE message_id IN (${placeholders})`,
+        `SELECT message_id
+           FROM saved_messages
+          WHERE user_id = ?
+            AND message_id IN (${placeholders})`,
       )
-      .all(...messageIds);
+      .all(userId, ...messageIds);
     return new Set(rows.map(r => r.message_id));
   }
 }

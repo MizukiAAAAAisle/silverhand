@@ -20,11 +20,12 @@
  * Fail-closed: when a regular workspace cannot be resolved the resolver
  * throws a `RuntimeStartResolveError` (a `DaemonTypedError`); the dispatcher
  * validates its code against `intentErrorSchema('runtime_start')` and emits
- * the typed wire code (`workspace_not_provisioned` / `registry_unavailable`)
- * instead of collapsing to `internal_error`. This is the daemon-side final
- * boundary; the backend ALSO bounded-lazy-backfills before dispatch (Cindy
- * `2A_y70Aue5X1SlOr`) so a cold-start auto-start of a legacy unprovisioned
- * workspace self-heals rather than fails.
+ * the typed wire code (`workspace_not_provisioned` /
+ * `workspace_path_missing` / `registry_unavailable`) instead of collapsing to
+ * `internal_error`. This is the daemon-side final boundary; the backend ALSO
+ * bounded-lazy-backfills before dispatch (Cindy `2A_y70Aue5X1SlOr`) so a
+ * cold-start auto-start of a legacy unprovisioned workspace self-heals rather
+ * than fails.
  */
 import type { RuntimeStartErrorCode, StartOptions } from '../protocol.js';
 import { agentHomeWorkspaceId } from '@silverhand/shared';

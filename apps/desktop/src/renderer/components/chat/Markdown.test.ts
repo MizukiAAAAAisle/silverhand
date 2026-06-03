@@ -891,7 +891,11 @@ describe('SystemMessage task event rows (PR-2)', () => {
       'task_status',
       fullMeta({
         task_status: 'done',
-        actor: { kind: 'user', id: null, name: 'user' },
+        // Multi-human audit 2026-06-03 #task:857 P0.5 (legacy null-
+        // actor → "you" collapse was removed). To exercise the
+        // viewer-rendering path now, the actor id must match the
+        // configured viewer (`'local'`, set above in this file).
+        actor: { kind: 'user', id: 'local', name: 'user' },
       }),
     );
     const html = renderTaskEvent(msg, () => undefined, [

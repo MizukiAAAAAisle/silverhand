@@ -85,44 +85,25 @@ import {
 } from '@/router';
 
 // Per-workspace "last viewed channel" + per-channel "last open thread"
-// memory. Persisted to localStorage so that quitting and relaunching the
-// app restores the user's place. Both maps are small (one entry per
-// workspace / channel ever visited) and entries self-heal: stale ids
-// that no longer exist in the channels query are simply ignored by the
-// restore effect.
-const LAST_CHANNEL_KEY = 'silverhand:layout.last-channel-by-workspace';
-const LAST_THREAD_KEY = 'silverhand:layout.last-thread-by-channel';
-
-function loadStringMap(key: string): Map<string, string> {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return new Map();
-    const obj = JSON.parse(raw) as Record<string, string>;
-    if (!obj || typeof obj !== 'object') return new Map();
-    return new Map(
-      Object.entries(obj).filter(
-        ([k, v]) => typeof k === 'string' && typeof v === 'string',
-      ),
-    );
-  } catch {
-    return new Map();
-  }
-}
-
-function saveStringMap(key: string, map: Map<string, string>): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(Object.fromEntries(map)));
-  } catch {
-    // Quota / disabled storage — fall back to in-memory only.
-  }
-}
-
-// Module-level singletons: app-global state, hydrated once on module
-// load, persisted on every mutation. Living outside the component
-// avoids the `useRef(loadStringMap())` re-eval-on-render footgun and
-// the `Map | null` typing dance.
-const lastChannelByWorkspace = loadStringMap(LAST_CHANNEL_KEY);
-const lastThreadByChannel = loadStringMap(LAST_THREAD_KEY);
+// memory. The maps + persistence helpers live in
+// `lib/place-memory.ts` so `useLogout` can also import them without a
+// circular dep on this module (multi-human audit 2026-06-03
+// #task:857 P0.7). The exports are re-exported here for callers that
+// already imported them from App.
+import {
+  LAST_CHANNEL_KEY,
+  LAST_THREAD_KEY,
+  clearPlaceMemory,
+  lastChannelByWorkspace,
+  lastThreadByChannel,
+  persistLastChannel,
+  persistLastThread,
+} from '@/lib/place-memory';
+export {
+  LAST_CHANNEL_KEY,
+  LAST_THREAD_KEY,
+  clearPlaceMemory,
+};
 
 export function App(): JSX.Element {
   useAppearance();
@@ -579,7 +560,7 @@ function RegisteredAppShell(): JSX.Element {
     if (selectedWorkspaceId && selectedChannelId) {
       if (lastChannelByWorkspace.get(selectedWorkspaceId) === selectedChannelId) return;
       lastChannelByWorkspace.set(selectedWorkspaceId, selectedChannelId);
-      saveStringMap(LAST_CHANNEL_KEY, lastChannelByWorkspace);
+      persistLastChannel();
     }
   }, [selectedWorkspaceId, selectedChannelId]);
 
@@ -593,7 +574,7 @@ function RegisteredAppShell(): JSX.Element {
     if (selectedChannelId && openThreadId) {
       if (lastThreadByChannel.get(selectedChannelId) === openThreadId) return;
       lastThreadByChannel.set(selectedChannelId, openThreadId);
-      saveStringMap(LAST_THREAD_KEY, lastThreadByChannel);
+      persistLastThread();
     }
   }, [selectedChannelId, openThreadId]);
 
@@ -965,7 +946,7 @@ function RegisteredAppShell(): JSX.Element {
       // deletion) so navigating away and back doesn't re-open the
       // just-dismissed thread, even across an app restart.
       if (lastThreadByChannel.delete(selectedChannelId)) {
-        saveStringMap(LAST_THREAD_KEY, lastThreadByChannel);
+        persistLastThread();
       }
       nav.toChannel(selectedWorkspaceId, selectedChannelId);
     }

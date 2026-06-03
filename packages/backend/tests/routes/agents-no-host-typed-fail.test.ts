@@ -50,12 +50,18 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { RuntimeHostPlacementError } from '../../src/host-placement-errors.js';
-import { HostWsCommandTransportError } from '../../src/ws/host-ws-server.js';
+import {
+  HostWsCommandResponseError,
+  HostWsCommandTransportError,
+} from '../../src/ws/host-ws-server.js';
 import {
   ClearSessionExitTimeoutError,
   ClearSessionInProgressError,
 } from '../../src/runtime/agent-runtime-host.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  X_SILVERHAND_LEGACY_USER_ID_HEADER as LEGACY_USER_ID_HEADER,
+} from '@silverhand/shared';
 
 async function createChannelWithAgent(
   t: TestApp,
@@ -158,6 +164,28 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
   });
 
   describe('host_attach_pending (NEW in D4.a Commit 6, 503)', () => {
+    it('stop allows the agent creator', async () => {
+      t = buildTestApp();
+      const { channelId, agentId } = await createChannelWithAgent(t);
+      const res = await http(t).post(
+        `/api/channels/${channelId}/agents/${agentId}/stop`,
+      );
+      expect(res.status).toBe(200);
+      expect(t.fake.stops).toMatchObject([
+        { conversationId: channelId, agentId, mode: 'hard' },
+      ]);
+    });
+
+    it('stop denies a non-creator human even when they can post in the conversation', async () => {
+      t = buildTestApp();
+      const { channelId, agentId } = await createChannelWithAgent(t);
+      const res = await http(t, {
+        [LEGACY_USER_ID_HEADER]: 'teammate',
+      }).post(`/api/channels/${channelId}/agents/${agentId}/stop`);
+      expect(res.status).toBe(403);
+      expect(t.fake.stops).toHaveLength(0);
+    });
+
     it('start → host_attach_pending (503) when transport_no_connection fires after placement resolves', async () => {
       // Pre-D4.a Commit 6 this case returned a generic untyped
       // `{ error: msg }` with status 400 — the renderer could not
@@ -224,6 +252,25 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
       expect(res.status).toBe(503);
       const body = await res.json() as { code: string };
       expect(body.code).toBe('host_attach_pending');
+    });
+  });
+
+  describe('runtime_start daemon typed response errors', () => {
+    it('start → workspace_path_missing (409) with the daemon message preserved', async () => {
+      t = buildTestApp();
+      const { channelId, agentId } = await createChannelWithAgent(t);
+      t.fake.startError = new HostWsCommandResponseError(
+        'workspace_path_missing' as never,
+        'runtime_start: resolved agent_home workspace "alice" path does not exist: /tmp/local-silverhand/agents/a1',
+        { hostId: 'h1', commandKind: 'runtime_start', requestId: 'r1' },
+      );
+      const res = await http(t).post(
+        `/api/channels/${channelId}/agents/${agentId}/start`,
+      );
+      expect(res.status).toBe(409);
+      const body = await res.json() as { code: string; error: string };
+      expect(body.code).toBe('workspace_path_missing');
+      expect(body.error).toContain('/tmp/local-silverhand/agents/a1');
     });
   });
 
@@ -404,6 +451,16 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
      * stays untouched on the error arms because the fake throws
      * before recording.
      */
+
+    it('denies a non-creator human even when they can post in the conversation', async () => {
+      t = buildTestApp();
+      const { channelId, agentId } = await createChannelWithAgent(t);
+      const res = await http(t, {
+        [LEGACY_USER_ID_HEADER]: 'teammate',
+      }).post(`/api/channels/${channelId}/agents/${agentId}/clear-session`);
+      expect(res.status).toBe(403);
+      expect(t.fake.clearedSessions).toHaveLength(0);
+    });
 
     it('no daemon attached → 503 host_attach_pending (typed)', async () => {
       t = buildTestApp();

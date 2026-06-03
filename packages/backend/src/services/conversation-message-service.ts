@@ -507,8 +507,7 @@ export class ConversationMessageService {
 
         this.notifications.insert({
           kind: 'mention_self',
-          // Notification routes still read v1 rows through user_id IS NULL.
-          userId: null,
+          userId: viewerUserId,
           workspaceId: conversation.workspace_id,
           conversationId: conversation.id,
           messageId: message.id,

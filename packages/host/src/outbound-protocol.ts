@@ -269,7 +269,8 @@ export type AgentFilesPurgeWireError = z.infer<
 
 // D4.e-6: runtime_start widens its wire error with the same per-command
 // scoping. The daemon now resolves all host paths and fails closed; the
-// backend reads `workspace_not_provisioned` (backfill + retry) vs
+// backend reads `workspace_not_provisioned` (backfill + retry),
+// `workspace_path_missing` (host-local files absent), or
 // `registry_unavailable` (hard fail) off this arm.
 export const RuntimeStartWireErrorSchema = z
   .object({
@@ -300,7 +301,8 @@ export type RuntimeStartWireError = z.infer<
  * `agent_workspace_index` / `agent_l2_seed` / `agent_files_purge`;
  * #task:811 commands `agent_workspace_tree` / `agent_workspace_file_read`;
  * and `runtime_start` — D4.e-6, codes `workspace_not_provisioned` /
- * `registry_unavailable`) override with their own wider schema.
+ * `workspace_path_missing` / `registry_unavailable`) override with their
+ * own wider schema.
  */
 export const outboundServerCommandSchemas = {
   runtime_start: {

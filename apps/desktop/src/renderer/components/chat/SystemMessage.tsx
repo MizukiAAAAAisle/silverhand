@@ -1,4 +1,4 @@
-import { useState, type ComponentType } from 'react';
+import { useState, useMemo, type ComponentType } from 'react';
 import {
   AtSign,
   CheckCircle2,
@@ -37,6 +37,7 @@ import {
   resolveSubtype,
 } from '@silverhand/shared';
 import { useMessage } from '@/features/messages/hooks';
+import { useUsersById, makeUserNameResolver } from '@/features/users/hooks';
 import { formatUserDisplayName } from '@/lib/current-user';
 import { Markdown } from './Markdown';
 import { ConversationRef } from './ConversationRef';
@@ -44,6 +45,20 @@ import { TaskRef } from './TaskRef';
 import { useRelativeTime } from './useRelativeTime';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
+
+/**
+ * Shared hook: build a resolver that maps `user_id` → display name.
+ *
+ * Used by every SystemMessage subtype renderer that surfaces a `user_id`
+ * (quotes, audit lines, task events, …). Lives here so each renderer
+ * doesn't repeat the `useUsersById + makeUserNameResolver` pair (multi-human
+ * audit 2026-06-03 #task:857 P0.10). React Query memoizes the underlying
+ * /api/users query so subscribing from multiple sub-components is free.
+ */
+function useUserResolver(): ReturnType<typeof makeUserNameResolver> {
+  const usersById = useUsersById();
+  return useMemo(() => makeUserNameResolver(usersById), [usersById]);
+}
 
 interface SystemMessageProps {
   message: MessageDto;
@@ -266,9 +281,13 @@ function MentionCcCard({
   // copy is present so we don't pay the round-trip on new rows.
   const { data: fetched } = useMessage(inlineOriginal ? null : sourceMessageId);
   const original = inlineOriginal ?? fetched?.message.content ?? null;
+  const userResolver = useUserResolver();
   const sourceUserLabel =
     sourceFromKind === 'user' || fetched?.message.from_kind === 'user'
-      ? formatUserDisplayName(sourceFromUserId ?? fetched?.message.from_user_id)
+      ? formatUserDisplayName(
+          sourceFromUserId ?? fetched?.message.from_user_id,
+          userResolver,
+        )
       : 'user';
 
   return (
@@ -370,8 +389,9 @@ function SessionClearedRow({
   // `formatUserDisplayName`. Run the helper only when the id is set;
   // otherwise render a generic "a user" so the audit row doesn't
   // misattribute the action to the current viewer.
+  const userResolver = useUserResolver();
   const actorLabel = meta.actor_user_id
-    ? `@${formatUserDisplayName(meta.actor_user_id)}`
+    ? `@${formatUserDisplayName(meta.actor_user_id, userResolver)}`
     : 'a user';
   return (
     <div
@@ -616,8 +636,9 @@ function TaskEventRowEnriched({
 }: {
   meta: TaskSystemMetadata;
 }): JSX.Element {
+  const userResolver = useUserResolver();
   const actorLabel = meta.actor.kind === 'user'
-    ? `@${formatUserDisplayName(meta.actor.id) || meta.actor.name || 'user'}`
+    ? `@${formatUserDisplayName(meta.actor.id, userResolver) || meta.actor.name || 'user'}`
     : `@${meta.actor.name}`;
 
   const dotKind: TaskEventDotKind =
@@ -1088,6 +1109,7 @@ function ThreadAnchorCard(props: RendererProps): JSX.Element {
   const meta = readThreadAnchorMetadata(
     (props.message.metadata ?? null) as Record<string, unknown> | null,
   );
+  const userResolver = useUserResolver();
   if (!meta) {
     return (
       <ContextCardLegacyFallback
@@ -1099,7 +1121,7 @@ function ThreadAnchorCard(props: RendererProps): JSX.Element {
   }
   return (
     <ContextCardShell
-      model={threadAnchorModel(meta)}
+      model={threadAnchorModel(meta, userResolver)}
       conversationRefsById={props.conversationRefsById}
       onOpenConversationRef={props.onOpenConversationRef}
       channelsByName={props.channelsByName}
@@ -1109,14 +1131,17 @@ function ThreadAnchorCard(props: RendererProps): JSX.Element {
   );
 }
 
-function threadAnchorModel(meta: ThreadAnchorMetadata): ContextCardModel {
+function threadAnchorModel(
+  meta: ThreadAnchorMetadata,
+  userResolver?: ReturnType<typeof makeUserNameResolver>,
+): ContextCardModel {
   let authorLabel: string;
   if (meta.quoted_from_kind === 'agent') {
     authorLabel = meta.quoted_agent_name
       ? `@${meta.quoted_agent_name}`
       : '@agent';
   } else if (meta.quoted_from_kind === 'user') {
-    authorLabel = `@${formatUserDisplayName(meta.quoted_from_user_id)}`;
+    authorLabel = `@${formatUserDisplayName(meta.quoted_from_user_id, userResolver)}`;
   } else {
     authorLabel = 'system';
   }

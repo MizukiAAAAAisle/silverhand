@@ -27,10 +27,10 @@ describe('parseAppearance', () => {
   });
 
   it('falls back to the current default theme when input is missing or bad', () => {
-    expect(parseAppearance(null)).toEqual({ theme: 'warm-script' });
-    expect(parseAppearanceJson('{bad json')).toEqual({ theme: 'warm-script' });
+    expect(parseAppearance(null)).toEqual({ theme: 'forza6' });
+    expect(parseAppearanceJson('{bad json')).toEqual({ theme: 'forza6' });
     expect(parseAppearance({ theme: 'unknown' })).toEqual({
-      theme: 'warm-script',
+      theme: 'forza6',
     });
   });
 
@@ -114,15 +114,15 @@ describe('theme markdown token cascade contract', () => {
     );
 
     expect(themeImports).toEqual([
-      'warm-script.css',
       'forza6.css',
+      'warm-script.css',
       'forza6-components.css',
     ]);
   });
 
   it('keeps :root only on the default theme', () => {
-    expect(warmScriptCss).toContain(':root,\n[data-theme=\'warm-script\']');
-    expect(forza6Css).not.toContain(':root');
+    expect(forza6Css).toContain(':root,\n[data-theme=\'forza6\']');
+    expect(warmScriptCss).not.toContain(':root');
   });
 
   it('defaults prose and code markdown font sizes to 12px in every theme', () => {

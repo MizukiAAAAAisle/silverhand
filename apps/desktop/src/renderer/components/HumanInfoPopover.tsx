@@ -34,8 +34,10 @@ interface HumanInfoPopoverProps {
    * - `undefined` (omitted) — no avatar URL provided; render the
    *   placeholder. We do NOT fetch internally so high-frequency render
    *   sites (timeline message authors, inline `@mentions`, member
-   *   chips) don't fire one GET per instance. v1 single-human installs
-   *   wire this from `useViewerAvatarObjectUrl()` on the parent.
+   *   chips) don't fire one GET per instance. Parents typically pick
+   *   the source by viewer match: `useViewerAvatarObjectUrl()` for
+   *   the viewer, `useUserAvatarObjectUrl({ userId })` (or the batch
+   *   `useUserAvatarObjectUrls`) for any other human.
    * - `null` — parent looked it up and the human has no avatar (or it
    *   is still loading); render the placeholder.
    * - `string` — use the parent's blob URL directly.
@@ -52,8 +54,9 @@ const HOVER_CLOSE_DELAY_MS = 120;
  * else. Intentionally lighter than the agent popover: humans are not
  * processes, so there is no per-conversation presence line, no
  * crashed-retry affordance, no management actions, and no Joined date
- * (per shiki — single-human v1 invariant means "joined" carries no
- * information beyond the registration row itself).
+ * (per shiki — `joined_at` on workspace_users is back-fill / install
+ * noise; the right Joined surface, if any, is per-conversation, not
+ * registration-row).
  *
  * Hover mode is implemented via controlled `open` rather than Radix's
  * separate HoverCard primitive to keep the dep surface narrow and

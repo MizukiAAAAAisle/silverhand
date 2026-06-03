@@ -3,13 +3,14 @@ import { COMMAND_GROUPS, findCommand, findGroup } from '../src/commands/index.js
 import type { BackendClient } from '../src/client.js';
 
 describe('command catalogue', () => {
-  it('exposes the seven nouns we promised in the prompt', () => {
+  it('exposes the eight nouns we promised in the prompt', () => {
     const nouns = COMMAND_GROUPS.map(g => g.noun);
     expect(nouns).toEqual([
       'message',
       'task',
       'thread',
       'channel',
+      'member',
       'workspace',
       'schedule',
       'file',
@@ -17,7 +18,7 @@ describe('command catalogue', () => {
   });
 
   it('matches every MCP tool with exactly one CLI verb', () => {
-    // The 18 backend internal routes that MCP currently exposes.
+    // The 19 backend internal routes that MCP currently exposes.
     // If you add a route, add a CLI command, and add it here.
     const expected: Array<[string, string]> = [
       ['message', 'send'],
@@ -32,6 +33,7 @@ describe('command catalogue', () => {
       ['thread', 'close'],
       ['channel', 'create'],
       ['channel', 'list'],
+      ['member', 'add'],
       ['workspace', 'list'],
       ['schedule', 'create'],
       ['schedule', 'list'],
@@ -44,7 +46,7 @@ describe('command catalogue', () => {
       expect(cmd, `${noun} ${verb}`).toBeDefined();
     }
     const total = COMMAND_GROUPS.reduce((acc, g) => acc + g.commands.length, 0);
-    expect(total).toBe(18);
+    expect(total).toBe(19);
   });
 
   it('every command has a non-empty help block', () => {

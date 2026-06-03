@@ -15,7 +15,7 @@ function rowToDto(row: NotificationRow): NotificationDto {
 
 export interface InsertNotificationParams {
   kind: NotificationKind;
-  /** v1 single-user app passes NULL. Migration to multi-user backfills 'local'. */
+  /** Target registered viewer. NULL is legacy/unclaimed and is ignored by routes. */
   userId?: string | null;
   agentId?: string | null;
   workspaceId?: string | null;
@@ -67,11 +67,8 @@ export class NotificationRepo {
     return row ? rowToDto(row) : null;
   }
 
-  /**
-   * List notifications for `userId` (NULL for v1 single-user). When
-   * `unread` is true, only rows with `read_at IS NULL` come back.
-   * Always sorted newest-first; cap with `limit` (default 100).
-   */
+  /** List notifications for `userId`. Passing NULL/undefined is retained only
+   * for legacy repo tests and returns unclaimed legacy rows. */
   list(opts: { userId?: string | null; unread?: boolean; limit?: number } = {}): NotificationDto[] {
     const limit = opts.limit ?? 100;
     const whereParts: string[] = [];

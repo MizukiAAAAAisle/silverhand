@@ -908,6 +908,7 @@ export const HumanMemberDtoSchema = z.object({
   user_id: z.string(),
   name: z.string(),
   display_name: z.string(),
+  avatar_url: z.string().nullable(),
 });
 export type HumanMemberDto = z.infer<typeof HumanMemberDtoSchema>;
 

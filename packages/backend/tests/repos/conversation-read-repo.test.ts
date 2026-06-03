@@ -91,6 +91,35 @@ describe('ConversationReadRepo', () => {
     expect(reads.unreadCountsByWorkspace('local')).toEqual({ [workspace.id]: 3 });
   });
 
+  it('excludes conversations the viewer is not a member of from aggregates', () => {
+    const { workspace, db, messages, reads, channel, otherChannel } = bootstrap();
+
+    db.prepare(
+      `DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?`,
+    ).run(otherChannel.id, 'local');
+    messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      content: 'visible',
+    });
+    messages.insertForConversation({
+      conversationId: otherChannel.id,
+      fromKind: 'agent',
+      content: 'hidden',
+    });
+
+    expect(
+      reads.unreadCountsByConversationForWorkspace(workspace.id, 'local'),
+    ).toEqual({
+      by_conversation: { [channel.id]: 1 },
+      total: 1,
+    });
+    expect(reads.unreadCountsByWorkspace('local')).toEqual({ [workspace.id]: 1 });
+    expect(reads.unreadCountsByWorkspaceSidebar('local')).toEqual({
+      [workspace.id]: 1,
+    });
+  });
+
   it('advances the cursor to latest seq and never moves it backward', () => {
     const { messages, reads, channel } = bootstrap();
     const m1 = messages.insertForConversation({
@@ -133,4 +162,3 @@ describe('ConversationReadRepo', () => {
     expect(reads.unreadCountForConversation(channel.id, 'local')).toBe(0);
   });
 });
-

@@ -10,8 +10,10 @@
      chat read area stays cool-neutral white so long-stay reading isn't punished.
    - Border strategy: color-block (almost no 1px hairlines). Separation comes
      from saturation differences and the 8px frame gap, not strokes.
+   Default theme — also serves as :root so first paint has tokens.
    ================================================================ */
 
+:root,
 [data-theme='forza6'] {
   /* ════════════════════════════════════════════════════════════════
      L1 — RAW PALETTE (forza6 refactor #task:788, P1)

@@ -42,9 +42,12 @@ export class ConversationReadRepo {
     viewerUserId: string,
   ): MessageUnreadByConversation {
     const rows = this.db
-      .prepare<[string, string, string], { conversation_id: string; c: number }>(
+      .prepare<[string, string, string, string], { conversation_id: string; c: number }>(
         `SELECT c.id AS conversation_id, COUNT(m.id) AS c
            FROM conversations c
+           JOIN conversation_users cu
+             ON cu.conversation_id = c.id
+            AND cu.user_id = ?
            JOIN messages m
              ON m.conversation_id = c.id
             AND m.seq > COALESCE(
@@ -64,7 +67,7 @@ export class ConversationReadRepo {
           WHERE c.workspace_id = ?
           GROUP BY c.id`,
       )
-      .all(viewerUserId, viewerUserId, workspaceId);
+      .all(viewerUserId, viewerUserId, viewerUserId, workspaceId);
 
     const byConversation: Record<string, number> = {};
     let total = 0;
@@ -102,9 +105,12 @@ export class ConversationReadRepo {
 
   unreadCountsByWorkspace(viewerUserId: string): Record<string, number> {
     const rows = this.db
-      .prepare<[string, string], { workspace_id: string; c: number }>(
+      .prepare<[string, string, string], { workspace_id: string; c: number }>(
         `SELECT c.workspace_id AS workspace_id, COUNT(m.id) AS c
            FROM conversations c
+           JOIN conversation_users cu
+             ON cu.conversation_id = c.id
+            AND cu.user_id = ?
            JOIN messages m
              ON m.conversation_id = c.id
             AND m.seq > COALESCE(
@@ -123,7 +129,7 @@ export class ConversationReadRepo {
             )
           GROUP BY c.workspace_id`,
       )
-      .all(viewerUserId, viewerUserId);
+      .all(viewerUserId, viewerUserId, viewerUserId);
 
     const byWorkspace: Record<string, number> = {};
     for (const row of rows) byWorkspace[row.workspace_id] = row.c;
@@ -132,11 +138,14 @@ export class ConversationReadRepo {
 
   unreadCountsByWorkspaceSidebar(viewerUserId: string): Record<string, number> {
     const rows = this.db
-      .prepare<[string, string], { scope_id: string; c: number }>(
+      .prepare<[string, string, string], { scope_id: string; c: number }>(
         `SELECT
             c.workspace_id AS scope_id,
             COUNT(m.id) AS c
            FROM conversations c
+           JOIN conversation_users cu
+             ON cu.conversation_id = c.id
+            AND cu.user_id = ?
            JOIN messages m
              ON m.conversation_id = c.id
             AND m.seq > COALESCE(
@@ -155,7 +164,7 @@ export class ConversationReadRepo {
             )
           GROUP BY c.workspace_id`,
       )
-      .all(viewerUserId, viewerUserId);
+      .all(viewerUserId, viewerUserId, viewerUserId);
 
     const byScope: Record<string, number> = {};
     for (const row of rows) byScope[row.scope_id] = row.c;

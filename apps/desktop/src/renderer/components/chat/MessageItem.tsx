@@ -18,6 +18,7 @@ import {
 import {
   formatUserDisplayName,
   isCurrentUserId,
+  type UserNameResolver,
 } from '@/lib/current-user';
 import { Lightbox } from './Lightbox';
 import { Markdown } from './Markdown';
@@ -104,6 +105,12 @@ interface MessageItemProps {
    *  parent only passes this in once the export pipeline is live so
    *  the user never sees a half-baked Share entry (Cindy review). */
   onShare?: (msg: MessageDto) => void;
+  /** Resolve a `user_id` → display name for surfaces that don't already
+   *  carry the user dto (task assignees, foreign-author fallback). Built
+   *  by the parent from `useUsersById()` (multi-human audit 2026-06-03
+   *  #task:857 P0.10). Optional — when absent, formatUserDisplayName
+   *  falls back to the raw id, matching v1 behaviour. */
+  userResolver?: UserNameResolver;
 }
 
 /**
@@ -158,6 +165,7 @@ export function MessageItem({
   onToggleSelected,
   onCopyMarkdown,
   onShare,
+  userResolver,
 }: MessageItemProps): JSX.Element {
   const isUser = message.from_kind === 'user';
   const isCurrentUser = isUser && isCurrentUserId(message.from_user_id);
@@ -190,7 +198,7 @@ export function MessageItem({
       )
     : null;
   const name = isUser
-    ? human?.name ?? formatUserDisplayName(message.from_user_id)
+    ? human?.name ?? formatUserDisplayName(message.from_user_id, userResolver)
     : agent?.name ?? 'agent';
   const displayLabel = isUser
     ? human?.display_name?.trim() || name
@@ -205,7 +213,13 @@ export function MessageItem({
     (userId: string) => toMembersUser(userId),
     [toMembersUser],
   );
-  const taskTag = <TaskMetaTag message={message} agentsById={agentsById} />;
+  const taskTag = (
+    <TaskMetaTag
+      message={message}
+      agentsById={agentsById}
+      userResolver={userResolver}
+    />
+  );
   const [hover, setHover] = useState(false);
   // React-driven focus-within: tracking it as state and OR-ing into
   // the visibility class is more reliable than relying on Tailwind's
@@ -462,14 +476,16 @@ const TASK_STATUS_LABELS: Record<NonNullable<MessageDto['task_status']>, string>
 function TaskMetaTag({
   message,
   agentsById,
+  userResolver,
 }: {
   message: MessageDto;
   agentsById: Map<string, AgentDto>;
+  userResolver?: UserNameResolver;
 }): JSX.Element | null {
   if (message.task_number === null) return null;
 
   const assignee = message.task_assignee
-    ? formatTaskAssignee(message.task_assignee, agentsById)
+    ? formatTaskAssignee(message.task_assignee, agentsById, userResolver)
     : null;
   const status = message.task_status
     ? TASK_STATUS_LABELS[message.task_status]
@@ -500,9 +516,10 @@ function TaskMetaTag({
 function formatTaskAssignee(
   assignee: NonNullable<MessageDto['task_assignee']>,
   agentsById: Map<string, AgentDto>,
+  userResolver?: UserNameResolver,
 ): string {
   if (assignee.type === 'user') {
-    return formatUserDisplayName(assignee.id);
+    return formatUserDisplayName(assignee.id, userResolver);
   }
   const agent = agentsById.get(assignee.id);
   const name = (

@@ -8,12 +8,12 @@
    purely by source order. Reordering imports without also updating
    `DEFAULT_APPEARANCE` (or vice versa) silently leaks the late
    default's tokens into other themes; do both together. */
-@import "./themes/warm-script.css";
 @import "./themes/forza6.css";
+@import "./themes/warm-script.css";
 
 /* Forza6-only component-layer specialization. Every selector inside is
-   `[data-theme='forza6']`-scoped; warm-three themes are pixel-identical
-   before and after this import. Must come AFTER forza6.css so token
+   `[data-theme='forza6']`-scoped; warm-script is pixel-identical before
+   and after this import. Must come AFTER forza6.css so token
    re-assignments inside it (`--bg-channels-sidebar` deep teal etc.)
    beat the PR-1 light-pink defaults. */
 @import "./themes/forza6-components.css";

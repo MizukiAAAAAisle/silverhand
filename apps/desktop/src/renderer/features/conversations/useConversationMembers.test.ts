@@ -16,6 +16,7 @@ const sampleMembers: MemberDto[] = [
     user_id: 'usr_local',
     name: 'shiki',
     display_name: 'shiki',
+    avatar_url: null,
   },
 ];
 

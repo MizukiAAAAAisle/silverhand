@@ -1278,11 +1278,17 @@ const AgentMaterializeIpcErrorSchema = z
 //     in the daemon registry (legacy row never provisioned / never
 //     read-path-backfilled). Recoverable: the backend may backfill via
 //     `workspace_provision` and retry.
+//   - `workspace_path_missing`: the daemon resolved a semantic workspace
+//     ref, but the host-local path no longer exists or is not a directory
+//     (for example an old agent_home row created under another
+//     `SILVERHAND_DIR`). Not recoverable by registry backfill; the local
+//     files need to be restored/materialized.
 //   - `registry_unavailable`: the registry itself can't be consulted
 //     (daemon not attached to a control plane, or foreign/corrupt
 //     registry file). Hard fail-closed.
 export const RuntimeStartErrorCodeSchema = z.enum([
   'workspace_not_provisioned',
+  'workspace_path_missing',
   'registry_unavailable',
 ]);
 export type RuntimeStartErrorCode = z.infer<typeof RuntimeStartErrorCodeSchema>;
@@ -1777,7 +1783,8 @@ export const intentSchemas = {
     result: RuntimeStartResultSchema,
     // D4.e-6 — daemon now resolves all paths and fails closed on
     // unresolvable workspaces; the typed taxonomy lets the backend
-    // tell `workspace_not_provisioned` (backfill + retry) from
+    // tell `workspace_not_provisioned` (backfill + retry),
+    // `workspace_path_missing` (host-local files missing), and
     // `registry_unavailable` (hard fail) apart from a generic
     // `internal_error`. Per-command scoped like agent_materialize.
     error: RuntimeStartIpcErrorSchema,

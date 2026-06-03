@@ -4,6 +4,7 @@ import dayjs from 'dayjs';
 import type { SavedMessageDto } from '@silverhand/shared';
 import { Markdown } from '@/components/chat/Markdown';
 import { useSavedMessages, useUnsaveMessage } from '@/features/saved/hooks';
+import { useUsersById, makeUserNameResolver } from '@/features/users/hooks';
 import { formatUserDisplayName } from '@/lib/current-user';
 
 interface SavedListViewProps {
@@ -83,13 +84,18 @@ function SavedItem({
   onUnsave: () => void;
 }): JSX.Element {
   const [hover, setHover] = useState(false);
+  // Multi-human audit 2026-06-03 #task:857 P0.10: resolve the saved
+  // message's author against the global directory so it renders as the
+  // human's display name instead of a raw uuid.
+  const usersById = useUsersById();
+  const userResolver = useMemo(() => makeUserNameResolver(usersById), [usersById]);
   const sender = useMemo(() => {
     if (item.message.from_kind === 'user') {
-      return formatUserDisplayName(item.message.from_user_id);
+      return formatUserDisplayName(item.message.from_user_id, userResolver);
     }
     if (item.agent_name) return `@${item.agent_name}`;
     return '@agent';
-  }, [item]);
+  }, [item, userResolver]);
   const when = useMemo(
     () => dayjs(item.saved_at).format('YYYY-MM-DD HH:mm'),
     [item.saved_at],

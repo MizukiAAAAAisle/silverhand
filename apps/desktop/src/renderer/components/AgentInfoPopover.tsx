@@ -8,7 +8,12 @@ import {
   useStartAgent,
   useStopAgent,
 } from '@/features/channels/hooks';
+import { canEditAgentProfile } from '@/features/agents/permissions';
 import { useAgentAvatarObjectUrl } from '@/features/agents/avatar-hooks';
+import {
+  isBackendUnreachable,
+  useViewerUser,
+} from '@/features/me/hooks';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -292,9 +297,13 @@ function AgentManagementActions({
   const start = useStartAgent(conversationId, routeKind);
   const stop = useStopAgent(conversationId, routeKind);
   const clearSession = useClearAgentSession(conversationId, routeKind);
+  const { data: viewer } = useViewerUser();
   const [clearOpen, setClearOpen] = useState(false);
   const row = conversationAgents.find(s => s.agent_id === agent.id);
   if (!row) return null;
+  const viewerForPermissions =
+    viewer && isBackendUnreachable(viewer) ? undefined : viewer;
+  if (!canEditAgentProfile(viewerForPermissions, agent)) return null;
 
   const pending = start.isPending || stop.isPending || clearSession.isPending;
   const agentLabel = `@${agent.name}`;
@@ -307,7 +316,11 @@ function AgentManagementActions({
     if (row.status === 'active' || row.status === 'starting') {
       await stop.mutateAsync({ agentId: agent.id, mode: 'hard' });
     }
-    await start.mutateAsync(agent.id);
+    try {
+      await start.mutateAsync(agent.id);
+    } catch {
+      // useStartAgent owns the visible toast; suppress the rejected click promise.
+    }
   };
   const stopAgent = (): void => {
     if (pending) return;
