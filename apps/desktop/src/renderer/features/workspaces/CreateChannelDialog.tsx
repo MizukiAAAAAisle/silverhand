@@ -21,6 +21,33 @@ import { useCreateChannel, useWorkspaceMemberLists } from './hooks';
 // create a new reference every render when the query hasn't resolved yet.
 const EMPTY_MEMBERS = { agents: [], humans: [] } as const;
 
+interface SeedMembersInput {
+  members: { agents: ReadonlyArray<{ id: string }>; humans: ReadonlyArray<{ id: string }> };
+  viewerUserId: string;
+}
+
+/**
+ * Pure helper that decides which agent / human ids to auto-seed into
+ * the "new channel" picker. Exported separately for unit testing
+ * (Cindy #task:890): the caller is responsible for gating on
+ * `viewerUserId !== null`; if the viewer is unknown we must NOT seed,
+ * because filtering against null would leak the viewer into
+ * `selectedHumans` and the downstream candidate list excludes them
+ * (creating a re-render orphan tag). Once the viewer id is in hand,
+ * the seed is "every workspace member except me".
+ */
+export function computeChannelSeedSelection(input: SeedMembersInput): {
+  agents: string[];
+  humans: string[];
+} {
+  return {
+    agents: input.members.agents.map(m => m.id),
+    humans: input.members.humans
+      .filter(m => m.id !== input.viewerUserId)
+      .map(m => m.id),
+  };
+}
+
 interface CreateChannelDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -77,7 +104,16 @@ export function CreateChannelDialog({
     if (seededOnceRef.current) return;
     if (isDm) return;
     const totalMembers = members.agents.length + members.humans.length;
-    if (totalMembers === 0) return; // wait for the query to land
+    if (totalMembers === 0) return; // wait for the members query to land
+    // Cindy review #task:890: wait for `viewerUserId` to resolve before
+    // seeding. If we seed against `viewerUserId === null` the
+    // `filter(m => m.id !== null)` is a no-op and the viewer ends up in
+    // `selectedHumans`. Once `candidates` later excludes the viewer
+    // (which it does unconditionally), that selected key becomes an
+    // orphan tag rendered as `id.slice(0, 8)`. Worse, the seed ref is
+    // already latched so we never self-correct. Gate the seed on the
+    // viewer id being known.
+    if (viewerUserId === null) return;
     // Auto-seed every workspace agent + every workspace human EXCEPT
     // the viewer themselves — the backend always unions the creator
     // into the channel member set (`channel-service.ts`:
@@ -85,12 +121,9 @@ export function CreateChannelDialog({
     // so the viewer is effectively forced. Per shiki #task:888 we don't
     // surface that forced membership as a deselectable chip; the picker
     // only lists the candidates the user actually controls.
-    setSelectedAgents(members.agents.map(m => m.id));
-    setSelectedHumans(
-      members.humans
-        .filter(m => m.id !== viewerUserId)
-        .map(m => m.id),
-    );
+    const seed = computeChannelSeedSelection({ members, viewerUserId });
+    setSelectedAgents(seed.agents);
+    setSelectedHumans(seed.humans);
     seededOnceRef.current = true;
   }, [open, isDm, members, viewerUserId]);
 
