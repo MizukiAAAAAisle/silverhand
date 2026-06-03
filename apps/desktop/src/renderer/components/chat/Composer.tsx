@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useEffect,
   useMemo,
   useRef,
@@ -24,6 +25,11 @@ import { useConversationById } from '@/features/conversations/useConversationByI
 import { useConversationMembers } from '@/features/conversations/useConversationMembers';
 import { useSendMessage } from '@/features/channels/hooks';
 import { useUsers } from '@/features/users/hooks';
+import {
+  isBackendUnreachable,
+  isRegistrationRequired,
+  useViewerUser,
+} from '@/features/me/hooks';
 import {
   clearComposerDraft,
   dropSentAttachmentsFromDraft,
@@ -240,24 +246,53 @@ export function Composer({
     return m;
   }, [users]);
   const conversationMembers = useConversationMembers(conversationId);
+  // #task:876 (2026-06-03): the viewer's own row in the mention picker
+  // is noise — you can't @-mention yourself meaningfully. Resolve the
+  // viewer id once so the human candidate list filter below can drop
+  // it. `useViewerUser()` returns either the resolved UserDto or the
+  // registration-required / backend-unreachable arms; we only need the
+  // id, which only exists on the UserDto arm.
+  const viewerQuery = useViewerUser();
+  const viewerId =
+    viewerQuery.data
+    && !isRegistrationRequired(viewerQuery.data)
+    && !isBackendUnreachable(viewerQuery.data)
+      ? viewerQuery.data.id
+      : null;
+  // Membership sets used to split the mention picker into
+  // "IN THIS CHANNEL/THREAD" vs "NOT IN" groups (#task:876). Empty
+  // sets while conversationMembers is still loading collapse the
+  // picker to the NOT IN section by default; once it resolves the
+  // viewer sees the proper split.
+  const { agentMemberIds, humanMemberIds } = useMemo(() => {
+    const a = new Set<string>();
+    const h = new Set<string>();
+    if (conversationMembers.status === 'resolved') {
+      for (const member of conversationMembers.members) {
+        if (member.kind === 'agent') a.add(member.agent_id);
+        else if (member.kind === 'human') h.add(member.user_id);
+      }
+    }
+    return { agentMemberIds: a, humanMemberIds: h };
+  }, [conversationMembers.status, conversationMembers.members]);
+  // Human mention candidate list = global users directory (D3),
+  // minus the viewer. Membership against this conversation is folded
+  // in by the picker's grouping pass downstream, not pre-filtered out
+  // (the picker now shows NOT IN candidates so the mention-cc DM
+  // path stays discoverable — see #task:864 / mention_cc fix series).
   const mentionHumans = useMemo<HumanMentionCandidate[]>(() => {
-    if (conversationMembers.status !== 'resolved') return [];
     const out: HumanMentionCandidate[] = [];
-    const seen = new Set<string>();
-    for (const member of conversationMembers.members) {
-      if (member.kind !== 'human') continue;
-      if (seen.has(member.user_id)) continue;
-      seen.add(member.user_id);
-      const user = usersById.get(member.user_id);
+    for (const user of users) {
+      if (viewerId && user.id === viewerId) continue;
       out.push({
-        id: member.user_id,
-        name: user?.name ?? member.name,
-        display_name: user?.display_name ?? member.display_name,
-        avatar_url: user?.avatar_url ?? null,
+        id: user.id,
+        name: user.name,
+        display_name: user.display_name,
+        avatar_url: user.avatar_url ?? null,
       });
     }
     return out;
-  }, [conversationMembers.status, conversationMembers.members, usersById]);
+  }, [users, viewerId]);
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const humanAvatarUrls = useUserAvatarObjectUrls(mentionHumans);
   // `#` autocomplete is scoped to the *current* conversation's
@@ -283,10 +318,23 @@ export function Composer({
   const items = useMemo<PickerItem[]>(() => {
     if (!trigger) return [];
     if (trigger.kind === '@') {
-      return filterMentionPeople(agents, mentionHumans, trigger.query);
+      return filterMentionPeople(
+        agents,
+        mentionHumans,
+        agentMemberIds,
+        humanMemberIds,
+        trigger.query,
+      );
     }
     return filterChannels(workspaceChannels, trigger.query);
-  }, [trigger, agents, mentionHumans, workspaceChannels]);
+  }, [
+    trigger,
+    agents,
+    mentionHumans,
+    agentMemberIds,
+    humanMemberIds,
+    workspaceChannels,
+  ]);
 
   const [active, setActive] = useState(0);
   // Keep the highlight in range as the candidate list shrinks/grows.
@@ -565,6 +613,7 @@ export function Composer({
             onHover={setActive}
             agentAvatarUrls={agentAvatarUrls}
             humanAvatarUrls={humanAvatarUrls}
+            routeKind={routeKind}
           />
         ) : null}
         {/* Composer shell: border + bg + focus-ring live on the
@@ -795,20 +844,35 @@ export interface HumanMentionCandidate {
 }
 
 export type PickerItem =
-  | { kind: 'agent'; agent: AgentDto }
-  | { kind: 'human'; human: HumanMentionCandidate }
+  | { kind: 'agent'; agent: AgentDto; inConversation: boolean }
+  | { kind: 'human'; human: HumanMentionCandidate; inConversation: boolean }
   | { kind: 'channel'; channel: ChannelConversationDto };
 
+/**
+ * Filter and group the mention picker candidate set.
+ *
+ * Grouping (#task:876, 2026-06-03): rows are split into two visual
+ * sections by `inConversation` — "IN THIS CHANNEL/THREAD" rows first,
+ * then "NOT IN" rows underneath rendered in a dimmer text color. Each
+ * section is internally sorted humans-first so multi-human installs
+ * surface the relevant humans before the agent fleet. The whole stack
+ * stays a flat `PickerItem[]` so keyboard nav (`active` index) doesn't
+ * have to skip section headers — `PickerMenu` inserts the divider
+ * before the first `!inConversation` row at render time.
+ *
+ * Caps: each section is capped at 5 (total max 10). When the IN
+ * section has fewer than 5 rows the NOT IN cap is unchanged — we
+ * don't expand it to backfill, because a too-tall picker hides the
+ * textarea behind the floating menu.
+ */
 export function filterMentionPeople(
   agents: AgentDto[],
   humans: HumanMentionCandidate[],
+  agentMemberIds: ReadonlySet<string>,
+  humanMemberIds: ReadonlySet<string>,
   query: string,
 ): PickerItem[] {
   const q = query.toLowerCase();
-  // Empty query — show everything (capped) so the menu acts as a
-  // browser when the user just types `@` to explore. Human members are
-  // shown first in that browser case so they are not hidden behind the
-  // global agent list cap.
   const matchedAgents = q
     ? agents.filter(a =>
         a.name.toLowerCase().includes(q) ||
@@ -821,16 +885,26 @@ export function filterMentionPeople(
         h.display_name.toLowerCase().includes(q),
       )
     : humans;
-  const agentItems: PickerItem[] = matchedAgents.map(agent => ({
-    kind: 'agent',
-    agent,
-  }));
-  const humanItems: PickerItem[] = matchedHumans.map(human => ({
-    kind: 'human',
-    human,
-  }));
-  return (q ? [...agentItems, ...humanItems] : [...humanItems, ...agentItems])
-    .slice(0, 8);
+  // Build the two sections. Each section orders humans before agents
+  // (mirrors the previous single-section ordering rule for empty
+  // queries) so user-attention lines up across both groups.
+  const inHumans: PickerItem[] = matchedHumans
+    .filter(h => humanMemberIds.has(h.id))
+    .map(human => ({ kind: 'human', human, inConversation: true }));
+  const inAgents: PickerItem[] = matchedAgents
+    .filter(a => agentMemberIds.has(a.id))
+    .map(agent => ({ kind: 'agent', agent, inConversation: true }));
+  const outHumans: PickerItem[] = matchedHumans
+    .filter(h => !humanMemberIds.has(h.id))
+    .map(human => ({ kind: 'human', human, inConversation: false }));
+  const outAgents: PickerItem[] = matchedAgents
+    .filter(a => !agentMemberIds.has(a.id))
+    .map(agent => ({ kind: 'agent', agent, inConversation: false }));
+  const PER_SECTION_CAP = 5;
+  return [
+    ...[...inHumans, ...inAgents].slice(0, PER_SECTION_CAP),
+    ...[...outHumans, ...outAgents].slice(0, PER_SECTION_CAP),
+  ];
 }
 
 /**
@@ -869,6 +943,7 @@ function PickerMenu({
   onHover,
   agentAvatarUrls,
   humanAvatarUrls,
+  routeKind,
 }: {
   items: PickerItem[];
   active: number;
@@ -876,50 +951,78 @@ function PickerMenu({
   onHover: (index: number) => void;
   agentAvatarUrls: Map<string, string | null>;
   humanAvatarUrls: Map<string, string | null>;
+  /** Drives the IN section header label — "IN THIS CHANNEL" vs
+   *  "IN THIS THREAD". Defaults to channel when omitted. */
+  routeKind?: 'channel' | 'thread';
 }): JSX.Element {
+  // #task:876 (2026-06-03): split header labels per section. We compute
+  // the boundary index here (first item with !inConversation) and let
+  // the map render a header chip just before that row. People-only
+  // sections; channel rows skip the headers entirely because there is
+  // no membership concept for channels in this picker (they're already
+  // workspace-scoped).
+  const headerBoundaryIndex = items.findIndex(
+    item => item.kind !== 'channel' && !item.inConversation,
+  );
+  const hasInSection = items.some(
+    item => item.kind !== 'channel' && item.inConversation,
+  );
+  const inHeader =
+    routeKind === 'thread' ? 'IN THIS THREAD' : 'IN THIS CHANNEL';
   return (
     <div
-      // Float above the textarea, left-aligned. Width is a fixed
-      // narrow 256px so a 4-field row (avatar / display_name / handle
-      // / runtime) doesn't drown in dead space — composer is ~600+px
-      // wide and the previous `left-0 right-0` made the menu look
-      // empty. We drop `right-0` and pin `w-64`; long display names
-      // fall back to truncate inside the row.
       className="absolute bottom-full left-0 mb-1.5 w-64 max-h-64 overflow-y-auto rounded-md border border-border bg-bg-floating p-1 shadow-lg"
-      // Stable hook for per-theme adaptation of the keyboard-active row
-      // fill. This is a hand-rolled floating panel, so it does NOT sit
-      // inside `[data-radix-popper-content-wrapper]` and misses the
-      // forza6 substitution that adapts every Radix popper. forza6
-      // targets `[data-composer-picker] [role='option'][aria-selected='true']`
-      // to repaint just the active row (container-level `--bg-hover`
-      // substitution leaks into `::-webkit-scrollbar-thumb`). See
-      // #task:505.
       data-composer-picker=""
       data-dropdown-frame
       role="listbox"
-      // Don't steal focus from the textarea on click — submit handler
-      // still needs the caret position to do the replacement.
       onMouseDown={e => e.preventDefault()}
     >
       {items.map((item, i) => (
-        <Row
-          key={rowKey(item)}
-          item={item}
-          active={i === active}
-          onPick={() => onPick(item)}
-          onHover={() => onHover(i)}
-          agentAvatarUrl={
-            item.kind === 'agent'
-              ? agentAvatarUrls.get(item.agent.id) ?? null
-              : null
-          }
-          humanAvatarUrl={
-            item.kind === 'human'
-              ? humanAvatarUrls.get(item.human.id) ?? null
-              : null
-          }
-        />
+        <Fragment key={rowKey(item)}>
+          {/* Section header — render BEFORE the row so the boundary
+              aligns with the first NOT IN entry. IN header only
+              renders when the IN section is non-empty AND we haven't
+              already passed it (i === 0 with at least one IN row). */}
+          {i === 0 && hasInSection ? (
+            <SectionHeader label={inHeader} />
+          ) : null}
+          {i === headerBoundaryIndex ? (
+            <SectionHeader label="NOT IN" />
+          ) : null}
+          <Row
+            item={item}
+            active={i === active}
+            onPick={() => onPick(item)}
+            onHover={() => onHover(i)}
+            agentAvatarUrl={
+              item.kind === 'agent'
+                ? agentAvatarUrls.get(item.agent.id) ?? null
+                : null
+            }
+            humanAvatarUrl={
+              item.kind === 'human'
+                ? humanAvatarUrls.get(item.human.id) ?? null
+                : null
+            }
+          />
+        </Fragment>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Pill-style section divider. Compact; uppercase tracking matches the
+ * sidebar's section labels so the picker feels of-a-piece with the
+ * surrounding chrome.
+ */
+function SectionHeader({ label }: { label: string }): JSX.Element {
+  return (
+    <div
+      role="presentation"
+      className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wider text-text-muted"
+    >
+      {label}
     </div>
   );
 }
@@ -939,9 +1042,19 @@ function Row({
   agentAvatarUrl: string | null;
   humanAvatarUrl: string | null;
 }): JSX.Element {
+  // #task:876 (2026-06-03): NOT IN rows are dimmed — shiki "NOT IN 的
+  // 颜色浅一点". Channels don't carry an inConversation flag, so they're
+  // always at full opacity. We use a single `opacity-60` wrapper rather
+  // than swapping every text color: it pulls the avatar, primary name,
+  // and meta line down together, and `active` (keyboard/hover) still
+  // overrides with the brighter `bg-bg-hover text-text-primary` pair so
+  // the user always sees which row will commit on Enter.
+  const dimmed =
+    (item.kind === 'agent' || item.kind === 'human') && !item.inConversation;
   const cls =
     'flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left ' +
-    (active ? 'bg-bg-hover text-text-primary' : 'text-text-secondary');
+    (active ? 'bg-bg-hover text-text-primary' : 'text-text-secondary')
+    + (dimmed && !active ? ' opacity-60' : '');
   // Keep the keyboard-highlighted row inside the scrollable menu.
   // Without this, ↑/↓ past the menu's visible window leaves the
   // selection invisible — the user has no idea their arrow press
