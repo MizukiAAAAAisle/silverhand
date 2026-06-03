@@ -78,6 +78,10 @@ import {
   readDaemonProxyConfig,
   writeDaemonProxyConfig,
 } from './proxy-config.js';
+import {
+  resolveLocalSilverhandCliLauncher,
+  type SilverhandCliLauncher,
+} from './silverhand-cli-launcher.js';
 
 export interface RunDaemonOptions {
   /** Absolute path where the daemon should bind its Unix socket. */
@@ -212,6 +216,7 @@ export interface RunDaemonOptions {
          */
         runtimeStartResolveDeps: RuntimeStartResolveDeps;
         proxyConfigPath: string | null;
+        localSilverhandCliLauncher: SilverhandCliLauncher | null;
       }) => SupervisorContract)
     | null;
   /**
@@ -318,6 +323,21 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
       alsoStderr: opts.alsoStderr ?? false,
       base: { component: 'silverhand-daemon', daemon_version: DAEMON_VERSION },
     });
+  const localSilverhandCliLauncher = resolveLocalSilverhandCliLauncher();
+  if (localSilverhandCliLauncher) {
+    logger.info(
+      {
+        command: localSilverhandCliLauncher.command,
+        args: localSilverhandCliLauncher.args,
+      },
+      'daemon local silverhand CLI launcher resolved',
+    );
+  } else if (opts.supervisorFactory) {
+    logger.warn(
+      {},
+      'daemon local silverhand CLI launcher unavailable; server fallback launcher may be used',
+    );
+  }
 
   const claim = claimPidFile(opts.pidFilePath);
   if (claim.status === 'conflict') {
@@ -484,6 +504,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         runtimePidRootDir,
         runtimeStartResolveDeps,
         proxyConfigPath: opts.proxyConfigPath ?? null,
+        localSilverhandCliLauncher,
       })
     : undefined;
   const dispatcher = new IntentDispatcher({

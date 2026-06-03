@@ -63,7 +63,7 @@ export interface OutboundRuntimeEventFanoutOptions {
   transport: () => OutboundFrameAdapter | null;
   logger: BackendLogger;
   workspacesRoot: string;
-  silverhandCli: SilverhandCliLauncher;
+  silverhandCli: SilverhandCliLauncher | null;
   agentTokens: AgentTokenStore;
   serverUrl: () => string;
   /**

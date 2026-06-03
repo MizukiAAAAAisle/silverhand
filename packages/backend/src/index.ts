@@ -165,7 +165,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   const listenPort = opts.listen?.port ?? 0;
   const logger = opts.logger ?? consoleLogger;
   const silverhandCliLauncher =
-    opts.silverhandCliLauncher ?? DISABLED_SILVERHAND_CLI_LAUNCHER;
+    opts.mode === 'embedded' ? opts.silverhandCliLauncher : null;
   const loggers: BackendLoggers = {
     system: opts.loggers?.system ?? logger,
     agent: opts.loggers?.agent ?? logger,
@@ -252,7 +252,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   await blobStorage.ensureReady();
 
   if (opts.mode === 'embedded') {
-    assertLauncherResolvable(silverhandCliLauncher.command, 'silverhand CLI');
+    assertLauncherResolvable(opts.silverhandCliLauncher.command, 'silverhand CLI');
   }
 
   // Bootstrap: embedded desktop owns the local daemon-host identity.
@@ -755,11 +755,6 @@ function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
 }
-
-const DISABLED_SILVERHAND_CLI_LAUNCHER: SilverhandCliLauncher = {
-  command: 'silverhand',
-  args: [],
-};
 
 function resolveLogControl(logger: BackendLogger): LogLevelControl {
   const candidate = logger as BackendLogger & { logControl?: LogLevelControl };

@@ -373,7 +373,10 @@ const RuntimeStartEnvPolicySchema = z
         auth_token: z.string().min(1),
       })
       .strict(),
-    silverhand_cli: SilverhandCliLauncherSchema,
+    // Host-local truth in standalone mode: the control plane provides
+    // server URL/token, while the daemon resolves how to launch its own
+    // bundled CLI. Embedded backends may still send an explicit launcher.
+    silverhand_cli: SilverhandCliLauncherSchema.optional(),
   })
   .strict();
 

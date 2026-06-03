@@ -63,7 +63,11 @@ import {
 } from '../runtime-pidfiles.js';
 import { buildDaemonSpawnEnv } from '../spawn-env.js';
 import { readDaemonProxyConfig } from '../proxy-config.js';
-import { prepareSpawnFiles } from '../spawn-prep.js';
+import {
+  prepareSpawnFiles,
+  type SilverhandCliLauncher,
+} from '../spawn-prep.js';
+import { chooseSilverhandCliLauncher } from '../silverhand-cli-launcher.js';
 import type { SupervisorContract } from '../supervisor-contract.js';
 import type {
   ActivitySnippetKind,
@@ -178,6 +182,14 @@ export interface SupervisorOptions {
   daemonInstanceId?: string;
   runtimePidRootDir?: string | null;
   proxyConfigPath?: string | null;
+  /**
+   * Host-local launcher for the `silverhand` CLI shim exposed to runtimes.
+   * Standalone backend cannot know packaged/host-local paths, so the
+   * supervisor replaces only the backend's fallback `{command:'silverhand'}`
+   * launcher with this local value. Embedded backends still pass an explicit
+   * launcher and are left unchanged.
+   */
+  localSilverhandCliLauncher?: SilverhandCliLauncher | null;
   // ── 3c-b init watchdog + retry/cooldown + compaction knobs ──────
   //
   // Override precedence is fixed (Cindy `-pdNvRYOWip5e9yA`):
@@ -229,6 +241,7 @@ export class Supervisor implements SupervisorContract {
   private readonly daemonInstanceId: string | null;
   private readonly runtimePidRootDir: string | null;
   private readonly proxyConfigPath: string | null;
+  private readonly localSilverhandCliLauncher: SilverhandCliLauncher | null;
 
   // ── 3c-b state ─────────────────────────────────────────────────
   /** Sticky per-(conv, agent) init failure counter + cooldown clock.
@@ -266,6 +279,7 @@ export class Supervisor implements SupervisorContract {
     this.daemonInstanceId = opts.daemonInstanceId ?? null;
     this.runtimePidRootDir = opts.runtimePidRootDir ?? null;
     this.proxyConfigPath = opts.proxyConfigPath ?? null;
+    this.localSilverhandCliLauncher = opts.localSilverhandCliLauncher ?? null;
     this.initWatchdogMs = opts.initWatchdogMs ?? null;
     this.initLivenessSilenceMs = opts.initLivenessSilenceMs;
     this.initPreProtocolCapMs = opts.initPreProtocolCapMs;
@@ -395,17 +409,24 @@ export class Supervisor implements SupervisorContract {
     const promptCtx =
       await buildPromptContextFromRuntimeStartOptions(resolvedOptions);
     const systemPromptText = buildSystemPromptFor(runtimeKind, promptCtx);
+    const wireSilverhandCli = startOptions.env_policy.silverhand_cli;
+    const serverSilverhandCli: SilverhandCliLauncher | null = wireSilverhandCli
+      ? {
+          command: wireSilverhandCli.command,
+          args: wireSilverhandCli.args,
+          ...(wireSilverhandCli.env_vars
+            ? { env: wireSilverhandCli.env_vars }
+            : {}),
+        }
+      : null;
     const spawnPrep = await prepareSpawnFiles({
       conversationId: params.conversation_id,
       agentId: params.agent_id,
       systemPromptText,
-      silverhandCli: {
-        command: startOptions.env_policy.silverhand_cli.command,
-        args: startOptions.env_policy.silverhand_cli.args,
-        ...(startOptions.env_policy.silverhand_cli.env_vars
-          ? { env: startOptions.env_policy.silverhand_cli.env_vars }
-          : {}),
-      },
+      silverhandCli: chooseSilverhandCliLauncher({
+        serverLauncher: serverSilverhandCli,
+        localLauncher: this.localSilverhandCliLauncher,
+      }),
     });
 
     const spawnCtx = {

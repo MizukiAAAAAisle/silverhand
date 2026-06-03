@@ -281,6 +281,20 @@ describe('protocol — runtime_* registry', () => {
     expect(parsed.success).toBe(true);
   });
 
+  it('runtime_start.options allows omitting silverhand_cli for daemon-local launcher resolution', () => {
+    const { silverhand_cli: _silverhandCli, ...envPolicy } =
+      testStartOptions().env_policy;
+    const parsed = RuntimeStartParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: {
+        ...testStartOptions(),
+        env_policy: envPolicy,
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
   it('runtime_start rejects empty startup_delivery.delivery_ids', () => {
     const r = RuntimeStartParamsSchema.safeParse({
       conversation_id: 'c1',

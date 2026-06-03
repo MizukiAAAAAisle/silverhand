@@ -51,12 +51,11 @@ export interface BackendLoggers {
 }
 
 /**
- * Host-supplied way to launch the `silverhand` CLI.
+ * Host-supplied way to launch the `silverhand` CLI in embedded mode.
  *
- * The runtime host (`DaemonAgentRuntimeHost`, via the per-spawn prep
- * in `silverhand-daemon`) creates a per-spawn `bin/silverhand` shim
- * that forwards to this launcher so the agent sees one stable command
- * name on PATH in both dev and packaged builds.
+ * Standalone control-plane servers deliberately do not know this value:
+ * the daemon-host resolves its own packaged/dev CLI locally and exposes
+ * it through the per-spawn `bin/silverhand` shim.
  */
 export interface SilverhandCliLauncher {
   command: string;
@@ -150,7 +149,7 @@ export interface BackendContext {
   /** In-process pub/sub for live UI updates. */
   events: ScopeEventBus;
   /** How the per-spawn PATH shim should invoke the Silverhand CLI. */
-  silverhandCliLauncher: SilverhandCliLauncher;
+  silverhandCliLauncher: SilverhandCliLauncher | null;
   /** Per-process bearer tokens scoped to one agent/conversation runtime. */
   agentTokens: AgentTokenStore;
   /** Password credential storage and verification. */
