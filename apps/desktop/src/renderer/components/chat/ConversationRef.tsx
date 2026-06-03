@@ -85,10 +85,17 @@ export function ConversationRef({
     ? `${kindLabel(resolved.kind)} · ${conversationDisplayName(resolved)}`
     : `Open conversation #conv:${id}`;
   const icon = conversationIcon(resolved?.kind);
+  // Unresolved fallback (`#conv:<short>`) is pure ASCII → mono so the id
+  // segment reads as the structured atom it is. Resolved labels surface
+  // the human-readable title which may contain CJK, so they stay sans —
+  // mono CJK fallback (PingFang etc.) looks uneven next to ASCII chars.
+  // See forza6 font split spec (msg vWYNLYq_Wtw6P4rj).
   const chipBody = (
     <>
       {icon}
-      <span className="truncate">{label}</span>
+      <span className={resolved ? 'truncate' : 'truncate font-mono'}>
+        {label}
+      </span>
     </>
   );
 

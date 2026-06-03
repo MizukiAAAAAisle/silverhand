@@ -490,9 +490,6 @@ function TaskMetaTag({
   const status = message.task_status
     ? TASK_STATUS_LABELS[message.task_status]
     : null;
-  const label = assignee
-    ? `#${message.task_number} · ${assignee}`
-    : `#${message.task_number}`;
   const title = [
     `Task #${message.task_number}`,
     status,
@@ -508,7 +505,15 @@ function TaskMetaTag({
       className="ml-2 inline-flex h-5 max-w-[200px] items-center gap-1 border border-[var(--border-task-tag)] bg-[var(--bg-task-tag)] px-1.5 align-middle text-[11px] font-semibold leading-none text-[var(--text-on-task-tag)]"
     >
       <ClipboardCheck className="size-3 shrink-0" aria-hidden />
-      <span className="min-w-0 truncate">{label}</span>
+      {/* ASCII sigil (`#NNN`) in mono so the number lines up identically
+          across tags; the assignee handle stays sans because display_name
+          may contain CJK and mono CJK fallback (PingFang etc.) looks
+          uneven next to ASCII digits. See forza6 font split spec
+          (msg vWYNLYq_Wtw6P4rj). */}
+      <span className="min-w-0 truncate">
+        <span className="font-mono">#{message.task_number}</span>
+        {assignee ? <span> · {assignee}</span> : null}
+      </span>
     </span>
   );
 }

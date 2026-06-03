@@ -18,6 +18,8 @@
   },
   "dependencies": {
     "@fontsource/rajdhani": "^5.2.7",
+    "@fontsource/space-grotesk": "^5.2.10",
+    "@fontsource/space-mono": "^5.2.9",
     "@hono/node-server": "^1.13.2",
     "@node-rs/argon2": "^2.0.2",
     "@radix-ui/react-context-menu": "^2.2.16",

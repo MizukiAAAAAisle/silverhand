@@ -59,7 +59,9 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
         data-task-ref-state="no-context"
       >
         <ClipboardCheck className="size-3 shrink-0 self-center" />
-        <span className="truncate">{inertLabel}</span>
+        {/* Whole label is ASCII (`#task:NNN`) → mono everywhere on the
+            inert/loading/missing chips. See forza6 font split spec. */}
+        <span className="truncate font-mono">{inertLabel}</span>
       </span>
     );
   }
@@ -80,7 +82,7 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
         data-task-ref-state="loading"
       >
         <ClipboardCheck className="size-3 shrink-0 self-center" />
-        <span className="truncate">{inertLabel}</span>
+        <span className="truncate font-mono">{inertLabel}</span>
       </span>
     );
     return (
@@ -103,17 +105,25 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
         data-task-ref-state="missing"
       >
         <ClipboardCheck className="size-3 shrink-0 self-center" />
-        <span className="truncate">{inertLabel}</span>
+        <span className="truncate font-mono">{inertLabel}</span>
       </span>
     );
   }
 
   const label = `#${task.task_number} · ${task.title}`;
   const tooltip = `Task ${label}`;
+  // ASCII sigil (`#NNN`) renders in mono so numbers line up identically
+  // across chips; title stays sans because it may contain CJK and mono
+  // CJK fallback (PingFang etc.) looks uneven next to ASCII digits. See
+  // forza6 font split spec (msg vWYNLYq_Wtw6P4rj).
   const chipContent = (
     <>
       <ClipboardCheck className="size-3 shrink-0 self-center" />
-      <span className="truncate">{label}</span>
+      <span className="truncate">
+        <span className="font-mono">#{task.task_number}</span>
+        {' · '}
+        {task.title}
+      </span>
     </>
   );
 
