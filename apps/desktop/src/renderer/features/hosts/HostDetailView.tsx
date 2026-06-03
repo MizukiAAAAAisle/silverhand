@@ -57,8 +57,24 @@
  * invalidates the query key on click.
  */
 import { useQueryClient } from '@tanstack/react-query';
-import { Cpu, Globe, Loader2, Monitor, RefreshCw, Save } from 'lucide-react';
-import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
+import {
+  Check,
+  CheckCircle2,
+  Cpu,
+  Globe,
+  Loader2,
+  Monitor,
+  RefreshCw,
+  Save,
+} from 'lucide-react';
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+  type JSX,
+  type ReactNode,
+} from 'react';
 import type {
   AgentOnHostDto,
   HostDto,
@@ -75,6 +91,7 @@ import {
 } from '@/features/me/hooks';
 import { useNav } from '@/router';
 import { Button } from '@/components/ui/button';
+import { Input, Label } from '@/components/ui/input';
 import { cn } from '@/lib/cn';
 import {
   hostStatusKey,
@@ -119,7 +136,22 @@ const TONE_BANNER_CLASS: Record<HostStatusTone, string> = {
   muted: 'border-border-subtle text-text-secondary',
 };
 
-const PROXY_RUNTIMES: RuntimeKind[] = [...RuntimeKindSchema.options];
+/** Human label for each known runtime kind. The runtime *list* is
+ *  derived from `RuntimeKindSchema.options` so a new kind shipping in
+ *  shared can't silently drop out of the proxy form; the *label* table
+ *  is keyed by kind and any unknown kind falls back to title-cased
+ *  kind so the form still renders. Mirrors the labels the original
+ *  Settings ProxyPane used. */
+const RUNTIME_LABELS: Record<string, string> = {
+  claude: 'Claude',
+  codex: 'Codex',
+  cursor: 'Cursor',
+  gemini: 'Gemini',
+};
+function runtimeLabel(kind: RuntimeKind): string {
+  return RUNTIME_LABELS[kind] ?? kind.charAt(0).toUpperCase() + kind.slice(1);
+}
+const PROXY_RUNTIMES: readonly RuntimeKind[] = [...RuntimeKindSchema.options];
 
 export interface HostDetailViewProps {
   host: HostDto;
@@ -215,21 +247,22 @@ function ProxySection({
   const query = useHostProxyConfigQuery(hostId, { enabled: isLocalSelf });
   const saveMutation = useSaveHostProxyConfigMutation(hostId);
   const [proxyUrl, setProxyUrl] = useState('');
-  const [runtimes, setRuntimes] = useState<RuntimeKind[]>([]);
-  const [message, setMessage] = useState<string | null>(null);
-  const loadedConfig = query.data?.ok ? query.data.config : null;
-  const normalizedRuntimes = normalizeProxyRuntimes(runtimes);
-  const isDirty =
-    !loadedConfig
-    || (proxyUrl.trim() ? proxyUrl.trim() : null) !== loadedConfig.proxy_url
-    || normalizedRuntimes.join('\0')
-      !== normalizeProxyRuntimes(loadedConfig.proxy_runtimes).join('\0');
+  const [proxyRuntimes, setProxyRuntimes] = useState<Set<RuntimeKind>>(
+    () => new Set(),
+  );
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
+  // Seed local form state from the daemon-served config. Re-runs
+  // whenever the cached config refetches — keeps the form coherent if
+  // another window writes the file (a rare path; renderer is the only
+  // writer today, but the snapshot is shared so we still react to it).
   useEffect(() => {
     if (!query.data?.ok) return;
     setProxyUrl(query.data.config.proxy_url ?? '');
-    setRuntimes(normalizeProxyRuntimes(query.data.config.proxy_runtimes));
-    setMessage(null);
+    setProxyRuntimes(new Set(query.data.config.proxy_runtimes));
+    setError(null);
+    setSaved(false);
   }, [query.data]);
 
   if (!isLocalSelf) {
@@ -243,33 +276,52 @@ function ProxySection({
     );
   }
 
-  const toggleRuntime = (runtime: RuntimeKind): void => {
-    setMessage(null);
-    setRuntimes(prev =>
-      normalizeProxyRuntimes(
-        prev.includes(runtime)
-          ? prev.filter(value => value !== runtime)
-          : [...prev, runtime],
-      ),
-    );
+  const toggleRuntime = (kind: RuntimeKind, checked: boolean): void => {
+    setSaved(false);
+    setError(null);
+    setProxyRuntimes(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(kind);
+      else next.delete(kind);
+      return next;
+    });
   };
-  const submit = async (): Promise<void> => {
-    setMessage(null);
+
+  const proxyEnabled = proxyUrl.trim().length > 0;
+  const allChecked = PROXY_RUNTIMES.every(kind => proxyRuntimes.has(kind));
+
+  const handleSubmit = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    setError(null);
+    setSaved(false);
+    // Stable canonical order driven by `PROXY_RUNTIMES` so the
+    // persisted file doesn't churn just because the user clicked
+    // checkboxes in a different sequence.
+    const orderedRuntimes = PROXY_RUNTIMES.filter(kind =>
+      proxyRuntimes.has(kind),
+    );
     const config: HostProxyConfig = {
       proxy_url: proxyUrl.trim() ? proxyUrl.trim() : null,
-      proxy_runtimes: normalizedRuntimes,
+      proxy_runtimes: orderedRuntimes,
     };
     const result = await saveMutation.mutateAsync(config);
     if (result.ok) {
-      setMessage('Saved.');
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 1500);
     } else {
-      setMessage(result.message ?? `Could not save proxy (${result.code}).`);
+      setError(result.message ?? `Could not save proxy (${result.code}).`);
     }
   };
 
+  const settingsLoading = query.isLoading;
+  const saving = saveMutation.isPending;
+
   return (
     <HostSection title="Proxy">
-      {query.isLoading ? (
+      <p className="mb-4 text-xs leading-relaxed text-text-muted">
+        Proxy configuration is injected only into newly spawned agent processes.
+      </p>
+      {settingsLoading ? (
         <div className="flex items-center gap-2 text-sm text-text-muted">
           <Loader2 className="size-4 animate-spin" aria-hidden />
           <span>Loading proxy settings…</span>
@@ -284,80 +336,142 @@ function ProxySection({
           {query.data.message ?? `Could not load proxy (${query.data.code}).`}
         </Banner>
       ) : (
-        <form
-          className="flex flex-col gap-4"
-          onSubmit={event => {
-            event.preventDefault();
-            void submit();
-          }}
-        >
-          <label className="flex flex-col gap-1.5">
-            <span className="text-[11px] font-medium uppercase tracking-wider text-text-muted">
-              URL
-            </span>
-            <input
+        <form onSubmit={handleSubmit} className="grid gap-5">
+          <div className="grid gap-2">
+            <Label htmlFor="proxy-url">Proxy URL</Label>
+            <Input
+              id="proxy-url"
               value={proxyUrl}
               onChange={event => {
                 setProxyUrl(event.target.value);
-                setMessage(null);
+                setSaved(false);
+                setError(null);
               }}
-              placeholder="http://127.0.0.1:7890"
-              className="h-9 border border-border-subtle bg-bg-base px-3 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-text-primary"
+              placeholder="127.0.0.1:7897 / http://... / socks5://..."
+              disabled={settingsLoading}
             />
-          </label>
-          <div className="flex flex-col gap-2">
-            <span className="text-[11px] font-medium uppercase tracking-wider text-text-muted">
-              Runtimes
-            </span>
-            <div className="flex flex-wrap gap-2">
-              {PROXY_RUNTIMES.map(runtime => {
-                const checked = runtimes.includes(runtime);
+            <p className="text-xs leading-relaxed text-text-muted">
+              Expands into <code>http_proxy</code>, <code>https_proxy</code>,
+              and <code>all_proxy</code> for selected runtimes. A bare
+              host:port or <code>http://</code> value is treated as a
+              mixed-port proxy; <code>socks5://</code> only sets{' '}
+              <code>all_proxy</code>.
+            </p>
+          </div>
+
+          <div className="grid gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <Label>Enabled runtimes</Label>
+              <button
+                type="button"
+                disabled={!proxyEnabled}
+                className="text-xs font-medium text-text-muted hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={() => {
+                  setSaved(false);
+                  setError(null);
+                  setProxyRuntimes(
+                    allChecked ? new Set() : new Set(PROXY_RUNTIMES),
+                  );
+                }}
+              >
+                {allChecked ? 'Clear all' : 'Select all'}
+              </button>
+            </div>
+
+            <div
+              className={cn(
+                'grid gap-2 sm:grid-cols-2',
+                !proxyEnabled && 'opacity-55',
+              )}
+            >
+              {PROXY_RUNTIMES.map(kind => {
+                const checked = proxyRuntimes.has(kind);
                 return (
-                  <button
-                    key={runtime}
-                    type="button"
-                    onClick={() => toggleRuntime(runtime)}
+                  <label
+                    key={kind}
                     className={cn(
-                      'h-8 border px-3 text-xs font-medium uppercase tracking-wide transition-colors',
+                      'flex min-w-0 items-center gap-3 rounded-[var(--control-radius)] border px-3 py-2 transition-colors',
+                      proxyEnabled
+                        ? 'cursor-pointer'
+                        : 'cursor-not-allowed',
                       checked
-                        ? 'border-text-primary bg-text-primary text-bg-base'
-                        : 'border-border-subtle bg-bg-floating text-text-secondary hover:border-text-primary',
+                        ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))]'
+                        : 'border-border-subtle bg-bg-floating hover:bg-[var(--bg-option-hover)]',
                     )}
-                    aria-pressed={checked}
                   >
-                    {runtime}
-                  </button>
+                    <input
+                      type="checkbox"
+                      className="sr-only"
+                      checked={checked}
+                      onChange={event =>
+                        toggleRuntime(kind, event.target.checked)
+                      }
+                      disabled={!proxyEnabled}
+                    />
+                    <span
+                      className={cn(
+                        'flex size-4 shrink-0 items-center justify-center rounded-[4px] border',
+                        checked
+                          ? 'border-accent bg-accent text-text-on-accent'
+                          : 'border-border-subtle bg-bg-floating text-transparent',
+                      )}
+                      aria-hidden
+                    >
+                      <Check className="size-3" />
+                    </span>
+                    <AgentAvatar runtime={kind} size={22} />
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
+                      {runtimeLabel(kind)}
+                    </span>
+                    <span className="shrink-0 font-mono text-[11px] text-text-muted">
+                      {kind}
+                    </span>
+                  </label>
                 );
               })}
             </div>
+            {!proxyEnabled ? (
+              <p className="text-xs text-text-muted">
+                Add a Proxy URL before selecting runtimes.
+              </p>
+            ) : null}
           </div>
-          <div className="flex items-center gap-3">
+
+          {/* Save row sits inline with the form content rather than
+              pinned to a sticky footer — the original bottom anchor
+              was off-screen on shorter viewports and easy to miss. */}
+          <div className="flex items-center justify-between gap-4 pt-1">
+            <div className="min-w-0 text-xs">
+              {error ? (
+                <span className="text-error">{error}</span>
+              ) : saved ? (
+                <span className="inline-flex items-center gap-1.5 text-success">
+                  <CheckCircle2 className="size-3.5" />
+                  Saved
+                </span>
+              ) : (
+                <span className="text-text-muted">
+                  Proxy changes save to this computer.
+                </span>
+              )}
+            </div>
             <Button
               type="submit"
-              size="sm"
-              disabled={saveMutation.isPending || !isDirty}
+              disabled={saving || settingsLoading}
               className="gap-2"
             >
-              {saveMutation.isPending ? (
-                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              {saving ? (
+                <Loader2 className="size-3.5 animate-spin" />
               ) : (
-                <Save className="size-3.5" aria-hidden />
+                <Save className="size-3.5" />
               )}
-              Save
+              {saving ? 'Saving...' : 'Save settings'}
             </Button>
-            {message ? (
-              <span className="text-xs text-text-muted">{message}</span>
-            ) : null}
           </div>
         </form>
       )}
     </HostSection>
   );
-}
-
-function normalizeProxyRuntimes(values: RuntimeKind[]): RuntimeKind[] {
-  const selected = new Set(values);
-  return PROXY_RUNTIMES.filter(runtime => selected.has(runtime));
 }
 
 /* ─── Hero ──────────────────────────────────────────────────────── */
