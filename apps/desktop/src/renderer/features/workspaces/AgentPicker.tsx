@@ -137,7 +137,7 @@ export function MemberPicker({
               // render a minimal placeholder so the user can still
               // remove the orphan from `value`.
               return (
-                <li key={id}>
+                <li key={id} className="flex h-6">
                   <SelectedTag
                     avatar={null}
                     displayName={id.slice(0, 8)}
@@ -171,7 +171,7 @@ export function MemberPicker({
                 />
               );
             return (
-              <li key={id}>
+              <li key={id} className="flex h-6">
                 <SelectedTag
                   avatar={avatar}
                   displayName={displayName}
@@ -289,18 +289,20 @@ function SelectedTag({
   ariaRemoveLabel: string;
   muted?: boolean;
 }): JSX.Element {
-  // Fixed `h-6` (24px) so avatar variants (agent sigil vs human
-  // photo/tinted-fallback) cannot drive the chip height. Per shiki
-  // followup on #task:888: "高度不统一,建议设置一个固定高度,而不是
-  // 由内容决定,否则会受到头像影响". Avatar wrapper uses `h-full
-  // items-center` to center the 16px avatar inside the 24px frame
-  // regardless of the avatar primitive's internal box; text uses
-  // `leading-none` so text-xs / [11px] line-heights don't add stray
-  // baseline space inside the fixed frame.
+  // Chip frame is sized by the parent `<li>` (`flex h-6`); the chip
+  // span uses `h-full` to fill it edge-to-edge so the chip background
+  // never reveals a stripe of `<li>` above/below it. Avatar wrapper
+  // also uses `h-full items-center` so the 16px avatar centers in
+  // the 24px frame regardless of which avatar primitive (sigil /
+  // photo / tinted square) renders inside. `leading-none` strips
+  // text-xs's intrinsic line-height padding from the visual frame.
+  // Per shiki followup on #task:888: "高度不统一,建议设置一个固定
+  // 高度,而不是由内容决定,否则会受到头像影响" + "li 是 24px 了,但
+  // 是内部的 span 没有撑满高度".
   return (
     <span
       className={
-        'inline-flex h-6 max-w-full items-center gap-1.5 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base pl-1 pr-1 text-xs leading-none '
+        'inline-flex h-full max-w-full items-center gap-1.5 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base pl-1 pr-1 text-xs leading-none '
         + (muted ? 'text-text-muted' : 'text-text-primary')
       }
     >
