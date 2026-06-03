@@ -216,7 +216,7 @@ button:disabled { cursor: not-allowed; }
   line-height: 1.55;
   overflow-wrap: anywhere;
   font-family: var(--appearance-prose-font, var(--font-sans));
-  font-size: var(--appearance-markdown-font-size, var(--md-prose-size, 13px));
+  font-size: var(--appearance-markdown-font-size, var(--md-prose-size, 14px));
 }
 .markdown-body > *:first-child { margin-top: 0; }
 .markdown-body > *:last-child { margin-bottom: 0; }
@@ -659,7 +659,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   padding: 0.08em 0.36em;
   margin-inline: 0.15em;
   font-family: var(--appearance-code-font, var(--font-mono));
-  font-size: var(--appearance-markdown-font-size, var(--md-code-size, 13px));
+  font-size: var(--appearance-markdown-font-size, var(--md-code-size, 14px));
   color: var(--text-inline-code);
   background: var(--bg-inline-code);
   border: var(--border-inline-code);
@@ -720,7 +720,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border-radius: 0;
   color: var(--text-island);
   font-family: var(--appearance-code-font, var(--font-mono));
-  font-size: var(--appearance-markdown-font-size, var(--md-code-size, 13px));
+  font-size: var(--appearance-markdown-font-size, var(--md-code-size, 14px));
   line-height: 1.5;
 }
 .markdown-body .code-block--expanded pre {

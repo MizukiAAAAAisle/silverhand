@@ -1015,8 +1015,10 @@ describe('SystemMessage task event rows (PR-2)', () => {
     // the chip) crops at large prose sizes too — the chrome must
     // grow with the prose size. Fix: both chip and pill get their
     // height from `.system-message-row { --system-message-control-height:
-    // max(18px, calc(var(--md-prose-size, 13px) * 1.5)) }` applied via
-    // attribute selectors. SSR can't resolve CSS variables, so this
+    // max(18px, calc(var(--system-message-size, 12px) * 1.5)) }` applied
+    // via attribute selectors. (forza6 字体 v5 拆出独立 system-message
+    // 12px baseline,所以这里读 `--system-message-size`,不再读
+    // `--md-prose-size`。) SSR can't resolve CSS variables, so this
     // test instead asserts the inline classes are absent — the
     // CSS-var path is what locks heights together.
     const msg = makeSystemMessage(

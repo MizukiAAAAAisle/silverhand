@@ -250,9 +250,12 @@
      the separate `--appearance-prose-font` / `--appearance-code-font` /
      `--appearance-markdown-font-size` slots (settings/apply.ts) so the
      override name is unambiguous and never collides with the theme
-     primitive. See settings/apply.ts. */
-  --md-prose-size: 13px;
-  --md-code-size: 13px;
+     primitive. See settings/apply.ts.
+
+     14px matches forza6 so the slider/Settings preview reads the same
+     across themes (single product baseline, no per-theme drift here). */
+  --md-prose-size: 14px;
+  --md-code-size: 14px;
   /* System message row size — one tier below markdown body; chrome,
      not content. Independent of `--md-*-size` so themes can drift the
      two without coupling. See forza6.css for the rationale. */

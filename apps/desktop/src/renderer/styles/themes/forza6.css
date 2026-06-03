@@ -437,9 +437,19 @@
      the separate `--appearance-prose-font` / `--appearance-code-font` /
      `--appearance-markdown-font-size` slots (settings/apply.ts) so the
      override name is unambiguous and never collides with the theme
-     primitive. */
-  --md-prose-size: 13px;
-  --md-code-size: 13px;
+     primitive.
+
+     14px (not 13) because Space Grotesk is a geometric grotesk — its
+     stroke contrast and curve geometry go soft below ~14px, and the
+     macOS subpixel-AA pullback in Mojave+ amplifies the effect. The
+     previous 13px baseline was tuned for Inter (humanist UI face,
+     hinted for small sizes); when we reverted body to Space Grotesk we
+     missed the recalibration. 14px gets the face's geometric identity
+     (round O, flat a) back into reading weight. shiki + Cindy
+     converged on 14 independently (msgs `PldL0VieHyiYtc27` /
+     `XCfTGJt3FuONjlKX` / `5yqOk4dFiDT9ty_q`). */
+  --md-prose-size: 14px;
+  --md-code-size: 14px;
   /* System message rows (task events, schedule banners, rename chips —
      anything that goes through `.system-message-row`) live one size
      tier below markdown body. They're chrome, not content, so the
