@@ -26,6 +26,10 @@ interface ScheduleRow {
   until_at: number | null;
   failure_reason: string | null;
   cancelled_at: number | null;
+  // v39 fire-failure metrics; see ScheduleDtoSchema for semantics.
+  last_failure_reason: string | null;
+  last_failure_at: number | null;
+  consecutive_failure_count: number;
   created_at: number;
   updated_at: number;
   // Projected by every SELECT via LEFT JOIN; null when the target row
@@ -89,6 +93,9 @@ function rowToDto(row: ScheduleRow): ScheduleDto {
     until_at: row.until_at,
     failure_reason: row.failure_reason,
     cancelled_at: row.cancelled_at,
+    last_failure_reason: row.last_failure_reason,
+    last_failure_at: row.last_failure_at,
+    consecutive_failure_count: row.consecutive_failure_count,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -269,6 +276,7 @@ export class ScheduleRepo {
                 fired_count = fired_count + 1,
                 last_fired_at = ?,
                 next_fire_at = ?,
+                consecutive_failure_count = 0,
                 updated_at = ?
           WHERE id = ? AND status = 'firing'
           RETURNING id`,
@@ -288,6 +296,7 @@ export class ScheduleRepo {
             SET status = 'done',
                 fired_count = fired_count + 1,
                 last_fired_at = ?,
+                consecutive_failure_count = 0,
                 updated_at = ?
           WHERE id = ? AND status = 'firing'
           RETURNING id`,
@@ -296,8 +305,16 @@ export class ScheduleRepo {
     return rows.length > 0;
   }
 
-  /** Wake delivery failed (terminal in v1; we don't auto-retry per-fire
-   *  to avoid masking real wiring problems with silent loops).
+  /** Wake delivery failed for a `kind:'once'` schedule (terminal — the
+   *  plan only had one fire to attempt; there is no future tick that
+   *  could retry).
+   *
+   *  For `cron|interval`, callers MUST use `markFireFailed` instead so
+   *  the schedule stays on its natural cadence. Routing transient
+   *  fire-time failures (daemon transport detached, target temporarily
+   *  closed, etc.) into terminal `failed` would silently kill long-
+   *  running plans on a single bad tick.
+   *
    *  Predicated on `status='firing'`: if a cancel raced and won, the
    *  schedule is already in `cancelled`; we don't overwrite it. */
   markFailed(id: string, reason: string): boolean {
@@ -312,6 +329,42 @@ export class ScheduleRepo {
           RETURNING id`,
       )
       .all(reason, now, id);
+    return rows.length > 0;
+  }
+
+  /**
+   * Wake delivery failed for a `cron|interval` schedule. Records the
+   * fire-level failure (`last_failure_*`, `consecutive_failure_count++`)
+   * but keeps the plan alive: `status` returns to `pending` and
+   * `next_fire_at` advances to the natural next cadence tick (caller
+   * computes via spec — see `ScheduleService.planFailureRearm`).
+   *
+   * `consecutive_failure_count` resets to 0 on the next successful fire
+   * (`markFiredAndRearm` / `markDone`); UI/observability layers read it
+   * to surface stuck schedules without auto-terminating them. The
+   * design rationale, including the rejected "auto-terminate after N"
+   * branch, lives at `docs/architecture-principles.md` (or the design
+   * doc that ships with this PR).
+   *
+   * Predicated on `status='firing'`: a concurrent cancel still wins.
+   * Returns `true` when the row transitioned, `false` when a racing
+   * terminal write got there first.
+   */
+  markFireFailed(id: string, reason: string, nextFireAt: number): boolean {
+    const now = Date.now();
+    const rows = this.db
+      .prepare<[string, number, number, number, string], { id: string }>(
+        `UPDATE schedules
+            SET status = 'pending',
+                last_failure_reason = ?,
+                last_failure_at = ?,
+                consecutive_failure_count = consecutive_failure_count + 1,
+                next_fire_at = ?,
+                updated_at = ?
+          WHERE id = ? AND status = 'firing'
+          RETURNING id`,
+      )
+      .all(reason, now, nextFireAt, now, id);
     return rows.length > 0;
   }
 

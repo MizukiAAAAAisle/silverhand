@@ -2091,6 +2091,17 @@ export const ScheduleDtoSchema = z.object({
   until_at: z.number().nullable(),
   failure_reason: z.string().nullable(),
   cancelled_at: z.number().nullable(),
+  /** v39 fire-failure metrics. `cron|interval` schedules whose
+   *  individual fire fails do NOT enter terminal `status='failed'`
+   *  (only `kind:'once'` does — its plan has no future fire to retry).
+   *  Instead these three fields record the most-recent fire failure;
+   *  the row stays `pending` with `next_fire_at` advanced to the next
+   *  natural cadence tick. `consecutive_failure_count` resets to 0
+   *  on the next successful fire. UI/observability layers read these
+   *  to surface stuck schedules without auto-terminating them. */
+  last_failure_reason: z.string().nullable(),
+  last_failure_at: z.number().nullable(),
+  consecutive_failure_count: z.number(),
   created_at: z.number(),
   updated_at: z.number(),
 });

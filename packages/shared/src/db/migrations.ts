@@ -2411,6 +2411,36 @@ export const migrations: Migration[] = [
        WHERE key IN ('proxy_url', 'proxy_runtimes');
     `,
   },
+  {
+    version: 39,
+    name: 'schedules_fire_failure_metrics',
+    // A `cron|interval` schedule whose individual fire fails (transient
+    // daemon detach, runtime spawn glitch, target temporarily unhealthy)
+    // must NOT terminate the plan. The pre-v39 design routed every wake
+    // failure through `markFailed → status='failed'` (terminal), which
+    // killed the entire schedule on a single bad fire — observed when
+    // the outbound daemon transport was momentarily unattached at a
+    // daily cron's tick (`HostRuntimeDisabledError`).
+    //
+    // v39 adds three columns to track per-fire failure metrics WITHOUT
+    // changing the plan's status. The service layer routes `cron|interval`
+    // failures here (status returns to `pending` with `next_fire_at`
+    // advanced to the natural next tick); `kind:'once'` still uses the
+    // legacy `markFailed` (terminal — the plan's only fire is over).
+    //
+    //   last_failure_reason         most-recent fire's error message
+    //   last_failure_at             most-recent fire failure ts (epoch ms)
+    //   consecutive_failure_count   resets to 0 on next successful fire
+    //
+    // No backfill: existing rows already in `status='failed'` stay
+    // there. The dev DB has one operator and a hand-applied SQL UPDATE
+    // is the recovery path (avoid carrying revival logic in code).
+    up: `
+      ALTER TABLE schedules ADD COLUMN last_failure_reason TEXT;
+      ALTER TABLE schedules ADD COLUMN last_failure_at INTEGER;
+      ALTER TABLE schedules ADD COLUMN consecutive_failure_count INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

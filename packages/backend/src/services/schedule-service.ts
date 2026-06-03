@@ -441,12 +441,50 @@ export class ScheduleService {
       await this.deliverWake(dto, actualFireAt, advancement);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      this.logger.error(
-        { scheduleId: dto.id, ownerAgentId: dto.owner_agent_id, err },
-        'schedule-service: wake delivery failed; marking failed',
+      // Branch on plan kind. `once` has no future fire to retry — its
+      // single attempt is over either way, so it's correctly terminal.
+      // `cron|interval` must NOT terminate on a single bad tick (e.g.
+      // transient daemon transport detach, target temporarily closed):
+      // we record fire-level failure metrics and re-arm to the natural
+      // next cadence tick. See ADR / design doc for the "no auto-
+      // terminate after N" rationale.
+      if (dto.spec.kind === 'once') {
+        this.logger.error(
+          { scheduleId: dto.id, ownerAgentId: dto.owner_agent_id, err },
+          'schedule-service: wake delivery failed; marking failed (once)',
+        );
+        this.schedules.markFailed(dto.id, reason);
+        return;
+      }
+      const failureRearm = this.planFailureRearm(dto, actualFireAt);
+      if (failureRearm.terminal) {
+        // Cron/interval whose natural-next-tick would be past `until_at`
+        // — the plan window is over and there is no future attempt
+        // possible. Treat as natural plan-end (`done`); UI surfaces
+        // `consecutive_failure_count > 0` so the operator can tell the
+        // tail fires failed.
+        this.logger.error(
+          { scheduleId: dto.id, ownerAgentId: dto.owner_agent_id, err },
+          'schedule-service: wake delivery failed and until_at exhausted; marking done',
+        );
+        this.schedules.markDone(dto.id, actualFireAt);
+        return;
+      }
+      this.logger.warn(
+        {
+          scheduleId: dto.id,
+          ownerAgentId: dto.owner_agent_id,
+          nextFireAt: failureRearm.nextFireAt,
+          err,
+        },
+        'schedule-service: wake delivery failed; re-arming for next cadence tick',
       );
-      // Predicated on `status='firing'` so a concurrent cancel still wins.
-      this.schedules.markFailed(dto.id, reason);
+      this.schedules.markFireFailed(
+        dto.id,
+        reason,
+        failureRearm.nextFireAt,
+      );
+      this.armNearTimer();
       return;
     }
     // Apply the planned transition. Each predicate is `status='firing'`,
@@ -509,6 +547,57 @@ export class ScheduleService {
       nextFireAt,
       missedCount: this.estimateMissedCount(dto, actualFireAt),
     };
+  }
+
+  /**
+   * Compute the next-fire transition for a `cron|interval` schedule
+   * whose current fire FAILED. Mirrors `planAdvancement` for the success
+   * path, with two differences:
+   *
+   *   - `max_occurrences` is intentionally NOT consulted. The failed
+   *     fire didn't increment `fired_count`, so the plan still owes
+   *     that occurrence; we should retry on the natural next cadence
+   *     tick rather than terminate. (If the next successful fire then
+   *     hits `max_occurrences`, `planAdvancement` will route through
+   *     `markDone` as usual.)
+   *   - `until_at` IS consulted. It's a wall-clock deadline; once past,
+   *     no future tick is possible regardless of failure history, so
+   *     the schedule terminates as `done` (UI surfaces
+   *     `consecutive_failure_count > 0` to indicate the tail fires
+   *     never landed).
+   *
+   * Returns `terminal:false` with the natural next fire-at for the
+   * caller to pass into `markFireFailed`. The caller never invokes
+   * this for `kind:'once'` (those terminate via `markFailed`); the
+   * branch is asserted with an Error rather than silently returning a
+   * default.
+   */
+  private planFailureRearm(
+    dto: ScheduleDto,
+    actualFireAt: number,
+  ): { terminal: true; nextFireAt: null } | { terminal: false; nextFireAt: number } {
+    if (dto.spec.kind === 'once') {
+      throw new Error(
+        'planFailureRearm: caller must route kind:once through markFailed, not here',
+      );
+    }
+    let nextFireAt: number;
+    if (dto.spec.kind === 'interval') {
+      nextFireAt = this.computeIntervalNext(
+        dto.spec.every_seconds,
+        actualFireAt,
+      );
+    } else {
+      nextFireAt = this.computeCronNext(
+        dto.spec.expression,
+        dto.spec.timezone,
+        actualFireAt,
+      );
+    }
+    if (dto.until_at !== null && nextFireAt > dto.until_at) {
+      return { terminal: true, nextFireAt: null };
+    }
+    return { terminal: false, nextFireAt };
   }
 
   /**

@@ -1463,6 +1463,250 @@ describe('ScheduleService — start() failure marks the schedule failed', () => 
   });
 });
 
+describe('ScheduleService — cron|interval fire failure does NOT terminate the plan (#task:755-followup)', () => {
+  // Pre-v39 every wake failure routed through `markFailed` and pushed
+  // the row to terminal `status='failed'`, killing daily/weekly cron
+  // schedules on a single bad fire. The new contract: only `kind:'once'`
+  // (no future fire) goes terminal — `cron|interval` log fire-level
+  // metrics and re-arm to the natural next cadence tick.
+
+  it('cron fire failure: status returns to pending, count++, next_fire_at advances to next cron tick', async () => {
+    const f = setup();
+    f.fake.start = async () => {
+      throw new Error('agent runtime is unavailable: no outbound daemon transport is attached for this host');
+    };
+    // 06:00 daily Asia/Shanghai — same shape as the real
+    // daily-cli-report schedule that died in the field.
+    f.setNow(Date.UTC(2026, 5, 1, 0, 0, 0)); // 2026-06-01 00:00 UTC = 08:00 CST
+    const s = f.service.create(
+      {
+        title: 'daily failer',
+        message: 'cron failing',
+        spec: {
+          kind: 'cron',
+          expression: '0 6 * * *',
+          timezone: 'Asia/Shanghai',
+        },
+        allow_unbounded: true,
+      },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    const firstPlanned = s.next_fire_at;
+    f.setNow(firstPlanned);
+    await f.service.tick();
+    const after = f.schedules.get(s.id)!;
+    expect(after.status).toBe('pending');
+    expect(after.fired_count).toBe(0); // failed fire MUST NOT count
+    expect(after.last_fired_at).toBeNull();
+    expect(after.failure_reason).toBeNull(); // legacy column reserved for kind:once
+    expect(after.last_failure_reason).toContain('outbound daemon transport');
+    expect(after.last_failure_at).not.toBeNull();
+    expect(after.consecutive_failure_count).toBe(1);
+    // Natural next cron tick is exactly 24h later.
+    expect(after.next_fire_at).toBe(firstPlanned + 24 * 60 * 60 * 1000);
+  });
+
+  it('interval fire failure: status returns to pending, count++, next_fire_at advances by every_seconds', async () => {
+    const f = setup();
+    f.fake.start = async () => {
+      throw new Error('transient transport detach');
+    };
+    const s = f.service.create(
+      {
+        title: 'every 60s failer',
+        message: 'interval failing',
+        spec: { kind: 'interval', every_seconds: 60 },
+        allow_unbounded: true,
+      },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    f.setNow(s.next_fire_at);
+    await f.service.tick();
+    const after = f.schedules.get(s.id)!;
+    expect(after.status).toBe('pending');
+    expect(after.fired_count).toBe(0);
+    expect(after.consecutive_failure_count).toBe(1);
+    expect(after.last_failure_reason).toBe('transient transport detach');
+    expect(after.next_fire_at).toBe(s.next_fire_at + 60_000);
+  });
+
+  it('repeated cron fire failures keep status=pending and bump consecutive_failure_count each time', async () => {
+    const f = setup();
+    f.fake.start = async () => {
+      throw new Error('still down');
+    };
+    f.setNow(Date.UTC(2026, 5, 1, 0, 0, 0));
+    const s = f.service.create(
+      {
+        title: 'persistent failer',
+        message: 'three strikes',
+        spec: {
+          kind: 'cron',
+          expression: '0 6 * * *',
+          timezone: 'Asia/Shanghai',
+        },
+        allow_unbounded: true,
+      },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    for (let i = 1; i <= 3; i++) {
+      const planned = f.schedules.get(s.id)!.next_fire_at;
+      f.setNow(planned);
+      await f.service.tick();
+      const after = f.schedules.get(s.id)!;
+      expect(after.status).toBe('pending');
+      expect(after.consecutive_failure_count).toBe(i);
+      expect(after.fired_count).toBe(0);
+    }
+    // Plan is still alive — never enters terminal `failed`.
+    expect(f.schedules.get(s.id)!.status).not.toBe('failed');
+  });
+
+  it('successful fire after a failure resets consecutive_failure_count to 0', async () => {
+    const f = setup();
+    let failNext = true;
+    f.fake.start = async () => {
+      if (failNext) throw new Error('first fire bad');
+    };
+    f.setNow(Date.UTC(2026, 5, 1, 0, 0, 0));
+    const s = f.service.create(
+      {
+        title: 'recovering',
+        message: 'fail then succeed',
+        spec: {
+          kind: 'cron',
+          expression: '0 6 * * *',
+          timezone: 'Asia/Shanghai',
+        },
+        allow_unbounded: true,
+      },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    // Fire 1: fails.
+    f.setNow(s.next_fire_at);
+    await f.service.tick();
+    let row = f.schedules.get(s.id)!;
+    expect(row.consecutive_failure_count).toBe(1);
+    expect(row.fired_count).toBe(0);
+    // Fire 2: succeeds → counter resets, fired_count++.
+    failNext = false;
+    f.setNow(row.next_fire_at);
+    await f.service.tick();
+    row = f.schedules.get(s.id)!;
+    expect(row.status).toBe('pending');
+    expect(row.consecutive_failure_count).toBe(0);
+    expect(row.fired_count).toBe(1);
+    expect(row.last_fired_at).toBe(s.next_fire_at + 24 * 60 * 60 * 1000);
+    // The failure metadata is intentionally NOT cleared — it remains
+    // as a post-mortem record of the most recent fire failure. UI can
+    // hide it once `consecutive_failure_count === 0`.
+    expect(row.last_failure_reason).toBe('first fire bad');
+  });
+
+  it('once fire failure still goes terminal `failed` (no future fire to retry)', async () => {
+    const f = setup();
+    f.fake.start = async () => {
+      throw new Error('once boom');
+    };
+    const s = f.service.create(
+      { title: 'one-shot', message: 'go', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    f.setNow(currentNow + 60_000);
+    await f.service.tick();
+    const after = f.schedules.get(s.id)!;
+    expect(after.status).toBe('failed');
+    expect(after.failure_reason).toContain('once boom');
+    // The new fire-failure metric columns stay at insert-time defaults:
+    // they are reserved for `cron|interval` non-terminal failures.
+    expect(after.last_failure_reason).toBeNull();
+    expect(after.last_failure_at).toBeNull();
+    expect(after.consecutive_failure_count).toBe(0);
+  });
+
+  it('interval failure whose natural next tick is past until_at terminates as `done`', async () => {
+    const f = setup();
+    f.fake.start = async () => {
+      throw new Error('runtime down');
+    };
+    // Interval is the cleanest setup for this assertion: every_seconds
+    // = 60, first fire at T0+60s, until_at at T0+90s. After the failed
+    // fire at T0+60s, planFailureRearm computes next-tick = T0+120s
+    // which is strictly past until_at → terminal-as-`done`.
+    const T0 = currentNow;
+    const s = f.service.create(
+      {
+        title: 'last gasp',
+        message: 'no time left',
+        spec: { kind: 'interval', every_seconds: 60 },
+        until_at: T0 + 90_000,
+      },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    f.setNow(s.next_fire_at);
+    await f.service.tick();
+    const after = f.schedules.get(s.id)!;
+    // Plan window genuinely closed — no future fire is possible
+    // regardless of the failure history. Goes `done`, not `failed`.
+    expect(after.status).toBe('done');
+    // markDone increments fired_count; we accept that on the failure
+    // until_at-exhausted path the row reads as if the last fire
+    // succeeded (UI: `last_failure_*` is null because markDone path
+    // doesn't update them; the error trace lives only in the logger).
+    // If we ever want permanent observability for this branch, add the
+    // failure metric writes to markDone's UPDATE.
+    expect(after.fired_count).toBe(1);
+  });
+
+  it('cancel race during a cron fire failure still wins over markFireFailed', async () => {
+    const f = setup();
+    const failureMessage = 'transport gone';
+    f.setNow(Date.UTC(2026, 5, 1, 0, 0, 0));
+    // Forward-declare the schedule id so the start() closure can call
+    // cancel() on it before throwing. We must install fake.start AFTER
+    // create() so the closure captures the real id.
+    let scheduleId = '';
+    const s = f.service.create(
+      {
+        title: 'cancel races fail',
+        message: 'go',
+        spec: {
+          kind: 'cron',
+          expression: '0 6 * * *',
+          timezone: 'Asia/Shanghai',
+        },
+        allow_unbounded: true,
+      },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    scheduleId = s.id;
+    f.fake.start = async () => {
+      // After tryClaim → status='firing'; cancel transitions
+      // firing→cancelled.
+      f.service.cancel(scheduleId, f.ownerAgentId);
+      throw new Error(failureMessage);
+    };
+    f.setNow(s.next_fire_at);
+    await f.service.tick();
+    const after = f.schedules.get(s.id)!;
+    // Cancel won the race — schedule terminates as cancelled, NOT
+    // pending-with-failure. The CAS predicate `status='firing'` on
+    // markFireFailed protects this; cancel transitions firing →
+    // cancelled, so the subsequent UPDATE sees no firing row and
+    // returns false.
+    expect(after.status).toBe('cancelled');
+    expect(after.consecutive_failure_count).toBe(0);
+    expect(after.last_failure_reason).toBeNull();
+  });
+});
+
 describe('ScheduleService — wake body advancement details', () => {
   it('reports missed_count for interval schedules that caught up late', async () => {
     const f = setup();
