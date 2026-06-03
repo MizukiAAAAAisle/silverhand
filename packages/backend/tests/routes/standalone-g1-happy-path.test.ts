@@ -490,7 +490,7 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     // attached" scenario produces typed `host_attach_pending` (503)
     // through `OutboundRuntimeEventFanout.connectedConnectionId`
     // and is covered end-to-end by the G2 route e2e
-    // (`standalone-g2-route-runtime.test.ts`).
+    // (`standalone-route-runtime.test.ts`).
     t = buildTestApp({ deploymentMode: 'standalone', bindAddressScope: 'lan' });
     const token = await signupReturnToken(t, 'fail.send@example.test');
     const claimedHostId = await claimLocalHost(t, token);

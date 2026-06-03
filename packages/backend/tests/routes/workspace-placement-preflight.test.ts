@@ -1,8 +1,8 @@
 /**
- * D4.c C3 — workspace POST / PATCH / DELETE / add-member
- * standalone-guard lift regression pins.
+ * Workspace POST / PATCH / DELETE / add-member placement preflight
+ * regression pins.
  *
- * Pre-C3 each of these routes short-circuited under
+ * Origin: D4.c C3 — pre-C3 each of these routes short-circuited under
  * `standaloneMode(ctx)` with a typed `host_runtime_disabled` 409.
  * C3 lifts those guards and replaces them with explicit
  * placement preflights:

@@ -1,11 +1,11 @@
 /**
- * D4.d structural-invariant tests.
+ * Agent-create / failed-row read-path structural invariants.
  *
- * Three invariants Cindy declared at design-pass close (and Alice
- * agreed to pin explicitly across D1–D5). D1 landed them as `.skip`
- * stubs; D3 un-skips invariants 1 + 3 (this commit); D5 un-skips
- * invariant 2.
- *
+ * Origin: D4.d structural-invariant tests — three invariants Cindy
+ * declared at design-pass close (and Alice agreed to pin explicitly
+ * across D1–D5). D1 landed them as `.skip` stubs; D3 un-skips
+ * invariants 1 + 3; D5 un-skips invariant 2.
+
  * Cross-referenced from `docs/remote-backend-architecture-notes.md §3.4`:
  *   - §3.2  + §6.1 (metadata mismatch precedence)
  *   - §4.1  + §7.3 + §10.3 (ACL-first list/get widener — D5)
@@ -322,7 +322,7 @@ describe('D4.d structural invariants', () => {
     // rows have NO dependent workspaces, so the workspace-membership
     // branch of `canViewAgent` can never match). Both tests below
     // exercise the cross-user negative path; the third
-    // (own-rows-visible) pin is in `d5-failed-recovery.test.ts`.
+    // (own-rows-visible) pin is in `agent-failed-recovery.test.ts`.
 
     it('list: ?include_failed=1 from user B does NOT widen to user A failed rows', async () => {
       const t = buildTestApp();

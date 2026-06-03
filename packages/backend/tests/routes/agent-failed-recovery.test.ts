@@ -1,8 +1,9 @@
 /**
- * D4.d D5 — failed-row recovery surface tests.
+ * Agent failed-row recovery surface tests.
  *
- * Pins the D5 deliverables in `docs/remote-backend-architecture-notes.md §3.4`
- * §3.2 / §4.1 / §7.3 / §10.3:
+ * Origin: D4.d D5. Pins the D5 deliverables in
+ * `docs/remote-backend-architecture-notes.md §3.4` §3.2 / §4.1 /
+ * §7.3 / §10.3:
  *
  *   1. DELETE branches:
  *      - `failed`  → 204 row-only delete (no dependents to sweep)
@@ -16,7 +17,7 @@
  *      - GET single: default returns 404 for `failed`, widener
  *        returns 200 for the caller's own failed row.
  *      - Cross-user widener stays creator-scoped — the structural
- *        invariant is pinned in `d4-d-structural-invariants.test.ts`
+ *        invariant is pinned in `agent-create-structural-invariants.test.ts`
  *        (Invariant 2); this file does NOT duplicate that.
  *
  *   3. `?retry=true` same-row retry matrix (§3.2 (a), Cindy D5
@@ -101,7 +102,7 @@ function readRow(t: TestApp, agentId: string): RowSnapshot | null {
  * Seed a `failed` agent row that matches the production L3b shape:
  * only the `agents` row exists, no dependent agent_home / DM /
  * membership rows. See the matching helper in
- * `d4-d-structural-invariants.test.ts` for the long-form rationale.
+ * `agent-create-structural-invariants.test.ts` for the long-form rationale.
  */
 function seedFailedAgent(
   t: TestApp,
@@ -615,7 +616,7 @@ describe('D4.d D5: failed-row recovery surface', () => {
 
     it('list: ?include_pending=1 from user B does NOT widen to user A\'s pending rows', async () => {
       // ACL-first invariant — mirrors `?include_failed=1` (Invariant 2
-      // in `d4-d-structural-invariants.test.ts`). Pending rows have
+      // in `agent-create-structural-invariants.test.ts`). Pending rows have
       // no dependent workspaces (L3a never ran), so
       // `canViewAgent`'s workspace-membership branch can never match
       // cross-user, exactly like failed rows.

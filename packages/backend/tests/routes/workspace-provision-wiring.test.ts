@@ -1,9 +1,10 @@
 /**
- * D4.e-1 3b-1 — workspace-create → `workspace_provision` wiring.
+ * Workspace-create → `workspace_provision` wiring.
  *
- * The create route no longer does local fs (validate / mkdir): it dispatches
- * `workspace_provision` to the owning daemon BEFORE inserting the row, and
- * caches the daemon's authoritative `bound_workspace_path` into the legacy
+ * Origin: D4.e-1 3b-1. The create route no longer does local fs
+ * (validate / mkdir): it dispatches `workspace_provision` to the
+ * owning daemon BEFORE inserting the row, and caches the daemon's
+ * authoritative `bound_workspace_path` into the legacy
  * `workspace_path` column. Pins:
  *   1. no body path → provision dispatched with NO `requested_path` (daemon
  *      managed default); row caches the daemon-bound path.

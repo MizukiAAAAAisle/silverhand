@@ -1,9 +1,10 @@
 /**
- * D4.e-4 — DELETE /api/agents/:id purges the agent's host-local files via the
+ * DELETE /api/agents/:id purges the agent's host-local files via the
  * owning daemon (`agent_files_purge`), replacing the backend's direct
  * `fs.rm(l1_path / l2_paths)` block.
  *
- * Pins (Cindy review focuses + design §3.3 commit boundary):
+ * Origin: D4.e-4. Pins (Cindy review focuses + design §3.3 commit
+ * boundary):
  *   - happy: 204; `agent_files_purge` dispatched with `{agent_id,
  *     scope:'all', workspace_ids}` (the regular memberships); DB rows gone.
  *   - fail-closed: a typed purge failure returns the code and KEEPS the agent

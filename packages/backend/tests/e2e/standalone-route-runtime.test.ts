@@ -1,10 +1,10 @@
 /**
- * D4.b P1-1 — Standalone G2 route-level runtime e2e.
+ * Standalone deployment — route-level runtime e2e.
  *
- * Closes the gap Cindy `wY_2I5y4l-FXO19h` called out: the B1-B6
- * batch only exercised `ctx.runtimeHost` directly, so the public
- * HTTP surface still went through the D4.a blanket
- * `standaloneMode(ctx)` guard and would return 409
+ * Origin: D4.b P1-1 (G2). Closes the gap Cindy `wY_2I5y4l-FXO19h`
+ * called out: the B1-B6 batch only exercised `ctx.runtimeHost`
+ * directly, so the public HTTP surface still went through the D4.a
+ * blanket `standaloneMode(ctx)` guard and would return 409
  * `host_runtime_disabled` for the user-facing user path. This test
  * pins the user path through real HTTP against the real backend:
  *

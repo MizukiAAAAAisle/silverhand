@@ -1,9 +1,9 @@
 /**
- * D4.e-3 — POST /api/workspaces/:id/members seeds the member agent's L2 via
+ * POST /api/workspaces/:id/members seeds the member agent's L2 via
  * the owning daemon (`agent_l2_seed`), replacing the backend's direct
  * `seedAgentL2` fs write.
  *
- * Pins (Cindy `-IsT5ltMW2s2uuu8` review focuses):
+ * Origin: D4.e-3. Pins (Cindy `-IsT5ltMW2s2uuu8` review focuses):
  *   - happy: 201; `agent_l2_seed` dispatched with `{agent_id, workspace_id,
  *     template_choice}`; L2 carries MEMORY.md + notes/ but NEVER L1
  *     `system_prompt.md`; membership row persisted.
