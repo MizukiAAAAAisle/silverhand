@@ -35,11 +35,13 @@ class FakeConversationManager {
   delivered: Array<{ conversationId: string; agentId: string; messageId: string }> = [];
   resolvedRuns: Array<{ conversationId: string; agentId: string; reason: TerminalReason }> = [];
   deliverError: Error | null = null;
+  startError: Error | null = null;
   hangDeliver = false;
   onDeliver: (() => void) | null = null;
 
   async start(conversationId: string, agentId: string): Promise<void> {
     this.starts.push({ conversationId, agentId });
+    if (this.startError) throw this.startError;
   }
 
   async deliverMessage(
@@ -147,6 +149,16 @@ function bootstrap() {
     bob,
     cleanup: tmp.cleanup,
   };
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error('waitFor timed out');
+    }
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
 }
 
 describe('ConversationMessageService.sendMessage', () => {
@@ -277,6 +289,138 @@ describe('ConversationMessageService.sendMessage', () => {
       });
 
       expect(t.notifications.list({ userId: 'local', unread: true })).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('sends agent_start_failed notification only to the user who triggered delivery failure', async () => {
+    const t = bootstrap();
+    try {
+      t.conversations.removeAgent(t.channel.id, t.bob.id);
+      t.fake.deliverError = new Error(
+        'runtime_start: binary "claude" for runtime "claude" not found on PATH',
+      );
+      const viewerEvents: Array<{ kind: string; payload: any }> = [];
+      const teammateEvents: Array<{ kind: string; payload: any }> = [];
+      const unsubViewer = t.events.subscribeScope('viewer:local', e => {
+        viewerEvents.push({ kind: e.kind, payload: e.payload });
+      });
+      const unsubTeammate = t.events.subscribeScope('viewer:teammate', e => {
+        teammateEvents.push({ kind: e.kind, payload: e.payload });
+      });
+
+      const result = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'user', userId: 'local' },
+        content: 'please respond',
+      });
+      await waitFor(() =>
+        t.notifications.list({ userId: 'local' }).some(n => n.kind === 'agent_start_failed'),
+      );
+      unsubViewer();
+      unsubTeammate();
+
+      expect(t.notifications.list({ userId: 'local', unread: true })).toEqual([
+        expect.objectContaining({
+          kind: 'agent_start_failed',
+          user_id: 'local',
+          agent_id: t.alice.id,
+          workspace_id: t.workspace.id,
+          conversation_id: t.channel.id,
+          message_id: null,
+          source_conversation_id: t.channel.id,
+          source_message_id: result.message.id,
+          payload: expect.objectContaining({
+            reason: 'runtime_start_failed',
+            agent_name: 'alice',
+            runtime: 'claude',
+            host_id: t.alice.host_id,
+            error: 'runtime_start: binary "claude" for runtime "claude" not found on PATH',
+          }),
+        }),
+      ]);
+      expect(t.notifications.list({ userId: 'teammate', unread: true })).toEqual([]);
+      expect(viewerEvents).toContainEqual({
+        kind: 'notification',
+        payload: expect.objectContaining({
+          kind: 'agent_start_failed',
+          conversation_id: t.channel.id,
+          agent_id: t.alice.id,
+        }),
+      });
+      expect(teammateEvents.filter(e => e.kind === 'notification')).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('keeps every repeated agent_start_failed notification in v1', async () => {
+    const t = bootstrap();
+    try {
+      t.conversations.removeAgent(t.channel.id, t.bob.id);
+      t.fake.deliverError = new Error('runtime_start failed');
+
+      await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'user', userId: 'local' },
+        content: 'first',
+      });
+      await waitFor(
+        () =>
+          t.notifications
+            .list({ userId: 'local' })
+            .filter(n => n.kind === 'agent_start_failed').length === 1,
+      );
+
+      await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'user', userId: 'local' },
+        content: 'second',
+      });
+      await waitFor(
+        () =>
+          t.notifications
+            .list({ userId: 'local' })
+            .filter(n => n.kind === 'agent_start_failed').length === 2,
+      );
+
+      expect(
+        t.notifications.list({ userId: 'local', unread: true })
+          .filter(n => n.kind === 'agent_start_failed'),
+      ).toHaveLength(2);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('sends agent_start_failed notification when user-triggered auto-start fails', async () => {
+    const t = bootstrap();
+    try {
+      t.conversations.removeAgent(t.channel.id, t.bob.id);
+      t.fake.startError = new Error('manual start failed');
+
+      const result = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'user', userId: 'local' },
+        content: 'wake up',
+      });
+      await waitFor(() =>
+        t.notifications.list({ userId: 'local' }).some(n => n.kind === 'agent_start_failed'),
+      );
+
+      expect(t.notifications.list({ userId: 'local', unread: true })).toEqual([
+        expect.objectContaining({
+          kind: 'agent_start_failed',
+          user_id: 'local',
+          agent_id: t.alice.id,
+          source_message_id: result.message.id,
+          payload: expect.objectContaining({
+            reason: 'runtime_start_failed',
+            error: 'manual start failed',
+          }),
+        }),
+      ]);
     } finally {
       t.cleanup();
     }

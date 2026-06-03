@@ -198,6 +198,7 @@ interface SendMessageTxResult {
 
 const REPLIED: AgentRunTerminalReason = 'replied';
 const MENTION_EXCERPT_LIMIT = 160;
+const START_FAILURE_ERROR_LIMIT = 240;
 
 function excerpt(s: string): string {
   const compact = s.replace(/\s+/g, ' ').trim();
@@ -209,6 +210,19 @@ function excerpt(s: string): string {
 function nonEmptyName(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function describeStartFailure(err: unknown): string {
+  const message =
+    err instanceof Error
+      ? err.message
+      : typeof err === 'string'
+        ? err
+        : 'unknown error';
+  const compact = message.replace(/\s+/g, ' ').trim() || 'unknown error';
+  return compact.length <= START_FAILURE_ERROR_LIMIT
+    ? compact
+    : `${compact.slice(0, START_FAILURE_ERROR_LIMIT - 1)}…`;
 }
 
 export class ConversationMessageService {
@@ -380,7 +394,8 @@ export class ConversationMessageService {
       || (input.actor.kind === 'agent' && targetIsCrossConversation);
     if (shouldAutoStartIdle) {
       void this.startIdleRecipientsBestEffort(
-        txResult.targetConversation.id,
+        txResult.targetConversation,
+        txResult.message,
         txResult.recipients,
       );
     }
@@ -566,20 +581,81 @@ export class ConversationMessageService {
     excludeAgentId: string | null,
   ): Promise<void> {
     const selected = recipients.filter(ca => ca.agent_id !== excludeAgentId);
-    try {
-      await Promise.all(
-        selected.map(ca =>
-          this.runtimeHost.deliverMessage(
+    const failures: Array<{ agentId: string; err: unknown }> = [];
+    await Promise.all(
+      selected.map(async ca => {
+        try {
+          await this.runtimeHost.deliverMessage(
             conversationId,
             ca.agent_id,
             messageId,
-          ),
-        ),
-      );
-    } catch (err) {
+          );
+        } catch (err) {
+          failures.push({ agentId: ca.agent_id, err });
+        }
+      }),
+    );
+    if (failures.length === 0) return;
+    // Only touch the DB on the failure path — the success path stays read-free.
+    const conversation = this.conversations.get(conversationId);
+    const message = this.messages.getById(messageId);
+    if (conversation && message) {
+      for (const { agentId, err } of failures) {
+        this.notifyAgentStartFailureBestEffort(conversation, message, agentId, err);
+      }
+    }
+    this.logger.warn(
+      { conversationId, messageId, excludeAgentId, failures },
+      'conversation-message-service: delivery failed',
+    );
+  }
+
+  private notifyAgentStartFailureBestEffort(
+    conversation: NonNullable<ReturnType<ConversationRepo['get']>>,
+    message: MessageDto,
+    agentId: string,
+    err: unknown,
+  ): void {
+    if (message.from_kind !== 'user' || !message.from_user_id) return;
+    const agent = this.agents.get(agentId);
+    const error = describeStartFailure(err);
+    try {
+      const notification = this.notifications.insert({
+        kind: 'agent_start_failed',
+        userId: message.from_user_id,
+        agentId,
+        workspaceId: conversation.workspace_id,
+        conversationId: conversation.id,
+        messageId: null,
+        sourceWorkspaceId: conversation.workspace_id,
+        sourceConversationId: conversation.id,
+        sourceMessageId: message.id,
+        payload: {
+          reason: 'runtime_start_failed',
+          error,
+          agent_name:
+            nonEmptyName(agent?.display_name)
+            ?? nonEmptyName(agent?.name)
+            ?? agentId,
+          runtime: agent?.runtime ?? null,
+          host_id: agent?.host_id ?? null,
+        },
+      });
+      this.events.publishToScope(`viewer:${message.from_user_id}`, 'notification', {
+        kind: 'agent_start_failed',
+        id: notification.id,
+        conversation_id: conversation.id,
+        agent_id: agentId,
+      });
+    } catch (notifyErr) {
       this.logger.warn(
-        { conversationId, messageId, excludeAgentId, err },
-        'conversation-message-service: delivery failed',
+        {
+          conversationId: conversation.id,
+          messageId: message.id,
+          agentId,
+          err: notifyErr,
+        },
+        'conversation-message-service: agent start failure notification failed',
       );
     }
   }
@@ -613,20 +689,29 @@ export class ConversationMessageService {
   }
 
   private async startIdleRecipientsBestEffort(
-    conversationId: string,
+    conversation: NonNullable<ReturnType<ConversationRepo['get']>>,
+    message: MessageDto,
     recipients: ReturnType<ConversationRepo['listAgents']>,
   ): Promise<void> {
     await Promise.all(
       recipients
         .filter(ca => ca.status !== 'active' && ca.status !== 'starting')
-        .map(ca =>
-          this.runtimeHost.start(conversationId, ca.agent_id).catch(err => {
+        .map(async ca => {
+          try {
+            await this.runtimeHost.start(conversation.id, ca.agent_id);
+          } catch (err) {
+            this.notifyAgentStartFailureBestEffort(
+              conversation,
+              message,
+              ca.agent_id,
+              err,
+            );
             this.logger.warn(
-              { conversationId, agentId: ca.agent_id, err },
+              { conversationId: conversation.id, agentId: ca.agent_id, err },
               'conversation-message-service: auto-start on message send failed',
             );
-          }),
-        ),
+          }
+        }),
     );
   }
 }
