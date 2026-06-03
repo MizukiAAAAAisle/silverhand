@@ -301,10 +301,12 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   // CONSTRUCTED synchronously after `serve()` returns (so `outboundAdapter`
   // is non-null before any route handler can run), but its `connect()` is
   // deferred behind this thunk and fired from inside the listen callback,
-  // AFTER `ctx.serverConfig.url` is swapped from the input placeholder to
-  // the real bound URL. Otherwise the connect — and the `runtime_start`
-  // it eventually carries — could race ahead of URL finalization and ship
-  // a placeholder `server_url`. Stays null for standalone (daemon dials in).
+  // AFTER `ctx.serverConfig.url` is finalized. Embedded replaces the
+  // placeholder with the real bound URL; standalone preserves a configured
+  // public origin when present. Otherwise the connect — and the
+  // `runtime_start` it eventually carries — could race ahead of URL
+  // finalization and ship a placeholder/bind-only `server_url`. Stays
+  // null for standalone (daemon dials in).
   let startEmbeddedOutboundConnect: (() => void) | null = null;
 
   const ctx: BackendContext = {
@@ -507,12 +509,20 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
         const address = info as AddressInfo;
         const port = address.port;
         const url = urlForListenAddress(listenHostname, port);
-        ctx.serverConfig = { ...opts.serverConfig, url };
+        const inputListenUrl = urlForListenAddress(listenHostname, listenPort);
+        const serverConfigUrl =
+          opts.mode === 'standalone' && opts.serverConfig.url !== inputListenUrl
+            ? opts.serverConfig.url
+            : url;
+        ctx.serverConfig = { ...opts.serverConfig, url: serverConfigUrl };
         ctx.readiness.listenReady = true;
-        logger.info({ url, listenHostname, port }, 'backend listening');
-        // P1-1 — now that `ctx.serverConfig.url` is the real bound URL,
-        // it is safe to dial the embedded daemon (the first `runtime_start`
-        // will read this finalized URL). No-op for standalone.
+        logger.info(
+          { url, serverConfigUrl, listenHostname, port },
+          'backend listening',
+        );
+        // P1-1 — now that `ctx.serverConfig.url` is finalized, it is safe
+        // to dial the embedded daemon (the first `runtime_start` will read
+        // this URL). No-op for standalone.
         startEmbeddedOutboundConnect?.();
         resolve({
           url,

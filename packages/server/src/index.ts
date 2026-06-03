@@ -171,11 +171,12 @@ export async function startStandaloneSilverhandServer(
 }
 
 function standaloneServerConfig(config: StandaloneServerEnvConfig): ServerConfig {
+  const publicOrigin = config.publicOrigin.value;
   return {
     mode: 'remote',
-    url: urlForListen(config.listen.value),
-    ...(config.publicOrigin.value
-      ? { event_ws_allowed_origins: [config.publicOrigin.value] }
+    url: publicOrigin ?? urlForListen(config.listen.value),
+    ...(publicOrigin
+      ? { event_ws_allowed_origins: [publicOrigin] }
       : {}),
     refresh_token: null,
     child_sessions: {

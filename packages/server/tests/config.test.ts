@@ -132,6 +132,8 @@ describe('standalone server env config', () => {
       expect(running.context.serverConfig.event_ws_allowed_origins).toEqual([
         'https://proxy.example.test',
       ]);
+      expect(running.context.serverConfig.url).toBe('https://proxy.example.test');
+      expect(running.url).not.toBe(running.context.serverConfig.url);
       expect(running.context.embeddedBootstrap.enabled).toBe(false);
 
       const health = await fetch(`${running.url}/api/health`);
