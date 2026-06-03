@@ -253,18 +253,33 @@
   opacity: 1;
 }
 
-/* ── #4 Display caps on task-ref chips ─────────────────────────────
+/* ── #4 Inline task-ref chip — reference, not announcement ─────────
    Chat task-tag chip — `[data-task-ref]` (TaskRef.tsx). It sits inline
-   in the message stream, so its TYPEFACE follows the Appearance prose
-   font (`--appearance-prose-font`, falling back to `var(--font-sans)`)
-   for a consistent markdown view — same rule as the task-event status
-   pill (shiki). The poster-chip identity (uppercase + tracking + colour
-   + shape) stays; only the font tracks the user's setting. Was a fixed
-   Barlow Condensed (`--forza6-font-task-ref`, since removed). */
+   in the message stream as a *reference*, so its visual weight has to
+   stay subordinate to the surrounding prose. TYPEFACE follows the
+   Appearance prose font (`--appearance-prose-font`, falling back to
+   `var(--font-sans)`) — same rule as the task-event status pill.
+
+   Size: `0.85em` so chip caps height ≈ surrounding body x-height (the
+   classical inline-caps-in-prose ratio). `em` not `px` so the chip
+   tracks the user's Appearance font-size slider proportionally; at the
+   14px default body that resolves to ~12px chip.
+
+   No `text-transform: uppercase` / `letter-spacing: 0.10em` — the
+   previous spec carried both as poster-chip identity, but in 14px body
+   the uppercase Space Grotesk cap-height pushed chips into "billboard"
+   territory inside flowing prose (shiki `O61I0_ISOz_W9A8g` "感觉有点
+   别扭…太大了…很粗糙"; Cindy `OQaJL2VKARGSpM3D` "title 整段被做成印章
+   = 显粗糙"). Mixed-case + no tracking lets the chip sit in the line
+   as a tinted reference instead of a centered banner. The poster-chip
+   identity now lives entirely in colour + shape (accent-soft fill,
+   accent text, `--chip-radius`).
+
+   Was a fixed Barlow Condensed (`--forza6-font-task-ref`, since
+   removed). */
 [data-theme='forza6'] [data-task-ref] {
   font-family: var(--appearance-prose-font, var(--font-sans));
-  letter-spacing: 0.10em;
-  text-transform: uppercase;
+  font-size: 0.85em;
 }
 
 /* ── Markdown inline code ─────────────────────────────────────────
