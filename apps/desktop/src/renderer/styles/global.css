@@ -653,13 +653,25 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    `--border-inline-code` / `--radius-inline-code` / `--text-inline-code`
    so warm-script can keep a soft borderless ink-wash chip while
    forza6 paints a hard lime poster sticker — all via tokens, no
-   per-theme override of this rule needed. */
+   per-theme override of this rule needed.
+
+   Size: `--inline-code-size` (theme-defined `0.88em`) — inline code
+   sits in the prose flow as emphasis, so the chip wants cap-height ≈
+   surrounding body x-height (same reference-vs-announcement rule we
+   applied to `[data-task-ref]` in v7). `em` keeps the chip
+   proportional to the user's Appearance font-size slider; it does NOT
+   read `--appearance-markdown-font-size` directly because the slider
+   already scales `.markdown-body`'s font-size and `em` inherits from
+   that — so going through the appearance token would double-apply.
+   Padding tightened (`0.06em 0.30em`) so the chip-area shrinks with
+   the type. Independent of `--md-code-size` (fenced code) — two
+   surfaces, two sizes. shiki accepted msg `H7DHYMS5mu1xNiJ3`. */
 .markdown-body :not(pre) > code {
   display: inline;
-  padding: 0.08em 0.36em;
+  padding: 0.06em 0.30em;
   margin-inline: 0.15em;
   font-family: var(--appearance-code-font, var(--font-mono));
-  font-size: var(--appearance-markdown-font-size, var(--md-code-size, 14px));
+  font-size: var(--inline-code-size, 0.88em);
   color: var(--text-inline-code);
   background: var(--bg-inline-code);
   border: var(--border-inline-code);

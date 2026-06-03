@@ -140,6 +140,17 @@ describe('theme markdown token cascade contract', () => {
     }
   });
 
+  it('defaults inline-code chip size to 0.88em in every theme', () => {
+    // Inline code is emphasis in prose, not a standalone block — the
+    // chip wants cap-height ≈ surrounding body x-height (same rule as
+    // [data-task-ref] in v7). Independent of `--md-code-size` (which
+    // drives fenced code blocks) — two surfaces, two sizes.
+    // shiki accepted msg `H7DHYMS5mu1xNiJ3`.
+    for (const css of [warmScriptCss, forza6Css]) {
+      expect(css).toContain('--inline-code-size: 0.88em;');
+    }
+  });
+
   /* Forza6 introduced 8 new tokens — every theme MUST define them
      explicitly so a theme switch from forza6 doesn't leak the
      festival-only values via :root fallback (design-new-theme §3.1

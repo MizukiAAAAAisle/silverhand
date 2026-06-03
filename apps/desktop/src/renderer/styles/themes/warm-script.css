@@ -260,6 +260,11 @@
      not content. Independent of `--md-*-size` so themes can drift the
      two without coupling. See forza6.css for the rationale. */
   --system-message-size: 12px;
+  /* Inline code chip size — `em` so it tracks Appearance size, `0.88`
+     so the chip sits subordinate to surrounding prose (chip cap-height
+     ≈ body x-height). Independent of `--md-code-size` (fenced code).
+     See forza6.css for the full rationale. */
+  --inline-code-size: 0.88em;
 
   /* ── Motion ── */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
