@@ -225,12 +225,15 @@
   background-color: #0A0A0A;
 }
 
-/* Sidebar group title — display caps + tighter letter-spacing.
-   Color cascades from the redefined `--text-muted: #4F5F5C` (5.88:1+
-   AA on both pale lime tints). */
+/* Sidebar group title — sans caps + tighter letter-spacing.
+   Per shiki `NklHz_M9fnIuJ6P7` the sidebar should carry Space Grotesk
+   (the brand body face) end-to-end, not Rajdhani — so the section
+   header inherits `--font-sans` from the cascade. Uppercase + 0.16em
+   tracking still differentiates the header from row text without
+   switching faces. Color cascades from the redefined `--text-muted:
+   #4F5F5C` (5.88:1+ AA on both pale lime tints). */
 [data-theme='forza6']
   aside[data-sidebar] section > header {
-  font-family: var(--font-display);
   letter-spacing: 0.16em;
   text-transform: uppercase;
 }

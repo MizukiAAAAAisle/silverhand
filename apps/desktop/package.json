@@ -17,7 +17,6 @@
     "package:dir": "../../scripts/package.sh --dir"
   },
   "dependencies": {
-    "@fontsource/inter": "^5.2.8",
     "@fontsource/rajdhani": "^5.2.7",
     "@fontsource/space-grotesk": "^5.2.10",
     "@fontsource/space-mono": "^5.2.9",
