@@ -427,15 +427,15 @@
      at the same metrics. `--font-serif` is set to sans because the
      festival vibe rejects serif altogether. */
   --font-display: 'Rajdhani', 'Impact', 'Helvetica Neue Condensed', 'Arial Narrow', system-ui, sans-serif;
-  --font-sans: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
   --font-serif: var(--font-sans);
   --font-mono: 'Space Mono', 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', 'Sarasa Mono SC', 'Source Han Mono SC', 'Noto Sans Mono CJK SC', 'PingFang SC', monospace;
 
   /* ── Markdown body ── */
   --md-prose-font: var(--font-sans);
-  --md-prose-size: 12px;
+  --md-prose-size: 13px;
   --md-code-font: var(--font-mono);
-  --md-code-size: 12px;
+  --md-code-size: 13px;
 
   /* ── Motion ── */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);

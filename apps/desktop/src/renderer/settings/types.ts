@@ -30,7 +30,7 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
  *  slider. */
 export const FONT_SIZE_MIN = 12;
 export const FONT_SIZE_MAX = 22;
-export const DEFAULT_MARKDOWN_FONT_SIZE = 12;
+export const DEFAULT_MARKDOWN_FONT_SIZE = 13;
 
 export interface LayoutSettings {
   workspaceSidebarVisible: boolean;

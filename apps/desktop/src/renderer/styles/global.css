@@ -215,7 +215,7 @@ button:disabled { cursor: not-allowed; }
   line-height: 1.55;
   overflow-wrap: anywhere;
   font-family: var(--md-prose-font, var(--font-sans));
-  font-size: var(--md-prose-size, 12px);
+  font-size: var(--md-prose-size, 13px);
 }
 .markdown-body > *:first-child { margin-top: 0; }
 .markdown-body > *:last-child { margin-bottom: 0; }
@@ -247,9 +247,9 @@ button:disabled { cursor: not-allowed; }
      pixel-aligned. The `1.5` factor matches `line-height: 1.5` below
      so the chrome's height tracks the row's actual text leading.
      Cindy PR-8 follow-up #3 (msg `VOGiR_K30xhSOswD`). */
-  --system-message-control-height: max(18px, calc(var(--md-prose-size, 12px) * 1.5));
+  --system-message-control-height: max(18px, calc(var(--md-prose-size, 13px) * 1.5));
   font-family: var(--md-prose-font, var(--font-sans));
-  font-size: var(--md-prose-size, 12px);
+  font-size: var(--md-prose-size, 13px);
   line-height: 1.5;
   /* Column alignment with regular MessageItem rows. shiki PR-10
      follow-up (msg `rhEL2UlGNYG2lgl7`) + Cindy review fix
@@ -658,7 +658,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   padding: 0.08em 0.36em;
   margin-inline: 0.15em;
   font-family: var(--md-code-font, var(--font-mono));
-  font-size: var(--md-code-size, 12px);
+  font-size: var(--md-code-size, 13px);
   color: var(--text-inline-code);
   background: var(--bg-inline-code);
   border: var(--border-inline-code);
@@ -719,7 +719,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border-radius: 0;
   color: var(--text-island);
   font-family: var(--md-code-font, var(--font-mono));
-  font-size: var(--md-code-size, 12px);
+  font-size: var(--md-code-size, 13px);
   line-height: 1.5;
 }
 .markdown-body .code-block--expanded pre {

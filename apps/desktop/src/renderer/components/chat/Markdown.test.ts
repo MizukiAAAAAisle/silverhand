@@ -1015,7 +1015,7 @@ describe('SystemMessage task event rows (PR-2)', () => {
     // the chip) crops at large prose sizes too — the chrome must
     // grow with the prose size. Fix: both chip and pill get their
     // height from `.system-message-row { --system-message-control-height:
-    // max(18px, calc(var(--md-prose-size, 12px) * 1.5)) }` applied via
+    // max(18px, calc(var(--md-prose-size, 13px) * 1.5)) }` applied via
     // attribute selectors. SSR can't resolve CSS variables, so this
     // test instead asserts the inline classes are absent — the
     // CSS-var path is what locks heights together.

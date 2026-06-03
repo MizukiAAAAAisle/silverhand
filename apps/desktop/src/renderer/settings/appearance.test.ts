@@ -125,10 +125,10 @@ describe('theme markdown token cascade contract', () => {
     expect(warmScriptCss).not.toContain(':root');
   });
 
-  it('defaults prose and code markdown font sizes to 12px in every theme', () => {
+  it('defaults prose and code markdown font sizes to 13px in every theme', () => {
     for (const css of [warmScriptCss, forza6Css]) {
-      expect(css).toContain('--md-prose-size: 12px;');
-      expect(css).toContain('--md-code-size: 12px;');
+      expect(css).toContain('--md-prose-size: 13px;');
+      expect(css).toContain('--md-code-size: 13px;');
     }
   });
 
