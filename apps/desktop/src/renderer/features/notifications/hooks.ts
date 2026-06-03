@@ -274,9 +274,14 @@ export function useNotificationToasts(
 
 /**
  * Whether a given notification kind has a meaningful click destination.
- * `mention_self` and `mention_external` open the source message;
- * `agent_start_failed` has no message anchor and is intentionally inert
- * (the user can find the failed agent via the regular Members panel).
+ * `mention_self` opens the message in the conversation where it was
+ * authored. `mention_external` opens the local Mentions DM at the
+ * wrapped system message — that's where the agent will reply, so the
+ * user's continued conversation lives there. (The mention_cc card
+ * inside the wrapped message provides a secondary affordance back to
+ * the source channel.) `agent_start_failed` has no message anchor and
+ * is intentionally inert (user finds the failed agent via the regular
+ * Members panel).
  */
 function isClickableKind(kind: NotificationDto['kind']): boolean {
   return kind === 'mention_self' || kind === 'mention_external';
@@ -306,23 +311,37 @@ export async function resolveNotificationJumpTarget(
     );
   }
   if (n.kind === 'mention_external') {
-    // Original mention site lives in the source workspace. The local
-    // `conversation_id` is the synthesized DM Mentions channel; we
-    // intentionally bypass it and jump straight to the foreign source
-    // so the user lands on the actual message.
-    if (
-      !n.source_workspace_id ||
-      !n.source_conversation_id ||
-      !n.source_message_id
-    ) {
-      return null;
+    // Jump to the local Mentions DM at the wrapped system message —
+    // that's where the agent's reply will land and where the user's
+    // ongoing conversation with the agent lives. The wrapped
+    // `mention_cc` card already inlines the original source content,
+    // and its source pill provides a secondary jump back to the source
+    // conversation when the user needs full context.
+    //
+    // Legacy/malformed rows missing `conversation_id` or `message_id`
+    // fall back to the source coords (older artifact behavior) so
+    // historical notifications stay clickable rather than going inert.
+    if (n.conversation_id && n.message_id) {
+      return resolveTargetFromConversationId(
+        qc,
+        n.workspace_id,
+        n.conversation_id,
+        n.message_id,
+      );
     }
-    return resolveTargetFromConversationId(
-      qc,
-      n.source_workspace_id,
-      n.source_conversation_id,
-      n.source_message_id,
-    );
+    if (
+      n.source_workspace_id &&
+      n.source_conversation_id &&
+      n.source_message_id
+    ) {
+      return resolveTargetFromConversationId(
+        qc,
+        n.source_workspace_id,
+        n.source_conversation_id,
+        n.source_message_id,
+      );
+    }
+    return null;
   }
   return null;
 }

@@ -268,6 +268,10 @@ function MentionCcCard({
     typeof meta['source_message_id'] === 'string'
       ? (meta['source_message_id'] as string)
       : null;
+  const sourceConversationId =
+    typeof meta['source_conversation_id'] === 'string'
+      ? (meta['source_conversation_id'] as string)
+      : null;
   const sourceFromKind =
     typeof meta['source_from_kind'] === 'string'
       ? (meta['source_from_kind'] as string)
@@ -290,6 +294,23 @@ function MentionCcCard({
         )
       : 'user';
 
+  // Secondary nav affordance: after the D-flip, the `mention_external`
+  // notification primary-jumps to this local DM (where we are right
+  // now). The source channel link below restores the legacy "back to
+  // source" path so the user can still see the surrounding context.
+  // No message anchor — `onOpenConversationRef` only takes a
+  // conversation id; landing in the source conversation is the
+  // intended scope.
+  const canJumpSource = !!(sourceConversationId && onOpenConversationRef);
+  const handleOpenSource = canJumpSource
+    ? () => onOpenConversationRef!(sourceConversationId!)
+    : null;
+  const sourceLocationLabel = channelName
+    ? conversationTitle
+      ? `#${channelName} · ${conversationTitle}`
+      : `#${channelName}`
+    : conversationTitle ?? null;
+
   return (
     <div className="border-l-2 border-accent/60 bg-bg-floating/60 px-3 py-2">
       <div className="mb-1 flex items-center gap-1.5 text-xs text-text-muted">
@@ -297,16 +318,21 @@ function MentionCcCard({
         <span>
           mentioned by{' '}
           <span className="text-text-secondary">{sourceUserLabel}</span>
-          {channelName ? (
+          {sourceLocationLabel ? (
             <>
               {' in '}
-              <span className="text-text-secondary">#{channelName}</span>
-            </>
-          ) : null}
-          {conversationTitle ? (
-            <>
-              {' · '}
-              <span className="text-text-secondary">{conversationTitle}</span>
+              {handleOpenSource ? (
+                <button
+                  type="button"
+                  onClick={handleOpenSource}
+                  className="text-text-secondary underline-offset-2 hover:text-accent hover:underline"
+                  data-mention-cc-source="1"
+                >
+                  {sourceLocationLabel}
+                </button>
+              ) : (
+                <span className="text-text-secondary">{sourceLocationLabel}</span>
+              )}
             </>
           ) : null}
         </span>

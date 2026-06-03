@@ -89,10 +89,12 @@ describe('resolveNotificationJumpTarget', () => {
     expect(r).toBeNull();
   });
 
-  it('returns null when mention_external has no source_* fields', async () => {
+  it('returns null when mention_external has no local conversation_id and no source_* fallback', async () => {
     const r = await resolveNotificationJumpTarget(
       makeNotification({
         kind: 'mention_external',
+        conversation_id: null,
+        message_id: null,
         source_workspace_id: null,
         source_conversation_id: null,
         source_message_id: null,
@@ -132,20 +134,57 @@ describe('resolveNotificationJumpTarget', () => {
     });
   });
 
-  it('mention_external uses source_* (not local DM mentions channel)', async () => {
+  it('mention_external jumps to the local Mentions DM at the wrapped message (not source)', async () => {
     const r = await resolveNotificationJumpTarget(
       makeNotification({
         kind: 'mention_external',
         // Local conversation = the synthesized DM Mentions channel.
-        // Must be ignored in favor of the foreign source.
-        workspace_id: '__system_dm_workspace__',
+        // After D-flip this is the primary jump target — that's where
+        // the agent will reply and where the user's continued
+        // conversation lives.
+        workspace_id: 'ws_dm_agent',
         conversation_id: 'dm_mentions',
         message_id: 'wrap_msg',
         source_workspace_id: 'ws_remote',
         source_conversation_id: 'conv_remote',
         source_message_id: 'msg_remote',
       }),
-      mockQc({ conv_remote: makeChannelRef({ id: 'conv_remote', workspace_id: 'ws_remote' }) }),
+      mockQc({
+        dm_mentions: makeChannelRef({
+          id: 'dm_mentions',
+          kind: 'dm_channel',
+          workspace_id: 'ws_dm_agent',
+        }),
+      }),
+    );
+    expect(r).toEqual({
+      workspaceId: 'ws_dm_agent',
+      channelId: 'dm_mentions',
+      threadId: null,
+      messageId: 'wrap_msg',
+    });
+  });
+
+  it('mention_external falls back to source coords for legacy rows missing local conversation_id', async () => {
+    const r = await resolveNotificationJumpTarget(
+      makeNotification({
+        kind: 'mention_external',
+        // Pre-flip artifact rows: conversation_id/message_id may be
+        // null if the wrapped message insert never happened (drop path)
+        // or if the row predates the local-DM wiring entirely.
+        workspace_id: null,
+        conversation_id: null,
+        message_id: null,
+        source_workspace_id: 'ws_remote',
+        source_conversation_id: 'conv_remote',
+        source_message_id: 'msg_remote',
+      }),
+      mockQc({
+        conv_remote: makeChannelRef({
+          id: 'conv_remote',
+          workspace_id: 'ws_remote',
+        }),
+      }),
     );
     expect(r).toEqual({
       workspaceId: 'ws_remote',
@@ -155,13 +194,13 @@ describe('resolveNotificationJumpTarget', () => {
     });
   });
 
-  it('mention_external on a foreign thread: lifts channelId to source workspace parent', async () => {
+  it('mention_external on a foreign thread (legacy fallback): lifts to source workspace parent', async () => {
     const r = await resolveNotificationJumpTarget(
       makeNotification({
         kind: 'mention_external',
-        workspace_id: '__system_dm_workspace__',
-        conversation_id: 'dm_mentions',
-        message_id: 'wrap_msg',
+        workspace_id: null,
+        conversation_id: null,
+        message_id: null,
         source_workspace_id: 'ws_remote',
         source_conversation_id: 'thread_remote',
         source_message_id: 'msg_remote',
