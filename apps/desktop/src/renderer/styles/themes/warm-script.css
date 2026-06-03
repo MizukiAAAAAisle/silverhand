@@ -242,7 +242,7 @@
   /* ── Fonts ── */
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
   --font-serif: 'New York', 'Charter', 'Iowan Old Style', 'Source Serif Pro', Georgia, serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', 'Sarasa Mono SC', 'Source Han Mono SC', 'Noto Sans Mono CJK SC', 'PingFang SC', monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
   /* ── Markdown body defaults (consumed by `.markdown-body`) ──
      User-level overrides land as inline style on `<html>` and beat

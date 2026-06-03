@@ -429,7 +429,7 @@
   --font-display: 'Rajdhani', 'Impact', 'Helvetica Neue Condensed', 'Arial Narrow', system-ui, sans-serif;
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
   --font-serif: var(--font-sans);
-  --font-mono: 'Space Mono', 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', 'Sarasa Mono SC', 'Source Han Mono SC', 'Noto Sans Mono CJK SC', 'PingFang SC', monospace;
+  --font-mono: 'Space Mono', ui-monospace, monospace;
 
   /* ── Markdown body ── */
   --md-prose-font: var(--font-sans);
