@@ -252,18 +252,11 @@ describe('permission helpers', () => {
   });
 
   it('denies user access without explicit workspace_users / conversation_users membership (v25 tightening)', () => {
-    t = buildTestApp();
+    t = buildTestApp({ seedAllFixtureMemberships: false });
     const f = seed(t);
-    // Drop the test-fixture autoseed triggers and remove the local
-    // user from membership tables, simulating a v2 multi-human world
-    // where a user exists but is not a member of this workspace /
-    // conversation.
-    t.ctx.db.exec(
-      `DROP TRIGGER IF EXISTS test_seed_workspace_users;
-       DROP TRIGGER IF EXISTS test_seed_conversation_users;
-       DELETE FROM workspace_users WHERE workspace_id = '${f.workspace.id}';
-       DELETE FROM conversation_users WHERE conversation_id = '${f.channel.id}';`,
-    );
+    // Strict fixture mode disables the legacy auto-membership triggers,
+    // matching the production requirement that route/service code writes
+    // explicit workspace_users / conversation_users rows.
 
     const user: UserPrincipal = { kind: 'user', userId: 'local' };
     expect(canViewWorkspace(t.ctx, user, f.workspace.id)).toBe(false);
@@ -344,16 +337,12 @@ describe('permission helpers', () => {
 
   describe('canViewAgent', () => {
     it('allows owner and same-workspace users while keeping edits owner-only', () => {
-      t = buildTestApp();
+      t = buildTestApp({ seedAllFixtureMemberships: false });
       const f = seed(t);
       const localUser: UserPrincipal = { kind: 'user', userId: 'local' };
       const teammate: UserPrincipal = { kind: 'user', userId: 'teammate' };
       const outsider: UserPrincipal = { kind: 'user', userId: 'other' };
 
-      t.ctx.db.exec(
-        `DROP TRIGGER IF EXISTS test_seed_workspace_users;
-         DELETE FROM workspace_users WHERE workspace_id = '${f.workspace.id}';`,
-      );
       f.workspaces.addUserMember(f.workspace.id, 'local');
       f.workspaces.addUserMember(f.workspace.id, 'teammate');
 

@@ -77,10 +77,9 @@ import { join as joinPath } from 'node:path';
  * Records every call routes / provision make into the runtime host.
  * Routes use `.start`, `.stop`, `.deliverMessage`, `.stopAll`,
  * `.reconcileOnBoot`, `.isRunning` — none of which can be allowed to
- * spawn real CLIs in tests. (Class name kept for diff readability;
- * the type cast is to `AgentRuntimeHost` post-Commit B.)
+ * spawn real CLIs in tests.
  */
-export class FakeConversationManager {
+export class FakeConversationManager implements AgentRuntimeHost {
   starts: Array<{ conversationId: string; agentId: string }> = [];
   stops: Array<{
     conversationId: string;
@@ -176,6 +175,9 @@ export class FakeConversationManager {
   }
   async stopAll(): Promise<void> {
     this.stoppedAll++;
+  }
+  async closeActivityLog(): Promise<void> {
+    // No activity log stream exists in this in-process fake.
   }
   async deliverMessage(
     conversationId: string,
@@ -738,6 +740,12 @@ export interface BuildTestAppOptions {
   deploymentMode?: BackendDeploymentMode;
   hostWsController?: () => HostWsServerController | null;
   /**
+   * Legacy route fixtures default to permissive auto-membership triggers.
+   * Set false for permission-boundary tests that need production-like
+   * explicit workspace_users / conversation_users rows.
+   */
+  seedAllFixtureMemberships?: boolean;
+  /**
    * D4.a Commit 4 — override the bind-address classification for
    * `/api/server/info` and any route that reads it. Defaults to
    * `'loopback'` because the test app does not actually bind a
@@ -772,7 +780,9 @@ export interface TestApp {
  * channel provision, which we don't want in unit tests.
  */
 export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
-  const { db, viewerUserId } = openTestDb();
+  const { db, viewerUserId } = openTestDb({
+    seedAllFixtureMemberships: options.seedAllFixtureMemberships,
+  });
   const tmp = makeTempSilverhandDir();
   // The real `startBackend` mkdirs workspacesRoot before mounting routes.
   mkdirSync(tmp.workspacesRoot, { recursive: true });
@@ -883,7 +893,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     // override `hostWsController` (incl. `() => null`) therefore also
     // steer the materialize path, preserving pre-D5.a semantics.
     outboundFrameAdapter: hostWsControllerFactory,
-    runtimeHost: fake as unknown as AgentRuntimeHost,
+    runtimeHost: fake,
   };
   // D4.e-1 3b-2/3b-3 — the same shared registry backfiller production wires,
   // so list_workspaces ensure()s before dispatching agent_workspace_index.

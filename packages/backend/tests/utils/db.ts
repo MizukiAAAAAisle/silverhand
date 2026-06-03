@@ -23,7 +23,17 @@ import type { Database as Db } from 'better-sqlite3';
  * that need the registration-required state should override that header
  * to an empty value and/or wipe the legacy settings pointer.
  */
-export function openTestDb(): {
+export interface OpenTestDbOptions {
+  /**
+   * Legacy compatibility mode for pre-v25 route/repo tests that create
+   * workspaces/conversations directly. Disable this in permission-sensitive
+   * tests so membership rows must come from the same route/service surfaces
+   * production uses.
+   */
+  seedAllFixtureMemberships?: boolean;
+}
+
+export function openTestDb(options: OpenTestDbOptions = {}): {
   db: Db;
   localHostId: string;
   /** The viewer id resolved by the principal middleware in this
@@ -69,6 +79,8 @@ export function openTestDb(): {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
   ).run();
 
+  const seedAllFixtureMemberships = options.seedAllFixtureMemberships ?? true;
+
   // v25 test-fixture compatibility: production permission gates now
   // require explicit `workspace_users` / `conversation_users`
   // membership for human principals. Production code adds the viewer
@@ -80,21 +92,23 @@ export function openTestDb(): {
   // insert so direct-repo tests keep working without per-test
   // boilerplate. Routes-driven tests still pass because the explicit
   // route inserts are `INSERT OR IGNORE`.
-  db.exec(`
-    CREATE TRIGGER IF NOT EXISTS test_seed_workspace_users
-    AFTER INSERT ON workspaces
-    BEGIN
-      INSERT OR IGNORE INTO workspace_users (workspace_id, user_id, joined_at)
-      SELECT NEW.id, u.id, NEW.created_at FROM users u;
-    END;
+  if (seedAllFixtureMemberships) {
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS test_seed_workspace_users
+      AFTER INSERT ON workspaces
+      BEGIN
+        INSERT OR IGNORE INTO workspace_users (workspace_id, user_id, joined_at)
+        SELECT NEW.id, u.id, NEW.created_at FROM users u;
+      END;
 
-    CREATE TRIGGER IF NOT EXISTS test_seed_conversation_users
-    AFTER INSERT ON conversations
-    BEGIN
-      INSERT OR IGNORE INTO conversation_users (conversation_id, user_id, joined_at)
-      SELECT NEW.id, u.id, NEW.created_at FROM users u;
-    END;
-  `);
+      CREATE TRIGGER IF NOT EXISTS test_seed_conversation_users
+      AFTER INSERT ON conversations
+      BEGIN
+        INSERT OR IGNORE INTO conversation_users (conversation_id, user_id, joined_at)
+        SELECT NEW.id, u.id, NEW.created_at FROM users u;
+      END;
+    `);
+  }
 
   return {
     db,

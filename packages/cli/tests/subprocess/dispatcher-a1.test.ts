@@ -18,11 +18,11 @@ import { dirname, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CLI_SRC = resolve(__dirname, '..', 'src', 'cli.ts');
+const CLI_SRC = resolve(__dirname, '..', '..', 'src', 'cli.ts');
 // `tsx` is hoisted under packages/cli/node_modules/.bin in this pnpm
 // workspace. Resolving relative to this test file makes the path
 // stable regardless of how vitest's cwd is set.
-const TSX_BIN = resolve(__dirname, '..', 'node_modules', '.bin', 'tsx');
+const TSX_BIN = resolve(__dirname, '..', '..', 'node_modules', '.bin', 'tsx');
 
 interface RunResult {
   code: number | null;

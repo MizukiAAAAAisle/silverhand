@@ -38,8 +38,8 @@ import { dirname, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CLI_SRC = resolve(__dirname, '..', 'src', 'cli.ts');
-const TSX_BIN = resolve(__dirname, '..', 'node_modules', '.bin', 'tsx');
+const CLI_SRC = resolve(__dirname, '..', '..', 'src', 'cli.ts');
+const TSX_BIN = resolve(__dirname, '..', '..', 'node_modules', '.bin', 'tsx');
 
 interface CapturedRequest {
   method: string;
