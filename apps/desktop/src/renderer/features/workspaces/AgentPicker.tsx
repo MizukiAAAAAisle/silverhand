@@ -1,5 +1,5 @@
 import * as Select from '@radix-ui/react-select';
-import { ChevronDown, Trash2, UserPlus } from 'lucide-react';
+import { ChevronDown, UserPlus, X } from 'lucide-react';
 import { useMemo } from 'react';
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
@@ -31,20 +31,25 @@ interface MemberPickerProps {
 }
 
 /**
- * Shared member picker. The add-member Select
- * trigger stays anchored at the top so it never drifts off-screen as
- * the selected list grows; selected members render below it as
- * full-width rows (avatar + display name + monospace `@handle` +
- * remove button), and the dropdown offers not-yet-selected candidates
- * with the same row layout. Visually identical to the rows produced
- * by `ManageMembersPopover` and `AddConversationMemberPopover`, which
- * follow the same "input on top, candidates / members below" rule —
- * so users see the same "member chip" vocabulary and the same
- * layout grammar regardless of which surface they encounter it on.
+ * Shared member picker. The add-member Select trigger stays anchored
+ * at the bottom; selected members render ABOVE it as compact wrapping
+ * tags (avatar + display_name + monospace `@handle` + tiny remove X)
+ * rather than full-width rows — picked members are confirmed identity
+ * chips, not "directory entries you can re-inspect". Per shiki
+ * #task:888: "选择过的不要出现在下方,而是在 Input 上方出现,但是不要
+ * 一个 member 占一行,而是一个 tag,显示头像、displayname, handle".
  *
- * The caller still owns filtering the candidate pool. `AgentPicker`
- * remains as the agent-only compatibility wrapper for older surfaces;
- * `MemberPicker` accepts agents and humans for workspace/channel creation.
+ * Tag pills wrap on overflow; the trigger sits below them, so the
+ * member-management surface reads as "what's in / how to add more"
+ * (top-down: state, then action) instead of "how to add / what's in"
+ * which inverts the natural editing flow.
+ *
+ * Callers are responsible for filtering candidates (e.g. excluding the
+ * viewer because the backend auto-includes the workspace/channel
+ * creator as a member); the picker stays a pure presentation primitive.
+ * `AgentPicker` remains as the agent-only compatibility wrapper for
+ * older surfaces; `MemberPicker` accepts agents and humans for
+ * workspace/channel creation.
  */
 export function AgentPicker({
   candidates,
@@ -120,6 +125,66 @@ export function MemberPicker({
 
   return (
     <div className="flex flex-col gap-1.5">
+      {selectedKeys.length > 0 ? (
+        <ul
+          className="flex flex-wrap gap-1.5"
+          aria-label="已选成员"
+        >
+          {selectedKeys.map(id => {
+            const candidate = byKey.get(id);
+            if (!candidate) {
+              // Lost reference (candidates rebuilt without this id) —
+              // render a minimal placeholder so the user can still
+              // remove the orphan from `value`.
+              return (
+                <li key={id}>
+                  <SelectedTag
+                    avatar={null}
+                    displayName={id.slice(0, 8)}
+                    handle={null}
+                    onRemove={() => removeMember(id)}
+                    ariaRemoveLabel={`移除 ${id.slice(0, 8)}`}
+                    muted
+                  />
+                </li>
+              );
+            }
+            const displayName = memberDisplayName(candidate);
+            const handle = memberHandle(candidate);
+            const avatar =
+              candidate.kind === 'agent' ? (
+                <AgentAvatar
+                  runtime={candidate.agent.runtime}
+                  size={16}
+                  avatarObjectUrl={
+                    agentAvatars.get(candidate.agent.id) ?? null
+                  }
+                  alt={displayName}
+                />
+              ) : (
+                <UserAvatar
+                  size={16}
+                  avatarObjectUrl={
+                    humanAvatars.get(candidate.user.id) ?? null
+                  }
+                  alt={displayName}
+                />
+              );
+            return (
+              <li key={id}>
+                <SelectedTag
+                  avatar={avatar}
+                  displayName={displayName}
+                  handle={handle}
+                  onRemove={() => removeMember(id)}
+                  ariaRemoveLabel={`移除 @${handle}`}
+                />
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+
       <Select.Root
         value=""
         onValueChange={v => {
@@ -198,80 +263,58 @@ export function MemberPicker({
           </Select.Content>
         </Select.Portal>
       </Select.Root>
-
-      {selectedKeys.length > 0 ? (
-        <ul className="flex flex-col gap-1">
-          {selectedKeys.map(id => {
-            const candidate = byKey.get(id);
-            if (!candidate) {
-              // Lost reference (candidates rebuilt without this id) —
-              // render a minimal placeholder so the user can still
-              // remove the orphan from `value`.
-              return (
-                <li
-                  key={id}
-                  className="flex items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base px-2 py-1 text-text-muted"
-                >
-                  <span className="truncate text-sm">{id.slice(0, 8)}</span>
-                  <button
-                    type="button"
-                    onClick={() => removeMember(id)}
-                    aria-label={`移除 ${id.slice(0, 8)}`}
-                    className="ml-auto flex size-6 items-center justify-center rounded-[var(--chip-radius)] text-text-muted hover:bg-bg-hover hover:text-error"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
-                </li>
-              );
-            }
-            const displayName = memberDisplayName(candidate);
-            const handle = memberHandle(candidate);
-            return (
-              <li
-                key={id}
-                className="flex items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base px-2 py-1"
-              >
-                {candidate.kind === 'agent' ? (
-                  <AgentAvatar
-                    runtime={candidate.agent.runtime}
-                    size={20}
-                    avatarObjectUrl={
-                      agentAvatars.get(candidate.agent.id) ?? null
-                    }
-                    alt={displayName}
-                  />
-                ) : (
-                  <UserAvatar
-                    size={20}
-                    avatarObjectUrl={
-                      humanAvatars.get(candidate.user.id) ?? null
-                    }
-                    alt={displayName}
-                  />
-                )}
-                <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-                  <span className="truncate text-sm font-medium text-text-primary">
-                    {displayName}
-                  </span>
-                  <span className="truncate font-mono text-[11px] text-text-muted">
-                    @{handle}
-                  </span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => removeMember(id)}
-                  aria-label={`移除 @${handle}`}
-                  title="移除成员"
-                  className="ml-auto flex size-6 items-center justify-center rounded-[var(--chip-radius)] text-text-muted hover:bg-bg-hover hover:text-error"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      ) : null}
     </div>
+  );
+}
+
+/**
+ * Selected-member chip — compact pill with avatar + display_name +
+ * mono `@handle` + inline remove X. Multiple chips wrap inside the
+ * parent `flex-wrap` row; the chip itself is `inline-flex` so it
+ * sizes to its content. Per shiki #task:888: NOT a full-width row —
+ * picked members are confirmation chips, not directory entries.
+ */
+function SelectedTag({
+  avatar,
+  displayName,
+  handle,
+  onRemove,
+  ariaRemoveLabel,
+  muted = false,
+}: {
+  avatar: React.ReactNode | null;
+  displayName: string;
+  handle: string | null;
+  onRemove: () => void;
+  ariaRemoveLabel: string;
+  muted?: boolean;
+}): JSX.Element {
+  return (
+    <span
+      className={
+        'inline-flex max-w-full items-center gap-1.5 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base py-0.5 pl-1 pr-1 text-xs '
+        + (muted ? 'text-text-muted' : 'text-text-primary')
+      }
+    >
+      {avatar ? <span className="shrink-0">{avatar}</span> : null}
+      <span className="flex min-w-0 items-baseline gap-1">
+        <span className="truncate font-medium">{displayName}</span>
+        {handle ? (
+          <span className="truncate font-mono text-[11px] text-text-muted">
+            @{handle}
+          </span>
+        ) : null}
+      </span>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={ariaRemoveLabel}
+        title="移除成员"
+        className="flex size-4 shrink-0 items-center justify-center rounded-[var(--chip-radius)] text-text-muted hover:bg-bg-hover hover:text-error focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+      >
+        <X className="size-3" aria-hidden />
+      </button>
+    </span>
   );
 }
 

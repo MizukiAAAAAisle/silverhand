@@ -9,6 +9,11 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import {
+  isBackendUnreachable,
+  isRegistrationRequired,
+  useViewerUser,
+} from '@/features/me/hooks';
 import { MemberPicker, type MemberPickerCandidate } from './AgentPicker';
 import { useCreateChannel, useWorkspaceMemberLists } from './hooks';
 
@@ -41,6 +46,13 @@ export function CreateChannelDialog({
 
   const { data: members = EMPTY_MEMBERS } = useWorkspaceMemberLists(workspaceId);
   const createChannel = useCreateChannel(workspaceId);
+  const viewer = useViewerUser();
+  const viewerUserId =
+    viewer.data
+    && !isRegistrationRequired(viewer.data)
+    && !isBackendUnreachable(viewer.data)
+      ? viewer.data.id
+      : null;
 
   const isDm = workspaceKind === 'dm';
 
@@ -66,17 +78,33 @@ export function CreateChannelDialog({
     if (isDm) return;
     const totalMembers = members.agents.length + members.humans.length;
     if (totalMembers === 0) return; // wait for the query to land
+    // Auto-seed every workspace agent + every workspace human EXCEPT
+    // the viewer themselves — the backend always unions the creator
+    // into the channel member set (`channel-service.ts`:
+    // `Array.from(new Set([input.actor.userId, ...explicitUserMemberIds]))`),
+    // so the viewer is effectively forced. Per shiki #task:888 we don't
+    // surface that forced membership as a deselectable chip; the picker
+    // only lists the candidates the user actually controls.
     setSelectedAgents(members.agents.map(m => m.id));
-    setSelectedHumans(members.humans.map(m => m.id));
+    setSelectedHumans(
+      members.humans
+        .filter(m => m.id !== viewerUserId)
+        .map(m => m.id),
+    );
     seededOnceRef.current = true;
-  }, [open, isDm, members]);
+  }, [open, isDm, members, viewerUserId]);
 
   const candidates = useMemo<MemberPickerCandidate[]>(
     () => [
       ...members.agents.map(agent => ({ kind: 'agent' as const, agent })),
-      ...members.humans.map(user => ({ kind: 'human' as const, user })),
+      // See seed effect above — the viewer is auto-added by the
+      // backend on every channel create, so they have no business
+      // appearing as a selectable human candidate either.
+      ...members.humans
+        .filter(user => user.id !== viewerUserId)
+        .map(user => ({ kind: 'human' as const, user })),
     ],
-    [members],
+    [members, viewerUserId],
   );
   const selectedMembers = useMemo(
     () => [

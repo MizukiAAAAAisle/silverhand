@@ -13,6 +13,11 @@ import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useHostProvenanceGate } from '@/features/hosts/hooks';
 import { useAgents } from '@/features/agents/hooks';
+import {
+  isBackendUnreachable,
+  isRegistrationRequired,
+  useViewerUser,
+} from '@/features/me/hooks';
 import { useUsers } from '@/features/users/hooks';
 import { MemberPicker, type MemberPickerCandidate } from './AgentPicker';
 import { useCreateWorkspace } from './hooks';
@@ -37,6 +42,13 @@ export function CreateWorkspaceDialog({
 
   const { data: agents = [] } = useAgents();
   const { data: users = [] } = useUsers();
+  const viewer = useViewerUser();
+  const viewerUserId =
+    viewer.data
+    && !isRegistrationRequired(viewer.data)
+    && !isBackendUnreachable(viewer.data)
+      ? viewer.data.id
+      : null;
   const createWorkspace = useCreateWorkspace();
   const hostProvenance = useHostProvenanceGate();
   // Local desktop host → the user can pick a real folder on this machine.
@@ -58,9 +70,18 @@ export function CreateWorkspaceDialog({
   const memberCandidates = useMemo<MemberPickerCandidate[]>(
     () => [
       ...agents.map((agent: AgentDto) => ({ kind: 'agent' as const, agent })),
-      ...users.map((user: UserDto) => ({ kind: 'human' as const, user })),
+      // The viewer is auto-added as a workspace member by the backend
+      // (`routes.ts: workspaces.addUserMember(workspace.id, viewerUserId)`
+      // runs before the explicit `member_user_ids`); listing them as a
+      // selectable candidate would be misleading "do I add myself?"
+      // noise. Per shiki #task:888: "操作人应该是默认加入的,而不是需要
+      // 选择". Drop the viewer here so they never appear in the picker
+      // dropdown or as a selected tag.
+      ...users
+        .filter((user: UserDto) => user.id !== viewerUserId)
+        .map((user: UserDto) => ({ kind: 'human' as const, user })),
     ],
-    [agents, users],
+    [agents, users, viewerUserId],
   );
 
   const selectedMembers = useMemo(
