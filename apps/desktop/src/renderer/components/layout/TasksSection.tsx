@@ -390,7 +390,7 @@ function TaskCard({
         }}
         onDragEnd={() => setDragging(false)}
         className={cn(
-          'group relative cursor-grab rounded-md border border-border-subtle bg-bg-base transition-colors hover:border-accent hover:bg-bg-hover active:cursor-grabbing',
+          'group relative min-w-0 cursor-grab rounded-md border border-border-subtle bg-bg-base transition-colors hover:border-accent hover:bg-bg-hover active:cursor-grabbing',
           dragging && 'opacity-50',
         )}
       >
@@ -405,12 +405,15 @@ function TaskCard({
         aria-label="跳转到消息"
         className="absolute inset-0 z-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       />
-      <div className="pointer-events-none relative z-10 p-2">
+      <div className="pointer-events-none relative z-10 min-w-0 p-2">
         {/* Row 1: #number + interactive status badge (reads "Closed" for
             a closed task — no separate chip). v6.5m: 2-row layout
             restored after v6.5l single-row attempt compressed title
-            space (shiki feedback). Mirrors WorkspaceTasksDrawer.tsx. */}
-        <div className="flex items-center gap-1.5 pb-0.5 leading-none">
+            space (shiki feedback). Mirrors WorkspaceTasksDrawer.tsx.
+            `flex-wrap` (#task:918): in narrow column widths the chip
+            ("in progress" / "in review") drops to its own line beneath
+            `#nnn` instead of overflowing the card edge. */}
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 pb-0.5 leading-none">
           <span data-tasks-num className="shrink-0 font-mono text-[10px] text-text-muted">
             #{task.task_number}
           </span>
@@ -420,17 +423,16 @@ function TaskCard({
             className="pointer-events-auto"
           />
         </div>
-        {/* Row 2: title */}
-        <span className="block min-w-0 break-words text-xs text-text-primary">
+        {/* Row 2: title — `[overflow-wrap:anywhere]` so long URLs / hashes
+            without spaces still break inside narrow cards (#task:918). */}
+        <span className="block min-w-0 text-xs text-text-primary [overflow-wrap:anywhere]">
           {task.title}
         </span>
         {/* Row 3: assignee · in conversation · created (inline meta,
             mirrors the popover layout — see TaskRef.TaskPopoverBody).
-            Single-line layout: only the conversation name shrinks /
-            ellipsizes when the row overflows, keeping assignee & time
-            anchored. Wrapping was tried but broke the card grid's
-            vertical rhythm (@shiki feedback `idpLhTxbhKQDy--j`). */}
-        <div className="mt-1 flex items-baseline gap-1.5 text-[10px] text-text-muted">
+            `flex-wrap` (#task:918): narrow cards let each segment drop
+            to a new line instead of overflowing. */}
+        <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[10px] text-text-muted">
           <span className="shrink-0 text-text-secondary">
             {task.assignee ? `@${task.assignee.name}` : (
               <span className="italic">unassigned</span>

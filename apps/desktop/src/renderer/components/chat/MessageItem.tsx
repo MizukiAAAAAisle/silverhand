@@ -1,4 +1,5 @@
 import { type FocusEvent, useCallback, useEffect, useState } from 'react';
+import dayjs from 'dayjs';
 import { Bookmark, Check, ClipboardCheck, CornerUpLeft, FileText, User } from 'lucide-react';
 import type {
   AgentDto,
@@ -26,7 +27,6 @@ import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 import { MessageContextMenu } from './MessageContextMenu';
 import { useMessageLayoutMode } from './useMessageLayoutMode';
-import { useRelativeTime } from './useRelativeTime';
 
 interface MessageItemProps {
   message: MessageDto;
@@ -115,7 +115,7 @@ interface MessageItemProps {
 
 /**
  * Renders a non-system message (user or agent) as a hoverable row with
- * markdown body, role-name + relative time header, and a Slack-style
+ * markdown body, role-name + absolute time header, and a Slack-style
  * pair of action affordances:
  *
  * - **Frame-corner action controls** (Save + Thread) — absolutely
@@ -203,7 +203,14 @@ export function MessageItem({
   const displayLabel = isUser
     ? human?.display_name?.trim() || name
     : `@${agent?.display_name?.trim() || name}`;
-  const { relative, absolute } = useRelativeTime(message.created_at);
+  // Absolute time stamp (shiki #task:918): the header shows the literal
+  // wall-clock value (`MM/DD HH:mm`) instead of "3 分钟前", and the
+  // tooltip carries the fuller `YYYY-MM-DD HH:mm:ss` for precise
+  // reference. Computed inline — no minute-tick re-render needed since
+  // the absolute value is immutable.
+  const createdAt = dayjs(message.created_at);
+  const timeLabel = createdAt.format('MM/DD HH:mm');
+  const timeTooltip = createdAt.format('YYYY-MM-DD HH:mm:ss');
   const { toMembers, toMembersUser } = useNav();
   const navigateToAgent = useCallback(
     (agentId: string) => toMembers(agentId),
@@ -309,10 +316,10 @@ export function MessageItem({
             <>
               <time
                 dateTime={new Date(message.created_at).toISOString()}
-                title={absolute}
+                title={timeTooltip}
                 className="text-[11px] text-text-muted"
               >
-                {relative}
+                {timeLabel}
               </time>
               <span className="ml-2 inline-block">
                 <AuthorLabel
@@ -346,10 +353,10 @@ export function MessageItem({
               />
               <time
                 dateTime={new Date(message.created_at).toISOString()}
-                title={absolute}
+                title={timeTooltip}
                 className="ml-2 text-[11px] text-text-muted"
               >
-                {relative}
+                {timeLabel}
               </time>
               {taskTag}
             </>

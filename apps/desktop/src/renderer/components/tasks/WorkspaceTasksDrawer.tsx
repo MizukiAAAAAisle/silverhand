@@ -761,7 +761,7 @@ function TaskCard({
         }}
         onDragEnd={() => setDragging(false)}
         className={cn(
-          'group relative cursor-grab rounded-md border border-border-subtle bg-bg-primary transition-all hover:border-accent hover:bg-bg-hover active:cursor-grabbing',
+          'group relative min-w-0 cursor-grab rounded-md border border-border-subtle bg-bg-primary transition-all hover:border-accent hover:bg-bg-hover active:cursor-grabbing',
           // Brief ring pulse when this card is the focused-task target.
           // Cleared by the drawer's setTimeout (~1.4s) so the highlight
           // doesn't linger on next open. `transition-all` lets the ring
@@ -784,8 +784,9 @@ function TaskCard({
       />
       {/* Content layer. `pointer-events-none` so text clicks fall
           through to the jump overlay; only the status badge re-enables
-          pointer events. */}
-      <div className="pointer-events-none relative z-10 p-2">
+          pointer events. `min-w-0` propagates the row's narrow-width
+          shrink down to the title/meta rows below (#task:918). */}
+      <div className="pointer-events-none relative z-10 min-w-0 p-2">
         {/* Row 1: #number + interactive status badge inline (reads
             "Closed" for a closed task — no separate chip). v6.5m
             (#task:917): reverted from the v6.5l single-row merge
@@ -796,9 +797,12 @@ function TaskCard({
             edge alignment between #nnn and title is handled by the
             `margin-left: -1px` nudge on `[data-tasks-num]` (forza6-
             components.css) that compensates Rajdhani's wider left
-            side-bearing on `#`. */}
-        <div className="flex items-center gap-1.5 pb-0.5 leading-none">
-          <span data-tasks-num className="font-mono text-[10px] text-text-muted">
+            side-bearing on `#`.
+            `flex-wrap` (#task:918): in narrow drawer/column widths the
+            chip ("in progress" / "in review") drops to its own line
+            beneath `#nnn` instead of overflowing the card edge. */}
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 pb-0.5 leading-none">
+          <span data-tasks-num className="shrink-0 font-mono text-[10px] text-text-muted">
             #{task.task_number}
           </span>
           <TaskStatusBadge
@@ -807,17 +811,21 @@ function TaskCard({
             className="pointer-events-auto"
           />
         </div>
-        {/* Row 2: title */}
-        <span className="block min-w-0 break-words text-xs text-text-primary">
+        {/* Row 2: title — `[overflow-wrap:anywhere]` (more aggressive
+            than `break-words`) so a long URL or hash without spaces
+            still breaks inside a narrow card instead of pushing the
+            card's effective width past its column. */}
+        <span className="block min-w-0 text-xs text-text-primary [overflow-wrap:anywhere]">
           {task.title}
         </span>
         {/* Row 3: assignee · in conversation · created (inline meta,
             mirrors the popover layout — see TaskRef.TaskPopoverBody).
-            Single-line layout: only the conversation name shrinks /
-            ellipsizes when the row overflows, keeping assignee & time
-            anchored. Wrapping was tried but broke the card grid's
-            vertical rhythm (@shiki feedback `idpLhTxbhKQDy--j`). */}
-        <div className="mt-1 flex items-baseline gap-1.5 text-[10px] text-text-muted">
+            `flex-wrap` (#task:918): narrow cards let each segment drop
+            to a new line instead of overflowing. The conversation span
+            keeps `min-w-0 truncate` so it still ellipsizes when forced
+            onto a single line with siblings; gap-y-0 keeps stacked
+            lines tight. */}
+        <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[10px] text-text-muted">
           <span className="shrink-0 text-text-secondary">
             {task.assignee ? `@${task.assignee.name}` : (
               <span className="italic">unassigned</span>

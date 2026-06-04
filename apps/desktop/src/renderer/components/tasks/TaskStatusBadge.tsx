@@ -56,7 +56,12 @@ const CHIP =
   // misaligning with siblings (e.g. card row 1's `#nnn` stamp).
   // Scoped opt-out per Tailwind's intended pattern — prose stays at
   // the loose default, only this chip tightens.
-  'rounded-[var(--chip-radius)] px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide leading-none';
+  // `whitespace-nowrap` keeps "in progress" / "in review" cohesive when
+  // the card's row 1 wraps under narrow column widths (TasksSection at low
+  // viewport + WorkspaceTasksDrawer at MIN_WIDTH share 5 columns). The
+  // chip drops to its own line beneath `#nnn` instead of breaking
+  // mid-word.
+  'rounded-[var(--chip-radius)] whitespace-nowrap px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide leading-none';
 
 export function TaskStatusBadge({
   status,
