@@ -151,7 +151,7 @@ export function AgentInfoPopover({
           onPointerEnter={scheduleOpen}
           onPointerLeave={scheduleClose}
           data-popover-frame="info"
-          className="z-50 w-[260px] max-w-[calc(100vw-32px)] rounded-md border border-border bg-bg-floating p-3 shadow-lg outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
+          className="z-50 w-[260px] max-w-[calc(100vw-32px)] bg-bg-floating p-3 shadow-lg outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
           {/* v3 layout (#task:912 review round 7 → round 9 final):
                 avatar | name + ● presence    [↻ ⏻ ⌫]   ← actions top-right

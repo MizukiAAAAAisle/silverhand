@@ -143,7 +143,7 @@ export function CreateWorkspaceDialog({
         <DialogHeader>
           <DialogTitle>新建 Workspace</DialogTitle>
           <DialogDescription>
-            一个 Workspace 是一个本地工作目录上的协作空间。创建后会自动开一个 Onboarding Channel，你在里面通过对话塑造每个成员的角色。
+            一个本地目录上的协作空间，创建后会自动开 Onboarding Channel。
           </DialogDescription>
         </DialogHeader>
 
@@ -164,29 +164,29 @@ export function CreateWorkspaceDialog({
             {canPickLocalFolder ? (
               // Local host: native folder picker is the primary affordance;
               // the typed input mirrors the picked path and stays editable.
-              <>
-                <div className="flex gap-2">
-                  <Input
-                    id="ch-path"
-                    value={workspacePath}
-                    onChange={e => setWorkspacePath(e.target.value)}
-                    placeholder="留空则由该 host 的 daemon 在其托管目录下自动创建"
-                    className="font-mono text-xs"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="md"
-                    onClick={pickDirectory}
-                  >
-                    <FolderOpen className="size-4" />
-                    浏览
-                  </Button>
-                </div>
-                <span className="text-xs text-text-muted">
-                  路径由该 host 的 daemon 校验与绑定。
-                </span>
-              </>
+              // The picker button is icon-only (shiki #task:920 D) — the
+              // FolderOpen glyph + tooltip is enough; freeing a label
+              // worth of width lets the typed path breathe.
+              <div className="flex gap-2">
+                <Input
+                  id="ch-path"
+                  value={workspacePath}
+                  onChange={e => setWorkspacePath(e.target.value)}
+                  placeholder="留空则由该 host 的 daemon 在其托管目录下自动创建"
+                  className="font-mono text-xs"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="md"
+                  onClick={pickDirectory}
+                  aria-label="浏览"
+                  title="浏览"
+                  className="w-9 shrink-0 px-0"
+                >
+                  <FolderOpen className="size-4" />
+                </Button>
+              </div>
             ) : (
               // Remote / sandbox host: no native picker. Default to the
               // daemon-managed path; expose a typed override under "高级".

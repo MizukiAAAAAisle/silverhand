@@ -1,11 +1,17 @@
-import { useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Copy, FolderOpen, Pin, PinOff, User } from 'lucide-react';
 import { toast } from 'sonner';
+import type { AgentDto } from '@silverhand/shared';
 import {
   AppContextMenu,
   AppContextMenuItem,
   AppContextMenuSeparator,
 } from '@/components/menus/AppContextMenu';
+import { AgentAvatar } from '@/components/AgentAvatar';
+import {
+  useAgentAvatarObjectUrls,
+  type AgentAvatarSource,
+} from '@/features/agents/avatar-hooks';
 import { SidebarRow, SidebarSection } from './sidebar-shared';
 
 type WorkspaceUiKind = 'regular' | 'dm';
@@ -46,6 +52,13 @@ interface WorkspaceGroupProps {
   /** Whether the group starts expanded. Defaults to true; archive group
    *  defaults to false so it stays out of the way. */
   defaultExpanded?: boolean;
+  /** Lookup of all workspace agents, keyed by id. When present, DM
+   *  workspace rows resolve their `dm_agent_id` here and render the
+   *  agent's uploaded avatar (or runtime icon fallback) via
+   *  `<AgentAvatar>` instead of the generic `User` glyph. Optional so
+   *  callers without agent context (tests / future surfaces) still get
+   *  a sane fallback. #task:919 */
+  agentsById?: ReadonlyMap<string, AgentDto>;
 }
 
 const ICON_BY_KIND: Record<WorkspaceUiKind, JSX.Element> = {
@@ -67,7 +80,27 @@ export function WorkspaceGroup({
   onAdd,
   emptyHint,
   defaultExpanded,
+  agentsById,
 }: WorkspaceGroupProps): JSX.Element {
+  // Collect every DM agent rendered in THIS group so we can batch-fetch
+  // their avatar object URLs once per group. The list is stable across
+  // renders unless workspaces or the agent lookup actually changes,
+  // which keeps `useAgentAvatarObjectUrls`' cacheKey stable. Regular
+  // workspaces contribute nothing here; archived groups (mixed kinds)
+  // pick up their DM members the same way. #task:919
+  const dmAgentSources = useMemo<AgentAvatarSource[]>(() => {
+    if (!agentsById) return [];
+    const out: AgentAvatarSource[] = [];
+    for (const w of workspaces) {
+      if (w.kind !== 'dm' || !w.dm_agent_id) continue;
+      const agent = agentsById.get(w.dm_agent_id);
+      if (!agent) continue;
+      out.push({ id: agent.id, avatar_url: agent.avatar_url });
+    }
+    return out;
+  }, [workspaces, agentsById]);
+  const dmAgentAvatarUrls = useAgentAvatarObjectUrls(dmAgentSources);
+
   return (
     <SidebarSection
       label={label}
@@ -84,6 +117,26 @@ export function WorkspaceGroup({
           const canPin = w.kind === 'regular' && !w.archived && !!onPinWorkspace;
           const canReveal = canRevealWorkspace?.(w) ?? false;
           const pinned = isWorkspacePinned(w);
+          // DM rows: render the agent's avatar (or runtime icon
+          // fallback) instead of the generic `User` glyph. Falls back
+          // gracefully to `ICON_BY_KIND.dm` when the agent lookup is
+          // missing (caller didn't thread `agentsById`) or the agent
+          // is no longer in the list (just-deleted, transient gap).
+          // shiki #task:919.
+          const dmAgent =
+            w.kind === 'dm' && w.dm_agent_id
+              ? agentsById?.get(w.dm_agent_id) ?? null
+              : null;
+          const icon = dmAgent ? (
+            <AgentAvatar
+              runtime={dmAgent.runtime}
+              size={16}
+              avatarObjectUrl={dmAgentAvatarUrls.get(dmAgent.id) ?? null}
+              alt={dmAgent.display_name || dmAgent.name}
+            />
+          ) : (
+            ICON_BY_KIND[w.kind]
+          );
           return (
             <AppContextMenu
               key={w.id}
@@ -100,7 +153,7 @@ export function WorkspaceGroup({
                   </li>
                 ) : (
                   <SidebarRow
-                    icon={ICON_BY_KIND[w.kind]}
+                    icon={icon}
                     title={title}
                     selected={w.id === selectedWorkspaceId}
                     status={w.active ? 'active' : null}

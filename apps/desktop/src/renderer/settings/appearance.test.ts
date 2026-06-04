@@ -538,9 +538,15 @@ describe('theme markdown token cascade contract', () => {
   });
 
   it('homes the live forza6 root token values in forza6.css (not dead values)', () => {
-    // `--border-focus` live value (festival magenta) was previously set
-    // in the component-layer root block; P1 pulled it back to root.
-    expect(forza6Css).toContain('--border-focus: var(--brand-primary);');
+    // `--border-focus` live value (ink) was previously set in the
+    // component-layer root block (P1 pulled it back to root); v6.10
+    // (#task:920) dialed it down from festival magenta (`--brand-
+    // primary`) to deep magenta (`--accent`); v6.10.1 demoted it
+    // entirely out of the magenta family to solid ink + a translucent
+    // ink ring halo (decoupled via `forza6-components.css` on the
+    // ring-color utility). Same vocabulary as v6.9.6 splitter /
+    // row-hover / control-hover — utility focus = ink, no hue.
+    expect(forza6Css).toContain('--border-focus: var(--forza6-ink);');
     // Brand + chrome semantic tokens derive from raws, not inline hex.
     expect(forza6Css).toContain('--brand-primary: var(--forza6-pink);');
     // P2 v6 (#task:917) — chrome master color migrated from

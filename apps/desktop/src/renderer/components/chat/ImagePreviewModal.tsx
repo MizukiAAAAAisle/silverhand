@@ -234,7 +234,7 @@ export function ImagePreviewModal({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[90] bg-black/40" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-[91] flex max-h-[80vh] w-[820px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--floating-radius,var(--radius-md))] border-[length:var(--control-border-width)] border-[color:var(--border-row-selected)] bg-bg-floating p-4 shadow-xl">
+        <Dialog.Content data-modal-shell className="fixed left-1/2 top-1/2 z-[91] flex max-h-[80vh] w-[820px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--floating-radius,var(--radius-md))] border-[length:var(--control-border-width)] border-[color:var(--border-row-selected)] bg-bg-floating p-4 shadow-xl">
           <Dialog.Title className="text-sm font-semibold text-text-primary">
             图片预览
           </Dialog.Title>
@@ -267,7 +267,7 @@ export function ImagePreviewModal({
               onClick={() => onOpenChange(false)}
             />
             <SelectionActionButton
-              variant="primary"
+              variant="neutral"
               label="Copy"
               disabled={phase !== 'ready' || busy}
               onClick={onCopy}

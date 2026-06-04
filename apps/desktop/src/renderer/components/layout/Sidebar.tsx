@@ -1,11 +1,18 @@
 import { useMemo } from 'react';
 import { Archive, Bookmark, Search } from 'lucide-react';
+import type { AgentDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { useHostProvenanceGate } from '@/features/hosts/hooks';
 import { WorkspaceGroup, type WorkspaceItem } from './WorkspacesPanel';
 
 interface SidebarProps {
   workspaces: WorkspaceItem[];
+  /** Workspace agents indexed by id. Threaded through to
+   *  `WorkspaceGroup` so DM rows can resolve `dm_agent_id` and render
+   *  the agent's uploaded avatar (or runtime icon fallback) instead of
+   *  the generic User glyph. Optional — when absent, DM rows fall back
+   *  to the User icon. #task:919 */
+  agentsById?: ReadonlyMap<string, AgentDto>;
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
   onPinWorkspace: (workspaceId: string, pinned: boolean) => void;
@@ -126,6 +133,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
           }
           emptyHint="新建 agent 时会自动创建 DM"
+          agentsById={props.agentsById}
         />
         <WorkspaceGroup
           label="WORKSPACES"
@@ -141,9 +149,13 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           emptyHint={
             <>
               还没有工作区。点{' '}
-              <kbd className="rounded bg-bg-elevated px-1 py-0.5">+</kbd> 新建。
+              <kbd className="inline-flex size-4 items-center justify-center rounded-[var(--control-radius)] bg-bg-elevated align-text-bottom text-[11px] leading-none">
+                +
+              </kbd>{' '}
+              新建。
             </>
           }
+          agentsById={props.agentsById}
         />
         {archived.length > 0 ? (
           <WorkspaceGroup
@@ -156,6 +168,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
               hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
             }
             defaultExpanded={false}
+            agentsById={props.agentsById}
           />
         ) : null}
       </nav>

@@ -26,7 +26,7 @@ interface ArchivedChannelsPanelProps {
 }
 
 const SELECT_TRIGGER_CLASS =
-  'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-accent focus:border-border-focus focus:ring-1 focus:ring-border-focus data-[placeholder]:text-text-muted';
+  'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus data-[placeholder]:text-text-muted';
 
 const SELECT_CONTENT_CLASS =
   'z-[60] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-lg';
@@ -307,8 +307,8 @@ function ArchivedChannelRow({
           onClick={onOpen}
           className="flex min-w-0 flex-1 items-center gap-3 px-3 py-3 text-left"
         >
-          <span data-list-row-icon className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border-subtle bg-bg-base text-text-muted">
-            <Hash className="size-4" />
+          <span data-list-row-icon className="flex size-8 shrink-0 items-center justify-center text-text-muted">
+            <Hash data-channel-icon className="size-6" />
           </span>
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
@@ -339,7 +339,7 @@ function ArchivedChannelRow({
             onRestore();
           }}
           disabled={restorePending}
-          className="m-3 ml-0 inline-flex shrink-0 items-center gap-1.5 self-center rounded-[var(--control-radius)] border border-border bg-bg-base px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:border-accent hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+          className="m-3 ml-0 inline-flex shrink-0 items-center gap-1.5 self-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
           aria-label={`Restore ${item.channel.title}`}
           title="Restore channel"
         >

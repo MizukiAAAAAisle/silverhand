@@ -14,7 +14,11 @@ import {
 } from 'lucide-react';
 import type { AgentDto, SearchResultDto, UserDto } from '@silverhand/shared';
 import { Input, Label } from '@/components/ui/input';
+import { AgentAvatar } from '@/components/AgentAvatar';
+import { UserAvatar } from '@/components/UserAvatar';
 import { useAgents } from '@/features/agents/hooks';
+import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { useMessageSearch } from '@/features/search/hooks';
 import { useUsers, useUsersById, makeUserNameResolver } from '@/features/users/hooks';
 import type { WorkspaceListItem } from '@/features/workspaces/hooks';
@@ -53,7 +57,7 @@ interface ResultGroup {
 }
 
 const SELECT_TRIGGER_CLASS =
-  'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-accent focus:border-border-focus focus:ring-1 focus:ring-border-focus data-[placeholder]:text-text-muted';
+  'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus data-[placeholder]:text-text-muted';
 
 const SELECT_CONTENT_CLASS =
   'z-[60] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-lg';
@@ -198,6 +202,7 @@ export function SearchPanel({
             <WorkspaceFilterSelect
               value={workspaceFilter}
               workspaces={workspaces}
+              agents={agents}
               onChange={setWorkspaceFilter}
             />
           </FilterBlock>
@@ -301,15 +306,27 @@ function FilterBlock({
 function WorkspaceFilterSelect({
   value,
   workspaces,
+  agents,
   onChange,
 }: {
   value: WorkspaceFilter;
   workspaces: WorkspaceListItem[];
+  agents: AgentDto[];
   onChange: (value: WorkspaceFilter) => void;
 }): JSX.Element {
   const dms = workspaces.filter(workspace => workspace.kind === 'dm');
   const regular = workspaces.filter(workspace => workspace.kind === 'regular');
-  const selected = workspaceFilterLabel(value, workspaces);
+  const agentsById = useMemo(
+    () => new Map(agents.map(agent => [agent.id, agent])),
+    [agents],
+  );
+  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
+  const selected = workspaceFilterLabel(
+    value,
+    workspaces,
+    agentsById,
+    agentAvatarUrls,
+  );
 
   return (
     <Select.Root value={value} onValueChange={v => onChange(v as WorkspaceFilter)}>
@@ -347,7 +364,7 @@ function WorkspaceFilterSelect({
                 <SelectItem
                   key={workspace.id}
                   value={`workspace:${workspace.id}`}
-                  icon={<User className="size-3.5" />}
+                  icon={dmWorkspaceIcon(workspace, agentsById, agentAvatarUrls)}
                 >
                   {formatWorkspaceName(workspace)}
                 </SelectItem>
@@ -393,7 +410,15 @@ function SenderFilterSelect({
   userResolver: UserNameResolver;
   onChange: (value: SenderFilter) => void;
 }): JSX.Element {
-  const selected = senderFilterLabel(value, agents, userResolver);
+  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
+  const userAvatarUrls = useUserAvatarObjectUrls(users);
+  const selected = senderFilterLabel(
+    value,
+    agents,
+    userResolver,
+    agentAvatarUrls,
+    userAvatarUrls,
+  );
   // Sort humans: viewer always first (when known), then alphabetic by
   // display name so the selector is stable.
   const viewerId = getCurrentUserId();
@@ -441,7 +466,7 @@ function SenderFilterSelect({
                 // pick "self" so the filter is usable on first paint.
                 <SelectItem
                   value={`user:${viewerId ?? 'self'}`}
-                  icon={<User className="size-3.5" />}
+                  icon={<UserAvatar size={16} />}
                 >
                   {formatUserDisplayName(viewerId, userResolver)}
                 </SelectItem>
@@ -450,7 +475,13 @@ function SenderFilterSelect({
                   <SelectItem
                     key={user.id}
                     value={`user:${user.id}`}
-                    icon={<User className="size-3.5" />}
+                    icon={
+                      <UserAvatar
+                        size={16}
+                        avatarObjectUrl={userAvatarUrls.get(user.id) ?? null}
+                        alt={user.display_name || user.name}
+                      />
+                    }
                     suffix={user.id === viewerId ? 'you' : undefined}
                   >
                     {user.display_name || user.name}
@@ -471,7 +502,14 @@ function SenderFilterSelect({
                   <SelectItem
                     key={agent.id}
                     value={`agent:${agent.id}`}
-                    icon={<Bot className="size-3.5" />}
+                    icon={
+                      <AgentAvatar
+                        runtime={agent.runtime}
+                        size={16}
+                        avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
+                        alt={agent.display_name?.trim() || agent.name}
+                      />
+                    }
                     suffix={agent.runtime}
                   >
                     @{agent.display_name?.trim() || agent.name}
@@ -799,9 +837,34 @@ function parseSenderFilter(value: SenderFilter): {
   return {};
 }
 
+/** DM workspaces are 1:1 with an agent — show that agent's avatar so the
+ *  DM group reads as "talking to @x" instead of a row of identical person
+ *  glyphs. Falls back to the neutral person glyph when the agent can't be
+ *  resolved (workspace not yet provisioned / agent list still loading). */
+function dmWorkspaceIcon(
+  workspace: WorkspaceListItem,
+  agentsById: Map<string, AgentDto>,
+  agentAvatarUrls: Map<string, string | null>,
+): JSX.Element {
+  const agent = workspace.dm_agent_id
+    ? agentsById.get(workspace.dm_agent_id)
+    : undefined;
+  if (!agent) return <User className="size-3.5" />;
+  return (
+    <AgentAvatar
+      runtime={agent.runtime}
+      size={16}
+      avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
+      alt={agent.display_name?.trim() || agent.name}
+    />
+  );
+}
+
 function workspaceFilterLabel(
   value: WorkspaceFilter,
   workspaces: WorkspaceListItem[],
+  agentsById: Map<string, AgentDto>,
+  agentAvatarUrls: Map<string, string | null>,
 ): { label: string; icon: JSX.Element } {
   if (value === 'scope:dm') {
     return { label: 'All DMs', icon: <User className="size-3.5" /> };
@@ -817,7 +880,7 @@ function workspaceFilterLabel(
         label: formatWorkspaceName(workspace),
         icon:
           workspace.kind === 'dm' ? (
-            <User className="size-3.5" />
+            dmWorkspaceIcon(workspace, agentsById, agentAvatarUrls)
           ) : (
             <WorkspaceGlyph />
           ),
@@ -831,19 +894,39 @@ function senderFilterLabel(
   value: SenderFilter,
   agents: AgentDto[],
   userResolver: UserNameResolver,
+  agentAvatarUrls?: Map<string, string | null>,
+  userAvatarUrls?: Map<string, string | null>,
 ): { label: string; icon: JSX.Element } {
   if (value.startsWith('user:')) {
+    const userId = value.slice('user:'.length);
+    const label = formatUserDisplayName(userId, userResolver);
     return {
-      label: formatUserDisplayName(value.slice('user:'.length), userResolver),
-      icon: <User className="size-3.5" />,
+      label,
+      icon: (
+        <UserAvatar
+          size={16}
+          avatarObjectUrl={userAvatarUrls?.get(userId) ?? null}
+          alt={label}
+        />
+      ),
     };
   }
   if (value.startsWith('agent:')) {
     const agentId = value.slice('agent:'.length);
     const agent = agents.find(a => a.id === agentId);
+    const label = `@${agent?.display_name?.trim() || agent?.name || agentId}`;
     return {
-      label: `@${agent?.display_name?.trim() || agent?.name || agentId}`,
-      icon: <Bot className="size-3.5" />,
+      label,
+      icon: agent ? (
+        <AgentAvatar
+          runtime={agent.runtime}
+          size={16}
+          avatarObjectUrl={agentAvatarUrls?.get(agentId) ?? null}
+          alt={label}
+        />
+      ) : (
+        <Bot className="size-3.5" />
+      ),
     };
   }
   return { label: 'All senders', icon: <SearchIcon className="size-3.5" /> };

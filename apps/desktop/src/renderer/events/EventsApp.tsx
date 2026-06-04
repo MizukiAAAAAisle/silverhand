@@ -198,7 +198,7 @@ export function EventsApp(): JSX.Element {
           <Select.Trigger
             aria-label="选择 channel"
             disabled={selectDisabled}
-            className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-[var(--control-radius)] border border-border-subtle bg-bg-floating px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors hover:border-border focus:border-border-focus focus:ring-2 focus:ring-border-focus data-[placeholder]:text-text-muted"
+            className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-[var(--control-radius)] border border-border-subtle bg-bg-floating px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors hover:border-border focus:border-border-focus data-[placeholder]:text-text-muted"
           >
             <span
               className={

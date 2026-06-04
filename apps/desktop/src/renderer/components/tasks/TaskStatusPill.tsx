@@ -93,7 +93,8 @@ function PillPicker({
         <Popover.Content
           align="start"
           sideOffset={4}
-          className="z-50 min-w-[140px] rounded-md border border-border bg-bg-floating p-1 shadow-lg outline-none"
+          data-popover-frame="info"
+          className="z-50 min-w-[140px] bg-bg-floating p-1 shadow-lg outline-none"
         >
           {ALL_STATUSES.filter(s => s !== current).map(s => (
             <button

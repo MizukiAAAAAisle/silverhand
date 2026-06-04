@@ -160,7 +160,7 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
       >
         <Select.Trigger
           aria-label="添加成员"
-          className="flex w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border border-border-subtle bg-bg-base px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors hover:border-border focus:border-border-focus focus:ring-2 focus:ring-border-focus disabled:cursor-not-allowed disabled:opacity-60 data-[placeholder]:text-text-muted"
+          className="flex w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus disabled:cursor-not-allowed disabled:opacity-60 data-[placeholder]:text-text-muted"
         >
           <span className="flex items-center gap-1.5">
             <UserPlus className="size-3.5 text-text-muted" />

@@ -1,6 +1,6 @@
 import { Plus, User, Users } from 'lucide-react';
-import { useState } from 'react';
-import { useAgents } from '@/features/agents/hooks';
+import { useMemo, useState } from 'react';
+import { useAgents, useAgentsPresence } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { CreateAgentDialog } from '@/features/agents/CreateAgentDialog';
 import {
@@ -38,6 +38,8 @@ export function MembersPanel({
   const [open, setOpen] = useState(false);
   const { data: agents = [] } = useAgents();
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
+  const agentIds = useMemo(() => agents.map(a => a.id), [agents]);
+  const agentPresence = useAgentsPresence(agentIds);
   const viewerQuery = useViewerUser();
   const viewerAvatarObjectUrl = useViewerAvatarObjectUrl();
   const viewer =
@@ -96,7 +98,7 @@ export function MembersPanel({
               }
               title={a.display_name || a.name}
               subtitle={<span data-agent-runtime>{a.runtime}</span>}
-              status="idle"
+              status={agentPresence.get(a.id) ?? 'idle'}
               selected={selectedAgentId === a.id}
               onClick={onSelectAgent ? () => onSelectAgent(a.id) : undefined}
             />

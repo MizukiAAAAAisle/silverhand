@@ -120,8 +120,8 @@ export function WorkspaceSettingsDialog({
           <DialogTitle>Workspace 设置</DialogTitle>
           <DialogDescription>
             {isDm
-              ? 'DM Workspace 的名称由 dm-<agent> 约定生成，不可修改。'
-              : '修改名称会向所有未关闭的根 Channel 广播 system 消息，提示在线 agent 更新自己 MEMORY 里的旧名引用。工作目录路径不会变。'}
+              ? 'DM Workspace 名称由 dm-<agent> 自动生成，不可改。'
+              : '改名会通知在线 agent 更新 MEMORY 里的旧名引用；工作目录不变。'}
           </DialogDescription>
         </DialogHeader>
 
@@ -179,8 +179,8 @@ export function WorkspaceSettingsDialog({
             </span>
             <span className="text-xs text-text-muted">
               {isArchived
-                ? '该 Workspace 当前折叠在侧栏的 Archived 分组下，仍可访问。取消归档放回活跃列表。'
-                : '从侧栏隐藏到 Archived 折叠组，仍保留所有 Channel、Thread 与历史。可随时恢复。'}
+                ? '已折叠到侧栏 Archived 分组，仍可访问。'
+                : '折叠到侧栏 Archived 分组，保留全部内容，可随时恢复。'}
             </span>
           </div>
           <Button
@@ -209,7 +209,7 @@ export function WorkspaceSettingsDialog({
               删除 Workspace
             </span>
             <span className="text-xs text-text-muted">
-              所有 Channel、Thread 与消息都会一并清除，不可恢复。
+              全部 Channel、Thread 与消息一并清除，不可恢复。
             </span>
           </div>
           {confirmingDelete ? (
