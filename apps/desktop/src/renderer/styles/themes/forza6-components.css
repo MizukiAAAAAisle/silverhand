@@ -1670,12 +1670,32 @@
    shiki audit: the composer wrapper carries `rounded-md` (6px) as
    the cross-theme default, but in forza6's 0-radius poster vocab it
    read as "almost-square". `data-composer-shell` squares it in
-   forza6 only — other themes keep the polished default. Border
-   colour, bg, and the focus-within ring are unaffected (the ring
-   colour question — festival-pink `--brand-primary` — is tracked
-   separately as audit item D, not changed here). */
+   forza6 only — other themes keep the polished default.
+
+   v6.10.3 (#task:920): composer focus colour split from the global
+   `--border-focus` rule. v6.10.x landed `--border-focus = --forza6-ink`
+   for *generic* utility controls (Input / Button / Select trigger /
+   etc.) on the principle that focus is a non-semantic utility signal
+   and shouldn't claim a saturated hue. Composer is the exception —
+   it is the brand-anchored main stage where the user starts every
+   turn, so its focus IS brand identity, not utility. Override the
+   border + ring on the shell's focus-within state to `--brand-primary`
+   (festival magenta) so the composer remains the one focus surface
+   that proudly carries brand pink — every other control stays ink.
+
+   Note: this is an element-scoped property override, NOT a re-root-
+   reassign of `--border-focus` (the appearance test pins that down).
+   `border-color` overrides the Tailwind `focus-within:border-border-
+   focus` resolved value; `--tw-ring-color` overrides the lazily-
+   resolved ring colour inside `focus-within:ring-border-focus`. Both
+   stay forza6-scoped — warm-script / slack-dark composers keep their
+   own `--border-focus` painting unchanged. */
 [data-theme='forza6'] [data-composer-shell] {
   border-radius: 0;
+}
+[data-theme='forza6'] [data-composer-shell]:focus-within {
+  border-color: var(--brand-primary);
+  --tw-ring-color: var(--brand-primary);
 }
 
 /* ── Focus ring colour (v6.10.2, #task:920) ────────────────────────

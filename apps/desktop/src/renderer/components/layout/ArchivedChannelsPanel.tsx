@@ -26,7 +26,7 @@ interface ArchivedChannelsPanelProps {
 }
 
 const SELECT_TRIGGER_CLASS =
-  'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-accent focus:border-border-focus focus:ring-1 focus:ring-border-focus data-[placeholder]:text-text-muted';
+  'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus focus:ring-1 focus:ring-border-focus data-[placeholder]:text-text-muted';
 
 const SELECT_CONTENT_CLASS =
   'z-[60] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-lg';
