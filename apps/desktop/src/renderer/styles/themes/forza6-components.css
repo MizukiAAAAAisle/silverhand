@@ -1678,36 +1678,14 @@
   border-radius: 0;
 }
 
-/* ── Focus ring decoupled from border (v6.10.1, #task:920) ─────────
-   `--border-focus` (forza6.css) is now solid ink — so any consumer
-   using `border-border-focus` paints an ink frame on focus, which is
-   the right structural signal. But `ring-border-focus` (the soft halo
-   utility — used on Button / Input / IconButton / SearchPanel hits /
-   AgentProfileCard / ChannelView etc., ~24 sites) maps to the SAME
-   token, so an unmodified ring would paint a 2px solid ink halo —
-   visually a heavy black banding around every focused control.
-
-   Fix: scope an override on the Tailwind ring-color utility's class
-   itself, so the ring inherits a translucent ink halo instead of the
-   solid border colour. Consumers stay theme-neutral (`ring-border-
-   focus` works the same way everywhere); forza6 just decouples ring
-   colour from border colour here.
-
-   Result reads as two coordinated layers on focus:
-     border = solid ink (1px frame, the structural "you're focused" mark)
-     ring   = rgba(10,10,10,0.45) translucent halo (soft outline emanation)
-   Same ink hue, two contrast tiers, no festival pink/magenta. Matches
-   the v6.9.6 splitter / row-hover / control-hover ink-vocabulary
-   decision (utility focus is non-semantic, so it shouldn't claim a
-   saturated hue — leave hues for channel/task/host/done/selected
-   identity).
-
-   Selectors use the escaped Tailwind class names (`\:` for the literal
-   colon). High specificity vs. the unscoped utility wins; root token
-   reassign is forbidden by the appearance test (#task:788 lock), so
-   this stays in element-scoped form on the focus-state classes. */
-[data-theme='forza6'] .focus-visible\:ring-border-focus:focus-visible,
-[data-theme='forza6'] .focus\:ring-border-focus:focus,
-[data-theme='forza6'] .focus-within\:ring-border-focus:focus-within {
-  --tw-ring-color: rgba(10, 10, 10, 0.45);
-}
+/* ── Focus ring colour (v6.10.2, #task:920) ────────────────────────
+   Border + ring both now read solid ink via `--border-focus:
+   var(--forza6-ink)` in forza6.css alone — no decoupling needed.
+   v6.10.1 first tried a translucent ink halo
+   (`--tw-ring-color: rgba(10,10,10,0.45)`) on the theory that the
+   solid 2px ink ring would feel "too heavy"; shiki review "半透墨水
+   晕不好, 直接用 ink 即可" — the half-tone halo read as soft / muddy
+   next to the solid frame, the cleaner read is two layers of the
+   same ink (border + ring), hard-stamped. So this block intentionally
+   does NOT override `--tw-ring-color` — the ring inherits `--border-
+   focus` directly, both layers paint solid `--forza6-ink`. */
