@@ -474,13 +474,16 @@
   --border: rgba(15, 31, 29, 0.14);
   --border-subtle: rgba(15, 31, 29, 0.10);
   --border-island: rgba(255, 255, 255, 0.08);
-  /* Input/focus cue = festival magenta (NOT `--accent` deep magenta):
-     the chat composer reads `focus:border-border-focus` / `ring-border-focus`
-     (Composer.tsx) and other inputs inherit it — magenta border+ring is the
-     "you're inputting here" cue, distinct from selected (lime). Live value
-     pulled back from the forza6-components.css root-reassign block (P1
-     #task:788). */
-  --border-focus: var(--brand-primary);
+  /* Input / focus cue. v6.10 (#task:920): dialed down from festival
+     magenta (`--brand-primary` #FF2C7A) to the deep-magenta accent
+     (`--accent` = `--forza6-pink-deep` #B3186A). Same hue family — so
+     focus still reads as "branded color shift, input active, distinct
+     from selected (lime)" — but roughly 30% lower saturation + 10%
+     darker, which kills the "节日粉" loudness shiki flagged on
+     Composer (v6.9.7 D) and MemberPicker (#task:920 C). Other themes
+     inherit their own `--border-focus`; this override only quiets
+     forza6's festival palette. */
+  --border-focus: var(--accent);
   /* Chat avatar frame — forza6 uses the brand near-black to harden
      the head-shot edge against neon backgrounds. Other themes alias
      this to `--border-subtle` so the chat surface stays soft. */

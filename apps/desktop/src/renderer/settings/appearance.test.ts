@@ -538,9 +538,13 @@ describe('theme markdown token cascade contract', () => {
   });
 
   it('homes the live forza6 root token values in forza6.css (not dead values)', () => {
-    // `--border-focus` live value (festival magenta) was previously set
-    // in the component-layer root block; P1 pulled it back to root.
-    expect(forza6Css).toContain('--border-focus: var(--brand-primary);');
+    // `--border-focus` live value (deep magenta = `--accent`) was
+    // previously set in the component-layer root block (P1 pulled it
+    // back to root); v6.10 (#task:920) further dialed it down from
+    // festival magenta (`--brand-primary`) to the deep-magenta accent
+    // to kill the loud focus ring shiki flagged on Composer (v6.9.7 D)
+    // and MemberPicker. Same hue family, ~30% lower saturation.
+    expect(forza6Css).toContain('--border-focus: var(--accent);');
     // Brand + chrome semantic tokens derive from raws, not inline hex.
     expect(forza6Css).toContain('--brand-primary: var(--forza6-pink);');
     // P2 v6 (#task:917) — chrome master color migrated from
