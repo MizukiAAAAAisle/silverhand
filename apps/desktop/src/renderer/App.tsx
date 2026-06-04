@@ -301,6 +301,14 @@ function RegisteredAppShell(): JSX.Element {
 
   const { data: workspaces = [] } = useWorkspaces();
   const { data: agents = [] } = useAgents();
+  // Stable id → agent lookup shared with the sidebar (DM avatar
+  // resolution) and any future agent-keyed surface. Memoized on the
+  // list reference so render of a different surface in the tree
+  // doesn't rebuild the Map. #task:919
+  const agentsById = useMemo(
+    () => new Map(agents.map(a => [a.id, a])),
+    [agents],
+  );
   const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId) ?? null;
   const { data: activeChannels = [] as ChannelListItem[] } = useChannelsForWorkspace(
     selectedWorkspaceId,
@@ -1479,6 +1487,7 @@ function RegisteredAppShell(): JSX.Element {
                       pinned_at: w.pinned_at,
                       archived: w.archived_at !== null,
                     }))}
+                    agentsById={agentsById}
                     selectedWorkspaceId={selectedWorkspaceId}
                     onSelectWorkspace={handleSelectWorkspace}
                     onPinWorkspace={(workspaceId, pinned) =>
