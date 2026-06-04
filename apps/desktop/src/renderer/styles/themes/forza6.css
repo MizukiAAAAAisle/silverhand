@@ -75,8 +75,8 @@
   /* P2 v6.4 (#task:917) — NavRail moves to poster paper white.
      shiki回报：v6.1-v6.3 NavRail 用的湖青/深 island 都有共同问题
      ——「跟青色 chrome 搭配不好」+「整体偏暗」. Six saturated
-     candidates (pink / cyan / lime / indigo / yellow / black,
-     forza6-navrail-colors.html mockup) also failed the same test.
+     candidates (pink / cyan / lime / indigo / yellow / black) also
+     failed the same test.
      Solution: NavRail flips to the white family —
      - Solves "太黑" (white is the brightest possible NavRail).
      - Strong contrast against teal chrome (white/teal ≈ 4.7:1).
