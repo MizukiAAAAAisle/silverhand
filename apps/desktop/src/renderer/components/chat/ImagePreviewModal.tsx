@@ -267,7 +267,7 @@ export function ImagePreviewModal({
               onClick={() => onOpenChange(false)}
             />
             <SelectionActionButton
-              variant="primary"
+              variant="neutral"
               label="Copy"
               disabled={phase !== 'ready' || busy}
               onClick={onCopy}
