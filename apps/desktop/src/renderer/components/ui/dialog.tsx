@@ -32,13 +32,13 @@ export const DialogContent = forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        'fixed left-1/2 top-1/2 z-50 grid w-full max-w-md -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg bg-bg-floating p-6 shadow-modal focus:outline-none',
+        'fixed left-1/2 top-1/2 z-50 grid w-full max-w-md -translate-x-1/2 -translate-y-1/2 gap-4 rounded-[var(--floating-radius)] bg-bg-floating p-6 shadow-modal focus:outline-none',
         className,
       )}
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-3 top-3 cursor-pointer rounded-md p-1 text-text-muted opacity-70 transition-opacity hover:bg-bg-hover hover:opacity-100 focus:outline-none">
+      <DialogPrimitive.Close className="absolute right-3 top-3 cursor-pointer rounded-[var(--control-radius)] p-1 text-text-muted opacity-70 transition-opacity hover:bg-bg-hover hover:opacity-100 focus:outline-none">
         <X className="size-4" />
         <span className="sr-only">Close</span>
       </DialogPrimitive.Close>
