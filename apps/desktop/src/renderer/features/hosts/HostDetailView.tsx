@@ -339,8 +339,16 @@ function ProxySection({
         <form onSubmit={handleSubmit} className="grid gap-5">
           <div className="grid gap-2">
             <Label htmlFor="proxy-url">Proxy URL</Label>
+            {/* v6.9 (#task:917, shiki computer-pane review): proxy URLs
+                are host:port / scheme strings — make the input read as a
+                config value, not prose. `font-mono` on the field itself
+                keeps it readable across themes; the `data-host-proxy-url`
+                hook lets forza6 layer HUD-specific weight/tracking
+                without forking the input. */}
             <Input
               id="proxy-url"
+              data-host-proxy-url
+              className="font-mono"
               value={proxyUrl}
               onChange={event => {
                 setProxyUrl(event.target.value);
@@ -389,6 +397,18 @@ function ProxySection({
                 return (
                   <label
                     key={kind}
+                    // v6.9.2 #task:917 (shiki "runtime 选中 background 和
+                    // border 不搭"): the generic `border-accent` + `bg-row-
+                    // selected` pair lands as pink-border + acid-lime fill
+                    // in forza6 — two high-sat hues fighting. The
+                    // `data-runtime-tile` + `data-checked` hooks let
+                    // forza6 swap the border (and inner check fill) to
+                    // ink-black so the tile reads as a poster-sticker
+                    // family member (lime ground + 1px ink stroke) instead
+                    // of clashing complements. Other themes keep the
+                    // accent border untouched.
+                    data-runtime-tile
+                    data-checked={checked || undefined}
                     className={cn(
                       'flex min-w-0 items-center gap-3 rounded-[var(--control-radius)] border px-3 py-2 transition-colors',
                       proxyEnabled
@@ -409,6 +429,8 @@ function ProxySection({
                       disabled={!proxyEnabled}
                     />
                     <span
+                      data-runtime-tile-check
+                      data-checked={checked || undefined}
                       className={cn(
                         'flex size-4 shrink-0 items-center justify-center rounded-[4px] border',
                         checked
@@ -509,34 +531,41 @@ function HostHero({
             onCommit={onRename}
           />
         </div>
-        {/* shiki dogfood `hLEODapuI_dHuCPz` / `z5DyAzlG34Rto52-`: state
-            row in the MIDDLE between title and meta; Ready chip + Refresh
-            both `h-7` (28px) — chip drove down to a tighter HUD size and
-            Refresh follows, not the other way around. */}
+        {/* shiki dogfood `hLEODapuI_dHuCPz` / `z5DyAzlG34Rto52-`:
+            state row in the MIDDLE between title and meta.
+            v6.9 (#task:917): chip refactored to PresencePill geometry
+            (border + py-0.5 + text-[10px], ≈20-21px tall), so Refresh
+            and the Loading placeholder both drop from `h-7` (28px) to
+            a matching structural construction (border + py-0.5 around
+            a 15px glyph) — same vertical anatomy as the chip, no
+            fragile pixel pin. shiki "把 refresh icon 高度调整到和前面
+            的 status tag 一样高". */}
         <div className="flex items-center gap-2">
           {statusLabel && statusTone ? (
             <StatusChip label={statusLabel} tone={statusTone} />
           ) : statusLoading ? (
-            <span className="inline-flex h-7 items-center gap-1 text-xs text-text-muted">
-              <Loader2 className="size-3 animate-spin" aria-hidden />
+            <span className="inline-flex items-center gap-1.5 border border-transparent px-1 py-0.5 text-[10px] text-text-muted">
+              <Loader2 className="size-[15px] animate-spin" aria-hidden />
               <span>Loading…</span>
             </span>
           ) : null}
           <Button
             variant="ghost"
             size="icon"
-            // Override the default `size="icon"` (h-8 w-8) to match
-            // the tighter `h-7` chip — shiki dogfood
-            // `z5DyAzlG34Rto52-` wants the strip shorter, not the
-            // chip taller.
-            className="h-7 w-7"
+            // Drop the default `size="icon"` (h-8 w-8 p-0). Use the
+            // same border + py-0.5 construction as the chip so the
+            // button height tracks the chip's text-derived height
+            // automatically — same anatomy, swapped fill (the chip's
+            // visible border becomes a transparent placeholder here so
+            // padding alignment is identical).
+            className="h-auto w-auto border border-transparent px-1 py-0.5"
             onClick={onRefresh}
             disabled={refreshing}
             aria-label="Refresh host status"
             title="Refresh"
           >
             <RefreshCw
-              className={cn('size-3.5', refreshing && 'animate-spin')}
+              className={cn('size-[15px]', refreshing && 'animate-spin')}
             />
           </Button>
         </div>
@@ -571,6 +600,7 @@ function HostBadge({ kind }: { kind: HostDto['kind'] }): JSX.Element {
   const Icon = kind === 'local' ? Monitor : Globe;
   return (
     <span
+      data-host-hero
       className="inline-flex size-20 shrink-0 items-center justify-center rounded-none bg-bg-elevated text-text-secondary"
       aria-hidden
     >
@@ -580,9 +610,19 @@ function HostBadge({ kind }: { kind: HostDto['kind'] }): JSX.Element {
 }
 
 /**
- * Lightweight status indicator — see the `TONE_DOT_CLASS` comment.
- * Height `h-7` keeps it on the same baseline as the adjacent ghost
- * Refresh button without forcing a filled tile.
+ * Lightweight status indicator. Geometry now mirrors `PresencePill` in
+ * PersonHero (`#task:917` v6.9 — shiki "READY 是状态信号，应该是 status
+ * pill 不是裸文字+大圆点"): outline pill, 6px tone-coloured dot, uppercase
+ * caps with letter-tracking. That makes the host Hero's status indicator a
+ * sibling of the agent/human Hero's active/idle pill — same indicator
+ * family, with the dot's colour carrying the tone signal (success/warning/
+ * error/info/muted). The `data-panel-pill` hook lets forza6 paint it
+ * further; default themes get the outline pill as-is.
+ *
+ * Before v6.9 this was `h-7 px-1` plain text + 10px filled dot, which
+ * read as decoration ("a green ball next to a label") rather than "host
+ * is in state X". The pill form structures it as the same kind of thing
+ * IDLE / 1 RUNNING etc. are in the agent Hero.
  */
 function StatusChip({
   label,
@@ -594,15 +634,12 @@ function StatusChip({
   return (
     <span
       role="status"
-      className="inline-flex h-7 items-center gap-2 px-1 text-[10px] font-semibold uppercase tracking-wider text-text-secondary"
+      data-panel-pill="host-status"
+      className="inline-flex items-center gap-1.5 border border-border-subtle bg-transparent px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-secondary"
     >
-      {/* shiki dogfood `DXVl5tEBshVT2LqF` #3: bump from `size-1.5` (6px)
-          to `size-2.5` (10px) so the tone signal is legible at a glance
-          in the Hero row — the prior pinhead read as decoration, not
-          status. Keep `AgentStatusPip` smaller; per-agent rows live in
-          a denser stack and a 10px dot there would shout. */}
       <span
-        className={cn('size-2.5 rounded-full', TONE_DOT_CLASS[tone])}
+        data-status-pip
+        className={cn('size-1.5 rounded-full', TONE_DOT_CLASS[tone])}
         aria-hidden
       />
       {label}
@@ -621,8 +658,16 @@ function SystemSection({
     <HostSection title="System">
       {/* shiki dogfood `6QIZeGVS8u8yJ137`: one row per field. Inline
           label + value (not stacked) so 4 short facts read as a tight
-          key-value list, not a stretched form. */}
-      <dl className="flex flex-col gap-2.5">
+          key-value list, not a stretched form.
+
+          v6.9 (#task:917, shiki computer-pane review): wrap the `<dl>`
+          in `data-host-system-list` and each value column in `data-
+          host-system-value` so forza6 can paint label-column HUD caps
+          + tabular spacing without leaking theme code into the base
+          structure. Base styling stays plain; ID/version/PID/uptime
+          values pick up `tabular-nums` here so digits line up across
+          rows regardless of theme. */}
+      <dl data-host-system-list className="flex flex-col gap-2.5">
         <SystemField label="OS">
           <span className="text-text-primary">{formatOsShort(snapshot.os)}</span>
           {snapshot.os_arch ? (
@@ -663,7 +708,9 @@ function SystemField({
       <dt className="w-36 shrink-0 text-[11px] font-medium uppercase tracking-wider text-text-muted">
         {label}
       </dt>
-      <dd className="min-w-0 flex-1 text-sm">{children}</dd>
+      <dd data-host-system-value className="min-w-0 flex-1 text-sm tabular-nums">
+        {children}
+      </dd>
     </div>
   );
 }

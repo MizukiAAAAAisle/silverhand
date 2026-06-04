@@ -50,7 +50,13 @@ const ALL_STATUSES: TaskStatus[] = [
 ];
 
 const CHIP =
-  'rounded-[var(--chip-radius)] px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide';
+  // `leading-none` (v6.5n, #task:917): the chip is by definition a
+  // single-line compact element; without an explicit line-height it
+  // inherits the root prose 1.5 and stretches its parent line-box,
+  // misaligning with siblings (e.g. card row 1's `#nnn` stamp).
+  // Scoped opt-out per Tailwind's intended pattern — prose stays at
+  // the loose default, only this chip tightens.
+  'rounded-[var(--chip-radius)] px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide leading-none';
 
 export function TaskStatusBadge({
   status,

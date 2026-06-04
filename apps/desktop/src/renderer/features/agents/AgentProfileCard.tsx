@@ -324,7 +324,7 @@ export function AgentProfileCard({
       <ProfileSection title="Metadata" muted>
         <MetadataList
           items={[
-            { label: 'Host', value: agent.host_id },
+            { label: 'Host', value: agent.host_id, mono: true },
             {
               label: 'Created',
               value: dayjs(agent.created_at).format('YYYY-MM-DD'),

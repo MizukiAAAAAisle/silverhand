@@ -9,6 +9,14 @@ import { Button } from '@/components/ui/button';
 
 interface SectionProps {
   label: string;
+  /** Optional leading icon (lucide or any ReactNode). Renders before the
+   *  label as a small section anchor — used by Members panel to give
+   *  AGENTS / HUMANS a visual identity (#task:917 v6.8). Kept theme-
+   *  neutral; consumers pass plain lucide icons and themes decide
+   *  whether to paint them further. Skip when the section's content
+   *  already carries identity (channel `#` chips, computer Monitor
+   *  glyphs). */
+  icon?: ReactNode;
   count?: number;
   onAdd?: () => void;
   action?: ReactNode;
@@ -22,6 +30,7 @@ interface SectionProps {
 
 export function SidebarSection({
   label,
+  icon,
   count,
   onAdd,
   action,
@@ -40,6 +49,11 @@ export function SidebarSection({
         ) : (
           <ChevronRight className="size-3 text-text-muted" />
         )
+      ) : null}
+      {icon ? (
+        <span data-sidebar-section-icon className="inline-flex shrink-0 items-center text-text-muted">
+          {icon}
+        </span>
       ) : null}
       <span>
         {label}
@@ -147,6 +161,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
         </span>
         {badge && badge > 0 ? (
           <span
+            data-sidebar-unread
             className={
               'inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums ' +
               (selected
@@ -158,7 +173,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
             {badge > 99 ? '99+' : badge}
           </span>
         ) : status ? (
-          <span className={'size-1.5 rounded-full ' + STATUS_DOT[status]} />
+          <span data-status-pip className={'size-1.5 rounded-full ' + STATUS_DOT[status]} />
         ) : null}
       </button>
     </li>

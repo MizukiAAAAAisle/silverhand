@@ -117,9 +117,29 @@ export function PresencePill({
   label,
 }: PresencePillProps): JSX.Element {
   if (runningCount <= 0) {
+    // v6.8 (#task:917, shiki "状态文字裸排不行, 升级成 status pill"):
+    // idle used to fall back to plain muted text, which read like a
+    // description rather than a state. Now renders as a structural
+    // pill mirroring the active branch's geometry (same px/py/font-
+    // size/uppercase/dot pattern) so active vs idle are clearly the
+    // SAME kind of indicator at different states.
+    //
+    // v6.8.1: outline form (transparent bg + border + muted text).
+    // First attempt used `bg-bg-elevated`, which in forza6 resolves
+    // to pale-lime — same colour as the selected sidebar row ground,
+    // so the IDLE pill read like a "selected" indicator instead of an
+    // "off" state (shiki review screenshot). Outline form is theme-
+    // safe: it conveys "off" via the absent fill, never collides
+    // with any theme's elevated surface, and reads as the same
+    // indicator family as the active pill (matched geometry, swapped
+    // fill).
     return (
-      <span className="text-text-muted">
-        {label ?? 'Idle in every conversation'}
+      <span
+        data-panel-pill="presence-idle"
+        className="inline-flex items-center gap-1.5 border border-border-subtle bg-transparent px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted"
+      >
+        <span className="size-1.5 rounded-full bg-text-muted/60" />
+        {label ?? 'Idle'}
       </span>
     );
   }

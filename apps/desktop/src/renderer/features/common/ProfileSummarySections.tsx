@@ -142,6 +142,14 @@ export interface MetadataItem {
  * Compact `<dl>` list for IDs, timestamps, host ids — values that the
  * user reads but rarely interacts with. Kept tight on purpose so the
  * Metadata section doesn't take more visual weight than Capabilities.
+ *
+ * v6.8 (#task:917): `data-metadata-list` hook on the `<dl>` lets the
+ * forza6 theme paint label-column alignment / HUD typography without
+ * leaking theme code into the base structure. All values get
+ * `tabular-nums` so dates and ID strings align across rows (zero
+ * effect on mono values which are already tabular; helps the non-mono
+ * date values most). Labels get a `data-metadata-label` hook for the
+ * same reason.
  */
 export function MetadataList({
   items,
@@ -149,19 +157,22 @@ export function MetadataList({
   items: MetadataItem[];
 }): JSX.Element {
   return (
-    <dl className="divide-y divide-border-subtle/60">
+    <dl data-metadata-list className="divide-y divide-border-subtle/60">
       {items.map(item => (
         <div
           key={item.label}
           className="flex items-baseline justify-between gap-3 py-1.5 first:pt-0 last:pb-0"
           title={item.title}
         >
-          <dt className="text-[11px] uppercase tracking-wider text-text-muted">
+          <dt
+            data-metadata-label
+            className="text-[11px] uppercase tracking-wider text-text-muted"
+          >
             {item.label}
           </dt>
           <dd
             className={cn(
-              'min-w-0 truncate text-xs text-text-primary',
+              'min-w-0 truncate text-xs text-text-primary tabular-nums',
               item.mono ? 'font-mono' : '',
             )}
           >

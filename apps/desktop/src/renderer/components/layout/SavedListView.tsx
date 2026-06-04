@@ -117,6 +117,7 @@ function SavedItem({
         }}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
+        data-list-row
         className={
           // Row radius routed via `--row-radius` token (#task:912 review
           // round 2). Saved items are list records — slack-dark gets

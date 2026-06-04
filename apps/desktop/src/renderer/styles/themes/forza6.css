@@ -34,13 +34,62 @@
   --forza6-lime-pale: #E6F68A;       /* pale-lime hover / selected-preview ground (P2) */
   --forza6-lime-deep: #3F7A1B;       /* AA deep lime — success / done */
   --forza6-cyan: #22B7E0;            /* electric cyan — accent-2 / in_progress / number */
-  --forza6-yellow: #FFEB00;          /* fluorescent HUD yellow (dormant) */
+  --forza6-yellow: #FFEB00;          /* fluorescent HUD yellow — claimed by Tasks
+                                        hero sticker (v6.6, [data-tasks-hero]).
+                                        Was dormant through v6.2-v6.5; now reads
+                                        as "tasks identity" wherever the Tasks
+                                        pane / drawer surfaces. */
+  --forza6-orange: #FF7A1A;          /* poster orange — caution / in_review (v6.5q):
+                                        sits between pink and yellow on the wheel,
+                                        carries universal "needs review / pending"
+                                        vocabulary; ink-on-orange ≈ 6.21:1 (AA
+                                        normal, AAA Large). Pink stays exclusive
+                                        to `#` channel identity + unread badge.
+                                        Hex matches `docs/mockups/forza6-poster-v2.html`
+                                        HUD-warning slot — single-sourced. */
   --forza6-ink: #0A0A0A;             /* poster near-black — ink / poster border / structure */
   --forza6-teal-island: #0F2F2C;     /* code-island ground */
   --forza6-teal-deep: #081E1B;       /* code-island deep ground */
-  --forza6-carrier-channels: #F4F8E8;/* pale-lime channels-sidebar / NavRail carrier */
+  /* P2 v6.3 (#task:917) — chrome poster colours.
+     v6.0 ran chrome at brand magenta (misread of "粉色作 frame 的角色").
+     v6.1 fixed it to saturated mid-teal #329E86 + deep湖青 #23545E.
+     v6.2 deepened a notch to #1E5E55 + #0F2F2C — wrong direction:
+     shiki "整体太黑了". The brightness was the right call all along;
+     the v6.1 problem wasn't "chrome too bright", it was "color
+     attack diversity missing" (panel block语言 absent, # color
+     mismatched). v6.3 reverts the deepening and keeps the v6.2
+     vocabulary fixes (split # by surface, yellow HUD count chip).
+     Brightness is the chrome's primary信号 — saturated mid-teal
+     reads as "festival poster ground" while #1E5E55 reads as
+     "muted工业 chrome". The reference posters' chrome IS this
+     brightness — figure 1's "发烧友" page ground is the mid-cyan-
+     teal family, not the deeper #0F2F2C island. */
+  --forza6-poster-teal: #329E86;     /* chrome 主色 — saturated mid-teal poster ground */
+  --forza6-poster-teal-deep: #23545E;/* hosts identity (v6.6.1, [data-host-hero]).
+                                        Was NavRail bg in v6.1-v6.3; replaced by
+                                        --forza6-paper in v6.4 and dormant since,
+                                        until claimed for hosts pane hero in v6.6.1
+                                        (after v6.6's first try at ink black read as
+                                        "一个大黑块"). Paper-on-teal-deep ≈ 7.6:1
+                                        AA + AAA Large. */
+  /* P2 v6.4 (#task:917) — NavRail moves to poster paper white.
+     shiki回报：v6.1-v6.3 NavRail 用的湖青/深 island 都有共同问题
+     ——「跟青色 chrome 搭配不好」+「整体偏暗」. Six saturated
+     candidates (pink / cyan / lime / indigo / yellow / black,
+     forza6-navrail-colors.html mockup) also failed the same test.
+     Solution: NavRail flips to the white family —
+     - Solves "太黑" (white is the brightest possible NavRail).
+     - Strong contrast against teal chrome (white/teal ≈ 4.7:1).
+     - Matches forza6 暖色系 (lime / pink / yellow / pale-米黄
+       sidebars) — paper warm-white is the暖系 family member chrome
+       teal needs as a counterweight.
+     Pure #FFFFFF reads cold/锐利; #FAFBF6 (R+1,G+0,B-9 from white)
+     keeps the warm tilt without yellowing into "cream". A 2px ink
+     right border (forza6-components.css) prevents NavRail / pale-
+     lime sidebar visual merge. */
+  --forza6-paper: #FAFBF6;           /* poster paper white — NavRail bg (v6.4) */
+  --forza6-carrier-channels: #F4F8E8;/* pale-lime channels-sidebar carrier */
   --forza6-carrier-sessions: #EEF3DC;/* pale-lime sessions-sidebar carrier */
-
   /* ── Backgrounds (cool-neutral ladder for chat read area) ── */
   --bg-base: #F7F8F6;
   --bg-primary: #ECEEEB;
@@ -66,17 +115,30 @@
   --bg-chat: #F7F8F6;
 
   /* ── Card frame —
-     8px frame padding exposes `--bg-app` around the chat panel. The
-     festival frame + titlebar read as brand magenta (this was the
-     component-layer live value; the old v1-era teal #0F847B it used to
-     hold was dead — overridden in forza6-components.css. P1 #task:788
-     pulled the live value back to this single root definition). */
-  --bg-app: var(--forza6-pink);
-  --frame-padding: 8px;
+     Frame padding exposes `--bg-app` around the chat panel. P2 v6
+     (#task:917) shifts the chrome master color from festival magenta
+     to the poster's dominant teal-green: the magenta we used in v1-
+     v5 was the misread of "粉色作 frame 的角色"——海报里粉只是局部
+     panel 装饰，不是窗框。Frame padding tightens 8 → 4 so the chrome
+     reads as "thin teal frame" rather than a full poster border. */
+  --bg-app: var(--forza6-poster-teal);
+  --frame-padding: 4px;
   --card-radius: 6px;          /* tighter than warm 8px — Forza tile feel */
   --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
   --splitter-bg: transparent;
   --splitter-offset: calc((var(--frame-padding) + 4px) / -2);
+  /* v6.9.6 (#task:917, shiki "拖拽的 resize handler 颜色, 在 forza6
+     下现在是节日粉"): the splitter's hover/active fill defaults to
+     `--accent`, which in forza6 = `--forza6-pink-deep #B3186A` (hot
+     wine magenta) — too loud for a structural separator. Override to
+     a half-opacity ink so the divider reads as "darker rule line"
+     (matching warm-script's near-black accent, which works because
+     it IS ink). Solid `--forza6-ink` would be too assertive on a
+     4px-wide track; 0.45 alpha lands as visible but architectural,
+     no hue. SplitPane.tsx + VerticalSplitter.tsx consume via
+     `bg-[var(--splitter-hover-bg,var(--accent))]` so other themes
+     (no override → falls through to var(--accent)) are untouched. */
+  --splitter-hover-bg: rgba(10, 10, 10, 0.45);
   --titlebar-border: transparent;
 
   /* ── Brand (hot magenta) —
@@ -93,9 +155,19 @@
      `JzkPVNV3svN97WSR`. */
   --brand-primary: var(--forza6-pink);
   --text-on-brand: var(--forza6-ink);
+  /* NavRail moves to poster paper white (P2 v6.4 #task:917). v6.1-
+     v6.3 ran #23545E deep湖青 — "跟青色 chrome 搭配不好" + 整体偏
+     暗. Paper white #FAFBF6 is the brightest possible NavRail,
+     warm-tilted to match forza6 暖色系 (lime / pink / yellow), and
+     keeps the strongest possible chrome-vs-rail contrast (paper
+     vs teal ≈ 18:1 inverse / 4.7:1 if you set ink icons on it).
+     v5.x's pale-lime carrier (which collapsed onto channels-sidebar)
+     was right about "navrail uses light surface" — wrong about
+     which light. Right border (forza6-components.css) carries 2px
+     ink against the pale-lime sidebar. */
   --text-nav-rail: var(--forza6-ink);
   --text-nav-rail-hover: var(--forza6-ink);
-  --bg-nav-rail-hover: rgba(0, 0, 0, 0.08);
+  --bg-nav-rail-hover: rgba(0, 0, 0, 0.06);
   --bg-task-tag: var(--brand-primary);
   --text-on-task-tag: var(--text-on-brand);
   --border-task-tag: rgba(0, 0, 0, 0.18);
@@ -120,11 +192,16 @@
      structure-dark variant headers. Doing it now without component-
      layer fg overrides produces ~1.5:1 sidebar text on dark teal — the
      PR-1 review blocker Cindy flagged on `-a3eR3PFtTRqtVsq`. */
-  /* NavRail carrier: pale-lime tint (same family as the sidebars). The
-     selected button paints a hot lime wedge over this via a component
-     rule. P1 #task:788 pulled the live value back here (root used to say
-     `var(--brand-primary)`, dead — overridden in forza6-components.css). */
-  --bg-nav-rail: var(--forza6-carrier-channels);
+  /* NavRail carrier: poster paper white (P2 v6.4 #task:917). Was
+     pale-lime in v5 (collapsed with channels-sidebar), deep湖青
+     #23545E in v6.1-v6.3 ("跟青色 chrome 不搭" + 整体偏暗). Paper
+     white delivers the strongest chrome-vs-rail contrast (white
+     vs teal ≈ 18:1) and matches forza6's 暖色系 family. Selected
+     wedge still paints lime over this via forza6-components.css
+     (lime fill + ink border on white = ink icon 14.8:1 AAA on
+     lime fill). Right border (forza6-components.css) carries 2px
+     ink against the pale-lime sidebar to prevent visual merge. */
+  --bg-nav-rail: var(--forza6-paper);
   --bg-channels-sidebar: color-mix(in oklab, var(--brand-primary) 8%, var(--bg-base));
   --bg-sessions-sidebar: color-mix(in oklab, var(--brand-primary) 4%, var(--bg-base));
 
@@ -175,16 +252,23 @@
      as a different chip species next to the filled in_progress/in_review/
      closed tiles; unified so the column reads as one vocabulary. Each
      keeps its semantic hue: todo = muted gray-teal (pending/neutral),
-     in_progress = cyan, in_review = brand magenta, done = deep lime,
-     closed = indigo. All fills clear AA against their ink. */
+     in_progress = cyan, in_review = poster orange, done = deep lime,
+     closed = indigo. All fills clear AA against their ink.
+
+     v6.5q (#task:917, shiki feedback "inreview 现在是节日粉，需要改掉"):
+     in_review re-homed from `--brand-primary` (festival pink) to
+     `--forza6-orange`. Pink reserved exclusively for `#` channel
+     identity + unread badge — letting in_review share that hue
+     diluted the # sticker effect. Orange better fits the
+     "caution / pending review" semantic and keeps Forza poster vibe. */
   --task-status-todo-bg: #5A6B67;
   --task-status-todo-text: #F7F8F6;
   --task-status-todo-border: none;
   --task-status-in-progress-bg: var(--forza6-cyan);
   --task-status-in-progress-text: var(--forza6-ink);
   --task-status-in-progress-border: none;
-  --task-status-in-review-bg: var(--brand-primary);
-  --task-status-in-review-text: var(--text-on-brand);
+  --task-status-in-review-bg: var(--forza6-orange);
+  --task-status-in-review-text: var(--forza6-ink);
   --task-status-in-review-border: none;
   --task-status-done-bg: var(--forza6-lime-deep);
   --task-status-done-text: #F7F8F6;

@@ -91,6 +91,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           <span>Saved</span>
           {props.savedCount !== undefined && props.savedCount > 0 ? (
             <span
+              data-sidebar-count
               className={cn(
                 'text-xs tabular-nums',
                 props.savedActive ? 'text-text-on-selected/70' : 'text-text-muted',

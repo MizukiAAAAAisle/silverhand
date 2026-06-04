@@ -257,6 +257,7 @@ function ChannelRow({
 
   const row = (
     <div
+      data-row-selected={selected || undefined}
       className={'sidebar-row-border flex w-full items-stretch border transition-colors ' + rowBg}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -297,7 +298,7 @@ function ChannelRow({
           {channel.title}
         </span>
         {unreadCount > 0 && !selected ? (
-          <span className="ml-auto shrink-0 min-w-[16px] rounded-full bg-accent px-1 text-center text-[9px] font-semibold leading-[16px] text-text-on-accent">
+          <span data-sidebar-unread className="ml-auto shrink-0 min-w-[16px] rounded-full bg-accent px-1 text-center text-[9px] font-semibold leading-[16px] text-text-on-accent">
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
         ) : null}
@@ -328,9 +329,9 @@ function ChannelRow({
           tabIndex={showPin ? 0 : -1}
         >
           {isPinned ? (
-            <PinOff className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
+            <PinOff data-pin-icon className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
           ) : (
-            <Pin className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
+            <Pin data-pin-icon className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
           )}
         </button>
       ) : null}

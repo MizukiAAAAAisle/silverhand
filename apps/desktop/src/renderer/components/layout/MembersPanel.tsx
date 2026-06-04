@@ -1,4 +1,4 @@
-import { Plus, User } from 'lucide-react';
+import { Plus, User, Users } from 'lucide-react';
 import { useState } from 'react';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
@@ -64,6 +64,7 @@ export function MembersPanel({
     <>
       <SidebarSection
         label="AGENTS"
+        icon={<Users className="size-3.5" />}
         count={agents.length}
         action={
           <Button
@@ -94,7 +95,7 @@ export function MembersPanel({
                 />
               }
               title={a.display_name || a.name}
-              subtitle={a.runtime}
+              subtitle={<span data-agent-runtime>{a.runtime}</span>}
               status="idle"
               selected={selectedAgentId === a.id}
               onClick={onSelectAgent ? () => onSelectAgent(a.id) : undefined}
@@ -103,7 +104,7 @@ export function MembersPanel({
         )}
       </SidebarSection>
 
-      <SidebarSection label="HUMANS" count={humansCount}>
+      <SidebarSection label="HUMANS" icon={<User className="size-3.5" />} count={humansCount}>
         {viewer ? (
           <SidebarRow
             key={viewer.id}

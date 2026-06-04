@@ -10,6 +10,7 @@ import {
 import {
   Archive,
   CheckCircle2,
+  CheckSquare,
   Circle,
   CircleDashed,
   CircleEllipsis,
@@ -439,6 +440,7 @@ export function WorkspaceTasksDrawer({
           {/* Header — title + count only; all narrowing lives in the
               filter bar below (no archived segment here). */}
           <div className="flex shrink-0 items-center gap-3 border-b border-border-subtle px-4 py-3">
+            <CheckSquare data-tasks-hero className="size-4 text-text-muted" />
             <span className="font-serif text-base font-semibold text-text-primary">
               Tasks
               {workspaceName ? (
@@ -785,14 +787,25 @@ function TaskCard({
           pointer events. */}
       <div className="pointer-events-none relative z-10 p-2">
         {/* Row 1: #number + interactive status badge inline (reads
-            "Closed" for a closed task — no separate chip). */}
-        <div className="flex items-center gap-1.5 pb-0.5">
+            "Closed" for a closed task — no separate chip). v6.5m
+            (#task:917): reverted from the v6.5l single-row merge
+            because pulling the title onto this row compressed the
+            content space too much for long titles — shiki "这样也
+            不好，会压缩卡片内容的空间，还是 #nnn 和 status 独占
+            一行，下面是内容比较好". The 2-row layout is back; left-
+            edge alignment between #nnn and title is handled by the
+            `margin-left: -1px` nudge on `[data-tasks-num]` (forza6-
+            components.css) that compensates Rajdhani's wider left
+            side-bearing on `#`. */}
+        <div className="flex items-center gap-1.5 pb-0.5 leading-none">
           <span data-tasks-num className="font-mono text-[10px] text-text-muted">
             #{task.task_number}
           </span>
-          <span className="pointer-events-auto">
-            <TaskStatusBadge status={task.status} onChange={onStatusChange} />
-          </span>
+          <TaskStatusBadge
+            status={task.status}
+            onChange={onStatusChange}
+            className="pointer-events-auto"
+          />
         </div>
         {/* Row 2: title */}
         <span className="block min-w-0 break-words text-xs text-text-primary">

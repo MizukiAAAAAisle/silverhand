@@ -135,8 +135,17 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
         overflow: 'hidden',
       }}
     >
-      <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-4">
-        <CheckSquare className="size-4 text-text-muted" />
+      {/* Header padding: `pl-[6px]` matches the forza6 tasks-hero
+        * sticker's 6px vertical clearance (22+1+1=24px sticker in 36px
+        * titlebar → (36-24)/2 = 6px top/bottom), so left ≈ vertical
+        * = symmetric breathing room around the hero stamp. Other
+        * themes show a plain 16px CheckSquare here; 6px left is tight
+        * but not broken — the icon leads the header content tight to
+        * the left edge by intent (shiki #task:917 v6.7.3, "在不同的
+        * 地方用不同的外层样式来控制"). The drawer header keeps the
+        * standard `px-4` because its own `py-3` already balances. */}
+      <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle pl-[6px] pr-4">
+        <CheckSquare data-tasks-hero className="size-4 text-text-muted" />
         <span className="font-serif text-sm font-semibold text-text-primary">
           {selectedChannelName ? `Tasks in #${selectedChannelName}` : 'All Tasks'}
         </span>
@@ -398,14 +407,18 @@ function TaskCard({
       />
       <div className="pointer-events-none relative z-10 p-2">
         {/* Row 1: #number + interactive status badge (reads "Closed" for
-            a closed task — no separate chip). */}
-        <div className="flex items-center gap-1.5 pb-0.5">
+            a closed task — no separate chip). v6.5m: 2-row layout
+            restored after v6.5l single-row attempt compressed title
+            space (shiki feedback). Mirrors WorkspaceTasksDrawer.tsx. */}
+        <div className="flex items-center gap-1.5 pb-0.5 leading-none">
           <span data-tasks-num className="shrink-0 font-mono text-[10px] text-text-muted">
             #{task.task_number}
           </span>
-          <span className="pointer-events-auto">
-            <TaskStatusBadge status={task.status} onChange={onStatusChange} />
-          </span>
+          <TaskStatusBadge
+            status={task.status}
+            onChange={onStatusChange}
+            className="pointer-events-auto"
+          />
         </div>
         {/* Row 2: title */}
         <span className="block min-w-0 break-words text-xs text-text-primary">

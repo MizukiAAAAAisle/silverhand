@@ -71,7 +71,16 @@ const THEME_META: Record<
      *  was nearly invisible against the magenta side of its
      *  lime→magenta gradient because the global subtle is only ~10%
      *  alpha — looked like the border had "disappeared" along the
-     *  bottom-right (@shiki feedback `h45zG6elM7NVgPzQ`). */
+     *  bottom-right (@shiki feedback `h45zG6elM7NVgPzQ`).
+     *
+     *  v6.9.5 note: an earlier `radius` field tried the same per-
+     *  theme treatment for the card's own corner radius, but stacking
+     *  three different radii in a 3-tile grid read as "inconsistent
+     *  design" (@shiki "圆角都不一致了, 固定一个圆角数值就好"). Card
+     *  radius is now a single fixed value across all three cards (see
+     *  the `rounded-[10px]` Tailwind class on the button below) —
+     *  the colour/gradient swatch is what previews the theme, the
+     *  card chrome stays uniform so the grid reads as one set. */
     border: string;
   }
 > = {
@@ -172,8 +181,18 @@ export function SettingsPage(): JSX.Element {
             Host-level preferences for future agent processes
           </span>
         </div>
-        <span className="shrink-0 text-[11px] font-medium text-text-muted">
-          Local
+        {/* v6.9.3 #task:917 (shiki settings audit "C"): the page-scope
+            tag was plain muted prose. Reuse `data-host-kind-tag` (landed
+            v6.9.1 for ComputersPanel) so any place in the app surfacing a
+            host's kind reads as the same HUD tag — Settings, sidebar,
+            future Hosts list, etc. forza6 paints uppercase mono caps via
+            the hook; other themes inherit muted text. Lowercase literal
+            matches the kind-enum source-of-truth (`host.kind === 'local'`). */}
+        <span
+          data-host-kind-tag
+          className="shrink-0 text-[11px] font-medium text-text-muted"
+        >
+          local
         </span>
       </header>
 
@@ -291,6 +310,21 @@ function AppearancePane({
                   <button
                     key={id}
                     type="button"
+                    // v6.9.5 #task:917 (shiki "圆角都不一致了, 固定一个
+                    // 圆角数值就好"): the three theme cards live as a
+                    // single grid, so the GRID needs to read as one set.
+                    // Two earlier iterations got the geometry wrong:
+                    //   v6.9.3 used `data-settings-card` → radius
+                    //     followed the viewer theme, cards morphed on
+                    //     toggle.
+                    //   v6.9.4 pinned per-target `meta.radius` → cards
+                    //     stopped morphing but the 3-tile row showed
+                    //     12px / 6px / 0 side-by-side, reading as
+                    //     "inconsistent UI", not "preview tiles".
+                    // The colour gradient + 4-dot swatch already carry
+                    // the theme's identity; the card chrome should be
+                    // uniform scaffolding. Fixed `rounded-[10px]` across
+                    // all three, no hook, no per-target override.
                     onClick={() => setTheme(id)}
                     className={cn(
                       'group relative flex min-h-[92px] flex-col items-start justify-between overflow-hidden rounded-[10px] border-2 p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus',
@@ -800,7 +834,10 @@ function SharedFontSizeControl({
   };
 
   return (
-    <div className="grid gap-2 rounded-[8px] border border-border-subtle bg-bg-floating p-3">
+    <div
+      data-settings-card
+      className="grid gap-2 rounded-[8px] border border-border-subtle bg-bg-floating p-3"
+    >
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-text-primary">Font size</h3>
@@ -827,6 +864,7 @@ function SharedFontSizeControl({
           </span>
           <button
             type="button"
+            data-settings-card
             onClick={onReset}
             disabled={!isOverride}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-[6px] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-accent hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
@@ -843,6 +881,7 @@ function SharedFontSizeControl({
         </span>
         <input
           id="markdown-font-size"
+          data-settings-slider
           type="range"
           min={FONT_SIZE_MIN}
           max={FONT_SIZE_MAX}
@@ -938,10 +977,16 @@ function MarkdownFontControl({
   };
 
   return (
-    <div className="grid gap-3 rounded-[8px] border border-border-subtle bg-bg-floating p-3">
+    <div
+      data-settings-card
+      className="grid gap-3 rounded-[8px] border border-border-subtle bg-bg-floating p-3"
+    >
       <div className="flex min-w-0 items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-[6px] bg-bg-elevated text-text-secondary">
+          <span
+            data-settings-icon-chip
+            className="flex size-7 shrink-0 items-center justify-center rounded-[6px] bg-bg-elevated text-text-secondary"
+          >
             {icon}
           </span>
           <div className="min-w-0">
@@ -953,6 +998,7 @@ function MarkdownFontControl({
         </div>
         <button
           type="button"
+          data-settings-card
           onClick={onReset}
           disabled={!fontValue}
           className="inline-flex shrink-0 items-center gap-1.5 rounded-[6px] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-accent hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
@@ -974,25 +1020,38 @@ function MarkdownFontControl({
           spellCheck={false}
         />
         <div className="flex flex-wrap gap-1.5">
-          {presets.map(preset => (
-            <button
-              key={`${title}-${preset.label}`}
-              type="button"
-              onClick={() => onFontChange(preset.value)}
-              className={cn(
-                'rounded-[999px] border px-2 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus',
-                fontValue === preset.value
-                  ? 'border-accent bg-accent text-text-on-accent'
-                  : 'border-border-subtle bg-bg-primary text-text-secondary hover:border-accent hover:text-text-primary',
-              )}
-            >
-              {preset.label}
-            </button>
-          ))}
+          {presets.map(preset => {
+            const isSelected = fontValue === preset.value;
+            return (
+              <button
+                key={`${title}-${preset.label}`}
+                type="button"
+                // v6.9.3 #task:917 (shiki settings audit "B"):
+                // `data-settings-pill` + `data-selected` let forza6
+                // override the generic `border-accent bg-accent` pink
+                // fill with the v6.9.2 ink-fill + paper-text recipe
+                // and square the 999px radius — keeps the rest of
+                // the pill (sizing, hover) intact and other themes
+                // untouched.
+                data-settings-pill
+                data-selected={isSelected || undefined}
+                onClick={() => onFontChange(preset.value)}
+                className={cn(
+                  'rounded-[999px] border px-2 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus',
+                  isSelected
+                    ? 'border-accent bg-accent text-text-on-accent'
+                    : 'border-border-subtle bg-bg-primary text-text-secondary hover:border-accent hover:text-text-primary',
+                )}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
       <div
+        data-settings-card
         className={cn(
           'rounded-[6px] border border-border-subtle bg-bg-primary px-3 py-2 text-text-primary',
           code ? 'font-mono' : '',
@@ -1024,7 +1083,10 @@ function SettingsSection({
       className="scroll-mt-6 grid gap-4 border-b border-border-subtle pb-8 last:border-b-0 last:pb-0"
     >
       <div className="flex items-start gap-3">
-        <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-[6px] bg-bg-elevated text-text-secondary">
+        <span
+          data-settings-icon-chip
+          className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-[6px] bg-bg-elevated text-text-secondary"
+        >
           {icon}
         </span>
         <div className="min-w-0">

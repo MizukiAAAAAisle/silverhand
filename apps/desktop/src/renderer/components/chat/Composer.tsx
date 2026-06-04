@@ -625,8 +625,18 @@ export function Composer({
          *  as siblings means the textarea no longer needs reserved
          *  padding and text can occupy its full width. Wrapper carries
          *  `focus-within:` ring so the focused-textarea outline still
-         *  encloses both rows. */}
-        <div className="flex flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-floating focus-within:border-border-focus focus-within:ring-2 focus-within:ring-border-focus">
+         *  encloses both rows.
+         *
+         *  v6.9.7 #task:917 (shiki composer audit C): `rounded-md`
+         *  (6px) is the right default for warm-script / slack-dark
+         *  cards, but in forza6's 0-radius poster vocab the composer
+         *  read as "almost-square". `data-composer-shell` lets forza6
+         *  square it (same one-rule hook pattern as `data-settings-
+         *  card` etc.); other themes keep the polished 6px. */}
+        <div
+          data-composer-shell
+          className="flex flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-floating focus-within:border-border-focus focus-within:ring-2 focus-within:ring-border-focus"
+        >
           <ComposerActivityHeader
             conversationId={conversationId}
             routeKind={routeKind}
@@ -1096,7 +1106,17 @@ function Row({
             <div className="flex items-center gap-1.5 text-[11px] text-text-muted">
               <span className="truncate font-mono">@{item.agent.name}</span>
               <span aria-hidden>·</span>
-              <span className="shrink-0">{item.agent.runtime}</span>
+              {/* v6.9.7 #task:917 (shiki composer audit B): runtime
+                  label here wears the same `data-agent-runtime` HUD
+                  tag landed in v6.8 for the Members pane, so the
+                  agent-runtime visual identity stays uniform across
+                  every place the app surfaces it (Members rows,
+                  mention picker, future Hosts). Other themes inherit
+                  the wrapping parent's `text-[11px] text-text-muted`
+                  unchanged. */}
+              <span data-agent-runtime className="shrink-0">
+                {item.agent.runtime}
+              </span>
             </div>
           </div>
         </>
@@ -1114,7 +1134,15 @@ function Row({
             <div className="flex items-center gap-1.5 text-[11px] text-text-muted">
               <span className="truncate font-mono">@{item.human.name}</span>
               <span aria-hidden>·</span>
-              <span className="shrink-0">human</span>
+              {/* Same HUD-tag treatment as the agent runtime above.
+                  `data-participant-kind` is a sibling hook in the
+                  forza6 rule that already covers `data-agent-runtime`
+                  / `data-host-kind-tag` — semantic naming for the
+                  "what kind of participant is this" enum (agent
+                  runtime / human / future kinds). */}
+              <span data-participant-kind className="shrink-0">
+                human
+              </span>
             </div>
           </div>
         </>

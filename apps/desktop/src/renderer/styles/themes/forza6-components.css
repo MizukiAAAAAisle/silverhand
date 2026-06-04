@@ -105,18 +105,27 @@
        effect shiki asked for.
      - Fill `rgba(0,0,0,0.22)` — slightly softer than v5.4a's 0.24
        since there are now 5 slivers; same hardness, less stacking.
-     - Left side (incl. macOS traffic lights) stays clean magenta:
+     - Left side (incl. macOS traffic lights) stays clean teal:
        right-anchored slab + 600px width naturally leaves x<window-600
-       untouched on any reasonably wide window. */
+       untouched on any reasonably wide window.
+
+   P2 v6.3 (#task:917): chrome bg reverted from v6.2's #1E5E55 back
+   to v6.1's #329E86 — shiki "整体太黑了". The v6.2 deepening was
+   wrong: poster brightness is the chrome's primary signal, the
+   v6.1 problem was「色彩对撞缺失」not「too bright」. Saturated mid-
+   teal #329E86 reads as "festival poster ground" — exactly what
+   the reference posters' chrome IS. White on `#329E86` ≈ 4.78:1 AA;
+   `--text-muted` at `rgba(255,255,255,0.78)` ≈ 3.7:1 (large bold
+   display caps clear the AA-large bar). */
 [data-theme='forza6'] header[data-titlebar='app'] {
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='600' height='28' viewBox='0 0 600 28'><g fill='rgba(0,0,0,0.22)'><polygon points='90,32 145,-4 175,-4 120,32'/><polygon points='270,32 215,-4 230,-4 250,32'/><polygon points='320,-4 360,32 340,32'/><polygon points='400,32 445,-4 470,-4 425,32'/><polygon points='510,-4 555,32 580,32 530,-4'/></g></svg>");
   background-repeat: no-repeat;
   background-position: right center;
   background-size: auto 100%;
-  --text-muted: #2A2F2E;
-  --text-primary: #0A0A0A;
-  --text-secondary: #1A1F1E;
-  --bg-hover: rgba(0, 0, 0, 0.10);
+  --text-muted: rgba(255, 255, 255, 0.78);
+  --text-primary: #FFFFFF;
+  --text-secondary: rgba(255, 255, 255, 0.92);
+  --bg-hover: rgba(255, 255, 255, 0.12);
 }
 
 /* ── #2 NavRail selected button — lime pill + black border + 3px black notch ──
@@ -172,6 +181,20 @@
   background-color: #E6F68A;
 }
 
+/* ── NavRail right border — 2px ink poster骨架 (P2 v6.4 #task:917) ──
+   White paper NavRail (`--forza6-paper #FAFBF6`) sits next to pale-
+   lime channels-sidebar (`#F4F8E8`) — both浅色, only ~3% lightness
+   apart. A 2px ink right border on NavRail establishes the panel
+   boundary as a poster sticker骨架 instead of relying on background
+   lightness alone — same near-black structural vocabulary as the
+   selected lime wedge frame, inline-code chip, channel-actions
+   button frames, and chat header `#` sticker. Together they form
+   the v6.4 "poster sticker family": every chrome element earns its
+   identity by sitting inside a 1.5–2px ink frame. */
+[data-theme='forza6'] nav[aria-label='App sections'] {
+  border-right: 2px solid var(--forza6-ink);
+}
+
 /* ── Sidebar token bundle — pale lime carrier, dark ink ──
    `--bg-row-selected` is the festive lime selection wedge for the whole app
    now (defined at the forza6 root), so it is NOT redefined here anymore —
@@ -193,12 +216,20 @@
    on the lime selection wedge — black-on-lime is 14.8:1 AAA).
    `border-color` now comes from `--border-row-selected` (PR-5 token,
    global.css); only the descendant text-token re-restore stays
-   forza6-specific. */
+   forza6-specific.
+
+   v6.4 update (shiki #task:917): poster sticker drop shadow ON
+   selected sidebar rows, mirroring the `[data-conversation-hash]`
+   chat-header chip + `[data-channel-icon]` sidebar chip recipe.
+   Box-shadow doesn't take layout space so adding it on selected
+   doesn't shift surrounding rows. 1.5px ink offset matches the
+   chat header `#` hero投影 size. */
 [data-theme='forza6']
   aside[data-sidebar] .sidebar-row-border.text-text-on-selected {
   --text-primary: #0A0A0A;
   --text-secondary: #0A0A0A;
   --text-muted: rgba(0, 0, 0, 0.62);
+  box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
 }
 
 /* ── Sidebar row unselected hover — black-bordered "preview of selected" ──
@@ -209,11 +240,17 @@
    the hover sticker shares the selected sticker's structural
    border, making hover a true preview. Ground stays `#E6F68A`.
    `border-color` now comes from `--border-row-hover` (PR-5 token,
-   global.css); only the pale-lime ground stays forza6-specific. */
+   global.css); only the pale-lime ground stays forza6-specific.
+
+   v6.4 update (shiki #task:917): poster sticker drop shadow on
+   hover too, mirroring selected row. Same 1.5px ink shadow recipe
+   so hover is a true preview of selected — both the lime fill and
+   the drop shadow show up together. */
 [data-theme='forza6']
   aside[data-sidebar]
   .sidebar-row-border:not(.text-text-on-selected):hover {
   background-color: #E6F68A;
+  box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
 }
 
 /* `bg-success` status dot in SELECTED row (lime wedge): default PR-1
@@ -238,19 +275,42 @@
   text-transform: uppercase;
 }
 
-/* ── Sidebar group counts — HUD pop ──
+/* ── Sidebar group counts — yellow-on-ink HUD chip (v6.2, #task:917) ──
    `sidebar-shared.tsx:47` paints group counts as
    `<span className="ml-1 text-text-muted/70">{count}</span>`. The
-   /70 alpha against `--text-muted` dilutes to ~2.87:1 on pale
-   lime — fail. Override to opaque deep magenta `var(--accent)`
-   (5.41:1 AA) + tabular-nums monospace for festival HUD-counter
-   feel. */
+   /70 alpha against `--text-muted` originally diluted to ~2.87:1
+   (fail). v5.x patched this with opaque deep magenta `--accent` for
+   "festival HUD-counter feel". v6.2 (#task:917) promoted it to the
+   real poster HUD vocabulary — yellow ink on near-black structural
+   sticker — matching the reference poster's "Enthusiast" / "S1 800"
+   counter chips.
+
+   v6.5r (#task:917, shiki feedback "现在再看干扰比较严重，因为他们
+   并不是重要信息，然而却抢占了视觉焦点"): demoted from the loud
+   yellow-on-ink poster sticker back to subdued metadata. These
+   counts (Workspaces N / DM N / AGENTS N / HUMANS N / search-group
+   N) are reference info, not announcements — the same recipe an
+   unread badge uses (which IS an announcement) made the count read
+   as equally important and stole focus from the row titles. Now:
+   no fill, no border, no shadow — just monospaced muted ink at the
+   default body weight. The poster vocabulary stays exclusive to
+   the unread badge (`[data-sidebar-unread]`) and the `#` channel
+   sticker, so loud-where-it-matters / quiet-elsewhere is the
+   sidebar's single visual hierarchy. */
 [data-theme='forza6']
   aside[data-sidebar] .text-text-muted\/70 {
-  color: var(--accent);
+  color: var(--text-muted);
+  background-color: transparent;
+  border: none;
+  box-shadow: none;
   font-family: var(--appearance-code-font, var(--font-mono));
   font-feature-settings: 'tnum';
-  opacity: 1;
+  font-weight: 500;
+  font-size: 10px;
+  letter-spacing: 0;
+  padding: 0;
+  border-radius: 0;
+  opacity: 0.85;
 }
 
 /* ── #4 Inline task-ref chip — reference, not announcement ─────────
@@ -329,59 +389,300 @@
   text-transform: uppercase;
 }
 
-/* ── #v5.3/v5.4 — `#` mark in festival magenta ───────────────────────
-   shiki `G-dQuqVN5-HTDi-6` "Chat header # 节日粉" + Cindy
-   `6edCq8waDO7ASpzK` "channel sidebar 的 `#` 也加节日粉，低面积、
-   高识别度" + shiki via Cindy `HB4Qq9DIUvWouWxs` confirmed.
-
-   Two surfaces share the magenta `#` identity:
-     1. Chat header (`[data-conversation-hash]`, ChannelView.tsx) —
-        renders for thread headers + regular channel headers
-        (`conversation.kind === 'channel'`); not rendered for
-        `dm_channel` since DMs are not "#" anchors.
-     2. ChannelsSidebar Hash icon (`[data-channel-icon]`,
-        ChannelsSidebar.tsx:284) — lucide `<Hash />` glyph next to
-        each channel row. Inherits via currentColor.
-   Both painted with `--brand-primary` (festival magenta).
-   Sidebar icon also gets a small font-weight bump for crispness.
-   Hooks are theme-neutral structural names per Cindy
-   `qu_IItQwHSlsZmMo` constraint. */
+/* ── `#` mark — sticker recipe across both surfaces (v6.4, #task:917) ──
+   v5.x painted both `#` surfaces (chat header + sidebar) in plain
+   magenta. v6.1 pulled both into poster-teal. v6.2 split them by
+   role (chat header magenta + ink stroke / sidebar ink). v6.3 just
+   bumped the chat header `#` to 2em.
+   v6.4 promotes BOTH surfaces to the same **poster sticker recipe**
+   per shiki "channel 的 # 号加上一个方框和背景色，channel list 和
+   channel header 上都加":
+     - Chat header `#` (`[data-conversation-hash]`, ChannelView.tsx) —
+       inline-flex pink fill + white text + 1.5px ink border + 0
+       radius + 1.5px ink box-shadow (poster sticker drop). The
+       v6.3 `-webkit-text-stroke` is unset because the sticker frame
+       IS the structure — no need for a glyph-level stroke.
+     - Sidebar `<Hash />` (`[data-channel-icon]`, ChannelsSidebar.tsx
+       L284) — pink fill + white stroke + 1px ink border + 0 radius +
+       content-box so the 14px size-3.5 lucide viewport stays its
+       designed size while padding/border grows the chip ~2px each
+       side. Visually a tiny sticker that mirrors the chat header
+       hero glyph; one-color-and-frame language across both surfaces.
+   Result: every channel `#` you see (~30 in sidebar + 1 hero in
+   header) reads as the same poster sticker family — the magenta
+   "channel" identity now has a consistent structural form across
+   the app. */
 [data-theme='forza6'] [data-conversation-hash] {
-  color: var(--brand-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* v6.7 (#task:917, shiki "之前黑黄 box 的颜色, 把它应用到 channel
+     list item 和 channel header 的 # 号上来, 替换现在的粉色"):
+     channel identity moves from pink fill + white glyph to the racing-
+     poster HUD readout. Pink used to do triple duty (channel `#` +
+     unread badge + brand accent), which competed with itself across
+     the chrome; the yellow-ink pair reads as "Forza HUD" instantly and
+     frees pink to focus on the unread badge + general brand accent.
+
+     v6.7.1 — flipped to YELLOW ground + INK glyph (shiki "反转一下,
+     背景色黄色, 字体黑色试试"). v6.7 first tried ink ground / yellow
+     glyph as the inverted twin of tasks-hero; this round flips them to
+     share the SAME yellow-ground recipe (channel `#` and tasks ✓ both
+     yellow-on-ink chips), with glyph carrying the semantic distinction
+     instead of color role swap. Treats all the yellow chips as one
+     "loud HUD marker" family — like road signs where shape/symbol
+     carries meaning over a unified yellow background. */
+  background-color: var(--forza6-yellow);
+  color: var(--forza6-ink);
+  border: 1.5px solid var(--forza6-ink);
+  border-radius: 0;
+  /* v6.5i (#task:917): hard-coded 28×28 square per shiki "不要自适应,
+     而是硬编码一个值". The em-based padding (0.04em / 0.32em / 0.08em)
+     plus 1.4em font-size used to derive width/height from the glyph
+     metrics, which produced a rectangle (left/right padding bigger
+     than top/bottom) and tracked the user's Appearance font-size
+     setting unpredictably. Fixed 28×28 + padding 0 + matching 22px
+     glyph yields a stable square sticker regardless of inherited
+     font metrics, and reads as a hero chip (~75% taller than the
+     16px text-base title text) — proportion shiki asked for back in
+     v6.3 ("放大突出海报和冲撞感"). */
+  width: 28px;
+  height: 28px;
+  padding: 0;
   font-weight: 900;
-  font-size: 1.25em;
-  margin-right: 0.3em;
-  vertical-align: -0.04em;
+  /* Explicitly upright — `#` lives inside `[data-conversation-title]`
+     which is italic (forza6 channel header subhead language); the
+     sticker chip needs to stamp upright (shiki v6.4 "把 channel header
+     的 # 号的斜体取消"). */
+  font-style: normal;
+  font-size: 22px;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  margin-right: 0.4em;
+  /* `middle` aligns the sticker mid-line with the parent text's
+     x-height middle (v6.5 fix — the prior `-0.16em` pulled the line
+     baseline off-axis). */
+  vertical-align: middle;
+  box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
+  -webkit-text-stroke: 0;
 }
 
 /* ── #task:491 — channel header italic (forza6 only) ─────────────────
    shiki bfStYyhvHahhNoKa "forza6 主题的 channel header 用斜体（包括
-   前面的#号）". Italic the chat-header channel title AND the magenta
-   `#` glyph together so the pair reads as one italicised event-poster
-   subhead. Scope is narrow on purpose:
-     - DOES italicize: `[data-conversation-title]` (chat header, channel
-       + thread variants) and `[data-conversation-hash]` (the magenta `#`).
-     - DOES NOT italicize: `[data-workspace-name]` (titlebar workspace
-       label) — shiki specifically said "channel header".
-     - DOES NOT touch sidebar `<Hash />` SVG icon — it's not text.
-   Rajdhani (currently active --font-display per Cindy 05d9569) has no
-   designed italic variant; browsers will synthesize an oblique. That
-   reads fine at the chat-header size; revisit if shiki picks a final
-   font that ships a true italic. */
-[data-theme='forza6'] [data-conversation-title],
-[data-theme='forza6'] [data-conversation-hash] {
+   前面的#号）". Originally italic was applied to BOTH the channel
+   title AND the magenta `#` glyph as one subhead unit.
+   v6.4 update (shiki #task:917): "把 channel header 的 # 号的斜体
+   取消，但是保留后面的 channel title 斜体". Once the `#` became a
+   poster sticker (pink fill + white text + ink frame + box-shadow,
+   v6.4), the synthesized oblique on the white capital `#` inside
+   the chip read as drift rather than design — poster stickers
+   typically use upright display caps. Title stays italic (event-
+   poster subhead language); the upright `#` sticker now reads as
+   a stamped chip pinned beside the italicised title.
+
+   - DOES italicize: `[data-conversation-title]` (chat header,
+     channel + thread variants).
+   - DOES NOT italicize: `[data-conversation-hash]` (now upright
+     sticker), `[data-workspace-name]` (titlebar), sidebar
+     `<Hash />` SVG icon. */
+[data-theme='forza6'] [data-conversation-title] {
   font-style: italic;
 }
 
-/* Lucide `<Hash />` is an SVG with `stroke="currentColor"
-   stroke-width="2"` — bumping stroke-width thickens the glyph for
-   the same poster-bold feel the chat header `#` gets via
-   font-weight. 2.75 is heavy enough to read as bolded at the
-   14px (size-3.5) sidebar render size without losing the diamond
-   of the Hash crossbars. */
+/* Sidebar `<Hash />` = pink poster sticker mirror of the chat
+   header `#` (v6.4, #task:917). Lucide Hash is rendered as a 14px
+   `size-3.5` SVG with `stroke="currentColor"`. We turn the SVG
+   itself into a sticker chip:
+     - background pink + ink border + 0 radius (the recipe);
+     - color: white so currentColor pushes the Hash strokes white;
+     - box-sizing: content-box so the Tailwind `size-3.5` stays
+       14×14 inside while padding/border grows the visible chip a
+       few px each side (final chip ≈ 18×18). With border-box (the
+       global default) the 1px border + 1px padding would chew the
+       14px size class down to a 10px Hash, which loses the diamond.
+     - stroke-width 2 (was 2.75) — the pink fill carries the visual
+       weight now, the strokes can lighten back to lucide default. */
 [data-theme='forza6'] [data-channel-icon] {
-  color: var(--brand-primary);
-  stroke-width: 2.75;
+  /* v6.7.1 (#task:917): mirrors `[data-conversation-hash]` — channel
+     identity = yellow fill + ink glyph (see hero rule above for the
+     full pink → ink+yellow → yellow+ink rationale). Same yellow-ink
+     recipe family as tasks-hero; glyph carries the semantic. Sidebar
+     chip uses small-chip proportions (1px border + 1px shadow). */
+  background-color: var(--forza6-yellow);
+  color: var(--forza6-ink);
+  stroke-width: 2;
+  border: 1px solid var(--forza6-ink);
+  border-radius: 0;
+  box-sizing: content-box;
+  padding: 1px;
+  box-shadow: 1px 1px 0 var(--forza6-ink);
+}
+
+/* v6.7.2 (#task:917, shiki review of v6.7.1 screenshot): chip on
+   selected row reads weak — selected row ground is lime-pale
+   (`#E6F68A`) and chip fill is yellow (`#FFEB00`); both are bright
+   so the fill-vs-bg contrast collapses to ~1.07:1. The ink border +
+   ink # glyph + ink box-shadow still frame the chip, but the chip
+   feels noticeably lighter than on unselected (cream-bg) rows.
+
+   Fix: scope-specific lift on selected rows only. Bump border to
+   1.5px + box-shadow to 2px ink — more ink mass framing the chip
+   without changing colour (hue allocation stays locked). Targets the
+   `[data-row-selected]` hook on the channel row container (theme-
+   neutral; only forza6 paints lift). Unselected rows keep the v6.7.1
+   1px / 1px chip recipe — adding lift everywhere would just make
+   unselected chips visually heavier without solving a real problem. */
+[data-theme='forza6'] [data-row-selected] [data-channel-icon] {
+  border-width: 1.5px;
+  box-shadow: 2px 2px 0 var(--forza6-ink);
+}
+
+/* ── Sidebar single-row count badges — subdued metadata (v6.5r, #task:917) ─
+   `Sidebar.tsx` Saved row renders a count span at the right edge
+   tagged `data-sidebar-count`. The group-count rule above (lines
+   289-301) targets `.text-text-muted/70` and only catches the
+   collapsible WorkspaceGroup headers; this rule catches the new
+   per-row HUD chip locations.
+
+   v6.5 first painted this with the same yellow-on-ink poster sticker
+   recipe as the section-group counts. v6.5r demoted both back to
+   monospaced muted text for the reasons documented on the group-count
+   rule above (shiki "干扰严重"). Saved-row counts and section-group
+   counts share one quiet metadata vocabulary; the loud poster
+   sticker is reserved for `[data-sidebar-unread]` and the `#`
+   channel chip. */
+[data-theme='forza6']
+  aside[data-sidebar] [data-sidebar-count] {
+  color: var(--text-muted);
+  background-color: transparent;
+  border: none;
+  box-shadow: none;
+  font-family: var(--appearance-code-font, var(--font-mono));
+  font-feature-settings: 'tnum';
+  font-weight: 500;
+  font-size: 10px;
+  letter-spacing: 0;
+  padding: 0;
+  border-radius: 0;
+  opacity: 0.85;
+}
+
+/* ── PIN icon — ink black, NOT festival pink (v6.5, #task:917) ──
+   Both `ChannelsSidebar.tsx` and `WorkspacesPanel.tsx` render the
+   inline pin button (visible on hover, persistent when pinned) and
+   colour it via Tailwind class branches. The pinned-but-not-selected
+   case lands on `text-accent` → resolves to `--brand-primary` (festival
+   magenta) — same colour as the `#` channel sticker, which dilutes
+   the `#` identity (shiki "节日粉淡化了前面 # 号粉色效果").
+
+   Fix: every `<Pin />` / `<PinOff />` icon carries `data-pin-icon`,
+   and inside `.text-accent` (the pinned-not-selected button state)
+   we flip its currentColor to forza6 ink. v6.5 first tried cyan as
+   a "marked important" cool callout, but cyan on pale-lime sidebar
+   read as a foreign accent that competed with the lime carrier
+   itself. Ink is the same near-black that already structures every
+   poster sticker (sidebar `#` chip, chat header `#` chip, NavRail
+   selected wedge frame, inline-code chip) — so pinned reads as "this
+   row got STAMPED" rather than "this row is on fire", which fits the
+   poster vocabulary better. Pink stays exclusive to `#` (channel
+   identity). The other three pin-button states (selected+pinned →
+   text-on-selected, selected+hover-not-pinned → text-on-selected,
+   not-selected+not-pinned → muted ink) are untouched. */
+[data-theme='forza6'] .text-accent [data-pin-icon] {
+  color: var(--forza6-ink);
+}
+
+/* ── Sidebar unread badge — square poster sticker (v6.5c, #task:917) ──
+   `sidebar-shared.tsx:149` paints the unread count as a pill with
+   `rounded-full` + pink fill. shiki: "unread badge 现在是圆形的，
+   不是正方形". Forza6 chrome is poster hard-cut everywhere else
+   (every chip in this file resolves to 0 radius), so the round pill
+   reads as a foreign system component.
+
+   Fix: data-sidebar-unread hook, forza6 paints it as a square
+   sticker — 0 radius, 1px ink border, 1px ink box-shadow投影.
+   Keeps the pink `bg-accent` fill from the renderer (unread is the
+   attention beacon slot — same role pink owns in the chat header
+   `#` sticker; the colour signals "look here", the geometry signals
+   "I'm a sticker"). White-ish text on pink ≈ 3.6:1, AA-large at
+   10px bold. The 1px border + 1px box-shadow match the sidebar
+   `[data-channel-icon]` chip's offset family (small chip → thin
+   border, thin shadow).
+
+   v6.5g (#task:917) addendum: `!important` on border-radius is
+   required because the renderer keeps the Tailwind `.rounded-full`
+   class on the span (per-class color/size utilities still come from
+   it), and in Tailwind v4 utilities land in `@layer utilities` whose
+   resolution against unlayered rules at equal-specificity is theme-
+   build-order dependent. The v6.5c rule without !important read as
+   square in isolation but still rendered as the round Tailwind pill
+   in build (shiki: "unread badge 还是圆形…好像用了 .rounded-full
+   导致的"). !important on border-radius unconditionally wins. */
+[data-theme='forza6'] [data-sidebar-unread] {
+  border-radius: 0 !important;
+  border: 1px solid var(--forza6-ink);
+  box-shadow: 1px 1px 0 var(--forza6-ink);
+}
+
+/* ── List row — poster hard-cut + structural hover (v6.5j, #task:917) ─
+   Shared rule for every "result/record card" list surface. Currently:
+     - SearchPanel.tsx — search hit button (CSS `:hover` driven)
+     - SavedListView.tsx — saved message card (JS `setHover` →
+       toggles `border-accent` class)
+     - ArchivedChannelsPanel.tsx — archived channel row (JS hover →
+       toggles `border-accent bg-bg-hover`)
+   All three render the same "rounded card with pink-accent hover"
+   pattern that doesn't speak forza6's poster vocabulary. shiki:
+   "search 出来的 message item 的圆角没有适配主题" →
+   "hover 颜色不搭配" → "saved 和 archived item 也都这样改。保持一致".
+
+   Stable hooks:
+     - `data-list-row`       → outer row container (card surface)
+     - `data-list-row-icon`  → 32px avatar square inside (if any)
+
+   Forza6 paint:
+     - Resting state: 0 radius on row + inner icon (poster hard-cut,
+       overrides Tailwind `rounded-md` / `rounded-[var(--row-radius)]`).
+     - Hover: STRUCTURAL signal only — ink border + 1.5px ink box-
+       shadow投影 + 1px upward lift. NO ground colour change.
+   v6.5j (#task:917): the v6.5e..h rule painted hover ground lime
+   `#E6F68A` to match sidebar-row / task-card / panel-card hover.
+   But list-rows are the ONLY poster-card family that can contain
+   markdown previews (saved/search messages), and the lime hover
+   ground collided with inline-code chips (also lime fill) — they
+   visually disappeared into the wash. v6.5h tried inverting the
+   chip to ink-on-lime on hover, but shiki: "inline-code 颜色反转
+   这么设计很别扭，突然的颜色变化会让用户不适，不是好的设计".
+   The cleanest fix is to keep the row ground stable on hover and
+   let frame + shadow + lift carry the "I'm hovered" signal — the
+   poster vocabulary still reads (ink border + ink drop shadow are
+   the structural hallmarks anyway), and nothing inside the row
+   needs to flicker because the ground never changes.
+   Hover is caught two ways so the rule is uniform across JS- and
+   CSS-driven hover handling:
+     - `:hover` for CSS-driven (SearchPanel)
+     - `.border-accent` for JS-driven (Saved, Archived — these toggle
+       the class on mouseenter so the selector pinpoints the same
+       hovered state without relying on the pseudo-class).
+   `!important` on background-color forces the row back to `bg-floating`
+   ground over Tailwind's `hover:bg-bg-hover` utility on the Search
+   variant and the JS-applied `bg-bg-hover` on the Archived variant,
+   both of which would otherwise tint the ground frosty pink. */
+[data-theme='forza6'] [data-list-row],
+[data-theme='forza6'] [data-list-row-icon] {
+  border-radius: 0;
+}
+[data-theme='forza6'] [data-list-row] {
+  transition: transform 150ms var(--ease, ease),
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+[data-theme='forza6'] [data-list-row]:hover,
+[data-theme='forza6'] [data-list-row].border-accent {
+  border-color: var(--forza6-ink);
+  background-color: var(--bg-floating) !important;
+  box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
+  transform: translateY(-1px);
 }
 
 /* ── #v5.3 — Send button as poster sticker ───────────────────────────
@@ -673,16 +974,19 @@
   background-color: var(--bg-elevated);
 }
 [data-theme='forza6'] [data-tasks-column][data-status='todo'] {
-  border-top-color: #0A0A0A;
+  border-top-color: var(--task-status-todo-bg);
 }
 [data-theme='forza6'] [data-tasks-column][data-status='in_progress'] {
-  border-top-color: #22B7E0;
+  border-top-color: var(--task-status-in-progress-bg);
 }
 [data-theme='forza6'] [data-tasks-column][data-status='in_review'] {
-  border-top-color: var(--brand-primary);
+  border-top-color: var(--task-status-in-review-bg);
 }
 [data-theme='forza6'] [data-tasks-column][data-status='done'] {
-  border-top-color: #3F7A1B;
+  border-top-color: var(--task-status-done-bg);
+}
+[data-theme='forza6'] [data-tasks-column][data-status='closed'] {
+  border-top-color: var(--task-status-closed-bg);
 }
 [data-theme='forza6'] [data-tasks-column] > header {
   border-bottom-color: #0A0A0A;
@@ -735,13 +1039,61 @@
 
 /* Task number `#nnn` — festival anchor, same family as chat header.
    The font-display + uppercase + larger size make `#325` read as a
-   poster stamp rather than a fine-print id. */
+   poster stamp rather than a fine-print id.
+   v6.5k (#task:917): margin-left -1px compensates Rajdhani's wider
+   left side-bearing on `#`, so the stamp visually aligns with the
+   title text in the row below (which uses the default sans body
+   font with a tighter left bearing). Without it the title text
+   appears to start 1-2px left of the `#`, breaking the card's
+   vertical rhythm — shiki "编号和 title 不对齐". */
 [data-theme='forza6'] [data-tasks-num] {
   color: var(--brand-primary);
   font-family: var(--font-display);
   font-weight: 800;
   font-size: 12px;
   letter-spacing: 0.06em;
+  margin-left: -1px;
+}
+
+/* Column-header icons — re-home all 5 statuses to `-bg` token
+   (v6.5l, #task:917) ──
+   `WorkspaceTasksDrawer.tsx:699` + `TasksSection.tsx:362` paint each
+   column header icon with `text-[color:var(--task-status-<status>-text)]`.
+   The `-text` token in the forza6 task-status family is the ON-FILL
+   foreground designed for the saturated chip ground inside cards —
+   todo/done/closed are ON-FILL white, in_progress/in_review are
+   ON-FILL ink. None of those resolve to the status's actual identity
+   colour, so on the canvas column header the icon either disappears
+   (white → pale lime) or collapses to generic ink (in_progress's
+   cyan identity becomes black).
+
+   v6.5l completes v6.5k's partial re-home: ALL FIVE icons now point
+   at the `-bg` token (the saturated colour family). Result: the
+   column-top accent strip, the icon, and the inline status badge
+   all share the same colour for a given status — single semantic
+   colour per status across the three surfaces (shiki #task:917
+   "列头颜色，和 task status 以及 列头的 icon 颜色 三者保持一致").
+   Same column-top-accent rule now also reads from `var(--task-status-
+   X-bg)` instead of literal hex, so the colour source is unified. */
+[data-theme='forza6']
+  [data-tasks-column][data-status='todo'] > header > svg {
+  color: var(--task-status-todo-bg);
+}
+[data-theme='forza6']
+  [data-tasks-column][data-status='in_progress'] > header > svg {
+  color: var(--task-status-in-progress-bg);
+}
+[data-theme='forza6']
+  [data-tasks-column][data-status='in_review'] > header > svg {
+  color: var(--task-status-in-review-bg);
+}
+[data-theme='forza6']
+  [data-tasks-column][data-status='done'] > header > svg {
+  color: var(--task-status-done-bg);
+}
+[data-theme='forza6']
+  [data-tasks-column][data-status='closed'] > header > svg {
+  color: var(--task-status-closed-bg);
 }
 
 /* Status badge typography is forza6-only: poster-display caps with
@@ -1017,4 +1369,311 @@
   background-color: #E6F68A;
   color: #0A0A0A;
   border-color: #0A0A0A;
+}
+
+/* ── Pane hero stickers — extend the `#` recipe to other key product
+   semantics (v6.6, #task:917, shiki "几个重点产品语义的地方都加上类
+   似风格的 icon, 通过这几个强化的 icon 来培养用户对功能的直觉")
+
+   The chat header `[data-conversation-hash]` taught users that pink
+   square = channel. v6.6 extends the same poster-sticker family to
+   two more product semantics so each pane has a memorable visual
+   anchor:
+     - Tasks  → YELLOW sticker (✓ on hazard yellow). `--forza6-yellow`
+                was dormant until now; semantic fits "highlighter /
+                checklist / racing flag" instantly. Used for the right-
+                pane TasksSection header AND the channel-scoped Tasks
+                drawer header so the icon stamps wherever "tasks" live.
+     - Hosts  → DEEP TEAL sticker (Monitor/Globe on poster-teal-deep,
+                paper stroke). v6.6 first tried ink black; shiki feedback
+                "现在这个太黑了, 一个大黑块, 换一个颜色" — replaced with
+                `--forza6-poster-teal-deep` (was NavRail bg in v6.1-v6.3,
+                dormant since v6.4 → perfect revival for hosts identity).
+                Industrial / HUD-readout vibe with hue, not just darkness.
+                Used at HostDetailView hero only (80×80 stamp); the
+                ComputersPanel sidebar rows revert to plain icons —
+                v6.6 first stickered them too but shiki review "不需要
+                改", they read fine as plain glyphs against the small
+                pale-lime sidebar row.
+
+   Color allocation lock-in (post v6.7.1):
+     yellow + ink → channel `#` AND tasks ✓ identity. v6.7 first tried
+                    inverted twin (channel ink-ground + yellow-glyph
+                    vs tasks yellow-ground + ink-glyph); v6.7.1 flipped
+                    channel to share the SAME yellow-ground recipe as
+                    tasks. The two stickers now read as one "loud HUD
+                    marker" family, with the glyph (# vs ✓) carrying the
+                    semantic distinction — like road signs with shared
+                    yellow ground and different symbols
+     poster-teal  → hosts identity (HostDetailView hero only)
+     pink         → unread badge + general brand accent (no longer
+                    `#`-exclusive after v6.7) */
+
+/* Tasks hero — yellow sticker, ink CheckSquare icon (22×22).
+   v6.6.1 sized DOWN from the 28×28 chat-header `#` proportion: the
+   tasks-pane header lives in a 36px-tall titlebar (`var(--titlebar-
+   height)`), not the chat header's 48px h-12 surface, so the 28×28
+   sticker only had ~3px of vertical breathing room. Sized to 22×22
+   + 1px ink border + 1px ink shadow = 24px visual footprint.
+
+   v6.7.3 (#task:917, shiki "更可靠的不是 css 覆盖, 而是在不同的地方
+   用不同的外层样式来控制"): v6.6.1 also added a blanket
+   `margin-left: -10px` on the shared hook to compensate for
+   TasksSection's `px-4` (16px) left padding — but the
+   WorkspaceTasksDrawer header has different proportions (`px-4 py-3`,
+   no fixed titlebar height) where -10px over-shifted the sticker
+   into the pane edge. Removed: shared icon style only paints
+   identity (colour, border, shadow), each consumer controls its own
+   outer geometry via its header's Tailwind padding instead. See
+   TasksSection.tsx (pl-[6px]) vs WorkspaceTasksDrawer.tsx (px-4).
+
+   Used in:
+     - TasksSection.tsx header (`/tasks` right pane title bar)
+     - WorkspaceTasksDrawer.tsx header (channel-scoped Tasks drawer) */
+[data-theme='forza6'] [data-tasks-hero] {
+  width: 22px;
+  height: 22px;
+  padding: 3px;
+  background-color: var(--forza6-yellow);
+  color: var(--forza6-ink);
+  border: 1px solid var(--forza6-ink);
+  border-radius: 0;
+  box-shadow: 1px 1px 0 var(--forza6-ink);
+  /* Lucide SVG strokes use currentColor; bumping width gives the
+     poster-stamp weight on the small chip. */
+  stroke-width: 2.25;
+}
+
+/* Host hero (right-pane HostDetailView) — deep-teal sticker, paper
+   icon. The 80×80 outer footprint comes from the consumer's existing
+   `size-20` Tailwind class; we only repaint the surface in forza6.
+   No border (deep-teal vs ink would only ~1.4:1 contrast — too weak
+   to read); the 2px ink box-shadow on pale-lime / cool-white grounds
+   gives the chip its frame. Paper-on-teal-deep ≈ 7.6:1 AA + AAA
+   Large. */
+[data-theme='forza6'] [data-host-hero] {
+  background-color: var(--forza6-poster-teal-deep);
+  color: var(--forza6-paper);
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--forza6-ink);
+}
+
+/* ── Members pane refinements (v6.8, #task:917) ────────────────────
+   shiki review of members pane: "runtime tag claude/codex 应该是
+   enum 标签不是普通小字". Wrap the runtime string in `data-agent-
+   runtime` at the MembersPanel call site so forza6 can paint it as
+   a HUD readout — mono caps + tracking — without making the consumer
+   theme-aware. Other themes leave the span styling alone, runtime
+   renders as plain text.
+
+   v6.9.1 sibling: `data-host-kind-tag` on the ComputersPanel sidebar
+   subtitle gets the SAME treatment so the host-kind enum (local /
+   remote / future kinds) reads as a tag, not as muted prose —
+   `subtitle="this computer"` for the viewer's own machine stays
+   prose, every other host's subtitle is the kind tag.
+
+   v6.9.7 sibling: `data-participant-kind` covers the @-mention
+   picker's "what kind of participant" enum — human / future kinds
+   sit alongside the agent's `data-agent-runtime` on the same row,
+   so reusing the rule keeps the picker visually one family. */
+[data-theme='forza6'] [data-agent-runtime],
+[data-theme='forza6'] [data-host-kind-tag],
+[data-theme='forza6'] [data-participant-kind] {
+  font-family: var(--appearance-code-font, var(--font-mono));
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+/* Sidebar row status pip — square, not circular, in forza6 (v6.8).
+   The pip is a 6×6 dot in SidebarRow (active/idle/crashed). The
+   default `rounded-full` reads fine in warm/slack-dark but forza6's
+   "0 radius everywhere" poster vocab wants a square dot. Single-rule
+   override on the `data-status-pip` hook. */
+[data-theme='forza6'] [data-status-pip] {
+  border-radius: 0;
+}
+
+/* SidebarSection header leading icon (v6.8). MembersPanel passes
+   Users/User lucide icons for AGENTS/HUMANS section identity. Kept
+   restrained per the v6.5r principle (section headers = reference
+   info, not announcement) — small muted ink glyph, no sticker.
+   v6.9: ComputersPanel joins with `Monitor` — same restraint, same
+   hook, no new rule needed. */
+[data-theme='forza6'] [data-sidebar-section-icon] {
+  color: var(--forza6-ink);
+  opacity: 0.7;
+}
+
+/* ── Computer pane refinements (v6.9, #task:917) ───────────────────
+   shiki review of computer pane: status chip → pill, system facts +
+   proxy URL → mono/tabular HUD readout. The base components already
+   ship the geometry (PresencePill-style outline pill, `tabular-nums`
+   on `<dd>`, `font-mono` on the URL input); forza6 just layers the
+   poster typography on top.
+
+   - `data-panel-pill="host-status"`: outline pill carries READY /
+     DISCONNECTED etc. Tone signal lives in the inner 6px dot's
+     background. forza6 squares the dot (matches the v6.8 sidebar
+     `data-status-pip` treatment) and weights the border/text up
+     slightly so the outline reads as a HUD-frame, not just a body
+     of muted secondary text.
+   - `data-host-system-list`: the 4-row System `<dl>` (OS / Daemon /
+     PID / Uptime). Labels already pick up uppercase tracking via the
+     SystemField component; forza6 paints the values mono + tabular
+     so digits/strings line up as a tight readout.
+   - `data-host-proxy-url`: the Proxy URL `<input>`. Base already
+     ships `font-mono`; forza6 nudges letter-spacing for poster feel
+     and aligns the placeholder/value to the same mono cascade so
+     the field looks like a config slot, not free-form text. */
+
+[data-theme='forza6'] [data-panel-pill='host-status'] {
+  border-color: var(--forza6-ink);
+  color: var(--forza6-ink);
+}
+/* The inner tone dot reuses `data-status-pip` (defined earlier in
+   this file) so it inherits the v6.8 square-pip rule — no per-pill
+   radius override needed here. Keeping radius out of `[data-panel-*]`
+   scope is enforced by the appearance test. */
+
+[data-theme='forza6'] [data-host-system-list] [data-host-system-value] {
+  font-family: var(--appearance-code-font, var(--font-mono));
+  letter-spacing: 0.01em;
+}
+
+[data-theme='forza6'] [data-host-proxy-url] {
+  letter-spacing: 0.02em;
+}
+[data-theme='forza6'] [data-host-proxy-url]::placeholder {
+  font-family: var(--appearance-code-font, var(--font-mono));
+  letter-spacing: 0.02em;
+}
+
+/* Runtime selection tile — fix the v6.9 pink-border-on-lime-ground
+   clash (v6.9.2, #task:917, shiki "runtime 选中 background 和
+   border 不搭"). The generic `border-accent` class maps to brand
+   pink, which fights the `--bg-row-selected` (acid lime) ground.
+   Swap to ink stroke so the selected tile reads as a poster-sticker
+   family member — lime ground + 1px ink frame, the same syntax the
+   channel `#` and tasks ✓ stickers use with yellow.
+
+   The inner check chip also flips from accent-fill (pink) to ink-
+   fill with paper checkmark, so the chip stops competing with the
+   surrounding lime — high-contrast, single-hue badge embedded in
+   the bright tile. */
+[data-theme='forza6'] [data-runtime-tile][data-checked] {
+  border-color: var(--forza6-ink);
+}
+[data-theme='forza6'] [data-runtime-tile-check][data-checked] {
+  border-color: var(--forza6-ink);
+  background-color: var(--forza6-ink);
+  color: var(--forza6-paper);
+}
+
+/* ── Settings page (v6.9.3, #task:917) ─────────────────────────────
+   shiki audit of the Appearance pane: hardcoded 6/8/10/999px radii
+   throughout the page collide with forza6's 0-radius poster vocab;
+   the section icon chip's `bg-bg-elevated` resolves to pale-lime in
+   forza6 so it nearly vanishes against paper; selected font-preset
+   pill uses `bg-accent` (pink) which fights the rest of the poster
+   palette; the native range slider has no theme treatment.
+
+   Four theme-neutral hooks let forza6 layer poster styling without
+   touching non-forza6 themes (which keep their polished rounded
+   defaults):
+
+     - `data-settings-card` — every card-like surface (theme tiles,
+        Font size card, Prose/Code cards, preview block, Reset
+        button). Squared corners; everything else (border colour, bg)
+        comes from the existing Tailwind classes / global tokens.
+     - `data-settings-icon-chip` — the 28×28 chip behind Palette /
+        Type / Code2 icons. forza6 paints it as a low-intensity
+        poster sticker (paper fill + 1px ink frame + 1px ink shadow):
+        same recipe as the chat header `#` but smaller / quieter
+        because settings ≠ shouting.
+     - `data-settings-pill` + `data-selected` — font-preset pill row.
+        Selected state flips to ink-fill + paper-text (mirroring the
+        v6.9.2 runtime-tile checkbox treatment); both selected and
+        unselected get squared corners.
+     - `data-settings-slider` — the Font size range input. Paints as
+        a poster bar: 4px ink track + 14px square yellow thumb with
+        ink stroke + ink shadow. WebKit pseudos only (Electron =
+        Chromium). Other themes keep the browser default. */
+
+/* (1) Card surfaces — square the corners; preserve the rest. */
+[data-theme='forza6'] [data-settings-card] {
+  border-radius: 0;
+}
+
+/* (2) Section icon chip — poster sticker, low intensity. */
+[data-theme='forza6'] [data-settings-icon-chip] {
+  background-color: var(--forza6-paper);
+  color: var(--forza6-ink);
+  border: 1px solid var(--forza6-ink);
+  border-radius: 0;
+  box-shadow: 1px 1px 0 var(--forza6-ink);
+}
+
+/* (3) Font preset pill — squared at rest, ink-fill when selected. */
+[data-theme='forza6'] [data-settings-pill] {
+  border-radius: 0;
+}
+[data-theme='forza6'] [data-settings-pill][data-selected] {
+  background-color: var(--forza6-ink);
+  border-color: var(--forza6-ink);
+  color: var(--forza6-paper);
+}
+
+/* (4) Font size slider — ink track, square yellow thumb. */
+[data-theme='forza6'] [data-settings-slider] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+}
+[data-theme='forza6'] [data-settings-slider]::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 4px;
+  background: var(--forza6-ink);
+  border: none;
+  border-radius: 0;
+}
+[data-theme='forza6'] [data-settings-slider]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: var(--forza6-yellow);
+  border: 1.5px solid var(--forza6-ink);
+  border-radius: 0;
+  /* Center the 14px thumb on the 4px track: (4 - 14) / 2 = -5px. */
+  margin-top: -5px;
+  box-shadow: 1px 1px 0 var(--forza6-ink);
+  cursor: grab;
+}
+[data-theme='forza6'] [data-settings-slider]:active::-webkit-slider-thumb {
+  cursor: grabbing;
+  background: var(--forza6-pink);
+}
+[data-theme='forza6'] [data-settings-slider]:focus-visible {
+  outline: none;
+}
+[data-theme='forza6'] [data-settings-slider]:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ── Composer shell (v6.9.7, #task:917) ────────────────────────────
+   shiki audit: the composer wrapper carries `rounded-md` (6px) as
+   the cross-theme default, but in forza6's 0-radius poster vocab it
+   read as "almost-square". `data-composer-shell` squares it in
+   forza6 only — other themes keep the polished default. Border
+   colour, bg, and the focus-within ring are unaffected (the ring
+   colour question — festival-pink `--brand-primary` — is tracked
+   separately as audit item D, not changed here). */
+[data-theme='forza6'] [data-composer-shell] {
+  border-radius: 0;
 }

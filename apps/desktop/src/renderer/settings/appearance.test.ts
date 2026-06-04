@@ -497,6 +497,18 @@ describe('theme markdown token cascade contract', () => {
       '--forza6-ink',
       '--forza6-teal-island',
       '--forza6-teal-deep',
+      // P2 v6 (#task:917) — chrome poster colours promoted from
+      // hex literals to named raws so `--bg-app` and `--bg-nav-rail`
+      // derive via var(...) like every other forza6 semantic token.
+      '--forza6-poster-teal',
+      '--forza6-poster-teal-deep',
+      // P2 v6.4 (#task:917) — NavRail moved to poster paper white;
+      // promoted to a named raw so `--bg-nav-rail` keeps deriving
+      // via var(...) (no bare hex in L2). The previous L2 raw
+      // `--forza6-poster-teal-deep` stays declared as dormant for
+      // backwards-compatibility / future deep-strip surface; not
+      // currently consumed.
+      '--forza6-paper',
       '--forza6-carrier-channels',
       '--forza6-carrier-sessions',
     ];
@@ -529,8 +541,17 @@ describe('theme markdown token cascade contract', () => {
     // `--border-focus` live value (festival magenta) was previously set
     // in the component-layer root block; P1 pulled it back to root.
     expect(forza6Css).toContain('--border-focus: var(--brand-primary);');
-    // Brand + carrier semantic tokens derive from raws, not inline hex.
+    // Brand + chrome semantic tokens derive from raws, not inline hex.
     expect(forza6Css).toContain('--brand-primary: var(--forza6-pink);');
-    expect(forza6Css).toContain('--bg-nav-rail: var(--forza6-carrier-channels);');
+    // P2 v6 (#task:917) — chrome master color migrated from
+    // `--forza6-pink` to the poster's deep teal-green; NavRail dropped
+    // the pale-lime carrier (which collapsed onto channels-sidebar) and
+    // adopted the poster's deep湖青 chrome strip color.
+    expect(forza6Css).toContain('--bg-app: var(--forza6-poster-teal);');
+    // P2 v6.4 (#task:917) — NavRail moved to poster paper white;
+    // 「跟青色 chrome 搭配不好」+「整体偏暗」issues with the v6.1-
+    // v6.3 deep湖青 NavRail. Paper white delivers strongest chrome-
+    // vs-rail contrast and matches forza6's 暖色系 family.
+    expect(forza6Css).toContain('--bg-nav-rail: var(--forza6-paper);');
   });
 });

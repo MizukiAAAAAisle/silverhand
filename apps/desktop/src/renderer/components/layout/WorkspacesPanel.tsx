@@ -197,6 +197,7 @@ function WorkspaceRow({
         </span>
         {workspace.unread && workspace.unread > 0 ? (
           <span
+            data-sidebar-unread
             className={
               'inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums ' +
               (selected
@@ -234,9 +235,9 @@ function WorkspaceRow({
         tabIndex={showPin ? 0 : -1}
       >
         {isPinned ? (
-          <PinOff className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
+          <PinOff data-pin-icon className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
         ) : (
-          <Pin className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
+          <Pin data-pin-icon className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
         )}
       </button>
     </div>

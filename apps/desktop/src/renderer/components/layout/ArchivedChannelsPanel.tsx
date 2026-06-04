@@ -26,7 +26,7 @@ interface ArchivedChannelsPanelProps {
 }
 
 const SELECT_TRIGGER_CLASS =
-  'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-accent focus:border-border-focus focus:ring-2 focus:ring-border-focus data-[placeholder]:text-text-muted';
+  'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-accent focus:border-border-focus focus:ring-1 focus:ring-border-focus data-[placeholder]:text-text-muted';
 
 const SELECT_CONTENT_CLASS =
   'z-[60] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-lg';
@@ -296,6 +296,7 @@ function ArchivedChannelRow({
       <div
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
+        data-list-row
         className={cn(
           'sidebar-row-border flex min-w-0 items-stretch border bg-bg-floating transition-colors',
           hover ? 'border-accent bg-bg-hover' : 'border-border',
@@ -306,7 +307,7 @@ function ArchivedChannelRow({
           onClick={onOpen}
           className="flex min-w-0 flex-1 items-center gap-3 px-3 py-3 text-left"
         >
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border-subtle bg-bg-base text-text-muted">
+          <span data-list-row-icon className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border-subtle bg-bg-base text-text-muted">
             <Hash className="size-4" />
           </span>
           <span className="min-w-0 flex-1">

@@ -294,11 +294,14 @@ export function SplitPane({
             onPointerCancel={onPointerUp}
             // Same paint vocabulary as VerticalSplitter — the track is
             // transparent by default (themes set --splitter-bg: transparent),
-            // tints with --accent on hover, and stays accent-coloured for
-            // the duration of an active drag. `transition-colors` smooths
-            // the hover fade so the divider doesn't pop in/out.
+            // tints with --splitter-hover-bg (fallback `--accent`) on hover,
+            // and stays that colour for the duration of an active drag.
+            // `transition-colors` smooths the hover fade so the divider
+            // doesn't pop in/out. forza6 sets `--splitter-hover-bg` to a
+            // neutral ink because `--accent` there is a hot brand hue —
+            // see VerticalSplitter.tsx for the full rationale.
             className={
-              'group/split relative w-1 shrink-0 cursor-col-resize bg-[var(--splitter-bg,var(--border-subtle))] transition-colors hover:bg-accent data-[active=true]:bg-accent'
+              'group/split relative w-1 shrink-0 cursor-col-resize bg-[var(--splitter-bg,var(--border-subtle))] transition-colors hover:bg-[var(--splitter-hover-bg,var(--accent))] data-[active=true]:bg-[var(--splitter-hover-bg,var(--accent))]'
             }
             role="separator"
             aria-orientation="vertical"

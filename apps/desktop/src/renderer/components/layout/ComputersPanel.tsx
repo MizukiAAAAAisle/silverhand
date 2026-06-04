@@ -56,7 +56,17 @@ export function ComputersPanel({
   const sorted = sortHostsForSidebar(hosts, localHostId);
 
   return (
-    <SidebarSection label="COMPUTERS" count={sorted.length}>
+    // v6.9 #task:917: SidebarSection now accepts a leading `icon` slot
+    // (added in v6.8 for AGENTS/HUMANS). COMPUTERS gets `Monitor` — same
+    // glyph the local host already uses in its row, so the section header
+    // reads as "computers live here" with one visual anchor. forza6 paints
+    // it as a small muted ink mark via `data-sidebar-section-icon`; other
+    // themes pass it through as plain lucide.
+    <SidebarSection
+      label="COMPUTERS"
+      icon={<Monitor className="size-3.5" />}
+      count={sorted.length}
+    >
       {sorted.length === 0 ? (
         <li className="px-2 py-1.5 text-xs text-text-muted">
           {isLoading ? 'Loading…' : 'No computers yet.'}
@@ -70,7 +80,25 @@ export function ComputersPanel({
               key={host.id}
               icon={<Icon className="size-3.5" />}
               title={host.display_label ?? host.name}
-              subtitle={isLocal ? 'this computer' : host.kind}
+              // Subtitle by row:
+              //   • viewer's own host → friendly prose ("this computer")
+              //   • every other host → the kind enum (`local` for a
+              //     non-self local-process host, `remote` for a server-
+              //     backed one). v6.9 #task:917: the raw lowercase enum
+              //     looked like body text. Wrap it as a small HUD tag
+              //     (data-host-kind-tag) so the kind reads as a chip,
+              //     parallel to the v6.8 `data-agent-runtime` tag on the
+              //     Members AGENTS rows. shiki: "local tag 是 host 的
+              //     kind, 分为 local 和 沙箱两种" — the enum may grow,
+              //     this rendering scales with it (any future kind value
+              //     drops in uppercase automatically).
+              subtitle={
+                isLocal ? (
+                  'this computer'
+                ) : (
+                  <span data-host-kind-tag>{host.kind}</span>
+                )
+              }
               selected={host.id === selectedHostId}
               // Cheap local-only signal — full per-host status pip lives
               // in the detail view's pill. Other hosts get no pip in v1

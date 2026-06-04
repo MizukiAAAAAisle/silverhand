@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>forza6 NavRail 配色对比 — pink / cyan / lime / indigo / yellow / black</title>
+<style>
+  :root {
+    --pink:        #FF2C7A;
+    --pink-deep:   #B3186A;
+    --lime:        #D4F523;
+    --lime-pale:   #F4F8E8;
+    --lime-pale-2: #EEF3DC;
+    --cyan:        #22B7E0;
+    --cyan-deep:   #0F7B9C;
+    --yellow:      #FFEB00;
+    --indigo:      #2D2AB8;
+    --indigo-deep: #1F1C8C;
+    --ink:         #0A0A0A;
+    --teal:        #329E86;
+    --teal-deep:   #23545E;
+    --teal-island: #0F2F2C;
+    --paper:       #FAFBF6;
+    --cool-white:  #F7F8F6;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+    background: #1a2a30;
+    color: #d8e0e0;
+    padding: 18px;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  h1 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 800;
+    font-style: italic;
+    letter-spacing: 0.04em;
+    font-size: 16px;
+    margin: 0 0 4px;
+    color: var(--yellow);
+  }
+  .intro {
+    font-size: 12px;
+    color: #aab8b8;
+    margin-bottom: 18px;
+    line-height: 1.55;
+  }
+  .intro strong { color: #fff; }
+  .intro em { color: var(--yellow); font-style: normal; font-weight: 700; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 18px;
+  }
+  @media (min-width: 1500px) {
+    .grid { grid-template-columns: repeat(3, 1fr); }
+  }
+
+  .variant {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.12);
+    padding: 12px;
+  }
+  .variant header {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .variant header .tag {
+    color: var(--ink);
+    padding: 2px 8px;
+    font-family: 'Space Mono', ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border: 1.5px solid var(--ink);
+  }
+  .variant header h2 {
+    margin: 0;
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    color: #fff;
+    font-style: italic;
+  }
+  .variant > .summary {
+    font-size: 11px;
+    color: #c5d0d0;
+    margin-bottom: 8px;
+    line-height: 1.55;
+  }
+  .variant .summary strong { color: var(--yellow); }
+
+  .window {
+    background: var(--teal);
+    padding: 4px;
+    border-radius: 4px;
+    height: 320px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  }
+  .titlebar {
+    height: 22px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    padding: 0 6px;
+    color: #fff;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+  .titlebar .traffic { display: flex; gap: 4px; margin-right: 8px; }
+  .titlebar .traffic span { width: 8px; height: 8px; border-radius: 50%; }
+  .titlebar .traffic span:nth-child(1) { background: #ED6A5E; }
+  .titlebar .traffic span:nth-child(2) { background: #F5BD4F; }
+  .titlebar .traffic span:nth-child(3) { background: #61C554; }
+  .titlebar h3 { margin: 0; flex: 1; text-align: center; font-size: 9px; font-weight: 700; }
+
+  .body {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 36px 96px 84px 1fr;
+    overflow: hidden;
+    background: var(--cool-white);
+  }
+
+  .navrail {
+    background: var(--nav-bg, var(--teal-deep));
+    color: var(--nav-fg, #fff);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 0;
+    gap: 4px;
+  }
+  .navrail .icon {
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: currentColor;
+    font-size: 12px;
+    border-left: 2px solid transparent;
+  }
+  .navrail .icon.active {
+    background: var(--nav-active-bg, var(--lime));
+    color: var(--nav-active-fg, var(--ink));
+    font-weight: 700;
+    border-left-color: var(--ink);
+  }
+  .navrail .spacer { flex: 1; }
+
+  .sidebar1 {
+    background: var(--lime-pale);
+    color: var(--ink);
+    overflow: hidden;
+    padding: 8px 0;
+  }
+  .sidebar1 .grouphead {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 4px 8px 2px;
+    color: rgba(0,0,0,0.55);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .sidebar1 .count {
+    background: var(--ink);
+    color: var(--yellow);
+    padding: 0 4px;
+    font-family: 'Space Mono', ui-monospace, monospace;
+    font-size: 8px;
+    font-weight: 700;
+    border: 1px solid var(--ink);
+  }
+  .sidebar1 .row {
+    padding: 3px 8px;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .sidebar1 .row .hash {
+    color: var(--ink);
+    font-weight: 700;
+    font-family: 'Space Mono', ui-monospace, monospace;
+  }
+  .sidebar1 .row.active {
+    background: var(--lime);
+    border: 1.5px solid var(--ink);
+    margin: 0 4px;
+    padding: 2px 6px;
+    font-weight: 700;
+    color: var(--ink);
+    font-style: italic;
+  }
+  .sidebar1 .row .badge {
+    margin-left: auto;
+    background: var(--pink);
+    color: #fff;
+    padding: 0 4px;
+    font-size: 8px;
+    font-weight: 700;
+    border: 1px solid var(--ink);
+    font-family: 'Space Mono', ui-monospace, monospace;
+  }
+
+  .sidebar2 {
+    background: var(--lime-pale-2);
+    color: var(--ink);
+    overflow: hidden;
+    padding: 8px 0;
+  }
+  .sidebar2 .grouphead {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 4px 8px 2px;
+    color: rgba(0,0,0,0.55);
+    display: flex;
+    justify-content: space-between;
+  }
+  .sidebar2 .count {
+    background: var(--ink);
+    color: var(--yellow);
+    padding: 0 4px;
+    font-family: 'Space Mono', ui-monospace, monospace;
+    font-size: 8px;
+    font-weight: 700;
+    border: 1px solid var(--ink);
+  }
+  .sidebar2 .row {
+    padding: 3px 8px;
+    font-size: 10px;
+    line-height: 1.3;
+  }
+  .sidebar2 .row .title { font-weight: 600; }
+  .sidebar2 .row .meta {
+    font-size: 8.5px;
+    color: rgba(0,0,0,0.55);
+    font-family: 'Space Mono', ui-monospace, monospace;
+  }
+  .sidebar2 .row.active {
+    background: var(--lime);
+    border: 1.5px solid var(--ink);
+    margin: 0 4px;
+    padding: 2px 6px;
+    color: var(--ink);
+    font-style: italic;
+  }
+
+  .chat {
+    background: var(--cool-white);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .chat-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(0,0,0,0.10);
+    background: #fff;
+  }
+  .chat-header .hash {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--pink);
+    color: #fff;
+    border: 1.5px solid var(--ink);
+    padding: 0 8px;
+    font-family: 'Space Mono', ui-monospace, monospace;
+    font-weight: 900;
+    font-size: 18px;
+    line-height: 1.05;
+    font-style: italic;
+    letter-spacing: -0.05em;
+    box-shadow: 1px 1px 0 var(--ink);
+  }
+  .chat-header h4 {
+    margin: 0;
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 800;
+    font-style: italic;
+    font-size: 11px;
+    color: var(--ink);
+  }
+  .chat-header .hud {
+    margin-left: auto;
+    background: var(--ink);
+    color: var(--yellow);
+    padding: 1px 5px;
+    font-family: 'Space Mono', ui-monospace, monospace;
+    font-size: 8px;
+    font-weight: 700;
+    border: 1px solid var(--ink);
+  }
+  .chat-body {
+    flex: 1;
+    overflow: hidden;
+    padding: 8px 10px;
+  }
+  .chat-body .msg {
+    font-size: 9.5px;
+    color: #555;
+    margin-bottom: 6px;
+    line-height: 1.4;
+  }
+  .chat-body .msg .name {
+    color: var(--ink);
+    font-weight: 700;
+  }
+  .composer {
+    flex-shrink: 0;
+    padding: 6px 10px 8px;
+    border-top: 1px solid rgba(0,0,0,0.10);
+    background: #fff;
+  }
+  .composer .input {
+    border: 1.5px solid var(--ink);
+    padding: 4px 6px;
+    background: #fff;
+    font-size: 9px;
+    color: rgba(0,0,0,0.5);
+  }
+
+  .swatches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+    font-size: 9.5px;
+  }
+  .swatches .sw {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: #c5d0d0;
+  }
+  .swatches .sw i {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border: 1px solid rgba(255,255,255,0.3);
+  }
+  .swatches .sw code {
+    font-family: 'Space Mono', ui-monospace, monospace;
+    font-size: 9px;
+    color: #fff;
+  }
+
+  /* ─── NavRail color variants ─── */
+
+  .variant.v63 .window     { --nav-bg: var(--teal-deep); --nav-fg: #fff; }
+  .variant.pink .window    { --nav-bg: var(--pink); --nav-fg: var(--ink); --nav-active-bg: var(--ink); --nav-active-fg: var(--yellow); }
+  .variant.cyan .window    { --nav-bg: var(--cyan); --nav-fg: var(--ink); --nav-active-bg: var(--ink); --nav-active-fg: var(--lime); }
+  .variant.lime .window    { --nav-bg: var(--lime); --nav-fg: var(--ink); --nav-active-bg: var(--ink); --nav-active-fg: var(--lime); }
+  .variant.indigo .window  { --nav-bg: var(--indigo); --nav-fg: #fff; --nav-active-bg: var(--lime); --nav-active-fg: var(--ink); }
+  .variant.black .window   { --nav-bg: var(--ink); --nav-fg: var(--yellow); --nav-active-bg: var(--lime); --nav-active-fg: var(--ink); }
+</style>
+</head>
+<body>
+
+<h1>forza6 NavRail 配色对比 — chrome / sidebar / chat 全部维持 v6.3 不动</h1>
+<div class="intro">
+保留 NavRail 独立条不融合，sidebar 浅米黄不动，chrome 维持亮 teal <code>#329E86</code>，chat 维持 cool white。
+<strong>只换 NavRail 这 48px 宽的颜色</strong>，看哪个最对路。
+<br>每个变体顶部 swatch 标了 <em>NavRail bg + 选中态 fg</em>，方便横向对比。
+</div>
+
+<div class="grid">
+
+  <!-- v6.3 baseline -->
+  <div class="variant v63">
+    <header>
+      <span class="tag" style="background:#23545E;color:#fff">baseline</span>
+      <h2>v6.3 — 深湖青 #23545E</h2>
+    </header>
+    <div class="summary">
+      当前已 commit。<strong>问题</strong>：跟 chrome teal 同家族但更深，看起来像「贴在 chrome 上的黑条」，缺少色彩个性。
+    </div>
+    <div class="window">
+      <div class="titlebar"><div class="traffic"><span></span><span></span><span></span></div><h3>baseline</h3><div style="width:30px"></div></div>
+      <div class="body">
+        <nav class="navrail">
+          <div class="icon active">💬</div><div class="icon">✓</div><div class="icon">👥</div><div class="icon">🖥</div>
+          <div class="spacer"></div><div class="icon">⚙</div>
+        </nav>
+        <aside class="sidebar1">
+          <div class="grouphead"><span>常用</span></div>
+          <div class="row">▢ Search</div><div class="row">▢ Saved</div>
+          <div class="grouphead"><span>频道</span><span class="count">04</span></div>
+          <div class="row active"><span class="hash">#</span> onboarding <span class="badge">2</span></div>
+          <div class="row"><span class="hash">#</span> version3</div>
+          <div class="row"><span class="hash">#</span> design notes</div>
+          <div class="grouphead"><span>DM</span><span class="count">03</span></div>
+          <div class="row">@Norman</div><div class="row">@Cindy</div>
+        </aside>
+        <aside class="sidebar2">
+          <div class="grouphead"><span>Threads</span><span class="count">04</span></div>
+          <div class="row"><div class="title">prompt 优化</div><div class="meta">@Norman · 2h</div></div>
+          <div class="row active"><div class="title">forza6 主题</div><div class="meta">now</div></div>
+          <div class="row"><div class="title">infra opt</div><div class="meta">@Cindy · 1d</div></div>
+        </aside>
+        <section class="chat">
+          <div class="chat-header"><span class="hash">#</span><h4>silverhand onboarding</h4><span class="hud">220 MSG</span></div>
+          <div class="chat-body"><div class="msg"><span class="name">shiki</span>: NavRail 偏深，缺色彩个性。</div></div>
+          <div class="composer"><div class="input">@Norman</div></div>
+        </section>
+      </div>
+    </div>
+    <div class="swatches">
+      <div class="sw"><i style="background:#23545E"></i><code>navrail #23545E</code></div>
+      <div class="sw"><i style="background:#D4F523"></i><code>active fg lime</code></div>
+    </div>
+  </div>
+
+  <!-- Pink -->
+  <div class="variant pink">
+    <header>
+      <span class="tag" style="background:#FF2C7A;color:#fff">A</span>
+      <h2>节日粉 #FF2C7A</h2>
+    </header>
+    <div class="summary">
+      <strong>最大胆</strong>。粉作为大面积 panel block 直接出场（海报里粉的真实角色）。NavRail icon 用近黑（粉上 5.56:1 AA）。chat 的粉 `#` sticker + sidebar 粉 unread badge 跟 NavRail 形成「粉色三联响」。
+    </div>
+    <div class="window">
+      <div class="titlebar"><div class="traffic"><span></span><span></span><span></span></div><h3>pink</h3><div style="width:30px"></div></div>
+      <div class="body">
+        <nav class="navrail">
+          <div class="icon active">💬</div><div class="icon">✓</div><div class="icon">👥</div><div class="icon">🖥</div>
+          <div class="spacer"></div><div class="icon">⚙</div>
+        </nav>
+        <aside class="sidebar1">
+          <div class="grouphead"><span>常用</span></div>
+          <div class="row">▢ Search</div><div class="row">▢ Saved</div>
+          <div class="grouphead"><span>频道</span><span class="count">04</span></div>
+          <div class="row active"><span class="hash">#</span> onboarding <span class="badge">2</span></div>
+          <div class="row"><span class="hash">#</span> version3</div>
+          <div class="row"><span class="hash">#</span> design notes</div>
+          <div class="grouphead"><span>DM</span><span class="count">03</span></div>
+          <div class="row">@Norman</div><div class="row">@Cindy</div>
+        </aside>
+        <aside class="sidebar2">
+          <div class="grouphead"><span>Threads</span><span class="count">04</span></div>
+          <div class="row"><div class="title">prompt 优化</div><div class="meta">@Norman · 2h</div></div>
+          <div class="row active"><div class="title">forza6 主题</div><div class="meta">now</div></div>
+          <div class="row"><div class="title">infra opt</div><div class="meta">@Cindy · 1d</div></div>
+        </aside>
+        <section class="chat">
+          <div class="chat-header"><span class="hash">#</span><h4>silverhand onboarding</h4><span class="hud">220 MSG</span></div>
+          <div class="chat-body"><div class="msg"><span class="name">shiki</span>: 粉 NavRail 海报感最强。</div></div>
+          <div class="composer"><div class="input">@Norman</div></div>
+        </section>
+      </div>
+    </div>
+    <div class="swatches">
+      <div class="sw"><i style="background:#FF2C7A"></i><code>navrail #FF2C7A</code></div>
+      <div class="sw"><i style="background:#0A0A0A"></i><code>icon ink</code></div>
+      <div class="sw"><i style="background:#FFEB00"></i><code>active fg yellow</code></div>
+    </div>
+  </div>
+
+  <!-- Cyan -->
+  <div class="variant cyan">
+    <header>
+      <span class="tag" style="background:#22B7E0">B</span>
+      <h2>电光蓝 #22B7E0</h2>
+    </header>
+    <div class="summary">
+      <strong>最和谐</strong>。cyan 跟 chrome teal 同冷家族但跳出绿色单调（蓝 vs 绿/蓝），形成「绿+蓝」邻近色对撞。海报图1 顶部 chrome 就是这个 cyan-teal。最克制有海报感。
+    </div>
+    <div class="window">
+      <div class="titlebar"><div class="traffic"><span></span><span></span><span></span></div><h3>cyan</h3><div style="width:30px"></div></div>
+      <div class="body">
+        <nav class="navrail">
+          <div class="icon active">💬</div><div class="icon">✓</div><div class="icon">👥</div><div class="icon">🖥</div>
+          <div class="spacer"></div><div class="icon">⚙</div>
+        </nav>
+        <aside class="sidebar1">
+          <div class="grouphead"><span>常用</span></div>
+          <div class="row">▢ Search</div><div class="row">▢ Saved</div>
+          <div class="grouphead"><span>频道</span><span class="count">04</span></div>
+          <div class="row active"><span class="hash">#</span> onboarding <span class="badge">2</span></div>
+          <div class="row"><span class="hash">#</span> version3</div>
+          <div class="row"><span class="hash">#</span> design notes</div>
+          <div class="grouphead"><span>DM</span><span class="count">03</span></div>
+          <div class="row">@Norman</div><div class="row">@Cindy</div>
+        </aside>
+        <aside class="sidebar2">
+          <div class="grouphead"><span>Threads</span><span class="count">04</span></div>
+          <div class="row"><div class="title">prompt 优化</div><div class="meta">@Norman · 2h</div></div>
+          <div class="row active"><div class="title">forza6 主题</div><div class="meta">now</div></div>
+          <div class="row"><div class="title">infra opt</div><div class="meta">@Cindy · 1d</div></div>
+        </aside>
+        <section class="chat">
+          <div class="chat-header"><span class="hash">#</span><h4>silverhand onboarding</h4><span class="hud">220 MSG</span></div>
+          <div class="chat-body"><div class="msg"><span class="name">shiki</span>: cyan + teal 邻近色和谐。</div></div>
+          <div class="composer"><div class="input">@Norman</div></div>
+        </section>
+      </div>
+    </div>
+    <div class="swatches">
+      <div class="sw"><i style="background:#22B7E0"></i><code>navrail #22B7E0</code></div>
+      <div class="sw"><i style="background:#0A0A0A"></i><code>icon ink</code></div>
+      <div class="sw"><i style="background:#D4F523"></i><code>active fg lime</code></div>
+    </div>
+  </div>
+
+  <!-- Lime -->
+  <div class="variant lime">
+    <header>
+      <span class="tag" style="background:#D4F523">C</span>
+      <h2>酸柠绿 #D4F523</h2>
+    </header>
+    <div class="summary">
+      <strong>最亮</strong>。海报里 lime 大块 panel 角色直接出场。但 lime 已经是 sidebar selected wedge 色——这里复用会形成「整列亮 lime」的视觉重叠。selected wedge 可能要换色让 NavRail 独占 lime 角色。
+    </div>
+    <div class="window">
+      <div class="titlebar"><div class="traffic"><span></span><span></span><span></span></div><h3>lime</h3><div style="width:30px"></div></div>
+      <div class="body">
+        <nav class="navrail">
+          <div class="icon active">💬</div><div class="icon">✓</div><div class="icon">👥</div><div class="icon">🖥</div>
+          <div class="spacer"></div><div class="icon">⚙</div>
+        </nav>
+        <aside class="sidebar1">
+          <div class="grouphead"><span>常用</span></div>
+          <div class="row">▢ Search</div><div class="row">▢ Saved</div>
+          <div class="grouphead"><span>频道</span><span class="count">04</span></div>
+          <div class="row active"><span class="hash">#</span> onboarding <span class="badge">2</span></div>
+          <div class="row"><span class="hash">#</span> version3</div>
+          <div class="row"><span class="hash">#</span> design notes</div>
+          <div class="grouphead"><span>DM</span><span class="count">03</span></div>
+          <div class="row">@Norman</div><div class="row">@Cindy</div>
+        </aside>
+        <aside class="sidebar2">
+          <div class="grouphead"><span>Threads</span><span class="count">04</span></div>
+          <div class="row"><div class="title">prompt 优化</div><div class="meta">@Norman · 2h</div></div>
+          <div class="row active"><div class="title">forza6 主题</div><div class="meta">now</div></div>
+          <div class="row"><div class="title">infra opt</div><div class="meta">@Cindy · 1d</div></div>
+        </aside>
+        <section class="chat">
+          <div class="chat-header"><span class="hash">#</span><h4>silverhand onboarding</h4><span class="hud">220 MSG</span></div>
+          <div class="chat-body"><div class="msg"><span class="name">shiki</span>: lime 大块最亮但跟 selected 撞色。</div></div>
+          <div class="composer"><div class="input">@Norman</div></div>
+        </section>
+      </div>
+    </div>
+    <div class="swatches">
+      <div class="sw"><i style="background:#D4F523"></i><code>navrail #D4F523</code></div>
+      <div class="sw"><i style="background:#0A0A0A"></i><code>icon ink + active bg</code></div>
+    </div>
+  </div>
+
+  <!-- Indigo -->
+  <div class="variant indigo">
+    <header>
+      <span class="tag" style="background:#2D2AB8;color:#fff">D</span>
+      <h2>深蓝紫 #2D2AB8</h2>
+    </header>
+    <div class="summary">
+      forza6 已有的 <code>--forza6-indigo-slab</code>（code-block header / closed-task chip）扩展使用。<strong>跟 chrome teal 形成「绿 + 紫蓝」补色对撞</strong>，海报「DISCOVER JAPAN」节日卡片就是这个色。深但不暗（高饱和）。
+    </div>
+    <div class="window">
+      <div class="titlebar"><div class="traffic"><span></span><span></span><span></span></div><h3>indigo</h3><div style="width:30px"></div></div>
+      <div class="body">
+        <nav class="navrail">
+          <div class="icon active">💬</div><div class="icon">✓</div><div class="icon">👥</div><div class="icon">🖥</div>
+          <div class="spacer"></div><div class="icon">⚙</div>
+        </nav>
+        <aside class="sidebar1">
+          <div class="grouphead"><span>常用</span></div>
+          <div class="row">▢ Search</div><div class="row">▢ Saved</div>
+          <div class="grouphead"><span>频道</span><span class="count">04</span></div>
+          <div class="row active"><span class="hash">#</span> onboarding <span class="badge">2</span></div>
+          <div class="row"><span class="hash">#</span> version3</div>
+          <div class="row"><span class="hash">#</span> design notes</div>
+          <div class="grouphead"><span>DM</span><span class="count">03</span></div>
+          <div class="row">@Norman</div><div class="row">@Cindy</div>
+        </aside>
+        <aside class="sidebar2">
+          <div class="grouphead"><span>Threads</span><span class="count">04</span></div>
+          <div class="row"><div class="title">prompt 优化</div><div class="meta">@Norman · 2h</div></div>
+          <div class="row active"><div class="title">forza6 主题</div><div class="meta">now</div></div>
+          <div class="row"><div class="title">infra opt</div><div class="meta">@Cindy · 1d</div></div>
+        </aside>
+        <section class="chat">
+          <div class="chat-header"><span class="hash">#</span><h4>silverhand onboarding</h4><span class="hud">220 MSG</span></div>
+          <div class="chat-body"><div class="msg"><span class="name">shiki</span>: 紫 + 绿补色对撞。</div></div>
+          <div class="composer"><div class="input">@Norman</div></div>
+        </section>
+      </div>
+    </div>
+    <div class="swatches">
+      <div class="sw"><i style="background:#2D2AB8"></i><code>navrail indigo</code></div>
+      <div class="sw"><i style="background:#FFFFFF"></i><code>icon white</code></div>
+      <div class="sw"><i style="background:#D4F523"></i><code>active fg lime</code></div>
+    </div>
+  </div>
+
+  <!-- Black -->
+  <div class="variant black">
+    <header>
+      <span class="tag" style="background:#0A0A0A;color:#FFEB00">E</span>
+      <h2>poster ink #0A0A0A + 黄 icon</h2>
+    </header>
+    <div class="summary">
+      <strong>最 strong contrast</strong>。海报图1 顶部 zigzag 黑边语言直接落地为 NavRail。icon 用海报黄 <code>#FFEB00</code> = poster HUD readout vibe。但 48px 大块全黑可能仍触发"太黑"反馈，看你接受度。
+    </div>
+    <div class="window">
+      <div class="titlebar"><div class="traffic"><span></span><span></span><span></span></div><h3>black</h3><div style="width:30px"></div></div>
+      <div class="body">
+        <nav class="navrail">
+          <div class="icon active">💬</div><div class="icon">✓</div><div class="icon">👥</div><div class="icon">🖥</div>
+          <div class="spacer"></div><div class="icon">⚙</div>
+        </nav>
+        <aside class="sidebar1">
+          <div class="grouphead"><span>常用</span></div>
+          <div class="row">▢ Search</div><div class="row">▢ Saved</div>
+          <div class="grouphead"><span>频道</span><span class="count">04</span></div>
+          <div class="row active"><span class="hash">#</span> onboarding <span class="badge">2</span></div>
+          <div class="row"><span class="hash">#</span> version3</div>
+          <div class="row"><span class="hash">#</span> design notes</div>
+          <div class="grouphead"><span>DM</span><span class="count">03</span></div>
+          <div class="row">@Norman</div><div class="row">@Cindy</div>
+        </aside>
+        <aside class="sidebar2">
+          <div class="grouphead"><span>Threads</span><span class="count">04</span></div>
+          <div class="row"><div class="title">prompt 优化</div><div class="meta">@Norman · 2h</div></div>
+          <div class="row active"><div class="title">forza6 主题</div><div class="meta">now</div></div>
+          <div class="row"><div class="title">infra opt</div><div class="meta">@Cindy · 1d</div></div>
+        </aside>
+        <section class="chat">
+          <div class="chat-header"><span class="hash">#</span><h4>silverhand onboarding</h4><span class="hud">220 MSG</span></div>
+          <div class="chat-body"><div class="msg"><span class="name">shiki</span>: 黑 + 黄 icon = HUD readout。</div></div>
+          <div class="composer"><div class="input">@Norman</div></div>
+        </section>
+      </div>
+    </div>
+    <div class="swatches">
+      <div class="sw"><i style="background:#0A0A0A"></i><code>navrail ink</code></div>
+      <div class="sw"><i style="background:#FFEB00"></i><code>icon yellow</code></div>
+      <div class="sw"><i style="background:#D4F523"></i><code>active bg lime</code></div>
+    </div>
+  </div>
+
+</div>
+
+<div style="margin-top: 20px; padding: 14px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12); font-size: 11px; line-height: 1.65;">
+  <strong style="color:#FFEB00; font-family:'Space Grotesk',sans-serif; letter-spacing:0.1em; text-transform:uppercase">个人推荐</strong><br>
+  按你的「保留 NavRail 独立 + sidebar 不变深 + 重点是 NavRail 颜色」诉求 + 海报感强度排序：
+  <ul style="margin:6px 0 0 18px; padding:0">
+    <li><strong style="color:#FF2C7A">A 节日粉</strong> ⭐ 最像海报 panel block 角色，「粉色三联响」（NavRail + chat # + unread badge）形成完整粉色叙事。</li>
+    <li><strong style="color:#22B7E0">B 电光蓝</strong> 最克制和谐，跟 chrome teal 邻近色对话。如果觉得 A 太刺眼可以选这个。</li>
+    <li><strong style="color:#2D2AB8">D 深蓝紫</strong> 复用已有 indigo token，绿+紫补色对撞。比 baseline 更有色彩个性但比 A 温和。</li>
+    <li>C lime 跟 selected wedge 撞色，要么不选，要么 selected 改其他色。</li>
+    <li>E ink + 黄 = HUD vibe 但可能仍嫌黑。</li>
+  </ul>
+</div>
+
+</body>
+</html>
