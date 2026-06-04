@@ -742,6 +742,7 @@ shiki 决定先保留胶囊（forza6 用饱和填色表达状态语义，不需�
 ## 8. 已有参考
 - `apps/desktop/src/renderer/styles/themes/warm-script.css`（默认主题，`:root` baseline）
 - `apps/desktop/src/renderer/styles/themes/forza6.css` + `forza6-components.css`（loud-festival 范式）
+- §12 = forza6 component-skin 特化清单；v6.x follow-up 的 sticker 配方 / modal chrome / 焦点契约 / presence dot 见 **§12.7**。canonical hook 清单以 `forza6-components.css` 为准（`rg -o "data-[a-z-]+"`）。
 
 ---
 
@@ -998,3 +999,30 @@ vendor stylesheet，零覆写）。把它命名成 theme-private 留出空间，
 - `pnpm --filter @silverhand/desktop test`（appearance.test.ts 含 4 个主题相关测试）
 - 切到 forza6 → 切到 warm-three 的来回测试，无 token 残留
 - 颜色对比度走 WCAG 2.1 AA / AAA
+
+### 12.7 v6.x follow-up（#task:918/919/920）：新增配方 + 焦点契约
+
+§12.2 / §12.3 的特化表是 **#task:917 时点的快照**，之后 #task:912/918/919/920 又陆续加了一批 hook（`data-modal-shell` / `data-dropdown-frame` / `data-status-pip` / `data-composer-shell` / `data-list-row` / `data-list-row-icon` / `data-sidebar-section-icon` / `data-panel-*` / `data-host-*` / `data-settings-*` …）而没回填那张表。**canonical hook 清单以代码为准**：`rg -o "data-[a-z-]+" themes/forza6-components.css | sort -u`。下面只记 v6.x 沉淀的可复用模式。
+
+**(1) Pane hero sticker 配方（`#` channel chip）**。把"高识别度小标"提炼成一个换 hue 即跨语义复用的配方，挂在 `data-channel-icon`：
+```
+fill = 语义色（channel = yellow）
+glyph = 对比色（ink）
+border = 1px solid ink
+border-radius = 0
+box-shadow = 1px 1px 0 ink   /* 海报硬冲压投影，no blur */
+box-sizing: content-box; padding: 1px; stroke-width: 2
+```
+现已复用到 chat header `#` / archived row / saved header / ChannelsSidebar。尺寸/间距由 consumer 外层控制，hook 只画 identity（fill/border/glyph/shadow）——见 §12.3 的 theme-neutral 约定。
+
+**(2) Modal poster chrome（`data-modal-shell`）**。Dialog / ImagePreviewModal 走 2px ink frame + 硬投影（`box-shadow: 2px 2px 0 ink`）+ `--floating-radius`(=0)。**opt-in 而非 `[role='dialog']` 全选**：Lightbox 也是 Radix Dialog 但不该吃海报框，所以用显式 hook 让它退出。
+
+**(3) Floating-frame token 簇**。base 组件（Input/Textarea/Button/Dialog/Select）不准 hardcode Tailwind 默认（`border`=1px / `rounded-md` / `rounded-lg`），必须消费簇：`--control-border-width`（forza6=2px）/ `--control-radius`(=0) / `--floating-radius`(=0) / `--floating-border` / `--border-control-hover`。否则主题切换只有 utility-level 一致、base-level 分裂；这类 debt 常被外层补偿（ring outset shadow 撑厚 1px 边）掩盖，**删补偿层（删 ring）的瞬间才暴露**。
+
+**(4) 焦点契约（v6.10.x lesson，硬规则）**：
+- **utility 状态绝不用饱和 hue**。focus / hover / splitter / row-hover / control-hover / 焦点框都是 utility → 走 `--border-focus`(=ink) / 中性词汇。`--border-focus` 是 token，**钉死在 `forza6.css`，不准在 `forza6-components.css` 重定义**（appearance test 锁）。
+- **例外：brand-anchored 主舞台**。composer 这种用户核心 anchor 的 focus 是 brand identity 高光，保留节日粉——用 `[data-composer-shell]:focus-within` element-scoped 覆盖，不动全局 token。判断标准：是不是"主舞台"？是→brand focus；否（一般 input/select/button）→ink focus。
+- **focus 变厚 = ring 不是 border**。Tailwind `ring-N` 是紧贴 border 外侧的 outset box-shadow（视觉 = border+ring 加粗）。要"focus 只换色不变粗"就删 ring 只换 border-color——前提是控件本就有可见 resting border。无 border 的控件（fill button / icon / chip）ring 是它们唯一 focus a11y 信号，**不能删**。
+- **hover→focus 不能跨色族**。同一控件 hover 粉 + focus 墨水 = click 瞬间色彩跳跃。复合 `--border-control-hover` 让 hover/focus 跨主题各自同族。
+
+**(5) 在线状态点（presence dot）**：复用 app 既有 active 点色 `--success`（forza6=deep lime，与 WORKSPACES 活跃点同款）。presence/online=绿是 app 既定约定，新做 presence 指示直接复用，**不算违反「饱和 hue 独占语义」**。批量数据用 `useAgentsPresence`（`useQueries` 拉 N 个 `/runtime-state`，共享 `useAgentRuntimeState` 的 query key + 5s 节奏）。

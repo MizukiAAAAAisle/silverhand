@@ -4,6 +4,42 @@
 
 ---
 
+## 2026-06-05 — forza6 海报主题 rework + follow-up polish（#task:917/918/919/920，已验收 closed）
+
+把 forza6 做成完整的「赛车海报」视觉系统（不只换色，走 **token + component-skin 两层**），七个 pane 通刷 + 一组 follow-up 打磨。四个 task 全部 closed。
+
+### #task:917 — 海报风格 rework
+
+七个 pane 通刷：chat header / tasks / members / computers / settings / splitter / composer。实现细节见 `docs/design-new-theme.md` §12「Forza6 component-layer 特化清单」。
+
+**配色锁定（每个高饱和 hue 独占一个最高级语义）**：
+- 粉 → channel `#` + unread + brand accent
+- 黄 → tasks ✓ family
+- 橙 → in_review
+- 湖青深 → hosts identity
+- 深绿 → done
+- acid lime → 选中身份色
+
+### #task:918/919/920 — follow-up polish
+
+- **#task:918**：TaskCard 窄面板文字溢出（`flex-wrap` + `min-w-0` + `overflow-wrap:anywhere`，status badge `nowrap`）；`MessageItem` 相对时间 → 绝对 `MM/DD HH:mm`（hover tooltip 秒级），免 minute-tick 重渲染。
+- **#task:919**：sidebar DM 行渲染 agent 上传头像（`useAgentAvatarObjectUrls` 批量 hook，`(id, avatar_url)` cache key + `?v=updated_at` cache-buster，runtime icon fallback）。
+- **#task:920**：焦点/边框系统收敛 + base 组件 token 对齐一大组：
+  - bordered Input/Select/Textarea 删 focus `ring`、只换 border 色（ink）；borderless 控件（Button/icon/chip）保留 ring 作 a11y。恢复 2px resting border via `--control-border-width`（根因：base 组件 hardcode Tailwind `border` 默认被 ring outset shadow 掩盖，删 ring 才暴露）。
+  - composer 保留 brand-pink focus（brand-anchored 主舞台例外，`[data-composer-shell]:focus-within` element-scoped，不动 `--border-focus` token）；filter trigger hover → `--border-control-hover`，消除 hover→focus 跨色族闪烁。
+  - member-picker triggers + Dialog primitive 接 floating-frame token 簇；forza6 dialog + ImagePreviewModal 加 2px ink frame + hard drop shadow（`data-modal-shell` opt-in，Lightbox 不吃）。
+  - ImagePreviewModal Save=primary、Copy/Cancel=neutral（产品层级清理，非视觉降饱和）。
+  - archived item + saved header 的 `#` → channel chip sticker（`data-channel-icon` 配方复用）。
+  - message search Sender + Workspace(DM) filter dropdown 显示真实 human/agent 头像，解析不到回落 person/Bot glyph。
+  - 空 WORKSPACES 提示里内联 `+` chip → 正方形 + `--control-radius`。
+  - Members AGENTS 状态点接入实时在线状态（`useAgentsPresence` 用 `useQueries` 批量拉 `/runtime-state`，复用 `useAgentRuntimeState` query key + 5s 轮询；`starting`/`active` → 绿点 `--success`，其余灰；判定口径同 AgentHeader presence pill）。
+
+**v6.10.x 焦点色 lesson（沉淀为通用设计原则）**：utility 状态（focus/hover/splitter/row-hover/control-hover）绝不用饱和 hue → 走 ink/中性；**例外**：brand-anchored 主入口（composer）的 focus 是 brand identity 高光，可保留品牌色。hover→focus 不能跨色族（同色族或复合 token cluster）。详见 `notes/user-preferences.md` 视觉系统层。
+
+### Gates
+
+每个 commit 各自 `pnpm --filter @silverhand/desktop typecheck` + `./scripts/test.sh --scope desktop`（770 pass / 62 files）全绿。917 squash 为单 commit `8bdeb17`（base `9c5bbb7`）；918/919/920 follow-up squash 为单 commit `978ee1d`（base `3e32f83`）。
+
 ## 2026-06-01 — 打包 .app 无法打开修复 + electron-builder 25→26 升级
 
 ### 症状
