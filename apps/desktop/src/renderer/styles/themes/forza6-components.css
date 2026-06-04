@@ -1709,3 +1709,40 @@
    same ink (border + ring), hard-stamped. So this block intentionally
    does NOT override `--tw-ring-color` — the ring inherits `--border-
    focus` directly, both layers paint solid `--forza6-ink`. */
+
+/* ── Dialog modal shell — poster sticker (v6.11, #task:920) ────────
+   shiki: "给弹窗加上 2px ink border + channel selected boxshadow"
+   (the "channel selected boxshadow" = the 1.5–2px solid ink offset
+   shadow forza6 already paints on every poster sticker in the app —
+   industry term: **hard drop shadow** / **solid drop shadow** /
+   **brutalist shadow** in the neo-brutalism vocabulary; we've been
+   calling it "poster sticker drop shadow" or "ink shadow" in our own
+   code comments).
+
+   Dialog (ui/dialog.tsx DialogContent) now carries two hooks:
+     - `data-popover-frame="info"` → border + radius come from the
+        floating-frame token cluster shared with info popovers (forza6 =
+        2px ink + 0 radius; warm = 1px subtle + radius-md; slack-dark =
+        1px white-10% + radius-md). Adds 2px ink frame to forza6
+        dialogs (which previously had no resting border).
+     - `data-modal-shell` → forza6-only sticker shadow rule below.
+        Doesn't touch warm/slack-dark (they keep the existing
+        `--shadow-modal` soft halo via the `shadow-modal` Tailwind
+        utility on DialogContent).
+
+   In forza6 the sticker shadow REPLACES `shadow-modal`, not stacks
+   with it — soft modal halo + hard sticker shadow on the same surface
+   reads as muddy (cf. v6.10.1 "半透墨水晕不好" — same principle: don't
+   mix tonal layers with hard layers on one chip). 2px offset (vs the
+   1.5px chat-header `#` chip / sidebar row) matches the dialog's
+   larger surface area; same proportion the host-hero sticker uses
+   (also a large block).
+
+   Why `data-modal-shell` instead of selecting `[role='dialog']`
+   broadly: Lightbox.tsx is also built on Radix Dialog so it would
+   inherit `role='dialog'`, but Lightbox is a full-bleed image viewer
+   that doesn't want poster sticker chrome. `data-modal-shell` is the
+   opt-in hook the Dialog primitive applies; Lightbox doesn't. */
+[data-theme='forza6'] [data-modal-shell] {
+  box-shadow: 2px 2px 0 var(--forza6-ink);
+}

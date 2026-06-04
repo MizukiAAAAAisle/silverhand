@@ -31,8 +31,10 @@ export const DialogContent = forwardRef<
     <DialogOverlay />
     <DialogPrimitive.Content
       ref={ref}
+      data-modal-shell
+      data-popover-frame="info"
       className={cn(
-        'fixed left-1/2 top-1/2 z-50 grid w-full max-w-md -translate-x-1/2 -translate-y-1/2 gap-4 rounded-[var(--floating-radius)] bg-bg-floating p-6 shadow-modal focus:outline-none',
+        'fixed left-1/2 top-1/2 z-50 grid w-full max-w-md -translate-x-1/2 -translate-y-1/2 gap-4 bg-bg-floating p-6 shadow-modal focus:outline-none',
         className,
       )}
       {...props}
