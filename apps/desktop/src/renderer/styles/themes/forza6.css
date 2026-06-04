@@ -474,16 +474,23 @@
   --border: rgba(15, 31, 29, 0.14);
   --border-subtle: rgba(15, 31, 29, 0.10);
   --border-island: rgba(255, 255, 255, 0.08);
-  /* Input / focus cue. v6.10 (#task:920): dialed down from festival
-     magenta (`--brand-primary` #FF2C7A) to the deep-magenta accent
-     (`--accent` = `--forza6-pink-deep` #B3186A). Same hue family — so
-     focus still reads as "branded color shift, input active, distinct
-     from selected (lime)" — but roughly 30% lower saturation + 10%
-     darker, which kills the "节日粉" loudness shiki flagged on
-     Composer (v6.9.7 D) and MemberPicker (#task:920 C). Other themes
-     inherit their own `--border-focus`; this override only quiets
-     forza6's festival palette. */
-  --border-focus: var(--accent);
+  /* Input / focus cue. v6.10.1 (#task:920): demoted from the magenta
+     family entirely to **ink收敛 + 半透晕**. v6.10 first tried dialing
+     festival magenta (`--brand-primary` #FF2C7A) down to deep magenta
+     (`--accent` #B3186A) on the theory that "same hue, lower saturation"
+     would quiet it. shiki review: still loud — `--accent` is the same
+     hue family flagged earlier in v6.9.6 splitter discussion as "festival
+     hue, structural separator should be ink". Focus is a utility signal
+     (short-lived, non-semantic) — it shouldn't claim a saturated hue at
+     all. Border becomes solid ink (`--forza6-ink`); the ring halo is
+     decoupled to a translucent ink in `forza6-components.css` so border
+     and ring read as two coordinated layers (solid frame + soft halo)
+     rather than one heavy ring. Same vocabulary as v6.9.6 splitter /
+     row-hover / control-hover (all ink); the saturated hues stay locked
+     to semantic roles (pink=channel, lime=selected, yellow=task,
+     湖青=hosts, 深绿=done, cyan=in_progress/link). Other themes inherit
+     their own `--border-focus`; this override only applies here. */
+  --border-focus: var(--forza6-ink);
   /* Chat avatar frame — forza6 uses the brand near-black to harden
      the head-shot edge against neon backgrounds. Other themes alias
      this to `--border-subtle` so the chat surface stays soft. */
