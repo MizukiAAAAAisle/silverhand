@@ -119,7 +119,8 @@ function StatusPicker({
           align="start"
           sideOffset={4}
           onClick={e => e.stopPropagation()}
-          className="z-50 min-w-[136px] rounded-[var(--floating-radius)] border border-border bg-bg-floating p-1 shadow-lg outline-none"
+          data-popover-frame="info"
+          className="z-50 min-w-[136px] bg-bg-floating p-1 shadow-lg outline-none"
         >
           <div className="px-1.5 pb-1 pt-0.5 text-[9px] font-medium uppercase tracking-wider text-text-muted">
             Move to

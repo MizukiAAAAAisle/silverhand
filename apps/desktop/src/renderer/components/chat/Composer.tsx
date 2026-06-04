@@ -981,7 +981,7 @@ function PickerMenu({
     routeKind === 'thread' ? 'THREAD' : 'CHANNEL';
   return (
     <div
-      className="absolute bottom-full left-0 mb-1.5 w-64 max-h-64 overflow-y-auto rounded-md border border-border bg-bg-floating p-1 shadow-lg"
+      className="absolute bottom-full left-0 mb-1.5 w-64 max-h-64 overflow-y-auto bg-bg-floating p-1 shadow-lg"
       data-composer-picker=""
       data-dropdown-frame
       role="listbox"
