@@ -140,7 +140,11 @@ function StatusPicker({
           // 点击 status 后卡片无法失焦消失).
           onCloseAutoFocus={e => e.preventDefault()}
           data-popover-frame="info"
-          className="z-50 min-w-[136px] bg-bg-floating p-1 shadow-lg outline-none"
+          // z-[85] clears the hover-card task popover (z-[80] in
+          // HoverPopover) so the picker isn't trapped behind its own
+          // host; stays under the modal layer (z-[90]+). Harmless in the
+          // task-card context where nothing floats this high. #task:923
+          className="z-[85] min-w-[136px] bg-bg-floating p-1 shadow-lg outline-none"
         >
           <div className="px-1.5 pb-1 pt-0.5 text-[9px] font-medium uppercase tracking-wider text-text-muted">
             Move to
