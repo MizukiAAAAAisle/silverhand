@@ -8,7 +8,11 @@ import {
   type RuntimeStopParams,
 } from '@silverhand/host';
 import { getDriver } from '@silverhand/host/drivers';
-import type { AgentRunState, AgentRunTerminalReason } from '@silverhand/shared';
+import type {
+  AgentRunState,
+  AgentRunTerminalReason,
+  RuntimeKind,
+} from '@silverhand/shared';
 import type { AgentTokenStore } from '../auth/agent-token-store.js';
 import type { BackendLogger, SilverhandCliLauncher } from '../context.js';
 import { systemSubtype } from '@silverhand/shared';
@@ -36,6 +40,8 @@ import {
   ClearSessionInProgressError,
   DEFAULT_SOFT_DIRECTIVE,
   type ClearSessionResult,
+  type ReapIdleRuntimesOptions,
+  type ReapIdleRuntimesResult,
 } from './agent-runtime-host.js';
 import { RuntimeDeliveryCoordinator } from './delivery-coordinator.js';
 import {
@@ -587,7 +593,25 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     softDirective?: string,
   ): Promise<void> {
     const hostId = this.hostIdForAgent(agentId);
-    const transport = this.requireTransport();
+    const connectionId = this.connectedConnectionId(hostId, 'runtime_stop');
+    await this.dispatchStop(
+      hostId,
+      connectionId,
+      conversationId,
+      agentId,
+      mode,
+      softDirective,
+    );
+  }
+
+  private async dispatchStop(
+    hostId: string,
+    expectedConnectionId: string,
+    conversationId: string,
+    agentId: string,
+    mode: 'soft' | 'hard',
+    softDirective?: string,
+  ): Promise<void> {
     const params: RuntimeStopParams =
       mode === 'soft'
         ? {
@@ -601,7 +625,110 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
             agent_id: agentId,
             mode,
           };
-    await transport.sendCommand(hostId, 'runtime_stop', params);
+    await this.requireTransport().sendCommand(hostId, 'runtime_stop', params, {
+      expectedConnectionId,
+    });
+  }
+
+  async reapIdleRuntimes(
+    opts: ReapIdleRuntimesOptions,
+  ): Promise<ReapIdleRuntimesResult> {
+    const result: ReapIdleRuntimesResult = {
+      considered: 0,
+      eligible: 0,
+      reaped: 0,
+      skipped: 0,
+      failed: 0,
+    };
+    if (!Number.isFinite(opts.ttlMs) || opts.ttlMs <= 0) return result;
+
+    const transport = this.opts.transport();
+    if (!transport) return result;
+
+    const now = opts.now ?? Date.now();
+    const runtimeEnabled = opts.runtimeEnabled ?? idleReapRuntimeEnabled;
+
+    for (const [hostId, state] of this.states.entries()) {
+      const selectedConnectionId = state.currentConnectionId;
+      if (!selectedConnectionId) continue;
+      if (transport.connectionIdForHost(hostId) !== selectedConnectionId) {
+        result.skipped += state.cache.list().length;
+        continue;
+      }
+
+      for (const entry of state.cache.list()) {
+        result.considered++;
+
+        if (!this.isIdleReapCandidate(entry, now, opts.ttlMs, runtimeEnabled)) {
+          result.skipped++;
+          continue;
+        }
+
+        if (this.inboxRepo.hasUndeliveredForPair(entry.conversationId, entry.agentId)) {
+          result.skipped++;
+          continue;
+        }
+
+        const freshEntry = state.cache.get(entry.conversationId, entry.agentId);
+        if (
+          !freshEntry ||
+          !this.isIdleReapCandidate(
+            freshEntry,
+            now,
+            opts.ttlMs,
+            runtimeEnabled,
+          ) ||
+          state.currentConnectionId !== selectedConnectionId ||
+          transport.connectionIdForHost(hostId) !== selectedConnectionId ||
+          this.inboxRepo.hasUndeliveredForPair(entry.conversationId, entry.agentId)
+        ) {
+          result.skipped++;
+          continue;
+        }
+
+        result.eligible++;
+        try {
+          await this.dispatchStop(
+            hostId,
+            selectedConnectionId,
+            entry.conversationId,
+            entry.agentId,
+            'hard',
+          );
+          result.reaped++;
+        } catch (err) {
+          result.failed++;
+          this.opts.logger.warn(
+            {
+              kind: 'runtime',
+              action: 'idle_reap_stop_failed',
+              hostId,
+              conversationId: entry.conversationId,
+              agent_id: entry.agentId,
+              err,
+            },
+            'idle reaper failed to stop runtime; continuing',
+          );
+        }
+      }
+    }
+
+    return result;
+  }
+
+  private isIdleReapCandidate(
+    entry: CachedRuntimeEntry,
+    now: number,
+    ttlMs: number,
+    runtimeEnabled: (runtime: RuntimeKind) => boolean,
+  ): boolean {
+    if (entry.phase !== 'ready') return false;
+    const runState = entry.runState;
+    if (!runState || runState.status !== 'idle') return false;
+    if (!Number.isFinite(runState.lastActivityAt)) return false;
+    if (now - runState.lastActivityAt <= ttlMs) return false;
+    const agent = this.agents.get(entry.agentId);
+    return !!agent && runtimeEnabled(agent.runtime);
   }
 
   /**
@@ -1794,6 +1921,10 @@ function daemonKeyFromReady(daemonPid: number, startedAt: number): string {
 
 function clearSessionKey(conversationId: string, agentId: string): string {
   return `${conversationId}|${agentId}`;
+}
+
+function idleReapRuntimeEnabled(_runtime: RuntimeKind): boolean {
+  return true;
 }
 
 function summarizeStartupDeliveryResult(result: {

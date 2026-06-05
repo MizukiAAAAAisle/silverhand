@@ -24,9 +24,14 @@ const DISALLOWED_TOOLS = [
  * Notes:
  * - Stream-json bidirectional: we both consume claude's output and write
  *   user messages on stdin in the same JSON-line format.
- * - We pass the standing system prompt via `--system-prompt-file` (file
- *   path) rather than `--system-prompt <text>`, since the synthesized
- *   §4.7 platform prompt easily exceeds argv length limits.
+ * - We pass the standing system prompt via `--append-system-prompt-file`
+ *   (file path) rather than `--append-system-prompt <text>`, since the
+ *   synthesized §4.7 platform prompt easily exceeds argv length limits.
+ *   `--append-system-prompt-file` *appends* our platform manual onto
+ *   Claude Code's built-in system prompt (tool usage, CLAUDE.md handling,
+ *   etc.) rather than replacing it — this keeps Claude's native coding
+ *   affordances intact and aligns Claude with the Codex driver, whose
+ *   `developerInstructions` already layers on top of Codex's base prompt.
  * - We delete `CLAUDECODE` from the env to keep nested invocations from
  *   tripping Claude's "I'm running inside Claude Code" branch.
  */
@@ -61,7 +66,7 @@ export class ClaudeDriver implements Driver {
       ctx.model || 'opus',
       '--disallowed-tools',
       DISALLOWED_TOOLS,
-      '--system-prompt-file',
+      '--append-system-prompt-file',
       ctx.systemPromptPath,
     ];
     if (ctx.cliSessionId) {
@@ -167,12 +172,16 @@ export class ClaudeDriver implements Driver {
         const subtype = typeof event.subtype === 'string' ? event.subtype : 'success';
         const stopReason =
           typeof event.stop_reason === 'string' ? event.stop_reason : null;
-        const errorIfNotBudget = (fallback: string) => {
-          if (stopReason !== 'max_tokens') {
-            const detail = collectResultError(event) || fallback;
-            events.push({ kind: 'error', message: detail });
-          }
-        };
+          const errorIfNotBudget = (fallback: string) => {
+            if (stopReason !== 'max_tokens') {
+              const detail = collectResultError(event) || fallback;
+              events.push({
+                kind: 'error',
+                message: detail,
+                ...classifyClaudeError(detail),
+              });
+            }
+          };
         switch (subtype) {
           case 'success':
             if (event.is_error) errorIfNotBudget('Execution failed');
@@ -272,4 +281,14 @@ function collectResultError(event: any): string {
     parts.push(event.result.trim());
   }
   return parts.join(' | ');
+}
+
+function classifyClaudeError(message: string): { code?: string; fatal?: boolean } {
+  if (
+    message.includes('No conversation found with session ID:') ||
+    message.includes('--resume requires a valid session ID')
+  ) {
+    return { code: 'session_not_found', fatal: true };
+  }
+  return {};
 }

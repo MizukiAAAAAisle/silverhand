@@ -35,7 +35,11 @@ import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { WorkspaceRegistryBackfiller } from '../../src/runtime/workspace-registry-backfill.js';
 import { createApiRouter, createInternalRouter } from '../../src/routes.js';
-import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
+import type {
+  AgentRuntimeHost,
+  ReapIdleRuntimesOptions,
+  ReapIdleRuntimesResult,
+} from '../../src/runtime/agent-runtime-host.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
 import {
   DEFAULT_AUTH_SESSION_TTL_MS,
@@ -52,6 +56,7 @@ import { AttachmentService } from '../../src/services/attachment-service.js';
 import { AgentService } from '../../src/services/agent-service.js';
 import { ChannelService } from '../../src/services/channel-service.js';
 import { ConversationMessageService } from '../../src/services/conversation-message-service.js';
+import { IdleReaperService } from '../../src/services/idle-reaper-service.js';
 import { ScheduleService } from '../../src/services/schedule-service.js';
 import { TaskService } from '../../src/services/task-service.js';
 import { ThreadService } from '../../src/services/thread-service.js';
@@ -175,6 +180,11 @@ export class FakeConversationManager implements AgentRuntimeHost {
   }
   async stopAll(): Promise<void> {
     this.stoppedAll++;
+  }
+  async reapIdleRuntimes(
+    _opts: ReapIdleRuntimesOptions,
+  ): Promise<ReapIdleRuntimesResult> {
+    return { considered: 0, eligible: 0, reaped: 0, skipped: 0, failed: 0 };
   }
   async closeActivityLog(): Promise<void> {
     // No activity log stream exists in this in-process fake.
@@ -875,6 +885,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     threadService: undefined as unknown as ThreadService,
     taskService: undefined as unknown as TaskService,
     scheduleService: undefined as unknown as ScheduleService,
+    idleReaperService: undefined as unknown as IdleReaperService,
     lastSpawnAtByAgent: new Map(),
     events: new ScopeEventBus(),
     silverhandCliLauncher: { command: 'noop', args: [] },
@@ -958,6 +969,11 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     logger: silentLogger,
     disableAutoTick: true,
   });
+  ctx.idleReaperService = new IdleReaperService({
+    runtimeHost: ctx.runtimeHost,
+    logger: silentLogger,
+    disableAutoTick: true,
+  });
 
   const hosts = new HostRepo(db);
   // Stage B.3 create routes require the current user to have an owned
@@ -995,6 +1011,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     viewerUserId,
     cleanup: () => {
       ctx.scheduleService.stop();
+      ctx.idleReaperService.stop();
       try {
         db.close();
       } catch {}

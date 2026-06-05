@@ -241,6 +241,21 @@ export class ConversationInboxRepo {
     return row?.c ?? 0;
   }
 
+  hasUndeliveredForPair(conversationId: string, agentId: string): boolean {
+    const row = this.db
+      .prepare<[string, string], { one: 1 }>(
+        `SELECT 1 AS one
+           FROM conversation_inboxes
+          WHERE conversation_id = ?
+            AND agent_id = ?
+            AND delivered_at IS NULL
+            AND failed_at IS NULL
+          LIMIT 1`,
+      )
+      .get(conversationId, agentId);
+    return row !== undefined;
+  }
+
   private deliveryRow(
     conversationId: string,
     agentId: string,

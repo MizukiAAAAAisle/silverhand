@@ -72,7 +72,7 @@ describe('ClaudeDriver.buildArgs', () => {
 
     expect(args).not.toContain('--mcp-config');
     expect(args).not.toContain('--strict-mcp-config');
-    expect(args).toContain('--system-prompt-file');
+    expect(args).toContain('--append-system-prompt-file');
     expect(args).toContain(built.ctx.systemPromptPath);
   });
 });
@@ -129,5 +129,32 @@ describe('ClaudeDriver.parseLine', () => {
     ]);
     expect(JSON.stringify(events)).not.toContain('127.0.0.1');
     expect(JSON.stringify(events)).not.toContain('/v1/messages');
+  });
+
+  it('classifies stale --resume result errors as fatal', () => {
+    const events = new ClaudeDriver().parseLine(
+      JSON.stringify({
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+        stop_reason: null,
+        session_id: '46af7b63-3663-4614-a4e5-a1e93f3a0230',
+        errors: [
+          'No conversation found with session ID: 11111111-1111-4111-8111-111111111111',
+        ],
+      }),
+    );
+
+    expect(events[0]).toEqual({
+      kind: 'error',
+      code: 'session_not_found',
+      fatal: true,
+      message:
+        'No conversation found with session ID: 11111111-1111-4111-8111-111111111111',
+    });
+    expect(events[1]).toEqual({
+      kind: 'turn_end',
+      sessionId: '46af7b63-3663-4614-a4e5-a1e93f3a0230',
+    });
   });
 });

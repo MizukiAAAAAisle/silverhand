@@ -65,6 +65,7 @@ import { AgentService } from './services/agent-service.js';
 import { ChannelService } from './services/channel-service.js';
 import { ConversationMessageService } from './services/conversation-message-service.js';
 import { ScheduleService } from './services/schedule-service.js';
+import { IdleReaperService } from './services/idle-reaper-service.js';
 import { ThreadService } from './services/thread-service.js';
 import { TaskService } from './services/task-service.js';
 import { UserService } from './services/user-service.js';
@@ -339,6 +340,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     threadService: undefined as unknown as ThreadService,
     taskService: undefined as unknown as TaskService,
     scheduleService: undefined as unknown as ScheduleService,
+    idleReaperService: undefined as unknown as IdleReaperService,
     lastSpawnAtByAgent: new Map(),
     events: new ScopeEventBus(),
     silverhandCliLauncher,
@@ -457,6 +459,10 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     events: ctx.events,
     logger,
   });
+  ctx.idleReaperService = new IdleReaperService({
+    runtimeHost: ctx.runtimeHost,
+    logger,
+  });
   // D4.d §5 — boot-time materialization reconciler. Marks stale
   // `pending_materialization` rows as `failed` with
   // `backend_crash_during_materialize`. SYNCHRONOUS by contract:
@@ -475,6 +481,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   // handles brought back are visible to the first wake delivery.
   await ctx.runtimeHost.reconcileOnBoot();
   ctx.scheduleService.start();
+  ctx.idleReaperService.start();
   const stopEventLoopLagProbe = startEventLoopLagProbe(logger);
 
   ctx.embeddedBootstrap = await prepareEmbeddedBootstrap({
@@ -531,6 +538,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
             // Stop the scheduler before any agent shutdown so we don't
             // race a fire mid-teardown (would write to a dying CM).
             ctx.scheduleService.stop();
+            ctx.idleReaperService.stop();
             // Phase 1: runtime shutdown — stop all agents, then flush +
             // close the activity log, WHILE the outbound transport is
             // still connected. `closeActivityLog()` dispatches

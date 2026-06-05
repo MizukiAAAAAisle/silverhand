@@ -1,6 +1,6 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   EventFrameSchema,
   KNOWN_CAPABILITIES_V1,
@@ -580,6 +580,113 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  it('rolls startup_delivery rows back to pending when the spawned child exits before init', async () => {
+    const fix = makeFixture();
+    try {
+      const delivery = enqueueMessage(fix, 'do not lose me');
+
+      await expect(
+        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
+      ).resolves.toBe(true);
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
+      expect(fix.inbox.countInFlightForPair(fix.channelId, fix.agentId)).toBe(1);
+
+      fix.fanout.onEvent(
+        fix.hostId,
+        {
+          direction: 'daemon_to_server',
+          type: 'event',
+          kind: 'runtime_startup_delivery_failed',
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          delivery_ids: [delivery.inboxId],
+          reason: 'child_exit',
+          ts: 1700000001000,
+        },
+        'conn-1',
+      );
+
+      expect(fix.inbox.countInFlightForPair(fix.channelId, fix.agentId)).toBe(0);
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId))
+        .toEqual([delivery.inboxId]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('keeps stale-resume startup_delivery pending and suppresses auto-respawn on fatal parsed error', async () => {
+    const fix = makeFixture();
+    try {
+      const delivery = enqueueMessage(fix, 'wake after idle');
+
+      await expect(
+        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
+      ).resolves.toBe(true);
+      const initialStarts = fix.transport.calls.filter(
+        call => call.kind === 'runtime_start',
+      ).length;
+
+      fix.fanout.onEvent(
+        fix.hostId,
+        {
+          direction: 'daemon_to_server',
+          type: 'event',
+          kind: 'runtime_parsed_event',
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          parsed: {
+            kind: 'error',
+            code: 'session_not_found',
+            fatal: true,
+            message: 'No conversation found with session ID: stale',
+          },
+          ts: 1700000001000,
+        },
+        'conn-1',
+      );
+      fix.fanout.onEvent(
+        fix.hostId,
+        {
+          direction: 'daemon_to_server',
+          type: 'event',
+          kind: 'runtime_startup_delivery_failed',
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          delivery_ids: [delivery.inboxId],
+          reason: 'child_exit',
+          ts: 1700000001001,
+        },
+        'conn-1',
+      );
+      fix.fanout.onEvent(
+        fix.hostId,
+        {
+          direction: 'daemon_to_server',
+          type: 'event',
+          kind: 'runtime_exit',
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          code: 1,
+          intentional: false,
+          ts: 1700000001002,
+        },
+        'conn-1',
+      );
+
+      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(fix.row().status).toBe('crashed');
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId))
+        .toEqual([delivery.inboxId]);
+      expect(
+        fix.transport.calls.filter(call => call.kind === 'runtime_start'),
+      ).toHaveLength(initialStarts);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   it('wires coordinator.respawn → a non-fatal runtime_exit with pending inbox re-runs startup_delivery (D5.a-3 respawn-wiring regression)', async () => {
     // Regression pin: the D5.a-3 unification onto OutboundRuntimeEventFanout
     // dropped the `respawn` callback, so a runtime that exited with pending
@@ -951,6 +1058,256 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  it('reapIdleRuntimes stops only stale live-idle runtimes and pins the connection', async () => {
+    const fix = makeFixture();
+    try {
+      await hydrateRuntime(fix, 'ready', {
+        status: 'idle',
+        lastActivityAt: 1700000000000,
+      });
+
+      await expect(
+        fix.fanout.reapIdleRuntimes({
+          ttlMs: 30 * 60_000,
+          now: 1700000000000 + 31 * 60_000,
+        }),
+      ).resolves.toMatchObject({
+        considered: 1,
+        eligible: 1,
+        reaped: 1,
+        failed: 0,
+      });
+
+      const stop = fix.transport.stopCalls()[0]!;
+      expect(stop.params).toEqual({
+        conversation_id: fix.channelId,
+        agent_id: fix.agentId,
+        mode: 'hard',
+      });
+      expect(stop.opts?.expectedConnectionId).toBe('conn-1');
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('reapIdleRuntimes skips active, disabled, and undelivered-inbox runtimes', async () => {
+    const active = makeFixture();
+    try {
+      await hydrateRuntime(active, 'ready', {
+        status: 'thinking',
+        lastActivityAt: 1700000000000,
+      });
+      await active.fanout.reapIdleRuntimes({
+        ttlMs: 30 * 60_000,
+        now: 1700000000000 + 31 * 60_000,
+      });
+      expect(active.transport.stopCalls()).toHaveLength(0);
+    } finally {
+      active.cleanup();
+    }
+
+    const disabled = makeFixture({ runtime: 'claude' });
+    try {
+      await hydrateRuntime(disabled, 'ready', {
+        status: 'idle',
+        lastActivityAt: 1700000000000,
+      });
+      await disabled.fanout.reapIdleRuntimes({
+        ttlMs: 30 * 60_000,
+        now: 1700000000000 + 31 * 60_000,
+        runtimeEnabled: runtime => runtime !== 'claude',
+      });
+      expect(disabled.transport.stopCalls()).toHaveLength(0);
+    } finally {
+      disabled.cleanup();
+    }
+
+    const inFlight = makeFixture();
+    try {
+      enqueueMessage(inFlight, 'already claimed');
+      inFlight.inbox.claimPending(inFlight.channelId, inFlight.agentId, 'conn-1');
+      await hydrateRuntime(inFlight, 'ready', {
+        status: 'idle',
+        lastActivityAt: 1700000000000,
+      });
+      await inFlight.fanout.reapIdleRuntimes({
+        ttlMs: 30 * 60_000,
+        now: 1700000000000 + 31 * 60_000,
+      });
+      expect(inFlight.transport.stopCalls()).toHaveLength(0);
+    } finally {
+      inFlight.cleanup();
+    }
+  });
+
+  it('reapIdleRuntimes rechecks undelivered inbox before stop', async () => {
+    const fix = makeFixture();
+    const original = ConversationInboxRepo.prototype.hasUndeliveredForPair;
+    let checksForPair = 0;
+    const spy = vi
+      .spyOn(ConversationInboxRepo.prototype, 'hasUndeliveredForPair')
+      .mockImplementation(function (
+        this: ConversationInboxRepo,
+        conversationId,
+        agentId,
+      ) {
+        if (conversationId === fix.channelId && agentId === fix.agentId) {
+          checksForPair++;
+          if (checksForPair === 1) return false;
+          if (checksForPair === 2) {
+            enqueueMessage(fix, 'raced in');
+            this.claimPending(conversationId, agentId, 'conn-race');
+          }
+        }
+        return original.call(this, conversationId, agentId);
+      });
+    try {
+      await hydrateRuntime(fix, 'ready', {
+        status: 'idle',
+        lastActivityAt: 1700000000000,
+      });
+
+      await fix.fanout.reapIdleRuntimes({
+        ttlMs: 30 * 60_000,
+        now: 1700000000000 + 31 * 60_000,
+      });
+
+      expect(fix.transport.stopCalls()).toHaveLength(0);
+      expect(checksForPair).toBe(2);
+    } finally {
+      spy.mockRestore();
+      fix.cleanup();
+    }
+  });
+
+  it('reapIdleRuntimes re-reads live cache before each stop after await gaps', async () => {
+    const fix = makeFixture();
+    try {
+      const secondAgent = new AgentRepo(fix.db).create(
+        { name: 'agent-2', runtime: 'claude', host_id: fix.hostId },
+        fix.hostId,
+        fix.viewerUserId,
+      );
+      new ConversationRepo(fix.db).addAgent(fix.channelId, secondAgent.id);
+      new ConversationRepo(fix.db).updateAgentRuntime(fix.channelId, secondAgent.id, {
+        status: 'active',
+      });
+      fix.transport.snapshot = {
+        runtimes: [
+          runtimeDto(fix.channelId, fix.agentId, 'ready', {
+            ...RUN_STATE,
+            conversationId: fix.channelId,
+            agentId: fix.agentId,
+            status: 'idle',
+            lastActivityAt: 1700000000000,
+          }),
+          runtimeDto(fix.channelId, secondAgent.id, 'ready', {
+            ...RUN_STATE,
+            conversationId: fix.channelId,
+            agentId: secondAgent.id,
+            status: 'idle',
+            lastActivityAt: 1700000000000,
+          }),
+        ],
+      };
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      await waitFor(() => fix.fanout.getAgentRunStates(fix.channelId).length === 2);
+
+      fix.transport.deferNextStop();
+      const sweep = fix.fanout.reapIdleRuntimes({
+        ttlMs: 30 * 60_000,
+        now: 1700000000000 + 31 * 60_000,
+      });
+      await waitFor(() => fix.transport.stopCalls().length === 1);
+
+      fix.fanout.onEvent(
+        fix.hostId,
+        {
+          direction: 'daemon_to_server',
+          type: 'event',
+          kind: 'runtime_state',
+          conversation_id: fix.channelId,
+          agent_id: secondAgent.id,
+          state: {
+            ...RUN_STATE,
+            conversationId: fix.channelId,
+            agentId: secondAgent.id,
+            status: 'thinking',
+            updatedAt: 1700000001000,
+            lastActivityAt: 1700000001000,
+          },
+          ts: 1700000001000,
+        },
+        'conn-1',
+      );
+
+      fix.transport.resolveDeferredStop({});
+      await expect(sweep).resolves.toMatchObject({
+        considered: 2,
+        eligible: 1,
+        reaped: 1,
+        failed: 0,
+      });
+      expect(fix.transport.stopCalls()).toHaveLength(1);
+      expect(fix.transport.stopCalls()[0]!.params).toMatchObject({
+        agent_id: fix.agentId,
+      });
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('reapIdleRuntimes logs stop failures and continues other candidates', async () => {
+    const fix = makeFixture();
+    try {
+      const secondAgent = new AgentRepo(fix.db).create(
+        { name: 'agent-2', runtime: 'claude', host_id: fix.hostId },
+        fix.hostId,
+        fix.viewerUserId,
+      );
+      new ConversationRepo(fix.db).addAgent(fix.channelId, secondAgent.id);
+      new ConversationRepo(fix.db).updateAgentRuntime(fix.channelId, secondAgent.id, {
+        status: 'active',
+      });
+      fix.transport.snapshot = {
+        runtimes: [
+          runtimeDto(fix.channelId, fix.agentId, 'ready', {
+            ...RUN_STATE,
+            conversationId: fix.channelId,
+            agentId: fix.agentId,
+            status: 'idle',
+            lastActivityAt: 1700000000000,
+          }),
+          runtimeDto(fix.channelId, secondAgent.id, 'ready', {
+            ...RUN_STATE,
+            conversationId: fix.channelId,
+            agentId: secondAgent.id,
+            status: 'idle',
+            lastActivityAt: 1700000000000,
+          }),
+        ],
+      };
+      fix.transport.rejectNextStop(new Error('stop failed'));
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      await waitFor(() => fix.fanout.getAgentRunStates(fix.channelId).length === 2);
+
+      const result = await fix.fanout.reapIdleRuntimes({
+        ttlMs: 30 * 60_000,
+        now: 1700000000000 + 31 * 60_000,
+      });
+
+      expect(result).toMatchObject({
+        considered: 2,
+        eligible: 2,
+        reaped: 1,
+        failed: 1,
+      });
+      expect(fix.transport.stopCalls()).toHaveLength(2);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   // D4.c C7 — clearSession bounded-wait for runtime_exit projection.
   // Cindy `szDHSdeKwtEUlxZb` P1 + `nPqEVJjCLjuNDH-6` final.
   //
@@ -1290,9 +1647,29 @@ function emitRuntimeExit(fix: Fixture): void {
   );
 }
 
+async function hydrateRuntime(
+  fix: Fixture,
+  phase: 'idle' | 'spawning' | 'startup_pending' | 'ready' | 'draining' | 'exited',
+  runState: Partial<AgentRunState>,
+): Promise<void> {
+  fix.transport.snapshot = {
+    runtimes: [
+      runtimeDto(fix.channelId, fix.agentId, phase, {
+        ...RUN_STATE,
+        conversationId: fix.channelId,
+        agentId: fix.agentId,
+        ...runState,
+      }),
+    ],
+  };
+  fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+  await waitFor(() => fix.fanout.getAgentRunStates(fix.channelId).length === 1);
+}
+
 interface Fixture {
   db: ReturnType<typeof openTestDb>['db'];
   hostId: string;
+  viewerUserId: string;
   channelId: string;
   agentId: string;
   events: Array<{ conv: string; kind: string; payload: unknown }>;
@@ -1368,6 +1745,7 @@ function makeFixture(
   return {
     db,
     hostId: localHostId,
+    viewerUserId,
     channelId: channel.id,
     agentId: agent.id,
     events,
@@ -1462,6 +1840,13 @@ class FakeTransport implements HostWsServerController {
       }
     | null = null;
   private nextClearResult: { cleared: boolean } | null = null;
+  private nextStopError: Error | null = null;
+  private deferredStop:
+    | {
+        resolve: (value: unknown) => void;
+        reject: (err: Error) => void;
+      }
+    | null = null;
 
   activeConnectionCount(): number {
     return 1;
@@ -1555,6 +1940,19 @@ class FakeTransport implements HostWsServerController {
       this.nextClearResult = null;
       return Promise.resolve(next) as Promise<OutboundServerCommandResult<K>>;
     }
+    if (kind === 'runtime_stop' && this.nextStopError) {
+      const err = this.nextStopError;
+      this.nextStopError = null;
+      return Promise.reject(err);
+    }
+    if (kind === 'runtime_stop' && this.deferredStop) {
+      return new Promise<OutboundServerCommandResult<K>>((resolve, reject) => {
+        this.deferredStop = {
+          resolve: value => resolve(value as OutboundServerCommandResult<K>),
+          reject,
+        };
+      });
+    }
     return Promise.resolve({}) as Promise<OutboundServerCommandResult<K>>;
   }
 
@@ -1568,6 +1966,13 @@ class FakeTransport implements HostWsServerController {
 
   wakeCalls(): Array<{ params: Record<string, unknown> }> {
     return this.calls.filter(call => call.kind === 'runtime_wake');
+  }
+
+  stopCalls(): Array<{
+    params: Record<string, unknown>;
+    opts?: { expectedConnectionId?: string };
+  }> {
+    return this.calls.filter(call => call.kind === 'runtime_stop');
   }
 
   deferNextWake(): void {
@@ -1591,6 +1996,23 @@ class FakeTransport implements HostWsServerController {
 
   rejectNextWake(err: Error): void {
     this.nextWakeError = err;
+  }
+
+  rejectNextStop(err: Error): void {
+    this.nextStopError = err;
+  }
+
+  deferNextStop(): void {
+    this.deferredStop = {
+      resolve: () => {},
+      reject: () => {},
+    };
+  }
+
+  resolveDeferredStop(value: unknown): void {
+    const deferred = this.deferredStop;
+    this.deferredStop = null;
+    deferred?.resolve(value);
   }
 
   refuseNextWake(reason: 'driver_not_ready'): void {

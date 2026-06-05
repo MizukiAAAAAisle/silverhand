@@ -21,6 +21,7 @@
 import type {
   AgentRunState,
   AgentRunTerminalReason,
+  RuntimeKind,
 } from '@silverhand/shared';
 
 /** Optional `start()` overrides. Kept thin — only fields services
@@ -52,6 +53,20 @@ export const DEFAULT_SOFT_DIRECTIVE =
 export interface ClearSessionResult {
   prevCliSessionId: string | null;
   wasRunning: boolean;
+}
+
+export interface ReapIdleRuntimesOptions {
+  ttlMs: number;
+  now?: number;
+  runtimeEnabled?: (runtime: RuntimeKind) => boolean;
+}
+
+export interface ReapIdleRuntimesResult {
+  considered: number;
+  eligible: number;
+  reaped: number;
+  skipped: number;
+  failed: number;
 }
 
 /**
@@ -165,6 +180,11 @@ export interface AgentRuntimeHost {
 
   /** Stop every running handle. Used on backend shutdown. Hard mode. */
   stopAll(): Promise<void>;
+
+  /** Best-effort idle reaper tick. Stops live, idle runtimes older than TTL. */
+  reapIdleRuntimes(
+    opts: ReapIdleRuntimesOptions,
+  ): Promise<ReapIdleRuntimesResult>;
 
   /**
    * Sync the human-controlled temporary log-debug window to the

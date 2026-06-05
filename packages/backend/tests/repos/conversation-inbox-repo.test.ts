@@ -154,4 +154,23 @@ describe('ConversationInboxRepo', () => {
     inbox.markDelivered([claimed[1]!.inboxId]);
     expect(inbox.listInFlightForOwner('conn-1')).toEqual([]);
   });
+
+  it('hasUndeliveredForPair includes pending and in-flight rows but excludes delivered rows', () => {
+    const { channel, messages, inbox, agentA } = bootstrap();
+    const m = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      content: 'undelivered',
+    });
+    inbox.enqueue(channel.id, agentA, m.id);
+
+    expect(inbox.hasUndeliveredForPair(channel.id, agentA)).toBe(true);
+
+    const [claimed] = inbox.claimPending(channel.id, agentA, 'conn-1');
+    expect(inbox.listPending(channel.id, agentA)).toEqual([]);
+    expect(inbox.hasUndeliveredForPair(channel.id, agentA)).toBe(true);
+
+    inbox.markDelivered([claimed!.inboxId]);
+    expect(inbox.hasUndeliveredForPair(channel.id, agentA)).toBe(false);
+  });
 });

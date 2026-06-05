@@ -6,6 +6,8 @@ import type { BackendLogger } from '../context.js';
 import type {
   AgentRuntimeHost,
   ClearSessionResult,
+  ReapIdleRuntimesOptions,
+  ReapIdleRuntimesResult,
   StartOptions,
 } from './agent-runtime-host.js';
 
@@ -71,6 +73,9 @@ export interface OutboundAgentRuntimeProjection {
    * children otherwise).
    */
   stopAll(): Promise<void>;
+  reapIdleRuntimes(
+    opts: ReapIdleRuntimesOptions,
+  ): Promise<ReapIdleRuntimesResult>;
   /**
    * D5.a-3 P1-4 — flush every connected host's runtime buffers via
    * `runtime_close_activity_log`, then close the backend-owned activity
@@ -155,6 +160,16 @@ export class OutboundAgentRuntimeHost implements AgentRuntimeHost {
     // every connected outbound host (P1-4). No connection → projection
     // no-ops; never silently drops the stop like the old control-plane stub.
     await this.projection?.()?.stopAll();
+  }
+
+  async reapIdleRuntimes(
+    opts: ReapIdleRuntimesOptions,
+  ): Promise<ReapIdleRuntimesResult> {
+    const projection = this.projection?.();
+    if (!projection) {
+      return { considered: 0, eligible: 0, reaped: 0, skipped: 0, failed: 0 };
+    }
+    return projection.reapIdleRuntimes(opts);
   }
 
   async setConversationLogDebug(

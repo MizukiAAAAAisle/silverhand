@@ -50,6 +50,10 @@ function makeSpyProjection(): {
     stopAll: async () => {
       calls.push('stopAll');
     },
+    reapIdleRuntimes: async opts => {
+      calls.push(`reapIdleRuntimes:${opts.ttlMs},${opts.now ?? ''}`);
+      return { considered: 0, eligible: 0, reaped: 0, skipped: 0, failed: 0 };
+    },
     closeActivityLog: async () => {
       calls.push('closeActivityLog');
     },
@@ -105,6 +109,32 @@ describe('OutboundAgentRuntimeHost', () => {
     const host = new OutboundAgentRuntimeHost(SILENT_LOGGER, () => null);
     await expect(host.stopAll()).resolves.toBeUndefined();
     await expect(host.closeActivityLog()).resolves.toBeUndefined();
+  });
+
+  it('reapIdleRuntimes delegates to the projection and no-ops without one', async () => {
+    const empty = new OutboundAgentRuntimeHost(SILENT_LOGGER, () => null);
+    await expect(
+      empty.reapIdleRuntimes({ ttlMs: 123, now: 456 }),
+    ).resolves.toEqual({
+      considered: 0,
+      eligible: 0,
+      reaped: 0,
+      skipped: 0,
+      failed: 0,
+    });
+
+    const { projection, calls } = makeSpyProjection();
+    const host = new OutboundAgentRuntimeHost(SILENT_LOGGER, () => projection);
+    await expect(
+      host.reapIdleRuntimes({ ttlMs: 123, now: 456 }),
+    ).resolves.toEqual({
+      considered: 0,
+      eligible: 0,
+      reaped: 0,
+      skipped: 0,
+      failed: 0,
+    });
+    expect(calls).toContain('reapIdleRuntimes:123,456');
   });
 
   // ── Fail-loud surface for the runtime-bearing methods ──

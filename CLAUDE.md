@@ -71,7 +71,7 @@ pnpm workspaces, all `workspace:*` linked:
     `cli.invoke` (success or failure) plus `cli.preflight_failure`
     lines for CLI-side errors (parse / strict-flag / unknown noun)
     that never reach a business route. See `docs/cli-system.md` §7.
-- When a channel never emits `session_init`, the most likely culprits in order: (a) stdin not primed at spawn time (verify `drainChain` ran), (b) runtime launcher not on PATH, (c) `system-prompt-file` arg malformed. Inspect `argv` of the suspect `claude` pid — silverhand-spawned ones carry `--system-prompt-file /var/folders/.../<channelId>/<agentId>/spawn-*/system-prompt.md` which uniquely distinguishes them from user-interactive `claude` invocations.
+- When a channel never emits `session_init`, the most likely culprits in order: (a) stdin not primed at spawn time (verify `drainChain` ran), (b) runtime launcher not on PATH, (c) `append-system-prompt-file` arg malformed. Inspect `argv` of the suspect `claude` pid — silverhand-spawned ones carry `--append-system-prompt-file /var/folders/.../<channelId>/<agentId>/spawn-*/system-prompt.md` which uniquely distinguishes them from user-interactive `claude` invocations. (We append onto Claude's built-in system prompt rather than replacing it via `--system-prompt-file`.)
 
 ## Conventions worth knowing
 
