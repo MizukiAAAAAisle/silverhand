@@ -119,6 +119,16 @@ function StatusPicker({
   children: ReactNode;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
+  // Single close path that ALSO notifies the parent. Radix only fires
+  // its own `onOpenChange` for interactions it owns (escape / outside /
+  // trigger toggle); a programmatic `setOpen(false)` from the item click
+  // would close the popover via the controlled prop WITHOUT notifying,
+  // leaving the host hover-card's `keepOpen` pin stuck true → popover
+  // never dismisses (#task:923). Route every close through here.
+  const close = () => {
+    setOpen(false);
+    onOpenChange?.(false);
+  };
   return (
     <Popover.Root
       open={open}
@@ -155,7 +165,7 @@ function StatusPicker({
               type="button"
               onClick={() => {
                 onChange(s);
-                setOpen(false);
+                close();
               }}
               className="flex w-full items-center rounded-[var(--floating-item-radius)] px-2 py-1.5 text-left hover:bg-bg-hover"
             >
