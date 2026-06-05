@@ -420,7 +420,7 @@ function TaskCard({
           <TaskStatusBadge
             status={task.status}
             onChange={onStatusChange}
-            className="pointer-events-auto"
+            className="ml-auto pointer-events-auto"
           />
         </div>
         {/* Row 2: title — `[overflow-wrap:anywhere]` so long URLs / hashes
