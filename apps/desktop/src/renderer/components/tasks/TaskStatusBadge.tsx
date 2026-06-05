@@ -66,10 +66,16 @@ const CHIP =
 export function TaskStatusBadge({
   status,
   onChange,
+  onOpenChange,
   className,
 }: {
   status: TaskStatus;
   onChange?: (next: TaskStatus) => void;
+  /** Fires when the click-to-change picker opens / closes. Lets a
+   *  parent floating surface (e.g. the hover-card task popover) stay
+   *  pinned open while the picker is active — otherwise the host
+   *  HoverCard closes on pointer-leave and unmounts the picker. */
+  onOpenChange?: (open: boolean) => void;
   className?: string;
 }): JSX.Element {
   if (!onChange) {
@@ -80,7 +86,7 @@ export function TaskStatusBadge({
     );
   }
   return (
-    <StatusPicker current={status} onChange={onChange}>
+    <StatusPicker current={status} onChange={onChange} onOpenChange={onOpenChange}>
       <button
         type="button"
         data-task-status={status}
@@ -104,15 +110,23 @@ export function TaskStatusBadge({
 function StatusPicker({
   current,
   onChange,
+  onOpenChange,
   children,
 }: {
   current: TaskStatus;
   onChange: (next: TaskStatus) => void;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
+    <Popover.Root
+      open={open}
+      onOpenChange={next => {
+        setOpen(next);
+        onOpenChange?.(next);
+      }}
+    >
       <Popover.Trigger asChild>{children}</Popover.Trigger>
       <Popover.Portal>
         <Popover.Content

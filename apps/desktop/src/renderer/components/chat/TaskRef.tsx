@@ -1,6 +1,9 @@
+import { useState } from 'react';
 import { ClipboardCheck } from 'lucide-react';
 import { useTaskByNumber } from '@/features/tasks/useTaskByNumber';
 import { useTaskRefContext } from '@/features/tasks/TaskRefContext';
+import { useUpdateTaskStatus } from '@/features/tasks/hooks';
+import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge';
 import { HoverPopover } from './HoverPopover';
 import { useRelativeTime } from './useRelativeTime';
 import type { TaskSummaryDto, TaskStatus } from '@silverhand/shared';
@@ -41,6 +44,12 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
   const task = result.data ?? null;
   const onOpenTask = ctx?.onOpenTask;
   const inertLabel = `#task:${taskNumber}`;
+  // Status-picker open state lifted here (not inside TaskPopoverBody) so
+  // we can pin the hover-card open via `keepOpen` while the picker is
+  // active — the picker portals outside the hover-card DOM, so without
+  // this the pointer-leave close delay would unmount it mid-pick.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const updateStatus = useUpdateTaskStatus();
 
   // No-context (saved/preview surfaces) and resolved-missing (task
   // deleted or never existed in this workspace) render a tooltip-only
@@ -173,8 +182,17 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
   return (
     <HoverPopover
       trigger={onOpenTask ? interactiveChip : inertChip}
-      content={<TaskPopoverBody task={task} />}
+      content={
+        <TaskPopoverBody
+          task={task}
+          onStatusChange={next =>
+            updateStatus.mutate({ messageId: task.message_id, status: next })
+          }
+          onPickerOpenChange={setPickerOpen}
+        />
+      }
       isContentReady={true}
+      keepOpen={pickerOpen}
     />
   );
 }
@@ -187,7 +205,15 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
  * meta keeps the popover scannable: title dominates, meta sits as one
  * subtle muted line that wraps if it has to.
  */
-function TaskPopoverBody({ task }: { task: TaskSummaryDto }): JSX.Element {
+function TaskPopoverBody({
+  task,
+  onStatusChange,
+  onPickerOpenChange,
+}: {
+  task: TaskSummaryDto;
+  onStatusChange: (next: TaskStatus) => void;
+  onPickerOpenChange: (open: boolean) => void;
+}): JSX.Element {
   const { relative, absolute } = useRelativeTime(task.created_at);
   return (
     <div className="space-y-2">
@@ -195,7 +221,14 @@ function TaskPopoverBody({ task }: { task: TaskSummaryDto }): JSX.Element {
         <span className="font-mono text-[10px] text-text-muted">
           #{task.task_number}
         </span>
-        <TaskStatusBadge status={task.status} />
+        {/* Same interactive chip as the task-pane card: click → "Move to"
+            picker → POST /status. `onPickerOpenChange` pins the host
+            hover-card open while the picker is up. */}
+        <TaskStatusBadge
+          status={task.status}
+          onChange={onStatusChange}
+          onOpenChange={onPickerOpenChange}
+        />
       </div>
       <p className="break-words text-xs font-medium text-text-primary">
         {task.title}
@@ -215,23 +248,5 @@ function TaskPopoverBody({ task }: { task: TaskSummaryDto }): JSX.Element {
         <span className="shrink-0" title={absolute}>{relative}</span>
       </p>
     </div>
-  );
-}
-
-function TaskStatusBadge({ status }: { status: TaskStatus }): JSX.Element {
-  const labels: Record<TaskStatus, string> = {
-    todo: 'todo',
-    in_progress: 'in progress',
-    in_review: 'in review',
-    done: 'done',
-    closed: 'closed',
-  };
-  return (
-    <span
-      data-task-status={status}
-      className="rounded-[var(--chip-radius)] px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide"
-    >
-      {labels[status]}
-    </span>
   );
 }

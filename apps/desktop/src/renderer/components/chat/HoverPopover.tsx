@@ -1,5 +1,5 @@
 import * as HoverCard from '@radix-ui/react-hover-card';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
 /**
  * Hover-triggered popover used by inline reference chips.
@@ -38,6 +38,13 @@ export interface HoverPopoverProps {
   /** Optional override of the standard 500ms grace. Only the test
    *  harness uses this — production callers should leave it default. */
   openDelayMs?: number;
+  /** When true, the popover stays open regardless of hover state. Used
+   *  when the content hosts a nested interactive layer (e.g. the task
+   *  popover's status picker, which portals outside the hover-card DOM
+   *  — moving the pointer onto it would otherwise trip the close delay
+   *  and unmount the picker mid-interaction). The caller flips this on
+   *  while that nested layer is open. */
+  keepOpen?: boolean;
 }
 
 export function HoverPopover({
@@ -46,9 +53,19 @@ export function HoverPopover({
   skeleton,
   isContentReady,
   openDelayMs = 500,
+  keepOpen = false,
 }: HoverPopoverProps): JSX.Element {
+  // Controlled so `keepOpen` can pin the card open while a nested
+  // interactive layer (status picker) is active. Hover/focus still
+  // drive `hoverOpen` via Radix's own detection; we OR in `keepOpen`.
+  const [hoverOpen, setHoverOpen] = useState(false);
   return (
-    <HoverCard.Root openDelay={openDelayMs} closeDelay={120}>
+    <HoverCard.Root
+      open={hoverOpen || keepOpen}
+      onOpenChange={setHoverOpen}
+      openDelay={openDelayMs}
+      closeDelay={120}
+    >
       <HoverCard.Trigger asChild>{trigger}</HoverCard.Trigger>
       <HoverCard.Portal>
         <HoverCard.Content
