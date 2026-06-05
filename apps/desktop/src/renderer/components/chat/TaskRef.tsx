@@ -218,7 +218,10 @@ function TaskPopoverBody({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-[10px] text-text-muted">
+        <span
+          data-tasks-num
+          className="font-mono text-[10px] text-text-muted"
+        >
           #{task.task_number}
         </span>
         {/* Same interactive chip as the task-pane card: click → "Move to"
