@@ -217,7 +217,7 @@ function TaskPopoverBody({
   const { relative, absolute } = useRelativeTime(task.created_at);
   return (
     <div className="space-y-2">
-      <div className="flex items-baseline gap-2">
+      <div className="flex items-baseline justify-between gap-2">
         <span className="font-mono text-[10px] text-text-muted">
           #{task.task_number}
         </span>
