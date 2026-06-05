@@ -133,6 +133,12 @@ function StatusPicker({
           align="start"
           sideOffset={4}
           onClick={e => e.stopPropagation()}
+          // Don't bounce focus back to the trigger badge on close. When
+          // this picker lives inside a hover-card popover, returning
+          // focus to the (hover-card-owned) badge re-arms the card's
+          // focus-open and fights the card's dismissal (#task:923 bug:
+          // 点击 status 后卡片无法失焦消失).
+          onCloseAutoFocus={e => e.preventDefault()}
           data-popover-frame="info"
           className="z-50 min-w-[136px] bg-bg-floating p-1 shadow-lg outline-none"
         >

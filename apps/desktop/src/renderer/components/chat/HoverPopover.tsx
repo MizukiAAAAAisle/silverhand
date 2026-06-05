@@ -1,5 +1,5 @@
 import * as HoverCard from '@radix-ui/react-hover-card';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 /**
  * Hover-triggered popover used by inline reference chips.
@@ -59,6 +59,18 @@ export function HoverPopover({
   // interactive layer (status picker) is active. Hover/focus still
   // drive `hoverOpen` via Radix's own detection; we OR in `keepOpen`.
   const [hoverOpen, setHoverOpen] = useState(false);
+  // When the pinned layer closes (keepOpen true→false), force the card
+  // shut instead of trusting `hoverOpen`. The nested picker portals
+  // outside the hover-card DOM and swallows the pointer-leave / blur
+  // events Radix relies on, so `hoverOpen` can be stuck `true` with no
+  // way left to dismiss (shiki: 点击 status 后卡片无法失焦消失). Collapsing
+  // on pin-release is the deterministic exit — after the user finishes
+  // with the picker, the popover just goes away.
+  const prevKeepOpen = useRef(keepOpen);
+  useEffect(() => {
+    if (prevKeepOpen.current && !keepOpen) setHoverOpen(false);
+    prevKeepOpen.current = keepOpen;
+  }, [keepOpen]);
   return (
     <HoverCard.Root
       open={hoverOpen || keepOpen}
