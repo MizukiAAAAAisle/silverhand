@@ -13,26 +13,33 @@
  *
  * The gate intentionally does NOT show signup/login fields — the
  * server's policy is unknown so any field choice would be a guess.
- * Users get three actions:
- *   1. **Retry** — re-issue `getAuthState()`. Useful when the user
- *      knows the server has just come back up or after fixing a
- *      VPN.
- *   2. **Open Setup Wizard** — opens the existing
- *      `SetupWizardModal` so the user can re-enter / replace the
- *      server URL. (The wizard owns "clear server profile" via its
- *      Embedded path or by re-entering `http://localhost:<port>`.)
- *   3. **Continue with embedded** — surface a copy line pointing
- *      at the `SILVERHAND_FORCE_EMBEDDED=1` recovery escape so a
- *      stuck user can boot embedded without UI.
+ *
+ * #task:991 (shiki) — the one thing a user wants here is to fix the
+ * address. The earlier build sent them into the Setup Wizard (a deep
+ * entry) just to retype a URL. Now the server URL is **edited in
+ * place**: a pencil icon on the URL row flips it into an input +
+ * Save / Cancel. Save goes through the same `saveServerUrl` IPC the
+ * Settings → Connection pane uses — that path is an Electron IPC to
+ * main (rewrite daemon-config + reload the daemon), NOT a backend
+ * HTTP call, so it works precisely when the backend is unreachable.
+ * On a successful save we re-probe via `onRetry`: if the new address
+ * is reachable the gate unmounts; if not, the save banner explains.
  *
  * Cindy review boundary (P1-2 tighter constraint): the gate must
  * NOT default to "signup enabled = true/false". The renderer renders
  * just the connect/repair affordance and trusts the next
  * `getAuthState()` reload to deliver the real arm.
  */
-import { AlertTriangle, RefreshCw, Settings } from 'lucide-react';
+import { useState } from 'react';
+import { AlertTriangle, Check, Loader2, Pencil, RefreshCw, X } from 'lucide-react';
+import { classifyServerUrl } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
-import { dispatchOpenSetupWizard } from '@/features/setup/openWizardEvent';
+import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/cn';
+import {
+  describeSaveServerUrlOutcome,
+  type SaveServerUrlBanner,
+} from '@/features/settings/describe-save-server-url-outcome';
 
 export interface BackendUnreachableGateProps {
   /** The active backend's origin (e.g. `https://backend.example.test`)
@@ -51,11 +58,62 @@ export function BackendUnreachableGate({
   message,
   onRetry,
 }: BackendUnreachableGateProps): JSX.Element {
-  const openSetupWizard = (): void => {
-    // Reuses the same renderer event the App menu's "Connect to
-    // backend…" item dispatches via the SetupWizardModal listener.
-    dispatchOpenSetupWizard();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(serverUrl);
+  const [saving, setSaving] = useState(false);
+  const [banner, setBanner] = useState<SaveServerUrlBanner | null>(null);
+
+  const startEdit = (): void => {
+    setDraft(serverUrl);
+    setBanner(null);
+    setEditing(true);
   };
+  const cancelEdit = (): void => {
+    setEditing(false);
+  };
+
+  // Same validation contract as the Settings → Connection pane: the
+  // classifier is the single source of truth for what a legal server
+  // origin is, so the gate can't accept an address Settings would
+  // reject.
+  const trimmed = draft.trim();
+  const classification =
+    trimmed === ''
+      ? { kind: 'empty' as const }
+      : (() => {
+          const c = classifyServerUrl(trimmed);
+          return c.ok
+            ? { kind: 'ok' as const }
+            : { kind: 'reject' as const, message: c.message };
+        })();
+  const isUnchanged = trimmed === serverUrl.trim();
+  const saveDisabled = saving || classification.kind !== 'ok' || isUnchanged;
+
+  const onSave = async (): Promise<void> => {
+    if (saveDisabled) return;
+    setSaving(true);
+    setBanner(null);
+    try {
+      const result = await window.agentHub.saveServerUrl({ serverUrl: trimmed });
+      setBanner(describeSaveServerUrlOutcome(result));
+      if (result.ok) {
+        // Address committed + daemon reloaded. Collapse the editor and
+        // re-probe: a reachable new address makes the gate unmount; an
+        // unreachable one keeps us here with the banner explaining why.
+        setEditing(false);
+        onRetry();
+      }
+    } catch (err) {
+      setBanner({
+        tone: 'error',
+        title: 'Could not save the address.',
+        description: err instanceof Error ? err.message : 'Unknown error.',
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <main
       className="grid h-screen w-screen place-items-center bg-bg-base px-6 py-14 text-text-primary"
@@ -76,9 +134,106 @@ export function BackendUnreachableGate({
         <p className="mb-3 text-xs leading-relaxed text-text-muted">
           Silverhand has a saved server profile pointing at:
         </p>
-        <p className="mb-4 break-all rounded-sm border border-border-subtle bg-bg-row-hover px-2 py-1.5 font-mono text-xs">
-          {serverUrl}
-        </p>
+
+        {editing ? (
+          <form
+            className="mb-4 flex flex-col gap-2"
+            onSubmit={e => {
+              e.preventDefault();
+              void onSave();
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <Input
+                autoFocus
+                type="url"
+                autoComplete="off"
+                spellCheck={false}
+                inputMode="url"
+                placeholder="http://127.0.0.1:8765"
+                value={draft}
+                onChange={e => setDraft(e.target.value)}
+                disabled={saving}
+                className="min-w-0 flex-1 font-mono text-xs"
+                onKeyDown={e => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancelEdit();
+                  }
+                }}
+              />
+              <Button
+                type="submit"
+                size="icon"
+                variant="outline"
+                disabled={saveDisabled}
+                title={
+                  classification.kind === 'reject'
+                    ? classification.message
+                    : isUnchanged
+                      ? 'Already set to this value.'
+                      : classification.kind === 'empty'
+                        ? 'Enter an address to save.'
+                        : 'Save address'
+                }
+              >
+                {saving ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Check className="size-3.5" />
+                )}
+              </Button>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={cancelEdit}
+                disabled={saving}
+                title="Cancel"
+              >
+                <X className="size-3.5" />
+              </Button>
+            </div>
+            {classification.kind === 'reject' && (
+              <p className="text-[11px] text-error">{classification.message}</p>
+            )}
+          </form>
+        ) : (
+          <div className="mb-4 flex items-center gap-2">
+            <p className="min-w-0 flex-1 break-all rounded-sm border border-border-subtle bg-bg-row-hover px-2 py-1.5 font-mono text-xs">
+              {serverUrl}
+            </p>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              onClick={startEdit}
+              title="Edit server address"
+            >
+              <Pencil className="size-3.5" />
+            </Button>
+          </div>
+        )}
+
+        {banner && (
+          <div
+            role="status"
+            className={cn(
+              'mb-4 rounded-md border px-3 py-2 text-xs',
+              banner.tone === 'error'
+                ? 'border-error bg-bg-row-hover text-error'
+                : banner.tone === 'success'
+                  ? 'border-accent bg-bg-row-hover text-text-primary'
+                  : 'border-border-subtle bg-bg-row-hover text-text-secondary',
+            )}
+          >
+            <div className="font-medium">{banner.title}</div>
+            {banner.description && (
+              <div className="mt-1 text-text-muted">{banner.description}</div>
+            )}
+          </div>
+        )}
+
         <p className="mb-2 text-xs leading-relaxed text-text-muted">
           The connection failed before signup or login could be
           attempted. The server may be down, the network may be
@@ -89,25 +244,10 @@ export function BackendUnreachableGate({
             {message}
           </pre>
         ) : null}
-        <div className="flex flex-col gap-2">
-          <Button
-            type="button"
-            onClick={onRetry}
-            className="w-full justify-center"
-          >
-            <RefreshCw className="size-3.5" />
-            Retry connection
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={openSetupWizard}
-            className="w-full justify-center"
-          >
-            <Settings className="size-3.5" />
-            Open Setup Wizard&hellip;
-          </Button>
-        </div>
+        <Button type="button" onClick={onRetry} className="w-full justify-center">
+          <RefreshCw className="size-3.5" />
+          Retry connection
+        </Button>
         <p className="mt-4 text-[11px] leading-snug text-text-muted">
           To boot with the embedded backend instead, relaunch
           Silverhand with{' '}
