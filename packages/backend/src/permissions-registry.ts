@@ -85,6 +85,13 @@ export const HUMAN_GOVERNANCE_ROUTES: readonly GovernanceRouteDecl[] = [
     roleScope: 'workspace',
     note: 'entry=admin (agent-member add); human-member add escalates to owner inside the handler',
   },
+  {
+    method: 'PATCH',
+    path: '/api/workspaces/:id/members/users/:userId/role',
+    minRole: 'owner',
+    roleScope: 'workspace',
+    note: 'human role escalation/demotion is owner-only; owner transfer remains unsupported',
+  },
   { method: 'DELETE', path: '/api/workspaces/:id/members/:agentId', minRole: 'admin', roleScope: 'workspace' },
   // Editing an agent's capability set is governance (owner/admin, doc
   // §2.4). This is the human-axis gate ON the agent-capability axis —

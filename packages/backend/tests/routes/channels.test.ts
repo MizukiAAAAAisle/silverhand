@@ -320,6 +320,106 @@ describe('workspace metadata and membership routes', () => {
     });
   });
 
+  it('lets the workspace owner update a human member role', async () => {
+    t = buildTestApp();
+    const workspace = await (
+      await http(t).post('/api/workspaces', { name: 'member-role' })
+    ).json() as any;
+    const path = `/api/workspaces/${workspace.workspace.id}/members/users/teammate/role`;
+
+    const promote = await http(t).patch(path, { role: 'admin' });
+    expect(promote.status).toBe(200);
+    const promoteBody = await promote.json() as any;
+    expect(promoteBody.member).toMatchObject({
+      workspace_id: workspace.workspace.id,
+      user_id: 'teammate',
+      role: 'admin',
+    });
+    expect(promoteBody.human_member).toMatchObject({
+      id: 'teammate',
+      user_id: 'teammate',
+      display_name: 'Teammate',
+      role: 'admin',
+    });
+
+    const demote = await http(t).patch(path, { role: 'member' });
+    expect(demote.status).toBe(200);
+    const demoteBody = await demote.json() as any;
+    expect(demoteBody.member).toMatchObject({ user_id: 'teammate', role: 'member' });
+
+    const list = await (
+      await http(t).get(`/api/workspaces/${workspace.workspace.id}/members`)
+    ).json() as any;
+    expect(list.human_members.find((m: any) => m.id === 'teammate')).toMatchObject({
+      user_id: 'teammate',
+      role: 'member',
+    });
+  });
+
+  it('requires owner role to update a human member role', async () => {
+    t = buildTestApp();
+    const workspace = await (
+      await http(t).post('/api/workspaces', { name: 'member-role-deny' })
+    ).json() as any;
+    const res = await http(t).patch(
+      `/api/workspaces/${workspace.workspace.id}/members/users/teammate/role`,
+      { role: 'admin' },
+      {
+        headers: {
+          [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+        },
+      },
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects owner role changes through the human member role endpoint', async () => {
+    t = buildTestApp();
+    const workspace = await (
+      await http(t).post('/api/workspaces', { name: 'member-role-owner' })
+    ).json() as any;
+
+    const setOwner = await http(t).patch(
+      `/api/workspaces/${workspace.workspace.id}/members/users/teammate/role`,
+      { role: 'owner' },
+    );
+    expect(setOwner.status).toBe(400);
+    await expect(setOwner.json()).resolves.toMatchObject({
+      code: 'owner_role_change_unsupported',
+    });
+
+    const demoteOwner = await http(t).patch(
+      `/api/workspaces/${workspace.workspace.id}/members/users/local/role`,
+      { role: 'member' },
+    );
+    expect(demoteOwner.status).toBe(400);
+    await expect(demoteOwner.json()).resolves.toMatchObject({
+      code: 'owner_role_change_unsupported',
+    });
+
+    const rows = t.ctx.db
+      .prepare<[string], { user_id: string; role: string }>(
+        `SELECT user_id, role FROM workspace_users
+          WHERE workspace_id = ?
+          ORDER BY user_id ASC`,
+      )
+      .all(workspace.workspace.id);
+    expect(rows).toContainEqual({ user_id: 'local', role: 'owner' });
+    expect(rows).toContainEqual({ user_id: 'teammate', role: 'member' });
+  });
+
+  it('returns 404 when updating a non-member human role', async () => {
+    t = buildTestApp();
+    const workspace = await (
+      await http(t).post('/api/workspaces', { name: 'member-role-missing' })
+    ).json() as any;
+    const res = await http(t).patch(
+      `/api/workspaces/${workspace.workspace.id}/members/users/missing-user/role`,
+      { role: 'admin' },
+    );
+    expect(res.status).toBe(404);
+  });
+
   it('rejects adding an unknown human workspace member', async () => {
     t = buildTestApp();
     const workspace = await (

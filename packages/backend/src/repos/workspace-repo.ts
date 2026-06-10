@@ -562,6 +562,30 @@ export class WorkspaceRepo {
     return row?.role ?? null;
   }
 
+  setUserRole(
+    workspaceId: string,
+    userId: string,
+    role: Exclude<WorkspaceRole, 'owner'>,
+  ): WorkspaceUserMemberDto | null {
+    const row = this.db
+      .prepare<[WorkspaceRole, string, string], WorkspaceUserMemberRow>(
+        `UPDATE workspace_users
+            SET role = ?
+          WHERE workspace_id = ?
+            AND user_id = ?
+            AND role != 'owner'
+          RETURNING *`,
+      )
+      .get(role, workspaceId, userId);
+    if (!row) return null;
+    return {
+      workspace_id: row.workspace_id,
+      user_id: row.user_id,
+      joined_at: row.joined_at,
+      role: row.role,
+    };
+  }
+
   listUserMemberIds(workspaceId: string): string[] {
     return this.db
       .prepare<[string], { user_id: string }>(

@@ -144,6 +144,21 @@ export const AddWorkspaceMemberInputSchema = z.union([
 ]);
 export type AddWorkspaceMemberInput = z.infer<typeof AddWorkspaceMemberInputSchema>;
 
+export const UpdateWorkspaceHumanMemberRoleInputSchema = z.object({
+  role: WorkspaceRoleSchema,
+});
+export type UpdateWorkspaceHumanMemberRoleInput = z.infer<
+  typeof UpdateWorkspaceHumanMemberRoleInputSchema
+>;
+
+export const UpdateWorkspaceHumanMemberRoleResponseSchema = z.object({
+  member: WorkspaceUserMemberDtoSchema,
+  human_member: WorkspaceHumanMemberDtoSchema,
+});
+export type UpdateWorkspaceHumanMemberRoleResponse = z.infer<
+  typeof UpdateWorkspaceHumanMemberRoleResponseSchema
+>;
+
 export const WorkspaceMembersResponseSchema = z.object({
   members: z.array(AgentDtoSchema),
   human_members: z.array(WorkspaceHumanMemberDtoSchema),

@@ -1,6 +1,8 @@
 // Membership HTTP surface across both public and internal router factories:
 //   - GET    /api/workspaces/:id/members              (createWorkspaceMembershipApp)
 //   - POST   /api/workspaces/:id/members              (createWorkspaceMembershipApp)
+//   - PATCH  /api/workspaces/:id/members/users/:userId/role
+//                                                     (createWorkspaceMembershipApp)
 //   - DELETE /api/workspaces/:id/members/:agentId     (createWorkspaceMembershipApp)
 //   - GET    /api/conversations/:id/members           (createConversationMembershipApp)
 //   - POST   /api/conversations/:id/members           (createConversationMembershipApp)
@@ -19,6 +21,7 @@ import {
   apiPaths,
   internalPaths,
   AddWorkspaceMemberInputSchema,
+  UpdateWorkspaceHumanMemberRoleInputSchema,
   AddConversationMemberInputSchema,
   AddConversationMemberByHandleInputSchema,
   type AgentCapability,
@@ -82,6 +85,16 @@ function workspaceMembersResponse(
     human_members: listWorkspaceHumanMemberDtos(ctx, workspaces, workspaceId),
     viewer_role: viewerRole,
   };
+}
+
+function ownerRoleChangeUnsupported(c: Context) {
+  return c.json(
+    {
+      error: 'owner role changes are not supported',
+      code: 'owner_role_change_unsupported',
+    },
+    400,
+  );
 }
 
 /**
@@ -172,6 +185,39 @@ export function createWorkspaceMembershipApp(
           result.error.failure.status,
         );
     }
+  });
+
+  app.patch(apiPaths.workspaceHumanMemberRole(':id', ':userId'), async c => {
+    const id = c.req.param('id');
+    const userId = c.req.param('userId');
+    if (!id || !userId) {
+      return c.json({ error: 'workspace id and user id required' }, 400);
+    }
+    const workspace = workspaces.get(id);
+    if (!workspace || workspace.workspace_kind !== 'regular') {
+      return c.json({ error: 'workspace not found' }, 404);
+    }
+    if (!canGovernWorkspace(ctx, getUserPrincipal(c), workspace.id, 'owner')) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = UpdateWorkspaceHumanMemberRoleInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    if (parsed.data.role === 'owner') return ownerRoleChangeUnsupported(c);
+
+    const currentRole = workspaces.getUserRole(workspace.id, userId);
+    if (!currentRole) {
+      return c.json({ error: 'workspace human member not found' }, 404);
+    }
+    if (currentRole === 'owner') return ownerRoleChangeUnsupported(c);
+
+    const member = workspaces.setUserRole(workspace.id, userId, parsed.data.role);
+    if (!member) return c.json({ error: 'workspace human member not found' }, 404);
+    const user = ctx.userService.getDto(userId);
+    if (!user) return c.json({ error: 'workspace human member not found' }, 404);
+    return c.json({ member, human_member: { ...user, ...member } });
   });
 
   app.delete(apiPaths.workspaceMember(':id', ':agentId'), async c => {
