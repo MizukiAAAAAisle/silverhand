@@ -96,16 +96,56 @@ export function formatAttachedSince(
   return `${days}d ago`;
 }
 
+export interface DescribeConnectionOpts {
+  /**
+   * Remote-mode readiness signal. In an embedded deployment the
+   * outbound WS attachment is observable in-process and surfaces as
+   * `attachedAt` (a number) — that's the primary "Ready" proof. But in
+   * a remote-server deployment the attachment registry
+   * (`HostWsServerController`) lives in the *remote* backend process,
+   * so desktop main's in-process `getEmbeddedHostWsController()` returns
+   * `null` and `attachedAt` is structurally always `null` even when the
+   * daemon is genuinely attached (agents communicate fine). Without a
+   * second source the pill would be stuck on "Connecting…" forever
+   * (#task:1010).
+   *
+   * This flag is that second source: the caller derives it from the
+   * remote backend's HTTP host-status (`availability === 'available'`),
+   * the same authority every other remote-mode fact flows through. When
+   * `true` we promote a `claimed + attachedAt===null` host to "Ready" —
+   * but with `detail: null`, since `availability` carries no attach
+   * timestamp to render a "since X" string. The embedded `attachedAt`
+   * path still wins when present (keeps "since").
+   *
+   * Defaults to `false` so every existing call site (and the
+   * exhaustiveness tests) keep the strict "no attachedAt ⇒ Connecting"
+   * behavior unchanged.
+   */
+  remoteAttached?: boolean;
+}
+
 export function describeConnectionState(
   status: LocalHostStatus,
   attachedAt: number | null,
   nowMs: number,
+  opts?: DescribeConnectionOpts,
 ): ConnectionStateView {
   switch (status) {
     case 'unclaimed':
       return { visible: false, label: '', tone: 'hidden', detail: null };
     case 'claimed':
       if (attachedAt === null) {
+        // Remote mode: no local `attachedAt`, but the remote backend
+        // confirmed the outbound attachment via host-status. Promote to
+        // Ready (no "since" — `availability` has no attach timestamp).
+        if (opts?.remoteAttached) {
+          return {
+            visible: true,
+            label: 'Ready',
+            tone: 'success',
+            detail: null,
+          };
+        }
         return {
           visible: true,
           label: 'Connecting…',

@@ -116,6 +116,61 @@ describe('describeConnectionState — anti-collapse pins (Cindy gate 1)', () => 
   });
 });
 
+describe('describeConnectionState — remoteAttached (remote-mode readiness, #task:1010)', () => {
+  it('claimed + attached_at===null + remoteAttached → "Ready" (no "since")', () => {
+    // Remote-server deployment: the in-process attachment registry is
+    // absent so attached_at is structurally null, but the remote
+    // backend confirms the outbound attach via host-status. The pill
+    // must read Ready, not a permanent "Connecting…".
+    const v = describeConnectionState('claimed', null, NOW, {
+      remoteAttached: true,
+    });
+    expect(v.visible).toBe(true);
+    expect(v.label).toBe('Ready');
+    expect(v.tone).toBe('success');
+    // No attach timestamp available from `availability`, so no "since".
+    expect(v.detail).toBeNull();
+  });
+
+  it('claimed + attached_at===null + remoteAttached===false → still "Connecting…"', () => {
+    // The genuine connecting case (daemon not yet/never attached). The
+    // opt defaulting to false must NOT promote to Ready.
+    const v = describeConnectionState('claimed', null, NOW, {
+      remoteAttached: false,
+    });
+    expect(v.label).toBe('Connecting…');
+    expect(v.tone).toBe('accent');
+  });
+
+  it('embedded attached_at wins over remoteAttached — keeps "since X"', () => {
+    // When the local attach timestamp is present (embedded), it remains
+    // the primary proof and carries the richer "since" detail; the
+    // remote flag is irrelevant.
+    const v = describeConnectionState('claimed', NOW - 5 * ONE_MIN, NOW, {
+      remoteAttached: true,
+    });
+    expect(v.label).toBe('Ready');
+    expect(v.detail).toBe('since 5m ago');
+  });
+
+  it('remoteAttached does NOT resurrect terminal states', () => {
+    // A revoked/failed host must stay terminal even if a stale
+    // host-status read says available.
+    expect(
+      describeConnectionState('revoked', null, NOW, { remoteAttached: true })
+        .label,
+    ).toBe('Removed');
+    expect(
+      describeConnectionState('failed', null, NOW, { remoteAttached: true })
+        .label,
+    ).toBe('Stopped');
+    expect(
+      describeConnectionState('error', null, NOW, { remoteAttached: true })
+        .label,
+    ).toBe('Offline');
+  });
+});
+
 describe('formatAttachedSince — bucketing', () => {
   it('returns "just now" for sub-minute deltas', () => {
     expect(formatAttachedSince(NOW - 30_000, NOW)).toBe('just now');

@@ -44,6 +44,7 @@ import {
   backendInfoKey,
   hostsKey,
   useBackendInfoSnapshot,
+  useHostStatusQuery,
   useHostsQuery,
 } from '@/features/hosts/hooks';
 import {
@@ -103,12 +104,13 @@ function ConnectionPill({ view }: { view: ConnectionStateView }): JSX.Element | 
 function describeThisMac(
   status: LocalHostStatus,
   attachedAt: number | null,
+  remoteAttached: boolean,
 ): string {
   switch (status) {
     case 'unclaimed':
       return 'Sign in from this computer to start running your agents.';
     case 'claimed':
-      return attachedAt === null
+      return attachedAt === null && !remoteAttached
         ? 'Connecting this computer to the server…'
         : 'This computer is connected and ready to run your agents.';
     case 'revoked':
@@ -215,9 +217,33 @@ export function ConnectionPane(): JSX.Element {
     backendInfoQuery.data?.local_host_status ?? 'unclaimed';
   const localHostAttachedAt =
     backendInfoQuery.data?.local_host_ws_attached_at ?? null;
+
+  // #task:1010 — remote-mode readiness source. In a remote-server
+  // deployment `local_host_ws_attached_at` is structurally null (the
+  // attachment registry lives in the remote backend, not in this
+  // process), so the embedded "attached_at" proof never lands and the
+  // pill would be stuck on "Connecting…" forever even though the daemon
+  // is genuinely attached (agents communicate fine). We consult the
+  // remote backend's host-status over HTTP — `availability === 'available'`
+  // is the same authority every other remote-mode fact flows through —
+  // but ONLY in the ambiguous window (`claimed` + no local attach
+  // timestamp). In embedded mode `attachedAt` lands fast, so this probe
+  // is disabled almost immediately and never adds traffic.
+  const needsRemoteAttachProbe =
+    localHostStatus === 'claimed' && localHostAttachedAt === null;
+  const localHostStatusQuery = useHostStatusQuery(currentLocalHostId, {
+    enabled: needsRemoteAttachProbe && currentLocalHostId !== null,
+    pollUntilAvailable: true,
+  });
+  const remoteAttached =
+    localHostStatusQuery.data?.availability === 'available';
+
   const localConnectionView = useMemo(
-    () => describeConnectionState(localHostStatus, localHostAttachedAt, Date.now()),
-    [localHostStatus, localHostAttachedAt],
+    () =>
+      describeConnectionState(localHostStatus, localHostAttachedAt, Date.now(), {
+        remoteAttached,
+      }),
+    [localHostStatus, localHostAttachedAt, remoteAttached],
   );
 
   const hosts: ReadonlyArray<HostDto> = useMemo(
@@ -398,7 +424,7 @@ export function ConnectionPane(): JSX.Element {
           <div className="flex min-w-0 flex-col gap-1">
             <h3 className="text-sm font-semibold text-text-primary">This computer</h3>
             <p className="max-w-prose text-xs text-text-muted">
-              {describeThisMac(localHostStatus, localHostAttachedAt)}
+              {describeThisMac(localHostStatus, localHostAttachedAt, remoteAttached)}
             </p>
           </div>
           <ConnectionPill view={localConnectionView} />

@@ -211,7 +211,7 @@ export function useHostProvenanceGate(): {
  */
 export function useHostStatusQuery(
   hostId: string | null | undefined,
-  options?: { enabled?: boolean },
+  options?: { enabled?: boolean; pollUntilAvailable?: boolean },
 ) {
   return useQuery<HostStatusResponse>({
     queryKey: hostStatusKey(hostId ?? '__none__'),
@@ -222,7 +222,22 @@ export function useHostStatusQuery(
     enabled: (options?.enabled ?? true) && Boolean(hostId),
     staleTime: Infinity,
     refetchOnWindowFocus: false,
-    refetchInterval: false,
+    // `#task:1010` — opt-in polling for the ConnectionPane "This
+    // computer" pill in remote mode. There, `local_host_ws_attached_at`
+    // is structurally null (the attachment registry lives in the remote
+    // backend, not in-process), so the pill needs host-status
+    // `availability` as the readiness source. We poll only until the
+    // host reports `available`, then stop — a `disconnected` host keeps
+    // polling (it's the genuine "Connecting" case) but never round-trips
+    // the daemon (the backend short-circuits to `disconnected` before
+    // dispatch when no attachment exists). Default callers (manual
+    // refresh on HostDetailView) leave this off.
+    refetchInterval: options?.pollUntilAvailable
+      ? query =>
+          query.state.data?.availability === 'available'
+            ? false
+            : CONNECTING_POLL_MS
+      : false,
   });
 }
 
