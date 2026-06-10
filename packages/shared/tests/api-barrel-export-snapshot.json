@@ -168,6 +168,8 @@
   "UpdateHostResponseSchema",
   "UpdateTaskStatusInputSchema",
   "UpdateUserProfileInputSchema",
+  "UpdateWorkspaceHumanMemberRoleInputSchema",
+  "UpdateWorkspaceHumanMemberRoleResponseSchema",
   "UpdateWorkspaceInputSchema",
   "UploadAvatarResponseSchema",
   "UserDtoSchema",
