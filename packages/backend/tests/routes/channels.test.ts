@@ -265,22 +265,53 @@ describe('workspace metadata and membership routes', () => {
       await http(t).get(`/api/workspaces/${workspace.workspace.id}/members`)
     ).json() as any;
     expect(before.human_members.map((m: any) => m.id)).not.toContain('teammate');
+    const viewerEvents: Array<{ kind: string; payload: unknown }> = [];
+    const unsubscribeViewer = t.ctx.events.subscribeScope('viewer:teammate', event => {
+      viewerEvents.push({ kind: event.kind, payload: event.payload });
+    });
 
-    const add = await http(t).post(
-      `/api/workspaces/${workspace.workspace.id}/members`,
-      { kind: 'human', user_id: 'teammate' },
-    );
-    expect(add.status).toBe(201);
-    const addBody = await add.json() as any;
-    expect(addBody.member).toMatchObject({
-      workspace_id: workspace.workspace.id,
-      user_id: 'teammate',
-    });
-    expect(addBody.human_member).toMatchObject({
-      id: 'teammate',
-      name: 'teammate-test',
-      display_name: 'Teammate',
-    });
+    try {
+      const add = await http(t).post(
+        `/api/workspaces/${workspace.workspace.id}/members`,
+        { kind: 'human', user_id: 'teammate' },
+      );
+      expect(add.status).toBe(201);
+      const addBody = await add.json() as any;
+      expect(addBody.member).toMatchObject({
+        workspace_id: workspace.workspace.id,
+        user_id: 'teammate',
+        role: 'member',
+      });
+      expect(addBody.human_member).toMatchObject({
+        id: 'teammate',
+        name: 'teammate-test',
+        display_name: 'Teammate',
+        workspace_id: workspace.workspace.id,
+        user_id: 'teammate',
+        role: 'member',
+      });
+      expect(viewerEvents).toEqual([
+        {
+          kind: 'viewer_workspaces_changed',
+          payload: {
+            change: 'added',
+            workspace_id: workspace.workspace.id,
+            role: 'member',
+          },
+        },
+      ]);
+
+      const duplicate = await http(t).post(
+        `/api/workspaces/${workspace.workspace.id}/members`,
+        { kind: 'human', user_id: 'teammate' },
+      );
+      expect(duplicate.status).toBe(201);
+      // `viewer_workspaces_changed` is a real-change event, not an
+      // idempotent write echo: duplicate add must not republish.
+      expect(viewerEvents).toHaveLength(1);
+    } finally {
+      unsubscribeViewer();
+    }
 
     const after = await (
       await http(t).get(`/api/workspaces/${workspace.workspace.id}/members`)
@@ -326,26 +357,68 @@ describe('workspace metadata and membership routes', () => {
       await http(t).post('/api/workspaces', { name: 'member-role' })
     ).json() as any;
     const path = `/api/workspaces/${workspace.workspace.id}/members/users/teammate/role`;
-
-    const promote = await http(t).patch(path, { role: 'admin' });
-    expect(promote.status).toBe(200);
-    const promoteBody = await promote.json() as any;
-    expect(promoteBody.member).toMatchObject({
-      workspace_id: workspace.workspace.id,
-      user_id: 'teammate',
-      role: 'admin',
-    });
-    expect(promoteBody.human_member).toMatchObject({
-      id: 'teammate',
-      user_id: 'teammate',
-      display_name: 'Teammate',
-      role: 'admin',
+    const viewerEvents: Array<{ kind: string; payload: unknown }> = [];
+    const unsubscribeViewer = t.ctx.events.subscribeScope('viewer:teammate', event => {
+      viewerEvents.push({ kind: event.kind, payload: event.payload });
     });
 
-    const demote = await http(t).patch(path, { role: 'member' });
-    expect(demote.status).toBe(200);
-    const demoteBody = await demote.json() as any;
-    expect(demoteBody.member).toMatchObject({ user_id: 'teammate', role: 'member' });
+    try {
+      const promote = await http(t).patch(path, { role: 'admin' });
+      expect(promote.status).toBe(200);
+      const promoteBody = await promote.json() as any;
+      expect(promoteBody.member).toMatchObject({
+        workspace_id: workspace.workspace.id,
+        user_id: 'teammate',
+        role: 'admin',
+      });
+      expect(promoteBody.human_member).toMatchObject({
+        id: 'teammate',
+        user_id: 'teammate',
+        display_name: 'Teammate',
+        role: 'admin',
+      });
+      expect(viewerEvents).toEqual([
+        {
+          kind: 'viewer_workspaces_changed',
+          payload: {
+            change: 'role_changed',
+            workspace_id: workspace.workspace.id,
+            role: 'admin',
+          },
+        },
+      ]);
+
+      const duplicateRole = await http(t).patch(path, { role: 'admin' });
+      expect(duplicateRole.status).toBe(200);
+      // Same-role writes return the current DTO but do not republish a
+      // "changed" event.
+      expect(viewerEvents).toHaveLength(1);
+
+      const demote = await http(t).patch(path, { role: 'member' });
+      expect(demote.status).toBe(200);
+      const demoteBody = await demote.json() as any;
+      expect(demoteBody.member).toMatchObject({ user_id: 'teammate', role: 'member' });
+      expect(viewerEvents).toEqual([
+        {
+          kind: 'viewer_workspaces_changed',
+          payload: {
+            change: 'role_changed',
+            workspace_id: workspace.workspace.id,
+            role: 'admin',
+          },
+        },
+        {
+          kind: 'viewer_workspaces_changed',
+          payload: {
+            change: 'role_changed',
+            workspace_id: workspace.workspace.id,
+            role: 'member',
+          },
+        },
+      ]);
+    } finally {
+      unsubscribeViewer();
+    }
 
     const list = await (
       await http(t).get(`/api/workspaces/${workspace.workspace.id}/members`)

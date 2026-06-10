@@ -27,6 +27,8 @@ import {
   type AgentCapability,
   type WorkspaceHumanMemberDto,
   type WorkspaceRoleDto,
+  type UserDto,
+  type WorkspaceUserMemberDto,
 } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
 import type { AppEnv, Principal } from '../auth/principal.js';
@@ -97,6 +99,67 @@ function ownerRoleChangeUnsupported(c: Context) {
   );
 }
 
+type ViewerWorkspaceChange = 'added' | 'role_changed';
+
+function publishViewerWorkspacesChanged(
+  ctx: BackendContext,
+  userId: string,
+  payload: {
+    change: ViewerWorkspaceChange;
+    workspace_id: string;
+    role: WorkspaceRoleDto;
+  },
+): void {
+  ctx.events.publishToScope(
+    `viewer:${userId}`,
+    'viewer_workspaces_changed',
+    payload,
+  );
+}
+
+function addWorkspaceHumanMember(
+  ctx: BackendContext,
+  workspaces: WorkspaceRepo,
+  input: { workspaceId: string; user: UserDto },
+): { member: WorkspaceUserMemberDto; human_member: WorkspaceHumanMemberDto } {
+  const wasMember = workspaces.isUserMember(input.workspaceId, input.user.id);
+  const member = workspaces.addUserMember(input.workspaceId, input.user.id);
+  if (!wasMember) {
+    publishViewerWorkspacesChanged(ctx, input.user.id, {
+      change: 'added',
+      workspace_id: input.workspaceId,
+      role: member.role,
+    });
+  }
+  return { member, human_member: { ...input.user, ...member } };
+}
+
+function updateWorkspaceHumanMemberRole(
+  ctx: BackendContext,
+  workspaces: WorkspaceRepo,
+  input: {
+    workspaceId: string;
+    user: UserDto;
+    previousRole: WorkspaceRoleDto;
+    role: Exclude<WorkspaceRoleDto, 'owner'>;
+  },
+): { member: WorkspaceUserMemberDto; human_member: WorkspaceHumanMemberDto } | null {
+  const member = workspaces.setUserRole(
+    input.workspaceId,
+    input.user.id,
+    input.role,
+  );
+  if (!member) return null;
+  if (input.previousRole !== input.role) {
+    publishViewerWorkspacesChanged(ctx, input.user.id, {
+      change: 'role_changed',
+      workspace_id: input.workspaceId,
+      role: member.role,
+    });
+  }
+  return { member, human_member: { ...input.user, ...member } };
+}
+
 /**
  * Workspace membership surface (api router): GET list + POST add + DELETE remove,
  * as a mountable sub-app. GET is viewer-gated (`canViewWorkspace`); POST is
@@ -152,8 +215,13 @@ export function createWorkspaceMembershipApp(
       }
       const user = ctx.userService.getDto(parsed.data.user_id);
       if (!user) return c.json({ error: 'user not found' }, 404);
-      const member = workspaces.addUserMember(workspace.id, user.id);
-      return c.json({ member, human_member: user }, 201);
+      return c.json(
+        addWorkspaceHumanMember(ctx, workspaces, {
+          workspaceId: workspace.id,
+          user,
+        }),
+        201,
+      );
     }
     // Add an agent member: delegated to AddWorkspaceAgentMemberUseCase. The
     // route stays thin — parse + admin gate above, then map the typed result.
@@ -213,11 +281,16 @@ export function createWorkspaceMembershipApp(
     }
     if (currentRole === 'owner') return ownerRoleChangeUnsupported(c);
 
-    const member = workspaces.setUserRole(workspace.id, userId, parsed.data.role);
-    if (!member) return c.json({ error: 'workspace human member not found' }, 404);
     const user = ctx.userService.getDto(userId);
     if (!user) return c.json({ error: 'workspace human member not found' }, 404);
-    return c.json({ member, human_member: { ...user, ...member } });
+    const result = updateWorkspaceHumanMemberRole(ctx, workspaces, {
+      workspaceId: workspace.id,
+      user,
+      previousRole: currentRole,
+      role: parsed.data.role,
+    });
+    if (!result) return c.json({ error: 'workspace human member not found' }, 404);
+    return c.json(result);
   });
 
   app.delete(apiPaths.workspaceMember(':id', ':agentId'), async c => {
