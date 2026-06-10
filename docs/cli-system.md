@@ -68,7 +68,7 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand schedule list` | List this agent's schedules. |
 | `silverhand schedule cancel` | Cancel a schedule. |
 | `silverhand file upload` | Upload a local file and return an attachment id. |
-| `silverhand file view` | Resolve an attachment id to a local path or download location. |
+| `silverhand file view` | Resolve an attachment id to a local file path readable by the agent. |
 
 ### 3.1 `silverhand message send` text body is stdin-only
 

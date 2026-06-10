@@ -114,6 +114,10 @@ function buildRegistrationMap(): Map<string, 'GET' | 'POST'> {
   return map;
 }
 
+function isAttachmentWildcardRoute(name: string): boolean {
+  return name === 'agentLocateAttachment' || name === 'agentDownloadAttachment';
+}
+
 describe('CLI invoke route map', () => {
   it('every entry maps to a (noun, verb) that exists in COMMAND_GROUPS', () => {
     for (const r of CLI_INVOKE_ROUTES) {
@@ -134,9 +138,10 @@ describe('CLI invoke route map', () => {
     for (const [name, fn] of builders) {
       // Each helper is `(cid, aid, ...rest) => string`. Probe with
       // placeholder ids; collapse `:attachmentId` to `*` for the
-      // locate route since the middleware matches by single segment.
+      // attachment file-view routes since the middleware matches by
+      // single segment.
       const probed =
-        name === 'agentLocateAttachment'
+        isAttachmentWildcardRoute(name)
           ? (fn as (...a: string[]) => string)(':cid', ':aid', 'ATT')
           : (fn as (...a: string[]) => string)(':cid', ':aid');
       const suffix = suffixOf(probed).replace('/ATT/', '/*/');
@@ -172,7 +177,7 @@ describe('CLI invoke route map', () => {
     const suffixToName = new Map<string, string>();
     for (const [name, fn] of builders) {
       const probed =
-        name === 'agentLocateAttachment'
+        isAttachmentWildcardRoute(name)
           ? (fn as (...a: string[]) => string)(':cid', ':aid', 'ATT')
           : (fn as (...a: string[]) => string)(':cid', ':aid');
       const suffix = suffixOf(probed).replace('/ATT/', '/*/');
@@ -208,8 +213,14 @@ describe('CLI invoke route map', () => {
       verb: 'view',
       routeSuffix: 'attachments/*/locate',
     });
+    expect(lookupCliRoute('GET', 'attachments/abc123/download')).toEqual({
+      noun: 'file',
+      verb: 'view',
+      routeSuffix: 'attachments/*/download',
+    });
     // The wildcard is single-segment — extra slashes do NOT match.
     expect(lookupCliRoute('GET', 'attachments/a/b/locate')).toBeNull();
+    expect(lookupCliRoute('GET', 'attachments/a/b/download')).toBeNull();
   });
 
   it('rejects mismatched HTTP methods (POST tasks vs GET tasks)', () => {

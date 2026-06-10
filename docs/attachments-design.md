@@ -338,8 +338,11 @@ async function view_file(id: string): Promise<{ path: string }> {
     return { path: locate.localPath };
   }
 
-  // remote 模式或非 local：HTTP 下载到 chat-bridge 本地缓存
-  const cacheDir = path.join(os.homedir(), '.silverhand', 'attachments-cache');
+  // remote 模式或非 local：HTTP 下载到 agent 本地缓存。
+  // 优先使用 SILVERHAND_DIR，保证 remote-only smoke app 与用户默认数据隔离。
+  const cacheDir = process.env.SILVERHAND_DIR
+    ? path.join(process.env.SILVERHAND_DIR, 'attachments-cache')
+    : path.join(os.homedir(), '.silverhand', 'attachments-cache');
   await fs.mkdir(cacheDir, { recursive: true });
 
   const meta = await fetchAttachmentMeta(id); // 至少拿 filename + content_type
@@ -364,7 +367,7 @@ agent 拿到 `path` 之后用 `Read` / 视觉工具直接读盘。两种模式�
 
 ### 5.3 文件命名
 
-返回给 agent 的路径必须带扩展名：`~/.silverhand/blobs/attachments/<id>.<ext>` 或 `~/.silverhand/attachments-cache/<id>.<ext>`。
+返回给 agent 的路径必须带扩展名：`~/.silverhand/blobs/attachments/<id>.<ext>` 或 `${SILVERHAND_DIR:-~/.silverhand}/attachments-cache/<id>.<ext>`。
 
 原因：agent 往往通过 `Read` / 视觉工具直接读取本地路径，带扩展名能减少工具侧类型猜测失败。扩展名从原始 `filename` 优先推导，其次从 `content_type` 推导，最后兜底 `.bin`。
 
@@ -507,7 +510,7 @@ DB cascade 只会删 row，不会自动删磁盘文件。v1 无去重，所以�
 - channel 删除 / workspace 删除时，先列出受影响 channel 的 attachments，按 storage backend 删除对应 `storage_key`，再提交 DB 删除；或者在事务提交后用 best-effort cleanup job 清理已记录的 keys。关键是不能只依赖 `ON DELETE CASCADE`。
 - thread 删除不删 blob，只会让 `source_conversation_id` 置空；blob 仍归 parent channel。
 - 单条 message 删除默认不删 blob，避免破坏其它消息引用和审计语义。未来如果要支持"删除未发送的 composer 上传"，单独做 orphan cleanup。
-- `~/.silverhand/attachments-cache/` 是 chat-bridge 读文件缓存，不跟随 channel delete 立即清理；后续按 LRU / 大小上限做 Phase 4 管理。
+- `${SILVERHAND_DIR:-~/.silverhand}/attachments-cache/` 是 agent 读文件缓存，不跟随 channel delete 立即清理；后续按 LRU / 大小上限做 Phase 4 管理。
 
 ---
 
@@ -551,7 +554,7 @@ profile asset application
 | **storage 抽象** | server-side（具体后端不可见） | **dispatch 层，storage 字段驱动**（local/remote 同构） |
 | **上传 endpoint** | `POST /internal/agent/{aid}/upload`，agent 传 `channel` target | `POST /api/channels/:cid/attachments` / `POST /api/threads/:tid/attachments`；agent 不传 channel |
 | **下载 endpoint** | `GET /api/attachments/{id}` | `GET /api/attachments/:id`（一致） |
-| **agent 缓存** | `~/.slock/attachments/{id}.{ext}`（带扩展名） | local: 零拷贝读 backend 存储；remote/cache: `~/.silverhand/attachments-cache/{id}.{ext}`（带扩展名） |
+| **agent 缓存** | `~/.slock/attachments/{id}.{ext}`（带扩展名） | local: 零拷贝读 backend 存储；remote/cache: `${SILVERHAND_DIR:-~/.silverhand}/attachments-cache/{id}.{ext}`（带扩展名） |
 | **MCP 工具** | `upload_file(file_path, channel)` / `view_file` / `send_message(attachment_ids)` | `upload_file(file_path)` / `view_file` / `send_message(attachment_ids)`；不让 agent 传 channel |
 | **stream-json 走法** | 文本注入，附件以 `[id:xxx — use view_file]` 提示 | **同上**（不污染 stream-json） |
 | **大小上限** | 10MB | 10MB |

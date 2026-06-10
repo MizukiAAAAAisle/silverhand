@@ -66,6 +66,9 @@ export const CLI_INVOKE_ROUTES: readonly CliInvokeRoute[] = [
   // attachments/:id/locate — middleware matches by prefix `attachments/`
   // + suffix `/locate`; we record it as a single entry.
   { method: 'GET', suffix: 'attachments/*/locate', noun: 'file', verb: 'view' },
+  // attachments/:id/download — implementation subrequest for `file view`
+  // remote fallback. Same CLI surface; id is normalized away.
+  { method: 'GET', suffix: 'attachments/*/download', noun: 'file', verb: 'view' },
 ];
 
 /**

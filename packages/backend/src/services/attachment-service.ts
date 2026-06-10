@@ -152,6 +152,13 @@ export class AttachmentService {
     return this.storage.serve(refOf(row), serveHeadersOf(row));
   }
 
+  /** Internal download after the caller has already resolved/authorized
+   *  the row through `locateForAgent`. This keeps agent file-view fallback
+   *  on the internal token surface instead of borrowing public user routes. */
+  async serveForAgentLocated(row: AttachmentRow): Promise<Response | null> {
+    return this.storage.serve(refOf(row), serveHeadersOf(row));
+  }
+
   /** Internal locate — agent asks "where can I read this attachment?".
    *  Caller MUST verify the attachment's channel matches the agent's
    *  current conversation channel before returning. */

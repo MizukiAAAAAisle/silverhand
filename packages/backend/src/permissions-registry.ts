@@ -278,6 +278,7 @@ export const AGENT_ROUTE_CAPABILITIES: Record<
   agentUpdateConversationTaskStatus: { status: 'enforced', capability: 'write_tasks', scope: 'target task\'s conversation workspace (service-level gate)' },
   agentUploadAttachment: { status: 'enforced', capability: 'upload_attachments', scope: 'principal conversation\'s workspace' },
   agentLocateAttachment: { status: 'enforced', capability: 'read_attachments', scope: 'principal conversation\'s workspace' },
+  agentDownloadAttachment: { status: 'enforced', capability: 'read_attachments', scope: 'principal conversation\'s workspace' },
   agentAddConversationMember: { status: 'enforced', capability: 'manage_conversation_members', scope: 'target conversation\'s workspace' },
   // Schedule create/cancel gate INSIDE schedule-service: the target
   // workspace is the schedule's target conversation's workspace, resolved

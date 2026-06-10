@@ -336,6 +336,60 @@ describe('Internal agent attachment routes', () => {
     expect(cross.status).toBe(404);
   });
 
+  it('agent downloads attachment bytes through the internal route after same-channel ACL', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const aliceId = agentIds.alice!;
+
+    const upload = await uploadFile(
+      t,
+      `/internal/conversations/${channelId}/agents/${aliceId}/attachments`,
+      'agent.png',
+      'image/png',
+      PNG_BYTES,
+      internalAuthHeaders(t, channelId, aliceId),
+    );
+    expect(upload.status).toBe(201);
+    const dto = await upload.json() as any;
+
+    const download = await t.app.fetch(
+      new Request(
+        `http://localhost/internal/conversations/${channelId}/agents/${aliceId}/attachments/${dto.id}/download`,
+        { headers: internalAuthHeaders(t, channelId, aliceId) },
+      ),
+    );
+    expect(download.status).toBe(200);
+    expect(download.headers.get('content-type')).toBe('image/png');
+    expect(Buffer.from(await download.arrayBuffer())).toEqual(PNG_BYTES);
+  });
+
+  it('download denies access when the attachment is from another channel (404)', async () => {
+    t = buildTestApp();
+    const a = await createWorkspaceChannel(t, ['alice1']);
+    const b = await createWorkspaceChannel(t, ['alice2']);
+    const aliceA = a.agentIds.alice1!;
+    const aliceB = b.agentIds.alice2!;
+
+    const dto = await (
+      await uploadFile(
+        t,
+        `/internal/conversations/${a.channelId}/agents/${aliceA}/attachments`,
+        'a.png',
+        'image/png',
+        PNG_BYTES,
+        internalAuthHeaders(t, a.channelId, aliceA),
+      )
+    ).json() as any;
+
+    const cross = await t.app.fetch(
+      new Request(
+        `http://localhost/internal/conversations/${b.channelId}/agents/${aliceB}/attachments/${dto.id}/download`,
+        { headers: internalAuthHeaders(t, b.channelId, aliceB) },
+      ),
+    );
+    expect(cross.status).toBe(404);
+  });
+
   it('upload is rejected when the agent is not a member of the conversation (403)', async () => {
     t = buildTestApp();
     const a = await createWorkspaceChannel(t, ['alice']);

@@ -1020,6 +1020,47 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
     },
   );
 
+  app.get(
+    internalPaths.agentDownloadAttachment(':cid', ':aid', ':attachmentId'),
+    async c => {
+      const cid = c.req.param('cid');
+      const aid = c.req.param('aid');
+      const attachmentId = c.req.param('attachmentId');
+      if (!cid || !aid || !attachmentId) {
+        return c.json(
+          { error: 'conversation id, agent id, and attachment id required' },
+          400,
+        );
+      }
+      if (!conversations.get(cid)) return c.json({ error: 'conversation not found' }, 404);
+      if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
+      if (!conversations.getAgent(cid, aid)) {
+        return c.json({ error: 'agent is not a member of this conversation' }, 403);
+      }
+      const principal = getAgentPrincipal(c);
+      if (!canViewConversation(ctx, principal, principal.conversationId)) {
+        return c.json({ error: 'forbidden' }, 403);
+      }
+      {
+        const denied = requireAgentCapability(c, ctx, principal, 'read_attachments',
+          conversations.get(principal.conversationId)?.workspace_id);
+        if (denied) return denied;
+      }
+      const located = await ctx.attachmentService.locateForAgent(
+        attachmentId,
+        principal.conversationId,
+      );
+      if (!located) {
+        // Same not-found shape as locate: missing rows and cross-channel
+        // attempts are indistinguishable.
+        return c.json({ error: 'attachment not found' }, 404);
+      }
+      const response = await ctx.attachmentService.serveForAgentLocated(located.row);
+      if (!response) return c.json({ error: 'attachment not found' }, 404);
+      return response;
+    },
+  );
+
   // ── Agent self-edit avatar (silverhand CLI → backend) ────────────
   // The agent token middleware already enforces `principal.agentId ===
   // :aid`, so the URL pin alone makes this self-only. `canEditAgent`

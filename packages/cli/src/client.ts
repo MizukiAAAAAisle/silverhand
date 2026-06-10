@@ -366,6 +366,34 @@ export class BackendClient {
       internalPaths.agentLocateAttachment(this.env.conversationId, this.env.agentId, attachmentId),
     );
   }
+
+  async downloadAttachment(attachmentId: string): Promise<{
+    buffer: Buffer;
+    contentType: string;
+  }> {
+    markRequestAttempted();
+    const url =
+      this.env.serverUrl +
+      internalPaths.agentDownloadAttachment(this.env.conversationId, this.env.agentId, attachmentId);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'GET',
+        headers: this.headers(),
+      });
+    } catch (err) {
+      throw fromNetworkError(err);
+    }
+    if (!res.ok) {
+      const text = await safeReadText(res);
+      throw mapHttpError(res.status, text);
+    }
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return {
+      buffer,
+      contentType: res.headers.get('content-type') ?? 'application/octet-stream',
+    };
+  }
 }
 
 async function safeReadText(res: Response): Promise<string> {

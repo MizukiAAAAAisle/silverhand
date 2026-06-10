@@ -477,11 +477,11 @@ workspace fs. The boundary contract:
   attachment file (e.g. `silverhand file view`), the resolution goes
   back through server HTTP, not through a daemon-local path.
 
-Implication for `silverhand file view` in remote-deploy: returns a
-server download URL (signed / ACL'd via existing routes), not a
-daemon-local fs path. Embedded mode may keep the current
+Implication for `silverhand file view` in remote-deploy: fetches the
+bytes back through server HTTP, caches them on the agent host, and
+returns that cache path. Embedded mode may keep the current
 local-path-resolution shortcut as an optimization, but the contract
-the agent sees is "URL or URL-like handle, fetch via http".
+the agent sees is "a local path readable by its normal file tools".
 
 Daemon-local blob cache / sandbox blob tier is a future storage
 optimization, not V1; see §5.1.
@@ -778,7 +778,8 @@ Revision 1 closed all three open questions per shiki/Cindy alignment
   for V1 main.** `~/.silverhand/blobs/` is server data dir per D1
   layout; current code already has server-owned `BlobFileStorage.put/serve/locate/delete`;
   daemon does not need to be involved. `silverhand file view` in
-  remote-deploy returns a server download URL. Daemon-local blob
+  remote-deploy fetches from the server and returns an agent-local
+  cache path. Daemon-local blob
   cache / sandbox blob tier is a future storage optimization, not
   V1 (see §5.1). `blob_locate` / `blob_upload_chunk` are NOT in the
   V1 protocol surface.

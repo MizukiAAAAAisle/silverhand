@@ -122,6 +122,7 @@
   "POST /internal/conversations/:cid/agents/:aid/tasks/update-status",
   "POST /internal/conversations/:cid/agents/:aid/attachments",
   "GET /internal/conversations/:cid/agents/:aid/attachments/:attachmentId/locate",
+  "GET /internal/conversations/:cid/agents/:aid/attachments/:attachmentId/download",
   "POST /internal/conversations/:cid/agents/:aid/avatar",
   "DELETE /internal/conversations/:cid/agents/:aid/avatar",
   "POST /internal/conversations/:cid/agents/:aid/schedules",

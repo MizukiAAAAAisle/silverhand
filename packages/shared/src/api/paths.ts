@@ -287,10 +287,14 @@ export const internalPaths = {
    *  Backend resolves channel ownership from `cid`. */
   agentUploadAttachment: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/attachments`,
-  /** Agent asks the backend where/how to read an attachment. Returns
-   *  either a local path (zero-copy) or a download URL. */
+  /** Agent asks the backend where/how to read an attachment. Embedded can
+   *  return a zero-copy local path; remote-safe callers may use the
+   *  paired download route and cache bytes locally. */
   agentLocateAttachment: (cid: string, aid: string, attachmentId: string) =>
     `/internal/conversations/${cid}/agents/${aid}/attachments/${attachmentId}/locate`,
+  /** Agent downloads attachment bytes after locate has proved same-channel access. */
+  agentDownloadAttachment: (cid: string, aid: string, attachmentId: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/attachments/${attachmentId}/download`,
 
   /** Agent uploads its own avatar (multipart). Token middleware enforces
    *  `principal.agentId === aid`, so the route is structurally self-only.

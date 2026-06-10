@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { COMMAND_GROUPS, findCommand, findGroup } from '../src/commands/index.js';
 import type { BackendClient } from '../src/client.js';
 
@@ -149,5 +152,108 @@ describe('thread close flag plumbing', () => {
     } as any);
     expect(calls[0]).toEqual({ summary: 'done' });
     expect(calls[0]).not.toHaveProperty('allow_open_tasks');
+  });
+});
+
+describe('file view command', () => {
+  it('returns the zero-copy local path when the loopback backend path is readable', async () => {
+    const cmd = findCommand('file', 'view');
+    expect(cmd).toBeDefined();
+    const dir = await mkdtemp(join(tmpdir(), 'silverhand-file-view-local-'));
+    try {
+      const localPath = join(dir, 'shot.png');
+      await writeFile(localPath, Buffer.from('local-bytes'));
+      let downloaded = false;
+      const fakeClient = {
+        locateAttachment: async () => ({
+          storage: 'local',
+          local_path: localPath,
+          filename: 'shot.png',
+          content_type: 'image/png',
+        }),
+        downloadAttachment: async () => {
+          downloaded = true;
+          return { buffer: Buffer.from('remote-bytes'), contentType: 'image/png' };
+        },
+      } as unknown as BackendClient;
+
+      const result = await cmd!.run({
+        env: {
+          conversationId: 'conv-local',
+          agentId: 'agent',
+          serverUrl: 'http://127.0.0.1:4488',
+          authToken: 'token',
+        },
+        client: fakeClient,
+        args: {
+          flags: { 'attachment-id': 'att-local' },
+          positional: [],
+          rest: [],
+        },
+      } as any);
+
+      expect(downloaded).toBe(false);
+      expect(result).toEqual({
+        storage: 'local',
+        local_path: localPath,
+        filename: 'shot.png',
+        content_type: 'image/png',
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('downloads remote-backend attachments into a local cache path', async () => {
+    const cmd = findCommand('file', 'view');
+    expect(cmd).toBeDefined();
+    const silverhandDir = await mkdtemp(join(tmpdir(), 'silverhand-file-view-cache-'));
+    const previousSilverhandDir = process.env.SILVERHAND_DIR;
+    try {
+      process.env.SILVERHAND_DIR = silverhandDir;
+      const result = await cmd!.run({
+        env: {
+          conversationId: 'conv-remote',
+          agentId: 'agent',
+          serverUrl: 'https://remote.example.test',
+          authToken: 'token',
+        },
+        client: {
+          locateAttachment: async () => ({
+            storage: 'local',
+            local_path: '/remote/server/blobs/shot.png',
+            filename: 'shot.png',
+            content_type: 'image/png',
+          }),
+          downloadAttachment: async () => ({
+            buffer: Buffer.from('remote-bytes'),
+            contentType: 'image/png',
+          }),
+        } as unknown as BackendClient,
+        args: {
+          flags: { 'attachment-id': 'att-remote' },
+          positional: [],
+          rest: [],
+        },
+      } as any) as {
+        storage: 'local';
+        local_path: string;
+        filename: string;
+        content_type: string;
+      };
+
+      expect(result.storage).toBe('local');
+      expect(result.local_path).toContain(silverhandDir);
+      expect(result.local_path).toContain('attachments-cache');
+      expect(result.local_path).toContain('conv-remote');
+      expect(result.local_path).toContain('att-remote');
+      expect(result.filename).toBe('shot.png');
+      expect(result.content_type).toBe('image/png');
+      expect(await readFile(result.local_path, 'utf8')).toBe('remote-bytes');
+    } finally {
+      if (previousSilverhandDir === undefined) delete process.env.SILVERHAND_DIR;
+      else process.env.SILVERHAND_DIR = previousSilverhandDir;
+      await rm(silverhandDir, { recursive: true, force: true });
+    }
   });
 });
