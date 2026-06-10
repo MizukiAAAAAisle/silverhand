@@ -23,7 +23,7 @@ function bootstrapConversation() {
     workspaceHostId: localHostId,
   });
   const agent = new AgentRepo(db).create({ name: 'a', runtime: 'claude' }, localHostId, 'local');
-  workspaces.addMember(workspace.id, agent.id);
+  workspaces.insertMembership(workspace.id, agent.id);
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
@@ -52,6 +52,65 @@ describe('MessageRepo', () => {
     });
     expect(m1.seq).toBe(1);
     expect(m2.seq).toBe(2);
+    expect(
+      db.prepare<[string], { latest_message_seq: number }>(
+        `SELECT latest_message_seq FROM conversations WHERE id = ?`,
+      ).get(channel.id)?.latest_message_seq,
+    ).toBe(2);
+  });
+
+  it('conditional insert rejects stale seen seq without inserting', () => {
+    const { db, channel, agentId } = bootstrapConversation();
+    const repo = new MessageRepo(db);
+
+    const observed = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      content: 'observed',
+    });
+    const newer = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      fromAgentId: agentId,
+      content: 'newer',
+    });
+
+    const stale = repo.insertForConversationIfFresh({
+      conversationId: channel.id,
+      seenUpToSeq: observed.seq,
+      fromKind: 'agent',
+      fromAgentId: agentId,
+      content: 'stale draft',
+    });
+
+    expect(stale).toEqual({ ok: false, currentSeq: newer.seq });
+    expect(repo.listForConversation(channel.id).map(m => m.content))
+      .toEqual(['observed', 'newer']);
+    expect(repo.listAfterSeq(channel.id, observed.seq).map(m => m.content))
+      .toEqual(['newer']);
+  });
+
+  it('conditional insert succeeds when seen seq matches latest', () => {
+    const { db, channel, agentId } = bootstrapConversation();
+    const repo = new MessageRepo(db);
+
+    const observed = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      content: 'observed',
+    });
+
+    const fresh = repo.insertForConversationIfFresh({
+      conversationId: channel.id,
+      seenUpToSeq: observed.seq,
+      fromKind: 'agent',
+      fromAgentId: agentId,
+      content: 'fresh draft',
+    });
+
+    expect(fresh.ok).toBe(true);
+    expect(fresh.ok && fresh.message.seq).toBe(2);
+    expect(repo.latestSeqForConversation(channel.id)).toBe(2);
   });
 
   it('seq counters are independent per conversation', () => {

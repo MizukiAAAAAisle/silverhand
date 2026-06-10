@@ -242,8 +242,16 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('exit code 1 as a user/input');
     expect(text).toContain('2 as a temporary error');
     expect(text).toContain('3 as a failure');
+    expect(text).toContain("details.subkind: 'message_stale'");
+    expect(text).toContain('details.newer_messages');
+    expect(text).toContain('Do not blindly');
+    expect(text).toContain('--stale-resolution unaffected');
+    expect(text).toContain('--stale-resolution revised');
+    expect(text).toContain('message stale-resolve --resolution obsolete');
+    expect(text).toContain('--anyway');
     expect(text).toContain('silverhand <noun> <verb> --help');
     expect(text).toContain('**`silverhand message send`**: Send a message');
+    expect(text).toContain('Use GitHub Flavored Markdown: headings, lists, tables');
     expect(text).toContain(
       '**`silverhand task list`**: View the workspace task board',
     );

@@ -15,6 +15,7 @@ import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import {
   ScheduleError,
   ScheduleService,
+  type ScheduleServiceOptions,
 } from '../../src/services/schedule-service.js';
 import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
@@ -63,7 +64,13 @@ interface Fixture {
 
 let currentNow = 0;
 
-function bootstrap(): Fixture {
+function bootstrap(
+  capChecker: (
+    agentId: string,
+    workspaceId: string,
+    capability: string,
+  ) => boolean = () => true,
+): Fixture {
   const { db, localHostId } = openTestDb();
   const tmp = makeTempSilverhandDir();
   const hosts = new HostRepo(db);
@@ -125,6 +132,7 @@ function bootstrap(): Fixture {
     events,
     logger,
     now: () => currentNow,
+    canUseCapability: capChecker as unknown as ScheduleServiceOptions['canUseCapability'],
     disableAutoTick: true,
   });
 
@@ -149,6 +157,14 @@ function bootstrap(): Fixture {
 let fixturesToCleanup: Fixture[] = [];
 function setup(): Fixture {
   const f = bootstrap();
+  fixturesToCleanup.push(f);
+  return f;
+}
+
+function setupWithCap(
+  capChecker: (agentId: string, workspaceId: string, capability: string) => boolean,
+): Fixture {
+  const f = bootstrap(capChecker);
   fixturesToCleanup.push(f);
   return f;
 }
@@ -790,6 +806,46 @@ describe('ScheduleService.cancel', () => {
       err = e as ScheduleError;
     }
     expect(err?.code).toBe('not_cancellable');
+  });
+});
+
+describe('ScheduleService — manage_schedules capability gate (graded-permissions cut 2)', () => {
+  it('create denied → typed capability_denied/manage_schedules', () => {
+    const f = setupWithCap(() => false);
+    let err: ScheduleError | undefined;
+    try {
+      f.service.create(
+        { title: 'wake', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+        f.ownerAgentId,
+        f.homeDmId,
+      );
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('capability_denied');
+    expect(err?.capability).toBe('manage_schedules');
+  });
+
+  it('cancel denied → typed capability_denied/manage_schedules', () => {
+    // Live closure: allow create, then deny manage_schedules before cancel.
+    let deny = false;
+    const f = setupWithCap(() => !deny);
+    const s = f.service.create(
+      { title: 'wake', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    deny = true;
+    let err: ScheduleError | undefined;
+    try {
+      f.service.cancel(s.id, f.ownerAgentId);
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('capability_denied');
+    expect(err?.capability).toBe('manage_schedules');
+    // Not cancelled — the gate fired before the state change.
+    expect(f.schedules.get(s.id)?.status).toBe('pending');
   });
 });
 

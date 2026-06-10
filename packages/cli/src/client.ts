@@ -16,6 +16,7 @@ import {
   type AgentReadHistoryInput,
   type AgentSearchMessagesDto,
   type AgentSearchMessagesInput,
+  type AgentSendStaleResolutionReason,
   type AttachmentDto,
   type AttachmentLocateDto,
   type ClaimTasksInput,
@@ -84,11 +85,26 @@ export class BackendClient {
   sendMessage(input: {
     content: string;
     target?: SendMessageTarget;
+    seen_up_to_seq?: number;
+    stale_event_id?: string;
+    stale_resolution_reason?: AgentSendStaleResolutionReason;
+    freshness_bypass?: boolean;
     attachment_ids?: string[];
-  }): Promise<{ message_id: string }> {
+  }): Promise<{ message_id: string; message_seq?: number }> {
     return this.request(
       'POST',
       internalPaths.agentSendConversationMessage(this.env.conversationId, this.env.agentId),
+      input,
+    );
+  }
+
+  resolveStaleMessage(input: {
+    stale_event_id: string;
+    resolution_reason: 'obsolete';
+  }): Promise<{ ok: boolean }> {
+    return this.request(
+      'POST',
+      internalPaths.agentResolveStaleMessage(this.env.conversationId, this.env.agentId),
       input,
     );
   }

@@ -276,4 +276,77 @@ describe('agent list_channels / search_messages routes', () => {
     const body = await res.json() as any;
     expect(body.hits.map((h: any) => h.message_ref.id)).toEqual([userHit.id]);
   });
+
+  // Characterization for the read-model SQL extraction (#task:980, Slice B):
+  // pin LIKE wildcard escaping. The search needle goes through escapeLike (which
+  // backslash-escapes \ % _) wrapped as %needle% with an `ESCAPE '\'` clause, so
+  // a query containing `%` or `_` matches those characters LITERALLY rather than
+  // as SQL wildcards. A relocation that dropped the escape or the ESCAPE clause
+  // would over-match here but still typecheck.
+  it('treats % and _ in the query as literals, not SQL wildcards', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const aliceId = agentIds.alice!;
+    const messages = new MessageRepo(t.ctx.db);
+    const percentHit = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'discount 50% today',
+    });
+    // Decoy that a naked `%50%%` (unescaped) wildcard would also match.
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'order 5050 today',
+    });
+    const underscoreHit = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'the user_id column',
+    });
+    // Decoy that a naked `_` (any single char) would also match.
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'the userXid column',
+    });
+
+    const pct = await http(t).post(searchMessagesPath(channelId, aliceId), {
+      q: '50%',
+    });
+    expect(pct.status).toBe(200);
+    const pctBody = await pct.json() as any;
+    expect(pctBody.hits.map((h: any) => h.message_ref.id)).toEqual([percentHit.id]);
+
+    const us = await http(t).post(searchMessagesPath(channelId, aliceId), {
+      q: 'user_id',
+    });
+    expect(us.status).toBe(200);
+    const usBody = await us.json() as any;
+    expect(usBody.hits.map((h: any) => h.message_ref.id)).toEqual([underscoreHit.id]);
+
+    // The third escape point: a literal backslash. escapeLike doubles `\` to
+    // `\\` and the query runs with `ESCAPE '\'`, so a query containing `\` must
+    // match that backslash literally. If the relocation dropped the escape of
+    // `\` (but kept the ESCAPE clause), the needle `%path\name%` would read `\n`
+    // as the escaped literal `n` — collapsing to `%pathname%` and over-matching
+    // the decoy below. The decoy has no backslash, so it only matches under that
+    // bug.
+    const backslashHit = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'path\\name segment',
+    });
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'pathname segment',
+    });
+    const bs = await http(t).post(searchMessagesPath(channelId, aliceId), {
+      q: 'path\\name',
+    });
+    expect(bs.status).toBe(200);
+    const bsBody = await bs.json() as any;
+    expect(bsBody.hits.map((h: any) => h.message_ref.id)).toEqual([backslashHit.id]);
+  });
 });

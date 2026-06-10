@@ -1,14 +1,20 @@
 import * as Popover from '@radix-ui/react-popover';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, Eraser, Power, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Eraser, Power, RefreshCw, UserMinus } from 'lucide-react';
 import type { AgentDto, ConversationAgentStatus } from '@silverhand/shared';
 import {
   useChannelAgents,
   useClearAgentSession,
+  useRemoveAgentFromChannel,
   useStartAgent,
   useStopAgent,
 } from '@/features/channels/hooks';
-import { canEditAgentProfile } from '@/features/agents/permissions';
+import {
+  canEditAgentProfile,
+  canRemoveAgentFromChannel,
+} from '@/features/agents/permissions';
+import { useConversationById } from '@/features/conversations/useConversationById';
+import { useWorkspaceMemberLists } from '@/features/workspaces/hooks';
 import { useAgentAvatarObjectUrl } from '@/features/agents/avatar-hooks';
 import {
   isBackendUnreachable,
@@ -296,18 +302,44 @@ function AgentManagementActions({
   const start = useStartAgent(conversationId, routeKind);
   const stop = useStopAgent(conversationId, routeKind);
   const clearSession = useClearAgentSession(conversationId, routeKind);
+  const removeFromChannel = useRemoveAgentFromChannel(conversationId);
   const { data: viewer } = useViewerUser();
+  // Resolve the viewer's role in THIS conversation's workspace so the
+  // remove gate can honor "workspace owner/admin" without callers having
+  // to thread a workspaceId through every popover surface (mentions,
+  // message authors, header chips). Both queries are cached and only
+  // mount when the popover content opens.
+  const conversation = useConversationById(conversationId);
+  const { data: memberLists } = useWorkspaceMemberLists(
+    conversation.ref?.workspace_id ?? null,
+  );
   const [clearOpen, setClearOpen] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
   const row = conversationAgents.find(s => s.agent_id === agent.id);
   if (!row) return null;
   const viewerForPermissions =
     viewer && isBackendUnreachable(viewer) ? undefined : viewer;
-  if (!canEditAgentProfile(viewerForPermissions, agent)) return null;
+  // Runtime controls (restart / stop / clear) stay creator-only, mirroring
+  // the backend `canEditAgent` gate. Removing from the conversation is a
+  // wider governance action — agent owner OR workspace owner/admin
+  // (#task:957, plan A: no per-channel owner concept).
+  const canManageRuntime = canEditAgentProfile(viewerForPermissions, agent);
+  const canRemove = canRemoveAgentFromChannel(
+    viewerForPermissions,
+    agent,
+    memberLists?.viewerRole,
+  );
+  if (!canManageRuntime && !canRemove) return null;
 
   const pending = start.isPending || stop.isPending || clearSession.isPending;
   const agentLabel = `@${agent.name}`;
-  const setDialogOpen = (open: boolean): void => {
+  const convNoun = routeKind === 'thread' ? 'thread' : 'channel';
+  const setClearDialogOpen = (open: boolean): void => {
     setClearOpen(open);
+    onDialogOpenChange(open);
+  };
+  const setRemoveDialogOpen = (open: boolean): void => {
+    setRemoveOpen(open);
     onDialogOpenChange(open);
   };
   const restart = async (): Promise<void> => {
@@ -327,54 +359,82 @@ function AgentManagementActions({
   };
   const clear = async (): Promise<void> => {
     await clearSession.mutateAsync(agent.id);
-    setDialogOpen(false);
+    setClearDialogOpen(false);
+  };
+  const remove = async (): Promise<void> => {
+    try {
+      await removeFromChannel.mutateAsync(agent.id);
+      setRemoveDialogOpen(false);
+    } catch {
+      // useRemoveAgentFromChannel surfaces the toast; keep the dialog
+      // open so the user can retry or cancel.
+    }
   };
 
   return (
     <>
       {/* v3 (#task:912 review round 7) + round 8 + round 9: top-right
           icon-only action group. No bottom-bar label buttons — the
-          popover stays identity-led and visually light. All three
-          icons sit on a uniform `gap-0.5` grid (round 9 — the user
-          flagged the prior destructive-spacer break against equal
-          spacing; the destructive's hover-red + error tint already
-          carries the warning, the gap doesn't need to). The Restart
-          icon also covers the crashed → restart path; round 8
-          collapsed the standalone RetryRow because the same Restart
-          icon is now always available on every popover surface. */}
+          popover stays identity-led and visually light. All icons sit on
+          a uniform `gap-0.5` grid (round 9 — the user flagged the prior
+          destructive-spacer break against equal spacing; the destructive
+          hover-red + error tint already carries the warning, the gap
+          doesn't need to). The Restart icon also covers the crashed →
+          restart path; round 8 collapsed the standalone RetryRow because
+          the same Restart icon is now always available on every popover
+          surface. #task:957: the trailing UserMinus removes the agent
+          from THIS conversation; it is gated wider than the creator-only
+          runtime trio (agent owner OR workspace owner/admin), so a
+          non-creator workspace owner sees only this control. */}
       <div className="flex shrink-0 items-center gap-0.5">
-        <button
-          type="button"
-          onClick={restart}
-          disabled={pending}
-          className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
-          title={`Restart ${agentLabel}`}
-          aria-label={`Restart ${agentLabel}`}
-        >
-          <RefreshCw className="size-3.5" />
-        </button>
-        <button
-          type="button"
-          onClick={stopAgent}
-          disabled={pending || row.status === 'idle'}
-          className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
-          title={`Stop ${agentLabel}`}
-          aria-label={`Stop ${agentLabel}`}
-        >
-          <Power className="size-3.5" />
-        </button>
-        <button
-          type="button"
-          onClick={() => setDialogOpen(true)}
-          disabled={pending}
-          className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-error/70 transition-colors hover:bg-error/10 hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
-          title={`Clear ${agentLabel} session`}
-          aria-label={`Clear ${agentLabel} session`}
-        >
-          <Eraser className="size-3.5" />
-        </button>
+        {canManageRuntime ? (
+          <>
+            <button
+              type="button"
+              onClick={restart}
+              disabled={pending}
+              className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
+              title={`Restart ${agentLabel}`}
+              aria-label={`Restart ${agentLabel}`}
+            >
+              <RefreshCw className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={stopAgent}
+              disabled={pending || row.status === 'idle'}
+              className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
+              title={`Stop ${agentLabel}`}
+              aria-label={`Stop ${agentLabel}`}
+            >
+              <Power className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setClearDialogOpen(true)}
+              disabled={pending}
+              className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-error/70 transition-colors hover:bg-error/10 hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
+              title={`Clear ${agentLabel} session`}
+              aria-label={`Clear ${agentLabel} session`}
+            >
+              <Eraser className="size-3.5" />
+            </button>
+          </>
+        ) : null}
+        {canRemove ? (
+          <button
+            type="button"
+            onClick={() => setRemoveDialogOpen(true)}
+            disabled={removeFromChannel.isPending}
+            className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-error/70 transition-colors hover:bg-error/10 hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
+            title={`Remove ${agentLabel} from this ${convNoun}`}
+            aria-label={`Remove ${agentLabel} from this ${convNoun}`}
+          >
+            <UserMinus className="size-3.5" />
+          </button>
+        ) : null}
       </div>
-      <Dialog open={clearOpen} onOpenChange={setDialogOpen}>
+      <Dialog open={clearOpen} onOpenChange={setClearDialogOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-error">
@@ -391,7 +451,7 @@ function AgentManagementActions({
             <Button
               type="button"
               variant="outline"
-              onClick={() => setDialogOpen(false)}
+              onClick={() => setClearDialogOpen(false)}
               disabled={clearSession.isPending}
             >
               Cancel
@@ -403,6 +463,38 @@ function AgentManagementActions({
               disabled={clearSession.isPending}
             >
               {clearSession.isPending ? 'Clearing...' : 'Clear session'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={removeOpen} onOpenChange={setRemoveDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-error">
+              <AlertTriangle className="size-4" />
+              Remove {agentLabel} from this {convNoun}
+            </DialogTitle>
+            <DialogDescription>
+              {agentLabel} will no longer be part of this {convNoun}. You can
+              add it back anytime.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setRemoveDialogOpen(false)}
+              disabled={removeFromChannel.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={remove}
+              disabled={removeFromChannel.isPending}
+            >
+              {removeFromChannel.isPending ? 'Removing...' : 'Remove'}
             </Button>
           </DialogFooter>
         </DialogContent>

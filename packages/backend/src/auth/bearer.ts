@@ -8,6 +8,19 @@ export interface PublicBearerOptions {
 }
 
 /**
+ * Parse a raw `Authorization` header value into its Bearer token.
+ *
+ * Header-level only — it never touches Hono's `Context`, so it is the single
+ * source of Bearer parsing shared by the public bearer middleware, the
+ * host-claim session-bearer guard, and the `/auth/logout` route. Returns null
+ * when the header is absent or carries no token after the `Bearer ` prefix.
+ */
+export function parseBearerTokenHeader(header: string | undefined): string | null {
+  const token = (header ?? '').replace(/^Bearer\s+/i, '').trim();
+  return token || null;
+}
+
+/**
  * Mount Bearer-token enforcement on the public `/api/*` router.
  *
  * The `/api/*` mount pattern (rather than `*` + a path guard) avoids
@@ -34,8 +47,8 @@ export function installPublicBearerMiddleware(
       await next();
       return;
     }
-    const header = c.req.header('authorization') ?? '';
-    const token = header.replace(/^Bearer\s+/i, '').trim();
+    const header = c.req.header('authorization');
+    const token = parseBearerTokenHeader(header) ?? '';
     if (!token) {
       ctx.logger.warn(
         {

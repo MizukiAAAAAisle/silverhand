@@ -4,6 +4,8 @@ import {
   SILVERHAND_AGENT_ID_ENV,
   SILVERHAND_AUTH_TOKEN_ENV,
   SILVERHAND_CONVERSATION_ID_ENV,
+  SILVERHAND_DAEMON_SOCKET_ENV,
+  SILVERHAND_LAST_DELIVERED_SEQ_FILE_ENV,
   SILVERHAND_SERVER_URL_ENV,
 } from '@silverhand/shared';
 import type { DaemonProxyConfig } from './proxy-config.js';
@@ -15,6 +17,8 @@ export interface DaemonSpawnEnvInput {
   options: StartOptions;
   conversationId: string;
   agentId: string;
+  daemonSocketPath?: string;
+  lastDeliveredSeqPath?: string;
   binDir: string;
   /**
    * Daemon-local control-plane origin from the current outbound attachment.
@@ -53,6 +57,12 @@ export function buildDaemonSpawnEnv(
     [SILVERHAND_AGENT_ID_ENV]: input.agentId,
     [SILVERHAND_SERVER_URL_ENV]: silverhandServerUrl,
     [SILVERHAND_AUTH_TOKEN_ENV]: options.env_policy.silverhand.auth_token,
+    ...(input.daemonSocketPath
+      ? { [SILVERHAND_DAEMON_SOCKET_ENV]: input.daemonSocketPath }
+      : {}),
+    ...(input.lastDeliveredSeqPath
+      ? { [SILVERHAND_LAST_DELIVERED_SEQ_FILE_ENV]: input.lastDeliveredSeqPath }
+      : {}),
     PATH: currentPath ? `${input.binDir}${delimiter}${currentPath}` : input.binDir,
   };
 }

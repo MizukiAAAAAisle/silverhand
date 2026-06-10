@@ -192,6 +192,16 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
   /** Stub supervisor that resolves wake successfully so the dispatch
    *  exercises the full received → ok path. */
   const stubSupervisor: SupervisorContract = {
+    agentMessageSend: async () => ({
+      ok: false,
+      status: 500,
+      body_text: '{"error":"not used"}',
+    }),
+    agentStaleResolve: async () => ({
+      ok: true,
+      resolved: false,
+      reason: 'no_pending_stale_event',
+    }),
     start: async () => ({ started: true, pid: 1, started_at: 0 }),
     stop: async () => ({ mode: 'hard', stopped: true, exit_code: 0 }),
     wake: async params => ({ delivered: true, delivery_ids: params.delivery_ids }),

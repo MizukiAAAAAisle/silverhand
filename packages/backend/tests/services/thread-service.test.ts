@@ -170,7 +170,7 @@ function bootstrap() {
   const bob = agents.create({ name: 'bob', runtime: 'claude' }, localHostId, 'local');
   const carol = agents.create({ name: 'carol', runtime: 'claude' }, localHostId, 'local');
   for (const agent of [alice, bob, carol]) {
-    workspaces.addMember(workspace.id, agent.id);
+    workspaces.insertMembership(workspace.id, agent.id);
   }
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,

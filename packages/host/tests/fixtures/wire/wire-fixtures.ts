@@ -460,6 +460,37 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'agent_files_purge' },
   },
   {
+    name: 'request/agent_message_send',
+    description:
+      'Agent runtime asks the daemon to send a visible message; daemon owns freshness boundary stamping before backend side-effect.',
+    frame: enc({
+      id: 'req-agent-message-send-1',
+      intent: 'agent_message_send',
+      params: {
+        conversation_id: 'conv_A',
+        agent_id: 'agent_A',
+        content: 'hello',
+        stale_resolution_reason: 'revised',
+      },
+    }),
+    kind: { kind: 'request', intent: 'agent_message_send' },
+  },
+  {
+    name: 'request/agent_stale_resolve',
+    description:
+      'Agent runtime asks the daemon to resolve the current pending stale event as obsolete without sending a message.',
+    frame: enc({
+      id: 'req-agent-stale-resolve-1',
+      intent: 'agent_stale_resolve',
+      params: {
+        conversation_id: 'conv_A',
+        agent_id: 'agent_A',
+        resolution_reason: 'obsolete',
+      },
+    }),
+    kind: { kind: 'request', intent: 'agent_stale_resolve' },
+  },
+  {
     name: 'request/workspace_provision-with-requested-path',
     description:
       'D4.e-1 (A — single intent): the SAME workspace_provision command, but carrying an OPTIONAL caller-proposed requested_path (M1 desktop folder picker / sandbox typed path / legacy backfill all unify here). The daemon RE-VALIDATES the path host-side (absolute / not root / not home / not inside the managed root / not already bound) before binding — it never blindly trusts the backend. The authoritative result is bound_workspace_path, not this field.',
@@ -499,6 +530,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
           'transport.unix_socket',
           'fs.local',
           'proxy.env_inherit',
+          'agent.freshness_authority',
         ],
       },
     }),
@@ -577,6 +609,26 @@ const RESPONSES_SUCCESS: WireFixture[] = [
       result: { ok: true, enabled: false, expires_at: null },
     }),
     kind: { kind: 'response_success', intent: 'conversation_log_debug' },
+  },
+  {
+    name: 'response/agent_message_send-success',
+    description:
+      'Daemon-owned freshness send success returns backend message id and seq.',
+    frame: enc({
+      id: 'req-agent-message-send-1',
+      result: { ok: true, message_id: 'msg_123', message_seq: 14 },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_message_send' },
+  },
+  {
+    name: 'response/agent_stale_resolve-success',
+    description:
+      'Daemon-owned stale resolution consumed the pending event and recorded obsolete.',
+    frame: enc({
+      id: 'req-agent-stale-resolve-1',
+      result: { ok: true, resolved: true },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_stale_resolve' },
   },
   {
     name: 'response/runtime_start-success',

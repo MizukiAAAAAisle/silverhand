@@ -18,10 +18,11 @@ describe('command catalogue', () => {
   });
 
   it('matches every MCP tool with exactly one CLI verb', () => {
-    // The 19 backend internal routes that MCP currently exposes.
+    // The 20 backend internal routes that MCP currently exposes.
     // If you add a route, add a CLI command, and add it here.
     const expected: Array<[string, string]> = [
       ['message', 'send'],
+      ['message', 'stale-resolve'],
       ['message', 'history'],
       ['message', 'search'],
       ['task', 'list'],
@@ -46,7 +47,7 @@ describe('command catalogue', () => {
       expect(cmd, `${noun} ${verb}`).toBeDefined();
     }
     const total = COMMAND_GROUPS.reduce((acc, g) => acc + g.commands.length, 0);
-    expect(total).toBe(19);
+    expect(total).toBe(20);
   });
 
   it('every command has a non-empty help block', () => {

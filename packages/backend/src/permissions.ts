@@ -1,7 +1,8 @@
-import type { AttachmentRow, AgentMaterializationStatus } from '@silverhand/shared';
+import type { AttachmentRow, AgentCapability, AgentMaterializationStatus, WorkspaceRole } from '@silverhand/shared';
 import type { BackendContext } from './context.js';
 import type { Principal, UserPrincipal } from './auth/principal.js';
 import { AgentRepo } from './repos/agent-repo.js';
+import { AgentCapabilityRepo } from './repos/agent-capability-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
 
@@ -120,21 +121,119 @@ export function canAgentAccessWorkspace(
     .some(w => w.id === workspaceId);
 }
 
-export function canMutateWorkspace(
+/**
+ * Graded-permissions Layer A — the human governance role axis.
+ *
+ * `owner` ⊇ `admin` ⊇ `member`. A higher role can do everything a lower
+ * one can; callers pass the MINIMUM role an op requires. This axis is
+ * deliberately separate from the agent capability axis: workspace roles
+ * never reference agent capabilities and vice-versa (orthogonality, doc
+ * §6.3/§6.4). System principals pass unconditionally (mirrors every
+ * other `canX`); agent principals are NOT governance actors and always
+ * fail — governance is a human-only surface in v1.
+ */
+const ROLE_RANK: Record<WorkspaceRole, number> = {
+  member: 0,
+  admin: 1,
+  owner: 2,
+};
+
+/**
+ * The governance role of a principal in a workspace, or `null` when the
+ * principal has no role there. Only human (user) principals carry a
+ * workspace role; system/agent principals return `null` (system is
+ * handled by the unconditional pass in `canGovernWorkspace`, agents are
+ * not governance actors). Reads the authoritative `workspace_users.role`
+ * column, never the denormalized `workspaces.owner_user_id` pointer.
+ */
+export function workspaceRole(
   ctx: BackendContext,
   principal: Principal,
   workspaceId: string,
-): boolean {
-  if (!canViewWorkspace(ctx, principal, workspaceId)) return false;
-  return principal.kind !== 'agent';
+): WorkspaceRole | null {
+  if (!workspaceExists(ctx, workspaceId)) return null;
+  if (principal.kind !== 'user') return null;
+  return workspaceRepo(ctx).getUserRole(workspaceId, principal.userId);
 }
 
-export function canManageMembers(
+/**
+ * Replaces the old two-valued `canMutateWorkspace`/`canManageMembers`
+ * (which granted every human member admin-equivalent power). A
+ * governance op is allowed when the principal can view the workspace
+ * (existence + membership) AND holds at least `minRole`. Pass `'owner'`
+ * for existential / human-roster ops (archive, delete, human-member
+ * management), `'admin'` for day-to-day governance (channel create/
+ * delete, agent-member management, settings incl. rename).
+ */
+export function canGovernWorkspace(
   ctx: BackendContext,
   principal: Principal,
   workspaceId: string,
+  minRole: WorkspaceRole,
 ): boolean {
-  return canMutateWorkspace(ctx, principal, workspaceId);
+  if (!canViewWorkspace(ctx, principal, workspaceId)) return false;
+  if (principal.kind === 'system') return true;
+  if (principal.kind === 'agent') return false;
+  const role = workspaceRole(ctx, principal, workspaceId);
+  if (role === null) return false;
+  return ROLE_RANK[role] >= ROLE_RANK[minRole];
+}
+
+/**
+ * Graded-permissions Layer A — the agent capability axis.
+ *
+ * The fine-grained, per-(workspace, agent) authority axis (doc §2 / §4).
+ * Orthogonal to the human role axis above: this never reads a workspace
+ * role and `canGovernWorkspace` never reads a capability (doc §6.3/§6.4).
+ *
+ * `scope.workspaceId` is the workspace the capability is evaluated against
+ * — resolved by the calling route from the actual TARGET it is about to
+ * act on (target conversation / `workspace_id` arg / resolved task or
+ * schedule), NOT the principal's home workspace alone (doc §3 Scope
+ * column / §4). A source-workspace grant must never authorize a
+ * target-workspace action.
+ *
+ * Principals:
+ *   - `system` passes unconditionally (mirrors every other `canX`).
+ *   - `agent` is checked against `workspace_agent_capabilities` for
+ *     `(scope.workspaceId, principal.agentId)`, EXCEPT in the agent's own
+ *     `agent_home` workspace where it holds implicit full authority (see
+ *     below).
+ *   - `user` always fails: capabilities are the agent-only axis; humans
+ *     act through the role axis (`canGovernWorkspace`). Internal agent
+ *     routes only ever carry agent principals, so this arm is defensive.
+ *
+ * agent_home exemption (VERY narrow, Cindy `0VvD-47mLnkjgDvw`): an
+ * `agent_home` workspace is the agent's private surface — it has no
+ * `workspace_members` row (membership is ownership, mirroring
+ * `canAgentAccessWorkspace` / `task-service` §1268) and so the seed
+ * migration never granted it caps. Without this exemption the agent would
+ * be denied in its own DM/home. The exemption fires ONLY when the scoped
+ * workspace is `agent_home` AND owned by THIS agent; a `regular`
+ * workspace with no cap row still correctly returns false, and another
+ * agent's home is never exempted.
+ */
+export function canAgentUseCapability(
+  ctx: BackendContext,
+  principal: Principal,
+  capability: AgentCapability,
+  scope: { workspaceId: string },
+): boolean {
+  if (principal.kind === 'system') return true;
+  if (principal.kind !== 'agent') return false;
+  const workspace = workspaceRepo(ctx).get(scope.workspaceId);
+  if (!workspace) return false;
+  if (
+    workspace.workspace_kind === 'agent_home' &&
+    workspace.owner_agent_id === principal.agentId
+  ) {
+    return true;
+  }
+  return new AgentCapabilityRepo(ctx.db).has(
+    scope.workspaceId,
+    principal.agentId,
+    capability,
+  );
 }
 
 export function canViewConversation(

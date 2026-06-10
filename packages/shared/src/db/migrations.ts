@@ -2441,6 +2441,185 @@ export const migrations: Migration[] = [
       ALTER TABLE schedules ADD COLUMN consecutive_failure_count INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    version: 40,
+    name: 'graded_permissions_human_role_spine',
+    // Graded-permissions Layer A (cut 1): the human governance role
+    // spine. Replaces the two-valued `canMutateWorkspace` (any human
+    // member ≈ admin) with an owner/admin/member role on
+    // `workspace_users`, plus a denormalized `workspaces.owner_user_id`
+    // pointer. The agent capability axis (`workspace_agent_capabilities`)
+    // is a SEPARATE later cut — this migration touches only the human
+    // axis. See docs/graded-permissions-v1.md §1.2 / §8 Layer A.
+    //
+    // Behavior delta: FULLY NEUTRAL on the current install (amendment 3,
+    // shiki). The local dogfood DB has exactly one human — that human
+    // becomes every workspace's `owner` (owner ⊇ admin ⊇ member), so no
+    // capability they have today is stripped. No earliest-joined
+    // heuristic and no multi-human backfill branch is needed because
+    // there is only one human to assign. The single observable change is
+    // that the model becomes expressible: a SECOND human added later
+    // joins as `member` (route default), not implicit admin — closing
+    // the §0 "any member can archive the workspace" hole.
+    //
+    // `role` defaults to 'member' for NEW rows (route/trigger writes the
+    // creator as 'owner' explicitly). The backfill below promotes the
+    // single existing human to 'owner' on every workspace they belong to
+    // and stamps `owner_user_id`.
+    //
+    // Owner resolution is an EXPLICIT single-human resolver, NOT a
+    // viewer-only lookup (Cindy review, #task:932). `viewer_user_id` is a
+    // legacy app_settings key — register/signup stopped writing it, so a
+    // DB registered after its deprecation but upgraded before v40 has a
+    // single `users` row and NO `viewer_user_id`. A viewer-only backfill
+    // would leave that human a `member` with `owner_user_id` NULL,
+    // violating amendment 3. The resolver therefore is:
+    //   1. `viewer_user_id` IFF it points at a real `users` row, else
+    //   2. the sole `users` row IFF exactly one exists, else
+    //   3. NULL — never guess across multiple humans.
+    // Every branch degrades to NULL on a pre-registration / multi-human
+    // DB, so the UPDATEs match zero rows and the migration is safe on
+    // every shape. The COALESCE is duplicated verbatim across the two
+    // statements because pure-SQL migrations cannot bind a shared value.
+    up: `
+      ALTER TABLE workspaces ADD COLUMN owner_user_id TEXT REFERENCES users(id);
+
+      ALTER TABLE workspace_users
+        ADD COLUMN role TEXT NOT NULL DEFAULT 'member'
+        CHECK (role IN ('owner', 'admin', 'member'));
+
+      -- Single local human → owner of every workspace (amendment 3).
+      UPDATE workspaces
+         SET owner_user_id = COALESCE(
+           (SELECT id FROM users
+              WHERE id = (SELECT value FROM app_settings WHERE key = 'viewer_user_id')),
+           (SELECT id FROM users WHERE (SELECT COUNT(*) FROM users) = 1)
+         );
+
+      UPDATE workspace_users
+         SET role = 'owner'
+       WHERE user_id = COALESCE(
+           (SELECT id FROM users
+              WHERE id = (SELECT value FROM app_settings WHERE key = 'viewer_user_id')),
+           (SELECT id FROM users WHERE (SELECT COUNT(*) FROM users) = 1)
+         );
+    `,
+  },
+  {
+    version: 41,
+    name: 'graded_permissions_agent_capability_spine',
+    // Graded-permissions Layer A (cut 2): the agent capability axis. A
+    // per-(workspace, agent) effective capability set, stored one row per
+    // granted bucket (PRESENCE = GRANTED — no boolean column). This is the
+    // SECOND, orthogonal axis to the v40 human role spine; the two never
+    // collapse (doc §2 / §6.3 orthogonality test).
+    //
+    // Behavior delta: FULLY NEUTRAL on every existing install (doc §2.3,
+    // amendment). The seed grants the FULL bucket set to every existing
+    // `workspace_members` row, so no agent loses any action it can perform
+    // today. The only observable change is that the model becomes
+    // expressible: capabilities can now be narrowed per agent, and a future
+    // route that forgets to gate is caught by the drift test.
+    //
+    // No-silent-widen discipline (doc §2.3): a FUTURE capability bucket
+    // must NOT auto-grant to existing rows via a helper default — it ships
+    // its own migration that explicitly decides true/false per row. This
+    // seed is that explicit decision for the v41 launch set (full grant).
+    //
+    // Shape note: the table keys on `agent_id` (not a polymorphic
+    // `actor_kind + actor_id`) by design — capabilities are the agent-only
+    // axis; humans use `workspace_users.role`, so there is no user variant
+    // of this row (architecture-principles §6 justified exception).
+    //
+    // The composite FK (workspace_id, agent_id) → workspace_members
+    // (its PK) with ON DELETE CASCADE makes caps auto-delete when the agent
+    // leaves the workspace (no orphan caps, doc §2.4). Purely additive
+    // (CREATE TABLE + seed INSERT); foreign_keys stays ON so the seed
+    // validates against live `workspace_members` rows — no foreignKeyEscape
+    // needed (same as v40's additive ALTER).
+    up: `
+      CREATE TABLE workspace_agent_capabilities (
+        workspace_id TEXT NOT NULL,
+        agent_id     TEXT NOT NULL,
+        capability   TEXT NOT NULL CHECK (capability IN (
+          'read_messages',
+          'send_messages',
+          'read_tasks',
+          'create_tasks',
+          'write_tasks',
+          'read_attachments',
+          'upload_attachments',
+          'create_threads',
+          'create_channels',
+          'manage_conversation_members',
+          'manage_schedules'
+        )),
+        PRIMARY KEY (workspace_id, agent_id, capability),
+        FOREIGN KEY (workspace_id, agent_id)
+          REFERENCES workspace_members (workspace_id, agent_id) ON DELETE CASCADE
+      );
+
+      -- Seed the FULL capability set for every existing membership →
+      -- zero behavioral regression (doc §2.3). The PK prefix
+      -- (workspace_id, agent_id) also serves per-agent cap lookups, so no
+      -- extra index is required.
+      INSERT INTO workspace_agent_capabilities (workspace_id, agent_id, capability)
+      SELECT m.workspace_id, m.agent_id, c.capability
+        FROM workspace_members m
+        CROSS JOIN (
+          SELECT 'read_messages' AS capability
+          UNION ALL SELECT 'send_messages'
+          UNION ALL SELECT 'read_tasks'
+          UNION ALL SELECT 'create_tasks'
+          UNION ALL SELECT 'write_tasks'
+          UNION ALL SELECT 'read_attachments'
+          UNION ALL SELECT 'upload_attachments'
+          UNION ALL SELECT 'create_threads'
+          UNION ALL SELECT 'create_channels'
+          UNION ALL SELECT 'manage_conversation_members'
+          UNION ALL SELECT 'manage_schedules'
+        ) c;
+    `,
+  },
+  {
+    version: 42,
+    name: 'conversation_message_seq_allocator',
+    precondition: db => {
+      const row = (db as {
+        prepare(sql: string): {
+          get(): { conversation_id: string; seq: number; count: number } | undefined;
+        };
+      }).prepare(`
+        SELECT conversation_id, seq, COUNT(*) AS count
+          FROM messages
+         GROUP BY conversation_id, seq
+        HAVING COUNT(*) > 1
+         LIMIT 1
+      `).get();
+      if (row) {
+        throw new Error(
+          'migration v42 cannot add unique conversation message seq: ' +
+            `conversation ${row.conversation_id} already has ${row.count} ` +
+            `messages with seq ${row.seq}`,
+        );
+      }
+    },
+    up: `
+      ALTER TABLE conversations
+        ADD COLUMN latest_message_seq INTEGER NOT NULL DEFAULT 0;
+
+      UPDATE conversations
+         SET latest_message_seq = COALESCE(
+           (SELECT MAX(m.seq)
+              FROM messages m
+             WHERE m.conversation_id = conversations.id),
+           0
+         );
+
+      CREATE UNIQUE INDEX uniq_messages_conversation_seq
+        ON messages(conversation_id, seq);
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

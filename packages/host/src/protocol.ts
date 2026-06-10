@@ -58,6 +58,7 @@
 import { z } from 'zod';
 import {
   AgentRunStateSchema,
+  AgentSendStaleResolutionReasonSchema,
   AgentWorkspaceFileReadSchema,
   AgentWorkspaceTreeSchema,
   ConversationKindSchema,
@@ -67,6 +68,7 @@ import {
   ParsedEventSchema,
   ReasoningEffortSchema,
   RuntimeKindSchema,
+  SendMessageTargetSchema,
   WorkspaceKindSchema,
 } from '@silverhand/shared';
 
@@ -86,6 +88,7 @@ export const KNOWN_CAPABILITIES_V1 = [
   'transport.unix_socket',
   'fs.local',
   'proxy.env_inherit',
+  'agent.freshness_authority',
 ] as const;
 export type KnownCapabilityV1 = typeof KNOWN_CAPABILITIES_V1[number];
 
@@ -268,6 +271,86 @@ export const ConversationLogDebugResultSchema = z
   .strict();
 export type ConversationLogDebugResult = z.infer<
   typeof ConversationLogDebugResultSchema
+>;
+
+// ── agent_message_send / agent_stale_resolve ───────────────────────
+//
+// Local agent-runtime → daemon intents for daemon-owned freshness
+// authority. The CLI remains a short-lived shim; it submits the visible
+// side-effect intent to the daemon, and the daemon stamps
+// `seen_up_to_seq` from its runtime coordinator before forwarding to
+// the backend. Backend HTTP failures intentionally travel as result
+// arms, not host-transport errors, so the CLI can preserve the same
+// user-facing error mapping it had on direct HTTP.
+
+export const AgentBackendHttpErrorSchema = z
+  .object({
+    ok: z.literal(false),
+    status: z.number().int().positive(),
+    body_text: z.string(),
+  })
+  .strict();
+export type AgentBackendHttpError = z.infer<typeof AgentBackendHttpErrorSchema>;
+
+export const AgentMessageSendParamsSchema = z
+  .object({
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    content: z.string(),
+    target: SendMessageTargetSchema.optional(),
+    attachment_ids: z.array(z.string().min(1)).optional(),
+    stale_resolution_reason: AgentSendStaleResolutionReasonSchema.optional(),
+    freshness_bypass: z.boolean().optional(),
+  })
+  .strict();
+export type AgentMessageSendParams = z.infer<
+  typeof AgentMessageSendParamsSchema
+>;
+
+export const AgentMessageSendResultSchema = z.union([
+  z
+    .object({
+      ok: z.literal(true),
+      message_id: z.string().min(1),
+      message_seq: z.number().int().nonnegative().optional(),
+    })
+    .strict(),
+  AgentBackendHttpErrorSchema,
+]);
+export type AgentMessageSendResult = z.infer<
+  typeof AgentMessageSendResultSchema
+>;
+
+export const AgentStaleResolveParamsSchema = z
+  .object({
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    stale_event_id: z.string().min(1).optional(),
+    resolution_reason: z.literal('obsolete'),
+  })
+  .strict();
+export type AgentStaleResolveParams = z.infer<
+  typeof AgentStaleResolveParamsSchema
+>;
+
+export const AgentStaleResolveResultSchema = z.union([
+  z
+    .object({
+      ok: z.literal(true),
+      resolved: z.literal(true),
+    })
+    .strict(),
+  z
+    .object({
+      ok: z.literal(true),
+      resolved: z.literal(false),
+      reason: z.literal('no_pending_stale_event'),
+    })
+    .strict(),
+  AgentBackendHttpErrorSchema,
+]);
+export type AgentStaleResolveResult = z.infer<
+  typeof AgentStaleResolveResultSchema
 >;
 
 // ── PR-2 runtime_* surface ──────────────────────────────────────────
@@ -488,6 +571,7 @@ export const RuntimeStartParamsSchema = z
     startup_delivery: z
       .object({
         delivery_ids: z.array(z.number().int()).min(1),
+        delivered_up_to_seq: z.number().int().nonnegative().optional(),
         text: RuntimeMessageTextSchema,
       })
       .strict()
@@ -675,6 +759,7 @@ export const RuntimeWakeParamsSchema = z
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
     delivery_ids: z.array(z.number().int()).min(1),
+    delivered_up_to_seq: z.number().int().nonnegative().optional(),
     kind: z.enum(['message', 'schedule_fire']),
     /** Unencoded message text (Option A v2). Daemon's
      *  `Supervisor.wake()` calls
@@ -1809,6 +1894,14 @@ export const intentSchemas = {
   conversation_log_debug: {
     params: ConversationLogDebugParamsSchema,
     result: ConversationLogDebugResultSchema,
+  },
+  agent_message_send: {
+    params: AgentMessageSendParamsSchema,
+    result: AgentMessageSendResultSchema,
+  },
+  agent_stale_resolve: {
+    params: AgentStaleResolveParamsSchema,
+    result: AgentStaleResolveResultSchema,
   },
   runtime_start: {
     params: RuntimeStartParamsSchema,

@@ -17,6 +17,10 @@
  * / response cycle.
  */
 import type {
+  AgentMessageSendParams,
+  AgentMessageSendResult,
+  AgentStaleResolveParams,
+  AgentStaleResolveResult,
   RuntimeClearSessionParams,
   RuntimeClearSessionResult,
   RuntimeCloseActivityLogParams,
@@ -38,6 +42,12 @@ import type {
 } from '../protocol.js';
 
 export interface SupervisorContract {
+  agentMessageSend(
+    params: AgentMessageSendParams,
+  ): AgentMessageSendResult | Promise<AgentMessageSendResult>;
+  agentStaleResolve(
+    params: AgentStaleResolveParams,
+  ): AgentStaleResolveResult | Promise<AgentStaleResolveResult>;
   start(params: RuntimeStartParams): RuntimeStartResult | Promise<RuntimeStartResult>;
   stop(params: RuntimeStopParams): RuntimeStopResult | Promise<RuntimeStopResult>;
   wake(params: RuntimeWakeParams): RuntimeWakeResult | Promise<RuntimeWakeResult>;

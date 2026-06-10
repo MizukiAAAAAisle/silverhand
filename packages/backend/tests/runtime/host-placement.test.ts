@@ -226,9 +226,13 @@ describe('RuntimeHostPlacementResolver', () => {
       workspaceHostId: hostB.id,
     });
 
+    // Host equality is a placement-control / use-case precondition, NOT a
+    // repo concern (use-case-layer spec §4, Cindy constraint ②): the repo's
+    // insertMembership is pure persistence and no longer host-checks, while
+    // the placement guard is what rejects a cross-host membership.
     expect(() =>
-      t.workspaces.addMember(workspace.id, agent.id),
-    ).toThrowError(expect.objectContaining({ code: 'host_mismatch' }));
+      t.workspaces.insertMembership(workspace.id, agent.id),
+    ).not.toThrow();
     expect(() =>
       t.placement.assertHostEqualityForMembership(agent.id, workspace.id),
     ).toThrowError(expect.objectContaining({ code: 'host_mismatch' }));

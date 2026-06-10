@@ -5,6 +5,7 @@ import {
   prepareEmbeddedBootstrap,
   type EmbeddedBootstrapState,
 } from '../../src/auth/embedded-bootstrap.js';
+import { canGovernWorkspace } from '../../src/permissions.js';
 import { buildTestApp, type TestApp } from '../utils/app.js';
 
 describe('embedded bootstrap auth route', () => {
@@ -67,6 +68,37 @@ describe('embedded bootstrap auth route', () => {
         )
         .get(body.user.id)?.c,
     ).toBe(conversationCount);
+    // v40 (graded-permissions): the first registered human is the OWNER
+    // of every pre-existing workspace — role + owner pointer, not a plain
+    // member. This is the register-path twin of the v40 migration
+    // backfill; without it Layer A neutrality breaks (view/post but no
+    // govern on pre-user workspaces).
+    expect(
+      t.ctx.db
+        .prepare<[string], { c: number }>(
+          `SELECT COUNT(*) AS c FROM workspace_users WHERE user_id = ? AND role != 'owner'`,
+        )
+        .get(body.user.id)?.c,
+    ).toBe(0);
+    expect(
+      t.ctx.db
+        .prepare<[string], { c: number }>(
+          `SELECT COUNT(*) AS c FROM workspaces WHERE owner_user_id IS NULL OR owner_user_id != ?`,
+        )
+        .get(body.user.id)?.c,
+    ).toBe(0);
+    // …and the governance gate agrees.
+    const someWorkspaceId = t.ctx.db
+      .prepare<[], { id: string }>(`SELECT id FROM workspaces LIMIT 1`)
+      .get()?.id as string;
+    expect(
+      canGovernWorkspace(
+        t.ctx,
+        { kind: 'user', userId: body.user.id },
+        someWorkspaceId,
+        'owner',
+      ),
+    ).toBe(true);
     expect(
       t.ctx.db
         .prepare<[], { value: string }>(

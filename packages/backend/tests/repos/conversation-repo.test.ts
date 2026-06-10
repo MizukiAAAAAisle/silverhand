@@ -37,7 +37,7 @@ describe('ConversationRepo canonical schema', () => {
         workspacePath,
         workspaceHostId: t.localHostId,
       });
-      t.workspaces.addMember(workspace.id, agent.id);
+      t.workspaces.insertMembership(workspace.id, agent.id);
       const channel = t.conversations.insertChannel({
         workspaceId: workspace.id,
         workspacePath,

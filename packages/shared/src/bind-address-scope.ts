@@ -26,7 +26,7 @@
  * conservative direction.
  */
 
-import type { BindAddressScope } from './api/dto.js';
+import type { BindAddressScope } from './api/server.js';
 
 /**
  * Loopback literals. Aligned with `LOOPBACK_HOSTNAMES` in

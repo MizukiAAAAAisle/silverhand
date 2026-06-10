@@ -181,6 +181,24 @@ describe('/api/me + /api/users/:id/avatar', () => {
     expect(res.status).toBe(404);
   });
 
+  it('DELETE /api/me/avatar is an idempotent no-op when no avatar is set', async () => {
+    // The `local` fixture starts with no avatar; clearing it must succeed
+    // (200) and return the current profile with a null avatar_url rather
+    // than erroring. Pins the service's early-return no-op arm at the route
+    // boundary before the users/me carve (#task:983 P16 prep).
+    t = buildTestApp();
+    const del = await t.app.fetch(
+      new Request(`http://localhost${apiPaths.meAvatar}`, {
+        method: 'DELETE',
+        headers: localViewerHeaders(t),
+      }),
+    );
+    expect(del.status).toBe(200);
+    const body = (await del.json()) as any;
+    expect(body.id).toBe('local');
+    expect(body.avatar_url).toBeNull();
+  });
+
   it('PATCH /api/me rejects display_name with control chars or Unicode line separators (400)', async () => {
     // See dto.ts `DisplayNameSchema`. Mirrors auth signup validation so
     // profile edits cannot reintroduce values rejected at user creation.

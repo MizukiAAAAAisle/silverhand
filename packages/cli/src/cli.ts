@@ -3,10 +3,11 @@
  * `silverhand` CLI entry. Dispatch is fixed two-level:
  *   silverhand <noun> <verb> [flags...]
  *
- * Phase 1 boundary: this CLI only talks to the backend's
- * `/internal/conversations/:cid/agents/:aid/...` route family. It does
- * not touch SQLite (no native deps, no ABI swap), does not serve as a
- * long-lived process, and does not coordinate with runtime drivers.
+ * Boundary: this CLI never touches SQLite (no native deps, no ABI swap)
+ * and does not serve as a long-lived process. In spawned runtimes,
+ * freshness-sensitive message sends route through silverhand-daemon
+ * so the host-owned runtime coordinator stamps the observed boundary;
+ * other commands still call backend internal routes directly.
  */
 import { performance } from 'node:perf_hooks';
 import { BackendClient } from './client.js';

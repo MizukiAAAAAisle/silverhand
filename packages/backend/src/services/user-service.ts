@@ -122,10 +122,21 @@ export class UserService {
       // a DB that has workspaces/conversations but no users yet. Add
       // membership rows now so permission gates immediately reflect the
       // new human.
+      //
+      // v40 (graded-permissions Layer A): the first registered human is
+      // the OWNER of every pre-existing workspace — same "single local
+      // human → owner of every workspace" rule as the v40 migration
+      // backfill (which only fires when `viewer_user_id` was already set;
+      // this register path is the other entry, for a DB that has
+      // workspaces but registers its first human now). Without this the
+      // first user would be a plain `member` with `owner_user_id` NULL on
+      // pre-user workspaces — able to view/post but not govern — breaking
+      // Layer A neutrality. Membership + role + owner pointer all land in
+      // this same registration tx.
       const now = Date.now();
       const insertWorkspaceUser = this.db.prepare(
         `INSERT OR IGNORE INTO workspace_users
-           (workspace_id, user_id, joined_at) VALUES (?, ?, ?)`,
+           (workspace_id, user_id, joined_at, role) VALUES (?, ?, ?, 'owner')`,
       );
       const insertConversationUser = this.db.prepare(
         `INSERT OR IGNORE INTO conversation_users
@@ -137,6 +148,13 @@ export class UserService {
       for (const w of workspaceRows) {
         insertWorkspaceUser.run(w.id, id, now);
       }
+      // Stamp the denormalized owner pointer on every workspace that has
+      // no owner yet (all of them on this first-register path).
+      this.db
+        .prepare(
+          `UPDATE workspaces SET owner_user_id = ? WHERE owner_user_id IS NULL`,
+        )
+        .run(id);
       const conversationRows = this.db
         .prepare<[], { id: string }>(`SELECT id FROM conversations`)
         .all();

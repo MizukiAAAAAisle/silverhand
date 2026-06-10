@@ -214,6 +214,16 @@ export interface WorkspaceRow {
   workspace_path: string;
   workspace_host_id: string;
   owner_agent_id: string | null;
+  /**
+   * Human governance owner (graded-permissions Layer A, v40). The live
+   * "who owns this workspace" pointer; `null` only on rows created
+   * before an owner is assigned (no such row exists post-migration on
+   * the current install — the single local human owns every workspace).
+   * Denormalized convenience + the anchor for the "exactly one owner"
+   * invariant; the authoritative governance gate reads
+   * `workspace_users.role`, not this column.
+   */
+  owner_user_id: string | null;
   dm_channel_id?: string | null;
   dm_channel_ids?: string[];
   pinned_at: number | null;
@@ -240,6 +250,80 @@ export interface WorkspaceUserMemberRow {
   workspace_id: string;
   user_id: string;
   joined_at: number;
+  /**
+   * Workspace governance role (graded-permissions Layer A, v40).
+   * Defaults to `member` for new rows; the workspace creator / migrated
+   * single local human is `owner`. This column is the authoritative
+   * source for `canGovernWorkspace`.
+   */
+  role: WorkspaceRole;
+}
+
+/**
+ * Workspace governance role (graded-permissions Layer A, v40). Two
+ * orthogonal authority axes exist: this human role axis (coarse,
+ * governance-scoped) and the per-(workspace, agent) capability axis
+ * (fine, agent-scoped, landed in Layer A cut 2). They never collapse.
+ *
+ * - `owner`  — existence + human-roster control (archive/delete the
+ *              workspace, add/remove human members, grant admin).
+ *              Exactly one per workspace.
+ * - `admin`  — day-to-day governance (create/delete channels, add/remove
+ *              agent members, edit settings incl. rename, edit agent
+ *              capabilities). Fully modeled in backend; NOT surfaced in
+ *              the UI yet (amendment 4).
+ * - `member` — view / post only (subject to conversation membership);
+ *              the default role for a newly added human.
+ */
+export type WorkspaceRole = 'owner' | 'admin' | 'member';
+
+/**
+ * The agent-capability axis (graded-permissions Layer A cut 2, v41). The
+ * 11 coarse capability buckets (doc §2.2) that gate what an agent may do
+ * in a given workspace. CANONICAL definition — the migration CHECK
+ * constraint, the DTO zod enum, and the backend route registry all derive
+ * from this one list, so adding a bucket is a single-edit change.
+ *
+ * Orthogonal to {@link WorkspaceRole}: the human axis is coarse and
+ * governance-scoped (who may *edit* capabilities); this axis is fine and
+ * per-(workspace, agent) (what an agent may *do*). The two never collapse
+ * — see docs/graded-permissions-v1.md §2 and the §6.3 orthogonality test.
+ */
+export const AGENT_CAPABILITIES = [
+  'read_messages',
+  'send_messages',
+  'read_tasks',
+  'create_tasks',
+  'write_tasks',
+  'read_attachments',
+  'upload_attachments',
+  'create_threads',
+  'create_channels',
+  'manage_conversation_members',
+  'manage_schedules',
+] as const;
+
+export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];
+
+/**
+ * One granted capability for an (agent, workspace) pair (v41). PRESENCE =
+ * GRANTED — there is no `granted` boolean; a missing row means the agent
+ * lacks that capability in that workspace. The composite (workspace_id,
+ * agent_id) is a FK onto `workspace_members` ON DELETE CASCADE, so caps
+ * auto-delete when the agent leaves the workspace (no orphan caps,
+ * doc §2.4).
+ *
+ * NOTE on shape: this table keys on `agent_id` (NOT a polymorphic
+ * `actor_kind + actor_id`) by design — capabilities are inherently the
+ * agent-only axis; humans use {@link WorkspaceRole}, not capabilities, so
+ * there is no user variant of this row. This is the justified exception to
+ * the actor-isomorphism anti-pattern (architecture-principles §6), not a
+ * violation of it.
+ */
+export interface WorkspaceAgentCapabilityRow {
+  workspace_id: string;
+  agent_id: string;
+  capability: AgentCapability;
 }
 
 export interface ConversationRow {
@@ -255,6 +339,7 @@ export interface ConversationRow {
   close_summary: string | null;
   pinned_at: number | null;
   archived_at: number | null;
+  latest_message_seq: number;
   created_at: number;
   updated_at: number;
 }

@@ -179,6 +179,30 @@ describe('auth routes', () => {
       expect(res.body).toEqual({ error_code: 'auth_failed' });
     }
   });
+
+  // Thin route-local schema / bearer guards pinned before the auth carve
+  // (#task:983 P17 prep) so the relocation into routes/auth.ts is provably
+  // behavior-preserving.
+  it('POST /auth/signup with an invalid body is rejected 400', async () => {
+    t = buildTestApp();
+    const res = await requestJson(t, 'POST', authPaths.signup, {});
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'invalid input' });
+  });
+
+  it('POST /auth/login with an invalid body is rejected 400', async () => {
+    t = buildTestApp();
+    const res = await requestJson(t, 'POST', authPaths.login, {});
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'invalid input' });
+  });
+
+  it('POST /auth/logout without a bearer token is rejected 401', async () => {
+    t = buildTestApp();
+    const res = await requestJson(t, 'POST', authPaths.logout, undefined);
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: 'unauthorized' });
+  });
 });
 
 function legacyViewerSetting(t: TestApp): string | null {

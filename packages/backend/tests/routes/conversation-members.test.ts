@@ -83,6 +83,10 @@ function membersPath(id: string): string {
   return `/api/conversations/${id}/members`;
 }
 
+function agentMemberPath(id: string, agentId: string): string {
+  return `/api/conversations/${id}/members/agents/${agentId}`;
+}
+
 describe('GET /api/conversations/:id/members', () => {
   let t: TestApp | null = null;
   afterEach(() => {
@@ -553,6 +557,43 @@ describe('POST /api/conversations/:id/members', () => {
     expect(res.status).toBe(403);
   });
 
+  it('rejects a workspace member (non-admin) human even when they are a channel member (graded-permissions §6.1)', async () => {
+    // The conversation-member-add governance gate requires the admin
+    // effective role for USER principals, on top of conversation
+    // visibility. Demote the (channel-member) viewer to `member`: the
+    // add must 403. Restore to admin: it succeeds. This pins the role
+    // half of the gate independently of the visibility half above.
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    const reg = await createRegularWorkspace(t, 'role-gate', [
+      alice.agentId,
+      bob.agentId,
+    ]);
+    const channelId = await createChannel(t, reg.workspaceId, 'governed', [
+      alice.agentId,
+    ]);
+    // `local` is a current channel member (seeded) — only the role varies.
+    t.ctx.db
+      .prepare(`UPDATE workspace_users SET role = 'member' WHERE workspace_id = ? AND user_id = 'local'`)
+      .run(reg.workspaceId);
+
+    const denied = await http(t).post(membersPath(channelId), {
+      kind: 'agent',
+      agent_id: bob.agentId,
+    });
+    expect(denied.status).toBe(403);
+
+    t.ctx.db
+      .prepare(`UPDATE workspace_users SET role = 'admin' WHERE workspace_id = ? AND user_id = 'local'`)
+      .run(reg.workspaceId);
+    const allowed = await http(t).post(membersPath(channelId), {
+      kind: 'agent',
+      agent_id: bob.agentId,
+    });
+    expect(allowed.status).toBe(200);
+  });
+
   it('allows an agent principal to add workspace members to its current channel', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
@@ -658,5 +699,242 @@ describe('POST /api/conversations/:id/members', () => {
       { kind: 'agent', agent_id: bob.agentId },
     );
     expect(res.status).toBe(400);
+  });
+});
+
+describe('DELETE /api/conversations/:id/members/agents/:agentId', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('removes an agent from a channel, stops its runtime, and broadcasts membership changes', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    const reg = await createRegularWorkspace(t, 'remove-agent', [
+      alice.agentId,
+      bob.agentId,
+    ]);
+    const channelId = await createChannel(t, reg.workspaceId, 'removals', [
+      alice.agentId,
+      bob.agentId,
+    ]);
+    const conversationEvents: Array<{ kind: string; payload: unknown }> = [];
+    const workspaceEvents: Array<{ kind: string; payload: unknown }> = [];
+    const unsubscribeConversation = t.ctx.events.subscribe(channelId, e => {
+      conversationEvents.push({ kind: e.kind, payload: e.payload });
+    });
+    const unsubscribeWorkspace = t.ctx.events.subscribeScope(
+      `workspace:${reg.workspaceId}`,
+      e => workspaceEvents.push({ kind: e.kind, payload: e.payload }),
+    );
+
+    const res = await http(t).del(agentMemberPath(channelId, bob.agentId));
+    unsubscribeConversation();
+    unsubscribeWorkspace();
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(
+      body.members
+        .filter((m: any) => m.kind === 'agent')
+        .map((m: any) => m.agent_id),
+    ).toEqual([alice.agentId]);
+    expect(t.fake.stops).toContainEqual({
+      conversationId: channelId,
+      agentId: bob.agentId,
+      mode: 'hard',
+    });
+    const memberRemovedMessage = conversationEvents.find(e => e.kind === 'message');
+    expect((memberRemovedMessage?.payload as any)?.message).toMatchObject({
+      from_kind: 'system',
+      content: '@local-test removed @bob from this conversation.',
+      metadata: null,
+    });
+    expect(conversationEvents).toContainEqual({
+      kind: 'conversation_members_changed',
+      payload: {
+        conversation_id: channelId,
+        workspace_id: reg.workspaceId,
+      },
+    });
+    expect(workspaceEvents).toContainEqual({
+      kind: 'workspace_channels_changed',
+      payload: {
+        workspace_id: reg.workspaceId,
+        channel_id: channelId,
+      },
+    });
+    expect(new ConversationRepo(t.ctx.db).getAgent(channelId, bob.agentId)).toBeNull();
+  });
+
+  it('allows the target agent creator even when the viewer is only a workspace member', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const reg = await createRegularWorkspace(t, 'remove-creator', [alice.agentId]);
+    const channelId = await createChannel(t, reg.workspaceId, 'creator-removes', [
+      alice.agentId,
+    ]);
+    t.ctx.db
+      .prepare(`UPDATE workspace_users SET role = 'member' WHERE workspace_id = ? AND user_id = 'local'`)
+      .run(reg.workspaceId);
+
+    const res = await http(t).del(agentMemberPath(channelId, alice.agentId));
+    expect(res.status).toBe(200);
+    expect(new ConversationRepo(t.ctx.db).getAgent(channelId, alice.agentId)).toBeNull();
+  });
+
+  it('allows a workspace admin to remove an agent they did not create', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    const reg = await createRegularWorkspace(t, 'remove-admin', [alice.agentId]);
+    const channelId = await createChannel(t, reg.workspaceId, 'admin-removes', [
+      alice.agentId,
+    ]);
+    t.ctx.db
+      .prepare(`UPDATE agents SET created_by_user_id = 'teammate' WHERE id = ?`)
+      .run(alice.agentId);
+    t.ctx.db
+      .prepare(`UPDATE workspace_users SET role = 'admin' WHERE workspace_id = ? AND user_id = 'local'`)
+      .run(reg.workspaceId);
+
+    const allowed = await http(t).del(agentMemberPath(channelId, alice.agentId));
+    expect(allowed.status).toBe(200);
+
+    // Non-member target is a duplicate-safe no-op; it must not stop or
+    // emit another audit row.
+    t.fake.stops = [];
+    const noop = await http(t).del(agentMemberPath(channelId, bob.agentId));
+    expect(noop.status).toBe(200);
+    expect(t.fake.stops).toEqual([]);
+  });
+
+  // #task:975 (P6 pre-refactor characterization): the non-member no-op is a
+  // FULL no-op — beyond not stopping the runtime, it must not insert a new
+  // system audit message and must not publish ANY conversation/workspace event.
+  // The existing admin test only pins `stops === []`; this pins the rest so the
+  // removeConversationMember use-case extraction is behavior-preserving on the
+  // idempotent short-circuit arm (spec §6 #7).
+  it('non-member remove is a full no-op: 200 {members}, no audit message, no events, no stop (#task:975)', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    const reg = await createRegularWorkspace(t, 'remove-noop', [
+      alice.agentId,
+      bob.agentId,
+    ]);
+    // bob is a workspace member but NOT a member of this channel.
+    const channelId = await createChannel(t, reg.workspaceId, 'noop-room', [
+      alice.agentId,
+    ]);
+
+    const messageCount = (): number =>
+      (
+        t!.ctx.db
+          .prepare(`SELECT COUNT(*) AS c FROM messages WHERE conversation_id = ?`)
+          .get(channelId) as { c: number }
+      ).c;
+    const before = messageCount();
+
+    const conversationEvents: Array<{ kind: string }> = [];
+    const workspaceEvents: Array<{ kind: string }> = [];
+    const unsubscribeConversation = t.ctx.events.subscribe(channelId, e => {
+      conversationEvents.push({ kind: e.kind });
+    });
+    const unsubscribeWorkspace = t.ctx.events.subscribeScope(
+      `workspace:${reg.workspaceId}`,
+      e => workspaceEvents.push({ kind: e.kind }),
+    );
+
+    const res = await http(t).del(agentMemberPath(channelId, bob.agentId));
+    unsubscribeConversation();
+    unsubscribeWorkspace();
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    // Members unchanged — still just alice (the lone channel agent).
+    expect(
+      body.members
+        .filter((m: any) => m.kind === 'agent')
+        .map((m: any) => m.agent_id),
+    ).toEqual([alice.agentId]);
+    // No new system audit row.
+    expect(messageCount()).toBe(before);
+    // No conversation/workspace events of any kind.
+    expect(conversationEvents).toEqual([]);
+    expect(workspaceEvents).toEqual([]);
+    // No runtime stop.
+    expect(t.fake.stops).toEqual([]);
+  });
+
+  it('rejects a non-creator workspace member', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const reg = await createRegularWorkspace(t, 'remove-deny', [alice.agentId]);
+    const channelId = await createChannel(t, reg.workspaceId, 'member-denied', [
+      alice.agentId,
+    ]);
+    t.ctx.db
+      .prepare(`UPDATE agents SET created_by_user_id = 'teammate' WHERE id = ?`)
+      .run(alice.agentId);
+    t.ctx.db
+      .prepare(`UPDATE workspace_users SET role = 'member' WHERE workspace_id = ? AND user_id = 'local'`)
+      .run(reg.workspaceId);
+
+    const res = await http(t).del(agentMemberPath(channelId, alice.agentId));
+    expect(res.status).toBe(403);
+    expect(new ConversationRepo(t.ctx.db).getAgent(channelId, alice.agentId)).not.toBeNull();
+  });
+
+  it('rejects callers who cannot view the conversation even if they created the agent', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const reg = await createRegularWorkspace(t, 'remove-visibility', [alice.agentId]);
+    const channelId = await createChannel(t, reg.workspaceId, 'private', [
+      alice.agentId,
+    ]);
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = 'local'`)
+      .run(channelId);
+
+    const res = await http(t).del(agentMemberPath(channelId, alice.agentId));
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects dm channels, closed conversations, and missing agents', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    const reg = await createRegularWorkspace(t, 'remove-invalid-targets', [
+      alice.agentId,
+      bob.agentId,
+    ]);
+    const channelId = await createChannel(t, reg.workspaceId, 'closed-room', [
+      alice.agentId,
+    ]);
+
+    const dmRes = await http(t).del(agentMemberPath(alice.dmChannelId, alice.agentId));
+    expect(dmRes.status).toBe(422);
+    expect((await dmRes.json()) as any).toMatchObject({
+      code: 'conversation_member_remove_unsupported',
+    });
+
+    const missing = await http(t).del(agentMemberPath(channelId, 'missing-agent'));
+    expect(missing.status).toBe(404);
+    expect((await missing.json()) as any).toMatchObject({
+      code: 'candidate_not_found',
+    });
+
+    t.ctx.db
+      .prepare(`UPDATE conversations SET closed_at = ? WHERE id = ?`)
+      .run(Date.now(), channelId);
+    const closed = await http(t).del(agentMemberPath(channelId, alice.agentId));
+    expect(closed.status).toBe(409);
+    expect((await closed.json()) as any).toMatchObject({
+      code: 'conversation_closed',
+    });
   });
 });

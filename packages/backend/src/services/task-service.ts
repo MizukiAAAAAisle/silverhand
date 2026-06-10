@@ -2,6 +2,7 @@ import type { Database as Db } from 'better-sqlite3';
 import {
   type ClaimErrorCode,
   type ClaimResultEntry,
+  type AgentCapability,
   type ConversationDto,
   type CreateTasksOpError,
   type CreateTasksResult,
@@ -140,7 +141,23 @@ export interface TaskServiceOptions {
   runtimeHost: AgentRuntimeHost;
   events: ScopeEventBus;
   logger: BackendLogger;
+  /**
+   * Agent-capability gate (graded-permissions cut 2). Injected — not
+   * re-implemented here — so the agent_home exemption and table lookup
+   * have a SINGLE source (`canAgentUseCapability`). Evaluated on the
+   * task's RESOLVED workspace, which only the service knows (message-id
+   * claims land in the message's workspace, not the principal's).
+   */
+  canUseCapability: AgentCapabilityChecker;
 }
+
+/** Signature of the injected `canAgentUseCapability` binding (see
+ *  TaskServiceOptions.canUseCapability). */
+export type AgentCapabilityChecker = (
+  actor: AgentActor,
+  workspaceId: string,
+  capability: AgentCapability,
+) => boolean;
 
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   todo: ['closed'],
@@ -261,6 +278,7 @@ export class TaskService {
   private readonly runtimeHost: AgentRuntimeHost;
   private readonly events: ScopeEventBus;
   private readonly logger: BackendLogger;
+  private readonly canUseCapability: AgentCapabilityChecker;
 
   constructor(opts: TaskServiceOptions) {
     this.db = opts.db;
@@ -271,6 +289,7 @@ export class TaskService {
     this.runtimeHost = opts.runtimeHost;
     this.events = opts.events;
     this.logger = opts.logger;
+    this.canUseCapability = opts.canUseCapability;
   }
 
   // ── Read ─────────────────────────────────────────────────────────
@@ -472,12 +491,22 @@ export class TaskService {
     // `UPDATE ... WHERE id = ?` for atomic correctness.
     let taskWorkspaceId: string | undefined;
     let skipSelector = false;
+    // Promotion = message-id of a not-yet-task message in the actor's own
+    // conversation (the one path that CREATES a new task). Determined from
+    // the peek so the capability gate below can require `create_tasks`
+    // before the txn. Over-approximating is fail-SAFE: if a concurrent
+    // promote numbers the row between peek and txn, we'd have required
+    // `create_tasks` for what becomes a plain claim — stricter, never
+    // looser. `task_number` only goes null→number, never back, so the
+    // reverse (peek numbered, txn null) cannot happen.
+    let isPromotion = false;
     if ('messageId' in by) {
       const peek = this.fetchMessage(by.messageId);
       if (peek) {
         if (peek.task_number === null && peek.conversation_id === actor.conversationId) {
           taskWorkspaceId = sourceConv.workspace_id;
           skipSelector = true;
+          isPromotion = true;
         } else if (peek.task_number !== null) {
           const access = this.validateMessageIdAccess(actor, peek, workspaceSelector);
           if ('failure' in access) {
@@ -509,6 +538,40 @@ export class TaskService {
     }
     // taskWorkspaceId is definitely assigned in both branches above.
     const resolvedTaskWorkspaceId = taskWorkspaceId!;
+
+    // Capability gate on the RESOLVED target workspace (doc §3 — for a
+    // message-id claim this is the message's own workspace, not the
+    // principal's). Typed denial, never downgraded to task_not_found.
+    //
+    // Two axes, checked in dependency order so the denial names the right
+    // bucket:
+    //   - Promotion CREATES a new task (same axis as
+    //     agentCreateConversationTasks → `create_tasks`) AND lands it
+    //     in_progress + self-assigned (a claim → `write_tasks`). It needs
+    //     BOTH. Missing create → `capability_denied/create_tasks`; has
+    //     create but missing write → `capability_denied/write_tasks`.
+    //   - A numbered-task claim is pure mutation → `write_tasks` only
+    //     (NOT tightened to also require create_tasks).
+    // (Cindy `AVTaRcXa3vuAd0W3` — write-only promotion was a create_tasks
+    // bypass.)
+    if (
+      isPromotion &&
+      !this.canUseCapability(actor, resolvedTaskWorkspaceId, 'create_tasks')
+    ) {
+      return failClaim({
+        code: 'capability_denied',
+        capability: 'create_tasks',
+        reason:
+          'agent lacks the create_tasks capability required to promote a message into a new task',
+      });
+    }
+    if (!this.canUseCapability(actor, resolvedTaskWorkspaceId, 'write_tasks')) {
+      return failClaim({
+        code: 'capability_denied',
+        capability: 'write_tasks',
+        reason: 'agent lacks the write_tasks capability in the target workspace',
+      });
+    }
 
     type ClaimTxOut =
       | { failure: ClaimResultEntry }
@@ -849,6 +912,14 @@ export class TaskService {
     }
     const resolvedTaskWorkspaceId = taskWorkspaceId!;
 
+    if (!this.canUseCapability(actor, resolvedTaskWorkspaceId, 'write_tasks')) {
+      return mutationFailure({
+        code: 'capability_denied',
+        capability: 'write_tasks',
+        reason: 'agent lacks the write_tasks capability in the target workspace',
+      });
+    }
+
     type UnclaimAgentTxOut =
       | { failure: TaskMutationResult }
       | {
@@ -1060,6 +1131,14 @@ export class TaskService {
       taskWorkspaceId = resolved.workspace.id;
     }
     const resolvedTaskWorkspaceId = taskWorkspaceId!;
+
+    if (!this.canUseCapability(actor, resolvedTaskWorkspaceId, 'write_tasks')) {
+      return mutationFailure({
+        code: 'capability_denied',
+        capability: 'write_tasks',
+        reason: 'agent lacks the write_tasks capability in the target workspace',
+      });
+    }
 
     type StatusAgentTxOut =
       | { failure: TaskMutationResult }
@@ -1795,6 +1874,7 @@ interface ClaimFailureArgs {
   messageId?: string;
   ownerConversation?: { id: string; title: string };
   workspaceCandidates?: string[];
+  capability?: AgentCapability;
 }
 
 function failClaim(args: ClaimFailureArgs): ClaimResultEntry {
@@ -1803,6 +1883,7 @@ function failClaim(args: ClaimFailureArgs): ClaimResultEntry {
     code: args.code,
     reason: args.reason,
   };
+  if (args.capability !== undefined) entry.capability = args.capability;
   if (args.taskNumber !== undefined) entry.task_number = args.taskNumber;
   if (args.messageId !== undefined) entry.message_id = args.messageId;
   if (args.ownerConversation) entry.owner_conversation = args.ownerConversation;
@@ -1819,12 +1900,14 @@ function mutationFailure(args: {
   code: TaskMutationErrorCode;
   reason: string;
   candidates?: string[];
+  capability?: AgentCapability;
 }): TaskMutationResult {
   const out: TaskMutationResult = {
     success: false,
     code: args.code,
     reason: args.reason,
   };
+  if (args.capability !== undefined) out.capability = args.capability;
   if (args.candidates && args.candidates.length > 0) {
     out.workspace_candidates = args.candidates;
   }

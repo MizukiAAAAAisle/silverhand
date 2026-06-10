@@ -387,6 +387,49 @@ describe('Tasks (PR-T1)', () => {
     expect(listed.tasks[0].assignee).toBeNull();
   });
 
+  // Characterization for the P10 internal-agent factory move (#task:981):
+  // pin the internal `tasks/unclaim` route (agentUnclaimConversationTask) at
+  // the HTTP layer. Before this, only the *public* /api/tasks/:id/unclaim path
+  // was covered — the agent-facing internal route (principal resolution →
+  // canPostToConversation → UnclaimTaskInputSchema → taskService.unclaimTask)
+  // had zero route-level coverage, so a verbatim relocation could break its
+  // wiring while still typechecking. Negative arms (non-poster / not-assignee /
+  // capability) stay covered at the service layer; this pins only the positive
+  // route path that the move must preserve.
+  it('internal POST .../tasks/unclaim returns a claimed task to todo (agent path)', async () => {
+    t = buildTestApp();
+    const { sessionId, agentIds } = await setup(t);
+    const h = http(t);
+
+    await h.post(
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+      { tasks: [{ title: 'unclaim me' }] },
+    );
+    const claim = (await (
+      await h.post(
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+        { task_numbers: [1] },
+      )
+    ).json()) as any;
+    expect(claim.results[0].success).toBe(true);
+    // Sanity: claim auto-advanced to in_progress + assigned to alice.
+    const afterClaim = (await (await http(t).get('/api/tasks')).json()) as any;
+    expect(afterClaim.tasks[0].status).toBe('in_progress');
+    expect(afterClaim.tasks[0].assignee?.id).toBe(agentIds.alice);
+
+    const res = await h.post(
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/unclaim`,
+      { task_number: 1 },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.success).toBe(true);
+
+    const afterUnclaim = (await (await http(t).get('/api/tasks')).json()) as any;
+    expect(afterUnclaim.tasks[0].status).toBe('todo');
+    expect(afterUnclaim.tasks[0].assignee).toBeNull();
+  });
+
   it('human POST /api/tasks/:messageId/status can jump to any non-current status', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);

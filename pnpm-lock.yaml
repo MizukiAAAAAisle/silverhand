@@ -221,6 +221,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@silverhand/host':
+        specifier: workspace:*
+        version: link:../host
       '@silverhand/shared':
         specifier: workspace:*
         version: link:../shared

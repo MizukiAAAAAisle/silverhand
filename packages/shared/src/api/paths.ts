@@ -85,6 +85,11 @@ export const apiPaths = {
   workspaceMembers: (id: string) => `/api/workspaces/${id}/members`,
   workspaceMember: (id: string, agentId: string) =>
     `/api/workspaces/${id}/members/${agentId}`,
+  /** Agent capability set within a workspace (graded-permissions cut 2).
+   *  GET reads the effective set (any workspace viewer); PUT replaces it
+   *  (owner/admin). */
+  workspaceAgentCapabilities: (id: string, agentId: string) =>
+    `/api/workspaces/${id}/agents/${agentId}/capabilities`,
   workspaceChannels: (id: string) => `/api/workspaces/${id}/channels`,
   workspaceArchivedChannels: (id: string) =>
     `/api/workspaces/${id}/channels/archived`,
@@ -145,6 +150,11 @@ export const apiPaths = {
    *  Permission: `canViewConversation` (workspace member or
    *  conversation member). */
   conversationMembers: (id: string) => `/api/conversations/${id}/members`,
+  /** Remove one agent from a channel/thread conversation. This only
+   *  mutates the conversation membership edge; workspace membership and
+   *  the agent row stay intact. */
+  conversationAgentMember: (id: string, agentId: string) =>
+    `/api/conversations/${id}/members/agents/${agentId}`,
 
   // attachments — upload via channel/thread context, download by id.
   // Each upload creates an independent blob (no de-dup).
@@ -214,6 +224,9 @@ export const internalPaths = {
   /** Agent posts a chat message; backend writes + distributes. */
   agentSendConversationMessage: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/send-message`,
+  /** Agent reports that a stale send was intentionally abandoned. */
+  agentResolveStaleMessage: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/stale-message-resolution`,
   /** Agent spawns a Thread off the current channel. */
   agentCreateThread: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/create-thread`,

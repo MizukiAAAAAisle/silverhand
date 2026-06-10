@@ -20,7 +20,7 @@ function bootstrap() {
     workspaceHostId: localHostId,
   });
   const agent = new AgentRepo(db).create({ name: 'a', runtime: 'claude' }, localHostId, 'local');
-  workspaces.addMember(workspace.id, agent.id);
+  workspaces.insertMembership(workspace.id, agent.id);
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,

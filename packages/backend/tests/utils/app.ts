@@ -34,7 +34,8 @@ import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { WorkspaceRegistryBackfiller } from '../../src/runtime/workspace-registry-backfill.js';
-import { createApiRouter, createInternalRouter } from '../../src/routes.js';
+import { createApiRouter } from '../../src/routes.js';
+import { createInternalRouter } from '../../src/routes/internal-agent.js';
 import type {
   AgentRuntimeHost,
   ReapIdleRuntimesOptions,
@@ -57,6 +58,7 @@ import { AgentService } from '../../src/services/agent-service.js';
 import { ChannelService } from '../../src/services/channel-service.js';
 import { ConversationMessageService } from '../../src/services/conversation-message-service.js';
 import { IdleReaperService } from '../../src/services/idle-reaper-service.js';
+import { canAgentUseCapability } from '../../src/permissions.js';
 import { ScheduleService } from '../../src/services/schedule-service.js';
 import { TaskService } from '../../src/services/task-service.js';
 import { ThreadService } from '../../src/services/thread-service.js';
@@ -957,6 +959,8 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,
+    canUseCapability: (actor, workspaceId, capability) =>
+      canAgentUseCapability(ctx, actor, capability, { workspaceId }),
   });
   ctx.scheduleService = new ScheduleService({
     schedules: new ScheduleRepo(db),
@@ -967,6 +971,13 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,
+    canUseCapability: (agentId, workspaceId, capability) =>
+      canAgentUseCapability(
+        ctx,
+        { kind: 'agent', agentId, conversationId: '' },
+        capability,
+        { workspaceId },
+      ),
     disableAutoTick: true,
   });
   ctx.idleReaperService = new IdleReaperService({

@@ -3030,4 +3030,392 @@ describe('database migrations', () => {
       }
     });
   });
+
+  describe('migration v40 (graded-permissions human role spine)', () => {
+    // The v40 owner backfill uses an EXPLICIT single-human resolver, not a
+    // viewer-only lookup: (1) viewer_user_id IFF it points at a real users
+    // row, else (2) the sole users row IFF exactly one exists, else (3) no
+    // guess. `viewer_user_id` is a legacy key — a DB registered after its
+    // deprecation but upgraded before v40 has one users row and no pointer,
+    // and amendment 3 still requires that human to become owner. These
+    // tests pin every branch.
+    const now = 1_700_000_000_000;
+
+    function seedV39Workspace(
+      db: Database.Database,
+      opts: { users: Array<{ id: string; name: string }>; viewerUserId?: string },
+    ): void {
+      db.prepare(
+        `INSERT INTO hosts (id, name, kind, created_at) VALUES ('h1', 'local', 'local', ?)`,
+      ).run(now);
+      for (const u of opts.users) {
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?)`,
+        ).run(u.id, u.name, u.name, now, now);
+      }
+      if (opts.viewerUserId !== undefined) {
+        db.prepare(
+          `INSERT INTO app_settings (key, value) VALUES ('viewer_user_id', ?)`,
+        ).run(opts.viewerUserId);
+      }
+      db.prepare(
+        `INSERT INTO workspaces
+           (id, name, description, workspace_kind, workspace_path,
+            workspace_host_id, owner_agent_id, pinned_at, archived_at,
+            created_at, updated_at)
+         VALUES ('ws1', 'main', NULL, 'regular', '/tmp/ws1', 'h1', NULL,
+                 NULL, NULL, ?, ?)`,
+      ).run(now, now);
+      for (const u of opts.users) {
+        db.prepare(
+          `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
+             VALUES ('ws1', ?, ?)`,
+        ).run(u.id, now);
+      }
+    }
+
+    it('promotes the viewer_user_id human to owner when the pointer is valid', () => {
+      const db = openDbAt(39);
+      try {
+        seedV39Workspace(db, {
+          users: [
+            { id: 'u_viewer', name: 'shiki' },
+            { id: 'u_other', name: 'bob' },
+          ],
+          viewerUserId: 'u_viewer',
+        });
+
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 40`).get(),
+        ).toBeDefined();
+        expect(
+          db.prepare(`SELECT owner_user_id FROM workspaces WHERE id = 'ws1'`).get(),
+        ).toEqual({ owner_user_id: 'u_viewer' });
+        expect(
+          db
+            .prepare(`SELECT user_id, role FROM workspace_users ORDER BY user_id`)
+            .all(),
+        ).toEqual([
+          { user_id: 'u_other', role: 'member' },
+          { user_id: 'u_viewer', role: 'owner' },
+        ]);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('falls back to the sole user when viewer_user_id is absent (post-deprecation single-human DB)', () => {
+      const db = openDbAt(39);
+      try {
+        seedV39Workspace(db, { users: [{ id: 'u_solo', name: 'shiki' }] });
+
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT owner_user_id FROM workspaces WHERE id = 'ws1'`).get(),
+        ).toEqual({ owner_user_id: 'u_solo' });
+        expect(
+          db.prepare(`SELECT role FROM workspace_users WHERE user_id = 'u_solo'`).get(),
+        ).toEqual({ role: 'owner' });
+      } finally {
+        db.close();
+      }
+    });
+
+    it('ignores a stale viewer_user_id and falls back to the sole user', () => {
+      const db = openDbAt(39);
+      try {
+        seedV39Workspace(db, {
+          users: [{ id: 'u_solo', name: 'shiki' }],
+          viewerUserId: 'u_ghost', // points at a user that does not exist
+        });
+
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT owner_user_id FROM workspaces WHERE id = 'ws1'`).get(),
+        ).toEqual({ owner_user_id: 'u_solo' });
+        expect(
+          db.prepare(`SELECT role FROM workspace_users WHERE user_id = 'u_solo'`).get(),
+        ).toEqual({ role: 'owner' });
+      } finally {
+        db.close();
+      }
+    });
+
+    it('does not guess an owner when multiple humans exist and viewer_user_id is absent', () => {
+      const db = openDbAt(39);
+      try {
+        seedV39Workspace(db, {
+          users: [
+            { id: 'u_a', name: 'ann' },
+            { id: 'u_b', name: 'bob' },
+          ],
+        });
+
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT owner_user_id FROM workspaces WHERE id = 'ws1'`).get(),
+        ).toEqual({ owner_user_id: null });
+        expect(
+          db.prepare(`SELECT role FROM workspace_users ORDER BY user_id`).all(),
+        ).toEqual([{ role: 'member' }, { role: 'member' }]);
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  describe('migration v41 (graded-permissions agent capability spine)', () => {
+    // v41 adds the per-(workspace, agent) capability table and seeds the
+    // FULL bucket set for every existing membership → zero behavioral
+    // regression (doc §2.3). These tests pin: full-seed, member-scoping,
+    // the CHECK enum, and ON DELETE CASCADE on membership removal.
+    const now = 1_700_000_000_000;
+    const ALL_CAPS = [
+      'create_channels',
+      'create_tasks',
+      'create_threads',
+      'manage_conversation_members',
+      'manage_schedules',
+      'read_attachments',
+      'read_messages',
+      'read_tasks',
+      'send_messages',
+      'upload_attachments',
+      'write_tasks',
+    ];
+
+    function seedV40Membership(
+      db: Database.Database,
+      opts: { memberships: Array<{ workspaceId: string; agentId: string }> },
+    ): void {
+      db.prepare(
+        `INSERT INTO hosts (id, name, kind, created_at) VALUES ('h1', 'local', 'local', ?)`,
+      ).run(now);
+      db.prepare(
+        `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES ('u1', 'shiki', 'shiki', ?, ?)`,
+      ).run(now, now);
+      const workspaceIds = [...new Set(opts.memberships.map((m) => m.workspaceId))];
+      for (const wid of workspaceIds) {
+        db.prepare(
+          `INSERT INTO workspaces
+             (id, name, description, workspace_kind, workspace_path,
+              workspace_host_id, owner_agent_id, pinned_at, archived_at,
+              created_at, updated_at)
+           VALUES (?, ?, NULL, 'regular', ?, 'h1', NULL, NULL, NULL, ?, ?)`,
+        ).run(wid, wid, `/tmp/${wid}`, now, now);
+      }
+      const agentIds = [...new Set(opts.memberships.map((m) => m.agentId))];
+      for (const aid of agentIds) {
+        db.prepare(
+          `INSERT INTO agents
+             (id, name, runtime, host_id, created_at, updated_at, created_by_user_id)
+           VALUES (?, ?, 'claude', 'h1', ?, ?, 'u1')`,
+        ).run(aid, aid, now, now);
+      }
+      for (const m of opts.memberships) {
+        db.prepare(
+          `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
+             VALUES (?, ?, ?)`,
+        ).run(m.workspaceId, m.agentId, now);
+      }
+    }
+
+    it('seeds the full capability set for every existing membership', () => {
+      const db = openDbAt(40);
+      try {
+        seedV40Membership(db, {
+          memberships: [
+            { workspaceId: 'ws1', agentId: 'a1' },
+            { workspaceId: 'ws1', agentId: 'a2' },
+          ],
+        });
+
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 41`).get(),
+        ).toBeDefined();
+        for (const aid of ['a1', 'a2']) {
+          const caps = (
+            db
+              .prepare(
+                `SELECT capability FROM workspace_agent_capabilities
+                WHERE workspace_id = 'ws1' AND agent_id = ? ORDER BY capability`,
+              )
+              .all(aid) as Array<{ capability: string }>
+          ).map((r) => r.capability);
+          expect(caps).toEqual(ALL_CAPS);
+        }
+      } finally {
+        db.close();
+      }
+    });
+
+    it('seeds nothing when there are no memberships', () => {
+      const db = openDbAt(40);
+      try {
+        db.prepare(
+          `INSERT INTO hosts (id, name, kind, created_at) VALUES ('h1', 'local', 'local', ?)`,
+        ).run(now);
+
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT COUNT(*) AS n FROM workspace_agent_capabilities`).get(),
+        ).toEqual({ n: 0 });
+      } finally {
+        db.close();
+      }
+    });
+
+    it('rejects an unknown capability via the CHECK constraint', () => {
+      const db = openDbAt(40);
+      try {
+        seedV40Membership(db, { memberships: [{ workspaceId: 'ws1', agentId: 'a1' }] });
+        runMigrations(db);
+
+        expect(() =>
+          db
+            .prepare(
+              `INSERT INTO workspace_agent_capabilities (workspace_id, agent_id, capability)
+                 VALUES ('ws1', 'a1', 'be_root')`,
+            )
+            .run(),
+        ).toThrow(/CHECK constraint/i);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('cascades capability rows when the membership is removed', () => {
+      const db = openDbAt(40);
+      try {
+        seedV40Membership(db, { memberships: [{ workspaceId: 'ws1', agentId: 'a1' }] });
+        runMigrations(db);
+        // FKs must be enforced for the cascade — the app opens with
+        // `PRAGMA foreign_keys = ON`; assert the schema honors it.
+        db.pragma('foreign_keys = ON');
+
+        db.prepare(
+          `DELETE FROM workspace_members WHERE workspace_id = 'ws1' AND agent_id = 'a1'`,
+        ).run();
+
+        expect(
+          db.prepare(`SELECT COUNT(*) AS n FROM workspace_agent_capabilities`).get(),
+        ).toEqual({ n: 0 });
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  describe('migration v42 (conversation message seq allocator)', () => {
+    const now = 1_700_000_000_000;
+
+    function seedV41Conversation(db: Database.Database): void {
+      db.prepare(
+        `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES ('u1', 'u1', 'User', ?, ?)`,
+      ).run(now, now);
+      db.prepare(
+        `INSERT INTO hosts (id, name, kind, user_id, created_at)
+           VALUES ('h1', 'local', 'local', 'u1', ?)`,
+      ).run(now);
+      db.prepare(
+        `INSERT INTO workspaces
+           (id, name, description, workspace_kind, workspace_path,
+            workspace_host_id, owner_agent_id, owner_user_id, pinned_at,
+            archived_at, created_at, updated_at)
+         VALUES
+           ('ws1', 'ws1', NULL, 'regular', '/tmp/ws1',
+            'h1', NULL, 'u1', NULL, NULL, ?, ?)`,
+      ).run(now, now);
+      db.prepare(
+        `INSERT INTO conversations
+           (id, workspace_id, workspace_path, kind, parent_conversation_id,
+            title, status, spawned_by_agent_id, closed_at, close_summary,
+            pinned_at, archived_at, created_at, updated_at)
+         VALUES
+           ('conv1', 'ws1', '/tmp/ws1', 'channel', NULL,
+            'conv1', 'idle', NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      ).run(now, now);
+    }
+
+    it('backfills latest_message_seq and adds a unique conversation seq constraint', () => {
+      const db = openDbAt(41);
+      try {
+        seedV41Conversation(db);
+        db.prepare(
+          `INSERT INTO messages
+             (id, conversation_id, from_kind, from_agent_id, from_user_id,
+              content, metadata, seq, created_at, task_number, task_status,
+              task_assignee_agent_id, task_assignee_user_id, task_title,
+              task_workspace_id, task_closed_at)
+           VALUES
+             ('m1', 'conv1', 'user', NULL, 'u1', 'one', NULL, 1, ?,
+              NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+             ('m3', 'conv1', 'user', NULL, 'u1', 'three', NULL, 3, ?,
+              NULL, NULL, NULL, NULL, NULL, NULL, NULL)`,
+        ).run(now, now + 1);
+
+        runMigrations(db);
+
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 42`).get(),
+        ).toBeDefined();
+        expect(
+          db.prepare(`SELECT latest_message_seq FROM conversations WHERE id = 'conv1'`).get(),
+        ).toEqual({ latest_message_seq: 3 });
+        expect(() =>
+          db.prepare(
+            `INSERT INTO messages
+               (id, conversation_id, from_kind, from_agent_id, from_user_id,
+                content, metadata, seq, created_at, task_number, task_status,
+                task_assignee_agent_id, task_assignee_user_id, task_title,
+                task_workspace_id, task_closed_at)
+             VALUES
+               ('dup', 'conv1', 'user', NULL, 'u1', 'dup', NULL, 3, ?,
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL)`,
+          ).run(now + 2),
+        ).toThrow(/UNIQUE constraint/i);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('fails loudly when historical messages already duplicate conversation seq', () => {
+      const db = openDbAt(41);
+      try {
+        seedV41Conversation(db);
+        db.prepare(
+          `INSERT INTO messages
+             (id, conversation_id, from_kind, from_agent_id, from_user_id,
+              content, metadata, seq, created_at, task_number, task_status,
+              task_assignee_agent_id, task_assignee_user_id, task_title,
+              task_workspace_id, task_closed_at)
+           VALUES
+             ('m1', 'conv1', 'user', NULL, 'u1', 'one', NULL, 1, ?,
+              NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+             ('m2', 'conv1', 'user', NULL, 'u1', 'two', NULL, 1, ?,
+              NULL, NULL, NULL, NULL, NULL, NULL, NULL)`,
+        ).run(now, now + 1);
+
+        expect(() => runMigrations(db)).toThrow(
+          /cannot add unique conversation message seq/,
+        );
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 42`).get(),
+        ).toBeUndefined();
+      } finally {
+        db.close();
+      }
+    });
+  });
 });

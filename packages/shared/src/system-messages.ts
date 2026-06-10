@@ -36,7 +36,7 @@
  * Both `legacy` and `unknown` are first-class fallback states, NOT errors.
  */
 import { z } from 'zod';
-import { TaskAssigneeDtoSchema } from './api/dto.js';
+import { TaskAssigneeDtoSchema } from './api/task.js';
 import { TaskStatusSchema } from './db/schema.js';
 
 /** Live subtypes — every entry must have a renderer in the registry. */

@@ -53,6 +53,7 @@ export type RuntimePhase =
  */
 export interface StartupDeliveryState {
   readonly deliveryIds: readonly number[];
+  readonly deliveredUpToSeq?: number;
   /**
    * Option A v2 (Cindy `UMGu36zoTDVuKWXi`): the unencoded text the
    * daemon will encode + write at consume time using its in-process
@@ -74,6 +75,11 @@ export interface ActivitySnippetBuffer {
   text: string;
 }
 
+export interface PendingStaleEvent {
+  id: string;
+  currentSeq: number;
+}
+
 export interface RuntimeHandle {
   readonly conversationId: string;
   readonly agentId: string;
@@ -90,6 +96,22 @@ export interface RuntimeHandle {
   /** The actual child process. Owned by the handle; cleanup releases
    *  stdio streams + removes listeners. */
   readonly child: ChildProcess;
+  readonly lastDeliveredSeqPath: string;
+  /** Daemon-owned model-seen freshness boundary for this runtime's
+   *  current conversation. Unlike `lastDeliveredSeqPath`, this is
+   *  advanced only at input-admission points, not on bare stdin writes. */
+  observedSeq: number;
+  /** High-water seq for a batch delivered mid-turn but not yet admitted
+   *  as precedent context for a new model action. */
+  pendingAdmissionSeq: number | null;
+  /** True once an admitted input batch is expected to be driving the
+   *  current model action. Cleared on turn_end/runtime resolution.
+   *  This covers the pre-first-output window where runState is still
+   *  null but the model is already thinking. */
+  inputTurnActive: boolean;
+  /** Most recent stale-send event returned to this runtime. Consumed by
+   *  the next send or by `message stale-resolve`. */
+  pendingStaleEvent: PendingStaleEvent | null;
   /** Current execution phase. Updated in-place by Supervisor as
    *  the process moves through its lifecycle. */
   phase: RuntimePhase;

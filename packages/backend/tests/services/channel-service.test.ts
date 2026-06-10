@@ -85,8 +85,8 @@ function bootstrap() {
   });
   const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
   const bob = agents.create({ name: 'bob', runtime: 'claude' }, localHostId, 'local');
-  workspaces.addMember(workspace.id, alice.id);
-  workspaces.addMember(workspace.id, bob.id);
+  workspaces.insertMembership(workspace.id, alice.id);
+  workspaces.insertMembership(workspace.id, bob.id);
   const source = conversations.insertChannel({
     workspaceId: workspace.id,
     workspacePath: workspace.workspace_path,

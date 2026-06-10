@@ -5,7 +5,7 @@ import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
-import { TaskService } from '../../src/services/task-service.js';
+import { TaskService, type TaskServiceOptions } from '../../src/services/task-service.js';
 import { PrincipalConversationMismatchError } from '../../src/auth/principal.js';
 import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
@@ -46,7 +46,13 @@ class FakeConversationManager {
   }
 }
 
-function bootstrap() {
+function bootstrap(
+  capChecker: (
+    actor: { agentId: string },
+    workspaceId: string,
+    capability: string,
+  ) => boolean = () => true,
+) {
   const { db, localHostId } = openTestDb();
   const tmp = makeTempSilverhandDir();
   new HostRepo(db).ensureLocal();
@@ -70,6 +76,7 @@ function bootstrap() {
     runtimeHost: fake as unknown as AgentRuntimeHost,
     events,
     logger,
+    canUseCapability: capChecker as unknown as TaskServiceOptions['canUseCapability'],
   });
 
   const workspace = workspaces.insert({
@@ -80,8 +87,8 @@ function bootstrap() {
   });
   const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
   const bob = agents.create({ name: 'bob', runtime: 'claude' }, localHostId, 'local');
-  workspaces.addMember(workspace.id, alice.id);
-  workspaces.addMember(workspace.id, bob.id);
+  workspaces.insertMembership(workspace.id, alice.id);
+  workspaces.insertMembership(workspace.id, bob.id);
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
     workspacePath: workspace.workspace_path,
@@ -980,7 +987,7 @@ describe('TaskService.list / getByMessageId', () => {
         workspacePath: t.tmp.workspacesRoot,
         workspaceHostId: t.localHostId,
       });
-      t.workspaces.addMember(ws2.id, t.alice.id);
+      t.workspaces.insertMembership(ws2.id, t.alice.id);
       const ch2 = t.conversations.insertChannel({
         workspaceId: ws2.id,
         workspacePath: ws2.workspace_path,
@@ -1074,7 +1081,7 @@ describe('TaskService.list / getByMessageId', () => {
         workspacePath: t.tmp.workspacesRoot,
         workspaceHostId: t.localHostId,
       });
-      t.workspaces.addMember(ws2.id, t.alice.id);
+      t.workspaces.insertMembership(ws2.id, t.alice.id);
       const ch2 = t.conversations.insertChannel({
         workspaceId: ws2.id,
         workspacePath: ws2.workspace_path,
@@ -1107,7 +1114,7 @@ describe('TaskService.list / getByMessageId', () => {
         workspacePath: t.tmp.workspacesRoot,
         workspaceHostId: t.localHostId,
       });
-      t.workspaces.addMember(ws2.id, t.alice.id);
+      t.workspaces.insertMembership(ws2.id, t.alice.id);
       const ch2 = t.conversations.insertChannel({
         workspaceId: ws2.id,
         workspacePath: ws2.workspace_path,
@@ -1172,7 +1179,7 @@ describe('TaskService.list / getByMessageId', () => {
         workspacePath: t.tmp.workspacesRoot,
         workspaceHostId: t.localHostId,
       });
-      t.workspaces.addMember(ws2.id, t.alice.id);
+      t.workspaces.insertMembership(ws2.id, t.alice.id);
       const ch2 = t.conversations.insertChannel({
         workspaceId: ws2.id,
         workspacePath: ws2.workspace_path,
@@ -1203,7 +1210,7 @@ describe('TaskService.list / getByMessageId', () => {
         workspacePath: t.tmp.workspacesRoot,
         workspaceHostId: t.localHostId,
       });
-      t.workspaces.addMember(ws2.id, t.alice.id);
+      t.workspaces.insertMembership(ws2.id, t.alice.id);
       const ch2 = t.conversations.insertChannel({
         workspaceId: ws2.id,
         workspacePath: ws2.workspace_path,
@@ -1670,7 +1677,7 @@ function bootstrapTwoWorkspaces() {
     title: 'platform-main',
   });
   t.conversations.addAgent(ws2Channel.id, t.bob.id);
-  t.workspaces.addMember(ws2.id, t.bob.id);
+  t.workspaces.insertMembership(ws2.id, t.bob.id);
   return { ...t, ws2, ws2Channel };
 }
 
@@ -1726,7 +1733,7 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
         tasks: [{ title: 'ws2 work' }],
       });
       // Add alice as ws2 member.
-      t.workspaces.addMember(t.ws2.id, t.alice.id);
+      t.workspaces.insertMembership(t.ws2.id, t.alice.id);
       const r = await t.service.claimTask({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
@@ -1817,7 +1824,7 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
       });
       expect(r1.code).toBe('workspace_membership_required');
       // Add alice → succeeds.
-      t.workspaces.addMember(t.ws2.id, t.alice.id);
+      t.workspaces.insertMembership(t.ws2.id, t.alice.id);
       const r2 = await t.service.claimTask({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
@@ -2023,7 +2030,7 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
       // Add alice as member of both workspaces (so a successful claim
       // path would not be gated by workspace_membership_required, and
       // any bug that retargets would actually mutate ws2).
-      t.workspaces.addMember(t.ws2.id, t.alice.id);
+      t.workspaces.insertMembership(t.ws2.id, t.alice.id);
 
       // Create #1 in current ws by alice (assignee=alice).
       const wsCreated = await t.service.createTasks({
@@ -2104,7 +2111,7 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
   it('unclaim/status --message-id mirror the same row-identity guard', async () => {
     const t = bootstrapTwoWorkspaces();
     try {
-      t.workspaces.addMember(t.ws2.id, t.alice.id);
+      t.workspaces.insertMembership(t.ws2.id, t.alice.id);
       t.conversations.addAgent(t.ws2Channel.id, t.alice.id);
 
       // ws #1: alice creates + claims.
@@ -2169,6 +2176,185 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
       expect(wsAfter?.assignee?.id).toBe(t.alice.id);
       expect(wsAfter?.status).toBe('in_progress');
     } finally {
+      t.cleanup();
+    }
+  });
+});
+
+describe('TaskService — write_tasks capability gate (graded-permissions cut 2)', () => {
+  // The service-level gate uses the injected checker; a denial must surface
+  // the typed `{ code: 'capability_denied', capability: 'write_tasks' }`
+  // shape (not a downgrade to forbidden / task_not_found). The checker is a
+  // live closure so the test can set up state with write_tasks allowed,
+  // then flip it off before the gated mutation.
+  let denyWriteTasks = false;
+  const makeT = () =>
+    bootstrap((_actor, _ws, cap) => !(denyWriteTasks && cap === 'write_tasks'));
+
+  it('claim denied → typed capability_denied/write_tasks', async () => {
+    denyWriteTasks = false;
+    const t = makeT();
+    try {
+      await createTask(t, t.bob.id, 'task-1');
+      denyWriteTasks = true;
+      const r = await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      expect(r.success).toBe(false);
+      expect(r.code).toBe('capability_denied');
+      expect(r.capability).toBe('write_tasks');
+    } finally {
+      denyWriteTasks = false;
+      t.cleanup();
+    }
+  });
+
+  it('unclaim denied → typed capability_denied/write_tasks', async () => {
+    denyWriteTasks = false;
+    const t = makeT();
+    try {
+      await createTask(t, t.alice.id, 'x');
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      denyWriteTasks = true;
+      const r = await t.service.unclaimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      expect(r.success).toBe(false);
+      expect(r.code).toBe('capability_denied');
+      expect(r.capability).toBe('write_tasks');
+    } finally {
+      denyWriteTasks = false;
+      t.cleanup();
+    }
+  });
+
+  it('updateStatus denied → typed capability_denied/write_tasks', async () => {
+    denyWriteTasks = false;
+    const t = makeT();
+    try {
+      await createTask(t, t.alice.id, 'x');
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      denyWriteTasks = true;
+      const r = await t.service.updateStatus({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+        status: 'in_review',
+      });
+      expect(r.success).toBe(false);
+      expect(r.code).toBe('capability_denied');
+      expect(r.capability).toBe('write_tasks');
+    } finally {
+      denyWriteTasks = false;
+      t.cleanup();
+    }
+  });
+});
+
+describe('TaskService — promotion requires create_tasks + write_tasks (Cindy AVTaRcXa3vuAd0W3)', () => {
+  // `claim --message-id <regular message>` promotes-and-claims, which both
+  // CREATES a new task (create_tasks axis) and lands it in_progress +
+  // self-assigned (write_tasks axis). It must require BOTH; a numbered-task
+  // claim still needs only write_tasks. The checker is keyed by capability
+  // so each case can deny exactly one bucket.
+  const denied = new Set<string>();
+  const makeT = () =>
+    bootstrap((_actor, _ws, cap) => !denied.has(cap));
+
+  const insertRegularMessage = (t: ReturnType<typeof bootstrap>) =>
+    t.messages.insertForConversation({
+      conversationId: t.channel.id,
+      fromKind: 'agent',
+      fromAgentId: t.bob.id,
+      content: 'a regular message that could become a task',
+    });
+
+  it('write-only agent: promotion denied with capability_denied/create_tasks', async () => {
+    denied.clear();
+    denied.add('create_tasks');
+    const t = makeT();
+    try {
+      const msg = insertRegularMessage(t);
+      const r = await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { messageId: msg.id },
+      });
+      expect(r.success).toBe(false);
+      expect(r.code).toBe('capability_denied');
+      expect(r.capability).toBe('create_tasks');
+      // Nothing was promoted.
+      const fresh = t.service.getByMessageId(msg.id, { kind: 'user', userId: 'local' });
+      expect(fresh).toBe(null);
+    } finally {
+      denied.clear();
+      t.cleanup();
+    }
+  });
+
+  it('create-only agent: promotion denied with capability_denied/write_tasks', async () => {
+    denied.clear();
+    denied.add('write_tasks');
+    const t = makeT();
+    try {
+      const msg = insertRegularMessage(t);
+      const r = await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { messageId: msg.id },
+      });
+      expect(r.success).toBe(false);
+      expect(r.code).toBe('capability_denied');
+      expect(r.capability).toBe('write_tasks');
+      const fresh = t.service.getByMessageId(msg.id, { kind: 'user', userId: 'local' });
+      expect(fresh).toBe(null);
+    } finally {
+      denied.clear();
+      t.cleanup();
+    }
+  });
+
+  it('agent with both caps: promotion succeeds', async () => {
+    denied.clear();
+    const t = makeT();
+    try {
+      const msg = insertRegularMessage(t);
+      const r = await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { messageId: msg.id },
+      });
+      expect(r).toMatchObject({ success: true, message_id: msg.id });
+      const fresh = t.service.getByMessageId(msg.id, { kind: 'user', userId: 'local' });
+      expect(fresh?.status).toBe('in_progress');
+      expect(fresh?.assignee?.id).toBe(t.alice.id);
+    } finally {
+      denied.clear();
+      t.cleanup();
+    }
+  });
+
+  it('existing numbered-task claim does NOT require create_tasks', async () => {
+    // Deny create_tasks but allow write_tasks; claiming an already-numbered
+    // task must still succeed (it is pure mutation, not creation).
+    denied.clear();
+    denied.add('create_tasks');
+    const t = makeT();
+    try {
+      // createTasks (service) is not capability-gated — the gate is on the
+      // route; this sets up a numbered task regardless of the checker.
+      await createTask(t, t.bob.id, 'numbered');
+      const r = await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      expect(r).toMatchObject({ success: true, task_number: 1 });
+    } finally {
+      denied.clear();
       t.cleanup();
     }
   });

@@ -129,6 +129,12 @@ describe('IntentDispatcher', () => {
     // contract through a stub supervisor that returns every phase the
     // schema admits.
     const stubSupervisor: SupervisorContract = {
+      async agentMessageSend() {
+        throw new Error('not used');
+      },
+      async agentStaleResolve() {
+        throw new Error('not used');
+      },
       async start() {
         throw new Error('not used');
       },

@@ -21,7 +21,13 @@ import type { AgentPrincipal, UserPrincipal } from '../auth/principal.js';
  * delivery/start, or `workspace_channels_changed` publishing.
  *
  * Contract:
- * - `createChannel` only targets regular workspaces.
+ * - `createChannel` targets regular workspaces.
+ * - `createAgentHomeDmChannel` targets agent_home workspaces (an agent's
+ *   private DM surface). It owns the single-transaction insertDmChannel +
+ *   addAgent + (user) addUser and the post-commit `workspace_channels_changed`
+ *   publish for that branch. Its signature deliberately takes NO member
+ *   parameters, so the agent_home rule "members are always the owner + the
+ *   current user" is structural.
  * - Every requested member must exist and already be a workspace member.
  * - User actors may pass an explicit human member subset. If omitted,
  *   channel creation preserves the legacy full workspace-human snapshot.
@@ -69,7 +75,8 @@ export interface SetArchivedInput {
 
 export type WorkspaceUnsuitableCode =
   | 'workspace_not_found'
-  | 'workspace_not_regular';
+  | 'workspace_not_regular'
+  | 'workspace_not_agent_home';
 
 export class WorkspaceUnsuitableError extends Error {
   constructor(
@@ -78,6 +85,32 @@ export class WorkspaceUnsuitableError extends Error {
   ) {
     super(message);
     this.name = 'WorkspaceUnsuitableError';
+  }
+}
+
+/**
+ * Defensive failures for {@link ChannelService.createAgentHomeDmChannel}. Both
+ * codes guard a state the schema already forbids — `workspaces` carries a CHECK
+ * (`agent_home ⇒ owner_agent_id IS NOT NULL`) and a FK
+ * (`owner_agent_id → agents(id)`), so neither is reachable through the public
+ * API. They exist purely so the service does not blindly trust its caller. The
+ * route maps these two codes to their exact `{ error }`-only bodies (no `code`
+ * field); it must NOT route them through `channelServiceErrorResponse`, which
+ * would add a `code`. This error type covers ONLY these two branches — every
+ * other failure (workspace missing / not agent_home / a transaction
+ * SqliteError) is left to surface as a generic 500.
+ */
+export type AgentHomeChannelErrorCode =
+  | 'agent_home_missing_owner'
+  | 'agent_home_owner_not_found';
+
+export class AgentHomeChannelError extends Error {
+  constructor(
+    public readonly code: AgentHomeChannelErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'AgentHomeChannelError';
   }
 }
 
@@ -342,6 +375,66 @@ export class ChannelService {
     }
 
     return { channel: created.channel };
+  }
+
+  /**
+   * Create a secondary DM channel inside an agent_home workspace (the agent's
+   * private surface). The members are always the home owner agent + the current
+   * user, so this takes NO member list. Re-validates the workspace kind and
+   * owner defensively (see {@link AgentHomeChannelError}) rather than trusting
+   * the caller, then performs the three writes as a SINGLE transaction so a
+   * partial failure leaves no half DM, and publishes
+   * `workspace_channels_changed` only after the commit.
+   */
+  async createAgentHomeDmChannel(input: {
+    workspaceId: string;
+    title: string;
+    actor: ChannelActor;
+  }): Promise<{ channel: DmChannelDto }> {
+    const workspace = this.workspaces.get(input.workspaceId);
+    if (!workspace) {
+      throw new WorkspaceUnsuitableError('workspace_not_found', 'workspace not found');
+    }
+    if (workspace.workspace_kind !== 'agent_home') {
+      throw new WorkspaceUnsuitableError(
+        'workspace_not_agent_home',
+        'workspace is not an agent_home workspace',
+      );
+    }
+    if (!workspace.owner_agent_id) {
+      throw new AgentHomeChannelError(
+        'agent_home_missing_owner',
+        'agent_home workspace missing owner',
+      );
+    }
+    const owner = this.agents.get(workspace.owner_agent_id);
+    if (!owner) {
+      throw new AgentHomeChannelError(
+        'agent_home_owner_not_found',
+        'agent_home owner not found',
+      );
+    }
+
+    const channel = this.db.transaction((): DmChannelDto => {
+      const dm = this.conversations.insertDmChannel({
+        workspaceId: workspace.id,
+        workspacePath: workspace.workspace_path,
+        title: input.title,
+        agentId: owner.id,
+      });
+      this.conversations.addAgent(dm.id, owner.id);
+      // Human membership for the freshly-created DM: the creating user is a
+      // workspace member (the admin gate already passed), so they are a
+      // legitimate member of their own new DM. Without this row a follow-up
+      // GET /messages would 403 for the same principal that just created it.
+      if (input.actor.kind === 'user') {
+        this.conversations.addUser(dm.id, input.actor.userId);
+      }
+      return dm;
+    })();
+
+    this.publishWorkspaceChannelsChanged(workspace.id, channel.id);
+    return { channel };
   }
 
   async setPinned(

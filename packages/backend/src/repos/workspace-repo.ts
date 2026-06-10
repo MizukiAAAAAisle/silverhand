@@ -10,6 +10,7 @@ import {
   type WorkspaceKind,
   type WorkspaceMemberDto,
   type WorkspaceMemberRow,
+  type WorkspaceRole,
   type WorkspaceRow,
   type WorkspaceUserMemberDto,
   type WorkspaceUserMemberRow,
@@ -408,10 +409,30 @@ export class WorkspaceRepo {
     this.assertAgentHostMatchesWorkspaceHost(agentId, workspace.workspace_host_id);
   }
 
-  addMember(workspaceId: string, agentId: string): WorkspaceMemberDto {
-    this.assertHostEqualityForMembership(agentId, workspaceId);
+  /**
+   * Insert a workspace membership row — PURE persistence (use-case-layer
+   * spec §4). Returns the row plus a `created` flag (true only when this call
+   * actually inserted; false when the member already existed). The caller owns
+   * the transaction and the cross-context policy:
+   *
+   *  - host/placement is asserted by the use case as a pre-commit precondition
+   *    (NOT here) — `insertMembership` no longer performs placement checks.
+   *    (The host-equality helpers still live on this repo for the placement
+   *    resolver to delegate to; they are simply not called from this path.)
+   *  - capability default-seeding is the use case's decision (`if (created)`),
+   *    run in the SAME caller transaction — `insertMembership` no longer
+   *    performs capability seeding.
+   *
+   * `created` is what preserves cut2's no-silent-re-widen rule: re-adding an
+   * existing member is a no-op here, so the caller skips re-seeding a
+   * previously narrowed capability set.
+   */
+  insertMembership(
+    workspaceId: string,
+    agentId: string,
+  ): { member: WorkspaceMemberDto; created: boolean } {
     const now = Date.now();
-    this.db
+    const info = this.db
       .prepare(
         `INSERT OR IGNORE INTO workspace_members
          (workspace_id, agent_id, joined_at)
@@ -425,7 +446,7 @@ export class WorkspaceRepo {
       )
       .get(workspaceId, agentId);
     if (!row) throw new Error('workspace member insert failed');
-    return { ...row };
+    return { member: { ...row }, created: info.changes > 0 };
   }
 
   listMemberAgents(workspaceId: string): string[] {
@@ -481,15 +502,16 @@ export class WorkspaceRepo {
   addUserMember(
     workspaceId: string,
     userId: string,
+    role: WorkspaceRole = 'member',
   ): WorkspaceUserMemberDto {
     const now = Date.now();
     this.db
       .prepare(
         `INSERT OR IGNORE INTO workspace_users
-         (workspace_id, user_id, joined_at)
-         VALUES (?, ?, ?)`,
+         (workspace_id, user_id, joined_at, role)
+         VALUES (?, ?, ?, ?)`,
       )
-      .run(workspaceId, userId, now);
+      .run(workspaceId, userId, now, role);
     const row = this.db
       .prepare<[string, string], WorkspaceUserMemberRow>(
         `SELECT * FROM workspace_users
@@ -498,6 +520,46 @@ export class WorkspaceRepo {
       .get(workspaceId, userId);
     if (!row) throw new Error('workspace_users insert failed');
     return { ...row };
+  }
+
+  /**
+   * Assign the human governance owner of a workspace (graded-permissions
+   * Layer A). Stamps the denormalized `workspaces.owner_user_id` pointer
+   * AND promotes the user's `workspace_users` row to `role = 'owner'` in
+   * one transaction, so the column and the authoritative role column can
+   * never disagree. The user must already be a member (call
+   * `addUserMember` first). Ownership transfer is out of scope this round
+   * (amendment 1): this is only ever called once, at workspace creation,
+   * on a workspace that has no other owner yet — it does not demote a
+   * prior owner.
+   */
+  setOwnerUserId(workspaceId: string, userId: string): void {
+    this.db.transaction(() => {
+      this.db
+        .prepare(`UPDATE workspaces SET owner_user_id = ? WHERE id = ?`)
+        .run(userId, workspaceId);
+      this.db
+        .prepare(
+          `UPDATE workspace_users SET role = 'owner'
+            WHERE workspace_id = ? AND user_id = ?`,
+        )
+        .run(workspaceId, userId);
+    })();
+  }
+
+  /**
+   * The governance role of a human in a workspace, or `null` if the user
+   * is not a member. Authoritative source for `canGovernWorkspace`
+   * (graded-permissions Layer A).
+   */
+  getUserRole(workspaceId: string, userId: string): WorkspaceRole | null {
+    const row = this.db
+      .prepare<[string, string], { role: WorkspaceRole }>(
+        `SELECT role FROM workspace_users
+          WHERE workspace_id = ? AND user_id = ?`,
+      )
+      .get(workspaceId, userId);
+    return row?.role ?? null;
   }
 
   listUserMemberIds(workspaceId: string): string[] {
@@ -509,6 +571,22 @@ export class WorkspaceRepo {
       )
       .all(workspaceId)
       .map(r => r.user_id);
+  }
+
+  listUserMemberships(workspaceId: string): WorkspaceUserMemberDto[] {
+    return this.db
+      .prepare<[string], WorkspaceUserMemberRow>(
+        `SELECT * FROM workspace_users
+         WHERE workspace_id = ?
+         ORDER BY joined_at ASC`,
+      )
+      .all(workspaceId)
+      .map(r => ({
+        workspace_id: r.workspace_id,
+        user_id: r.user_id,
+        joined_at: r.joined_at,
+        role: r.role,
+      }));
   }
 
   listUserMembers(workspaceId: string): UserRow[] {

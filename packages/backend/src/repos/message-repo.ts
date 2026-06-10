@@ -436,16 +436,101 @@ export class MessageRepo {
      *  channel ownership before passing them in. */
     attachments?: AttachmentSnapshot[] | null;
   }): MessageDto {
+    return this.db.transaction(() => {
+      const seq = this.reserveNextSeq(params.conversationId);
+      return this.insertForConversationAtSeq(params, seq);
+    })();
+  }
+
+  insertForConversationIfFresh(params: {
+    conversationId: string;
+    seenUpToSeq: number;
+    fromKind: FromKind;
+    fromAgentId?: string | null;
+    fromUserId?: string | null;
+    content: string;
+    metadata?: Record<string, unknown> | null;
+    attachments?: AttachmentSnapshot[] | null;
+  }): { ok: true; message: MessageDto } | { ok: false; currentSeq: number } {
+    return this.db.transaction(() => {
+      const seq = this.reserveNextSeqIfFresh(
+        params.conversationId,
+        params.seenUpToSeq,
+      );
+      if (seq === null) {
+        return {
+          ok: false as const,
+          currentSeq: this.latestSeqForConversation(params.conversationId),
+        };
+      }
+      return {
+        ok: true as const,
+        message: this.insertForConversationAtSeq(params, seq),
+      };
+    })();
+  }
+
+  latestSeqForConversation(conversationId: string): number {
+    const row = this.db
+      .prepare<[string], { latest_message_seq: number }>(
+        `SELECT latest_message_seq
+           FROM conversations
+          WHERE id = ?`,
+      )
+      .get(conversationId);
+    return row?.latest_message_seq ?? 0;
+  }
+
+  listAfterSeq(
+    conversationId: string,
+    afterSeq: number,
+    limit = 10,
+  ): MessageDto[] {
+    return this.fetchAfterSeq(conversationId, afterSeq, Math.max(1, limit))
+      .map(messageRowWithTaskAssigneeToDto);
+  }
+
+  private reserveNextSeq(conversationId: string): number {
+    const changed = this.db
+      .prepare<[string]>(
+        `UPDATE conversations
+            SET latest_message_seq = latest_message_seq + 1
+          WHERE id = ?`,
+      )
+      .run(conversationId).changes;
+    if (changed !== 1) {
+      throw new Error(`conversation ${conversationId} not found`);
+    }
+    return this.latestSeqForConversation(conversationId);
+  }
+
+  private reserveNextSeqIfFresh(
+    conversationId: string,
+    seenUpToSeq: number,
+  ): number | null {
+    const changed = this.db
+      .prepare<[string, number]>(
+        `UPDATE conversations
+            SET latest_message_seq = latest_message_seq + 1
+          WHERE id = ?
+            AND latest_message_seq = ?`,
+      )
+      .run(conversationId, seenUpToSeq).changes;
+    if (changed !== 1) return null;
+    return seenUpToSeq + 1;
+  }
+
+  private insertForConversationAtSeq(params: {
+    conversationId: string;
+    fromKind: FromKind;
+    fromAgentId?: string | null;
+    fromUserId?: string | null;
+    content: string;
+    metadata?: Record<string, unknown> | null;
+    attachments?: AttachmentSnapshot[] | null;
+  }, seq: number): MessageDto {
     const id = newId();
     const now = Date.now();
-    const seqRow = this.db
-      .prepare<[string], { next_seq: number }>(
-        `SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq
-           FROM messages
-          WHERE conversation_id = ?`,
-      )
-      .get(params.conversationId);
-    const seq = seqRow?.next_seq ?? 1;
     const mergedMetadata = mergeMetadataWithAttachments(
       params.metadata ?? null,
       params.attachments ?? null,

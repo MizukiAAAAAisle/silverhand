@@ -132,6 +132,7 @@ interface ClearSessionWaiter {
 
 interface PendingDeliveryBatch {
   deliveryIds: number[];
+  deliveredUpToSeq: number;
   text: string;
   agentRuntime: string;
   driver: ReturnType<typeof getDriver>;
@@ -1146,6 +1147,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           options,
           startup_delivery: {
             delivery_ids: batch.deliveryIds,
+            delivered_up_to_seq: batch.deliveredUpToSeq,
             text: batch.text,
           },
         } satisfies RuntimeStartParams,
@@ -1730,6 +1732,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         agentId,
         [{
           deliveryIds: batch.deliveryIds,
+          deliveredUpToSeq: batch.deliveredUpToSeq,
           dedupKey: claimed[0]!.message.id,
           text: batch.text,
           driver: {
@@ -1786,6 +1789,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         agentId,
         [{
           deliveryIds: batch.deliveryIds,
+          deliveredUpToSeq: batch.deliveredUpToSeq,
           dedupKey: claimed[0]!.message.id,
           text: batch.text,
           driver: {
@@ -1815,6 +1819,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     const driver = getDriver(agent.runtime);
     return {
       deliveryIds: claimed.map(row => row.inboxId),
+      deliveredUpToSeq: Math.max(...claimed.map(row => row.message.seq)),
       text: formatInboxBatch(
         [...claimed],
         id => this.agents.get(id)?.name,

@@ -1,4 +1,4 @@
-import type { AgentDto, MeResponse } from '@silverhand/shared';
+import type { AgentDto, MeResponse, WorkspaceRole } from '@silverhand/shared';
 import { isRegistrationRequired } from '@/features/me/hooks';
 
 /**
@@ -49,4 +49,36 @@ export function canEditAgentProfile(
   if (!viewer) return false;
   if (isRegistrationRequired(viewer)) return false;
   return viewer.id === agent.created_by_user_id;
+}
+
+/**
+ * Renderer-side mirror of the backend remove-from-conversation gate
+ * (#task:957). The canonical authority is the backend route
+ * `DELETE /api/conversations/:id/members/agents/:agentId`, which enforces
+ * `canEditAgent(targetAgent) || canGovernWorkspace(ws, 'admin')` and
+ * returns 403 otherwise. This helper only decides whether the UI surfaces
+ * the "remove from channel" control, so the viewer is never offered a
+ * button guaranteed to 403.
+ *
+ * Permission (shiki 2026-06-09, plan A): the agent's owner (creator) OR a
+ * workspace owner/admin may remove it from a conversation. "channel owner"
+ * is intentionally NOT a concept — conversations carry no human-owner
+ * column, so there is no per-channel ownership to honor; channel-member
+ * governance rides the workspace role, matching the add-member route.
+ *
+ * `viewerWorkspaceRole` is the viewer's role in the conversation's
+ * workspace (`useWorkspaceMemberLists(ws).viewerRole`). It is
+ * `null` / `undefined` while it resolves (or for non-members), in which
+ * case only the creator branch grants the control — the wider owner/admin
+ * affordance appears once the role lands.
+ */
+export function canRemoveAgentFromChannel(
+  viewer: MeResponse | undefined,
+  agent: Pick<AgentDto, 'created_by_user_id'>,
+  viewerWorkspaceRole: WorkspaceRole | null | undefined,
+): boolean {
+  if (!viewer) return false;
+  if (isRegistrationRequired(viewer)) return false;
+  if (viewer.id === agent.created_by_user_id) return true;
+  return viewerWorkspaceRole === 'owner' || viewerWorkspaceRole === 'admin';
 }

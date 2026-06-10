@@ -326,7 +326,7 @@ function walk(node: MdastNode): void {
 // filters those) out, while still allowing slash-separated live refs
 // such as `#task:317/#task:318`. Handle character class
 // mirrors `CreateAgentInputSchema` / `CreateChannelInputSchema` in
-// `packages/shared/src/api/dto.ts` (alphanumerics, `-`, `_`).
+// `packages/shared/src/api/agent.ts` / `conversation.ts` (alphanumerics, `-`, `_`).
 // Conversation ids are generated from 12 random bytes as base64url,
 // yielding exactly 16 chars. The trailing negative lookahead prevents
 // matching a valid-looking prefix inside a longer id-like token.

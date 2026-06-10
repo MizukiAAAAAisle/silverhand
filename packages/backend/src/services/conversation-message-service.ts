@@ -1,6 +1,8 @@
 import type { Database as Db } from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 import type {
   AgentRunTerminalReason,
+  AgentSendStaleResolutionReason,
   MessageDto,
   SendMessageTarget,
 } from '@silverhand/shared';
@@ -55,11 +57,22 @@ export interface SendMessageInput {
   content: string;
   attachmentIds?: string[];
   target?: SendMessageTarget;
+  seenUpToSeq?: number;
+  staleEventId?: string;
+  staleResolutionReason?: AgentSendStaleResolutionReason;
+  freshnessBypass?: boolean;
 }
 
 export interface SendMessageResult {
   message: MessageDto;
   targetConversationId: string;
+}
+
+export interface ResolveStaleMessageInput {
+  conversationId: string;
+  actor: AgentPrincipal;
+  staleEventId: string;
+  resolutionReason: 'obsolete';
 }
 
 interface SendMessagePolicy {
@@ -175,6 +188,38 @@ export class AttachmentError extends Error {
   }
 }
 
+export class MessageFreshnessError extends Error {
+  readonly code = 'message_stale' as const;
+
+  constructor(
+    public readonly conversationId: string,
+    public readonly seenUpToSeq: number,
+    public readonly currentSeq: number,
+    public readonly newerMessages: MessageDto[],
+    public readonly staleEventId: string,
+  ) {
+    super(
+      `message is stale: conversation advanced from seq ${seenUpToSeq} ` +
+        `to ${currentSeq} before send`,
+    );
+    this.name = 'MessageFreshnessError';
+  }
+}
+
+class MessageFreshnessGuardError extends Error {
+  constructor(
+    public readonly conversationId: string,
+    public readonly seenUpToSeq: number,
+    public readonly currentSeq: number,
+  ) {
+    super(
+      `message is stale: conversation advanced from seq ${seenUpToSeq} ` +
+        `to ${currentSeq} before send`,
+    );
+    this.name = 'MessageFreshnessGuardError';
+  }
+}
+
 export interface ConversationMessageServiceOptions {
   db: Db;
   conversations: ConversationRepo;
@@ -194,11 +239,13 @@ interface SendMessageTxResult {
   targetConversation: NonNullable<ReturnType<ConversationRepo['get']>>;
   message: MessageDto;
   recipients: ReturnType<ConversationRepo['listAgents']>;
+  skippedFreshnessReason: string | null;
 }
 
 const REPLIED: AgentRunTerminalReason = 'replied';
 const MENTION_EXCERPT_LIMIT = 160;
 const START_FAILURE_ERROR_LIMIT = 240;
+const STALE_MESSAGE_LIMIT = 10;
 
 function excerpt(s: string): string {
   const compact = s.replace(/\s+/g, ' ').trim();
@@ -263,46 +310,108 @@ export class ConversationMessageService {
       );
     }
 
-    const txResult = this.db.transaction((): SendMessageTxResult => {
-      const sourceConversation = this.conversations.get(input.conversationId);
-      if (!sourceConversation) {
-        throw new ConversationError(
-          'conversation_not_found',
-          'conversation not found',
-        );
-      }
-      if (sourceConversation.closed_at !== null) {
-        throw new ConversationError(
-          'conversation_closed',
-          'conversation is closed',
-        );
-      }
-      if (sourceConversation.archived_at !== null) {
-        throw new ConversationError(
-          'conversation_archived',
-          'conversation is archived',
-        );
-      }
-      this.validateActor(input.actor, policy, sourceConversation.id);
+    let txResult: SendMessageTxResult;
+    try {
+      txResult = this.db.transaction((): SendMessageTxResult => {
+        const sourceConversation = this.conversations.get(input.conversationId);
+        if (!sourceConversation) {
+          throw new ConversationError(
+            'conversation_not_found',
+            'conversation not found',
+          );
+        }
+        if (sourceConversation.closed_at !== null) {
+          throw new ConversationError(
+            'conversation_closed',
+            'conversation is closed',
+          );
+        }
+        if (sourceConversation.archived_at !== null) {
+          throw new ConversationError(
+            'conversation_archived',
+            'conversation is archived',
+          );
+        }
+        this.validateActor(input.actor, policy, sourceConversation.id);
 
-      const targetConversation = this.resolveTarget(sourceConversation, target);
-      const attachmentIds = input.attachmentIds ?? [];
-      const snapshots = this.resolveAttachmentSnapshots(targetConversation, attachmentIds);
-      const message = this.messages.insertForConversation({
-        conversationId: targetConversation.id,
-        fromKind: input.actor.kind,
-        fromUserId: input.actor.kind === 'user' ? input.actor.userId : null,
-        fromAgentId: input.actor.kind === 'agent' ? input.actor.agentId : null,
-        content: input.content,
-        attachments: snapshots.length > 0 ? snapshots : null,
+        const targetConversation = this.resolveTarget(sourceConversation, target);
+        const attachmentIds = input.attachmentIds ?? [];
+        const snapshots = this.resolveAttachmentSnapshots(targetConversation, attachmentIds);
+        const { message, skippedFreshnessReason } =
+          this.insertMessageWithFreshnessIfApplicable({
+            input,
+            sourceConversationId: sourceConversation.id,
+            targetConversationId: targetConversation.id,
+            snapshots,
+          });
+        return {
+          sourceConversation,
+          targetConversation,
+          message,
+          recipients: this.conversations.listAgents(targetConversation.id),
+          skippedFreshnessReason,
+        };
+      })();
+    } catch (err) {
+      if (err instanceof MessageFreshnessGuardError) {
+        const staleEventId = randomUUID();
+        const newerMessages = this.messages.listAfterSeq(
+          err.conversationId,
+          err.seenUpToSeq,
+          STALE_MESSAGE_LIMIT,
+        );
+        this.logger.warn(
+          {
+            staleEventId,
+            conversationId: err.conversationId,
+            actorKind: input.actor.kind,
+            actorId: input.actor.kind === 'agent' ? input.actor.agentId : input.actor.userId,
+            seenUpToSeq: err.seenUpToSeq,
+            currentSeq: err.currentSeq,
+            newerMessageCount: newerMessages.length,
+            priorStaleEventId: input.staleEventId ?? null,
+            priorStaleResolutionReason: input.staleResolutionReason ?? null,
+          },
+          'conversation-message-service: freshness CAS rejected',
+        );
+        throw new MessageFreshnessError(
+          err.conversationId,
+          err.seenUpToSeq,
+          err.currentSeq,
+          newerMessages,
+          staleEventId,
+        );
+      }
+      throw err;
+    }
+
+    if (txResult.skippedFreshnessReason) {
+      this.logger.warn(
+        {
+          sourceConversationId: txResult.sourceConversation.id,
+          targetConversationId: txResult.targetConversation.id,
+          actorKind: input.actor.kind,
+          actorId: input.actor.kind === 'agent' ? input.actor.agentId : input.actor.userId,
+          reason: txResult.skippedFreshnessReason,
+        },
+        'conversation-message-service: freshness CAS skipped',
+      );
+    }
+
+    if (input.actor.kind === 'agent' && input.staleEventId) {
+      this.logStaleResolution({
+        sourceConversationId: txResult.sourceConversation.id,
+        targetConversationId: txResult.targetConversation.id,
+        agentId: input.actor.agentId,
+        staleEventId: input.staleEventId,
+        resolutionReason:
+          input.staleResolutionReason
+          ?? (input.freshnessBypass ? 'force_send' : 'unattributed'),
+        outcome: 'message_sent',
+        messageId: txResult.message.id,
+        messageSeq: txResult.message.seq,
       });
-      return {
-        sourceConversation,
-        targetConversation,
-        message,
-        recipients: this.conversations.listAgents(targetConversation.id),
-      };
-    })();
+    }
 
     this.logger.info(
       {
@@ -404,6 +513,101 @@ export class ConversationMessageService {
       message: txResult.message,
       targetConversationId: txResult.targetConversation.id,
     };
+  }
+
+  resolveStaleMessage(input: ResolveStaleMessageInput): void {
+    assertActorConversationMatch(input.actor, input.conversationId);
+    this.logStaleResolution({
+      sourceConversationId: input.conversationId,
+      targetConversationId: input.conversationId,
+      agentId: input.actor.agentId,
+      staleEventId: input.staleEventId,
+      resolutionReason: input.resolutionReason,
+      outcome: 'obsolete',
+      messageId: null,
+      messageSeq: null,
+    });
+  }
+
+  private insertMessageWithFreshnessIfApplicable(params: {
+    input: SendMessageInput;
+    sourceConversationId: string;
+    targetConversationId: string;
+    snapshots: NonNullable<Parameters<MessageRepo['insertForConversation']>[0]['attachments']>;
+  }): { message: MessageDto; skippedFreshnessReason: string | null } {
+    const { input } = params;
+    const base = {
+      conversationId: params.targetConversationId,
+      fromKind: input.actor.kind,
+      fromUserId: input.actor.kind === 'user' ? input.actor.userId : null,
+      fromAgentId: input.actor.kind === 'agent' ? input.actor.agentId : null,
+      content: input.content,
+      attachments: params.snapshots.length > 0 ? params.snapshots : null,
+    };
+
+    if (input.actor.kind !== 'agent') {
+      return {
+        message: this.messages.insertForConversation(base),
+        skippedFreshnessReason: null,
+      };
+    }
+    if (input.freshnessBypass) {
+      return {
+        message: this.messages.insertForConversation(base),
+        skippedFreshnessReason: 'freshness_bypass_explicit',
+      };
+    }
+    if (params.sourceConversationId !== params.targetConversationId) {
+      return {
+        message: this.messages.insertForConversation(base),
+        skippedFreshnessReason: 'cross_target_send',
+      };
+    }
+    if (input.seenUpToSeq === undefined) {
+      return {
+        message: this.messages.insertForConversation(base),
+        skippedFreshnessReason: 'missing_seen_up_to_seq',
+      };
+    }
+
+    const result = this.messages.insertForConversationIfFresh({
+      ...base,
+      seenUpToSeq: input.seenUpToSeq,
+    });
+    if (result.ok) {
+      return { message: result.message, skippedFreshnessReason: null };
+    }
+
+    throw new MessageFreshnessGuardError(
+      params.targetConversationId,
+      input.seenUpToSeq,
+      result.currentSeq,
+    );
+  }
+
+  private logStaleResolution(args: {
+    sourceConversationId: string;
+    targetConversationId: string;
+    agentId: string;
+    staleEventId: string;
+    resolutionReason: AgentSendStaleResolutionReason | 'obsolete' | 'unattributed';
+    outcome: 'message_sent' | 'obsolete';
+    messageId: string | null;
+    messageSeq: number | null;
+  }): void {
+    this.logger.warn(
+      {
+        sourceConversationId: args.sourceConversationId,
+        targetConversationId: args.targetConversationId,
+        agentId: args.agentId,
+        staleEventId: args.staleEventId,
+        resolutionReason: args.resolutionReason,
+        outcome: args.outcome,
+        messageId: args.messageId,
+        messageSeq: args.messageSeq,
+      },
+      'conversation-message-service: stale send resolution observed',
+    );
   }
 
   private validateActor(

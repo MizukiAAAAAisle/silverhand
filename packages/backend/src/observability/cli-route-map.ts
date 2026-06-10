@@ -7,7 +7,7 @@
  * every observed CLI call with a `(noun, verb)` pair so `cli-*.log`
  * lines can be filtered/aggregated by command.
  *
- * The 18 entries here are intentionally locked by a drift-guard test
+ * The entries here are intentionally locked by a drift-guard test
  * (`packages/backend/tests/observability/cli-route-map.test.ts`):
  *   - every `(noun, verb)` must exist in `COMMAND_GROUPS`, and
  *   - every internal route exposed by `internalPaths` (minus the
@@ -35,6 +35,7 @@ export interface CliInvokeRoute {
 export const CLI_INVOKE_ROUTES: readonly CliInvokeRoute[] = [
   // message
   { method: 'POST', suffix: 'send-message', noun: 'message', verb: 'send' },
+  { method: 'POST', suffix: 'stale-message-resolution', noun: 'message', verb: 'stale-resolve' },
   { method: 'POST', suffix: 'read-history', noun: 'message', verb: 'history' },
   { method: 'POST', suffix: 'search-messages', noun: 'message', verb: 'search' },
   // task

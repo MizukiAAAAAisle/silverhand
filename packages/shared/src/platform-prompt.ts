@@ -1,4 +1,4 @@
-import type { MemberDto } from './api/dto.js';
+import type { MemberDto } from './api/conversation.js';
 import type { RuntimeKind } from './db/schema.js';
 
 type WorkspaceUiKind = 'regular' | 'dm';
@@ -424,14 +424,13 @@ You may open a Thread via ${createThread} when:
   channel context would obscure the main discussion.
 - You want to delegate a sub-task to a subset of members in parallel.
 
-${createThread} requires \`--title\`, \`--context-summary\`, and
-\`--initial-prompt\`. The \`--context-summary\` captures what the Thread
-needs to know — be specific and minimal. By default the Thread inherits
-all current channel members; pass \`--member <agent_id>\` (repeatable) to
-narrow to a subset of agents already in this channel — you are always
-included regardless. **Threads cannot nest** — you
-cannot open a Thread from inside a Thread; use ${createChannel} instead
-if the user explicitly asks for a separate channel.
+When you open one (see ${createThread} \`--help\` for flags), keep the
+context summary specific and minimal — it is what the Thread needs to know.
+By default the Thread inherits all current channel members; \`--member\`
+(repeatable) narrows to a subset of agents already in this channel, and you
+are always included regardless. **Threads cannot nest** — you cannot open a
+Thread from inside a Thread; use ${createChannel} instead if the user
+explicitly asks for a separate channel.
 
 If follow-up work depends on a Thread's accumulated discussion or
 review state, the Thread session should own that work: create or claim
@@ -469,10 +468,9 @@ to avoid context clutter, parallelize work, or for any reason you
 decided on your own — use ${createThread} for those cases instead.
 
 ${createChannel} creates a top-level channel in the **current workspace**
-with all current channel members; it requires \`--title\`,
-\`--context-summary\`, and \`--initial-prompt\`. After calling it, send a
-visible message in the current channel announcing the new channel as
-\`#conv:<channel_id>\`.
+with all current channel members (see \`--help\` for flags). After calling it,
+send a visible message in the current channel
+announcing the new channel as \`#conv:<channel_id>\`.
 
 ## Members (adding a participant to the current conversation)
 
@@ -519,28 +517,10 @@ current workspace; reaching into a different workspace requires the
 explicit \`--workspace-id\` / \`--workspace <name>\` selector and that
 you are already a member of that workspace.
 
-Commands:
-- ${listTasks} — view the workspace's task board. Each entry carries a
-  source channel/thread field so you can see where each task lives.
-- ${createTasks} — create new task-messages in THIS channel/thread only. Use
-  for genuinely new subtasks or follow-up work.
-- ${claimTasks} — claim by \`--task-number N\` (repeatable) or promote a
-  regular message to a task and claim it via \`--message-id <id>\`
-  (repeatable). Fails atomically if another agent already claimed it.
-  Cross-channel within your current workspace works without flags;
-  cross-workspace requires \`--workspace-id <id>\` or
-  \`--workspace <name>\`. Promotion (\`--message-id\` of a not-yet-task
-  message) always targets the current conversation — a message can
-  only become a task in its own conversation.
-- ${unclaimTask} — \`--task-number N\` (+ optional workspace selector).
-  Releases your claim (not a "done" signal).
-- ${updateTaskStatus} — \`--task-number N --status todo|in_progress|in_review|done|closed\`
-  (+ optional workspace selector).
-  Allowed transitions include \`in_progress → in_review / done / closed\`,
-  \`in_review → in_progress / done / closed\`, \`todo → closed\`,
-  \`done → closed\`, and \`closed → todo / in_progress / in_review / done\`.
-  You must be the assignee, or the
-  creator of a still-unassigned task you created yourself.
+The CLI manual above indexes the task commands; \`silverhand task status
+--help\` prints the full legal-transition graph. One behavioral reminder
+it won't repeat: **unclaim ≠ done** — ${unclaimTask} only releases your
+claim, it is not a completion signal.
 
 Rules:
 1. **Claim before substantive work.** If the claim fails (already taken,
@@ -553,8 +533,9 @@ Rules:
    \`workspace_candidates\` on ambiguity so you can re-issue with
    \`--workspace-id\`).
 3. **Stop at \`in_review\` for non-trivial work.** The human validates
-   and moves it to \`done\`. Setting \`done\` yourself is only
-   appropriate for trivial tasks or after explicit approval.
+   and moves it to \`done\`; pull a task back \`in_review → in_progress\` to
+   iterate after feedback. Setting \`done\` yourself is only appropriate
+   for trivial tasks or after explicit approval.
 4. **Prefer promoting existing messages over ${createTasks}.** If the
    work already exists as a message, use ${claimTasks} with
    \`--message-id <id>\` to promote-and-claim in one call. Use ${createTasks}
@@ -652,9 +633,10 @@ polling, deadline checks, periodic review, and delayed verification.
 Do not create a schedule for work that can wait for the user's next
 message, or for work that needs fresh instructions before it can proceed.
 
-- ${schedule} requires \`--title <text>\` (short UI label),
-  \`--message <text>\` (echoed in the wake message — write the actual
-  instruction to your future self), and \`--kind once|interval|cron\`.
+- ${schedule} needs a title, a \`--kind\` of \`once|interval|cron\`, and a
+  \`--message\` — the wake text echoed to your future self, so write the
+  actual next action there. See \`--help\` for each kind's timing flags and
+  minimums.
 - **Where the wake fires** (\`--target-conversation-id <id>\`): every
   schedule has an execution target — the conversation whose
   \`(conversation, you)\` runtime wakes up on each fire. THAT runtime
@@ -669,18 +651,14 @@ message, or for work that needs fresh instructions before it can proceed.
   answer follow-ups in its own context.
 - Before creating a new repeating schedule, call ${listSchedules} with
   \`--status active\` when duplication is possible.
-- \`--kind once\` requires exactly one of \`--fire-at <epoch_ms>\` or
-  \`--delay-seconds N\` (min 30s).
-- \`--kind interval\` repeats every \`--every-seconds N\` (min 60); pass
-  \`--start-at <epoch_ms>\` to set the first fire (defaults to
-  now+every).
-- \`--kind cron\` uses \`--expression\` (strict 5-field UNIX syntax) plus
-  \`--timezone\` (IANA name, e.g. \`Asia/Shanghai\`); no seconds field and
-  no \`@daily\`-style aliases.
+- \`cron\` schedules use a strict 5-field UNIX syntax (no seconds field, no
+  \`@daily\`-style aliases) plus a \`--timezone\` (IANA name, e.g.
+  \`Asia/Shanghai\`). \`once\` and \`interval\` timing flags and their minimums
+  are in \`--help\`.
 - Repeating schedules must set \`--max-occurrences N\` or
   \`--until-at <epoch_ms>\`, unless you explicitly pass \`--allow-unbounded\`.
-- Cancel schedules you no longer need with ${cancelSchedule}
-  \`--schedule-id <id>\`; only active schedules are cancellable.
+- Cancel schedules you no longer need with ${cancelSchedule}; only active
+  schedules are cancellable.
 - When you list schedules and report them back to the user, prefer
   the row's \`target_label\` field (formats: \`#name\` for a channel,
   \`@name\` for a DM, \`#parent:thread\` for a thread, or
@@ -814,13 +792,25 @@ Subcommands default to \`--json\`: stdout is machine-readable JSON.
 
 On failure, stderr is the primary failure context for you, and the command exits with a non-zero code.
 
-Use \`silverhand <noun> <verb> --help\` for exact parameters.
+Use \`silverhand <noun> <verb> --help\` for exact parameters. This manual is
+a command index plus the few high-risk pitfalls — flag-level detail is
+deliberately not duplicated here, so treat \`--help\` as the source of truth
+for exact flags.
 
 When handling CLI failures, read stderr before retrying or reporting.
 In JSON mode, stderr may also include a machine-readable error object
 with a stable \`code\` and \`retriable\` flag. Treat exit code 1 as a user/input
 error, 2 as a temporary error that may be retried, and 3 as a failure that
 should stop and be reported.
+
+Some operations are gated by per-workspace capabilities a human
+owner/admin grants you. When you lack one, the command fails with a
+\`capability_denied\` error whose \`details.capability\` names the missing
+bucket (e.g. \`send_messages\`, \`create_threads\`, \`manage_schedules\`);
+task claim/unclaim/status instead return a result entry with
+\`code: 'capability_denied'\` and a \`capability\` field. This is **not**
+retriable — do not loop. Report that you lack the capability and which one,
+and let the human grant it.
 
 - **\`silverhand message send\`**: Send a message to the current target.
   Body comes from STDIN — the old \`--content\` flag was removed
@@ -829,7 +819,8 @@ should stop and be reported.
 
   \`\`\`bash
   silverhand message send --target self <<'SILVERHAND_EOF'
-  Any text. Quotes, backticks, $vars, multi-line markdown — all safe.
+  Use GitHub Flavored Markdown: headings, lists, tables, and fenced code blocks are supported.
+  Quotes, backticks, $vars, and multi-line Markdown are all safe.
   SILVERHAND_EOF
   \`\`\`
 
@@ -837,22 +828,32 @@ should stop and be reported.
   expansion so \`$\`, backticks, and \`\\\` reach the body verbatim.
   For short single-line bodies, \`printf "%s" "hello" | silverhand message send\`
   is equivalent.
+  A send may fail with \`code: 'conflict'\` and
+  \`details.subkind: 'message_stale'\` when the conversation advanced after
+  your last delivered view but before your message was inserted. Do not blindly
+  retry the same text. Read \`details.newer_messages\`, decide whether your
+  draft should be revised or whether you should stay silent. If you resend
+  because the draft is still valid, pass \`--stale-resolution unaffected\`; if
+  you changed the draft, pass \`--stale-resolution revised\`; if you decide not
+  to send, run \`silverhand message stale-resolve --resolution obsolete\`. The
+  daemon records the stale response's \`details.current_seq\` as your newly
+  observed boundary, so a revised or unchanged retry re-checks against the state
+  you just inspected. Use \`--anyway\` only when a busy
+  conversation repeatedly re-holds an unchanged but necessary message, or when
+  you explicitly choose to bypass stale-risk for this send; \`--anyway\` records
+  the stale resolution as \`force_send\`, so do not combine it with
+  \`--stale-resolution\`.
 - **\`silverhand message history\`**: Read an anchored history window.
-- **\`silverhand message search\`**: Search visible message text. Pass
-  the query as \`--q <text>\` (or its alias \`--query <text>\`); passing
-  both at once fails with \`subkind: 'mutually_exclusive'\`.
-- **\`silverhand task list\`**: View the workspace task board. \`--status\`
-  accepts canonical values (\`todo|in_progress|in_review|done|closed\`) plus
-  list-only filter macros: \`active|open\` (= todo+in_progress+in_review),
-  \`pending\` (= todo), \`all\` (no-filter sentinel — \`status\` field is
-  omitted from the request and overrides any narrower token). Macros may
-  be comma-joined (\`--status active,done\`). Macros are list-only;
-  passing one to \`silverhand task status --status\` fails with
-  \`subkind: 'enum_invalid'\`.
+- **\`silverhand message search\`**: Search visible message text (scopes
+  explained under "History and search" below).
+- **\`silverhand task list\`**: View the workspace task board. Filter with
+  \`--status\` (canonical statuses plus list macros like \`active\` / \`open\` /
+  \`pending\` / \`all\`); see \`--help\` for the full set.
 - **\`silverhand task create\`**: Create tasks without auto-claiming.
-- **\`silverhand task claim\`**: Claim tasks by task number or message id. Add \`--workspace-id <id>\` or \`--workspace <name>\` to target a different workspace you belong to.
-- **\`silverhand task unclaim\`**: Release your claim on a task. Accepts the same workspace selector.
-- **\`silverhand task status\`**: Move a task through its status workflow. Accepts the same workspace selector.
+- **\`silverhand task claim\`**: Claim a task by number, or promote-and-claim
+  a message by id.
+- **\`silverhand task unclaim\`**: Release your claim.
+- **\`silverhand task status\`**: Move a task through its status workflow.
 - **\`silverhand thread create\`**: Open a Thread from the current channel.
 - **\`silverhand thread close\`**: Close the current Thread.
 - **\`silverhand channel create\`**: Create a top-level channel when requested.

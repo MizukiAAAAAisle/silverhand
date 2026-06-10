@@ -215,6 +215,18 @@ export function getUserPrincipal(c: AppContext): UserPrincipal {
   return principal;
 }
 
+// Viewer principal → user id. Principal projection (not route-context logic),
+// so it lives next to `getUserPrincipal`. Both forms are kept: callers use
+// `requireViewerUserId`; `resolveViewerUserId` is the underlying primitive
+// (the forwarding is pre-existing and intentionally preserved verbatim).
+export function resolveViewerUserId(c: AppContext): string {
+  return getUserPrincipal(c).userId;
+}
+
+export function requireViewerUserId(c: AppContext): string {
+  return resolveViewerUserId(c);
+}
+
 export function getAgentPrincipal(c: AppContext): AgentPrincipal {
   const principal = getPrincipal(c);
   if (principal.kind !== 'agent') {

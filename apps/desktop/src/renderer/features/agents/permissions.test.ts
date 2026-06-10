@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentDto, RegistrationRequired, UserDto } from '@silverhand/shared';
-import { canEditAgentProfile } from './permissions';
+import { canEditAgentProfile, canRemoveAgentFromChannel } from './permissions';
 
 const agent = (overrides: Partial<AgentDto> = {}): AgentDto =>
   ({
@@ -70,5 +70,86 @@ describe('canEditAgentProfile', () => {
     expect(
       canEditAgentProfile(viewer({ id: 'a-1' }), agent({ id: 'a-1', created_by_user_id: 'u-creator' })),
     ).toBe(false);
+  });
+});
+
+describe('canRemoveAgentFromChannel', () => {
+  // Mirrors the backend remove-from-conversation gate (#task:957, plan A):
+  // agent owner (creator) OR workspace owner/admin. No "channel owner".
+  it('returns true for the agent creator regardless of workspace role', () => {
+    // Creator branch short-circuits before role is even consulted — so a
+    // creator who is only a plain member (or whose role hasn't resolved)
+    // still gets the control.
+    expect(
+      canRemoveAgentFromChannel(
+        viewer({ id: 'u-creator' }),
+        agent({ created_by_user_id: 'u-creator' }),
+        'member',
+      ),
+    ).toBe(true);
+    expect(
+      canRemoveAgentFromChannel(
+        viewer({ id: 'u-creator' }),
+        agent({ created_by_user_id: 'u-creator' }),
+        null,
+      ),
+    ).toBe(true);
+  });
+
+  it('returns true for a non-creator workspace owner or admin', () => {
+    expect(
+      canRemoveAgentFromChannel(
+        viewer({ id: 'u-other' }),
+        agent({ created_by_user_id: 'u-creator' }),
+        'owner',
+      ),
+    ).toBe(true);
+    expect(
+      canRemoveAgentFromChannel(
+        viewer({ id: 'u-other' }),
+        agent({ created_by_user_id: 'u-creator' }),
+        'admin',
+      ),
+    ).toBe(true);
+  });
+
+  it('returns false for a non-creator plain member', () => {
+    expect(
+      canRemoveAgentFromChannel(
+        viewer({ id: 'u-other' }),
+        agent({ created_by_user_id: 'u-creator' }),
+        'member',
+      ),
+    ).toBe(false);
+  });
+
+  it('returns false for a non-creator while the role is still unresolved', () => {
+    // `useWorkspaceMemberLists` returns undefined viewerRole until it
+    // lands; default-deny the wider affordance until then (the creator
+    // branch is unaffected — see above).
+    expect(
+      canRemoveAgentFromChannel(
+        viewer({ id: 'u-other' }),
+        agent({ created_by_user_id: 'u-creator' }),
+        undefined,
+      ),
+    ).toBe(false);
+    expect(
+      canRemoveAgentFromChannel(
+        viewer({ id: 'u-other' }),
+        agent({ created_by_user_id: 'u-creator' }),
+        null,
+      ),
+    ).toBe(false);
+  });
+
+  it('returns false during pre-registration even for an owner', () => {
+    expect(canRemoveAgentFromChannel(registrationRequired, agent(), 'owner')).toBe(
+      false,
+    );
+  });
+
+  it('returns false while /api/me is still loading (viewer undefined)', () => {
+    expect(canRemoveAgentFromChannel(undefined, agent(), 'owner')).toBe(false);
   });
 });

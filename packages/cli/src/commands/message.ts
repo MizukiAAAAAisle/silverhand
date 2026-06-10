@@ -1,8 +1,17 @@
 /**
  * `silverhand message` — send, history, search.
  */
-import type { SendMessageTarget } from '@silverhand/shared';
-import { CliError } from '../errors.js';
+import type {
+  AgentSendStaleResolutionReason,
+  SendMessageTarget,
+} from '@silverhand/shared';
+import {
+  HostClient,
+  HostClientError,
+  type AgentMessageSendParams,
+  type AgentStaleResolveParams,
+} from '@silverhand/host';
+import { CliError, mapHttpError } from '../errors.js';
 import {
   flagBool,
   flagNumber,
@@ -16,6 +25,8 @@ const sendCommand: Command = {
   summary: 'Send a message to the current channel/thread.',
   help: `silverhand message send [--target self|parent|<thread_id>]
                           [--attachment <id> ...]
+                          [--stale-resolution unaffected|revised]
+                          [--anyway]
 
 Reads the message body from STDIN and sends it to the current
 conversation (channel or thread). Always pipe content via stdin —
@@ -47,6 +58,15 @@ Flags:
   --attachment <id>     Optional, repeatable. Attachment ids returned by
                         \`silverhand file upload\`. All ids must belong
                         to the current channel.
+  --stale-resolution    Optional. After a message_stale conflict, explain
+                        why this retry is being sent:
+                        "unaffected" means the original draft still applies;
+                        "revised" means newer messages changed the draft.
+                        Missing reason never blocks sending; it is logged as
+                        unattributed telemetry when a pending stale event exists.
+  --anyway              Bypass this send's stale-message freshness guard.
+                        Use only after inspecting a message_stale conflict,
+                        or when the message must be posted despite stale risk.
 
 Pre-flight failures (exit 1):
   --content was supplied         → flag_removed (use stdin instead)
@@ -57,8 +77,9 @@ Pre-flight failures (exit 1):
   stdin is empty                 → empty_stdin
   stdin is not UTF-8             → invalid_utf8 (re-encode upstream)
 
-stdout: { "message_id": "<id>" }`,
-  flags: ['target', 'attachment'] as const,
+stdout: { "message_id": "<id>", "message_seq": <seq> }`,
+  flags: ['target', 'attachment', 'stale-resolution'] as const,
+  booleanFlags: ['anyway'],
   removedFlags: {
     content: {
       replacement: 'stdin',
@@ -90,7 +111,7 @@ stdout: { "message_id": "<id>" }`,
         "or `printf \"%s\" \"...\" | silverhand message send`",
     },
   },
-  async run({ client, args }) {
+  async run({ env, client, args }) {
     // Pre-flight: a TTY on stdin means the agent forgot to pipe a body.
     // Failing fast (rather than blocking on a read that will never
     // arrive) keeps the agent's exit path predictable.
@@ -149,13 +170,92 @@ stdout: { "message_id": "<id>" }`,
 
     const target = parseTarget(flagString(args, 'target'));
     const attachmentIds = flagStringArray(args, 'attachment');
-    return client.sendMessage({
+    const anyway = flagBool(args, 'anyway') ?? false;
+    const staleResolution = parseSendStaleResolution(
+      flagString(args, 'stale-resolution'),
+    );
+    if (anyway && staleResolution !== undefined) {
+      throw new CliError({
+        code: 'validation_error',
+        message:
+          '--anyway already records stale resolution as force_send; ' +
+          'do not also pass --stale-resolution',
+        retriable: false,
+      });
+    }
+    const daemonInput = {
+      conversation_id: env.conversationId,
+      agent_id: env.agentId,
       content,
       ...(target ? { target } : {}),
       ...(attachmentIds && attachmentIds.length > 0
         ? { attachment_ids: attachmentIds }
         : {}),
+      ...(anyway ? { freshness_bypass: true } : {}),
+      ...(staleResolution ? { stale_resolution_reason: staleResolution } : {}),
+    };
+    if (env.daemonSocketPath) {
+      return await sendViaDaemon(env.daemonSocketPath, daemonInput);
+    }
+
+    // Migration fallback for non-daemon/manual CLI contexts. Do not read
+    // the retired sidecar as freshness authority; missing seen_up_to_seq
+    // makes the backend explicitly skip hard CAS instead of validating a
+    // polluted boundary.
+    return await client.sendMessage({
+      content,
+      ...(target ? { target } : {}),
+      ...(anyway ? { freshness_bypass: true } : {}),
+      ...(attachmentIds && attachmentIds.length > 0
+        ? { attachment_ids: attachmentIds }
+        : {}),
     });
+  },
+};
+
+const staleResolveCommand: Command = {
+  verb: 'stale-resolve',
+  summary: 'Report that a stale draft no longer needs to be sent.',
+  help: `silverhand message stale-resolve --resolution obsolete [--event-id <id>]
+
+Reports an observability-only resolution for the most recent message_stale
+conflict without sending a message. This is for the "no need to send anymore"
+case after reading the newer messages from the conflict response.
+
+Flags:
+  --resolution obsolete  Required. Records that the stale draft is obsolete.
+  --event-id <id>        Optional. Defaults to the pending stale event recorded
+                         from the latest message_stale response.
+
+stdout: { "resolved": true } or { "resolved": false, "reason": "no_pending_stale_event" }`,
+  flags: ['resolution', 'event-id'] as const,
+  async run({ env, client, args }) {
+    const resolution = flagString(args, 'resolution');
+    if (resolution !== 'obsolete') {
+      throw new CliError({
+        code: 'validation_error',
+        message: '--resolution must be obsolete',
+        retriable: false,
+      });
+    }
+    const explicitEventId = flagString(args, 'event-id');
+    if (env.daemonSocketPath) {
+      return await resolveStaleViaDaemon(env.daemonSocketPath, {
+        conversation_id: env.conversationId,
+        agent_id: env.agentId,
+        ...(explicitEventId ? { stale_event_id: explicitEventId } : {}),
+        resolution_reason: 'obsolete',
+      });
+    }
+    const staleEventId = explicitEventId;
+    if (!staleEventId) {
+      return { resolved: false, reason: 'no_pending_stale_event' };
+    }
+    await client.resolveStaleMessage({
+      stale_event_id: staleEventId,
+      resolution_reason: 'obsolete',
+    });
+    return { resolved: true };
   },
 };
 
@@ -315,6 +415,7 @@ stdout: AgentSearchMessagesDto JSON.`,
 
 export const messageCommands: readonly Command[] = [
   sendCommand,
+  staleResolveCommand,
   historyCommand,
   searchCommand,
 ];
@@ -323,6 +424,91 @@ function parseTarget(raw: string | undefined): SendMessageTarget | undefined {
   if (raw === undefined) return undefined;
   if (raw === 'self' || raw === 'parent') return raw;
   return { thread_id: raw };
+}
+
+function parseSendStaleResolution(
+  raw: string | undefined,
+): AgentSendStaleResolutionReason | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === 'unaffected' || raw === 'revised') return raw;
+  throw new CliError({
+    code: 'validation_error',
+    message: '--stale-resolution must be unaffected or revised',
+    retriable: false,
+  });
+}
+
+async function sendViaDaemon(
+  socketPath: string,
+  input: AgentMessageSendParams,
+): Promise<{ message_id: string; message_seq?: number }> {
+  const host = new HostClient({ socketPath });
+  try {
+    await host.connect();
+    requireFreshnessAuthority(host);
+    const result = await host.agentMessageSend(input);
+    if (!result.ok) {
+      throw mapHttpError(result.status, result.body_text);
+    }
+    return {
+      message_id: result.message_id,
+      ...(result.message_seq !== undefined ? { message_seq: result.message_seq } : {}),
+    };
+  } catch (err) {
+    if (err instanceof HostClientError) {
+      throw new CliError({
+        code: err.code === 'disconnected' || err.code === 'timeout'
+          ? 'upstream_unavailable'
+          : 'internal',
+        message: `silverhand daemon send failed: ${err.message}`,
+        retriable: err.code === 'disconnected' || err.code === 'timeout',
+      });
+    }
+    throw err;
+  } finally {
+    await host.close().catch(() => undefined);
+  }
+}
+
+async function resolveStaleViaDaemon(
+  socketPath: string,
+  input: AgentStaleResolveParams,
+): Promise<{ resolved: boolean; reason?: 'no_pending_stale_event' }> {
+  const host = new HostClient({ socketPath });
+  try {
+    await host.connect();
+    requireFreshnessAuthority(host);
+    const result = await host.agentStaleResolve(input);
+    if (!result.ok) {
+      throw mapHttpError(result.status, result.body_text);
+    }
+    return result.resolved
+      ? { resolved: true }
+      : { resolved: false, reason: result.reason };
+  } catch (err) {
+    if (err instanceof HostClientError) {
+      throw new CliError({
+        code: err.code === 'disconnected' || err.code === 'timeout'
+          ? 'upstream_unavailable'
+          : 'internal',
+        message: `silverhand daemon stale-resolve failed: ${err.message}`,
+        retriable: err.code === 'disconnected' || err.code === 'timeout',
+      });
+    }
+    throw err;
+  } finally {
+    await host.close().catch(() => undefined);
+  }
+}
+
+function requireFreshnessAuthority(host: HostClient): void {
+  if (host.capabilities.has('agent.freshness_authority')) return;
+  throw new CliError({
+    code: 'internal',
+    message:
+      'silverhand daemon does not advertise agent.freshness_authority; restart the app/daemon from the same build as this CLI',
+    retriable: false,
+  });
 }
 
 /** Read every byte off `process.stdin` into a single Buffer. Does NOT

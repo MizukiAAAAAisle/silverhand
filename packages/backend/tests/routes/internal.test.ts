@@ -135,6 +135,7 @@ describe('POST /internal/.../send-message', () => {
     expect(r.status).toBe(200);
     const body = await r.json() as any;
     expect(typeof body.message_id).toBe('string');
+    expect(typeof body.message_seq).toBe('number');
 
     // Sender (alice) is excluded; bob gets the delivery.
     expect(t.fake.delivered.map(d => d.agentId)).toEqual([agentIds.bob]);
@@ -144,6 +145,7 @@ describe('POST /internal/.../send-message', () => {
       await http(t).get(`/api/channels/${conversationId}/messages`)
     ).json() as any;
     const inserted = msgs.messages.find((m: any) => m.id === body.message_id);
+    expect(inserted.seq).toBe(body.message_seq);
     expect(inserted.from_kind).toBe('agent');
     expect(inserted.from_agent_id).toBe(agentIds.alice);
     expect(inserted.content).toBe('hello team');
@@ -151,6 +153,49 @@ describe('POST /internal/.../send-message', () => {
       kind: 'unread_updated',
       payload: { conversation_id: conversationId },
     });
+  });
+
+  it('returns a stale_event_id when same-conversation agent send is stale', async () => {
+    t = buildTestApp();
+    const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
+    const observed = await (
+      await http(t).post(
+        `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+        { content: 'observed' },
+        { headers: authHeaders(t.authToken) },
+      )
+    ).json() as any;
+    await http(t).post(
+      `/internal/conversations/${conversationId}/agents/${agentIds.bob}/send-message`,
+      { content: 'newer context' },
+      { headers: authHeaders(t.authToken) },
+    );
+
+    const r = await http(t).post(
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      { content: 'stale draft', seen_up_to_seq: observed.message_seq },
+      { headers: authHeaders(t.authToken) },
+    );
+
+    expect(r.status).toBe(409);
+    const body = await r.json() as any;
+    expect(body.error.code).toBe('conflict');
+    expect(body.error.details.subkind).toBe('message_stale');
+    expect(typeof body.error.details.stale_event_id).toBe('string');
+    expect(body.error.details.current_seq).toBe(observed.message_seq + 1);
+  });
+
+  it('accepts obsolete stale-resolution telemetry without sending a message', async () => {
+    t = buildTestApp();
+    const { conversationId, agentIds } = await setupSession(t, ['alice']);
+    const r = await http(t).post(
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/stale-message-resolution`,
+      { stale_event_id: 'evt-obsolete', resolution_reason: 'obsolete' },
+      { headers: authHeaders(t.authToken) },
+    );
+
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ ok: true });
   });
 
   it('rejects parent target when current session has no parent', async () => {

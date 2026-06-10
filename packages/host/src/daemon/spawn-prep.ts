@@ -17,6 +17,7 @@ export interface SpawnPrepInput {
 
 export interface SpawnPrepHandle {
   systemPromptPath: string;
+  lastDeliveredSeqPath: string;
   binDir: string;
   cleanup(): Promise<void>;
 }
@@ -29,6 +30,7 @@ export async function prepareSpawnFiles(
   const dir = await mkdtemp(join(parentDir, 'spawn-'));
 
   const systemPromptPath = join(dir, 'system-prompt.md');
+  const lastDeliveredSeqPath = join(dir, 'last-delivered-seq');
   const binDir = join(dir, 'bin');
   const silverhandShimPath = join(binDir, 'silverhand');
   const shim = renderSilverhandShim(input.silverhandCli);
@@ -42,6 +44,7 @@ export async function prepareSpawnFiles(
 
   return {
     systemPromptPath,
+    lastDeliveredSeqPath,
     binDir,
     cleanup: async () => {
       await rm(dir, { recursive: true, force: true }).catch(() => {});

@@ -40,6 +40,10 @@
  * the synchronous response.
  */
 import type {
+  AgentMessageSendParams,
+  AgentMessageSendResult,
+  AgentStaleResolveParams,
+  AgentStaleResolveResult,
   EventFrame,
   RuntimeClearSessionParams,
   RuntimeClearSessionResult,
@@ -132,6 +136,26 @@ export class FakeSupervisor {
     this.now = opts.now ?? Date.now;
     this.schedule = opts.schedule ?? DEFAULT_SCHEDULE;
     this.failStartupDelivery = opts.failStartupDelivery ?? false;
+  }
+
+  agentMessageSend(_params: AgentMessageSendParams): AgentMessageSendResult {
+    return {
+      ok: false,
+      status: 500,
+      body_text: JSON.stringify({ error: 'fake supervisor send not implemented' }),
+    };
+  }
+
+  agentStaleResolve(
+    _params: AgentStaleResolveParams,
+  ): AgentStaleResolveResult {
+    return {
+      ok: false,
+      status: 500,
+      body_text: JSON.stringify({
+        error: 'fake supervisor stale-resolve not implemented',
+      }),
+    };
   }
 
   // ── runtime_start ──────────────────────────────────────────────

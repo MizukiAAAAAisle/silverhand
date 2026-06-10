@@ -29,6 +29,8 @@ import {
   type HelloResult,
   intentErrorSchema,
   intentSchemas,
+  type AgentMessageSendParams,
+  type AgentStaleResolveParams,
   type AgentMaterializeParams,
   type AgentMaterializeResult,
   type AgentWorkspaceIndexParams,
@@ -660,6 +662,14 @@ export class IntentDispatcher {
         this.logger.logControl.disableConversationDebug(p.conversation_id);
         return { ok: true, enabled: false, expires_at: null };
       }
+      case 'agent_message_send':
+        return this.requireSupervisor().agentMessageSend(
+          params as AgentMessageSendParams,
+        );
+      case 'agent_stale_resolve':
+        return this.requireSupervisor().agentStaleResolve(
+          params as AgentStaleResolveParams,
+        );
       // ── runtime_* family ────────────────────────────────────────
       // Each case below requires `this.supervisor` to be set; when
       // it isn't, we throw — `dispatch()` catches and projects as

@@ -213,4 +213,56 @@ describe('POST /internal/.../read-history', () => {
     const body = await res.json() as any;
     expect(body.code).toBe('not_target_conversation_member');
   });
+
+  // Characterization for the read-model SQL extraction (#task:980, Slice B):
+  // pin the has_more_before / has_more_after pagination flags at an exact page
+  // boundary. buildReadHistoryDto derives these from hasHistoryBefore/After on
+  // the returned page's min/max seq; a module relocation that subtly changed the
+  // boundary SQL would break this but NOT typecheck. include_system:false keeps
+  // the onboarding system message out of the universe so only the five user
+  // messages count.
+  it('reports has_more_before/after at the page boundary and false on a full page', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const aliceId = agentIds.alice!;
+    const messages = new MessageRepo(t.ctx.db);
+    const m = Array.from({ length: 5 }, (_, i) =>
+      messages.insertForConversation({
+        conversationId: channelId,
+        fromKind: 'user',
+        content: `msg ${i + 1}`,
+      }),
+    );
+
+    // before_seq = 4th message → the latest 2 rows below it are msg2, msg3.
+    // Below msg2 there is msg1 (has_more_before); above msg3 there are msg4,
+    // msg5 (has_more_after).
+    const mid = await http(t).post(readHistoryPath(channelId, aliceId), {
+      before_seq: m[3]!.seq,
+      limit: 2,
+      include_system: false,
+    });
+    expect(mid.status).toBe(200);
+    const midBody = await mid.json() as any;
+    expect(midBody.messages.map((x: any) => x.message_ref.id)).toEqual([
+      m[1]!.id,
+      m[2]!.id,
+    ]);
+    expect(midBody.has_more_before).toBe(true);
+    expect(midBody.has_more_after).toBe(true);
+
+    // A page that spans every user message: nothing remains on either side.
+    const full = await http(t).post(readHistoryPath(channelId, aliceId), {
+      before_seq: m[4]!.seq + 1,
+      limit: 10,
+      include_system: false,
+    });
+    expect(full.status).toBe(200);
+    const fullBody = await full.json() as any;
+    expect(fullBody.messages.map((x: any) => x.message_ref.id)).toEqual(
+      m.map(x => x.id),
+    );
+    expect(fullBody.has_more_before).toBe(false);
+    expect(fullBody.has_more_after).toBe(false);
+  });
 });

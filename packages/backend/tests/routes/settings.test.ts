@@ -36,4 +36,22 @@ describe('GET/PUT /api/settings', () => {
     const initial = await (await http(t).get(apiPaths.settings)).json() as any;
     expect(initial.settings).toEqual({});
   });
+
+  // Pin the PUT handler's remaining two arms before the settings carve
+  // (#task:983 P18 prep): an empty object is the accepted no-op, a non-object
+  // body is rejected. Keeps the relocation into routes/settings.ts provably
+  // behavior-preserving.
+  it('accepts an empty object as a no-op and echoes the empty snapshot', async () => {
+    t = buildTestApp();
+    const res = await http(t).put(apiPaths.settings, {});
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.settings).toEqual({});
+  });
+
+  it('rejects a non-object body with 400', async () => {
+    t = buildTestApp();
+    const res = await http(t).put(apiPaths.settings, 42);
+    expect(res.status).toBe(400);
+  });
 });

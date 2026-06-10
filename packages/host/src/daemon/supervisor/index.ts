@@ -12,10 +12,12 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { setTimeout as setTimer } from 'node:timers';
 import { randomUUID } from 'node:crypto';
-import { stat } from 'node:fs/promises';
+import { stat, writeFile } from 'node:fs/promises';
 import {
+  AUTH_TOKEN_HEADER,
   buildSystemPromptFor,
   type AgentRunState,
+  internalPaths,
   type ParsedEvent,
   ParsedEventSchema,
   type RuntimeKind,
@@ -26,6 +28,10 @@ import { detectRuntimes } from '../../runtimes.js';
 import {
   encodeFrame,
   MAX_FRAME_BYTES,
+  type AgentMessageSendParams,
+  type AgentMessageSendResult,
+  type AgentStaleResolveParams,
+  type AgentStaleResolveResult,
   type EventFrame,
   type RuntimeClearSessionParams,
   type RuntimeClearSessionResult,
@@ -72,6 +78,7 @@ import type { SupervisorContract } from '../supervisor-contract.js';
 import type {
   ActivitySnippetKind,
   InitTimeoutReason,
+  PendingStaleEvent,
   RuntimeHandle,
   RuntimePhase,
 } from './handle.js';
@@ -154,6 +161,10 @@ export interface SupervisorOptions {
    * `supervisorFactory` being required-but-nullable.
    */
   runtimeStartResolveDeps: RuntimeStartResolveDeps;
+  /** Absolute path to the daemon control socket. Spawned agents use
+   *  this to route freshness-sensitive side effects through the daemon
+   *  rather than computing freshness in the short-lived CLI. */
+  daemonSocketPath?: string | null;
   /** Optional injection for tests:
    *   - `driverFor` lets tests substitute a fake `Driver` so they can
    *     drive `Supervisor` against a controlled binary;
@@ -231,6 +242,64 @@ function key(conversationId: string, agentId: string): string {
   return `${conversationId}\x00${agentId}`;
 }
 
+function safeSeq(value: number | undefined): number | null {
+  return Number.isSafeInteger(value) && value !== undefined && value > 0
+    ? value
+    : null;
+}
+
+function parsedStartsTurn(parsed: ParsedEvent): boolean {
+  return (
+    parsed.kind === 'thinking'
+    || parsed.kind === 'text'
+    || parsed.kind === 'tool_call'
+    || (parsed.kind === 'error' && parsed.fatal !== true)
+  );
+}
+
+function parseObjectJson(text: string): Record<string, unknown> | null {
+  try {
+    const value = JSON.parse(text) as unknown;
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractStaleConflict(bodyText: string): PendingStaleEvent | null {
+  const parsed = parseObjectJson(bodyText);
+  const error = parsed?.['error'];
+  if (!error || typeof error !== 'object' || Array.isArray(error)) return null;
+  const details = (error as Record<string, unknown>)['details'];
+  if (!details || typeof details !== 'object' || Array.isArray(details)) {
+    return null;
+  }
+  const d = details as Record<string, unknown>;
+  if (d['subkind'] !== 'message_stale') return null;
+  const id = d['stale_event_id'];
+  const currentSeq = d['current_seq'];
+  if (
+    typeof id !== 'string'
+    || id.length === 0
+    || typeof currentSeq !== 'number'
+    || !Number.isSafeInteger(currentSeq)
+    || currentSeq <= 0
+  ) {
+    return null;
+  }
+  return { id, currentSeq };
+}
+
+async function safeReadResponseText(res: Response): Promise<string> {
+  try {
+    return await res.text();
+  } catch {
+    return '';
+  }
+}
+
 export class Supervisor implements SupervisorContract {
   private readonly handles = new Map<string, RuntimeHandle>();
   private readonly emit: (event: EventFrame) => void;
@@ -250,6 +319,7 @@ export class Supervisor implements SupervisorContract {
   private readonly proxyConfigPath: string | null;
   private readonly localSilverhandCliLauncher: SilverhandCliLauncher | null;
   private readonly controlPlaneServerUrl: () => string | null;
+  private readonly daemonSocketPath: string | null;
 
   // ── 3c-b state ─────────────────────────────────────────────────
   /** Sticky per-(conv, agent) init failure counter + cooldown clock.
@@ -289,6 +359,7 @@ export class Supervisor implements SupervisorContract {
     this.proxyConfigPath = opts.proxyConfigPath ?? null;
     this.localSilverhandCliLauncher = opts.localSilverhandCliLauncher ?? null;
     this.controlPlaneServerUrl = opts.controlPlaneServerUrl ?? (() => null);
+    this.daemonSocketPath = opts.daemonSocketPath ?? null;
     this.initWatchdogMs = opts.initWatchdogMs ?? null;
     this.initLivenessSilenceMs = opts.initLivenessSilenceMs;
     this.initPreProtocolCapMs = opts.initPreProtocolCapMs;
@@ -300,6 +371,201 @@ export class Supervisor implements SupervisorContract {
       opts.initFailureCooldownMs ?? DEFAULT_INIT_FAILURE_COOLDOWN_MS;
     this.compactionStaleMs = opts.compactionStaleMs ?? DEFAULT_COMPACTION_STALE_MS;
     this.emitRawRuntimeOutput = opts.emitRawRuntimeOutput ?? false;
+  }
+
+  private advanceObservedSeq(
+    handle: RuntimeHandle,
+    seq: number | undefined,
+    source: string,
+  ): void {
+    const nextSeq = safeSeq(seq);
+    if (nextSeq === null) return;
+    const prev = handle.observedSeq;
+    handle.observedSeq = Math.max(prev, nextSeq);
+    handle.inputTurnActive = true;
+    if (handle.observedSeq !== prev) {
+      this.logger.warn(
+        {
+          kind: 'process',
+          action: 'freshness_observed_seq_advanced',
+          conversationId: handle.conversationId,
+          agent_id: handle.agentId,
+          source,
+          previous_seq: prev,
+          observed_seq: handle.observedSeq,
+        },
+        'runtime freshness observed seq advanced',
+      );
+    }
+  }
+
+  private queueAdmissionSeq(
+    handle: RuntimeHandle,
+    seq: number | undefined,
+    source: string,
+  ): void {
+    const nextSeq = safeSeq(seq);
+    if (nextSeq === null) return;
+    const prev = handle.pendingAdmissionSeq ?? 0;
+    handle.pendingAdmissionSeq = Math.max(prev, nextSeq);
+    if (handle.pendingAdmissionSeq !== prev) {
+      this.logger.warn(
+        {
+          kind: 'process',
+          action: 'freshness_pending_admission_queued',
+          conversationId: handle.conversationId,
+          agent_id: handle.agentId,
+          source,
+          previous_pending_seq: prev || null,
+          pending_admission_seq: handle.pendingAdmissionSeq,
+        },
+        'runtime freshness pending admission queued',
+      );
+    }
+  }
+
+  private admitPendingSeqForNewTurn(handle: RuntimeHandle, source: string): void {
+    const pending = handle.pendingAdmissionSeq;
+    if (pending === null) return;
+    handle.pendingAdmissionSeq = null;
+    this.advanceObservedSeq(handle, pending, source);
+  }
+
+  private shouldAdmitDeliveryImmediately(handle: RuntimeHandle): boolean {
+    return handle.inputTurnActive !== true;
+  }
+
+  private getHandleForAgentIntent(
+    conversationId: string,
+    agentId: string,
+  ): RuntimeHandle {
+    const handle = this.handles.get(key(conversationId, agentId));
+    if (!handle || handle.phase === 'exited') {
+      throw new Error(
+        `agent side-effect requested for non-running runtime ${conversationId}/${agentId}`,
+      );
+    }
+    return handle;
+  }
+
+  private async backendPost(
+    handle: RuntimeHandle,
+    path: string,
+    body: unknown,
+  ): Promise<Response> {
+    const serverUrl = this.controlPlaneServerUrl();
+    if (!serverUrl) {
+      throw new Error(
+        'agent side-effect requested before daemon has a control-plane server URL',
+      );
+    }
+    return fetch(`${serverUrl}${path}`, {
+      method: 'POST',
+      headers: {
+        [AUTH_TOKEN_HEADER]: `Bearer ${handle.spawnParams.options.env_policy.silverhand.auth_token}`,
+        'X-Agent-Hub-Caller': 'silverhand-daemon',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async agentMessageSend(
+    params: AgentMessageSendParams,
+  ): Promise<AgentMessageSendResult> {
+    const handle = this.getHandleForAgentIntent(
+      params.conversation_id,
+      params.agent_id,
+    );
+    const pendingStale = handle.pendingStaleEvent;
+    const body: Record<string, unknown> = {
+      content: params.content,
+      ...(params.target ? { target: params.target } : {}),
+      ...(params.attachment_ids ? { attachment_ids: params.attachment_ids } : {}),
+      ...(params.freshness_bypass
+        ? { freshness_bypass: true }
+        : { seen_up_to_seq: handle.observedSeq }),
+      ...(pendingStale
+        ? {
+            stale_event_id: pendingStale.id,
+            ...(params.freshness_bypass
+              ? { stale_resolution_reason: 'force_send' }
+              : params.stale_resolution_reason
+                ? { stale_resolution_reason: params.stale_resolution_reason }
+                : {}),
+          }
+        : {}),
+    };
+    const res = await this.backendPost(
+      handle,
+      internalPaths.agentSendConversationMessage(
+        params.conversation_id,
+        params.agent_id,
+      ),
+      body,
+    );
+    if (!res.ok) {
+      const bodyText = await safeReadResponseText(res);
+      const stale = res.status === 409 ? extractStaleConflict(bodyText) : null;
+      if (stale) {
+        handle.pendingStaleEvent = stale;
+        this.advanceObservedSeq(handle, stale.currentSeq, 'message_stale_response');
+      } else if (pendingStale) {
+        handle.pendingStaleEvent = null;
+      }
+      return { ok: false, status: res.status, body_text: bodyText };
+    }
+    const json = (await res.json()) as Record<string, unknown>;
+    const messageId = json['message_id'];
+    const messageSeq = json['message_seq'];
+    if (typeof messageId !== 'string' || messageId.length === 0) {
+      throw new Error('backend send-message response missing message_id');
+    }
+    if (typeof messageSeq === 'number') {
+      this.advanceObservedSeq(handle, messageSeq, 'message_send_commit');
+    }
+    handle.pendingStaleEvent = null;
+    return {
+      ok: true,
+      message_id: messageId,
+      ...(typeof messageSeq === 'number' ? { message_seq: messageSeq } : {}),
+    };
+  }
+
+  async agentStaleResolve(
+    params: AgentStaleResolveParams,
+  ): Promise<AgentStaleResolveResult> {
+    const handle = this.getHandleForAgentIntent(
+      params.conversation_id,
+      params.agent_id,
+    );
+    const pendingStale = handle.pendingStaleEvent;
+    const staleEventId = params.stale_event_id ?? pendingStale?.id;
+    if (!staleEventId) {
+      return { ok: true, resolved: false, reason: 'no_pending_stale_event' };
+    }
+    const res = await this.backendPost(
+      handle,
+      internalPaths.agentResolveStaleMessage(
+        params.conversation_id,
+        params.agent_id,
+      ),
+      {
+        stale_event_id: staleEventId,
+        resolution_reason: params.resolution_reason,
+      },
+    );
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        body_text: await safeReadResponseText(res),
+      };
+    }
+    if (!params.stale_event_id || pendingStale?.id === params.stale_event_id) {
+      handle.pendingStaleEvent = null;
+    }
+    return { ok: true, resolved: true };
   }
 
   // ── runtime_start ──────────────────────────────────────────────
@@ -456,6 +722,8 @@ export class Supervisor implements SupervisorContract {
       options: startOptions,
       conversationId: params.conversation_id,
       agentId: params.agent_id,
+      daemonSocketPath: this.daemonSocketPath ?? undefined,
+      lastDeliveredSeqPath: spawnPrep.lastDeliveredSeqPath,
       binDir: spawnPrep.binDir,
       controlPlaneServerUrl: this.controlPlaneServerUrl(),
       proxyConfig: readDaemonProxyConfig(this.proxyConfigPath, this.logger),
@@ -524,6 +792,7 @@ export class Supervisor implements SupervisorContract {
     const startupBatch = params.startup_delivery && !driver.oneShot
       ? {
           deliveryIds: [...params.startup_delivery.delivery_ids],
+          deliveredUpToSeq: params.startup_delivery.delivered_up_to_seq,
           text: params.startup_delivery.text,
         }
       : null;
@@ -535,6 +804,13 @@ export class Supervisor implements SupervisorContract {
       startedAt,
       driver,
       child,
+      lastDeliveredSeqPath: spawnPrep.lastDeliveredSeqPath,
+      observedSeq: driver.oneShot
+        ? safeSeq(params.startup_delivery?.delivered_up_to_seq) ?? 0
+        : 0,
+      pendingAdmissionSeq: null,
+      inputTurnActive: driver.oneShot && !!params.startup_delivery,
+      pendingStaleEvent: null,
       phase: startupBatch ? 'startup_pending' : 'spawning',
       outputPaused: false,
       exitCode: null,
@@ -594,6 +870,10 @@ export class Supervisor implements SupervisorContract {
     child.off('error', earlyChildErrorListener);
 
     if (driver.oneShot && params.startup_delivery) {
+      void this.writeLastDeliveredSeq(
+        handle,
+        params.startup_delivery.delivered_up_to_seq,
+      );
       this.emitStartupDeliveryConsumed(
         handle,
         params.startup_delivery.delivery_ids,
@@ -770,6 +1050,12 @@ export class Supervisor implements SupervisorContract {
 
     try {
       await this.writeStdinPayload(handle, encoded);
+      this.advanceObservedSeq(
+        handle,
+        batch.deliveredUpToSeq,
+        'startup_delivery_admitted',
+      );
+      await this.writeLastDeliveredSeq(handle, batch.deliveredUpToSeq);
     } catch (err) {
       this.logger.warn(
         {
@@ -1254,8 +1540,23 @@ export class Supervisor implements SupervisorContract {
         delivery_ids: passthroughDeliveryIds,
       };
     }
+    const admitNow = this.shouldAdmitDeliveryImmediately(handle);
     try {
       await this.writeStdinPayload(handle, encoded);
+      if (admitNow) {
+        this.advanceObservedSeq(
+          handle,
+          params.delivered_up_to_seq,
+          'wake_delivery_admitted',
+        );
+      } else {
+        this.queueAdmissionSeq(
+          handle,
+          params.delivered_up_to_seq,
+          'wake_delivery_deferred',
+        );
+      }
+      await this.writeLastDeliveredSeq(handle, params.delivered_up_to_seq);
     } catch (err) {
       this.logger.warn(
         {
@@ -1289,6 +1590,40 @@ export class Supervisor implements SupervisorContract {
       delivered: true,
       delivery_ids: passthroughDeliveryIds,
     };
+  }
+
+  private async writeLastDeliveredSeq(
+    handle: RuntimeHandle,
+    deliveredUpToSeq: number | undefined,
+  ): Promise<void> {
+    if (
+      deliveredUpToSeq === undefined
+      || !Number.isSafeInteger(deliveredUpToSeq)
+      || deliveredUpToSeq <= 0
+    ) {
+      return;
+    }
+    try {
+      await writeFile(
+        handle.lastDeliveredSeqPath,
+        `${deliveredUpToSeq}\n`,
+        'utf-8',
+      );
+    } catch (err) {
+      this.logger.warn(
+        {
+          kind: 'process',
+          action: 'last_delivered_seq_write_failed',
+          pid: handle.pid,
+          conversationId: handle.conversationId,
+          agent_id: handle.agentId,
+          delivered_up_to_seq: deliveredUpToSeq,
+          path: handle.lastDeliveredSeqPath,
+          error_message: (err as Error).message,
+        },
+        'failed to update runtime last-delivered seq file',
+      );
+    }
   }
 
   // ── runtime_status ─────────────────────────────────────────────
@@ -1741,6 +2076,10 @@ export class Supervisor implements SupervisorContract {
       return;
     }
 
+    if (!handle.inputTurnActive && parsedStartsTurn(parsed)) {
+      this.admitPendingSeqForNewTurn(handle, 'queued_delivery_admitted_on_activity');
+    }
+
     switch (parsed.kind) {
       case 'thinking':
         this.recordActivitySnippet(handle, 'thinking', parsed.text);
@@ -2049,6 +2388,7 @@ export class Supervisor implements SupervisorContract {
     handle.runState = null;
     handle.busy.outstandingToolUses = 0;
     handle.busy.compacting = false;
+    handle.inputTurnActive = false;
   }
 
   /**

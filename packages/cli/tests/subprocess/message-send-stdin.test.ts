@@ -34,7 +34,9 @@ import {
 } from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -50,6 +52,12 @@ interface CapturedRequest {
 let server: Server;
 let serverUrl: string;
 const captured: CapturedRequest[] = [];
+let nextSendResponse:
+  | {
+      status: number;
+      body: unknown;
+    }
+  | null = null;
 
 beforeAll(async () => {
   server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -61,9 +69,11 @@ beforeAll(async () => {
         path: req.url ?? '',
         bodyBytes: Buffer.concat(chunks),
       });
-      res.statusCode = 200;
+      const reply = nextSendResponse;
+      nextSendResponse = null;
+      res.statusCode = reply?.status ?? 200;
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ message_id: 'msg-1' }));
+      res.end(JSON.stringify(reply?.body ?? { message_id: 'msg-1', message_seq: 9 }));
     });
   });
   await new Promise<void>(r => server.listen(0, '127.0.0.1', () => r()));
@@ -91,6 +101,23 @@ interface RunResult {
 function runSend(opts: {
   argv?: string[];
   stdin?: Buffer | string | null;
+  env?: Record<string, string>;
+  /** Wrap with `script -q /dev/null` to fake a TTY on stdin. macOS only. */
+  withTty?: boolean;
+}): Promise<RunResult> {
+  return runMessage({
+    noun: 'message',
+    verb: 'send',
+    ...opts,
+  });
+}
+
+function runMessage(opts: {
+  noun: string;
+  verb: string;
+  argv?: string[];
+  stdin?: Buffer | string | null;
+  env?: Record<string, string>;
   /** Wrap with `script -q /dev/null` to fake a TTY on stdin. macOS only. */
   withTty?: boolean;
 }): Promise<RunResult> {
@@ -102,10 +129,10 @@ function runSend(opts: {
       // BSD `script` puts the wrapped command's stdin/stdout under a
       // pty. We use `/dev/null` as the typescript output target.
       cmd = '/usr/bin/script';
-      cmdArgs = ['-q', '/dev/null', TSX_BIN, CLI_SRC, 'message', 'send', ...argv];
+      cmdArgs = ['-q', '/dev/null', TSX_BIN, CLI_SRC, opts.noun, opts.verb, ...argv];
     } else {
       cmd = TSX_BIN;
-      cmdArgs = [CLI_SRC, 'message', 'send', ...argv];
+      cmdArgs = [CLI_SRC, opts.noun, opts.verb, ...argv];
     }
     const child = spawn(cmd, cmdArgs, {
       // For the `script` (TTY) wrapper we MUST NOT inherit vitest's
@@ -122,6 +149,7 @@ function runSend(opts: {
         ...process.env,
         ...ENV,
         SILVERHAND_SERVER_URL: serverUrl,
+        ...(opts.env ?? {}),
       },
     });
     let stdout = '';
@@ -316,5 +344,109 @@ describe('silverhand message send (stdin-only, real subprocess)', () => {
     expect(reqBody.content).toBe('hi');
     expect(reqBody.target).toBe('parent');
     expect(reqBody.attachment_ids).toEqual(['att-1', 'att-2']);
+  });
+
+  it('does not derive freshness from the legacy delivered-seq sidecar in direct fallback', async () => {
+    captured.length = 0;
+    const dir = await mkdtemp(join(tmpdir(), 'silverhand-cli-seq-'));
+    const seqFile = join(dir, 'last-delivered-seq');
+    try {
+      await writeFile(seqFile, '5\n', 'utf8');
+      const r = await runSend({
+        stdin: 'hi',
+        env: { SILVERHAND_LAST_DELIVERED_SEQ_FILE: seqFile },
+      });
+      expect(r.code, r.stderr).toBe(0);
+      const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
+        content: string;
+        seen_up_to_seq?: number;
+      };
+      expect(reqBody.seen_up_to_seq).toBeUndefined();
+      expect((await readFile(seqFile, 'utf8')).trim()).toBe('5');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('forwards --anyway as an explicit freshness bypass in direct fallback', async () => {
+    captured.length = 0;
+    const dir = await mkdtemp(join(tmpdir(), 'silverhand-cli-anyway-'));
+    const seqFile = join(dir, 'last-delivered-seq');
+    try {
+      await writeFile(seqFile, '5\n', 'utf8');
+      const r = await runSend({
+        argv: ['--anyway'],
+        stdin: 'force it',
+        env: { SILVERHAND_LAST_DELIVERED_SEQ_FILE: seqFile },
+      });
+      expect(r.code, r.stderr).toBe(0);
+      const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
+        content: string;
+        seen_up_to_seq?: number;
+        freshness_bypass?: boolean;
+      };
+      expect(reqBody.content).toBe('force it');
+      expect(reqBody.seen_up_to_seq).toBeUndefined();
+      expect(reqBody.freshness_bypass).toBe(true);
+      expect((await readFile(seqFile, 'utf8')).trim()).toBe('5');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not mutate the legacy sidecar on direct-fallback message_stale', async () => {
+    captured.length = 0;
+    const dir = await mkdtemp(join(tmpdir(), 'silverhand-cli-stale-'));
+    const seqFile = join(dir, 'last-delivered-seq');
+    try {
+      await writeFile(seqFile, '5\n', 'utf8');
+      nextSendResponse = {
+        status: 409,
+        body: {
+          error: {
+            code: 'conflict',
+            message: 'message stale',
+            details: {
+              subkind: 'message_stale',
+              conversation_id: 'conv-1',
+              stale_event_id: 'evt-1',
+              seen_up_to_seq: 5,
+              current_seq: 8,
+              newer_messages: [{ id: 'msg-8', seq: 8 }],
+            },
+          },
+        },
+      };
+      const stale = await runSend({
+        stdin: 'draft',
+        env: { SILVERHAND_LAST_DELIVERED_SEQ_FILE: seqFile },
+      });
+      expect(stale.code).toBe(1);
+      const err = parseStderrJson(stale.stderr);
+      expect(err.error.code).toBe('conflict');
+      expect((await readFile(seqFile, 'utf8')).trim()).toBe('5');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports obsolete stale resolution with an explicit event id in direct fallback', async () => {
+    captured.length = 0;
+    nextSendResponse = { status: 200, body: { ok: true } };
+    const resolved = await runMessage({
+      noun: 'message',
+      verb: 'stale-resolve',
+      argv: ['--resolution', 'obsolete', '--event-id', 'evt-obsolete'],
+    });
+    expect(resolved.code, resolved.stderr).toBe(0);
+    const output = JSON.parse(resolved.stdout) as { resolved: boolean };
+    expect(output).toEqual({ resolved: true });
+    const reqBody = JSON.parse(captured.at(-1)!.bodyBytes.toString('utf8')) as {
+      stale_event_id?: string;
+      resolution_reason?: string;
+    };
+    expect(captured.at(-1)!.path).toContain('/stale-message-resolution');
+    expect(reqBody.stale_event_id).toBe('evt-obsolete');
+    expect(reqBody.resolution_reason).toBe('obsolete');
   });
 }, { timeout: 30_000 });

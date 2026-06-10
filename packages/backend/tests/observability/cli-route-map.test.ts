@@ -27,7 +27,7 @@
  * Together they keep the `cli.invoke` aggregations honest as the
  * command surface evolves.
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -70,8 +70,14 @@ function suffixOf(path: string): string {
 }
 
 /**
- * Read `packages/backend/src/routes.ts` and build a map from
- * `internalPaths` helper name → registered HTTP method (`'GET'|'POST'`).
+ * Read the backend route source and build a map from `internalPaths`
+ * helper name → registered HTTP method (`'GET'|'POST'`).
+ *
+ * Internal route registrations live in `routes.ts` AND in the extracted
+ * per-context route modules under `src/routes/` (the #task:966/#967 context
+ * split moved e.g. `agentAddConversationMember` into `routes/membership.ts`).
+ * We scan all of them so the guard follows handlers as they move out of the
+ * monolith.
  *
  * Uses a regex over the source rather than booting the app: cheaper,
  * deterministic, and the test wants to fail when the *source registers*
@@ -79,22 +85,31 @@ function suffixOf(path: string): string {
  */
 function buildRegistrationMap(): Map<string, 'GET' | 'POST'> {
   const here = dirname(fileURLToPath(import.meta.url));
-  const routesPath = resolve(here, '../../src/routes.ts');
-  const src = readFileSync(routesPath, 'utf8');
+  const srcDir = resolve(here, '../../src');
+  const routesDir = resolve(srcDir, 'routes');
+  const files = [
+    resolve(srcDir, 'routes.ts'),
+    ...readdirSync(routesDir)
+      .filter(f => f.endsWith('.ts'))
+      .map(f => resolve(routesDir, f)),
+  ];
   const re = /app\.(get|post)\(\s*internalPaths\.(\w+)\s*\(/g;
   const map = new Map<string, 'GET' | 'POST'>();
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(src)) !== null) {
-    const method = m[1]!.toUpperCase() as 'GET' | 'POST';
-    const name = m[2]!;
-    // First registration wins. There should never be duplicates; if a
-    // name shows up twice we fail loudly below.
-    if (map.has(name) && map.get(name) !== method) {
-      throw new Error(
-        `internalPaths.${name} registered with both ${map.get(name)} and ${method} in routes.ts`,
-      );
+  for (const file of files) {
+    const src = readFileSync(file, 'utf8');
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src)) !== null) {
+      const method = m[1]!.toUpperCase() as 'GET' | 'POST';
+      const name = m[2]!;
+      // First registration wins. There should never be duplicates; if a
+      // name shows up twice we fail loudly below.
+      if (map.has(name) && map.get(name) !== method) {
+        throw new Error(
+          `internalPaths.${name} registered with both ${map.get(name)} and ${method}`,
+        );
+      }
+      map.set(name, method);
     }
-    map.set(name, method);
   }
   return map;
 }
@@ -134,7 +149,7 @@ describe('CLI invoke route map', () => {
       const expectedMethod = registered.get(name);
       expect(
         expectedMethod,
-        `internalPaths.${name} is not registered in routes.ts (no app.get/app.post call)`,
+        `internalPaths.${name} is not registered in any backend route source (no app.get/app.post call)`,
       ).toBeDefined();
       const hit = lookupCliRoute(expectedMethod!, suffix);
       expect(
@@ -144,7 +159,7 @@ describe('CLI invoke route map', () => {
     }
   });
 
-  it('every CLI_INVOKE_ROUTES entry method matches the routes.ts registration', () => {
+  it('every CLI_INVOKE_ROUTES entry method matches the backend route registration', () => {
     // Reverse direction: walk the route map, find the matching
     // internalPaths helper by suffix, and assert the methods agree.
     // This catches the case where someone updates the map to a method
@@ -172,11 +187,11 @@ describe('CLI invoke route map', () => {
       const actualMethod = registered.get(name!);
       expect(
         actualMethod,
-        `CLI_INVOKE_ROUTES entry ${r.method} ${r.suffix} → internalPaths.${name} is not registered in routes.ts`,
+        `CLI_INVOKE_ROUTES entry ${r.method} ${r.suffix} → internalPaths.${name} is not registered in any backend route source`,
       ).toBeDefined();
       expect(
         actualMethod,
-        `CLI_INVOKE_ROUTES entry ${r.method} ${r.suffix} → routes.ts registers ${actualMethod} for internalPaths.${name}; the map will produce None.None in cli-*.log`,
+        `CLI_INVOKE_ROUTES entry ${r.method} ${r.suffix} → backend route sources register ${actualMethod} for internalPaths.${name}; the map will produce None.None in cli-*.log`,
       ).toBe(r.method);
     }
   });

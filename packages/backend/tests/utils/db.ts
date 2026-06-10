@@ -97,8 +97,11 @@ export function openTestDb(options: OpenTestDbOptions = {}): {
       CREATE TRIGGER IF NOT EXISTS test_seed_workspace_users
       AFTER INSERT ON workspaces
       BEGIN
-        INSERT OR IGNORE INTO workspace_users (workspace_id, user_id, joined_at)
-        SELECT NEW.id, u.id, NEW.created_at FROM users u;
+        INSERT OR IGNORE INTO workspace_users (workspace_id, user_id, joined_at, role)
+        SELECT NEW.id, u.id, NEW.created_at,
+               CASE WHEN u.id = (SELECT value FROM app_settings WHERE key = 'viewer_user_id')
+                    THEN 'owner' ELSE 'member' END
+          FROM users u;
       END;
 
       CREATE TRIGGER IF NOT EXISTS test_seed_conversation_users

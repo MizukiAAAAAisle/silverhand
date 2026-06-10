@@ -1,15 +1,19 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Copy, Check, Archive, ArchiveRestore } from 'lucide-react';
+import { Copy, Check, Archive, ArchiveRestore, Settings2, ShieldCheck } from 'lucide-react';
+import type { AgentCapability } from '@silverhand/shared';
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/cn';
+import { AgentPermissionsPanel } from './AgentPermissionsPanel';
 import { useArchiveWorkspace, useDeleteWorkspace, useRenameWorkspace } from './hooks';
+
+type SettingsSection = 'general' | 'agents';
 
 interface WorkspaceSettingsDialogProps {
   open: boolean;
@@ -21,9 +25,20 @@ interface WorkspaceSettingsDialogProps {
   /** epoch ms when archived; null for active workspaces. */
   archivedAt: number | null;
   onDeleted?: () => void;
+  /** Deep-link: open straight to a section. Defaults to 'general'. The
+   *  unified "open settings → Agent 权限" entry (channel jump today, future
+   *  capability_denied notification) passes 'agents' + a focus agent. */
+  initialSection?: SettingsSection;
+  focusAgentId?: string | null;
+  highlightCapability?: AgentCapability | null;
 }
 
 const NAME_PATTERN = /^[a-zA-Z0-9_\-]+$/;
+
+const NAV_ITEMS: { id: SettingsSection; label: string; icon: typeof Settings2 }[] = [
+  { id: 'general', label: 'General', icon: Settings2 },
+  { id: 'agents', label: 'Permission', icon: ShieldCheck },
+];
 
 export function WorkspaceSettingsDialog({
   open,
@@ -34,7 +49,11 @@ export function WorkspaceSettingsDialog({
   workspacePath,
   archivedAt,
   onDeleted,
+  initialSection = 'general',
+  focusAgentId = null,
+  highlightCapability = null,
 }: WorkspaceSettingsDialogProps): JSX.Element {
+  const [section, setSection] = useState<SettingsSection>(initialSection);
   const [name, setName] = useState('');
   const [renameError, setRenameError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -50,12 +69,13 @@ export function WorkspaceSettingsDialog({
   // workspace.
   useEffect(() => {
     if (open) {
+      setSection(initialSection);
       setName(workspaceName ?? '');
       setRenameError(null);
       setCopied(false);
       setConfirmingDelete(false);
     }
-  }, [open, workspaceName]);
+  }, [open, workspaceName, initialSection]);
 
   const handleRename = async (e: FormEvent) => {
     e.preventDefault();
@@ -63,11 +83,11 @@ export function WorkspaceSettingsDialog({
     if (!workspaceId) return;
     const trimmed = name.trim();
     if (!trimmed) {
-      setRenameError('请填写 Workspace 名称');
+      setRenameError('Please enter a workspace name');
       return;
     }
     if (!NAME_PATTERN.test(trimmed)) {
-      setRenameError('只允许字母、数字、`-` 和 `_`');
+      setRenameError('Only letters, digits, - and _ are allowed');
       return;
     }
     if (trimmed === workspaceName) return;
@@ -115,136 +135,249 @@ export function WorkspaceSettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-w-4xl">
         <DialogHeader>
-          <DialogTitle>Workspace 设置</DialogTitle>
-          <DialogDescription>
-            {isDm
-              ? 'DM Workspace 名称由 dm-<agent> 自动生成，不可改。'
-              : '改名会通知在线 agent 更新 MEMORY 里的旧名引用；工作目录不变。'}
-          </DialogDescription>
+          <DialogTitle className="flex items-baseline gap-2">
+            Workspace Settings
+            {workspaceName ? (
+              <span className="min-w-0 truncate text-sm font-normal text-text-muted">
+                {workspaceName}
+              </span>
+            ) : null}
+          </DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={handleRename} className="flex flex-col gap-1.5">
-          <Label htmlFor="workspace-settings-name">名称</Label>
-          <div className="flex gap-2">
-            <Input
-              id="workspace-settings-name"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="my-frontend"
-              disabled={isDm}
-              autoFocus={!isDm}
-            />
-            <Button type="submit" disabled={renameDisabled}>
-              {renameWorkspace.isPending ? '保存中…' : '保存'}
-            </Button>
-          </div>
-          {renameError ? (
-            <div className="text-xs text-error">{renameError}</div>
-          ) : null}
-        </form>
+        <div className="flex h-[32rem] gap-5">
+          <nav className="flex w-40 shrink-0 flex-col gap-0.5">
+            {NAV_ITEMS.map(item => {
+              const active = section === item.id;
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-current={active ? 'page' : undefined}
+                  onClick={() => setSection(item.id)}
+                  className={cn(
+                    'flex items-center gap-2 rounded-[var(--control-radius)] px-2.5 py-1.5 text-left text-sm transition-colors',
+                    active
+                      ? 'bg-[var(--bg-row-selected)] font-medium text-[color:var(--text-on-selected)]'
+                      : 'text-text-secondary hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
+                  )}
+                >
+                  <Icon className="size-3.5 shrink-0" />
+                  <span className="truncate">{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
 
-        {workspacePath ? (
-          <div className="flex flex-col gap-1.5">
-            <Label>工作目录</Label>
-            <div className="flex gap-2">
-              <Input
-                value={workspacePath}
-                readOnly
-                onFocus={e => e.currentTarget.select()}
-                className="font-mono text-xs"
+          <div className="scrollbar-hide min-w-0 flex-1 overflow-y-auto pr-1">
+            {section === 'general' ? (
+              <GeneralSection
+                isDm={isDm}
+                isArchived={isArchived}
+                name={name}
+                onNameChange={setName}
+                onRename={handleRename}
+                renameError={renameError}
+                renameDisabled={renameDisabled}
+                renamePending={renameWorkspace.isPending}
+                workspaceId={workspaceId}
+                workspacePath={workspacePath}
+                copied={copied}
+                onCopyWorkspace={handleCopyWorkspace}
+                onToggleArchive={handleToggleArchive}
+                archivePending={archiveWorkspace.isPending}
+                confirmingDelete={confirmingDelete}
+                setConfirmingDelete={setConfirmingDelete}
+                onDelete={handleDelete}
+                deletePending={deleteWorkspace.isPending}
               />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleCopyWorkspace}
-                aria-label="复制工作目录路径"
-                title="复制工作目录路径"
-              >
-                {copied ? (
-                  <Check className="size-3.5" />
-                ) : (
-                  <Copy className="size-3.5" />
-                )}
-              </Button>
-            </div>
-          </div>
-        ) : null}
-
-        <div className="mt-2 flex items-center justify-between gap-3 rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated/40 p-3">
-          <div className="flex flex-col gap-0.5">
-            <span className="text-sm font-medium text-text-primary">
-              {isArchived ? '已归档' : '归档 Workspace'}
-            </span>
-            <span className="text-xs text-text-muted">
-              {isArchived
-                ? '已折叠到侧栏 Archived 分组，仍可访问。'
-                : '折叠到侧栏 Archived 分组，保留全部内容，可随时恢复。'}
-            </span>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={handleToggleArchive}
-            disabled={!workspaceId || archiveWorkspace.isPending}
-          >
-            {isArchived ? (
-              <>
-                <ArchiveRestore className="mr-1.5 size-3.5" />
-                {archiveWorkspace.isPending ? '处理中…' : '取消归档'}
-              </>
             ) : (
-              <>
-                <Archive className="mr-1.5 size-3.5" />
-                {archiveWorkspace.isPending ? '处理中…' : '归档'}
-              </>
+              <AgentPermissionsPanel
+                workspaceId={workspaceId}
+                focusAgentId={focusAgentId}
+                highlightCapability={highlightCapability}
+              />
             )}
-          </Button>
-        </div>
-
-        <div className="mt-2 flex flex-col gap-2 rounded-[var(--control-radius)] border border-error/30 bg-error/5 p-3">
-          <div className="flex flex-col gap-0.5">
-            <span className="text-sm font-medium text-text-primary">
-              删除 Workspace
-            </span>
-            <span className="text-xs text-text-muted">
-              全部 Channel、Thread 与消息一并清除，不可恢复。
-            </span>
           </div>
-          {confirmingDelete ? (
-            <div className="flex items-center justify-end gap-2">
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => setConfirmingDelete(false)}
-                disabled={deleteWorkspace.isPending}
-              >
-                取消
-              </Button>
-              <Button
-                type="button"
-                variant="danger"
-                onClick={handleDelete}
-                disabled={deleteWorkspace.isPending}
-              >
-                {deleteWorkspace.isPending ? '删除中…' : '确认删除'}
-              </Button>
-            </div>
-          ) : (
-            <div className="flex justify-end">
-              <Button
-                type="button"
-                variant="danger"
-                onClick={() => setConfirmingDelete(true)}
-                disabled={!workspaceId}
-              >
-                删除 Workspace
-              </Button>
-            </div>
-          )}
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+interface GeneralSectionProps {
+  isDm: boolean;
+  isArchived: boolean;
+  name: string;
+  onNameChange: (v: string) => void;
+  onRename: (e: FormEvent) => void;
+  renameError: string | null;
+  renameDisabled: boolean;
+  renamePending: boolean;
+  workspaceId: string | null;
+  workspacePath: string | null;
+  copied: boolean;
+  onCopyWorkspace: () => void;
+  onToggleArchive: () => void;
+  archivePending: boolean;
+  confirmingDelete: boolean;
+  setConfirmingDelete: (v: boolean) => void;
+  onDelete: () => void;
+  deletePending: boolean;
+}
+
+function GeneralSection({
+  isDm,
+  isArchived,
+  name,
+  onNameChange,
+  onRename,
+  renameError,
+  renameDisabled,
+  renamePending,
+  workspaceId,
+  workspacePath,
+  copied,
+  onCopyWorkspace,
+  onToggleArchive,
+  archivePending,
+  confirmingDelete,
+  setConfirmingDelete,
+  onDelete,
+  deletePending,
+}: GeneralSectionProps): JSX.Element {
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-xs text-text-muted">
+        {isDm
+          ? 'DM workspace names are auto-generated as dm-<agent> and cannot be changed.'
+          : 'Renaming notifies online agents to update old name references in MEMORY; the working directory is unchanged.'}
+      </p>
+
+      <form onSubmit={onRename} className="flex flex-col gap-1.5">
+        <Label htmlFor="workspace-settings-name">Name</Label>
+        <div className="flex gap-2">
+          <Input
+            id="workspace-settings-name"
+            value={name}
+            onChange={e => onNameChange(e.target.value)}
+            placeholder="my-frontend"
+            disabled={isDm}
+            autoFocus={!isDm}
+            className="transition-colors hover:border-[color:var(--border-control-hover)]"
+          />
+          <Button type="submit" disabled={renameDisabled}>
+            {renamePending ? 'Saving…' : 'Save'}
+          </Button>
+        </div>
+        {renameError ? (
+          <div className="text-xs text-error">{renameError}</div>
+        ) : null}
+      </form>
+
+      {workspacePath ? (
+        <div className="flex flex-col gap-1.5">
+          <Label>Working directory</Label>
+          <div className="flex gap-2">
+            <Input
+              value={workspacePath}
+              readOnly
+              onFocus={e => e.currentTarget.select()}
+              className="font-mono text-xs"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onCopyWorkspace}
+              aria-label="Copy working directory path"
+              title="Copy working directory path"
+            >
+              {copied ? (
+                <Check className="size-3.5" />
+              ) : (
+                <Copy className="size-3.5" />
+              )}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="flex items-center justify-between gap-3 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-elevated/40 p-3 transition-colors hover:border-[color:var(--border-control-hover)]">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-sm font-medium text-text-primary">
+            {isArchived ? 'Archived' : 'Archive workspace'}
+          </span>
+          <span className="text-xs text-text-muted">
+            {isArchived
+              ? 'Collapsed into the sidebar Archived group; still accessible.'
+              : 'Collapse into the sidebar Archived group, keep all content, restore anytime.'}
+          </span>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onToggleArchive}
+          disabled={!workspaceId || archivePending}
+        >
+          {isArchived ? (
+            <>
+              <ArchiveRestore className="mr-1.5 size-3.5" />
+              {archivePending ? 'Working…' : 'Unarchive'}
+            </>
+          ) : (
+            <>
+              <Archive className="mr-1.5 size-3.5" />
+              {archivePending ? 'Working…' : 'Archive'}
+            </>
+          )}
+        </Button>
+      </div>
+
+      <div className="flex flex-col gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-error/30 bg-error/5 p-3">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-sm font-medium text-text-primary">
+            Delete workspace
+          </span>
+          <span className="text-xs text-text-muted">
+            All channels, threads, and messages are removed permanently and
+            cannot be recovered.
+          </span>
+        </div>
+        {confirmingDelete ? (
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setConfirmingDelete(false)}
+              disabled={deletePending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={onDelete}
+              disabled={deletePending}
+            >
+              {deletePending ? 'Deleting…' : 'Confirm delete'}
+            </Button>
+          </div>
+        ) : (
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              variant="danger"
+              onClick={() => setConfirmingDelete(true)}
+              disabled={!workspaceId}
+            >
+              Delete workspace
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

@@ -56,6 +56,8 @@ import {
   type RuntimeStatusParams,
   type RuntimeClearSessionParams,
   type ConversationLogDebugParams,
+  type AgentMessageSendParams,
+  type AgentStaleResolveParams,
   type HostOutboundAttachParams,
   type HostProxyConfigSetParams,
 } from '../protocol.js';
@@ -353,6 +355,18 @@ export class HostClient {
     params: ConversationLogDebugParams,
   ): Promise<IntentResult<'conversation_log_debug'>> {
     return this.call('conversation_log_debug', params);
+  }
+
+  agentMessageSend(
+    params: AgentMessageSendParams,
+  ): Promise<IntentResult<'agent_message_send'>> {
+    return this.call('agent_message_send', params);
+  }
+
+  agentStaleResolve(
+    params: AgentStaleResolveParams,
+  ): Promise<IntentResult<'agent_stale_resolve'>> {
+    return this.call('agent_stale_resolve', params);
   }
 
   // ── PR-2 runtime_* typed helpers ───────────────────────────────

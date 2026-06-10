@@ -16,7 +16,7 @@
  * default 5s budget even when we deliberately exercise the
  * `--ignore-sigterm` path.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
@@ -3175,5 +3175,131 @@ describe('Supervisor 3b — Option A v2 deferred startup_delivery on stateful dr
     ).toBe(true);
 
     await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+});
+
+describe('Supervisor — daemon-owned freshness boundary', () => {
+  it('does not admit mid-turn wake delivery into the next send boundary', async () => {
+    const { supervisor } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(
+          JSON.stringify({ message_id: 'm14', message_seq: 14 }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      await supervisor.wake({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [12],
+        kind: 'message',
+        text: 'count upward from 1',
+        delivered_up_to_seq: 12,
+      });
+      await supervisor.wake({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [13],
+        kind: 'message',
+        text: 'Judy: 1',
+        delivered_up_to_seq: 13,
+      });
+
+      const result = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: '1',
+      });
+
+      expect(result).toMatchObject({ ok: true, message_id: 'm14' });
+      expect(postedBodies).toHaveLength(1);
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(12);
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('advances observed seq and carries the stale event after a 409 response', async () => {
+    const { supervisor } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        if (postedBodies.length === 1) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'conflict',
+                message: 'message stale',
+                details: {
+                  subkind: 'message_stale',
+                  conversation_id: 'c1',
+                  stale_event_id: 'stale-1',
+                  seen_up_to_seq: 12,
+                  current_seq: 13,
+                  newer_messages: [],
+                },
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({ message_id: 'm14', message_seq: 14 }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      await supervisor.wake({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [12],
+        kind: 'message',
+        text: 'count upward from 1',
+        delivered_up_to_seq: 12,
+      });
+
+      const stale = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: '1',
+      });
+      expect(stale).toMatchObject({ ok: false, status: 409 });
+
+      const retry = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: '2',
+        stale_resolution_reason: 'revised',
+      });
+
+      expect(retry).toMatchObject({ ok: true, message_id: 'm14' });
+      expect(postedBodies).toHaveLength(2);
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(12);
+      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(13);
+      expect(postedBodies[1]?.['stale_event_id']).toBe('stale-1');
+      expect(postedBodies[1]?.['stale_resolution_reason']).toBe('revised');
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
   });
 });

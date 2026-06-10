@@ -215,6 +215,7 @@ export interface RunDaemonOptions {
         logger: DaemonLogger;
         daemonInstanceId: string;
         runtimePidRootDir: string | null;
+        daemonSocketPath: string;
         /**
          * D4.e-6 — host path resolution deps for `runtime_start`. The
          * daemon resolves semantic workspace/agent refs to absolute host
@@ -532,6 +533,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         logger,
         daemonInstanceId,
         runtimePidRootDir,
+        daemonSocketPath: opts.socketPath,
         runtimeStartResolveDeps,
         proxyConfigPath: opts.proxyConfigPath ?? null,
         localSilverhandCliLauncher,

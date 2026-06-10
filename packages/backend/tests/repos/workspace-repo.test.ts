@@ -23,23 +23,23 @@ function bootstrapWorkspaceAndAgents() {
 }
 
 describe('WorkspaceRepo', () => {
-  it('addMember is idempotent and isMember reflects state', () => {
+  it('insertMembership is idempotent and isMember reflects state', () => {
     const { workspace, a, workspaces } = bootstrapWorkspaceAndAgents();
     expect(workspaces.isMember(workspace.id, a.id)).toBe(false);
 
-    workspaces.addMember(workspace.id, a.id);
+    workspaces.insertMembership(workspace.id, a.id);
     expect(workspaces.isMember(workspace.id, a.id)).toBe(true);
 
-    workspaces.addMember(workspace.id, a.id);
+    workspaces.insertMembership(workspace.id, a.id);
     expect(workspaces.listMembers(workspace.id)).toHaveLength(1);
   });
 
   it('listMembers returns agents in joined_at order', () => {
     const { workspace, a, b, workspaces } = bootstrapWorkspaceAndAgents();
-    workspaces.addMember(workspace.id, b.id);
+    workspaces.insertMembership(workspace.id, b.id);
     const now = Date.now();
     while (Date.now() === now) { /* spin */ }
-    workspaces.addMember(workspace.id, a.id);
+    workspaces.insertMembership(workspace.id, a.id);
 
     const list = workspaces.listMembers(workspace.id);
     expect(list.map(x => x.id)).toEqual([b.id, a.id]);
@@ -47,8 +47,8 @@ describe('WorkspaceRepo', () => {
 
   it('removeMember deletes only the targeted membership', () => {
     const { workspace, a, b, workspaces } = bootstrapWorkspaceAndAgents();
-    workspaces.addMember(workspace.id, a.id);
-    workspaces.addMember(workspace.id, b.id);
+    workspaces.insertMembership(workspace.id, a.id);
+    workspaces.insertMembership(workspace.id, b.id);
 
     workspaces.removeMember(workspace.id, a.id);
     expect(workspaces.isMember(workspace.id, a.id)).toBe(false);
@@ -84,7 +84,7 @@ describe('WorkspaceRepo', () => {
   it('models agent_home ownership separately from regular workspace membership', () => {
     const { db, localHostId, workspace, a, workspaces } =
       bootstrapWorkspaceAndAgents();
-    workspaces.addMember(workspace.id, a.id);
+    workspaces.insertMembership(workspace.id, a.id);
     const home = workspaces.insertAgentHome({
       agent: a,
       workspacePath: join(tmpdir(), 'agents', a.id),
@@ -99,7 +99,7 @@ describe('WorkspaceRepo', () => {
       workspace.id,
       home.id,
     ]);
-    expect(() => workspaces.addMember(home.id, a.id)).toThrow(
+    expect(() => workspaces.insertMembership(home.id, a.id)).toThrow(
       /regular workspaces only/,
     );
 

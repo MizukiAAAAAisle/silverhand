@@ -130,7 +130,8 @@ drive runtime behavior.
 - old `channels`, `channelSessions`, `session*`, and internal
   `/internal/sessions/:sid/...` paths.
 
-`packages/shared/src/api/dto.ts` still contains legacy product DTOs:
+The `packages/shared/src/api/` per-context modules (e.g. `conversation.ts`)
+still contain legacy product DTOs:
 
 - `ChannelDto` still means old workspace/channel in some call sites;
 - `SessionDto`, `SessionAgentDto`, `SessionMessagesDto`;

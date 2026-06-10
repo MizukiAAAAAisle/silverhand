@@ -543,6 +543,81 @@ describe('host routes', () => {
       // best-effort disconnect runs.
       expect(controller!.disconnects).toEqual([]);
     });
+
+    // P9 (#task:978) pre-refactor characterization: the host-row revoke and
+    // the credential sweep are a SINGLE better-sqlite3 transaction. If the
+    // sweep (second write) fails, the revoke (first write) must roll back too —
+    // no half state (host tombstoned but credentials still active). Forced via
+    // a TEMP abort trigger on the host_credentials UPDATE. Pins the tx boundary
+    // before it moves into the use case (it must stay a single tx there).
+    it('rolls back the host-row revoke atomically when the credential sweep fails (single tx)', async () => {
+      t = buildTestApp({ ownedLocalHostUserIds: [] });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const claimed = await h.json<any>(
+        h.post(apiPaths.hostClaimOrCreate, {
+          installation_id: '50000009-1111-4111-8111-111111111111',
+        }),
+      );
+      // The host has exactly one active credential from the claim, so the
+      // sweep's UPDATE touches a row and the BEFORE-UPDATE trigger fires.
+      t.ctx.db.exec(
+        `CREATE TEMP TRIGGER force_fail_cred_sweep
+           BEFORE UPDATE ON host_credentials
+           BEGIN SELECT RAISE(ABORT, 'forced sweep failure'); END;`,
+      );
+
+      const res = await h.post(apiPaths.hostRevoke(claimed.host_id));
+      // Uncaught SqliteError (RAISE ABORT) → Hono default 500 (no app.onError).
+      expect(res.status).toBe(500);
+
+      // The first write rolled back with the second: host NOT revoked, and the
+      // credential is still active (sweep rolled back).
+      expect(new HostRepo(t.ctx.db).get(claimed.host_id)).toMatchObject({
+        revoked_at: null,
+      });
+      const activeCreds =
+        t.ctx.db
+          .prepare<[string], { c: number }>(
+            `SELECT COUNT(*) AS c FROM host_credentials
+              WHERE host_id = ? AND revoked_at IS NULL`,
+          )
+          .get(claimed.host_id)?.c ?? 0;
+      expect(activeCreds).toBe(1);
+    });
+
+    // P9 (#task:978) pre-refactor characterization: the 200 body is exactly
+    // `{ host: <full HostDto> }` — every DTO field, not just id/revoked_at —
+    // so the use-case extraction + route mapper must preserve the whole
+    // projection verbatim.
+    it('returns the full revoked HostDto verbatim in the 200 body', async () => {
+      t = buildTestApp({ ownedLocalHostUserIds: [] });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const claimed = await h.json<any>(
+        h.post(apiPaths.hostClaimOrCreate, {
+          installation_id: '50000010-1111-4111-8111-111111111111',
+        }),
+      );
+
+      const res = await h.post(apiPaths.hostRevoke(claimed.host_id));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { host: unknown };
+
+      // The body must be the full toDto of the revoked row — assert it equals
+      // the repo's own projection field-by-field (envelope + every field).
+      const repo = new HostRepo(t.ctx.db);
+      const updated = repo.get(claimed.host_id);
+      expect(updated).not.toBeNull();
+      const expectedDto = repo.toDto(updated!);
+      expect(body).toEqual({ host: expectedDto });
+      // Sanity: the projected row is the revoked tombstone.
+      expect(typeof expectedDto.revoked_at).toBe('number');
+    });
   });
 
   // ── POST /api/hosts/:id/rotate-token (Stage B.4) ─────────────

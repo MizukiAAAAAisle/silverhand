@@ -13,6 +13,7 @@ release/
 release-remote-server/
 
 # Local data
+.claude/worktrees/*
 docs/cli-log-reports/*
 docs/changelogs/*
 .silverhand

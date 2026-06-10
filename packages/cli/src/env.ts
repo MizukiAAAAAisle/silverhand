@@ -14,6 +14,8 @@ import {
   SILVERHAND_AGENT_ID_ENV,
   SILVERHAND_AUTH_TOKEN_ENV,
   SILVERHAND_CONVERSATION_ID_ENV,
+  SILVERHAND_DAEMON_SOCKET_ENV,
+  SILVERHAND_LAST_DELIVERED_SEQ_FILE_ENV,
   SILVERHAND_SERVER_URL_ENV,
 } from '@silverhand/shared';
 import { CliError } from './errors.js';
@@ -23,6 +25,8 @@ export interface CliEnv {
   agentId: string;
   serverUrl: string;
   authToken: string;
+  daemonSocketPath?: string;
+  lastDeliveredSeqFile?: string;
 }
 
 /** Reads the four required env vars. Throws a `CliError` (validation_error,
@@ -34,6 +38,8 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): CliEnv {
   const agentId = env[SILVERHAND_AGENT_ID_ENV];
   const serverUrl = env[SILVERHAND_SERVER_URL_ENV];
   const authToken = env[SILVERHAND_AUTH_TOKEN_ENV];
+  const daemonSocketPath = env[SILVERHAND_DAEMON_SOCKET_ENV];
+  const lastDeliveredSeqFile = env[SILVERHAND_LAST_DELIVERED_SEQ_FILE_ENV];
   if (!conversationId) missing.push(SILVERHAND_CONVERSATION_ID_ENV);
   if (!agentId) missing.push(SILVERHAND_AGENT_ID_ENV);
   if (!serverUrl) missing.push(SILVERHAND_SERVER_URL_ENV);
@@ -60,6 +66,8 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): CliEnv {
     agentId: agentId!,
     serverUrl: serverUrl!,
     authToken: authToken!,
+    ...(daemonSocketPath ? { daemonSocketPath } : {}),
+    ...(lastDeliveredSeqFile ? { lastDeliveredSeqFile } : {}),
   };
 }
 

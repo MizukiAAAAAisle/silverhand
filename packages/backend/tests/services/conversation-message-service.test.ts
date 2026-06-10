@@ -13,6 +13,7 @@ import {
   AttachmentError,
   ConversationError,
   ConversationMessageService,
+  MessageFreshnessError,
   PolicyError,
   TargetError,
 } from '../../src/services/conversation-message-service.js';
@@ -119,8 +120,8 @@ function bootstrap() {
   });
   const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
   const bob = agents.create({ name: 'bob', runtime: 'claude' }, localHostId, 'local');
-  workspaces.addMember(workspace.id, alice.id);
-  workspaces.addMember(workspace.id, bob.id);
+  workspaces.insertMembership(workspace.id, alice.id);
+  workspaces.insertMembership(workspace.id, bob.id);
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
     workspacePath: workspace.workspace_path,
@@ -592,6 +593,208 @@ describe('ConversationMessageService.sendMessage', () => {
         { conversationId: t.channel.id, agentId: t.alice.id, reason: 'replied' },
       ]);
       expect(vi.mocked(ccMentionsFromUserMessage)).not.toHaveBeenCalled();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('holds stale same-conversation agent sends before inserting side effects', async () => {
+    const t = bootstrap();
+    try {
+      const observed = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'observed',
+      });
+      const newer = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'conflicting update',
+      });
+      const conversationEvents: Array<{ kind: string; payload: any }> = [];
+      const unsub = t.events.subscribe(t.channel.id, e => {
+        conversationEvents.push({ kind: e.kind, payload: e.payload });
+      });
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          content: 'stale draft',
+          seenUpToSeq: observed.seq,
+        }),
+      ).rejects.toMatchObject({
+        code: 'message_stale',
+        staleEventId: expect.any(String),
+        seenUpToSeq: observed.seq,
+        currentSeq: newer.seq,
+        newerMessages: [expect.objectContaining({ content: 'conflicting update' })],
+      });
+      unsub();
+
+      expect(t.messages.listForConversation(t.channel.id).map(m => m.content))
+        .toEqual(['observed', 'conflicting update']);
+      expect(conversationEvents).toEqual([]);
+      expect(t.fake.delivered).toEqual([]);
+      expect(t.fake.resolvedRuns).toEqual([]);
+      expect(t.logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          staleEventId: expect.any(String),
+          conversationId: t.channel.id,
+          actorKind: 'agent',
+          actorId: t.alice.id,
+          seenUpToSeq: observed.seq,
+          currentSeq: newer.seq,
+          newerMessageCount: 1,
+        }),
+        'conversation-message-service: freshness CAS rejected',
+      );
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('falls back without hard CAS when an agent send has no delivered seq', async () => {
+    const t = bootstrap();
+    try {
+      await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'no seen seq',
+      });
+
+      expect(t.messages.listForConversation(t.channel.id).map(m => m.content))
+        .toEqual(['no seen seq']);
+      expect(t.logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: 'missing_seen_up_to_seq' }),
+        'conversation-message-service: freshness CAS skipped',
+      );
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('explicit freshness bypass inserts stale agent sends and logs an auditable reason', async () => {
+    const t = bootstrap();
+    try {
+      const observed = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'observed',
+      });
+      t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'newer context',
+      });
+
+      const result = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'send anyway',
+        seenUpToSeq: observed.seq,
+        staleEventId: 'evt-force',
+        freshnessBypass: true,
+      });
+
+      expect(result.message.content).toBe('send anyway');
+      expect(t.messages.listForConversation(t.channel.id).map(m => m.content))
+        .toEqual(['observed', 'newer context', 'send anyway']);
+      expect(t.logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: 'freshness_bypass_explicit' }),
+        'conversation-message-service: freshness CAS skipped',
+      );
+      expect(t.logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          staleEventId: 'evt-force',
+          resolutionReason: 'force_send',
+          outcome: 'message_sent',
+          messageId: result.message.id,
+          messageSeq: result.message.seq,
+        }),
+        'conversation-message-service: stale send resolution observed',
+      );
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('logs explicit stale retry reasons without making telemetry a send gate', async () => {
+    const t = bootstrap();
+    try {
+      const result = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'revised reply',
+        staleEventId: 'evt-revised',
+        staleResolutionReason: 'revised',
+      });
+
+      expect(result.message.content).toBe('revised reply');
+      expect(t.logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          staleEventId: 'evt-revised',
+          resolutionReason: 'revised',
+          outcome: 'message_sent',
+          messageId: result.message.id,
+          messageSeq: result.message.seq,
+        }),
+        'conversation-message-service: stale send resolution observed',
+      );
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('logs unattributed stale retry sends when the agent omits a reason', async () => {
+    const t = bootstrap();
+    try {
+      const result = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'retry without reason',
+        staleEventId: 'evt-unattributed',
+      });
+
+      expect(result.message.content).toBe('retry without reason');
+      expect(t.logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          staleEventId: 'evt-unattributed',
+          resolutionReason: 'unattributed',
+          outcome: 'message_sent',
+          messageId: result.message.id,
+          messageSeq: result.message.seq,
+        }),
+        'conversation-message-service: stale send resolution observed',
+      );
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('logs obsolete stale resolutions without sending a message', async () => {
+    const t = bootstrap();
+    try {
+      t.service.resolveStaleMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        staleEventId: 'evt-obsolete',
+        resolutionReason: 'obsolete',
+      });
+
+      expect(t.messages.listForConversation(t.channel.id)).toEqual([]);
+      expect(t.logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          staleEventId: 'evt-obsolete',
+          resolutionReason: 'obsolete',
+          outcome: 'obsolete',
+          messageId: null,
+          messageSeq: null,
+        }),
+        'conversation-message-service: stale send resolution observed',
+      );
     } finally {
       t.cleanup();
     }

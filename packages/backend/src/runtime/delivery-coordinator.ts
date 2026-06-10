@@ -157,6 +157,8 @@ export interface LiveDeliveryRequest {
    *  ids in the group are acked together (or stashed together for the
    *  B3 init gate). */
   deliveryIds: readonly number[];
+  /** Highest message seq covered by this text payload. */
+  deliveredUpToSeq?: number;
   /** Stable dedup key. For singleton groups, the row's message id; for
    *  pre-combined groups, an arbitrary key the caller picks (typically
    *  the first row's message id). Coordinator's enqueue skips a new
@@ -243,6 +245,7 @@ export interface CoordinatorBridge {
     conversation_id: string;
     agent_id: string;
     delivery_ids: number[];
+    delivered_up_to_seq?: number;
     kind: 'message' | 'schedule_fire';
     text: string;
   }): Promise<RuntimeWakeResult>;
@@ -338,6 +341,7 @@ interface PendingDelivery {
   /** Inbox row ids covered by this pending request. Singleton for most
    *  enqueued requests; multi for caller pre-combined groups. */
   deliveryIds: readonly number[];
+  deliveredUpToSeq?: number;
   dedupKey: string;
   /** Un-encoded human-readable text. Combined with sibling pendings at
    *  flush time via `combineGated` (when length > 1); daemon encodes. */
@@ -859,6 +863,7 @@ export class RuntimeDeliveryCoordinator {
     if (st.pending.some(item => item.dedupKey === req.dedupKey)) return;
     st.pending.push({
       deliveryIds: req.deliveryIds,
+      deliveredUpToSeq: req.deliveredUpToSeq,
       dedupKey: req.dedupKey,
       text: req.text,
       driver: req.driver,
@@ -900,6 +905,7 @@ export class RuntimeDeliveryCoordinator {
         conversation_id: conversationId,
         agent_id: agentId,
         delivery_ids: deliveryIds,
+        delivered_up_to_seq: maxDeliveredUpToSeq(batch),
         kind: 'message',
         text,
       });
@@ -999,6 +1005,7 @@ export class RuntimeDeliveryCoordinator {
         conversation_id: conversationId,
         agent_id: agentId,
         delivery_ids: deliveryIds,
+        delivered_up_to_seq: maxDeliveredUpToSeq(batch),
         kind: 'message',
         text,
       });
@@ -1220,6 +1227,17 @@ export class RuntimeDeliveryCoordinator {
     }
     return this.callbacks.combineGated(batch.map(item => item.text));
   }
+}
+
+function maxDeliveredUpToSeq(
+  batch: ReadonlyArray<{ deliveredUpToSeq?: number }>,
+): number | undefined {
+  let max = 0;
+  for (const item of batch) {
+    const value = item.deliveredUpToSeq ?? 0;
+    if (value > max) max = value;
+  }
+  return max > 0 ? max : undefined;
 }
 
 function waitingSnippet(driver: DriverDeliveryView, thresholdMs: number): string {

@@ -10,6 +10,7 @@ import {
   type ScheduleListStatusFilter,
   type ScheduleSpec,
   type ScheduleStatus,
+  type AgentCapability,
   systemSubtype,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
@@ -42,17 +43,33 @@ export type ScheduleErrorCode =
   | 'agent_not_in_target_conversation'
   | 'schedule_not_found'
   | 'not_owner'
-  | 'not_cancellable';
+  | 'not_cancellable'
+  | 'capability_denied';
 
 export class ScheduleError extends Error {
   constructor(
     public readonly code: ScheduleErrorCode,
     message: string,
+    /** Set only when `code === 'capability_denied'` — the missing
+     *  capability bucket, surfaced as a typed field (doc §3.4b). */
+    public readonly capability?: AgentCapability,
   ) {
     super(message);
     this.name = 'ScheduleError';
   }
 }
+
+/**
+ * Agent-capability gate signature (graded-permissions cut 2). The
+ * injected closure binds the real `canAgentUseCapability` so the
+ * agent_home exemption + table lookup live in ONE place. `manage_schedules`
+ * is evaluated on the schedule's target conversation's workspace.
+ */
+export type ScheduleCapabilityChecker = (
+  agentId: string,
+  workspaceId: string,
+  capability: AgentCapability,
+) => boolean;
 
 export interface ScheduleServiceOptions {
   schedules: ScheduleRepo;
@@ -65,6 +82,14 @@ export interface ScheduleServiceOptions {
   runtimeHost: AgentRuntimeHost;
   events: ScopeEventBus;
   logger: BackendLogger;
+  /**
+   * Agent-capability gate (graded-permissions cut 2) — injected so the
+   * agent_home exemption + table lookup have a SINGLE source
+   * (`canAgentUseCapability`). Evaluated on the schedule's TARGET
+   * conversation's workspace (create) / the resolved schedule's target
+   * workspace (cancel) — `manage_schedules`.
+   */
+  canUseCapability: ScheduleCapabilityChecker;
   /** Override `Date.now()` in tests so the scheduler clock is
    *  deterministic. Default = `Date.now`. */
   now?: () => number;
@@ -106,6 +131,7 @@ export class ScheduleService {
   private readonly runtimeHost: AgentRuntimeHost;
   private readonly events: ScopeEventBus;
   private readonly logger: BackendLogger;
+  private readonly canUseCapability: ScheduleCapabilityChecker;
   private readonly now: () => number;
   private readonly disableAutoTick: boolean;
   private sweepTimer: NodeJS.Timeout | null = null;
@@ -124,6 +150,7 @@ export class ScheduleService {
     this.runtimeHost = opts.runtimeHost;
     this.events = opts.events;
     this.logger = opts.logger;
+    this.canUseCapability = opts.canUseCapability;
     this.now = opts.now ?? Date.now;
     this.disableAutoTick = opts.disableAutoTick ?? false;
   }
@@ -259,6 +286,24 @@ export class ScheduleService {
       );
     }
 
+    // Capability gate (graded-permissions cut 2): scheduling fires a wake
+    // into the TARGET conversation's workspace, so `manage_schedules` is
+    // evaluated there (not the calling conversation's workspace). The
+    // injected checker carries the agent_home exemption.
+    if (
+      !this.canUseCapability(
+        ownerAgentId,
+        target.workspace_id,
+        'manage_schedules',
+      )
+    ) {
+      throw new ScheduleError(
+        'capability_denied',
+        `agent ${ownerAgentId} lacks manage_schedules in workspace ${target.workspace_id}`,
+        'manage_schedules',
+      );
+    }
+
     const active = this.schedules.countActive(ownerAgentId);
     if (active >= SCHEDULE_MAX_ACTIVE_PER_AGENT) {
       throw new ScheduleError(
@@ -386,6 +431,26 @@ export class ScheduleService {
       throw new ScheduleError(
         'not_owner',
         `schedule ${scheduleId} is owned by another agent`,
+      );
+    }
+    // Capability gate (graded-permissions cut 2): `manage_schedules` on
+    // the schedule's target conversation's workspace — the same axis the
+    // create call was gated on. If the target conversation has since been
+    // deleted the schedule is dangling; the owner-match above is the only
+    // guard and we let the owner clean it up.
+    const target = this.conversations.get(existing.target_conversation_id);
+    if (
+      target &&
+      !this.canUseCapability(
+        ownerAgentId,
+        target.workspace_id,
+        'manage_schedules',
+      )
+    ) {
+      throw new ScheduleError(
+        'capability_denied',
+        `agent ${ownerAgentId} lacks manage_schedules in workspace ${target.workspace_id}`,
+        'manage_schedules',
       );
     }
     const ok = this.schedules.cancel(scheduleId);

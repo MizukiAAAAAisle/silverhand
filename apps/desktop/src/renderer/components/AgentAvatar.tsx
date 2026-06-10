@@ -63,7 +63,7 @@ export function AgentAvatar({
     return (
       <span
         className={cn(
-          'inline-flex shrink-0 items-center justify-center overflow-hidden bg-bg-muted rounded-none',
+          'inline-flex shrink-0 items-center justify-center overflow-hidden bg-bg-muted rounded-none align-middle',
           className,
         )}
         style={{ width: size, height: size }}
@@ -85,7 +85,7 @@ export function AgentAvatar({
   return (
     <span
       className={cn(
-        'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none',
+        'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle',
         tint.bg,
         tint.fg,
         className,

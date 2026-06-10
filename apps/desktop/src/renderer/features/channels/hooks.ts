@@ -14,6 +14,7 @@ import type {
   AttachmentSnapshot,
   ClearSessionResponse,
   ConversationAgentDto,
+  ConversationMembersResponse,
   ConversationMessagesDto,
   MessageDto,
   TaskChangedEvent,
@@ -75,6 +76,29 @@ function formatStartAgentError(err: unknown): string {
     return `Agent 启动失败：${detail}`;
   }
   return `Agent 启动失败：${err instanceof Error ? err.message : String(err)}`;
+}
+
+function formatRemoveAgentError(err: unknown): string {
+  if (err instanceof ApiError) {
+    const body = parseApiErrorBody(err);
+    const code = typeof body?.code === 'string' ? body.code : null;
+    if (code === 'conversation_member_remove_unsupported') {
+      return '只能从 channel 或 thread 移除成员(DM 不支持)。';
+    }
+    if (code === 'conversation_closed') {
+      return '该会话已关闭,无法移除成员。';
+    }
+    if (err.status === 403) return '没有权限将该 agent 从此频道移除。';
+    if (err.status === 404) return '该 agent 已不在此频道。';
+    const detail =
+      typeof body?.error === 'string'
+        ? body.error
+        : typeof body?.message === 'string'
+          ? body.message
+          : `HTTP ${err.status}`;
+    return `移除失败：${detail}`;
+  }
+  return `移除失败：${err instanceof Error ? err.message : String(err)}`;
 }
 
 /** Page-param shape for the bidirectional infinite query.
@@ -813,6 +837,64 @@ export function useClearAgentSession(
             )
           : prev,
       );
+    },
+  });
+}
+
+/**
+ * Remove an agent from THIS conversation only (human-triggered leave —
+ * #task:957). The backend route `DELETE /api/conversations/:id/members/
+ * agents/:agentId` (Cindy) stops the agent's runtime here, drops the
+ * membership row, and emits a "member removed" system narration. The
+ * path is conversation-kind agnostic — it works for both channels and
+ * threads, so no `routeKind` branch is needed.
+ *
+ * Permission (agent owner OR workspace owner/admin) is enforced
+ * server-side; the popover hides the control otherwise via
+ * `canRemoveAgentFromChannel`, and this hook surfaces a toast if the
+ * server still rejects (stale role, concurrent change).
+ */
+export function useRemoveAgentFromChannel(channelId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (agentId: string) => {
+      if (!channelId) throw new Error('no channel selected');
+      await api(apiPaths.conversationAgentMember(channelId, agentId), {
+        method: 'DELETE',
+      });
+    },
+    onSuccess: (_res, agentId) => {
+      if (!channelId) return;
+      // Drop the removed agent from the per-conversation roster cache so
+      // the member strip / popover update immediately; the backend's
+      // `conversation_members_changed` event reconciles other windows.
+      qc.setQueryData<ConversationAgentDto[]>(agentsKey(channelId), prev =>
+        prev ? prev.filter(a => a.agent_id !== agentId) : prev,
+      );
+      // The header member-chip strip reads from a *separate* cache
+      // (`['conversation-members', id]` via `useConversationMembers`), so
+      // strip the removed agent there too — otherwise the chip lingers
+      // until the invalidate refetch lands (visible on slow networks).
+      // Invalidate stays as the reconciler against the authoritative list.
+      qc.setQueryData<ConversationMembersResponse>(
+        ['conversation-members', channelId],
+        prev =>
+          prev
+            ? {
+                ...prev,
+                members: prev.members.filter(
+                  m => !(m.kind === 'agent' && m.agent_id === agentId),
+                ),
+              }
+            : prev,
+      );
+      void qc.invalidateQueries({ queryKey: agentsKey(channelId) });
+      void qc.invalidateQueries({
+        queryKey: ['conversation-members', channelId],
+      });
+    },
+    onError: err => {
+      toast.error(formatRemoveAgentError(err));
     },
   });
 }

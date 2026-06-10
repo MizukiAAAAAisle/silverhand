@@ -5,8 +5,7 @@ import {
   canDeleteAttachment,
   canEditAgent,
   canViewAgent,
-  canManageMembers,
-  canMutateWorkspace,
+  canGovernWorkspace,
   canPostToConversation,
   canSubscribeScope,
   canViewAttachment,
@@ -14,6 +13,7 @@ import {
   canViewOwnedState,
   canViewWorkspace,
   parseWsScope,
+  workspaceRole,
 } from '../src/permissions.js';
 import type { AgentPrincipal, Principal, UserPrincipal } from '../src/auth/principal.js';
 import { AgentRepo } from '../src/repos/agent-repo.js';
@@ -39,7 +39,7 @@ function seed(t: TestApp) {
     workspacePath: join(t.ctx.workspacesRoot, 'workspace'),
     workspaceHostId: host.id,
   });
-  workspaces.addMember(workspace.id, alice.id);
+  workspaces.insertMembership(workspace.id, alice.id);
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
     workspacePath: workspace.workspace_path,
@@ -84,8 +84,12 @@ describe('permission helpers', () => {
     const user: UserPrincipal = { kind: 'user', userId: 'local' };
 
     expect(canViewWorkspace(t.ctx, user, f.workspace.id)).toBe(true);
-    expect(canMutateWorkspace(t.ctx, user, f.workspace.id)).toBe(true);
-    expect(canManageMembers(t.ctx, user, f.workspace.id)).toBe(true);
+    // v40: the fixture viewer ('local') is the workspace owner, so it
+    // governs at every level — preserving the pre-v40 permissive behavior
+    // for the single-human install.
+    expect(canGovernWorkspace(t.ctx, user, f.workspace.id, 'owner')).toBe(true);
+    expect(canGovernWorkspace(t.ctx, user, f.workspace.id, 'admin')).toBe(true);
+    expect(canGovernWorkspace(t.ctx, user, f.workspace.id, 'member')).toBe(true);
     expect(canViewConversation(t.ctx, user, f.channel.id)).toBe(true);
     expect(canViewConversation(t.ctx, user, f.thread.id)).toBe(true);
     expect(canPostToConversation(t.ctx, user, f.channel.id)).toBe(true);
@@ -112,8 +116,9 @@ describe('permission helpers', () => {
     expect(canViewWorkspace(t.ctx, alice, f.workspace.id)).toBe(true);
     expect(canViewConversation(t.ctx, alice, f.channel.id)).toBe(true);
     expect(canPostToConversation(t.ctx, alice, f.channel.id)).toBe(true);
-    expect(canMutateWorkspace(t.ctx, alice, f.workspace.id)).toBe(false);
-    expect(canManageMembers(t.ctx, alice, f.workspace.id)).toBe(false);
+    // Agents are never governance actors (doc §1.4) — any minRole fails.
+    expect(canGovernWorkspace(t.ctx, alice, f.workspace.id, 'admin')).toBe(false);
+    expect(canGovernWorkspace(t.ctx, alice, f.workspace.id, 'member')).toBe(false);
 
     expect(canViewConversation(t.ctx, alice, f.sibling.id)).toBe(false);
     expect(canViewWorkspace(t.ctx, bob, f.workspace.id)).toBe(false);
@@ -147,7 +152,7 @@ describe('permission helpers', () => {
     const user: UserPrincipal = { kind: 'user', userId: 'local' };
 
     expect(canViewWorkspace(t.ctx, owner, home.id)).toBe(true);
-    expect(canMutateWorkspace(t.ctx, owner, home.id)).toBe(false);
+    expect(canGovernWorkspace(t.ctx, owner, home.id, 'admin')).toBe(false);
     expect(canViewWorkspace(t.ctx, nonOwner, home.id)).toBe(false);
     expect(canViewWorkspace(t.ctx, user, home.id)).toBe(true);
   });
@@ -373,6 +378,143 @@ describe('permission helpers', () => {
       expect(canViewAgent(t.ctx, { kind: 'system' }, f.alice.id)).toBe(true);
       expect(canViewAgent(t.ctx, { kind: 'system' }, 'missing')).toBe(true);
       expect(canViewAgent(t.ctx, { kind: 'user', userId: 'local' }, 'missing')).toBe(false);
+    });
+  });
+
+  describe('canGovernWorkspace / workspaceRole (v40 human role spine)', () => {
+    // Helper: add a human to the workspace with an explicit role,
+    // bypassing the route layer (these are helper-level unit tests).
+    function addHuman(t: TestApp, workspaceId: string, userId: string, role: string) {
+      const now = Date.now();
+      t.ctx.db
+        .prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO NOTHING`,
+        )
+        .run(userId, userId, userId, now, now);
+      t.ctx.db
+        .prepare(
+          `INSERT INTO workspace_users (workspace_id, user_id, joined_at, role)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(workspace_id, user_id) DO UPDATE SET role = excluded.role`,
+        )
+        .run(workspaceId, userId, now, role);
+    }
+
+    it('grades owner ⊇ admin ⊇ member', () => {
+      t = buildTestApp({ seedAllFixtureMemberships: false });
+      const f = seed(t);
+      addHuman(t, f.workspace.id, 'owner-u', 'owner');
+      addHuman(t, f.workspace.id, 'admin-u', 'admin');
+      addHuman(t, f.workspace.id, 'member-u', 'member');
+      const owner: UserPrincipal = { kind: 'user', userId: 'owner-u' };
+      const admin: UserPrincipal = { kind: 'user', userId: 'admin-u' };
+      const member: UserPrincipal = { kind: 'user', userId: 'member-u' };
+
+      // owner: every level
+      expect(canGovernWorkspace(t.ctx, owner, f.workspace.id, 'owner')).toBe(true);
+      expect(canGovernWorkspace(t.ctx, owner, f.workspace.id, 'admin')).toBe(true);
+      expect(canGovernWorkspace(t.ctx, owner, f.workspace.id, 'member')).toBe(true);
+      // admin: admin and below, not owner
+      expect(canGovernWorkspace(t.ctx, admin, f.workspace.id, 'owner')).toBe(false);
+      expect(canGovernWorkspace(t.ctx, admin, f.workspace.id, 'admin')).toBe(true);
+      expect(canGovernWorkspace(t.ctx, admin, f.workspace.id, 'member')).toBe(true);
+      // member: member only
+      expect(canGovernWorkspace(t.ctx, member, f.workspace.id, 'owner')).toBe(false);
+      expect(canGovernWorkspace(t.ctx, member, f.workspace.id, 'admin')).toBe(false);
+      expect(canGovernWorkspace(t.ctx, member, f.workspace.id, 'member')).toBe(true);
+    });
+
+    it('returns the role via workspaceRole, null for non-members and agents', () => {
+      t = buildTestApp({ seedAllFixtureMemberships: false });
+      const f = seed(t);
+      addHuman(t, f.workspace.id, 'admin-u', 'admin');
+      expect(workspaceRole(t.ctx, { kind: 'user', userId: 'admin-u' }, f.workspace.id)).toBe('admin');
+      // not a member → null
+      expect(workspaceRole(t.ctx, { kind: 'user', userId: 'ghost' }, f.workspace.id)).toBe(null);
+      // agents carry no workspace role
+      const agent: AgentPrincipal = {
+        kind: 'agent',
+        agentId: f.alice.id,
+        conversationId: f.channel.id,
+      };
+      expect(workspaceRole(t.ctx, agent, f.workspace.id)).toBe(null);
+      // missing workspace → null
+      expect(workspaceRole(t.ctx, { kind: 'user', userId: 'admin-u' }, 'missing')).toBe(null);
+    });
+
+    it('passes system unconditionally and denies non-members', () => {
+      t = buildTestApp({ seedAllFixtureMemberships: false });
+      const f = seed(t);
+      expect(canGovernWorkspace(t.ctx, { kind: 'system' }, f.workspace.id, 'owner')).toBe(true);
+      // a registered user who is not a workspace member cannot govern
+      addHuman(t, f.workspace.id, 'member-u', 'member'); // ensure user row exists elsewhere
+      expect(
+        canGovernWorkspace(t.ctx, { kind: 'user', userId: 'ghost' }, f.workspace.id, 'member'),
+      ).toBe(false);
+    });
+  });
+
+  describe('cross-axis orthogonality (v40 — doc §6.3 cases 1-3)', () => {
+    // The agent capability axis lands in Layer A cut 2; case 4
+    // (capability change vs role change) is deferred until then. Cut 1
+    // proves the human role axis does not collapse into the agent-edit
+    // (creator) axis: governing a workspace ≠ editing an agent profile.
+    function addHuman(t: TestApp, workspaceId: string, userId: string, role: string) {
+      const now = Date.now();
+      t.ctx.db
+        .prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+        )
+        .run(userId, userId, userId, now, now);
+      t.ctx.db
+        .prepare(
+          `INSERT INTO workspace_users (workspace_id, user_id, joined_at, role)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(workspace_id, user_id) DO UPDATE SET role = excluded.role`,
+        )
+        .run(workspaceId, userId, now, role);
+    }
+
+    it('case 1: workspace owner who is not the agent creator governs but cannot edit the agent', () => {
+      t = buildTestApp({ seedAllFixtureMemberships: false });
+      const f = seed(t);
+      // alice was created by 'local'. Make 'owner-u' the workspace owner.
+      addHuman(t, f.workspace.id, 'owner-u', 'owner');
+      const owner: UserPrincipal = { kind: 'user', userId: 'owner-u' };
+      expect(canGovernWorkspace(t.ctx, owner, f.workspace.id, 'owner')).toBe(true);
+      // …but owner-u did not create alice, so cannot edit her profile.
+      expect(canEditAgent(t.ctx, owner, f.alice.id)).toBe(false);
+    });
+
+    it('case 2: agent creator who is an ordinary member edits the agent but cannot govern', () => {
+      t = buildTestApp({ seedAllFixtureMemberships: false });
+      const f = seed(t);
+      // 'local' created alice (fixture). Make 'local' only a member.
+      addHuman(t, f.workspace.id, 'local', 'member');
+      const creator: UserPrincipal = { kind: 'user', userId: 'local' };
+      expect(canEditAgent(t.ctx, creator, f.alice.id)).toBe(true);
+      expect(canGovernWorkspace(t.ctx, creator, f.workspace.id, 'admin')).toBe(false);
+      expect(canGovernWorkspace(t.ctx, creator, f.workspace.id, 'owner')).toBe(false);
+    });
+
+    it('case 3: plain member can view/post but holds no admin/owner governance', () => {
+      t = buildTestApp({ seedAllFixtureMemberships: false });
+      const f = seed(t);
+      addHuman(t, f.workspace.id, 'member-u', 'member');
+      t.ctx.db
+        .prepare(
+          `INSERT INTO conversation_users (conversation_id, user_id, joined_at)
+           VALUES (?, 'member-u', ?)`,
+        )
+        .run(f.channel.id, Date.now());
+      const member: UserPrincipal = { kind: 'user', userId: 'member-u' };
+      expect(canViewWorkspace(t.ctx, member, f.workspace.id)).toBe(true);
+      expect(canPostToConversation(t.ctx, member, f.channel.id)).toBe(true);
+      expect(canGovernWorkspace(t.ctx, member, f.workspace.id, 'admin')).toBe(false);
+      expect(canEditAgent(t.ctx, member, f.alice.id)).toBe(false);
     });
   });
 });

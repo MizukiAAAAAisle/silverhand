@@ -405,7 +405,7 @@ Rules:
 ### PR-T1：DB + 后端基础
 
 - migration 007_tasks：`messages` 加 5 列 + `task_channel_id` 冗余 + partial unique index
-- `packages/shared/src/api/dto.ts`：TaskStatus 枚举、TaskSummary DTO、TaskChangedEvent
+- `packages/shared/src/api/task.ts`：TaskStatus 枚举、TaskSummary DTO、TaskChangedEvent
 - `packages/backend/src/tasks.ts`：5 个 agent endpoint + 3 个 human endpoint
 - 系统消息 subtype 扩展（`task_create` / `task_claim` / `task_unclaim` / `task_status`）
 - 广播路径复用现有 `broadcastMessage` + SSE

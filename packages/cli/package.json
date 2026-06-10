@@ -18,6 +18,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@silverhand/host": "workspace:*",
     "@silverhand/shared": "workspace:*",
     "zod": "^3.23.8"
   },

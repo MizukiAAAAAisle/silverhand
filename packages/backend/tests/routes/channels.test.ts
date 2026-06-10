@@ -233,6 +233,12 @@ describe('workspace metadata and membership routes', () => {
     ).json() as any;
     expect(list1.members.map((m: any) => m.id)).toContain(agentId);
     expect(list1.human_members.map((m: any) => m.id)).toContain('local');
+    expect(list1.viewer_role).toBe('owner');
+    expect(list1.human_members.find((m: any) => m.id === 'local')).toMatchObject({
+      workspace_id: workspace.workspace.id,
+      user_id: 'local',
+      role: 'owner',
+    });
 
     const rm = await http(t).del(
       `/api/workspaces/${workspace.workspace.id}/members/${agentId}`,
@@ -280,6 +286,38 @@ describe('workspace metadata and membership routes', () => {
       await http(t).get(`/api/workspaces/${workspace.workspace.id}/members`)
     ).json() as any;
     expect(after.human_members.map((m: any) => m.id)).toContain('teammate');
+    expect(after.viewer_role).toBe('owner');
+    expect(after.human_members.find((m: any) => m.id === 'teammate')).toMatchObject({
+      id: 'teammate',
+      user_id: 'teammate',
+      workspace_id: workspace.workspace.id,
+      role: 'member',
+      display_name: 'Teammate',
+    });
+  });
+
+  it('returns the current viewer role from the workspace membership edge', async () => {
+    t = buildTestApp();
+    const workspace = await (
+      await http(t).post('/api/workspaces', { name: 'viewer-role' })
+    ).json() as any;
+
+    t.ctx.db
+      .prepare(
+        `UPDATE workspace_users
+           SET role = 'member'
+         WHERE workspace_id = ? AND user_id = 'local'`,
+      )
+      .run(workspace.workspace.id);
+
+    const body = await (
+      await http(t).get(`/api/workspaces/${workspace.workspace.id}/members`)
+    ).json() as any;
+    expect(body.viewer_role).toBe('member');
+    expect(body.human_members.find((m: any) => m.id === 'local')).toMatchObject({
+      user_id: 'local',
+      role: 'member',
+    });
   });
 
   it('rejects adding an unknown human workspace member', async () => {

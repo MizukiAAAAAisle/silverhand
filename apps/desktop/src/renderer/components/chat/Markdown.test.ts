@@ -94,6 +94,38 @@ function renderWithTaskCtx(
   );
 }
 
+describe('Markdown soft breaks', () => {
+  it('renders a single newline from the composer as a visible line break', () => {
+    const html = render('line one\nline two');
+
+    expect(html).toContain('line one<br/>');
+    expect(html).toContain('line two');
+  });
+
+  it('preserves soft breaks around inline refs instead of requiring a blank line', () => {
+    const html = render('@alice\n#channel');
+
+    expect(html).toContain('<br/>');
+    expect(html).toContain('@alice');
+    expect(html).toContain('#channel');
+  });
+
+  it('keeps GFM setext heading semantics for a line containing ---', () => {
+    const html = render('这是第一行\n---\n这是第三行');
+
+    expect(html).toContain('<h2>这是第一行</h2>');
+    expect(html).toContain('这是第三行');
+  });
+
+  it('keeps thematic breaks when they are separated as Markdown blocks', () => {
+    const html = render('before\n\n---\n\nafter');
+
+    expect(html).toContain('<p>before</p>');
+    expect(html).toContain('<hr/>');
+    expect(html).toContain('<p>after</p>');
+  });
+});
+
 describe('SystemMessage channel refs', () => {
   // Construct a minimal MessageDto. Only the fields SystemMessage /
   // its inner cards read need realistic values; the rest are filled

@@ -40,7 +40,7 @@
 
 ## 3. 数据模型：`AgentRunState`
 
-`packages/shared/src/api/dto.ts`：
+`packages/shared/src/api/runtime.ts`：
 
 ```ts
 AgentRunStatusSchema = z.enum(['starting', 'thinking', 'tool_running', 'idle', 'failed']);

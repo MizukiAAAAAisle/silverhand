@@ -30,6 +30,7 @@
 export const ERROR_CODES = [
   'not_found',
   'forbidden',
+  'capability_denied',
   'unauthorized',
   'validation_error',
   'conflict',
@@ -167,6 +168,10 @@ export function exitCodeFor(code: ErrorCode): 1 | 2 | 3 {
   switch (code) {
     case 'unauthorized':
     case 'forbidden':
+    // A capability denial is an authorization failure (the agent is
+    // authenticated but lacks the workspace capability) — same "stop and
+    // report, do not retry" class as `forbidden`. No new exit class.
+    case 'capability_denied':
       return 3;
     case 'rate_limited':
     case 'upstream_unavailable':
@@ -267,6 +272,8 @@ function defaultMessageForCode(code: ErrorCode): string {
       return 'resource not found';
     case 'forbidden':
       return 'forbidden';
+    case 'capability_denied':
+      return 'missing a required workspace capability';
     case 'unauthorized':
       return 'auth token rejected by backend';
     case 'validation_error':

@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import type {
   AddWorkspaceMemberInput,
+  AgentCapabilitiesDto,
+  AgentCapability,
   AgentDto,
   ArchivedChannelListItemDto,
   ChannelConversationDto,
@@ -10,9 +12,12 @@ import type {
   CreateWorkspaceInput,
   DmChannelDto,
   ThreadDto,
+  UpdateAgentCapabilitiesInput,
   UpdateWorkspaceInput,
-  UserDto,
   WorkspaceDto,
+  WorkspaceHumanMemberDto,
+  WorkspaceMembersResponse,
+  WorkspaceRole,
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
@@ -43,15 +48,19 @@ const archivedChannelsKey = (workspaceId: string) =>
 const archivedChannelsIndexKey = (workspaceId: string | null, since: number | null) =>
   ['archived-channels', { workspaceId, since }] as const;
 const membersKey = (workspaceId: string) => ['workspaces', workspaceId, 'members'] as const;
+const capabilitiesKey = (workspaceId: string, agentId: string) =>
+  ['workspaces', workspaceId, 'agents', agentId, 'capabilities'] as const;
 
-interface WorkspaceMembersResponse {
-  members: AgentDto[];
-  human_members?: UserDto[];
-}
+/** Human workspace member (canonical shared shape): `UserDto` display
+ *  fields PLUS the graded-permissions membership `role`. */
+export type WorkspaceHumanMember = WorkspaceHumanMemberDto;
 
 export interface WorkspaceMemberLists {
   agents: AgentDto[];
-  humans: UserDto[];
+  humans: WorkspaceHumanMember[];
+  /** Current viewer's role in this workspace (request-scoped sugar from the
+   *  members endpoint). `null` = not a member → read-only. */
+  viewerRole: WorkspaceRole | null;
 }
 
 function normalizeWorkspaceMembers(
@@ -59,7 +68,8 @@ function normalizeWorkspaceMembers(
 ): WorkspaceMemberLists {
   return {
     agents: response.members,
-    humans: response.human_members ?? [],
+    humans: response.human_members,
+    viewerRole: response.viewer_role,
   };
 }
 
@@ -445,6 +455,53 @@ export function useRemoveWorkspaceMember(workspaceId: string | null) {
     },
     onSuccess: () => {
       if (workspaceId) qc.invalidateQueries({ queryKey: membersKey(workspaceId) });
+    },
+  });
+}
+
+/** The effective capability set of one agent in one workspace (GET).
+ *  Any workspace viewer may read; editing is gated on the human role. */
+export function useAgentCapabilities(
+  workspaceId: string | null,
+  agentId: string | null,
+) {
+  return useQuery({
+    queryKey:
+      workspaceId && agentId
+        ? capabilitiesKey(workspaceId, agentId)
+        : ['workspaces', 'none', 'agents', 'none', 'capabilities'],
+    enabled: !!workspaceId && !!agentId,
+    queryFn: () =>
+      api<AgentCapabilitiesDto>(
+        apiPaths.workspaceAgentCapabilities(workspaceId!, agentId!),
+      ),
+  });
+}
+
+/** Replace-set edit of an agent's capabilities (PUT). The caller sends the
+ *  FULL desired set; the backend diffs against stored rows. On success the
+ *  returned DTO seats the cache; on failure the mutation rejects and the
+ *  caller is responsible for rollback + refetch (see `AgentPermissionsPanel`). */
+export function useUpdateAgentCapabilities(workspaceId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: {
+      agentId: string;
+      capabilities: AgentCapability[];
+    }) => {
+      if (!workspaceId) throw new Error('no workspace selected');
+      const body: UpdateAgentCapabilitiesInput = {
+        capabilities: vars.capabilities,
+      };
+      return api<AgentCapabilitiesDto>(
+        apiPaths.workspaceAgentCapabilities(workspaceId, vars.agentId),
+        { method: 'PUT', body: JSON.stringify(body) },
+      );
+    },
+    onSuccess: (dto, vars) => {
+      if (workspaceId) {
+        qc.setQueryData(capabilitiesKey(workspaceId, vars.agentId), dto);
+      }
     },
   });
 }

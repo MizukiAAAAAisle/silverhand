@@ -14,6 +14,7 @@ describe('CliError contract', () => {
     expect(ERROR_CODES).toEqual([
       'not_found',
       'forbidden',
+      'capability_denied',
       'unauthorized',
       'validation_error',
       'conflict',
@@ -31,6 +32,7 @@ describe('CliError contract', () => {
     expect(exitCodeFor('upstream_unavailable')).toBe(2);
     expect(exitCodeFor('unauthorized')).toBe(3);
     expect(exitCodeFor('forbidden')).toBe(3);
+    expect(exitCodeFor('capability_denied')).toBe(3);
     expect(exitCodeFor('internal')).toBe(1);
   });
 });
@@ -82,6 +84,28 @@ describe('mapHttpError', () => {
     const err = mapHttpError(502, '<html>Bad Gateway</html>');
     expect(err.code).toBe('upstream_unavailable');
     expect(err.message).toMatch(/HTTP 502/);
+  });
+
+  it('preserves an explicit capability_denied 403 with the missing bucket', () => {
+    const err = mapHttpError(
+      403,
+      JSON.stringify({
+        code: 'capability_denied',
+        message: "missing 'send_messages' capability in this workspace",
+        details: { capability: 'send_messages' },
+      }),
+    );
+    expect(err.code).toBe('capability_denied');
+    expect(err.retriable).toBe(false);
+    expect(err.message).toMatch(/send_messages/);
+    expect(err.details?.capability).toBe('send_messages');
+  });
+
+  it('falls back to forbidden for a 403 without an explicit capability_denied code', () => {
+    expect(mapHttpError(403, '').code).toBe('forbidden');
+    expect(
+      mapHttpError(403, JSON.stringify({ error: { code: 'forbidden', message: 'nope' } })).code,
+    ).toBe('forbidden');
   });
 });
 

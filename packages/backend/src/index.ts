@@ -8,7 +8,8 @@ import { performance } from 'node:perf_hooks';
 import { silverhandCors } from './cors.js';
 import { openDatabase } from './db.js';
 import type { MigrationRunResult } from './db.js';
-import { createApiRouter, createInternalRouter } from './routes.js';
+import { createApiRouter } from './routes.js';
+import { createInternalRouter } from './routes/internal-agent.js';
 import type { AppEnv } from './auth/principal.js';
 import {
   consoleLogger,
@@ -19,6 +20,7 @@ import {
   type SilverhandCliLauncher,
 } from './context.js';
 import { AgentTokenStore } from './auth/agent-token-store.js';
+import { canAgentUseCapability } from './permissions.js';
 import { resolveAuthRuntimeConfig } from './auth/config.js';
 import {
   cleanupEmbeddedBootstrap,
@@ -448,6 +450,8 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger,
+    canUseCapability: (actor, workspaceId, capability) =>
+      canAgentUseCapability(ctx, actor, capability, { workspaceId }),
   });
   ctx.scheduleService = new ScheduleService({
     schedules: new ScheduleRepo(db),
@@ -458,6 +462,17 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger,
+    // `canAgentUseCapability` reads only `kind`/`agentId` from the
+    // principal; the schedule checker is keyed by agentId, so synthesize a
+    // minimal agent principal (conversationId is unused by the capability
+    // path).
+    canUseCapability: (agentId, workspaceId, capability) =>
+      canAgentUseCapability(
+        ctx,
+        { kind: 'agent', agentId, conversationId: '' },
+        capability,
+        { workspaceId },
+      ),
   });
   ctx.idleReaperService = new IdleReaperService({
     runtimeHost: ctx.runtimeHost,

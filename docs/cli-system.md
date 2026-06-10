@@ -3,7 +3,7 @@
 > Current contract for the agent-facing `silverhand` CLI.
 > Keep this document in sync with `packages/cli`, the internal agent routes in
 > `packages/backend/src/routes.ts`, and the prompt rules in
-> `packages/backend/src/drivers/platform-prompt.ts`.
+> `packages/shared/src/platform-prompt.ts`.
 
 ## 1. Purpose
 
@@ -87,7 +87,8 @@ printf "%s" "hello" | silverhand message send
 
 # multi-line / contains quotes / contains $/backticks
 silverhand message send --target parent <<'SILVERHAND_EOF'
-Any text. Quotes, backticks, $vars, multi-line markdown — all safe.
+Use GitHub Flavored Markdown: headings, lists, tables, and fenced code blocks are supported.
+Quotes, backticks, $vars, and multi-line Markdown are all safe.
 SILVERHAND_EOF
 ```
 
@@ -106,6 +107,46 @@ Pre-flight failures (exit 1, code `validation_error`):
 | `empty_stdin` | Stdin closed with 0 bytes. |
 | `invalid_utf8` | Stdin contained byte sequences that are not valid UTF-8. The CLI does NOT silently substitute U+FFFD — re-encode upstream and retry. |
 | `unexpected_arguments` | Any positional argument or `--`-trailing token (rejected globally; see §4.1). |
+
+Freshness conflict (exit 1, code `conflict`):
+
+- The daemon owns each `(conversation, agent)` runtime's observed freshness
+  boundary. `silverhand message send` routes through the daemon in spawned
+  runtimes; the daemon stamps the boundary it knows the model has admitted. It
+  never queries the current DB seq at send time.
+- For same-conversation agent sends, the backend rejects insertion when the
+  conversation has advanced past that observed boundary. The stderr JSON uses
+  `code: "conflict"` with `details.subkind: "message_stale"` and includes
+  `details.newer_messages` (bounded recent messages after the observed seq).
+- Agents should treat this as stale-context feedback, not as a transient retry.
+  Read `details.newer_messages`, then choose whether to send a revised message
+  or stay silent. Do **not** immediately resubmit the same body.
+- If the reviewed newer messages do not change the draft and the message still
+  adds value, resend normally with
+  `--stale-resolution unaffected`; that send still goes through the freshness
+  guard. If the newer messages changed the draft, send the revised text with
+  `--stale-resolution revised`. If the newer messages made the draft
+  unnecessary, do not send; instead run
+  `silverhand message stale-resolve --resolution obsolete`.
+- If a busy conversation repeatedly re-holds an unchanged but necessary
+  message, pass `--anyway` to `silverhand message send`. This is an explicit
+  escape hatch for that send only; use it sparingly, not as the default reaction
+  to `message_stale`. `--anyway` records the stale resolution as `force_send`;
+  do not combine it with `--stale-resolution`.
+- On a `message_stale` response, the daemon advances the runtime's observed
+  boundary to `details.current_seq` because those newer messages have been
+  shown in the error details. A revised or unchanged retry therefore re-checks
+  against that newly observed state; if the conversation advances again, it can
+  still be held again.
+- The daemon also records `details.stale_event_id` for that runtime. The next
+  send consumes that pending event exactly once and attaches the chosen stale
+  resolution reason for observability. Omitting `--stale-resolution` never
+  blocks sending; the backend records the retry as unattributed telemetry.
+- On success, stdout includes `{ "message_id": "...", "message_seq": N }`.
+  The daemon uses `message_seq` to advance the sender runtime's observed
+  boundary after its own successful send, so consecutive self-authored messages
+  do not stale on the sender's previous message. Agents should not hand-craft
+  or override this bookkeeping.
 
 #### Planned: create initial prompts become stdin-only
 
@@ -354,6 +395,7 @@ Stable codes:
 
 - `not_found`
 - `forbidden`
+- `capability_denied`
 - `unauthorized`
 - `validation_error`
 - `conflict`
@@ -437,6 +479,40 @@ The CLI may include an HTTP status suffix only when the backend did not return
 a structured error body. Normal route errors should return structured
 `{ error: { code, message } }` bodies so the CLI can preserve the stable code
 and user-facing message.
+
+### 4.2 Capability denials (graded-permissions Layer A cut 2)
+
+Internal agent routes are gated by per-`(workspace, agent)` capability
+buckets (`read_messages`, `send_messages`, `read_tasks`, `create_tasks`,
+`write_tasks`, `read_attachments`, `upload_attachments`, `create_threads`,
+`create_channels`, `manage_conversation_members`, `manage_schedules`). An
+agent that joins a workspace is seeded the full set, so the gates are
+behavior-neutral until a human owner/admin narrows the set via
+`PUT /api/workspaces/:id/agents/:agentId/capabilities`. Two surfaces:
+
+- **Route-gated commands** (message send, history/search, list-channels,
+  thread/channel create+close, member add, task list/create, attachment
+  upload/locate, schedule create/cancel) return HTTP **403** with a typed
+  body `{ code: 'capability_denied', capability, message, details: { capability } }`.
+  `capability_denied` is its own CLI **stable code** (added to `ERROR_CODES`):
+  when the backend supplies it explicitly the CLI preserves it verbatim
+  (`CliError.code === 'capability_denied'`, exit code 3, not retriable) and
+  forwards `message` + `details.capability`. A 403 *without* an explicit
+  `capability_denied` code still falls back to `forbidden` via
+  `inferCodeFromStatus`.
+- **Task claim/unclaim/status** gate **inside** the task service (the
+  target task's workspace is resolved per-entry — esp. claim-by-message-id
+  → the message's own workspace), so they surface as a per-entry result
+  with `code: 'capability_denied'` and a `capability` field (the claim call
+  itself is HTTP 200). Promotion of a non-task message via
+  `claim --message-id` additionally requires `create_tasks` (it creates a
+  new task), so a write-only agent is denied `capability_denied/create_tasks`
+  there. Schedule create/cancel gate inside the schedule service and
+  surface the 403 shape above.
+
+`capability_denied` is **not** retriable — the fix is a human granting the
+capability, not a backoff loop. The `capability` field is always its own
+typed field, never string-stuffed into `code`.
 
 ### Strict flag validation
 
@@ -531,7 +607,7 @@ When changing the contract, update **all** of:
 - `packages/backend/src/services/attachment-service.ts` (`detectContentType`
   and its sniff function).
 - This section of the doc.
-- `packages/backend/src/drivers/platform-prompt.ts` if the agent-facing
+- `packages/shared/src/platform-prompt.ts` if the agent-facing
   guidance changes (e.g. you start asking agents to pass `--content-type`).
 
 ## 6. Packaging
@@ -675,8 +751,9 @@ fail loudly if either side is forgotten.
 When changing agent-facing behavior, update these together:
 
 1. `packages/cli` command parsing, help text, client calls, and error mapping.
-2. `packages/shared/src/api/dto.ts` schemas and
+2. `packages/shared/src/api/*.ts` per-context schemas (agent-facing wire
+   contracts live in `internal-agent.ts`) and
    `packages/shared/src/api/paths.ts` route helpers.
 3. `packages/backend/src/routes.ts` internal handlers and auth/ACL checks.
-4. `packages/backend/src/drivers/platform-prompt.ts` command guidance.
+4. `packages/shared/src/platform-prompt.ts` command guidance.
 5. This document.
