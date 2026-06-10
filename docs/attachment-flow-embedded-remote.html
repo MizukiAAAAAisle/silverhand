@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Silverhand Attachment Flow: Embedded vs Remote</title>
+  <style>
+    :root {
+      --bg: #f7f4ed;
+      --paper: #fffdf8;
+      --ink: #1d1b18;
+      --muted: #6f675d;
+      --line: #ded5c8;
+      --line-strong: #b9aa98;
+      --accent: #2f6f68;
+      --accent-soft: #dbeee9;
+      --warn: #9b4d1e;
+      --warn-soft: #f5dfcd;
+      --violet: #6d5db8;
+      --violet-soft: #e8e2ff;
+      --green: #4f7d3f;
+      --green-soft: #e3efcf;
+      --code: #f3eee5;
+      --shadow: 0 18px 50px rgba(52, 42, 31, 0.12);
+      font-family: Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.65), rgba(255,255,255,0) 380px),
+        radial-gradient(circle at top left, rgba(219, 238, 233, 0.75), transparent 360px),
+        var(--bg);
+    }
+
+    main {
+      width: min(1180px, calc(100% - 36px));
+      margin: 0 auto;
+      padding: 34px 0 56px;
+    }
+
+    header.hero {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 28px;
+      align-items: end;
+      margin-bottom: 28px;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(34px, 5vw, 62px);
+      line-height: 0.96;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 0;
+      max-width: 760px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.65;
+    }
+
+    .legend {
+      display: grid;
+      gap: 10px;
+      padding: 16px;
+      background: rgba(255,255,255,0.58);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+
+    .legend-row {
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      gap: 12px;
+      align-items: start;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .legend-row strong {
+      color: var(--ink);
+      font-weight: 700;
+    }
+
+    section {
+      margin-top: 26px;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 22px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 16px;
+      line-height: 1.3;
+    }
+
+    p {
+      margin: 0;
+      line-height: 1.62;
+    }
+
+    code {
+      font-family: "SF Mono", ui-monospace, monospace;
+      font-size: 0.92em;
+      background: var(--code);
+      padding: 0.08em 0.32em;
+      border: 1px solid var(--line);
+    }
+
+    .model {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .concept,
+    .card,
+    .note,
+    .matrix-cell {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      box-shadow: 0 10px 30px rgba(52, 42, 31, 0.07);
+    }
+
+    .concept {
+      padding: 16px;
+      min-height: 154px;
+    }
+
+    .concept .kicker,
+    .card .kicker {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      padding: 0 8px;
+      margin-bottom: 10px;
+      border: 1px solid var(--line-strong);
+      background: var(--code);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .concept p {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .matrix {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .matrix-cell {
+      padding: 18px;
+      min-height: 100%;
+    }
+
+    .matrix-cell.embedded {
+      border-top: 4px solid var(--green);
+    }
+
+    .matrix-cell.remote {
+      border-top: 4px solid var(--violet);
+    }
+
+    .path {
+      display: grid;
+      gap: 9px;
+      margin-top: 14px;
+    }
+
+    .step {
+      position: relative;
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 12px;
+      background: #fbf7ef;
+      border: 1px solid var(--line);
+    }
+
+    .step::after {
+      content: "";
+      position: absolute;
+      left: 27px;
+      bottom: -10px;
+      width: 1px;
+      height: 10px;
+      background: var(--line-strong);
+    }
+
+    .step:last-child::after {
+      display: none;
+    }
+
+    .num {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      color: white;
+      background: var(--ink);
+      font: 700 12px/1 "SF Mono", ui-monospace, monospace;
+    }
+
+    .step strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 13px;
+    }
+
+    .step span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.48;
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .tag {
+      padding: 5px 8px;
+      border: 1px solid var(--line-strong);
+      background: white;
+      color: var(--muted);
+      font-size: 12px;
+      font-family: "SF Mono", ui-monospace, monospace;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .note {
+      padding: 18px;
+    }
+
+    .note.warn {
+      border-color: #d6aa83;
+      background: var(--warn-soft);
+    }
+
+    .note.accent {
+      border-color: #9fcfc5;
+      background: var(--accent-soft);
+    }
+
+    .note h3 {
+      margin-bottom: 10px;
+    }
+
+    .note ul {
+      margin: 10px 0 0;
+      padding-left: 20px;
+      line-height: 1.58;
+      color: var(--muted);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      box-shadow: 0 10px 30px rgba(52, 42, 31, 0.07);
+      overflow: hidden;
+    }
+
+    th,
+    td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    th {
+      background: #f1eadf;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .route {
+      color: var(--accent);
+      font-family: "SF Mono", ui-monospace, monospace;
+      font-size: 12px;
+    }
+
+    footer {
+      margin-top: 34px;
+      padding-top: 18px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 900px) {
+      header.hero,
+      .model,
+      .matrix,
+      .split {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <div>
+        <h1>Attachment Flow<br />Embedded vs Remote</h1>
+        <p class="subtitle">
+          这份图解只讲一个边界：附件的权威存储在 server，agent 最终拿到的是一个可读的本地路径。
+          embedded 和 remote 的差异不应该泄漏给 agent，只影响后台如何把这个路径解析出来。
+        </p>
+      </div>
+      <aside class="legend" aria-label="legend">
+        <div class="legend-row">
+          <strong>发送方</strong>
+          <span>human 通过 Desktop renderer；agent 通过 <code>silverhand file upload</code>。</span>
+        </div>
+        <div class="legend-row">
+          <strong>权威存储</strong>
+          <span>永远在当前 backend 所属的 blob storage，不在 message snapshot 里。</span>
+        </div>
+        <div class="legend-row">
+          <strong>读取方</strong>
+          <span>agent 通过 <code>silverhand file view</code> 拿本机可读路径。</span>
+        </div>
+      </aside>
+    </header>
+
+    <section>
+      <h2>四个核心对象</h2>
+      <div class="model">
+        <article class="concept">
+          <span class="kicker">Attachment row</span>
+          <h3>数据库真值</h3>
+          <p>
+            <code>attachments</code> 行保存 id、filename、size、content_type、storage、storage_key、
+            <code>channel_id</code> 和 <code>source_conversation_id</code>。
+          </p>
+        </article>
+        <article class="concept">
+          <span class="kicker">Blob bytes</span>
+          <h3>文件字节真值</h3>
+          <p>
+            local storage 下落在 backend 的 <code>SILVERHAND_DIR/blobs/...</code>。
+            remote server 时，这个目录在远端机器上。
+          </p>
+        </article>
+        <article class="concept">
+          <span class="kicker">Message snapshot</span>
+          <h3>消息里的快照</h3>
+          <p>
+            message 只嵌入 <code>{id, filename, size, content_type}</code>，用于 UI 展示和后续引用。
+            它不是文件本体，也不是鉴权真值。
+          </p>
+        </article>
+        <article class="concept">
+          <span class="kicker">Agent local path</span>
+          <h3>agent 可读路径</h3>
+          <p>
+            <code>file view</code> 的输出。embedded 可零拷贝返回 blob path；remote 必须先下载到
+            <code>attachments-cache</code>。
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>视角一：human 在 Desktop 里发送附件</h2>
+      <div class="matrix">
+        <article class="matrix-cell embedded">
+          <span class="kicker">Embedded server</span>
+          <h3>Desktop 与 backend 在同一台机器</h3>
+          <div class="path">
+            <div class="step">
+              <div class="num">1</div>
+              <div>
+                <strong>Renderer 上传 multipart</strong>
+                <span><span class="route">POST /api/channels/:id/attachments</span> 或 <span class="route">POST /api/threads/:id/attachments</span>。</span>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">2</div>
+              <div>
+                <strong>Backend 解析 owner channel</strong>
+                <span>channel 直接归自己；thread 上传时 <code>channel_id</code> 归 parent channel，<code>source_conversation_id</code> 记录 thread。</span>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">3</div>
+              <div>
+                <strong>写 attachment row + 本地 blob</strong>
+                <span>blob path 由 <code>attachments.storage_key</code> 映射而来，形如 <code>SILVERHAND_DIR/blobs/&lt;storage_key&gt;</code>；不要把 row id 当作文件名契约。</span>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">4</div>
+              <div>
+                <strong>发送 message snapshot</strong>
+                <span>消息里只有 id/filename/size/content_type 快照；UI 通过 HTTP 预览。</span>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">5</div>
+              <div>
+                <strong>本地 agent file view</strong>
+                <span>internal locate 通过 channel guard 后返回 blob local_path；CLI 信任 loopback，直接输出该路径。</span>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="matrix-cell remote">
+          <span class="kicker">Remote server</span>
+          <h3>Desktop 把字节上传到远端 backend</h3>
+          <div class="path">
+            <div class="step">
+              <div class="num">1</div>
+              <div>
+                <strong>Renderer 上传到 remote backend</strong>
+                <span>route 与 embedded 相同，只是 backend origin 是远端。</span>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">2</div>
+              <div>
+                <strong>远端写 attachment row + 远端 blob</strong>
+                <span>权威 bytes 在 remote server 的 <code>SILVERHAND_DIR/blobs/...</code>，本机没有这份 blob。</span>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">3</div>
+              <div>
+                <strong>消息 snapshot 正常广播</strong>
+                <span>本地 Desktop 可以预览，因为 renderer 走 <span class="route">GET /api/attachments/:id</span> 从 remote HTTP 拉字节。</span>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">4</div>
+              <div>
+                <strong>本地 agent file view</strong>
+                <span>CLI 通过 server URL 判断当前不是 loopback。locate 只用于校验和拿 metadata；返回的 server-local path 会被忽略，随后直接调用 internal download route 拉字节。</span>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">5</div>
+              <div>
+                <strong>缓存到 agent 本机</strong>
+                <span>输出 <code>${SILVERHAND_DIR:-~/.silverhand}/attachments-cache/&lt;conversationId&gt;/&lt;attachmentId&gt;/&lt;filename&gt;</code>。</span>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>视角二：agent 通过 CLI 发送附件</h2>
+      <div class="matrix">
+        <article class="matrix-cell embedded">
+          <span class="kicker">Embedded server</span>
+          <h3>agent 原文件和 backend 同机</h3>
+          <div class="path">
+            <div class="step">
+              <div class="num">1</div>
+              <div>
+                <strong>Agent 读取本地文件</strong>
+                <span><code>silverhand file upload --path /abs/file.png</code> 从 agent 当前机器读字节。</span>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">2</div>
+              <div>
+                <strong>Internal upload</strong>
+                <span><span class="route">POST /internal/conversations/:cid/agents/:aid/attachments</span>。agent 不传 channel，backend 用 token 的 conversation 解析。</span>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">3</div>
+              <div>
+                <strong>Backend 写本地 blob</strong>
+                <span>即使原文件就在 agent workspace，上传后权威副本仍是 backend blob；原路径不是 attachment 真值。</span>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">4</div>
+              <div>
+                <strong>Agent 发送 message</strong>
+                <span><code>silverhand message send --attachment &lt;id&gt;</code> 把 attachment id 嵌进 message snapshot。</span>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">5</div>
+              <div>
+                <strong>再次 file view</strong>
+                <span>同 embedded human 路径：locate 后直接返回 backend blob local_path。</span>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="matrix-cell remote">
+          <span class="kicker">Remote server</span>
+          <h3>agent 原文件在本地，权威副本在远端</h3>
+          <div class="path">
+            <div class="step">
+              <div class="num">1</div>
+              <div>
+                <strong>Agent 上传本地文件字节</strong>
+                <span>CLI 读取 <code>--path</code> 指向的本地文件，然后通过 internal route 发到 remote backend。</span>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">2</div>
+              <div>
+                <strong>Remote backend 写权威 blob</strong>
+                <span>attachment row 和 blob 都在 remote server；本机原文件只是上传来源，不参与后续鉴权或生命周期。</span>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">3</div>
+              <div>
+                <strong>Agent 发送 message snapshot</strong>
+                <span>和 human 一样，message 保存附件快照，不保存 bytes。</span>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">4</div>
+              <div>
+                <strong>后续 file view</strong>
+                <span>即使是自己刚上传的附件，也按 remote 读取规则：download 到本机 cache 后返回 local path。</span>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>为什么 remote cache 不放进 <code>blobs/</code></h2>
+      <div class="split">
+        <article class="note warn">
+          <h3><code>blobs/</code> 是 server authoritative storage</h3>
+          <p>
+            在 embedded 下，本机 server 的 <code>blobs/</code> 是真值，所以可以直接给 agent。
+            在 remote 下，本机没有 server authoritative blob；本机副本只是为了 agent 读取的 cache。
+          </p>
+          <ul>
+            <li>放进 <code>blobs/</code> 会让 cache 看起来像本机 server 真值。</li>
+            <li>远端删除、GC、channel 清理不会自动同步到本机。</li>
+            <li>同一个 <code>SILVERHAND_DIR</code> 切回 embedded 时可能误读这些 cache。</li>
+          </ul>
+        </article>
+        <article class="note accent">
+          <h3><code>attachments-cache/</code> 是 agent read cache</h3>
+          <p>
+            remote 下载副本放在 <code>${SILVERHAND_DIR:-~/.silverhand}/attachments-cache/</code>。
+            这个名字直接表达它不是权威存储，只是 <code>file view</code> 为 agent 准备的本地读路径。
+          </p>
+          <ul>
+            <li>保持 remote-only smoke app 与默认用户数据隔离。</li>
+            <li>最终输出仍然是 local path，对 agent 使用方式透明。</li>
+            <li>未来可以单独做 LRU / size cap，不影响 server blob 生命周期。</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>路由与真值来源</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>场景</th>
+            <th>入口</th>
+            <th>server 负责</th>
+            <th>agent 最终看到</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>human 上传</td>
+            <td><span class="route">POST /api/channels/:id/attachments</span><br /><span class="route">POST /api/threads/:id/attachments</span></td>
+            <td>解析 owner channel，写 attachment row 和 blob。</td>
+            <td>通过 <code>file view</code> 间接读取，不直接使用 public URL。</td>
+          </tr>
+          <tr>
+            <td>agent 上传</td>
+            <td><span class="route">POST /internal/conversations/:cid/agents/:aid/attachments</span></td>
+            <td>从 agent token 的 conversation 推导 owner channel，写 attachment row 和 blob。</td>
+            <td>得到 attachment id，后续用 <code>message send --attachment</code>。</td>
+          </tr>
+          <tr>
+            <td>renderer 预览</td>
+            <td><span class="route">GET /api/attachments/:id</span></td>
+            <td>按 route-supplied ACL streaming bytes。</td>
+            <td>浏览器显示图片或下载文件。</td>
+          </tr>
+          <tr>
+            <td>agent 查看</td>
+            <td><span class="route">GET /internal/.../attachments/:id/locate</span><br /><span class="route">GET /internal/.../attachments/:id/download</span></td>
+            <td>先 locate 做存在性和 channel guard；remote 再 download bytes。</td>
+            <td>一个本机可读 local path。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>排障读法</h2>
+      <div class="split">
+        <article class="note">
+          <h3>message 里有 snapshot，不代表 locate 一定成功</h3>
+          <p>
+            snapshot 是消息展示数据；<code>file view</code> 要重新查 attachment row 并做 channel guard。
+            如果 row 不在当前 server DB、server 版本没有 internal download route、或者跨 channel/thread guard 不通过，都会得到 404。
+          </p>
+        </article>
+        <article class="note">
+          <h3>new CLI + old remote backend 的典型症状</h3>
+          <p>
+            新 CLI 在非 loopback server 下会调用 internal download route；旧 remote server 没有这条 route，
+            所以表现为 <code>not_found (HTTP 404)</code>。部署含新 route 的 server 后再测，才是有效结果。
+          </p>
+        </article>
+      </div>
+      <div class="tag-row" aria-label="invariants">
+        <span class="tag">channel_id = ACL boundary</span>
+        <span class="tag">source_conversation_id = upload origin</span>
+        <span class="tag">message snapshot != blob truth</span>
+        <span class="tag">remote cache != blobs</span>
+      </div>
+    </section>
+
+    <footer>
+      Generated for Silverhand UI/UX discussion. This document describes the intended post-#task:1012 behavior:
+      embedded zero-copy where safe, remote HTTP fetch to agent-local cache where server and agent are not co-located.
+    </footer>
+  </main>
+</body>
+</html>
