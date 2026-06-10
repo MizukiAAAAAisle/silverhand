@@ -31,6 +31,7 @@
   "POST /api/workspaces/:id/members",
   "PATCH /api/workspaces/:id/members/users/:userId/role",
   "DELETE /api/workspaces/:id/members/:agentId",
+  "DELETE /api/workspaces/:id/members/users/:userId",
   "GET /api/workspaces/:id/agents/:agentId/capabilities",
   "PUT /api/workspaces/:id/agents/:agentId/capabilities",
   "GET /api/workspaces/:id/message-unread",

@@ -11,9 +11,16 @@ import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
 import { AgentPermissionsPanel } from './AgentPermissionsPanel';
+import { HumanRolesPanel } from './HumanRolesPanel';
 import { useArchiveWorkspace, useDeleteWorkspace, useRenameWorkspace } from './hooks';
 
 type SettingsSection = 'general' | 'agents';
+type PermissionTab = 'agents' | 'human';
+
+const PERMISSION_TABS: { id: PermissionTab; label: string }[] = [
+  { id: 'agents', label: 'Agents' },
+  { id: 'human', label: 'Human' },
+];
 
 interface WorkspaceSettingsDialogProps {
   open: boolean;
@@ -54,6 +61,11 @@ export function WorkspaceSettingsDialog({
   highlightCapability = null,
 }: WorkspaceSettingsDialogProps): JSX.Element {
   const [section, setSection] = useState<SettingsSection>(initialSection);
+  // Sub-tab within the Permission section. Agent capabilities and human
+  // roles are orthogonal permission models, so they live as sibling tabs
+  // rather than one merged list. A deep-link that targets an agent
+  // (focusAgentId) implies the Agents tab.
+  const [permTab, setPermTab] = useState<PermissionTab>('agents');
   const [name, setName] = useState('');
   const [renameError, setRenameError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -70,6 +82,7 @@ export function WorkspaceSettingsDialog({
   useEffect(() => {
     if (open) {
       setSection(initialSection);
+      setPermTab('agents');
       setName(workspaceName ?? '');
       setRenameError(null);
       setCopied(false);
@@ -195,11 +208,47 @@ export function WorkspaceSettingsDialog({
                 deletePending={deleteWorkspace.isPending}
               />
             ) : (
-              <AgentPermissionsPanel
-                workspaceId={workspaceId}
-                focusAgentId={focusAgentId}
-                highlightCapability={highlightCapability}
-              />
+              <div className="flex flex-col gap-4">
+                {/* Permission sub-tabs: agent capabilities vs human roles.
+                    Horizontal segmented control pinned above the active
+                    panel. */}
+                <div
+                  role="tablist"
+                  aria-label="Permission target"
+                  className="flex items-center gap-1 border-b-[length:var(--control-border-width)] border-border-subtle"
+                >
+                  {PERMISSION_TABS.map(tab => {
+                    const active = permTab === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={active}
+                        onClick={() => setPermTab(tab.id)}
+                        className={cn(
+                          '-mb-px border-b-2 px-3 py-1.5 text-sm transition-colors',
+                          active
+                            ? 'border-border-focus font-medium text-text-primary'
+                            : 'border-transparent text-text-secondary hover:text-text-primary',
+                        )}
+                      >
+                        {tab.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {permTab === 'agents' ? (
+                  <AgentPermissionsPanel
+                    workspaceId={workspaceId}
+                    focusAgentId={focusAgentId}
+                    highlightCapability={highlightCapability}
+                  />
+                ) : (
+                  <HumanRolesPanel workspaceId={workspaceId} />
+                )}
+              </div>
             )}
           </div>
         </div>

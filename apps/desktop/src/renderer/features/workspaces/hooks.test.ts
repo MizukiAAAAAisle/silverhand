@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import type { ChannelConversationDto, ThreadDto } from '@silverhand/shared';
+import type {
+  ChannelConversationDto,
+  ThreadDto,
+  WorkspaceHumanMemberDto,
+  WorkspaceMembersResponse,
+} from '@silverhand/shared';
 import {
   decideViewerSyncInvalidations,
   isViewerWorkspacesChangedPayload,
+  patchHumanMemberRole,
+  removeHumanMemberFromList,
   sortConversationList,
   type ChannelListItem,
   type ViewerSyncFrame,
@@ -183,5 +190,93 @@ describe('decideViewerSyncInvalidations', () => {
       [],
     );
     expect(decideViewerSyncInvalidations(frame({ type: 'ping' }))).toEqual([]);
+  });
+});
+
+describe('patchHumanMemberRole', () => {
+  const human = (
+    userId: string,
+    role: WorkspaceHumanMemberDto['role'],
+  ): WorkspaceHumanMemberDto => ({
+    id: userId,
+    name: userId,
+    display_name: userId,
+    avatar_url: null,
+    created_at: 0,
+    updated_at: 0,
+    workspace_id: 'w-1',
+    user_id: userId,
+    joined_at: 0,
+    role,
+  });
+
+  const base: WorkspaceMembersResponse = {
+    members: [],
+    human_members: [human('u-owner', 'owner'), human('u-a', 'member')],
+    viewer_role: 'owner',
+  };
+
+  it('sets only the targeted member role and leaves the rest untouched', () => {
+    const next = patchHumanMemberRole(base, 'u-a', 'admin');
+    expect(next.human_members.map(h => [h.user_id, h.role])).toEqual([
+      ['u-owner', 'owner'],
+      ['u-a', 'admin'],
+    ]);
+  });
+
+  it('does not mutate the input (new objects for changed rows)', () => {
+    const next = patchHumanMemberRole(base, 'u-a', 'admin');
+    expect(base.human_members[1]?.role).toBe('member');
+    expect(next).not.toBe(base);
+    expect(next.human_members[1]).not.toBe(base.human_members[1]);
+    // Unchanged row keeps its identity (cheap referential equality).
+    expect(next.human_members[0]).toBe(base.human_members[0]);
+  });
+
+  it('is a no-op shape when the userId is not present', () => {
+    const next = patchHumanMemberRole(base, 'nobody', 'admin');
+    expect(next.human_members).toEqual(base.human_members);
+  });
+});
+
+describe('removeHumanMemberFromList', () => {
+  const human = (userId: string): WorkspaceHumanMemberDto => ({
+    id: userId,
+    name: userId,
+    display_name: userId,
+    avatar_url: null,
+    created_at: 0,
+    updated_at: 0,
+    workspace_id: 'w-1',
+    user_id: userId,
+    joined_at: 0,
+    role: 'member',
+  });
+
+  const base: WorkspaceMembersResponse = {
+    members: [],
+    human_members: [human('u-owner'), human('u-a'), human('u-b')],
+    viewer_role: 'owner',
+  };
+
+  it('drops only the targeted human and keeps the rest', () => {
+    const next = removeHumanMemberFromList(base, 'u-a');
+    expect(next.human_members.map(h => h.user_id)).toEqual(['u-owner', 'u-b']);
+  });
+
+  it('does not mutate the input', () => {
+    const next = removeHumanMemberFromList(base, 'u-a');
+    expect(base.human_members).toHaveLength(3);
+    expect(next).not.toBe(base);
+    expect(next.human_members).not.toBe(base.human_members);
+  });
+
+  it('is a no-op shape when the userId is not present', () => {
+    const next = removeHumanMemberFromList(base, 'nobody');
+    expect(next.human_members.map(h => h.user_id)).toEqual([
+      'u-owner',
+      'u-a',
+      'u-b',
+    ]);
   });
 });

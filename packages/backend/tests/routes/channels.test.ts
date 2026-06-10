@@ -493,6 +493,122 @@ describe('workspace metadata and membership routes', () => {
     expect(res.status).toBe(404);
   });
 
+  it('lets the owner remove a human member, cascading conversation membership and publishing removed', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/workspaces', { name: 'remove-human' })
+    ).json() as any;
+    const workspaceId = created.workspace.id;
+    const onboardingChannelId = created.onboarding_channel_id;
+
+    // teammate is auto-mirrored as a member; seat a conversation_users row so
+    // the cascade has something to clear (proves removal isn't workspace-only).
+    t.ctx.db
+      .prepare(
+        `INSERT OR IGNORE INTO conversation_users (conversation_id, user_id, joined_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(onboardingChannelId, 'teammate', 0);
+
+    const before = await (
+      await http(t).get(`/api/workspaces/${workspaceId}/members`)
+    ).json() as any;
+    expect(before.human_members.map((m: any) => m.id)).toContain('teammate');
+
+    const viewerEvents: Array<{ kind: string; payload: unknown }> = [];
+    const unsubscribeViewer = t.ctx.events.subscribeScope('viewer:teammate', event => {
+      viewerEvents.push({ kind: event.kind, payload: event.payload });
+    });
+
+    let status: number;
+    try {
+      const res = await http(t).del(
+        `/api/workspaces/${workspaceId}/members/users/teammate`,
+      );
+      status = res.status;
+    } finally {
+      unsubscribeViewer();
+    }
+    expect(status).toBe(204);
+    // removed carries no role (the viewer no longer has one here); renderer
+    // refetches `['workspaces']` as the authority.
+    expect(viewerEvents).toEqual([
+      {
+        kind: 'viewer_workspaces_changed',
+        payload: { change: 'removed', workspace_id: workspaceId },
+      },
+    ]);
+
+    const after = await (
+      await http(t).get(`/api/workspaces/${workspaceId}/members`)
+    ).json() as any;
+    expect(after.human_members.map((m: any) => m.id)).not.toContain('teammate');
+
+    const convRow = t.ctx.db
+      .prepare<[string, string], { c: number }>(
+        `SELECT COUNT(*) AS c FROM conversation_users
+          WHERE conversation_id = ? AND user_id = ?`,
+      )
+      .get(onboardingChannelId, 'teammate');
+    expect(convRow?.c).toBe(0);
+    const wsRow = t.ctx.db
+      .prepare<[string, string], { c: number }>(
+        `SELECT COUNT(*) AS c FROM workspace_users
+          WHERE workspace_id = ? AND user_id = ?`,
+      )
+      .get(workspaceId, 'teammate');
+    expect(wsRow?.c).toBe(0);
+  });
+
+  it('rejects removing the workspace owner', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/workspaces', { name: 'remove-owner' })
+    ).json() as any;
+    const workspaceId = created.workspace.id;
+    const res = await http(t).del(
+      `/api/workspaces/${workspaceId}/members/users/local`,
+    );
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({
+      code: 'owner_removal_unsupported',
+    });
+    const rows = t.ctx.db
+      .prepare<[string], { user_id: string; role: string }>(
+        `SELECT user_id, role FROM workspace_users WHERE workspace_id = ?`,
+      )
+      .all(workspaceId);
+    expect(rows).toContainEqual({ user_id: 'local', role: 'owner' });
+  });
+
+  it('requires owner role to remove a human member', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/workspaces', { name: 'remove-deny' })
+    ).json() as any;
+    // teammate (a non-owner member) cannot remove anyone.
+    const res = await http(t).del(
+      `/api/workspaces/${created.workspace.id}/members/users/local`,
+      {
+        headers: {
+          [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+        },
+      },
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 404 when removing a non-member human', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/workspaces', { name: 'remove-missing' })
+    ).json() as any;
+    const res = await http(t).del(
+      `/api/workspaces/${created.workspace.id}/members/users/missing-user`,
+    );
+    expect(res.status).toBe(404);
+  });
+
   it('rejects adding an unknown human workspace member', async () => {
     t = buildTestApp();
     const workspace = await (

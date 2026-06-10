@@ -85,6 +85,8 @@ export const apiPaths = {
   workspaceMembers: (id: string) => `/api/workspaces/${id}/members`,
   workspaceMember: (id: string, agentId: string) =>
     `/api/workspaces/${id}/members/${agentId}`,
+  workspaceHumanMember: (id: string, userId: string) =>
+    `/api/workspaces/${id}/members/users/${userId}`,
   workspaceHumanMemberRole: (id: string, userId: string) =>
     `/api/workspaces/${id}/members/users/${userId}/role`,
   /** Agent capability set within a workspace (graded-permissions cut 2).

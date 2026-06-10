@@ -14,6 +14,8 @@ import {
   useAddWorkspaceMember,
   useWorkspaceMemberLists,
   useRemoveWorkspaceMember,
+  useRemoveWorkspaceHumanMember,
+  type WorkspaceHumanMember,
 } from './hooks';
 
 interface ManageMembersPopoverProps {
@@ -34,11 +36,19 @@ interface ManageMembersPopoverProps {
  * Replaces the previous modal `ManageMembersDialog` so the action
  * stays anchored to its trigger in the titlebar.
  *
+ * Role gating mirrors the backend governance gates, per-kind (a member must
+ * never see a control that would only 403): agent add/remove needs admin+,
+ * human add/remove needs owner. So the add selector hides entirely for plain
+ * members, narrows to agents-only for admins, and is full for owners; the
+ * agent Trash2 shows for admin+, the human Trash2 only for owners and never
+ * on the owner row. `membersKey` invalidates on `role_changed`, so a
+ * promotion re-lights these controls live.
+ *
  * Removal: agents have a Trash2 row action backed by `DELETE
- * /api/workspaces/:id/members/:agentId`. Humans currently render as
- * view-only — there is no human-remove backend route yet, and adding
- * a no-op control would be misleading. When the backend gains
- * `DELETE …/users/:userId`, the same affordance can land here.
+ * /api/workspaces/:id/members/:agentId` (admin+). Humans have a Trash2 backed
+ * by `DELETE /api/workspaces/:id/members/users/:userId` (owner-only); the
+ * owner row never renders it (UI mirror of the backend
+ * `owner_removal_unsupported`, so removing an owner can't be attempted).
  */
 export function ManageMembersPopover({
   workspaceId,
@@ -68,7 +78,7 @@ type Candidate =
 
 type Member =
   | { kind: 'agent'; agent: AgentDto }
-  | { kind: 'human'; user: UserDto };
+  | { kind: 'human'; user: WorkspaceHumanMember };
 
 // Split body out so the React-Query hooks below only mount once the
 // popover actually opens (Radix unmounts Content when closed).
@@ -92,7 +102,21 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
   const candidateHumanAvatarUrls = useUserAvatarObjectUrls(users);
   const addMember = useAddWorkspaceMember(workspaceId);
   const removeMember = useRemoveWorkspaceMember(workspaceId);
+  const removeHumanMember = useRemoveWorkspaceHumanMember(workspaceId);
   const [error, setError] = useState<string | null>(null);
+
+  // Mirror the backend governance gates so members never see dead controls.
+  // Agent add/remove is admin+ (POST + DELETE /api/workspaces/:id/members
+  // [/:agentId], minRole admin); human add is owner-only (the POST handler
+  // escalates the human branch to owner), and human remove is owner-only
+  // (`DELETE /api/workspaces/:id/members/users/:userId`). Gating is per-kind,
+  // not a popover-level boolean, because agents and humans share one
+  // selector/list. `membersKey` invalidates on `role_changed`, so these flags
+  // re-light live after a promotion — no manual refresh.
+  const viewerRole = memberLists?.viewerRole ?? null;
+  const canManageAgents = viewerRole === 'owner' || viewerRole === 'admin';
+  const canManageHumans = viewerRole === 'owner';
+  const canAddAny = canManageAgents || canManageHumans;
 
   const agentMemberIds = useMemo(
     () => new Set(agentMembers.map(m => m.id)),
@@ -103,18 +127,23 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
     [humanMembers],
   );
 
-  // Flat candidate list (members not yet enrolled). Agents listed
-  // first, then humans — a stable ordering without a section label.
+  // Flat candidate list (members not yet enrolled), filtered to what the
+  // viewer may actually add: agents need admin+, humans need owner. Agents
+  // listed first, then humans — a stable ordering without a section label.
   const candidates = useMemo<Candidate[]>(() => {
     const list: Candidate[] = [];
-    for (const a of agents) {
-      if (!agentMemberIds.has(a.id)) list.push({ kind: 'agent', agent: a });
+    if (canManageAgents) {
+      for (const a of agents) {
+        if (!agentMemberIds.has(a.id)) list.push({ kind: 'agent', agent: a });
+      }
     }
-    for (const u of users) {
-      if (!humanMemberIds.has(u.id)) list.push({ kind: 'human', user: u });
+    if (canManageHumans) {
+      for (const u of users) {
+        if (!humanMemberIds.has(u.id)) list.push({ kind: 'human', user: u });
+      }
     }
     return list;
-  }, [agents, users, agentMemberIds, humanMemberIds]);
+  }, [agents, users, agentMemberIds, humanMemberIds, canManageAgents, canManageHumans]);
 
   // Flat member list (everyone currently enrolled). Same ordering
   // contract as `candidates`.
@@ -148,89 +177,104 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
     }
   };
 
+  const handleRemoveHuman = async (userId: string): Promise<void> => {
+    setError(null);
+    try {
+      await removeHumanMember.mutateAsync(userId);
+    } catch (err) {
+      setError(formatRemoveHumanError(err));
+    }
+  };
+
   return (
     <div className="flex flex-col gap-3">
-      {/* Add-member selector. Choosing an option fires the mutation
-        * and clears the value so the trigger reverts to its placeholder
-        * (controlled value="" so picking the same candidate twice is fine). */}
-      <Select.Root
-        value=""
-        onValueChange={v => void onPick(v)}
-        disabled={addMember.isPending}
-      >
-        <Select.Trigger
-          aria-label="添加成员"
-          className="flex w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus disabled:cursor-not-allowed disabled:opacity-60 data-[placeholder]:text-text-muted"
+      {/* Add-member selector — only when the viewer can add at least one
+        * kind. Choosing an option fires the mutation and clears the value so
+        * the trigger reverts to its placeholder (controlled value="" so
+        * picking the same candidate twice is fine). The label narrows to
+        * "添加 agent" for admins, who cannot add humans. */}
+      {canAddAny ? (
+        <Select.Root
+          value=""
+          onValueChange={v => void onPick(v)}
+          disabled={addMember.isPending}
         >
-          <span className="flex items-center gap-1.5">
-            <UserPlus className="size-3.5 text-text-muted" />
-            <Select.Value placeholder="添加成员…" />
-          </span>
-          <Select.Icon>
-            <ChevronDown className="size-3.5 text-text-muted" />
-          </Select.Icon>
-        </Select.Trigger>
-        <Select.Portal>
-          <Select.Content
-            position="popper"
-            sideOffset={4}
-            className="z-[60] max-h-[40vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-lg"
+          <Select.Trigger
+            aria-label={canManageHumans ? '添加成员' : '添加 agent'}
+            className="flex w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus disabled:cursor-not-allowed disabled:opacity-60 data-[placeholder]:text-text-muted"
           >
-            <Select.Viewport className="p-1">
-              {candidates.length === 0 ? (
-                <div className="px-2 py-2 text-center text-xs italic text-text-muted">
-                  所有候选都已经在 Workspace 里
-                </div>
-              ) : (
-                candidates.map(c => {
-                  const value = candidateValue(c);
-                  const handle = c.kind === 'agent' ? c.agent.name : c.user.name;
-                  const displayName =
-                    c.kind === 'agent'
-                      ? c.agent.display_name || c.agent.name
-                      : c.user.display_name || c.user.name;
-                  return (
-                    <Select.Item
-                      key={value}
-                      value={value}
-                      className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-text-primary outline-none data-[highlighted]:bg-bg-hover"
-                    >
-                      {c.kind === 'agent' ? (
-                        <AgentAvatar
-                          runtime={c.agent.runtime}
-                          size={18}
-                          avatarObjectUrl={
-                            candidateAgentAvatarUrls.get(c.agent.id) ?? null
-                          }
-                          alt={displayName}
-                        />
-                      ) : (
-                        <UserAvatar
-                          size={18}
-                          avatarObjectUrl={
-                            candidateHumanAvatarUrls.get(c.user.id) ?? null
-                          }
-                          alt={displayName}
-                        />
-                      )}
-                      <Select.ItemText>
-                        <span className="flex min-w-0 items-baseline gap-1.5">
-                          <span className="truncate font-medium">
-                            {displayName}
+            <span className="flex items-center gap-1.5">
+              <UserPlus className="size-3.5 text-text-muted" />
+              <Select.Value
+                placeholder={canManageHumans ? '添加成员…' : '添加 agent…'}
+              />
+            </span>
+            <Select.Icon>
+              <ChevronDown className="size-3.5 text-text-muted" />
+            </Select.Icon>
+          </Select.Trigger>
+          <Select.Portal>
+            <Select.Content
+              position="popper"
+              sideOffset={4}
+              className="z-[60] max-h-[40vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-lg"
+            >
+              <Select.Viewport className="p-1">
+                {candidates.length === 0 ? (
+                  <div className="px-2 py-2 text-center text-xs italic text-text-muted">
+                    所有候选都已经在 Workspace 里
+                  </div>
+                ) : (
+                  candidates.map(c => {
+                    const value = candidateValue(c);
+                    const handle = c.kind === 'agent' ? c.agent.name : c.user.name;
+                    const displayName =
+                      c.kind === 'agent'
+                        ? c.agent.display_name || c.agent.name
+                        : c.user.display_name || c.user.name;
+                    return (
+                      <Select.Item
+                        key={value}
+                        value={value}
+                        className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-text-primary outline-none data-[highlighted]:bg-bg-hover"
+                      >
+                        {c.kind === 'agent' ? (
+                          <AgentAvatar
+                            runtime={c.agent.runtime}
+                            size={18}
+                            avatarObjectUrl={
+                              candidateAgentAvatarUrls.get(c.agent.id) ?? null
+                            }
+                            alt={displayName}
+                          />
+                        ) : (
+                          <UserAvatar
+                            size={18}
+                            avatarObjectUrl={
+                              candidateHumanAvatarUrls.get(c.user.id) ?? null
+                            }
+                            alt={displayName}
+                          />
+                        )}
+                        <Select.ItemText>
+                          <span className="flex min-w-0 items-baseline gap-1.5">
+                            <span className="truncate font-medium">
+                              {displayName}
+                            </span>
+                            <span className="truncate font-mono text-[11px] text-text-muted">
+                              @{handle}
+                            </span>
                           </span>
-                          <span className="truncate font-mono text-[11px] text-text-muted">
-                            @{handle}
-                          </span>
-                        </span>
-                      </Select.ItemText>
-                    </Select.Item>
-                  );
-                })
-              )}
-            </Select.Viewport>
-          </Select.Content>
-        </Select.Portal>
-      </Select.Root>
+                        </Select.ItemText>
+                      </Select.Item>
+                    );
+                  })
+                )}
+              </Select.Viewport>
+            </Select.Content>
+          </Select.Portal>
+        </Select.Root>
+      ) : null}
 
       <Section title={`MEMBERS · ${members.length}`}>
         {membersLoading ? (
@@ -273,11 +317,31 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
                       @{handle}
                     </span>
                   </span>
-                  {m.kind === 'agent' ? (
+                  {/* Agent remove is admin+ (DELETE …/members/:agentId,
+                    * minRole admin). */}
+                  {m.kind === 'agent' && canManageAgents ? (
                     <button
                       type="button"
                       onClick={() => handleRemove(m.agent.id)}
                       disabled={removeMember.isPending}
+                      aria-label="移除"
+                      title="移除成员"
+                      className="ml-auto flex size-6 items-center justify-center rounded-[var(--chip-radius)] text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-60"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  ) : null}
+                  {/* Human remove is owner-only (DELETE …/members/users/:userId).
+                    * The owner row never renders it — UI mirror of the backend
+                    * `owner_removal_unsupported`, so removing an owner can't even
+                    * be attempted. */}
+                  {m.kind === 'human' &&
+                  canManageHumans &&
+                  m.user.role !== 'owner' ? (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveHuman(m.user.user_id)}
+                      disabled={removeHumanMember.isPending}
                       aria-label="移除"
                       title="移除成员"
                       className="ml-auto flex size-6 items-center justify-center rounded-[var(--chip-radius)] text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-60"
@@ -335,6 +399,23 @@ function formatAddError(err: unknown): string {
     return `添加失败 (HTTP ${err.status})。`;
   }
   return '添加失败,请重试。';
+}
+
+/**
+ * One-line user-facing message for human-member remove errors. The UI gates
+ * the control to owners and hides it on the owner row, so 403 / 400
+ * (`owner_removal_unsupported`) should be unreachable — they are mapped
+ * anyway as a backstop in case state is stale.
+ */
+function formatRemoveHumanError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.kind === 'backend_unreachable') return '移除失败:无法连接后端。';
+    if (err.status === 403) return '没有权限移除此成员(需要 owner)。';
+    if (err.status === 400) return '无法移除 workspace owner。';
+    if (err.status === 404) return '该成员不存在或已被移除。';
+    return `移除失败 (HTTP ${err.status})。`;
+  }
+  return '移除失败,请重试。';
 }
 
 function Section({

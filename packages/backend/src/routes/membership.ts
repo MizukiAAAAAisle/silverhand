@@ -4,6 +4,8 @@
 //   - PATCH  /api/workspaces/:id/members/users/:userId/role
 //                                                     (createWorkspaceMembershipApp)
 //   - DELETE /api/workspaces/:id/members/:agentId     (createWorkspaceMembershipApp)
+//   - DELETE /api/workspaces/:id/members/users/:userId
+//                                                     (createWorkspaceMembershipApp)
 //   - GET    /api/conversations/:id/members           (createConversationMembershipApp)
 //   - POST   /api/conversations/:id/members           (createConversationMembershipApp)
 //   - DELETE /api/conversations/:id/members/agents/:agentId
@@ -99,7 +101,17 @@ function ownerRoleChangeUnsupported(c: Context) {
   );
 }
 
-type ViewerWorkspaceChange = 'added' | 'role_changed';
+function ownerRemovalUnsupported(c: Context) {
+  return c.json(
+    {
+      error: 'the workspace owner cannot be removed',
+      code: 'owner_removal_unsupported',
+    },
+    400,
+  );
+}
+
+type ViewerWorkspaceChange = 'added' | 'role_changed' | 'removed';
 
 function publishViewerWorkspacesChanged(
   ctx: BackendContext,
@@ -107,7 +119,10 @@ function publishViewerWorkspacesChanged(
   payload: {
     change: ViewerWorkspaceChange;
     workspace_id: string;
-    role: WorkspaceRoleDto;
+    // Absent for `removed` (the viewer no longer has a role here); the
+    // renderer treats the payload as a hint and refetches `['workspaces']`
+    // as the authority regardless. See `docs/viewer-visibility-sync-v1.md`.
+    role?: WorkspaceRoleDto;
   },
 ): void {
   ctx.events.publishToScope(
@@ -161,14 +176,52 @@ function updateWorkspaceHumanMemberRole(
 }
 
 /**
- * Workspace membership surface (api router): GET list + POST add + DELETE remove,
- * as a mountable sub-app. GET is viewer-gated (`canViewWorkspace`); POST is
- * admin-gated, human branch escalates to owner, agent branch delegates to the
- * AddWorkspaceAgentMember use case; DELETE is admin-gated and stops + removes the
+ * Remove a human member from a workspace. Mirrors the agent-remove cascade
+ * (`app.delete` below): drops the user's `conversation_users` row in every
+ * conversation of the workspace, then the `workspace_users` membership row.
+ * Humans run no process, so there is nothing to stop. The two-table cascade
+ * runs in ONE transaction so a mid-sequence failure can't leave the user
+ * half-removed (orphan `conversation_users` with no `workspace_users`). The
+ * `removed` publish happens AFTER commit so a rolled-back delete never emits
+ * a phantom event (same post-commit discipline as create-workspace). Caller
+ * has already verified the target is a non-owner human member.
+ */
+function removeWorkspaceHumanMember(
+  ctx: BackendContext,
+  workspaces: WorkspaceRepo,
+  conversations: ConversationRepo,
+  input: { workspaceId: string; userId: string },
+): void {
+  ctx.db.transaction(() => {
+    for (const conversation of conversations.list()) {
+      if (conversation.workspace_id !== input.workspaceId) continue;
+      conversations.removeUser(conversation.id, input.userId);
+    }
+    workspaces.removeUserMember(input.workspaceId, input.userId);
+  })();
+  publishViewerWorkspacesChanged(ctx, input.userId, {
+    change: 'removed',
+    workspace_id: input.workspaceId,
+  });
+}
+
+/**
+ * Workspace membership surface (api router): GET list + POST add + two DELETEs
+ * (agent-remove and human-remove), as a mountable sub-app. GET is viewer-gated
+ * (`canViewWorkspace`); POST is admin-gated, human branch escalates to owner,
+ * agent branch delegates to the AddWorkspaceAgentMember use case.
+ *
+ * DELETE `…/members/:agentId` (agent) is admin-gated and stops + removes the
  * agent from every conversation of the workspace, then removes the workspace
- * membership. DELETE stays best-effort
- * per-conversation stop + removeAgent, then removeMember, 204 — no tx / system
- * message / event; a use-case version is a future increment).
+ * membership. It stays best-effort (per-conversation stop + removeAgent, then
+ * removeMember, 204 — no tx / system message / event; a use-case version is a
+ * future increment).
+ *
+ * DELETE `…/members/users/:userId` (human) is owner-gated (human-roster is
+ * owner-only); the owner itself is never removable (`owner_removal_unsupported`
+ * 400). Humans run no process, so it just cascades `conversation_users` +
+ * `workspace_users` in one transaction, then publishes `removed` to the
+ * viewer scope post-commit. 204.
  */
 export function createWorkspaceMembershipApp(
   deps: MembershipRouteDeps,
@@ -317,6 +370,36 @@ export function createWorkspaceMembershipApp(
       conversations.removeAgent(conversation.id, agentId);
     }
     workspaces.removeMember(workspace.id, agentId);
+    return c.body(null, 204);
+  });
+
+  app.delete(apiPaths.workspaceHumanMember(':id', ':userId'), c => {
+    const id = c.req.param('id');
+    const userId = c.req.param('userId');
+    if (!id || !userId) {
+      return c.json({ error: 'workspace id and user id required' }, 400);
+    }
+    const workspace = workspaces.get(id);
+    if (!workspace || workspace.workspace_kind !== 'regular') {
+      return c.json({ error: 'workspace not found' }, 404);
+    }
+    // Human-roster management is owner-only (mirrors human add `:213` and
+    // role PATCH above), unlike the admin-gated agent-remove.
+    if (!canGovernWorkspace(ctx, getUserPrincipal(c), workspace.id, 'owner')) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const currentRole = workspaces.getUserRole(workspace.id, userId);
+    if (!currentRole) {
+      return c.json({ error: 'workspace human member not found' }, 404);
+    }
+    // The owner can never be removed: there must always be an owner and
+    // ownership transfer is unsupported (same invariant as the role PATCH).
+    // Owner-gating means the actor cannot remove themselves either.
+    if (currentRole === 'owner') return ownerRemovalUnsupported(c);
+    removeWorkspaceHumanMember(ctx, workspaces, conversations, {
+      workspaceId: workspace.id,
+      userId,
+    });
     return c.body(null, 204);
   });
 

@@ -573,6 +573,75 @@ export function useRemoveWorkspaceMember(workspaceId: string | null) {
   });
 }
 
+/** Pure optimistic removal: return a members response with `userId` dropped
+ *  from the human list, leaving every other field untouched. Exported for
+ *  unit tests. */
+export function removeHumanMemberFromList(
+  response: WorkspaceMembersResponse,
+  userId: string,
+): WorkspaceMembersResponse {
+  return {
+    ...response,
+    human_members: response.human_members.filter(h => h.user_id !== userId),
+  };
+}
+
+/** Remove a human member from a workspace. Owner-only on the backend
+ *  (`DELETE …/members/users/:userId`, 204 No Content — no body to parse).
+ *  Optimistic: drops the row from the cached members list, restores the
+ *  snapshot on error, refetches as the authority. The removed user's OWN
+ *  client downgrades via the `removed` viewer event (`useViewerWorkspacesSync`),
+ *  not this hook. */
+export function useRemoveWorkspaceHumanMember(workspaceId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (userId: string) => {
+      if (!workspaceId) throw new Error('no workspace selected');
+      await api(apiPaths.workspaceHumanMember(workspaceId, userId), {
+        method: 'DELETE',
+      });
+    },
+    onMutate: async userId => {
+      if (!workspaceId) return { previous: undefined };
+      const key = membersKey(workspaceId);
+      await qc.cancelQueries({ queryKey: key });
+      const previous = qc.getQueryData<WorkspaceMembersResponse>(key);
+      if (previous) {
+        qc.setQueryData<WorkspaceMembersResponse>(
+          key,
+          removeHumanMemberFromList(previous, userId),
+        );
+      }
+      return { previous };
+    },
+    onError: (_err, _userId, ctx) => {
+      if (workspaceId && ctx?.previous) {
+        qc.setQueryData(membersKey(workspaceId), ctx.previous);
+      }
+    },
+    onSettled: () => {
+      if (workspaceId) qc.invalidateQueries({ queryKey: membersKey(workspaceId) });
+    },
+  });
+}
+
+/** Pure optimistic patch: return a members response with `userId`'s role set
+ *  to `role`, leaving every other member untouched. Owner rows are never a
+ *  legal target (the caller only offers admin↔member), but this helper does
+ *  not re-enforce that — it just maps by `user_id`. Exported for unit tests. */
+export function patchHumanMemberRole(
+  response: WorkspaceMembersResponse,
+  userId: string,
+  role: WorkspaceRole,
+): WorkspaceMembersResponse {
+  return {
+    ...response,
+    human_members: response.human_members.map(h =>
+      h.user_id === userId ? { ...h, role } : h,
+    ),
+  };
+}
+
 /** Update a human member's workspace role (admin↔member). Owner-only on the
  *  backend (`PATCH …/members/users/:userId/role`); the renderer mirrors that
  *  gate by only mounting the control for owner viewers and never offering
@@ -599,12 +668,10 @@ export function useUpdateWorkspaceHumanMemberRole(workspaceId: string | null) {
       await qc.cancelQueries({ queryKey: key });
       const previous = qc.getQueryData<WorkspaceMembersResponse>(key);
       if (previous) {
-        qc.setQueryData<WorkspaceMembersResponse>(key, {
-          ...previous,
-          human_members: previous.human_members.map(h =>
-            h.user_id === vars.userId ? { ...h, role: vars.role } : h,
-          ),
-        });
+        qc.setQueryData<WorkspaceMembersResponse>(
+          key,
+          patchHumanMemberRole(previous, vars.userId, vars.role),
+        );
       }
       return { previous };
     },

@@ -93,6 +93,13 @@ export const HUMAN_GOVERNANCE_ROUTES: readonly GovernanceRouteDecl[] = [
     note: 'human role escalation/demotion is owner-only; owner transfer remains unsupported',
   },
   { method: 'DELETE', path: '/api/workspaces/:id/members/:agentId', minRole: 'admin', roleScope: 'workspace' },
+  {
+    method: 'DELETE',
+    path: '/api/workspaces/:id/members/users/:userId',
+    minRole: 'owner',
+    roleScope: 'workspace',
+    note: 'human-member removal is owner-only; the owner itself can never be removed (owner_removal_unsupported)',
+  },
   // Editing an agent's capability set is governance (owner/admin, doc
   // §2.4). This is the human-axis gate ON the agent-capability axis —
   // WHO may edit caps is a role decision; WHAT the caps then authorize is
