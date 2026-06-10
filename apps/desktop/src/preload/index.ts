@@ -184,14 +184,6 @@ export type DesktopSaveServerUrlResult =
         | 'obfuscated_loopback_disallowed';
       message: string;
     }
-  | {
-      // D4.a Commit 1 — see `api.d.ts` for rationale. Removed when
-      // Commit 5 lands remote daemon acceptance.
-      ok: false;
-      kind: 'remote_backend_not_yet_supported';
-      insecure: boolean;
-      message: string;
-    }
   | { ok: false; kind: 'config_write_failed'; message: string }
   | {
       ok: false;

@@ -98,17 +98,6 @@ export function describeSaveServerUrlOutcome(
         // can't include without runtime substitution.
         description: result.message,
       };
-    case 'remote_backend_not_yet_supported':
-      // D4.a Commit 1 — the classifier admitted a remote URL but the
-      // Settings → save pipeline is still loopback-only in this
-      // build. Render an honest banner so the user knows the URL
-      // shape is fine but the *feature* isn't wired through yet.
-      // Removed when Commit 5 lands the profile update flow.
-      return {
-        tone: 'error',
-        title: 'Remote backend support is not yet enabled in this build.',
-        description: result.message,
-      };
     case 'config_write_failed':
       return {
         tone: 'error',

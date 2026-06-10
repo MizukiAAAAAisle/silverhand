@@ -186,57 +186,55 @@ describe('performOutboundReload — anchor 1: raw input classify', () => {
     expect(state.reloadCalls).toBe(0);
   });
 
-  // D4.a Commit 1 — when the classifier successfully admits a remote
-  // URL (https or http+dev-flag), the Settings layer must still
-  // short-circuit with the typed `remote_backend_not_yet_supported`
-  // outcome because daemon outbound-WS hasn't been widened yet.
-  // This pins the boundary: writes / reloads MUST NOT fire.
+  // #task:1008 — remote acceptance has landed. When the classifier
+  // admits a remote URL (https, or http+dev-flag), the Settings layer
+  // no longer short-circuits: the URL flows straight through the same
+  // write → reload → watchdog pipeline as loopback. This pins that a
+  // classified remote URL DOES write the new bytes and fire the
+  // reload IPC (the old `remote_backend_not_yet_supported` guard is
+  // gone — insecure http is still rejected at classify, tested above).
   it.each<{
     label: string;
     classified: { ok: true; kind: 'remote'; url: URL; insecure: boolean };
-    expectedInsecure: boolean;
   }>([
     {
       label: 'remote https',
       classified: {
         ok: true,
         kind: 'remote',
-        url: new URL('https://api.example.com'),
+        url: new URL('https://api.example.com/'),
         insecure: false,
       },
-      expectedInsecure: false,
     },
     {
       label: 'remote http with dev flag',
       classified: {
         ok: true,
         kind: 'remote',
-        url: new URL('http://10.0.0.5:8080'),
+        url: new URL('http://10.0.0.5:8080/'),
         insecure: true,
       },
-      expectedInsecure: true,
     },
   ])(
-    'remote_backend_not_yet_supported short-circuits with insecure=$expectedInsecure ($label)',
-    async ({ classified, expectedInsecure }) => {
+    'classified remote URL flows through to write + reload ($label)',
+    async ({ classified }) => {
       const { deps, state } = makeDeps({ classify: () => classified });
       const out = await performOutboundReload(
         { serverUrl: classified.url.toString() },
         deps,
       );
-      expect(out.ok).toBe(false);
-      if (out.ok) throw new Error('unreachable');
-      if (out.kind !== 'remote_backend_not_yet_supported') {
-        throw new Error('unreachable');
-      }
-      expect(out.insecure).toBe(expectedInsecure);
-      expect(out.message).toMatch(/not yet enabled/i);
-      // Critical invariant: NO write to daemon-config, NO reload IPC.
-      // A regression here would corrupt the daemon's loopback-only
-      // config and leave the WS in a broken state.
-      expect(state.writeCalls).toEqual([]);
-      expect(state.reloadCalls).toBe(0);
-      expect(state.watchdogCalls).toEqual([]);
+      // Default deps reload as `action: 'reloaded'` then the watchdog
+      // resolves ok → `reloaded` success arm. The point of the test
+      // is that the remote URL reached the pipeline at all.
+      expect(out.ok).toBe(true);
+      if (!out.ok) throw new Error('unreachable');
+      expect(out.kind).toBe('reloaded');
+      // The remote URL's normalized form was written to daemon-config
+      // and the reload IPC fired — no Settings-layer short-circuit.
+      expect(state.writeCalls).toHaveLength(1);
+      expect(state.writeCalls[0]!.server_url).toBe(classified.url.toString());
+      expect(state.reloadCalls).toBe(1);
+      expect(state.watchdogCalls).toHaveLength(1);
     },
   );
 

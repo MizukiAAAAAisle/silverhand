@@ -195,21 +195,6 @@ export type DesktopSaveServerUrlResult =
         | 'obfuscated_loopback_disallowed';
       message: string;
     }
-  | {
-      // D4.a Commit 1 — classifier admits non-loopback https (and
-      // non-loopback http with the dev flag) as `kind: 'remote'`, but
-      // the Settings → save pipeline is still loopback-only in this
-      // build (daemon outbound-WS still rejects remote in
-      // `outbound-client.ts` until Commit 5 / G2). Surface a typed
-      // "not yet supported" outcome so the renderer can render an
-      // honest banner instead of treating the URL as accepted.
-      ok: false;
-      kind: 'remote_backend_not_yet_supported';
-      /** Honest insecure flag from the classifier: true when the
-       *  input was http+dev-flag, false when the input was https. */
-      insecure: boolean;
-      message: string;
-    }
   | { ok: false; kind: 'config_write_failed'; message: string }
   | {
       ok: false;
