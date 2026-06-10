@@ -113,10 +113,27 @@ three (invalidate `['workspaces']`); only the secondary effects branch. One kind
 keeps the rail open for future viewer-visibility facts (e.g. workspace deleted
 out from under a member) by adding a `change` variant, not a new subscription.
 
-> Naming note for review: `viewer_workspaces_changed` vs reusing a more generic
-> `viewer_visibility_changed`. I lean to the former (precise: it is about the
-> viewer's workspace set). Open to Cindy's preference if she sees adjacent facts
-> that should share the kind.
+Kind name `viewer_workspaces_changed` is **settled** (Cindy review): narrower
+boundary than a generic `viewer_visibility_changed`, so notifications / other
+viewer-private facts don't get vacuumed into it.
+
+**Required secondary invalidation (contract, not optional):** on
+`change === 'role_changed'` the renderer MUST also invalidate
+`membersKey(workspace_id)` (`['workspaces', id, 'members']`) in addition to
+`['workspaces']`. Rationale: the governance UI's `viewerRole` is sourced from
+`GET /api/workspaces/:id/members` (`useWorkspaceMemberLists`), **not** from the
+workspace list — invalidating only `['workspaces']` would leave stale role gates.
+This is part of the contract so the publisher and consumer agree it is mandatory,
+not a nicety.
+
+**No-op suppression (contract):** the event name is `*_changed`, so it MUST fire
+only on a *real* change. Both backend mutation points can produce no-op shapes —
+`addUserMember` is `INSERT OR IGNORE` then returns the row (re-add of an existing
+member = no change); `setUserRole` will `UPDATE … RETURNING` even when the new
+role equals the old. The publisher MUST gate on the actual delta (`created`
+flag for add; `oldRole !== newRole` for role change) and skip publish otherwise.
+Repeated publishes are harmless to `invalidate` (idempotent), but they pollute
+event semantics and must not be relied on or emitted.
 
 ### 3.2 Backend publish points (Cindy implements)
 
@@ -129,20 +146,23 @@ Publish to `viewer:<affectedUserId>` after the mutation commits, at:
 | remove human from workspace | **no endpoint today** (DELETE members is agent-only, `membership.ts:244`) | `change:'removed', workspace_id` |
 
 Notes / dependencies for review:
-- **Remove-human is a gap**: the current `DELETE /workspaces/:id/members/:agentId`
-  removes *agents*. A "remove human from workspace" path may not exist yet. If
-  it doesn't, `change:'removed'` is speculative until that endpoint lands — flag
-  whether to (a) scope v1 to add + role_changed only, or (b) add the
-  remove-human endpoint in the same cut. My rec: ship add + role_changed now,
-  reserve `'removed'` in the enum, wire it when the endpoint exists.
+- **Remove-human is a gap (confirmed)**: no public endpoint today — only
+  persistence methods exist (`WorkspaceRepo.removeUserMember`,
+  `ConversationRepo.removeUser`); the `DELETE /workspaces/:id/members/:agentId`
+  route is agent-only (`membership.ts:244`). v1 ships **add + role_changed**;
+  `'removed'` is reserved in the enum but **not** emitted until a
+  remove-human-from-workspace endpoint lands (P2).
+- **Centralize publish (Cindy):** do **not** hand-write two publish blocks in the
+  two route branches. Add a thin workspace-human-membership use case (or at
+  minimum a route-local helper) that owns: the no-op delta check (§3.1) + the
+  post-commit publish to `viewer:<userId>`. Consistent with the project's
+  route→use-case direction (`docs/use-case-layer-p0-spec.md`) and keeps the
+  no-op rule in exactly one place.
 - **Agents have no viewer scope** — agent workspace membership changes stay on
   `workspace:<id>` (members panel already covers that). This event is
   **human-only**.
 - **Post-commit discipline**: publish after the DB write, consistent with the
-  use-case `PostCommitEffect` pattern (`docs/use-case-layer-p0-spec.md`). The
-  human-add branch is currently a raw route handler; whether to lift it into a
-  use case first is Cindy's call (it is a small handler, but the project
-  direction is route→use-case for anything emitting effects).
+  use-case `PostCommitEffect` pattern (`docs/use-case-layer-p0-spec.md`).
 
 ### 3.3 Renderer subscription (Alice implements)
 
@@ -207,14 +227,24 @@ that needs care; everything else is a coarse invalidate.
 - **P2**: `change:'removed'` once a remove-human-from-workspace endpoint exists;
   wire safe-downgrade live.
 
-## 6. Review questions for Cindy
+## 6. Resolved (Cindy review, 2026-06-10)
 
-1. Event kind name + single-kind-with-`change` vs three kinds — agree?
-2. Coarse-trigger-with-hints stance (correctness independent of payload) — agree
-   it is race-safe, or do you want the payload to be authoritative anywhere?
-3. Remove-human endpoint: does one exist? If not, v1 = add + role_changed only,
-   reserve `'removed'`?
-4. Lift the human-add route handler into a use case before adding the effect, or
-   publish inline for v1?
-5. Any other viewer-visibility fact that should share `viewer_workspaces_changed`
-   now rather than later (workspace deleted while you're a member?).
+Direction PASS; contract settled:
+
+1. Kind name `viewer_workspaces_changed`; single kind + `change` discriminator
+   (not three kinds).
+2. Coarse trigger + hints; payload is never source of truth — refetch
+   `['workspaces']` is authority. (folded into §3.1)
+3. Remove-human endpoint does not exist → v1 = add + role_changed; `'removed'`
+   reserved, not emitted. (folded into §3.2)
+4. No-op suppression is mandatory (`created` / `oldRole !== newRole`), centralized
+   in a thin human-membership use case / helper — not duplicated across route
+   branches. (folded into §3.1, §3.2)
+5. `role_changed` MUST also invalidate `membersKey(workspace_id)` — required
+   secondary invalidation, in the contract. (folded into §3.1)
+6. `workspace deleted while you're a member` eventually shares this kind, but
+   it's an owner-only destructive surface — **not** in P1.
+
+Ready to implement on shiki's go-ahead: renderer (`useViewerWorkspacesSync` at
+`RegisteredAppShell`) = Alice; backend (thin human-membership use case +
+viewer-scope publish) = Cindy.
