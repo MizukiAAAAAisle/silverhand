@@ -190,6 +190,48 @@ export function useHostProvenanceGate(): {
   };
 }
 
+export interface HostStatusFreshnessPolicy {
+  /** React Query `staleTime` for this consumer. */
+  staleTime: number;
+  /** React Query `refetchOnMount` for this consumer. */
+  refetchOnMount: 'always' | false;
+}
+
+/**
+ * `#task:1010`/`#task:1011` (Cindy review P1) — decide the cache
+ * freshness policy for `useHostStatusQuery` based on the consumer.
+ *
+ * The two consumers share `hostStatusKey(hostId)` but have OPPOSITE
+ * freshness needs, and they must NOT inherit each other's policy:
+ *
+ *   - **HostDetailView (`pollUntilAvailable === false`)** — manual
+ *     refresh only. `staleTime: Infinity` + no mount refetch: the cache
+ *     entry stays fresh as long as it's in memory, and the user pulls
+ *     fresh data via the explicit Refresh button (shiki: "agents 列表手动
+ *     refresh 就够了").
+ *
+ *   - **ConnectionPane pill (`pollUntilAvailable === true`)** — the
+ *     remote-mode readiness source. It MUST re-validate against the live
+ *     remote backend on every mount and MUST NOT trust a stale
+ *     `available` left in the shared cache by a prior HostDetailView
+ *     read. Otherwise the pill would flash/stick "Ready" while the
+ *     daemon is actually disconnected (the `refetchInterval` stops as
+ *     soon as it sees `available`, so without a forced fresh mount probe
+ *     a stale `available` would never be corrected). Hence
+ *     `staleTime: 0` + `refetchOnMount: 'always'`.
+ *
+ * Pure + exported so a unit test pins the "pollUntilAvailable never
+ * inherits the fresh-forever manual cache" contract without rendering
+ * the hook.
+ */
+export function hostStatusFreshnessPolicy(
+  pollUntilAvailable: boolean,
+): HostStatusFreshnessPolicy {
+  return pollUntilAvailable
+    ? { staleTime: 0, refetchOnMount: 'always' }
+    : { staleTime: Infinity, refetchOnMount: false };
+}
+
 /**
  * `#task:808` slice 4 — fetch the per-host dynamic snapshot powering
  * `HostDetailView`. Returns the discriminated `HostStatusResponse`; the
@@ -197,14 +239,11 @@ export function useHostProvenanceGate(): {
  * always renders `data.agents[]` (registration is a DB fact, survives
  * daemon disconnect — see Cindy `Mtf5zZL-Y7PauIDi`).
  *
- * **Manual refresh only** (shiki: "agents 列表我觉得手动 refresh 就够了"):
- *   - `staleTime: Infinity` — never auto-refetches on focus / interval /
- *     remount; the cache entry is fresh as long as it's in memory.
- *   - `refetchOnWindowFocus: false` / `refetchInterval: false` — explicit
- *     belts on the same constraint.
- *   - The detail view exposes a Refresh button that calls
- *     `qc.invalidateQueries({ queryKey: hostStatusKey(hostId) })` to
- *     trigger a single one-off refetch.
+ * **Freshness is consumer-dependent** — see `hostStatusFreshnessPolicy`.
+ * HostDetailView (default) is manual-refresh-only (`staleTime: Infinity`,
+ * Refresh button calls `qc.invalidateQueries`). The ConnectionPane pill
+ * opts into `pollUntilAvailable`, which forces a fresh mount probe +
+ * poll-until-available so it never trusts the manual cache.
  *
  * The hook is `enabled` only when `hostId` is provided so the master/
  * detail right pane mounting with no selection doesn't burn a request.
@@ -213,6 +252,9 @@ export function useHostStatusQuery(
   hostId: string | null | undefined,
   options?: { enabled?: boolean; pollUntilAvailable?: boolean },
 ) {
+  const freshness = hostStatusFreshnessPolicy(
+    options?.pollUntilAvailable ?? false,
+  );
   return useQuery<HostStatusResponse>({
     queryKey: hostStatusKey(hostId ?? '__none__'),
     queryFn: async () => {
@@ -220,7 +262,8 @@ export function useHostStatusQuery(
       return HostStatusResponseSchema.parse(raw);
     },
     enabled: (options?.enabled ?? true) && Boolean(hostId),
-    staleTime: Infinity,
+    staleTime: freshness.staleTime,
+    refetchOnMount: freshness.refetchOnMount,
     refetchOnWindowFocus: false,
     // `#task:1010` — opt-in polling for the ConnectionPane "This
     // computer" pill in remote mode. There, `local_host_ws_attached_at`

@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CONNECTING_POLL_MS,
   connectingRefetchIntervalMs,
+  hostStatusFreshnessPolicy,
   type BackendInfoSnapshot,
 } from './hooks';
 
@@ -109,6 +110,30 @@ describe('connectingRefetchIntervalMs — terminal arms with stale attached_at a
         }),
       ),
     ).toBe(false);
+  });
+});
+
+describe('hostStatusFreshnessPolicy — pollUntilAvailable must not trust the manual cache (Cindy #task:1011 P1)', () => {
+  it('pollUntilAvailable=true → forces a fresh mount probe (staleTime 0, refetchOnMount "always")', () => {
+    // The ConnectionPane connection pill shares hostStatusKey(hostId)
+    // with HostDetailView's manual-refresh query. HostDetailView caches
+    // with staleTime: Infinity, so a prior `available` read could sit in
+    // the shared cache indefinitely. If the pill inherited that policy
+    // it would read the stale `available` on mount and (because
+    // refetchInterval stops as soon as it sees `available`) NEVER
+    // re-probe — showing "Ready" while the daemon is actually
+    // disconnected. The pill consumer must therefore re-validate.
+    const policy = hostStatusFreshnessPolicy(true);
+    expect(policy.staleTime).toBe(0);
+    expect(policy.refetchOnMount).toBe('always');
+  });
+
+  it('pollUntilAvailable=false → keeps the manual-refresh-only policy (staleTime Infinity, no mount refetch)', () => {
+    // HostDetailView is unchanged: fresh-as-long-as-in-memory, user
+    // pulls fresh data via the explicit Refresh button.
+    const policy = hostStatusFreshnessPolicy(false);
+    expect(policy.staleTime).toBe(Infinity);
+    expect(policy.refetchOnMount).toBe(false);
   });
 });
 

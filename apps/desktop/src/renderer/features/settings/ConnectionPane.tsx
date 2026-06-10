@@ -153,8 +153,13 @@ export function ConnectionPane(): JSX.Element {
   const qc = useQueryClient();
   const hostsQuery = useHostsQuery();
   // This pane renders the live connection pill, so it opts into the
-  // narrow `claimed + attached_at===null` polling that auto-stops once
-  // the attachment lands or the status moves terminal.
+  // narrow `claimed + attached_at===null` polling. In embedded mode this
+  // auto-stops once `attached_at` lands (the attachment is observable
+  // in-process). In remote mode `attached_at` never lands (#task:1010),
+  // so this keeps ticking at 1.5s while the pane is open — but it's a
+  // cheap local backend-info IPC, NOT a daemon round-trip, and the
+  // pill's Connecting→Ready flip in remote comes from the separate
+  // host-status probe below, which DOES stop once `available`.
   const backendInfoQuery = useBackendInfoSnapshot({ pollWhileConnecting: true });
 
   // ---- Server address form -------------------------------------------------
