@@ -6,7 +6,11 @@ import {
   FromKindSchema,
   TaskStatusSchema,
 } from '../db/schema.js';
-import { SearchOptionalStringSchema } from './_zod-helpers.js';
+import {
+  MessageAttachmentIdsInputSchema,
+  SearchOptionalStringSchema,
+  hasMessagePayload,
+} from './_zod-helpers.js';
 import { AttachmentSnapshotSchema } from './attachment.js';
 import { TaskAssigneeDtoSchema } from './task.js';
 
@@ -46,11 +50,14 @@ export const ConversationMessagesDtoSchema = z.object({
 export type ConversationMessagesDto = z.infer<typeof ConversationMessagesDtoSchema>;
 
 export const SendMessageInputSchema = z.object({
-  content: z.string().min(1),
+  content: z.string(),
   /** Optional attachment ids previously returned by the upload endpoint.
    *  Server validates each id belongs to the same channel as the
    *  destination conversation. */
-  attachment_ids: z.array(z.string().min(1)).max(20).optional(),
+  attachment_ids: MessageAttachmentIdsInputSchema,
+}).refine(hasMessagePayload, {
+  message: 'message must include text or at least one attachment',
+  path: ['content'],
 });
 export type SendMessageInput = z.infer<typeof SendMessageInputSchema>;
 

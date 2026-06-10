@@ -29,8 +29,11 @@ const sendCommand: Command = {
                           [--anyway]
 
 Reads the message body from STDIN and sends it to the current
-conversation (channel or thread). Always pipe content via stdin —
-the old \`--content <text>\` flag was removed because shell quoting
+conversation (channel or thread). A message must include text or at
+least one attachment. Pipe text via stdin; attachment-only sends may
+omit stdin and pass \`--attachment <id>\`.
+
+The old \`--content <text>\` flag was removed because shell quoting
 of a value containing \`"\`, backticks, or \`$\` silently truncated
 the body before reaching this CLI.
 
@@ -43,6 +46,9 @@ Two recommended call shapes:
   silverhand message send --target parent <<'SILVERHAND_EOF'
   Any text. Quotes, backticks, $vars, multi-line markdown — all safe.
   SILVERHAND_EOF
+
+  # attachment-only
+  silverhand message send --attachment att_123
 
 The single-quoted heredoc delimiter (\`<<'SILVERHAND_EOF'\`) disables
 shell expansion of \`$\`, backticks, and \`\\\`. The body is read as
@@ -73,8 +79,8 @@ Pre-flight failures (exit 1):
   --text / --message was supplied → flag_removed (use stdin instead;
                                     these were never accepted but are
                                     intercepted with a stdin template)
-  stdin is a TTY                 → stdin_is_tty (no body provided)
-  stdin is empty                 → empty_stdin
+  stdin is a TTY and no attachment → stdin_is_tty (no body provided)
+  stdin is empty and no attachment → empty_stdin
   stdin is not UTF-8             → invalid_utf8 (re-encode upstream)
 
 stdout: { "message_id": "<id>", "message_seq": <seq> }`,
@@ -112,10 +118,15 @@ stdout: { "message_id": "<id>", "message_seq": <seq> }`,
     },
   },
   async run({ env, client, args }) {
+    const attachmentIds = flagStringArray(args, 'attachment');
+    const hasAttachments = (attachmentIds?.length ?? 0) > 0;
+    let content = '';
+
     // Pre-flight: a TTY on stdin means the agent forgot to pipe a body.
     // Failing fast (rather than blocking on a read that will never
-    // arrive) keeps the agent's exit path predictable.
-    if (process.stdin.isTTY) {
+    // arrive) keeps the agent's exit path predictable. Attachment-only
+    // sends are the one intentional no-stdin path.
+    if (process.stdin.isTTY && !hasAttachments) {
       throw new CliError({
         code: 'validation_error',
         subkind: 'stdin_is_tty',
@@ -127,49 +138,50 @@ stdout: { "message_id": "<id>", "message_seq": <seq> }`,
       });
     }
 
-    // Read raw bytes; do NOT setEncoding so any UTF-8 surrogate pairs
-    // / multi-byte sequences cross chunk boundaries cleanly.
-    const buffer = await readAllStdin();
+    if (!process.stdin.isTTY) {
+      // Read raw bytes; do NOT setEncoding so any UTF-8 surrogate pairs
+      // / multi-byte sequences cross chunk boundaries cleanly.
+      const buffer = await readAllStdin();
 
-    if (buffer.byteLength === 0) {
-      throw new CliError({
-        code: 'validation_error',
-        subkind: 'empty_stdin',
-        message:
-          'silverhand message send received 0 bytes on stdin. ' +
-          'Pipe a non-empty body, or use a heredoc.',
-        retriable: false,
-      });
-    }
+      if (buffer.byteLength === 0 && !hasAttachments) {
+        throw new CliError({
+          code: 'validation_error',
+          subkind: 'empty_stdin',
+          message:
+            'silverhand message send received 0 bytes on stdin. ' +
+            'Pipe a non-empty body, or attach at least one file.',
+          retriable: false,
+        });
+      }
 
-    // UTF-8 decode + zero normalization. `Buffer.toString('utf8')`
-    // does NOT strip a BOM; does NOT translate CR/LF; does NOT trim.
-    // The backend / DB stores the bytes the agent wrote, period.
-    const content = buffer.toString('utf8');
+      // UTF-8 decode + zero normalization. `Buffer.toString('utf8')`
+      // does NOT strip a BOM; does NOT translate CR/LF; does NOT trim.
+      // The backend / DB stores the bytes the agent wrote, period.
+      content = buffer.toString('utf8');
 
-    // Round-trip sanity. `toString('utf8')` silently substitutes any
-    // invalid byte sequence with U+FFFD (REPLACEMENT CHARACTER); if
-    // we accepted that, the DB would store a string whose bytes do
-    // NOT equal the agent's input — exactly the silent-corruption
-    // failure mode this command's stdin-only design exists to
-    // prevent. Reject explicitly so the agent re-encodes upstream.
-    // `details` is bytes-free (Cindy review): `{encoding: 'utf8'}`
-    // is enough context, raw bytes never enter stderr or cli-trace.
-    if (!Buffer.from(content, 'utf8').equals(buffer)) {
-      throw new CliError({
-        code: 'validation_error',
-        subkind: 'invalid_utf8',
-        message:
-          'message body must be valid UTF-8 ' +
-          '(stdin contained byte sequences that are not a UTF-8 string). ' +
-          'Re-encode your input as UTF-8 before piping.',
-        retriable: false,
-        details: { encoding: 'utf8' },
-      });
+      // Round-trip sanity. `toString('utf8')` silently substitutes any
+      // invalid byte sequence with U+FFFD (REPLACEMENT CHARACTER); if
+      // we accepted that, the DB would store a string whose bytes do
+      // NOT equal the agent's input — exactly the silent-corruption
+      // failure mode this command's stdin-only design exists to
+      // prevent. Reject explicitly so the agent re-encodes upstream.
+      // `details` is bytes-free (Cindy review): `{encoding: 'utf8'}`
+      // is enough context, raw bytes never enter stderr or cli-trace.
+      if (!Buffer.from(content, 'utf8').equals(buffer)) {
+        throw new CliError({
+          code: 'validation_error',
+          subkind: 'invalid_utf8',
+          message:
+            'message body must be valid UTF-8 ' +
+            '(stdin contained byte sequences that are not a UTF-8 string). ' +
+            'Re-encode your input as UTF-8 before piping.',
+          retriable: false,
+          details: { encoding: 'utf8' },
+        });
+      }
     }
 
     const target = parseTarget(flagString(args, 'target'));
-    const attachmentIds = flagStringArray(args, 'attachment');
     const anyway = flagBool(args, 'anyway') ?? false;
     const staleResolution = parseSendStaleResolution(
       flagString(args, 'stale-resolution'),

@@ -70,14 +70,17 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand file upload` | Upload a local file and return an attachment id. |
 | `silverhand file view` | Resolve an attachment id to a local path or download location. |
 
-### 3.1 `silverhand message send` is stdin-only
+### 3.1 `silverhand message send` text body is stdin-only
 
-The body of a sent message is read from **STDIN**. The original
-`--content <text>` flag was removed because shell quoting silently
-truncated bodies whenever the value contained `"`, `` ` ``, or `$` —
-bash word-split at the first unescaped `"` and the tail landed in
-`args.positional`, which the dispatcher used to discard silently. See
-the incident note linked in `docs/progress.md` for the original repro.
+The body of a sent message is read from **STDIN**. A message must include
+text or at least one attachment; attachment-only sends may omit stdin and
+pass `--attachment <id>`.
+
+The original `--content <text>` flag was removed because shell quoting
+silently truncated bodies whenever the value contained `"`, `` ` ``, or
+`$` — bash word-split at the first unescaped `"` and the tail landed in
+`args.positional`, which the dispatcher used to discard silently. See the
+incident note linked in `docs/progress.md` for the original repro.
 
 Two recommended call shapes:
 
@@ -90,6 +93,9 @@ silverhand message send --target parent <<'SILVERHAND_EOF'
 Use GitHub Flavored Markdown: headings, lists, tables, and fenced code blocks are supported.
 Quotes, backticks, $vars, and multi-line Markdown are all safe.
 SILVERHAND_EOF
+
+# attachment-only
+silverhand message send --attachment att_123
 ```
 
 The single-quoted heredoc delimiter (`<<'SILVERHAND_EOF'`) disables
@@ -103,8 +109,8 @@ Pre-flight failures (exit 1, code `validation_error`):
 | `subkind` | When |
 |---|---|
 | `flag_removed` | A command-specific removed/disallowed flag was supplied, such as `message send --content` / `--text` / `--message` or `task create --message`. |
-| `stdin_is_tty` | `process.stdin.isTTY` is true (no body was piped in). |
-| `empty_stdin` | Stdin closed with 0 bytes. |
+| `stdin_is_tty` | `process.stdin.isTTY` is true and no attachment was supplied. |
+| `empty_stdin` | Stdin closed with 0 bytes and no attachment was supplied. |
 | `invalid_utf8` | Stdin contained byte sequences that are not valid UTF-8. The CLI does NOT silently substitute U+FFFD — re-encode upstream and retry. |
 | `unexpected_arguments` | Any positional argument or `--`-trailing token (rejected globally; see §4.1). |
 
@@ -451,8 +457,8 @@ Current `subkind` values (CLI-side enum is the source of truth):
   `--q` and `--query` on `silverhand message search`). `details`
   carries `{flags[]}`.
 - `unexpected_arguments` — any positional / `--`-trailing token.
-- `stdin_is_tty` — `silverhand message send` invoked without a piped body.
-- `empty_stdin` — `silverhand message send` invoked with 0-byte stdin.
+- `stdin_is_tty` — `silverhand message send` invoked without a piped body or attachment.
+- `empty_stdin` — `silverhand message send` invoked with 0-byte stdin and no attachment.
 - `invalid_utf8` — `silverhand message send` stdin contained non-UTF-8 bytes.
 
 `subkind` and `details` are stderr-only. The fire-and-forget

@@ -9,3 +9,14 @@ export const SearchOptionalStringSchema = z.preprocess(
   value => (typeof value === 'string' && value.trim() === '' ? undefined : value),
   z.string().trim().optional(),
 );
+
+export const MessageAttachmentIdsInputSchema = z.array(z.string().min(1))
+  .max(20)
+  .optional();
+
+export function hasMessagePayload(value: {
+  content: string;
+  attachment_ids?: readonly string[];
+}): boolean {
+  return value.content.trim().length > 0 || (value.attachment_ids?.length ?? 0) > 0;
+}

@@ -216,6 +216,35 @@ describe('Attachment routes', () => {
     });
   });
 
+  it('accepts an attachment-only user message', async () => {
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId } = await createWorkspaceChannel(t);
+    const dto = await (
+      await uploadFile(
+        t,
+        `/api/channels/${channelId}/attachments`,
+        'shot.png',
+        'image/png',
+        PNG_BYTES,
+      )
+    ).json() as any;
+
+    const msg = await viewer.post(`/api/channels/${channelId}/messages`, {
+      content: '',
+      attachment_ids: [dto.id],
+    });
+    expect(msg.status).toBe(201);
+    const body = await msg.json() as any;
+    expect(body.message.content).toBe('');
+    expect(body.message.attachments).toHaveLength(1);
+    expect(body.message.attachments[0]).toMatchObject({
+      id: dto.id,
+      filename: 'shot.png',
+      content_type: 'image/png',
+    });
+  });
+
   it('rejects send-message with an attachment that belongs to a different channel', async () => {
     t = buildTestApp();
     const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
@@ -355,6 +384,44 @@ describe('Internal agent attachment routes', () => {
       })
     ).json() as any;
     const stored = messages.messages.find((m: any) => m.id === body.message_id);
+    expect(stored.attachments).toHaveLength(1);
+    expect(stored.attachments[0]).toMatchObject({
+      id: dto.id,
+      filename: 'a.png',
+      content_type: 'image/png',
+    });
+  });
+
+  it('agent send-message accepts attachment-only content', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const aliceId = agentIds.alice!;
+    const dto = await (
+      await uploadFile(
+        t,
+        `/internal/conversations/${channelId}/agents/${aliceId}/attachments`,
+        'a.png',
+        'image/png',
+        PNG_BYTES,
+        internalAuthHeaders(t, channelId, aliceId),
+      )
+    ).json() as any;
+
+    const send = await http(t).post(
+      `/internal/conversations/${channelId}/agents/${aliceId}/send-message`,
+      { content: '', attachment_ids: [dto.id] },
+      { headers: internalAuthHeaders(t, channelId, aliceId) },
+    );
+    expect(send.status).toBe(200);
+    const body = await send.json() as any;
+
+    const messages = await (
+      await http(t).get(`/api/channels/${channelId}/messages`, {
+        headers: { 'X-Silverhand-User-Id': 'local' },
+      })
+    ).json() as any;
+    const stored = messages.messages.find((m: any) => m.id === body.message_id);
+    expect(stored.content).toBe('');
     expect(stored.attachments).toHaveLength(1);
     expect(stored.attachments[0]).toMatchObject({
       id: dto.id,

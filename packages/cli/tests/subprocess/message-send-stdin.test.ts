@@ -5,7 +5,8 @@
  * Scope:
  *   - the legacy `--content` flag is rejected as `flag_removed`,
  *   - a TTY on stdin is rejected as `stdin_is_tty`,
- *   - an empty stdin pipe is rejected as `empty_stdin`,
+ *   - an empty stdin pipe is rejected as `empty_stdin` unless an
+ *     attachment is present,
  *   - bytes piped on stdin reach the backend byte-equal — no UTF-8
  *     normalization, no BOM strip, no CRLF→LF, no trim,
  *   - `--target` and repeated `--attachment` still flow through.
@@ -149,6 +150,7 @@ function runMessage(opts: {
         ...process.env,
         ...ENV,
         SILVERHAND_SERVER_URL: serverUrl,
+        SILVERHAND_DAEMON_SOCKET: '',
         ...(opts.env ?? {}),
       },
     });
@@ -234,6 +236,22 @@ describe('silverhand message send (stdin-only, real subprocess)', () => {
     const body = parseStderrJson(r.stderr);
     expect(body.error.code).toBe('validation_error');
     expect(body.error.subkind).toBe('empty_stdin');
+  });
+
+  it('allows empty stdin when at least one attachment is present', async () => {
+    captured.length = 0;
+    const r = await runSend({
+      argv: ['--attachment', 'att-1'],
+      stdin: '',
+    });
+    expect(r.code, r.stderr).toBe(0);
+    expect(captured.length).toBe(1);
+    const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
+      content: string;
+      attachment_ids?: string[];
+    };
+    expect(reqBody.content).toBe('');
+    expect(reqBody.attachment_ids).toEqual(['att-1']);
   });
 
   it('rejects invalid UTF-8 bytes with subkind=invalid_utf8 (no silent U+FFFD substitution)', async () => {

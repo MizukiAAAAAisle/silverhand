@@ -828,6 +828,8 @@ and let the human grant it.
   expansion so \`$\`, backticks, and \`\\\` reach the body verbatim.
   For short single-line bodies, \`printf "%s" "hello" | silverhand message send\`
   is equivalent.
+  Attachment-only sends may omit stdin and pass \`--attachment <id>\`;
+  without text or an attachment, the command fails before sending.
   A send may fail with \`code: 'conflict'\` and
   \`details.subkind: 'message_stale'\` when the conversation advanced after
   your last delivered view but before your message was inserted. Do not blindly
