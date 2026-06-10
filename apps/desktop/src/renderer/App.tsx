@@ -45,6 +45,7 @@ import { useConversationById } from '@/features/conversations/useConversationByI
 import { useAgents } from '@/features/agents/hooks';
 import {
   useWorkspaces,
+  useViewerWorkspacesSync,
   useChannelsForWorkspace,
   useArchivedChannelsForWorkspace,
   usePinWorkspace,
@@ -178,6 +179,13 @@ function RegisteredAppShell(): JSX.Element {
     toggleWorkspaceSidebar,
     toggleChannelSidebar,
   } = useLayoutSettings();
+
+  // Keep the viewer's workspace list live when their cross-workspace
+  // membership/role changes from any source (added/removed/role-changed).
+  // Mounted here — post-auth and independent of workspace selection — so it
+  // also catches "added to your first workspace". See
+  // docs/viewer-visibility-sync-v1.md.
+  useViewerWorkspacesSync();
 
   // Shutdown overlay — shown when the main process starts its graceful
   // quit sequence. Steps arrive via IPC; null means not shutting down.

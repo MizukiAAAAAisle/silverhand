@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ChannelConversationDto, ThreadDto } from '@silverhand/shared';
-import { sortConversationList, type ChannelListItem } from './hooks';
+import {
+  decideViewerSyncInvalidations,
+  isViewerWorkspacesChangedPayload,
+  sortConversationList,
+  type ChannelListItem,
+  type ViewerSyncFrame,
+} from './hooks';
 
 function channel(
   id: string,
@@ -70,5 +76,112 @@ describe('sortConversationList', () => {
       first.id,
       third.id,
     ]);
+  });
+});
+
+describe('isViewerWorkspacesChangedPayload', () => {
+  it('accepts the three documented change variants with a workspace_id', () => {
+    for (const change of ['added', 'removed', 'role_changed'] as const) {
+      expect(
+        isViewerWorkspacesChangedPayload({ change, workspace_id: 'w-1' }),
+      ).toBe(true);
+    }
+    // role is optional and not required for the guard to pass
+    expect(
+      isViewerWorkspacesChangedPayload({
+        change: 'role_changed',
+        workspace_id: 'w-1',
+        role: 'admin',
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects unknown change values and missing/typed-wrong workspace_id', () => {
+    expect(
+      isViewerWorkspacesChangedPayload({ change: 'mutated', workspace_id: 'w-1' }),
+    ).toBe(false);
+    expect(isViewerWorkspacesChangedPayload({ change: 'added' })).toBe(false);
+    expect(
+      isViewerWorkspacesChangedPayload({ change: 'added', workspace_id: 42 }),
+    ).toBe(false);
+  });
+
+  it('rejects non-object payloads (no duck-typing)', () => {
+    expect(isViewerWorkspacesChangedPayload(null)).toBe(false);
+    expect(isViewerWorkspacesChangedPayload(undefined)).toBe(false);
+    expect(isViewerWorkspacesChangedPayload('added')).toBe(false);
+    expect(isViewerWorkspacesChangedPayload(123)).toBe(false);
+  });
+});
+
+describe('decideViewerSyncInvalidations', () => {
+  const frame = (over: Partial<ViewerSyncFrame>): ViewerSyncFrame => ({
+    type: 'event',
+    scope: 'viewer:u-1',
+    ...over,
+  });
+
+  it('invalidates the workspace list on snapshot_required (replay-gap safety)', () => {
+    expect(
+      decideViewerSyncInvalidations(frame({ type: 'snapshot_required' })),
+    ).toEqual([['workspaces']]);
+  });
+
+  it('invalidates only the workspace list on add', () => {
+    expect(
+      decideViewerSyncInvalidations(
+        frame({
+          kind: 'viewer_workspaces_changed',
+          payload: { change: 'added', workspace_id: 'w-1' },
+        }),
+      ),
+    ).toEqual([['workspaces']]);
+  });
+
+  it('invalidates only the workspace list on remove', () => {
+    expect(
+      decideViewerSyncInvalidations(
+        frame({
+          kind: 'viewer_workspaces_changed',
+          payload: { change: 'removed', workspace_id: 'w-1' },
+        }),
+      ),
+    ).toEqual([['workspaces']]);
+  });
+
+  it('also invalidates the members query on role_changed (governance viewerRole source)', () => {
+    expect(
+      decideViewerSyncInvalidations(
+        frame({
+          kind: 'viewer_workspaces_changed',
+          payload: { change: 'role_changed', workspace_id: 'w-1', role: 'admin' },
+        }),
+      ),
+    ).toEqual([['workspaces'], ['workspaces', 'w-1', 'members']]);
+  });
+
+  it('ignores other event kinds and malformed payloads', () => {
+    expect(
+      decideViewerSyncInvalidations(
+        frame({ kind: 'unread_updated', payload: { conversation_id: 'c-1' } }),
+      ),
+    ).toEqual([]);
+    expect(
+      decideViewerSyncInvalidations(
+        frame({ kind: 'viewer_workspaces_changed', payload: { change: 'nope' } }),
+      ),
+    ).toEqual([]);
+    expect(
+      decideViewerSyncInvalidations(
+        frame({ kind: 'viewer_workspaces_changed', payload: null }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('ignores frame types that are neither event nor snapshot_required', () => {
+    expect(decideViewerSyncInvalidations(frame({ type: 'subscribed' }))).toEqual(
+      [],
+    );
+    expect(decideViewerSyncInvalidations(frame({ type: 'ping' }))).toEqual([]);
   });
 });

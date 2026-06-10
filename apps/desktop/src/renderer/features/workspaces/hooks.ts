@@ -13,6 +13,7 @@ import type {
   DmChannelDto,
   ThreadDto,
   UpdateAgentCapabilitiesInput,
+  UpdateWorkspaceHumanMemberRoleResponse,
   UpdateWorkspaceInput,
   WorkspaceDto,
   WorkspaceHumanMemberDto,
@@ -21,7 +22,7 @@ import type {
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
-import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
+import { onWsFrame, subscribeWsScope, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
 
 export type WorkspaceListItem = {
   id: string;
@@ -126,6 +127,119 @@ export function useWorkspaces() {
       return res.workspaces.map(workspaceToListItem);
     },
   });
+}
+
+/**
+ * Wire payload for the viewer-scoped `viewer_workspaces_changed` event.
+ * Narrowed locally from `unknown` (the bus payload type) — the backend
+ * publisher owns the matching shape; the doc is the contract. Following
+ * the established renderer pattern (e.g. `isMessageUnreadUpdatedPayload`),
+ * we do NOT share this type — the wire stays `unknown` and each side
+ * validates independently. See `docs/viewer-visibility-sync-v1.md`.
+ */
+interface ViewerWorkspacesChangedPayload {
+  change: 'added' | 'removed' | 'role_changed';
+  workspace_id: string;
+  role?: WorkspaceRole;
+}
+
+export function isViewerWorkspacesChangedPayload(
+  payload: unknown,
+): payload is ViewerWorkspacesChangedPayload {
+  if (typeof payload !== 'object' || payload === null) return false;
+  const o = payload as Record<string, unknown>;
+  return (
+    (o.change === 'added' || o.change === 'removed' || o.change === 'role_changed') &&
+    typeof o.workspace_id === 'string'
+  );
+}
+
+/**
+ * Minimal WS frame shape the decision below consumes. Both the live
+ * `onWsFrame` listener and the unit test normalize into this so the
+ * decision logic can be tested without React or a real socket (mirrors
+ * the `decideNextVisible` pattern in `useBackendUnreachableSnitch`).
+ */
+export interface ViewerSyncFrame {
+  type: string;
+  scope: string;
+  kind?: string;
+  payload?: unknown;
+}
+
+/**
+ * Pure decision: given a viewer-scope frame, return the query keys to
+ * invalidate (empty = ignore the frame). The hook and tests share this so
+ * the two cannot drift.
+ *
+ * - `snapshot_required` on the viewer scope → refetch `['workspaces']`
+ *   (replay-gap safety, same as the other viewer consumers).
+ * - `viewer_workspaces_changed` event → always `['workspaces']`; for
+ *   `role_changed` additionally the workspace's members query (governance
+ *   `viewerRole` is sourced there, not from the list).
+ * - anything else → no invalidation.
+ *
+ * Caller is responsible for the `isCurrentViewerScope(frame.scope)` gate
+ * before calling — kept out of the pure fn so it stays dependency-free.
+ */
+export function decideViewerSyncInvalidations(
+  frame: ViewerSyncFrame,
+): readonly (readonly string[])[] {
+  if (frame.type === 'snapshot_required') return [workspacesKey];
+  if (frame.type !== 'event') return [];
+  if (frame.kind !== 'viewer_workspaces_changed') return [];
+  if (!isViewerWorkspacesChangedPayload(frame.payload)) return [];
+  if (frame.payload.change === 'role_changed') {
+    return [workspacesKey, membersKey(frame.payload.workspace_id)];
+  }
+  return [workspacesKey];
+}
+
+/**
+ * Live-sync the viewer's workspace list when their cross-workspace
+ * membership/role changes from ANY source — added to / removed from a
+ * workspace, or role changed. See `docs/viewer-visibility-sync-v1.md`.
+ *
+ * Carrier is the `viewer:<userId>` scope which — unlike `workspace:<id>` —
+ * is subscribable before the viewer belongs to any workspace, so this also
+ * catches the "added to your first workspace" bootstrap case (there is no
+ * workspace scope to have been listening on).
+ *
+ * Coarse trigger: any `viewer_workspaces_changed` invalidates
+ * `['workspaces']`, and the refetch is the authority (the server returns
+ * exactly this viewer's workspaces). The payload is a hint only —
+ * `role_changed` additionally invalidates that workspace's members query
+ * because the governance `viewerRole` is sourced from the members endpoint
+ * (`useWorkspaceMemberLists`), not from the workspace list.
+ *
+ * Safe-downgrade on removal needs no handling here: App's existing
+ * "selected workspace no longer exists → bounce to /chat" effect fires
+ * reactively once the refetched list drops the row.
+ *
+ * Mount ONCE in `RegisteredAppShell`: must be alive post-auth and
+ * independent of any workspace selection (the sidebar may not be mounted
+ * when the viewer's first workspace arrives).
+ */
+export function useViewerWorkspacesSync(): void {
+  const qc = useQueryClient();
+  useEffect(() => {
+    const sub = subscribeViewerScope();
+    const unsub = onWsFrame(frame => {
+      if (
+        (frame.type !== 'event' && frame.type !== 'snapshot_required') ||
+        !isCurrentViewerScope(frame.scope)
+      ) {
+        return;
+      }
+      for (const queryKey of decideViewerSyncInvalidations(frame)) {
+        void qc.invalidateQueries({ queryKey });
+      }
+    });
+    return () => {
+      sub.unsubscribe();
+      unsub();
+    };
+  }, [qc]);
 }
 
 export function useCreateWorkspace() {
@@ -454,6 +568,52 @@ export function useRemoveWorkspaceMember(workspaceId: string | null) {
       });
     },
     onSuccess: () => {
+      if (workspaceId) qc.invalidateQueries({ queryKey: membersKey(workspaceId) });
+    },
+  });
+}
+
+/** Update a human member's workspace role (admin↔member). Owner-only on the
+ *  backend (`PATCH …/members/users/:userId/role`); the renderer mirrors that
+ *  gate by only mounting the control for owner viewers and never offering
+ *  `owner` as a target. Optimistic: patches the member row in the cached
+ *  members list, then refetches as the authority. On error the snapshot is
+ *  restored and the cache invalidated. Cross-end live sync (a role change
+ *  initiated elsewhere) rides `useViewerWorkspacesSync`, not this hook. */
+export function useUpdateWorkspaceHumanMemberRole(workspaceId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: {
+      userId: string;
+      role: Exclude<WorkspaceRole, 'owner'>;
+    }) => {
+      if (!workspaceId) throw new Error('no workspace selected');
+      return api<UpdateWorkspaceHumanMemberRoleResponse>(
+        apiPaths.workspaceHumanMemberRole(workspaceId, vars.userId),
+        { method: 'PATCH', body: JSON.stringify({ role: vars.role }) },
+      );
+    },
+    onMutate: async vars => {
+      if (!workspaceId) return { previous: undefined };
+      const key = membersKey(workspaceId);
+      await qc.cancelQueries({ queryKey: key });
+      const previous = qc.getQueryData<WorkspaceMembersResponse>(key);
+      if (previous) {
+        qc.setQueryData<WorkspaceMembersResponse>(key, {
+          ...previous,
+          human_members: previous.human_members.map(h =>
+            h.user_id === vars.userId ? { ...h, role: vars.role } : h,
+          ),
+        });
+      }
+      return { previous };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (workspaceId && ctx?.previous) {
+        qc.setQueryData(membersKey(workspaceId), ctx.previous);
+      }
+    },
+    onSettled: () => {
       if (workspaceId) qc.invalidateQueries({ queryKey: membersKey(workspaceId) });
     },
   });
