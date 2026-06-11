@@ -671,6 +671,90 @@ export function useThreadCluster(
   return { ...query, data: messages };
 }
 
+/** Pinned-root context for a thread (reply cluster). The root message is
+ *  the anchor of the thread and must stay visible regardless of how the
+ *  reply pagination window scrolls, so it is fetched independently of the
+ *  tail-anchored `useThreadCluster` window.
+ *
+ *  A single main-stream `around_message_id=<root>&limit=1` read yields
+ *  BOTH the root message object AND the authoritative cut3-6
+ *  `reply_counts_by_root[root]` (the backend's main-stream window branch
+ *  computes the sidecar for every root in the window — see
+ *  `routes/conversations.ts`). This decouples "show the root + full reply
+ *  count" from "page through replies", satisfying the invariant that the
+ *  root is stably pinned and the header count is authoritative (not a
+ *  loaded-rows count).
+ *
+ *  The live reply-count bump mirrors cut3-6 semantics: only non-system
+ *  replies to this exact root increment the count. */
+export function useThreadRoot(
+  channelId: string | null,
+  rootMessageId: string | null,
+) {
+  const qc = useQueryClient();
+  const enabled = !!channelId && !!rootMessageId;
+  const key = [
+    'channels',
+    channelId ?? 'none',
+    'thread-root',
+    rootMessageId ?? 'none',
+  ] as const;
+
+  const query = useQuery<ConversationMessagesDto>({
+    queryKey: key,
+    enabled,
+    queryFn: ({ signal }) =>
+      fetchMessagesWindow({
+        conversationId: channelId!,
+        routeKind: 'channel',
+        aroundMessageId: rootMessageId!,
+        limit: 1,
+        signal,
+      }),
+  });
+
+  const onEvent = useCallback(
+    (e: ConversationStreamEvent) => {
+      if (!rootMessageId) return;
+      if (e.kind !== 'message') return;
+      const msg = e.payload?.message as MessageDto | undefined;
+      if (!msg) return;
+      // Mirror cut3-6 count semantics: only non-system replies to this
+      // exact root advance the authoritative count.
+      if (msg.thread_root_id !== rootMessageId || msg.from_kind === 'system') {
+        return;
+      }
+      qc.setQueryData<ConversationMessagesDto>(key, prev => {
+        if (!prev) return prev;
+        const current = prev.reply_counts_by_root[rootMessageId] ?? 0;
+        return {
+          ...prev,
+          reply_counts_by_root: {
+            ...prev.reply_counts_by_root,
+            [rootMessageId]: current + 1,
+          },
+        };
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [qc, rootMessageId, key.join(':')],
+  );
+  useConversationStream(enabled ? channelId : null, onEvent, 'channel');
+
+  const root =
+    query.data?.messages.find(m => m.id === rootMessageId) ?? null;
+  const replyCount = rootMessageId
+    ? query.data?.reply_counts_by_root[rootMessageId] ?? 0
+    : 0;
+
+  return {
+    root,
+    replyCount,
+    isLoading: query.isLoading,
+    isError: query.isError,
+  };
+}
+
 /** Independent helper for "prime the messages cache around message X
  *  for any conversation". Lives in its own hook so the App-level
  *  jump path doesn't depend on `useChannelMessages` being mounted

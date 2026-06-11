@@ -7,7 +7,7 @@ import { SystemMessage } from '@/components/chat/SystemMessage';
 import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
 import { Composer } from '@/components/chat/Composer';
 import type { ChannelReference } from '@/components/chat/ChannelRef';
-import { useThreadCluster } from '@/features/channels/hooks';
+import { useThreadCluster, useThreadRoot } from '@/features/channels/hooks';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
@@ -60,6 +60,11 @@ export function ThreadPanel({
   onClose,
 }: ThreadPanelProps): JSX.Element {
   void workspaceId;
+  // The root message is the thread's anchor — pinned at the top
+  // independently of the tail-anchored reply window so a long thread can
+  // never push it off-screen (cut3-3b review blocker, @Cindy). This read
+  // also carries the authoritative cut3-6 reply count.
+  const rootCtx = useThreadRoot(channelId, rootMessageId);
   const cluster = useThreadCluster(channelId, rootMessageId);
   const messages = cluster.data;
 
@@ -117,20 +122,52 @@ export function ThreadPanel({
     [],
   );
 
-  const items = useMemo(() => groupMessages(messages), [messages]);
-
-  const replyCount = useMemo(
-    () =>
-      messages.filter(
-        m => m.thread_root_id === rootMessageId && m.from_kind !== 'system',
-      ).length,
+  // The root is pinned separately (see below), so drop it from the
+  // scrolled reply list to avoid rendering it twice — it can appear in
+  // the cluster window for small threads (where the window reaches the
+  // start) but not for large ones (tail-anchored window).
+  const replyMessages = useMemo(
+    () => messages.filter(m => m.id !== rootMessageId),
     [messages, rootMessageId],
   );
+  const items = useMemo(() => groupMessages(replyMessages), [replyMessages]);
+
+  // Authoritative full reply count from the cut3-6 sidecar (kept live by
+  // useThreadRoot) — NOT a count of currently-loaded rows, which would be
+  // wrong for a paginated long thread.
+  const replyCount = rootCtx.replyCount;
 
   const resolvedViewer =
     viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer)
       ? viewer
       : undefined;
+
+  const renderMessage = (m: typeof messages[number]): JSX.Element =>
+    m.from_kind === 'system' ? (
+      <SystemMessage
+        key={m.id}
+        message={m}
+        channelsByName={channelsByName}
+        humansByName={humansByName}
+      />
+    ) : (
+      <MessageItem
+        key={m.id}
+        message={m}
+        conversationId={channelId}
+        routeKind="channel"
+        agentsById={agentsById}
+        agentsByName={agentsByName}
+        humansByName={humansByName}
+        humansById={humansById}
+        channelsByName={channelsByName}
+        viewerAvatarObjectUrl={viewerAvatarObjectUrl}
+        viewer={resolvedViewer}
+        humanAvatarUrls={humanAvatarUrls}
+        agentAvatarUrls={agentAvatarUrls}
+        userResolver={userResolver}
+      />
+    );
 
   return (
     <aside
@@ -159,78 +196,72 @@ export function ThreadPanel({
         </button>
       </header>
 
-      <div className="scrollbar-hide flex min-h-0 flex-1 flex-col overflow-y-auto px-1 py-2">
-        {cluster.isLoading ? (
-          <div className="flex flex-1 items-center justify-center text-text-muted">
-            <Loader2 className="size-4 animate-spin" />
+      {rootCtx.isError ? (
+        // Root unavailable (404 / legacy thread target / fetch failure).
+        // Distinct from "no replies yet" — the thread can't be shown at
+        // all, and replying would have no valid target.
+        <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-text-muted">
+          无法加载该消息,它可能已被删除或不可用
+        </div>
+      ) : rootCtx.isLoading && !rootCtx.root ? (
+        <div className="flex flex-1 items-center justify-center text-text-muted">
+          <Loader2 className="size-4 animate-spin" />
+        </div>
+      ) : (
+        <>
+          {/* Pinned root — always visible, never paged away. */}
+          {rootCtx.root ? (
+            <div className="border-b border-border-subtle px-1 py-2">
+              {renderMessage(rootCtx.root)}
+            </div>
+          ) : null}
+
+          <div className="scrollbar-hide flex min-h-0 flex-1 flex-col overflow-y-auto px-1 py-2">
+            {cluster.isLoading ? (
+              <div className="flex flex-1 items-center justify-center text-text-muted">
+                <Loader2 className="size-4 animate-spin" />
+              </div>
+            ) : replyMessages.length === 0 ? (
+              <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-text-muted">
+                还没有回复
+              </div>
+            ) : (
+              <>
+                {cluster.hasPreviousPage ? (
+                  <button
+                    type="button"
+                    disabled={cluster.isFetchingPreviousPage}
+                    onClick={() => void cluster.fetchPreviousPage()}
+                    className="mx-auto mb-1 rounded px-2 py-1 text-xs text-text-muted hover:text-text-primary disabled:opacity-50"
+                  >
+                    {cluster.isFetchingPreviousPage ? '加载中…' : '加载更早的回复'}
+                  </button>
+                ) : null}
+                {items.map(item => {
+                  if (item.kind === 'cluster') {
+                    return (
+                      <SystemActivityCluster
+                        key={item.messages[0]?.id ?? 'cluster'}
+                        messages={item.messages}
+                        channelsByName={channelsByName}
+                        humansByName={humansByName}
+                      />
+                    );
+                  }
+                  return renderMessage(item.message);
+                })}
+              </>
+            )}
           </div>
-        ) : messages.length === 0 ? (
-          <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-text-muted">
-            还没有回复
-          </div>
-        ) : (
-          <>
-            {cluster.hasPreviousPage ? (
-              <button
-                type="button"
-                disabled={cluster.isFetchingPreviousPage}
-                onClick={() => void cluster.fetchPreviousPage()}
-                className="mx-auto mb-1 rounded px-2 py-1 text-xs text-text-muted hover:text-text-primary disabled:opacity-50"
-              >
-                {cluster.isFetchingPreviousPage ? '加载中…' : '加载更早的回复'}
-              </button>
-            ) : null}
-            {items.map(item => {
-              if (item.kind === 'cluster') {
-                return (
-                  <SystemActivityCluster
-                    key={item.messages[0]?.id ?? 'cluster'}
-                    messages={item.messages}
-                    channelsByName={channelsByName}
-                    humansByName={humansByName}
-                  />
-                );
-              }
-              const m = item.message;
-              if (m.from_kind === 'system') {
-                return (
-                  <SystemMessage
-                    key={m.id}
-                    message={m}
-                    channelsByName={channelsByName}
-                    humansByName={humansByName}
-                  />
-                );
-              }
-              return (
-                <MessageItem
-                  key={m.id}
-                  message={m}
-                  conversationId={channelId}
-                  routeKind="channel"
-                  agentsById={agentsById}
-                  agentsByName={agentsByName}
-                  humansByName={humansByName}
-                  humansById={humansById}
-                  channelsByName={channelsByName}
-                  viewerAvatarObjectUrl={viewerAvatarObjectUrl}
-                  viewer={resolvedViewer}
-                  humanAvatarUrls={humanAvatarUrls}
-                  agentAvatarUrls={agentAvatarUrls}
-                  userResolver={userResolver}
-                />
-              );
-            })}
-          </>
-        )}
-      </div>
+        </>
+      )}
 
       <Composer
         key={`${channelId}#cluster#${rootMessageId}`}
         conversationId={channelId}
         threadRootId={rootMessageId}
         routeKind="channel"
-        disabled={closed}
+        disabled={closed || rootCtx.isError}
         archived={archived}
       />
     </aside>
