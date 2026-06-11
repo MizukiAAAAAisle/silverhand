@@ -830,6 +830,12 @@ and let the human grant it.
   is equivalent.
   Attachment-only sends may omit stdin and pass \`--attachment <id>\`;
   without text or an attachment, the command fails before sending.
+  To reply to a message in the current conversation, pass
+  \`--reply-to <message_id>\`: your send lands in that message's thread
+  (reply cluster) rather than the main line. The first reply to a
+  main-line message opens its thread; replying to a reply joins the same
+  thread (no nesting). \`--reply-to\` is mutually exclusive with
+  \`--target\` and echoes \`thread_root_id\` in the result.
   A send may fail with \`code: 'conflict'\` and
   \`details.subkind: 'message_stale'\` when the conversation advanced after
   your last delivered view but before your message was inserted. Do not blindly

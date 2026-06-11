@@ -364,6 +364,40 @@ describe('silverhand message send (stdin-only, real subprocess)', () => {
     expect(reqBody.attachment_ids).toEqual(['att-1', 'att-2']);
   });
 
+  it('forwards --reply-to as reply_to_message_id and echoes thread_root_id', async () => {
+    captured.length = 0;
+    nextSendResponse = {
+      status: 200,
+      body: { message_id: 'm-reply', message_seq: 12, thread_root_id: 'm-root' },
+    };
+    const r = await runSend({
+      argv: ['--reply-to', 'm-root'],
+      stdin: 'threaded answer',
+    });
+    expect(r.code, r.stderr).toBe(0);
+    const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
+      content: string;
+      reply_to_message_id?: string;
+      target?: string;
+    };
+    expect(reqBody.content).toBe('threaded answer');
+    expect(reqBody.reply_to_message_id).toBe('m-root');
+    expect(reqBody.target).toBeUndefined();
+    const out = JSON.parse(r.stdout) as { thread_root_id?: string | null };
+    expect(out.thread_root_id).toBe('m-root');
+  });
+
+  it('rejects --reply-to together with --target as mutually_exclusive', async () => {
+    const r = await runSend({
+      argv: ['--reply-to', 'm-root', '--target', 'parent'],
+      stdin: 'oops',
+    });
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.code).toBe('validation_error');
+    expect(body.error.subkind).toBe('mutually_exclusive');
+  });
+
   it('does not derive freshness from the legacy delivered-seq sidecar in direct fallback', async () => {
     captured.length = 0;
     const dir = await mkdtemp(join(tmpdir(), 'silverhand-cli-seq-'));

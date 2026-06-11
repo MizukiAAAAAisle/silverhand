@@ -24,6 +24,7 @@ const sendCommand: Command = {
   verb: 'send',
   summary: 'Send a message to the current channel/thread.',
   help: `silverhand message send [--target self|parent|<thread_id>]
+                          [--reply-to <message_id>]
                           [--attachment <id> ...]
                           [--stale-resolution unaffected|revised]
                           [--anyway]
@@ -50,6 +51,9 @@ Two recommended call shapes:
   # attachment-only
   silverhand message send --attachment att_123
 
+  # reply into a thread (reply cluster) under message m_123
+  printf "%s" "in-thread answer" | silverhand message send --reply-to m_123
+
 The single-quoted heredoc delimiter (\`<<'SILVERHAND_EOF'\`) disables
 shell expansion of \`$\`, backticks, and \`\\\`. The body is read as
 raw bytes, decoded as UTF-8, and posted to the backend with **no
@@ -61,6 +65,13 @@ Flags:
                         a Thread; sends to that Thread's parent channel.
                         Any other value is treated as a child Thread id
                         you opened from this channel.
+  --reply-to <id>       Optional. Reply to a message in the current
+                        conversation, placing this send in that message's
+                        thread (reply cluster). The first reply to a
+                        main-line message opens its thread; replying to an
+                        existing reply joins the same thread (no nesting).
+                        Mutually exclusive with --target (a reply always
+                        lands in the current conversation's stream).
   --attachment <id>     Optional, repeatable. Attachment ids returned by
                         \`silverhand file upload\`. All ids must belong
                         to the current channel.
@@ -79,12 +90,13 @@ Pre-flight failures (exit 1):
   --text / --message was supplied → flag_removed (use stdin instead;
                                     these were never accepted but are
                                     intercepted with a stdin template)
+  --reply-to and --target together → mutually_exclusive
   stdin is a TTY and no attachment → stdin_is_tty (no body provided)
   stdin is empty and no attachment → empty_stdin
   stdin is not UTF-8             → invalid_utf8 (re-encode upstream)
 
-stdout: { "message_id": "<id>", "message_seq": <seq> }`,
-  flags: ['target', 'attachment', 'stale-resolution'] as const,
+stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null> }`,
+  flags: ['target', 'reply-to', 'attachment', 'stale-resolution'] as const,
   booleanFlags: ['anyway'],
   removedFlags: {
     content: {
@@ -182,6 +194,18 @@ stdout: { "message_id": "<id>", "message_seq": <seq> }`,
     }
 
     const target = parseTarget(flagString(args, 'target'));
+    const replyTo = flagString(args, 'reply-to');
+    if (replyTo !== undefined && target !== undefined) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'mutually_exclusive',
+        message:
+          '--reply-to and --target are mutually exclusive: a reply always ' +
+          'lands in the current conversation\'s thread stream. Drop --target.',
+        retriable: false,
+        details: { flags: ['reply-to', 'target'] },
+      });
+    }
     const anyway = flagBool(args, 'anyway') ?? false;
     const staleResolution = parseSendStaleResolution(
       flagString(args, 'stale-resolution'),
@@ -200,6 +224,7 @@ stdout: { "message_id": "<id>", "message_seq": <seq> }`,
       agent_id: env.agentId,
       content,
       ...(target ? { target } : {}),
+      ...(replyTo ? { reply_to_message_id: replyTo } : {}),
       ...(attachmentIds && attachmentIds.length > 0
         ? { attachment_ids: attachmentIds }
         : {}),
@@ -217,6 +242,7 @@ stdout: { "message_id": "<id>", "message_seq": <seq> }`,
     return await client.sendMessage({
       content,
       ...(target ? { target } : {}),
+      ...(replyTo ? { reply_to_message_id: replyTo } : {}),
       ...(anyway ? { freshness_bypass: true } : {}),
       ...(attachmentIds && attachmentIds.length > 0
         ? { attachment_ids: attachmentIds }
@@ -453,7 +479,7 @@ function parseSendStaleResolution(
 async function sendViaDaemon(
   socketPath: string,
   input: AgentMessageSendParams,
-): Promise<{ message_id: string; message_seq?: number }> {
+): Promise<{ message_id: string; message_seq?: number; thread_root_id?: string | null }> {
   const host = new HostClient({ socketPath });
   try {
     await host.connect();
@@ -465,6 +491,9 @@ async function sendViaDaemon(
     return {
       message_id: result.message_id,
       ...(result.message_seq !== undefined ? { message_seq: result.message_seq } : {}),
+      ...(result.thread_root_id !== undefined
+        ? { thread_root_id: result.thread_root_id }
+        : {}),
     };
   } catch (err) {
     if (err instanceof HostClientError) {

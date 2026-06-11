@@ -96,6 +96,9 @@ SILVERHAND_EOF
 
 # attachment-only
 silverhand message send --attachment att_123
+
+# reply into a thread (reply cluster) under message m_123
+printf "%s" "in-thread answer" | silverhand message send --reply-to m_123
 ```
 
 The single-quoted heredoc delimiter (`<<'SILVERHAND_EOF'`) disables
@@ -103,6 +106,16 @@ shell expansion of `$`, backticks, and `\`. The CLI reads the raw
 bytes and decodes them as UTF-8 with **no normalization** — no BOM
 stripping, no CRLF→LF translation, no trim. The bytes the agent wrote
 are the bytes that reach the database.
+
+`--reply-to <message_id>` places the send in that message's thread
+(reply cluster) within the current conversation: the first reply to a
+main-line message opens its thread, replying to a reply joins the same
+root (no nesting). It is mutually exclusive with `--target`
+(`mutually_exclusive`) and the result echoes `thread_root_id` (null on
+the main line). The daemon resolves the reply target to its stream and
+carries that stream's `seen_up_to_seq` + `stream_key` for per-stream
+freshness; an unknown reply target sends without a freshness boundary
+(loose first-touch) rather than falsely stale-ing.
 
 Pre-flight failures (exit 1, code `validation_error`):
 

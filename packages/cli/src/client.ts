@@ -85,12 +85,13 @@ export class BackendClient {
   sendMessage(input: {
     content: string;
     target?: SendMessageTarget;
+    reply_to_message_id?: string;
     seen_up_to_seq?: number;
     stale_event_id?: string;
     stale_resolution_reason?: AgentSendStaleResolutionReason;
     freshness_bypass?: boolean;
     attachment_ids?: string[];
-  }): Promise<{ message_id: string; message_seq?: number }> {
+  }): Promise<{ message_id: string; message_seq?: number; thread_root_id?: string | null }> {
     return this.request(
       'POST',
       internalPaths.agentSendConversationMessage(this.env.conversationId, this.env.agentId),
