@@ -57,9 +57,11 @@ import { runBootMaterializeReconciler } from './runtime/materialize-reconciler.j
 import { AgentRepo } from './repos/agent-repo.js';
 import { AttachmentRepo } from './repos/attachment-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
+import { ConversationInboxRepo } from './repos/conversation-inbox-repo.js';
 import { MessageRepo } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
 import { ScheduleRepo } from './repos/schedule-repo.js';
+import { ThreadFollowerRepo } from './repos/thread-follower-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
 import { WorkspaceRegistryBackfiller } from './runtime/workspace-registry-backfill.js';
 import { AttachmentService } from './services/attachment-service.js';
@@ -417,7 +419,9 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   ctx.conversationMessageService = new ConversationMessageService({
     db,
     conversations: new ConversationRepo(db),
+    conversationInboxes: new ConversationInboxRepo(db),
     messages: new MessageRepo(db),
+    threadFollowers: new ThreadFollowerRepo(db),
     agents: new AgentRepo(db),
     users: new UserRepo(db),
     notifications: new NotificationRepo(db),

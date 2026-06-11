@@ -12,8 +12,13 @@ import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import { ccMentionsFromUserMessage } from '../mention-cc.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
+import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { NotificationRepo } from '../repos/notification-repo.js';
+import type {
+  ThreadFollowerRepo,
+  ThreadFollowerSource,
+} from '../repos/thread-follower-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { AttachmentService } from './attachment-service.js';
@@ -233,7 +238,9 @@ class MessageFreshnessGuardError extends Error {
 export interface ConversationMessageServiceOptions {
   db: Db;
   conversations: ConversationRepo;
+  conversationInboxes: ConversationInboxRepo;
   messages: MessageRepo;
+  threadFollowers: ThreadFollowerRepo;
   agents: AgentRepo;
   users: UserRepo;
   notifications: NotificationRepo;
@@ -244,11 +251,38 @@ export interface ConversationMessageServiceOptions {
   logger: BackendLogger;
 }
 
+/**
+ * Per-recipient plan for delivering a thread reply (§6 reply-cluster).
+ * `kind` is the delivery_kind from docs §6.2: `turn` recipients were
+ * @mentioned by this reply and may be auto-started/woken; `observe`
+ * recipients are followers who get the reply in their durable inbox for
+ * context but must NOT cause an idle runtime to start. (The wire-level
+ * `delivery_kind` envelope that lets a *ready* runtime ingest an observe
+ * message without taking a turn is 段2; 段1 only gates auto-start.)
+ */
+type ThreadDeliveryKind = 'turn' | 'observe';
+
+interface ThreadDeliveryRecipient {
+  agentId: string;
+  kind: ThreadDeliveryKind;
+}
+
+interface ThreadDeliveryPlan {
+  threadRootId: string;
+  /** Follower agents that are current channel members, EXCLUDING the
+   *  reply sender. Computed inside the send transaction after auto-follow
+   *  upserts so newly-followed agents are included. */
+  recipients: ThreadDeliveryRecipient[];
+}
+
 interface SendMessageTxResult {
   sourceConversation: NonNullable<ReturnType<ConversationRepo['get']>>;
   targetConversation: NonNullable<ReturnType<ConversationRepo['get']>>;
   message: MessageDto;
   recipients: ReturnType<ConversationRepo['listAgents']>;
+  /** Non-null when this send is a thread reply: drives follower-gated
+   *  delivery instead of the main-line channel-member fan-out. */
+  threadDelivery: ThreadDeliveryPlan | null;
   skippedFreshnessReason: string | null;
 }
 
@@ -256,6 +290,11 @@ const REPLIED: AgentRunTerminalReason = 'replied';
 const MENTION_EXCERPT_LIMIT = 160;
 const START_FAILURE_ERROR_LIMIT = 240;
 const STALE_MESSAGE_LIMIT = 10;
+/** Cap on how many historical thread replies are backfilled into a
+ *  newly-followed agent's inbox (§6.1). Threads are usually short; a thread
+ *  exceeding this logs a truncation warning rather than silently dropping
+ *  context. digest-vs-full above this is a 段2/runtime optimization. */
+const THREAD_BACKFILL_LIMIT = 500;
 
 function excerpt(s: string): string {
   const compact = s.replace(/\s+/g, ' ').trim();
@@ -285,7 +324,9 @@ function describeStartFailure(err: unknown): string {
 export class ConversationMessageService {
   private readonly db: Db;
   private readonly conversations: ConversationRepo;
+  private readonly conversationInboxes: ConversationInboxRepo;
   private readonly messages: MessageRepo;
+  private readonly threadFollowers: ThreadFollowerRepo;
   private readonly agents: AgentRepo;
   private readonly users: UserRepo;
   private readonly notifications: NotificationRepo;
@@ -298,7 +339,9 @@ export class ConversationMessageService {
   constructor(opts: ConversationMessageServiceOptions) {
     this.db = opts.db;
     this.conversations = opts.conversations;
+    this.conversationInboxes = opts.conversationInboxes;
     this.messages = opts.messages;
+    this.threadFollowers = opts.threadFollowers;
     this.agents = opts.agents;
     this.users = opts.users;
     this.notifications = opts.notifications;
@@ -359,11 +402,32 @@ export class ConversationMessageService {
             threadRootId,
             snapshots,
           });
+        // Reply-cluster durable semantics (§6): when this send is a thread
+        // reply, register auto-followers and backfill prior thread history
+        // into newly-followed agents' inboxes — all inside this transaction
+        // so we never leave a "followed but not caught up" state (Cindy
+        // ruling). Returns the follower-gated delivery plan for the current
+        // reply, executed best-effort after commit.
+        const threadDelivery =
+          threadRootId !== null
+            ? this.applyThreadFollowEffects({
+                conversationId: targetConversation.id,
+                threadRootId,
+                message,
+                actor: input.actor,
+              })
+            : null;
         return {
           sourceConversation,
           targetConversation,
           message,
-          recipients: this.conversations.listAgents(targetConversation.id),
+          // Main-line recipients only; thread replies deliver via
+          // `threadDelivery` (follower-gated), not the channel-wide fan-out.
+          recipients:
+            threadDelivery === null
+              ? this.conversations.listAgents(targetConversation.id)
+              : [],
+          threadDelivery,
           skippedFreshnessReason,
         };
       })();
@@ -439,7 +503,10 @@ export class ConversationMessageService {
         actorId: input.actor.kind === 'agent' ? input.actor.agentId : input.actor.userId,
         target,
         contentBytes: input.content.length,
-        recipientCount: txResult.recipients.length,
+        recipientCount:
+          txResult.threadDelivery?.recipients.length
+          ?? txResult.recipients.length,
+        threadReply: txResult.threadDelivery !== null,
       },
       'conversation-message-service: message inserted',
     );
@@ -491,15 +558,34 @@ export class ConversationMessageService {
       && !targetIsCrossConversation
         ? input.actor.agentId
         : null;
+    if (policy.ccMentions) {
+      void this.ccMentionsBestEffort(txResult.sourceConversation, txResult.message);
+    }
+
+    // Thread reply: follower-gated delivery (§6). Recipients were narrowed
+    // to follower ∩ channel-visible inside the transaction (sender already
+    // excluded), and prior thread history was backfilled there. Here we
+    // only deliver the current reply: `turn` recipients (mentioned) get
+    // active delivery (spawn idle / wake ready); `observe` recipients get a
+    // durable inbox row only and must NOT start an idle runtime.
+    if (txResult.threadDelivery) {
+      void this.deliverThreadReplyBestEffort(
+        txResult.targetConversation,
+        txResult.message,
+        txResult.threadDelivery,
+      );
+      return {
+        message: txResult.message,
+        targetConversationId: txResult.targetConversation.id,
+      };
+    }
+
     void this.deliverBestEffort(
       txResult.targetConversation.id,
       txResult.message.id,
       txResult.recipients,
       deliveryExcludeAgentId,
     );
-    if (policy.ccMentions) {
-      void this.ccMentionsBestEffort(txResult.sourceConversation, txResult.message);
-    }
     // Auto-start policy:
     //  - User send: always (policy.autoStartIdleRecipients = true).
     //  - Agent send to self: never — prevents same-conversation ping-pong
@@ -905,6 +991,214 @@ export class ConversationMessageService {
         'conversation-message-service: agent start failure notification failed',
       );
     }
+  }
+
+  /**
+   * Reply-cluster auto-follow + history backfill (§5/§6.1). Runs INSIDE the
+   * send transaction so a follower is never registered without its catch-up
+   * inbox rows (Cindy ruling). Registers as followers of the thread:
+   *   - the reply author (`source='reply'`),
+   *   - the root message author (`source='target_author'`),
+   *   - every @mentioned principal that is a current channel member
+   *     (`source='mention'`).
+   * For each AGENT principal becoming a follower now (newly-inserted row)
+   * that is a current channel member, backfills the thread's prior replies
+   * (plus the root) into its inbox. Returns the follower-gated delivery plan
+   * for the current reply, executed best-effort after commit.
+   */
+  private applyThreadFollowEffects(params: {
+    conversationId: string;
+    threadRootId: string;
+    message: MessageDto;
+    actor: SendMessageActor;
+  }): ThreadDeliveryPlan {
+    const { conversationId, threadRootId, message } = params;
+    const currentSeq = message.seq;
+
+    // reply author → follower
+    this.followMessageAuthor(conversationId, threadRootId, message, 'reply', currentSeq);
+
+    // root message author → follower
+    const root = this.messages.getInConversation(conversationId, threadRootId);
+    if (root) {
+      this.followMessageAuthor(conversationId, threadRootId, root, 'target_author', currentSeq);
+    }
+
+    // @mentioned channel members → follower; mentioned AGENTS also take a turn.
+    // Non-members are never followed via mention (§4.1: follow is not a
+    // membership backdoor); their visibility is filtered at delivery anyway.
+    const mentionedAgentIds = new Set<string>();
+    let userMemberIds: Set<string> | null = null;
+    for (const handle of new Set(extractMentions(message.content))) {
+      const agent = this.agents.getByName(handle);
+      if (agent && this.conversations.getAgent(conversationId, agent.id)) {
+        mentionedAgentIds.add(agent.id);
+        this.followAgent(conversationId, threadRootId, agent.id, 'mention', currentSeq);
+        continue;
+      }
+      const user = this.users.getByName(handle);
+      if (user) {
+        userMemberIds ??= this.conversationUserMemberIds(conversationId);
+        if (userMemberIds.has(user.id)) {
+          this.threadFollowers.upsert({
+            threadRootId,
+            conversationId,
+            principalKind: 'human',
+            principalId: user.id,
+            source: 'mention',
+          });
+        }
+      }
+    }
+
+    // Current-reply delivery plan: follower agents that are channel-visible,
+    // excluding the sender. `turn` iff @mentioned by this reply, else
+    // `observe`. (delivery_kind only controls behavior — the recipient set is
+    // already follower ∩ visible, never widened by kind.)
+    const senderAgentId =
+      message.from_kind === 'agent' ? message.from_agent_id : null;
+    const recipients: ThreadDeliveryRecipient[] = this.threadFollowers
+      .listFollowerAgentsVisible(threadRootId)
+      .filter(ca => ca.agent_id !== senderAgentId)
+      .map(ca => ({
+        agentId: ca.agent_id,
+        kind: mentionedAgentIds.has(ca.agent_id) ? 'turn' : 'observe',
+      }));
+    return { threadRootId, recipients };
+  }
+
+  /** Follow the author of `msg` (agent or human). Agent authors get history
+   *  backfill when newly followed; human authors are recorded as followers
+   *  (UI/notification consumer) but have no inbox. Only current channel
+   *  members are recorded (follower ⊆ member, enforced again at delivery). */
+  private followMessageAuthor(
+    conversationId: string,
+    threadRootId: string,
+    msg: MessageDto,
+    source: ThreadFollowerSource,
+    currentSeq: number,
+  ): void {
+    if (msg.from_kind === 'agent' && msg.from_agent_id) {
+      this.followAgent(conversationId, threadRootId, msg.from_agent_id, source, currentSeq);
+    } else if (msg.from_kind === 'user' && msg.from_user_id) {
+      if (this.conversationUserMemberIds(conversationId).has(msg.from_user_id)) {
+        this.threadFollowers.upsert({
+          threadRootId,
+          conversationId,
+          principalKind: 'human',
+          principalId: msg.from_user_id,
+          source,
+        });
+      }
+    }
+  }
+
+  /** Upsert an agent follower; if it is newly followed AND a current channel
+   *  member, backfill the thread's prior history into its inbox. Non-members
+   *  are skipped (follower ⊆ member). */
+  private followAgent(
+    conversationId: string,
+    threadRootId: string,
+    agentId: string,
+    source: ThreadFollowerSource,
+    currentSeq: number,
+  ): void {
+    if (!this.conversations.getAgent(conversationId, agentId)) return;
+    const { inserted } = this.threadFollowers.upsert({
+      threadRootId,
+      conversationId,
+      principalKind: 'agent',
+      principalId: agentId,
+      source,
+    });
+    if (inserted) {
+      this.backfillThreadHistory(conversationId, threadRootId, agentId, currentSeq);
+    }
+  }
+
+  /** Backfill prior thread context — the root (it anchors the thread) plus
+   *  replies with `seq < currentSeq` — into a newly-followed agent's inbox.
+   *  Ordered by seq, idempotent on (conversation, agent, message), and skips
+   *  the agent's own messages. Runs in the send transaction; the current
+   *  reply is delivered separately afterwards so it is never double-enqueued
+   *  (§6.1). */
+  private backfillThreadHistory(
+    conversationId: string,
+    threadRootId: string,
+    agentId: string,
+    currentSeq: number,
+  ): void {
+    const root = this.messages.getInConversation(conversationId, threadRootId);
+    if (root && !(root.from_kind === 'agent' && root.from_agent_id === agentId)) {
+      this.conversationInboxes.ensureDelivery(conversationId, agentId, root.id);
+    }
+    const replies = this.messages.listAfterSeqInStream(
+      conversationId,
+      threadRootId,
+      0,
+      THREAD_BACKFILL_LIMIT,
+    );
+    if (replies.length === THREAD_BACKFILL_LIMIT) {
+      this.logger.warn(
+        { conversationId, threadRootId, agentId, limit: THREAD_BACKFILL_LIMIT },
+        'conversation-message-service: thread backfill hit cap; oldest replies beyond cap not enqueued',
+      );
+    }
+    for (const reply of replies) {
+      if (reply.seq >= currentSeq) continue;
+      if (reply.from_kind === 'agent' && reply.from_agent_id === agentId) continue;
+      this.conversationInboxes.ensureDelivery(conversationId, agentId, reply.id);
+    }
+  }
+
+  private conversationUserMemberIds(conversationId: string): Set<string> {
+    return new Set(
+      this.conversations.listUserMembers(conversationId).map(u => u.id),
+    );
+  }
+
+  /** Deliver the current thread reply to its follower-gated recipients
+   *  (post-commit, best-effort). `turn` recipients get active delivery
+   *  (spawn idle / wake ready). `observe` recipients get a durable inbox row
+   *  only — they must NOT start an idle runtime, so a normal follower is not
+   *  woken by every thread reply (§6.2). Pushing an observe reply into an
+   *  already-ready runtime's context without a turn needs the `delivery_kind`
+   *  envelope and is 段2. */
+  private async deliverThreadReplyBestEffort(
+    conversation: NonNullable<ReturnType<ConversationRepo['get']>>,
+    message: MessageDto,
+    plan: ThreadDeliveryPlan,
+  ): Promise<void> {
+    const failures: Array<{ agentId: string; err: unknown }> = [];
+    await Promise.all(
+      plan.recipients.map(async r => {
+        try {
+          if (r.kind === 'turn') {
+            await this.runtimeHost.deliverMessage(
+              conversation.id,
+              r.agentId,
+              message.id,
+            );
+          } else {
+            this.conversationInboxes.ensureDelivery(
+              conversation.id,
+              r.agentId,
+              message.id,
+            );
+          }
+        } catch (err) {
+          failures.push({ agentId: r.agentId, err });
+        }
+      }),
+    );
+    if (failures.length === 0) return;
+    for (const { agentId, err } of failures) {
+      this.notifyAgentStartFailureBestEffort(conversation, message, agentId, err);
+    }
+    this.logger.warn(
+      { conversationId: conversation.id, messageId: message.id, failures },
+      'conversation-message-service: thread reply delivery failed',
+    );
   }
 
   private async ccMentionsBestEffort(

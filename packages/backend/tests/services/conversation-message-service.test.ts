@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
+import { ThreadFollowerRepo } from '../../src/repos/thread-follower-repo.js';
 import { UserRepo } from '../../src/repos/user-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { AttachmentService } from '../../src/services/attachment-service.js';
@@ -83,7 +85,9 @@ function bootstrap() {
   const agents = new AgentRepo(db);
   const workspaces = new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot });
   const conversations = new ConversationRepo(db);
+  const conversationInboxes = new ConversationInboxRepo(db);
   const messages = new MessageRepo(db);
+  const threadFollowers = new ThreadFollowerRepo(db);
   const notifications = new NotificationRepo(db);
   const users = new UserRepo(db);
   const attachments = new AttachmentRepo(db);
@@ -102,7 +106,9 @@ function bootstrap() {
   const service = new ConversationMessageService({
     db,
     conversations,
+    conversationInboxes,
     messages,
+    threadFollowers,
     agents,
     users,
     notifications,
@@ -133,11 +139,14 @@ function bootstrap() {
   return {
     db,
     tmp,
+    localHostId,
     attachments,
     agents,
     workspaces,
     conversations,
+    conversationInboxes,
     messages,
+    threadFollowers,
     notifications,
     users,
     events,
@@ -1185,6 +1194,301 @@ describe('ConversationMessageService.sendMessage', () => {
         }),
       ).resolves.toMatchObject({ message: { content: 'deliver fail' } });
       expect(t.logger.warn).toHaveBeenCalled();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  // ── Thread reply-cluster durable semantics (cut2 段1) ──────────────────
+  // Red lines (Cindy): (1) non-follower thread reply writes no inbox / no
+  // wake, and a follower that lost channel membership is filtered out;
+  // (2) a mentioned member is followed + backfilled in the same tx before the
+  // current reply, and `source` is immutable; (3) a member pulled in mid-thread
+  // catches up prior replies by seq, idempotent, with no duplicate of the
+  // current delivery. Stream-isolation of stale `newer_messages` (5) is
+  // covered by the freshness tests above.
+
+  it('delivers a thread reply only to followers — observe writes inbox without waking; non-followers get nothing', async () => {
+    const t = bootstrap();
+    try {
+      const carol = t.agents.create(
+        { name: 'carol', runtime: 'claude' },
+        t.localHostId,
+        'local',
+      );
+      t.workspaces.insertMembership(t.workspace.id, carol.id);
+      t.conversations.addAgent(t.channel.id, carol.id);
+
+      // Root authored by bob (agent), inserted directly so its own send does
+      // not pollute the fake's delivered/starts records.
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'bob root',
+      });
+
+      // alice replies → alice follows (reply), bob follows (target_author).
+      // carol is a member but follows nothing.
+      const reply = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'alice reply',
+        replyToMessageId: root.id,
+      });
+      expect(reply.message.thread_root_id).toBe(root.id);
+
+      // bob is a follower but NOT mentioned → observe: a durable inbox row,
+      // never a deliverMessage (no wake) and never an auto-start.
+      await waitFor(() =>
+        t.conversationInboxes
+          .listPending(t.channel.id, t.bob.id)
+          .some(i => i.message.id === reply.message.id),
+      );
+      expect(
+        t.fake.delivered.some(
+          d => d.agentId === t.bob.id && d.messageId === reply.message.id,
+        ),
+      ).toBe(false);
+      expect(t.fake.starts.some(s => s.agentId === t.bob.id)).toBe(false);
+
+      // carol is not a follower → no inbox row, no delivery, no follow record.
+      expect(t.conversationInboxes.listPending(t.channel.id, carol.id)).toEqual([]);
+      expect(
+        t.fake.delivered.some(d => d.agentId === carol.id),
+      ).toBe(false);
+      expect(t.threadFollowers.isFollower(root.id, 'agent', carol.id)).toBe(false);
+
+      // followers recorded: alice (reply), bob (target_author).
+      const followers = t.threadFollowers.listFollowers(root.id);
+      expect(
+        followers
+          .filter(f => f.principal_kind === 'agent')
+          .map(f => [f.principal_id, f.source])
+          .sort(),
+      ).toEqual(
+        [
+          [t.alice.id, 'reply'],
+          [t.bob.id, 'target_author'],
+        ].sort(),
+      );
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('does not deliver a thread reply to a follower that lost channel membership', async () => {
+    const t = bootstrap();
+    try {
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'bob root',
+      });
+      // alice replies → alice + bob become followers.
+      await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'alice reply',
+        replyToMessageId: root.id,
+      });
+      // bob leaves the channel; his follower row lingers but is not authoritative.
+      t.conversations.removeAgent(t.channel.id, t.bob.id);
+      expect(t.threadFollowers.isFollower(root.id, 'agent', t.bob.id)).toBe(true);
+
+      // alice posts another thread reply. bob is a follower-of-record but no
+      // longer a channel member → must be filtered out of delivery entirely.
+      const second = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'second reply',
+        replyToMessageId: root.id,
+      });
+      // give any post-commit delivery a chance to run, then assert bob got none.
+      await new Promise(resolve => setTimeout(resolve, 30));
+      expect(
+        t.conversationInboxes
+          .listPending(t.channel.id, t.bob.id)
+          .some(i => i.message.id === second.message.id),
+      ).toBe(false);
+      expect(
+        t.fake.delivered.some(
+          d => d.agentId === t.bob.id && d.messageId === second.message.id,
+        ),
+      ).toBe(false);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('follows + backfills a mentioned member in the same tx, then delivers the current reply as a turn', async () => {
+    const t = bootstrap();
+    try {
+      const carol = t.agents.create(
+        { name: 'carol', runtime: 'claude' },
+        t.localHostId,
+        'local',
+      );
+      t.workspaces.insertMembership(t.workspace.id, carol.id);
+      t.conversations.addAgent(t.channel.id, carol.id);
+
+      // Build a thread: root (bob) + reply1 (alice), before carol is involved.
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root',
+      });
+      const reply1 = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'reply one',
+        replyToMessageId: root.id,
+      });
+
+      // bob mentions @carol in a thread reply: carol is followed (mention) and
+      // backfilled with prior thread history (root + reply1) inside the tx,
+      // THEN the current reply is delivered to her as a turn.
+      const mentionReply = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        content: '@carol please look',
+        replyToMessageId: reply1.message.id,
+      });
+
+      // follower with source 'mention'.
+      const carolFollow = t.threadFollowers
+        .listFollowers(root.id)
+        .find(f => f.principal_id === carol.id);
+      expect(carolFollow?.source).toBe('mention');
+
+      // Backfill is synchronous (in-tx): root + reply1 are already in carol's
+      // inbox by the time send resolves, ordered by seq, excluding the current
+      // reply (delivered as a turn, never double-enqueued).
+      const backfilled = t.conversationInboxes
+        .listPending(t.channel.id, carol.id)
+        .map(i => i.message.id);
+      expect(backfilled).toEqual([root.id, reply1.message.id]);
+      expect(backfilled).not.toContain(mentionReply.message.id);
+
+      // current reply reaches carol as a turn (deliverMessage → wake).
+      await waitFor(() =>
+        t.fake.delivered.some(
+          d => d.agentId === carol.id && d.messageId === mentionReply.message.id,
+        ),
+      );
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('keeps follower source immutable and does not re-backfill on a repeat follow', async () => {
+    const t = bootstrap();
+    try {
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root',
+      });
+      // alice follows via reply.
+      await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'alice reply',
+        replyToMessageId: root.id,
+      });
+      const before = t.conversationInboxes
+        .listPending(t.channel.id, t.alice.id)
+        .map(i => i.message.id);
+
+      // bob now mentions @alice in a thread reply. alice is already a follower
+      // → ON CONFLICT DO NOTHING: source stays 'reply', no re-backfill.
+      await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        content: '@alice ping',
+        replyToMessageId: root.id,
+      });
+
+      const aliceFollow = t.threadFollowers
+        .listFollowers(root.id)
+        .find(f => f.principal_id === t.alice.id);
+      expect(aliceFollow?.source).toBe('reply');
+
+      // The repeat follow must not have re-enqueued the historical backfill
+      // (root). alice's pending set grew only by the current mention turn —
+      // which is delivered via deliverMessage, not the inbox — so the inbox
+      // backfill set is unchanged.
+      const after = t.conversationInboxes
+        .listPending(t.channel.id, t.alice.id)
+        .map(i => i.message.id);
+      expect(after.filter(id => id === root.id)).toEqual(
+        before.filter(id => id === root.id),
+      );
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('backfills a mid-thread follower by seq, idempotently, excluding own + current messages', async () => {
+    const t = bootstrap();
+    try {
+      const carol = t.agents.create(
+        { name: 'carol', runtime: 'claude' },
+        t.localHostId,
+        'local',
+      );
+      t.workspaces.insertMembership(t.workspace.id, carol.id);
+      t.conversations.addAgent(t.channel.id, carol.id);
+
+      // root (bob) + reply1 (alice) + reply2 (carol's OWN) + reply3 (bob).
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root',
+      });
+      const reply1 = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'reply one',
+        replyToMessageId: root.id,
+      });
+      // carol's own in-thread message, inserted directly (bypassing the
+      // service) so it does NOT register a follow — carol stays a non-follower
+      // until the mention below. Backfill must exclude this, her own message.
+      const carolOwn = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: carol.id,
+        content: 'carol own (pre-follow)',
+        threadRootId: root.id,
+      });
+      const reply3 = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        content: 'reply three',
+        replyToMessageId: root.id,
+      });
+
+      // Now pull carol in mid-thread via mention. Backfill must include
+      // root + reply1 + reply3 (seq < current), ordered by seq, and EXCLUDE
+      // carol's own message and the current mention reply.
+      const mention = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: '@carol catch up',
+        replyToMessageId: root.id,
+      });
+
+      const inbox = t.conversationInboxes
+        .listPending(t.channel.id, carol.id)
+        .map(i => i.message.id);
+      expect(inbox).toEqual([root.id, reply1.message.id, reply3.message.id]);
+      expect(inbox).not.toContain(carolOwn.id);
+      expect(inbox).not.toContain(mention.message.id);
     } finally {
       t.cleanup();
     }

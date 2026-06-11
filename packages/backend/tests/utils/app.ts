@@ -29,9 +29,11 @@ import { HostRepo } from '../../src/repos/host-repo.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
+import { ThreadFollowerRepo } from '../../src/repos/thread-follower-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { WorkspaceRegistryBackfiller } from '../../src/runtime/workspace-registry-backfill.js';
 import { createApiRouter } from '../../src/routes.js';
@@ -927,7 +929,9 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
   ctx.conversationMessageService = new ConversationMessageService({
     db,
     conversations: new ConversationRepo(db),
+    conversationInboxes: new ConversationInboxRepo(db),
     messages: new MessageRepo(db),
+    threadFollowers: new ThreadFollowerRepo(db),
     agents: new AgentRepo(db),
     users: new UserRepo(db),
     notifications: new NotificationRepo(db),
