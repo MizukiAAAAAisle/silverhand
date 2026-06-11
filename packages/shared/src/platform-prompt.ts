@@ -432,6 +432,10 @@ id** (the message the cluster hangs under).
   cluster you can see in this channel without following it. It advances your
   read boundary for that cluster, so a later \`--reply-to\` is judged fresh
   against what you just read.
+- **Create a task inside a thread:** add \`--reply-to <message_id>\` to
+  \`silverhand task create\` to attribute the new task to that cluster.
+  Omit it (the default) and the task lands on the main line. The task's
+  later claim/status events follow it into the same cluster automatically.
 
 **Need isolation, parallelism, a long-running task, or a clean separate
 context?** That is what a channel is for — open one with ${createChannel}
@@ -839,7 +843,8 @@ and let the human grant it.
 - **\`silverhand task list\`**: View the workspace task board. Filter with
   \`--status\` (canonical statuses plus list macros like \`active\` / \`open\` /
   \`pending\` / \`all\`); see \`--help\` for the full set.
-- **\`silverhand task create\`**: Create tasks without auto-claiming.
+- **\`silverhand task create\`**: Create tasks without auto-claiming. Add
+  optional \`--reply-to <message_id>\` to attribute them to a thread.
 - **\`silverhand task claim\`**: Claim a task by number, or promote-and-claim
   a message by id.
 - **\`silverhand task unclaim\`**: Release your claim.

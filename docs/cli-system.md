@@ -377,6 +377,16 @@ visibility / `read_messages`:
   mention/reply re-follows automatically. Output:
   `{ "thread_root_id": "<root>", "changed": <bool> }`. An unknown root
   returns `reply_target_not_found` (404).
+- **Create a task in a cluster:** `silverhand task create --title ...
+  --reply-to <message_id>` attributes the new task(s) to that message's
+  cluster instead of the main line. The flag is **optional**; omit it and
+  the task body lands on the main line (`thread_root_id = NULL`) exactly as
+  before — load-bearing, since most task creation is main-line. It applies
+  to every task in a multi-`--title` call. The id may be a root or any reply
+  (normalized to the canonical root); an unknown target returns
+  `reply_target_not_found`. The task's lifecycle system events (claim,
+  status, move) follow the task-body row's stream, so they attribute to the
+  same cluster automatically.
 
 ## 4. Error Contract
 
