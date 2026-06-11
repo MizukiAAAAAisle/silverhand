@@ -12,6 +12,7 @@ import { MembersPanel } from '@/components/layout/MembersPanel';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { ChannelsSidebar } from '@/components/layout/ChannelsSidebar';
 import { ChannelView } from '@/components/layout/ChannelView';
+import { ThreadPanel } from '@/components/layout/ThreadPanel';
 import { SavedListView } from '@/components/layout/SavedListView';
 import { SearchPanel } from '@/components/layout/SearchPanel';
 import { ArchivedChannelsPanel } from '@/components/layout/ArchivedChannelsPanel';
@@ -229,6 +230,7 @@ function RegisteredAppShell(): JSX.Element {
     channelId: selectedChannelId,
     threadId: openThreadId,
     sideConversationId,
+    clusterRootId,
     focusedTaskNumber,
     fullscreen: routeFullscreen,
     threadFullscreen,
@@ -991,19 +993,6 @@ function RegisteredAppShell(): JSX.Element {
     clearJump();
   }, [clearJump]);
 
-  const handleThreadCreated = useCallback(
-    (threadId: string, thread?: ChannelListItem) => {
-      if (selectedWorkspaceId && selectedChannelId) {
-        // Optimistically store the thread so the secondary pane is
-        // non-null on the very first render after nav.toThread() fires,
-        // before the channels-list query refetch has a chance to complete.
-        if (thread) setEphemeralThread(thread);
-        nav.toThread(selectedWorkspaceId, selectedChannelId, threadId);
-      }
-    },
-    [nav.toThread, selectedWorkspaceId, selectedChannelId],
-  );
-
   const handleArchiveChannelMutation = useCallback(
     (channelId: string, archived: boolean) => {
       archiveChannel.mutate({
@@ -1213,7 +1202,7 @@ function RegisteredAppShell(): JSX.Element {
       jumpTarget={parentJumpTarget}
       jumpPrimePending={parentJumpPrimePending}
       onJumped={handleJumped}
-      onThreadCreated={handleThreadCreated}
+      onOpenThread={nav.openCluster}
       highlightedMessageId={highlightedMessageIdForParent}
       onArchiveChannel={handleArchiveChannelMutation}
       archivePending={archiveChannel.isPending}
@@ -1231,7 +1220,6 @@ function RegisteredAppShell(): JSX.Element {
   //     `secondaryIsThread`. The conversation descriptor's
   //     `workspace_id` carries the *foreign* workspace for cross-
   //     workspace `?side`, so ChannelView's workspace-scoped hooks
-  //     (`useChannelThreads`, `useStartThread` via MessageList)
   //     auto-target the right cache without a separate prop.
   //   - Loading / unauthorized / not_found (`?side` ref hook didn't
   //     return a usable conversation) → SidePlaceholder (the renamed
@@ -1289,17 +1277,32 @@ function RegisteredAppShell(): JSX.Element {
           onOpenConversationRef={nav.openSide}
           onOpenChannelRef={handleOpenChannelByName}
           onOpenTask={handleOpenTask}
-          // No nested Thread from the secondary pane: thread sides can't
-          // spawn sub-threads (1-layer hard limit, schema-enforced); for
-          // channel sides, sub-thread creation would target the side's
-          // parent rather than the user's primary, which is confusing —
-          // disabled for PR-1 and revisited per real UX feedback.
-          onThreadCreated={undefined}
+          // No thread open from the secondary pane: a reply cluster shares
+          // its parent channel's context, so opening a thread only makes
+          // sense from the primary channel pane. Undefined hides the reply
+          // affordance on side/legacy-thread secondary panes.
+          onOpenThread={undefined}
         />
       );
     }
+  } else if (clusterRootId && selectedChannelId && selectedWorkspaceId) {
+    // Reply-cluster pane (`?cluster=<rootMessageId>`). A cluster is NOT a
+    // conversation — it shares the parent channel's context — so it does
+    // not flow through `secondaryDescriptor`/`ChannelView`. It renders
+    // only when no side/thread secondary is present (those win), matching
+    // the nav-layer mutual exclusion (`openCluster` clears `?side`).
+    secondaryView = (
+      <ThreadPanel
+        channelId={selectedChannelId}
+        workspaceId={selectedWorkspaceId}
+        rootMessageId={clusterRootId}
+        parentTitle={selectedChannel?.title ?? null}
+        closed={parentDescriptor?.closed_at != null}
+        archived={parentDescriptor?.archived_at != null}
+        onClose={nav.closeCluster}
+      />
+    );
   }
-
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden">

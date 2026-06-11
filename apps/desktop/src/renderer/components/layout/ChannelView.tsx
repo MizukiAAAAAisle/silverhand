@@ -28,7 +28,6 @@ import type {
   HumanMemberDto,
   MemberDto,
   MessageDto,
-  ThreadDto,
   UserDto,
 } from '@silverhand/shared';
 import { Composer } from '@/components/chat/Composer';
@@ -66,11 +65,6 @@ import {
   useArchivedChannelsForWorkspace,
   type ChannelListItem,
 } from '@/features/workspaces/hooks';
-import {
-  useChannelThreads,
-  useStartThread,
-  type ThreadSummary,
-} from '@/features/threads/hooks';
 import { useSavedMessageIds, useToggleSave } from '@/features/saved/hooks';
 import {
   isBackendUnreachable,
@@ -130,12 +124,11 @@ interface ChannelViewProps {
    *  `(channelId, messageId)`; superseded by any newer jump. */
   jumpPrimePending?: boolean;
   onJumped?: () => void;
-  /** Called when the user clicks Thread on a message. The parent owns
-   *  thread-pane state — receives the freshly-created thread id
-   *  and the conversation DTO (if available) for optimistic rendering.
-   *  When this is undefined the Thread action is hidden (threads
-   *  can't spawn sub-threads). */
-  onThreadCreated?: (threadId: string, thread?: ThreadDto) => void;
+  /** Called when the user clicks Thread / the reply badge on a main-line
+   *  message — opens that message's thread (reply cluster) in the right
+   *  pane. Receives the root message id. When undefined the Thread action
+   *  is hidden (secondary panes can't open nested threads). */
+  onOpenThread?: (rootMessageId: string) => void;
   /** When set, renders an X button in the header that calls this back.
    *  Used by the right-side secondary pane to close itself. */
   onCloseChild?: () => void;
@@ -225,7 +218,7 @@ function ActiveChannelView({
   jumpTarget,
   jumpPrimePending = false,
   onJumped,
-  onThreadCreated,
+  onOpenThread,
   onCloseChild,
   closeLabel = '关闭 Thread',
   onJumpToOriginal,
@@ -250,6 +243,7 @@ function ActiveChannelView({
     isAtTail,
     hasNewerLiveGap,
     resetToLatest,
+    replyCountsByRoot,
   } = useChannelMessages(conversation.id, routeKind);
 
   // Advance the message read cursor in real-time as new messages arrive.
@@ -383,21 +377,13 @@ function ActiveChannelView({
     }
   }, [conversation.id, jumpTarget, onJumped]);
 
-  // Open-thread summary for this channel — only fetched on parent
-  // panes (where Thread is actionable). Thread panes can't have
-  // sub-threads so the query is gated and stays disabled there.
-  const isParentPane = !!onThreadCreated;
-  const { data: threads = [] } = useChannelThreads(
-    isParentPane ? conversation.id : null,
-    isParentPane ? conversation.workspace_id : null,
-  );
-  const threadByAnchor = useMemo(() => {
-    const m = new Map<string, ThreadSummary>();
-    for (const t of threads) {
-      if (t.anchor_message_id) m.set(t.anchor_message_id, t);
-    }
-    return m;
-  }, [threads]);
+  // The reply affordance (open thread + per-root reply badge) is
+  // actionable only on the parent pane, gated by `onOpenThread` being
+  // passed. Secondary panes (legacy thread / `?side`) pass it undefined
+  // so the action is hidden. Per-root reply counts come from the message
+  // window's cut3-6 sidecar (`replyCountsByRoot`) — there is no separate
+  // threads query anymore.
+
 
   // Bind a TaskRefContext to this conversation's workspace. Inline
   // `#task:<n>` chips inside this pane resolve their numeric reference
@@ -620,8 +606,8 @@ function ActiveChannelView({
             isAtTail={isAtTail}
             hasNewerLiveGap={hasNewerLiveGap}
             onResetToLatest={resetToLatest}
-            onThreadCreated={onThreadCreated}
-            threadByAnchor={threadByAnchor}
+            onOpenThread={onOpenThread}
+            replyCountsByRoot={replyCountsByRoot}
             routeKind={routeKind}
             conversationRefsById={conversationRefsById}
             onOpenConversationRef={onOpenConversationRef}
@@ -927,8 +913,8 @@ function MessageList({
   isAtTail = true,
   hasNewerLiveGap = false,
   onResetToLatest,
-  onThreadCreated,
-  threadByAnchor,
+  onOpenThread,
+  replyCountsByRoot,
   routeKind,
   conversationRefsById,
   onOpenConversationRef,
@@ -964,12 +950,14 @@ function MessageList({
    *  signal used for the button action. */
   hasNewerLiveGap?: boolean;
   onResetToLatest?: () => void;
-  onThreadCreated?: (threadId: string, thread?: ThreadDto) => void;
-  /** Map of `original message id → open-thread summary` for the parent
-   *  pane. Empty / absent on thread panes. Drives the per-message
-   *  "{count} Reply" badge and short-circuits the POST when a thread
-   *  already exists (just opens it). */
-  threadByAnchor?: Map<string, ThreadSummary>;
+  /** Opens a main-line message's thread (reply cluster) in the right
+   *  pane. Receives the root message id. Undefined on secondary panes
+   *  (no nested threads), which hides the reply affordance. */
+  onOpenThread?: (rootMessageId: string) => void;
+  /** Per-root reply counts from the message window's cut3-6 sidecar
+   *  (`reply_counts_by_root`). Drives the inline "{count} Reply" badge.
+   *  A root with 0 (or absent) shows the hover "Thread" action instead. */
+  replyCountsByRoot?: Record<string, number>;
   routeKind: 'channel' | 'thread';
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
@@ -1016,7 +1004,6 @@ function MessageList({
   // global directory + conversation members all resolve here.
   const userResolver = useMemo(() => makeUserNameResolver(humansById), [humansById]);
   const humanAvatarUrls = useUserAvatarObjectUrls(users);
-  const startThread = useStartThread(workspaceId);
   const handleCopyMarkdown = useCallback(async (msg: MessageDto): Promise<void> => {
     // Single-message copy semantic: clipboard receives ONLY
     // `message.content`. Multi-message transcript export with sender
@@ -1101,18 +1088,8 @@ function MessageList({
     return m;
   }, [workspaceKind, liveChannels, archivedChannels]);
 
-  const handleStartThread = (msg: MessageDto): void => {
-    if (!onThreadCreated) return;
-    // Already a thread on this message → just open it; no POST needed.
-    const existing = threadByAnchor?.get(msg.id);
-    if (existing) {
-      onThreadCreated(existing.thread_id);
-      return;
-    }
-    if (startThread.isPending) return;
-    startThread.mutate(msg.id, {
-      onSuccess: res => onThreadCreated(res.thread_id, res.thread),
-    });
+  const handleOpenThread = (msg: MessageDto): void => {
+    onOpenThread?.(msg.id);
   };
 
   // Auto-scroll to bottom on new messages or when a new activity bubble
@@ -1552,8 +1529,12 @@ function MessageList({
           onOpenConversationRef={onOpenConversationRef}
           saved={savedIds.has(m.id)}
           onSave={msg => toggleSave(msg.id)}
-          onStartThread={onThreadCreated ? handleStartThread : undefined}
-          threadReplyCount={threadByAnchor?.get(m.id)?.reply_count}
+          onStartThread={onOpenThread ? handleOpenThread : undefined}
+          threadReplyCount={
+            (replyCountsByRoot?.[m.id] ?? 0) > 0
+              ? replyCountsByRoot?.[m.id]
+              : undefined
+          }
           viewerAvatarObjectUrl={viewerAvatarObjectUrl}
           viewer={viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer) ? viewer : undefined}
           humanAvatarUrls={humanAvatarUrls}
@@ -1582,9 +1563,9 @@ function MessageList({
       onOpenConversationRef,
       savedIds,
       toggleSave,
-      onThreadCreated,
-      handleStartThread,
-      threadByAnchor,
+      onOpenThread,
+      handleOpenThread,
+      replyCountsByRoot,
       viewerAvatarObjectUrl,
       viewer,
       agentAvatarUrls,

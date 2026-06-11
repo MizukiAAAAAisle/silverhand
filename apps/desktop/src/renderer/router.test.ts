@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildChannelPathPreservingSide,
+  buildClusterOpenUrl,
   buildSideOpenUrl,
   buildTaskOpenUrl,
   parseRouteState,
+  withClusterQuery,
   withSideQuery,
   withTaskQuery,
 } from './router';
@@ -379,5 +381,78 @@ describe('buildTaskOpenUrl — openTask URL writer', () => {
     expect(out).toContain('task=8');
     expect(out).not.toContain('task=3');
     expect(out).toContain('utm_source=test');
+  });
+});
+
+// Reply-cluster pane (`?cluster=<rootMessageId>`). A cluster is NOT a
+// conversation — it points at a main-line message whose thread the right
+// pane shows. It is mutually exclusive with `?side` at the nav layer:
+// opening one clears the other.
+describe('parseRouteState — ?cluster=<rootMessageId> thread pane pointer', () => {
+  it('parses ?cluster=<id> alone', () => {
+    const r = parseRouteState('/chat/w/w-1/c/c-a', '?cluster=m-1');
+    expect(r).toMatchObject({
+      channelId: 'c-a',
+      clusterRootId: 'm-1',
+      sideConversationId: null,
+    });
+  });
+
+  it('defaults clusterRootId to null with no query', () => {
+    const r = parseRouteState('/chat/w/w-1/c/c-a', '');
+    expect(r.clusterRootId).toBeNull();
+  });
+
+  it('treats empty ?cluster= as unset', () => {
+    const r = parseRouteState('/chat/w/w-1/c/c-a', '?cluster=');
+    expect(r.clusterRootId).toBeNull();
+  });
+});
+
+describe('withClusterQuery — URL writer for openCluster / closeCluster', () => {
+  it('writes ?cluster=<id>, clearing ?side and ?fullscreen', () => {
+    const out = withClusterQuery(
+      '/chat/w/w-1/c/c-a',
+      '?side=c-other&fullscreen=1',
+      'm-1',
+    );
+    expect(out).toContain('cluster=m-1');
+    expect(out).not.toContain('side=c-other');
+    expect(out).not.toContain('fullscreen=1');
+  });
+
+  it('clears ?cluster (and ?fullscreen) when id is null', () => {
+    const closed = withClusterQuery(
+      '/chat/w/w-1/c/c-a',
+      '?cluster=m-1&fullscreen=1',
+      null,
+    );
+    expect(closed).not.toContain('cluster');
+    expect(closed).not.toContain('fullscreen');
+  });
+
+  it('preserves unrelated params (e.g. ?task) when opening', () => {
+    const out = withClusterQuery('/chat/w/w-1/c/c-a', '?task=7', 'm-1');
+    expect(out).toContain('cluster=m-1');
+    expect(out).toContain('task=7');
+  });
+});
+
+describe('buildClusterOpenUrl — openCluster URL writer', () => {
+  it('is additive over withClusterQuery and mutually exclusive with side', () => {
+    expect(buildClusterOpenUrl('/chat/w/w-1/c/c-a', '', 'm-1')).toBe(
+      '/chat/w/w-1/c/c-a?cluster=m-1',
+    );
+    const out = buildClusterOpenUrl('/chat/w/w-1/c/c-a', '?side=c-other', 'm-1');
+    expect(out).toContain('cluster=m-1');
+    expect(out).not.toContain('side=c-other');
+  });
+});
+
+describe('buildSideOpenUrl — clears ?cluster (side/cluster mutual exclusion)', () => {
+  it('opening a side overlay closes an open cluster', () => {
+    const out = buildSideOpenUrl('/chat/w/w-1/c/c-a', '?cluster=m-1', 'c-other');
+    expect(out).toContain('side=c-other');
+    expect(out).not.toContain('cluster=m-1');
   });
 });

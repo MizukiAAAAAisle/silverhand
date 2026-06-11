@@ -114,6 +114,15 @@ export interface RouteState {
    *  exist in the current workspace's channels union; cross-workspace
    *  resolution lands in PR-2 with `useConversationById`. */
   sideConversationId: string | null;
+  /** Reply-cluster pane pointer (`?cluster=<root_message_id>`). When set,
+   *  the right pane shows that main-line message's reply cluster (root +
+   *  replies sharing the parent channel context). A cluster is NOT a
+   *  conversation, so this is a message id, not a conversation id — it is
+   *  resolved against the current channel (`channelId`), never the
+   *  workspace conversation union. Mutually exclusive with
+   *  `sideConversationId` at the nav layer (opening one clears the other);
+   *  `?side` wins if both somehow coexist. */
+  clusterRootId: string | null;
   /** Tasks-drawer focus pointer (`?task=<task_number>`). When set, the
    *  drawer opens to "all" filter and scrolls/highlights the row. The
    *  number is workspace-scoped — resolution uses the workspace of the
@@ -167,6 +176,10 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   // Defensive: empty string treated as unset; prevents `?side=` from
   // forcing an "unresolved secondary" placeholder.
   const sideConversationId = rawSide && rawSide.length > 0 ? rawSide : null;
+  const rawCluster = searchParams.get('cluster');
+  // Defensive: empty string treated as unset (mirrors `?side`). The value
+  // is a main-line message id whose reply cluster the right pane shows.
+  const clusterRootId = rawCluster && rawCluster.length > 0 ? rawCluster : null;
   const rawTask = searchParams.get('task');
   // Defensive: positive-integer-string only — no leading zeros, no
   // decimals, no trailing garbage. `parseInt` would silently accept
@@ -201,6 +214,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
     channelId: channelId ?? null,
     threadId: threadId ?? null,
     sideConversationId,
+    clusterRootId,
     focusedTaskNumber,
     fullscreen,
     threadFullscreen,
@@ -336,8 +350,58 @@ export function buildSideOpenUrl(
   const params = new URLSearchParams(search);
   params.set('side', conversationId);
   params.delete('fullscreen');
+  // Side and cluster are mutually exclusive secondary panes — opening the
+  // side overlay closes any open reply cluster. No-op when `?cluster` is
+  // absent, so existing side-pane URLs are unaffected.
+  params.delete('cluster');
   const qs = params.toString();
   return qs ? `${pathname}?${qs}` : pathname;
+}
+
+/**
+ * Build a URL with `?cluster` written or cleared. Pure helper mirroring
+ * `withSideQuery` so the nav hook stays tiny and tests can assert URL
+ * shape without React.
+ *
+ * Rules:
+ *  - `rootMessageId == null` → strip `?cluster` AND `?fullscreen` (closing
+ *    the cluster removes the secondary pane; a `/t/<tid>` left on the path
+ *    falls back to a non-fullscreen split).
+ *  - `rootMessageId !== null` → set `?cluster=<id>`, strip `?side` and
+ *    `?fullscreen` (cluster is a fresh secondary pane, mutually exclusive
+ *    with the side overlay).
+ *  - Other query params (`task`, …) are preserved verbatim.
+ */
+export function withClusterQuery(
+  pathname: string,
+  search: string,
+  rootMessageId: string | null,
+): string {
+  const params = new URLSearchParams(search);
+  if (rootMessageId == null) {
+    params.delete('cluster');
+    params.delete('fullscreen');
+  } else {
+    params.set('cluster', rootMessageId);
+    params.delete('side');
+    params.delete('fullscreen');
+  }
+  const next = params.toString();
+  return next ? `${pathname}?${next}` : pathname;
+}
+
+/**
+ * Build the URL written by `openCluster(rootMessageId)`. Sets
+ * `?cluster=<id>`, clearing the side overlay + fullscreen so the reply
+ * cluster takes the secondary pane cleanly. Thin wrapper over
+ * `withClusterQuery` for call-site symmetry with `buildSideOpenUrl`.
+ */
+export function buildClusterOpenUrl(
+  pathname: string,
+  search: string,
+  rootMessageId: string,
+): string {
+  return withClusterQuery(pathname, search, rootMessageId);
 }
 
 /**
@@ -378,6 +442,14 @@ export function useNav(): {
    *  again. `replace` so the user's back button doesn't have to step
    *  through every overlay open/close. */
   closeSide: () => void;
+  /** Open the reply cluster for `rootMessageId` in the right pane. Writes
+   *  `?cluster=<id>` (clearing `?side`/`?fullscreen`) via `replace` so it
+   *  doesn't pile history entries. The base path is preserved so closing
+   *  restores whatever was below. */
+  openCluster: (rootMessageId: string) => void;
+  /** Close the reply-cluster pane. Strips `?cluster` (and `?fullscreen`);
+   *  the base path's thread, if any, becomes secondary again. */
+  closeCluster: () => void;
   /** Focus a task in the workspace tasks drawer by writing `?task=<n>`.
    *  The drawer auto-opens, switches to "all" filter, scrolls the row
    *  into view, and applies a brief highlight. `replace` so re-clicking
@@ -408,6 +480,21 @@ export function useNav(): {
   );
   const closeSide = useCallback(() => {
     const next = withSideQuery(location.pathname, location.search, null);
+    navigate(next, { replace: true });
+  }, [navigate, location.pathname, location.search]);
+  const openCluster = useCallback(
+    (rootMessageId: string) => {
+      const next = buildClusterOpenUrl(
+        location.pathname,
+        location.search,
+        rootMessageId,
+      );
+      navigate(next, { replace: true });
+    },
+    [navigate, location.pathname, location.search],
+  );
+  const closeCluster = useCallback(() => {
+    const next = withClusterQuery(location.pathname, location.search, null);
     navigate(next, { replace: true });
   }, [navigate, location.pathname, location.search]);
   const openTask = useCallback(
@@ -473,6 +560,8 @@ export function useNav(): {
     toSettings,
     openSide,
     closeSide,
+    openCluster,
+    closeCluster,
     openTask,
     closeTask,
   }), [
@@ -491,6 +580,8 @@ export function useNav(): {
     toSettings,
     openSide,
     closeSide,
+    openCluster,
+    closeCluster,
     openTask,
     closeTask,
   ]);

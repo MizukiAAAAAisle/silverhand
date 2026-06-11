@@ -20,12 +20,12 @@ import {
   useViewerUser,
 } from '@/features/me/hooks';
 
-interface ReplyClusterPanelProps {
+interface ThreadPanelProps {
   /** Parent channel conversation. Replies live in this conversation with
    *  `thread_root_id = rootMessageId`; the panel reads/sends against it. */
   channelId: string;
   workspaceId: string;
-  /** The root (main-line) message whose cluster this panel shows. */
+  /** The root (main-line) message whose thread this panel shows. */
   rootMessageId: string;
   /** Parent channel title, shown in the header subtitle. */
   parentTitle?: string | null;
@@ -36,20 +36,21 @@ interface ReplyClusterPanelProps {
 }
 
 /**
- * Right-pane view of one reply cluster: the root message plus its replies,
- * read from `GET /api/channels/:id/messages?thread_root_id=` (cut3-4) and
+ * Right-pane view of one thread: the root message plus its replies, read
+ * from `GET /api/channels/:id/messages?thread_root_id=` (cut3-4) and
  * appended to via the channel send route with `reply_to_message_id`
- * (cut3-5). A cluster is NOT a separate conversation — it shares the parent
- * channel's context — so this panel deliberately does not reuse the
- * conversation-bound `ChannelView`; it renders the cluster with the same
- * `MessageItem` / `groupMessages` primitives and a reply-targeted Composer.
+ * (cut3-5). A thread is NOT a separate conversation — it is a reply cluster
+ * sharing the parent channel's context — so this panel deliberately does
+ * not reuse the conversation-bound `ChannelView`; it renders the thread
+ * with the same `MessageItem` / `groupMessages` primitives and a
+ * reply-targeted Composer.
  *
  * NOTE: the message-render lookup maps below duplicate a slice of
  * `ChannelView`'s internal `MessageList`. Extracting a shared
  * `useMessageRenderContext(channelId, workspaceId)` hook is a clean
  * follow-up; kept inline here to avoid a large `ChannelView` refactor.
  */
-export function ReplyClusterPanel({
+export function ThreadPanel({
   channelId,
   workspaceId,
   rootMessageId,
@@ -57,7 +58,7 @@ export function ReplyClusterPanel({
   closed = false,
   archived = false,
   onClose,
-}: ReplyClusterPanelProps): JSX.Element {
+}: ThreadPanelProps): JSX.Element {
   void workspaceId;
   const cluster = useThreadCluster(channelId, rootMessageId);
   const messages = cluster.data;
@@ -133,7 +134,7 @@ export function ReplyClusterPanel({
 
   return (
     <aside
-      data-pane="reply-cluster"
+      data-pane="thread"
       className="flex h-full min-h-0 w-full flex-col border-l border-border-subtle bg-[var(--bg-chat,transparent)]"
     >
       <header className="flex items-center gap-2 border-b border-border-subtle px-3 py-2">

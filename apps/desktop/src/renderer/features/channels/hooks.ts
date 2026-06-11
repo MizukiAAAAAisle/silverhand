@@ -482,6 +482,21 @@ export function useChannelMessages(
     [query.data],
   );
 
+  // Per-root reply counts (cut3-6 sidecar). Each page carries the full,
+  // pagination-independent count for every root in its window, so merging
+  // pages (later pages win) yields the authoritative count for each root
+  // currently visible in the main stream. Drives the inline "{N} Reply"
+  // badge on main-line message rows.
+  const replyCountsByRoot = useMemo(() => {
+    const merged: Record<string, number> = {};
+    for (const page of query.data?.pages ?? []) {
+      for (const [rootId, count] of Object.entries(page.reply_counts_by_root)) {
+        merged[rootId] = count;
+      }
+    }
+    return merged;
+  }, [query.data]);
+
   /** Reset the active query to the latest window. We do NOT keep the
    *  previous pages here: an around-message window may not be
    *  contiguous with latest, and stitching disjoint ranges would
@@ -549,6 +564,7 @@ export function useChannelMessages(
     isAtTail,
     hasNewerLiveGap,
     resetToLatest,
+    replyCountsByRoot,
   };
 }
 
