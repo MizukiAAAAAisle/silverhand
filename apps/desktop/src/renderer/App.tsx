@@ -1258,15 +1258,33 @@ function RegisteredAppShell(): JSX.Element {
     // not flow through `secondaryDescriptor`/`ChannelView`. It renders
     // only when no side/thread secondary is present (those win), matching
     // the nav-layer mutual exclusion (`openCluster` clears `?side`).
+    //
+    // Captured into consts so the `onViewInChannel` closure keeps the
+    // narrowed non-null types (TS widens branch-narrowed `let`s back to
+    // nullable inside a deferred callback).
+    const clusterChannelId = selectedChannelId;
+    const clusterWorkspaceId = selectedWorkspaceId;
+    const clusterRoot = clusterRootId;
     secondaryView = (
       <ThreadPanel
-        channelId={selectedChannelId}
-        workspaceId={selectedWorkspaceId}
-        rootMessageId={clusterRootId}
+        channelId={clusterChannelId}
+        workspaceId={clusterWorkspaceId}
+        rootMessageId={clusterRoot}
         parentTitle={selectedChannel?.title ?? null}
         closed={parentDescriptor?.closed_at != null}
         archived={parentDescriptor?.archived_at != null}
         onClose={nav.closeCluster}
+        onViewInChannel={() => {
+          // Scroll-locate + flash the root in the main channel stream,
+          // then drop the cluster pane so the channel is unobstructed.
+          requestJump({
+            workspaceId: clusterWorkspaceId,
+            channelId: clusterChannelId,
+            threadId: null,
+            messageId: clusterRoot,
+          });
+          nav.closeCluster();
+        }}
       />
     );
   }

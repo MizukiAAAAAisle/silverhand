@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { CornerDownLeft, Loader2, X } from 'lucide-react';
+import { ArrowUpRight, CornerDownLeft, Loader2, X } from 'lucide-react';
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { groupMessages } from '@/components/chat/groupMessages';
 import { MessageItem } from '@/components/chat/MessageItem';
@@ -33,6 +33,10 @@ interface ThreadPanelProps {
   closed?: boolean;
   archived?: boolean;
   onClose: () => void;
+  /** "View in channel": close this panel and scroll-locate + flash the
+   *  root message in the main channel stream. Wired by App to
+   *  `requestJump` + `closeCluster`. Omitted = button hidden. */
+  onViewInChannel?: () => void;
 }
 
 /**
@@ -58,6 +62,7 @@ export function ThreadPanel({
   closed = false,
   archived = false,
   onClose,
+  onViewInChannel,
 }: ThreadPanelProps): JSX.Element {
   void workspaceId;
   // The root message is the thread's anchor — pinned at the top
@@ -185,15 +190,28 @@ export function ThreadPanel({
             {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
           </div>
         </div>
-        <button
-          type="button"
-          aria-label="关闭"
-          title="关闭"
-          onClick={onClose}
-          className="shrink-0 rounded p-1 text-text-muted hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary"
-        >
-          <X className="size-4" />
-        </button>
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {onViewInChannel ? (
+            <button
+              type="button"
+              aria-label="在频道中查看"
+              title="在频道中查看"
+              onClick={onViewInChannel}
+              className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+            >
+              <ArrowUpRight className="size-4" />
+            </button>
+          ) : null}
+          <button
+            type="button"
+            aria-label="关闭"
+            title="关闭"
+            onClick={onClose}
+            className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
       </header>
 
       {rootCtx.isError ? (

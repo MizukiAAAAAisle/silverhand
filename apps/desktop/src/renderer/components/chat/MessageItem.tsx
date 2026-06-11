@@ -392,18 +392,20 @@ export function MessageItem({
         {threadReplyCount !== undefined && onStartThread ? (
           <div
             className={
-              'mt-1 flex h-5 items-center text-xs ' +
+              'mt-1 flex items-center text-xs ' +
               (alignRight ? 'justify-end' : 'justify-start')
             }
           >
-            <ActionButton
-              icon={<CornerUpLeft className="size-3.5" />}
-              label={`${threadReplyCount} Reply`}
-              active
-              onClick={() => onStartThread(message)}
-              alwaysVisible
-              hovered={hover}
-            />
+            <span className="inline-flex items-center rounded-md border border-border-subtle px-2 py-0.5 transition-colors hover:border-accent hover:bg-bg-hover">
+              <ActionButton
+                icon={<CornerUpLeft className="size-3.5" />}
+                label={`${threadReplyCount} Reply`}
+                active
+                onClick={() => onStartThread(message)}
+                alwaysVisible
+                hovered={hover}
+              />
+            </span>
           </div>
         ) : null}
       </div>
