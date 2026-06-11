@@ -1,7 +1,8 @@
 # Thread = Reply Cluster v1 — 共享上下文的线程重设计
 
-Status: **draft for review** (Architect = @Alice, #task:1022). Reviewer = @Cindy
-(runtime/inbox/schema feasibility). Implementation gated on shiki.
+Status: **review PASS (Cindy 2026-06-11) — design frozen, implementation pending shiki greenlight**
+(Architect = @Alice, #task:1022). Reviewer = @Cindy(runtime/inbox/schema feasibility,已 PASS,
+含 better-sqlite3 实测复核 CAS 分支)。
 
 本 doc 把 2026-06-11 三方(shiki / Alice / Cindy)在 #conv:cF9iMuc5ojXgb2Bs 收敛的
 线程重设计固化为单一权威。它**取代**现有"thread = 独立 agent session 的隔离子频道"模型。
@@ -254,6 +255,10 @@ push、泄露 thread 内容**。
   slock 同此:read/history + full stdin delivery 推进 boundary,busy notice 不推进。
 
 净效果:消除跨 stream 误报 + 非 follower 误拦 + payload 泄露;thread-heavy 频道的假 stale 大幅下降。
+
+> **实现期测试要求(Cindy review PASS 附带,卡点):** CAS 测试必须覆盖 main 与 thread 两组路径的全部分支——
+> 首插、**并发首插(`seen=0` 第二条 → 0 changes → stale)**、CAS 成功、CAS stale、**`seen>0` 且 head 缺失 →
+> UPDATE 0 行 → stale(不误插)**;并断言 `conversations.latest_message_seq` 在 CAS miss 后已 rollback(无 burned seq)。
 
 ---
 
