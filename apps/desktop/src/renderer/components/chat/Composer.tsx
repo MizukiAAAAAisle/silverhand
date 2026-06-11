@@ -50,6 +50,12 @@ import { ComposerActivityHeader } from './ComposerActivityHeader';
 interface ComposerProps {
   conversationId: string;
   routeKind?: 'channel' | 'thread';
+  /** When set, this composer posts replies into the given root's reply
+   *  cluster (sends `reply_to_message_id`) and keeps its own draft,
+   *  isolated from the channel's main composer. The channel id in
+   *  `conversationId` is still used for the send target, member/mention
+   *  resolution, and attachment uploads. */
+  threadRootId?: string;
   disabled: boolean;
   /** When true, composer is disabled with an "archived" placeholder.
    *  Independent of `disabled` (closed) so we can distinguish the reason
@@ -89,13 +95,20 @@ type SubmittingSnapshot = {
 export function Composer({
   conversationId,
   routeKind = 'channel',
+  threadRootId,
   disabled: disabledProp,
   archived = false,
 }: ComposerProps): JSX.Element {
   // Treat archived as another flavor of disabled so every send/attach
   // path is gated identically. Placeholder below distinguishes the copy.
   const disabled = disabledProp || archived;
-  const [initialDraft] = useState(() => readComposerDraft(conversationId));
+  // Draft identity: a reply-cluster composer keeps its own draft so it
+  // never clobbers the channel's main draft. Network ops (send target,
+  // members, attachment upload path) still use the real `conversationId`.
+  const draftKey = threadRootId
+    ? `${conversationId}#cluster#${threadRootId}`
+    : conversationId;
+  const [initialDraft] = useState(() => readComposerDraft(draftKey));
   const [draft, setDraftState] = useState(initialDraft?.text ?? '');
   const [caret, setCaretState] = useState(initialDraft?.caret ?? 0);
   const [pending, setPendingState] = useState<PendingAttachment[]>(
@@ -114,7 +127,7 @@ export function Composer({
   // events + a one-tick guard avoids accidentally sending the partial
   // text on candidate selection.
   const [composing, setComposing] = useState(false);
-  const send = useSendMessage(conversationId, routeKind);
+  const send = useSendMessage(conversationId, routeKind, threadRootId);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -147,25 +160,25 @@ export function Composer({
     caretRef.current = nextCaret;
     setDraftState(nextDraft);
     setCaretState(nextCaret);
-    patchComposerDraftText(conversationId, routeKind, nextDraft, nextCaret);
+    patchComposerDraftText(draftKey, routeKind, nextDraft, nextCaret);
   }
 
   function updateCaret(nextCaret: number): void {
     caretRef.current = nextCaret;
     setCaretState(nextCaret);
-    patchComposerDraftText(conversationId, routeKind, draftRef.current, nextCaret);
+    patchComposerDraftText(draftKey, routeKind, draftRef.current, nextCaret);
   }
 
   function detachSubmittingDraftForEdit(): void {
     const submitting = submittingSnapshotRef.current;
     if (!submitting) return;
     dropSentAttachmentsFromDraft(
-      conversationId,
+      draftKey,
       submitting.snapshot.pending.map(item => item.key),
     );
     submittingSnapshotRef.current = null;
     patchComposerDraftText(
-      conversationId,
+      draftKey,
       routeKind,
       draftRef.current,
       caretRef.current,
@@ -177,10 +190,11 @@ export function Composer({
       if (
         item.state === 'uploading'
         && item.file
-        && !hasComposerDraftInFlightUpload(conversationId, item.key)
+        && !hasComposerDraftInFlightUpload(draftKey, item.key)
       ) {
         void startComposerDraftAttachmentUpload({
-          conversationId,
+          conversationId: draftKey,
+          uploadChannelId: conversationId,
           routeKind,
           attachmentKey: item.key,
           file: item.file,
@@ -188,10 +202,10 @@ export function Composer({
         });
       }
     }
-  }, [conversationId, routeKind]);
+  }, [draftKey, conversationId, routeKind]);
 
   useEffect(() => {
-    return subscribeComposerDraft(conversationId, event => {
+    return subscribeComposerDraft(draftKey, event => {
       if (event.type === 'clear') {
         draftRef.current = '';
         caretRef.current = 0;
@@ -215,7 +229,7 @@ export function Composer({
         ),
       );
     });
-  }, [conversationId]);
+  }, [draftKey]);
 
   useEffect(() => {
     return () => {
@@ -224,7 +238,7 @@ export function Composer({
         submitting && editGenerationRef.current === submitting.editGeneration
           ? submitting.snapshot
           : {
-              conversationId,
+              conversationId: draftKey,
               routeKind,
               text: draftRef.current,
               caret: caretRef.current,
@@ -236,7 +250,7 @@ export function Composer({
         updatedAt: Date.now(),
       });
     };
-  }, [conversationId, routeKind]);
+  }, [draftKey, routeKind]);
 
   const { data: agents = [] } = useAgents();
   const { data: users = [] } = useUsers();
@@ -386,7 +400,7 @@ export function Composer({
     const submittedPending = pending.filter(p => p.state === 'done' && p.attachment);
     const sentAttachmentIds = ready.map(item => item.id);
     const submittedSnapshot: ComposerDraftSnapshot = {
-      conversationId,
+      conversationId: draftKey,
       routeKind,
       text: content,
       caret: content.length,
@@ -410,7 +424,7 @@ export function Composer({
       .then(() => {
         const submitting = submittingSnapshotRef.current;
         if (submitting?.editGeneration !== editGeneration) return;
-        clearComposerDraft(conversationId, { sentAttachmentIds });
+        clearComposerDraft(draftKey, { sentAttachmentIds });
         submittingSnapshotRef.current = null;
       })
       .catch(() => {
@@ -426,13 +440,13 @@ export function Composer({
           setPendingState(submittedSnapshot.pending);
         }
         patchComposerDraftText(
-          conversationId,
+          draftKey,
           routeKind,
           submittedSnapshot.text,
           submittedSnapshot.caret,
         );
         for (const item of submittedSnapshot.pending) {
-          upsertComposerDraftAttachment(conversationId, routeKind, item);
+          upsertComposerDraftAttachment(draftKey, routeKind, item);
         }
       });
   }
@@ -462,7 +476,8 @@ export function Composer({
         item,
       ]);
       void startComposerDraftAttachmentUpload({
-        conversationId,
+        conversationId: draftKey,
+        uploadChannelId: conversationId,
         routeKind,
         attachmentKey: key,
         file,
@@ -475,7 +490,7 @@ export function Composer({
     detachSubmittingDraftForEdit();
     editGenerationRef.current += 1;
     setPendingValue(curr => curr.filter(p => p.key !== key));
-    removeComposerDraftAttachment(conversationId, key);
+    removeComposerDraftAttachment(draftKey, key);
   }
 
   // Composer-level lightbox: shown when the user clicks an image chip.

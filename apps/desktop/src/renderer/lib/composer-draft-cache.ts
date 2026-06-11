@@ -163,6 +163,12 @@ export function startComposerDraftAttachmentUpload(input: {
   attachmentKey: string;
   file: File;
   previewUrl?: string;
+  /** Channel id used to build the upload network path, when it differs
+   *  from `conversationId` (the draft identity key). Reply-cluster drafts
+   *  key the draft by a composite `${channelId}#cluster#${rootId}` so they
+   *  don't collide with the channel's main draft, but their attachments
+   *  must still POST to the real channel. Defaults to `conversationId`. */
+  uploadChannelId?: string;
 }): Promise<void> {
   const key = uploadKey(input.conversationId, input.attachmentKey);
   const existing = inFlightUploads.get(key);
@@ -231,14 +237,16 @@ async function uploadAttachment(
     attachmentKey: string;
     file: File;
     previewUrl?: string;
+    uploadChannelId?: string;
   },
   key: string,
 ): Promise<void> {
   try {
+    const channelId = input.uploadChannelId ?? input.conversationId;
     const path =
       input.routeKind === 'thread'
-        ? apiPaths.threadAttachments(input.conversationId)
-        : apiPaths.channelAttachments(input.conversationId);
+        ? apiPaths.threadAttachments(channelId)
+        : apiPaths.channelAttachments(channelId);
     const form = new FormData();
     form.append('file', input.file, input.file.name);
     const dto = await apiUpload<AttachmentDto>(path, form);
