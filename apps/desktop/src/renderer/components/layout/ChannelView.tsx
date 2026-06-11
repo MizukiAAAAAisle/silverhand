@@ -31,7 +31,7 @@ import type {
   UserDto,
 } from '@silverhand/shared';
 import { Composer } from '@/components/chat/Composer';
-import { MessageItem } from '@/components/chat/MessageItem';
+import { ChannelMessageItem } from '@/components/chat/ChannelMessageItem';
 import { QuotedMessagePreview } from '@/components/chat/QuotedMessagePreview';
 import { findThreadAnchor, readAnchorMessageId } from '@/components/chat/threadAnchor';
 import { SystemMessage } from '@/components/chat/SystemMessage';
@@ -1515,7 +1515,7 @@ function MessageList({
         );
       }
       return (
-        <MessageItem
+        <ChannelMessageItem
           message={m}
           conversationId={channelId}
           routeKind={routeKind}

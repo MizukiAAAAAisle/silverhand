@@ -28,7 +28,7 @@ import type { ConversationReference } from './ConversationRef';
 import { MessageContextMenu } from './MessageContextMenu';
 import { useMessageLayoutMode } from './useMessageLayoutMode';
 
-interface MessageItemProps {
+export interface MessageItemProps {
   message: MessageDto;
   /** Conversation this message belongs to. Forwarded to AgentInfoPopover so
    *  the author/avatar popover can show per-conversation presence + retry. */
@@ -402,7 +402,10 @@ export function MessageItem({
               (alignRight ? 'justify-end' : 'justify-start')
             }
           >
-            <span className="inline-flex items-center rounded-md border border-border-subtle px-2 py-0.5 transition-colors hover:border-accent hover:bg-bg-hover">
+            <span
+              data-panel-pill="thread"
+              className="inline-flex items-center border border-border-subtle px-2 py-0.5 transition-colors hover:border-accent hover:bg-bg-hover"
+            >
               <ActionButton
                 icon={<CornerUpLeft className="size-3.5" />}
                 label={`${threadReplyCount} Reply`}

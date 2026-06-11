@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { ArrowUpRight, Bell, BellOff, CornerDownLeft, Loader2, X } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ArrowDown, ArrowUpRight, Bell, BellOff, CornerDownLeft, Loader2, X } from 'lucide-react';
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { groupMessages } from '@/components/chat/groupMessages';
 import { MessageItem } from '@/components/chat/MessageItem';
@@ -175,6 +175,48 @@ export function ThreadPanel({
       ? viewer
       : undefined;
 
+  // Scroll-to-bottom behavior, mirroring the channel (#task:1050 items 4+5):
+  // (re)opening the panel lands at the newest reply, and a back-to-bottom
+  // button appears once the user scrolls up. ThreadPanel uses a plain
+  // scroll container (not the channel's Virtuoso list), so this is a small
+  // vanilla controller rather than a reused hook.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pinBottomRef = useRef(true);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
+
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    pinBottomRef.current = true;
+    setShowScrollBottom(false);
+  }, []);
+
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 20;
+    pinBottomRef.current = atBottom;
+    setShowScrollBottom(!atBottom);
+  }, []);
+
+  // Reopening the panel for a (different) root resets to follow-bottom mode.
+  useEffect(() => {
+    pinBottomRef.current = true;
+    setShowScrollBottom(false);
+  }, [rootMessageId]);
+
+  // While pinned (initial open, or the user sitting at the tail), keep the
+  // newest reply in view as the root loads / replies arrive. Instant jump
+  // (not smooth) so an open never animates up from the top.
+  useLayoutEffect(() => {
+    if (!pinBottomRef.current) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    setShowScrollBottom(false);
+  }, [messages, rootMessageId, cluster.isLoading, rootCtx.root]);
+
   const renderMessage = (m: typeof messages[number]): JSX.Element =>
     m.from_kind === 'system' ? (
       <SystemMessage
@@ -199,18 +241,13 @@ export function ThreadPanel({
         humanAvatarUrls={humanAvatarUrls}
         agentAvatarUrls={agentAvatarUrls}
         userResolver={userResolver}
-        onUnfollowThread={
-          viewerFollowing && !followPending
-            ? () => unfollowThread.mutate()
-            : undefined
-        }
       />
     );
 
   return (
     <aside
       data-pane="thread"
-      className="flex h-full min-h-0 w-full flex-col border-l border-border-subtle bg-[var(--bg-chat,transparent)]"
+      className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
     >
       <header className="flex items-center gap-2 border-b border-border-subtle px-3 py-2">
         <CornerDownLeft className="size-3.5 shrink-0 text-text-muted" />
@@ -223,7 +260,10 @@ export function ThreadPanel({
             {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
           </div>
         </div>
-        <div className="ml-auto flex shrink-0 items-center gap-1">
+        <div
+          data-channel-actions
+          className="ml-auto flex shrink-0 items-center gap-1"
+        >
           {followers.data ? (
             <button
               type="button"
@@ -281,15 +321,29 @@ export function ThreadPanel({
           <Loader2 className="size-4 animate-spin" />
         </div>
       ) : (
-        <>
-          {/* Pinned root — always visible, never paged away. */}
-          {rootCtx.root ? (
-            <div className="border-b border-border-subtle px-1 py-2">
-              {renderMessage(rootCtx.root)}
-            </div>
-          ) : null}
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <div
+            ref={scrollRef}
+            onScroll={onScroll}
+            className="scrollbar-hide flex min-h-0 flex-1 flex-col overflow-y-auto px-1 py-2"
+          >
+            {/* Load earlier replies (between the root and the tail window). */}
+            {cluster.hasPreviousPage ? (
+              <button
+                type="button"
+                disabled={cluster.isFetchingPreviousPage}
+                onClick={() => void cluster.fetchPreviousPage()}
+                className="mx-auto mb-1 rounded px-2 py-1 text-xs text-text-muted hover:text-text-primary disabled:opacity-50"
+              >
+                {cluster.isFetchingPreviousPage ? '加载中…' : '加载更早的回复'}
+              </button>
+            ) : null}
 
-          <div className="scrollbar-hide flex min-h-0 flex-1 flex-col overflow-y-auto px-1 py-2">
+            {/* Root message — the cluster anchor, rendered inline as the
+                first message in the stream. No longer pinned (#task:1050
+                item 1) so replies get the panel's full height. */}
+            {rootCtx.root ? renderMessage(rootCtx.root) : null}
+
             {cluster.isLoading ? (
               <div className="flex flex-1 items-center justify-center text-text-muted">
                 <Loader2 className="size-4 animate-spin" />
@@ -299,34 +353,36 @@ export function ThreadPanel({
                 还没有回复
               </div>
             ) : (
-              <>
-                {cluster.hasPreviousPage ? (
-                  <button
-                    type="button"
-                    disabled={cluster.isFetchingPreviousPage}
-                    onClick={() => void cluster.fetchPreviousPage()}
-                    className="mx-auto mb-1 rounded px-2 py-1 text-xs text-text-muted hover:text-text-primary disabled:opacity-50"
-                  >
-                    {cluster.isFetchingPreviousPage ? '加载中…' : '加载更早的回复'}
-                  </button>
-                ) : null}
-                {items.map(item => {
-                  if (item.kind === 'cluster') {
-                    return (
-                      <SystemActivityCluster
-                        key={item.messages[0]?.id ?? 'cluster'}
-                        messages={item.messages}
-                        channelsByName={channelsByName}
-                        humansByName={humansByName}
-                      />
-                    );
-                  }
-                  return renderMessage(item.message);
-                })}
-              </>
+              items.map(item => {
+                if (item.kind === 'cluster') {
+                  return (
+                    <SystemActivityCluster
+                      key={item.messages[0]?.id ?? 'cluster'}
+                      messages={item.messages}
+                      channelsByName={channelsByName}
+                      humansByName={humansByName}
+                    />
+                  );
+                }
+                return renderMessage(item.message);
+              })
             )}
           </div>
-        </>
+
+          {/* Back-to-bottom — same primitive as the channel (#task:1050
+              item 5). Appears once the user scrolls away from the tail. */}
+          {showScrollBottom ? (
+            <button
+              type="button"
+              aria-label="滚动到底部"
+              title="滚动到底部"
+              onClick={scrollToBottom}
+              className="absolute bottom-4 left-1/2 z-20 flex size-9 -translate-x-1/2 items-center justify-center rounded-full bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
+            >
+              <ArrowDown className="size-4" />
+            </button>
+          ) : null}
+        </div>
       )}
 
       <Composer
