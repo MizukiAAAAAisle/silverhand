@@ -551,6 +551,33 @@ export class MessageRepo {
       .map(messageRowWithTaskAssigneeToDto);
   }
 
+  /** All messages in a thread stream with `seq < beforeSeq`, ordered ASC.
+   *  Uncapped by design: backfilling a newly-followed agent must catch up the
+   *  COMPLETE prior thread history (§6.1) — a `LIMIT` here would silently drop
+   *  the replies nearest the current one (the most relevant context). If a
+   *  thread ever grows large enough that full backfill is a problem, the
+   *  answer is an explicit digest/truncation message in context, not a cap
+   *  that drops context invisibly. (`threadRootId` is the root message id;
+   *  the root itself carries NULL and is enqueued separately.) */
+  listStreamBelowSeq(
+    conversationId: string,
+    threadRootId: string,
+    beforeSeq: number,
+  ): MessageDto[] {
+    return this.db
+      .prepare<[string, string, number], MessageRowWithTaskAssignee>(
+        `SELECT m.*, aa.display_name AS task_assignee_name
+           FROM messages m
+           LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
+          WHERE m.conversation_id = ?
+            AND m.thread_root_id IS ?
+            AND m.seq < ?
+          ORDER BY m.seq ASC`,
+      )
+      .all(conversationId, threadRootId, beforeSeq)
+      .map(messageRowWithTaskAssigneeToDto);
+  }
+
   /** Fetch a message by id, scoped to one conversation. Returns null when
    *  the id does not belong to the conversation. Used by the send path to
    *  resolve a `--reply-to` target into its thread root. */

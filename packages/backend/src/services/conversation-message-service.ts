@@ -290,11 +290,6 @@ const REPLIED: AgentRunTerminalReason = 'replied';
 const MENTION_EXCERPT_LIMIT = 160;
 const START_FAILURE_ERROR_LIMIT = 240;
 const STALE_MESSAGE_LIMIT = 10;
-/** Cap on how many historical thread replies are backfilled into a
- *  newly-followed agent's inbox (§6.1). Threads are usually short; a thread
- *  exceeding this logs a truncation warning rather than silently dropping
- *  context. digest-vs-full above this is a 段2/runtime optimization. */
-const THREAD_BACKFILL_LIMIT = 500;
 
 function excerpt(s: string): string {
   const compact = s.replace(/\s+/g, ' ').trim();
@@ -1117,11 +1112,12 @@ export class ConversationMessageService {
   }
 
   /** Backfill prior thread context — the root (it anchors the thread) plus
-   *  replies with `seq < currentSeq` — into a newly-followed agent's inbox.
-   *  Ordered by seq, idempotent on (conversation, agent, message), and skips
-   *  the agent's own messages. Runs in the send transaction; the current
+   *  all replies with `seq < currentSeq` — into a newly-followed agent's
+   *  inbox. Ordered by seq, idempotent on (conversation, agent, message), and
+   *  skips the agent's own messages. Runs in the send transaction; the current
    *  reply is delivered separately afterwards so it is never double-enqueued
-   *  (§6.1). */
+   *  (§6.1). The catch-up is COMPLETE by design — no cap — so a mid-thread
+   *  follower never lands with a hole in the replies nearest the current one. */
   private backfillThreadHistory(
     conversationId: string,
     threadRootId: string,
@@ -1132,20 +1128,12 @@ export class ConversationMessageService {
     if (root && !(root.from_kind === 'agent' && root.from_agent_id === agentId)) {
       this.conversationInboxes.ensureDelivery(conversationId, agentId, root.id);
     }
-    const replies = this.messages.listAfterSeqInStream(
+    const replies = this.messages.listStreamBelowSeq(
       conversationId,
       threadRootId,
-      0,
-      THREAD_BACKFILL_LIMIT,
+      currentSeq,
     );
-    if (replies.length === THREAD_BACKFILL_LIMIT) {
-      this.logger.warn(
-        { conversationId, threadRootId, agentId, limit: THREAD_BACKFILL_LIMIT },
-        'conversation-message-service: thread backfill hit cap; oldest replies beyond cap not enqueued',
-      );
-    }
     for (const reply of replies) {
-      if (reply.seq >= currentSeq) continue;
       if (reply.from_kind === 'agent' && reply.from_agent_id === agentId) continue;
       this.conversationInboxes.ensureDelivery(conversationId, agentId, reply.id);
     }

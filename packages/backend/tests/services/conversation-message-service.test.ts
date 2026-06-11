@@ -1493,4 +1493,59 @@ describe('ConversationMessageService.sendMessage', () => {
       t.cleanup();
     }
   });
+
+  it('backfills the COMPLETE thread history for a large thread — never drops the newest replies', async () => {
+    const t = bootstrap();
+    try {
+      const carol = t.agents.create(
+        { name: 'carol', runtime: 'claude' },
+        t.localHostId,
+        'local',
+      );
+      t.workspaces.insertMembership(t.workspace.id, carol.id);
+      t.conversations.addAgent(t.channel.id, carol.id);
+
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root',
+      });
+      // A thread with more replies than the old 500 cap. Inserted directly so
+      // none of them register a follow — carol is pulled in only at the end.
+      const REPLY_COUNT = 520;
+      const replyIds: string[] = [];
+      for (let i = 0; i < REPLY_COUNT; i++) {
+        replyIds.push(
+          t.messages.insertForConversation({
+            conversationId: t.channel.id,
+            fromKind: 'agent',
+            fromAgentId: t.bob.id,
+            content: `reply ${i}`,
+            threadRootId: root.id,
+          }).id,
+        );
+      }
+
+      // mention carol → full backfill of root + every prior reply.
+      const mention = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: '@carol catch up on everything',
+        replyToMessageId: root.id,
+      });
+
+      const inbox = t.conversationInboxes
+        .listPending(t.channel.id, carol.id)
+        .map(i => i.message.id);
+      // root + all 520 replies, nothing dropped, current reply not enqueued.
+      expect(inbox).toEqual([root.id, ...replyIds]);
+      // Regression guard: the OLD `ORDER BY seq ASC LIMIT 500` kept the oldest
+      // 500 and dropped the newest 20 — the most relevant context.
+      expect(inbox).toContain(replyIds[REPLY_COUNT - 1]);
+      expect(inbox).not.toContain(mention.message.id);
+    } finally {
+      t.cleanup();
+    }
+  });
 });
