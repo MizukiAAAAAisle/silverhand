@@ -58,6 +58,31 @@ export const ConversationMessagesDtoSchema = z.object({
 });
 export type ConversationMessagesDto = z.infer<typeof ConversationMessagesDtoSchema>;
 
+export const ThreadFollowerStateDtoSchema = z.object({
+  /** Canonical reply-cluster root; the request may name either the root
+   *  message or any reply in that cluster. */
+  thread_root_id: z.string(),
+  /** Whether the current human viewer is subscribed to future delivery /
+   *  notification for this thread. This is not a permission bit. */
+  viewer_following: z.boolean(),
+  /** Agent followers that are still visible members of the parent channel.
+   *  Renderer uses this to filter channel-level run-state bubbles inside a
+   *  thread panel. */
+  follower_agent_ids: z.array(z.string()),
+});
+export type ThreadFollowerStateDto = z.infer<
+  typeof ThreadFollowerStateDtoSchema
+>;
+
+export const ThreadFollowMutationDtoSchema = z.object({
+  thread_root_id: z.string(),
+  changed: z.boolean(),
+  viewer_following: z.boolean(),
+});
+export type ThreadFollowMutationDto = z.infer<
+  typeof ThreadFollowMutationDtoSchema
+>;
+
 export const SendMessageInputSchema = z.object({
   content: z.string(),
   /** Optional attachment ids previously returned by the upload endpoint.

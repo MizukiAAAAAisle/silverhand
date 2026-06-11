@@ -623,6 +623,108 @@ export function createConversationMessagingApp(
     return c.json({ states });
   });
 
+  app.get(apiPaths.channelThreadFollowers(':id', ':rootMessageId'), c => {
+    const id = c.req.param('id');
+    const rootMessageId = c.req.param('rootMessageId');
+    if (!id || !rootMessageId) {
+      return c.json({ error: 'channel id and root message id required' }, 400);
+    }
+    const channel = conversations.getChannelLike(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    const principal = getUserPrincipal(c);
+    if (!canViewConversation(ctx, principal, channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const viewerUserId = requireViewerUserId(c);
+    if (!canViewOwnedState(ctx, principal, viewerUserId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    try {
+      const state = ctx.conversationMessageService.threadFollowerState({
+        conversationId: channel.id,
+        rootMessageId,
+        userId: viewerUserId,
+      });
+      return c.json({
+        thread_root_id: state.threadRootId,
+        viewer_following: state.viewerFollowing,
+        follower_agent_ids: state.followerAgentIds,
+      });
+    } catch (err) {
+      const mapped = conversationMessageServiceErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
+  });
+
+  app.post(apiPaths.channelThreadFollow(':id', ':rootMessageId'), c => {
+    const id = c.req.param('id');
+    const rootMessageId = c.req.param('rootMessageId');
+    if (!id || !rootMessageId) {
+      return c.json({ error: 'channel id and root message id required' }, 400);
+    }
+    const channel = conversations.getChannelLike(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    const principal = getUserPrincipal(c);
+    if (!canViewConversation(ctx, principal, channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const viewerUserId = requireViewerUserId(c);
+    if (!canViewOwnedState(ctx, principal, viewerUserId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    try {
+      const result = ctx.conversationMessageService.followHumanThread({
+        conversationId: channel.id,
+        rootMessageId,
+        userId: viewerUserId,
+      });
+      return c.json({
+        thread_root_id: result.threadRootId,
+        changed: result.changed,
+        viewer_following: true,
+      });
+    } catch (err) {
+      const mapped = conversationMessageServiceErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
+  });
+
+  app.delete(apiPaths.channelThreadFollow(':id', ':rootMessageId'), c => {
+    const id = c.req.param('id');
+    const rootMessageId = c.req.param('rootMessageId');
+    if (!id || !rootMessageId) {
+      return c.json({ error: 'channel id and root message id required' }, 400);
+    }
+    const channel = conversations.getChannelLike(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    const principal = getUserPrincipal(c);
+    if (!canViewConversation(ctx, principal, channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const viewerUserId = requireViewerUserId(c);
+    if (!canViewOwnedState(ctx, principal, viewerUserId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    try {
+      const result = ctx.conversationMessageService.unfollowHumanThread({
+        conversationId: channel.id,
+        rootMessageId,
+        userId: viewerUserId,
+      });
+      return c.json({
+        thread_root_id: result.threadRootId,
+        changed: result.changed,
+        viewer_following: false,
+      });
+    } catch (err) {
+      const mapped = conversationMessageServiceErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
+  });
+
   app.get(apiPaths.threadAgentRunStates(':id'), c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'thread id required' }, 400);

@@ -103,6 +103,10 @@ export const apiPaths = {
    *  used by the workspace-scoped query path. */
   archivedChannels: '/api/archived-channels',
   channelMessages: (id: string) => `/api/channels/${id}/messages`,
+  channelThreadFollowers: (id: string, rootMessageId: string) =>
+    `/api/channels/${id}/threads/${rootMessageId}/followers`,
+  channelThreadFollow: (id: string, rootMessageId: string) =>
+    `/api/channels/${id}/threads/${rootMessageId}/follow`,
   channelAgents: (id: string) => `/api/channels/${id}/agents`,
   channelAgentStart: (id: string, agentId: string) =>
     `/api/channels/${id}/agents/${agentId}/start`,

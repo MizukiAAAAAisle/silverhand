@@ -163,6 +163,7 @@ export type TargetErrorCode =
   | 'no_parent'
   | 'thread_not_found'
   | 'thread_not_child'
+  | 'legacy_thread_target_deprecated'
   | 'target_closed'
   | 'target_archived'
   | 'reply_target_not_found'
@@ -1063,17 +1064,10 @@ export class ConversationMessageService {
     rootMessageId: string;
     agentId: string;
   }): { threadRootId: string; changed: boolean } {
-    const root = this.messages.getInConversation(
+    const threadRootId = this.resolveExistingThreadRoot(
       params.conversationId,
       params.rootMessageId,
     );
-    if (!root) {
-      throw new TargetError(
-        'reply_target_not_found',
-        'thread root message not found in conversation',
-      );
-    }
-    const threadRootId = root.thread_root_id ?? root.id;
     const changed = this.db.transaction(() =>
       this.followAgent(
         params.conversationId,
@@ -1095,23 +1089,102 @@ export class ConversationMessageService {
     rootMessageId: string;
     agentId: string;
   }): { threadRootId: string; changed: boolean } {
-    const root = this.messages.getInConversation(
+    const threadRootId = this.resolveExistingThreadRoot(
       params.conversationId,
       params.rootMessageId,
     );
-    if (!root) {
-      throw new TargetError(
-        'reply_target_not_found',
-        'thread root message not found in conversation',
-      );
-    }
-    const threadRootId = root.thread_root_id ?? root.id;
     const { removed } = this.threadFollowers.remove(
       threadRootId,
       'agent',
       params.agentId,
     );
     return { threadRootId, changed: removed };
+  }
+
+  threadFollowerState(params: {
+    conversationId: string;
+    rootMessageId: string;
+    userId: string;
+  }): {
+    threadRootId: string;
+    viewerFollowing: boolean;
+    followerAgentIds: string[];
+  } {
+    const threadRootId = this.resolveExistingThreadRoot(
+      params.conversationId,
+      params.rootMessageId,
+    );
+    return {
+      threadRootId,
+      viewerFollowing: this.threadFollowers.isFollower(
+        threadRootId,
+        'human',
+        params.userId,
+      ),
+      followerAgentIds: this.threadFollowers
+        .listFollowerAgentsVisible(threadRootId)
+        .map(f => f.agent_id),
+    };
+  }
+
+  followHumanThread(params: {
+    conversationId: string;
+    rootMessageId: string;
+    userId: string;
+  }): { threadRootId: string; changed: boolean } {
+    const threadRootId = this.resolveExistingThreadRoot(
+      params.conversationId,
+      params.rootMessageId,
+    );
+    const { inserted } = this.threadFollowers.upsert({
+      threadRootId,
+      conversationId: params.conversationId,
+      principalKind: 'human',
+      principalId: params.userId,
+      source: 'manual',
+    });
+    return { threadRootId, changed: inserted };
+  }
+
+  unfollowHumanThread(params: {
+    conversationId: string;
+    rootMessageId: string;
+    userId: string;
+  }): { threadRootId: string; changed: boolean } {
+    const threadRootId = this.resolveExistingThreadRoot(
+      params.conversationId,
+      params.rootMessageId,
+    );
+    const { removed } = this.threadFollowers.remove(
+      threadRootId,
+      'human',
+      params.userId,
+    );
+    return { threadRootId, changed: removed };
+  }
+
+  private resolveExistingThreadRoot(
+    conversationId: string,
+    rootMessageId: string,
+  ): string {
+    const root = this.messages.getInConversation(
+      conversationId,
+      rootMessageId,
+    );
+    if (!root) {
+      const legacyThread = this.conversations.getThread(rootMessageId);
+      if (legacyThread) {
+        throw new TargetError(
+          'legacy_thread_target_deprecated',
+          `legacy isolated thread ${legacyThread.id} is read-only; use conversation:${legacyThread.id} for read-only history`,
+        );
+      }
+      throw new TargetError(
+        'reply_target_not_found',
+        'thread root message not found in conversation',
+      );
+    }
+    return root.thread_root_id ?? root.id;
   }
 
   private applyThreadFollowEffects(params: {

@@ -172,6 +172,16 @@ export const NON_GOVERNANCE_MUTATING_ROUTES: readonly NonGovernanceRouteDecl[] =
   },
   {
     method: 'POST',
+    path: '/api/channels/:id/threads/:rootMessageId/follow',
+    reason: 'thread follow subscription — current-viewer delivery state, view gate, not governance',
+  },
+  {
+    method: 'DELETE',
+    path: '/api/channels/:id/threads/:rootMessageId/follow',
+    reason: 'thread unfollow subscription — current-viewer delivery state, view gate, not governance',
+  },
+  {
+    method: 'POST',
     path: '/api/channels/:id/attachments',
     reason: 'upload an attachment — conversation post gate, member-level',
   },
