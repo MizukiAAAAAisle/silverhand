@@ -16,7 +16,7 @@
 import type { ChildProcess } from 'node:child_process';
 import type { AgentRunState } from '@silverhand/shared';
 import type { Driver } from '../../drivers/index.js';
-import type { RuntimeStartParams } from '../../protocol.js';
+import type { RuntimeDelivery, RuntimeStartParams } from '../../protocol.js';
 
 /** Tier name for the 3-tier init watchdog. Matches CM's
  *  `InitTimeoutReason` so the wire `runtime_init_timeout.timeout_reason`
@@ -54,6 +54,15 @@ export type RuntimePhase =
 export interface StartupDeliveryState {
   readonly deliveryIds: readonly number[];
   readonly deliveredUpToSeq?: number;
+  /**
+   * Per-delivery stream metadata for the batch (reply-cluster §6.4),
+   * one entry per id in `deliveryIds`. Present when the backend speaks
+   * the 段2 protocol; absent on a legacy backend, in which case the
+   * supervisor falls back to advancing the main stream by
+   * `deliveredUpToSeq`. The entry set MUST match `deliveryIds` exactly —
+   * the supervisor hard-rejects a drift at start time.
+   */
+  readonly deliveries?: readonly RuntimeDelivery[];
   /**
    * Option A v2 (Cindy `UMGu36zoTDVuKWXi`): the unencoded text the
    * daemon will encode + write at consume time using its in-process
@@ -97,13 +106,23 @@ export interface RuntimeHandle {
    *  stdio streams + removes listeners. */
   readonly child: ChildProcess;
   readonly lastDeliveredSeqPath: string;
-  /** Daemon-owned model-seen freshness boundary for this runtime's
-   *  current conversation. Unlike `lastDeliveredSeqPath`, this is
-   *  advanced only at input-admission points, not on bare stdin writes. */
-  observedSeq: number;
-  /** High-water seq for a batch delivered mid-turn but not yet admitted
-   *  as precedent context for a new model action. */
-  pendingAdmissionSeq: number | null;
+  /** Daemon-owned model-seen freshness boundary, keyed PER STREAM
+   *  (reply-cluster §6.4). `stream_key` is `'main'` for the channel's
+   *  main line or `thread:<rootMessageId>` for a reply cluster. A send
+   *  picks the seen value of the stream it targets; absence of a key
+   *  means "never observed" (treated as 0). Advanced only at
+   *  input-admission points, not on bare stdin writes. */
+  observedSeqByStream: Map<string, number>;
+  /** High-water seq, per stream, for a batch delivered mid-turn but not
+   *  yet admitted as precedent context for a new model action. Flushed
+   *  into `observedSeqByStream` at the next turn boundary. */
+  pendingAdmissionSeqByStream: Map<string, number>;
+  /** Bounded memory of where a `--reply-to <messageId>` send should go:
+   *  the message id the agent may reply to → that reply's target
+   *  `stream_key`. Populated as deliveries are admitted and as the
+   *  agent's own sends resolve. A reply target absent from this map is
+   *  "unknown" — the send omits seen+stream_key (Case A loose). */
+  replyTargetStreamByMessageId: Map<string, string>;
   /** True once an admitted input batch is expected to be driving the
    *  current model action. Cleared on turn_end/runtime resolution.
    *  This covers the pre-first-output window where runState is still

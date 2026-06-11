@@ -42,6 +42,17 @@ export type AgentSendStaleResolutionReason = z.infer<
 export const AgentSendMessageInputSchema = z.object({
   content: z.string(),
   target: SendMessageTargetSchema.optional(),
+  /** Reply-cluster anchor (v43/§6): when set, this send is a reply to
+   *  that message and lands in its thread stream. First reply to a
+   *  main-line message creates the thread; replying to an existing reply
+   *  joins the same root (no nested threads). */
+  reply_to_message_id: z.string().min(1).optional(),
+  /** Daemon's assertion of which per-stream boundary `seen_up_to_seq`
+   *  was read against (`'main'` or `thread:<rootMessageId>`). The backend
+   *  independently resolves the stream from `reply_to_message_id` and
+   *  hard-rejects a mismatch (§6.4). Observability + safety; absent on a
+   *  freshness-bypass / unknown-target send. */
+  stream_key: z.string().min(1).optional(),
   /** Runtime-observed target conversation seq for outbound freshness CAS.
    *  The CLI must only forward the value stamped by the runtime delivery
    *  path; it must not read the current latest seq at send time. */
@@ -79,6 +90,11 @@ export const AgentSendMessageOutputSchema = z.object({
    *  only to advance its local observed boundary after its own successful
    *  same-conversation send; it is not a room-current read. */
   message_seq: z.number().int().positive(),
+  /** Reply-cluster root the sent message belongs to (§6.4): NULL for a
+   *  main-line message, else the cluster's root message id. The daemon
+   *  uses it to learn the reply-target stream of the new message and of
+   *  the message it replied to. */
+  thread_root_id: z.string().nullable(),
 });
 export type AgentSendMessageOutput = z.infer<typeof AgentSendMessageOutputSchema>;
 

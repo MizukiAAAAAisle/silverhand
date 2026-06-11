@@ -298,6 +298,10 @@ export const AgentMessageSendParamsSchema = z
     agent_id: z.string().min(1),
     content: z.string(),
     target: SendMessageTargetSchema.optional(),
+    /** Reply-cluster anchor (§6): the message id this send replies to.
+     *  The daemon resolves it to a target stream_key + seen boundary
+     *  before forwarding to the backend. */
+    reply_to_message_id: z.string().min(1).optional(),
     attachment_ids: z.array(z.string().min(1)).optional(),
     stale_resolution_reason: AgentSendStaleResolutionReasonSchema.optional(),
     freshness_bypass: z.boolean().optional(),

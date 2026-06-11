@@ -50,6 +50,7 @@ import {
   type RuntimeStopAllResult,
   type RuntimeStopParams,
   type RuntimeStopResult,
+  type RuntimeDelivery,
   type RuntimeWakeParams,
   type RuntimeWakeResult,
 } from '../../protocol.js';
@@ -248,6 +249,31 @@ function safeSeq(value: number | undefined): number | null {
     : null;
 }
 
+/** Stream key for the channel's main line. */
+const MAIN_STREAM_KEY = 'main';
+
+/** Upper bound on the per-handle reply-target memory. A reply target
+ *  beyond this LRU window is treated as "unknown" (Case A loose) — the
+ *  send omits seen+stream_key rather than guessing the wrong stream. */
+const REPLY_TARGET_STREAM_CACHE_CAP = 4096;
+
+/** The stream a message LIVES in — what its arrival/our own send
+ *  advances as the observed boundary. `thread_root_id === null` ⇒ main
+ *  line; otherwise the reply cluster rooted at that message. */
+function streamKeyForMessage(threadRootId: string | null | undefined): string {
+  return threadRootId ? `thread:${threadRootId}` : MAIN_STREAM_KEY;
+}
+
+/** The stream a reply TO `messageId` is destined for: the cluster it
+ *  anchors (reply to a main-line message) or already belongs to (reply
+ *  to an existing reply, joining the same root — no nesting). */
+function replyTargetStreamKey(
+  messageId: string,
+  threadRootId: string | null | undefined,
+): string {
+  return `thread:${threadRootId ?? messageId}`;
+}
+
 function parsedStartsTurn(parsed: ParsedEvent): boolean {
   return (
     parsed.kind === 'thinking'
@@ -373,17 +399,19 @@ export class Supervisor implements SupervisorContract {
     this.emitRawRuntimeOutput = opts.emitRawRuntimeOutput ?? false;
   }
 
-  private advanceObservedSeq(
+  private advanceObservedStream(
     handle: RuntimeHandle,
+    streamKey: string,
     seq: number | undefined,
     source: string,
   ): void {
     const nextSeq = safeSeq(seq);
     if (nextSeq === null) return;
-    const prev = handle.observedSeq;
-    handle.observedSeq = Math.max(prev, nextSeq);
+    const prev = handle.observedSeqByStream.get(streamKey) ?? 0;
+    const observed = Math.max(prev, nextSeq);
+    handle.observedSeqByStream.set(streamKey, observed);
     handle.inputTurnActive = true;
-    if (handle.observedSeq !== prev) {
+    if (observed !== prev) {
       this.logger.warn(
         {
           kind: 'process',
@@ -391,24 +419,27 @@ export class Supervisor implements SupervisorContract {
           conversationId: handle.conversationId,
           agent_id: handle.agentId,
           source,
+          stream_key: streamKey,
           previous_seq: prev,
-          observed_seq: handle.observedSeq,
+          observed_seq: observed,
         },
         'runtime freshness observed seq advanced',
       );
     }
   }
 
-  private queueAdmissionSeq(
+  private queueAdmissionStream(
     handle: RuntimeHandle,
+    streamKey: string,
     seq: number | undefined,
     source: string,
   ): void {
     const nextSeq = safeSeq(seq);
     if (nextSeq === null) return;
-    const prev = handle.pendingAdmissionSeq ?? 0;
-    handle.pendingAdmissionSeq = Math.max(prev, nextSeq);
-    if (handle.pendingAdmissionSeq !== prev) {
+    const prev = handle.pendingAdmissionSeqByStream.get(streamKey) ?? 0;
+    const pending = Math.max(prev, nextSeq);
+    handle.pendingAdmissionSeqByStream.set(streamKey, pending);
+    if (pending !== prev) {
       this.logger.warn(
         {
           kind: 'process',
@@ -416,8 +447,9 @@ export class Supervisor implements SupervisorContract {
           conversationId: handle.conversationId,
           agent_id: handle.agentId,
           source,
+          stream_key: streamKey,
           previous_pending_seq: prev || null,
-          pending_admission_seq: handle.pendingAdmissionSeq,
+          pending_admission_seq: pending,
         },
         'runtime freshness pending admission queued',
       );
@@ -425,10 +457,113 @@ export class Supervisor implements SupervisorContract {
   }
 
   private admitPendingSeqForNewTurn(handle: RuntimeHandle, source: string): void {
-    const pending = handle.pendingAdmissionSeq;
-    if (pending === null) return;
-    handle.pendingAdmissionSeq = null;
-    this.advanceObservedSeq(handle, pending, source);
+    if (handle.pendingAdmissionSeqByStream.size === 0) return;
+    const pending = [...handle.pendingAdmissionSeqByStream.entries()];
+    handle.pendingAdmissionSeqByStream.clear();
+    for (const [streamKey, seq] of pending) {
+      this.advanceObservedStream(handle, streamKey, seq, source);
+    }
+  }
+
+  /** Record where a future `--reply-to <messageId>` should land, keeping
+   *  the per-handle memory bounded (insertion-order LRU). */
+  private rememberReplyTargetStream(
+    handle: RuntimeHandle,
+    messageId: string,
+    streamKey: string,
+  ): void {
+    const map = handle.replyTargetStreamByMessageId;
+    map.delete(messageId);
+    map.set(messageId, streamKey);
+    while (map.size > REPLY_TARGET_STREAM_CACHE_CAP) {
+      const oldest = map.keys().next().value;
+      if (oldest === undefined) break;
+      map.delete(oldest);
+    }
+  }
+
+  /**
+   * Admit a delivered batch into the per-stream observed boundary
+   * (reply-cluster §6.4). With structured `deliveries[]` each row
+   * advances (or queues) the stream it lives in and teaches the handle
+   * where a reply to that message would go. Without metadata (legacy
+   * backend) we fall back to the scalar high-water on the main stream.
+   * `admitNow=false` queues instead of advancing, for a mid-turn batch
+   * that becomes precedent only at the next turn boundary.
+   */
+  private admitDeliveryBatch(
+    handle: RuntimeHandle,
+    deliveries: readonly RuntimeDelivery[] | undefined,
+    deliveredUpToSeq: number | undefined,
+    admitNow: boolean,
+    source: string,
+  ): void {
+    if (deliveries && deliveries.length > 0) {
+      for (const delivery of deliveries) {
+        this.rememberReplyTargetStream(
+          handle,
+          delivery.message_id,
+          replyTargetStreamKey(delivery.message_id, delivery.thread_root_id),
+        );
+        const streamKey = streamKeyForMessage(delivery.thread_root_id);
+        if (admitNow) {
+          this.advanceObservedStream(handle, streamKey, delivery.seq, source);
+        } else {
+          this.queueAdmissionStream(handle, streamKey, delivery.seq, source);
+        }
+      }
+      return;
+    }
+    if (admitNow) {
+      this.advanceObservedStream(handle, MAIN_STREAM_KEY, deliveredUpToSeq, source);
+    } else {
+      this.queueAdmissionStream(handle, MAIN_STREAM_KEY, deliveredUpToSeq, source);
+    }
+  }
+
+  /** Hard-reject a batch whose per-delivery metadata id-set does not
+   *  match its `delivery_ids` (text and stream metadata must not drift —
+   *  reply-cluster §6.4). A legacy batch without `deliveries[]` is
+   *  allowed and validated as a no-op. Throws on mismatch (a backend
+   *  contract bug): the delivery is left un-acked so the failure is loud. */
+  private assertDeliveryMetadataConsistent(
+    conversationId: string,
+    agentId: string,
+    deliveryIds: readonly number[],
+    deliveries: readonly RuntimeDelivery[] | undefined,
+    context: string,
+  ): void {
+    if (!deliveries) return;
+    const idSet = new Set(deliveryIds);
+    const metaSet = new Set(deliveries.map(d => d.delivery_id));
+    let mismatch = idSet.size !== metaSet.size;
+    if (!mismatch) {
+      for (const id of idSet) {
+        if (!metaSet.has(id)) {
+          mismatch = true;
+          break;
+        }
+      }
+    }
+    if (mismatch) {
+      this.logger.error(
+        {
+          kind: 'process',
+          action: 'delivery_metadata_mismatch',
+          conversationId,
+          agent_id: agentId,
+          context,
+          delivery_ids: [...idSet],
+          metadata_ids: [...metaSet],
+        },
+        'delivery metadata id-set does not match delivery_ids (backend bug)',
+      );
+      throw new Error(
+        `delivery metadata mismatch in ${context}: `
+          + `delivery_ids=[${[...idSet].join(',')}] `
+          + `deliveries=[${[...metaSet].join(',')}]`,
+      );
+    }
   }
 
   private shouldAdmitDeliveryImmediately(handle: RuntimeHandle): boolean {
@@ -478,13 +613,43 @@ export class Supervisor implements SupervisorContract {
       params.agent_id,
     );
     const pendingStale = handle.pendingStaleEvent;
+    // Resolve which per-stream observed boundary this send is anchored to
+    // (reply-cluster §6.4):
+    //  - no reply_to            → main line (always known).
+    //  - reply_to we have seen  → that cluster's stream (known).
+    //  - reply_to we have NOT seen → unknown (Case A loose, Q1=A): omit
+    //    seen+stream_key so the backend skips freshness for this
+    //    first-touch send instead of falsely stale-ing it.
+    const replyTo = params.reply_to_message_id;
+    const targetStreamKey = replyTo
+      ? handle.replyTargetStreamByMessageId.get(replyTo)
+      : MAIN_STREAM_KEY;
+    const targetKnown = targetStreamKey !== undefined;
+    if (replyTo && !targetKnown) {
+      this.logger.info(
+        {
+          kind: 'process',
+          action: 'missing_reply_target_message',
+          conversationId: handle.conversationId,
+          agent_id: handle.agentId,
+          reply_to_message_id: replyTo,
+        },
+        'reply target unknown to daemon — sending without per-stream freshness (Case A)',
+      );
+    }
     const body: Record<string, unknown> = {
       content: params.content,
       ...(params.target ? { target: params.target } : {}),
+      ...(replyTo ? { reply_to_message_id: replyTo } : {}),
       ...(params.attachment_ids ? { attachment_ids: params.attachment_ids } : {}),
       ...(params.freshness_bypass
         ? { freshness_bypass: true }
-        : { seen_up_to_seq: handle.observedSeq }),
+        : targetKnown
+          ? {
+              seen_up_to_seq: handle.observedSeqByStream.get(targetStreamKey) ?? 0,
+              stream_key: targetStreamKey,
+            }
+          : {}),
       ...(pendingStale
         ? {
             stale_event_id: pendingStale.id,
@@ -509,7 +674,14 @@ export class Supervisor implements SupervisorContract {
       const stale = res.status === 409 ? extractStaleConflict(bodyText) : null;
       if (stale) {
         handle.pendingStaleEvent = stale;
-        this.advanceObservedSeq(handle, stale.currentSeq, 'message_stale_response');
+        if (targetKnown) {
+          this.advanceObservedStream(
+            handle,
+            targetStreamKey,
+            stale.currentSeq,
+            'message_stale_response',
+          );
+        }
       } else if (pendingStale) {
         handle.pendingStaleEvent = null;
       }
@@ -521,8 +693,31 @@ export class Supervisor implements SupervisorContract {
     if (typeof messageId !== 'string' || messageId.length === 0) {
       throw new Error('backend send-message response missing message_id');
     }
-    if (typeof messageSeq === 'number') {
-      this.advanceObservedSeq(handle, messageSeq, 'message_send_commit');
+    // Learn the reply-target stream of both the message we replied to and
+    // our own new message from the backend-resolved root, so a subsequent
+    // `--reply-to` of either resolves to the right stream.
+    const resolvedRoot =
+      typeof json['thread_root_id'] === 'string' ? json['thread_root_id'] : null;
+    if (replyTo) {
+      const stream = resolvedRoot
+        ? `thread:${resolvedRoot}`
+        : replyTargetStreamKey(replyTo, null);
+      this.rememberReplyTargetStream(handle, replyTo, stream);
+      this.rememberReplyTargetStream(handle, messageId, stream);
+    }
+    // Observed-advance asymmetry (Cindy ruling): a send into a KNOWN
+    // stream proves — via the per-stream CAS the backend just ran — there
+    // is no unseen gap, so advance that stream's observed to our own
+    // message. An UNKNOWN-target send only records the mapping above;
+    // advancing observed for a stream we have never read would defeat the
+    // dumb-loop guard.
+    if (targetKnown && typeof messageSeq === 'number') {
+      this.advanceObservedStream(
+        handle,
+        targetStreamKey,
+        messageSeq,
+        'message_send_commit',
+      );
     }
     handle.pendingStaleEvent = null;
     return {
@@ -789,10 +984,20 @@ export class Supervisor implements SupervisorContract {
     // startup_delivery, the runtime starts in `startup_pending` and
     // the gate stays closed until the supervisor settles the batch.
     // Without startup_delivery the gate is already open.
+    if (params.startup_delivery) {
+      this.assertDeliveryMetadataConsistent(
+        params.conversation_id,
+        params.agent_id,
+        params.startup_delivery.delivery_ids,
+        params.startup_delivery.deliveries,
+        'startup_delivery',
+      );
+    }
     const startupBatch = params.startup_delivery && !driver.oneShot
       ? {
           deliveryIds: [...params.startup_delivery.delivery_ids],
           deliveredUpToSeq: params.startup_delivery.delivered_up_to_seq,
+          deliveries: params.startup_delivery.deliveries,
           text: params.startup_delivery.text,
         }
       : null;
@@ -805,10 +1010,9 @@ export class Supervisor implements SupervisorContract {
       driver,
       child,
       lastDeliveredSeqPath: spawnPrep.lastDeliveredSeqPath,
-      observedSeq: driver.oneShot
-        ? safeSeq(params.startup_delivery?.delivered_up_to_seq) ?? 0
-        : 0,
-      pendingAdmissionSeq: null,
+      observedSeqByStream: new Map(),
+      pendingAdmissionSeqByStream: new Map(),
+      replyTargetStreamByMessageId: new Map(),
       inputTurnActive: driver.oneShot && !!params.startup_delivery,
       pendingStaleEvent: null,
       phase: startupBatch ? 'startup_pending' : 'spawning',
@@ -870,6 +1074,16 @@ export class Supervisor implements SupervisorContract {
     child.off('error', earlyChildErrorListener);
 
     if (driver.oneShot && params.startup_delivery) {
+      // oneShot drivers consume the startup batch at spawn time (no gate).
+      // Admit it into the per-stream observed map now so the agent's first
+      // send picks the right per-stream seen boundary.
+      this.admitDeliveryBatch(
+        handle,
+        params.startup_delivery.deliveries,
+        params.startup_delivery.delivered_up_to_seq,
+        true,
+        'oneshot_startup_admitted',
+      );
       void this.writeLastDeliveredSeq(
         handle,
         params.startup_delivery.delivered_up_to_seq,
@@ -1050,9 +1264,11 @@ export class Supervisor implements SupervisorContract {
 
     try {
       await this.writeStdinPayload(handle, encoded);
-      this.advanceObservedSeq(
+      this.admitDeliveryBatch(
         handle,
+        batch.deliveries,
         batch.deliveredUpToSeq,
+        true,
         'startup_delivery_admitted',
       );
       await this.writeLastDeliveredSeq(handle, batch.deliveredUpToSeq);
@@ -1479,6 +1695,13 @@ export class Supervisor implements SupervisorContract {
     const k = key(params.conversation_id, params.agent_id);
     const handle = this.handles.get(k);
     const passthroughDeliveryIds = [...params.delivery_ids];
+    this.assertDeliveryMetadataConsistent(
+      params.conversation_id,
+      params.agent_id,
+      params.delivery_ids,
+      params.deliveries,
+      'runtime_wake',
+    );
     if (!handle || handle.phase === 'exited') {
       return {
         delivered: false,
@@ -1543,19 +1766,13 @@ export class Supervisor implements SupervisorContract {
     const admitNow = this.shouldAdmitDeliveryImmediately(handle);
     try {
       await this.writeStdinPayload(handle, encoded);
-      if (admitNow) {
-        this.advanceObservedSeq(
-          handle,
-          params.delivered_up_to_seq,
-          'wake_delivery_admitted',
-        );
-      } else {
-        this.queueAdmissionSeq(
-          handle,
-          params.delivered_up_to_seq,
-          'wake_delivery_deferred',
-        );
-      }
+      this.admitDeliveryBatch(
+        handle,
+        params.deliveries,
+        params.delivered_up_to_seq,
+        admitNow,
+        admitNow ? 'wake_delivery_admitted' : 'wake_delivery_deferred',
+      );
       await this.writeLastDeliveredSeq(handle, params.delivered_up_to_seq);
     } catch (err) {
       this.logger.warn(

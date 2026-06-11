@@ -758,6 +758,51 @@ describe('ConversationMessageService.sendMessage', () => {
     }
   });
 
+  it('accepts a matching asserted stream_key and rejects a mismatched one', async () => {
+    const t = bootstrap();
+    try {
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'root question',
+      });
+      // Matching assertion (daemon resolved thread:<root> for a reply to root)
+      // passes through.
+      const ok = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'threaded answer',
+        replyToMessageId: root.id,
+        assertedStreamKey: `thread:${root.id}`,
+        seenUpToSeq: 0,
+      });
+      expect(ok.message.thread_root_id).toBe(root.id);
+      // A main-line send asserting 'main' also passes.
+      const mainOk = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        content: 'main line',
+        assertedStreamKey: 'main',
+        seenUpToSeq: root.seq,
+      });
+      expect(mainOk.message.thread_root_id).toBeNull();
+      // A mismatched assertion (daemon thinks main, backend resolves a thread)
+      // hard-rejects.
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          content: 'wrong stream',
+          replyToMessageId: root.id,
+          assertedStreamKey: 'main',
+          seenUpToSeq: 0,
+        }),
+      ).rejects.toMatchObject({ code: 'stream_key_mismatch' });
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('rejects a reply whose target is not in the conversation', async () => {
     const t = bootstrap();
     try {

@@ -3303,3 +3303,183 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
     }
   });
 });
+
+describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', () => {
+  it('keeps main and thread observed boundaries independent and picks the reply target stream seen', async () => {
+    const { supervisor } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    let nextSeq = 51;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const parsedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        postedBodies.push(parsedBody);
+        const seq = nextSeq++;
+        // Echo a resolved root for reply sends; main-line sends carry null.
+        const replyTo = parsedBody['reply_to_message_id'];
+        const threadRootId =
+          typeof replyTo === 'string'
+            ? replyTo === 'm51'
+              ? 'mRoot'
+              : replyTo
+            : null;
+        return new Response(
+          JSON.stringify({
+            message_id: `m${seq}`,
+            message_seq: seq,
+            thread_root_id: threadRootId,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      // A main-line delivery (mRoot @ seq 50) — advances observed[main]
+      // and teaches the daemon that a reply to mRoot opens thread:mRoot.
+      await supervisor.wake({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [50],
+        kind: 'message',
+        text: 'root message',
+        delivered_up_to_seq: 50,
+        deliveries: [
+          {
+            delivery_id: 50,
+            message_id: 'mRoot',
+            seq: 50,
+            thread_root_id: null,
+            delivery_kind: 'turn',
+          },
+        ],
+      });
+
+      // First reply to mRoot: thread:mRoot has never been observed → seen 0.
+      const reply1 = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'first reply',
+        reply_to_message_id: 'mRoot',
+      });
+      expect(reply1).toMatchObject({ ok: true, message_id: 'm51' });
+      expect(postedBodies[0]?.['reply_to_message_id']).toBe('mRoot');
+      expect(postedBodies[0]?.['stream_key']).toBe('thread:mRoot');
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(0);
+
+      // A reply to our own reply (m51) joins the same root; observed
+      // [thread:mRoot] was advanced to 51 by the prior send, independent
+      // of observed[main]=50.
+      const reply2 = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'second reply',
+        reply_to_message_id: 'm51',
+      });
+      expect(reply2).toMatchObject({ ok: true });
+      expect(postedBodies[1]?.['stream_key']).toBe('thread:mRoot');
+      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(51);
+
+      // A main-line send still sees the main boundary (50), untouched by
+      // the thread sends.
+      const mainSend = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'main line',
+      });
+      expect(mainSend).toMatchObject({ ok: true });
+      expect(postedBodies[2]?.['stream_key']).toBe('main');
+      expect(postedBodies[2]?.['seen_up_to_seq']).toBe(50);
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('omits seen+stream_key for an unknown reply target (Case A loose) and never advances observed', async () => {
+    const { supervisor } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(
+          JSON.stringify({
+            message_id: 'm77',
+            message_seq: 77,
+            thread_root_id: 'mGhost',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      const result = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'reply to a message I never saw',
+        reply_to_message_id: 'mGhost',
+      });
+      expect(result).toMatchObject({ ok: true, message_id: 'm77' });
+      expect(postedBodies[0]?.['reply_to_message_id']).toBe('mGhost');
+      expect(postedBodies[0]).not.toHaveProperty('seen_up_to_seq');
+      expect(postedBodies[0]).not.toHaveProperty('stream_key');
+
+      // The success taught the daemon mGhost's stream → a follow-up reply
+      // is now known and carries seen 0 (observed was never advanced).
+      const followup = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'follow-up reply',
+        reply_to_message_id: 'mGhost',
+      });
+      expect(followup).toMatchObject({ ok: true });
+      expect(postedBodies[1]?.['stream_key']).toBe('thread:mGhost');
+      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('hard-rejects a wake whose deliveries[] id-set does not match delivery_ids', async () => {
+    const { supervisor } = makeSupervisor();
+    try {
+      await supervisor.start(baseStartParams);
+      await expect(
+        supervisor.wake({
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          delivery_ids: [1, 2],
+          kind: 'message',
+          text: 'mismatched batch',
+          delivered_up_to_seq: 2,
+          deliveries: [
+            {
+              delivery_id: 1,
+              message_id: 'm1',
+              seq: 1,
+              thread_root_id: null,
+              delivery_kind: 'turn',
+            },
+          ],
+        }),
+      ).rejects.toThrow(/delivery metadata mismatch/);
+    } finally {
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+});

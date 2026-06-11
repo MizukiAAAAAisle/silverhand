@@ -251,7 +251,9 @@ export function conversationMessageServiceErrorResponse(
     const status =
       err.code === 'thread_not_found' || err.code === 'reply_target_not_found'
         ? 404
-        : err.code === 'target_closed' || err.code === 'target_archived'
+        : err.code === 'target_closed'
+          || err.code === 'target_archived'
+          || err.code === 'stream_key_mismatch'
           ? 409
           : 400;
     return c.json({ error: err.message, code: err.code }, status);

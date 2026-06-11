@@ -369,6 +369,8 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
         content: parsed.data.content,
         attachmentIds: parsed.data.attachment_ids ?? [],
         target: parsed.data.target,
+        replyToMessageId: parsed.data.reply_to_message_id,
+        assertedStreamKey: parsed.data.stream_key,
         seenUpToSeq: parsed.data.seen_up_to_seq,
         staleEventId: parsed.data.stale_event_id,
         staleResolutionReason: parsed.data.stale_resolution_reason,
@@ -377,6 +379,7 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json({
         message_id: result.message.id,
         message_seq: result.message.seq,
+        thread_root_id: result.message.thread_root_id,
       });
     } catch (err) {
       const mapped = conversationMessageServiceErrorResponse(c, err);

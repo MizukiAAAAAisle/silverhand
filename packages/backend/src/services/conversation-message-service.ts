@@ -67,6 +67,11 @@ export interface SendMessageInput {
    *  message creates the thread; replying to an existing reply joins the
    *  same root (no nested threads). See docs/thread-reply-cluster-v1.md. */
   replyToMessageId?: string;
+  /** Daemon's assertion of which per-stream boundary `seenUpToSeq` was
+   *  read against (`'main'` or `thread:<rootMessageId>`). When present it
+   *  is cross-checked against the stream the backend resolves from
+   *  `replyToMessageId`; a mismatch hard-rejects (§6.4). */
+  assertedStreamKey?: string;
   seenUpToSeq?: number;
   staleEventId?: string;
   staleResolutionReason?: AgentSendStaleResolutionReason;
@@ -160,7 +165,8 @@ export type TargetErrorCode =
   | 'thread_not_child'
   | 'target_closed'
   | 'target_archived'
-  | 'reply_target_not_found';
+  | 'reply_target_not_found'
+  | 'stream_key_mismatch';
 
 export class TargetError extends Error {
   constructor(
@@ -387,6 +393,7 @@ export class ConversationMessageService {
           targetConversation.id,
           input.replyToMessageId,
         );
+        this.assertStreamKeyConsistent(input, threadRootId);
         const attachmentIds = input.attachmentIds ?? [];
         const snapshots = this.resolveAttachmentSnapshots(targetConversation, attachmentIds);
         const { message, skippedFreshnessReason } =
@@ -707,6 +714,35 @@ export class ConversationMessageService {
       );
     }
     return replied.thread_root_id ?? replied.id;
+  }
+
+  /** Cross-check the daemon's asserted `stream_key` against the stream the
+   *  backend resolved from `reply_to`. They must agree, otherwise the
+   *  daemon picked the wrong per-stream seen boundary and the freshness
+   *  CAS would be meaningless (§6.4). A backend contract bug → hard
+   *  reject + warn. No-op when the caller did not assert a stream_key. */
+  private assertStreamKeyConsistent(
+    input: SendMessageInput,
+    threadRootId: string | null,
+  ): void {
+    if (input.assertedStreamKey === undefined) return;
+    const canonical = threadRootId ? `thread:${threadRootId}` : 'main';
+    if (input.assertedStreamKey === canonical) return;
+    this.logger.warn(
+      {
+        conversationId: input.conversationId,
+        actorKind: input.actor.kind,
+        replyToMessageId: input.replyToMessageId ?? null,
+        asserted_stream_key: input.assertedStreamKey,
+        resolved_stream_key: canonical,
+      },
+      'conversation-message-service: stream_key assertion mismatch (rejecting)',
+    );
+    throw new TargetError(
+      'stream_key_mismatch',
+      `stream_key assertion ${input.assertedStreamKey} does not match `
+        + `resolved stream ${canonical}`,
+    );
   }
 
   private logStaleResolution(args: {
