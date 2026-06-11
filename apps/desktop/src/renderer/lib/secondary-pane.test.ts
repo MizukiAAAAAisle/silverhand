@@ -265,11 +265,10 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
     expect(out).toEqual({ source: 'side', status: 'loading', id: 'c-foreign' });
   });
 
-  it('returns null when /t/<tid> is not in lookup (no ephemeral here)', () => {
-    // App.tsx folds ephemeralThread into channelsForLookup, so a
-    // freshly-created thread DOES resolve at runtime. The selector
-    // itself, given just the persisted lookup, returns null and lets
-    // the parent-mismatch effect handle the bad-id case.
+  it('returns null when /t/<tid> is not in lookup', () => {
+    // Legacy thread ids must resolve from the persisted workspace channel
+    // list. The reply-cluster UI no longer creates child conversations, so
+    // there is no ephemeral "just-created thread" lookup path.
     const out = selectSecondaryDescriptor(
       { sideConversationId: null, threadId: 't-deleted' },
       channels,
@@ -649,9 +648,8 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
       closed_at: null,
       archived_at: null,
       // The whole point: ChannelView's workspace_id is the FOREIGN
-      // one, not the primary's. ChannelView's `useChannelThreads` /
-      // `MessageList`'s `useStartThread` will then target the right
-      // workspace cache.
+      // one, not the primary's. Workspace-scoped hooks inside ChannelView
+      // then target the right workspace cache.
       workspace_id: 'w-2',
     });
     // ChannelView's `channelKind` projects from the FOREIGN workspace,

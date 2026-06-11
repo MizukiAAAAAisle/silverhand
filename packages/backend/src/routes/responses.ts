@@ -25,12 +25,6 @@ import {
   TargetError,
 } from '../services/conversation-message-service.js';
 import {
-  MembershipError as ThreadMembershipError,
-  MessageError as ThreadMessageError,
-  ParentError as ThreadParentError,
-  SeedAgentError,
-} from '../services/thread-service.js';
-import {
   ScheduleError,
   type ScheduleErrorCode,
 } from '../services/schedule-service.js';
@@ -287,36 +281,6 @@ export function conversationMessageServiceErrorResponse(
         },
       },
       409,
-    );
-  }
-  return null;
-}
-
-export function threadServiceErrorResponse(c: Context, err: unknown): Response | null {
-  if (err instanceof ThreadMessageError) {
-    return c.json({ error: err.message, code: err.code }, 404);
-  }
-  if (err instanceof ThreadParentError) {
-    const status = err.code === 'parent_not_found' ? 404 : 409;
-    return c.json({ error: err.message, code: err.code }, status);
-  }
-  if (err instanceof ThreadMembershipError) {
-    return c.json(
-      {
-        error: err.message,
-        code: err.code,
-        ...(err.agentId ? { agent_id: err.agentId } : {}),
-      },
-      400,
-    );
-  }
-  if (err instanceof SeedAgentError) {
-    return c.json({ error: err.message, code: err.code }, 404);
-  }
-  if (isRepoError(err)) {
-    return c.json(
-      { error: err.message, code: err.code },
-      repoErrorStatusMap[err.code] ?? 400,
     );
   }
   return null;

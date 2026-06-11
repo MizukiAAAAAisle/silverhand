@@ -44,7 +44,6 @@ import {
   conversationMessageServiceErrorResponse,
   placementErrorResponse,
   runtimeStartErrorResponse,
-  threadServiceErrorResponse,
 } from './responses.js';
 import {
   ClearSessionExitTimeoutError,
@@ -746,24 +745,6 @@ export function createConversationMessagingApp(
     return markConversationRead(thread.id, c);
   });
 
-  app.get(apiPaths.channelThreads(':id'), c => {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'channel id required' }, 400);
-    const channel = conversations.getChannelLike(id);
-    if (!channel) return c.json({ error: 'channel not found' }, 404);
-    if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    const threads = timedRouteSpan(
-      ctx,
-      'conversation.threads.summary',
-      { conversationId: channel.id, kind: channel.kind },
-      () => conversations.listThreadSummariesForParent(channel.id),
-      result => ({ threadCount: result.length }),
-    );
-    return c.json({ threads });
-  });
-
   app.get(apiPaths.saved, c => {
     const principal = getUserPrincipal(c);
     return c.json({ saved: saved.listForUser(principal.userId) });
@@ -862,34 +843,6 @@ export function createConversationRuntimeApp(
       visibleUserId: viewerUserId,
     });
     return c.json({ query: parsed.data, results });
-  });
-
-  app.post(apiPaths.messageThread(':id'), async c => {
-    const messageId = c.req.param('id');
-    if (!messageId) return c.json({ error: 'message id required' }, 400);
-    const message = messages.getById(messageId);
-    if (!message) return c.json({ error: 'message not found' }, 404);
-    if (!canPostToConversation(ctx, getUserPrincipal(c), message.conversation_id)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    // Thread creation in an agent-backed conversation does not dispatch any
-    // runtime command; it only creates the child conversation row. The downstream
-    // "first message to the thread agent" path is what surfaces typed
-    // `host_attach_pending` if no daemon is attached.
-    try {
-      const result = await ctx.threadService.createThreadFromMessage({
-        messageId,
-        actor: getUserPrincipal(c),
-      });
-      return c.json(
-        { thread_id: result.thread.id, thread: result.thread, reused: result.reused },
-        result.reused ? 200 : 201,
-      );
-    } catch (err) {
-      const mapped = threadServiceErrorResponse(c, err);
-      if (mapped) return mapped;
-      throw err;
-    }
   });
 
   app.post('/api/channels/:id/agents/:aid/start', async c => {

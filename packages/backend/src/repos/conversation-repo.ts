@@ -1,7 +1,6 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import type {
-  ChildSessionLimits,
   ChannelConversationDto,
   ConversationAgentDto,
   ConversationAgentRow,
@@ -429,75 +428,6 @@ export class ConversationRepo {
     return this.listThreadsForChannel(parentId);
   }
 
-  countActiveChildren(parentId: string): number {
-    const row = this.db
-      .prepare<[string], { c: number }>(
-        `SELECT COUNT(*) AS c
-         FROM conversations
-         WHERE parent_conversation_id = ? AND closed_at IS NULL`,
-      )
-      .get(parentId);
-    return row?.c ?? 0;
-  }
-
-  findOpenThreadChild(parentId: string, anchorMessageId: string): ThreadDto | null {
-    const row = this.db
-      .prepare<[string, string], ConversationRow>(
-        `SELECT c.*
-         FROM conversations c
-         JOIN messages m ON m.conversation_id = c.id
-         WHERE c.parent_conversation_id = ?
-           AND c.closed_at IS NULL
-           AND c.kind = 'thread'
-           AND m.from_kind = 'system'
-           AND json_extract(m.metadata, '$.subtype') = 'thread_anchor'
-           AND json_extract(m.metadata, '$.quoted_message_id') = ?
-         ORDER BY c.created_at DESC
-         LIMIT 1`,
-      )
-      .get(parentId, anchorMessageId);
-    return row ? rowToThread(row, anchorMessageId) : null;
-  }
-
-  listThreadSummariesForParent(
-    parentId: string,
-  ): Array<{ thread_id: string; anchor_message_id: string | null; reply_count: number }> {
-    return this.db
-      .prepare<
-        [string, string],
-        { thread_id: string; anchor_message_id: string | null; reply_count: number }
-      >(
-        `SELECT
-           c.id AS thread_id,
-           json_extract(anchor.metadata, '$.quoted_message_id') AS anchor_message_id,
-           COALESCE(stats.reply_count, 0) AS reply_count
-         FROM conversations c
-         LEFT JOIN (
-           SELECT
-             m.conversation_id,
-             SUM(CASE WHEN m.from_kind != 'system' THEN 1 ELSE 0 END) AS reply_count,
-             MIN(CASE
-               WHEN m.from_kind = 'system'
-                AND json_extract(m.metadata, '$.subtype') = 'thread_anchor'
-               THEN m.seq
-               ELSE NULL
-             END) AS anchor_seq
-           FROM messages m
-           JOIN conversations tc ON tc.id = m.conversation_id
-           WHERE tc.parent_conversation_id = ?
-             AND tc.kind = 'thread'
-           GROUP BY m.conversation_id
-         ) stats ON stats.conversation_id = c.id
-         LEFT JOIN messages anchor
-           ON anchor.conversation_id = c.id
-          AND anchor.seq = stats.anchor_seq
-         WHERE c.parent_conversation_id = ?
-           AND c.kind = 'thread'
-         ORDER BY c.created_at ASC`,
-      )
-      .all(parentId, parentId);
-  }
-
   insertChannel(params: {
     workspaceId: string;
     workspacePath: string;
@@ -536,39 +466,11 @@ export class ConversationRepo {
     channelId: string;
     title: string;
     spawnedByAgentId?: string | null;
-    spawnCtx?: SpawnLimitContext;
   }): ThreadDto {
     const parent = this.getChannelLike(params.channelId);
     if (!parent) throw repoError('parent_not_found', 'parent channel not found');
     if (parent.closed_at !== null) {
       throw repoError('parent_closed', 'parent channel is closed');
-    }
-    if (params.spawnCtx) {
-      const { limits, lastSpawnAtByAgent } = params.spawnCtx;
-      if (limits.max_concurrent_per_parent !== null) {
-        const active = this.countActiveChildren(parent.id);
-        if (active >= limits.max_concurrent_per_parent) {
-          throw repoError(
-            'concurrent_limit',
-            `thread limit reached: ${active}/${limits.max_concurrent_per_parent} active under this channel`,
-          );
-        }
-      }
-      if (
-        limits.spawn_cooldown_seconds !== null &&
-        params.spawnedByAgentId
-      ) {
-        const last = lastSpawnAtByAgent.get(params.spawnedByAgentId);
-        if (
-          last !== undefined &&
-          Date.now() - last < limits.spawn_cooldown_seconds * 1000
-        ) {
-          throw repoError(
-            'spawn_cooldown',
-            `spawn cooldown active: must wait ${limits.spawn_cooldown_seconds}s between spawns`,
-          );
-        }
-      }
     }
     const row = this.insert({
       workspaceId: parent.workspace_id,
@@ -578,9 +480,6 @@ export class ConversationRepo {
       parentConversationId: parent.id,
       spawnedByAgentId: params.spawnedByAgentId ?? null,
     });
-    if (params.spawnCtx && params.spawnedByAgentId) {
-      params.spawnCtx.lastSpawnAtByAgent.set(params.spawnedByAgentId, row.created_at);
-    }
     return rowToThread(row);
   }
 
@@ -895,12 +794,6 @@ export class ConversationRepo {
       .get(threadId);
     return row?.anchor_message_id ?? null;
   }
-}
-
-export interface SpawnLimitContext {
-  limits: ChildSessionLimits;
-  /** Last spawn timestamps per agent — maintained in-process. */
-  lastSpawnAtByAgent: Map<string, number>;
 }
 
 export interface ArchivedAggregateRow {

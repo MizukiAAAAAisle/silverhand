@@ -307,75 +307,43 @@ GET    /api/saved                 → SavedMessageDto[]
 
 ## 7. Thread
 
-**Status**: Spec → PR4（依赖 PR2）
+**Status**: Shipped as reply cluster.
 
-参考 [`core-design.md` §3.6](./core-design.md#36-thread--取代-slock-thread-的真隔离方案)。原方案只支持 agent 通过 MCP 工具 spawn；本节扩展 **human 可以从 UI 触发**。
-
-> 命名说明：UI 概念叫 **Thread**（IM 中广泛使用的"在某条消息上展开子讨论"的术语）。底层落到 `conversations` 表的 child conversation 上 —— 所有 Thread 都是 child conversation（`kind='thread'`），但 agent 通过 `create_thread` MCP 工具自己开的 child conversation **不是 Thread**（没有 `thread_anchor`）。
+UI 概念仍叫 **Thread**：在某条消息下展开子讨论。它不再创建
+`kind='thread'` child conversation；thread reply 是父 channel 中的一条普通
+message，写入 `messages.thread_root_id = <root message id>`。
 
 ### 7.1 后端 API
 
-```
-POST /api/messages/:id/thread
-  Body: {}  （目前无参数；将来可加 initial_prompt override）
-  Returns: { thread_id: string }
-```
+- 主 channel 消息窗口：`GET /api/channels/:id/messages` 只返回 main stream
+  (`thread_root_id IS NULL`)；返回体带 `reply_counts_by_root` sidecar，用于根
+  message 的 reply 徽标。
+- Thread 面板消息窗口：
+  `GET /api/channels/:id/messages?thread_root_id=<root_message_id>`，返回根消息
+  + 该 root 下的 replies，复用 `ConversationMessagesDto`。
+- Human 在 thread 中回复：
+  `POST /api/channels/:id/messages` body 带
+  `reply_to_message_id: <root_or_reply_message_id>`。后端将 reply 归一到 canonical
+  root。
+- Agent CLI 对应：`silverhand message send --reply-to <message_id>`、
+  `message history --target thread:<root_message_id>`、
+  `thread follow|unfollow --root <root_message_id>`。
 
-实现要点（对应 `routes.ts` 中 `POST /api/messages/:id/thread` 路由）：
-
-1. 找到原 message + 其 channel + workspace
-2. 拒绝条件：
-   - 原 channel 已 `closed_at != null` → 409
-   - 原 channel 已经是 thread (`parent_conversation_id != null`) → 400（硬限 1 层）
-3. 幂等：同源 message 已有未关闭 thread → 复用（`findOpenThreadChild`）
-4. INSERT `conversations`：`parent_conversation_id = 原 channel.id`，`spawned_by_agent_id = null`（human spawn 标识；schema 已允许 null），`title = "Thread: " + 截短(原 message body, 50)`
-5. members：默认**只拉发件 agent**（如果原 message `from_kind='agent'` 且 `from_agent_id` 非空）。如果原 message 是 user 发的，先用父 workspace 的 default agent（dm_agent_id 或第一个 member）兜底——这个 case 实际是"我（user）想就自己刚才说的话开个 thread"，需要 v1 时具体测下手感。
-6. 写两条初始消息：
-   - **第一条 system（带 metadata）—— thread anchor**：
-     ```
-     content: 'Quoted from #<workspace> · @<sender>:\n\n> <quote 原 body, 截断>'
-     metadata: {
-       subtype: 'thread_anchor',
-       quoted_message_id: <id>,
-       quoted_channel_id: <channel.id>,
-       quoted_workspace_name, quoted_content, quoted_from_kind,
-       quoted_from_agent_id, quoted_agent_name, quoted_created_at,
-     }
-     ```
-     UI 渲染时识别 metadata，把锚点变成"跳回原消息"按钮。snapshot 字段冻结原消息内容/时间，原消息后续编辑不影响 thread 锚点。
-   - **第二条 system（onboarding）**：
-     ```
-     content: imperative onboarding 文案，例如：
-       'Onboarding task (system-triggered): You (@<agent>) just joined a thread in #<workspace>.
-        Context: the user wants to dig deeper into the quoted message above.
-        1) Read the quoted message.
-        2) Send one short greeting via silverhand message send acknowledging the topic.
-        3) Then await user input.
-        You can call silverhand message send --target parent to ask the parent channel for context if needed.
-        Call close_thread(summary) when this thread reaches a conclusion.'
-     metadata: { subtype: 'onboarding' }
-     ```
-7. **不主动 spawn thread 进程**——等用户在 UI thread pane 第一次发消息或显式 start 时再 spawn（同 §3.6 第 5 步）。
-8. 返回 `thread_id`。
-
-后续追加 member：复用现有 `Manage Members` 对话框（PR4 顺便扩展使其支持 thread，或 v1 阶段只能从 workspace level 加，加进 workspace 后 thread 自动可见）。**MVP 版本只允许默认成员**，"后加 member" 留 v1.1。
+旧 `kind='thread'` conversation 是只读 fossil：可通过 `/api/threads/:id/...`
+读取历史；写入、自动 spawn、agent `thread create/close` 已冻结/下线。若需要隔离
+上下文或并行长任务，创建新的 channel，而不是 thread。
 
 ### 7.2 前端
 
-- App.tsx 新增 state `openThreadId: string | null`
-- `MessageItem.onStartThread` → POST `/thread` → `setOpenThreadId(thread_id)` + 切到该 workspace 下也包含 thread 的 channel list
-- Main view 改成：
-  ```tsx
-  <SplitPane
-    left={<ChannelView channel={parent} />}
-    right={openThreadId ? <ChannelView channel={thread} onClose={() => setOpenThreadId(null)} /> : null}
-    defaultRatio={0.5}
-    storageKey="silverhand.layout.split-ratio"
-  />
-  ```
-- 关闭 thread（点 thread 头部的 ✕，或 thread 自己 close_thread）→ split 收回，parent 占满
-- thread 已经在 ChannelsSidebar tree 里也能看到（缩进显示），点击 sidebar 里的 thread 等价于触发 `setOpenThreadId(id)` + parent 自动选中
-- 同一时间只允许一个 thread pane：再点别的 message 的 Thread，提示"关闭当前 thread 才能开新 thread"或直接替换（v1 暂定**直接替换**+ confirm）
+- Message row 的 reply count / Thread affordance 打开右侧 `ThreadPanel`
+  (`?cluster=<root_message_id>` 作为过渡期 URL 参数，避免和 legacy `/t/:threadId`
+  命名冲突)。
+- `ThreadPanel` 固定 pin 根消息，replies 列表读取
+  `?thread_root_id=<root>`，底部 composer 发送
+  `reply_to_message_id=<root>`。
+- 主 channel 列表不内联 thread replies；新 reply 通过 WS 更新根消息的
+  `reply_counts_by_root` 徽标，面板内按 root 过滤 append。
+- Channel sidebar 不展示 thread children；thread 不是导航树节点。
 
 ---
 

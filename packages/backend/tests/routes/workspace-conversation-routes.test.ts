@@ -4,6 +4,7 @@ import {
   encodeUserPrincipalHeader,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
@@ -285,15 +286,16 @@ describe('workspace/conversation routes', () => {
     expect((await http(t).get(`/api/threads/${channelId}/messages`)).status)
       .toBe(404);
 
-    const msgBody = await (
-      await http(t).post(`/api/channels/${channelId}/messages`, {
-        content: 'start a thread here',
-      })
-    ).json() as any;
-    const threadBody = await (
-      await http(t).post(`/api/messages/${msgBody.message.id}/thread`)
-    ).json() as any;
-    const threadId = threadBody.thread_id;
+    const conversations = new ConversationRepo(t.ctx.db);
+    const thread = conversations.insertThread({
+      channelId,
+      title: 'legacy thread',
+    });
+    conversations.addAgent(thread.id, agentBody.agent.id);
+    for (const member of conversations.listUsers(channelId)) {
+      conversations.addUser(thread.id, member.user_id);
+    }
+    const threadId = thread.id;
 
     expect((await http(t).get(`/api/channels/${threadId}/messages`)).status)
       .toBe(404);

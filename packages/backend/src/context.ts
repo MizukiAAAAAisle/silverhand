@@ -9,7 +9,6 @@ import type { ConversationMessageService } from './services/conversation-message
 import type { IdleReaperService } from './services/idle-reaper-service.js';
 import type { ScheduleService } from './services/schedule-service.js';
 import type { TaskService } from './services/task-service.js';
-import type { ThreadService } from './services/thread-service.js';
 import type { UserService } from './services/user-service.js';
 import type { BlobFileStorage } from './storage/blob-file-storage.js';
 import type { AgentTokenStore } from './auth/agent-token-store.js';
@@ -138,8 +137,6 @@ export interface BackendContext {
   channelService: ChannelService;
   /** Application layer that owns user/agent send-message side effects. */
   conversationMessageService: ConversationMessageService;
-  /** Application layer that owns legacy message-anchored thread creation. */
-  threadService: ThreadService;
   /** Application layer that owns task create / claim / unclaim / status side effects. */
   taskService: TaskService;
   /** Agent-owned cron-like scheduler. Owns its own setInterval/setTimeout
@@ -147,8 +144,6 @@ export interface BackendContext {
   scheduleService: ScheduleService;
   /** Process-local idle runtime reaper. Owns its own setInterval lifecycle. */
   idleReaperService: IdleReaperService;
-  /** Per-process state: last child-conversation spawn timestamp per agent (cooldown). */
-  lastSpawnAtByAgent: Map<string, number>;
   /** In-process pub/sub for live UI updates. */
   events: ScopeEventBus;
   /** How the per-spawn PATH shim should invoke the Silverhand CLI. */

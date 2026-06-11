@@ -63,7 +63,6 @@ import { IdleReaperService } from '../../src/services/idle-reaper-service.js';
 import { canAgentUseCapability } from '../../src/permissions.js';
 import { ScheduleService } from '../../src/services/schedule-service.js';
 import { TaskService } from '../../src/services/task-service.js';
-import { ThreadService } from '../../src/services/thread-service.js';
 import { UserService } from '../../src/services/user-service.js';
 import { UserRepo } from '../../src/repos/user-repo.js';
 import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.js';
@@ -886,11 +885,9 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     userService,
     channelService: undefined as unknown as ChannelService,
     conversationMessageService: undefined as unknown as ConversationMessageService,
-    threadService: undefined as unknown as ThreadService,
     taskService: undefined as unknown as TaskService,
     scheduleService: undefined as unknown as ScheduleService,
     idleReaperService: undefined as unknown as IdleReaperService,
-    lastSpawnAtByAgent: new Map(),
     events: new ScopeEventBus(),
     silverhandCliLauncher: { command: 'noop', args: [] },
     agentTokens: new AgentTokenStore(),
@@ -940,18 +937,6 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,
-  });
-  ctx.threadService = new ThreadService({
-    db,
-    conversations: new ConversationRepo(db),
-    messages: new MessageRepo(db),
-    agents: new AgentRepo(db),
-    workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
-    runtimeHost: ctx.runtimeHost,
-    events: ctx.events,
-    logger: silentLogger,
-    serverConfig: () => ctx.serverConfig,
-    lastSpawnAtByAgent: ctx.lastSpawnAtByAgent,
   });
   ctx.taskService = new TaskService({
     db,

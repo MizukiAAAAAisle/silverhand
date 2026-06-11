@@ -70,7 +70,6 @@ import { ChannelService } from './services/channel-service.js';
 import { ConversationMessageService } from './services/conversation-message-service.js';
 import { ScheduleService } from './services/schedule-service.js';
 import { IdleReaperService } from './services/idle-reaper-service.js';
-import { ThreadService } from './services/thread-service.js';
 import { TaskService } from './services/task-service.js';
 import { UserService } from './services/user-service.js';
 import { UserRepo } from './repos/user-repo.js';
@@ -341,11 +340,9 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     userService,
     channelService: undefined as unknown as ChannelService,
     conversationMessageService: undefined as unknown as ConversationMessageService,
-    threadService: undefined as unknown as ThreadService,
     taskService: undefined as unknown as TaskService,
     scheduleService: undefined as unknown as ScheduleService,
     idleReaperService: undefined as unknown as IdleReaperService,
-    lastSpawnAtByAgent: new Map(),
     events: new ScopeEventBus(),
     silverhandCliLauncher,
     agentTokens: new AgentTokenStore(),
@@ -430,18 +427,6 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger,
-  });
-  ctx.threadService = new ThreadService({
-    db,
-    conversations: new ConversationRepo(db),
-    messages: new MessageRepo(db),
-    agents: new AgentRepo(db),
-    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
-    runtimeHost: ctx.runtimeHost,
-    events: ctx.events,
-    logger,
-    serverConfig: () => ctx.serverConfig,
-    lastSpawnAtByAgent: ctx.lastSpawnAtByAgent,
   });
   ctx.taskService = new TaskService({
     db,

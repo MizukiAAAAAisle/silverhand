@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
@@ -31,6 +32,37 @@ async function createWorkspaceChannel(
   };
 }
 
+function createLegacyThread(
+  t: TestApp,
+  channelId: string,
+  opts: { anchorMessageId?: string; title?: string } = {},
+) {
+  const conversations = new ConversationRepo(t.ctx.db);
+  const messages = new MessageRepo(t.ctx.db);
+  const thread = conversations.insertThread({
+    channelId,
+    title: opts.title ?? 'Legacy thread',
+  });
+  for (const member of conversations.listAgents(channelId)) {
+    conversations.addAgent(thread.id, member.agent_id);
+  }
+  for (const member of conversations.listUsers(channelId)) {
+    conversations.addUser(thread.id, member.user_id);
+  }
+  if (opts.anchorMessageId) {
+    messages.insertForConversation({
+      conversationId: thread.id,
+      fromKind: 'system',
+      content: 'Legacy thread anchor',
+      metadata: {
+        subtype: 'thread_anchor',
+        quoted_message_id: opts.anchorMessageId,
+      },
+    });
+  }
+  return thread;
+}
+
 describe('canonical channel/thread routes', () => {
   let t: TestApp | null = null;
   afterEach(() => {
@@ -52,15 +84,15 @@ describe('canonical channel/thread routes', () => {
         content: 'thread anchor',
       })
     ).json() as any;
-    const created = await (
-      await http(t).post(`/api/messages/${msg.message.id}/thread`)
-    ).json() as any;
+    const thread = createLegacyThread(t, channelId, {
+      anchorMessageId: msg.message.id,
+    });
 
     for (const path of [
       `/api/channels/${channelId}/stream`,
       `/api/channels/${channelId}/events`,
-      `/api/threads/${created.thread_id}/stream`,
-      `/api/threads/${created.thread_id}/events`,
+      `/api/threads/${thread.id}/stream`,
+      `/api/threads/${thread.id}/events`,
     ]) {
       expect((await http(t).get(path)).ok).toBe(false);
     }
@@ -350,16 +382,16 @@ describe('canonical channel/thread routes', () => {
       fromUserId: 'local',
       content: 'legacy anchor',
     });
-    const legacy = await (
-      await http(t).post(`/api/messages/${legacyAnchor.id}/thread`)
-    ).json() as any;
+    const legacy = createLegacyThread(t, channelId, {
+      anchorMessageId: legacyAnchor.id,
+    });
     const deprecated = await http(t).get(
-      `/api/channels/${channelId}/messages?thread_root_id=${legacy.thread_id}`,
+      `/api/channels/${channelId}/messages?thread_root_id=${legacy.id}`,
     );
     expect(deprecated.status).toBe(400);
     const deprecatedBody = (await deprecated.json()) as any;
     expect(deprecatedBody.code).toBe('legacy_thread_target_deprecated');
-    expect(deprecatedBody.error).toContain(`conversation:${legacy.thread_id}`);
+    expect(deprecatedBody.error).toContain(`conversation:${legacy.id}`);
   });
 
   it('human channel sends can reply to root messages and existing replies', async () => {
@@ -436,11 +468,11 @@ describe('canonical channel/thread routes', () => {
         content: 'legacy root',
       })
     ).json() as any;
-    const legacy = await (
-      await http(t).post(`/api/messages/${root.message.id}/thread`)
-    ).json() as any;
+    const legacy = createLegacyThread(t, channelId, {
+      anchorMessageId: root.message.id,
+    });
     const legacyWrite = await http(t).post(
-      `/api/threads/${legacy.thread_id}/messages`,
+      `/api/threads/${legacy.id}/messages`,
       {
         content: 'should stay read-only',
         reply_to_message_id: root.message.id,
@@ -515,51 +547,34 @@ describe('canonical channel/thread routes', () => {
     expect(okBody.has_more_after).toBe(false);
   });
 
-  it('creates a thread from a channel message and enforces kind guards', async () => {
+  it('serves legacy thread reads and enforces kind guards', async () => {
     t = buildTestApp();
-    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
     const msg = await (
       await http(t).post(`/api/channels/${channelId}/messages`, {
         content: 'start a thread here',
       })
     ).json() as any;
-    t.fake.starts = [];
-    t.fake.delivered = [];
+    const thread = createLegacyThread(t, channelId, {
+      anchorMessageId: msg.message.id,
+    });
 
-    const created = await (
-      await http(t).post(`/api/messages/${msg.message.id}/thread`)
-    ).json() as any;
-    expect(typeof created.thread_id).toBe('string');
-    expect(created.thread.id).toBe(created.thread_id);
-    expect(created.thread.channel_id).toBe(channelId);
-    expect(created.thread.parent_conversation_id).toBe(channelId);
-
-    expect((await http(t).get(`/api/channels/${created.thread_id}/messages`)).status)
+    expect((await http(t).get(`/api/channels/${thread.id}/messages`)).status)
       .toBe(404);
     expect((await http(t).get(`/api/threads/${channelId}/messages`)).status)
       .toBe(404);
-    expect((await http(t).get(`/api/threads/${created.thread_id}/messages`)).status)
+    expect((await http(t).get(`/api/threads/${thread.id}/messages`)).status)
       .toBe(200);
     const threadMessages = await (
-      await http(t).get(`/api/threads/${created.thread_id}/messages`)
+      await http(t).get(`/api/threads/${thread.id}/messages`)
     ).json() as any;
-    const onboarding = threadMessages.messages.find(
-      (m: any) => m.metadata?.subtype === 'onboarding',
+    const anchor = threadMessages.messages.find(
+      (m: any) => m.metadata?.subtype === 'thread_anchor',
     );
-    expect(onboarding).toBeDefined();
-    expect(t.fake.delivered).toEqual([
-      {
-        conversationId: created.thread_id,
-        agentId: agentIds.alice,
-        messageId: onboarding.id,
-      },
-    ]);
-    expect(t.fake.starts).toEqual([
-      { conversationId: created.thread_id, agentId: agentIds.alice },
-    ]);
+    expect(anchor).toBeDefined();
   });
 
-  it('rejects human writes to legacy threads while keeping summaries readable', async () => {
+  it('rejects human writes to legacy threads and retires public thread summaries', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
     const msg = await (
@@ -567,34 +582,23 @@ describe('canonical channel/thread routes', () => {
         content: 'topic',
       })
     ).json() as any;
-    const created = await (
-      await http(t).post(`/api/messages/${msg.message.id}/thread`)
-    ).json() as any;
+    const thread = createLegacyThread(t, channelId, {
+      anchorMessageId: msg.message.id,
+    });
 
-    const post = await http(t).post(`/api/threads/${created.thread_id}/messages`, {
+    const post = await http(t).post(`/api/threads/${thread.id}/messages`, {
       content: 'thread reply',
     });
     expect(post.status).toBe(409);
     expect(await post.json()).toMatchObject({ code: 'legacy_thread_read_only' });
-    const threads = await (
-      await http(t).get(`/api/channels/${channelId}/threads`)
-    ).json() as any;
-    expect(threads.threads).toMatchObject([
-      {
-        thread_id: created.thread_id,
-        anchor_message_id: msg.message.id,
-        reply_count: 0,
-      },
-    ]);
+    expect((await http(t).get(`/api/channels/${channelId}/threads`)).status)
+      .toBe(404);
 
     t.ctx.db
       .prepare(`UPDATE conversations SET closed_at = ?, status = 'archived' WHERE id = ?`)
-      .run(Date.now(), created.thread_id);
-    const closedThreads = await (
-      await http(t).get(`/api/channels/${channelId}/threads`)
-    ).json() as any;
-    expect(closedThreads.threads.map((thread: any) => thread.thread_id))
-      .toContain(created.thread_id);
+      .run(Date.now(), thread.id);
+    expect((await http(t).get(`/api/threads/${thread.id}/messages`)).status)
+      .toBe(200);
   });
 
   it('serves the global message unread summary keyed by workspace/sidebar ids', async () => {
@@ -700,16 +704,16 @@ describe('canonical channel/thread routes', () => {
         content: 'topic',
       })
     ).json() as any;
-    const created = await (
-      await http(t).post(`/api/messages/${msg.message.id}/thread`)
-    ).json() as any;
+    const created = createLegacyThread(t, channelId, {
+      anchorMessageId: msg.message.id,
+    });
     const stop = await http(t).post(
-      `/api/threads/${created.thread_id}/agents/${agentIds.alice}/stop`,
+      `/api/threads/${created.id}/agents/${agentIds.alice}/stop`,
       { mode: 'soft', directive: 'pause' },
     );
     expect(stop.status).toBe(200);
     expect(t.fake.stops).toContainEqual({
-      conversationId: created.thread_id,
+      conversationId: created.id,
       agentId: agentIds.alice,
       mode: 'soft',
       directive: 'pause',
@@ -751,14 +755,20 @@ describe('canonical channel/thread routes', () => {
         content: 'topic',
       })
     ).json() as any;
-    const created = await (
-      await viewer.post(`/api/messages/${msg.message.id}/thread`)
-    ).json() as any;
-    const writeThread = await viewer.post(`/api/threads/${created.thread_id}/messages`, {
+    const thread = createLegacyThread(t, channelId, {
+      anchorMessageId: msg.message.id,
+    });
+    new MessageRepo(t.ctx.db).insertForConversation({
+      conversationId: thread.id,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'existing fossil reply',
+    });
+    const writeThread = await viewer.post(`/api/threads/${thread.id}/messages`, {
       content: 'thread msg',
     });
     expect(writeThread.status).toBe(409);
-    const markThread = await viewer.post(`/api/threads/${created.thread_id}/mark-read`);
+    const markThread = await viewer.post(`/api/threads/${thread.id}/mark-read`);
     expect(markThread.status).toBe(200);
     expect(await markThread.json()).toEqual({ last_read_seq: 2 });
   });

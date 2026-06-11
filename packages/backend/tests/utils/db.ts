@@ -85,7 +85,7 @@ export function openTestDb(options: OpenTestDbOptions = {}): {
   // require explicit `workspace_users` / `conversation_users`
   // membership for human principals. Production code adds the viewer
   // through routes/services (POST /api/workspaces, ChannelService,
-  // ThreadService, createAgentWithHome). Many tests bypass those
+  // createAgentWithHome). Many tests bypass those
   // surfaces and create workspaces/conversations directly via repos —
   // they would otherwise lose user access. These triggers snapshot
   // ALL fixture users into membership on every workspace/conversation

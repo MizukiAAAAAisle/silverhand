@@ -52,6 +52,9 @@ function seedLegacyThread(
   for (const agentId of memberAgentIds) {
     conversations.addAgent(thread.id, agentId);
   }
+  for (const member of conversations.listUsers(channelId)) {
+    conversations.addUser(thread.id, member.user_id);
+  }
   return { thread_id: thread.id };
 }
 
@@ -79,9 +82,7 @@ describe('message routes', () => {
         content: 'topic',
       })
     ).json() as any;
-    const thread = await (
-      await http(t).post(`/api/messages/${channelPost.message.id}/thread`)
-    ).json() as any;
+    const thread = seedLegacyThread(t, channelId, 'legacy child', []);
     const threadPost = await http(t).post(`/api/threads/${thread.thread_id}/messages`, {
       content: 'thread reply',
     });
@@ -95,13 +96,6 @@ describe('message routes', () => {
         {
           kind: 'message',
           payload: { message: expect.objectContaining({ id: channelPost.message.id }) },
-        },
-        {
-          kind: 'thread_updated',
-          payload: {
-            parent_conversation_id: channelId,
-            thread_id: thread.thread_id,
-          },
         },
       ]),
     );

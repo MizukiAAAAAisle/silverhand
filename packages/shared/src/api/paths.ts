@@ -112,7 +112,6 @@ export const apiPaths = {
     `/api/channels/${id}/agents/${agentId}/clear-session`,
   channelAgentRunStates: (id: string) => `/api/channels/${id}/agent-run-states`,
   channelClose: (id: string) => `/api/channels/${id}/close`,
-  channelThreads: (id: string) => `/api/channels/${id}/threads`,
   channelStop: (id: string) => `/api/channels/${id}/stop`,
   channelResume: (id: string) => `/api/channels/${id}/resume`,
   channelMarkRead: (id: string) => `/api/channels/${id}/mark-read`,
@@ -120,7 +119,6 @@ export const apiPaths = {
   conversationChannel: (id: string) => `/api/channels/${id}`,
   conversationChannelMessages: (id: string) => `/api/channels/${id}/messages`,
   conversationChannelAgents: (id: string) => `/api/channels/${id}/agents`,
-  conversationChannelThreads: (id: string) => `/api/channels/${id}/threads`,
   thread: (id: string) => `/api/threads/${id}`,
   threadMessages: (id: string) => `/api/threads/${id}/messages`,
   threadAgents: (id: string) => `/api/threads/${id}/agents`,
@@ -131,9 +129,6 @@ export const apiPaths = {
   threadAgentClearSession: (id: string, agentId: string) =>
     `/api/threads/${id}/agents/${agentId}/clear-session`,
   threadAgentRunStates: (id: string) => `/api/threads/${id}/agent-run-states`,
-  threadClose: (id: string) => `/api/threads/${id}/close`,
-  threadStop: (id: string) => `/api/threads/${id}/stop`,
-  threadResume: (id: string) => `/api/threads/${id}/resume`,
   threadMarkRead: (id: string) => `/api/threads/${id}/mark-read`,
 
   /** Identity + routing metadata for ANY conversation by id (channel /
@@ -178,10 +173,6 @@ export const apiPaths = {
   // single message lookup — used by thread anchor preview to backfill
   // old rows whose metadata snapshot is missing (pre-PR4-fix data).
   message: (id: string) => `/api/messages/${id}`,
-
-  // human-triggered child conversation ("Thread" on a chat message).
-  // Per docs/app-layout.md §7.
-  messageThread: (id: string) => `/api/messages/${id}/thread`,
 
   // legacy host-wide app settings. Runtime proxy is daemon-local now.
   settings: '/api/settings',

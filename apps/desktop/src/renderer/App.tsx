@@ -260,14 +260,6 @@ function RegisteredAppShell(): JSX.Element {
     isPrimePendingFor,
   } = useMessageJumpController();
 
-  // Holds the newly-created thread for the brief window between
-  // nav.toThread() firing and the channels query refetch completing.
-  // Without this, thread would be null on the first render after
-  // navigation and the split pane wouldn't appear until the refetch lands.
-  // Keyed by threadId so we never leak a stale channel into the
-  // wrong split pane.
-  const [ephemeralThread, setEphemeralThread] = useState<ChannelListItem | null>(null);
-
   // The original message id anchored by the currently-open thread. Set
   // by the child ChannelView via onThreadAnchorResolved; consumed by
   // the parent ChannelView to render that row with a persistent
@@ -389,15 +381,6 @@ function RegisteredAppShell(): JSX.Element {
   //     the legacy `openThreadId ?? selectedChannelId` semantic by
   //     letting a resolved secondary win over primary.
   //
-  // Ephemeral threads (just created via "Reply" — not yet in the
-  // channels cache for the brief window before invalidateQueries lands)
-  // are folded into the lookup so the secondary pane appears
-  // immediately rather than blinking in a frame later.
-  const channelsForLookup = useMemo<ChannelListItem[]>(() => {
-    if (!ephemeralThread) return channels;
-    if (channels.some(c => c.id === ephemeralThread.id)) return channels;
-    return [...channels, ephemeralThread];
-  }, [channels, ephemeralThread]);
   const primaryPointer = useMemo<ConversationPointer | null>(() => {
     if (!selectedChannelId) return null;
     const hit = channels.find(c => c.id === selectedChannelId);
@@ -414,10 +397,10 @@ function RegisteredAppShell(): JSX.Element {
     () =>
       selectSecondaryDescriptor(
         { sideConversationId, threadId: openThreadId },
-        channelsForLookup,
+        channels,
         sideRef,
       ),
-    [sideConversationId, openThreadId, channelsForLookup, sideRef],
+    [sideConversationId, openThreadId, channels, sideRef],
   );
   // Workspace metadata for a `?side` resolved descriptor flows through
   // `secondaryViewInputs` below — no separate memo needed. The four
@@ -693,11 +676,8 @@ function RegisteredAppShell(): JSX.Element {
   const parentChannel = selectedChannel?.kind === 'thread'
     ? channels.find(s => s.id === selectedChannel.parent_conversation_id) ?? null
     : null;
-  // Secondary pane: resolved channel object for ChannelView. Pulled
-  // from `channelsForLookup` (which already folds in `ephemeralThread`),
-  // so a freshly-created thread renders immediately rather than blinking
-  // until the channels query refetch lands.
-  // PR-1: thread-path source resolves through `channelsForLookup`. PR-2:
+  // Secondary pane: resolved channel object for ChannelView.
+  // PR-1: thread-path source resolves through the workspace channel list. PR-2:
   // `?side` source resolves through the ref hook — secondaryChannel is
   // null in that case (the lookup may not contain a cross-workspace
   // conversation), and the secondary ChannelDescriptor is built from
@@ -707,8 +687,8 @@ function RegisteredAppShell(): JSX.Element {
       return null;
     }
     if (secondaryDescriptor.source !== 'thread-path') return null;
-    return channelsForLookup.find(c => c.id === secondaryDescriptor.id) ?? null;
-  }, [secondaryDescriptor, channelsForLookup]);
+    return channels.find(c => c.id === secondaryDescriptor.id) ?? null;
+  }, [secondaryDescriptor, channels]);
   // PR-1: only enable the fullscreen toggle for the legacy thread-path
   // source. `?side` panes don't get fullscreen toggle yet — that lives
   // in a follow-up that needs to teach `useNav` to write `?fullscreen=1`
@@ -718,11 +698,11 @@ function RegisteredAppShell(): JSX.Element {
   const conversationRefsById = useMemo(() => {
     const m = new Map<string, ConversationReference>();
     const topLevelById = new Map(
-      channelsForLookup
+      channels
         .filter(item => item.kind !== 'thread')
         .map(item => [item.id, item] as const),
     );
-    for (const item of channelsForLookup) {
+    for (const item of channels) {
       if (item.kind === 'thread') {
         const parent = topLevelById.get(item.channel_id);
         m.set(item.id, {
@@ -741,20 +721,7 @@ function RegisteredAppShell(): JSX.Element {
       }
     }
     return m;
-  }, [channelsForLookup]);
-
-  // Clear ephemeral once the real channels list includes this thread,
-  // or when the URL no longer points at this thread.
-  useEffect(() => {
-    if (!ephemeralThread) return;
-    if (ephemeralThread.id !== openThreadId) {
-      setEphemeralThread(null);
-      return;
-    }
-    if (channels.some(s => s.id === ephemeralThread.id)) {
-      setEphemeralThread(null);
-    }
-  }, [ephemeralThread, openThreadId, channels]);
+  }, [channels]);
 
   // IPC: tell the main process which conversation the user is focused
   // on. Drives tray/dock badging and the events window. Schema is
