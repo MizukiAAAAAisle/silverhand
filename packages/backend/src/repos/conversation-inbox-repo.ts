@@ -6,20 +6,34 @@ import type { MessageRow } from '@silverhand/shared';
  * message was posted. Drained on spawn and at safe delivery boundaries.
  */
 
+/** Per-delivery semantics (§6.2). `turn`: the agent was @mentioned /
+ *  explicitly targeted and should consider responding. `observe`: the agent
+ *  is a thread follower; the message enters its context but does not demand a
+ *  response. Decided at delivery creation, persisted, never re-derived. */
+export type InboxDeliveryKind = 'turn' | 'observe';
+
 export interface PendingConversationInboxItem {
   inboxId: number;
   message: MessageRow;
+  deliveryKind: InboxDeliveryKind;
 }
 
 export interface ClaimedConversationInboxItem extends PendingConversationInboxItem {
   inFlightOwner: string;
 }
 
-type JoinedRow = MessageRow & { inbox_id: number };
+type JoinedRow = MessageRow & { inbox_id: number; delivery_kind: string | null };
 type DeliveryRow = {
   id: number;
   delivered_at: number | null;
 };
+
+/** Pre-v44 rows and plain main-line deliveries store NULL → read as 'turn',
+ *  preserving the legacy behavior where every delivered message is
+ *  response-eligible. */
+function coalesceDeliveryKind(raw: string | null): InboxDeliveryKind {
+  return raw === 'observe' ? 'observe' : 'turn';
+}
 
 export interface ConversationDeliveryRecord {
   inboxId: number;
@@ -33,23 +47,25 @@ export class ConversationInboxRepo {
     conversationId: string,
     agentId: string,
     messageId: string,
+    deliveryKind: InboxDeliveryKind = 'turn',
   ): ConversationDeliveryRecord {
-    return this.ensureDelivery(conversationId, agentId, messageId);
+    return this.ensureDelivery(conversationId, agentId, messageId, deliveryKind);
   }
 
   ensureDelivery(
     conversationId: string,
     agentId: string,
     messageId: string,
+    deliveryKind: InboxDeliveryKind = 'turn',
   ): ConversationDeliveryRecord {
     this.db
       .prepare(
         `INSERT INTO conversation_inboxes
-         (conversation_id, agent_id, message_id, delivered_at, created_at)
-         VALUES (?, ?, ?, NULL, ?)
+         (conversation_id, agent_id, message_id, delivered_at, delivery_kind, created_at)
+         VALUES (?, ?, ?, NULL, ?, ?)
          ON CONFLICT(conversation_id, agent_id, message_id) DO NOTHING`,
       )
-      .run(conversationId, agentId, messageId, Date.now());
+      .run(conversationId, agentId, messageId, deliveryKind, Date.now());
     const row = this.deliveryRow(conversationId, agentId, messageId);
     if (!row) throw new Error('conversation inbox delivery lookup failed');
     return { inboxId: row.id, deliveredAt: row.delivered_at };
@@ -61,7 +77,7 @@ export class ConversationInboxRepo {
   ): PendingConversationInboxItem[] {
     const rows = this.db
       .prepare<[string, string], JoinedRow>(
-        `SELECT i.id AS inbox_id, m.*
+        `SELECT i.id AS inbox_id, i.delivery_kind, m.*
          FROM conversation_inboxes i
          JOIN messages m ON m.id = i.message_id
          WHERE i.conversation_id = ?
@@ -72,9 +88,10 @@ export class ConversationInboxRepo {
          ORDER BY i.id ASC`,
       )
       .all(conversationId, agentId);
-    return rows.map(({ inbox_id, ...message }) => ({
+    return rows.map(({ inbox_id, delivery_kind, ...message }) => ({
       inboxId: inbox_id,
       message,
+      deliveryKind: coalesceDeliveryKind(delivery_kind),
     }));
   }
 
@@ -104,7 +121,7 @@ export class ConversationInboxRepo {
     // future stale in-flight watchdog. Current replay correctness is owned by
     // the per-connection `in_flight_owner` lease plus disconnect sweep.
     const select = this.db.prepare<[string, string], JoinedRow>(
-      `SELECT i.id AS inbox_id, m.*
+      `SELECT i.id AS inbox_id, i.delivery_kind, m.*
          FROM conversation_inboxes i
          JOIN messages m ON m.id = i.message_id
         WHERE i.conversation_id = ?
@@ -126,12 +143,13 @@ export class ConversationInboxRepo {
     return this.db.transaction(() => {
       const rows = select.all(conversationId, agentId);
       const claimed: ClaimedConversationInboxItem[] = [];
-      for (const { inbox_id, ...message } of rows) {
+      for (const { inbox_id, delivery_kind, ...message } of rows) {
         const changed = update.run(inFlightOwner, now, inbox_id).changes;
         if (changed === 0) continue;
         claimed.push({
           inboxId: inbox_id,
           message,
+          deliveryKind: coalesceDeliveryKind(delivery_kind),
           inFlightOwner,
         });
       }

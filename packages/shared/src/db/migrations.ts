@@ -2795,6 +2795,26 @@ export const migrations: Migration[] = [
       SELECT id, NULL, latest_message_seq FROM conversations;
     `,
   },
+  {
+    version: 44,
+    name: 'conversation_inbox_delivery_kind',
+    up: `
+      -- Reply-cluster delivery semantics (cut2 段2): each inbox row records
+      -- whether the delivery is a 'turn' (the agent was @mentioned / explicitly
+      -- targeted and should consider responding) or an 'observe' (the agent is
+      -- a thread follower; the message enters its context but does not demand a
+      -- response). The kind is decided at delivery-creation time and is NOT
+      -- re-derivable later: a backfilled historical reply that happens to
+      -- mention the agent is still 'observe', so recomputing from message text
+      -- at wake time would wrongly flip it to 'turn'. See
+      -- docs/thread-reply-cluster-v1.md §6.2.
+      --
+      -- Nullable with no default: every pre-v44 row (and any plain main-line
+      -- delivery) is read as 'turn' by the repo's COALESCE, preserving today's
+      -- behavior where every delivered message is response-eligible.
+      ALTER TABLE conversation_inboxes ADD COLUMN delivery_kind TEXT;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

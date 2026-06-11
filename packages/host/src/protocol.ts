@@ -557,6 +557,30 @@ export type RuntimeStateDto = z.infer<typeof RuntimeStateDtoSchema>;
 
 // ── runtime_start ───────────────────────────────────────────────────
 
+/**
+ * Per-delivery wire metadata attached to a startup/wake batch so the
+ * daemon can maintain a PER-STREAM observed boundary and resolve
+ * `--reply-to` targets it has seen (reply-cluster §6.4). One entry per
+ * delivered inbox row; the entry set MUST match the batch's
+ * `delivery_ids` exactly (daemon hard-rejects a mismatch — text and
+ * metadata must not drift). `thread_root_id === null` ⇒ the message lives
+ * on the main line. `delivery_kind` is decided at delivery creation and is
+ * per-delivery, never batch-level (a startup batch can mix historical
+ * `observe` rows with the current `turn` row). The scalar
+ * `delivered_up_to_seq` stays as a legacy/diagnostic high-water; observed
+ * authority is this array, advanced per stream.
+ */
+export const RuntimeDeliverySchema = z
+  .object({
+    delivery_id: z.number().int(),
+    message_id: z.string().min(1),
+    seq: z.number().int().nonnegative(),
+    thread_root_id: z.string().min(1).nullable(),
+    delivery_kind: z.enum(['turn', 'observe']),
+  })
+  .strict();
+export type RuntimeDelivery = z.infer<typeof RuntimeDeliverySchema>;
+
 export const RuntimeStartParamsSchema = z
   .object({
     conversation_id: z.string().min(1),
@@ -572,6 +596,7 @@ export const RuntimeStartParamsSchema = z
       .object({
         delivery_ids: z.array(z.number().int()).min(1),
         delivered_up_to_seq: z.number().int().nonnegative().optional(),
+        deliveries: z.array(RuntimeDeliverySchema).optional(),
         text: RuntimeMessageTextSchema,
       })
       .strict()
@@ -760,6 +785,7 @@ export const RuntimeWakeParamsSchema = z
     agent_id: z.string().min(1),
     delivery_ids: z.array(z.number().int()).min(1),
     delivered_up_to_seq: z.number().int().nonnegative().optional(),
+    deliveries: z.array(RuntimeDeliverySchema).optional(),
     kind: z.enum(['message', 'schedule_fire']),
     /** Unencoded message text (Option A v2). Daemon's
      *  `Supervisor.wake()` calls

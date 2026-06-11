@@ -151,6 +151,18 @@ export interface DriverDeliveryView {
  * `deliveryIds` carries every inbox row the combined text covers.
  * Coordinator treats them as one atomic ack group.
  */
+/** Per-delivery wire metadata carried alongside a wake / startup batch so
+ *  the daemon can maintain a per-stream observed boundary and resolve
+ *  `--reply-to` targets it has seen (§6.4). One entry per delivered inbox
+ *  row. `thread_root_id === null` ⇒ the message lives on the main line. */
+export interface RuntimeDelivery {
+  delivery_id: number;
+  message_id: string;
+  seq: number;
+  thread_root_id: string | null;
+  delivery_kind: 'turn' | 'observe';
+}
+
 export interface LiveDeliveryRequest {
   /** Atomic group of inbox row ids this single `text` covers. Singleton
    *  for live deliverMessage; multi when the caller pre-combined. All
@@ -159,6 +171,13 @@ export interface LiveDeliveryRequest {
   deliveryIds: readonly number[];
   /** Highest message seq covered by this text payload. */
   deliveredUpToSeq?: number;
+  /** Per-delivery wire metadata for the daemon's per-stream observed
+   *  boundary (§6.4). One entry per `deliveryIds` member; carries the
+   *  message's stream (`thread_root_id`) and `delivery_kind`. The daemon
+   *  advances `observedSeqByStream` from this — NOT from the scalar
+   *  `deliveredUpToSeq`, which mixes streams. Optional only for legacy
+   *  callers/tests; production paths always populate it. */
+  deliveries?: readonly RuntimeDelivery[];
   /** Stable dedup key. For singleton groups, the row's message id; for
    *  pre-combined groups, an arbitrary key the caller picks (typically
    *  the first row's message id). Coordinator's enqueue skips a new
@@ -246,6 +265,7 @@ export interface CoordinatorBridge {
     agent_id: string;
     delivery_ids: number[];
     delivered_up_to_seq?: number;
+    deliveries?: RuntimeDelivery[];
     kind: 'message' | 'schedule_fire';
     text: string;
   }): Promise<RuntimeWakeResult>;
@@ -999,6 +1019,11 @@ export class RuntimeDeliveryCoordinator {
   ): Promise<LiveDeliveryDecision> {
     const text = this.combineText(batch);
     const deliveryIds = batch.flatMap(item => [...item.deliveryIds]);
+    // Flatten per-delivery metadata across the (possibly pre-combined) batch
+    // so the daemon advances observed per stream, not from the scalar high-
+    // water. Kept consistent with `deliveryIds` — the daemon hard-rejects a
+    // wake whose id sets disagree.
+    const deliveries = batch.flatMap(item => [...(item.deliveries ?? [])]);
     let result: RuntimeWakeResult;
     try {
       result = await this.bridge.runtimeWake({
@@ -1006,6 +1031,7 @@ export class RuntimeDeliveryCoordinator {
         agent_id: agentId,
         delivery_ids: deliveryIds,
         delivered_up_to_seq: maxDeliveredUpToSeq(batch),
+        ...(deliveries.length > 0 ? { deliveries } : {}),
         kind: 'message',
         text,
       });

@@ -43,7 +43,7 @@ import {
   type ReapIdleRuntimesOptions,
   type ReapIdleRuntimesResult,
 } from './agent-runtime-host.js';
-import { RuntimeDeliveryCoordinator } from './delivery-coordinator.js';
+import { RuntimeDeliveryCoordinator, type RuntimeDelivery } from './delivery-coordinator.js';
 import {
   RuntimeEventHandler,
   type EventPublisher,
@@ -133,6 +133,7 @@ interface ClearSessionWaiter {
 interface PendingDeliveryBatch {
   deliveryIds: number[];
   deliveredUpToSeq: number;
+  deliveries: RuntimeDelivery[];
   text: string;
   agentRuntime: string;
   driver: ReturnType<typeof getDriver>;
@@ -1148,6 +1149,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           startup_delivery: {
             delivery_ids: batch.deliveryIds,
             delivered_up_to_seq: batch.deliveredUpToSeq,
+            deliveries: batch.deliveries,
             text: batch.text,
           },
         } satisfies RuntimeStartParams,
@@ -1733,6 +1735,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         [{
           deliveryIds: batch.deliveryIds,
           deliveredUpToSeq: batch.deliveredUpToSeq,
+          deliveries: batch.deliveries,
           dedupKey: claimed[0]!.message.id,
           text: batch.text,
           driver: {
@@ -1790,6 +1793,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         [{
           deliveryIds: batch.deliveryIds,
           deliveredUpToSeq: batch.deliveredUpToSeq,
+          deliveries: batch.deliveries,
           dedupKey: claimed[0]!.message.id,
           text: batch.text,
           driver: {
@@ -1820,6 +1824,13 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     return {
       deliveryIds: claimed.map(row => row.inboxId),
       deliveredUpToSeq: Math.max(...claimed.map(row => row.message.seq)),
+      deliveries: claimed.map(row => ({
+        delivery_id: row.inboxId,
+        message_id: row.message.id,
+        seq: row.message.seq,
+        thread_root_id: row.message.thread_root_id,
+        delivery_kind: row.deliveryKind,
+      })),
       text: formatInboxBatch(
         [...claimed],
         id => this.agents.get(id)?.name,

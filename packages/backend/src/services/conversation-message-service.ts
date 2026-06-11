@@ -1126,7 +1126,7 @@ export class ConversationMessageService {
   ): void {
     const root = this.messages.getInConversation(conversationId, threadRootId);
     if (root && !(root.from_kind === 'agent' && root.from_agent_id === agentId)) {
-      this.conversationInboxes.ensureDelivery(conversationId, agentId, root.id);
+      this.conversationInboxes.ensureDelivery(conversationId, agentId, root.id, 'observe');
     }
     const replies = this.messages.listStreamBelowSeq(
       conversationId,
@@ -1135,7 +1135,7 @@ export class ConversationMessageService {
     );
     for (const reply of replies) {
       if (reply.from_kind === 'agent' && reply.from_agent_id === agentId) continue;
-      this.conversationInboxes.ensureDelivery(conversationId, agentId, reply.id);
+      this.conversationInboxes.ensureDelivery(conversationId, agentId, reply.id, 'observe');
     }
   }
 
@@ -1172,6 +1172,7 @@ export class ConversationMessageService {
               conversation.id,
               r.agentId,
               message.id,
+              'observe',
             );
           }
         } catch (err) {
