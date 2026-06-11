@@ -79,6 +79,21 @@ export function describeSaveServerUrlOutcome(
           title: 'Saved. Reconnecting…',
           description: `No connection was confirmed within ${formatMs(result.elapsedMs)}. The server may still be starting or unreachable.`,
         };
+      case 'reloaded_remote':
+        // `#task:1021` — REMOTE backend. The address is saved and the
+        // daemon spawned a fresh outbound client, but the in-process
+        // attachment registry is absent in remote mode (same root cause
+        // as the #task:1010 pill), so connectivity isn't observed from
+        // main. It IS shown live by the "This computer" indicator above
+        // (which polls the remote backend's host-status `availability`).
+        // Point the user there — do NOT claim "connection check is not
+        // available in this mode" (it is, via that indicator).
+        return {
+          tone: 'info',
+          title: 'Saved. Reconnecting…',
+          description:
+            'Watch “This computer” above for the live connection status.',
+        };
       default: {
         // Exhaustiveness gate — adding a new ok arm without
         // updating this switch fails the typecheck loud.

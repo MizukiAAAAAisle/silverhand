@@ -160,6 +160,11 @@ export type DesktopHostMutationResult =
  *   - `reloaded`              — daemon swapped + fresh attachment observed
  *   - `unchanged`             — fingerprint match, no swap, no reconnect needed
  *   - `connectivity_unverified` — daemon swapped, watchdog budget exceeded
+ *   - `reloaded_remote`       — remote backend: daemon swapped, but the
+ *                               in-process attachment registry is absent
+ *                               (#task:1021); connectivity is shown live
+ *                               by the connection indicator (host-status
+ *                               `availability`, #task:1010), not verified here
  *
  * Renderer rule (Cindy #task:634 note 1): `connectivity_unverified`
  * MUST NOT be rendered as "Connected". Copy keys off the discriminator
@@ -169,6 +174,7 @@ export type DesktopSaveServerUrlResult =
   | { ok: true; kind: 'reloaded'; elapsedMs: number; attachedAt: number }
   | { ok: true; kind: 'unchanged' }
   | { ok: true; kind: 'connectivity_unverified'; elapsedMs: number }
+  | { ok: true; kind: 'reloaded_remote' }
   | {
       ok: false;
       kind: 'classify_rejected';

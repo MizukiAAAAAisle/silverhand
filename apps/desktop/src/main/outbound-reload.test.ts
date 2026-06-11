@@ -505,6 +505,44 @@ describe('performOutboundReload — anchor 3: reloaded ≠ connected', () => {
     expect(state.writeCalls).toHaveLength(1);
     expect(state.watchdogCalls).toEqual([]);
   });
+
+  it('action=reloaded + getAttachment null + remoteMode → reloaded_remote (NOT no_attachment_controller) — `#task:1021`', async () => {
+    // Remote backend: the in-process HostWsServerController is
+    // structurally absent (it lives in the remote backend process), so
+    // `getAttachment` is null — same root cause as the #task:1010 pill.
+    // But the daemon DID swap (reloaded), and connectivity is observable
+    // out-of-band via the renderer's connection indicator (host-status
+    // `availability`). So this is the `reloaded_remote` SUCCESS arm, not
+    // the misleading `no_attachment_controller` "can't verify" failure.
+    const { deps, state } = makeDeps();
+    deps.getAttachment = null;
+    deps.remoteMode = true;
+    const out = await performOutboundReload(
+      { serverUrl: 'https://sandbox.example.com' },
+      deps,
+    );
+    expect(out).toEqual({ ok: true, kind: 'reloaded_remote' });
+    // Config IS saved; no watchdog is started (nothing local to watch).
+    expect(state.writeCalls).toHaveLength(1);
+    expect(state.watchdogCalls).toEqual([]);
+  });
+
+  it('action=reloaded + getAttachment null + remoteMode=false stays no_attachment_controller (headless / unsupported edge keeps the failure arm)', async () => {
+    // Contrast pin for the test above: the `reloaded_remote` promotion
+    // must be gated on `remoteMode`. Without it (headless test, no
+    // indicator to defer to) verification is genuinely impossible and
+    // the failure arm must remain reachable.
+    const { deps } = makeDeps();
+    deps.getAttachment = null;
+    deps.remoteMode = false;
+    const out = await performOutboundReload(
+      { serverUrl: 'http://127.0.0.1:8765' },
+      deps,
+    );
+    expect(out.ok).toBe(false);
+    if (out.ok) throw new Error('unreachable');
+    expect(out.kind).toBe('no_attachment_controller');
+  });
 });
 
 describe('performOutboundReload — anchor 3 freshness contract pin', () => {

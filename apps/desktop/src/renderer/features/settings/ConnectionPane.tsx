@@ -43,6 +43,7 @@ import { cn } from '@/lib/cn';
 import {
   backendInfoKey,
   hostsKey,
+  hostStatusKey,
   useBackendInfoSnapshot,
   useHostStatusQuery,
   useHostsQuery,
@@ -185,6 +186,20 @@ export function ConnectionPane(): JSX.Element {
       if (result.ok) {
         void qc.invalidateQueries({ queryKey: backendInfoKey });
         void qc.invalidateQueries({ queryKey: hostsKey });
+        // `#task:1021` — a save bounces the daemon's outbound WS. The
+        // connection indicator's host-status query is the single
+        // readiness signal source (embedded `attached_at` is null in
+        // remote, so the pill reads host-status `availability` —
+        // #task:1010). Force it to re-probe: its `refetchInterval`
+        // has already stopped if it previously observed `available`,
+        // so without this invalidate the pill would show a stale
+        // "Ready" through the reconnect. `hostStatusFreshnessPolicy(true)`
+        // (set by `pollUntilAvailable`) makes the refetch hit the live
+        // backend, not the shared manual-refresh cache.
+        const hostId = backendInfoQuery.data?.local_host_id ?? null;
+        if (hostId !== null) {
+          void qc.invalidateQueries({ queryKey: hostStatusKey(hostId) });
+        }
       }
     },
     onError: err => {

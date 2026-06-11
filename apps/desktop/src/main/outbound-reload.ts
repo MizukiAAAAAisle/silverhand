@@ -71,11 +71,11 @@ import {
 } from './outbound-attach.js';
 
 /**
- * Outcome the IPC handler returns to the renderer. Three success
- * arms (`reloaded` / `unchanged` / `connectivity_unverified`) and a
- * single failure arm with a discriminated reason. The renderer
- * surfaces user-facing copy keyed off the reason; the message field
- * is diagnostic.
+ * Outcome the IPC handler returns to the renderer. Four success
+ * arms (`reloaded` / `unchanged` / `connectivity_unverified` /
+ * `reloaded_remote`) and a single failure arm with a discriminated
+ * reason. The renderer surfaces user-facing copy keyed off the reason;
+ * the message field is diagnostic.
  *
  * Why `connectivity_unverified` is success-arm (not failure):
  *   The daemon DID swap to the new bytes (action: 'reloaded' on the
@@ -105,6 +105,25 @@ export type OutboundReloadOutcome =
       kind: 'connectivity_unverified';
       /** ms elapsed before the watchdog budget expired. */
       elapsedMs: number;
+    }
+  | {
+      /**
+       * `#task:1021` — REMOTE backend success arm. The daemon swapped to
+       * the new bytes (`reloaded: true`), but the in-process
+       * `HostWsServerController` is structurally absent in remote mode
+       * (the attachment registry lives in the remote backend process,
+       * not here — same root cause as the `#task:1010` connection pill).
+       * So from main we cannot watch the reattach. This is NOT a failure
+       * (`no_attachment_controller`): connectivity IS observable
+       * out-of-band via the renderer's connection indicator, which polls
+       * the remote backend's host-status `availability` — the single
+       * readiness signal source (#task:1010). The save is confirmed;
+       * verification is deferred to that indicator. The renderer renders
+       * "Saved. Reconnecting…" and points the user at it, never the old
+       * misleading "connection check is not available in this mode".
+       */
+      ok: true;
+      kind: 'reloaded_remote';
     }
   | {
       ok: false;
@@ -181,6 +200,20 @@ export interface PerformOutboundReloadDeps {
   hostOutboundReload: HostOutboundReloadFn;
   /** Backend attachment snapshot — `HostWsServerController.getAttachment`. */
   getAttachment: GetHostAttachmentFn | null;
+  /**
+   * `#task:1021` — true when this desktop runs against a REMOTE backend.
+   * In remote mode `getAttachment` is structurally null (the in-process
+   * `HostWsServerController` lives in the remote backend, not here), so
+   * the orchestrator cannot watch the reattach from main. But a reloaded
+   * client is still a SUCCESS, not a `no_attachment_controller` failure:
+   * the renderer's connection indicator polls the remote backend's
+   * host-status `availability` (#task:1010) and is the single readiness
+   * signal source. With this flag set, the no-controller branch returns
+   * the `reloaded_remote` success arm instead. Headless / unsupported
+   * edges leave it false → `no_attachment_controller` (verification is
+   * genuinely impossible there — no indicator polling either).
+   */
+  remoteMode?: boolean;
   /**
    * Returns the local host id this desktop is currently bound to,
    * or null if no claim is active. Reload requires `claimed`; the
@@ -404,9 +437,22 @@ export async function performOutboundReload(
   //     the two-branch OR (connectionId change OR attachedAt
   //     lower bound) per Cindy's earlier review on D3.a.
   if (!deps.getAttachment) {
-    // No controller (mode-specific edge — e.g. headless test).
-    // Caller still saw `reloaded: true` from the daemon, so the
-    // config is updated; we just can't verify the WS landed.
+    // No in-process attachment registry to watch. Two very different
+    // reasons land here:
+    if (deps.remoteMode) {
+      // `#task:1021` — REMOTE backend. The controller lives in the
+      // remote process, so we can't observe the reattach from main.
+      // But the daemon acked `reloaded` AND connectivity is observable
+      // out-of-band: the renderer's connection indicator polls the
+      // remote backend's host-status `availability` (#task:1010), the
+      // single readiness signal source. So this is success with
+      // verification deferred to that indicator — NOT the misleading
+      // `no_attachment_controller` "can't verify in this mode".
+      return { ok: true, kind: 'reloaded_remote' };
+    }
+    // Headless / unsupported edge — no controller AND no indicator to
+    // defer to. Caller still saw `reloaded: true` from the daemon, so
+    // the config is updated; we just can't verify the WS landed.
     return {
       ok: false,
       kind: 'no_attachment_controller',

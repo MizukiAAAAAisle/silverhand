@@ -64,6 +64,29 @@ describe('describeSaveServerUrlOutcome — success arms', () => {
     expect(banner.description).toMatch(/10\.0\s*s/);
   });
 
+  it('reloaded_remote uses tone=info, points at the indicator, and MUST NOT say "not available in this mode" (`#task:1021`)', () => {
+    // Regression for shiki's report: in remote mode every save (even a
+    // correct sandbox URL) showed "Connection check is not available in
+    // this mode." That copy is wrong — connectivity IS shown live by the
+    // "This computer" indicator (host-status `availability`, #task:1010).
+    // The `reloaded_remote` arm must point the user there instead.
+    const banner = describeSaveServerUrlOutcome({
+      ok: true,
+      kind: 'reloaded_remote',
+    });
+    expect(banner.tone).toBe('info');
+    expect(banner.title).toMatch(/saved/i);
+    expect(banner.title).toMatch(/reconnect|reconnecting/i);
+    // The exact misleading phrasing must be gone.
+    expect(banner.title.toLowerCase()).not.toMatch(/not available/);
+    expect(banner.description.toLowerCase()).not.toMatch(/not available/);
+    expect(banner.description.toLowerCase()).not.toMatch(/cannot verify/);
+    // Points the user at the live connection indicator.
+    expect(banner.description.toLowerCase()).toMatch(/this computer/);
+    // Anti-claim: must not say "Connected".
+    expect(banner.title.toLowerCase()).not.toMatch(/\bconnected\b/);
+  });
+
   it('formatMs switches to seconds at >= 1000ms', () => {
     // Sub-second renders as integer ms; ≥ 1000ms renders as 1dp s.
     const fast = describeSaveServerUrlOutcome({
@@ -206,6 +229,7 @@ describe('describeSaveServerUrlOutcome — no implementation language in user-vi
     { ok: true, kind: 'reloaded', elapsedMs: 380, attachedAt: 1 },
     { ok: true, kind: 'unchanged' },
     { ok: true, kind: 'connectivity_unverified', elapsedMs: 10_000 },
+    { ok: true, kind: 'reloaded_remote' },
     {
       ok: false,
       kind: 'config_write_failed',
