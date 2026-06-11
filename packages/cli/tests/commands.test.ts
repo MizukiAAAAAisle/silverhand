@@ -226,3 +226,47 @@ describe('file view command', () => {
     }
   });
 });
+
+describe('task create --reply-to', () => {
+  // Locks the load-bearing contract: the optional --reply-to flag must
+  // reach the wire as `reply_to_message_id`, and OMITTING it must leave
+  // the field absent entirely (so the backend keeps the main-line default
+  // `thread_root_id = NULL`). Without this, the flag could silently
+  // regress to "accepted but never forwarded" — backend/schema/typecheck
+  // would all stay green (#task:1056 review, requested by Cindy).
+  function captureCreateTasks(flags: Record<string, string>) {
+    const cmd = findCommand('task', 'create');
+    expect(cmd).toBeDefined();
+    let captured: unknown;
+    const client = {
+      createTasks: async (input: unknown) => {
+        captured = input;
+        return { tasks: [] };
+      },
+    } as unknown as BackendClient;
+    return cmd!
+      .run({
+        env: {
+          conversationId: 'conv',
+          agentId: 'agent',
+          serverUrl: 'http://127.0.0.1:4488',
+          authToken: 'token',
+        },
+        client,
+        args: { flags, positional: [], rest: [] },
+      } as any)
+      .then(() => captured as { tasks: unknown[]; reply_to_message_id?: string });
+  }
+
+  it('forwards --reply-to as reply_to_message_id', async () => {
+    const input = await captureCreateTasks({ title: 'T', 'reply-to': 'm1' });
+    expect(input.tasks).toEqual([{ title: 'T' }]);
+    expect(input.reply_to_message_id).toBe('m1');
+  });
+
+  it('omits reply_to_message_id when --reply-to is absent (main-line default)', async () => {
+    const input = await captureCreateTasks({ title: 'T' });
+    expect(input.tasks).toEqual([{ title: 'T' }]);
+    expect('reply_to_message_id' in input).toBe(false);
+  });
+});
