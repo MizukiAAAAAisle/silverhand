@@ -51,6 +51,16 @@ describe('Notifications routes — characterization (P15 prep)', () => {
     return r.message.id;
   };
 
+  const postReply = async (conversationId: string, rootMessageId: string) => {
+    const r = await http(t!).json<{ message: { id: string } }>(
+      http(t!).post(`/api/channels/${conversationId}/messages`, {
+        content: 'thread reply notification',
+        reply_to_message_id: rootMessageId,
+      }),
+    );
+    return r.message.id;
+  };
+
   it('GET /api/notifications lists the viewer notifications; unread + limit filters apply', async () => {
     t = buildTestApp();
     const { workspaceId } = await createWs('n-list');
@@ -72,6 +82,27 @@ describe('Notifications routes — characterization (P15 prep)', () => {
       http(t).get('/api/notifications?limit=1'),
     );
     expect(limited.notifications).toHaveLength(1);
+  });
+
+  it('GET /api/notifications exposes reply-cluster roots for message-anchored notifications', async () => {
+    t = buildTestApp();
+    const { workspaceId, conversationId } = await createWs('n-thread-list');
+    const rootId = await postMsg(conversationId);
+    const replyId = await postReply(conversationId, rootId);
+    const n = seed(workspaceId, conversationId, replyId);
+
+    const all = await http(t).json<{
+      notifications: Array<{
+        id: string;
+        thread_root_id: string | null;
+        legacy_thread_conversation_id: string | null;
+      }>;
+    }>(http(t).get('/api/notifications'));
+
+    expect(all.notifications.find(x => x.id === n.id)).toMatchObject({
+      thread_root_id: rootId,
+      legacy_thread_conversation_id: null,
+    });
   });
 
   it('GET /api/notifications/unread returns total + by_workspace + latest_by_workspace', async () => {
@@ -97,6 +128,33 @@ describe('Notifications routes — characterization (P15 prep)', () => {
     expect(res.latest_by_workspace[ws1.workspaceId]?.conversation_id).toBe(
       ws1.conversationId,
     );
+  });
+
+  it('GET /api/notifications/unread includes the latest pointer thread root', async () => {
+    t = buildTestApp();
+    const { workspaceId, conversationId } = await createWs('n-thread-unread');
+    const rootId = await postMsg(conversationId);
+    const replyId = await postReply(conversationId, rootId);
+    seed(workspaceId, conversationId, replyId);
+
+    const res = await http(t).json<{
+      latest_by_workspace: Record<
+        string,
+        {
+          conversation_id: string;
+          message_id: string;
+          thread_root_id: string | null;
+          legacy_thread_conversation_id: string | null;
+        }
+      >;
+    }>(http(t).get('/api/notifications/unread'));
+
+    expect(res.latest_by_workspace[workspaceId]).toMatchObject({
+      conversation_id: conversationId,
+      message_id: replyId,
+      thread_root_id: rootId,
+      legacy_thread_conversation_id: null,
+    });
   });
 
   it('POST /api/notifications/read by id marks 1 and publishes unread_updated to the viewer scope', async () => {

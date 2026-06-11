@@ -646,6 +646,11 @@ describe('canonical channel/thread routes', () => {
     const listed = await (await local.get('/api/saved')).json() as any;
     expect(listed.saved).toHaveLength(1);
     expect(listed.saved[0].message.id).toBe(msg.message.id);
+    expect(listed.saved[0]).toMatchObject({
+      legacy_thread_conversation_id: null,
+      thread_id: null,
+      message: { thread_root_id: null },
+    });
 
     expect((await (await alice.get('/api/saved')).json() as any).saved).toEqual([]);
     const aliceSaved = await alice.post(`/api/messages/${msg.message.id}/save`);
@@ -659,6 +664,37 @@ describe('canonical channel/thread routes', () => {
     expect(afterDelete.saved).toEqual([]);
     expect((await (await alice.get('/api/saved')).json() as any).saved)
       .toHaveLength(1);
+  });
+
+  it('saved reply-cluster messages expose the message anchor target, not a legacy thread id', async () => {
+    t = buildTestApp();
+    const local = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+    const root = await (
+      await local.post(`/api/channels/${channelId}/messages`, {
+        content: 'root for saved cluster',
+      })
+    ).json() as any;
+    const reply = await (
+      await local.post(`/api/channels/${channelId}/messages`, {
+        content: 'saved cluster reply',
+        reply_to_message_id: root.message.id,
+      })
+    ).json() as any;
+
+    expect((await local.post(`/api/messages/${reply.message.id}/save`)).status)
+      .toBe(201);
+    const listed = await (await local.get('/api/saved')).json() as any;
+    expect(listed.saved).toHaveLength(1);
+    expect(listed.saved[0]).toMatchObject({
+      channel_id: channelId,
+      legacy_thread_conversation_id: null,
+      thread_id: null,
+      message: {
+        id: reply.message.id,
+        thread_root_id: root.message.id,
+      },
+    });
   });
 
   it('gates saved-message operations by source conversation visibility', async () => {

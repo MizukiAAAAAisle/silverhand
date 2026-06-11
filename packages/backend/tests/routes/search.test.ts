@@ -41,6 +41,50 @@ describe('GET /api/search', () => {
     );
   });
 
+  it('message hits expose reply-cluster roots separately from legacy thread ids', async () => {
+    t = buildTestApp();
+    const agent = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    const workspace = await (
+      await http(t).post('/api/workspaces', {
+        name: 'eng-thread-search',
+        member_agent_ids: [agent.agent.id],
+      })
+    ).json() as any;
+    const root = await (
+      await http(t).post(`/api/channels/${workspace.onboarding_channel_id}/messages`, {
+        content: 'root for search cluster',
+      })
+    ).json() as any;
+    const reply = await (
+      await http(t).post(`/api/channels/${workspace.onboarding_channel_id}/messages`, {
+        content: 'needle-thread-search reply',
+        reply_to_message_id: root.message.id,
+      })
+    ).json() as any;
+
+    const res = await http(t).get('/api/search?q=needle-thread-search');
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'message',
+          conversation: expect.objectContaining({
+            channel_id: workspace.onboarding_channel_id,
+            legacy_thread_conversation_id: null,
+            thread_id: null,
+          }),
+          message: expect.objectContaining({
+            id: reply.message.id,
+            thread_root_id: root.message.id,
+          }),
+        }),
+      ]),
+    );
+  });
+
   it('searches workspace names without using legacy channel aliases', async () => {
     t = buildTestApp();
     await http(t).post('/api/workspaces', {

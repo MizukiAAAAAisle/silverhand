@@ -6,9 +6,16 @@ function newId(): string {
   return randomBytes(12).toString('base64url');
 }
 
-function rowToDto(row: NotificationRow): NotificationDto {
+type NotificationJoinedRow = NotificationRow & {
+  thread_root_id?: string | null;
+  legacy_thread_conversation_id?: string | null;
+};
+
+function rowToDto(row: NotificationJoinedRow): NotificationDto {
   return {
     ...row,
+    thread_root_id: row.thread_root_id ?? null,
+    legacy_thread_conversation_id: row.legacy_thread_conversation_id ?? null,
     payload: row.payload ? (JSON.parse(row.payload) as Record<string, unknown>) : null,
   };
 }
@@ -60,8 +67,16 @@ export class NotificationRepo {
 
   get(id: string): NotificationDto | null {
     const row = this.db
-      .prepare<[string], NotificationRow>(
-        `SELECT * FROM notifications WHERE id = ?`,
+      .prepare<[string], NotificationJoinedRow>(
+        `SELECT
+            n.*,
+            m.thread_root_id AS thread_root_id,
+            CASE WHEN conv.kind = 'thread' THEN conv.id ELSE NULL END
+              AS legacy_thread_conversation_id
+           FROM notifications n
+           LEFT JOIN messages m ON m.id = n.message_id
+           LEFT JOIN conversations conv ON conv.id = n.conversation_id
+          WHERE n.id = ?`,
       )
       .get(id);
     return row ? rowToDto(row) : null;
@@ -84,10 +99,17 @@ export class NotificationRepo {
     if (opts.unread) whereParts.push('read_at IS NULL');
     args.push(limit);
     const rows = this.db
-      .prepare<typeof args, NotificationRow>(
-        `SELECT * FROM notifications
+      .prepare<typeof args, NotificationJoinedRow>(
+        `SELECT
+            n.*,
+            m.thread_root_id AS thread_root_id,
+            CASE WHEN conv.kind = 'thread' THEN conv.id ELSE NULL END
+              AS legacy_thread_conversation_id
+           FROM notifications n
+           LEFT JOIN messages m ON m.id = n.message_id
+           LEFT JOIN conversations conv ON conv.id = n.conversation_id
          WHERE ${whereParts.join(' AND ')}
-         ORDER BY created_at DESC
+         ORDER BY n.created_at DESC
          LIMIT ?`,
       )
       .all(...args);
@@ -123,21 +145,39 @@ export class NotificationRepo {
    */
   latestUnreadByWorkspace(
     userId?: string | null,
-  ): Map<string, { conversation_id: string; message_id: string }> {
+  ): Map<
+    string,
+    {
+      conversation_id: string;
+      message_id: string;
+      thread_root_id: string | null;
+      legacy_thread_conversation_id: string | null;
+    }
+  > {
     const userPredicate =
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
     const args = userId == null ? [] : [userId];
     const rows = this.db
       .prepare<
         typeof args,
-        { scope_id: string; conversation_id: string; message_id: string }
+        {
+          scope_id: string;
+          conversation_id: string;
+          message_id: string;
+          thread_root_id: string | null;
+          legacy_thread_conversation_id: string | null;
+        }
       >(
         `SELECT
            COALESCE(n.workspace_id, c.workspace_id) AS scope_id,
            n.conversation_id,
-           n.message_id
+           n.message_id,
+           m.thread_root_id AS thread_root_id,
+           CASE WHEN c.kind = 'thread' THEN c.id ELSE NULL END
+             AS legacy_thread_conversation_id
          FROM notifications n
          JOIN conversations c ON c.id = n.conversation_id
+         LEFT JOIN messages m ON m.id = n.message_id
          JOIN (
            SELECT
              COALESCE(n2.workspace_id, c2.workspace_id) AS scope_id,
@@ -156,11 +196,21 @@ export class NotificationRepo {
            AND n.read_at IS NULL`,
       )
       .all(...args, ...args);
-    const out = new Map<string, { conversation_id: string; message_id: string }>();
+    const out = new Map<
+      string,
+      {
+        conversation_id: string;
+        message_id: string;
+        thread_root_id: string | null;
+        legacy_thread_conversation_id: string | null;
+      }
+    >();
     for (const r of rows) {
       out.set(r.scope_id, {
         conversation_id: r.conversation_id,
         message_id: r.message_id,
+        thread_root_id: r.thread_root_id ?? null,
+        legacy_thread_conversation_id: r.legacy_thread_conversation_id ?? null,
       });
     }
     return out;

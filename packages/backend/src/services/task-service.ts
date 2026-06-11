@@ -185,6 +185,8 @@ interface TaskJoinedRow {
   workspace_name: string;
   channel_id: string;
   channel_name: string;
+  thread_root_id: string | null;
+  legacy_thread_conversation_id: string | null;
   thread_id: string | null;
   task_assignee_agent_id: string | null;
   task_assignee_user_id: string | null;
@@ -215,6 +217,11 @@ const SELECT_TASK_JOINED = `
       ELSE root.id
     END                        AS channel_id,
     root.title                 AS channel_name,
+    m.thread_root_id           AS thread_root_id,
+    CASE
+      WHEN conv.kind = 'thread' THEN conv.id
+      ELSE NULL
+    END                        AS legacy_thread_conversation_id,
     CASE
       WHEN conv.kind = 'thread' THEN conv.id
       ELSE NULL
@@ -1680,6 +1687,8 @@ export class TaskService {
       workspace_name: row.workspace_name,
       channel_id: row.channel_id,
       channel_name: row.channel_name,
+      thread_root_id: row.thread_root_id,
+      legacy_thread_conversation_id: row.legacy_thread_conversation_id,
       thread_id: row.thread_id,
       conversation: { id: row.conversation_id, title: row.conversation_title },
       status: row.task_status,
@@ -1868,10 +1877,16 @@ export class TaskService {
     const workspaceId = args.conversation.workspace_id;
     const channelId = args.conversation.parent_conversation_id ?? args.conversation.id;
     const threadId = args.conversation.parent_conversation_id ? args.conversation.id : null;
+    const taskMessage = this.fetchMessage(args.messageId);
+    const threadRootId = taskMessage?.conversation_id === conversationId
+      ? taskMessage.thread_root_id
+      : null;
     const event: TaskChangedEvent = {
       kind: args.kind,
       workspace_id: workspaceId,
       channel_id: channelId,
+      thread_root_id: threadRootId,
+      legacy_thread_conversation_id: threadId,
       thread_id: threadId,
       conversation_id: conversationId,
       task_number: args.taskNumber,

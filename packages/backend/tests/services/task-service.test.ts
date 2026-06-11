@@ -192,6 +192,14 @@ describe('TaskService.createTasks', () => {
         )
         .get(taskMessageId);
       expect(taskRow?.thread_root_id).toBe(root.id);
+      const summaries = t.service.list({
+        actor: { kind: 'user', userId: 'local' },
+      });
+      expect(summaries.find(x => x.message_id === taskMessageId)).toMatchObject({
+        thread_root_id: root.id,
+        legacy_thread_conversation_id: null,
+        thread_id: null,
+      });
 
       const createRows = fetchSystemRows(t, 'task_create');
       expect(createRows).toHaveLength(1);
@@ -1675,6 +1683,10 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
   it('task claim/status system messages inherit the task message thread stream', async () => {
     const t = bootstrap();
     try {
+      const taskEvents: unknown[] = [];
+      const unsub = t.events.subscribe(t.channel.id, e => {
+        if (e.kind === 'task_changed') taskEvents.push(e.payload);
+      });
       const root = t.messages.insertForConversation({
         conversationId: t.channel.id,
         fromKind: 'agent',
@@ -1700,6 +1712,7 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
         by: { messageId: taskBody.id },
         status: 'in_review',
       });
+      unsub();
       expect(status).toEqual({ success: true });
 
       const claimRows = fetchSystemRows(t, 'task_claim');
@@ -1710,6 +1723,21 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
       expect(readTaskSystemMetadata(statusRows[0]!.metadata)?.task_message_id).toBe(taskBody.id);
       expect(claimRows[0]!.thread_root_id).toBe(root.id);
       expect(statusRows[0]!.thread_root_id).toBe(root.id);
+      expect(taskEvents).toHaveLength(2);
+      expect(taskEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'claim',
+            thread_root_id: root.id,
+            legacy_thread_conversation_id: null,
+          }),
+          expect.objectContaining({
+            kind: 'status',
+            thread_root_id: root.id,
+            legacy_thread_conversation_id: null,
+          }),
+        ]),
+      );
     } finally {
       t.cleanup();
     }

@@ -30,6 +30,13 @@ export const NotificationDtoSchema = z.object({
   workspace_id: z.string().nullable(),
   conversation_id: z.string().nullable(),
   message_id: z.string().nullable(),
+  /** Reply-cluster root for `message_id` when the notification points
+   *  at a message inside a thread cluster. NULL = main-line / legacy. */
+  thread_root_id: z.string().nullable().optional(),
+  /** Legacy isolated-thread conversation id when `conversation_id`
+   *  points at a fossil thread. New reply clusters use
+   *  `thread_root_id` instead. */
+  legacy_thread_conversation_id: z.string().nullable().optional(),
   source_workspace_id: z.string().nullable(),
   source_conversation_id: z.string().nullable(),
   source_message_id: z.string().nullable(),

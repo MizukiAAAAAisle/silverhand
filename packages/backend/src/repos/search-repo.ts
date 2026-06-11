@@ -18,6 +18,7 @@ interface ConversationSearchRow {
   conversation_title: string;
   conversation_kind: ConversationKind;
   channel_id: string;
+  legacy_thread_conversation_id: string | null;
   thread_id: string | null;
   parent_conversation_id: string | null;
   closed_at: number | null;
@@ -41,6 +42,7 @@ type MessageSearchRow = MessageRow & {
   conversation_title: string;
   conversation_kind: ConversationKind;
   channel_id: string;
+  legacy_thread_conversation_id: string | null;
   thread_id: string | null;
   parent_conversation_id: string | null;
   closed_at: number | null;
@@ -76,6 +78,7 @@ function conversationRef(row: {
   conversation_title: string;
   conversation_kind: ConversationKind;
   channel_id: string;
+  legacy_thread_conversation_id: string | null;
   thread_id: string | null;
   parent_conversation_id: string | null;
   closed_at: number | null;
@@ -86,6 +89,7 @@ function conversationRef(row: {
     title: row.conversation_title,
     kind: row.conversation_kind,
     channel_id: row.channel_id,
+    legacy_thread_conversation_id: row.legacy_thread_conversation_id,
     thread_id: row.thread_id,
     parent_conversation_id: row.parent_conversation_id,
     closed_at: row.closed_at,
@@ -217,6 +221,7 @@ export class SearchRepo {
             conv.title AS conversation_title,
             conv.kind AS conversation_kind,
             root.id AS channel_id,
+            CASE WHEN conv.kind = 'thread' THEN conv.id ELSE NULL END AS legacy_thread_conversation_id,
             CASE WHEN conv.kind = 'thread' THEN conv.id ELSE NULL END AS thread_id,
             conv.parent_conversation_id AS parent_conversation_id,
             conv.closed_at AS closed_at,
@@ -284,6 +289,7 @@ export class SearchRepo {
             conv.title AS conversation_title,
             conv.kind AS conversation_kind,
             root.id AS channel_id,
+            CASE WHEN conv.kind = 'thread' THEN conv.id ELSE NULL END AS legacy_thread_conversation_id,
             CASE WHEN conv.kind = 'thread' THEN conv.id ELSE NULL END AS thread_id,
             conv.parent_conversation_id AS parent_conversation_id,
             conv.closed_at AS closed_at,
