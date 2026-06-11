@@ -1616,11 +1616,6 @@ function RegisteredAppShell(): JSX.Element {
                           });
                         }}
                         archivePending={archiveChannel.isPending}
-                        // Always wired — closeThread no-ops when there's
-                        // no open thread pane (re-navigates to the same
-                        // channel). Keeping the menu item shape constant
-                        // avoids a "now you see it, now you don't" feel.
-                        onCloseThread={closeThread}
                         unreadByChannel={channelUnreadCounts ?? {}}
                       />
                     </div>

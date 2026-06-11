@@ -3,12 +3,9 @@ import {
   Archive,
   ArchiveRestore,
   Copy,
-  CornerDownRight,
   Hash,
-  MessageSquareText,
   Pin,
   PinOff,
-  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -34,9 +31,12 @@ interface ChannelsSidebarProps {
   /** null when no workspace is selected — used only to choose the empty
    *  hint copy. Workspace name + actions live in the titlebar now. */
   workspaceName: string | null;
-  /** Active (non-archived) channels and their threads, server-filtered.
-   *  Archived channels live on a dedicated chat tool page; the workspace
-   *  channel tree only shows active rows. */
+  /** Active (non-archived) top-level channels, server-filtered. In the
+   *  reply-cluster model a thread is no longer a conversation node, so it
+   *  never appears in this tree — the sidebar only renders top-level
+   *  channels / DM channels. Any legacy `kind='thread'` row (which carries
+   *  a `parent_channel_id`) is filtered out below. Archived channels live
+   *  on a dedicated chat tool page. */
   channels: ChannelNode[];
   workspaceKind: WorkspaceUiKind | null;
   selectedChannelId: string | null;
@@ -44,10 +44,6 @@ interface ChannelsSidebarProps {
   onPinChannel: (channelId: string, pinned: boolean) => void;
   onArchiveChannel: (channelId: string, archived: boolean) => void;
   archivePending?: boolean;
-  /** Close the currently-open thread pane. Mirrors the X button in the
-   *  thread header — surfaced via the thread row's right-click menu so
-   *  the user can dismiss it without first focusing the thread pane. */
-  onCloseThread?: () => void;
   /** Unread notification counts keyed by channel id. Used to render
    *  per-channel badges. Missing key ≡ zero. */
   unreadByChannel?: Record<string, number>;
@@ -62,23 +58,17 @@ export function ChannelsSidebar({
   onPinChannel,
   onArchiveChannel,
   archivePending = false,
-  onCloseThread,
   unreadByChannel = {},
 }: ChannelsSidebarProps): JSX.Element {
-  // Pinned top-level channels float above unpinned ones. The backend
-  // already returns them sorted correctly, but we split here so we can
-  // render an optional separator between the two groups.
+  // The sidebar renders top-level channels only. Threads are reply
+  // clusters under a message now, not conversation nodes, so they are
+  // never shown here (legacy `kind='thread'` rows carry a
+  // `parent_channel_id` and are excluded by this filter). Pinned channels
+  // float above unpinned ones — the backend already returns them sorted,
+  // we split here only to render an optional separator between the groups.
   const topLevel = channels.filter(s => s.parent_channel_id === null);
   const pinnedTop = topLevel.filter(s => s.pinned_at !== null);
   const unpinnedTop = topLevel.filter(s => s.pinned_at === null);
-  const childrenByParent = new Map<string, ChannelNode[]>();
-  for (const s of channels) {
-    if (s.parent_channel_id) {
-      const list = childrenByParent.get(s.parent_channel_id) ?? [];
-      list.push(s);
-      childrenByParent.set(s.parent_channel_id, list);
-    }
-  }
 
   return (
     <aside
@@ -101,14 +91,12 @@ export function ChannelsSidebar({
               <ChannelTreeItem
                 key={top.id}
                 channel={top}
-                childChannels={childrenByParent.get(top.id) ?? []}
                 selectedChannelId={selectedChannelId}
                 onSelect={onSelectChannel}
                 onPin={onPinChannel}
                 onArchive={onArchiveChannel}
                 archivePending={archivePending}
                 workspaceKind={workspaceKind}
-                onCloseThread={onCloseThread}
                 unreadByChannel={unreadByChannel}
               />
             ))}
@@ -121,14 +109,12 @@ export function ChannelsSidebar({
               <ChannelTreeItem
                 key={top.id}
                 channel={top}
-                childChannels={childrenByParent.get(top.id) ?? []}
                 selectedChannelId={selectedChannelId}
                 onSelect={onSelectChannel}
                 onPin={onPinChannel}
                 onArchive={onArchiveChannel}
                 archivePending={archivePending}
                 workspaceKind={workspaceKind}
-                onCloseThread={onCloseThread}
                 unreadByChannel={unreadByChannel}
               />
             ))}
@@ -147,32 +133,27 @@ function EmptyHint({ message }: { message: string }): JSX.Element {
 
 function ChannelTreeItem({
   channel,
-  childChannels,
   selectedChannelId,
   onSelect,
   onPin,
   onArchive,
   archivePending,
   workspaceKind,
-  onCloseThread,
   unreadByChannel,
 }: {
   channel: ChannelNode;
-  childChannels: ChannelNode[];
   selectedChannelId: string | null;
   onSelect: (id: string) => void;
   onPin: (channelId: string, pinned: boolean) => void;
   onArchive: (channelId: string, archived: boolean) => void;
   archivePending: boolean;
   workspaceKind: WorkspaceUiKind | null;
-  onCloseThread?: () => void;
   unreadByChannel: Record<string, number>;
 }): JSX.Element {
   return (
     <li>
       <ChannelRow
         channel={channel}
-        depth={0}
         selected={channel.id === selectedChannelId}
         onClick={() => onSelect(channel.id)}
         onPin={onPin}
@@ -181,51 +162,27 @@ function ChannelTreeItem({
         workspaceKind={workspaceKind}
         unreadCount={unreadByChannel[channel.id] ?? 0}
       />
-      {childChannels.length > 0 ? (
-        <ul className="space-y-0.5">
-          {childChannels.map(child => (
-            <li key={child.id}>
-              <ChannelRow
-                channel={child}
-                depth={1}
-                selected={child.id === selectedChannelId}
-                onClick={() => onSelect(child.id)}
-                onPin={onPin}
-                onArchive={onArchive}
-                archivePending={archivePending}
-                workspaceKind={workspaceKind}
-                onCloseThread={onCloseThread}
-                unreadCount={unreadByChannel[child.id] ?? 0}
-              />
-            </li>
-          ))}
-        </ul>
-      ) : null}
     </li>
   );
 }
 
 function ChannelRow({
   channel,
-  depth,
   selected,
   onClick,
   onPin,
   onArchive,
   archivePending,
   workspaceKind,
-  onCloseThread,
   unreadCount,
 }: {
   channel: ChannelNode;
-  depth: 0 | 1;
   selected: boolean;
   onClick: () => void;
   onPin: (channelId: string, pinned: boolean) => void;
   onArchive: (channelId: string, archived: boolean) => void;
   archivePending: boolean;
   workspaceKind: WorkspaceUiKind | null;
-  onCloseThread?: () => void;
   unreadCount: number;
 }): JSX.Element {
   const isClosed = channel.closed_at !== null;
@@ -233,23 +190,14 @@ function ChannelRow({
   const isArchived = channel.archived_at !== null;
   const [hovered, setHovered] = useState(false);
 
-  // Show the pin control only for top-level channels (threads can't be
-  // pinned), and only on hover or when already pinned. A sibling <button>
+  // Pin control shows on hover or when already pinned. A sibling <button>
   // is used — not a nested interactive — so keyboard focus and click
   // semantics are correct. stopPropagation prevents the row click handler
   // from firing when the pin button is activated.
-  const showPin = depth === 0 && (hovered || isPinned);
-  const showPinMenu = depth === 0;
+  const showPin = hovered || isPinned;
   const showArchiveMenu =
-    depth === 0 && workspaceKind === 'regular' && channel.kind === 'channel';
-  // Close-thread item shows on EVERY thread row, not just the currently
-  // open one. Hiding it conditionally on `selected` looks like a bug
-  // (the menu silently changes shape based on which thread the pane is
-  // displaying). The callback itself short-circuits when no thread pane
-  // is open, so the item is safe to always render.
-  const showCloseThreadMenu =
-    depth === 1 && channel.kind === 'thread' && !!onCloseThread;
-  const hasManagementMenu = showPinMenu || showArchiveMenu || showCloseThreadMenu;
+    workspaceKind === 'regular' && channel.kind === 'channel';
+  const hasManagementMenu = showArchiveMenu;
 
   const rowBg = selected
     ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
@@ -266,30 +214,15 @@ function ChannelRow({
       <button
         type="button"
         onClick={onClick}
-        className={
-          'flex min-w-0 flex-1 items-center gap-1.5 py-1.5 text-left text-sm ' +
-          (depth === 1 ? 'pl-6' : 'pl-2')
-        }
+        className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 pl-2 text-left text-sm"
       >
-        {depth === 1 ? (
-          <CornerDownRight className="size-3 shrink-0 text-text-muted/60" />
-        ) : null}
-        {depth === 1 ? (
-          <MessageSquareText
-            className={
-              'size-3.5 shrink-0 ' +
-              (isClosed ? 'text-text-muted/50' : 'text-text-muted')
-            }
-          />
-        ) : (
-          <Hash
-            data-channel-icon
-            className={
-              'size-3.5 shrink-0 ' +
-              (isClosed ? 'text-text-muted/50' : 'text-text-muted')
-            }
-          />
-        )}
+        <Hash
+          data-channel-icon
+          className={
+            'size-3.5 shrink-0 ' +
+            (isClosed ? 'text-text-muted/50' : 'text-text-muted')
+          }
+        />
         <span
           className={
             'min-w-0 truncate ' + (isClosed ? 'line-through text-text-muted' : '')
@@ -306,54 +239,50 @@ function ChannelRow({
 
       {/* Pin button — sibling, not nested. Reserves fixed width so the
           title doesn't shift on hover. */}
-      {depth === 0 ? (
-        <button
-          type="button"
-          aria-label={isPinned ? '取消固定' : '固定'}
-          title={isPinned ? '取消固定' : '固定'}
-          onClick={e => {
-            e.stopPropagation();
-            onPin(channel.id, !isPinned);
-          }}
-          className={
-            'group/pin flex shrink-0 items-center justify-center px-1 ' +
-            (!showPin ? 'pointer-events-none opacity-0' : '') +
-            (selected
-              ? isPinned
-                ? ' text-text-on-selected'
-                : ' text-text-on-selected/60 hover:text-text-on-selected'
-              : isPinned
-                ? ' text-accent'
-                : ' text-text-muted hover:text-text-primary')
-          }
-          tabIndex={showPin ? 0 : -1}
-        >
-          {isPinned ? (
-            <PinOff data-pin-icon className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
-          ) : (
-            <Pin data-pin-icon className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
-          )}
-        </button>
-      ) : null}
+      <button
+        type="button"
+        aria-label={isPinned ? '取消固定' : '固定'}
+        title={isPinned ? '取消固定' : '固定'}
+        onClick={e => {
+          e.stopPropagation();
+          onPin(channel.id, !isPinned);
+        }}
+        className={
+          'group/pin flex shrink-0 items-center justify-center px-1 ' +
+          (!showPin ? 'pointer-events-none opacity-0' : '') +
+          (selected
+            ? isPinned
+              ? ' text-text-on-selected'
+              : ' text-text-on-selected/60 hover:text-text-on-selected'
+            : isPinned
+              ? ' text-accent'
+              : ' text-text-muted hover:text-text-primary')
+        }
+        tabIndex={showPin ? 0 : -1}
+      >
+        {isPinned ? (
+          <PinOff data-pin-icon className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
+        ) : (
+          <Pin data-pin-icon className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
+        )}
+      </button>
     </div>
   );
 
   return (
     <AppContextMenu trigger={row}>
-      {showPinMenu ? (
-        <AppContextMenuItem
-          icon={
-            isPinned ? (
-              <PinOff className="size-3.5" />
-            ) : (
-              <Pin className="size-3.5" />
-            )
-          }
-          onSelect={() => onPin(channel.id, !isPinned)}
-        >
-          {isPinned ? 'Unpin' : 'Pin'}
-        </AppContextMenuItem>
-      ) : null}
+      <AppContextMenuItem
+        icon={
+          isPinned ? (
+            <PinOff className="size-3.5" />
+          ) : (
+            <Pin className="size-3.5" />
+          )
+        }
+        onSelect={() => onPin(channel.id, !isPinned)}
+      >
+        {isPinned ? 'Unpin' : 'Pin'}
+      </AppContextMenuItem>
       {showArchiveMenu ? (
         <AppContextMenuItem
           icon={
@@ -367,14 +296,6 @@ function ChannelRow({
           onSelect={() => onArchive(channel.id, !isArchived)}
         >
           {isArchived ? 'Restore' : 'Archive'}
-        </AppContextMenuItem>
-      ) : null}
-      {showCloseThreadMenu ? (
-        <AppContextMenuItem
-          icon={<X className="size-3.5" />}
-          onSelect={() => onCloseThread?.()}
-        >
-          Close thread
         </AppContextMenuItem>
       ) : null}
       {hasManagementMenu ? <AppContextMenuSeparator /> : null}
