@@ -206,9 +206,12 @@ push、泄露 thread 内容**。
   单调递增(全局 allocator 保证后插入更大)→ `latest_seq` 本身就是合法 CAS token,**一值三用**:CAS token
   + `newer_messages` 下界 + daemon observed boundary。语义源头仍是 `messages` 全局 seq + stream key
   (`MAX(seq) WHERE conversation_id=? AND thread_root_id <=> ?` 可重建 head,用于 backfill/校验)。
-  - **不建独立 `version` 字段。** slock-ai 同样用"消息序号本身"做 per-target boundary、无独立 version;
-    reaction 不带 `seenUpToSeq`、不参与 freshness。仅当未来 edit/reaction 也要触发重判(不推进 `latest_seq`
-    的 stream 内变更)时,才值得引入独立 version——届时再加,v1 不预留。
+  - **不建独立 `version` 字段。** slock-ai 同样用"消息序号本身"做 per-target boundary、无独立 version。
+    **注意(shiki 指正):slock 是有 reaction 机制的,但 reaction 被刻意排除在 freshness 之外**(只 POST/DELETE
+    `/messages/:id/reactions`,不带 `seenUpToSeq`)——所以"系统里存在 reaction"本身**永远不构成**引入 version
+    的理由。只有当我们**主动决定**让某种不推进 `latest_seq` 的变更(edit / 把 reaction 设计成"需重判")参与
+    freshness 时,才需要独立 version。v1 不这么设计(对齐 `docs/reactions-design.md`:reaction 独立表、不进消息流),
+    故单 `latest_seq` 足够,version 不预留。
 - **发送事务(乐观锁下沉到 stream 级):**
   1. resolve target stream(reply→`thread:<root>`,否则 `main`)。
   2. CAS = upsert:
