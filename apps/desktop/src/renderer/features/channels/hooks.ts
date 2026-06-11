@@ -35,6 +35,12 @@ import {
 import { applyTaskChangedToTaskByNumberCache } from '@/features/tasks/useTaskByNumber';
 
 const messagesKey = (cid: string) => ['channels', cid, 'messages'] as const;
+/** Cache key for one reply cluster's window. A cluster lives in the same
+ *  channel conversation as its root (rows with `thread_root_id = rootId`),
+ *  so it is keyed off the channel id plus the root message id — distinct
+ *  from the main-stream window (`messagesKey`) which excludes replies. */
+const clusterMessagesKey = (cid: string, rootId: string) =>
+  ['channels', cid, 'cluster', rootId, 'messages'] as const;
 const agentsKey = (cid: string) => ['channels', cid, 'agents'] as const;
 const MESSAGE_PAGE_LIMIT = 100;
 const AROUND_MESSAGE_LIMIT = 100;
@@ -298,6 +304,39 @@ function applyTaskChangedToCache(
   return changed ? { ...data, pages } : data;
 }
 
+/** Adjust a root's reply-count badge in the main-stream cache by `delta`.
+ *
+ *  The main window (cut3-6) excludes reply rows but carries a
+ *  `reply_counts_by_root` sidecar per page; a live reply must bump that
+ *  badge without inlining the reply itself. Each root appears in exactly
+ *  one page's window, so we update the page that already carries the key
+ *  or the page holding the root message (the first reply seeds the key).
+ *  Roots not in any loaded page are a no-op — the next window fetch
+ *  re-derives the authoritative count. */
+function bumpReplyCountInCache(
+  data: MessagesCache | undefined,
+  rootId: string,
+  delta = 1,
+): MessagesCache | undefined {
+  if (!data) return data;
+  return {
+    ...data,
+    pages: data.pages.map(page => {
+      const hasKey = Object.prototype.hasOwnProperty.call(
+        page.reply_counts_by_root,
+        rootId,
+      );
+      const hasRoot = page.messages.some(m => m.id === rootId);
+      if (!hasKey && !hasRoot) return page;
+      const next = Math.max(0, (page.reply_counts_by_root[rootId] ?? 0) + delta);
+      return {
+        ...page,
+        reply_counts_by_root: { ...page.reply_counts_by_root, [rootId]: next },
+      };
+    }),
+  };
+}
+
 /** Build a single messages-window page request URL.
  *
  *  Cursor params are mutually exclusive on the wire (the route 400s
@@ -311,6 +350,10 @@ async function fetchMessagesWindow(opts: {
   routeKind: ConversationRouteKind;
   pageParam?: MessagesPageParam;
   aroundMessageId?: string;
+  /** When set, fetch the reply cluster rooted at this message id
+   *  (`?thread_root_id=`) instead of the conversation's main stream.
+   *  Channel route only — threads have no nested clusters. */
+  threadRootId?: string;
   limit: number;
   signal?: AbortSignal;
 }): Promise<ConversationMessagesDto> {
@@ -323,6 +366,9 @@ async function fetchMessagesWindow(opts: {
     } else {
       params.set('after_seq', String(opts.pageParam.seq));
     }
+  }
+  if (opts.threadRootId !== undefined) {
+    params.set('thread_root_id', opts.threadRootId);
   }
   const path =
     opts.routeKind === 'thread'
@@ -461,6 +507,17 @@ export function useChannelMessages(
       if (e.kind === 'message') {
         const msg = e.payload?.message as MessageDto | undefined;
         if (!msg) return;
+        // Reply-cluster: replies live only in their cluster panel, never
+        // inline in the main stream (cut3-6 — the main window excludes
+        // `thread_root_id != null`). A live reply must not be appended
+        // here; it only bumps its root's reply-count badge. The cluster's
+        // own `useThreadCluster` window appends it for the open panel.
+        if (msg.thread_root_id !== null) {
+          qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
+            bumpReplyCountInCache(prev, msg.thread_root_id!),
+          );
+          return;
+        }
         const cur = qc.getQueryData<MessagesCache>(messagesKey(channelId));
         if (!lastPageIsTail(cur)) {
           // Window doesn't include the tail — don't lie. Mark the
@@ -493,6 +550,109 @@ export function useChannelMessages(
     hasNewerLiveGap,
     resetToLatest,
   };
+}
+
+/** Read window for one reply cluster: the root message plus its replies,
+ *  served by the cut3-4 `GET /api/channels/:id/messages?thread_root_id=`
+ *  route. Distinct cache key from the channel's main stream so the two
+ *  windows never cross-contaminate.
+ *
+ *  Replies arrive on the *channel* realtime stream (the cluster is not a
+ *  separate conversation), so this hook subscribes to the channel and
+ *  filters live `message` events down to this root's cluster — appending
+ *  at tail just like the main window. The parent channel's main-stream
+ *  hook independently bumps the reply-count badge for the same event. */
+export function useThreadCluster(
+  channelId: string | null,
+  rootMessageId: string | null,
+) {
+  const qc = useQueryClient();
+  const enabled = !!channelId && !!rootMessageId;
+  const key = clusterMessagesKey(channelId ?? 'none', rootMessageId ?? 'none');
+
+  const query = useInfiniteQuery<
+    ConversationMessagesDto,
+    Error,
+    InfiniteData<ConversationMessagesDto, MessagesPageParam>,
+    ReturnType<typeof clusterMessagesKey>,
+    MessagesPageParam
+  >({
+    queryKey: key,
+    enabled,
+    initialPageParam: undefined as MessagesPageParam,
+    queryFn: async ({ pageParam, signal }) =>
+      fetchMessagesWindow({
+        conversationId: channelId!,
+        routeKind: 'channel',
+        threadRootId: rootMessageId!,
+        pageParam,
+        limit: MESSAGE_PAGE_LIMIT,
+        signal,
+      }),
+    getPreviousPageParam: firstPage => {
+      if (!firstPage.has_more_before) return undefined;
+      const firstReal = firstPage.messages.find(
+        m => !m.id.startsWith('pending-'),
+      );
+      return firstReal ? { kind: 'before', seq: firstReal.seq } : undefined;
+    },
+    getNextPageParam: lastPage => {
+      if (!lastPage.has_more_after || lastPage.messages.length === 0) {
+        return undefined;
+      }
+      for (let i = lastPage.messages.length - 1; i >= 0; i--) {
+        const m = lastPage.messages[i]!;
+        if (!m.id.startsWith('pending-')) {
+          return { kind: 'after', seq: m.seq };
+        }
+      }
+      return undefined;
+    },
+  });
+
+  const messages = useMemo(
+    () => query.data?.pages.flatMap(page => page.messages) ?? [],
+    [query.data],
+  );
+
+  const onEvent = useCallback(
+    (e: ConversationStreamEvent) => {
+      if (!channelId || !rootMessageId) return;
+      if (e.kind === 'connected' && e.payload?.snapshot_required) {
+        void qc.invalidateQueries({ queryKey: key });
+        return;
+      }
+      if (e.kind === 'message') {
+        const msg = e.payload?.message as MessageDto | undefined;
+        if (!msg) return;
+        // Only this cluster's rows: a reply (`thread_root_id === root`) or
+        // an edit of the root itself. Main-line and other clusters are
+        // ignored here.
+        if (msg.thread_root_id !== rootMessageId && msg.id !== rootMessageId) {
+          return;
+        }
+        const cur = qc.getQueryData<MessagesCache>(key);
+        // Cluster windows open at tail and stay there; only append when
+        // the cached window still reaches the tail to avoid lying about
+        // position during a back-scroll.
+        if (!lastPageIsTail(cur)) return;
+        qc.setQueryData<MessagesCache>(key, prev =>
+          appendMessageToCache(prev, msg),
+        );
+      }
+      if (e.kind === 'task_changed') {
+        const task = e.payload as TaskChangedEvent | undefined;
+        if (!task?.message_id) return;
+        qc.setQueryData<MessagesCache>(key, prev =>
+          applyTaskChangedToCache(prev, task),
+        );
+      }
+    },
+    [qc, channelId, rootMessageId, key],
+  );
+  useConversationStream(enabled ? channelId : null, onEvent, 'channel');
+
+  return { ...query, data: messages };
 }
 
 /** Independent helper for "prime the messages cache around message X
@@ -664,8 +824,22 @@ export interface SendMessageInput {
 export function useSendMessage(
   channelId: string | null,
   routeKind: ConversationRouteKind = 'channel',
+  /** When set, the message is a reply into this root's cluster: the
+   *  request carries `reply_to_message_id` and all optimistic cache
+   *  writes target the cluster window (`clusterMessagesKey`) instead of
+   *  the channel's main stream. The reply's reply-count badge on the main
+   *  stream is bumped by the live `message` event, not here. */
+  threadRootId?: string | null,
 ) {
   const qc = useQueryClient();
+  // Optimistic writes land wherever the reply will actually be read: the
+  // cluster window for a reply, the main stream otherwise.
+  const targetKey =
+    channelId && threadRootId
+      ? clusterMessagesKey(channelId, threadRootId)
+      : channelId
+        ? messagesKey(channelId)
+        : null;
   return useMutation({
     mutationFn: async (input: SendMessageInput) => {
       if (!channelId) throw new Error('no channel selected');
@@ -673,11 +847,18 @@ export function useSendMessage(
         routeKind === 'thread'
           ? apiPaths.threadMessages(channelId)
           : apiPaths.channelMessages(channelId);
-      const body: { content: string; attachment_ids?: string[] } = {
+      const body: {
+        content: string;
+        attachment_ids?: string[];
+        reply_to_message_id?: string;
+      } = {
         content: input.content,
       };
       if (input.attachments && input.attachments.length > 0) {
         body.attachment_ids = input.attachments.map(a => a.id);
+      }
+      if (threadRootId) {
+        body.reply_to_message_id = threadRootId;
       }
       const res = await api<{ message: MessageDto }>(
         path,
@@ -690,8 +871,8 @@ export function useSendMessage(
     // onSuccess replaces it with the real row (live de-dupe prevents a
     // second append when the event arrives after onSuccess).
     onMutate: async (input: SendMessageInput) => {
-      if (!channelId) return undefined;
-      const key = messagesKey(channelId);
+      if (!channelId || !targetKey) return undefined;
+      const key = targetKey;
       await qc.cancelQueries({ queryKey: key });
       const prev = qc.getQueryData<MessagesCache>(key);
       // Invariant: never append optimistic messages to a non-tail
@@ -738,7 +919,7 @@ export function useSendMessage(
         attachments: snapshots,
         seq: Date.now(),
         created_at: Date.now(),
-        thread_root_id: null,
+        thread_root_id: threadRootId ?? null,
         task_number: null,
         task_status: null,
         task_assignee: null,
@@ -752,20 +933,18 @@ export function useSendMessage(
       return { prev, tempId };
     },
     onSuccess: (msg, _input, ctx) => {
-      if (!channelId || !ctx) return;
-      const key = messagesKey(channelId);
-      qc.setQueryData<MessagesCache>(key, cur =>
+      if (!targetKey || !ctx) return;
+      qc.setQueryData<MessagesCache>(targetKey, cur =>
         replacePendingMessageInCache(cur, ctx.tempId, msg),
       );
     },
     onError: (_err, _input, ctx) => {
-      if (!channelId || !ctx) return;
-      const key = messagesKey(channelId);
+      if (!targetKey || !ctx) return;
       // Roll back optimistic message so the user doesn't see a ghost.
       if (ctx.prev) {
-        qc.setQueryData<MessagesCache>(key, ctx.prev);
+        qc.setQueryData<MessagesCache>(targetKey, ctx.prev);
       } else {
-        qc.setQueryData<MessagesCache | undefined>(key, cur =>
+        qc.setQueryData<MessagesCache | undefined>(targetKey, cur =>
           removeMessageFromCache(cur, ctx.tempId),
         );
       }
