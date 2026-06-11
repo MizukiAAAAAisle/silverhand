@@ -219,21 +219,33 @@ push、泄露 thread 内容**。
   (否则会把 `conversations.latest_message_seq` 空推进、留下 burned seq)。确定顺序:
   1. resolve target stream(reply→`thread_root_id=<root>`,否则 `main` 即 `NULL`)。
   2. **reserve global seq**:`conversations.latest_message_seq += 1` → `newGlobalSeq`(无条件全局 allocator)。
-  3. **stream-head CAS upsert**(`seenStreamSeq` 必须 `=0` 才允许 INSERT 分支,否则 head 丢失/迁移漏 backfill
-     时 `seen>0` 无行会被误当首条 reply 插入成功):
-     ```
-     INSERT INTO conversation_stream_heads(conversation_id, thread_root_id, latest_seq)
-     SELECT :conv, :rootOrNull, :newGlobalSeq
-      WHERE :seenStreamSeq = 0
-     ON CONFLICT(conversation_id, thread_root_id)
-     DO UPDATE SET latest_seq = :newGlobalSeq WHERE latest_seq = :seenStreamSeq;
-     ```
+  3. **stream-head CAS,按 `seenStreamSeq` 分两条路径**(实测纠正,见下方"为何不用单条 upsert"):
+     - `seenStreamSeq == 0`(首条 reply / 该 stream 尚无 head):**INSERT,冲突即放弃**
+       ```sql
+       INSERT INTO conversation_stream_heads(conversation_id, thread_root_id, latest_seq)
+       VALUES(:conv, :rootOrNull, :newGlobalSeq)
+       ON CONFLICT DO NOTHING;     -- 无需 conflict target;changes()==0 → 并发首 reply 已赢 → stale
+       ```
+     - `seenStreamSeq > 0`(stream 已有 head):**plain UPDATE CAS**
+       ```sql
+       UPDATE conversation_stream_heads SET latest_seq = :newGlobalSeq
+        WHERE conversation_id = :conv
+          AND thread_root_id IS :rootOrNull   -- main 用 IS NULL;thread 用 = :root
+          AND latest_seq = :seenStreamSeq;     -- changes()==0 → 被人推进 or head 缺失 → stale
+       ```
+     - `changes()==0` → CAS 失败 → 走步骤 4 rollback。**`seen>0` 且行缺失时 UPDATE 自然匹配 0 行 → stale,
+       绝不会被误当首条 reply 插入**(这正是 blocker#1 要的守护,且比 SQL trick 更直白)。
+     > **为何不用单条 `INSERT…ON CONFLICT DO UPDATE`(我和 Cindy 一开始的方向,实测证伪):**
+     > ① 若给 INSERT 的 SELECT 加 `WHERE :seen=0` 守护,则 `seen>0` 时 SELECT 无行 → 根本进不到 ON CONFLICT
+     > → **DO UPDATE 永不触发,head 在所有非首 reply 上静默不推进**(`/tmp` 实测 `changes()=0`)。② 不加守护则
+     > `seen>0` 且行缺失会被误插成首 reply。③ 加上 Cindy blocker#3:partial unique index 当 conflict target 必须
+     > 带对应 `WHERE`,main/thread 两套 target 一条 SQL 覆盖不了。**分两路径(`DO NOTHING` 无 target + 裸 UPDATE)
+     > 三个坑全绕开**,且保留 `NULL=main` 数据语义(不引 `''` sentinel)。
   4. **0 changes → `throw` / rollback 整个事务**(allocator 的 +1 一并回滚,无 gap);事务外再查该 stream
      当前 `latest_seq` 组 stale 响应,`newer_messages` 用**同 stream + 同 deliverability/follower filter** 拉。
-  5. CAS 成功 → insert message(`seq=newGlobalSeq`, `thread_root_id=…`),提交。
-  - 首条 reply:stream 空、`seenStreamSeq=0`、无行 → INSERT(`WHERE :seen=0` 放行)成。并发首 reply:一条
-    INSERT 赢,另一条 `WHERE :seen=0` 的 INSERT 撞 unique → ON CONFLICT 的 `WHERE latest_seq=0` 又撞已改写行
-    → 0 changes → rollback → stale。
+  5. CAS 成功(`changes()==1`)→ insert message(`seq=newGlobalSeq`, `thread_root_id=…`),提交。
+  - 并发首 reply(都 `seen=0`):一条 `INSERT … ON CONFLICT DO NOTHING` 赢(`changes()=1`),另一条撞 partial
+    unique → `DO NOTHING` → `changes()=0` → rollback → stale。(以上路径均 `/tmp` better-sqlite3/sqlite3 实测过。)
 - **daemon observed 从单值 → map** `stream_key → observed_seq`(= 它读到的该 stream `latest_seq`)。send 带
   `(stream_key, seenStreamSeq)`;CAS 比的是同一 stream 的 head,而非 conv 全局 max。
 - **`newer_messages` 用完全相同的 deliverability + stream filter**,不能 `listAfterSeq(conversation_id)`。
@@ -325,6 +337,11 @@ push、泄露 thread 内容**。
   ```
   - `thread_root_id` 复用 §9 上面那套 root-valid trigger 约束(存在、同 conversation、root 自身
     `thread_root_id IS NULL`)。`stream_key='main'|'thread:<id>'` 只在 API/daemon wire 层编码/解码,DB 不见。
+  - **SQLite UPSERT 落地(Cindy 实测起头 + 我实测纠正):** CAS **不走** `ON CONFLICT … DO UPDATE`——一条 upsert
+    既绕不开 partial unique index 的 conflict-target 限制(main/thread 两套 target),`seen=0` 守护又会让 `seen>0`
+    的 DO UPDATE 永不触发(实测 `changes()=0`,head 静默不推进)。**改按 `seen` 分两路径:`seen=0` → `INSERT …
+    ON CONFLICT DO NOTHING`(无需 target);`seen>0` → 裸 `UPDATE … WHERE latest_seq=:seen`。** 两者都不需要
+    conflict target,partial index 限制不再相关。完整 SQL + 实测结论见 §6.4 步骤 3。
   - **无 `version` 列**(原 §14 已拍 + Cindy slock 调研 #task:1023 印证:slock 也用消息 seq 做 per-target
     boundary、无独立 version;reaction 不参与 freshness)。仅未来 edit/reaction 要触发重判时才加。
   - `latest_seq` 语义源头 = `MAX(messages.seq) WHERE conversation_id=? AND thread_root_id <=> ?`,head 是其物化,
