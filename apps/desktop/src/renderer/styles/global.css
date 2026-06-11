@@ -780,7 +780,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   20%, 60% { background-color: var(--accent-soft); }
 }
 .msg-jump-flash {
-  animation: msg-jump-flash 1.6s ease-in-out;
+  animation: msg-jump-flash 3s ease-in-out;
 }
 
 /* Tool-badge bump — plays when a tool call count increments or a new

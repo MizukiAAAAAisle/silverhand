@@ -1462,7 +1462,7 @@ function MessageList({
             setFlashedMessageId(null);
             onJumped?.();
           }
-        }, 1600);
+        }, 3000);
         cleanup = () => {
           clearTimeout(timer);
           target.classList.remove('msg-jump-flash');
