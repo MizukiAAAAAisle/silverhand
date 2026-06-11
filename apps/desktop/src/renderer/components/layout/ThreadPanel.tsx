@@ -84,9 +84,14 @@ export function ThreadPanel({
   // restricts the (channel-scoped) activity bubble to this thread's agents.
   const followers = useThreadFollowers(channelId, rootMessageId);
   const viewerFollowing = followers.data?.viewer_following ?? false;
-  // Only filter once we have authoritative data — degrade to unrestricted
-  // on load/error rather than hiding all activity.
-  const followerAgentIds = followers.data?.follower_agent_ids ?? null;
+  // Until we have an authoritative follower snapshot, restrict the
+  // (channel-scoped) activity bubble to an EMPTY allow-list so it shows
+  // nothing — never fall back to unrestricted, which would leak main-line /
+  // other-cluster agents into this thread. Showing full activity under
+  // unknown state is wrong info, not a graceful fallback (Cindy #1047 cut B
+  // review). `useThreadFollowers` keeps this snapshot fresh against the
+  // thread message stream (auto-follow side effects).
+  const followerAgentIds = followers.data?.follower_agent_ids ?? [];
   const followThread = useFollowThread(channelId, rootMessageId);
   const unfollowThread = useUnfollowThread(channelId, rootMessageId);
   const followPending = followThread.isPending || unfollowThread.isPending;

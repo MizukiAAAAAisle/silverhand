@@ -773,9 +773,11 @@ export function useThreadFollowers(
   channelId: string | null,
   rootMessageId: string | null,
 ) {
+  const qc = useQueryClient();
   const enabled = !!channelId && !!rootMessageId;
-  return useQuery<ThreadFollowerStateDto>({
-    queryKey: threadFollowersKey(channelId ?? 'none', rootMessageId ?? 'none'),
+  const key = threadFollowersKey(channelId ?? 'none', rootMessageId ?? 'none');
+  const query = useQuery<ThreadFollowerStateDto>({
+    queryKey: key,
     enabled,
     queryFn: ({ signal }) =>
       api<ThreadFollowerStateDto>(
@@ -783,6 +785,36 @@ export function useThreadFollowers(
         { signal },
       ),
   });
+
+  // The follower set is mutated as a SIDE EFFECT of thread messages:
+  // backend auto-follows the author / target / @-mentioned agents on each
+  // reply (reply / mention / target_author paths). So this snapshot must
+  // track the thread message stream — without it, an open panel keeps a
+  // stale `follower_agent_ids` (wrong activity-bubble allow-list) and stale
+  // `viewer_following` after someone replies / @-mentions in the cluster.
+  // Mirror `useThreadCluster`'s event filter: any reply to this root (or a
+  // reconnect that needs a fresh snapshot) invalidates and refetches.
+  const onEvent = useCallback(
+    (e: ConversationStreamEvent) => {
+      if (!rootMessageId) return;
+      if (e.kind === 'connected' && e.payload?.snapshot_required) {
+        void qc.invalidateQueries({ queryKey: key });
+        return;
+      }
+      if (e.kind !== 'message') return;
+      const msg = e.payload?.message as MessageDto | undefined;
+      if (!msg) return;
+      if (msg.thread_root_id !== rootMessageId && msg.id !== rootMessageId) {
+        return;
+      }
+      void qc.invalidateQueries({ queryKey: key });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [qc, rootMessageId, key.join(':')],
+  );
+  useConversationStream(enabled ? channelId : null, onEvent, 'channel');
+
+  return query;
 }
 
 /** Subscribe the current human viewer to a reply cluster
