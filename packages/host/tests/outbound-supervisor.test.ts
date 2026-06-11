@@ -93,7 +93,7 @@ function makeFixture(): SupervisorFixture {
   const spawned: FakeClient[] = [];
   const readyEvent = (): Extract<EventFrame, { event: 'ready' }> => ({
     event: 'ready',
-    protocol_version: 1,
+    protocol_version: 2,
     daemon_version: '0.0.0-test',
     daemon_id: 'local',
     instance_id: 'instance-test',

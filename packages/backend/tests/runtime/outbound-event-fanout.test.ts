@@ -2060,7 +2060,7 @@ function readyEvent(): OutboundDaemonToServerEventFrame {
     direction: 'daemon_to_server',
     type: 'event',
     kind: 'ready',
-    protocol_version: 1,
+    protocol_version: 2,
     daemon_version: '0.0.0-test',
     daemon_id: 'local',
     instance_id: 'instance-1',

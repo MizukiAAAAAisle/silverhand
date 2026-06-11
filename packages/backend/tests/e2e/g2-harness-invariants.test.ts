@@ -33,7 +33,7 @@ const fakeReadyFrame: OutboundDaemonToServerEventFrame = {
   direction: 'daemon_to_server',
   type: 'event',
   kind: 'ready',
-  protocol_version: 1,
+  protocol_version: 2,
   daemon_version: 'test',
   daemon_id: 'local',
   instance_id: '__harness_pin__',

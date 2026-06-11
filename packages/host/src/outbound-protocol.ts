@@ -116,7 +116,13 @@ export {
 
 const FrameIdSchema = z.string().min(1);
 
-export const OUTBOUND_PROTOCOL_VERSION = 1;
+// v2 (reply-cluster §6.4): the outbound `runtime_start` / `runtime_wake`
+// commands reuse the same strict `RuntimeStartParamsSchema` /
+// `RuntimeWakeParamsSchema` as the local-socket protocol, which gained the
+// `deliveries` wire field. A v1 standalone daemon would strict-reject the
+// extra key, so this transport's version bumps in lock-step with
+// HOST_PROTOCOL_VERSION to fail loud at attach instead of on the command.
+export const OUTBOUND_PROTOCOL_VERSION = 2;
 
 // ── server → daemon command catalogue ──────────────────────────────
 

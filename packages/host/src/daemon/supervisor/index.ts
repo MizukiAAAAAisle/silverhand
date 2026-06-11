@@ -724,6 +724,7 @@ export class Supervisor implements SupervisorContract {
       ok: true,
       message_id: messageId,
       ...(typeof messageSeq === 'number' ? { message_seq: messageSeq } : {}),
+      thread_root_id: resolvedRoot,
     };
   }
 

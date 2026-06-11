@@ -530,7 +530,7 @@ describe('LocalOutboundFrameServer', () => {
 function makeReadyEvent(): Extract<EventFrame, { event: 'ready' }> {
   return {
     event: 'ready',
-    protocol_version: 1,
+    protocol_version: 2,
     daemon_version: 'test',
     daemon_id: 'local',
     instance_id: 'inst-1',

@@ -74,12 +74,17 @@ import {
 
 // ── Protocol handshake ─────────────────────────────────────────────
 //
-// This is the v1 starting point for the daemon IPC protocol. Bumping
-// the protocol version is a compatibility event, not a package-version
-// bump: clients fail loud during `hello` if the daemon speaks a
-// different version.
+// Bumping the protocol version is a compatibility event, not a
+// package-version bump: clients fail loud during `hello` if the daemon
+// speaks a different version.
+//
+// v2 (reply-cluster §6.4): `runtime_start.startup_delivery.deliveries`,
+// `runtime_wake.deliveries`, and `agent_message_send.reply_to_message_id`
+// were added to strict command schemas. A v1 daemon strict-parses those
+// as unknown keys and rejects the command, so the version MUST gate at
+// hello rather than silently breaking business commands.
 
-export const HOST_PROTOCOL_VERSION = 1;
+export const HOST_PROTOCOL_VERSION = 2;
 
 export const KNOWN_CAPABILITIES_V1 = [
   'runtime.claude',
@@ -317,6 +322,11 @@ export const AgentMessageSendResultSchema = z.union([
       ok: z.literal(true),
       message_id: z.string().min(1),
       message_seq: z.number().int().nonnegative().optional(),
+      /** Reply-cluster root the sent message belongs to (§6.4): null on
+       *  the main line, else the cluster's root message id. Surfaced from
+       *  the backend send response so a caller (CLI) can report which
+       *  stream the message landed in. */
+      thread_root_id: z.string().min(1).nullable().optional(),
     })
     .strict(),
   AgentBackendHttpErrorSchema,
