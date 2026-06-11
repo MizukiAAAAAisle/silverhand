@@ -952,7 +952,6 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     logger: silentLogger,
     serverConfig: () => ctx.serverConfig,
     lastSpawnAtByAgent: ctx.lastSpawnAtByAgent,
-    taskService: () => ctx.taskService,
   });
   ctx.taskService = new TaskService({
     db,

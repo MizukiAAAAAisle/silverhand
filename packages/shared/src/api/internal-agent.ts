@@ -98,14 +98,6 @@ export const AgentSendMessageOutputSchema = z.object({
 });
 export type AgentSendMessageOutput = z.infer<typeof AgentSendMessageOutputSchema>;
 
-export const AgentSpawnChildInputSchema = z.object({
-  title: z.string().min(1),
-  members: z.array(z.string().min(1)).optional(),
-  context_summary: z.string().min(1),
-  initial_prompt: z.string().min(1),
-});
-export type AgentSpawnChildInput = z.infer<typeof AgentSpawnChildInputSchema>;
-
 export const AgentCreateChannelInputSchema = z.object({
   title: z.string().min(1).max(128),
   context_summary: z.string().min(1),
@@ -114,18 +106,6 @@ export const AgentCreateChannelInputSchema = z.object({
 export type AgentCreateChannelInput = z.infer<
   typeof AgentCreateChannelInputSchema
 >;
-
-export const AgentCloseThreadInputSchema = z.object({
-  summary: z.string().min(1),
-  posted_to_parent: z.boolean().optional(),
-  /** Explicit override: bypass the "thread has no open tasks" guard.
-   *  Set ONLY when the caller has consciously decided to leave one or
-   *  more tasks in `todo`/`in_progress`/`in_review` after the thread is
-   *  closed. The server still rejects `already_closed` and
-   *  `has_active_children` regardless of this flag. */
-  allow_open_tasks: z.boolean().optional(),
-});
-export type AgentCloseThreadInput = z.infer<typeof AgentCloseThreadInputSchema>;
 
 /** Agent voluntary thread follow/unfollow (reply-cluster §5 B / §8). The
  *  thread is identified by a *message id* — the cluster root, or any reply

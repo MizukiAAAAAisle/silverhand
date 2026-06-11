@@ -10,8 +10,12 @@
  *      registry fails CI.
  *
  *   2. Every `SYSTEM_SUBTYPES` entry has at least one producer in
- *      `packages/backend/src/**`. A registry entry with no producer
- *      fails CI — either delete the entry or wire up the producer.
+ *      `packages/backend/src/**`, except read-only legacy thread
+ *      subtypes whose producers were intentionally retired while the
+ *      renderer still keeps structured display support for old DB rows.
+ *      A registry entry with no producer and no explicit retirement
+ *      fails CI — either delete the entry, wire up the producer, or
+ *      mark the retirement here with the owning refactor.
  *
  * The grep is deliberately literal-only: producers must pass a string
  * literal through the helper (`systemSubtype('mention_cc')`,
@@ -48,6 +52,14 @@ const TASK_SUBTYPE_CALL =
   /\btaskSystemSubtype\(\s*['"]([a-z_][a-z0-9_]*)['"]\s*\)/g;
 const TASK_SUBTYPE_DYNAMIC =
   /\btaskSystemSubtype\(\s*[A-Za-z_][A-Za-z0-9_.]*\s*\)/g;
+
+const RETIRED_RENDERED_SUBTYPES = new Set<string>([
+  // Reply-cluster cut3 removed isolated thread create/close producers,
+  // but old rows remain readable and still use their structured desktop
+  // renderer until the legacy UI path is fully retired.
+  'child_context',
+  'thread_summary',
+]);
 
 interface ProducerHit {
   file: string;
@@ -127,7 +139,9 @@ describe('system message subtype drift guard', () => {
 
     const orphans: string[] = [];
     for (const subtype of SYSTEM_SUBTYPES) {
-      if (!produced.has(subtype)) orphans.push(subtype);
+      if (!produced.has(subtype) && !RETIRED_RENDERED_SUBTYPES.has(subtype)) {
+        orphans.push(subtype);
+      }
     }
     expect(
       orphans,

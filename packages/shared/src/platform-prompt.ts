@@ -4,8 +4,6 @@ import type { RuntimeKind } from './db/schema.js';
 type WorkspaceUiKind = 'regular' | 'dm';
 type ToolName =
   | 'send_message'
-  | 'create_thread'
-  | 'close_thread'
   | 'create_channel'
   | 'list_tasks'
   | 'create_tasks'
@@ -25,8 +23,6 @@ type ToolName =
 
 const CLI_COMMANDS: Record<ToolName, string> = {
   send_message: '`silverhand message send`',
-  create_thread: '`silverhand thread create`',
-  close_thread: '`silverhand thread close`',
   create_channel: '`silverhand channel create`',
   list_tasks: '`silverhand task list`',
   create_tasks: '`silverhand task create`',
@@ -135,8 +131,6 @@ export interface DriverPromptContext {
 export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const t = (name: ToolName): string => CLI_COMMANDS[name];
   const sendMessage = t('send_message');
-  const createThread = t('create_thread');
-  const closeThread = t('close_thread');
   const createChannel = t('create_channel');
   const addMember = t('add_member');
   const listTasks = t('list_tasks');
@@ -161,10 +155,7 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const hasConsensus = input.currentConsensus !== null;
   const sessionContextBlock = renderSessionContext(
     input.sessionContext,
-    {
-      parentSend: '`silverhand message send --target parent`',
-      closeThread: '`silverhand thread close`',
-    },
+    {},
     { hasConsensus },
   );
   const profileDir = normalizeProfileDir(input.activeProfileDir);
@@ -441,12 +432,6 @@ id** (the message the cluster hangs under).
 context?** That is what a channel is for — open one with ${createChannel}
 (only when the user asks). Threads exist for shared-context side-discussions,
 nothing else.
-
-${createThread} opens a **legacy** isolated-session thread and is retained
-only for backward compatibility — do not use it for new work (use a reply
-cluster, or ${createChannel} for isolation). ${closeThread} likewise applies
-only to those legacy threads; a reply cluster has no close concept. The
-legacy isolated-thread path will be removed.
 
 ## Channels (when to create a new one)
 
@@ -796,7 +781,7 @@ should stop and be reported.
 Some operations are gated by per-workspace capabilities a human
 owner/admin grants you. When you lack one, the command fails with a
 \`capability_denied\` error whose \`details.capability\` names the missing
-bucket (e.g. \`send_messages\`, \`create_threads\`, \`manage_schedules\`);
+bucket (e.g. \`send_messages\`, \`create_channels\`, \`manage_schedules\`);
 task claim/unclaim/status instead return a result entry with
 \`code: 'capability_denied'\` and a \`capability\` field. This is **not**
 retriable — do not loop. Report that you lack the capability and which one,
@@ -856,9 +841,6 @@ and let the human grant it.
 - **\`silverhand task status\`**: Move a task through its status workflow.
 - **\`silverhand thread follow\`** / **\`silverhand thread unfollow\`**:
   Subscribe / unsubscribe to a reply cluster by \`--root <message_id>\`.
-- **\`silverhand thread create\`** / **\`silverhand thread close\`**:
-  **Legacy** isolated-session threads only — retained for backward
-  compatibility, not for new work (reply via \`message send --reply-to\`).
 - **\`silverhand channel create\`**: Create a top-level channel when requested.
 - **\`silverhand channel list\`**: List channels, optionally by workspace.
 - **\`silverhand workspace list\`**: List workspaces you can access.
@@ -871,7 +853,7 @@ and let the human grant it.
 
 function renderSessionContext(
   sc: SessionContextInput,
-  tools: { parentSend: string; closeThread: string },
+  _tools: Record<string, never>,
   opts: { hasConsensus: boolean },
 ): string {
   const lines: string[] = [];
@@ -896,17 +878,13 @@ function renderSessionContext(
     }
     if (sc.isAgentSpawnedChild) {
       lines.push(
-        `- This is a **Thread** opened off the parent channel "${sc.parentSessionTitle ?? '(unknown)'}".`,
-        `  Stay focused on the sub-task. Use ${tools.parentSend}`,
-        `  only for blockers; report the final result via ${tools.closeThread}.`,
+        `- This is a legacy isolated Thread under the parent channel "${sc.parentSessionTitle ?? '(unknown)'}".`,
+        `  Legacy isolated threads are read-only during the reply-cluster migration.`,
       );
     } else {
       lines.push(
-        `- This is a **user-opened Thread** under the parent channel "${sc.parentSessionTitle ?? '(unknown)'}".`,
-        `  Stay focused on the thread. Use ${tools.parentSend}`,
-        `  only for blockers. When the thread reaches a conclusion, post a`,
-        `  visible summary in this thread and ask the user whether to close it.`,
-        `  Only call ${tools.closeThread} after the user explicitly confirms.`,
+        `- This is a legacy user-opened Thread under the parent channel "${sc.parentSessionTitle ?? '(unknown)'}".`,
+        `  Legacy isolated threads are read-only during the reply-cluster migration.`,
       );
     }
   }

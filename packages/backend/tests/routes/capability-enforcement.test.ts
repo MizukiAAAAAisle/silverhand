@@ -105,22 +105,6 @@ describe('capability enforcement — route-level gates', () => {
     });
   });
 
-  it('create-thread: denies without create_threads', async () => {
-    t = buildTestApp();
-    const team = await makeTeam(t);
-    caps(t).replaceSet(team.workspaceId, team.alice, ['read_messages']);
-
-    const denied = await http(t).post(
-      internal(team.channelId, team.alice, 'create-thread'),
-      { title: 'x', members: [team.alice], context_summary: 'c', initial_prompt: 'p' },
-    );
-    expect(denied.status).toBe(403);
-    expect(await denied.json()).toMatchObject({
-      code: 'capability_denied',
-      capability: 'create_threads',
-    });
-  });
-
   it('list-channels: denies without read_messages', async () => {
     t = buildTestApp();
     const team = await makeTeam(t);

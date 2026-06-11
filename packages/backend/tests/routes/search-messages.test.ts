@@ -178,17 +178,12 @@ describe('agent list_channels / search_messages routes', () => {
     const searchChannel = await createChannel(t, workspaceId, 'search-channel', [
       aliceId,
     ]);
-    const thread = await (
-      await http(t).post(
-        `/internal/conversations/${searchChannel}/agents/${aliceId}/create-thread`,
-        {
-          title: 'thread',
-          members: [aliceId],
-          context_summary: 'x',
-          initial_prompt: 'thread seed',
-        },
-      )
-    ).json() as any;
+    const conversations = new ConversationRepo(t.ctx.db);
+    const thread = conversations.insertThread({
+      channelId: searchChannel,
+      title: 'thread',
+    });
+    conversations.addAgent(thread.id, aliceId);
     const messages = new MessageRepo(t.ctx.db);
     const channelHit = messages.insertForConversation({
       conversationId: searchChannel,
@@ -196,7 +191,7 @@ describe('agent list_channels / search_messages routes', () => {
       content: 'channel-scope shared token',
     });
     const threadHit = messages.insertForConversation({
-      conversationId: thread.thread_id,
+      conversationId: thread.id,
       fromKind: 'user',
       content: 'thread channel-scope shared token',
     });
@@ -215,9 +210,9 @@ describe('agent list_channels / search_messages routes', () => {
     const threadRef = body.hits.find((h: any) => h.message_ref.id === threadHit.id)
       .message_ref;
     expect(threadRef).toMatchObject({
-      conversation_id: thread.thread_id,
+      conversation_id: thread.id,
       channel_id: searchChannel,
-      thread_id: thread.thread_id,
+      thread_id: thread.id,
     });
   });
 

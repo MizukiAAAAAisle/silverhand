@@ -1,9 +1,7 @@
 import type { Database as Db } from 'better-sqlite3';
 import {
-  type AgentRunTerminalReason,
   type MessageDto,
   type ServerConfig,
-  type ThreadCloseOpenTaskDetail,
   type ThreadDto,
   systemSubtype,
 } from '@silverhand/shared';
@@ -13,19 +11,17 @@ import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
-import type { TaskService } from './task-service.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import {
-  assertActorConversationMatch,
-  type AgentPrincipal,
   type UserPrincipal,
 } from '../auth/principal.js';
 
 /**
- * ThreadService is the single owner of thread create / close business side
- * effects. Routes translate auth and input shapes, then call wrappers; they
- * must not replicate insertThread, membership fan-out, seed messages,
- * realtime publish, agent delivery/start/stop, or run resolution.
+ * ThreadService is the single owner of legacy message-anchored thread creation
+ * side effects while the renderer is migrated to reply clusters. Routes
+ * translate auth and input shapes, then call wrappers; they must not replicate
+ * insertThread, membership fan-out, seed messages, realtime publish, or agent
+ * delivery/start work.
  *
  * Contract:
  * - Routes call public wrappers only. The private core owns common create
@@ -37,10 +33,6 @@ import {
  * - DB mutations are transactional. Realtime publishes happen after commit
  *   and before best-effort delivery/start/stop work.
  */
-
-export type ThreadActor =
-  | UserPrincipal
-  | AgentPrincipal;
 
 export type MessageErrorCode = 'message_not_found';
 
@@ -82,18 +74,6 @@ export class MembershipError extends Error {
   }
 }
 
-export type ActorErrorCode = 'agent_not_found' | 'agent_not_member_of_thread';
-
-export class ActorError extends Error {
-  constructor(
-    public readonly code: ActorErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'ActorError';
-  }
-}
-
 export type SeedAgentErrorCode = 'seed_agent_not_found';
 
 export class SeedAgentError extends Error {
@@ -103,44 +83,6 @@ export class SeedAgentError extends Error {
   ) {
     super(message);
     this.name = 'SeedAgentError';
-  }
-}
-
-export type ThreadErrorCode =
-  | 'thread_not_found'
-  | 'already_closed'
-  | 'has_active_children';
-
-export class ThreadError extends Error {
-  constructor(
-    public readonly code: ThreadErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'ThreadError';
-  }
-}
-
-/**
- * Specialized close-thread failure: the thread still has tasks in
- * `todo` / `in_progress` / `in_review`. Separate from `ThreadError`
- * because it carries a structured `blockingTasks` payload that the
- * route surfaces as `details.blocking_tasks` for the CLI to render,
- * and because it maps to the top-level `code: 'conflict'` shape
- * (the silverhand-specific reason lives in `details.reason`) so the
- * CLI's stable ERROR_CODES enum keeps working.
- *
- * Override: callers pass `allowOpenTasks: true` to `closeThread` to
- * bypass this check after the human has consciously decided to leave
- * residue. The `already_closed` / `has_active_children` / actor /
- * membership checks are NOT bypassed.
- */
-export class ThreadOpenTasksError extends Error {
-  constructor(
-    public readonly blockingTasks: readonly ThreadCloseOpenTaskDetail[],
-  ) {
-    super(formatThreadOpenTasksMessage(blockingTasks));
-    this.name = 'ThreadOpenTasksError';
   }
 }
 
@@ -155,11 +97,6 @@ export interface ThreadServiceOptions {
   logger: BackendLogger;
   serverConfig: ServerConfig | (() => ServerConfig);
   lastSpawnAtByAgent: Map<string, number>;
-  /** Late-bound: TaskService is constructed after ThreadService in
-   *  `index.ts`, so we accept a getter and resolve on each call. The
-   *  closeThread guard only needs `list(...)`, so we accept the smaller
-   *  shape rather than the full TaskService type to make tests easier. */
-  taskService: () => Pick<TaskService, 'list'>;
 }
 
 interface CreateThreadCoreInput {
@@ -193,16 +130,6 @@ interface CreateThreadCoreTxResult {
   insertedSeeds: InsertedSeedMessage[];
 }
 
-interface CloseThreadTxResult {
-  thread: ThreadDto;
-  parentConversationId: string;
-  summaryMessage: MessageDto | null;
-  parentRecipients: ReturnType<ConversationRepo['listAgents']>;
-  threadRecipients: ReturnType<ConversationRepo['listAgents']>;
-}
-
-const CONVERSATION_CLOSED: AgentRunTerminalReason = 'conversation_closed';
-
 export class ThreadService {
   private readonly db: Db;
   private readonly conversations: ConversationRepo;
@@ -214,7 +141,6 @@ export class ThreadService {
   private readonly logger: BackendLogger;
   private readonly getServerConfig: () => ServerConfig;
   private readonly lastSpawnAtByAgent: Map<string, number>;
-  private readonly getTaskService: () => Pick<TaskService, 'list'>;
 
   constructor(opts: ThreadServiceOptions) {
     this.db = opts.db;
@@ -231,7 +157,6 @@ export class ThreadService {
         ? serverConfig
         : () => serverConfig;
     this.lastSpawnAtByAgent = opts.lastSpawnAtByAgent;
-    this.getTaskService = opts.taskService;
   }
 
   async createThreadFromMessage(input: {
@@ -347,217 +272,6 @@ export class ThreadService {
     return { thread, reused: false };
   }
 
-  async createThreadFromAgent(input: {
-    parentConversationId: string;
-    actor: AgentPrincipal;
-    title: string;
-    contextSummary: string;
-    initialPrompt: string;
-    requestedMembers?: string[];
-  }): Promise<{ thread: ThreadDto }> {
-    assertActorConversationMatch(input.actor, input.parentConversationId);
-    const parent = this.conversations.getChannelLike(input.parentConversationId);
-    if (!parent) {
-      throw new ParentError('parent_not_found', 'parent channel not found');
-    }
-    const spawnerAgentId = input.actor.agentId;
-    if (!this.agents.get(spawnerAgentId)) {
-      throw new ActorError('agent_not_found', 'agent not found');
-    }
-    const parentMembers = new Set(
-      this.conversations.listAgents(parent.id).map(member => member.agent_id),
-    );
-    if (!parentMembers.has(spawnerAgentId)) {
-      throw new MembershipError(
-        'agent_not_member_of_parent',
-        'agent is not a member of the parent channel',
-      );
-    }
-    const requestedMembers =
-      input.requestedMembers && input.requestedMembers.length > 0
-        ? input.requestedMembers
-        : [...parentMembers];
-    for (const memberId of requestedMembers) {
-      if (!parentMembers.has(memberId)) {
-        throw new MembershipError(
-          'member_not_in_parent',
-          `agent ${memberId} is not a member of the parent channel`,
-          memberId,
-        );
-      }
-    }
-    const thread = await this.createThreadCore({
-      parentChannelId: parent.id,
-      title: input.title,
-      spawnedByAgentId: spawnerAgentId,
-      memberAgentIds: dedupe([...requestedMembers, spawnerAgentId]),
-      seedMessages: [
-        {
-          fromKind: 'system',
-          content:
-            `Inherited context from parent channel '${parent.title}': ${input.contextSummary}`,
-          metadata: {
-            subtype: systemSubtype('child_context'),
-            parent_conversation_id: parent.id,
-            parent_title: parent.title,
-            summary: input.contextSummary,
-          },
-          deliverTo: spawnerAgentId,
-        },
-        {
-          fromKind: 'agent',
-          fromAgentId: spawnerAgentId,
-          content: input.initialPrompt,
-          distributeToOthers: { excludeAgentId: spawnerAgentId },
-        },
-      ],
-      autoStart: { mode: 'all' },
-    });
-    return { thread };
-  }
-
-  async closeThread(input: {
-    threadId: string;
-    actor: ThreadActor;
-    summary: string;
-    postedToParent: boolean;
-    /** Explicit escape hatch — bypass the "thread has no open tasks"
-     *  guard only. Other pre-close checks (`already_closed`,
-     *  `has_active_children`, actor / membership) still apply. */
-    allowOpenTasks?: boolean;
-  }): Promise<{ thread: ThreadDto }> {
-    assertActorConversationMatch(input.actor, input.threadId);
-    const thread = this.conversations.getThread(input.threadId);
-    if (!thread) {
-      throw new ThreadError('thread_not_found', 'thread not found');
-    }
-    if (thread.closed_at !== null) {
-      throw new ThreadError('already_closed', 'already closed');
-    }
-    if (this.conversations.countActiveChildren(thread.id) > 0) {
-      throw new ThreadError(
-        'has_active_children',
-        'close all child threads first',
-      );
-    }
-    if (input.actor.kind === 'agent') {
-      if (!this.agents.get(input.actor.agentId)) {
-        throw new ActorError('agent_not_found', 'agent not found');
-      }
-      if (!this.conversations.getAgent(thread.id, input.actor.agentId)) {
-        throw new ActorError(
-          'agent_not_member_of_thread',
-          'agent is not a member of this thread',
-        );
-      }
-    }
-    // Open-task guard. Placed AFTER actor + membership so a non-member
-    // or unauthorized actor never sees a `blocking_tasks` summary
-    // (which is just task titles/assignees, but is still leakage we
-    // don't want gated only by HTTP 409 vs 403 timing). The check
-    // queries the thread by id directly — TaskService.list itself
-    // scopes agent actors by workspace, which is wider than needed
-    // here, so the AND on `conversationId` does the final narrowing.
-    if (!input.allowOpenTasks) {
-      const openTasks = this.getTaskService().list({
-        actor: input.actor,
-        conversationId: thread.id,
-        status: OPEN_TASK_STATUSES,
-      });
-      if (openTasks.length > 0) {
-        throw new ThreadOpenTasksError(
-          openTasks.map(t => ({
-            task_number: t.task_number,
-            status: t.status as ThreadCloseOpenTaskDetail['status'],
-            title: t.title,
-            assignee_name: t.assignee?.name ?? null,
-            assignee_agent_id:
-              t.assignee?.type === 'agent' ? t.assignee.id : null,
-          })),
-        );
-      }
-    }
-
-    const closed = this.db.transaction((): CloseThreadTxResult => {
-      this.conversations.close(thread.id, input.summary);
-      const closedThread = this.conversations.getThread(thread.id);
-      if (!closedThread) {
-        throw new ThreadError('thread_not_found', 'thread not found');
-      }
-      const parent = this.conversations.get(thread.channel_id);
-      const parentOpen = parent !== null && parent.closed_at === null;
-      let summaryMessage: MessageDto | null = null;
-      if (!input.postedToParent && parentOpen && parent) {
-        const closedBy = this.actorLabel(input.actor);
-        // The summary is user/agent-supplied markdown, often with
-        // headings, lists or code. Put it on its own line(s) so block
-        // markdown parses, and ship the raw fields in metadata so the
-        // renderer can lay it out as a structured card without having
-        // to re-parse the prose header.
-        summaryMessage = this.messages.insertForConversation({
-          conversationId: parent.id,
-          fromKind: 'system',
-          content:
-            `Thread "${thread.title}" closed by ${closedBy}.\n\n` +
-            input.summary,
-          metadata: {
-            subtype: systemSubtype('thread_summary'),
-            thread_id: thread.id,
-            thread_title: thread.title,
-            closed_by: closedBy,
-            summary: input.summary,
-          },
-        });
-      }
-      return {
-        thread: closedThread,
-        parentConversationId: thread.channel_id,
-        summaryMessage,
-        parentRecipients: parent ? this.conversations.listAgents(parent.id) : [],
-        threadRecipients: this.conversations.listAgents(thread.id),
-      };
-    })();
-
-    if (closed.summaryMessage) {
-      this.events.publish(closed.parentConversationId, {
-        kind: 'message',
-        payload: { message: closed.summaryMessage },
-      });
-    }
-    this.events.publish(closed.parentConversationId, {
-      kind: 'thread_updated',
-      payload: {
-        parent_conversation_id: closed.parentConversationId,
-        thread_id: closed.thread.id,
-      },
-    });
-    this.events.publishToScope(
-      `workspace:${closed.thread.workspace_id}`,
-      'workspace_channels_changed',
-      {
-        workspace_id: closed.thread.workspace_id,
-        channel_id: closed.thread.id,
-      },
-    );
-    this.runtimeHost.resolveConversationRuns(
-      closed.thread.id,
-      CONVERSATION_CLOSED,
-    );
-
-    if (closed.summaryMessage) {
-      void this.deliverBestEffort(
-        closed.parentConversationId,
-        closed.summaryMessage.id,
-        closed.parentRecipients,
-        null,
-        'thread-service: parent summary delivery failed',
-      );
-    }
-    void this.stopThreadMembersBestEffort(closed.thread.id, closed.threadRecipients);
-
-    return { thread: closed.thread };
-  }
-
   private async createThreadCore(input: CreateThreadCoreInput): Promise<ThreadDto> {
     const memberAgentIds = dedupe(input.memberAgentIds);
     if (memberAgentIds.length === 0) {
@@ -648,12 +362,6 @@ export class ThreadService {
     return created.thread;
   }
 
-  private actorLabel(actor: ThreadActor): string {
-    if (actor.kind === 'user') return userLabel(actor.userId);
-    const agent = this.agents.get(actor.agentId);
-    return `@${agent?.name ?? 'agent'}`;
-  }
-
   private async deliverOneBestEffort(
     conversationId: string,
     agentId: string,
@@ -715,26 +423,10 @@ export class ThreadService {
           this.runtimeHost.start(conversationId, ca.agent_id).catch(err => {
             this.logger.warn(
               { conversationId, agentId: ca.agent_id, err },
-              'thread-service: auto-start on agent-created thread failed',
+              'thread-service: auto-start on legacy thread failed',
             );
           }),
         ),
-    );
-  }
-
-  private async stopThreadMembersBestEffort(
-    conversationId: string,
-    members: ReturnType<ConversationRepo['listAgents']>,
-  ): Promise<void> {
-    await Promise.all(
-      members.map(ca =>
-        this.runtimeHost.stop(conversationId, ca.agent_id, 'hard').catch(err => {
-          this.logger.warn(
-            { conversationId, agentId: ca.agent_id, err },
-            'thread-service: stop closed thread member failed',
-          );
-        }),
-      ),
     );
   }
 }
@@ -745,21 +437,4 @@ function dedupe(ids: Array<string | null | undefined>): string[] {
 
 function userLabel(userId: string | null | undefined): string {
   return userId ?? 'user';
-}
-
-const OPEN_TASK_STATUSES = ['todo', 'in_progress', 'in_review'] as const;
-
-function formatThreadOpenTasksMessage(
-  blocking: readonly ThreadCloseOpenTaskDetail[],
-): string {
-  const n = blocking.length;
-  // Keep the human-readable message terse — the CLI renders the full
-  // task list from `details.blocking_tasks`. This string is the
-  // fallback for tools that ignore details and only show .message.
-  return (
-    `cannot close thread: ${n} open task${n === 1 ? '' : 's'} ` +
-    `(status in todo/in_progress/in_review). ` +
-    `Move tasks to done or closed first, ` +
-    `or pass --allow-open-tasks to override.`
-  );
 }

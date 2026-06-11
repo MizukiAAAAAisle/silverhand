@@ -442,8 +442,6 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     logger,
     serverConfig: () => ctx.serverConfig,
     lastSpawnAtByAgent: ctx.lastSpawnAtByAgent,
-    // Late-bound: TaskService is constructed below.
-    taskService: () => ctx.taskService,
   });
   ctx.taskService = new TaskService({
     db,

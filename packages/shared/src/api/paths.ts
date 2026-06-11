@@ -231,12 +231,6 @@ export const internalPaths = {
   /** Agent reports that a stale send was intentionally abandoned. */
   agentResolveStaleMessage: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/stale-message-resolution`,
-  /** Agent spawns a Thread off the current channel. */
-  agentCreateThread: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/create-thread`,
-  /** Agent closes the current Thread. */
-  agentCloseThread: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/close-thread`,
   /** Agent creates a new top-level channel in the same workspace. */
   agentCreateChannel: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/create-channel`,

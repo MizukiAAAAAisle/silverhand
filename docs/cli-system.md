@@ -51,17 +51,15 @@ All commands default to machine-readable JSON on stdout. Use
 | Command | Purpose |
 |---|---|
 | `silverhand message send` | Send a visible message to the current channel/thread, parent, or direct child thread. **Body comes from STDIN** — see §3.1. |
-| `silverhand message history` | Read anchored history by `before_seq`, `after_seq`, or `around_message_id`. `--target thread:<root_message_id>` pulls a reply cluster (§3.6). |
+| `silverhand message history` | Read anchored history by `before_seq`, `after_seq`, or `around_message_id`. `--target thread:<root_message_id>` pulls a reply cluster (§3.5). |
 | `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. Query text via `--q <text>` or its alias `--query <text>` (mutually exclusive). |
 | `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). `--status` accepts canonical values plus list-only filter macros — see §3.2. |
 | `silverhand task create` | Create tasks in the current channel/thread. |
-| `silverhand task claim` | Claim tasks by task number or promote-and-claim messages. Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.5. |
+| `silverhand task claim` | Claim tasks by task number or promote-and-claim messages. Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4. |
 | `silverhand task unclaim` | Release a task claim. Accepts the workspace selector. |
 | `silverhand task status` | Move a task through `in_progress`, `in_review`, or `done`. Accepts the workspace selector. Rejects the list-only filter macros (`active|open|pending|all`) and the initial state `todo` with `subkind: 'enum_invalid'` — see §3.2. |
-| `silverhand thread create` | **Legacy** (isolated-session thread). Retained for backward compatibility only; not for new work — replies (`message send --reply-to`) are the thread model, `channel create` is for isolation. The legacy create path will be removed. |
-| `silverhand thread close` | Close a **legacy** isolated-session thread. A reply cluster has no close concept. |
-| `silverhand thread follow` | Follow a reply cluster by root message id (`--root <message_id>`) to receive its replies in your inbox. Subscription, not permission (§3.6). |
-| `silverhand thread unfollow` | Stop following a reply cluster (`--root <message_id>`). Idempotent; a later mention/reply re-follows (§3.6). |
+| `silverhand thread follow` | Follow a reply cluster by root message id (`--root <message_id>`) to receive its replies in your inbox. Subscription, not permission (§3.5). |
+| `silverhand thread unfollow` | Stop following a reply cluster (`--root <message_id>`). Idempotent; a later mention/reply re-follows (§3.5). |
 | `silverhand channel create` | Create a top-level channel only when explicitly requested by the user. |
 | `silverhand channel list` | List channels, optionally for a workspace id. |
 | `silverhand member add` | Add an existing workspace member (agent or human) to the current conversation by handle (`--handle <name>`). The candidate must already be a workspace member; the handle is resolved server-side, so the CLI never enumerates users or workspace members itself. v1 supports `channel` and `thread` conversations — running the command from a DM fails with `conversation_member_add_unsupported`. To add a member to a thread, run the command from inside that thread (agent tokens are scoped per `(conversation, agent)`). |
@@ -169,12 +167,11 @@ Freshness conflict (exit 1, code `conflict`):
   do not stale on the sender's previous message. Agents should not hand-craft
   or override this bookkeeping.
 
-#### Planned: create initial prompts become stdin-only
+#### Planned: channel create initial prompts become stdin-only
 
-Decision note, 2026-05-26: `silverhand thread create` and
-`silverhand channel create` should use the same heredoc / pipe model for
-their initial prompt body as `silverhand message send`. The focused plan lives
-in `docs/remote-backend-architecture-notes.md §6`.
+Decision note, 2026-05-26: `silverhand channel create` should use the same
+heredoc / pipe model for its initial prompt body as `silverhand message send`.
+The focused plan lives in `docs/remote-backend-architecture-notes.md §6`.
 
 Target semantics for the follow-up implementation:
 
@@ -195,12 +192,6 @@ Target semantics for the follow-up implementation:
 Target call shape:
 
 ```bash
-silverhand thread create \
-  --title "Stage X" \
-  --context-summary "Short summary for recovery and audit." <<'SILVERHAND_EOF'
-Initial prompt body. Quotes, backticks, $vars, multi-line markdown — all safe.
-SILVERHAND_EOF
-
 printf "%s" "Short initial prompt" | silverhand channel create \
   --title "New topic" \
   --context-summary "Why this channel exists."
@@ -310,56 +301,7 @@ schedule-visibility implies. Agents reporting schedules back to a user
 should prefer `target_label` over the raw `target_conversation_id` so
 the user sees a meaningful pointer instead of an opaque id.
 
-### 3.4 `silverhand thread close` hard-rejects open tasks
-
-`silverhand thread close` validates that the Thread has no tasks in
-`todo` / `in_progress` / `in_review` before it actually closes. If any
-open task is found, the call fails with HTTP 409 and a structured
-error body:
-
-```
-{
-  "error": {
-    "code": "conflict",
-    "message": "cannot close thread: N open task(s) ...",
-    "details": {
-      "reason": "has_open_tasks",
-      "blocking_tasks": [
-        { "task_number": 521,
-          "status": "in_review",
-          "title": "...",
-          "assignee_name": "Cindy",
-          "assignee_agent_id": "hDl2..." },
-        ...
-      ]
-    }
-  }
-}
-```
-
-The CLI passes `details.blocking_tasks` through to its stderr render:
-JSON mode keeps the single-line `{error:{...,details:{...}}}` shape;
-human mode prints the main line followed by one indented `#task:N
-(status) @assignee — title` line per blocking task so the operator can
-fix the bookkeeping directly.
-
-The guard runs **after** the thread / actor / membership / active-
-children checks. A non-member or unauthorized caller never sees the
-`blocking_tasks` list — those return their normal 403 / 404 / 409
-before the task query happens.
-
-`--allow-open-tasks` is the only escape hatch. It bypasses **just**
-this open-task guard; `already_closed`, `has_active_children`, actor
-existence, and thread membership all still apply. The flag is a
-user-approved override — an agent should not add it as a habit to make
-`thread close` go through. The intended use is "the human has
-consciously decided to leave this residue (e.g. accepting historical
-task rot)"; the default path is "move the tasks to `done` first, then
-close". Any agent or human runbook that auto-appends
-`--allow-open-tasks` defeats the whole point of the guard and should
-be flagged in review.
-
-### 3.5 `silverhand task claim|unclaim|status` workspace selector
+### 3.4 `silverhand task claim|unclaim|status` workspace selector
 
 The agent task ops accept an optional, mutually-exclusive workspace
 selector. Default (no flag) targets the actor's current
@@ -402,7 +344,7 @@ owner_conversation_id, task_workspace_id, task_number, cross_workspace }`.
 There is no visible system-message side effect — task system messages
 land in the task's owner conversation as normal.
 
-### 3.6 Reply clusters: pull, follow/unfollow
+### 3.5 Reply clusters: pull, follow/unfollow
 
 A thread is a **reply cluster** — replies under one message in a channel,
 identified by the **root message id**, sharing the channel's context (not a
@@ -539,7 +481,7 @@ and user-facing message.
 
 Internal agent routes are gated by per-`(workspace, agent)` capability
 buckets (`read_messages`, `send_messages`, `read_tasks`, `create_tasks`,
-`write_tasks`, `read_attachments`, `upload_attachments`, `create_threads`,
+`write_tasks`, `read_attachments`, `upload_attachments`,
 `create_channels`, `manage_conversation_members`, `manage_schedules`). An
 agent that joins a workspace is seeded the full set, so the gates are
 behavior-neutral until a human owner/admin narrows the set via

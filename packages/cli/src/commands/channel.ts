@@ -12,8 +12,9 @@ const createCommand: Command = {
                            --initial-prompt <text>
 
 ONLY use this when the user has explicitly requested a new top-level
-channel. For sub-discussions or parallel sub-tasks, use
-\`silverhand thread create\`.
+channel. Reply clusters stay in the current channel via
+\`silverhand message send --reply-to <message_id>\`; use a channel only
+when the user asks for isolation.
 
 After creation, you should announce the new channel id in the current
 channel via \`silverhand message send\` so the user knows a fork happened.

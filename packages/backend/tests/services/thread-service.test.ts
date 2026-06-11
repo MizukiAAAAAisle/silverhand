@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
-  AgentRunTerminalReason,
   ServerConfig,
 } from '@silverhand/shared';
 import {
-  readChildContextMetadata,
   readThreadAnchorMetadata,
 } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
@@ -13,25 +11,20 @@ import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import {
-  ActorError,
   MembershipError,
   ParentError,
   SeedAgentError,
-  ThreadError,
-  ThreadOpenTasksError,
   ThreadService,
 } from '../../src/services/thread-service.js';
 import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
-import { PrincipalConversationMismatchError } from '../../src/auth/principal.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
 
 class FakeConversationManager {
   starts: Array<{ conversationId: string; agentId: string }> = [];
   delivered: Array<{ conversationId: string; agentId: string; messageId: string }> = [];
   stops: Array<{ conversationId: string; agentId: string; mode: 'soft' | 'hard' }> = [];
-  resolvedConversations: Array<{ conversationId: string; reason: AgentRunTerminalReason }> = [];
   hangDeliver = false;
   deliverError: Error | null = null;
   onDeliver: (() => void) | null = null;
@@ -59,13 +52,7 @@ class FakeConversationManager {
     this.stops.push({ conversationId, agentId, mode });
   }
 
-  resolveConversationRuns(
-    conversationId: string,
-    reason: AgentRunTerminalReason = 'conversation_closed',
-  ): void {
-    this.resolvedConversations.push({ conversationId, reason });
-  }
-
+  resolveConversationRuns(): void {}
   resolveRun(): void {}
   getAgentRunStates(): never[] {
     return [];
@@ -80,38 +67,6 @@ class FakeConversationManager {
   }
 }
 
-interface FakeTaskInput {
-  task_number: number;
-  status: 'todo' | 'in_progress' | 'in_review';
-  title: string;
-  assigneeName: string | null;
-  assigneeAgentId: string | null;
-}
-
-function makeFakeTaskSummary(
-  i: FakeTaskInput,
-): import('@silverhand/shared').TaskSummaryDto {
-  return {
-    message_id: `msg-${i.task_number}`,
-    task_number: i.task_number,
-    workspace_id: 'w',
-    workspace_name: 'w',
-    channel_id: 'c',
-    channel_name: 'c',
-    thread_id: 't',
-    conversation: { id: 't', title: 't' },
-    status: i.status,
-    title: i.title,
-    assignee:
-      i.assigneeName && i.assigneeAgentId
-        ? { type: 'agent', id: i.assigneeAgentId, name: i.assigneeName }
-        : null,
-    creator: { type: 'agent', id: 'creator', name: 'creator' },
-    created_at: 0,
-    closed_at: null,
-  };
-}
-
 function bootstrap() {
   const { db, localHostId } = openTestDb();
   const tmp = makeTempSilverhandDir();
@@ -122,15 +77,6 @@ function bootstrap() {
   const messages = new MessageRepo(db);
   const events = new ScopeEventBus('test-epoch');
   const fake = new FakeConversationManager();
-  // FakeTaskService: by default the close-thread guard sees zero open
-  // tasks. Tests that exercise the guard mutate `fakeTaskService.tasks`
-  // before calling `closeThread`.
-  const fakeTaskService = {
-    tasks: [] as Array<import('@silverhand/shared').TaskSummaryDto>,
-    list(_filters: unknown) {
-      return this.tasks;
-    },
-  };
   const logger: BackendLogger = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -158,7 +104,6 @@ function bootstrap() {
     logger,
     serverConfig,
     lastSpawnAtByAgent: new Map(),
-    taskService: () => fakeTaskService,
   });
   const workspace = workspaces.insert({
     name: 'eng',
@@ -196,7 +141,6 @@ function bootstrap() {
     alice,
     bob,
     carol,
-    fakeTaskService,
     cleanup: tmp.cleanup,
   };
 }
@@ -350,495 +294,6 @@ describe('ThreadService.createThreadFromMessage', () => {
   });
 });
 
-describe('ThreadService.createThreadFromAgent', () => {
-  it('rejects agent principal conversation mismatch before inserting', async () => {
-    const t = bootstrap();
-    try {
-      const other = t.conversations.insertChannel({
-        workspaceId: t.workspace.id,
-        workspacePath: t.workspace.workspace_path,
-        title: 'other',
-      });
-      await expect(
-        t.service.createThreadFromAgent({
-          parentConversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
-          title: 'bad',
-          contextSummary: 'x',
-          initialPrompt: 'go',
-        }),
-      ).rejects.toBeInstanceOf(PrincipalConversationMismatchError);
-      expect(t.conversations.listChildren(t.channel.id)).toEqual([]);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('creates an agent thread, publishes before delivery, distributes prompt, and starts all members including the spawner', async () => {
-    const t = bootstrap();
-    try {
-      const order: string[] = [];
-      const unsub = t.events.subscribe(t.channel.id, e => {
-        if (e.kind === 'thread_updated') order.push('publish');
-      });
-      t.fake.onDeliver = () => order.push('deliver');
-
-      const result = await t.service.createThreadFromAgent({
-        parentConversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        title: 'investigate',
-        contextSummary: 'perf regression',
-        initialPrompt: 'profile the hot path',
-        requestedMembers: [t.bob.id],
-      });
-      unsub();
-
-      expect(order[0]).toBe('publish');
-      expect(t.conversations.listAgents(result.thread.id).map(a => a.agent_id).sort())
-        .toEqual([t.alice.id, t.bob.id].sort());
-      const seeded = t.messages.listForConversation(result.thread.id);
-      expect(seeded.map(m => m.content)).toEqual([
-        "Inherited context from parent channel 'source': perf regression",
-        'profile the hot path',
-      ]);
-      // PR-5 producer round-trip: child_context metadata must satisfy
-      // ChildContextMetadataSchema so the renderer can pull an
-      // Inherited card without re-parsing message.content.
-      const childParsed = readChildContextMetadata(
-        seeded[0]!.metadata as Record<string, unknown>,
-      );
-      expect(childParsed).not.toBeNull();
-      expect(childParsed!.parent_conversation_id).toBe(t.channel.id);
-      expect(childParsed!.parent_title).toBe('source');
-      expect(childParsed!.summary).toBe('perf regression');
-      expect(t.fake.delivered).toEqual([
-        {
-          conversationId: result.thread.id,
-          agentId: t.alice.id,
-          messageId: seeded[0]!.id,
-        },
-        {
-          conversationId: result.thread.id,
-          agentId: t.bob.id,
-          messageId: seeded[1]!.id,
-        },
-      ]);
-      // The spawner needs its own (thread, agent) process to receive
-      // future thread messages and the inherited-context system message
-      // (delivered to the spawner). Without this start, the spawner
-      // stays 'idle' in the thread and shows as 'away' in the UI.
-      expect(
-        t.fake.starts
-          .filter(s => s.conversationId === result.thread.id)
-          .map(s => s.agentId)
-          .sort(),
-      ).toEqual([t.alice.id, t.bob.id].sort());
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('defaults members to all parent members and rejects non-parent members', async () => {
-    const t = bootstrap();
-    try {
-      const result = await t.service.createThreadFromAgent({
-        parentConversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        title: 'all',
-        contextSummary: 'x',
-        initialPrompt: 'go',
-      });
-      expect(t.conversations.listAgents(result.thread.id).map(a => a.agent_id).sort())
-        .toEqual([t.alice.id, t.bob.id].sort());
-
-      await expect(
-        t.service.createThreadFromAgent({
-          parentConversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-          title: 'bad',
-          contextSummary: 'x',
-          initialPrompt: 'go',
-          requestedMembers: [t.carol.id],
-        }),
-      ).rejects.toBeInstanceOf(MembershipError);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('rejects invalid parent and spawner membership before inserting', async () => {
-    const t = bootstrap();
-    try {
-      const thread = t.conversations.insertThread({
-        channelId: t.channel.id,
-        title: 'not-parent',
-      });
-      await expect(
-        t.service.createThreadFromAgent({
-          parentConversationId: thread.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: thread.id },
-          title: 'bad',
-          contextSummary: 'x',
-          initialPrompt: 'go',
-        }),
-      ).rejects.toBeInstanceOf(ParentError);
-
-      await expect(
-        t.service.createThreadFromAgent({
-          parentConversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: t.carol.id, conversationId: t.channel.id },
-          title: 'bad',
-          contextSummary: 'x',
-          initialPrompt: 'go',
-        }),
-      ).rejects.toMatchObject({ code: 'agent_not_member_of_parent' });
-    } finally {
-      t.cleanup();
-    }
-  });
-});
-
-describe('ThreadService.closeThread', () => {
-  it('rejects agent principal conversation mismatch before closing', async () => {
-    const t = bootstrap();
-    try {
-      const created = await t.service.createThreadFromAgent({
-        parentConversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        title: 'inv',
-        contextSummary: 'x',
-        initialPrompt: 'go',
-        requestedMembers: [t.bob.id],
-      });
-      await expect(
-        t.service.closeThread({
-          threadId: created.thread.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-          summary: 'done',
-          postedToParent: false,
-        }),
-      ).rejects.toBeInstanceOf(PrincipalConversationMismatchError);
-      expect(t.conversations.getThread(created.thread.id)?.closed_at).toBe(null);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('closes a thread, publishes summary before delivery, resolves runs, and stops members', async () => {
-    const t = bootstrap();
-    try {
-      const created = await t.service.createThreadFromAgent({
-        parentConversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        title: 'inv',
-        contextSummary: 'x',
-        initialPrompt: 'go',
-        requestedMembers: [t.bob.id],
-      });
-      t.fake.delivered = [];
-      t.fake.stops = [];
-      const order: string[] = [];
-      const workspaceEvents: Array<{ kind: string; payload: unknown }> = [];
-      const unsub = t.events.subscribe(t.channel.id, e => {
-        if (e.kind === 'message') order.push('publish-message');
-        if (e.kind === 'thread_updated') order.push('publish-thread');
-      });
-      const unsubWorkspace = t.events.subscribeScope(
-        `workspace:${t.workspace.id}`,
-        e => workspaceEvents.push({ kind: e.kind, payload: e.payload }),
-      );
-      t.fake.onDeliver = () => order.push('deliver');
-
-      const closed = await t.service.closeThread({
-        threadId: created.thread.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: created.thread.id },
-        summary: 'done',
-        postedToParent: false,
-      });
-      unsub();
-      unsubWorkspace();
-
-      expect(closed.thread.closed_at).not.toBeNull();
-      expect(order.slice(0, 2)).toEqual(['publish-message', 'publish-thread']);
-      expect(workspaceEvents).toContainEqual({
-        kind: 'workspace_channels_changed',
-        payload: { workspace_id: t.workspace.id, channel_id: created.thread.id },
-      });
-      expect(t.fake.resolvedConversations).toEqual([
-        { conversationId: created.thread.id, reason: 'conversation_closed' },
-      ]);
-      const parentMessages = t.messages.listForConversation(t.channel.id);
-      const summary = parentMessages.find(m => m.metadata?.subtype === 'thread_summary');
-      expect(summary?.content).toContain('@bob');
-      expect(summary?.content).toContain('done');
-      expect(summary?.metadata).toMatchObject({
-        subtype: 'thread_summary',
-        summary: 'done',
-      });
-      expect(t.fake.delivered.map(d => d.agentId).sort()).toEqual(
-        [t.alice.id, t.bob.id].sort(),
-      );
-      expect(t.fake.stops.map(s => s.agentId).sort()).toEqual(
-        [t.alice.id, t.bob.id].sort(),
-      );
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('skips parent summary when already posted', async () => {
-    const t = bootstrap();
-    try {
-      const created = await t.service.createThreadFromAgent({
-        parentConversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        title: 'inv',
-        contextSummary: 'x',
-        initialPrompt: 'go',
-        requestedMembers: [t.bob.id],
-      });
-      const before = t.messages.listForConversation(t.channel.id).length;
-
-      await t.service.closeThread({
-        threadId: created.thread.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: created.thread.id },
-        summary: 'already posted',
-        postedToParent: true,
-      });
-
-      expect(t.messages.listForConversation(t.channel.id)).toHaveLength(before);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('rejects forged agent close actors without mutating the thread', async () => {
-    const t = bootstrap();
-    try {
-      const created = await t.service.createThreadFromAgent({
-        parentConversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        title: 'inv',
-        contextSummary: 'x',
-        initialPrompt: 'go',
-        requestedMembers: [t.bob.id],
-      });
-
-      await expect(
-        t.service.closeThread({
-          threadId: created.thread.id,
-          actor: { kind: 'agent', agentId: t.carol.id, conversationId: created.thread.id },
-          summary: 'done',
-          postedToParent: false,
-        }),
-      ).rejects.toBeInstanceOf(ActorError);
-
-      expect(t.conversations.getThread(created.thread.id)?.closed_at).toBeNull();
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('rejects already closed threads without mutating them again', async () => {
-    const t = bootstrap();
-    try {
-      const created = await t.service.createThreadFromAgent({
-        parentConversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        title: 'inv',
-        contextSummary: 'x',
-        initialPrompt: 'go',
-        requestedMembers: [t.bob.id],
-      });
-      await t.service.closeThread({
-        threadId: created.thread.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: created.thread.id },
-        summary: 'done',
-        postedToParent: true,
-      });
-
-      await expect(
-        t.service.closeThread({
-          threadId: created.thread.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: created.thread.id },
-          summary: 'again',
-          postedToParent: true,
-        }),
-      ).rejects.toBeInstanceOf(ThreadError);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('rejects close when thread still has open tasks and surfaces blocking_tasks detail', async () => {
-    const t = bootstrap();
-    try {
-      const created = await t.service.createThreadFromAgent({
-        parentConversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        title: 'inv',
-        contextSummary: 'x',
-        initialPrompt: 'go',
-        requestedMembers: [t.bob.id],
-      });
-      t.fakeTaskService.tasks = [
-        makeFakeTaskSummary({
-          task_number: 901,
-          status: 'in_review',
-          title: 'finish review',
-          assigneeName: 'bob',
-          assigneeAgentId: t.bob.id,
-        }),
-        makeFakeTaskSummary({
-          task_number: 902,
-          status: 'todo',
-          title: 'pending work',
-          assigneeName: null,
-          assigneeAgentId: null,
-        }),
-      ];
-
-      let captured: ThreadOpenTasksError | null = null;
-      try {
-        await t.service.closeThread({
-          threadId: created.thread.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: created.thread.id },
-          summary: 'done',
-          postedToParent: false,
-        });
-      } catch (err) {
-        if (err instanceof ThreadOpenTasksError) captured = err;
-        else throw err;
-      }
-      expect(captured).not.toBeNull();
-      expect(captured!.blockingTasks).toHaveLength(2);
-      expect(captured!.blockingTasks[0]).toMatchObject({
-        task_number: 901,
-        status: 'in_review',
-        assignee_name: 'bob',
-        assignee_agent_id: t.bob.id,
-      });
-      expect(captured!.blockingTasks[1]).toMatchObject({
-        task_number: 902,
-        status: 'todo',
-        assignee_name: null,
-        assignee_agent_id: null,
-      });
-      expect(captured!.message).toContain('2 open tasks');
-      // thread must NOT be closed
-      expect(t.conversations.getThread(created.thread.id)?.closed_at).toBeNull();
-      // no parent summary published; no runs resolved
-      expect(t.fake.resolvedConversations).toEqual([]);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('allowOpenTasks bypasses the open-task guard and closes the thread', async () => {
-    const t = bootstrap();
-    try {
-      const created = await t.service.createThreadFromAgent({
-        parentConversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        title: 'inv',
-        contextSummary: 'x',
-        initialPrompt: 'go',
-        requestedMembers: [t.bob.id],
-      });
-      t.fakeTaskService.tasks = [
-        makeFakeTaskSummary({
-          task_number: 903,
-          status: 'in_progress',
-          title: 'still going',
-          assigneeName: 'alice',
-          assigneeAgentId: t.alice.id,
-        }),
-      ];
-
-      const closed = await t.service.closeThread({
-        threadId: created.thread.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: created.thread.id },
-        summary: 'accepting residue',
-        postedToParent: true,
-        allowOpenTasks: true,
-      });
-
-      expect(closed.thread.closed_at).not.toBeNull();
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('non-member actor hits ActorError BEFORE the open-task query (no leakage of blocking_tasks)', async () => {
-    const t = bootstrap();
-    try {
-      const created = await t.service.createThreadFromAgent({
-        parentConversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        title: 'inv',
-        contextSummary: 'x',
-        initialPrompt: 'go',
-        requestedMembers: [t.bob.id],
-      });
-      // Populate the fake task service with tasks. If the guard fired
-      // BEFORE the actor check we'd surface them; the order assertion
-      // below proves we don't.
-      t.fakeTaskService.tasks = [
-        makeFakeTaskSummary({
-          task_number: 904,
-          status: 'in_review',
-          title: 'should not leak',
-          assigneeName: 'bob',
-          assigneeAgentId: t.bob.id,
-        }),
-      ];
-      let saw: unknown = null;
-      const listSpy = vi.spyOn(t.fakeTaskService, 'list');
-      try {
-        await t.service.closeThread({
-          threadId: created.thread.id,
-          // carol is NOT a member of the thread
-          actor: { kind: 'agent', agentId: t.carol.id, conversationId: created.thread.id },
-          summary: 'forged',
-          postedToParent: false,
-        });
-      } catch (err) {
-        saw = err;
-      }
-      expect(saw).toBeInstanceOf(ActorError);
-      expect(listSpy).not.toHaveBeenCalled();
-      listSpy.mockRestore();
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('closes cleanly when every task in the thread is done (no open-task block)', async () => {
-    const t = bootstrap();
-    try {
-      const created = await t.service.createThreadFromAgent({
-        parentConversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        title: 'inv',
-        contextSummary: 'x',
-        initialPrompt: 'go',
-        requestedMembers: [t.bob.id],
-      });
-      // empty fakeTaskService.tasks already; matches "all done / no
-      // active tasks in this thread"
-      const closed = await t.service.closeThread({
-        threadId: created.thread.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: created.thread.id },
-        summary: 'all done',
-        postedToParent: true,
-      });
-      expect(closed.thread.closed_at).not.toBeNull();
-    } finally {
-      t.cleanup();
-    }
-  });
-});
-
 describe('ThreadService user-membership inheritance (v25)', () => {
   it('inherits user members from the parent conversation when creating a thread', async () => {
     const t = bootstrap();
@@ -860,13 +315,15 @@ describe('ThreadService user-membership inheritance (v25)', () => {
         )
         .run(t.channel.id, Date.now(), t.channel.id, Date.now());
 
-      const result = await t.service.createThreadFromAgent({
-        parentConversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        title: 'child',
-        requestedMembers: [t.alice.id],
-        contextSummary: 'ctx',
-        initialPrompt: 'go',
+      const anchor = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        fromUserId: 'local',
+        content: 'open a legacy thread',
+      });
+      const result = await t.service.createThreadFromMessage({
+        messageId: anchor.id,
+        actor: { kind: 'user', userId: 'local' },
       });
 
       const userMembers = t.conversations

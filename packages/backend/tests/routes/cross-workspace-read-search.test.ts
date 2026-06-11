@@ -187,17 +187,12 @@ describe('PR-B: cross-workspace read_history({target:{conversation_id}})', () =>
     const alice = await makeAgent(t, 'alice');
     const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
     const channel = await createChannel(t, reg.workspaceId, 'main', [alice.agentId]);
-    const thread = await (
-      await http(t).post(
-        `/internal/conversations/${channel}/agents/${alice.agentId}/create-thread`,
-        {
-          title: 'child',
-          members: [alice.agentId],
-          context_summary: 'x',
-          initial_prompt: 'thread seed',
-        },
-      )
-    ).json() as any;
+    const conversations = new ConversationRepo(t.ctx.db);
+    const thread = conversations.insertThread({
+      channelId: channel,
+      title: 'child',
+    });
+    conversations.addAgent(thread.id, alice.agentId);
     const messages = new MessageRepo(t.ctx.db);
     const channelMsg = messages.insertForConversation({
       conversationId: channel,
@@ -205,7 +200,7 @@ describe('PR-B: cross-workspace read_history({target:{conversation_id}})', () =>
       content: 'channel anchor',
     });
     const threadMsg = messages.insertForConversation({
-      conversationId: thread.thread_id,
+      conversationId: thread.id,
       fromKind: 'user',
       content: 'thread anchor',
     });
@@ -218,7 +213,7 @@ describe('PR-B: cross-workspace read_history({target:{conversation_id}})', () =>
     expect((await selfRes.json() as any).target.conversation_id).toBe(channel);
 
     // parent from thread
-    const parentRes = await http(t).post(readHistoryPath(thread.thread_id, alice.agentId), {
+    const parentRes = await http(t).post(readHistoryPath(thread.id, alice.agentId), {
       target: 'parent',
       around_message_id: channelMsg.id,
     });
@@ -229,21 +224,21 @@ describe('PR-B: cross-workspace read_history({target:{conversation_id}})', () =>
     // {conversation_id}, but the thread:<id> / {thread_id} target form is
     // now reserved for reply-cluster root ids.
     const threadRes = await http(t).post(readHistoryPath(channel, alice.agentId), {
-      target: { thread_id: thread.thread_id },
+      target: { thread_id: thread.id },
       around_message_id: threadMsg.id,
     });
     expect(threadRes.status).toBe(400);
     const threadBody = await threadRes.json() as any;
     expect(threadBody.code).toBe('legacy_thread_target_deprecated');
-    expect(threadBody.error).toContain(`conversation:${thread.thread_id}`);
+    expect(threadBody.error).toContain(`conversation:${thread.id}`);
 
     const conversationRes = await http(t).post(readHistoryPath(channel, alice.agentId), {
-      target: { conversation_id: thread.thread_id },
+      target: { conversation_id: thread.id },
       around_message_id: threadMsg.id,
     });
     expect(conversationRes.status).toBe(200);
     expect((await conversationRes.json() as any).target.conversation_id)
-      .toBe(thread.thread_id);
+      .toBe(thread.id);
   });
 
   it('rejects {conversation_id} pointing at the workspace itself or other unsupported kinds', async () => {

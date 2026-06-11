@@ -21,7 +21,7 @@ describe('command catalogue', () => {
   });
 
   it('matches every MCP tool with exactly one CLI verb', () => {
-    // The 22 backend internal routes that MCP currently exposes.
+    // The 20 backend internal routes that MCP currently exposes.
     // If you add a route, add a CLI command, and add it here.
     const expected: Array<[string, string]> = [
       ['message', 'send'],
@@ -33,8 +33,6 @@ describe('command catalogue', () => {
       ['task', 'claim'],
       ['task', 'unclaim'],
       ['task', 'status'],
-      ['thread', 'create'],
-      ['thread', 'close'],
       ['thread', 'follow'],
       ['thread', 'unfollow'],
       ['channel', 'create'],
@@ -52,7 +50,7 @@ describe('command catalogue', () => {
       expect(cmd, `${noun} ${verb}`).toBeDefined();
     }
     const total = COMMAND_GROUPS.reduce((acc, g) => acc + g.commands.length, 0);
-    expect(total).toBe(22);
+    expect(total).toBe(20);
   });
 
   it('every command has a non-empty help block', () => {
@@ -110,50 +108,19 @@ describe('command catalogue', () => {
   });
 });
 
-describe('thread close flag plumbing', () => {
-  it('forwards --allow-open-tasks to the client as allow_open_tasks: true', async () => {
-    const cmd = findCommand('thread', 'close');
-    expect(cmd).toBeDefined();
-    expect(cmd!.booleanFlags).toContain('allow-open-tasks');
-    const calls: Array<Record<string, unknown>> = [];
-    const fakeClient = {
-      closeThread: async (input: Record<string, unknown>) => {
-        calls.push(input);
-        return { thread: { id: 't' } };
-      },
-    } as unknown as BackendClient;
-    await cmd!.run({
-      client: fakeClient,
-      args: {
-        flags: { summary: 'done', 'allow-open-tasks': true },
-        positional: [],
-        rest: [],
-      },
-    } as any);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual({ summary: 'done', allow_open_tasks: true });
-  });
-
-  it('omits allow_open_tasks when the flag is absent (back-compat default)', async () => {
-    const cmd = findCommand('thread', 'close');
-    expect(cmd).toBeDefined();
-    const calls: Array<Record<string, unknown>> = [];
-    const fakeClient = {
-      closeThread: async (input: Record<string, unknown>) => {
-        calls.push(input);
-        return { thread: { id: 't' } };
-      },
-    } as unknown as BackendClient;
-    await cmd!.run({
-      client: fakeClient,
-      args: {
-        flags: { summary: 'done' },
-        positional: [],
-        rest: [],
-      },
-    } as any);
-    expect(calls[0]).toEqual({ summary: 'done' });
-    expect(calls[0]).not.toHaveProperty('allow_open_tasks');
+describe('thread legacy verbs', () => {
+  it('removes create/close and keeps explicit migration hints', () => {
+    expect(findCommand('thread', 'create')).toBeUndefined();
+    expect(findCommand('thread', 'close')).toBeUndefined();
+    const group = findGroup('thread');
+    expect(group?.removedVerbs?.create).toMatchObject({
+      replacement: 'follow',
+    });
+    expect(group?.removedVerbs?.create?.hint).toContain('--reply-to');
+    expect(group?.removedVerbs?.close).toMatchObject({
+      replacement: 'unfollow',
+    });
+    expect(group?.removedVerbs?.close?.hint).toContain('thread unfollow');
   });
 });
 

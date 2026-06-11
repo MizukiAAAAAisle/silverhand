@@ -112,31 +112,6 @@ export class BackendClient {
     );
   }
 
-  createThread(input: {
-    title: string;
-    members?: string[];
-    context_summary: string;
-    initial_prompt: string;
-  }): Promise<{ thread_id: string }> {
-    return this.request(
-      'POST',
-      internalPaths.agentCreateThread(this.env.conversationId, this.env.agentId),
-      input,
-    );
-  }
-
-  closeThread(input: {
-    summary: string;
-    posted_to_parent?: boolean;
-    allow_open_tasks?: boolean;
-  }): Promise<{ thread: unknown }> {
-    return this.request(
-      'POST',
-      internalPaths.agentCloseThread(this.env.conversationId, this.env.agentId),
-      input,
-    );
-  }
-
   /** Voluntarily follow a reply cluster (subscription, not permission;
    *  §5 B). `root_message_id` may be the cluster root or any reply in it;
    *  the server normalizes to the canonical root and backfills its prior

@@ -138,7 +138,7 @@ export interface BackendContext {
   channelService: ChannelService;
   /** Application layer that owns user/agent send-message side effects. */
   conversationMessageService: ConversationMessageService;
-  /** Application layer that owns thread create / close side effects. */
+  /** Application layer that owns legacy message-anchored thread creation. */
   threadService: ThreadService;
   /** Application layer that owns task create / claim / unclaim / status side effects. */
   taskService: TaskService;

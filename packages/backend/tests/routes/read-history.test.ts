@@ -158,17 +158,9 @@ describe('POST /internal/.../read-history', () => {
     t = buildTestApp();
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
     const aliceId = agentIds.alice!;
-    const thread = await (
-      await http(t).post(
-        `/internal/conversations/${channelId}/agents/${aliceId}/create-thread`,
-        {
-          title: 'child',
-          members: [aliceId],
-          context_summary: 'x',
-          initial_prompt: 'seed child',
-        },
-      )
-    ).json() as any;
+    const conversations = new ConversationRepo(t.ctx.db);
+    const thread = conversations.insertThread({ channelId, title: 'child' });
+    conversations.addAgent(thread.id, aliceId);
     const parentMessage = new MessageRepo(t.ctx.db).insertForConversation({
       conversationId: channelId,
       fromKind: 'user',
@@ -176,7 +168,7 @@ describe('POST /internal/.../read-history', () => {
     });
 
     const res = await http(t).post(
-      readHistoryPath(thread.thread_id, aliceId),
+      readHistoryPath(thread.id, aliceId),
       {
         target: 'parent',
         around_message_id: parentMessage.id,
@@ -194,26 +186,21 @@ describe('POST /internal/.../read-history', () => {
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice', 'bob']);
     const aliceId = agentIds.alice!;
     const bobId = agentIds.bob!;
-    const thread = await (
-      await http(t).post(
-        `/internal/conversations/${channelId}/agents/${aliceId}/create-thread`,
-        {
-          title: 'alice-only child',
-          members: [aliceId],
-          context_summary: 'x',
-          initial_prompt: 'seed child',
-        },
-      )
-    ).json() as any;
+    const conversations = new ConversationRepo(t.ctx.db);
+    const thread = conversations.insertThread({
+      channelId,
+      title: 'alice-only child',
+    });
+    conversations.addAgent(thread.id, aliceId);
 
     const res = await http(t).post(readHistoryPath(channelId, bobId), {
-      target: { thread_id: thread.thread_id },
+      target: { thread_id: thread.id },
       before_seq: 99,
     });
     expect(res.status).toBe(400);
     const body = await res.json() as any;
     expect(body.code).toBe('legacy_thread_target_deprecated');
-    expect(body.error).toContain(`conversation:${thread.thread_id}`);
+    expect(body.error).toContain(`conversation:${thread.id}`);
   });
 
   // Characterization for the read-model SQL extraction (#task:980, Slice B):

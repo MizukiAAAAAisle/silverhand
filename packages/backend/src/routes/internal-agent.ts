@@ -59,7 +59,6 @@ import {
   channelServiceErrorResponse,
   conversationMessageServiceErrorResponse,
   scheduleServiceErrorResponse,
-  threadServiceErrorResponse,
 } from './responses.js';
 import {
   dispatchAgentWorkspaceIndex,
@@ -71,7 +70,6 @@ import {
   MembershipService,
 } from '../services/membership-service.js';
 import {
-  AgentCloseThreadInputSchema,
   AgentCreateChannelInputSchema,
   AgentFollowThreadInputSchema,
   AgentListChannelsQuerySchema,
@@ -79,7 +77,6 @@ import {
   AgentResolveStaleMessageInputSchema,
   AgentSearchMessagesInputSchema,
   AgentSendMessageInputSchema,
-  AgentSpawnChildInputSchema,
   ClaimTasksInputSchema,
   CliTraceInputSchema,
   CreateTasksInputSchema,
@@ -422,43 +419,6 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
     return c.json({ ok: true });
   });
 
-  app.post(internalPaths.agentCreateThread(':cid', ':aid'), async c => {
-    const cid = c.req.param('cid');
-    const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
-    }
-    const body = await c.req.json().catch(() => ({}));
-    const parsed = AgentSpawnChildInputSchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
-    }
-    const principal = getAgentPrincipal(c);
-    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    {
-      const denied = requireAgentCapability(c, ctx, principal, 'create_threads',
-        conversations.get(principal.conversationId)?.workspace_id);
-      if (denied) return denied;
-    }
-    try {
-      const result = await ctx.threadService.createThreadFromAgent({
-        parentConversationId: principal.conversationId,
-        actor: principal,
-        title: parsed.data.title,
-        contextSummary: parsed.data.context_summary,
-        initialPrompt: parsed.data.initial_prompt,
-        requestedMembers: parsed.data.members,
-      });
-      return c.json({ thread_id: result.thread.id });
-    } catch (err) {
-      const mapped = threadServiceErrorResponse(c, err);
-      if (mapped) return mapped;
-      throw err;
-    }
-  });
-
   app.post(internalPaths.agentCreateChannel(':cid', ':aid'), async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
@@ -502,42 +462,6 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json({ channel_id: result.channel.id });
     } catch (err) {
       const mapped = channelServiceErrorResponse(c, err);
-      if (mapped) return mapped;
-      throw err;
-    }
-  });
-
-  app.post(internalPaths.agentCloseThread(':cid', ':aid'), async c => {
-    const cid = c.req.param('cid');
-    const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
-    }
-    const body = await c.req.json().catch(() => ({}));
-    const parsed = AgentCloseThreadInputSchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
-    }
-    const principal = getAgentPrincipal(c);
-    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    {
-      const denied = requireAgentCapability(c, ctx, principal, 'create_threads',
-        conversations.get(principal.conversationId)?.workspace_id);
-      if (denied) return denied;
-    }
-    try {
-      const result = await ctx.threadService.closeThread({
-        threadId: principal.conversationId,
-        actor: principal,
-        summary: parsed.data.summary,
-        postedToParent: parsed.data.posted_to_parent ?? false,
-        allowOpenTasks: parsed.data.allow_open_tasks ?? false,
-      });
-      return c.json({ thread: result.thread });
-    } catch (err) {
-      const mapped = threadServiceErrorResponse(c, err);
       if (mapped) return mapped;
       throw err;
     }

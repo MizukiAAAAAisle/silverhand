@@ -314,8 +314,8 @@ describe('buildPlatformPrompt', () => {
     );
     expect(text).toMatch(/Need isolation, parallelism/);
     expect(text).toContain('`silverhand channel create`');
-    // `thread create` is retained only as legacy compatibility.
-    expect(text).toContain('legacy');
+    expect(text).not.toContain('silverhand thread create');
+    expect(text).not.toContain('silverhand thread close');
 
     // Drift guard: the OLD independent-session model must never return.
     expect(text).not.toContain('Threads run as separate agent sessions');
@@ -479,7 +479,7 @@ describe('buildPlatformPrompt', () => {
     expect(text).toMatch(/inert text/i);
   });
 
-  it('requires visible in-thread summary before closing user-opened threads', () => {
+  it('renders legacy child-session context as read-only without close guidance', () => {
     const text = buildPlatformPrompt({
       agentId: 'agent-1',
       agentName: 'Cindy',
@@ -503,19 +503,17 @@ describe('buildPlatformPrompt', () => {
       },
     });
 
-    expect(text).toContain('user-opened Thread');
-    expect(text).toContain('visible summary');
-    expect(text).toContain('ask the user whether to close');
-    expect(text).toContain('Only call');
+    expect(text).toContain('legacy user-opened Thread');
+    expect(text).toContain('read-only during the reply-cluster migration');
     expect(text).not.toContain('do not close this thread unless');
     expect(text).not.toContain('User-opened Threads should remain open');
     expect(text).not.toContain('then call `close_session`');
-    expect(text).toContain('silverhand thread close');
+    expect(text).not.toContain('silverhand thread close');
     expect(text).not.toContain('target=parent');
     expect(text).not.toContain('posted_to_parent: true');
   });
 
-  it('keeps close_thread guidance for agent-spawned Threads', () => {
+  it('renders agent-spawned legacy child-session context as read-only', () => {
     const text = buildPlatformPrompt({
       agentId: 'agent-1',
       agentName: 'Cindy',
@@ -539,7 +537,9 @@ describe('buildPlatformPrompt', () => {
       },
     });
 
-    expect(text).toContain('report the final result via `silverhand thread close`');
+    expect(text).toContain('legacy isolated Thread');
+    expect(text).toContain('read-only during the reply-cluster migration');
+    expect(text).not.toContain('silverhand thread close');
   });
 
   // ── Members block (PR-B) ────────────────────────────────────────

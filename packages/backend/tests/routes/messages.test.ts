@@ -3,6 +3,7 @@ import {
   encodeUserPrincipalHeader,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
@@ -38,6 +39,20 @@ async function createWorkspaceChannel(
 
 function authHeaders(token: string): Record<string, string> {
   return { authorization: `Bearer ${token}` };
+}
+
+function seedLegacyThread(
+  t: TestApp,
+  channelId: string,
+  title: string,
+  memberAgentIds: string[],
+): { thread_id: string } {
+  const conversations = new ConversationRepo(t.ctx.db);
+  const thread = conversations.insertThread({ channelId, title });
+  for (const agentId of memberAgentIds) {
+    conversations.addAgent(thread.id, agentId);
+  }
+  return { thread_id: thread.id };
 }
 
 describe('message routes', () => {
@@ -122,18 +137,12 @@ describe('message routes', () => {
   it('rejects agent sends originating from legacy threads', async () => {
     t = buildTestApp();
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice', 'bob']);
-    const thread = await (
-      await http(t).post(
-        `/internal/conversations/${channelId}/agents/${agentIds.alice}/create-thread`,
-        {
-          title: 'child',
-          members: [agentIds.alice, agentIds.bob],
-          context_summary: 'x',
-          initial_prompt: 'seed child',
-        },
-        { headers: authHeaders(t.authToken) },
-      )
-    ).json() as any;
+    const thread = seedLegacyThread(
+      t,
+      channelId,
+      'child',
+      [agentIds.alice!, agentIds.bob!],
+    );
     t.fake.delivered = [];
     t.fake.resolvedRuns = [];
 
@@ -155,18 +164,7 @@ describe('message routes', () => {
   it('agent send-message into a closed target returns 409', async () => {
     t = buildTestApp();
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
-    const thread = await (
-      await http(t).post(
-        `/internal/conversations/${channelId}/agents/${agentIds.alice}/create-thread`,
-        {
-          title: 'child',
-          members: [agentIds.alice],
-          context_summary: 'x',
-          initial_prompt: 'seed child',
-        },
-        { headers: authHeaders(t.authToken) },
-      )
-    ).json() as any;
+    const thread = seedLegacyThread(t, channelId, 'child', [agentIds.alice!]);
     t.ctx.db
       .prepare(`UPDATE conversations SET closed_at = ?, status = 'archived' WHERE id = ?`)
       .run(Date.now(), thread.thread_id);

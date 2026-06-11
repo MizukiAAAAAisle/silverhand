@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { X_SILVERHAND_PRINCIPAL_HEADER } from '@silverhand/shared';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 async function setupSession(
@@ -36,6 +37,20 @@ async function setupSession(
 
 function authHeaders(token: string): Record<string, string> {
   return { authorization: `Bearer ${token}` };
+}
+
+function seedLegacyThread(
+  t: TestApp,
+  channelId: string,
+  title: string,
+  memberAgentIds: string[],
+): { thread_id: string } {
+  const conversations = new ConversationRepo(t.ctx.db);
+  const thread = conversations.insertThread({ channelId, title });
+  for (const agentId of memberAgentIds) {
+    conversations.addAgent(thread.id, agentId);
+  }
+  return { thread_id: thread.id };
 }
 
 describe('Internal route auth', () => {
@@ -222,18 +237,12 @@ describe('POST /internal/.../send-message', () => {
         member_agent_ids: [agentIds.alice],
       })
     ).json() as any;
-    const siblingThread = await (
-      await http(t).post(
-        `/internal/conversations/${sibling.channel.id}/agents/${agentIds.alice}/create-thread`,
-        {
-          title: 'sibling child',
-          members: [agentIds.alice],
-          context_summary: 'x',
-          initial_prompt: 'seed',
-        },
-        { headers: authHeaders(t.authToken) },
-      )
-    ).json() as any;
+    const siblingThread = seedLegacyThread(
+      t,
+      sibling.channel.id,
+      'sibling child',
+      [agentIds.alice!],
+    );
     const r = await http(t).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
       {
@@ -248,18 +257,7 @@ describe('POST /internal/.../send-message', () => {
   it('rejects legacy thread targets via { thread_id }', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t, ['alice']);
-    const child = await (
-      await http(t).post(
-        `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
-        {
-        title: 'child',
-        members: [agentIds.alice],
-        context_summary: 'x',
-        initial_prompt: 'seed child',
-      },
-        { headers: authHeaders(t.authToken) },
-      )
-    ).json() as any;
+    const child = seedLegacyThread(t, conversationId, 'child', [agentIds.alice!]);
     const r = await http(t).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
       {
@@ -280,168 +278,6 @@ describe('POST /internal/.../send-message', () => {
     ).toBe(false);
   });
 
-});
-
-describe('POST /internal/.../create-thread', () => {
-  let t: TestApp | null = null;
-  afterEach(() => {
-    t?.cleanup();
-    t = null;
-  });
-
-  it('rejects members that are not in the parent channel (400)', async () => {
-    t = buildTestApp();
-    const { conversationId, agentIds } = await setupSession(t, ['alice']);
-    const outsider = await (
-      await http(t).post('/api/agents', { name: 'mallory', runtime: 'claude' })
-    ).json() as any;
-    const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
-      {
-        title: 'oops',
-        members: [outsider.agent.id],
-        context_summary: 'x',
-        initial_prompt: 'go',
-      },
-      { headers: authHeaders(t.authToken) },
-    );
-    expect(r.status).toBe(400);
-  });
-
-  it('creates a child thread, lists it without an anchor, and seeds 2 messages', async () => {
-    t = buildTestApp();
-    const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
-    const events: { kind: string; payload: unknown }[] = [];
-    const unsub = t.ctx.events.subscribe(conversationId, e => events.push(e));
-    const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
-      {
-        title: 'investigate',
-        members: [agentIds.bob],
-        context_summary: 'looking at perf',
-        initial_prompt: 'profile the hot path',
-      },
-      { headers: authHeaders(t.authToken) },
-    );
-    unsub();
-    expect(r.status).toBe(200);
-    const body = await r.json() as any;
-    expect(typeof body.thread_id).toBe('string');
-
-    const threadSummary = await (
-      await http(t).get(`/api/channels/${conversationId}/threads`)
-    ).json() as any;
-    expect(threadSummary.threads).toContainEqual({
-      thread_id: body.thread_id,
-      anchor_message_id: null,
-      reply_count: 1,
-    });
-    expect(events).toContainEqual({
-      kind: 'thread_updated',
-      payload: {
-        parent_conversation_id: conversationId,
-        thread_id: body.thread_id,
-      },
-    });
-
-    const msgs = await (
-      await http(t).get(`/api/threads/${body.thread_id}/messages`)
-    ).json() as any;
-    expect(msgs.messages).toHaveLength(2);
-    expect(msgs.messages[0].from_kind).toBe('system');
-    expect(msgs.messages[0].content).toContain('looking at perf');
-    expect(msgs.messages[1].from_kind).toBe('agent');
-    expect(msgs.messages[1].from_agent_id).toBe(agentIds.alice);
-    expect(msgs.messages[1].content).toBe('profile the hot path');
-
-    expect(t.fake.delivered).toEqual([
-      {
-        conversationId: body.thread_id,
-        agentId: agentIds.alice,
-        messageId: msgs.messages[0].id,
-      },
-      {
-        conversationId: body.thread_id,
-        agentId: agentIds.bob,
-        messageId: msgs.messages[1].id,
-      },
-    ]);
-    expect(
-      t.fake.starts
-        .filter(s => s.conversationId === body.thread_id)
-        .map(s => s.agentId)
-        .sort(),
-    ).toEqual([agentIds.alice, agentIds.bob].sort());
-
-    // Explicit subsets are allowed, but the caller is always included.
-    const childAgents = await (
-      await http(t).get(`/api/threads/${body.thread_id}/agents`)
-    ).json() as any;
-    expect(childAgents.agents.map((a: any) => a.agent_id).sort()).toEqual(
-      [agentIds.alice, agentIds.bob].sort(),
-    );
-  });
-
-  it('defaults create_thread members to all current channel members', async () => {
-    t = buildTestApp();
-    const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
-    const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
-      {
-        title: 'default-members',
-        context_summary: 'x',
-        initial_prompt: 'go',
-      },
-      { headers: authHeaders(t.authToken) },
-    );
-    expect(r.status).toBe(200);
-    const body = await r.json() as any;
-    const childAgents = await (
-      await http(t).get(`/api/threads/${body.thread_id}/agents`)
-    ).json() as any;
-    expect(childAgents.agents.map((a: any) => a.agent_id).sort()).toEqual(
-      [agentIds.alice, agentIds.bob].sort(),
-    );
-  });
-
-  it('surfaces concurrent_limit as 429', async () => {
-    t = buildTestApp();
-    const { conversationId, agentIds } = await setupSession(t, ['alice']);
-    t.ctx.serverConfig = {
-      ...t.ctx.serverConfig,
-      child_sessions: {
-        max_concurrent_per_parent: 1,
-        spawn_cooldown_seconds: null,
-        max_depth: 1,
-      },
-    };
-
-    const ok = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
-      {
-        title: 'c1',
-        members: [agentIds.alice],
-        context_summary: 'x',
-        initial_prompt: 'go',
-      },
-      { headers: authHeaders(t.authToken) },
-    );
-    expect(ok.status).toBe(200);
-
-    const second = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
-      {
-        title: 'c2',
-        members: [agentIds.alice],
-        context_summary: 'x',
-        initial_prompt: 'go',
-      },
-      { headers: authHeaders(t.authToken) },
-    );
-    expect(second.status).toBe(429);
-    const body = await second.json() as any;
-    expect(body.code).toBe('concurrent_limit');
-  });
 });
 
 describe('POST /internal/.../create-channel', () => {
@@ -539,18 +375,7 @@ describe('POST /internal/.../create-channel', () => {
   it('creates a top-level sibling when invoked from a child session', async () => {
     t = buildTestApp();
     const { conversationId, channelId, agentIds } = await setupSession(t, ['alice']);
-    const child = await (
-      await http(t).post(
-        `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
-        {
-          title: 'thread',
-          members: [agentIds.alice],
-          context_summary: 'x',
-          initial_prompt: 'go',
-        },
-        { headers: authHeaders(t.authToken) },
-      )
-    ).json() as any;
+    const child = seedLegacyThread(t, conversationId, 'thread', [agentIds.alice!]);
 
     const r = await http(t).post(
       `/internal/conversations/${child.thread_id}/agents/${agentIds.alice}/create-channel`,
@@ -573,18 +398,12 @@ describe('POST /internal/.../create-channel', () => {
   it('uses current thread members, not parent channel members, when creating a channel from a thread', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
-    const child = await (
-      await http(t).post(
-        `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
-        {
-          title: 'alice-only-thread',
-          members: [agentIds.alice],
-          context_summary: 'x',
-          initial_prompt: 'go',
-        },
-        { headers: authHeaders(t.authToken) },
-      )
-    ).json() as any;
+    const child = seedLegacyThread(
+      t,
+      conversationId,
+      'alice-only-thread',
+      [agentIds.alice!],
+    );
 
     const created = await (
       await http(t).post(
@@ -630,67 +449,5 @@ describe('POST /internal/.../create-channel', () => {
       { headers: authHeaders(t.authToken) },
     );
     expect(r.status).toBe(404);
-  });
-});
-
-describe('POST /internal/.../close-thread', () => {
-  let t: TestApp | null = null;
-  afterEach(() => {
-    t?.cleanup();
-    t = null;
-  });
-
-  it('child agent close posts summary to parent + tells ConversationManager.stop for every member', async () => {
-    t = buildTestApp();
-    const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
-    // spawn a child via the internal route
-    const child = await (
-      await http(t).post(
-        `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-thread`,
-        {
-          title: 'inv',
-          members: [agentIds.bob],
-          context_summary: 'x',
-          initial_prompt: 'go',
-        },
-        { headers: authHeaders(t.authToken) },
-      )
-    ).json() as any;
-
-    t.fake.stops = [];
-    const events: { kind: string; payload: unknown }[] = [];
-    const unsub = t.ctx.events.subscribe(conversationId, e => events.push(e));
-
-    const close = await http(t).post(
-      `/internal/conversations/${child.thread_id}/agents/${agentIds.bob}/close-thread`,
-      { summary: 'done' },
-      { headers: authHeaders(t.authToken) },
-    );
-    unsub();
-    expect(close.status).toBe(200);
-
-    // Parent got an auto-summary system message
-    const parentMsgs = await (
-      await http(t).get(`/api/channels/${conversationId}/messages`)
-    ).json() as any;
-    const summary = parentMsgs.messages.find(
-      (m: any) => m.from_kind === 'system' && m.content.includes('inv'),
-    );
-    expect(summary).toBeDefined();
-    expect(summary.content).toContain('done');
-    expect(summary.content).toContain('@bob');
-
-    // Every member of the closed session got stop() called
-    expect(
-      t.fake.stops.some(
-        s => s.conversationId === child.thread_id && s.agentId === agentIds.bob,
-      ),
-    ).toBe(true);
-
-    const threadUpdated = events.find(e => e.kind === 'thread_updated')?.payload as any;
-    expect(threadUpdated).toMatchObject({
-      parent_conversation_id: conversationId,
-      thread_id: child.thread_id,
-    });
   });
 });

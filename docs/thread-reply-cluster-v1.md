@@ -378,11 +378,11 @@ push、泄露 thread 内容**。
 |---|---|
 | `message history` / `search` / saved / attachments(旧 thread) | **只读放行**(它仍是合法 conversation,历史可读) |
 | 在旧 thread 内 `message send`(新 reply) | **拒绝**,typed error 引导"去父 channel reply 根消息";不再往旧 thread 追加 |
-| `thread close`(旧 thread) | 允许(收尾用);**新模型无 thread close 概念**,不暴露给新 reply-cluster |
+| `thread create` / `thread close`(旧隔离 thread CLI + internal route) | **移除**;新模型不再提供隔离 child-thread 创建/关闭面 |
 | `schedule --target-conversation-id <旧 thread>` | 已存在的允许跑完;**不允许新建**指向旧 thread 的 schedule |
-| 内部 `--target thread:<旧 conversation id>` | dispatcher 双解:命中旧 thread-conversation → 旧读路径;否则按 root_msg_id(新语义,§8) |
+| `thread:<id>` / `{ thread_id }` 目标里的旧 conversation id | **不双解**,返回 typed deprecation error,指向 `conversation:<id>` 只读入口;`thread:` 永久只表示 reply-cluster root |
 | runtime start/stop/clear(旧 thread agent) | 不再 spawn;已驻留的走 idle-reap;手动 stop 允许 |
-| task close guard(旧 thread 残留 task) | 沿用现有 `thread close` 的 open-task 拒绝逻辑,收尾后冻结 |
+| task close guard(旧 thread 残留 task) | 随 `thread close` 移除;旧 thread 只读保留,不再有主动 close 流程 |
 
 - **统一原则:旧 thread = 只读化石,所有写入面拒绝并引导到新模型;所有读取面放行。**
 - 冻结窗口长度 / 何时彻底删旧 thread 行,由 Cindy(runtime/schema)定;本 doc 只定方向(B + 上表)。

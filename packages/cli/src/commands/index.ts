@@ -112,8 +112,26 @@ export const COMMAND_GROUPS: readonly NounGroup[] = [
   },
   {
     noun: 'thread',
-    summary: 'Open or close a sub-discussion under a channel.',
+    summary: 'Follow or unfollow reply clusters under messages.',
     commands: threadCommands,
+    removedVerbs: {
+      create: {
+        replacement: 'follow',
+        hint:
+          'isolated thread creation has been removed. Reply to a message with ' +
+          '`silverhand message send --reply-to <message_id>`; use ' +
+          '`silverhand channel create` only when the user explicitly asks for ' +
+          'an isolated channel.',
+      },
+      close: {
+        replacement: 'unfollow',
+        hint:
+          'reply clusters have no close operation. Use ' +
+          '`silverhand thread unfollow --root <message_id>` to stop ' +
+          'receiving a cluster, or read a legacy isolated thread via ' +
+          '`message history --target conversation:<conversation_id>`.',
+      },
+    },
   },
   {
     noun: 'channel',

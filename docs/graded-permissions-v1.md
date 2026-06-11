@@ -173,7 +173,7 @@ Coarse buckets (~11, not 20 atomic ops; Cindy `x30tmJFBhD2cedlr` #4):
 | `write_tasks` | mutate existing tasks — claim / unclaim / update-status |
 | `read_attachments` | locate / download attachment |
 | `upload_attachments` | upload attachment |
-| `create_threads` | open / close a thread |
+| `create_threads` | retired legacy bucket (old isolated thread create/close removed; retained only for DB/backward compatibility) |
 | `create_channels` | create a top-level channel |
 | `manage_conversation_members` | agent adds an existing workspace member into a channel/thread |
 | `manage_schedules` | schedule create / cancel (list is self-introspection, §3.2) |
@@ -244,8 +244,6 @@ checked on.
 | `agentListChannels` | `canViewConversation` | `read_messages` | **target** `workspace_id` arg (default principal's) |
 | `agentSearchMessages` | `canViewConversation` (+ `canAgentAccessWorkspace` cross-ws) | `read_messages` | **resolved target**: `scope='channel'` → `channel.workspace_id` (global id, may differ); else `workspace_id` arg; else principal's |
 | `agentSendConversationMessage` | `canPostToConversation` | `send_messages` | principal conversation's workspace |
-| `agentCreateThread` | `canPostToConversation` | `create_threads` | principal conversation's workspace |
-| `agentCloseThread` | `canPostToConversation` | `create_threads` | principal conversation's workspace |
 | `agentCreateChannel` | `canPostToConversation` | `create_channels` | principal conversation's workspace |
 | `agentListConversationTasks` | `canViewConversation` | `read_tasks` | **effective** workspace (route supports `workspace_id` arg → other member workspace, `routes.ts:6996`) |
 | `agentCreateConversationTasks` | `canPostToConversation` | `create_tasks` | principal conversation's workspace |
@@ -433,7 +431,7 @@ reflects shiki's in-flight decisions during landing (`OkOt6hfWe1TkehYR`, `LaxSET
   this agent's bucket" entry can plug in without reworking the editor.)
 - **Denied agent actions — UI feedback NOT built this round** (shiki `LaxSET_0ob_42pL8`). The
   expectation is the **agent self-reports** the denial in chat. Verified live: a denied
-  `silverhand thread create` returns `{ code: 'capability_denied', details: { capability }, retriable:
+  `silverhand channel create` returns `{ code: 'capability_denied', details: { capability }, retriable:
   false }` (exit 3), and the agent surfaces that as a participant — the human/agent-isomorphic path,
   better than an implicit editor alarm. This is **not** counted as a gap in the agent permission UI; a
   dedicated denial-visibility optimization is future work, at which point the deep-link seam above can
