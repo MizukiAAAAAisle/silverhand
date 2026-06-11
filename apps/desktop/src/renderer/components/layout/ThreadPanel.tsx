@@ -261,7 +261,7 @@ export function ThreadPanel({
         conversationId={channelId}
         threadRootId={rootMessageId}
         routeKind="channel"
-        disabled={closed || rootCtx.isError}
+        disabled={closed || rootCtx.isError || !rootCtx.root}
         archived={archived}
       />
     </aside>
