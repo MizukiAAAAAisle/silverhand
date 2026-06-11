@@ -60,6 +60,9 @@ export const SendMessageInputSchema = z.object({
    *  Server validates each id belongs to the same channel as the
    *  destination conversation. */
   attachment_ids: MessageAttachmentIdsInputSchema,
+  /** Reply-cluster target message id. A main-line target opens a cluster;
+   *  replying to an existing reply joins that reply's root. */
+  reply_to_message_id: z.string().min(1).optional(),
 }).refine(hasMessagePayload, {
   message: 'message must include text or at least one attachment',
   path: ['content'],

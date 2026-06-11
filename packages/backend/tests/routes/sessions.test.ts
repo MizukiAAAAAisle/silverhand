@@ -287,6 +287,96 @@ describe('canonical channel/thread routes', () => {
     expect(deprecatedBody.error).toContain(`conversation:${legacy.thread_id}`);
   });
 
+  it('human channel sends can reply to root messages and existing replies', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+    const root = await (
+      await http(t).post(`/api/channels/${channelId}/messages`, {
+        content: 'root',
+      })
+    ).json() as any;
+
+    const replyToRootRes = await http(t).post(
+      `/api/channels/${channelId}/messages`,
+      {
+        content: 'reply-to-root',
+        reply_to_message_id: root.message.id,
+      },
+    );
+    expect(replyToRootRes.status).toBe(201);
+    const replyToRoot = (await replyToRootRes.json()) as any;
+    expect(replyToRoot.message.thread_root_id).toBe(root.message.id);
+
+    const replyToReplyRes = await http(t).post(
+      `/api/channels/${channelId}/messages`,
+      {
+        content: 'reply-to-reply',
+        reply_to_message_id: replyToRoot.message.id,
+      },
+    );
+    expect(replyToReplyRes.status).toBe(201);
+    const replyToReply = (await replyToReplyRes.json()) as any;
+    expect(replyToReply.message.thread_root_id).toBe(root.message.id);
+
+    const cluster = await (
+      await http(t).get(
+        `/api/channels/${channelId}/messages?thread_root_id=${root.message.id}&limit=10`,
+      )
+    ).json() as any;
+    expect(cluster.messages.map((m: any) => m.content)).toEqual([
+      'root',
+      'reply-to-root',
+      'reply-to-reply',
+    ]);
+  });
+
+  it('human channel sends reject invalid reply targets without reopening legacy threads', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+
+    const missing = await http(t).post(`/api/channels/${channelId}/messages`, {
+      content: 'missing target',
+      reply_to_message_id: 'does-not-exist',
+    });
+    expect(missing.status).toBe(404);
+    expect(((await missing.json()) as any).code).toBe('reply_target_not_found');
+
+    const { channelId: otherChannelId } = await createWorkspaceChannel(t, [
+      'bob',
+    ]);
+    const otherRoot = await (
+      await http(t).post(`/api/channels/${otherChannelId}/messages`, {
+        content: 'other root',
+      })
+    ).json() as any;
+    const cross = await http(t).post(`/api/channels/${channelId}/messages`, {
+      content: 'cross target',
+      reply_to_message_id: otherRoot.message.id,
+    });
+    expect(cross.status).toBe(404);
+    expect(((await cross.json()) as any).code).toBe('reply_target_not_found');
+
+    const root = await (
+      await http(t).post(`/api/channels/${channelId}/messages`, {
+        content: 'legacy root',
+      })
+    ).json() as any;
+    const legacy = await (
+      await http(t).post(`/api/messages/${root.message.id}/thread`)
+    ).json() as any;
+    const legacyWrite = await http(t).post(
+      `/api/threads/${legacy.thread_id}/messages`,
+      {
+        content: 'should stay read-only',
+        reply_to_message_id: root.message.id,
+      },
+    );
+    expect(legacyWrite.status).toBe(409);
+    expect(((await legacyWrite.json()) as any).code).toBe(
+      'legacy_thread_read_only',
+    );
+  });
+
   it('messages window 400s on multiple cursors and 404s on cross-channel anchors', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
