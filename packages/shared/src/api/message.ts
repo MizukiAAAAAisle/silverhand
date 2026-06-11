@@ -27,6 +27,11 @@ export const MessageDtoSchema = z.object({
   attachments: z.array(AttachmentSnapshotSchema).nullable(),
   seq: z.number(),
   created_at: z.number(),
+  /** Reply-cluster thread anchor (v43). NULL = root / main-line message;
+   *  non-NULL = a reply in the thread rooted at that message id. The thread
+   *  is identified by this root id, not a separate conversation. See
+   *  docs/thread-reply-cluster-v1.md. */
+  thread_root_id: z.string().nullable(),
   /** Task metadata — all null when this message is not a task. */
   task_number: z.number().nullable(),
   task_status: TaskStatusSchema.nullable(),

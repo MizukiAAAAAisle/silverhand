@@ -23,6 +23,7 @@ interface JoinedRow extends SavedMessageRow {
   m_metadata: string | null;
   m_seq: number;
   m_created_at: number;
+  m_thread_root_id: string | null;
   m_task_number: number | null;
   m_task_status: TaskStatus | null;
   m_task_title: string | null;
@@ -76,6 +77,7 @@ function rowToDto(row: JoinedRow): SavedMessageDto {
       attachments: extractAttachmentSnapshots(row.m_metadata),
       seq: row.m_seq,
       created_at: row.m_created_at,
+      thread_root_id: row.m_thread_root_id,
       task_number: row.m_task_number,
       task_status: row.m_task_status,
       task_title: row.m_task_title,
@@ -138,6 +140,7 @@ const SELECT_JOINED = `
     m.metadata         AS m_metadata,
     m.seq              AS m_seq,
     m.created_at       AS m_created_at,
+    m.thread_root_id   AS m_thread_root_id,
     m.task_number             AS m_task_number,
     m.task_status             AS m_task_status,
     m.task_title              AS m_task_title,

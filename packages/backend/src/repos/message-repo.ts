@@ -91,6 +91,7 @@ export function messageRowToDto(
     attachments: extractAttachmentSnapshots(metadata),
     seq: row.seq,
     created_at: row.created_at,
+    thread_root_id: row.thread_root_id,
     task_number: row.task_number,
     task_status: row.task_status,
     task_title: row.task_title,

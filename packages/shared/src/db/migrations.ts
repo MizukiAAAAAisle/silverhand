@@ -2620,6 +2620,95 @@ export const migrations: Migration[] = [
         ON messages(conversation_id, seq);
     `,
   },
+  {
+    version: 43,
+    name: 'thread_reply_cluster_spine',
+    // Reply-cluster thread model — docs/thread-reply-cluster-v1.md.
+    // A thread = replies anchored to a root message in the SAME conversation.
+    // Root message has thread_root_id IS NULL; replies store the root's id.
+    // Threads are NOT separate conversations; messages.seq stays conversation-global.
+    up: `
+      ALTER TABLE messages
+        ADD COLUMN thread_root_id TEXT REFERENCES messages(id) ON DELETE CASCADE;
+
+      CREATE INDEX idx_messages_thread_root
+        ON messages(conversation_id, thread_root_id, seq);
+
+      -- root-valid invariants (bare self-FK can't prove same-conversation /
+      -- not-nested; triggers do — RAISE(ABORT) only legal inside triggers).
+      CREATE TRIGGER messages_thread_root_insert
+      BEFORE INSERT ON messages
+      WHEN NEW.thread_root_id IS NOT NULL
+      BEGIN
+        SELECT CASE
+          WHEN NOT EXISTS (SELECT 1 FROM messages WHERE id = NEW.thread_root_id)
+          THEN RAISE(ABORT, 'thread_root_id must reference an existing message')
+        END;
+        SELECT CASE
+          WHEN COALESCE((SELECT conversation_id FROM messages WHERE id = NEW.thread_root_id), '') != NEW.conversation_id
+          THEN RAISE(ABORT, 'thread root must be in the same conversation')
+        END;
+        SELECT CASE
+          WHEN (SELECT thread_root_id FROM messages WHERE id = NEW.thread_root_id) IS NOT NULL
+          THEN RAISE(ABORT, 'thread root must not itself be a reply (no nested threads)')
+        END;
+      END;
+
+      CREATE TRIGGER messages_thread_root_update
+      BEFORE UPDATE OF thread_root_id ON messages
+      WHEN NEW.thread_root_id IS NOT NULL
+      BEGIN
+        SELECT CASE
+          WHEN NOT EXISTS (SELECT 1 FROM messages WHERE id = NEW.thread_root_id)
+          THEN RAISE(ABORT, 'thread_root_id must reference an existing message')
+        END;
+        SELECT CASE
+          WHEN COALESCE((SELECT conversation_id FROM messages WHERE id = NEW.thread_root_id), '') != NEW.conversation_id
+          THEN RAISE(ABORT, 'thread root must be in the same conversation')
+        END;
+        SELECT CASE
+          WHEN (SELECT thread_root_id FROM messages WHERE id = NEW.thread_root_id) IS NOT NULL
+          THEN RAISE(ABORT, 'thread root must not itself be a reply (no nested threads)')
+        END;
+      END;
+
+      -- thread followers = delivery/notification subscription, NOT membership
+      -- or permission. follower ⊆ channel member is enforced at query time,
+      -- not by this table (it can't shrink with membership).
+      CREATE TABLE thread_followers (
+        thread_root_id   TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        principal_kind   TEXT NOT NULL CHECK (principal_kind IN ('human', 'agent')),
+        principal_id     TEXT NOT NULL,
+        followed_at      INTEGER NOT NULL,
+        source           TEXT NOT NULL CHECK (source IN ('reply', 'mention', 'manual', 'target_author')),
+        PRIMARY KEY (thread_root_id, principal_kind, principal_id)
+      );
+
+      CREATE INDEX idx_thread_followers_principal
+        ON thread_followers(principal_kind, principal_id);
+
+      -- per-stream freshness head = optimistic-lock row for message-stale CAS.
+      -- stream = (conversation_id, thread_root_id|NULL=main); latest_seq = the
+      -- global messages.seq of the stream's newest message (also the CAS token).
+      CREATE TABLE conversation_stream_heads (
+        conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        thread_root_id   TEXT REFERENCES messages(id) ON DELETE CASCADE,
+        latest_seq       INTEGER NOT NULL
+      );
+
+      CREATE UNIQUE INDEX uniq_stream_head_main
+        ON conversation_stream_heads(conversation_id) WHERE thread_root_id IS NULL;
+      CREATE UNIQUE INDEX uniq_stream_head_thread
+        ON conversation_stream_heads(conversation_id, thread_root_id) WHERE thread_root_id IS NOT NULL;
+
+      -- Backfill main-stream heads for every existing conversation so that a
+      -- post-migration send with seen>0 hits the UPDATE-CAS path; a missing
+      -- head would make UPDATE match 0 rows and wrongly stale the sender.
+      INSERT INTO conversation_stream_heads(conversation_id, thread_root_id, latest_seq)
+      SELECT id, NULL, latest_message_seq FROM conversations;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

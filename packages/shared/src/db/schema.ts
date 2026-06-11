@@ -382,6 +382,40 @@ export interface MessageRow {
   task_title: string | null;
   task_workspace_id: string | null;
   task_closed_at: number | null;
+  /**
+   * Reply-cluster thread anchor (v43). NULL = this message is a root /
+   * main-line message; non-NULL = a reply in the thread rooted at that
+   * message id (same conversation, root itself has thread_root_id NULL).
+   * See docs/thread-reply-cluster-v1.md.
+   */
+  thread_root_id: string | null;
+}
+
+/**
+ * Thread delivery/notification subscription (v43) — NOT membership or
+ * permission. `follower ⊆ parent channel member` is enforced at query
+ * time, not by this table. `source` records the initial entry path
+ * (immutable; later entries don't overwrite). See thread-reply-cluster-v1 §5/§9.
+ */
+export interface ThreadFollowerRow {
+  thread_root_id: string;
+  conversation_id: string;
+  principal_kind: 'human' | 'agent';
+  principal_id: string;
+  followed_at: number;
+  source: 'reply' | 'mention' | 'manual' | 'target_author';
+}
+
+/**
+ * Per-stream freshness head (v43) — the optimistic-lock row for
+ * message-stale CAS. A stream is (conversation_id, thread_root_id|NULL);
+ * `latest_seq` is the global messages.seq of the stream's newest message
+ * and doubles as the CAS token + newer-messages boundary. See §6.4.
+ */
+export interface ConversationStreamHeadRow {
+  conversation_id: string;
+  thread_root_id: string | null;
+  latest_seq: number;
 }
 
 export interface ConversationReadRow {
