@@ -18,6 +18,8 @@ import type {
   ConversationMessagesDto,
   MessageDto,
   TaskChangedEvent,
+  ThreadFollowerStateDto,
+  ThreadFollowMutationDto,
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api, ApiError } from '@/lib/api';
@@ -753,6 +755,90 @@ export function useThreadRoot(
     isLoading: query.isLoading,
     isError: query.isError,
   };
+}
+
+/** Cache key for one reply cluster's human-follower state (cut3 slice B). */
+const threadFollowersKey = (cid: string, rootId: string) =>
+  ['channels', cid, 'thread-followers', rootId] as const;
+
+/** Human follower state for one reply cluster: whether the current viewer
+ *  is subscribed, plus the agent followers still visible in the parent
+ *  channel. Drives the ThreadPanel follow toggle / context-menu unfollow
+ *  (item 5) and the activity-bubble follower filter (item 4).
+ *
+ *  Backed by `GET /api/channels/:id/threads/:rootMessageId/followers`. The
+ *  root id may be the root message or any reply in the cluster — the
+ *  backend normalizes it. */
+export function useThreadFollowers(
+  channelId: string | null,
+  rootMessageId: string | null,
+) {
+  const enabled = !!channelId && !!rootMessageId;
+  return useQuery<ThreadFollowerStateDto>({
+    queryKey: threadFollowersKey(channelId ?? 'none', rootMessageId ?? 'none'),
+    enabled,
+    queryFn: ({ signal }) =>
+      api<ThreadFollowerStateDto>(
+        apiPaths.channelThreadFollowers(channelId!, rootMessageId!),
+        { signal },
+      ),
+  });
+}
+
+/** Subscribe the current human viewer to a reply cluster
+ *  (`POST .../follow`). Idempotent server-side; we refetch follower state
+ *  on success so the toggle + bubble reflect the new membership. */
+export function useFollowThread(
+  channelId: string | null,
+  rootMessageId: string | null,
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      if (!channelId || !rootMessageId) throw new Error('no thread selected');
+      return api<ThreadFollowMutationDto>(
+        apiPaths.channelThreadFollow(channelId, rootMessageId),
+        { method: 'POST' },
+      );
+    },
+    onSuccess: () => {
+      if (!channelId || !rootMessageId) return;
+      void qc.invalidateQueries({
+        queryKey: threadFollowersKey(channelId, rootMessageId),
+      });
+    },
+    onError: () => {
+      toast.error('关注失败,请重试');
+    },
+  });
+}
+
+/** Unsubscribe the current human viewer from a reply cluster
+ *  (`DELETE .../follow`). A later reply / mention re-follows automatically
+ *  (backend behavior) — unfollow only stops delivery, not visibility. */
+export function useUnfollowThread(
+  channelId: string | null,
+  rootMessageId: string | null,
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      if (!channelId || !rootMessageId) throw new Error('no thread selected');
+      return api<ThreadFollowMutationDto>(
+        apiPaths.channelThreadFollow(channelId, rootMessageId),
+        { method: 'DELETE' },
+      );
+    },
+    onSuccess: () => {
+      if (!channelId || !rootMessageId) return;
+      void qc.invalidateQueries({
+        queryKey: threadFollowersKey(channelId, rootMessageId),
+      });
+    },
+    onError: () => {
+      toast.error('取消关注失败,请重试');
+    },
+  });
 }
 
 /** Independent helper for "prime the messages cache around message X

@@ -53,6 +53,27 @@ function pickOrder(a: AgentRunState, b: AgentRunState): number {
   return b.lastActivityAt - a.lastActivityAt; // newer first
 }
 
+/**
+ * Active run-states for the bubble: non-terminal (drop `idle` / `failed`),
+ * optionally restricted to an agent allow-list (the thread follower filter,
+ * item 4), then sorted by main-status priority and recency. Pure — exported
+ * for tests.
+ *
+ * `restrictToAgentIds` semantics: `null`/`undefined` = no restriction; a
+ * list (even empty) restricts to exactly those agent ids, so an empty list
+ * legitimately yields nothing (a thread with no follower agents).
+ */
+export function selectActiveRunStates(
+  runStates: readonly AgentRunState[],
+  restrictToAgentIds?: readonly string[] | null,
+): AgentRunState[] {
+  const restrictSet = restrictToAgentIds ? new Set(restrictToAgentIds) : null;
+  return runStates
+    .filter(s => s.status !== 'idle' && s.status !== 'failed')
+    .filter(s => !restrictSet || restrictSet.has(s.agentId))
+    .sort(pickOrder);
+}
+
 interface ToolSummary {
   /** The tool to surface on the collapsed line — the live current tool
    *  (`state.detail`, set on each tool_call) when running, else the
@@ -102,6 +123,13 @@ interface ComposerActivityHeaderProps {
   /** Reused from the Composer's own batch hooks — no extra fetch. */
   agents: AgentDto[];
   agentAvatarUrls: Map<string, string | null>;
+  /** When non-null, only show run-state for these agent ids. Used inside
+   *  the ThreadPanel: the run-state stream is channel-scoped (a reply
+   *  cluster is not a separate conversation), so without this filter the
+   *  bubble would surface agents busy on the main line / other clusters.
+   *  Passing the thread's follower agent ids restricts it to participants
+   *  of this cluster (item 4). `null`/`undefined` = no restriction. */
+  restrictToAgentIds?: readonly string[] | null;
 }
 
 /**
@@ -124,6 +152,7 @@ export function ComposerActivityHeader({
   routeKind,
   agents,
   agentAvatarUrls,
+  restrictToAgentIds,
 }: ComposerActivityHeaderProps): JSX.Element | null {
   const { data: runStates = [] } = useAgentRunStates(conversationId, routeKind);
   const [expanded, setExpanded] = useState(false);
@@ -134,13 +163,11 @@ export function ComposerActivityHeader({
     return m;
   }, [agents]);
 
-  // Active = non-terminal, sorted by main-status priority then recency.
+  // Active = non-terminal, optionally restricted to the thread's follower
+  // agents (item 4), sorted by main-status priority then recency.
   const active = useMemo(
-    () =>
-      runStates
-        .filter(s => s.status !== 'idle' && s.status !== 'failed')
-        .sort(pickOrder),
-    [runStates],
+    () => selectActiveRunStates(runStates, restrictToAgentIds),
+    [runStates, restrictToAgentIds],
   );
 
   const subject = active[0];

@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react';
-import { Bookmark, BookmarkX, ClipboardCopy, Share2 } from 'lucide-react';
+import { BellOff, Bookmark, BookmarkX, ClipboardCopy, Share2 } from 'lucide-react';
 import {
   AppContextMenu,
   AppContextMenuItem,
@@ -24,6 +24,10 @@ import {
  *   message preselected. Hidden until the export pipeline lands
  *   (Cindy's "no half-baked Share entry" constraint), so callers
  *   in the unfinished commits omit `onShare` entirely.
+ * - **Unfollow thread** (`onUnfollowThread`) — unsubscribe the human
+ *   viewer from this message's reply cluster. Passed in only inside the
+ *   ThreadPanel and only while the viewer is following, so it never
+ *   shows on main-line rows or threads the viewer isn't subscribed to.
  *
  * If `trigger` ends up with no actions visible the entire wrapper
  * collapses to a transparent passthrough (no menu pops on right-click).
@@ -34,14 +38,21 @@ export function MessageContextMenu({
   onCopyMarkdown,
   onToggleSave,
   onShare,
+  onUnfollowThread,
 }: {
   trigger: ReactElement;
   saved?: boolean;
   onCopyMarkdown?: () => void;
   onToggleSave?: () => void;
   onShare?: () => void;
+  onUnfollowThread?: () => void;
 }): JSX.Element {
-  const hasAnyAction = !!(onCopyMarkdown || onToggleSave || onShare);
+  const hasAnyAction = !!(
+    onCopyMarkdown ||
+    onToggleSave ||
+    onShare ||
+    onUnfollowThread
+  );
   if (!hasAnyAction) return trigger;
 
   return (
@@ -76,6 +87,17 @@ export function MessageContextMenu({
             onSelect={onShare}
           >
             Share…
+          </AppContextMenuItem>
+        </>
+      ) : null}
+      {onUnfollowThread ? (
+        <>
+          <AppContextMenuSeparator />
+          <AppContextMenuItem
+            icon={<BellOff className="size-3.5" />}
+            onSelect={onUnfollowThread}
+          >
+            Unfollow thread
           </AppContextMenuItem>
         </>
       ) : null}

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { ArrowUpRight, CornerDownLeft, Loader2, X } from 'lucide-react';
+import { ArrowUpRight, Bell, BellOff, CornerDownLeft, Loader2, X } from 'lucide-react';
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { groupMessages } from '@/components/chat/groupMessages';
 import { MessageItem } from '@/components/chat/MessageItem';
@@ -7,7 +7,13 @@ import { SystemMessage } from '@/components/chat/SystemMessage';
 import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
 import { Composer } from '@/components/chat/Composer';
 import type { ChannelReference } from '@/components/chat/ChannelRef';
-import { useThreadCluster, useThreadRoot } from '@/features/channels/hooks';
+import {
+  useFollowThread,
+  useThreadCluster,
+  useThreadFollowers,
+  useThreadRoot,
+  useUnfollowThread,
+} from '@/features/channels/hooks';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
@@ -72,6 +78,23 @@ export function ThreadPanel({
   const rootCtx = useThreadRoot(channelId, rootMessageId);
   const cluster = useThreadCluster(channelId, rootMessageId);
   const messages = cluster.data;
+
+  // Human follower state for this cluster (item 4 + 5). `viewer_following`
+  // drives the header toggle / context-menu unfollow; `follower_agent_ids`
+  // restricts the (channel-scoped) activity bubble to this thread's agents.
+  const followers = useThreadFollowers(channelId, rootMessageId);
+  const viewerFollowing = followers.data?.viewer_following ?? false;
+  // Only filter once we have authoritative data — degrade to unrestricted
+  // on load/error rather than hiding all activity.
+  const followerAgentIds = followers.data?.follower_agent_ids ?? null;
+  const followThread = useFollowThread(channelId, rootMessageId);
+  const unfollowThread = useUnfollowThread(channelId, rootMessageId);
+  const followPending = followThread.isPending || unfollowThread.isPending;
+  const toggleFollow = (): void => {
+    if (followPending) return;
+    if (viewerFollowing) unfollowThread.mutate();
+    else followThread.mutate();
+  };
 
   const { data: agents = [] } = useAgents();
   const { data: users = [] } = useUsers();
@@ -171,6 +194,11 @@ export function ThreadPanel({
         humanAvatarUrls={humanAvatarUrls}
         agentAvatarUrls={agentAvatarUrls}
         userResolver={userResolver}
+        onUnfollowThread={
+          viewerFollowing && !followPending
+            ? () => unfollowThread.mutate()
+            : undefined
+        }
       />
     );
 
@@ -191,6 +219,28 @@ export function ThreadPanel({
           </div>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          {followers.data ? (
+            <button
+              type="button"
+              aria-label={viewerFollowing ? '取消关注该线程' : '关注该线程'}
+              aria-pressed={viewerFollowing}
+              title={viewerFollowing ? '取消关注该线程' : '关注该线程'}
+              onClick={toggleFollow}
+              disabled={followPending}
+              className={
+                'flex size-8 shrink-0 items-center justify-center rounded-[6px] hover:bg-bg-hover disabled:opacity-50 ' +
+                (viewerFollowing
+                  ? 'text-accent hover:text-accent'
+                  : 'text-text-muted hover:text-text-primary')
+              }
+            >
+              {viewerFollowing ? (
+                <BellOff className="size-4" />
+              ) : (
+                <Bell className="size-4" />
+              )}
+            </button>
+          ) : null}
           {onViewInChannel ? (
             <button
               type="button"
@@ -281,6 +331,7 @@ export function ThreadPanel({
         routeKind="channel"
         disabled={closed || rootCtx.isError || !rootCtx.root}
         archived={archived}
+        activityAgentIds={followerAgentIds}
       />
     </aside>
   );

@@ -105,6 +105,11 @@ interface MessageItemProps {
    *  parent only passes this in once the export pipeline is live so
    *  the user never sees a half-baked Share entry (Cindy review). */
   onShare?: (msg: MessageDto) => void;
+  /** Right-click → "Unfollow thread" menu item. Passed in only by the
+   *  ThreadPanel and only while the human viewer is following this reply
+   *  cluster, so the entry never appears on main-line rows or unfollowed
+   *  threads (item 5). */
+  onUnfollowThread?: (msg: MessageDto) => void;
   /** Resolve a `user_id` → display name for surfaces that don't already
    *  carry the user dto (task assignees, foreign-author fallback). Built
    *  by the parent from `useUsersById()` (multi-human audit 2026-06-03
@@ -165,6 +170,7 @@ export function MessageItem({
   onToggleSelected,
   onCopyMarkdown,
   onShare,
+  onUnfollowThread,
   userResolver,
 }: MessageItemProps): JSX.Element {
   const isUser = message.from_kind === 'user';
@@ -475,6 +481,9 @@ export function MessageItem({
       }
       onToggleSave={onSave ? () => onSave(message) : undefined}
       onShare={onShare ? () => onShare(message) : undefined}
+      onUnfollowThread={
+        onUnfollowThread ? () => onUnfollowThread(message) : undefined
+      }
     />
   );
 }

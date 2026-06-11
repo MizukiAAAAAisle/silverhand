@@ -61,6 +61,12 @@ interface ComposerProps {
    *  Independent of `disabled` (closed) so we can distinguish the reason
    *  in the placeholder copy without losing other disabled paths. */
   archived?: boolean;
+  /** Restrict the run-state activity bubble to these agent ids. The
+   *  ThreadPanel passes the thread's follower agent ids so the bubble
+   *  only reflects agents participating in this reply cluster, not the
+   *  whole (channel-scoped) run-state stream (item 4). `null`/`undefined`
+   *  = show all. */
+  activityAgentIds?: readonly string[] | null;
 }
 
 const MAX_TEXTAREA_HEIGHT = 192; // Mirrors Tailwind max-h-48.
@@ -98,6 +104,7 @@ export function Composer({
   threadRootId,
   disabled: disabledProp,
   archived = false,
+  activityAgentIds,
 }: ComposerProps): JSX.Element {
   // Treat archived as another flavor of disabled so every send/attach
   // path is gated identically. Placeholder below distinguishes the copy.
@@ -657,6 +664,7 @@ export function Composer({
             routeKind={routeKind}
             agents={agents}
             agentAvatarUrls={agentAvatarUrls}
+            restrictToAgentIds={activityAgentIds}
           />
           <textarea
             ref={ref}
