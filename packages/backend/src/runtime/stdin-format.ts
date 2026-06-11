@@ -97,7 +97,7 @@ export function formatInboxBatch(
  * Format (fields in fixed order, no quoting; content body follows on
  * the next line):
  *
- *     msg_id=<full-id> sender=@<handle>|system type=agent|human|system [thread=<root-id>] time=<ISO8601>
+ *     msg_id=<full-id> sender=@<handle>|system type=agent|human|system target=channel|thread:<root-id> time=<ISO8601>
  *
  * - `sender` is the canonical mention handle (`@<agent.name>` /
  *   `@<user.name>`) so an agent can reply with `@<handle>` directly.
@@ -107,9 +107,10 @@ export function formatInboxBatch(
  *   messages emit `sender=system` with no `@`.
  * - `type` is the surface vocabulary: DB column `from_kind='user'`
  *   maps to `human` here; agent and system pass through.
- * - `thread` is present only for reply-cluster messages. It names the
- *   cluster root message id, giving agents the reply target they need
- *   to keep a response in the same thread.
+ * - `target` names the stream this message belongs to: `channel` for
+ *   main-line messages, or `thread:<root-id>` for a reply cluster.
+ *   The message's own `msg_id` remains the relation handle agents pass
+ *   to `silverhand message send --reply-to` to answer in the same thread.
  * - `time` is ISO 8601 in the local timezone (offset preserved) so
  *   the agent sees both an absolute instant and the wall clock the
  *   user experienced.
@@ -121,24 +122,26 @@ export function formatStdinMessageHeader(
   defaultUserHandle: string | undefined,
 ): string {
   const time = formatStdinTimestamp(msg.created_at);
-  const thread = msg.thread_root_id ? ` thread=${msg.thread_root_id}` : '';
+  const target = msg.thread_root_id
+    ? `thread:${msg.thread_root_id}`
+    : 'channel';
   switch (msg.from_kind) {
     case 'agent': {
       const handle = msg.from_agent_id
         ? agentNameById(msg.from_agent_id)
         : undefined;
       const sender = handle ? `@${handle}` : 'agent';
-      return `msg_id=${msg.id} sender=${sender} type=agent${thread} time=${time}`;
+      return `msg_id=${msg.id} sender=${sender} type=agent target=${target} time=${time}`;
     }
     case 'user': {
       const resolved = msg.from_user_id
         ? userNameById(msg.from_user_id) ?? defaultUserHandle
         : defaultUserHandle;
       const sender = resolved ? `@${resolved}` : 'user';
-      return `msg_id=${msg.id} sender=${sender} type=human${thread} time=${time}`;
+      return `msg_id=${msg.id} sender=${sender} type=human target=${target} time=${time}`;
     }
     case 'system': {
-      return `msg_id=${msg.id} sender=system type=system${thread} time=${time}`;
+      return `msg_id=${msg.id} sender=system type=system target=${target} time=${time}`;
     }
   }
 }

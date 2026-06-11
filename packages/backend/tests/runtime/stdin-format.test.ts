@@ -73,9 +73,9 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     );
 
     expect(header).toMatch(
-      /^msg_id=m-main sender=@shiki type=human time=/,
+      /^msg_id=m-main sender=@shiki type=human target=channel time=/,
     );
-    expect(header).not.toContain(' thread=');
+    expect(header).not.toContain('thread:');
   });
 
   it('includes thread root metadata for reply-cluster messages', () => {
@@ -95,7 +95,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     );
 
     expect(header).toMatch(
-      /^msg_id=m-reply sender=@Alice type=agent thread=m-root time=/,
+      /^msg_id=m-reply sender=@Alice type=agent target=thread:m-root time=/,
     );
   });
 });
