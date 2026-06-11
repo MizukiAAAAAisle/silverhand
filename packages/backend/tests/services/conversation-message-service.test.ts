@@ -1203,7 +1203,7 @@ describe('ConversationMessageService.sendMessage', () => {
   // current delivery. Stream-isolation of stale `newer_messages` (5) is
   // covered by the freshness tests above.
 
-  it('delivers a thread reply only to followers — observe writes inbox without waking; non-followers get nothing', async () => {
+  it('wakes the root author on the first thread reply, then observes ordinary follower replies', async () => {
     const t = bootstrap();
     try {
       const carol = t.agents.create(
@@ -1223,26 +1223,42 @@ describe('ConversationMessageService.sendMessage', () => {
         content: 'bob root',
       });
 
-      // alice replies → alice follows (reply), bob follows (target_author).
+      // A human starts a thread under bob's message. bob becomes a
+      // target_author follower now, so the current reply is a turn for bob.
       // carol is a member but follows nothing.
       const reply = await t.service.sendMessage({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        content: 'alice reply',
+        actor: { kind: 'user', userId: 'local' },
+        content: 'human reply',
         replyToMessageId: root.id,
       });
       expect(reply.message.thread_root_id).toBe(root.id);
 
-      // bob is a follower but NOT mentioned → observe: a durable inbox row,
-      // never a deliverMessage (no wake) and never an auto-start.
+      await waitFor(() =>
+        t.fake.delivered.some(
+          d => d.agentId === t.bob.id && d.messageId === reply.message.id,
+        ),
+      );
+      expect(t.fake.starts.some(s => s.agentId === t.bob.id)).toBe(false);
+      t.fake.delivered = [];
+
+      // A later ordinary reply to the same thread should not keep waking the
+      // already-following target_author. It is observe-only: durable inbox row,
+      // no deliverMessage / wake.
+      const second = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'user', userId: 'local' },
+        content: 'plain follow-up',
+        replyToMessageId: root.id,
+      });
       await waitFor(() =>
         t.conversationInboxes
           .listPending(t.channel.id, t.bob.id)
-          .some(i => i.message.id === reply.message.id),
+          .some(i => i.message.id === second.message.id),
       );
       expect(
         t.fake.delivered.some(
-          d => d.agentId === t.bob.id && d.messageId === reply.message.id,
+          d => d.agentId === t.bob.id && d.messageId === second.message.id,
         ),
       ).toBe(false);
       expect(t.fake.starts.some(s => s.agentId === t.bob.id)).toBe(false);
@@ -1254,7 +1270,7 @@ describe('ConversationMessageService.sendMessage', () => {
       ).toBe(false);
       expect(t.threadFollowers.isFollower(root.id, 'agent', carol.id)).toBe(false);
 
-      // followers recorded: alice (reply), bob (target_author).
+      // followers recorded: local human (reply), bob (target_author).
       const followers = t.threadFollowers.listFollowers(root.id);
       expect(
         followers
@@ -1263,10 +1279,17 @@ describe('ConversationMessageService.sendMessage', () => {
           .sort(),
       ).toEqual(
         [
-          [t.alice.id, 'reply'],
           [t.bob.id, 'target_author'],
-        ].sort(),
+        ],
       );
+      expect(
+        followers.some(
+          f =>
+            f.principal_kind === 'human'
+            && f.principal_id === 'local'
+            && f.source === 'reply',
+        ),
+      ).toBe(true);
     } finally {
       t.cleanup();
     }

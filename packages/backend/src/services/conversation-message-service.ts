@@ -1126,21 +1126,31 @@ export class ConversationMessageService {
     // reply author → follower
     this.followMessageAuthor(conversationId, threadRootId, message, 'reply', currentSeq);
 
-    // root message author → follower
+    const turnAgentIds = new Set<string>();
+
+    // root message author → follower. If this reply is what newly follows the
+    // root author, the current reply is a turn for that agent; later ordinary
+    // replies stay observe-only unless they explicitly mention the agent.
     const root = this.messages.getInConversation(conversationId, threadRootId);
     if (root) {
-      this.followMessageAuthor(conversationId, threadRootId, root, 'target_author', currentSeq);
+      const targetAuthorAgentId = this.followMessageAuthor(
+        conversationId,
+        threadRootId,
+        root,
+        'target_author',
+        currentSeq,
+      );
+      if (targetAuthorAgentId) turnAgentIds.add(targetAuthorAgentId);
     }
 
     // @mentioned channel members → follower; mentioned AGENTS also take a turn.
     // Non-members are never followed via mention (§4.1: follow is not a
     // membership backdoor); their visibility is filtered at delivery anyway.
-    const mentionedAgentIds = new Set<string>();
     let userMemberIds: Set<string> | null = null;
     for (const handle of new Set(extractMentions(message.content))) {
       const agent = this.agents.getByName(handle);
       if (agent && this.conversations.getAgent(conversationId, agent.id)) {
-        mentionedAgentIds.add(agent.id);
+        turnAgentIds.add(agent.id);
         this.followAgent(conversationId, threadRootId, agent.id, 'mention', currentSeq);
         continue;
       }
@@ -1160,7 +1170,8 @@ export class ConversationMessageService {
     }
 
     // Current-reply delivery plan: follower agents that are channel-visible,
-    // excluding the sender. `turn` iff @mentioned by this reply, else
+    // excluding the sender. `turn` iff this reply explicitly addresses the
+    // recipient (mention, or newly-created target_author follow), else
     // `observe`. (delivery_kind only controls behavior — the recipient set is
     // already follower ∩ visible, never widened by kind.)
     const senderAgentId =
@@ -1170,7 +1181,7 @@ export class ConversationMessageService {
       .filter(ca => ca.agent_id !== senderAgentId)
       .map(ca => ({
         agentId: ca.agent_id,
-        kind: mentionedAgentIds.has(ca.agent_id) ? 'turn' : 'observe',
+        kind: turnAgentIds.has(ca.agent_id) ? 'turn' : 'observe',
       }));
     return { threadRootId, recipients };
   }
@@ -1178,16 +1189,25 @@ export class ConversationMessageService {
   /** Follow the author of `msg` (agent or human). Agent authors get history
    *  backfill when newly followed; human authors are recorded as followers
    *  (UI/notification consumer) but have no inbox. Only current channel
-   *  members are recorded (follower ⊆ member, enforced again at delivery). */
+   *  members are recorded (follower ⊆ member, enforced again at delivery).
+   *  Returns the agent id only when a NEW agent follower row was inserted. */
   private followMessageAuthor(
     conversationId: string,
     threadRootId: string,
     msg: MessageDto,
     source: ThreadFollowerSource,
     currentSeq: number,
-  ): void {
+  ): string | null {
     if (msg.from_kind === 'agent' && msg.from_agent_id) {
-      this.followAgent(conversationId, threadRootId, msg.from_agent_id, source, currentSeq);
+      return this.followAgent(
+        conversationId,
+        threadRootId,
+        msg.from_agent_id,
+        source,
+        currentSeq,
+      )
+        ? msg.from_agent_id
+        : null;
     } else if (msg.from_kind === 'user' && msg.from_user_id) {
       if (this.conversationUserMemberIds(conversationId).has(msg.from_user_id)) {
         this.threadFollowers.upsert({
@@ -1199,6 +1219,7 @@ export class ConversationMessageService {
         });
       }
     }
+    return null;
   }
 
   /** Upsert an agent follower; if it is newly followed AND a current channel
