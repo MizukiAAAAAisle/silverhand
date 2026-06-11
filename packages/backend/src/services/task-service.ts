@@ -258,6 +258,7 @@ interface ResolvedTaskRow {
 interface ResolvedMessageRow {
   id: string;
   conversation_id: string;
+  thread_root_id: string | null;
   from_kind: MessageRow['from_kind'];
   metadata: string | null;
   content: string;
@@ -1581,6 +1582,7 @@ export class TaskService {
     const row = this.db
       .prepare<[string], ResolvedMessageRow>(
         `SELECT id, conversation_id AS conversation_id,
+                thread_root_id,
                 from_kind, metadata, content,
                 task_number, task_workspace_id, task_status, task_closed_at,
                 task_assignee_agent_id, task_title
@@ -1785,6 +1787,10 @@ export class TaskService {
     sysMessage: string;
   }): Promise<void> {
     const conversationId = args.conversation.id;
+    const taskMessage = this.fetchMessage(args.messageId);
+    const threadRootId = taskMessage?.conversation_id === conversationId
+      ? taskMessage.thread_root_id
+      : null;
 
     const systemActor: TaskSystemActor = this.taskSystemActor(args.actor);
     const sysMsg = this.db.transaction(() =>
@@ -1792,6 +1798,7 @@ export class TaskService {
         conversationId,
         fromKind: 'system',
         content: args.sysMessage,
+        threadRootId,
         metadata: {
           subtype: taskSystemSubtype(args.kind),
           task_number: args.taskNumber,

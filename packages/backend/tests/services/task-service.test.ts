@@ -1507,6 +1507,28 @@ function fetchSystemMetadata(
     );
 }
 
+function fetchSystemRows(
+  t: ReturnType<typeof bootstrap>,
+  subtype: string,
+): { metadata: Record<string, unknown>; thread_root_id: string | null }[] {
+  const rows = t.db
+    .prepare<[], { metadata: string | null; thread_root_id: string | null }>(
+      `SELECT metadata, thread_root_id
+       FROM messages
+       WHERE from_kind = 'system'
+       ORDER BY created_at ASC, id ASC`,
+    )
+    .all();
+  return rows
+    .map(r => ({
+      metadata: r.metadata ? (JSON.parse(r.metadata) as Record<string, unknown>) : null,
+      thread_root_id: r.thread_root_id,
+    }))
+    .filter((r): r is { metadata: Record<string, unknown>; thread_root_id: string | null } =>
+      r.metadata !== null && (r.metadata as { subtype?: string }).subtype === subtype,
+    );
+}
+
 describe('TaskService system message metadata enrichment (PR-2)', () => {
   it('task_create writes full enriched metadata: subtype, task_message_id, title, status, assignee, actor', async () => {
     const t = bootstrap();
@@ -1559,6 +1581,49 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
       expect(meta!.actor.id).toBe(t.alice.id);
       expect(meta!.task_message_id).toBeTypeOf('string');
       expect(meta!.task_title).toBe('task-claim-meta');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('task claim/status system messages inherit the task message thread stream', async () => {
+    const t = bootstrap();
+    try {
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root message',
+      });
+      const taskBody = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'task inside thread',
+        threadRootId: root.id,
+      });
+
+      const claim = await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { messageId: taskBody.id },
+      });
+      expect(claim).toMatchObject({ success: true, message_id: taskBody.id });
+
+      const status = await t.service.updateStatus({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { messageId: taskBody.id },
+        status: 'in_review',
+      });
+      expect(status).toEqual({ success: true });
+
+      const claimRows = fetchSystemRows(t, 'task_claim');
+      const statusRows = fetchSystemRows(t, 'task_status');
+      expect(claimRows).toHaveLength(1);
+      expect(statusRows).toHaveLength(1);
+      expect(readTaskSystemMetadata(claimRows[0]!.metadata)?.task_message_id).toBe(taskBody.id);
+      expect(readTaskSystemMetadata(statusRows[0]!.metadata)?.task_message_id).toBe(taskBody.id);
+      expect(claimRows[0]!.thread_root_id).toBe(root.id);
+      expect(statusRows[0]!.thread_root_id).toBe(root.id);
     } finally {
       t.cleanup();
     }
