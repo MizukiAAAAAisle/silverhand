@@ -80,6 +80,7 @@ export const CreateTasksInputSchema = z.object({
       }),
     )
     .min(1),
+  reply_to_message_id: z.string().min(1).optional(),
 });
 export type CreateTasksInput = z.infer<typeof CreateTasksInputSchema>;
 
@@ -88,6 +89,7 @@ export const CreateTasksOpErrorSchema = z.enum([
   'conversation_closed',
   'not_conversation_member',
   'agent_not_found',
+  'reply_target_not_found',
 ]);
 export type CreateTasksOpError = z.infer<typeof CreateTasksOpErrorSchema>;
 

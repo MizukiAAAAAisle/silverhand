@@ -77,6 +77,9 @@ export interface CreateTasksInput {
   conversationId: string;
   actor: TaskActor;
   tasks: { title: string; body?: string }[];
+  /** Optional message this batch should hang under as a reply-cluster
+   *  task body. Omitted keeps task creation on the main line. */
+  replyToMessageId?: string;
 }
 
 export type ClaimTaskInput =
@@ -392,6 +395,14 @@ export class TaskService {
         return { error: 'not_conversation_member' };
       }
     }
+    let threadRootId: string | null = null;
+    if (input.replyToMessageId) {
+      const target = this.fetchMessage(input.replyToMessageId);
+      if (!target || target.conversation_id !== input.conversationId) {
+        return { error: 'reply_target_not_found' };
+      }
+      threadRootId = target.thread_root_id ?? target.id;
+    }
 
     const taskWorkspaceId = conversation.workspace_id;
     const created: { message_id: string; task_number: number; title: string }[] =
@@ -404,6 +415,7 @@ export class TaskService {
             fromAgentId: input.actor.kind === 'agent' ? input.actor.agentId : null,
             fromUserId: input.actor.kind === 'user' ? input.actor.userId : null,
             content: t.body && t.body.length > 0 ? t.body : t.title,
+            threadRootId,
           });
           const nextNumber = this.allocateTaskNumber(taskWorkspaceId);
           this.db

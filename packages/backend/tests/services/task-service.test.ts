@@ -159,6 +159,92 @@ describe('TaskService.createTasks', () => {
     }
   });
 
+  it('createTasks with replyToMessageId writes task body and task_create event to that thread stream', async () => {
+    const t = bootstrap();
+    try {
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root message',
+      });
+      const reply = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'existing reply',
+        threadRootId: root.id,
+      });
+
+      const result = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        tasks: [{ title: 'thread task' }],
+        replyToMessageId: reply.id,
+      });
+
+      expect('tasks' in result).toBe(true);
+      if (!('tasks' in result)) throw new Error();
+      const taskMessageId = result.tasks[0]!.message_id;
+      const taskRow = t.db
+        .prepare<[string], { thread_root_id: string | null }>(
+          `SELECT thread_root_id FROM messages WHERE id = ?`,
+        )
+        .get(taskMessageId);
+      expect(taskRow?.thread_root_id).toBe(root.id);
+
+      const createRows = fetchSystemRows(t, 'task_create');
+      expect(createRows).toHaveLength(1);
+      expect(readTaskSystemMetadata(createRows[0]!.metadata)?.task_message_id).toBe(taskMessageId);
+      expect(createRows[0]!.thread_root_id).toBe(root.id);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('createTasks with a missing or cross-conversation replyToMessageId fails without inserting', async () => {
+    const t = bootstrap();
+    try {
+      const other = t.conversations.insertChannel({
+        workspaceId: t.workspace.id,
+        workspacePath: t.workspace.workspace_path,
+        title: 'other',
+      });
+      t.conversations.addAgent(other.id, t.alice.id);
+      const otherMsg = t.messages.insertForConversation({
+        conversationId: other.id,
+        fromKind: 'agent',
+        fromAgentId: t.alice.id,
+        content: 'other channel message',
+      });
+
+      const missing = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        tasks: [{ title: 'missing target' }],
+        replyToMessageId: 'missing-message',
+      });
+      expect(missing).toEqual({ error: 'reply_target_not_found' });
+
+      const cross = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        tasks: [{ title: 'cross target' }],
+        replyToMessageId: otherMsg.id,
+      });
+      expect(cross).toEqual({ error: 'reply_target_not_found' });
+
+      const count = t.db
+        .prepare<[], { count: number }>(
+          `SELECT COUNT(*) AS count FROM messages WHERE task_number IS NOT NULL`,
+        )
+        .get();
+      expect(count?.count).toBe(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('agent not in conversation → not_conversation_member, no insert', async () => {
     const t = bootstrap();
     try {

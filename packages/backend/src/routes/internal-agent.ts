@@ -847,9 +847,13 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
       conversationId: principal.conversationId,
       actor: principal,
       tasks: parsed.data.tasks,
+      replyToMessageId: parsed.data.reply_to_message_id,
     });
     if ('error' in result) {
-      return c.json({ error: result.error }, 400);
+      return c.json(
+        { error: result.error },
+        result.error === 'reply_target_not_found' ? 404 : 400,
+      );
     }
     return c.json(result);
   });
