@@ -201,37 +201,39 @@ push、泄露 thread 内容**。
 - **排序 seq 不动:** `messages.seq` 仍是 conversation 内全局单调序(排序/分页/WS replay 兼容)。**不给
   thread 另起递增 seq。**
 - **per-stream head 物化 + `latest_seq` 当 CAS token(无独立 `version`,已拍):** 新表
-  `conversation_stream_heads(conversation_id, stream_key, latest_seq)`(`stream_key` = `main` 或
-  `thread:<root_msg_id>`)。`latest_seq` = 该 stream 最新消息的 **global seq**。同一 stream 内 global seq
+  `conversation_stream_heads`(**结构化列 `thread_root_id`,NULL=main;不存编码字符串 `stream_key`**,见 §9 + blocker 修正)。
+  `latest_seq` = 该 stream 最新消息的 **global seq**。同一 stream 内 global seq
   单调递增(全局 allocator 保证后插入更大)→ `latest_seq` 本身就是合法 CAS token,**一值三用**:CAS token
   + `newer_messages` 下界 + daemon observed boundary。语义源头仍是 `messages` 全局 seq + stream key
-  (`MAX(seq) WHERE conversation_id=? AND thread_root_id <=> ?` 可重建 head,用于 backfill/校验)。
+  (`MAX(seq) WHERE conversation_id=? AND thread_root_id <=> ?` 可重建 head,用于 backfill/校验)。`stream_key`
+  字符串只在 API/daemon wire 层暴露,DB 边界一律用结构化 `thread_root_id`。
   - **不建独立 `version` 字段。** slock-ai 同样用"消息序号本身"做 per-target boundary、无独立 version。
     **注意(shiki 指正):slock 是有 reaction 机制的,但 reaction 被刻意排除在 freshness 之外**(只 POST/DELETE
     `/messages/:id/reactions`,不带 `seenUpToSeq`)——所以"系统里存在 reaction"本身**永远不构成**引入 version
     的理由。只有当我们**主动决定**让某种不推进 `latest_seq` 的变更(edit / 把 reaction 设计成"需重判")参与
     freshness 时,才需要独立 version。v1 不这么设计(对齐 `docs/reactions-design.md`:reaction 独立表、不进消息流),
     故单 `latest_seq` 足够,version 不预留。
-- **发送事务(乐观锁下沉到 stream 级):**
-  1. resolve target stream(reply→`thread:<root>`,否则 `main`)。
-  2. CAS = upsert:
+- **发送事务(确定形态,单一 DB transaction,采纳 Cindy blocker#1):** allocator 与 stream-CAS 是两件事
+  (今天在 `message-repo.ts:493-521` 挤成同一条 `latest_message_seq+1` UPDATE,新模型必须拆),但**必须包在
+  一个事务里,CAS 失败整体 rollback**——不能像现有 `insertForConversationIfFresh` 那样 return stale 后仍提交
+  (否则会把 `conversations.latest_message_seq` 空推进、留下 burned seq)。确定顺序:
+  1. resolve target stream(reply→`thread_root_id=<root>`,否则 `main` 即 `NULL`)。
+  2. **reserve global seq**:`conversations.latest_message_seq += 1` → `newGlobalSeq`(无条件全局 allocator)。
+  3. **stream-head CAS upsert**(`seenStreamSeq` 必须 `=0` 才允许 INSERT 分支,否则 head 丢失/迁移漏 backfill
+     时 `seen>0` 无行会被误当首条 reply 插入成功):
      ```
-     INSERT INTO conversation_stream_heads(conversation_id, stream_key, latest_seq)
-     VALUES(?, ?, :newGlobalSeq)
-     ON CONFLICT(conversation_id, stream_key)
-     DO UPDATE SET latest_seq=:newGlobalSeq WHERE latest_seq=:seenStreamSeq;
+     INSERT INTO conversation_stream_heads(conversation_id, thread_root_id, latest_seq)
+     SELECT :conv, :rootOrNull, :newGlobalSeq
+      WHERE :seenStreamSeq = 0
+     ON CONFLICT(conversation_id, thread_root_id)
+     DO UPDATE SET latest_seq = :newGlobalSeq WHERE latest_seq = :seenStreamSeq;
      ```
-     首条 reply:stream 空、`seenStreamSeq=0`、无行 → INSERT 成。并发首 reply:一条 INSERT 赢,另一条
-     ON CONFLICT 的 `WHERE latest_seq=0` 撞已改写行 → 0 changes → stale。
-  3. 0 changes → stale;`newer_messages` 用**同 stream + 同 deliverability/follower filter** 拉(下条)。
-  4. CAS 成功 → `conversations.latest_message_seq += 1` 分配 `newGlobalSeq`(无条件全局 allocator,所有
-     消息都走它,`messages.seq` 全局连续)。
-  5. insert message(`seq=newGlobalSeq`, `thread_root_id=...`),并把步骤 2 的 `latest_seq` 落为 `newGlobalSeq`。
-
-  > 注:步骤 2 的 CAS 与步骤 4 的 allocator 是**两件事**——今天它俩在 `message-repo.ts:493-521` 是同一条
-  > `latest_message_seq+1` UPDATE(CAS 变体多 `WHERE =:seen`),新模型必须拆:allocator 无条件全局,CAS 按
-  > stream。实现时把 `newGlobalSeq` 先 reserve 再回填 head,或调换 2/4 顺序(先 allocator 后 stream CAS)均可,
-  > 以 Cindy runtime 定。
+  4. **0 changes → `throw` / rollback 整个事务**(allocator 的 +1 一并回滚,无 gap);事务外再查该 stream
+     当前 `latest_seq` 组 stale 响应,`newer_messages` 用**同 stream + 同 deliverability/follower filter** 拉。
+  5. CAS 成功 → insert message(`seq=newGlobalSeq`, `thread_root_id=…`),提交。
+  - 首条 reply:stream 空、`seenStreamSeq=0`、无行 → INSERT(`WHERE :seen=0` 放行)成。并发首 reply:一条
+    INSERT 赢,另一条 `WHERE :seen=0` 的 INSERT 撞 unique → ON CONFLICT 的 `WHERE latest_seq=0` 又撞已改写行
+    → 0 changes → rollback → stale。
 - **daemon observed 从单值 → map** `stream_key → observed_seq`(= 它读到的该 stream `latest_seq`)。send 带
   `(stream_key, seenStreamSeq)`;CAS 比的是同一 stream 的 head,而非 conv 全局 max。
 - **`newer_messages` 用完全相同的 deliverability + stream filter**,不能 `listAfterSeq(conversation_id)`。
@@ -306,18 +308,27 @@ push、泄露 thread 内容**。
   - **`follower ⊆ channel member` 不是 DB 表能维持的不变量**(表无法随 membership 动态收缩)——它在
     **投递/读查询时**按"当前是否 channel 可见/成员"join 过滤(失权即过滤;follower 表非权威,channel 权限才是)。
 - **per-stream freshness head(load-bearing,非可选缓存——它是 freshness CAS 的锁行,§6.4):**
+  **DB 用结构化列 `thread_root_id`(NULL=main),不存编码字符串 `stream_key`**(采纳 Cindy blocker#2:
+  `thread:<id>` 字符串无法自然 FK 到 messages,结构化列才能复用同一套 root-valid trigger):
   ```
   conversation_stream_heads(
     conversation_id  TEXT NOT NULL,
-    stream_key       TEXT NOT NULL,      -- 'main' | 'thread:<root_msg_id>'
-    latest_seq       INTEGER NOT NULL,   -- 该 stream 最新消息的 global messages.seq;= CAS token + 边界
-    PRIMARY KEY (conversation_id, stream_key)
-  )
+    thread_root_id   TEXT,                 -- NULL = main stream
+    latest_seq       INTEGER NOT NULL      -- 该 stream 最新消息的 global messages.seq;= CAS token + 边界
+  );
+  -- 每 conversation 唯一 main head:
+  CREATE UNIQUE INDEX uniq_stream_main
+    ON conversation_stream_heads(conversation_id) WHERE thread_root_id IS NULL;
+  -- 每 (conversation, thread) 唯一 head:
+  CREATE UNIQUE INDEX uniq_stream_thread
+    ON conversation_stream_heads(conversation_id, thread_root_id) WHERE thread_root_id IS NOT NULL;
   ```
+  - `thread_root_id` 复用 §9 上面那套 root-valid trigger 约束(存在、同 conversation、root 自身
+    `thread_root_id IS NULL`)。`stream_key='main'|'thread:<id>'` 只在 API/daemon wire 层编码/解码,DB 不见。
   - **无 `version` 列**(原 §14 已拍 + Cindy slock 调研 #task:1023 印证:slock 也用消息 seq 做 per-target
     boundary、无独立 version;reaction 不参与 freshness)。仅未来 edit/reaction 要触发重判时才加。
   - `latest_seq` 语义源头 = `MAX(messages.seq) WHERE conversation_id=? AND thread_root_id <=> ?`,head 是其物化,
-    可由该 query 重建(backfill / 校验)。
+    可由该 query 重建(backfill / 校验 job)。
 - 迁移按 append-only(CLAUDE.md):新版本 migration,不改已发布的。
 
 ---
@@ -397,7 +408,8 @@ session。这比旧模型(给 agent 一个"每 thread 一个脑子"、human 没�
 
 **仍开放:**
 1. §6.1 追平:全量回灌 vs digest 的阈值(默认全量;长 thread 何时切 digest)。
-2. §6.4:per-stream freshness latest 何时从 query 切到物化 `conversation_stream_heads` 缓存(性能触发点)。
+2. §6.4/§9:`conversation_stream_heads` 是 load-bearing 锁行(已定),是否再加一个**派生校验/重建 job**
+   (拿 `MAX(messages.seq)` 对账 head,修迁移/异常导致的漂移)。
 3. §10:冻结窗口多长、何时彻底删旧 thread 行(Cindy 定);typed error code 命名。
 4. §8:`thread follow/unfollow --root` 要不要短别名(纯人体工学,非阻塞)。
 5. human UI 的 unread / 通知粒度(per-thread 通知管理,Slack 有,v1 是否做)。
