@@ -79,10 +79,13 @@ import {
 // speaks a different version.
 //
 // v2 (reply-cluster §6.4): `runtime_start.startup_delivery.deliveries`,
-// `runtime_wake.deliveries`, and `agent_message_send.reply_to_message_id`
-// were added to strict command schemas. A v1 daemon strict-parses those
-// as unknown keys and rejects the command, so the version MUST gate at
-// hello rather than silently breaking business commands.
+// `runtime_wake.deliveries`, `agent_message_send.reply_to_message_id`,
+// and the new `agent_stream_observed` intent were added to the strict
+// command surface. A v1 daemon strict-parses the new keys as unknown and
+// rejects the command (and has no handler for the new intent), so the
+// version MUST gate at hello rather than silently breaking business
+// commands. `agent_stream_observed` lands in the SAME v2 surface (it was
+// added before v2 shipped to any deployment) — no further bump.
 
 export const HOST_PROTOCOL_VERSION = 2;
 
@@ -365,6 +368,44 @@ export const AgentStaleResolveResultSchema = z.union([
 ]);
 export type AgentStaleResolveResult = z.infer<
   typeof AgentStaleResolveResultSchema
+>;
+
+// ── agent_stream_observed (CLI→daemon, reply-cluster §6.4 B-light) ──
+// A pull (`message history --target thread:<root>`) reaches the backend
+// over plain HTTP, NOT through the daemon — so the daemon never learns
+// that the agent observed the cluster. Without this the next
+// `send --reply-to` would treat a just-read cluster as unknown (Case A
+// loose), losing freshness protection on the read-then-reply path (THE
+// main thread workflow). After a successful thread pull the CLI fires
+// this daemon-local intent so the daemon advances the cluster's observed
+// boundary and records the surfaced message ids as known reply targets.
+// Purely daemon-local state: no backend call, no HTTP-error arm.
+//
+// Contract (Cindy 2026-06-11, msg UbcoVgS3ZQ4TivZ6):
+//  - `observed_seq` is the max seq among REPLIES the pull returned
+//    (`thread_root_id === root`); 0 when the cluster has no replies. The
+//    root's own seq lives on the main line and MUST NOT be passed here.
+//  - `reply_target_messages` is the root id PLUS the returned reply ids;
+//    each maps to `thread:<root>` so a later `--reply-to` of any of them
+//    resolves a known stream (root → seen=0 when there are no replies).
+export const AgentStreamObservedParamsSchema = z
+  .object({
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    thread_root_id: z.string().min(1),
+    observed_seq: z.number().int().nonnegative(),
+    reply_target_messages: z.array(z.string().min(1)),
+  })
+  .strict();
+export type AgentStreamObservedParams = z.infer<
+  typeof AgentStreamObservedParamsSchema
+>;
+
+export const AgentStreamObservedResultSchema = z
+  .object({ ok: z.literal(true) })
+  .strict();
+export type AgentStreamObservedResult = z.infer<
+  typeof AgentStreamObservedResultSchema
 >;
 
 // ── PR-2 runtime_* surface ──────────────────────────────────────────
@@ -1942,6 +1983,10 @@ export const intentSchemas = {
   agent_stale_resolve: {
     params: AgentStaleResolveParamsSchema,
     result: AgentStaleResolveResultSchema,
+  },
+  agent_stream_observed: {
+    params: AgentStreamObservedParamsSchema,
+    result: AgentStreamObservedResultSchema,
   },
   runtime_start: {
     params: RuntimeStartParamsSchema,

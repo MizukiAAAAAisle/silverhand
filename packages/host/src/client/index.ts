@@ -58,6 +58,7 @@ import {
   type ConversationLogDebugParams,
   type AgentMessageSendParams,
   type AgentStaleResolveParams,
+  type AgentStreamObservedParams,
   type HostOutboundAttachParams,
   type HostProxyConfigSetParams,
 } from '../protocol.js';
@@ -367,6 +368,12 @@ export class HostClient {
     params: AgentStaleResolveParams,
   ): Promise<IntentResult<'agent_stale_resolve'>> {
     return this.call('agent_stale_resolve', params);
+  }
+
+  agentStreamObserved(
+    params: AgentStreamObservedParams,
+  ): Promise<IntentResult<'agent_stream_observed'>> {
+    return this.call('agent_stream_observed', params);
   }
 
   // ── PR-2 runtime_* typed helpers ───────────────────────────────

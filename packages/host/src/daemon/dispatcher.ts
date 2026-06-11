@@ -31,6 +31,7 @@ import {
   intentSchemas,
   type AgentMessageSendParams,
   type AgentStaleResolveParams,
+  type AgentStreamObservedParams,
   type AgentMaterializeParams,
   type AgentMaterializeResult,
   type AgentWorkspaceIndexParams,
@@ -669,6 +670,10 @@ export class IntentDispatcher {
       case 'agent_stale_resolve':
         return this.requireSupervisor().agentStaleResolve(
           params as AgentStaleResolveParams,
+        );
+      case 'agent_stream_observed':
+        return this.requireSupervisor().agentStreamObserved(
+          params as AgentStreamObservedParams,
         );
       // ── runtime_* family ────────────────────────────────────────
       // Each case below requires `this.supervisor` to be set; when

@@ -21,6 +21,8 @@ import type {
   AgentMessageSendResult,
   AgentStaleResolveParams,
   AgentStaleResolveResult,
+  AgentStreamObservedParams,
+  AgentStreamObservedResult,
   RuntimeClearSessionParams,
   RuntimeClearSessionResult,
   RuntimeCloseActivityLogParams,
@@ -48,6 +50,9 @@ export interface SupervisorContract {
   agentStaleResolve(
     params: AgentStaleResolveParams,
   ): AgentStaleResolveResult | Promise<AgentStaleResolveResult>;
+  agentStreamObserved(
+    params: AgentStreamObservedParams,
+  ): AgentStreamObservedResult | Promise<AgentStreamObservedResult>;
   start(params: RuntimeStartParams): RuntimeStartResult | Promise<RuntimeStartResult>;
   stop(params: RuntimeStopParams): RuntimeStopResult | Promise<RuntimeStopResult>;
   wake(params: RuntimeWakeParams): RuntimeWakeResult | Promise<RuntimeWakeResult>;

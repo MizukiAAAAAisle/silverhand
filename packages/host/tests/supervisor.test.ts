@@ -3451,6 +3451,172 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     }
   });
 
+  it('records a pulled cluster boundary (agent_stream_observed) so a later reply-to carries seen=maxSeq', async () => {
+    const { supervisor } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(
+          JSON.stringify({ message_id: 'm99', message_seq: 99, thread_root_id: 'mRoot' }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      // The agent ran `history --target thread:mRoot` over plain HTTP (the
+      // daemon never saw it) and the CLI fired this intent: replies up to
+      // seq 60 were observed; root + reply ids surfaced.
+      const observed = await supervisor.agentStreamObserved({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        thread_root_id: 'mRoot',
+        observed_seq: 60,
+        reply_target_messages: ['mRoot', 'm55', 'm60'],
+      });
+      expect(observed).toEqual({ ok: true });
+
+      // Reply to the root → known stream thread:mRoot, seen = the pulled max.
+      const reply = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'late reply after reading',
+        reply_to_message_id: 'mRoot',
+      });
+      expect(reply).toMatchObject({ ok: true });
+      expect(postedBodies[0]?.['stream_key']).toBe('thread:mRoot');
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(60);
+
+      // A surfaced reply id maps to the same stream (root + replies all known).
+      await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'reply to a surfaced reply',
+        reply_to_message_id: 'm60',
+      });
+      expect(postedBodies[1]?.['stream_key']).toBe('thread:mRoot');
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('makes a reply-to-root known with seen=0 after observing a cluster that has no replies', async () => {
+    const { supervisor } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(
+          JSON.stringify({ message_id: 'm12', message_seq: 12, thread_root_id: 'mLone' }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      // Pulled a cluster with only the root (no replies yet): observed_seq 0,
+      // root id surfaced.
+      const observed = await supervisor.agentStreamObserved({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        thread_root_id: 'mLone',
+        observed_seq: 0,
+        reply_target_messages: ['mLone'],
+      });
+      expect(observed).toEqual({ ok: true });
+
+      // First reply to the root: known stream (the mapping made it known) and
+      // seen 0 (no replies were observed) — exactly the freshness the backend
+      // CAS expects for a thread's first reply.
+      const reply = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'first reply to a freshly read root',
+        reply_to_message_id: 'mLone',
+      });
+      expect(reply).toMatchObject({ ok: true });
+      expect(postedBodies[0]?.['stream_key']).toBe('thread:mLone');
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('does not advance the main observed boundary when a thread cluster is pulled', async () => {
+    const { supervisor } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(
+          JSON.stringify({ message_id: 'm51', message_seq: 51, thread_root_id: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      // A main-line delivery advances observed[main] = 50.
+      await supervisor.wake({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [50],
+        kind: 'message',
+        text: 'main message',
+        delivered_up_to_seq: 50,
+        deliveries: [
+          {
+            delivery_id: 50,
+            message_id: 'mMain',
+            seq: 50,
+            thread_root_id: null,
+            delivery_kind: 'turn',
+          },
+        ],
+      });
+
+      // Pulling a thread cluster up to seq 80 must touch ONLY thread:mRoot —
+      // never main (the pull saw one root, not the whole main prefix to 80).
+      await supervisor.agentStreamObserved({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        thread_root_id: 'mRoot',
+        observed_seq: 80,
+        reply_target_messages: ['mRoot'],
+      });
+
+      const mainSend = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'main line send',
+      });
+      expect(mainSend).toMatchObject({ ok: true });
+      expect(postedBodies[0]?.['stream_key']).toBe('main');
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(50);
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
   it('hard-rejects a wake whose deliveries[] id-set does not match delivery_ids', async () => {
     const { supervisor } = makeSupervisor();
     try {

@@ -491,6 +491,23 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'agent_stale_resolve' },
   },
   {
+    name: 'request/agent_stream_observed',
+    description:
+      'Agent runtime tells the daemon it observed a reply cluster via an HTTP pull (history --target thread:<root>); daemon advances the thread:<root> observed boundary and records the surfaced ids as known reply targets. Daemon-local, no backend call.',
+    frame: enc({
+      id: 'req-agent-stream-observed-1',
+      intent: 'agent_stream_observed',
+      params: {
+        conversation_id: 'conv_A',
+        agent_id: 'agent_A',
+        thread_root_id: 'msg_root',
+        observed_seq: 14,
+        reply_target_messages: ['msg_root', 'msg_reply_1', 'msg_reply_2'],
+      },
+    }),
+    kind: { kind: 'request', intent: 'agent_stream_observed' },
+  },
+  {
     name: 'request/workspace_provision-with-requested-path',
     description:
       'D4.e-1 (A — single intent): the SAME workspace_provision command, but carrying an OPTIONAL caller-proposed requested_path (M1 desktop folder picker / sandbox typed path / legacy backfill all unify here). The daemon RE-VALIDATES the path host-side (absolute / not root / not home / not inside the managed root / not already bound) before binding — it never blindly trusts the backend. The authoritative result is bound_workspace_path, not this field.',
@@ -629,6 +646,16 @@ const RESPONSES_SUCCESS: WireFixture[] = [
       result: { ok: true, resolved: true },
     }),
     kind: { kind: 'response_success', intent: 'agent_stale_resolve' },
+  },
+  {
+    name: 'response/agent_stream_observed-success',
+    description:
+      'Daemon acked the pull-observe: per-stream observed boundary advanced and reply-target ids recorded. Daemon-local state only.',
+    frame: enc({
+      id: 'req-agent-stream-observed-1',
+      result: { ok: true },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_stream_observed' },
   },
   {
     name: 'response/runtime_start-success',

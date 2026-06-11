@@ -32,6 +32,8 @@ import {
   type AgentMessageSendResult,
   type AgentStaleResolveParams,
   type AgentStaleResolveResult,
+  type AgentStreamObservedParams,
+  type AgentStreamObservedResult,
   type EventFrame,
   type RuntimeClearSessionParams,
   type RuntimeClearSessionResult,
@@ -399,7 +401,11 @@ export class Supervisor implements SupervisorContract {
     this.emitRawRuntimeOutput = opts.emitRawRuntimeOutput ?? false;
   }
 
-  private advanceObservedStream(
+  /** Pure per-stream observed advance: bump the stream to max(prev, seq)
+   *  and log when it actually moves. No turn side-effect — shared by the
+   *  send path (which additionally marks the turn) and the pull-observe
+   *  intent (which must NOT start a turn). */
+  private recordObservedStream(
     handle: RuntimeHandle,
     streamKey: string,
     seq: number | undefined,
@@ -410,7 +416,6 @@ export class Supervisor implements SupervisorContract {
     const prev = handle.observedSeqByStream.get(streamKey) ?? 0;
     const observed = Math.max(prev, nextSeq);
     handle.observedSeqByStream.set(streamKey, observed);
-    handle.inputTurnActive = true;
     if (observed !== prev) {
       this.logger.warn(
         {
@@ -426,6 +431,18 @@ export class Supervisor implements SupervisorContract {
         'runtime freshness observed seq advanced',
       );
     }
+  }
+
+  private advanceObservedStream(
+    handle: RuntimeHandle,
+    streamKey: string,
+    seq: number | undefined,
+    source: string,
+  ): void {
+    this.recordObservedStream(handle, streamKey, seq, source);
+    // A send/arrival is turn activity; only mark the turn when we had a
+    // real seq to record (preserve the prior early-return semantics).
+    if (safeSeq(seq) !== null) handle.inputTurnActive = true;
   }
 
   private queueAdmissionStream(
@@ -762,6 +779,34 @@ export class Supervisor implements SupervisorContract {
       handle.pendingStaleEvent = null;
     }
     return { ok: true, resolved: true };
+  }
+
+  /** Reply-cluster pull-observe (§6.4 B-light). The CLI fires this after a
+   *  successful `message history --target thread:<root>` so the daemon —
+   *  which never sees the HTTP pull — records that the agent observed the
+   *  cluster: advance the `thread:<root>` observed boundary to the max
+   *  REPLY seq (the caller already excluded the root's main-line seq) and
+   *  map the surfaced ids (root + replies) to this stream so a later
+   *  `--reply-to` of any of them resolves a known stream. Daemon-local
+   *  only — no backend call, never marks a turn. */
+  async agentStreamObserved(
+    params: AgentStreamObservedParams,
+  ): Promise<AgentStreamObservedResult> {
+    const handle = this.getHandleForAgentIntent(
+      params.conversation_id,
+      params.agent_id,
+    );
+    const streamKey = streamKeyForMessage(params.thread_root_id);
+    this.recordObservedStream(
+      handle,
+      streamKey,
+      params.observed_seq,
+      'pull_history_observed',
+    );
+    for (const messageId of params.reply_target_messages) {
+      this.rememberReplyTargetStream(handle, messageId, streamKey);
+    }
+    return { ok: true };
   }
 
   // ── runtime_start ──────────────────────────────────────────────

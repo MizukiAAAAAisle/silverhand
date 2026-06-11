@@ -44,6 +44,8 @@ import type {
   AgentMessageSendResult,
   AgentStaleResolveParams,
   AgentStaleResolveResult,
+  AgentStreamObservedParams,
+  AgentStreamObservedResult,
   EventFrame,
   RuntimeClearSessionParams,
   RuntimeClearSessionResult,
@@ -156,6 +158,14 @@ export class FakeSupervisor {
         error: 'fake supervisor stale-resolve not implemented',
       }),
     };
+  }
+
+  agentStreamObserved(
+    _params: AgentStreamObservedParams,
+  ): AgentStreamObservedResult {
+    // Daemon-local intent — the fake just acks; per-stream observed state
+    // lives on the real Supervisor's handles, not here.
+    return { ok: true };
   }
 
   // ── runtime_start ──────────────────────────────────────────────

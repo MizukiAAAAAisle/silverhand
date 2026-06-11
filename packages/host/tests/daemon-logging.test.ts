@@ -202,6 +202,7 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
       resolved: false,
       reason: 'no_pending_stale_event',
     }),
+    agentStreamObserved: async () => ({ ok: true }),
     start: async () => ({ started: true, pid: 1, started_at: 0 }),
     stop: async () => ({ mode: 'hard', stopped: true, exit_code: 0 }),
     wake: async params => ({ delivered: true, delivery_ids: params.delivery_ids }),
