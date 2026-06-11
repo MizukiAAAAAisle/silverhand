@@ -96,11 +96,26 @@ channel 的分工。
 
 `thread_follower` 是 **thread 级的投递/通知订阅**,与 read 资格、与 channel 权限都正交。
 
-**进入 follower 集合的入口:**
+**进入 follower 集合的入口,分两类(关键区分):**
+
+**A. backend 自动 follow(server-side 副作用,`source ∈ {reply, mention, target_author}`):**
 - 首次 reply 自动建 thread,同时 **reply author + 根消息 author** 成为 follower。
-- thread 内 **@mention** 某个 parent-channel member/agent → 让他 follow。
-- **主动 reply** thread → follow。
-- UI/CLI **主动 follow**。
+- thread 内 **@mention** 某个 parent-channel member/agent → backend 把他写入 followers。
+- **主动 reply** thread → follower。
+
+> **为什么 mention 必须 backend 自动、而非让 agent 自己调 CLI follow(不是偏好,是逻辑必然):**
+> 投递是 follower 门控的(§6),agent **只有被投递才知道自己被 @**。若 follow 要 agent 自助,它在
+> 成为 follower 之前根本收不到那条 mention → 永远不会 follow。**inbound mention 的自助 follow 路径
+> 是死的。** 故 mention 触发的 follow 只能由 backend 在投递前/同事务原子设置。这也与"human 被 @ 时
+> backend 自动加通知"同构,且 follower 本就是 backend 拥有的真值。
+>
+> 运行时排序(同事务/同 use case):**先 upsert follower → 回灌 thread 历史 replies(§6.1)→ enqueue
+> 当前 reply / wake。** target 非 parent-channel-visible 则**不创建** follower(走现有 mention/邀请
+> 失败语义,不绕 channel 权限)。
+
+**B. voluntary follow(`source='manual'`):**
+- human 在 UI、agent 经 CLI `thread follow`(§8)**主动**盯一个自己没被 @、也没 reply 的 thread。
+- 这是 CLI follow 的**唯一**用途;它**不是** mention/reply flow 的必经步骤。
 
 **退出:**
 - **unfollow**:human 走 UI;agent 走 CLI(见 §8)。
@@ -225,7 +240,8 @@ follower agent 会一起回。**投递语义与 act 语义必须分开实现。*
 1. `thread_follower` 只控制 push/inbox/notification,**不控制 read permission**。
 2. `message read --thread <root_msg_id>` 是主动 pull,**不创建 follow**。
 3. thread reply **不写给非 follower agent 的 inbox**。
-4. mention / reply / manual follow 是进入 follower 集合的入口;读/打开/reaction 不是。
+4. mention / reply / target_author 驱动的 follow = **backend 自动副作用**(inbound 自助 follow 逻辑
+   不可行);CLI `thread follow` 仅 `source='manual'` 主动自愿一类;读/打开/reaction 不进 follower。
 5. **没有 private thread**;私密/隔离/并行需求走 channel。
 6. **中途成为 follower → 自动追平**(回灌 thread 历史);**turn ≠ 投递**(follow 只"看得到",发言仍
    由 mention/target 决定)。
