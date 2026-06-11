@@ -2670,6 +2670,13 @@ export const migrations: Migration[] = [
           WHEN (SELECT thread_root_id FROM messages WHERE id = NEW.thread_root_id) IS NOT NULL
           THEN RAISE(ABORT, 'thread root must not itself be a reply (no nested threads)')
         END;
+        -- Turning a message that already HAS replies into a reply would
+        -- orphan its children into a nested thread. The app never updates
+        -- thread_root_id, but the schema must still forbid the transition.
+        SELECT CASE
+          WHEN EXISTS (SELECT 1 FROM messages WHERE thread_root_id = OLD.id)
+          THEN RAISE(ABORT, 'cannot turn a thread root with existing replies into a reply')
+        END;
       END;
 
       -- thread followers = delivery/notification subscription, NOT membership
@@ -2688,6 +2695,44 @@ export const migrations: Migration[] = [
       CREATE INDEX idx_thread_followers_principal
         ON thread_followers(principal_kind, principal_id);
 
+      -- Same root-valid integrity the messages column enforces: a follower's
+      -- thread_root_id must reference an existing root in the SAME conversation
+      -- that is not itself a reply. A bare FK to messages(id) can prove none of
+      -- this, and a polluted follower row would mislead cut2 delivery/inbox.
+      CREATE TRIGGER thread_followers_root_insert
+      BEFORE INSERT ON thread_followers
+      BEGIN
+        SELECT CASE
+          WHEN NOT EXISTS (SELECT 1 FROM messages WHERE id = NEW.thread_root_id)
+          THEN RAISE(ABORT, 'thread_followers.thread_root_id must reference an existing message')
+        END;
+        SELECT CASE
+          WHEN COALESCE((SELECT conversation_id FROM messages WHERE id = NEW.thread_root_id), '') != NEW.conversation_id
+          THEN RAISE(ABORT, 'thread follower root must be in the same conversation')
+        END;
+        SELECT CASE
+          WHEN (SELECT thread_root_id FROM messages WHERE id = NEW.thread_root_id) IS NOT NULL
+          THEN RAISE(ABORT, 'thread follower root must not itself be a reply')
+        END;
+      END;
+
+      CREATE TRIGGER thread_followers_root_update
+      BEFORE UPDATE OF thread_root_id, conversation_id ON thread_followers
+      BEGIN
+        SELECT CASE
+          WHEN NOT EXISTS (SELECT 1 FROM messages WHERE id = NEW.thread_root_id)
+          THEN RAISE(ABORT, 'thread_followers.thread_root_id must reference an existing message')
+        END;
+        SELECT CASE
+          WHEN COALESCE((SELECT conversation_id FROM messages WHERE id = NEW.thread_root_id), '') != NEW.conversation_id
+          THEN RAISE(ABORT, 'thread follower root must be in the same conversation')
+        END;
+        SELECT CASE
+          WHEN (SELECT thread_root_id FROM messages WHERE id = NEW.thread_root_id) IS NOT NULL
+          THEN RAISE(ABORT, 'thread follower root must not itself be a reply')
+        END;
+      END;
+
       -- per-stream freshness head = optimistic-lock row for message-stale CAS.
       -- stream = (conversation_id, thread_root_id|NULL=main); latest_seq = the
       -- global messages.seq of the stream's newest message (also the CAS token).
@@ -2701,6 +2746,47 @@ export const migrations: Migration[] = [
         ON conversation_stream_heads(conversation_id) WHERE thread_root_id IS NULL;
       CREATE UNIQUE INDEX uniq_stream_head_thread
         ON conversation_stream_heads(conversation_id, thread_root_id) WHERE thread_root_id IS NOT NULL;
+
+      -- Root-valid integrity for thread heads (NULL = main, skipped). Mirrors
+      -- the messages / thread_followers triggers so a head row can never point
+      -- at a cross-conversation, non-existent, or nested root. latest_seq-only
+      -- bumps don't list these columns, so the UPDATE trigger never fires on
+      -- the CAS hot path.
+      CREATE TRIGGER conversation_stream_heads_root_insert
+      BEFORE INSERT ON conversation_stream_heads
+      WHEN NEW.thread_root_id IS NOT NULL
+      BEGIN
+        SELECT CASE
+          WHEN NOT EXISTS (SELECT 1 FROM messages WHERE id = NEW.thread_root_id)
+          THEN RAISE(ABORT, 'conversation_stream_heads.thread_root_id must reference an existing message')
+        END;
+        SELECT CASE
+          WHEN COALESCE((SELECT conversation_id FROM messages WHERE id = NEW.thread_root_id), '') != NEW.conversation_id
+          THEN RAISE(ABORT, 'stream head root must be in the same conversation')
+        END;
+        SELECT CASE
+          WHEN (SELECT thread_root_id FROM messages WHERE id = NEW.thread_root_id) IS NOT NULL
+          THEN RAISE(ABORT, 'stream head root must not itself be a reply')
+        END;
+      END;
+
+      CREATE TRIGGER conversation_stream_heads_root_update
+      BEFORE UPDATE OF thread_root_id, conversation_id ON conversation_stream_heads
+      WHEN NEW.thread_root_id IS NOT NULL
+      BEGIN
+        SELECT CASE
+          WHEN NOT EXISTS (SELECT 1 FROM messages WHERE id = NEW.thread_root_id)
+          THEN RAISE(ABORT, 'conversation_stream_heads.thread_root_id must reference an existing message')
+        END;
+        SELECT CASE
+          WHEN COALESCE((SELECT conversation_id FROM messages WHERE id = NEW.thread_root_id), '') != NEW.conversation_id
+          THEN RAISE(ABORT, 'stream head root must be in the same conversation')
+        END;
+        SELECT CASE
+          WHEN (SELECT thread_root_id FROM messages WHERE id = NEW.thread_root_id) IS NOT NULL
+          THEN RAISE(ABORT, 'stream head root must not itself be a reply')
+        END;
+      END;
 
       -- Backfill main-stream heads for every existing conversation so that a
       -- post-migration send with seen>0 hits the UPDATE-CAS path; a missing

@@ -585,3 +585,99 @@ describe('MessageRepo per-stream freshness (v43 reply cluster)', () => {
     expect(latestMessageSeq(db, channel.id)).toBe(before);
   });
 });
+
+describe('v43 derived-table root-valid triggers', () => {
+  function twoChannels() {
+    const { db, workspace, channel, conversations } = bootstrapConversation();
+    const channel2 = conversations.insertChannel({
+      workspaceId: workspace.id,
+      workspacePath: workspace.workspace_path,
+      title: 't2',
+    });
+    const repo = new MessageRepo(db);
+    const root = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      content: 'root',
+    });
+    const reply = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      content: 'reply',
+      threadRootId: root.id,
+    });
+    return { db, channel, channel2, repo, root, reply };
+  }
+
+  function insertFollower(
+    db: any,
+    threadRootId: string,
+    conversationId: string,
+  ): void {
+    db.prepare(
+      `INSERT INTO thread_followers
+         (thread_root_id, conversation_id, principal_kind, principal_id, followed_at, source)
+       VALUES (?, ?, 'agent', 'a1', 0, 'manual')`,
+    ).run(threadRootId, conversationId);
+  }
+  function insertHead(
+    db: any,
+    conversationId: string,
+    threadRootId: string,
+  ): void {
+    db.prepare(
+      `INSERT INTO conversation_stream_heads
+         (conversation_id, thread_root_id, latest_seq)
+       VALUES (?, ?, 1)`,
+    ).run(conversationId, threadRootId);
+  }
+
+  it('thread_followers rejects a root from another conversation', () => {
+    const { db, channel2, root } = twoChannels();
+    expect(() => insertFollower(db, root.id, channel2.id)).toThrow(
+      /same conversation/,
+    );
+  });
+
+  it('thread_followers rejects a nested root (root that is itself a reply)', () => {
+    const { db, channel, reply } = twoChannels();
+    expect(() => insertFollower(db, reply.id, channel.id)).toThrow(
+      /must not itself be a reply/,
+    );
+  });
+
+  it('thread_followers accepts a valid same-conversation root', () => {
+    const { db, channel, root } = twoChannels();
+    expect(() => insertFollower(db, root.id, channel.id)).not.toThrow();
+  });
+
+  it('conversation_stream_heads rejects a root from another conversation', () => {
+    const { db, channel2, root } = twoChannels();
+    expect(() => insertHead(db, channel2.id, root.id)).toThrow(
+      /same conversation/,
+    );
+  });
+
+  it('conversation_stream_heads rejects a nested root', () => {
+    const { db, channel, reply } = twoChannels();
+    expect(() => insertHead(db, channel.id, reply.id)).toThrow(
+      /must not itself be a reply/,
+    );
+  });
+
+  it('messages rejects turning a root with replies into a reply', () => {
+    const { db, channel, repo, root } = twoChannels();
+    // a second valid root to point at — so the children-check, not the
+    // root-valid checks, is what rejects the transition.
+    const otherRoot = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      content: 'other root',
+    });
+    expect(() =>
+      db
+        .prepare(`UPDATE messages SET thread_root_id = ? WHERE id = ?`)
+        .run(otherRoot.id, root.id),
+    ).toThrow(/existing replies/);
+  });
+});
