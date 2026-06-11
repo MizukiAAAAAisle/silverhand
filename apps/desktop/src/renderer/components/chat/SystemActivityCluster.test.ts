@@ -27,6 +27,7 @@ function makeSystemMessage(
     attachments: null,
     seq: 1,
     created_at: 0,
+    thread_root_id: null,
     task_number: null,
     task_status: null,
     task_title: null,

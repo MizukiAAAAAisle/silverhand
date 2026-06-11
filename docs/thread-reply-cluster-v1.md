@@ -220,33 +220,40 @@ push、泄露 thread 内容**。
   (否则会把 `conversations.latest_message_seq` 空推进、留下 burned seq)。确定顺序:
   1. resolve target stream(reply→`thread_root_id=<root>`,否则 `main` 即 `NULL`)。
   2. **reserve global seq**:`conversations.latest_message_seq += 1` → `newGlobalSeq`(无条件全局 allocator)。
-  3. **stream-head CAS,按 `seenStreamSeq` 分两条路径**(实测纠正,见下方"为何不用单条 upsert"):
-     - `seenStreamSeq == 0`(首条 reply / 该 stream 尚无 head):**INSERT,冲突即放弃**
+  3. **stream-head CAS,UPDATE-first(实测纠正二轮,见下方"为何 UPDATE-first"):**
+     - **先做条件 UPDATE**(无论 `seenStreamSeq` 是 0 还是 >0,只要 head 行已存在):
+       ```sql
+       UPDATE conversation_stream_heads SET latest_seq = :newGlobalSeq
+        WHERE conversation_id = :conv
+          AND thread_root_id IS :rootOrNull   -- main 用 IS NULL;thread 用 = :root
+          AND latest_seq = :seenStreamSeq;     -- changes()==1 → 成功
+       ```
+     - **UPDATE 命中 0 行且 `seenStreamSeq == 0`**(该 stream 尚无 head 行,典型=thread 首条 reply):**INSERT,冲突即放弃**
        ```sql
        INSERT INTO conversation_stream_heads(conversation_id, thread_root_id, latest_seq)
        VALUES(:conv, :rootOrNull, :newGlobalSeq)
        ON CONFLICT DO NOTHING;     -- 无需 conflict target;changes()==0 → 并发首 reply 已赢 → stale
        ```
-     - `seenStreamSeq > 0`(stream 已有 head):**plain UPDATE CAS**
-       ```sql
-       UPDATE conversation_stream_heads SET latest_seq = :newGlobalSeq
-        WHERE conversation_id = :conv
-          AND thread_root_id IS :rootOrNull   -- main 用 IS NULL;thread 用 = :root
-          AND latest_seq = :seenStreamSeq;     -- changes()==0 → 被人推进 or head 缺失 → stale
-       ```
-     - `changes()==0` → CAS 失败 → 走步骤 4 rollback。**`seen>0` 且行缺失时 UPDATE 自然匹配 0 行 → stale,
-       绝不会被误当首条 reply 插入**(这正是 blocker#1 要的守护,且比 SQL trick 更直白)。
-     > **为何不用单条 `INSERT…ON CONFLICT DO UPDATE`(我和 Cindy 一开始的方向,实测证伪):**
-     > ① 若给 INSERT 的 SELECT 加 `WHERE :seen=0` 守护,则 `seen>0` 时 SELECT 无行 → 根本进不到 ON CONFLICT
-     > → **DO UPDATE 永不触发,head 在所有非首 reply 上静默不推进**(`/tmp` 实测 `changes()=0`)。② 不加守护则
-     > `seen>0` 且行缺失会被误插成首 reply。③ 加上 Cindy blocker#3:partial unique index 当 conflict target 必须
-     > 带对应 `WHERE`,main/thread 两套 target 一条 SQL 覆盖不了。**分两路径(`DO NOTHING` 无 target + 裸 UPDATE)
-     > 三个坑全绕开**,且保留 `NULL=main` 数据语义(不引 `''` sentinel)。
-  4. **0 changes → `throw` / rollback 整个事务**(allocator 的 +1 一并回滚,无 gap);事务外再查该 stream
-     当前 `latest_seq` 组 stale 响应,`newer_messages` 用**同 stream + 同 deliverability/follower filter** 拉。
+     - **UPDATE 命中 0 行且 `seenStreamSeq > 0`** → head 被人推进 or 行缺失 → **stale**(不进 INSERT,绝不误插)。
+     > **为何 UPDATE-first(纠正原"`seen==0`→INSERT / `seen>0`→UPDATE"两路径,sqlite3 + better-sqlite3 实测):**
+     > v43 migration 给**每个已存在 conversation** backfill 了一条 main head(空会话 `latest_seq=0`)。原方案下 main 线
+     > 首发(`seen==0`)会走 INSERT 分支 → 撞已存在的 main head 行 → `ON CONFLICT DO NOTHING` → `changes()==0` →
+     > **误判 stale**(而旧 conv 级 CAS `WHERE latest_message_seq=0` 是成功的 → 回归)。UPDATE-first 把"行已存在"
+     > 的所有情形(含 backfilled main-head-at-0)交给条件 UPDATE,只有 UPDATE 0 行 **且** `seen==0` 才认定 head
+     > 真缺失 → INSERT。**并发首 reply / `seen>0` 缺行 → stale 的语义与原方案逐格一致**(见下方并发用例),只是多正确
+     > 覆盖了 backfilled-main 这一格。两条 SQL 仍都不带 conflict target,partial-index 限制不相关。
+
+  4. **CAS 失败(`changes()==0`)→ `throw` 让事务/savepoint rollback**(allocator 的 +1 一并回滚,无 gap);
+     rollback 后再查该 stream 当前 `latest_seq` 组 stale 响应,`newer_messages` 用**同 stream + 同
+     deliverability/follower filter** 拉。
+     - **cut1 落地形态**(`message-repo.ts insertForConversationIfFresh`):allocator+CAS 包在一个 `db.transaction`,
+       CAS miss 抛内部 sentinel `StreamCasMiss` → savepoint rollback(撤 +1)→ 捕获后返回 `{ok:false, currentSeq=
+       该 stream head}`;service 再抛 `MessageFreshnessGuardError(threadRootId)` 回滚外层并组 `message_stale` 响应,
+       `newer_messages` = `listAfterSeqInStream(conv, threadRootId, seen)`(follower deliverability filter 归 cut2)。
   5. CAS 成功(`changes()==1`)→ insert message(`seq=newGlobalSeq`, `thread_root_id=…`),提交。
-  - 并发首 reply(都 `seen=0`):一条 `INSERT … ON CONFLICT DO NOTHING` 赢(`changes()=1`),另一条撞 partial
-    unique → `DO NOTHING` → `changes()=0` → rollback → stale。(以上路径均 `/tmp` better-sqlite3/sqlite3 实测过。)
+  - 并发首 reply(都 `seen=0`):第一条 UPDATE 0 行 → INSERT 成功(`changes()=1`);第二条 UPDATE 0 行(head 已被首条
+    推到 >0)→ `seen=0` 走 INSERT → 撞 partial unique → `DO NOTHING` → `changes()=0` → stale。(均 better-sqlite3 实测,
+    cut1 测试 `message-repo.test.ts` 钉死。)
 - **daemon observed 从单值 → map** `stream_key → observed_seq`(= 它读到的该 stream `latest_seq`)。send 带
   `(stream_key, seenStreamSeq)`;CAS 比的是同一 stream 的 head,而非 conv 全局 max。
 - **`newer_messages` 用完全相同的 deliverability + stream filter**,不能 `listAfterSeq(conversation_id)`。
@@ -342,11 +349,11 @@ push、泄露 thread 内容**。
   ```
   - `thread_root_id` 复用 §9 上面那套 root-valid trigger 约束(存在、同 conversation、root 自身
     `thread_root_id IS NULL`)。`stream_key='main'|'thread:<id>'` 只在 API/daemon wire 层编码/解码,DB 不见。
-  - **SQLite UPSERT 落地(Cindy 实测起头 + 我实测纠正):** CAS **不走** `ON CONFLICT … DO UPDATE`——一条 upsert
-    既绕不开 partial unique index 的 conflict-target 限制(main/thread 两套 target),`seen=0` 守护又会让 `seen>0`
-    的 DO UPDATE 永不触发(实测 `changes()=0`,head 静默不推进)。**改按 `seen` 分两路径:`seen=0` → `INSERT …
-    ON CONFLICT DO NOTHING`(无需 target);`seen>0` → 裸 `UPDATE … WHERE latest_seq=:seen`。** 两者都不需要
-    conflict target,partial index 限制不再相关。完整 SQL + 实测结论见 §6.4 步骤 3。
+  - **SQLite UPSERT 落地(Cindy 实测起头 + 我两轮实测纠正):** CAS **不走** `ON CONFLICT … DO UPDATE`,改 **UPDATE-first**:
+    先 `UPDATE … WHERE latest_seq=:seen`;命中 0 行**且** `seen=0` 再 `INSERT … ON CONFLICT DO NOTHING`;否则 stale。
+    这样既绕开 partial unique index 的 conflict-target 限制(两条 SQL 都无 target),又正确覆盖 v43 给每个已存在
+    conversation backfill 的 main head(空会话 `latest_seq=0`)——纯"`seen=0`→INSERT"会把它误判 stale。完整 SQL +
+    实测结论见 §6.4 步骤 3。
   - **无 `version` 列**(原 §14 已拍 + Cindy slock 调研 #task:1023 印证:slock 也用消息 seq 做 per-target
     boundary、无独立 version;reaction 不参与 freshness)。仅未来 edit/reaction 要触发重判时才加。
   - `latest_seq` 语义源头 = `MAX(messages.seq) WHERE conversation_id=? AND thread_root_id <=> ?`,head 是其物化,

@@ -727,6 +727,7 @@ export function useSendMessage(
         attachments: snapshots,
         seq: Date.now(),
         created_at: Date.now(),
+        thread_root_id: null,
         task_number: null,
         task_status: null,
         task_assignee: null,

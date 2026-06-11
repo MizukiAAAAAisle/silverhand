@@ -721,6 +721,132 @@ describe('ConversationMessageService.sendMessage', () => {
     }
   });
 
+  it('routes a reply into the thread stream rooted at the target message', async () => {
+    const t = bootstrap();
+    try {
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'root question',
+      });
+      const result = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'threaded answer',
+        replyToMessageId: root.id,
+      });
+      expect(result.message.thread_root_id).toBe(root.id);
+      // a reply to that reply joins the SAME root (no nested threads)
+      const nested = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        content: 'follow-up',
+        replyToMessageId: result.message.id,
+      });
+      expect(nested.message.thread_root_id).toBe(root.id);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('rejects a reply whose target is not in the conversation', async () => {
+    const t = bootstrap();
+    try {
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          content: 'orphan reply',
+          replyToMessageId: 'does-not-exist',
+        }),
+      ).rejects.toMatchObject({ code: 'reply_target_not_found' });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('scopes freshness per stream: a thread reply does not stale a main-line send', async () => {
+    const t = bootstrap();
+    try {
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'observed on main',
+      });
+      // a reply lands in the thread stream, advancing the global seq but NOT
+      // the main head — an agent that observed the main line up to `root`
+      // must still be able to post on the main line without a false stale.
+      await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        content: 'thread reply',
+        replyToMessageId: root.id,
+        seenUpToSeq: 0,
+      });
+      const result = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'main-line answer',
+        seenUpToSeq: root.seq,
+      });
+      expect(result.message.content).toBe('main-line answer');
+      expect(result.message.thread_root_id).toBeNull();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('stale reply reports newer_messages from the same thread stream only', async () => {
+    const t = bootstrap();
+    try {
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'root',
+      });
+      // first reply establishes the thread head (seen=0)
+      const firstReply = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        content: 'first thread reply',
+        replyToMessageId: root.id,
+        seenUpToSeq: 0,
+      });
+      // a concurrent main-line message advances the conversation-global seq
+      // but is in a DIFFERENT stream — it must NOT appear in the thread's
+      // stale newer_messages.
+      t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'unrelated main message',
+      });
+      // a second thread reply advances the thread head past `firstReply`
+      const secondReply = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'newer thread reply',
+        threadRootId: root.id,
+      });
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          content: 'stale thread draft',
+          replyToMessageId: root.id,
+          seenUpToSeq: firstReply.message.seq,
+        }),
+      ).rejects.toMatchObject({
+        code: 'message_stale',
+        currentSeq: secondReply.seq,
+        newerMessages: [
+          expect.objectContaining({ content: 'newer thread reply' }),
+        ],
+      });
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('logs explicit stale retry reasons without making telemetry a send gate', async () => {
     const t = bootstrap();
     try {

@@ -32,6 +32,7 @@ function msg(id: string, seq: number, content = `body-${id}`): MessageDto {
     attachments: null,
     seq,
     created_at: 1_700_000_000_000 + seq * 1000,
+    thread_root_id: null,
     task_number: null,
     task_status: null,
     task_title: null,

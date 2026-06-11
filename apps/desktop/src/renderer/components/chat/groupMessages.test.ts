@@ -26,6 +26,7 @@ function makeMsg(opts: {
     attachments: null,
     seq: 1,
     created_at: opts.createdAt ?? 0,
+    thread_root_id: null,
     task_number: null,
     task_status: null,
     task_title: null,

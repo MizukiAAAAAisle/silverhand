@@ -57,6 +57,11 @@ export interface SendMessageInput {
   content: string;
   attachmentIds?: string[];
   target?: SendMessageTarget;
+  /** Reply-cluster anchor (v43): when set, this send is a reply to that
+   *  message and lands in its thread stream. First reply to a main-line
+   *  message creates the thread; replying to an existing reply joins the
+   *  same root (no nested threads). See docs/thread-reply-cluster-v1.md. */
+  replyToMessageId?: string;
   seenUpToSeq?: number;
   staleEventId?: string;
   staleResolutionReason?: AgentSendStaleResolutionReason;
@@ -149,7 +154,8 @@ export type TargetErrorCode =
   | 'thread_not_found'
   | 'thread_not_child'
   | 'target_closed'
-  | 'target_archived';
+  | 'target_archived'
+  | 'reply_target_not_found';
 
 export class TargetError extends Error {
   constructor(
@@ -197,6 +203,9 @@ export class MessageFreshnessError extends Error {
     public readonly currentSeq: number,
     public readonly newerMessages: MessageDto[],
     public readonly staleEventId: string,
+    /** Target stream the CAS was scoped to (NULL = main line). The
+     *  `newerMessages` list is drawn from this stream only. */
+    public readonly threadRootId: string | null = null,
   ) {
     super(
       `message is stale: conversation advanced from seq ${seenUpToSeq} ` +
@@ -211,6 +220,7 @@ class MessageFreshnessGuardError extends Error {
     public readonly conversationId: string,
     public readonly seenUpToSeq: number,
     public readonly currentSeq: number,
+    public readonly threadRootId: string | null,
   ) {
     super(
       `message is stale: conversation advanced from seq ${seenUpToSeq} ` +
@@ -335,6 +345,10 @@ export class ConversationMessageService {
         this.validateActor(input.actor, policy, sourceConversation.id);
 
         const targetConversation = this.resolveTarget(sourceConversation, target);
+        const threadRootId = this.resolveThreadRoot(
+          targetConversation.id,
+          input.replyToMessageId,
+        );
         const attachmentIds = input.attachmentIds ?? [];
         const snapshots = this.resolveAttachmentSnapshots(targetConversation, attachmentIds);
         const { message, skippedFreshnessReason } =
@@ -342,6 +356,7 @@ export class ConversationMessageService {
             input,
             sourceConversationId: sourceConversation.id,
             targetConversationId: targetConversation.id,
+            threadRootId,
             snapshots,
           });
         return {
@@ -355,8 +370,9 @@ export class ConversationMessageService {
     } catch (err) {
       if (err instanceof MessageFreshnessGuardError) {
         const staleEventId = randomUUID();
-        const newerMessages = this.messages.listAfterSeq(
+        const newerMessages = this.messages.listAfterSeqInStream(
           err.conversationId,
+          err.threadRootId,
           err.seenUpToSeq,
           STALE_MESSAGE_LIMIT,
         );
@@ -380,6 +396,7 @@ export class ConversationMessageService {
           err.currentSeq,
           newerMessages,
           staleEventId,
+          err.threadRootId,
         );
       }
       throw err;
@@ -533,6 +550,7 @@ export class ConversationMessageService {
     input: SendMessageInput;
     sourceConversationId: string;
     targetConversationId: string;
+    threadRootId: string | null;
     snapshots: NonNullable<Parameters<MessageRepo['insertForConversation']>[0]['attachments']>;
   }): { message: MessageDto; skippedFreshnessReason: string | null } {
     const { input } = params;
@@ -543,6 +561,7 @@ export class ConversationMessageService {
       fromAgentId: input.actor.kind === 'agent' ? input.actor.agentId : null,
       content: input.content,
       attachments: params.snapshots.length > 0 ? params.snapshots : null,
+      threadRootId: params.threadRootId,
     };
 
     if (input.actor.kind !== 'agent') {
@@ -582,7 +601,31 @@ export class ConversationMessageService {
       params.targetConversationId,
       input.seenUpToSeq,
       result.currentSeq,
+      params.threadRootId,
     );
+  }
+
+  /** Resolve a `--reply-to` target into its thread root. A reply to a
+   *  main-line message roots a new thread at that message; a reply to an
+   *  existing reply joins the same root (no nested threads). Returns null
+   *  for a non-reply (main-line) send. Throws when the target message is
+   *  not in the conversation. */
+  private resolveThreadRoot(
+    targetConversationId: string,
+    replyToMessageId: string | undefined,
+  ): string | null {
+    if (replyToMessageId === undefined) return null;
+    const replied = this.messages.getInConversation(
+      targetConversationId,
+      replyToMessageId,
+    );
+    if (!replied) {
+      throw new TargetError(
+        'reply_target_not_found',
+        'reply target message not found in target conversation',
+      );
+    }
+    return replied.thread_root_id ?? replied.id;
   }
 
   private logStaleResolution(args: {

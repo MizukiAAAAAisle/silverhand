@@ -12,6 +12,13 @@ function newId(): string {
   return randomBytes(12).toString('base64url');
 }
 
+/** Internal sentinel: thrown inside the per-stream conditional-insert
+ *  transaction on a freshness CAS miss so the unconditional allocator
+ *  `+1` rolls back with the savepoint (no burned global seq). Caught
+ *  inside `insertForConversationIfFresh` and turned into an `{ ok:false }`
+ *  result — it never escapes the repo. See docs/thread-reply-cluster-v1.md §6.4. */
+class StreamCasMiss extends Error {}
+
 export interface MessageWindow {
   messages: MessageDto[];
   has_more_before: boolean;
@@ -436,10 +443,19 @@ export class MessageRepo {
      *  Caller is responsible for resolving ids → snapshots and verifying
      *  channel ownership before passing them in. */
     attachments?: AttachmentSnapshot[] | null;
+    /** Reply-cluster anchor (v43). NULL/omitted = main-line message; a
+     *  root message id routes this message into that thread's stream.
+     *  See docs/thread-reply-cluster-v1.md. */
+    threadRootId?: string | null;
   }): MessageDto {
     return this.db.transaction(() => {
       const seq = this.reserveNextSeq(params.conversationId);
-      return this.insertForConversationAtSeq(params, seq);
+      const message = this.insertForConversationAtSeq(params, seq);
+      // Stream-head maintenance invariant: EVERY insert advances its
+      // stream's head (main when threadRootId is null), or the head drifts
+      // behind messages.seq and the per-stream freshness CAS misfires.
+      this.bumpStreamHead(params.conversationId, params.threadRootId ?? null, seq);
+      return message;
     })();
   }
 
@@ -452,23 +468,38 @@ export class MessageRepo {
     content: string;
     metadata?: Record<string, unknown> | null;
     attachments?: AttachmentSnapshot[] | null;
+    /** Reply-cluster anchor (v43); NULL/omitted = main-line stream. The
+     *  freshness CAS is scoped to THIS stream's head, not the whole
+     *  conversation. `seenUpToSeq` is the actor's last-observed seq in the
+     *  same stream. See docs/thread-reply-cluster-v1.md §6.4. */
+    threadRootId?: string | null;
   }): { ok: true; message: MessageDto } | { ok: false; currentSeq: number } {
-    return this.db.transaction(() => {
-      const seq = this.reserveNextSeqIfFresh(
-        params.conversationId,
-        params.seenUpToSeq,
-      );
-      if (seq === null) {
+    const threadRootId = params.threadRootId ?? null;
+    try {
+      return this.db.transaction(() => {
+        // The conversation-global allocator (`+1`) and the per-stream
+        // freshness CAS are two steps now (they used to be one guarded
+        // UPDATE). They MUST share one transaction: on a CAS miss we throw
+        // so the allocator `+1` rolls back with the savepoint — no burned
+        // global seq. (doc §6.4 step 4)
+        const seq = this.reserveNextSeq(params.conversationId);
+        if (!this.casStreamHead(params.conversationId, threadRootId, params.seenUpToSeq, seq)) {
+          throw new StreamCasMiss();
+        }
+        return {
+          ok: true as const,
+          message: this.insertForConversationAtSeq(params, seq),
+        };
+      })();
+    } catch (err) {
+      if (err instanceof StreamCasMiss) {
         return {
           ok: false as const,
-          currentSeq: this.latestSeqForConversation(params.conversationId),
+          currentSeq: this.streamHeadLatestSeq(params.conversationId, threadRootId),
         };
       }
-      return {
-        ok: true as const,
-        message: this.insertForConversationAtSeq(params, seq),
-      };
-    })();
+      throw err;
+    }
   }
 
   latestSeqForConversation(conversationId: string): number {
@@ -491,6 +522,46 @@ export class MessageRepo {
       .map(messageRowWithTaskAssigneeToDto);
   }
 
+  /** Stream-scoped variant of `listAfterSeq`: only messages in the given
+   *  stream (`threadRootId` NULL = main line). Used to build a
+   *  freshness-stale `newer_messages` list that stays inside the actor's
+   *  own target stream — a conversation-global list would leak replies from
+   *  threads the actor never followed. (doc §6.4) */
+  listAfterSeqInStream(
+    conversationId: string,
+    threadRootId: string | null,
+    afterSeq: number,
+    limit = 10,
+  ): MessageDto[] {
+    return this.db
+      .prepare<
+        [string, string | null, number, number],
+        MessageRowWithTaskAssignee
+      >(
+        `SELECT m.*, aa.display_name AS task_assignee_name
+           FROM messages m
+           LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
+          WHERE m.conversation_id = ?
+            AND m.thread_root_id IS ?
+            AND m.seq > ?
+          ORDER BY m.seq ASC
+          LIMIT ?`,
+      )
+      .all(conversationId, threadRootId, afterSeq, Math.max(1, limit))
+      .map(messageRowWithTaskAssigneeToDto);
+  }
+
+  /** Fetch a message by id, scoped to one conversation. Returns null when
+   *  the id does not belong to the conversation. Used by the send path to
+   *  resolve a `--reply-to` target into its thread root. */
+  getInConversation(
+    conversationId: string,
+    messageId: string,
+  ): MessageDto | null {
+    const row = this.fetchById(conversationId, messageId);
+    return row ? messageRowWithTaskAssigneeToDto(row) : null;
+  }
+
   private reserveNextSeq(conversationId: string): number {
     const changed = this.db
       .prepare<[string]>(
@@ -505,20 +576,87 @@ export class MessageRepo {
     return this.latestSeqForConversation(conversationId);
   }
 
-  private reserveNextSeqIfFresh(
+  /** Read a stream's freshness head (`threadRootId` NULL = main line).
+   *  Returns 0 when no head row exists yet (a thread before its first
+   *  reply). The main head always exists post-v43 (backfilled). */
+  streamHeadLatestSeq(
     conversationId: string,
-    seenUpToSeq: number,
-  ): number | null {
-    const changed = this.db
-      .prepare<[string, number]>(
-        `UPDATE conversations
-            SET latest_message_seq = latest_message_seq + 1
-          WHERE id = ?
-            AND latest_message_seq = ?`,
+    threadRootId: string | null,
+  ): number {
+    const row = this.db
+      .prepare<[string, string | null], { latest_seq: number }>(
+        `SELECT latest_seq FROM conversation_stream_heads
+          WHERE conversation_id = ? AND thread_root_id IS ?`,
       )
-      .run(conversationId, seenUpToSeq).changes;
-    if (changed !== 1) return null;
-    return seenUpToSeq + 1;
+      .get(conversationId, threadRootId);
+    return row?.latest_seq ?? 0;
+  }
+
+  /** Unconditionally advance a stream's head to `newSeq` (the largest seq
+   *  by construction — the global allocator just minted it). UPDATE-or-INSERT
+   *  with no ON CONFLICT target, which sidesteps the partial-index
+   *  conflict-target rule. Used by every non-CAS insert path. */
+  private bumpStreamHead(
+    conversationId: string,
+    threadRootId: string | null,
+    newSeq: number,
+  ): void {
+    const updated = this.db
+      .prepare<[number, string, string | null]>(
+        `UPDATE conversation_stream_heads
+            SET latest_seq = ?
+          WHERE conversation_id = ? AND thread_root_id IS ?`,
+      )
+      .run(newSeq, conversationId, threadRootId).changes;
+    if (updated === 0) {
+      this.db
+        .prepare<[string, string | null, number]>(
+          `INSERT INTO conversation_stream_heads
+             (conversation_id, thread_root_id, latest_seq)
+           VALUES (?, ?, ?)`,
+        )
+        .run(conversationId, threadRootId, newSeq);
+    }
+  }
+
+  /** Per-stream freshness CAS (doc §6.4). Advances the stream head from
+   *  `seenStreamSeq` to `newSeq`; returns false (stale) when the head moved
+   *  underneath the caller.
+   *
+   *  UPDATE-first (a refinement of the doc's plain branch-by-seen): the
+   *  conditional UPDATE handles every case where the head row already exists
+   *  — including the backfilled main head sitting at `latest_seq = 0`, which
+   *  a bare `seen==0 → INSERT` branch would wrongly treat as a conflict and
+   *  reject (a regression vs. the old conversation-level CAS). Only when the
+   *  UPDATE matches no row AND `seenStreamSeq == 0` is the head genuinely
+   *  absent (a thread's first reply) → INSERT, with ON CONFLICT DO NOTHING
+   *  so a concurrent first reply loses the race (changes == 0 → stale). A
+   *  `seen > 0` miss means the head was advanced or is missing → stale, never
+   *  a wrongful insert. (No conflict target needed in either statement.) */
+  private casStreamHead(
+    conversationId: string,
+    threadRootId: string | null,
+    seenStreamSeq: number,
+    newSeq: number,
+  ): boolean {
+    const advanced = this.db
+      .prepare<[number, string, string | null, number]>(
+        `UPDATE conversation_stream_heads
+            SET latest_seq = ?
+          WHERE conversation_id = ? AND thread_root_id IS ? AND latest_seq = ?`,
+      )
+      .run(newSeq, conversationId, threadRootId, seenStreamSeq).changes;
+    if (advanced === 1) return true;
+    if (seenStreamSeq !== 0) return false;
+    const inserted = this.db
+      .prepare<[string, string | null, number]>(
+        `INSERT INTO conversation_stream_heads
+           (conversation_id, thread_root_id, latest_seq)
+         VALUES (?, ?, ?)
+         ON CONFLICT DO NOTHING`,
+      )
+      .run(conversationId, threadRootId, newSeq).changes;
+    return inserted === 1;
   }
 
   private insertForConversationAtSeq(params: {
@@ -529,6 +667,7 @@ export class MessageRepo {
     content: string;
     metadata?: Record<string, unknown> | null;
     attachments?: AttachmentSnapshot[] | null;
+    threadRootId?: string | null;
   }, seq: number): MessageDto {
     const id = newId();
     const now = Date.now();
@@ -540,8 +679,8 @@ export class MessageRepo {
       .prepare(
         `INSERT INTO messages
          (id, conversation_id, from_kind, from_agent_id, from_user_id,
-          content, metadata, seq, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          content, metadata, seq, created_at, thread_root_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -553,6 +692,7 @@ export class MessageRepo {
         mergedMetadata ? JSON.stringify(mergedMetadata) : null,
         seq,
         now,
+        params.threadRootId ?? null,
       );
     const row = this.db
       .prepare<[string], MessageRow>('SELECT * FROM messages WHERE id = ?')
