@@ -243,6 +243,14 @@ export const internalPaths = {
   /** Agent reads anchored message history in its current/target conversation. */
   agentReadHistory: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/read-history`,
+  /** Agent voluntarily follows a reply cluster (thread = root message id),
+   *  `source='manual'`. Idempotent; a new follow backfills thread history. */
+  agentFollowThread: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/follow-thread`,
+  /** Agent stops following a reply cluster; re-followed automatically on a
+   *  later mention/reply (§5). */
+  agentUnfollowThread: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/unfollow-thread`,
   /** Agent lists workspaces it currently has member access to (regular
    *  workspaces via `workspace_members` ∪ its own `agent_home`). */
   agentListWorkspaces: (cid: string, aid: string) =>

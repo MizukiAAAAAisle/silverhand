@@ -65,6 +65,25 @@ export class ThreadFollowerRepo {
     return { inserted: changes === 1 };
   }
 
+  /** Remove a follower row (voluntary unfollow, §5). Idempotent — returns
+   *  whether a row was actually deleted. A later mention/reply re-follows
+   *  via {@link upsert} (auto-follow is idempotent over unfollow state). */
+  remove(
+    threadRootId: string,
+    principalKind: 'human' | 'agent',
+    principalId: string,
+  ): { removed: boolean } {
+    const changes = this.db
+      .prepare(
+        `DELETE FROM thread_followers
+          WHERE thread_root_id = ?
+            AND principal_kind = ?
+            AND principal_id = ?`,
+      )
+      .run(threadRootId, principalKind, principalId).changes;
+    return { removed: changes === 1 };
+  }
+
   isFollower(
     threadRootId: string,
     principalKind: 'human' | 'agent',

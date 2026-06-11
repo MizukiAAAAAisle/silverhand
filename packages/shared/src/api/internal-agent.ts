@@ -127,6 +127,28 @@ export const AgentCloseThreadInputSchema = z.object({
 });
 export type AgentCloseThreadInput = z.infer<typeof AgentCloseThreadInputSchema>;
 
+/** Agent voluntary thread follow/unfollow (reply-cluster §5 B / §8). The
+ *  thread is identified by a *message id* — the cluster root, or any reply
+ *  in it (the server normalizes a reply to its canonical root). */
+export const AgentFollowThreadInputSchema = z.object({
+  root_message_id: z.string().min(1),
+});
+export type AgentFollowThreadInput = z.infer<
+  typeof AgentFollowThreadInputSchema
+>;
+
+export const AgentFollowThreadOutputSchema = z.object({
+  /** Canonical cluster root the follow/unfollow resolved to. */
+  thread_root_id: z.string(),
+  /** follow: true when a NEW follower row was created (false = already
+   *  following, no re-backfill). unfollow: true when a row was removed
+   *  (false = was not following). */
+  changed: z.boolean(),
+});
+export type AgentFollowThreadOutput = z.infer<
+  typeof AgentFollowThreadOutputSchema
+>;
+
 /** Structured detail attached to the backend `has_open_tasks` error so
  *  the CLI can render a list of the offending tasks without re-parsing
  *  the prose message. */

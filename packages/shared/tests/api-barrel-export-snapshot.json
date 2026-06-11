@@ -16,6 +16,8 @@
   "AgentCreateChannelInputSchema",
   "AgentDeleteImpactDtoSchema",
   "AgentDtoSchema",
+  "AgentFollowThreadInputSchema",
+  "AgentFollowThreadOutputSchema",
   "AgentListChannelsDtoSchema",
   "AgentListChannelsQuerySchema",
   "AgentListWorkspacesDtoSchema",

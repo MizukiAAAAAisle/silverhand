@@ -73,6 +73,7 @@ import {
 import {
   AgentCloseThreadInputSchema,
   AgentCreateChannelInputSchema,
+  AgentFollowThreadInputSchema,
   AgentListChannelsQuerySchema,
   AgentReadHistoryInputSchema,
   AgentResolveStaleMessageInputSchema,
@@ -592,6 +593,77 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json({ error: result.error, code: result.code }, result.status);
     }
     return c.json(result);
+  });
+
+  app.post(internalPaths.agentFollowThread(':cid', ':aid'), async c => {
+    const cid = c.req.param('cid');
+    const aid = c.req.param('aid');
+    if (!cid || !aid) {
+      return c.json({ error: 'conversation id and agent id required' }, 400);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = AgentFollowThreadInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const principal = getAgentPrincipal(c);
+    // Following is a read-side subscription within the agent's own
+    // conversation — gate on view + read_messages, not post (§4.1: follow
+    // is not a membership/permission backdoor).
+    if (!canViewConversation(ctx, principal, principal.conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    {
+      const denied = requireAgentCapability(c, ctx, principal, 'read_messages',
+        conversations.get(principal.conversationId)?.workspace_id);
+      if (denied) return denied;
+    }
+    try {
+      const result = ctx.conversationMessageService.followThread({
+        conversationId: principal.conversationId,
+        rootMessageId: parsed.data.root_message_id,
+        agentId: principal.agentId,
+      });
+      return c.json({ thread_root_id: result.threadRootId, changed: result.changed });
+    } catch (err) {
+      const mapped = conversationMessageServiceErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
+  });
+
+  app.post(internalPaths.agentUnfollowThread(':cid', ':aid'), async c => {
+    const cid = c.req.param('cid');
+    const aid = c.req.param('aid');
+    if (!cid || !aid) {
+      return c.json({ error: 'conversation id and agent id required' }, 400);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = AgentFollowThreadInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const principal = getAgentPrincipal(c);
+    if (!canViewConversation(ctx, principal, principal.conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    {
+      const denied = requireAgentCapability(c, ctx, principal, 'read_messages',
+        conversations.get(principal.conversationId)?.workspace_id);
+      if (denied) return denied;
+    }
+    try {
+      const result = ctx.conversationMessageService.unfollowThread({
+        conversationId: principal.conversationId,
+        rootMessageId: parsed.data.root_message_id,
+        agentId: principal.agentId,
+      });
+      return c.json({ thread_root_id: result.threadRootId, changed: result.changed });
+    } catch (err) {
+      const mapped = conversationMessageServiceErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
   });
 
   app.get(internalPaths.agentListWorkspaces(':cid', ':aid'), async c => {

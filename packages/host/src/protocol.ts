@@ -388,13 +388,17 @@ export type AgentStaleResolveResult = z.infer<
 //  - `reply_target_messages` is the root id PLUS the returned reply ids;
 //    each maps to `thread:<root>` so a later `--reply-to` of any of them
 //    resolves a known stream (root → seen=0 when there are no replies).
+//    `.min(1)`: the root id is ALWAYS present (the caller prepends it from
+//    the read DTO's target ref), so an empty array is a caller bug — fail
+//    loud rather than record an observed boundary with no stream mapping
+//    (Cindy 2026-06-11 non-blocking note, folded with the CLI producer).
 export const AgentStreamObservedParamsSchema = z
   .object({
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
     thread_root_id: z.string().min(1),
     observed_seq: z.number().int().nonnegative(),
-    reply_target_messages: z.array(z.string().min(1)),
+    reply_target_messages: z.array(z.string().min(1)).min(1),
   })
   .strict();
 export type AgentStreamObservedParams = z.infer<

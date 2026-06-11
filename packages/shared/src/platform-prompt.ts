@@ -153,7 +153,6 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const schedule = t('schedule');
   const listSchedules = t('list_schedules');
   const cancelSchedule = t('cancel_schedule');
-  const parentConclusionTarget = '`silverhand message send --target parent`';
   // DM workspaces (`agent_home`) have only one member, so there is no
   // concept of consensus. We still render the role/MEMORY auto-load
   // notice, but every reference to CONSENSUS.md is suppressed in the
@@ -412,52 +411,42 @@ ids, and do not wrap any of them in CLI arguments or API parameters.
   for any conversation by id, \`#task:\` is for tasks by number.**
   Never mix them — \`@#task:5\` or \`#conv:#task:5\` are not valid.
 
-## Threads (when to open one)
+## Threads (reply clusters)
 
-Threads run as separate agent sessions with their own context. The
-Thread's (conversation, agent) process accumulates the Thread's
-discussion, decisions, and review state — the parent channel's process
-does not see any of that.
+A thread is a **reply cluster**: replies hanging under one message in this
+channel, sharing the channel's context — it is NOT a separate conversation
+or a separate agent session. A thread is identified by its **root message
+id** (the message the cluster hangs under).
 
-You may open a Thread via ${createThread} when:
-- A side-discussion is large enough that mixing it with current
-  channel context would obscure the main discussion.
-- You want to delegate a sub-task to a subset of members in parallel.
+- **Reply into a thread:** \`silverhand message send --reply-to <message_id>\`.
+  The first reply to a main-line message opens its cluster; replying to an
+  existing reply joins the same cluster (replies never nest). Replying also
+  makes you a follower of that cluster.
+- **Followers** receive a cluster's replies in their inbox. You become one
+  automatically when you reply in it, are @mentioned in it, or are the
+  target of one of its replies. To watch a cluster you were not pulled into
+  — or to stop watching one — use
+  \`silverhand thread follow --root <message_id>\` /
+  \`silverhand thread unfollow --root <message_id>\` (the id may be the root
+  or any reply in it). Following is a delivery **subscription, not a
+  permission**: it presupposes you can already see the channel. Unfollow only
+  stops delivery; a later mention or reply re-follows you automatically.
+- **Peek without following (pull):**
+  \`silverhand message history --target thread:<root_message_id>\` reads any
+  cluster you can see in this channel without following it. It advances your
+  read boundary for that cluster, so a later \`--reply-to\` is judged fresh
+  against what you just read.
 
-When you open one (see ${createThread} \`--help\` for flags), keep the
-context summary specific and minimal — it is what the Thread needs to know.
-By default the Thread inherits all current channel members; \`--member\`
-(repeatable) narrows to a subset of agents already in this channel, and you
-are always included regardless. **Threads cannot nest** — you cannot open a
-Thread from inside a Thread; use ${createChannel} instead if the user
-explicitly asks for a separate channel.
+**Need isolation, parallelism, a long-running task, or a clean separate
+context?** That is what a channel is for — open one with ${createChannel}
+(only when the user asks). Threads exist for shared-context side-discussions,
+nothing else.
 
-If follow-up work depends on a Thread's accumulated discussion or
-review state, the Thread session should own that work: create or claim
-the task in the Thread, post progress in the Thread, and let the
-parent channel carry only a short pointer or final summary. Do not
-@-mention an executor in the parent while saying the work should
-happen in the Thread — mention or task them inside the Thread instead.
-
-When an agent-spawned Thread completes, call ${closeThread} with a final
-\`--summary\`. When a user-opened Thread reaches a conclusion, post a
-visible summary message in that thread via ${sendMessage} and ask the
-user whether to close it. Only call ${closeThread} after the user
-explicitly confirms. If you've already sent the conclusion to the parent
-via ${parentConclusionTarget}, pass \`--posted-to-parent\` when calling
-${closeThread} to avoid duplicate posting.
-
-${closeThread} hard-rejects when the Thread still has tasks in
-\`todo\` / \`in_progress\` / \`in_review\` — error code \`conflict\` with
-\`details.blocking_tasks\` listing each task's number, status, and
-assignee. The fix is almost always to move those tasks to \`done\` /
-\`closed\` (or re-claim and finish them) before closing, not to add
-\`--allow-open-tasks\`. \`--allow-open-tasks\` is a user-approved
-escape hatch for accepting residue, not a normal close-path flag —
-do not auto-include it.
-
-Frequent parent ↔ child back-and-forth (5+ rounds) means the Thread
-decision was wrong — close out and continue in the parent.
+${createThread} opens a **legacy** isolated-session thread and is retained
+only for backward compatibility — do not use it for new work (use a reply
+cluster, or ${createChannel} for isolation). ${closeThread} likewise applies
+only to those legacy threads; a reply cluster has no close concept. The
+legacy isolated-thread path will be removed.
 
 ## Channels (when to create a new one)
 

@@ -10,6 +10,7 @@ import {
   HostClientError,
   type AgentMessageSendParams,
   type AgentStaleResolveParams,
+  type AgentStreamObservedParams,
 } from '@silverhand/host';
 import { CliError, mapHttpError } from '../errors.js';
 import {
@@ -315,16 +316,22 @@ Flags:
   --target              Where to read.
                           self                    (default; current conv)
                           parent                  (only inside a Thread)
-                          thread:<thread_id>      (a direct child Thread)
+                          thread:<root_msg_id>    (a reply cluster, by its
+                                                  root message id)
                           conversation:<conv_id>  (any conv you can reach)
   --include-content     Return full content. Default is snippets only.
   --no-include-system   Skip system messages. Default keeps them.
   --limit N             Max messages. Default 50, max 100.
 
+Reading a reply cluster (\`--target thread:<root_msg_id>\`) is a pull:
+gated by parent-channel visibility, it does NOT make you a follower, but
+it advances your observed boundary for that thread so a later
+\`message send --reply-to\` is judged fresh against what you just read.
+
 stdout: full AgentReadHistoryDto JSON.`,
   flags: ['before-seq', 'after-seq', 'around', 'target', 'limit'] as const,
   booleanFlags: ['include-content', 'include-system'],
-  async run({ client, args }) {
+  async run({ env, client, args }) {
     const before = flagNumber(args, 'before-seq');
     const after = flagNumber(args, 'after-seq');
     const around = flagString(args, 'around');
@@ -341,7 +348,7 @@ stdout: full AgentReadHistoryDto JSON.`,
     const includeSystem = flagBool(args, 'include-system') ?? true;
     const limit = flagNumber(args, 'limit') ?? 50;
     const target = parseHistoryTarget(flagString(args, 'target'));
-    return client.readHistory({
+    const dto = await client.readHistory({
       ...(before !== undefined ? { before_seq: before } : {}),
       ...(after !== undefined ? { after_seq: after } : {}),
       ...(around !== undefined ? { around_message_id: around } : {}),
@@ -350,6 +357,44 @@ stdout: full AgentReadHistoryDto JSON.`,
       include_system: includeSystem,
       limit,
     });
+
+    // Pull-observed (B-light, docs/thread-reply-cluster-v1.md §6.4/§7):
+    // a successful reply-cluster read enters the model's context, so it
+    // is a real observe. The read itself reaches the backend over plain
+    // HTTP (the daemon never sees it), so when a daemon socket is present
+    // we fire a daemon-local `agent_stream_observed` intent to advance
+    // the `thread:<root>` observed boundary and map the surfaced ids —
+    // otherwise a read-then-`--reply-to` would be judged stale against a
+    // boundary the daemon never learned about. Gated on
+    // `target.thread_root_id` (set only for the cluster read form).
+    // Direct/non-daemon fallback degrades to "A": no intent, no boundary
+    // (no daemon owns observed state to advance). Best-effort: the read
+    // already succeeded and was returned, so an intent failure must not
+    // fail the command.
+    const root = dto.target.thread_root_id;
+    if (root && env.daemonSocketPath) {
+      const replySeqs = dto.messages
+        .filter(m => m.message_ref.id !== root)
+        .map(m => m.message_ref.seq);
+      const observedSeq = replySeqs.length > 0 ? Math.max(...replySeqs) : 0;
+      // root id is ALWAYS first so the array is non-empty (schema .min(1))
+      // and reply-to-root resolves a known stream even with zero replies.
+      const replyTargetMessages = [
+        root,
+        ...dto.messages
+          .map(m => m.message_ref.id)
+          .filter(id => id !== root),
+      ];
+      await observeStreamViaDaemon(env.daemonSocketPath, {
+        conversation_id: env.conversationId,
+        agent_id: env.agentId,
+        thread_root_id: root,
+        observed_seq: observedSeq,
+        reply_target_messages: replyTargetMessages,
+      });
+    }
+
+    return dto;
   },
 };
 
@@ -570,19 +615,50 @@ function parseHistoryTarget(
 ):
   | 'self'
   | 'parent'
-  | { thread_id: string }
+  | { thread_root_id: string }
   | { conversation_id: string }
   | undefined {
   if (raw === undefined) return undefined;
   if (raw === 'self' || raw === 'parent') return raw;
-  if (raw.startsWith('thread:')) return { thread_id: raw.slice('thread:'.length) };
+  // `thread:<id>` now means a reply cluster identified by its ROOT
+  // message id (docs/thread-reply-cluster-v1.md §8) — threads are no
+  // longer separate conversations. The old "child thread conversation
+  // id" reading moves to `conversation:<id>`; legacy dual-resolution
+  // lives in the freeze cut.
+  if (raw.startsWith('thread:')) {
+    return { thread_root_id: raw.slice('thread:'.length) };
+  }
   if (raw.startsWith('conversation:')) {
     return { conversation_id: raw.slice('conversation:'.length) };
   }
   throw new CliError({
     code: 'validation_error',
     message:
-      '--target must be self | parent | thread:<id> | conversation:<id>',
+      '--target must be self | parent | thread:<root_msg_id> | conversation:<id>',
     retriable: false,
   });
+}
+
+/**
+ * Fire the daemon-local `agent_stream_observed` intent after a
+ * reply-cluster pull (B-light, §6.4/§7). Best-effort by contract: the
+ * history read it follows has already succeeded and been returned to the
+ * caller, so any transport/daemon failure here is swallowed rather than
+ * surfaced — losing the observed-boundary advance degrades to the
+ * "A" semantics (the next reply is judged against an unknown stream),
+ * which is strictly better than failing a read that worked.
+ */
+async function observeStreamViaDaemon(
+  socketPath: string,
+  params: AgentStreamObservedParams,
+): Promise<void> {
+  const host = new HostClient({ socketPath });
+  try {
+    await host.connect();
+    await host.agentStreamObserved(params);
+  } catch {
+    // swallow — see doc comment.
+  } finally {
+    await host.close().catch(() => undefined);
+  }
 }

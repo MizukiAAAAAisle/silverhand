@@ -11,6 +11,8 @@ import {
   AUTH_TOKEN_HEADER,
   internalPaths,
   type AgentListChannelsDto,
+  type AgentFollowThreadInput,
+  type AgentFollowThreadOutput,
   type AgentListWorkspacesDto,
   type AgentReadHistoryDto,
   type AgentReadHistoryInput,
@@ -131,6 +133,30 @@ export class BackendClient {
     return this.request(
       'POST',
       internalPaths.agentCloseThread(this.env.conversationId, this.env.agentId),
+      input,
+    );
+  }
+
+  /** Voluntarily follow a reply cluster (subscription, not permission;
+   *  §5 B). `root_message_id` may be the cluster root or any reply in it;
+   *  the server normalizes to the canonical root and backfills its prior
+   *  history into this agent's inbox. */
+  followThread(input: AgentFollowThreadInput): Promise<AgentFollowThreadOutput> {
+    return this.request(
+      'POST',
+      internalPaths.agentFollowThread(this.env.conversationId, this.env.agentId),
+      input,
+    );
+  }
+
+  /** Stop following a reply cluster (§5). Idempotent; a later mention /
+   *  reply re-follows automatically. */
+  unfollowThread(
+    input: AgentFollowThreadInput,
+  ): Promise<AgentFollowThreadOutput> {
+    return this.request(
+      'POST',
+      internalPaths.agentUnfollowThread(this.env.conversationId, this.env.agentId),
       input,
     );
   }

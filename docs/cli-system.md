@@ -51,15 +51,17 @@ All commands default to machine-readable JSON on stdout. Use
 | Command | Purpose |
 |---|---|
 | `silverhand message send` | Send a visible message to the current channel/thread, parent, or direct child thread. **Body comes from STDIN** — see §3.1. |
-| `silverhand message history` | Read anchored history by `before_seq`, `after_seq`, or `around_message_id`. |
+| `silverhand message history` | Read anchored history by `before_seq`, `after_seq`, or `around_message_id`. `--target thread:<root_message_id>` pulls a reply cluster (§3.6). |
 | `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. Query text via `--q <text>` or its alias `--query <text>` (mutually exclusive). |
 | `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). `--status` accepts canonical values plus list-only filter macros — see §3.2. |
 | `silverhand task create` | Create tasks in the current channel/thread. |
 | `silverhand task claim` | Claim tasks by task number or promote-and-claim messages. Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.5. |
 | `silverhand task unclaim` | Release a task claim. Accepts the workspace selector. |
 | `silverhand task status` | Move a task through `in_progress`, `in_review`, or `done`. Accepts the workspace selector. Rejects the list-only filter macros (`active|open|pending|all`) and the initial state `todo` with `subkind: 'enum_invalid'` — see §3.2. |
-| `silverhand thread create` | Open a Thread for a bounded side discussion or delegation. |
-| `silverhand thread close` | Close the current Thread. |
+| `silverhand thread create` | **Legacy** (isolated-session thread). Retained for backward compatibility only; not for new work — replies (`message send --reply-to`) are the thread model, `channel create` is for isolation. The legacy create path will be removed. |
+| `silverhand thread close` | Close a **legacy** isolated-session thread. A reply cluster has no close concept. |
+| `silverhand thread follow` | Follow a reply cluster by root message id (`--root <message_id>`) to receive its replies in your inbox. Subscription, not permission (§3.6). |
+| `silverhand thread unfollow` | Stop following a reply cluster (`--root <message_id>`). Idempotent; a later mention/reply re-follows (§3.6). |
 | `silverhand channel create` | Create a top-level channel only when explicitly requested by the user. |
 | `silverhand channel list` | List channels, optionally for a workspace id. |
 | `silverhand member add` | Add an existing workspace member (agent or human) to the current conversation by handle (`--handle <name>`). The candidate must already be a workspace member; the handle is resolved server-side, so the CLI never enumerates users or workspace members itself. v1 supports `channel` and `thread` conversations — running the command from a DM fails with `conversation_member_add_unsupported`. To add a member to a thread, run the command from inside that thread (agent tokens are scoped per `(conversation, agent)`). |
@@ -399,6 +401,40 @@ Cross-conversation ops emit a single `task_cross_op` audit line to
 owner_conversation_id, task_workspace_id, task_number, cross_workspace }`.
 There is no visible system-message side effect — task system messages
 land in the task's owner conversation as normal.
+
+### 3.6 Reply clusters: pull, follow/unfollow
+
+A thread is a **reply cluster** — replies under one message in a channel,
+identified by the **root message id**, sharing the channel's context (not a
+separate conversation or session). The CLI surface, all gated by parent-channel
+visibility / `read_messages`:
+
+- **Reply:** `silverhand message send --reply-to <message_id>` (§3.1). First
+  reply opens the cluster and auto-follows the sender.
+- **Pull (peek without following):**
+  `silverhand message history --target thread:<root_message_id>` reads a
+  cluster the agent can see without becoming a follower. The id may be the
+  root or any reply (the backend normalizes a reply to its canonical root);
+  the read returns the root message plus its replies. Push/pull split: push
+  (inbox/wake) is follower-gated, pull is channel-visibility-gated.
+  - The read reaches the backend over plain HTTP, so when a daemon socket is
+    present the CLI fires a daemon-local `agent_stream_observed` intent after a
+    successful read to advance that cluster's observed boundary and map the
+    surfaced ids — otherwise a read-then-`--reply-to` would be judged stale
+    against a boundary the daemon never learned. `observed_seq` = max seq of
+    the returned **replies** (0 when none; never the root's main-line seq);
+    `reply_target_messages` = root id + returned reply ids. Best-effort: a
+    failed intent never fails the read. Direct/non-daemon fallback skips the
+    intent (degrades to first-touch, no boundary).
+- **Follow / unfollow:** `silverhand thread follow --root <message_id>` /
+  `silverhand thread unfollow --root <message_id>` (id = root or any reply).
+  Follow is a delivery **subscription, not a permission**; `source='manual'`
+  records the entry and is immutable. A new follow backfills the cluster's
+  prior history into the agent's inbox once; re-follow returns
+  `changed:false` (no re-backfill). Unfollow only stops delivery — a later
+  mention/reply re-follows automatically. Output:
+  `{ "thread_root_id": "<root>", "changed": <bool> }`. An unknown root
+  returns `reply_target_not_found` (404).
 
 ## 4. Error Contract
 

@@ -1037,6 +1037,70 @@ export class ConversationMessageService {
    * (plus the root) into its inbox. Returns the follower-gated delivery plan
    * for the current reply, executed best-effort after commit.
    */
+  /** Voluntary manual follow of a reply cluster (§5 B / §8). The thread is
+   *  named by a message id — the root or ANY reply in it; we normalize to the
+   *  canonical root (symmetry with the send/read paths). `source='manual'`;
+   *  a repeat follow is idempotent and keeps its original source (no
+   *  re-backfill). A newly-created follow backfills the cluster's full prior
+   *  history into the agent's inbox (§6.1) — `MAX_SAFE_INTEGER` includes every
+   *  existing reply since there is no "current reply" to exclude. Runs in one
+   *  transaction so the follower row and its backfill commit together. */
+  followThread(params: {
+    conversationId: string;
+    rootMessageId: string;
+    agentId: string;
+  }): { threadRootId: string; changed: boolean } {
+    const root = this.messages.getInConversation(
+      params.conversationId,
+      params.rootMessageId,
+    );
+    if (!root) {
+      throw new TargetError(
+        'reply_target_not_found',
+        'thread root message not found in conversation',
+      );
+    }
+    const threadRootId = root.thread_root_id ?? root.id;
+    const changed = this.db.transaction(() =>
+      this.followAgent(
+        params.conversationId,
+        threadRootId,
+        params.agentId,
+        'manual',
+        Number.MAX_SAFE_INTEGER,
+      ),
+    )();
+    return { threadRootId, changed };
+  }
+
+  /** Voluntary unfollow (§5). Idempotent; deletes the follower row whatever
+   *  its original source. A later mention/reply re-follows automatically, so
+   *  unfollow never makes `@`-addressing silently fail. Already-delivered
+   *  backfill is NOT retracted — unfollow only stops FUTURE delivery. */
+  unfollowThread(params: {
+    conversationId: string;
+    rootMessageId: string;
+    agentId: string;
+  }): { threadRootId: string; changed: boolean } {
+    const root = this.messages.getInConversation(
+      params.conversationId,
+      params.rootMessageId,
+    );
+    if (!root) {
+      throw new TargetError(
+        'reply_target_not_found',
+        'thread root message not found in conversation',
+      );
+    }
+    const threadRootId = root.thread_root_id ?? root.id;
+    const { removed } = this.threadFollowers.remove(
+      threadRootId,
+      'agent',
+      params.agentId,
+    );
+    return { threadRootId, changed: removed };
+  }
+
   private applyThreadFollowEffects(params: {
     conversationId: string;
     threadRootId: string;
@@ -1126,15 +1190,16 @@ export class ConversationMessageService {
 
   /** Upsert an agent follower; if it is newly followed AND a current channel
    *  member, backfill the thread's prior history into its inbox. Non-members
-   *  are skipped (follower ⊆ member). */
+   *  are skipped (follower ⊆ member). Returns whether a NEW follower row was
+   *  created (false = already following or not a member → no backfill). */
   private followAgent(
     conversationId: string,
     threadRootId: string,
     agentId: string,
     source: ThreadFollowerSource,
     currentSeq: number,
-  ): void {
-    if (!this.conversations.getAgent(conversationId, agentId)) return;
+  ): boolean {
+    if (!this.conversations.getAgent(conversationId, agentId)) return false;
     const { inserted } = this.threadFollowers.upsert({
       threadRootId,
       conversationId,
@@ -1145,6 +1210,7 @@ export class ConversationMessageService {
     if (inserted) {
       this.backfillThreadHistory(conversationId, threadRootId, agentId, currentSeq);
     }
+    return inserted;
   }
 
   /** Backfill prior thread context — the root (it anchors the thread) plus

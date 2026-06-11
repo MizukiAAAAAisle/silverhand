@@ -47,6 +47,8 @@ export const CLI_INVOKE_ROUTES: readonly CliInvokeRoute[] = [
   // thread
   { method: 'POST', suffix: 'create-thread', noun: 'thread', verb: 'create' },
   { method: 'POST', suffix: 'close-thread', noun: 'thread', verb: 'close' },
+  { method: 'POST', suffix: 'follow-thread', noun: 'thread', verb: 'follow' },
+  { method: 'POST', suffix: 'unfollow-thread', noun: 'thread', verb: 'unfollow' },
   // channel
   { method: 'POST', suffix: 'create-channel', noun: 'channel', verb: 'create' },
   { method: 'GET', suffix: 'list-channels', noun: 'channel', verb: 'list' },

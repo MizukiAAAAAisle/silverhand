@@ -259,6 +259,8 @@ export const AGENT_ROUTE_CAPABILITIES: Record<
 
   // ── Enforced: capability gated at request time per doc §3 ────────────
   agentReadHistory: { status: 'enforced', capability: 'read_messages', scope: 'target conversation\'s workspace' },
+  agentFollowThread: { status: 'enforced', capability: 'read_messages', scope: 'principal conversation\'s workspace' },
+  agentUnfollowThread: { status: 'enforced', capability: 'read_messages', scope: 'principal conversation\'s workspace' },
   agentListChannels: { status: 'enforced', capability: 'read_messages', scope: 'target workspace_id arg (default principal\'s)' },
   agentSearchMessages: { status: 'enforced', capability: 'read_messages', scope: 'resolved target: channel.workspace_id | workspace_id arg | principal\'s' },
   agentSendConversationMessage: { status: 'enforced', capability: 'send_messages', scope: 'principal conversation\'s workspace' },

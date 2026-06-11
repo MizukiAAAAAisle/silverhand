@@ -112,6 +112,8 @@
   "POST /internal/conversations/:cid/agents/:aid/create-channel",
   "POST /internal/conversations/:cid/agents/:aid/close-thread",
   "POST /internal/conversations/:cid/agents/:aid/read-history",
+  "POST /internal/conversations/:cid/agents/:aid/follow-thread",
+  "POST /internal/conversations/:cid/agents/:aid/unfollow-thread",
   "GET /internal/conversations/:cid/agents/:aid/list-workspaces",
   "GET /internal/conversations/:cid/agents/:aid/list-channels",
   "POST /internal/conversations/:cid/agents/:aid/search-messages",

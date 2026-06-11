@@ -273,10 +273,13 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toContain('auth failure');
   });
 
-  it('uses Thread/channel terminology and gates agent-created top-level channels', () => {
+  it('uses reply-cluster thread terminology and gates agent-created top-level channels', () => {
     const text = prompt();
-    expect(text).toContain('Threads (when to open one)');
-    expect(text).toContain('`silverhand thread create`');
+    expect(text).toContain('Threads (reply clusters)');
+    expect(text).toContain('reply cluster');
+    expect(text).toContain('`silverhand message send --reply-to <message_id>`');
+    expect(text).toContain('`silverhand thread follow --root <message_id>`');
+    expect(text).toContain('`silverhand thread unfollow --root <message_id>`');
     expect(text).toContain('`silverhand channel create`');
     expect(text).toContain('**Only** call `silverhand channel create`');
     expect(text).toContain('explicitly');
@@ -285,57 +288,43 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toContain('`mcp__chat__create_session`');
   });
 
-  it('teaches that Threads are independent agent sessions and own their follow-up work', () => {
-    // Two facts the agent must internalize without us teaching them
-    // about runtime delivery:
-    //   1. A Thread is a *separate* (conversation, agent) process —
-    //      not a chat-organization layer. The parent channel's process
-    //      does NOT see Thread content. This justifies "if the work
-    //      depends on Thread context, do it inside the Thread".
-    //   2. Work-log ownership: when follow-up depends on a Thread's
-    //      accumulated state, the Thread session creates/claims and
-    //      drives the task; parent stays a pointer. Don't @-mention
-    //      executors in parent while delegating "to the Thread" —
-    //      that splits the log between two sessions.
+  it('teaches the reply-cluster thread model (shared context, not a separate session)', () => {
+    // The thread model the agent must internalize:
+    //   1. A thread is a *reply cluster* — replies under one message in
+    //      the channel, sharing the channel's context. It is NOT a
+    //      separate conversation or a separate agent session (the old
+    //      model). Identified by its root message id.
+    //   2. Three operations: reply (`--reply-to`), follow/unfollow
+    //      (a delivery subscription, not a permission), and pull
+    //      (`message history --target thread:<root>` — read without
+    //      following). Isolation/parallelism → a channel, not a thread.
     //
-    // We deliberately do NOT mention auto-wake / `--no-wake` / runtime
-    // delivery semantics. That's a backend transport guarantee
-    // (cross-target sends wake idle target members); the agent should
-    // default-assume "the message reaches the target" and not have to
-    // know about it. Per @shiki review of msg `Va7npVrVTFMQpGFQ`.
+    // We deliberately do NOT teach runtime delivery semantics (wake /
+    // auto-start). The agent default-assumes "the message reaches the
+    // target" and need not reason about runtime state.
     const text = prompt();
-    expect(text).toContain('separate agent sessions');
-    expect(text).toContain('with their own context');
+    expect(text).toContain('reply cluster');
+    expect(text).toContain("sharing the channel's context");
+    expect(text).toMatch(/root\s+message\s+id/);
+    expect(text).toContain('--reply-to');
+    expect(text).toContain('makes you a follower');
+    expect(text).toMatch(/subscription, not a\s+permission/);
     expect(text).toContain(
-      "(conversation, agent) process accumulates the Thread's",
+      'silverhand message history --target thread:<root_message_id>',
     );
-    expect(text).toContain('parent channel');
-    expect(text).toContain('does not see any of that');
+    expect(text).toMatch(/Need isolation, parallelism/);
+    expect(text).toContain('`silverhand channel create`');
+    // `thread create` is retained only as legacy compatibility.
+    expect(text).toContain('legacy');
 
-    // Work-log ownership clauses.
-    expect(text).toContain(
-      "follow-up work depends on a Thread's accumulated discussion",
-    );
-    expect(text).toContain('the Thread session should own that work');
-    expect(text).toMatch(/create or\s+claim\s+the task in the Thread/);
-    expect(text).toMatch(/post progress\s+in the Thread/);
-    expect(text).toMatch(
-      /let the\s+parent channel carry only a short pointer or final\s+summary/,
-    );
-    expect(text).toMatch(/Do not\s+@-mention an executor in the parent/);
-    expect(text).toMatch(
-      /mention or task them inside\s+the Thread instead/,
-    );
-
-    // Drift guard: never reintroduce wake/runtime-delivery vocabulary.
-    // Agents must not be taught to think about runtime delivery state.
+    // Drift guard: the OLD independent-session model must never return.
+    expect(text).not.toContain('Threads run as separate agent sessions');
+    expect(text).not.toContain('does not see any of that');
+    // Drift guard: never reintroduce runtime-delivery vocabulary.
     expect(text).not.toContain('auto-wake');
     expect(text).not.toContain('auto-start');
     expect(text).not.toMatch(/woken automatically/i);
     expect(text).not.toContain('--no-wake');
-    expect(text).not.toContain('--wake');
-    expect(text).not.toContain('idle members are woken');
-    expect(text).not.toContain('idle recipients');
   });
 
   it('teaches the #conv:<id> sigil for inline conversation references', () => {
@@ -514,7 +503,6 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toContain('User-opened Threads should remain open');
     expect(text).not.toContain('then call `close_session`');
     expect(text).toContain('silverhand thread close');
-    expect(text).toContain('pass `--posted-to-parent`');
     expect(text).not.toContain('target=parent');
     expect(text).not.toContain('posted_to_parent: true');
   });
