@@ -39,6 +39,7 @@ export function sendMessageToolName(): string {
  *  the canonical stdin header carries. */
 export interface MessageLite {
   id: string;
+  thread_root_id: string | null;
   from_kind: FromKind;
   from_agent_id: string | null;
   from_user_id: string | null;
@@ -96,7 +97,7 @@ export function formatInboxBatch(
  * Format (fields in fixed order, no quoting; content body follows on
  * the next line):
  *
- *     msg_id=<full-id> sender=@<handle>|system type=agent|human|system time=<ISO8601>
+ *     msg_id=<full-id> sender=@<handle>|system type=agent|human|system [thread=<root-id>] time=<ISO8601>
  *
  * - `sender` is the canonical mention handle (`@<agent.name>` /
  *   `@<user.name>`) so an agent can reply with `@<handle>` directly.
@@ -106,6 +107,9 @@ export function formatInboxBatch(
  *   messages emit `sender=system` with no `@`.
  * - `type` is the surface vocabulary: DB column `from_kind='user'`
  *   maps to `human` here; agent and system pass through.
+ * - `thread` is present only for reply-cluster messages. It names the
+ *   cluster root message id, giving agents the reply target they need
+ *   to keep a response in the same thread.
  * - `time` is ISO 8601 in the local timezone (offset preserved) so
  *   the agent sees both an absolute instant and the wall clock the
  *   user experienced.
@@ -117,23 +121,24 @@ export function formatStdinMessageHeader(
   defaultUserHandle: string | undefined,
 ): string {
   const time = formatStdinTimestamp(msg.created_at);
+  const thread = msg.thread_root_id ? ` thread=${msg.thread_root_id}` : '';
   switch (msg.from_kind) {
     case 'agent': {
       const handle = msg.from_agent_id
         ? agentNameById(msg.from_agent_id)
         : undefined;
       const sender = handle ? `@${handle}` : 'agent';
-      return `msg_id=${msg.id} sender=${sender} type=agent time=${time}`;
+      return `msg_id=${msg.id} sender=${sender} type=agent${thread} time=${time}`;
     }
     case 'user': {
       const resolved = msg.from_user_id
         ? userNameById(msg.from_user_id) ?? defaultUserHandle
         : defaultUserHandle;
       const sender = resolved ? `@${resolved}` : 'user';
-      return `msg_id=${msg.id} sender=${sender} type=human time=${time}`;
+      return `msg_id=${msg.id} sender=${sender} type=human${thread} time=${time}`;
     }
     case 'system': {
-      return `msg_id=${msg.id} sender=system type=system time=${time}`;
+      return `msg_id=${msg.id} sender=system type=system${thread} time=${time}`;
     }
   }
 }
@@ -244,9 +249,6 @@ export function formatDeliveryInstruction(
     );
   });
   const hasOnlySystemMessages = messages.every(m => m.from_kind === 'system');
-  const hasActionableThreadSummary = messages.some(
-    m => m.from_kind === 'system' && m.subtype === 'thread_summary',
-  );
 
   if (hasUserMessage && hasUserMessageForRecipient) {
     const mentionHint = nonSystemMentionsRecipient
@@ -278,14 +280,6 @@ export function formatDeliveryInstruction(
   }
 
   if (hasOnlySystemMessages) {
-    if (hasActionableThreadSummary) {
-      return (
-        `The system messages above include a closed-thread summary. ` +
-        `If you are a relevant parent-channel agent or can move the next step forward, ` +
-        `call \`${sendMessageTool}\` with a reply or take the appropriate action before stopping. ` +
-        `If no follow-up is needed from you, no visible reply is required.`
-      );
-    }
     return (
       `Respond as appropriate. System messages do not require a reply ` +
       `unless they explicitly ask for one.`

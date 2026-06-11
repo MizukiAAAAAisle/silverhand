@@ -307,6 +307,8 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain("sharing the channel's context");
     expect(text).toMatch(/root\s+message\s+id/);
     expect(text).toContain('--reply-to');
+    expect(text).toContain('thread=<root_message_id>');
+    expect(text).toContain('when your response should stay in the same thread');
     expect(text).toContain('makes you a follower');
     expect(text).toMatch(/subscription, not a\s+permission/);
     expect(text).toContain(

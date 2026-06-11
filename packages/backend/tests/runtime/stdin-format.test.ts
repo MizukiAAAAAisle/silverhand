@@ -1,21 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { formatDeliveryInstruction, type MessageLite } from '../../src/runtime/stdin-format.js';
+import {
+  formatDeliveryInstruction,
+  formatStdinMessageHeader,
+  type MessageLite,
+} from '../../src/runtime/stdin-format.js';
 
 const TOOL = 'silverhand message send';
 
 describe('formatDeliveryInstruction system-message subtypes', () => {
-  it('asks relevant agents to act on closed-thread summaries', () => {
-    const instruction = formatDeliveryInstruction(
-      [systemMessage({ subtype: 'thread_summary' })],
-      'Cindy',
-      TOOL,
-    );
-
-    expect(instruction).toContain('closed-thread summary');
-    expect(instruction).toContain(TOOL);
-    expect(instruction).toContain('no visible reply is required');
-  });
-
   it('keeps ordinary system-only messages informational', () => {
     expect(
       formatDeliveryInstruction(
@@ -28,7 +20,19 @@ describe('formatDeliveryInstruction system-message subtypes', () => {
     );
   });
 
-  it('keeps user-message precedence over actionable system subtypes', () => {
+  it('does not treat legacy thread_summary as actionable in reply-cluster mode', () => {
+    expect(
+      formatDeliveryInstruction(
+        [systemMessage({ subtype: 'thread_summary' })],
+        'Cindy',
+        TOOL,
+      ),
+    ).toBe(
+      'Respond as appropriate. System messages do not require a reply unless they explicitly ask for one.',
+    );
+  });
+
+  it('keeps user-message precedence over system subtypes', () => {
     const instruction = formatDeliveryInstruction(
       [
         systemMessage({ subtype: 'thread_summary' }),
@@ -39,6 +43,7 @@ describe('formatDeliveryInstruction system-message subtypes', () => {
           from_user_id: 'u1',
           content: 'Please handle this',
           created_at: 1,
+          thread_root_id: null,
         },
       ],
       'Cindy',
@@ -50,9 +55,55 @@ describe('formatDeliveryInstruction system-message subtypes', () => {
   });
 });
 
+describe('formatStdinMessageHeader reply-cluster metadata', () => {
+  it('omits thread metadata for main-line messages', () => {
+    const header = formatStdinMessageHeader(
+      {
+        id: 'm-main',
+        thread_root_id: null,
+        from_kind: 'user',
+        from_agent_id: null,
+        from_user_id: 'u1',
+        content: 'main',
+        created_at: 0,
+      },
+      agentName,
+      userName,
+      undefined,
+    );
+
+    expect(header).toMatch(
+      /^msg_id=m-main sender=@shiki type=human time=/,
+    );
+    expect(header).not.toContain(' thread=');
+  });
+
+  it('includes thread root metadata for reply-cluster messages', () => {
+    const header = formatStdinMessageHeader(
+      {
+        id: 'm-reply',
+        thread_root_id: 'm-root',
+        from_kind: 'agent',
+        from_agent_id: 'a1',
+        from_user_id: null,
+        content: 'reply',
+        created_at: 0,
+      },
+      agentName,
+      userName,
+      undefined,
+    );
+
+    expect(header).toMatch(
+      /^msg_id=m-reply sender=@Alice type=agent thread=m-root time=/,
+    );
+  });
+});
+
 function systemMessage(overrides: Partial<MessageLite> = {}): MessageLite {
   return {
     id: 'm-system',
+    thread_root_id: null,
     from_kind: 'system',
     from_agent_id: null,
     from_user_id: null,
@@ -60,4 +111,12 @@ function systemMessage(overrides: Partial<MessageLite> = {}): MessageLite {
     created_at: 0,
     ...overrides,
   };
+}
+
+function agentName(id: string): string | undefined {
+  return id === 'a1' ? 'Alice' : undefined;
+}
+
+function userName(id: string): string | undefined {
+  return id === 'u1' ? 'shiki' : undefined;
 }
