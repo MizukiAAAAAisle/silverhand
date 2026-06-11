@@ -261,12 +261,10 @@ export interface ConversationMessageServiceOptions {
 
 /**
  * Per-recipient plan for delivering a thread reply (§6 reply-cluster).
- * `kind` is the delivery_kind from docs §6.2: `turn` recipients were
- * @mentioned by this reply and may be auto-started/woken; `observe`
- * recipients are followers who get the reply in their durable inbox for
- * context but must NOT cause an idle runtime to start. (The wire-level
- * `delivery_kind` envelope that lets a *ready* runtime ingest an observe
- * message without taking a turn is 段2; 段1 only gates auto-start.)
+ * Current thread messages align with main-line channel delivery: follower
+ * agents that are visible in the channel receive a `turn`, excluding the
+ * sender. `observe` is reserved for non-waking context paths such as
+ * backfill/pull history.
  */
 type ThreadDeliveryKind = 'turn' | 'observe';
 
@@ -1199,31 +1197,29 @@ export class ConversationMessageService {
     // reply author → follower
     this.followMessageAuthor(conversationId, threadRootId, message, 'reply', currentSeq);
 
-    const turnAgentIds = new Set<string>();
-
-    // root message author → follower. If this reply is what newly follows the
-    // root author, the current reply is a turn for that agent; later ordinary
-    // replies stay observe-only unless they explicitly mention the agent.
+    // root message author → follower. Delivery kind no longer has a
+    // target-author carve-out: the current thread message follows channel
+    // semantics and turns every visible follower agent except the sender.
     const root = this.messages.getInConversation(conversationId, threadRootId);
     if (root) {
-      const targetAuthorAgentId = this.followMessageAuthor(
+      this.followMessageAuthor(
         conversationId,
         threadRootId,
         root,
         'target_author',
         currentSeq,
       );
-      if (targetAuthorAgentId) turnAgentIds.add(targetAuthorAgentId);
     }
 
-    // @mentioned channel members → follower; mentioned AGENTS also take a turn.
+    // @mentioned channel members → follower. Mention no longer changes
+    // delivery kind because current thread messages already turn every
+    // visible follower agent; it still creates a follower row for the mention.
     // Non-members are never followed via mention (§4.1: follow is not a
     // membership backdoor); their visibility is filtered at delivery anyway.
     let userMemberIds: Set<string> | null = null;
     for (const handle of new Set(extractMentions(message.content))) {
       const agent = this.agents.getByName(handle);
       if (agent && this.conversations.getAgent(conversationId, agent.id)) {
-        turnAgentIds.add(agent.id);
         this.followAgent(conversationId, threadRootId, agent.id, 'mention', currentSeq);
         continue;
       }
@@ -1243,10 +1239,9 @@ export class ConversationMessageService {
     }
 
     // Current-reply delivery plan: follower agents that are channel-visible,
-    // excluding the sender. `turn` iff this reply explicitly addresses the
-    // recipient (mention, or newly-created target_author follow), else
-    // `observe`. (delivery_kind only controls behavior — the recipient set is
-    // already follower ∩ visible, never widened by kind.)
+    // excluding the sender. Current thread messages match channel delivery:
+    // every recipient gets a `turn`; `observe` is only used for historical
+    // backfill and other non-waking context paths.
     const senderAgentId =
       message.from_kind === 'agent' ? message.from_agent_id : null;
     const recipients: ThreadDeliveryRecipient[] = this.threadFollowers
@@ -1254,7 +1249,7 @@ export class ConversationMessageService {
       .filter(ca => ca.agent_id !== senderAgentId)
       .map(ca => ({
         agentId: ca.agent_id,
-        kind: turnAgentIds.has(ca.agent_id) ? 'turn' : 'observe',
+        kind: 'turn',
       }));
     return { threadRootId, recipients };
   }

@@ -1203,7 +1203,7 @@ describe('ConversationMessageService.sendMessage', () => {
   // current delivery. Stream-isolation of stale `newer_messages` (5) is
   // covered by the freshness tests above.
 
-  it('wakes the root author on the first thread reply, then observes ordinary follower replies', async () => {
+  it('wakes visible follower agents for every current thread reply', async () => {
     const t = bootstrap();
     try {
       const carol = t.agents.create(
@@ -1224,7 +1224,8 @@ describe('ConversationMessageService.sendMessage', () => {
       });
 
       // A human starts a thread under bob's message. bob becomes a
-      // target_author follower now, so the current reply is a turn for bob.
+      // target_author follower now; current thread delivery aligns with
+      // channel delivery, so visible follower agents receive a turn.
       // carol is a member but follows nothing.
       const reply = await t.service.sendMessage({
         conversationId: t.channel.id,
@@ -1242,9 +1243,9 @@ describe('ConversationMessageService.sendMessage', () => {
       expect(t.fake.starts.some(s => s.agentId === t.bob.id)).toBe(false);
       t.fake.delivered = [];
 
-      // A later ordinary reply to the same thread should not keep waking the
-      // already-following target_author. It is observe-only: durable inbox row,
-      // no deliverMessage / wake.
+      // A later ordinary reply to the same thread still turns bob because
+      // thread current-message delivery mirrors channel delivery over the
+      // follower set. `observe` is reserved for backfill/pull history.
       const second = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
@@ -1252,15 +1253,15 @@ describe('ConversationMessageService.sendMessage', () => {
         replyToMessageId: root.id,
       });
       await waitFor(() =>
-        t.conversationInboxes
-          .listPending(t.channel.id, t.bob.id)
-          .some(i => i.message.id === second.message.id),
+        t.fake.delivered.some(
+          d => d.agentId === t.bob.id && d.messageId === second.message.id,
+        ),
       );
       expect(
         t.fake.delivered.some(
           d => d.agentId === t.bob.id && d.messageId === second.message.id,
         ),
-      ).toBe(false);
+      ).toBe(true);
       expect(t.fake.starts.some(s => s.agentId === t.bob.id)).toBe(false);
 
       // carol is not a follower → no inbox row, no delivery, no follow record.
