@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AgentSendMessageInputSchema,
+  ConversationMessagesDtoSchema,
   SendMessageInputSchema,
 } from '../src/api/index.js';
 
@@ -42,5 +43,16 @@ describe('message send input schemas', () => {
         'message must include text or at least one attachment',
       );
     }
+  });
+
+  it('accepts reply-cluster count sidecars on message windows', () => {
+    expect(
+      ConversationMessagesDtoSchema.safeParse({
+        messages: [],
+        reply_counts_by_root: { root_message_id: 2 },
+        has_more_before: false,
+        has_more_after: false,
+      }).success,
+    ).toBe(true);
   });
 });

@@ -237,6 +237,81 @@ describe('canonical channel/thread routes', () => {
     );
   });
 
+  it('messages window includes per-root reply counts for visible roots', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+    const messages = new MessageRepo(t.ctx.db);
+    const root = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'root',
+    });
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'reply-1',
+      threadRootId: root.id,
+    });
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'system',
+      content: 'system reply does not count',
+      threadRootId: root.id,
+    });
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'reply-2',
+      threadRootId: root.id,
+    });
+    const otherRoot = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'other-root',
+    });
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'other-reply',
+      threadRootId: otherRoot.id,
+    });
+    const emptyRoot = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'empty-root',
+    });
+
+    const body = await (
+      await http(t).get(
+        `/api/channels/${channelId}/messages?limit=10&after_seq=${root.seq - 1}`,
+      )
+    ).json() as any;
+    expect(body.messages.map((m: any) => m.content)).toEqual([
+      'root',
+      'other-root',
+      'empty-root',
+    ]);
+    expect(body.reply_counts_by_root[root.id]).toBe(2);
+    expect(body.reply_counts_by_root[otherRoot.id]).toBe(1);
+    expect(body.reply_counts_by_root[emptyRoot.id]).toBe(0);
+    // The count is total for the root, not local to the current
+    // message page. A small window containing only the root still
+    // reports all replies in the cluster.
+    const firstPage = await (
+      await http(t).get(
+        `/api/channels/${channelId}/messages?limit=1&after_seq=${root.seq - 1}`,
+      )
+    ).json() as any;
+    expect(firstPage.messages.map((m: any) => m.id)).toEqual([root.id]);
+    expect(firstPage.reply_counts_by_root[root.id]).toBe(2);
+  });
+
   it('messages window rejects invalid reply-cluster roots', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice']);

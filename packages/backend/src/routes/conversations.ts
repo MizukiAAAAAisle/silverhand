@@ -212,12 +212,23 @@ export function createConversationReadApp(
         },
         () => {
           const opts = { limit, beforeSeq, afterSeq, aroundMessageId };
-          return threadRootId
+          const window = threadRootId
             ? messages.listWindowForThreadCluster(channel.id, threadRootId, opts)
-            : messages.listWindowForConversation(channel.id, opts);
+            : messages.listWindowForMainStream(channel.id, opts);
+          const rootIds = window.messages
+            .filter(
+              message =>
+                message.thread_root_id === null && message.from_kind !== 'system',
+            )
+            .map(message => message.id);
+          return {
+            ...window,
+            reply_counts_by_root: messages.replyCountsByRoot(channel.id, rootIds),
+          };
         },
         result => ({
           messageCount: result.messages.length,
+          replyCountRootCount: Object.keys(result.reply_counts_by_root).length,
           hasMoreBefore: result.has_more_before,
           hasMoreAfter: result.has_more_after,
         }),

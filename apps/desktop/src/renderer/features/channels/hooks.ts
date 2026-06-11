@@ -207,6 +207,7 @@ function appendMessageToCache(
   if (!data) {
     return makeMessagesCache({
       messages: [msg],
+      reply_counts_by_root: {},
       has_more_before: false,
       has_more_after: false,
     });
@@ -217,7 +218,12 @@ function appendMessageToCache(
     return {
       ...data,
       pages: [
-        { messages: [msg], has_more_before: false, has_more_after: false },
+        {
+          messages: [msg],
+          reply_counts_by_root: {},
+          has_more_before: false,
+          has_more_after: false,
+        },
       ],
       pageParams: [undefined as MessagesPageParam],
     };
@@ -701,7 +707,12 @@ export function useSendMessage(
       if (prev && !lastPageIsTail(prev)) {
         qc.setQueryData<MessagesCache>(key, {
           pages: [
-            { messages: [], has_more_before: true, has_more_after: false },
+            {
+              messages: [],
+              reply_counts_by_root: {},
+              has_more_before: true,
+              has_more_after: false,
+            },
           ],
           pageParams: [undefined as MessagesPageParam],
         });

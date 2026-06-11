@@ -44,6 +44,10 @@ export type MessageDto = z.infer<typeof MessageDtoSchema>;
 
 export const ConversationMessagesDtoSchema = z.object({
   messages: z.array(MessageDtoSchema),
+  /** Reply-cluster badge data keyed by root message id. Values are the
+   *  total non-system replies in that root's cluster, independent of the
+   *  current pagination window. */
+  reply_counts_by_root: z.record(z.string(), z.number().int().nonnegative()),
   has_more_before: z.boolean(),
   /** True when at least one message exists with seq > max(messages.seq).
    *  For the default "latest" window this is always false; for an

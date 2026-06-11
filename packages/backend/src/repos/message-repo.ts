@@ -21,6 +21,7 @@ class StreamCasMiss extends Error {}
 
 export interface MessageWindow {
   messages: MessageDto[];
+  reply_counts_by_root: Record<string, number>;
   has_more_before: boolean;
   has_more_after: boolean;
 }
@@ -55,6 +56,12 @@ export interface ListWindowOpts {
   afterSeq?: number | null;
   aroundMessageId?: string | null;
 }
+
+type WindowScope =
+  | { mode: 'all' }
+  | { mode: 'main' }
+  | { mode: 'cluster'; threadRootId: string };
+type WindowScopeMode = WindowScope['mode'];
 
 type MessageRowWithTaskAssignee = MessageRow & {
   task_assignee_name: string | null;
@@ -178,7 +185,18 @@ export class MessageRepo {
     conversationId: string,
     opts: ListWindowOpts = {},
   ): MessageWindow {
-    return this.listWindowForConversationScoped(conversationId, opts, null);
+    return this.listWindowForConversationScoped(conversationId, opts, {
+      mode: 'all',
+    });
+  }
+
+  listWindowForMainStream(
+    conversationId: string,
+    opts: ListWindowOpts = {},
+  ): MessageWindow {
+    return this.listWindowForConversationScoped(conversationId, opts, {
+      mode: 'main',
+    });
   }
 
   listWindowForThreadCluster(
@@ -186,13 +204,16 @@ export class MessageRepo {
     threadRootId: string,
     opts: ListWindowOpts = {},
   ): MessageWindow {
-    return this.listWindowForConversationScoped(conversationId, opts, threadRootId);
+    return this.listWindowForConversationScoped(conversationId, opts, {
+      mode: 'cluster',
+      threadRootId,
+    });
   }
 
   private listWindowForConversationScoped(
     conversationId: string,
     opts: ListWindowOpts,
-    threadRootId: string | null,
+    scope: WindowScope,
   ): MessageWindow {
     const limit = Math.max(1, opts.limit ?? 200);
     const beforeSeq = opts.beforeSeq ?? null;
@@ -225,7 +246,7 @@ export class MessageRepo {
       const anchorSeq = this.anchorSeqFor(
         conversationId,
         aroundMessageId,
-        threadRootId,
+        scope,
       );
       if (anchorSeq === null) {
         throw new AnchorMessageNotInConversationError(
@@ -243,12 +264,12 @@ export class MessageRepo {
         conversationId,
         anchorSeq,
         beforeCount,
-        threadRootId,
+        scope,
       );
       const anchorRow = this.fetchById(
         conversationId,
         aroundMessageId,
-        threadRootId,
+        scope,
       );
       const afterLimit = Math.max(
         0,
@@ -258,16 +279,16 @@ export class MessageRepo {
         conversationId,
         anchorSeq,
         afterLimit,
-        threadRootId,
+        scope,
       );
       rows = [...beforeRows, ...(anchorRow ? [anchorRow] : []), ...afterRows];
     } else if (afterSeq !== null) {
-      rows = this.fetchAfterSeq(conversationId, afterSeq, limit, threadRootId);
+      rows = this.fetchAfterSeq(conversationId, afterSeq, limit, scope);
     } else {
       // Both `latest` (beforeSeq === null) and explicit before_seq go
       // through the same DESC-then-ASC path; null acts as "no upper
       // bound", so the existing tail behaviour is preserved.
-      rows = this.fetchBeforeSeq(conversationId, beforeSeq, limit, threadRootId);
+      rows = this.fetchBeforeSeq(conversationId, beforeSeq, limit, scope);
     }
 
     const minSeq = rows[0]?.seq ?? null;
@@ -285,18 +306,46 @@ export class MessageRepo {
     const hasMoreBefore =
       minSeq === null
         ? false
-        : this.existsWithSeq(conversationId, '<', minSeq, threadRootId);
+        : this.existsWithSeq(conversationId, '<', minSeq, scope);
 
     const hasMoreAfter =
       isLatest || maxSeq === null
         ? false
-        : this.existsWithSeq(conversationId, '>', maxSeq, threadRootId);
+        : this.existsWithSeq(conversationId, '>', maxSeq, scope);
 
     return {
       messages: rows.map(r => messageRowWithTaskAssigneeToDto(r)),
+      reply_counts_by_root: {},
       has_more_before: hasMoreBefore,
       has_more_after: hasMoreAfter,
     };
+  }
+
+  replyCountsByRoot(
+    conversationId: string,
+    rootMessageIds: readonly string[],
+  ): Record<string, number> {
+    const uniqueRootIds = [...new Set(rootMessageIds)];
+    if (uniqueRootIds.length === 0) return {};
+    const counts = Object.fromEntries(uniqueRootIds.map(id => [id, 0]));
+    const placeholders = uniqueRootIds.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare<
+        [string, ...string[]],
+        { thread_root_id: string; reply_count: number }
+      >(
+        `SELECT thread_root_id, COUNT(*) AS reply_count
+           FROM messages
+          WHERE conversation_id = ?
+            AND thread_root_id IN (${placeholders})
+            AND from_kind != 'system'
+          GROUP BY thread_root_id`,
+      )
+      .all(conversationId, ...uniqueRootIds);
+    for (const row of rows) {
+      counts[row.thread_root_id] = row.reply_count;
+    }
+    return counts;
   }
 
   /** Fetch up to `limit` rows with `seq < beforeSeq` (or the tail
@@ -307,7 +356,7 @@ export class MessageRepo {
     conversationId: string,
     beforeSeq: number | null,
     limit: number,
-    threadRootId: string | null,
+    scope: WindowScope,
   ): MessageRowWithTaskAssignee[] {
     return this.db
       .prepare<
@@ -315,7 +364,9 @@ export class MessageRepo {
           string,
           number | null,
           number | null,
-          string | null,
+          WindowScopeMode,
+          WindowScopeMode,
+          WindowScopeMode,
           string | null,
           string | null,
           number,
@@ -328,7 +379,11 @@ export class MessageRepo {
                FROM messages
               WHERE conversation_id = ?
                 AND (? IS NULL OR seq < ?)
-                AND (? IS NULL OR id = ? OR thread_root_id = ?)
+                AND (
+                  ? = 'all'
+                  OR (? = 'main' AND thread_root_id IS NULL)
+                  OR (? = 'cluster' AND (id = ? OR thread_root_id = ?))
+                )
               ORDER BY seq DESC
               LIMIT ?
            ) m
@@ -339,9 +394,7 @@ export class MessageRepo {
         conversationId,
         beforeSeq,
         beforeSeq,
-        threadRootId,
-        threadRootId,
-        threadRootId,
+        ...this.scopeParams(scope),
         limit,
       );
   }
@@ -353,12 +406,21 @@ export class MessageRepo {
     conversationId: string,
     afterSeq: number,
     limit: number,
-    threadRootId: string | null,
+    scope: WindowScope,
   ): MessageRowWithTaskAssignee[] {
     if (limit <= 0) return [];
     return this.db
       .prepare<
-        [string, number, string | null, string | null, string | null, number],
+        [
+          string,
+          number,
+          WindowScopeMode,
+          WindowScopeMode,
+          WindowScopeMode,
+          string | null,
+          string | null,
+          number,
+        ],
         MessageRowWithTaskAssignee
       >(
         `SELECT m.*, aa.display_name AS task_assignee_name
@@ -366,11 +428,15 @@ export class MessageRepo {
            LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
           WHERE m.conversation_id = ?
             AND m.seq > ?
-            AND (? IS NULL OR m.id = ? OR m.thread_root_id = ?)
+            AND (
+              ? = 'all'
+              OR (? = 'main' AND m.thread_root_id IS NULL)
+              OR (? = 'cluster' AND (m.id = ? OR m.thread_root_id = ?))
+            )
           ORDER BY m.seq ASC
           LIMIT ?`,
       )
-      .all(conversationId, afterSeq, threadRootId, threadRootId, threadRootId, limit);
+      .all(conversationId, afterSeq, ...this.scopeParams(scope), limit);
   }
 
   /** Fetch a single row by id, scoped to one conversation. Returns
@@ -379,11 +445,19 @@ export class MessageRepo {
   private fetchById(
     conversationId: string,
     messageId: string,
-    threadRootId: string | null,
+    scope: WindowScope,
   ): MessageRowWithTaskAssignee | null {
     const row = this.db
       .prepare<
-        [string, string, string | null, string | null, string | null],
+        [
+          string,
+          string,
+          WindowScopeMode,
+          WindowScopeMode,
+          WindowScopeMode,
+          string | null,
+          string | null,
+        ],
         MessageRowWithTaskAssignee
       >(
         `SELECT m.*, aa.display_name AS task_assignee_name
@@ -391,9 +465,13 @@ export class MessageRepo {
            LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
           WHERE m.conversation_id = ?
             AND m.id = ?
-            AND (? IS NULL OR m.id = ? OR m.thread_root_id = ?)`,
+            AND (
+              ? = 'all'
+              OR (? = 'main' AND m.thread_root_id IS NULL)
+              OR (? = 'cluster' AND (m.id = ? OR m.thread_root_id = ?))
+            )`,
       )
-      .get(conversationId, messageId, threadRootId, threadRootId, threadRootId);
+      .get(conversationId, messageId, ...this.scopeParams(scope));
     return row ?? null;
   }
 
@@ -402,18 +480,30 @@ export class MessageRepo {
   private anchorSeqFor(
     conversationId: string,
     messageId: string,
-    threadRootId: string | null,
+    scope: WindowScope,
   ): number | null {
     const row = this.db
       .prepare<
-        [string, string, string | null, string | null, string | null],
+        [
+          string,
+          string,
+          WindowScopeMode,
+          WindowScopeMode,
+          WindowScopeMode,
+          string | null,
+          string | null,
+        ],
         { seq: number }
       >(
         `SELECT seq FROM messages
           WHERE conversation_id = ? AND id = ?
-            AND (? IS NULL OR id = ? OR thread_root_id = ?)`,
+            AND (
+              ? = 'all'
+              OR (? = 'main' AND thread_root_id IS NULL)
+              OR (? = 'cluster' AND (id = ? OR thread_root_id = ?))
+            )`,
       )
-      .get(conversationId, messageId, threadRootId, threadRootId, threadRootId);
+      .get(conversationId, messageId, ...this.scopeParams(scope));
     return row?.seq ?? null;
   }
 
@@ -423,26 +513,55 @@ export class MessageRepo {
     conversationId: string,
     op: '<' | '>',
     pivot: number,
-    threadRootId: string | null,
+    scope: WindowScope,
   ): boolean {
     const sql =
       op === '<'
         ? `SELECT 1 AS found FROM messages
             WHERE conversation_id = ? AND seq < ?
-              AND (? IS NULL OR id = ? OR thread_root_id = ?)
+              AND (
+                ? = 'all'
+                OR (? = 'main' AND thread_root_id IS NULL)
+                OR (? = 'cluster' AND (id = ? OR thread_root_id = ?))
+              )
             LIMIT 1`
         : `SELECT 1 AS found FROM messages
             WHERE conversation_id = ? AND seq > ?
-              AND (? IS NULL OR id = ? OR thread_root_id = ?)
+              AND (
+                ? = 'all'
+                OR (? = 'main' AND thread_root_id IS NULL)
+                OR (? = 'cluster' AND (id = ? OR thread_root_id = ?))
+              )
             LIMIT 1`;
     return (
       this.db
         .prepare<
-          [string, number, string | null, string | null, string | null],
+          [
+            string,
+            number,
+            WindowScopeMode,
+            WindowScopeMode,
+            WindowScopeMode,
+            string | null,
+            string | null,
+          ],
           { found: 1 }
         >(sql)
-        .get(conversationId, pivot, threadRootId, threadRootId, threadRootId) !== undefined
+        .get(conversationId, pivot, ...this.scopeParams(scope)) !== undefined
     );
+  }
+
+  private scopeParams(
+    scope: WindowScope,
+  ): [
+    WindowScopeMode,
+    WindowScopeMode,
+    WindowScopeMode,
+    string | null,
+    string | null,
+  ] {
+    const threadRootId = scope.mode === 'cluster' ? scope.threadRootId : null;
+    return [scope.mode, scope.mode, scope.mode, threadRootId, threadRootId];
   }
 
   getById(id: string): MessageDto | null {
@@ -582,7 +701,12 @@ export class MessageRepo {
     afterSeq: number,
     limit = 10,
   ): MessageDto[] {
-    return this.fetchAfterSeq(conversationId, afterSeq, Math.max(1, limit), null)
+    return this.fetchAfterSeq(
+      conversationId,
+      afterSeq,
+      Math.max(1, limit),
+      { mode: 'all' },
+    )
       .map(messageRowWithTaskAssigneeToDto);
   }
 
@@ -649,7 +773,7 @@ export class MessageRepo {
     conversationId: string,
     messageId: string,
   ): MessageDto | null {
-    const row = this.fetchById(conversationId, messageId, null);
+    const row = this.fetchById(conversationId, messageId, { mode: 'all' });
     return row ? messageRowWithTaskAssigneeToDto(row) : null;
   }
 
