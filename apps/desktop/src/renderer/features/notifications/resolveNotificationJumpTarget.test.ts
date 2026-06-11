@@ -233,4 +233,55 @@ describe('resolveNotificationJumpTarget', () => {
       messageId: 'msg_a',
     });
   });
+
+  it('mention_self in a reply cluster: short-circuits to a cluster anchor without a ref fetch', async () => {
+    // The notification already carries the cluster root and its
+    // `conversation_id` is the parent channel (cluster replies live in
+    // the channel). The resolver must NOT fetch the conversation ref —
+    // it anchors straight to the message via `threadRootId`. We pass an
+    // empty mock so any fetchQuery call would throw `no mock for …`.
+    const qc = mockQc({});
+    const r = await resolveNotificationJumpTarget(
+      makeNotification({
+        kind: 'mention_self',
+        conversation_id: 'conv_a',
+        message_id: 'reply_msg',
+        thread_root_id: 'root_msg',
+      }),
+      qc,
+    );
+    expect(r).toEqual({
+      workspaceId: 'ws_a',
+      channelId: 'conv_a',
+      threadRootId: 'root_msg',
+      messageId: 'reply_msg',
+    });
+    expect((qc as unknown as { fetchQuery: ReturnType<typeof vi.fn> }).fetchQuery)
+      .not.toHaveBeenCalled();
+  });
+
+  it('mention_external in a reply cluster: short-circuits using the notification thread_root_id', async () => {
+    const qc = mockQc({});
+    const r = await resolveNotificationJumpTarget(
+      makeNotification({
+        kind: 'mention_external',
+        workspace_id: 'ws_dm_agent',
+        conversation_id: 'dm_mentions',
+        message_id: 'reply_msg',
+        thread_root_id: 'root_msg',
+        source_workspace_id: 'ws_remote',
+        source_conversation_id: 'conv_remote',
+        source_message_id: 'msg_remote',
+      }),
+      qc,
+    );
+    expect(r).toEqual({
+      workspaceId: 'ws_dm_agent',
+      channelId: 'dm_mentions',
+      threadRootId: 'root_msg',
+      messageId: 'reply_msg',
+    });
+    expect((qc as unknown as { fetchQuery: ReturnType<typeof vi.fn> }).fetchQuery)
+      .not.toHaveBeenCalled();
+  });
 });

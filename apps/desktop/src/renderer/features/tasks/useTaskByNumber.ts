@@ -62,6 +62,11 @@ export function applyTaskChangedToTaskByNumberCache(
       message_id: task.message_id,
       workspace_id: task.workspace_id,
       channel_id: task.channel_id,
+      // Keep the navigation anchor fields fresh from the realtime event so
+      // an inline `#task:<n>` jump resolves to the right reply cluster /
+      // legacy fossil instead of relying on stale `/api/tasks` fetch values.
+      thread_root_id: task.thread_root_id,
+      legacy_thread_conversation_id: task.legacy_thread_conversation_id,
       thread_id: task.thread_id,
       status: task.status,
       title: task.title,

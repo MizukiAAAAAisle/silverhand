@@ -43,6 +43,7 @@ export interface TasksSectionProps {
     workspaceId?: string;
     channelId: string;
     threadId?: string | null;
+    threadRootId?: string | null;
     messageId: string;
   }) => void;
 }
@@ -187,7 +188,11 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
               onJump({
                 workspaceId: t.workspace_id,
                 channelId: t.channel_id,
-                threadId: t.thread_id,
+                // New reply-cluster tasks carry `thread_root_id`; legacy fossil
+                // tasks fall back to the renamed conversation id. Never the
+                // legacy `thread_id`.
+                threadRootId: t.thread_root_id,
+                threadId: t.legacy_thread_conversation_id,
                 messageId: t.message_id,
               })
             }

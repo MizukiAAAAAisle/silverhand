@@ -57,6 +57,12 @@ export function useMessageJumpController() {
       });
 
       void primeAround(conversationId, routeKind, target.messageId, {
+        // A reply-cluster target primes the cluster cache (the same window
+        // `useThreadCluster` reads) so ThreadPanel can scroll-locate the
+        // reply. Without this the main-stream prime 404s on a reply id
+        // (main anchor requires `thread_root_id IS NULL`) and the jump is
+        // cleared before the cluster pane gets a chance to locate it.
+        threadRootId: target.threadRootId ?? undefined,
         shouldCommit: () => attemptIdRef.current === attemptId,
       })
         .then(result => {

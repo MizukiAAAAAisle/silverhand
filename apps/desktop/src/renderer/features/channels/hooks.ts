@@ -906,14 +906,29 @@ export function usePrimeConversationMessages() {
       opts?: {
         shouldCommit?: () => boolean;
         signal?: AbortSignal;
+        /** When set, prime the reply cluster rooted at this message id
+         *  rather than the conversation's main stream. The window is
+         *  fetched via `?thread_root_id=` and committed to
+         *  `clusterMessagesKey(conversationId, threadRootId)`, which is
+         *  exactly the cache `useThreadCluster` reads — so a cluster jump
+         *  lands on the right window instead of 404-ing against the main
+         *  stream (whose anchor requires `thread_root_id IS NULL`). */
+        threadRootId?: string;
       },
     ): Promise<{ committed: boolean; reason?: 'stale' | 'aborted' | 'not_found' }> => {
+      // A cluster target writes to the cluster cache; everything else to
+      // the main stream cache. Both the fetch scope and the commit key must
+      // agree, or we'd prime one window and read another.
+      const cacheKey = opts?.threadRootId
+        ? clusterMessagesKey(conversationId, opts.threadRootId)
+        : messagesKey(conversationId);
       try {
         if (opts?.signal?.aborted) return { committed: false, reason: 'aborted' };
         const page = await fetchMessagesWindow({
           conversationId,
           routeKind,
           aroundMessageId: messageId,
+          threadRootId: opts?.threadRootId,
           limit: AROUND_MESSAGE_LIMIT,
           // Plumb signal into the underlying fetch so an abort on the
           // App side actually cancels the in-flight request, not just
@@ -929,7 +944,7 @@ export function usePrimeConversationMessages() {
         // Cancel any in-flight latest/before/after fetch so React
         // Query doesn't overwrite our prime with a stale response.
         await qc.cancelQueries({
-          queryKey: messagesKey(conversationId),
+          queryKey: cacheKey,
           exact: true,
         });
         // `cancelQueries` is async — by the time it resolves the
@@ -945,7 +960,7 @@ export function usePrimeConversationMessages() {
         // hook held before, so stitching is unsafe; the hook will
         // page outward from here using before/after cursors.
         qc.setQueryData<MessagesCache>(
-          messagesKey(conversationId),
+          cacheKey,
           makeMessagesCache(page, undefined),
         );
         return { committed: true };
