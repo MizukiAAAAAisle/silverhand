@@ -530,9 +530,17 @@ export function useChannelMessages(
         // here; it only bumps its root's reply-count badge. The cluster's
         // own `useThreadCluster` window appends it for the open panel.
         if (msg.thread_root_id !== null) {
-          qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
-            bumpReplyCountInCache(prev, msg.thread_root_id!),
-          );
+          // System events (e.g. task claim/status) can now carry a
+          // `thread_root_id` — they attribute to the cluster's stream
+          // (#task:1053) — but they are NOT replies. Only non-system rows
+          // bump the badge, mirroring the cut3-6 sidecar (which excludes
+          // system) and `useThreadRoot`'s live bump. Either way the row
+          // never appends to the main stream.
+          if (msg.from_kind !== 'system') {
+            qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
+              bumpReplyCountInCache(prev, msg.thread_root_id!),
+            );
+          }
           return;
         }
         const cur = qc.getQueryData<MessagesCache>(messagesKey(channelId));
