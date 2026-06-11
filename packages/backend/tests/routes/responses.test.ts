@@ -38,6 +38,12 @@ describe('conversationMessageServiceErrorResponse — TargetError mapping', () =
     ).toBe(409);
   });
 
+  it('maps legacy isolated thread write attempts to 409', async () => {
+    expect(
+      await statusFor(new TargetError('legacy_thread_read_only', 'read only')),
+    ).toBe(409);
+  });
+
   it('defaults other target errors to 400', async () => {
     expect(await statusFor(new TargetError('no_parent', 'no parent'))).toBe(400);
   });

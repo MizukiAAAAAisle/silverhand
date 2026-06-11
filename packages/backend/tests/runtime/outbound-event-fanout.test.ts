@@ -937,6 +937,36 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  it('does not spawn legacy isolated thread runtimes', async () => {
+    const fix = makeFixture({ runtime: 'codex' });
+    try {
+      const legacyThread = fix.conversations.insertThread({
+        channelId: fix.channelId,
+        title: 'legacy thread',
+      });
+      fix.conversations.addAgent(legacyThread.id, fix.agentId);
+      const msg = fix.messages.insertForConversation({
+        conversationId: legacyThread.id,
+        fromKind: 'user',
+        content: 'old pending message',
+      });
+      fix.inbox.ensureDelivery(legacyThread.id, fix.agentId, msg.id);
+
+      await expect(
+        fix.fanout.startDeliveryBacked(legacyThread.id, fix.agentId),
+      ).resolves.toBe(false);
+      expect(fix.transport.calls.some(c => c.kind === 'runtime_start')).toBe(false);
+      expect(fix.inbox.listPending(legacyThread.id, fix.agentId).length).toBe(1);
+
+      await expect(
+        fix.fanout.start(legacyThread.id, fix.agentId),
+      ).rejects.toMatchObject({ code: 'legacy_thread_runtime_disabled' });
+      expect(fix.transport.calls.some(c => c.kind === 'runtime_start')).toBe(false);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   it('runtime_start options never carry server_url; the daemon injects host-local URL', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
@@ -1675,6 +1705,7 @@ interface Fixture {
   events: Array<{ conv: string; kind: string; payload: unknown }>;
   messages: MessageRepo;
   inbox: ConversationInboxRepo;
+  conversations: ConversationRepo;
   transport: FakeTransport;
   fanout: OutboundRuntimeEventFanout;
   row(): { status: string; pid: number | null; cli_session_id: string | null };
@@ -1751,6 +1782,7 @@ function makeFixture(
     events,
     messages,
     inbox,
+    conversations,
     transport,
     fanout,
     row: () => {

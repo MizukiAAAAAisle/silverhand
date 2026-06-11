@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
@@ -188,7 +189,7 @@ describe('POST /internal/.../read-history', () => {
     expect(body.messages.map((m: any) => m.content)).toContain('parent context');
   });
 
-  it('rejects reading a child thread when the caller is not a member of that target', async () => {
+  it('rejects legacy {thread_id} reads before membership checks', async () => {
     t = buildTestApp();
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice', 'bob']);
     const aliceId = agentIds.alice!;
@@ -209,9 +210,10 @@ describe('POST /internal/.../read-history', () => {
       target: { thread_id: thread.thread_id },
       before_seq: 99,
     });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(400);
     const body = await res.json() as any;
-    expect(body.code).toBe('not_target_conversation_member');
+    expect(body.code).toBe('legacy_thread_target_deprecated');
+    expect(body.error).toContain(`conversation:${thread.thread_id}`);
   });
 
   // Characterization for the read-model SQL extraction (#task:980, Slice B):
@@ -416,6 +418,33 @@ describe('POST /internal/.../read-history', () => {
     expect(res.status).toBe(404);
     const body = await res.json() as any;
     expect(body.code).toBe('thread_root_not_found');
+  });
+
+  it('rejects a legacy thread conversation id passed as thread:<id> with a deprecation error', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const aliceId = agentIds.alice!;
+    const conversations = new ConversationRepo(t.ctx.db);
+    const thread = conversations.insertThread({
+      channelId,
+      title: 'legacy thread',
+    });
+    conversations.addAgent(thread.id, aliceId);
+    const messages = new MessageRepo(t.ctx.db);
+    const anchor = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'channel anchor',
+    });
+
+    const res = await http(t).post(readHistoryPath(channelId, aliceId), {
+      target: { thread_root_id: thread.id },
+      around_message_id: anchor.id,
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as any;
+    expect(body.code).toBe('legacy_thread_target_deprecated');
+    expect(body.error).toContain(`conversation:${thread.id}`);
   });
 
   it('returns only the root for a cluster with no replies (underpins seen=0 on first reply)', async () => {

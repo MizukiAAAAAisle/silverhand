@@ -47,7 +47,7 @@ describe('message routes', () => {
     t = null;
   });
 
-  it('human channel and thread message routes publish message and unread events', async () => {
+  it('human channel routes publish message and legacy thread writes are read-only', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
     const channelEvents: Array<{ kind: string; payload: any }> = [];
@@ -67,14 +67,14 @@ describe('message routes', () => {
     const thread = await (
       await http(t).post(`/api/messages/${channelPost.message.id}/thread`)
     ).json() as any;
-    const threadPost = await (
-      await http(t).post(`/api/threads/${thread.thread_id}/messages`, {
-        content: 'thread reply',
-      })
-    ).json() as any;
+    const threadPost = await http(t).post(`/api/threads/${thread.thread_id}/messages`, {
+      content: 'thread reply',
+    });
     unsubChannel();
     unsubViewer();
 
+    expect(threadPost.status).toBe(409);
+    expect(await threadPost.json()).toMatchObject({ code: 'legacy_thread_read_only' });
     expect(channelEvents).toEqual(
       expect.arrayContaining([
         {
@@ -93,10 +93,11 @@ describe('message routes', () => {
     expect(viewerEvents).toEqual(
       expect.arrayContaining([
         { kind: 'unread_updated', payload: { conversation_id: channelId } },
-        {
-          kind: 'unread_updated',
-          payload: { conversation_id: threadPost.message.conversation_id },
-        },
+      ]),
+    );
+    expect(viewerEvents).not.toEqual(
+      expect.arrayContaining([
+        { kind: 'unread_updated', payload: { conversation_id: thread.thread_id } },
       ]),
     );
   });
@@ -118,7 +119,7 @@ describe('message routes', () => {
     expect(body.message.from_user_id).toBe('teammate');
   });
 
-  it('agent target parent lands in the parent conversation', async () => {
+  it('rejects agent sends originating from legacy threads', async () => {
     t = buildTestApp();
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice', 'bob']);
     const thread = await (
@@ -142,14 +143,13 @@ describe('message routes', () => {
       { headers: authHeaders(t.authToken) },
     );
 
-    expect(send.status).toBe(200);
+    expect(send.status).toBe(409);
+    expect(await send.json()).toMatchObject({ code: 'legacy_thread_read_only' });
     const parentMessages = await (
       await http(t).get(`/api/channels/${channelId}/messages`)
     ).json() as any;
-    expect(parentMessages.messages.map((m: any) => m.content)).toContain('up to parent');
-    expect(t.fake.resolvedRuns).toEqual([
-      { conversationId: thread.thread_id, agentId: agentIds.alice, reason: 'replied' },
-    ]);
+    expect(parentMessages.messages.map((m: any) => m.content)).not.toContain('up to parent');
+    expect(t.fake.resolvedRuns).toEqual([]);
   });
 
   it('agent send-message into a closed target returns 409', async () => {

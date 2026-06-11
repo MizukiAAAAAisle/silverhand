@@ -182,7 +182,7 @@ describe('PR-B: cross-workspace read_history({target:{conversation_id}})', () =>
     expect(body.code).toBe('conversation_not_found');
   });
 
-  it('still resolves "self" / "parent" / {thread_id} unchanged', async () => {
+  it('resolves self/parent and rejects legacy {thread_id} targets with a deprecation error', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
@@ -225,13 +225,25 @@ describe('PR-B: cross-workspace read_history({target:{conversation_id}})', () =>
     expect(parentRes.status).toBe(200);
     expect((await parentRes.json() as any).target.conversation_id).toBe(channel);
 
-    // {thread_id} from channel
+    // Legacy isolated thread conversations remain readable via
+    // {conversation_id}, but the thread:<id> / {thread_id} target form is
+    // now reserved for reply-cluster root ids.
     const threadRes = await http(t).post(readHistoryPath(channel, alice.agentId), {
       target: { thread_id: thread.thread_id },
       around_message_id: threadMsg.id,
     });
-    expect(threadRes.status).toBe(200);
-    expect((await threadRes.json() as any).target.conversation_id).toBe(thread.thread_id);
+    expect(threadRes.status).toBe(400);
+    const threadBody = await threadRes.json() as any;
+    expect(threadBody.code).toBe('legacy_thread_target_deprecated');
+    expect(threadBody.error).toContain(`conversation:${thread.thread_id}`);
+
+    const conversationRes = await http(t).post(readHistoryPath(channel, alice.agentId), {
+      target: { conversation_id: thread.thread_id },
+      around_message_id: threadMsg.id,
+    });
+    expect(conversationRes.status).toBe(200);
+    expect((await conversationRes.json() as any).target.conversation_id)
+      .toBe(thread.thread_id);
   });
 
   it('rejects {conversation_id} pointing at the workspace itself or other unsupported kinds', async () => {

@@ -214,7 +214,7 @@ describe('ConversationMessageService.sendMessage', () => {
     }
   });
 
-  it('sends a user message to a thread and refreshes the parent', async () => {
+  it('rejects user sends into a legacy isolated thread as read-only', async () => {
     const t = bootstrap();
     try {
       const thread = t.conversations.insertThread({
@@ -227,20 +227,16 @@ describe('ConversationMessageService.sendMessage', () => {
         parentEvents.push({ kind: e.kind, payload: e.payload });
       });
 
-      await t.service.sendMessage({
-        conversationId: thread.id,
-        actor: { kind: 'user', userId: 'local' },
-        content: 'thread reply',
-      });
+      await expect(
+        t.service.sendMessage({
+          conversationId: thread.id,
+          actor: { kind: 'user', userId: 'local' },
+          content: 'thread reply',
+        }),
+      ).rejects.toMatchObject({ code: 'legacy_thread_read_only' });
       unsub();
 
-      expect(parentEvents).toContainEqual({
-        kind: 'thread_updated',
-        payload: {
-          parent_conversation_id: t.channel.id,
-          thread_id: thread.id,
-        },
-      });
+      expect(parentEvents).toEqual([]);
     } finally {
       t.cleanup();
     }
@@ -980,7 +976,7 @@ describe('ConversationMessageService.sendMessage', () => {
     }
   });
 
-  it('sends an agent message to parent and resolves the source run, not the target', async () => {
+  it('rejects agent sends originating from a legacy isolated thread', async () => {
     const t = bootstrap();
     try {
       const thread = t.conversations.insertThread({
@@ -989,34 +985,23 @@ describe('ConversationMessageService.sendMessage', () => {
       });
       t.conversations.addAgent(thread.id, t.alice.id);
 
-      const result = await t.service.sendMessage({
-        conversationId: thread.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: thread.id },
-        content: 'parent update',
-        target: 'parent',
-      });
-
-      expect(result.targetConversationId).toBe(t.channel.id);
+      await expect(
+        t.service.sendMessage({
+          conversationId: thread.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: thread.id },
+          content: 'parent update',
+          target: 'parent',
+        }),
+      ).rejects.toMatchObject({ code: 'legacy_thread_read_only' });
       expect(t.messages.listForConversation(t.channel.id).map(m => m.content))
-        .toContain('parent update');
-      expect(t.fake.resolvedRuns).toEqual([
-        { conversationId: thread.id, agentId: t.alice.id, reason: 'replied' },
-      ]);
+        .not.toContain('parent update');
+      expect(t.fake.resolvedRuns).toEqual([]);
     } finally {
       t.cleanup();
     }
   });
 
-  it('agent cross-target send to parent auto-starts target idle members including the sender session in the target', async () => {
-    // Regression for the "thread → parent forward did not wake parent
-    // members" bug. The (thread, alice) process is the sender. The
-    // target is the parent channel where another (channel, alice)
-    // session exists alongside (channel, bob). Both must be woken AND
-    // both must receive the message in their inbox; sender exclusion
-    // is a same-conversation echo guard and does not apply here. The
-    // (channel, alice) session is a *different* process from the
-    // (thread, alice) sender and only it will see the inbox arriving
-    // in the channel.
+  it('does not auto-start parent members from a legacy thread send attempt', async () => {
     const t = bootstrap();
     try {
       const thread = t.conversations.insertThread({
@@ -1025,35 +1010,23 @@ describe('ConversationMessageService.sendMessage', () => {
       });
       t.conversations.addAgent(thread.id, t.alice.id);
 
-      await t.service.sendMessage({
-        conversationId: thread.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: thread.id },
-        content: 'forward to parent',
-        target: 'parent',
-      });
+      await expect(
+        t.service.sendMessage({
+          conversationId: thread.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: thread.id },
+          content: 'forward to parent',
+          target: 'parent',
+        }),
+      ).rejects.toMatchObject({ code: 'legacy_thread_read_only' });
 
-      expect(t.fake.starts.map(s => ({ c: s.conversationId, a: s.agentId })).sort(
-        (x, y) => (x.c + x.a).localeCompare(y.c + y.a),
-      )).toEqual(
-        [
-          { c: t.channel.id, a: t.alice.id },
-          { c: t.channel.id, a: t.bob.id },
-        ].sort((x, y) => (x.c + x.a).localeCompare(y.c + y.a)),
-      );
-      expect(t.fake.delivered.map(d => ({ c: d.conversationId, a: d.agentId })).sort(
-        (x, y) => (x.c + x.a).localeCompare(y.c + y.a),
-      )).toEqual(
-        [
-          { c: t.channel.id, a: t.alice.id },
-          { c: t.channel.id, a: t.bob.id },
-        ].sort((x, y) => (x.c + x.a).localeCompare(y.c + y.a)),
-      );
+      expect(t.fake.starts).toEqual([]);
+      expect(t.fake.delivered).toEqual([]);
     } finally {
       t.cleanup();
     }
   });
 
-  it('sends an agent message to a direct child thread', async () => {
+  it('rejects agent sends targeted at a legacy isolated thread', async () => {
     const t = bootstrap();
     try {
       const thread = t.conversations.insertThread({
@@ -1063,34 +1036,23 @@ describe('ConversationMessageService.sendMessage', () => {
       t.conversations.addAgent(thread.id, t.alice.id);
       t.conversations.addAgent(thread.id, t.bob.id);
 
-      const result = await t.service.sendMessage({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        content: 'down',
-        target: { thread_id: thread.id },
-      });
-
-      expect(result.targetConversationId).toBe(thread.id);
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          content: 'down',
+          target: { thread_id: thread.id },
+        }),
+      ).rejects.toMatchObject({ code: 'legacy_thread_read_only' });
       expect(t.messages.listForConversation(thread.id).map(m => m.content))
-        .toContain('down');
-      // Cross-target send: delivery does NOT exclude the sender's agent id.
-      // (channel, alice) and (thread, alice) are different processes;
-      // (thread, alice) must receive the message in its inbox or it
-      // wakes without anything to process. See @Cindy review of `f28ed08`.
-      expect(t.fake.delivered.map(d => d.agentId).sort()).toEqual(
-        [t.alice.id, t.bob.id].sort(),
-      );
+        .not.toContain('down');
+      expect(t.fake.delivered).toEqual([]);
     } finally {
       t.cleanup();
     }
   });
 
-  it('agent cross-target send to a child thread auto-starts the thread members including the sender session in the thread', async () => {
-    // Mirror of the parent-direction test, for the more common case:
-    // channel agent forwards work into a thread. The (thread, alice)
-    // session and the (thread, bob) session both must wake AND receive
-    // the message — sender exclusion is a same-conversation echo
-    // guard and must not apply here.
+  it('does not auto-start legacy thread members from a targeted send attempt', async () => {
     const t = bootstrap();
     try {
       const thread = t.conversations.insertThread({
@@ -1100,29 +1062,17 @@ describe('ConversationMessageService.sendMessage', () => {
       t.conversations.addAgent(thread.id, t.alice.id);
       t.conversations.addAgent(thread.id, t.bob.id);
 
-      await t.service.sendMessage({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        content: 'down to thread',
-        target: { thread_id: thread.id },
-      });
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          content: 'down to thread',
+          target: { thread_id: thread.id },
+        }),
+      ).rejects.toMatchObject({ code: 'legacy_thread_read_only' });
 
-      expect(t.fake.starts.map(s => ({ c: s.conversationId, a: s.agentId })).sort(
-        (x, y) => (x.c + x.a).localeCompare(y.c + y.a),
-      )).toEqual(
-        [
-          { c: thread.id, a: t.alice.id },
-          { c: thread.id, a: t.bob.id },
-        ].sort((x, y) => (x.c + x.a).localeCompare(y.c + y.a)),
-      );
-      expect(t.fake.delivered.map(d => ({ c: d.conversationId, a: d.agentId })).sort(
-        (x, y) => (x.c + x.a).localeCompare(y.c + y.a),
-      )).toEqual(
-        [
-          { c: thread.id, a: t.alice.id },
-          { c: thread.id, a: t.bob.id },
-        ].sort((x, y) => (x.c + x.a).localeCompare(y.c + y.a)),
-      );
+      expect(t.fake.starts).toEqual([]);
+      expect(t.fake.delivered).toEqual([]);
     } finally {
       t.cleanup();
     }

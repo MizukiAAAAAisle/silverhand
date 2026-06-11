@@ -252,7 +252,7 @@ describe('canonical channel/thread routes', () => {
     ]);
   });
 
-  it('posts human messages to threads and refreshes the parent thread summary', async () => {
+  it('rejects human writes to legacy threads while keeping summaries readable', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
     const msg = await (
@@ -267,7 +267,8 @@ describe('canonical channel/thread routes', () => {
     const post = await http(t).post(`/api/threads/${created.thread_id}/messages`, {
       content: 'thread reply',
     });
-    expect(post.status).toBe(201);
+    expect(post.status).toBe(409);
+    expect(await post.json()).toMatchObject({ code: 'legacy_thread_read_only' });
     const threads = await (
       await http(t).get(`/api/channels/${channelId}/threads`)
     ).json() as any;
@@ -275,7 +276,7 @@ describe('canonical channel/thread routes', () => {
       {
         thread_id: created.thread_id,
         anchor_message_id: msg.message.id,
-        reply_count: 1,
+        reply_count: 0,
       },
     ]);
 
@@ -446,12 +447,13 @@ describe('canonical channel/thread routes', () => {
     const created = await (
       await viewer.post(`/api/messages/${msg.message.id}/thread`)
     ).json() as any;
-    await viewer.post(`/api/threads/${created.thread_id}/messages`, {
+    const writeThread = await viewer.post(`/api/threads/${created.thread_id}/messages`, {
       content: 'thread msg',
     });
+    expect(writeThread.status).toBe(409);
     const markThread = await viewer.post(`/api/threads/${created.thread_id}/mark-read`);
     expect(markThread.status).toBe(200);
-    expect(await markThread.json()).toEqual({ last_read_seq: 3 });
+    expect(await markThread.json()).toEqual({ last_read_seq: 2 });
   });
 
   it('publishes message unread updates only when unread counts change', async () => {

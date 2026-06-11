@@ -139,6 +139,27 @@ export class ClearSessionInProgressError extends Error {
 }
 
 /**
+ * Legacy isolated thread conversations are frozen read-only during the
+ * reply-cluster migration. They remain readable as conversations, but the
+ * backend must not spawn a fresh `(thread, agent)` runtime for them.
+ */
+export class LegacyThreadRuntimeDisabledError extends Error {
+  readonly code = 'legacy_thread_runtime_disabled' as const;
+  readonly conversationId: string;
+  readonly agentId: string;
+
+  constructor(conversationId: string, agentId: string) {
+    super(
+      `legacy isolated thread ${conversationId} is read-only; use a ` +
+        'channel for isolated work or message send --reply-to for reply clusters',
+    );
+    this.name = 'LegacyThreadRuntimeDisabledError';
+    this.conversationId = conversationId;
+    this.agentId = agentId;
+  }
+}
+
+/**
  * Backend-side facade for the per-(conversation, agent) runtime
  * lifecycle.
  */

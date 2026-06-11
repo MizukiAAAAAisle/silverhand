@@ -166,7 +166,8 @@ export type TargetErrorCode =
   | 'target_closed'
   | 'target_archived'
   | 'reply_target_not_found'
-  | 'stream_key_mismatch';
+  | 'stream_key_mismatch'
+  | 'legacy_thread_read_only';
 
 export class TargetError extends Error {
   constructor(
@@ -386,9 +387,21 @@ export class ConversationMessageService {
             'conversation is archived',
           );
         }
+        if (sourceConversation.kind === 'thread') {
+          throw new TargetError(
+            'legacy_thread_read_only',
+            'legacy isolated threads are read-only; use message send --reply-to for reply clusters or a channel for isolated work',
+          );
+        }
         this.validateActor(input.actor, policy, sourceConversation.id);
 
         const targetConversation = this.resolveTarget(sourceConversation, target);
+        if (targetConversation.kind === 'thread') {
+          throw new TargetError(
+            'legacy_thread_read_only',
+            'legacy isolated threads are read-only; use message send --reply-to for reply clusters or a channel for isolated work',
+          );
+        }
         const threadRootId = this.resolveThreadRoot(
           targetConversation.id,
           input.replyToMessageId,

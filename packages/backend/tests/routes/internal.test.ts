@@ -245,7 +245,7 @@ describe('POST /internal/.../send-message', () => {
     expect(r.status).toBe(400);
   });
 
-  it('writes to a real thread via { thread_id }', async () => {
+  it('rejects legacy thread targets via { thread_id }', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t, ['alice']);
     const child = await (
@@ -268,7 +268,8 @@ describe('POST /internal/.../send-message', () => {
       },
       { headers: authHeaders(t.authToken) },
     );
-    expect(r.status).toBe(200);
+    expect(r.status).toBe(409);
+    expect(await r.json()).toMatchObject({ code: 'legacy_thread_read_only' });
     const childMsgs = await (
       await http(t).get(`/api/threads/${child.thread_id}/messages`)
     ).json() as any;
@@ -276,7 +277,7 @@ describe('POST /internal/.../send-message', () => {
       childMsgs.messages.some(
         (m: any) => m.from_kind === 'agent' && m.content === 'down to child',
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
 });
