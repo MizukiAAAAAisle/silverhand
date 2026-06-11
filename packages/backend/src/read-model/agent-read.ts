@@ -52,7 +52,7 @@ type AgentSearchMessageRow = HistoryMessageRow & {
 };
 
 type ReadHistoryTargetResult =
-  | { ok: true; conversation: ConversationDto }
+  | { ok: true; conversation: ConversationDto; threadRootId: string | null }
   | {
       ok: false;
       status: 400 | 403 | 404;
@@ -60,7 +60,23 @@ type ReadHistoryTargetResult =
       message: string;
     };
 
+/** Minimal cluster-root lookup for the `{ thread_root_id }` read
+ *  form. Returns just the routing fields (no DTO assembly) for a
+ *  message id, or `null` when no such message exists. */
+function lookupClusterRootMessage(
+  ctx: BackendContext,
+  messageId: string,
+): { id: string; conversation_id: string; thread_root_id: string | null } | null {
+  const row = ctx.db
+    .prepare<[string], { id: string; conversation_id: string; thread_root_id: string | null }>(
+      `SELECT id, conversation_id, thread_root_id FROM messages WHERE id = ?`,
+    )
+    .get(messageId);
+  return row ?? null;
+}
+
 export function resolveAgentReadHistoryTarget(
+  ctx: BackendContext,
   conversations: ConversationRepo,
   sourceConversation: ConversationDto,
   agentId: string,
@@ -68,6 +84,10 @@ export function resolveAgentReadHistoryTarget(
 ): ReadHistoryTargetResult {
   const requested = target ?? 'self';
   let resolved: ConversationDto | null;
+  // Non-null only for the `{ thread_root_id }` reply-cluster form;
+  // carries the canonical cluster root id downstream so the DTO
+  // builder can scope the listing to root + its replies.
+  let threadRootId: string | null = null;
   if (requested === 'self') {
     resolved = sourceConversation;
   } else if (requested === 'parent') {
@@ -107,6 +127,42 @@ export function resolveAgentReadHistoryTarget(
       };
     }
     resolved = thread;
+  } else if ('thread_root_id' in requested) {
+    // Reply-cluster read: the value is a *message id*. The cluster
+    // lives inside the root message's channel; normalize a reply to
+    // its canonical root (symmetry with send-side resolveThreadRoot)
+    // so `thread:<reply_id>` reads the whole cluster, not nothing.
+    const rootMsg = lookupClusterRootMessage(ctx, requested.thread_root_id);
+    if (!rootMsg) {
+      return {
+        ok: false,
+        status: 404,
+        code: 'thread_root_not_found',
+        message: 'thread root message not found',
+      };
+    }
+    const conversation = conversations.get(rootMsg.conversation_id);
+    if (!conversation) {
+      return {
+        ok: false,
+        status: 404,
+        code: 'conversation_not_found',
+        message: 'conversation not found',
+      };
+    }
+    // Reply clusters are a channel concept. An old isolated-thread
+    // conversation does not host clusters — read it via
+    // `{ conversation_id }` instead.
+    if (conversation.kind !== 'channel' && conversation.kind !== 'dm_channel') {
+      return {
+        ok: false,
+        status: 400,
+        code: 'thread_root_not_in_channel',
+        message: 'thread root message is not in a channel',
+      };
+    }
+    resolved = conversation;
+    threadRootId = rootMsg.thread_root_id ?? rootMsg.id;
   } else {
     // Cross-conversation read by id. The agent must be in
     // `conversation_agents` for the target — workspace-level
@@ -144,10 +200,13 @@ export function resolveAgentReadHistoryTarget(
       message: 'agent is not a member of target conversation',
     };
   }
-  return { ok: true, conversation: resolved };
+  return { ok: true, conversation: resolved, threadRootId };
 }
 
-function targetRef(conversation: ConversationDto): ReadHistoryTargetRef {
+function targetRef(
+  conversation: ConversationDto,
+  threadRootId: string | null,
+): ReadHistoryTargetRef {
   return {
     conversation_id: conversation.id,
     conversation_kind: conversation.kind,
@@ -156,6 +215,7 @@ function targetRef(conversation: ConversationDto): ReadHistoryTargetRef {
         ? conversation.parent_conversation_id ?? conversation.id
         : conversation.id,
     thread_id: conversation.kind === 'thread' ? conversation.id : null,
+    thread_root_id: threadRootId,
     workspace_id: conversation.workspace_id,
     title: conversation.title,
   };
@@ -222,6 +282,23 @@ function historySystemFilter(includeSystem: boolean): string {
   return includeSystem ? '' : `AND m.from_kind != 'system'`;
 }
 
+/** Reply-cluster scope (`docs/thread-reply-cluster-v1.md` §6): when
+ *  `threadRootId` is set, restrict a listing to the cluster — the
+ *  root message itself (`id = root`) plus every reply
+ *  (`thread_root_id = root`). Empty string when null, so every
+ *  non-thread read form scopes to the whole conversation unchanged.
+ *  `col` is the table alias used by the caller's query (`''` for the
+ *  bare-`messages` anchor query). */
+function threadScopeClause(threadRootId: string | null, col = 'm'): string {
+  if (!threadRootId) return '';
+  const prefix = col ? `${col}.` : '';
+  return `AND (${prefix}id = ? OR ${prefix}thread_root_id = ?)`;
+}
+
+function threadScopeParams(threadRootId: string | null): string[] {
+  return threadRootId ? [threadRootId, threadRootId] : [];
+}
+
 function historySelectSql(whereSql: string, orderSql: string, limitSql = 'LIMIT ?'): string {
   return `SELECT
             m.*,
@@ -241,22 +318,24 @@ function listHistoryBefore(
   beforeSeq: number,
   includeSystem: boolean,
   limit: number,
+  threadRootId: string | null,
 ): HistoryMessageRow[] {
   if (limit <= 0) return [];
   const rows = ctx.db
-    .prepare<[string, number, number], HistoryMessageRow>(
+    .prepare<(string | number)[], HistoryMessageRow>(
       `SELECT *
          FROM (
            ${historySelectSql(
              `m.conversation_id = ?
               AND m.seq < ?
-              ${historySystemFilter(includeSystem)}`,
+              ${historySystemFilter(includeSystem)}
+              ${threadScopeClause(threadRootId)}`,
              'ORDER BY m.seq DESC',
            )}
          )
         ORDER BY seq ASC`,
     )
-    .all(conversationId, beforeSeq, limit);
+    .all(conversationId, beforeSeq, ...threadScopeParams(threadRootId), limit);
   return rows;
 }
 
@@ -266,33 +345,37 @@ function listHistoryAfter(
   afterSeq: number,
   includeSystem: boolean,
   limit: number,
+  threadRootId: string | null,
 ): HistoryMessageRow[] {
   if (limit <= 0) return [];
   return ctx.db
-    .prepare<[string, number, number], HistoryMessageRow>(
+    .prepare<(string | number)[], HistoryMessageRow>(
       historySelectSql(
         `m.conversation_id = ?
          AND m.seq > ?
-         ${historySystemFilter(includeSystem)}`,
+         ${historySystemFilter(includeSystem)}
+         ${threadScopeClause(threadRootId)}`,
         'ORDER BY m.seq ASC',
       ),
     )
-    .all(conversationId, afterSeq, limit);
+    .all(conversationId, afterSeq, ...threadScopeParams(threadRootId), limit);
 }
 
 function getHistoryAnchorSeq(
   ctx: BackendContext,
   conversationId: string,
   messageId: string,
+  threadRootId: string | null,
 ): number | null {
   const row = ctx.db
-    .prepare<[string, string], { seq: number }>(
+    .prepare<(string | number)[], { seq: number }>(
       `SELECT seq
          FROM messages
         WHERE id = ?
-          AND conversation_id = ?`,
+          AND conversation_id = ?
+          ${threadScopeClause(threadRootId, '')}`,
     )
-    .get(messageId, conversationId);
+    .get(messageId, conversationId, ...threadScopeParams(threadRootId));
   return row?.seq ?? null;
 }
 
@@ -301,18 +384,20 @@ function getHistoryRowById(
   conversationId: string,
   messageId: string,
   includeSystem: boolean,
+  threadRootId: string | null,
 ): HistoryMessageRow | null {
   const row = ctx.db
-    .prepare<[string, string], HistoryMessageRow>(
+    .prepare<(string | number)[], HistoryMessageRow>(
       historySelectSql(
         `m.id = ?
          AND m.conversation_id = ?
-         ${historySystemFilter(includeSystem)}`,
+         ${historySystemFilter(includeSystem)}
+         ${threadScopeClause(threadRootId)}`,
         '',
         '',
       ),
     )
-    .get(messageId, conversationId);
+    .get(messageId, conversationId, ...threadScopeParams(threadRootId));
   return row ?? null;
 }
 
@@ -321,18 +406,20 @@ function hasHistoryBefore(
   conversationId: string,
   seq: number,
   includeSystem: boolean,
+  threadRootId: string | null,
 ): boolean {
   return (
     ctx.db
-      .prepare<[string, number], { found: 1 }>(
+      .prepare<(string | number)[], { found: 1 }>(
         `SELECT 1 AS found
            FROM messages m
           WHERE m.conversation_id = ?
             AND m.seq < ?
             ${historySystemFilter(includeSystem)}
+            ${threadScopeClause(threadRootId)}
           LIMIT 1`,
       )
-      .get(conversationId, seq) !== undefined
+      .get(conversationId, seq, ...threadScopeParams(threadRootId)) !== undefined
   );
 }
 
@@ -341,18 +428,20 @@ function hasHistoryAfter(
   conversationId: string,
   seq: number,
   includeSystem: boolean,
+  threadRootId: string | null,
 ): boolean {
   return (
     ctx.db
-      .prepare<[string, number], { found: 1 }>(
+      .prepare<(string | number)[], { found: 1 }>(
         `SELECT 1 AS found
            FROM messages m
           WHERE m.conversation_id = ?
             AND m.seq > ?
             ${historySystemFilter(includeSystem)}
+            ${threadScopeClause(threadRootId)}
           LIMIT 1`,
       )
-      .get(conversationId, seq) !== undefined
+      .get(conversationId, seq, ...threadScopeParams(threadRootId)) !== undefined
   );
 }
 
@@ -367,8 +456,9 @@ export function buildReadHistoryDto(
     include_system: boolean;
     limit: number;
   },
+  threadRootId: string | null = null,
 ): AgentReadHistoryDto | { error: string; code: string; status: 404 } {
-  const target = targetRef(targetConversation);
+  const target = targetRef(targetConversation, threadRootId);
   let rows: HistoryMessageRow[];
   let anchor: AgentReadHistoryDto['anchor'];
 
@@ -380,6 +470,7 @@ export function buildReadHistoryDto(
       input.before_seq,
       input.include_system,
       input.limit,
+      threadRootId,
     );
   } else if (input.after_seq !== undefined) {
     anchor = { type: 'after_seq', seq: input.after_seq };
@@ -389,10 +480,16 @@ export function buildReadHistoryDto(
       input.after_seq,
       input.include_system,
       input.limit,
+      threadRootId,
     );
   } else {
     const messageId = input.around_message_id!;
-    const anchorSeq = getHistoryAnchorSeq(ctx, targetConversation.id, messageId);
+    const anchorSeq = getHistoryAnchorSeq(
+      ctx,
+      targetConversation.id,
+      messageId,
+      threadRootId,
+    );
     if (anchorSeq === null) {
       return {
         error: 'message not found',
@@ -408,12 +505,14 @@ export function buildReadHistoryDto(
       anchorSeq,
       input.include_system,
       beforeCount,
+      threadRootId,
     );
     const anchorRow = getHistoryRowById(
       ctx,
       targetConversation.id,
       messageId,
       input.include_system,
+      threadRootId,
     );
     const afterLimit = Math.max(
       0,
@@ -425,6 +524,7 @@ export function buildReadHistoryDto(
       anchorSeq,
       input.include_system,
       afterLimit,
+      threadRootId,
     );
     rows = [...before, ...(anchorRow ? [anchorRow] : []), ...after];
   }
@@ -448,6 +548,7 @@ export function buildReadHistoryDto(
             targetConversation.id,
             minSeq,
             input.include_system,
+            threadRootId,
           ),
     has_more_after:
       maxSeq === null
@@ -457,6 +558,7 @@ export function buildReadHistoryDto(
             targetConversation.id,
             maxSeq,
             input.include_system,
+            threadRootId,
           ),
   };
 }

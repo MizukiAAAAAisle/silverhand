@@ -560,6 +560,7 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
     const sourceConversation = conversations.get(principal.conversationId);
     if (!sourceConversation) return c.json({ error: 'conversation not found' }, 404);
     const target = resolveAgentReadHistoryTarget(
+      ctx,
       conversations,
       sourceConversation,
       principal.agentId,
@@ -582,7 +583,7 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
         agentId: principal.agentId,
         limit: parsed.data.limit,
       },
-      () => buildReadHistoryDto(ctx, target.conversation, parsed.data),
+      () => buildReadHistoryDto(ctx, target.conversation, parsed.data, target.threadRootId),
       out => ({
         messageCount: 'messages' in out ? out.messages.length : 0,
       }),

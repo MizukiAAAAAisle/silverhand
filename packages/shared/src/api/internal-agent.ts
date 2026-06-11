@@ -155,11 +155,23 @@ const ReadHistoryOptionalLimitSchema = z.preprocess(
  *  `SendMessageTargetSchema` so adding read-only cross-conversation
  *  navigation here does NOT silently widen the surface that allows
  *  cross-conversation message posting. The `{ conversation_id }`
- *  form is membership-gated server-side via `conversation_agents`. */
+ *  form is membership-gated server-side via `conversation_agents`.
+ *
+ *  `{ thread_root_id }` is the reply-cluster read form (thread =
+ *  reply cluster, `docs/thread-reply-cluster-v1.md`): the value is
+ *  a *message id* (the cluster root, or any reply in it — the
+ *  server normalizes a reply to its canonical root, symmetric with
+ *  the send-side `resolveThreadRoot`). It reads the cluster inside
+ *  the root message's channel: the root message (anchor) plus every
+ *  reply whose `thread_root_id` equals the root. Distinct from the
+ *  legacy `{ thread_id }` form, whose value is a *conversation id*
+ *  for an old isolated-thread conversation (frozen; read via
+ *  `{ conversation_id }`). */
 export const ReadHistoryTargetSchema = z.union([
   z.literal('self'),
   z.literal('parent'),
   z.object({ thread_id: z.string().min(1) }),
+  z.object({ thread_root_id: z.string().min(1) }),
   z.object({ conversation_id: z.string().min(1) }),
 ]);
 export type ReadHistoryTarget = z.infer<typeof ReadHistoryTargetSchema>;
@@ -211,6 +223,12 @@ export const ReadHistoryTargetRefSchema = z.object({
   conversation_kind: ConversationKindSchema,
   channel_id: z.string(),
   thread_id: z.string().nullable(),
+  /** Set only for the reply-cluster read form (`{ thread_root_id }`):
+   *  the canonical cluster root message id. `null` for every other
+   *  target. Lets the caller tell the anchor root apart from its
+   *  replies (the root carries `id === thread_root_id`; replies do
+   *  not) without exposing per-message `thread_root_id`. */
+  thread_root_id: z.string().nullable(),
   workspace_id: z.string(),
   title: z.string(),
 });

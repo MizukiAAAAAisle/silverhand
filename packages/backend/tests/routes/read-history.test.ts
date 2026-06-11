@@ -265,4 +265,182 @@ describe('POST /internal/.../read-history', () => {
     expect(fullBody.has_more_before).toBe(false);
     expect(fullBody.has_more_after).toBe(false);
   });
+
+  // Reply-cluster read path (docs/thread-reply-cluster-v1.md §6; cut2 2-B2).
+  // `target: { thread_root_id }` reads the cluster INSIDE the root message's
+  // channel — the root (anchor) plus every reply (thread_root_id = root) —
+  // and nothing else. The DTO target echoes the canonical root so the daemon
+  // side can tell the anchor root apart from its replies (observed advances
+  // on replies only).
+  it('reads a reply cluster: root anchor + its replies, excluding other channel messages', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const aliceId = agentIds.alice!;
+    const messages = new MessageRepo(t.ctx.db);
+    const root = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'cluster root question',
+    });
+    const reply1 = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: aliceId,
+      content: 'first reply',
+      threadRootId: root.id,
+    });
+    // interleaved main-line noise — must NOT appear in the cluster read.
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'unrelated main-line message',
+    });
+    const reply2 = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'second reply',
+      threadRootId: root.id,
+    });
+    // a different cluster — must not leak in.
+    const otherRoot = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'other root',
+    });
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'other reply',
+      threadRootId: otherRoot.id,
+    });
+
+    const res = await http(t).post(readHistoryPath(channelId, aliceId), {
+      target: { thread_root_id: root.id },
+      after_seq: 0,
+      limit: 50,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.target.thread_root_id).toBe(root.id);
+    expect(body.target.thread_id).toBeNull();
+    expect(body.target.conversation_id).toBe(channelId);
+    expect(body.messages.map((m: any) => m.message_ref.id)).toEqual([
+      root.id,
+      reply1.id,
+      reply2.id,
+    ]);
+  });
+
+  it('normalizes a reply id to its canonical root when reading a cluster', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const aliceId = agentIds.alice!;
+    const messages = new MessageRepo(t.ctx.db);
+    const root = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'root',
+    });
+    const reply1 = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: aliceId,
+      content: 'reply one',
+      threadRootId: root.id,
+    });
+    const reply2 = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'reply two',
+      threadRootId: root.id,
+    });
+
+    // Target a REPLY id, not the root — the server normalizes to the root
+    // (symmetry with send-side resolveThreadRoot) and reads the whole cluster.
+    const res = await http(t).post(readHistoryPath(channelId, aliceId), {
+      target: { thread_root_id: reply1.id },
+      after_seq: 0,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.target.thread_root_id).toBe(root.id);
+    expect(body.messages.map((m: any) => m.message_ref.id)).toEqual([
+      root.id,
+      reply1.id,
+      reply2.id,
+    ]);
+  });
+
+  it('lets a channel member read a cluster without following it (channel-visibility gate, not follow gate)', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice', 'bob']);
+    const aliceId = agentIds.alice!;
+    const bobId = agentIds.bob!;
+    const messages = new MessageRepo(t.ctx.db);
+    const root = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: aliceId,
+      content: 'root',
+    });
+    const reply = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: aliceId,
+      content: 'reply',
+      threadRootId: root.id,
+    });
+
+    // bob is a channel member but has NO thread_followers row — he can still
+    // pull the cluster (pull is channel-visibility gated, never follow gated).
+    const res = await http(t).post(readHistoryPath(channelId, bobId), {
+      target: { thread_root_id: root.id },
+      after_seq: 0,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.messages.map((m: any) => m.message_ref.id)).toEqual([
+      root.id,
+      reply.id,
+    ]);
+  });
+
+  it('rejects an unknown thread root message id with thread_root_not_found', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const aliceId = agentIds.alice!;
+    const res = await http(t).post(readHistoryPath(channelId, aliceId), {
+      target: { thread_root_id: 'does-not-exist' },
+      after_seq: 0,
+    });
+    expect(res.status).toBe(404);
+    const body = await res.json() as any;
+    expect(body.code).toBe('thread_root_not_found');
+  });
+
+  it('returns only the root for a cluster with no replies (underpins seen=0 on first reply)', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const aliceId = agentIds.alice!;
+    const messages = new MessageRepo(t.ctx.db);
+    const root = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'lonely root with no replies yet',
+    });
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'main-line noise',
+    });
+
+    const res = await http(t).post(readHistoryPath(channelId, aliceId), {
+      target: { thread_root_id: root.id },
+      after_seq: 0,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.target.thread_root_id).toBe(root.id);
+    expect(body.messages.map((m: any) => m.message_ref.id)).toEqual([root.id]);
+  });
 });
