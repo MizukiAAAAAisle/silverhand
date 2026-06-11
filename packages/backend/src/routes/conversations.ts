@@ -151,6 +151,52 @@ export function createConversationReadApp(
     const parsed = parseMessagesWindowQuery(c);
     if (!parsed.ok) return parsed.response;
     const { limit, beforeSeq, afterSeq, aroundMessageId } = parsed;
+    const requestedThreadRootId = c.req.query('thread_root_id');
+    let threadRootId: string | null = null;
+    if (requestedThreadRootId !== undefined) {
+      if (requestedThreadRootId.length === 0) {
+        return c.json(
+          {
+            error: 'thread_root_id must be a non-empty message id',
+            code: 'invalid_thread_root_id',
+          },
+          400,
+        );
+      }
+      const rootMessage = messages.getById(requestedThreadRootId);
+      if (!rootMessage) {
+        const legacyThread = conversations.getThread(requestedThreadRootId);
+        if (legacyThread) {
+          return c.json(
+            {
+              error:
+                `legacy isolated thread ${legacyThread.id} is read-only; read it with ` +
+                `conversation:${legacyThread.id}. The thread_root_id query is reserved ` +
+                'for reply-cluster root message ids.',
+              code: 'legacy_thread_target_deprecated',
+            },
+            400,
+          );
+        }
+        return c.json(
+          {
+            error: 'thread root message not found',
+            code: 'thread_root_not_found',
+          },
+          404,
+        );
+      }
+      if (rootMessage.conversation_id !== channel.id) {
+        return c.json(
+          {
+            error: 'thread root message not found in this channel',
+            code: 'thread_root_not_found',
+          },
+          404,
+        );
+      }
+      threadRootId = rootMessage.thread_root_id ?? rootMessage.id;
+    }
     try {
       const window = timedRouteSpan(
         ctx,
@@ -162,14 +208,14 @@ export function createConversationReadApp(
           beforeSeq,
           afterSeq,
           aroundMessageId,
+          threadRootId,
         },
-        () =>
-          messages.listWindowForConversation(channel.id, {
-            limit,
-            beforeSeq,
-            afterSeq,
-            aroundMessageId,
-          }),
+        () => {
+          const opts = { limit, beforeSeq, afterSeq, aroundMessageId };
+          return threadRootId
+            ? messages.listWindowForThreadCluster(channel.id, threadRootId, opts)
+            : messages.listWindowForConversation(channel.id, opts);
+        },
         result => ({
           messageCount: result.messages.length,
           hasMoreBefore: result.has_more_before,

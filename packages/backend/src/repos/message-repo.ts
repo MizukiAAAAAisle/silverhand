@@ -178,6 +178,22 @@ export class MessageRepo {
     conversationId: string,
     opts: ListWindowOpts = {},
   ): MessageWindow {
+    return this.listWindowForConversationScoped(conversationId, opts, null);
+  }
+
+  listWindowForThreadCluster(
+    conversationId: string,
+    threadRootId: string,
+    opts: ListWindowOpts = {},
+  ): MessageWindow {
+    return this.listWindowForConversationScoped(conversationId, opts, threadRootId);
+  }
+
+  private listWindowForConversationScoped(
+    conversationId: string,
+    opts: ListWindowOpts,
+    threadRootId: string | null,
+  ): MessageWindow {
     const limit = Math.max(1, opts.limit ?? 200);
     const beforeSeq = opts.beforeSeq ?? null;
     const afterSeq = opts.afterSeq ?? null;
@@ -206,7 +222,11 @@ export class MessageRepo {
       // cross-conversation message id would otherwise leak a window
       // around a message the caller might not be allowed to see, and
       // the UX of "jump to message" is per-conversation anyway.
-      const anchorSeq = this.anchorSeqFor(conversationId, aroundMessageId);
+      const anchorSeq = this.anchorSeqFor(
+        conversationId,
+        aroundMessageId,
+        threadRootId,
+      );
       if (anchorSeq === null) {
         throw new AnchorMessageNotInConversationError(
           conversationId,
@@ -223,8 +243,13 @@ export class MessageRepo {
         conversationId,
         anchorSeq,
         beforeCount,
+        threadRootId,
       );
-      const anchorRow = this.fetchById(conversationId, aroundMessageId);
+      const anchorRow = this.fetchById(
+        conversationId,
+        aroundMessageId,
+        threadRootId,
+      );
       const afterLimit = Math.max(
         0,
         limit - beforeRows.length - (anchorRow ? 1 : 0),
@@ -233,15 +258,16 @@ export class MessageRepo {
         conversationId,
         anchorSeq,
         afterLimit,
+        threadRootId,
       );
       rows = [...beforeRows, ...(anchorRow ? [anchorRow] : []), ...afterRows];
     } else if (afterSeq !== null) {
-      rows = this.fetchAfterSeq(conversationId, afterSeq, limit);
+      rows = this.fetchAfterSeq(conversationId, afterSeq, limit, threadRootId);
     } else {
       // Both `latest` (beforeSeq === null) and explicit before_seq go
       // through the same DESC-then-ASC path; null acts as "no upper
       // bound", so the existing tail behaviour is preserved.
-      rows = this.fetchBeforeSeq(conversationId, beforeSeq, limit);
+      rows = this.fetchBeforeSeq(conversationId, beforeSeq, limit, threadRootId);
     }
 
     const minSeq = rows[0]?.seq ?? null;
@@ -259,12 +285,12 @@ export class MessageRepo {
     const hasMoreBefore =
       minSeq === null
         ? false
-        : this.existsWithSeq(conversationId, '<', minSeq);
+        : this.existsWithSeq(conversationId, '<', minSeq, threadRootId);
 
     const hasMoreAfter =
       isLatest || maxSeq === null
         ? false
-        : this.existsWithSeq(conversationId, '>', maxSeq);
+        : this.existsWithSeq(conversationId, '>', maxSeq, threadRootId);
 
     return {
       messages: rows.map(r => messageRowWithTaskAssigneeToDto(r)),
@@ -281,10 +307,19 @@ export class MessageRepo {
     conversationId: string,
     beforeSeq: number | null,
     limit: number,
+    threadRootId: string | null,
   ): MessageRowWithTaskAssignee[] {
     return this.db
       .prepare<
-        [string, number | null, number | null, number],
+        [
+          string,
+          number | null,
+          number | null,
+          string | null,
+          string | null,
+          string | null,
+          number,
+        ],
         MessageRowWithTaskAssignee
       >(
         `SELECT m.*, aa.display_name AS task_assignee_name
@@ -293,13 +328,22 @@ export class MessageRepo {
                FROM messages
               WHERE conversation_id = ?
                 AND (? IS NULL OR seq < ?)
+                AND (? IS NULL OR id = ? OR thread_root_id = ?)
               ORDER BY seq DESC
               LIMIT ?
            ) m
           LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
           ORDER BY m.seq ASC`,
       )
-      .all(conversationId, beforeSeq, beforeSeq, limit);
+      .all(
+        conversationId,
+        beforeSeq,
+        beforeSeq,
+        threadRootId,
+        threadRootId,
+        threadRootId,
+        limit,
+      );
   }
 
   /** Fetch up to `limit` rows with `seq > afterSeq`, returned in
@@ -309,11 +353,12 @@ export class MessageRepo {
     conversationId: string,
     afterSeq: number,
     limit: number,
+    threadRootId: string | null,
   ): MessageRowWithTaskAssignee[] {
     if (limit <= 0) return [];
     return this.db
       .prepare<
-        [string, number, number],
+        [string, number, string | null, string | null, string | null, number],
         MessageRowWithTaskAssignee
       >(
         `SELECT m.*, aa.display_name AS task_assignee_name
@@ -321,10 +366,11 @@ export class MessageRepo {
            LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
           WHERE m.conversation_id = ?
             AND m.seq > ?
+            AND (? IS NULL OR m.id = ? OR m.thread_root_id = ?)
           ORDER BY m.seq ASC
           LIMIT ?`,
       )
-      .all(conversationId, afterSeq, limit);
+      .all(conversationId, afterSeq, threadRootId, threadRootId, threadRootId, limit);
   }
 
   /** Fetch a single row by id, scoped to one conversation. Returns
@@ -333,16 +379,21 @@ export class MessageRepo {
   private fetchById(
     conversationId: string,
     messageId: string,
+    threadRootId: string | null,
   ): MessageRowWithTaskAssignee | null {
     const row = this.db
-      .prepare<[string, string], MessageRowWithTaskAssignee>(
+      .prepare<
+        [string, string, string | null, string | null, string | null],
+        MessageRowWithTaskAssignee
+      >(
         `SELECT m.*, aa.display_name AS task_assignee_name
            FROM messages m
            LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
           WHERE m.conversation_id = ?
-            AND m.id = ?`,
+            AND m.id = ?
+            AND (? IS NULL OR m.id = ? OR m.thread_root_id = ?)`,
       )
-      .get(conversationId, messageId);
+      .get(conversationId, messageId, threadRootId, threadRootId, threadRootId);
     return row ?? null;
   }
 
@@ -351,13 +402,18 @@ export class MessageRepo {
   private anchorSeqFor(
     conversationId: string,
     messageId: string,
+    threadRootId: string | null,
   ): number | null {
     const row = this.db
-      .prepare<[string, string], { seq: number }>(
+      .prepare<
+        [string, string, string | null, string | null, string | null],
+        { seq: number }
+      >(
         `SELECT seq FROM messages
-          WHERE conversation_id = ? AND id = ?`,
+          WHERE conversation_id = ? AND id = ?
+            AND (? IS NULL OR id = ? OR thread_root_id = ?)`,
       )
-      .get(conversationId, messageId);
+      .get(conversationId, messageId, threadRootId, threadRootId, threadRootId);
     return row?.seq ?? null;
   }
 
@@ -367,17 +423,25 @@ export class MessageRepo {
     conversationId: string,
     op: '<' | '>',
     pivot: number,
+    threadRootId: string | null,
   ): boolean {
     const sql =
       op === '<'
         ? `SELECT 1 AS found FROM messages
-            WHERE conversation_id = ? AND seq < ? LIMIT 1`
+            WHERE conversation_id = ? AND seq < ?
+              AND (? IS NULL OR id = ? OR thread_root_id = ?)
+            LIMIT 1`
         : `SELECT 1 AS found FROM messages
-            WHERE conversation_id = ? AND seq > ? LIMIT 1`;
+            WHERE conversation_id = ? AND seq > ?
+              AND (? IS NULL OR id = ? OR thread_root_id = ?)
+            LIMIT 1`;
     return (
       this.db
-        .prepare<[string, number], { found: 1 }>(sql)
-        .get(conversationId, pivot) !== undefined
+        .prepare<
+          [string, number, string | null, string | null, string | null],
+          { found: 1 }
+        >(sql)
+        .get(conversationId, pivot, threadRootId, threadRootId, threadRootId) !== undefined
     );
   }
 
@@ -518,7 +582,7 @@ export class MessageRepo {
     afterSeq: number,
     limit = 10,
   ): MessageDto[] {
-    return this.fetchAfterSeq(conversationId, afterSeq, Math.max(1, limit))
+    return this.fetchAfterSeq(conversationId, afterSeq, Math.max(1, limit), null)
       .map(messageRowWithTaskAssigneeToDto);
   }
 
@@ -585,7 +649,7 @@ export class MessageRepo {
     conversationId: string,
     messageId: string,
   ): MessageDto | null {
-    const row = this.fetchById(conversationId, messageId);
+    const row = this.fetchById(conversationId, messageId, null);
     return row ? messageRowWithTaskAssigneeToDto(row) : null;
   }
 

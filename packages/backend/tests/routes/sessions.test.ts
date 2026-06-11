@@ -145,6 +145,148 @@ describe('canonical channel/thread routes', () => {
     expect(around.has_more_after).toBe(true);
   });
 
+  it('messages window can be scoped to a reply cluster root', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+    const messages = new MessageRepo(t.ctx.db);
+    const root = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'root',
+    });
+    const reply1 = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'reply-1',
+      threadRootId: root.id,
+    });
+    const mainNoise = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'main-noise',
+    });
+    const reply2 = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'reply-2',
+      threadRootId: root.id,
+    });
+    const otherRoot = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'other-root',
+    });
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'other-reply',
+      threadRootId: otherRoot.id,
+    });
+
+    const cluster = await (
+      await http(t).get(
+        `/api/channels/${channelId}/messages?thread_root_id=${root.id}&limit=10`,
+      )
+    ).json() as any;
+    expect(cluster.messages.map((m: any) => m.content)).toEqual([
+      'root',
+      'reply-1',
+      'reply-2',
+    ]);
+    expect(cluster.messages.map((m: any) => m.thread_root_id)).toEqual([
+      null,
+      root.id,
+      root.id,
+    ]);
+
+    const viaReply = await (
+      await http(t).get(
+        `/api/channels/${channelId}/messages?thread_root_id=${reply1.id}&limit=10`,
+      )
+    ).json() as any;
+    expect(viaReply.messages.map((m: any) => m.id)).toEqual([
+      root.id,
+      reply1.id,
+      reply2.id,
+    ]);
+
+    const forward = await (
+      await http(t).get(
+        `/api/channels/${channelId}/messages?thread_root_id=${root.id}&limit=2&after_seq=0`,
+      )
+    ).json() as any;
+    expect(forward.messages.map((m: any) => m.content)).toEqual([
+      'root',
+      'reply-1',
+    ]);
+    expect(forward.has_more_before).toBe(false);
+    expect(forward.has_more_after).toBe(true);
+
+    const aroundOutsideCluster = await http(t).get(
+      `/api/channels/${channelId}/messages?thread_root_id=${root.id}&around_message_id=${mainNoise.id}`,
+    );
+    expect(aroundOutsideCluster.status).toBe(404);
+    expect(((await aroundOutsideCluster.json()) as any).code).toBe(
+      'message_not_found',
+    );
+  });
+
+  it('messages window rejects invalid reply-cluster roots', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+    const messages = new MessageRepo(t.ctx.db);
+
+    const empty = await http(t).get(
+      `/api/channels/${channelId}/messages?thread_root_id=`,
+    );
+    expect(empty.status).toBe(400);
+    expect(((await empty.json()) as any).code).toBe('invalid_thread_root_id');
+
+    const unknown = await http(t).get(
+      `/api/channels/${channelId}/messages?thread_root_id=missing-root`,
+    );
+    expect(unknown.status).toBe(404);
+    expect(((await unknown.json()) as any).code).toBe('thread_root_not_found');
+
+    const { channelId: otherChannelId } = await createWorkspaceChannel(t, [
+      'bob',
+    ]);
+    const otherRoot = messages.insertForConversation({
+      conversationId: otherChannelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'other-channel-root',
+    });
+    const cross = await http(t).get(
+      `/api/channels/${channelId}/messages?thread_root_id=${otherRoot.id}`,
+    );
+    expect(cross.status).toBe(404);
+    expect(((await cross.json()) as any).code).toBe('thread_root_not_found');
+
+    const legacyAnchor = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'legacy anchor',
+    });
+    const legacy = await (
+      await http(t).post(`/api/messages/${legacyAnchor.id}/thread`)
+    ).json() as any;
+    const deprecated = await http(t).get(
+      `/api/channels/${channelId}/messages?thread_root_id=${legacy.thread_id}`,
+    );
+    expect(deprecated.status).toBe(400);
+    const deprecatedBody = (await deprecated.json()) as any;
+    expect(deprecatedBody.code).toBe('legacy_thread_target_deprecated');
+    expect(deprecatedBody.error).toContain(`conversation:${legacy.thread_id}`);
+  });
+
   it('messages window 400s on multiple cursors and 404s on cross-channel anchors', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
