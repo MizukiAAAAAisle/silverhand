@@ -83,6 +83,11 @@ describe('describeSaveServerUrlOutcome — success arms', () => {
     expect(banner.description.toLowerCase()).not.toMatch(/cannot verify/);
     // Points the user at the live connection indicator.
     expect(banner.description.toLowerCase()).toMatch(/this computer/);
+    // Cindy `#task:1021` review P2 — copy must stay direction-free: the
+    // banner and the "This computer" indicator are separate sections of
+    // ConnectionPane whose relative order can change, so a directional
+    // word ("above"/"below") would be a layout-coupled lie.
+    expect(banner.description.toLowerCase()).not.toMatch(/\babove\b|\bbelow\b/);
     // Anti-claim: must not say "Connected".
     expect(banner.title.toLowerCase()).not.toMatch(/\bconnected\b/);
   });

@@ -1535,15 +1535,20 @@ async function saveServerUrlFromSettings(
   // Mirrors the D3.b `host_outbound_detach` controller-snapshot
   // pattern.
   //
-  // D4.a Commit 5d / `#task:1021`: `getEmbeddedHostWsController()`
-  // returns `null` on the remote arm. We pass `remoteMode: controller
-  // === null` so the orchestrator returns the `reloaded_remote` SUCCESS
-  // arm (config saved; the daemon swapped; connectivity is shown live by
-  // the renderer's connection indicator, which polls the remote backend's
-  // host-status `availability` — #task:1010) instead of the misleading
-  // `no_attachment_controller` failure. We do NOT pretend to verify a
-  // remote attachment from main — the single readiness signal source is
-  // that indicator, not a second poller here.
+  // D4.a Commit 5d / `#task:1021`: derive `remoteMode` from the
+  // backend discriminant DIRECTLY, NOT from `controller === null`.
+  // `getEmbeddedHostWsController()` returns null in TWO distinct cases
+  // (`:556-561`): `backend.kind !== 'embedded'` (genuinely remote) AND
+  // embedded-but-`hostWsController?.()` missing (a registry-missing edge
+  // that SHOULD surface as `no_attachment_controller`). Binding
+  // `remoteMode = controller === null` would conflate them and promote
+  // that embedded edge to a `reloaded_remote` success — swallowing the
+  // failure the orchestrator is supposed to expose (Cindy `#task:1021`
+  // review P1). So: `remoteMode = backend.kind === 'remote'` (explicit),
+  // and the controller is still snapshotted separately for
+  // `bindAttachmentAccessor` (null on the remote arm → no local watchdog;
+  // connectivity is shown by the renderer's connection indicator, which
+  // polls remote host-status `availability` — #task:1010).
   const controller = getEmbeddedHostWsController();
   const outcome = await performOutboundReload(
     { serverUrl: rawServerUrl },
@@ -1552,7 +1557,7 @@ async function saveServerUrlFromSettings(
       writeDaemonHostConfig: config => writeDaemonHostConfig(dir, config),
       hostOutboundReload: () => client.hostOutboundReload(),
       getAttachment: bindAttachmentAccessor(controller),
-      remoteMode: controller === null,
+      remoteMode: backend.kind === 'remote',
       currentLocalHostId: () =>
         localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
       currentHostToken: () => readDaemonHostConfig(dir)?.host_token ?? null,

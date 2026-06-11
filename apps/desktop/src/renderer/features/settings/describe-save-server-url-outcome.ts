@@ -84,15 +84,18 @@ export function describeSaveServerUrlOutcome(
         // daemon spawned a fresh outbound client, but the in-process
         // attachment registry is absent in remote mode (same root cause
         // as the #task:1010 pill), so connectivity isn't observed from
-        // main. It IS shown live by the "This computer" indicator above
-        // (which polls the remote backend's host-status `availability`).
-        // Point the user there — do NOT claim "connection check is not
-        // available in this mode" (it is, via that indicator).
+        // main. It IS shown live by the "This computer" indicator (which
+        // polls the remote backend's host-status `availability`). Point
+        // the user there — do NOT claim "connection check is not
+        // available in this mode" (it is, via that indicator). Copy is
+        // deliberately direction-free (no "above"/"below"): the banner
+        // and the indicator are different sections of ConnectionPane and
+        // their relative order can change (Cindy `#task:1021` review P2).
         return {
           tone: 'info',
           title: 'Saved. Reconnecting…',
           description:
-            'Watch “This computer” above for the live connection status.',
+            'Watch “This computer” for the live connection status.',
         };
       default: {
         // Exhaustiveness gate — adding a new ok arm without
