@@ -28,10 +28,10 @@ import type {
   HumanMemberDto,
   MemberDto,
   MessageDto,
-  UserDto,
 } from '@silverhand/shared';
 import { Composer } from '@/components/chat/Composer';
 import { ChannelMessageItem } from '@/components/chat/ChannelMessageItem';
+import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import { QuotedMessagePreview } from '@/components/chat/QuotedMessagePreview';
 import { findThreadAnchor, readAnchorMessageId } from '@/components/chat/threadAnchor';
 import { SystemMessage } from '@/components/chat/SystemMessage';
@@ -54,25 +54,14 @@ import {
 } from '@/components/menus/AppContextMenu';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import {
-  useUserAvatarObjectUrl,
-  useUserAvatarObjectUrls,
-} from '@/features/users/avatar-hooks';
-import { useUsersById, makeUserNameResolver } from '@/features/users/hooks';
-import {
-  useWorkspaces,
-  useChannelsForWorkspace,
-  useArchivedChannelsForWorkspace,
-  type ChannelListItem,
-} from '@/features/workspaces/hooks';
+import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
+import { useUsersById } from '@/features/users/hooks';
 import { useSavedMessageIds, useToggleSave } from '@/features/saved/hooks';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
-  useViewerAvatarObjectUrl,
   useViewerUser,
 } from '@/features/me/hooks';
-import { useUsers } from '@/features/users/hooks';
 import { canEditAgentProfile } from '@/features/agents/permissions';
 import {
   useChannelAgents,
@@ -82,7 +71,6 @@ import {
   useStopAgent,
 } from '@/features/channels/hooks';
 import { useConversationStream } from '@/hooks/useConversationStream';
-import type { ChannelReference } from '@/components/chat/ChannelRef';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import {
   FIRST_ITEM_INDEX_START,
@@ -965,45 +953,27 @@ function MessageList({
    *  `#<channel_name>` chips. */
   onOpenChannelRef?: (channelId: string) => void;
 }): JSX.Element {
-  const { data: agents = [] } = useAgents();
-  const { data: users = [] } = useUsers();
-  const { data: workspaces = [] } = useWorkspaces();
-  // Resolve `#<channel_name>` against the message's workspace — not the
-  // primary-selected workspace — so cross-workspace `?side` panes still
-  // resolve refs that exist in their own workspace. Both the active
-  // and archived channel lists feed the lookup so an archived channel's
-  // name still resolves to a clickable chip (the chip dims via
-  // `closed_at` for closed channels).
-  const workspaceKind: 'regular' | 'dm' | null =
-    workspaces.find(w => w.id === workspaceId)?.kind ?? null;
-  const { data: liveChannels = [] } = useChannelsForWorkspace(
-    workspaceId,
-    workspaceKind,
-  );
-  const { data: archivedChannels = [] } = useArchivedChannelsForWorkspace(
-    workspaceId,
-    workspaceKind,
-  );
+  // Render context (lookup maps + sigil resolution + resolved viewer)
+  // comes from the shared hook so the channel pane and the thread
+  // reply-cluster pane resolve `@mention` / `#<channel>` / `#conv:` /
+  // `#task:` identically (#task:1052). The AGENT avatar batch stays
+  // lifted in `ActiveChannelView` (passed in as `agentAvatarUrls`) so
+  // authors, the member strip, and the activity bubble share one fetch.
+  const {
+    agentsById,
+    agentsByName,
+    humansById,
+    humansByName,
+    channelsByName,
+    humanAvatarUrls,
+    viewerAvatarObjectUrl,
+    viewer,
+    userResolver,
+    liveChannels,
+    archivedChannels,
+  } = useMessageRenderContext(workspaceId, channelId);
   const savedIds = useSavedMessageIds();
   const { toggle: toggleSave } = useToggleSave();
-  const { data: viewer } = useViewerUser();
-  const viewerAvatarObjectUrl = useViewerAvatarObjectUrl();
-  const conversationMembers = useConversationMembers(channelId);
-  const humansById = useMemo(() => {
-    const byId = new Map<string, UserDto>();
-    for (const user of users) byId.set(user.id, user);
-    if (viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer)) {
-      byId.set(viewer.id, viewer);
-    }
-    return byId;
-  }, [users, viewer]);
-  // Resolver fed to MessageItem so foreign-author fallbacks (task
-  // assignees, async-loading author rows) render the actual display
-  // name instead of a raw uuid (multi-human audit 2026-06-03
-  // #task:857 P0.10). Built off the same humansById merge so viewer +
-  // global directory + conversation members all resolve here.
-  const userResolver = useMemo(() => makeUserNameResolver(humansById), [humansById]);
-  const humanAvatarUrls = useUserAvatarObjectUrls(users);
   const handleCopyMarkdown = useCallback(async (msg: MessageDto): Promise<void> => {
     // Single-message copy semantic: clipboard receives ONLY
     // `message.content`. Multi-message transcript export with sender
@@ -1024,69 +994,6 @@ function MessageList({
   // are declared further down (after `selection` is in scope) and the
   // modal's `open` state is just a React boolean.
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
-  // Lookup maps used by the message renderer:
-  //  - `agentsById`   → message author (avatar + display name)
-  //  - `agentsByName` → inline `@handle` mention pills
-  //  - `humansByName` → inline `@handle` human mention pills
-  //  - `channelsByName` → inline `#<channel_name>` ref pills
-  const { agentsById, agentsByName } = useMemo(() => {
-    const byId = new Map<string, AgentDto>();
-    const byName = new Map<string, AgentDto>();
-    for (const a of agents) {
-      byId.set(a.id, a);
-      byName.set(a.name, a);
-    }
-    return { agentsById: byId, agentsByName: byName };
-  }, [agents]);
-  const humansByName = useMemo(() => {
-    const byName = new Map<string, UserDto>();
-    if (conversationMembers.status === 'resolved') {
-      for (const member of conversationMembers.members) {
-        if (member.kind !== 'human') continue;
-        const user = humansById.get(member.user_id);
-        if (user) byName.set(user.name, user);
-      }
-    }
-    if (viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer)) {
-      byName.set(viewer.name, viewer);
-    }
-    return byName;
-  }, [conversationMembers.status, conversationMembers.members, humansById, viewer]);
-  // Build the channel-name lookup keyed by channel `title`. Threads
-  // aren't addressable by `#<name>` (use `#conv:<id>` for threads), so
-  // we filter to top-level channels (`channel` / `dm_channel`). When
-  // two channels in the same workspace share a title we record the
-  // ambiguity sentinel `null` so `<ChannelRef>` degrades to inert text
-  // — picking a destination silently is worse than asking the user to
-  // disambiguate.
-  //
-  // Short-circuit when workspaces haven't hydrated yet (`workspaceKind
-  // === null`): both channel queries are `enabled: false` in that
-  // window, so they emit empty arrays. Returning the empty map directly
-  // skips a wasted iteration and signals "still resolving" to
-  // `<ChannelRef>`, which renders unresolved → inert text — same
-  // observable outcome, one fewer allocation.
-  const channelsByName = useMemo(() => {
-    const m = new Map<string, ChannelReference | null>();
-    if (workspaceKind === null) return m;
-    const consider = (c: ChannelListItem): void => {
-      if (c.kind === 'thread') return;
-      const title = c.title;
-      if (m.has(title)) {
-        m.set(title, null);
-        return;
-      }
-      m.set(title, {
-        id: c.id,
-        title: c.title,
-        closed_at: c.closed_at ?? null,
-        archived_at: c.archived_at ?? null,
-      });
-    };
-    for (const c of liveChannels) consider(c);
-    for (const c of archivedChannels) consider(c);
-    return m;
-  }, [workspaceKind, liveChannels, archivedChannels]);
 
   const handleOpenThread = (msg: MessageDto): void => {
     onOpenThread?.(msg.id);
@@ -1221,7 +1128,7 @@ function MessageList({
     if (snapshots.length === 0) return;
     const text = buildMarkdownTranscript(snapshots, {
       agentsById,
-      viewer: viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer) ? viewer : undefined,
+      viewer,
     });
     // shiki `vBRFDuOuOqhsYzow`: multi-select share is clipboard, not a
     // save dialog. Same destination as the single-message Copy markdown
@@ -1536,7 +1443,7 @@ function MessageList({
               : undefined
           }
           viewerAvatarObjectUrl={viewerAvatarObjectUrl}
-          viewer={viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer) ? viewer : undefined}
+          viewer={viewer}
           humanAvatarUrls={humanAvatarUrls}
           agentAvatarUrls={agentAvatarUrls}
           highlighted={
@@ -1601,7 +1508,7 @@ function MessageList({
         humansByName={humansByName}
         channelsByName={channelsByName}
         agentAvatarUrls={agentAvatarUrls}
-        viewer={viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer) ? viewer : undefined}
+        viewer={viewer}
         viewerAvatarObjectUrl={viewerAvatarObjectUrl}
       />
       <div className="relative min-h-0 min-w-0 flex-1">

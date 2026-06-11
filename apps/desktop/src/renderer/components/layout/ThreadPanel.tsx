@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUpRight, Bell, BellOff, CornerDownLeft, Loader2, X } from 'lucide-react';
-import type { AgentDto, UserDto } from '@silverhand/shared';
 import { groupMessages } from '@/components/chat/groupMessages';
 import { MessageItem } from '@/components/chat/MessageItem';
 import { SystemMessage } from '@/components/chat/SystemMessage';
 import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
 import { Composer } from '@/components/chat/Composer';
-import type { ChannelReference } from '@/components/chat/ChannelRef';
+import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
+import type { ConversationReference } from '@/components/chat/ConversationRef';
+import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import {
   useFollowThread,
   useThreadCluster,
@@ -16,15 +17,6 @@ import {
 } from '@/features/channels/hooks';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
-import { useUsers, makeUserNameResolver } from '@/features/users/hooks';
-import { useConversationMembers } from '@/features/conversations/useConversationMembers';
-import {
-  isBackendUnreachable,
-  isRegistrationRequired,
-  useViewerAvatarObjectUrl,
-  useViewerUser,
-} from '@/features/me/hooks';
 
 interface ThreadPanelProps {
   /** Parent channel conversation. Replies live in this conversation with
@@ -43,6 +35,19 @@ interface ThreadPanelProps {
    *  root message in the main channel stream. Wired by App to
    *  `requestJump` + `closeCluster`. Omitted = button hidden. */
   onViewInChannel?: () => void;
+  /** Inline-ref resolution + navigation, threaded from App so a thread
+   *  reply resolves `#conv:` / `#<channel>` / `#task:` sigils identically
+   *  to the channel pane (#task:1052). Same handlers App passes to
+   *  `ChannelView`. */
+  conversationRefsById?: Map<string, ConversationReference>;
+  onOpenConversationRef?: (id: string) => void;
+  /** `(workspaceId, channelId)` — App-level handler; the panel pre-binds
+   *  it to this thread's workspace before handing it to the renderer. */
+  onOpenChannelRef?: (workspaceId: string, channelId: string) => void;
+  /** `(taskNumber, workspaceId)` — App-level handler; wrapped into a
+   *  `TaskRefContextProvider` scoped to this thread's workspace so inline
+   *  `#task:<n>` chips resolve + open. */
+  onOpenTask?: (taskNumber: number, workspaceId: string) => void;
 }
 
 /**
@@ -55,10 +60,10 @@ interface ThreadPanelProps {
  * with the same `MessageItem` / `groupMessages` primitives and a
  * reply-targeted Composer.
  *
- * NOTE: the message-render lookup maps below duplicate a slice of
- * `ChannelView`'s internal `MessageList`. Extracting a shared
- * `useMessageRenderContext(channelId, workspaceId)` hook is a clean
- * follow-up; kept inline here to avoid a large `ChannelView` refactor.
+ * Render context (lookup maps + sigil resolution) comes from the shared
+ * `useMessageRenderContext` hook — the SAME source `ChannelView`'s
+ * `MessageList` consumes — so an inline `@mention` / `#<channel>` /
+ * `#conv:` / `#task:` resolves identically in both panes (#task:1052).
  */
 export function ThreadPanel({
   channelId,
@@ -69,12 +74,11 @@ export function ThreadPanel({
   archived = false,
   onClose,
   onViewInChannel,
+  conversationRefsById,
+  onOpenConversationRef,
+  onOpenChannelRef,
+  onOpenTask,
 }: ThreadPanelProps): JSX.Element {
-  void workspaceId;
-  // The root message is the thread's anchor — pinned at the top
-  // independently of the tail-anchored reply window so a long thread can
-  // never push it off-screen (cut3-3b review blocker, @Cindy). This read
-  // also carries the authoritative cut3-6 reply count.
   const rootCtx = useThreadRoot(channelId, rootMessageId);
   const cluster = useThreadCluster(channelId, rootMessageId);
   const messages = cluster.data;
@@ -101,58 +105,40 @@ export function ThreadPanel({
     else followThread.mutate();
   };
 
+  // Shared render context — identical maps to the channel pane. The
+  // AGENT avatar batch is lifted here (not in the hook) so this pane's
+  // authors share one fetch; `useAgents` is React-Query cached so this
+  // call reuses the same data the hook reads.
+  const {
+    agentsById,
+    agentsByName,
+    humansById,
+    humansByName,
+    channelsByName,
+    humanAvatarUrls,
+    viewerAvatarObjectUrl,
+    viewer,
+    userResolver,
+  } = useMessageRenderContext(workspaceId, channelId);
   const { data: agents = [] } = useAgents();
-  const { data: users = [] } = useUsers();
-  const { data: viewer } = useViewerUser();
-  const viewerAvatarObjectUrl = useViewerAvatarObjectUrl();
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
-  const humanAvatarUrls = useUserAvatarObjectUrls(users);
-  const conversationMembers = useConversationMembers(channelId);
 
-  const { agentsById, agentsByName } = useMemo(() => {
-    const byId = new Map<string, AgentDto>();
-    const byName = new Map<string, AgentDto>();
-    for (const a of agents) {
-      byId.set(a.id, a);
-      byName.set(a.name, a);
-    }
-    return { agentsById: byId, agentsByName: byName };
-  }, [agents]);
-
-  const humansById = useMemo(() => {
-    const byId = new Map<string, UserDto>();
-    for (const user of users) byId.set(user.id, user);
-    if (viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer)) {
-      byId.set(viewer.id, viewer);
-    }
-    return byId;
-  }, [users, viewer]);
-
-  const humansByName = useMemo(() => {
-    const byName = new Map<string, UserDto>();
-    if (conversationMembers.status === 'resolved') {
-      for (const member of conversationMembers.members) {
-        if (member.kind !== 'human') continue;
-        const user = humansById.get(member.user_id);
-        if (user) byName.set(user.name, user);
-      }
-    }
-    if (viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer)) {
-      byName.set(viewer.name, viewer);
-    }
-    return byName;
-  }, [conversationMembers.status, conversationMembers.members, humansById, viewer]);
-
-  const userResolver = useMemo(
-    () => makeUserNameResolver(humansById),
-    [humansById],
+  // Pre-bind the App handlers to this thread's workspace, mirroring
+  // `ChannelView` exactly so the renderer receives the same shapes.
+  const handleOpenChannelRef = useCallback(
+    (resolvedChannelId: string) => {
+      onOpenChannelRef?.(workspaceId, resolvedChannelId);
+    },
+    [onOpenChannelRef, workspaceId],
   );
-
-  // `#<name>` channel refs are not resolved inside the cluster panel for
-  // v1 — they degrade to inert text (use the main pane for navigation).
-  const channelsByName = useMemo(
-    () => new Map<string, ChannelReference | null>(),
-    [],
+  const taskRefContext = useMemo(
+    () => ({
+      workspaceId,
+      onOpenTask: onOpenTask
+        ? (taskNumber: number) => onOpenTask(taskNumber, workspaceId)
+        : undefined,
+    }),
+    [workspaceId, onOpenTask],
   );
 
   // The root is pinned separately (see below), so drop it from the
@@ -169,11 +155,6 @@ export function ThreadPanel({
   // useThreadRoot) — NOT a count of currently-loaded rows, which would be
   // wrong for a paginated long thread.
   const replyCount = rootCtx.replyCount;
-
-  const resolvedViewer =
-    viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer)
-      ? viewer
-      : undefined;
 
   // Scroll-to-bottom behavior, mirroring the channel (#task:1050 items 4+5):
   // (re)opening the panel lands at the newest reply, and a back-to-bottom
@@ -223,6 +204,9 @@ export function ThreadPanel({
         key={m.id}
         message={m}
         channelsByName={channelsByName}
+        onOpenChannelRef={handleOpenChannelRef}
+        conversationRefsById={conversationRefsById}
+        onOpenConversationRef={onOpenConversationRef}
         humansByName={humansByName}
       />
     ) : (
@@ -236,8 +220,11 @@ export function ThreadPanel({
         humansByName={humansByName}
         humansById={humansById}
         channelsByName={channelsByName}
+        onOpenChannelRef={handleOpenChannelRef}
+        conversationRefsById={conversationRefsById}
+        onOpenConversationRef={onOpenConversationRef}
         viewerAvatarObjectUrl={viewerAvatarObjectUrl}
-        viewer={resolvedViewer}
+        viewer={viewer}
         humanAvatarUrls={humanAvatarUrls}
         agentAvatarUrls={agentAvatarUrls}
         userResolver={userResolver}
@@ -245,6 +232,7 @@ export function ThreadPanel({
     );
 
   return (
+    <TaskRefContextProvider value={taskRefContext}>
     <aside
       data-pane="thread"
       className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
@@ -360,6 +348,9 @@ export function ThreadPanel({
                       key={item.messages[0]?.id ?? 'cluster'}
                       messages={item.messages}
                       channelsByName={channelsByName}
+                      onOpenChannelRef={handleOpenChannelRef}
+                      conversationRefsById={conversationRefsById}
+                      onOpenConversationRef={onOpenConversationRef}
                       humansByName={humansByName}
                     />
                   );
@@ -395,5 +386,6 @@ export function ThreadPanel({
         activityAgentIds={followerAgentIds}
       />
     </aside>
+    </TaskRefContextProvider>
   );
 }

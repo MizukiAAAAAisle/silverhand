@@ -1285,6 +1285,13 @@ function RegisteredAppShell(): JSX.Element {
           });
           nav.closeCluster();
         }}
+        // Same inline-ref resolution + nav handlers the channel pane
+        // gets, so thread replies render `#conv:` / `#<channel>` /
+        // `#task:` sigils identically (#task:1052).
+        conversationRefsById={conversationRefsById}
+        onOpenConversationRef={nav.openSide}
+        onOpenChannelRef={handleOpenChannelByName}
+        onOpenTask={handleOpenTask}
       />
     );
   }
