@@ -320,6 +320,14 @@ describe('buildPlatformPrompt', () => {
     // Drift guard: the OLD independent-session model must never return.
     expect(text).not.toContain('Threads run as separate agent sessions');
     expect(text).not.toContain('does not see any of that');
+    // Drift guard: the Channels section must not redirect isolation/parallel
+    // work back to `thread create`, and the command index must not describe
+    // the legacy thread commands as a normal "open a thread" affordance —
+    // both pull the agent back into the retired thread=isolated-session model.
+    expect(text).not.toContain(
+      'use `silverhand thread create` for those cases',
+    );
+    expect(text).not.toContain('Open a Thread from the current channel');
     // Drift guard: never reintroduce runtime-delivery vocabulary.
     expect(text).not.toContain('auto-wake');
     expect(text).not.toContain('auto-start');

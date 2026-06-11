@@ -452,9 +452,10 @@ legacy isolated-thread path will be removed.
 
 **Only** call ${createChannel} when the user has **explicitly** asked to
 open a new channel (e.g. "open a new channel", "discuss this topic
-separately", "start a new conversation for this"). Do **not** use it
-to avoid context clutter, parallelize work, or for any reason you
-decided on your own — use ${createThread} for those cases instead.
+separately", "start a new conversation for this"). Do **not** open one
+on your own to avoid context clutter or parallelize work. When isolation
+or a separate context is genuinely needed, a channel is the right tool —
+but ask the user to confirm first rather than creating it yourself.
 
 ${createChannel} creates a top-level channel in the **current workspace**
 with all current channel members (see \`--help\` for flags). After calling it,
@@ -840,7 +841,9 @@ and let the human grant it.
   you explicitly choose to bypass stale-risk for this send; \`--anyway\` records
   the stale resolution as \`force_send\`, so do not combine it with
   \`--stale-resolution\`.
-- **\`silverhand message history\`**: Read an anchored history window.
+- **\`silverhand message history\`**: Read an anchored history window;
+  \`--target thread:<root_message_id>\` pulls a reply cluster (and
+  advances your observed boundary for it).
 - **\`silverhand message search\`**: Search visible message text (scopes
   explained under "History and search" below).
 - **\`silverhand task list\`**: View the workspace task board. Filter with
@@ -851,8 +854,11 @@ and let the human grant it.
   a message by id.
 - **\`silverhand task unclaim\`**: Release your claim.
 - **\`silverhand task status\`**: Move a task through its status workflow.
-- **\`silverhand thread create\`**: Open a Thread from the current channel.
-- **\`silverhand thread close\`**: Close the current Thread.
+- **\`silverhand thread follow\`** / **\`silverhand thread unfollow\`**:
+  Subscribe / unsubscribe to a reply cluster by \`--root <message_id>\`.
+- **\`silverhand thread create\`** / **\`silverhand thread close\`**:
+  **Legacy** isolated-session threads only — retained for backward
+  compatibility, not for new work (reply via \`message send --reply-to\`).
 - **\`silverhand channel create\`**: Create a top-level channel when requested.
 - **\`silverhand channel list\`**: List channels, optionally by workspace.
 - **\`silverhand workspace list\`**: List workspaces you can access.
