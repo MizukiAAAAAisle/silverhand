@@ -4,7 +4,16 @@ import { useMarkChannelRead, usePrimeConversationMessages } from './hooks';
 export interface MessageJumpTarget {
   workspaceId?: string;
   channelId: string;
+  /** Legacy isolated-thread conversation id. When set, the message lives
+   *  in that separate `kind='thread'` conversation (a read-only fossil) and
+   *  priming/locating targets it. Mutually exclusive with `threadRootId`. */
   threadId?: string | null;
+  /** New reply-cluster root message id. When set, the message is a reply
+   *  in the parent CHANNEL (`channelId`) — priming targets the channel,
+   *  while the cluster pane (`ThreadPanel`) opens to `threadRootId` and
+   *  scroll-locates `messageId` inside it. Does NOT change the prime
+   *  conversation: a cluster message is a channel message. */
+  threadRootId?: string | null;
   messageId: string;
 }
 
@@ -14,6 +23,8 @@ interface PrimePending {
 }
 
 function conversationIdForJump(target: MessageJumpTarget): string {
+  // A reply-cluster message lives in the parent channel, so only the
+  // legacy thread conversation redirects the prime target.
   return target.threadId ?? target.channelId;
 }
 
@@ -33,6 +44,7 @@ export function useMessageJumpController() {
         workspaceId: target.workspaceId,
         channelId: target.channelId,
         threadId: target.threadId ?? null,
+        threadRootId: target.threadRootId ?? null,
         messageId: target.messageId,
       });
       markRead(conversationId);

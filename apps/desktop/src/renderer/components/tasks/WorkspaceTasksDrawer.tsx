@@ -74,6 +74,7 @@ export interface WorkspaceTasksDrawerProps {
     workspaceId?: string;
     channelId: string;
     threadId?: string | null;
+    threadRootId?: string | null;
     messageId: string;
   }) => void;
 }
@@ -305,8 +306,12 @@ export function WorkspaceTasksDrawer({
   const tasks = useMemo(
     () =>
       applyTaskFilters(allTasks, filters, (task, conversationId) =>
+        // A channel-option id that is a legacy fossil thread matches its
+        // tasks via the renamed `legacy_thread_conversation_id`. New
+        // reply-cluster tasks live in the channel itself, so they match the
+        // channel option through `channel_id` (never the legacy `thread_id`).
         threadIds.has(conversationId)
-          ? task.thread_id === conversationId
+          ? task.legacy_thread_conversation_id === conversationId
           : task.channel_id === conversationId,
       ),
     [allTasks, filters, threadIds],
@@ -323,7 +328,10 @@ export function WorkspaceTasksDrawer({
     onJumpToMessage?.({
       workspaceId: t.workspace_id,
       channelId: t.channel_id,
-      threadId: t.thread_id,
+      // New reply-cluster tasks carry `thread_root_id`; legacy fossil tasks
+      // fall back to the renamed conversation id. Never the legacy `thread_id`.
+      threadRootId: t.thread_root_id,
+      threadId: t.legacy_thread_conversation_id,
       messageId: t.message_id,
     });
     onOpenChange(false);

@@ -18,6 +18,8 @@ function task(overrides: Partial<TaskSummaryDto>): TaskSummaryDto {
     channel_id: 'ch1',
     channel_name: 'chan',
     thread_id: null,
+    thread_root_id: null,
+    legacy_thread_conversation_id: null,
     conversation: { id: 'ch1', title: 'chan' },
     status: 'todo',
     title: 'a task',

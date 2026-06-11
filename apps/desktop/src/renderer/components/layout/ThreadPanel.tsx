@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUpRight, Bell, BellOff, CornerDownLeft, Loader2, X } from 'lucide-react';
+import { ArrowDown, ArrowUpRight, Bell, BellOff, CornerUpLeft, Loader2, X } from 'lucide-react';
 import { groupMessages } from '@/components/chat/groupMessages';
 import { MessageItem } from '@/components/chat/MessageItem';
 import { SystemMessage } from '@/components/chat/SystemMessage';
@@ -48,6 +48,14 @@ interface ThreadPanelProps {
    *  `TaskRefContextProvider` scoped to this thread's workspace so inline
    *  `#task:<n>` chips resolve + open. */
   onOpenTask?: (taskNumber: number, workspaceId: string) => void;
+  /** A reply inside this cluster to scroll-locate + flash. Set by App when
+   *  a jump (task/saved/search/notification) targets a message whose
+   *  `thread_root_id === rootMessageId`. App gates this to this cluster, so
+   *  the panel just locates. Null = no pending jump. */
+  jumpMessageId?: string | null;
+  /** Called once the jump completes (flashed) or is given up (target not in
+   *  the loaded window). App clears the jump target on this. */
+  onJumped?: () => void;
 }
 
 /**
@@ -78,6 +86,8 @@ export function ThreadPanel({
   onOpenConversationRef,
   onOpenChannelRef,
   onOpenTask,
+  jumpMessageId,
+  onJumped,
 }: ThreadPanelProps): JSX.Element {
   const rootCtx = useThreadRoot(channelId, rootMessageId);
   const cluster = useThreadCluster(channelId, rootMessageId);
@@ -198,6 +208,48 @@ export function ThreadPanel({
     setShowScrollBottom(false);
   }, [messages, rootMessageId, cluster.isLoading, rootCtx.root]);
 
+  // Jump-locate: when App routes a jump to a reply inside THIS cluster,
+  // scroll it into view + one-shot flash, mirroring the channel's
+  // `MessageList` flash sequence. App gates `jumpMessageId` to messages
+  // whose `thread_root_id === rootMessageId`, so the panel just locates.
+  // A pending jump overrides follow-bottom so the locate scroll wins.
+  // Virtuoso renders the channel list async; this plain container renders
+  // its loaded rows synchronously, so a short rAF poll covers the window's
+  // commit. A target outside the loaded window (an older paginated reply)
+  // releases the jump rather than latching — cross-page locate is a
+  // follow-up, not silently broken.
+  useEffect(() => {
+    if (!jumpMessageId) return;
+    pinBottomRef.current = false;
+    setShowScrollBottom(true);
+    let raf = 0;
+    let attempts = 0;
+    let flashTimer: ReturnType<typeof setTimeout> | undefined;
+    const tryLocate = (): void => {
+      const node = document.getElementById(`msg-${jumpMessageId}`);
+      if (node) {
+        node.scrollIntoView({ block: 'center' });
+        node.classList.add('msg-jump-flash');
+        flashTimer = setTimeout(() => {
+          node.classList.remove('msg-jump-flash');
+          onJumped?.();
+        }, 3000);
+        return;
+      }
+      attempts += 1;
+      if (attempts > 60) {
+        onJumped?.();
+        return;
+      }
+      raf = requestAnimationFrame(tryLocate);
+    };
+    raf = requestAnimationFrame(tryLocate);
+    return () => {
+      cancelAnimationFrame(raf);
+      if (flashTimer) clearTimeout(flashTimer);
+    };
+  }, [jumpMessageId, onJumped]);
+
   const renderMessage = (m: typeof messages[number]): JSX.Element =>
     m.from_kind === 'system' ? (
       <SystemMessage
@@ -238,14 +290,13 @@ export function ThreadPanel({
       className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
     >
       <header className="flex items-center gap-2 border-b border-border-subtle px-3 py-2">
-        <CornerDownLeft className="size-3.5 shrink-0 text-text-muted" />
+        <CornerUpLeft className="size-3.5 shrink-0 text-text-muted" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium text-text-primary">
-            Thread
+            {parentTitle || 'Thread'}
           </div>
           <div className="truncate text-xs text-text-muted">
-            {parentTitle ? `${parentTitle} · ` : ''}
-            {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
+            Thread · {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
           </div>
         </div>
         <div
@@ -255,15 +306,15 @@ export function ThreadPanel({
           {followers.data ? (
             <button
               type="button"
-              aria-label={viewerFollowing ? '取消关注该线程' : '关注该线程'}
+              aria-label={viewerFollowing ? 'Unfollow thread' : 'Follow thread'}
               aria-pressed={viewerFollowing}
-              title={viewerFollowing ? '取消关注该线程' : '关注该线程'}
+              title={viewerFollowing ? 'Unfollow thread' : 'Follow thread'}
               onClick={toggleFollow}
               disabled={followPending}
               className={
-                'flex size-8 shrink-0 items-center justify-center rounded-[6px] hover:bg-bg-hover disabled:opacity-50 ' +
+                'flex size-8 shrink-0 items-center justify-center rounded-[var(--control-radius)] hover:bg-bg-hover disabled:opacity-50 ' +
                 (viewerFollowing
-                  ? 'text-accent hover:text-accent'
+                  ? 'text-text-primary hover:text-text-primary'
                   : 'text-text-muted hover:text-text-primary')
               }
             >
@@ -277,20 +328,20 @@ export function ThreadPanel({
           {onViewInChannel ? (
             <button
               type="button"
-              aria-label="在频道中查看"
-              title="在频道中查看"
+              aria-label="View in channel"
+              title="View in channel"
               onClick={onViewInChannel}
-              className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+              className="flex size-8 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
               <ArrowUpRight className="size-4" />
             </button>
           ) : null}
           <button
             type="button"
-            aria-label="关闭"
-            title="关闭"
+            aria-label="Close"
+            title="Close"
             onClick={onClose}
-            className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+            className="flex size-8 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
           >
             <X className="size-4" />
           </button>

@@ -308,6 +308,7 @@ export async function resolveNotificationJumpTarget(
       n.workspace_id,
       n.conversation_id,
       n.message_id,
+      n.thread_root_id ?? null,
     );
   }
   if (n.kind === 'mention_external') {
@@ -327,6 +328,7 @@ export async function resolveNotificationJumpTarget(
         n.workspace_id,
         n.conversation_id,
         n.message_id,
+        n.thread_root_id ?? null,
       );
     }
     if (
@@ -339,6 +341,7 @@ export async function resolveNotificationJumpTarget(
         n.source_workspace_id,
         n.source_conversation_id,
         n.source_message_id,
+        null,
       );
     }
     return null;
@@ -351,7 +354,20 @@ async function resolveTargetFromConversationId(
   workspaceId: string | null,
   conversationId: string,
   messageId: string,
+  threadRootId: string | null,
 ): Promise<MessageJumpTarget> {
+  // New reply-cluster: the notification already carries the cluster root,
+  // and `conversation_id` is the parent channel (cluster replies live in
+  // the channel). Anchor straight to the message — no ref fetch, and never
+  // the legacy `thread_id`.
+  if (threadRootId) {
+    return {
+      workspaceId: workspaceId ?? undefined,
+      channelId: conversationId,
+      threadRootId,
+      messageId,
+    };
+  }
   // Cached against the same key `useConversationById` uses, so a
   // recently-resolved cross-workspace `?side` ref is reused for free.
   const data = await qc
@@ -375,6 +391,8 @@ async function resolveTargetFromConversationId(
   const ref = data.ref;
   const resolvedWorkspaceId = workspaceId ?? ref.workspace_id;
   if (ref.kind === 'thread' && ref.parent_channel_id) {
+    // Legacy fossil thread: a genuinely separate conversation. Its id is
+    // the legacy thread conversation id (carried as `threadId`).
     return {
       workspaceId: resolvedWorkspaceId,
       channelId: ref.parent_channel_id,

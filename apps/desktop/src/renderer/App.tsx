@@ -84,6 +84,7 @@ import {
   routes,
   useNav,
   useRouteState,
+  withClusterQuery,
 } from '@/router';
 
 // Per-workspace "last viewed channel" + per-channel "last open thread"
@@ -870,7 +871,21 @@ function RegisteredAppShell(): JSX.Element {
     ) {
       return;
     }
-    if (params.threadId) {
+    // Reply-cluster target (new model): the message lives in the parent
+    // channel; open the cluster pane to its root and let ThreadPanel
+    // scroll-locate the message (requestJump already primed the channel).
+    // Navigate channel + `?cluster` atomically — a `toChannel` then
+    // `openCluster` would build the cluster query off the pre-navigation
+    // location and drop it. Mutually exclusive with the legacy thread path.
+    if (params.threadRootId) {
+      nav.go(
+        withClusterQuery(
+          routes.chatChannel(wid, params.channelId),
+          '',
+          params.threadRootId,
+        ),
+      );
+    } else if (params.threadId) {
       nav.toThread(wid, params.channelId, params.threadId, {
         fullscreen: options.threadFullscreen,
       });
@@ -1122,7 +1137,10 @@ function RegisteredAppShell(): JSX.Element {
   // secondary pane's id (legacy "jump to thread" lands here).
   const parentJumpTarget = useMemo(
     () =>
-      jumpTarget && !jumpTarget.threadId && jumpTarget.channelId === selectedChannelId
+      jumpTarget &&
+      !jumpTarget.threadId &&
+      !jumpTarget.threadRootId &&
+      jumpTarget.channelId === selectedChannelId
         ? { channelId: jumpTarget.channelId, messageId: jumpTarget.messageId }
         : null,
     [jumpTarget, selectedChannelId],
@@ -1133,6 +1151,20 @@ function RegisteredAppShell(): JSX.Element {
         ? { channelId: secondaryConversationDescriptor.id, messageId: jumpTarget.messageId }
         : null,
     [jumpTarget, secondaryConversationDescriptor],
+  );
+  // Reply-cluster jump: the message is in the channel but the user asked to
+  // land inside the cluster pane. Matches when the jump carries a
+  // `threadRootId` for the cluster currently open in the secondary pane.
+  // ThreadPanel scroll-locates `messageId`; `handleJumped` clears it.
+  const clusterJumpMessageId = useMemo(
+    () =>
+      jumpTarget &&
+      jumpTarget.threadRootId &&
+      jumpTarget.threadRootId === clusterRootId &&
+      jumpTarget.channelId === selectedChannelId
+        ? jumpTarget.messageId
+        : null,
+    [jumpTarget, clusterRootId, selectedChannelId],
   );
 
   // Per-pane pending is derived from the controller's active
@@ -1292,6 +1324,8 @@ function RegisteredAppShell(): JSX.Element {
         onOpenConversationRef={nav.openSide}
         onOpenChannelRef={handleOpenChannelByName}
         onOpenTask={handleOpenTask}
+        jumpMessageId={clusterJumpMessageId}
+        onJumped={handleJumped}
       />
     );
   }
