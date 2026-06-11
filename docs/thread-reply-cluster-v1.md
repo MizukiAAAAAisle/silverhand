@@ -117,13 +117,19 @@ channel 的分工。
 - human 在 UI、agent 经 CLI `thread follow`(§8)**主动**盯一个自己没被 @、也没 reply 的 thread。
 - 这是 CLI follow 的**唯一**用途;它**不是** mention/reply flow 的必经步骤。
 
-**退出:**
+**退出与重入:**
 - **unfollow**:human 走 UI;agent 走 CLI(见 §8)。
+- **已 unfollow 的对象被再次 @mention/reply → 重新 follow。** mention 必须可靠:不能因为对方曾 unfollow
+  就让 @ 静默失效(否则"我 @ 了他、他却收不到"破坏寻址语义)。即 backend-auto-follow 入口对 unfollow
+  状态是幂等覆盖。
+
+**`source` 语义(采纳 Cindy):** `source` 记**初始**入口(immutable,纯遥测/可解释性),后续入口变化**不覆盖**
+已存在行——避免"manual follow 后被 mention 覆盖成 mention"的语义漂移。需要完整入口史就另立审计事件,v1 不做。
 
 **不自动 follow:**
 - 仅打开/阅读 thread(避免误订阅)。
 - reaction(除非日后明确"reaction = participate")。
-- 主动 pull 读(`message read --thread`,见 §7)——读不创建 follow。
+- 主动 pull 读(`message history --target thread:<root_msg_id>`,见 §7/§8)——读不创建 follow。
 
 ---
 
@@ -135,7 +141,7 @@ channel 的分工。
 - **inbox 新规则:**
   - 父 channel 主线消息:按现有 channel membership / agent subscription 投递。
   - **thread reply:只投给该 thread followers 里的 agent/human notification target。**
-  - **非 follower agent:thread reply 不写它 inbox。** 只有它主动 `message read --thread` 才拉取。
+  - **非 follower agent:thread reply 不写它 inbox。** 只有它主动 `message history --target thread:<root_msg_id>` 才拉取。
   - **@mention 某 agent:先让它 follow,再按 follower 规则投递/唤醒**(注册 follow 与投递在同一步,
     否则被 @ 的人会漏掉那条触发消息)。
 - **同上下文 ≠ 广播给所有 channel agent。** 否则高频 thread 会重新污染主频道上下文,丢掉隔离收益。
@@ -144,19 +150,32 @@ channel 的分工。
 ### 6.1 中途成为 follower 的"追平"(不变量 6)
 
 agent 被 @ / 主动 follow **之前**,该 thread 的历史 reply 从没进过它 inbox(它当时没 follow)。
-成为 follower 的瞬间必须追平:
+成为 follower 的瞬间必须追平。**严格顺序(同一事务 / 同一 use case 内,采纳 Cindy):**
 
-- **(采纳)follow 时把该 thread 已有 replies 回灌进 `(channel, agent)` 上下文/inbox**,使被 @ 进来的
-  agent **立刻"懂行"**。
+1. **upsert follower**(若已存在则幂等,不重置 `source`/`followed_at`)。
+2. **backfill 该 thread 已有 replies** 进 `(channel, agent)` inbox/上下文——**按 `seq` 有序、幂等去重**
+   (以 agent 在该 stream 的 observed boundary 为起点,只灌它没见过的;重复 follow 不重复灌)。
+3. **enqueue 当前触发的 reply / wake**。
+
+- **当前触发消息单独 enqueue(步骤 3),不混进 backfill(步骤 2)**——backfill 严格是"此前已有 replies",
+  避免当前 reply 被投两次。
+- **追平要同步推进该 stream 的 observed boundary**(§6.4),否则刚灌进去的历史会被 freshness 当成"未观察"
+  反过来把这个 agent stale 掉。
 - pull(§7)留作**非 follower** 的逃生口,**不是 follow 后的补课**。
-- 回灌的投递时机 / 是否给"全量 replies vs digest"由 runtime(Cindy)定;digest 仅在 thread 过长时
-  作为优化,默认全量(thread 通常不长)。
+- 全量回灌 vs digest 的阈值由 runtime 定;默认全量(thread 通常不长),digest 仅长 thread 优化。
 
 ### 6.2 turn ≠ 投递
 
 follower 决定**投递/可见**;**是否发言仍由 mention / 明确 target / 现有 turn 规则决定。** agent
 follow 了 thread 可以观察上下文,但**不应因每条 thread 消息都自动抢答**。否则一个 thread 里所有
 follower agent 会一起回。**投递语义与 act 语义必须分开实现。**
+
+**一等字段(采纳 Cindy):投递信封带 `delivery_kind: 'observe' | 'turn'`(或等价 `wake_reason`)。**
+- `observe`:你是 follower、消息进你上下文,但**不要求**发言(默认)。
+- `turn`:你被 @mention / 显式 target,**应当**考虑响应。
+- backend 在投递时按"该 actor 是否被本条消息 mention/target"算出 `delivery_kind`,runtime 据此决定是否
+  起 turn。**不能让 runtime 从 inbox 有没有新消息去猜。**
+- **测试钉死:** 普通 follower 收到 thread reply → `observe`、不抢答;被 mention 的 follower → `turn`。
 
 ### 6.3 串行化(已知取舍,记档)
 
@@ -165,6 +184,60 @@ follower agent 会一起回。**投递语义与 act 语义必须分开实现。*
 真要并行的重活就该是独立 conversation = channel**(这正是决策 Y 的运行时理由)。v1 不为 thread 引入
 并行 session。
 
+### 6.4 Freshness / message-stale 交互(per-target-stream)
+
+旧 `message_stale` 是 **conversation 粒度的 raw seq CAS**(`conversations.latest_message_seq` + daemon 单值
+observed)。旧模型成立因 thread 是独立 conversation。新模型 thread reply 写进父 channel 同一条消息流,
+**若仍用 conv 粒度会两个错:** ① 非 follower 没收到某 thread 的 reply,但 conv seq 被推进 → 它在主线发言被
+误 stale;② stale 的 `newer_messages` 会把它没 follow 的 thread 消息塞回去 = **用 freshness 绕过 follower
+push、泄露 thread 内容**。
+
+**契约(正式 v1 = per-target-stream;delivery-stream 只允许作实现 floor/迁移中间态,不写进产品语义):**
+
+> **一条 send 只能被「同一 target stream 内、且对该 actor 可见/可投递」的更新判 stale;`newer_messages`
+> 也只含这类更新。** `stream_key = (conversation_id, thread_root_id | null)`(`null`=主线)。
+
+机制(排序与判新解耦,三方收敛 + Cindy slock-ai 调研 #task:1023 印证):
+- **排序 seq 不动:** `messages.seq` 仍是 conversation 内全局单调序(排序/分页/WS replay 兼容)。**不给
+  thread 另起递增 seq。**
+- **per-stream head 物化 + `latest_seq` 当 CAS token(无独立 `version`,已拍):** 新表
+  `conversation_stream_heads(conversation_id, stream_key, latest_seq)`(`stream_key` = `main` 或
+  `thread:<root_msg_id>`)。`latest_seq` = 该 stream 最新消息的 **global seq**。同一 stream 内 global seq
+  单调递增(全局 allocator 保证后插入更大)→ `latest_seq` 本身就是合法 CAS token,**一值三用**:CAS token
+  + `newer_messages` 下界 + daemon observed boundary。语义源头仍是 `messages` 全局 seq + stream key
+  (`MAX(seq) WHERE conversation_id=? AND thread_root_id <=> ?` 可重建 head,用于 backfill/校验)。
+  - **不建独立 `version` 字段。** slock-ai 同样用"消息序号本身"做 per-target boundary、无独立 version;
+    reaction 不带 `seenUpToSeq`、不参与 freshness。仅当未来 edit/reaction 也要触发重判(不推进 `latest_seq`
+    的 stream 内变更)时,才值得引入独立 version——届时再加,v1 不预留。
+- **发送事务(乐观锁下沉到 stream 级):**
+  1. resolve target stream(reply→`thread:<root>`,否则 `main`)。
+  2. CAS = upsert:
+     ```
+     INSERT INTO conversation_stream_heads(conversation_id, stream_key, latest_seq)
+     VALUES(?, ?, :newGlobalSeq)
+     ON CONFLICT(conversation_id, stream_key)
+     DO UPDATE SET latest_seq=:newGlobalSeq WHERE latest_seq=:seenStreamSeq;
+     ```
+     首条 reply:stream 空、`seenStreamSeq=0`、无行 → INSERT 成。并发首 reply:一条 INSERT 赢,另一条
+     ON CONFLICT 的 `WHERE latest_seq=0` 撞已改写行 → 0 changes → stale。
+  3. 0 changes → stale;`newer_messages` 用**同 stream + 同 deliverability/follower filter** 拉(下条)。
+  4. CAS 成功 → `conversations.latest_message_seq += 1` 分配 `newGlobalSeq`(无条件全局 allocator,所有
+     消息都走它,`messages.seq` 全局连续)。
+  5. insert message(`seq=newGlobalSeq`, `thread_root_id=...`),并把步骤 2 的 `latest_seq` 落为 `newGlobalSeq`。
+
+  > 注:步骤 2 的 CAS 与步骤 4 的 allocator 是**两件事**——今天它俩在 `message-repo.ts:493-521` 是同一条
+  > `latest_message_seq+1` UPDATE(CAS 变体多 `WHERE =:seen`),新模型必须拆:allocator 无条件全局,CAS 按
+  > stream。实现时把 `newGlobalSeq` 先 reserve 再回填 head,或调换 2/4 顺序(先 allocator 后 stream CAS)均可,
+  > 以 Cindy runtime 定。
+- **daemon observed 从单值 → map** `stream_key → observed_seq`(= 它读到的该 stream `latest_seq`)。send 带
+  `(stream_key, seenStreamSeq)`;CAS 比的是同一 stream 的 head,而非 conv 全局 max。
+- **`newer_messages` 用完全相同的 deliverability + stream filter**,不能 `listAfterSeq(conversation_id)`。
+- **pull-read(§7)产生该 `thread_root_id` stream 的 observed boundary**(不创建 follow),否则"主动读完→
+  reply"会被自己 stale(与 §6.1 追平同源:任何让历史进上下文的路径都要同步推进对应 stream 的 observed)。
+  slock 同此:read/history + full stdin delivery 推进 boundary,busy notice 不推进。
+
+净效果:消除跨 stream 误报 + 非 follower 误拦 + payload 泄露;thread-heavy 频道的假 stale 大幅下降。
+
 ---
 
 ## 7. Push / Pull 二分(核心红线)
@@ -172,7 +245,7 @@ follower agent 会一起回。**投递语义与 act 语义必须分开实现。*
 | | 门控 | 是否建 follow |
 |---|---|---|
 | **Push**(inbox / 通知 / 唤醒) | thread **follower** | — |
-| **Pull**(`message read --thread <root_msg_id>`) | parent channel **可见性** | **否** |
+| **Pull**(`message history --target thread:<root_msg_id>`) | parent channel **可见性** | **否** |
 
 - pull 让任何"能看 channel"的 agent **主动**读任意 thread,与 follower 无关、不创建 follow。
 - pull 退居为"瞄一眼没 follow 的 thread"的逃生口;**主路径是"我 follow 了 → 消息原生在我上下文里"**
@@ -186,11 +259,14 @@ follower agent 会一起回。**投递语义与 act 语义必须分开实现。*
 
 - **reply / 建 thread:** `message send --reply-to <msg_id> ...`(reply 到某消息;首次 reply 自动建
   thread 并 follow)。
-- **主动读:** `message read --thread <root_msg_id>`(pull;§7;不建 follow)。
+- **主动读(pull):** **复用 `message history`,新增 target 形态 `--target thread:<root_msg_id>`**(§7;不建
+  follow,但产生该 stream 的 observed boundary,§6.4)。**不要新引 `message read`** —— 当前 CLI 明确无该
+  命令、且有 rejection test 提示用 `message history`(Cindy 现读指出)。沿用 `message history` 即可,避免复活
+  一个被测试拒绝的命令。
+  - 注:`--target thread:<id>` 这个 grammar 现存(旧指 thread-conversation id);thread 不再是 conversation
+    后,**该形态语义迁移为按 root_msg_id 取**,dispatcher / prompt / docs / rejection-test 同步更新。
 - **follow / unfollow:** `thread follow --root <msg_id>` / `thread unfollow --root <msg_id>`(agent
-  侧;human 走 UI)。
-- **history 定位:** thread 历史按根消息 id 取(替换现有 `--target thread:<conv_id>`,因 thread 不再是
-  conversation)。
+  侧,`source='manual'`;human 走 UI)。
 - 旧 `silverhand thread create`(显式开隔离 thread)**移除**——需要隔离/并行改 `channel create`。
 
 > 命名:沿用 ubiquitous language,统一用 **reply / thread(reply cluster)/ follower**,不要再用
@@ -200,9 +276,17 @@ follower agent 会一起回。**投递语义与 act 语义必须分开实现。*
 
 ## 9. 数据模型
 
-- **消息加根指针:** `messages.thread_root_id`(= 该 thread 锚定的根消息 id;根消息自身该列为 NULL
-  或自指,二选一,实现时定)。reply 通过 `--reply-to` 落 `thread_root_id = 根消息 id`。
-  - thread 身份 = 根消息 id,**不新建 conversation 行**。
+- **消息加根指针:** `messages.thread_root_id`。**采纳(原 §14 Q2 已拍):根消息自身 `thread_root_id = NULL`,
+  reply 存根消息 id。** 查询时把根消息单独 include。这样避免 self-FK / 插入后再 update,也更容易用
+  trigger 禁套娃(nested thread)。reply 通过 `--reply-to` 落 `thread_root_id = 根消息 id`。
+  - thread 身份 = 根消息 id,**不新建 conversation 行**;**不给 thread 另起 seq**(排序仍走全局 `messages.seq`,§6.4)。
+- **完整性约束(采纳 Cindy,需 trigger/复合键,非裸 FK):**
+  - 根消息必须属于这个 parent channel(`thread_root_id` 指向的消息 `conversation_id` == 该 reply 的
+    `conversation_id`)——SQLite 裸 `messages(id)` FK 证明不了 conversation 一致,用**复合 FK 或 trigger**。
+  - **根消息自己不能是 reply**(`thread_root_id` 必须指向 `thread_root_id IS NULL` 的消息)→ 禁 nested thread。
+  - **不能跨 conversation**。
+  - **删除根消息时**:其 replies + `thread_followers` 行级联清理(或随消息删除策略一致)。
+  - 这些进迁移 + test 计划。
 - **follower 表(不叫 membership,避免误导):**
   ```
   thread_followers(
@@ -211,41 +295,73 @@ follower agent 会一起回。**投递语义与 act 语义必须分开实现。*
     principal_kind   TEXT NOT NULL,      -- 'human' | 'agent'
     principal_id     TEXT NOT NULL,
     followed_at      INTEGER NOT NULL,
-    source           TEXT NOT NULL,      -- 'reply' | 'mention' | 'manual' | 'target_author'
+    source           TEXT NOT NULL,      -- 'reply'|'mention'|'manual'|'target_author';= 初始入口,immutable,不覆盖
     PRIMARY KEY (thread_root_id, principal_kind, principal_id)
   )
   ```
-  `source` 仅遥测/可解释性;**权限判断永远回 parent channel/conversation 做,不读这张表当权威。**
+  - `source` 仅遥测/可解释性、记初始入口不覆盖(§5)。
+  - **`follower ⊆ channel member` 不是 DB 表能维持的不变量**(表无法随 membership 动态收缩)——它在
+    **投递/读查询时**按"当前是否 channel 可见/成员"join 过滤(失权即过滤;follower 表非权威,channel 权限才是)。
+- **per-stream freshness head(load-bearing,非可选缓存——它是 freshness CAS 的锁行,§6.4):**
+  ```
+  conversation_stream_heads(
+    conversation_id  TEXT NOT NULL,
+    stream_key       TEXT NOT NULL,      -- 'main' | 'thread:<root_msg_id>'
+    latest_seq       INTEGER NOT NULL,   -- 该 stream 最新消息的 global messages.seq;= CAS token + 边界
+    PRIMARY KEY (conversation_id, stream_key)
+  )
+  ```
+  - **无 `version` 列**(原 §14 已拍 + Cindy slock 调研 #task:1023 印证:slock 也用消息 seq 做 per-target
+    boundary、无独立 version;reaction 不参与 freshness)。仅未来 edit/reaction 要触发重判时才加。
+  - `latest_seq` 语义源头 = `MAX(messages.seq) WHERE conversation_id=? AND thread_root_id <=> ?`,head 是其物化,
+    可由该 query 重建(backfill / 校验)。
 - 迁移按 append-only(CLAUDE.md):新版本 migration,不改已发布的。
 
 ---
 
-## 10. 旧 thread 迁移
+## 10. 旧 thread 迁移(冻结 + 兼容矩阵)
 
-现存 `kind='thread'` 的 conversation + `(thread, agent)` session 是要废弃的形态。两条可选,建议
-**(B)**:
+现存 `kind='thread'` 的 conversation + `(thread, agent)` session 是要废弃的形态。**决定走
+(B) 冻结而非改写**(原 §14 Q3 已拍):
 
-- (A) 把每个旧 thread 的消息"挂回"父 channel:为其根选一条锚点消息,旧 thread 消息批量改写
-  `thread_root_id`,删除 thread conversation 行。**风险:历史消息归属重写,易错。**
-- **(B,建议) 冻结而非改写:** 停止创建新隔离 thread;旧 thread conversation 只读保留一段(UI 标
-  "legacy thread"),新模型只对新建 reply 生效。旧 thread 的 `(thread, agent)` session 走正常 idle-reap
-  回收,不再 spawn。降低一次性迁移风险。
+- (A) 把每个旧 thread 的消息"挂回"父 channel:旧 thread 消息批量改写 `thread_root_id`,删 thread
+  conversation 行。**风险:历史归属重写、跨 stream observed/freshness 重算,易错——否决。**
+- **(B,采用) 冻结:** 停止创建新隔离 thread;旧 thread conversation 只读保留(UI 标 "legacy
+  thread"),新模型只对新建 reply 生效。旧 `(thread, agent)` session 走正常 idle-reap 回收,不再 spawn。
 
-具体迁移脚本 / 兼容窗口由 Cindy(runtime/schema)定;本 doc 只定方向(B 优先)。
+### 10.1 冻结期兼容矩阵(旧 `kind='thread'` conversation 的每个面)
+
+| 面 | 冻结期行为 |
+|---|---|
+| `message history` / `search` / saved / attachments(旧 thread) | **只读放行**(它仍是合法 conversation,历史可读) |
+| 在旧 thread 内 `message send`(新 reply) | **拒绝**,typed error 引导"去父 channel reply 根消息";不再往旧 thread 追加 |
+| `thread close`(旧 thread) | 允许(收尾用);**新模型无 thread close 概念**,不暴露给新 reply-cluster |
+| `schedule --target-conversation-id <旧 thread>` | 已存在的允许跑完;**不允许新建**指向旧 thread 的 schedule |
+| 内部 `--target thread:<旧 conversation id>` | dispatcher 双解:命中旧 thread-conversation → 旧读路径;否则按 root_msg_id(新语义,§8) |
+| runtime start/stop/clear(旧 thread agent) | 不再 spawn;已驻留的走 idle-reap;手动 stop 允许 |
+| task close guard(旧 thread 残留 task) | 沿用现有 `thread close` 的 open-task 拒绝逻辑,收尾后冻结 |
+
+- **统一原则:旧 thread = 只读化石,所有写入面拒绝并引导到新模型;所有读取面放行。**
+- 冻结窗口长度 / 何时彻底删旧 thread 行,由 Cindy(runtime/schema)定;本 doc 只定方向(B + 上表)。
+- 具体迁移脚本 / typed error code 命名 Cindy 拟。
 
 ---
 
 ## 11. 核心不变量(测试 + review 卡点)
 
 1. `thread_follower` 只控制 push/inbox/notification,**不控制 read permission**。
-2. `message read --thread <root_msg_id>` 是主动 pull,**不创建 follow**。
+2. `message history --target thread:<root_msg_id>` 是主动 pull,**不创建 follow**(但产生该 stream
+   的 observed boundary,§6.4)。
 3. thread reply **不写给非 follower agent 的 inbox**。
 4. mention / reply / target_author 驱动的 follow = **backend 自动副作用**(inbound 自助 follow 逻辑
    不可行);CLI `thread follow` 仅 `source='manual'` 主动自愿一类;读/打开/reaction 不进 follower。
 5. **没有 private thread**;私密/隔离/并行需求走 channel。
-6. **中途成为 follower → 自动追平**(回灌 thread 历史);**turn ≠ 投递**(follow 只"看得到",发言仍
-   由 mention/target 决定)。
-7. **follower ⊆ parent channel member**;失权即过滤(follower 表非权威)。
+6. **中途成为 follower → 自动追平**(回灌 thread 历史,按 seq 有序幂等,同步推进 observed boundary);
+   **turn ≠ 投递**(follow 只"看得到",发言仍由 mention/target 决定;投递信封带 `delivery_kind`)。
+7. **follower ⊆ parent channel member**;失权即过滤(follower 表非权威,query-time join channel 权限)。
+8. **freshness 判 stale 只在「同一 target stream + 对该 actor 可投递」范围内**(`stream_key =
+   (conversation_id, thread_root_id|null)`);`newer_messages` 用同一 deliverability+stream filter,
+   **不得跨 stream 泄露**。排序 `messages.seq` 仍 conversation 全局,**不给 thread 另起 seq**。
 
 ---
 
@@ -270,8 +386,15 @@ session。这比旧模型(给 agent 一个"每 thread 一个脑子"、human 没�
 
 ## 14. 待 review / 开放问题
 
-1. §6.1 追平:全量回灌 vs digest 的阈值。
-2. §9:`thread_root_id` 在根消息自身上取 NULL 还是自指。
-3. §10:迁移确认走 (B);冻结窗口多长。
-4. §8:`thread follow/unfollow` 的确切 CLI 形态(按 root msg id 是否够,要不要短别名)。
+**已拍(本轮收敛,留痕):**
+- ~~Q2 §9 `thread_root_id` 根消息上取 NULL 还是自指~~ → **NULL on root**(§9)。
+- ~~Q3 §10 迁移走 (A) 还是 (B)~~ → **(B) 冻结 + 兼容矩阵**(§10.1)。
+- ~~freshness 是否给 thread 单独建 latest seq~~ → **不**;排序 seq 全局不动,freshness 改 per-stream
+  派生(§6.4)。
+
+**仍开放:**
+1. §6.1 追平:全量回灌 vs digest 的阈值(默认全量;长 thread 何时切 digest)。
+2. §6.4:per-stream freshness latest 何时从 query 切到物化 `conversation_stream_heads` 缓存(性能触发点)。
+3. §10:冻结窗口多长、何时彻底删旧 thread 行(Cindy 定);typed error code 命名。
+4. §8:`thread follow/unfollow --root` 要不要短别名(纯人体工学,非阻塞)。
 5. human UI 的 unread / 通知粒度(per-thread 通知管理,Slack 有,v1 是否做)。
