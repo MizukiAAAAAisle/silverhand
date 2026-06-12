@@ -4,6 +4,7 @@ import {
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { MessageRepo } from '../../src/repos/message-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
@@ -170,5 +171,61 @@ describe('message routes', () => {
     );
 
     expect(send.status).toBe(409);
+  });
+});
+
+describe('GET /api/channels/:id/messages — reply_summaries_by_root (P1)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('returns the enriched reply-badge sidecar keyed like reply_counts_by_root', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const messages = new MessageRepo(t.ctx.db);
+
+    const root = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'has a thread',
+    });
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: agentIds.alice!,
+      content: 'a reply',
+      threadRootId: root.id,
+    });
+    // A main-line message with no replies — appears in counts (0) but not in
+    // the summaries sidecar.
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'no thread',
+    });
+
+    const body = (await (
+      await http(t).get(`/api/channels/${channelId}/messages`)
+    ).json()) as any;
+
+    const summaries = body.reply_summaries_by_root;
+    expect(summaries).toBeDefined();
+    expect(summaries[root.id]).toBeDefined();
+    // Mirrors the count sidecar exactly.
+    expect(summaries[root.id].reply_count).toBe(body.reply_counts_by_root[root.id]);
+    expect(summaries[root.id].reply_count).toBe(1);
+    expect(summaries[root.id].repliers).toEqual([
+      { kind: 'agent', id: agentIds.alice },
+    ]);
+    expect(summaries[root.id].replier_total).toBe(1);
+    expect(typeof summaries[root.id].last_reply_at).toBe('number');
+    // Every summary key is a count key (never widens the root set).
+    for (const k of Object.keys(summaries)) {
+      expect(body.reply_counts_by_root).toHaveProperty(k);
+    }
   });
 });

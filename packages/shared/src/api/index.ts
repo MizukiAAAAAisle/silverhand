@@ -8,6 +8,7 @@ export * from './conversation.js';
 export * from './runtime.js';
 export * from './attachment.js';
 export * from './message.js';
+export * from './thread-summary.js';
 export * from './task.js';
 export * from './internal-agent.js';
 export * from './notification.js';

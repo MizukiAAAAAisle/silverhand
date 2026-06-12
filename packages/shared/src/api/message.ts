@@ -42,12 +42,43 @@ export const MessageDtoSchema = z.object({
 });
 export type MessageDto = z.infer<typeof MessageDtoSchema>;
 
+/** Per-root enriched reply-badge data (#task:1073, P1). Optional sidecar
+ *  that augments `reply_counts_by_root` with what a Slack-style inline reply
+ *  badge needs beyond a bare count: the most-recent replier identities (for
+ *  a stacked-avatar cluster) and the last-reply time. Absent until the
+ *  backend populates it — the badge falls back to count-only. Keyed by root
+ *  message id. See docs/thread-discovery-p2-requirements.md §P1. */
+export const ReplyBadgeSummarySchema = z.object({
+  /** Total non-system replies. Mirrors `reply_counts_by_root` for self-
+   *  containment; the count shown still reads `reply_counts_by_root` so the
+   *  two never visibly diverge. */
+  reply_count: z.number().int().nonnegative(),
+  /** Epoch ms of the most recent non-system reply. */
+  last_reply_at: z.number(),
+  /** Up to 3 distinct most-recent repliers, most-recent first. */
+  repliers: z.array(
+    z.object({
+      kind: z.enum(['agent', 'human']),
+      id: z.string(),
+    }),
+  ),
+  /** Full distinct replier count (drives a "+N" overflow past the 3 shown). */
+  replier_total: z.number().int().nonnegative(),
+});
+export type ReplyBadgeSummary = z.infer<typeof ReplyBadgeSummarySchema>;
+
 export const ConversationMessagesDtoSchema = z.object({
   messages: z.array(MessageDtoSchema),
   /** Reply-cluster badge data keyed by root message id. Values are the
    *  total non-system replies in that root's cluster, independent of the
    *  current pagination window. */
   reply_counts_by_root: z.record(z.string(), z.number().int().nonnegative()),
+  /** Optional enriched reply-badge sidecar keyed by root message id
+   *  (#task:1073, P1). Present only once the backend ships it; consumers
+   *  must treat it as possibly-undefined and fall back to count-only. */
+  reply_summaries_by_root: z
+    .record(z.string(), ReplyBadgeSummarySchema)
+    .optional(),
   has_more_before: z.boolean(),
   /** True when at least one message exists with seq > max(messages.seq).
    *  For the default "latest" window this is always false; for an

@@ -123,6 +123,8 @@ export const apiPaths = {
   conversationChannel: (id: string) => `/api/channels/${id}`,
   conversationChannelMessages: (id: string) => `/api/channels/${id}/messages`,
   conversationChannelAgents: (id: string) => `/api/channels/${id}/agents`,
+  /** Per-channel reply-cluster ("Threads") discovery list (#task:1074). */
+  conversationChannelThreads: (id: string) => `/api/channels/${id}/threads`,
   thread: (id: string) => `/api/threads/${id}`,
   threadMessages: (id: string) => `/api/threads/${id}/messages`,
   threadAgents: (id: string) => `/api/threads/${id}/agents`,

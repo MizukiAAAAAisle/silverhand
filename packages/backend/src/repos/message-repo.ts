@@ -5,7 +5,10 @@ import type {
   FromKind,
   MessageDto,
   MessageRow,
+  ReplyBadgeSummary,
   TaskAssigneeDto,
+  ThreadReplier,
+  ThreadSummary,
 } from '@silverhand/shared';
 
 function newId(): string {
@@ -44,6 +47,97 @@ export class AnchorMessageNotInConversationError extends Error {
     );
     this.name = 'AnchorMessageNotInConversationError';
   }
+}
+
+/** Max length of a thread row's plain-text preview (raw root content). The
+ *  frontend adds the final ellipsis + renders mention sigils. */
+const THREAD_PREVIEW_MAX_CHARS = 160;
+
+/** Keyset position for the per-channel Threads list: the sort tuple of the
+ *  last row on a page — (last_reply_at, root seq). Both components are
+ *  needed because last_reply_at alone is not unique across clusters; root
+ *  seq is the immutable tiebreak (matches the ORDER BY). */
+interface ThreadsKeyset {
+  /** epoch ms — `last_reply_at` of the boundary row. */
+  at: number;
+  /** the boundary root message's global `seq` (immutable tiebreak). */
+  seq: number;
+}
+
+/** Thrown when an opaque `cursor` fails to decode. The route layer maps it
+ *  to a 400 so a tampered / stale-format token is a clean client error
+ *  rather than a 500. */
+export class InvalidThreadsCursorError extends Error {
+  constructor(public readonly cursor: string) {
+    super(`invalid threads cursor: ${cursor}`);
+    this.name = 'InvalidThreadsCursorError';
+  }
+}
+
+function encodeThreadsCursor(keyset: ThreadsKeyset): string {
+  return Buffer.from(
+    JSON.stringify([keyset.at, keyset.seq]),
+    'utf8',
+  ).toString('base64url');
+}
+
+function decodeThreadsCursor(raw: string): ThreadsKeyset {
+  try {
+    const parsed: unknown = JSON.parse(
+      Buffer.from(raw, 'base64url').toString('utf8'),
+    );
+    if (
+      Array.isArray(parsed) &&
+      parsed.length === 2 &&
+      typeof parsed[0] === 'number' &&
+      Number.isFinite(parsed[0]) &&
+      typeof parsed[1] === 'number' &&
+      Number.isInteger(parsed[1])
+    ) {
+      return { at: parsed[0], seq: parsed[1] };
+    }
+  } catch {
+    // fall through to the typed throw
+  }
+  throw new InvalidThreadsCursorError(raw);
+}
+
+/** A single page of the per-channel Threads list. */
+export interface ChannelThreadsPage {
+  threads: ThreadSummary[];
+  next_cursor: string | null;
+}
+
+/** Raw joined row backing one Threads-list entry (root fields + the
+ *  aggregated last-reply identity). */
+interface ThreadRootRow {
+  root_message_id: string;
+  root_from_kind: FromKind;
+  root_from_agent_id: string | null;
+  root_from_user_id: string | null;
+  root_content: string;
+  root_created_at: number;
+  root_seq: number;
+  reply_count: number;
+  last_reply_message_id: string;
+  last_reply_at: number;
+}
+
+/** Storage `from_kind` → frontend author kind. 'user' is surfaced as
+ *  'human' to match the principal-level vocabulary. */
+function mapAuthorKind(fromKind: FromKind): 'agent' | 'human' | 'system' {
+  if (fromKind === 'agent') return 'agent';
+  if (fromKind === 'system') return 'system';
+  return 'human';
+}
+
+function authorId(
+  fromKind: FromKind,
+  fromAgentId: string | null,
+  fromUserId: string | null,
+): string {
+  if (fromKind === 'agent') return fromAgentId ?? '';
+  return fromUserId ?? '';
 }
 
 /** Mutually-exclusive cursor anchors. The repo enforces "at most
@@ -346,6 +440,240 @@ export class MessageRepo {
       counts[row.thread_root_id] = row.reply_count;
     }
     return counts;
+  }
+
+  /** P1 inline-badge enrichment (#task:1073): the per-root sibling of
+   *  `replyCountsByRoot`. For each root in `rootMessageIds` that has >= 1
+   *  non-system reply, returns the count + last-reply time + up to 3
+   *  most-recent distinct repliers + the full distinct replier count. Keyed
+   *  by root id; roots with no non-system reply are simply absent (the
+   *  count-only badge already covers them). Scoped to the passed root set —
+   *  it never widens beyond the window's `reply_counts_by_root` keys.
+   *
+   *  `reply_count` is identical to `replyCountsByRoot` by construction (same
+   *  `from_kind != 'system'` rule), so the two never visibly diverge.
+   *  `last_reply_at` is the max-`seq` non-system reply's `created_at` (seq is
+   *  the recency authority — see `listChannelThreads`), shared with P2. */
+  replyBadgeSummariesByRoot(
+    conversationId: string,
+    rootMessageIds: readonly string[],
+  ): Record<string, ReplyBadgeSummary> {
+    const result: Record<string, ReplyBadgeSummary> = {};
+    const uniqueRootIds = [...new Set(rootMessageIds)];
+    if (uniqueRootIds.length === 0) return result;
+    const placeholders = uniqueRootIds.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare<
+        [string, ...string[]],
+        { root_id: string; reply_count: number; last_reply_at: number }
+      >(
+        `SELECT agg.root_id      AS root_id,
+                agg.reply_count  AS reply_count,
+                lr.created_at    AS last_reply_at
+           FROM (
+             SELECT thread_root_id AS root_id,
+                    COUNT(*)       AS reply_count,
+                    MAX(seq)       AS last_reply_seq
+               FROM messages
+              WHERE conversation_id = ?
+                AND thread_root_id IN (${placeholders})
+                AND from_kind != 'system'
+              GROUP BY thread_root_id
+           ) agg
+           JOIN messages lr
+             ON lr.conversation_id = ?
+            AND lr.thread_root_id = agg.root_id
+            AND lr.seq = agg.last_reply_seq`,
+      )
+      .all(conversationId, ...uniqueRootIds, conversationId);
+
+    const repliersByRoot = this.repliersForRoots(conversationId, uniqueRootIds);
+
+    for (const row of rows) {
+      const rep = repliersByRoot.get(row.root_id) ?? {
+        repliers: [],
+        total: 0,
+      };
+      result[row.root_id] = {
+        reply_count: row.reply_count,
+        last_reply_at: row.last_reply_at,
+        repliers: rep.repliers,
+        replier_total: rep.total,
+      };
+    }
+    return result;
+  }
+
+  /** Per-channel reply-cluster ("Threads") discovery list. A "thread" is any
+   *  root message with >= 1 non-system reply in the same conversation
+   *  (`thread_root_id = root.id`, `from_kind != 'system'`). Rows are ordered
+   *  newest-activity-first — `last_reply_at DESC, root seq DESC` — and
+   *  keyset-paginated over that same tuple (the opaque `cursor`). Operates
+   *  purely on the reply-cluster spine (migration 43); it never resolves a
+   *  legacy `kind='thread'` conversation.
+   *
+   *  `last_reply_at` / `last_reply_message_id` identify ONE row — the
+   *  max-`seq` non-system reply (seq is the system's recency authority) —
+   *  so the timestamp and the message id always agree. */
+  listChannelThreads(
+    conversationId: string,
+    opts: { limit?: number; cursor?: string | null } = {},
+  ): ChannelThreadsPage {
+    const limit = Math.min(50, Math.max(1, opts.limit ?? 30));
+    const cursor = opts.cursor ? decodeThreadsCursor(opts.cursor) : null;
+
+    // Fetch one extra row to decide whether a next page exists without a
+    // second COUNT query.
+    const rows = this.db
+      .prepare<
+        [string, string, string, number, number, number, number, number],
+        ThreadRootRow
+      >(
+        `SELECT
+           root.id            AS root_message_id,
+           root.from_kind     AS root_from_kind,
+           root.from_agent_id AS root_from_agent_id,
+           root.from_user_id  AS root_from_user_id,
+           root.content       AS root_content,
+           root.created_at    AS root_created_at,
+           root.seq           AS root_seq,
+           agg.reply_count    AS reply_count,
+           lr.id              AS last_reply_message_id,
+           lr.created_at      AS last_reply_at
+         FROM (
+           SELECT thread_root_id AS root_id,
+                  COUNT(*)       AS reply_count,
+                  MAX(seq)       AS last_reply_seq
+             FROM messages
+            WHERE conversation_id = ?
+              AND thread_root_id IS NOT NULL
+              AND from_kind != 'system'
+            GROUP BY thread_root_id
+         ) agg
+         JOIN messages lr
+           ON lr.conversation_id = ?
+          AND lr.thread_root_id = agg.root_id
+          AND lr.seq = agg.last_reply_seq
+         JOIN messages root
+           ON root.id = agg.root_id
+          AND root.conversation_id = ?
+         WHERE (
+                 ? = 0
+                 OR lr.created_at < ?
+                 OR (lr.created_at = ? AND root.seq < ?)
+               )
+         ORDER BY lr.created_at DESC, root.seq DESC
+         LIMIT ?`,
+      )
+      .all(
+        conversationId,
+        conversationId,
+        conversationId,
+        cursor ? 1 : 0,
+        cursor?.at ?? 0,
+        cursor?.at ?? 0,
+        cursor?.seq ?? 0,
+        limit + 1,
+      );
+
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+
+    const repliersByRoot = this.repliersForRoots(
+      conversationId,
+      pageRows.map(r => r.root_message_id),
+    );
+
+    const threads: ThreadSummary[] = pageRows.map(r => {
+      const rep = repliersByRoot.get(r.root_message_id) ?? {
+        repliers: [],
+        total: 0,
+      };
+      return {
+        root_message_id: r.root_message_id,
+        root_author: {
+          kind: mapAuthorKind(r.root_from_kind),
+          id: authorId(r.root_from_kind, r.root_from_agent_id, r.root_from_user_id),
+        },
+        root_preview: r.root_content.slice(0, THREAD_PREVIEW_MAX_CHARS),
+        root_created_at: r.root_created_at,
+        reply_count: r.reply_count,
+        last_reply_at: r.last_reply_at,
+        last_reply_message_id: r.last_reply_message_id,
+        repliers: rep.repliers,
+        replier_total: rep.total,
+      };
+    });
+
+    const boundary = pageRows.at(-1);
+    const next_cursor =
+      hasMore && boundary
+        ? encodeThreadsCursor({
+            at: boundary.last_reply_at,
+            seq: boundary.root_seq,
+          })
+        : null;
+
+    return { threads, next_cursor };
+  }
+
+  /** Distinct repliers per root, most-recent first (up to 3) plus the full
+   *  distinct count. Distinct identity is (from_kind, actor id); ordering is
+   *  by the replier's most-recent reply (`MAX(seq)`). Legacy rows with no
+   *  resolvable actor id (pre-v26 null `from_user_id`) are skipped — they
+   *  can't render an avatar — so `replier_total` counts identifiable
+   *  repliers only. */
+  private repliersForRoots(
+    conversationId: string,
+    rootIds: readonly string[],
+  ): Map<string, { repliers: ThreadReplier[]; total: number }> {
+    const result = new Map<
+      string,
+      { repliers: ThreadReplier[]; total: number }
+    >();
+    if (rootIds.length === 0) return result;
+    const placeholders = rootIds.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare<
+        [string, ...string[]],
+        {
+          root_id: string;
+          from_kind: FromKind;
+          actor_id: string | null;
+          last_seq: number;
+        }
+      >(
+        `SELECT thread_root_id AS root_id,
+                from_kind      AS from_kind,
+                CASE from_kind WHEN 'agent' THEN from_agent_id ELSE from_user_id END AS actor_id,
+                MAX(seq)       AS last_seq
+           FROM messages
+          WHERE conversation_id = ?
+            AND thread_root_id IN (${placeholders})
+            AND from_kind != 'system'
+          GROUP BY thread_root_id, from_kind, actor_id
+          ORDER BY last_seq DESC`,
+      )
+      .all(conversationId, ...rootIds);
+
+    // Rows arrive globally seq-DESC; per-root relative order is preserved, so
+    // accumulating in iteration order yields most-recent-first repliers.
+    for (const row of rows) {
+      if (row.actor_id == null) continue;
+      let entry = result.get(row.root_id);
+      if (!entry) {
+        entry = { repliers: [], total: 0 };
+        result.set(row.root_id, entry);
+      }
+      entry.total += 1;
+      if (entry.repliers.length < 3) {
+        entry.repliers.push({
+          kind: row.from_kind === 'agent' ? 'agent' : 'human',
+          id: row.actor_id,
+        });
+      }
+    }
+    return result;
   }
 
   /** Fetch up to `limit` rows with `seq < beforeSeq` (or the tail

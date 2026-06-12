@@ -47,6 +47,7 @@
   "POST /api/conversations/:id/members",
   "DELETE /api/conversations/:id/members/agents/:agentId",
   "GET /api/threads/:id/messages",
+  "GET /api/channels/:id/threads",
   "GET /api/channels/:id/agents",
   "GET /api/threads/:id/agents",
   "POST /api/channels/:id/pin",

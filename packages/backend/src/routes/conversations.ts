@@ -38,7 +38,7 @@ import {
   canViewWorkspace,
 } from '../permissions.js';
 import { timedRouteSpan } from '../observability/route-span.js';
-import { AnchorMessageNotInConversationError } from '../repos/message-repo.js';
+import { AnchorMessageNotInConversationError, InvalidThreadsCursorError } from '../repos/message-repo.js';
 import {
   channelServiceErrorResponse,
   conversationMessageServiceErrorResponse,
@@ -223,6 +223,10 @@ export function createConversationReadApp(
           return {
             ...window,
             reply_counts_by_root: messages.replyCountsByRoot(channel.id, rootIds),
+            reply_summaries_by_root: messages.replyBadgeSummariesByRoot(
+              channel.id,
+              rootIds,
+            ),
           };
         },
         result => ({
@@ -502,6 +506,50 @@ export function createConversationMessagingApp(
           },
           404,
         );
+      }
+      throw err;
+    }
+  });
+
+  app.get(apiPaths.conversationChannelThreads(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'channel id required' }, 400);
+    // `getChannelLike` resolves channel / dm_channel only — a legacy
+    // `kind='thread'` conversation returns null here, so this list never
+    // revives a legacy thread conversation; threads are reply-clusters
+    // within the channel.
+    const channel = conversations.getChannelLike(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+
+    let limit = 30;
+    const limitRaw = c.req.query('limit');
+    if (limitRaw !== undefined) {
+      const n = Number(limitRaw);
+      if (!Number.isInteger(n) || n < 1) {
+        return c.json({ error: 'invalid limit', code: 'invalid_limit' }, 400);
+      }
+      limit = Math.min(50, n);
+    }
+    const cursor = c.req.query('cursor') ?? null;
+
+    try {
+      const page = timedRouteSpan(
+        ctx,
+        'conversation.threads.list',
+        { conversationId: channel.id, kind: channel.kind, limit },
+        () => messages.listChannelThreads(channel.id, { limit, cursor }),
+        result => ({
+          threadCount: result.threads.length,
+          hasMore: result.next_cursor != null,
+        }),
+      );
+      return c.json(page);
+    } catch (err) {
+      if (err instanceof InvalidThreadsCursorError) {
+        return c.json({ error: 'invalid cursor', code: 'invalid_cursor' }, 400);
       }
       throw err;
     }
