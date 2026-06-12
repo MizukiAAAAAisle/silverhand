@@ -301,11 +301,6 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     mkdirSync(memoryDir, { recursive: true });
     writeFileSync(join(agentHome, 'system_prompt.md'), 'ROLE_D2G', 'utf8');
     writeFileSync(join(memoryDir, 'MEMORY.md'), 'MEMORY_D2G', 'utf8');
-    writeFileSync(
-      join(workspacePath, '.silverhand', 'CONSENSUS.md'),
-      'CONSENSUS_D2G',
-      'utf8',
-    );
 
     let promptText = '';
     const captured: { ctx?: DriverSpawnContext } = {};
@@ -354,7 +349,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       expect(ctx.systemPromptPath).toMatch(/spawn-.+system-prompt\.md$/);
       expect(promptText).toContain('ROLE_D2G');
       expect(promptText).toContain('MEMORY_D2G');
-      expect(promptText).toContain('CONSENSUS_D2G');
+      expect(promptText).not.toContain('CONSENSUS_D2G');
       await waitFor(() =>
         spy.events.some(e => e.event === 'runtime_startup_delivery_consumed'),
       );

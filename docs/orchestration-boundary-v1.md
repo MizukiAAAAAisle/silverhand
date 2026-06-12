@@ -1,5 +1,16 @@
 # Orchestration boundary — V1 (D2.0 design pass)
 
+> **2026-06-12 — workspace Consensus removed (#task:1086 / #task:1087).**
+> The `CONSENSUS.md` / "Workspace Consensus" concept was deleted (agents
+> rarely edited the shared file; it blurred separate agents' records).
+> This Rev-5 contract still mentions `CONSENSUS.md` and "prompt/memory/
+> consensus bytes" throughout — read those as **prompt/memory bytes**
+> only. The byte-ownership boundary it locks (daemon-host owns the
+> prompt/memory files; server never reads their bytes) is unchanged;
+> consensus simply drops out of the file set. The historical text is left
+> intact below rather than rewritten line-by-line, since the contract's
+> substance is the ownership boundary, not the specific file list.
+
 **Status**: DRAFT Rev 5. D1 complete; D2.0 design pass while D1 soaks. No code change in this stage — this doc only locks the contract for where each responsibility lives in the V1 remote-backend topology. Revision 1 (2026-05-26) folded @Cindy round-1 review; Revision 2 (2026-05-26) folded @Cindy round-2 review; Revision 3 (2026-05-26) folded @Cindy round-3 mechanical-shape-drift findings in §3.3. **Revision 4 (2026-05-27, contract anchor `81996a6`)** corrects the prompt/memory/consensus byte-ownership claim: under the V1 topology lock (daemon + agent always run on the user's desktop; server is control/state plane only), `system_prompt.md` / `MEMORY.md` / `CONSENSUS.md` byte content is **daemon-host local-fs truth**, not server-owned data. **Revision 5 (2026-05-27, D2.g corrective slice)** clarifies the path boundary: server DB path metadata (`agent.home_dir`, `workspace.path`, `workspace_memory_index[].path`) may cross as typed records; daemon-host derives cwd, prompt paths, spawn dirs, and env locally. D2.1 (file -> DB migration) is downgraded from "remote-deploy hard prerequisite" to **future / triggered by sandbox host or multi-device memory sync**. See §9.
 
 **Predecessor docs to read first**:

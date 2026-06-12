@@ -2,7 +2,7 @@
  * Test-only embedded daemon-seed simulators.
  *
  * D4.e-5: the backend production module `packages/backend/src/workspace-files.ts`
- * was REMOVED — host-local L1/L2/CONSENSUS seeding is now owned exclusively by
+ * was REMOVED — host-local L1/L2 seeding is now owned exclusively by
  * the daemon (`agent_materialize` → L1, `agent_l2_seed` → L2,
  * `workspace_provision` → workspace skeleton), and `packages/backend/src` holds
  * zero agent-host filesystem ops (invariant I6 / acceptance A1).
@@ -34,7 +34,7 @@ Key model:
 - **Thread** — a focused sub-discussion spawned from a channel message.
 - **Task** — a claimable work unit tracked on the channel task board.
 
-## Memory Model (four-file)
+## Memory Model
 
 - **Identity is global.** \`~/.silverhand/agents/<id>/system_prompt.md\` is
   the only source of who you are, and it applies in every workspace. The
@@ -43,15 +43,14 @@ Key model:
 - **Workspace memory is local.**
   \`<workspace>/.silverhand/agents/<id>/MEMORY.md\` (auto-loaded as
   **Active Workspace Memory**) plus \`notes/\` describe what is true in
-  one workspace; \`<workspace>/.silverhand/CONSENSUS.md\` is the rules
-  every member of that workspace must respect.
+  one workspace.
 - **Write by scope.** Global identity / role / working-style guidance from
   the user → update L1 \`system_prompt.md\`. Guidance about this workspace's
   collaboration, tasks, project facts, or work logs → update L2 (MEMORY.md
-  / notes/ / CONSENSUS.md).
-- **Current vs reference.** The current workspace's MEMORY.md and CONSENSUS
-  are auto-loaded; other workspaces are paths only — open them only when
-  the task needs cross-workspace context.
+  / notes/).
+- **Current vs reference.** The current workspace's MEMORY.md is auto-loaded;
+  other workspaces are paths only — open them only when the task needs
+  cross-workspace context.
 
 Do not mention internal file paths to the user unless they ask.
 
@@ -77,9 +76,7 @@ Decide whether the user's guidance is global identity or workspace-scoped:
   everywhere) → update L1 \`system_prompt.md\`. The next spawn in any
   workspace picks it up.
 - **Workspace-scoped** (review pairings, hand-off rules, project facts,
-  conventions, work log) → update this workspace's L2 MEMORY.md / notes/
-  or, for rules every member must respect, propose an update to
-  CONSENSUS.md.
+  conventions, work log) → update this workspace's L2 MEMORY.md / notes/.
 
 If the user starts with a real task instead of role guidance, do the task. Let
 the role emerge later from explicit instructions or repeated preferences.
@@ -249,22 +246,13 @@ async function seedNotesIfMissing(notesDir: string): Promise<void> {
 
 /**
  * Test-only stand-in for the daemon's `workspace_provision` skeleton
- * (`initWorkspaceSkeleton`). Creates `<workspace>/.silverhand/CONSENSUS.md` +
- * `agents/`. Idempotent. Byte-identical to the daemon's canonical default.
+ * (`initWorkspaceSkeleton`). Creates `<workspace>/.silverhand/agents/`.
+ * Idempotent.
  */
 export async function initWorkspaceDir(workspacePath: string): Promise<void> {
   await fs.mkdir(workspacePath, { recursive: true });
   const dotDir = join(workspacePath, '.silverhand');
   await fs.mkdir(join(dotDir, 'agents'), { recursive: true });
-  const consensusPath = join(dotDir, 'CONSENSUS.md');
-  try {
-    await fs.access(consensusPath);
-  } catch {
-    await fs.writeFile(
-      consensusPath,
-      '# Workspace Consensus\n\n_Add only agreements that ALL members must respect. Keep under 2KB._\n',
-    );
-  }
 }
 
 /**

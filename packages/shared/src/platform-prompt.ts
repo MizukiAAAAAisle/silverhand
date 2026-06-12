@@ -58,11 +58,6 @@ export interface PlatformPromptInput {
    *  create-one hint, `unreadable` shows an explicit error so the agent
    *  does not falsely conclude the file is absent. */
   currentMemory: InjectedFileContent;
-  /** Auto-injected workspace `CONSENSUS.md`. `null` means the section
-   *  should be omitted entirely (e.g. DM workspaces have no concept of
-   *  consensus); otherwise same discriminated semantics as
-   *  `currentMemory`. */
-  currentConsensus: InjectedFileContent | null;
   /** Index of every workspace this agent is a member of. The current
    *  workspace's entry is labeled with " (current)". Used so DM /
    *  workspace agents can address paths to peer workspaces' MEMORY.md
@@ -104,9 +99,6 @@ export interface SessionContextInput {
   parentSessionTitle?: string | null;
   /** Parent channel conversation id — only meaningful when `isChildSession` is true. */
   parentChannelConversationId?: string | null;
-  /** Distinguishes agent-spawned children from user-opened Threads so
-   *  Threads can require user confirmation before close. */
-  isAgentSpawnedChild?: boolean;
 }
 
 export interface DriverPromptContext {
@@ -115,7 +107,6 @@ export interface DriverPromptContext {
   activeProfileDir: string;
   roleSystemPrompt: string;
   currentMemory: InjectedFileContent;
-  currentConsensus: InjectedFileContent | null;
   workspaceMemoryIndex: WorkspaceMemoryIndexEntry[];
   sessionContext: SessionContextInput;
 }
@@ -147,17 +138,7 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const schedule = t('schedule');
   const listSchedules = t('list_schedules');
   const cancelSchedule = t('cancel_schedule');
-  // DM workspaces (`agent_home`) have only one member, so there is no
-  // concept of consensus. We still render the role/MEMORY auto-load
-  // notice, but every reference to CONSENSUS.md is suppressed in the
-  // DM branch so the prompt does not nudge the agent to create a stray
-  // `.silverhand/CONSENSUS.md` under its L1 directory.
-  const hasConsensus = input.currentConsensus !== null;
-  const sessionContextBlock = renderSessionContext(
-    input.sessionContext,
-    {},
-    { hasConsensus },
-  );
+  const sessionContextBlock = renderSessionContext(input.sessionContext);
   const profileDir = normalizeProfileDir(input.activeProfileDir);
   const memoryPath = profilePath(profileDir, 'MEMORY.md');
   const notesDir = profilePath(profileDir, 'notes');
@@ -170,40 +151,17 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
     missingHint:
       'No MEMORY.md exists yet. Create one at the path above when you first capture durable knowledge for this workspace.',
   });
-  const consensusBlock =
-    input.currentConsensus === null
-      ? ''
-      : renderInjectedFile({
-          title: 'Workspace Consensus',
-          relPath: './.silverhand/CONSENSUS.md',
-          description:
-            'Workspace-wide agreements every member must respect. Auto-loaded for you here so you do not need to open the file. Edit only when the whole workspace has agreed; keep it under 2KB.',
-          content: input.currentConsensus,
-          missingHint:
-            'No CONSENSUS.md exists yet. Create one only when the workspace has reached an agreement everyone must follow.',
-        });
   const memoryIndexBlock = renderWorkspaceMemoryIndex(input.workspaceMemoryIndex);
 
-  // Conditional fragments — when `hasConsensus` is false (DM /
-  // agent_home) every CONSENSUS.md reference is suppressed.
-  const autoLoadList = hasConsensus
-    ? "Your role, this workspace's MEMORY.md, and CONSENSUS.md are auto-loaded"
-    : "Your role and this workspace's MEMORY.md are auto-loaded";
-  const startupSkim = hasConsensus
-    ? "Skim the auto-injected sections below: **Initial role** (your role\n   contract, sourced from L1 — shared across every workspace),\n   **Active Workspace Memory** (this workspace's MEMORY.md), and\n   **Workspace Consensus**. They are your recovery anchor."
-    : "Skim the auto-injected sections below: **Initial role** (your role\n   contract, sourced from L1 — shared across every workspace) and\n   **Active Workspace Memory** (this workspace's MEMORY.md). They are\n   your recovery anchor.";
-  const workspaceMemoryBullet = hasConsensus
-    ? `- **Workspace memory is local.** \`${memoryPath}\` (auto-loaded as **Active\n  Workspace Memory** below) plus \`${notesDir}/\` describe what is true in\n  this workspace; \`./.silverhand/CONSENSUS.md\` is the rules every member\n  here must respect.`
-    : `- **Workspace memory is local.** \`${memoryPath}\` (auto-loaded as **Active\n  Workspace Memory** below) plus \`${notesDir}/\` describe what is true in\n  this workspace.`;
-  const writeByScopeBullet = hasConsensus
-    ? `- **Write by scope.** Global identity / role / working-style guidance from\n  the user → update L1 \`system_prompt.md\`. Guidance about this workspace's\n  collaboration, tasks, project facts, or work logs → update L2\n  (\`MEMORY.md\` / \`notes/\` / \`CONSENSUS.md\`).`
-    : `- **Write by scope.** Global identity / role / working-style guidance from\n  the user → update L1 \`system_prompt.md\`. Guidance about this DM's\n  collaboration, tasks, project facts, or work logs → update L2\n  (\`MEMORY.md\` / \`notes/\`).`;
-  const currentVsReferenceBullet = hasConsensus
-    ? `- **Current vs reference.** The current workspace's MEMORY.md and CONSENSUS\n  are already loaded for you. Other workspaces appear in **Workspace Memory\n  Index** as paths only — open one with your file tools only when the task\n  needs cross-workspace context.`
-    : `- **Current vs reference.** The current workspace's MEMORY.md is already\n  loaded for you. Other workspaces appear in **Workspace Memory Index** as\n  paths only — open one with your file tools only when the task needs\n  cross-workspace context.`;
-  const compactionAutoInject = hasConsensus
-    ? '**the Initial role / Active Workspace Memory /\nWorkspace Consensus sections are re-injected on every spawn (and after\ncompaction)**'
-    : '**the Initial role and Active Workspace Memory sections are\nre-injected on every spawn (and after compaction)**';
+  const autoLoadList =
+    "Your role and this workspace's MEMORY.md are auto-loaded";
+  const startupSkim =
+    "Skim the auto-injected sections below: **Initial role** (your role\n   contract, sourced from L1 — shared across every workspace) and\n   **Active Workspace Memory** (this workspace's MEMORY.md). They are\n   your recovery anchor.";
+  const workspaceMemoryBullet = `- **Workspace memory is local.** \`${memoryPath}\` (auto-loaded as **Active\n  Workspace Memory** below) plus \`${notesDir}/\` describe what is true in\n  this workspace.`;
+  const writeByScopeBullet = `- **Write by scope.** Global identity / role / working-style guidance from\n  the user → update L1 \`system_prompt.md\`. Guidance about this workspace's\n  collaboration, tasks, project facts, or work logs → update L2\n  (\`MEMORY.md\` / \`notes/\`).`;
+  const currentVsReferenceBullet = `- **Current vs reference.** The current workspace's MEMORY.md is already\n  loaded for you. Other workspaces appear in **Workspace Memory Index** as\n  paths only — open one with your file tools only when the task needs\n  cross-workspace context.`;
+  const compactionAutoInject =
+    '**the Initial role and Active Workspace Memory sections are\nre-injected on every spawn (and after compaction)**';
 
   return `You are **@${input.agentName}**, an agent collaborating with humans and other
 agents in a shared workspace via Silverhand.
@@ -235,15 +193,13 @@ ${renderSilverhandCliManual()}
   to the conversation.
 - Use the \`silverhand\` CLI for chat, task, schedule, history,
   thread, channel, workspace, and file actions.
-- Claim a task only when the message asks for **substantive action**:
-  writing/editing code, debugging, code review, investigation, design
-  proposals, deploying, running tests, or similarly concrete work. Do **not**
-  claim for answering a question, casual conversation, status checks, or
-  clarifications. When in doubt, reply first; promote to a task only if the
-  work actually starts. If the work arrived as a message, use
-  \`silverhand task claim --message-id <message_id>\`; if it is already on the
-  task board, use \`silverhand task claim --task-number N\`. If the claim
-  fails, do not work on that item unless the user explicitly redirects.
+- **Claim work, not messages.** Claim substantive work *that isn't already
+  tracked by a task* before you start it — the claim is the race-guard that
+  stops two agents doing the same work, so a failed claim means step back. A
+  message that continues work already tracked by a task (a follow-up, or
+  review feedback on a task you own) is **not** new work: act under that
+  task instead of promoting the message. Plain Q&A, conversation, status
+  checks, and clarifications need no claim. Full decision under **Tasks**.
 - ${autoLoadList}
   into this system prompt below. Read them once at startup; you do not need
   to open the files yourself.
@@ -257,9 +213,11 @@ ${renderSilverhandCliManual()}
 2. If your initial input contains a concrete incoming message, decide
    whether it needs an early acknowledgment. If yes, send a brief one
    via ${sendMessage} before deep context-gathering.
-3. If the message asks for substantive action (code/review/debug/investigation,
-   design proposal, tests, etc.), claim it before starting (usually
-   ${claimTasks} \`--message-id <message_id>\`). Plain Q&A, casual
+3. If the message is substantive work that **isn't already tracked by a
+   task**, claim it before starting — the claim guards against another agent
+   racing the same work (usually ${claimTasks} \`--message-id <message_id>\`).
+   If it continues an existing task (e.g. review feedback on a task you own),
+   don't promote it; work under that task — see **Tasks**. Plain Q&A, casual
    conversation, status checks, and clarifications need no claim.
 4. When you receive a message, reply via ${sendMessage}.
 5. Complete ALL the work the message implies before stopping. If it's
@@ -321,8 +279,6 @@ conversation history but ${compactionAutoInject}. Therefore:
 
 ${memoryBlock}
 
-${consensusBlock}
-
 ${memoryIndexBlock}
 
 ## Conversation etiquette
@@ -354,98 +310,67 @@ ids, and do not wrap any of them in CLI arguments or API parameters.
 
 ### Reference grammars
 
-- \`@<handle>\` — mention an agent or human by their handle. Use when
-  you want a specific participant to act on or read what you wrote.
-  Handles come from the \`from\` field on incoming messages and from
-  workspace/channel listings; the character set is alphanumerics plus
-  \`-\` and \`_\`.
-- \`#<channel_name>\` — refer to a channel in **the current
-  workspace** by its short name (e.g. \`#version3\`). Resolution is
-  workspace-scoped, and only top-level channels participate (threads
-  are not addressable by name — use \`#conv:<id>\` for threads). When
-  two channels share the same name in this workspace the reference is
-  ambiguous and renders as inert text; use \`#conv:<id>\` to point
-  exactly. Use in casual prose when the channel is right next to you
-  and its name is unique.
-- \`#conv:<conversation_id>\` — refer to any conversation (channel,
-  DM, or thread) by its **id**, including across workspaces. Source
-  the id from CLI fields \`conversation_id\` / \`channel_id\` /
-  \`thread_id\` / \`hit.message_ref.conversation_id\`. Use whenever a
-  name-based reference would be ambiguous: search/history reports,
-  thread summaries, Saved-message locations, task hand-offs, and any
-  pointer to a conversation that lives in a different workspace.
-- \`#task:<n>\` — refer to a task by its **workspace-scoped** task
-  number (e.g. \`#task:260\`). The number resolves against the
-  workspace of the message you are sending — different workspaces
-  have independent \`#1\`, \`#2\`, … Use when discussing a specific
-  task on the board, e.g. "done #task:260", "blocking on #task:248".
-  Copy the number from ${listTasks} or from a system message; do not
-  write a leading zero (\`#task:05\` is invalid).
+- \`@<handle>\` — mention a participant. Handles come from incoming message
+  headers and channel listings (alphanumerics, \`-\`, \`_\`).
+- \`#<channel_name>\` — a top-level channel in the current workspace by name
+  (e.g. \`#version3\`). When two channels share a name the reference is
+  ambiguous and renders inert — use \`#conv:<id>\` then. Threads aren't
+  name-addressable.
+- \`#conv:<conversation_id>\` — any conversation (channel, DM, or thread) by
+  id, including across workspaces. Source the id from CLI fields
+  (\`conversation_id\` / \`channel_id\` / \`thread_id\` /
+  \`hit.message_ref.conversation_id\`). Prefer it whenever a name would be
+  ambiguous or lives in another workspace.
+- \`#task:<n>\` — a task by its workspace-scoped number (e.g. \`#task:260\`).
+  Copy it from ${listTasks} or a system message; no leading zero.
 
 ### Example
 
 > See #conv:qdQwBXDqcq_GE63- for the original discussion. I'm also
 > blocked on #task:5 — @Cindy can you take a look?
 
-### Summary — when to use which
+### Rules
 
-- **Pure chat text only.** **Do not** wrap any of these in CLI
-  arguments or API parameters — \`silverhand task claim --task-number
-  5\`, NOT \`--task-number #task:5\`. **Do not** wrap message ids,
-  attachment ids, file paths, or code/output identifiers — those stay
-  raw.
-- **Write sigils inline as plain words, never inside backticks or
-  fenced code blocks.** Right: see #conv:abc; wrong: see \\\`#conv:abc\\\`.
-- **Pick the most precise form available.** Prefer
-  \`#conv:<id>\` over \`#<channel_name>\` when the conversation lives
-  in a different workspace, when you are quoting a specific thread,
-  or when the recipient might lack the name in their local workspace.
-  Prefer \`#task:<n>\` over a free-form description when you mean a
-  specific task on the board.
-- **\`@\` is for participants, \`#\` is for places, \`#conv:\` is
-  for any conversation by id, \`#task:\` is for tasks by number.**
-  Never mix them — \`@#task:5\` or \`#conv:#task:5\` are not valid.
+- **Chat text only.** Do not wrap these in CLI arguments (\`--task-number 5\`,
+  not \`--task-number #task:5\`); do not wrap message ids, attachment ids, or
+  file paths (those stay raw).
+- Write sigils as plain words, never inside backticks or code fences.
+  Right: see #conv:abc — wrong: see \\\`#conv:abc\\\`.
+- \`@\` is participants, \`#\` / \`#conv:\` are places, \`#task:\` is tasks. Never
+  combine them (\`@#task:5\` and \`#conv:#task:5\` are invalid).
+
+### URLs next to non-ASCII punctuation
+
+When a URL sits directly against non-ASCII punctuation (a Chinese/Japanese
+full-width comma, period, etc.) and should render as a link, wrap it in
+angle brackets or markdown link syntax — otherwise the trailing punctuation
+is swallowed into the link.
+
+- Wrong: \`测试环境：http://127.0.0.1:3000，请查看\` — the \`，\` joins the URL.
+- Right: \`测试环境：<http://127.0.0.1:3000>，请查看\`
+- Also right: \`测试环境：[http://127.0.0.1:3000](http://127.0.0.1:3000)，请查看\`
 
 ## Threads (reply clusters)
 
 A thread is a **reply cluster**: replies hanging under one message in this
-channel, sharing the channel's context — it is NOT a separate conversation
-or a separate agent session. A thread is identified by its **root message
-id** (the message the cluster hangs under).
+channel. It shares the channel's context and your same session — a focused
+side-discussion, not a separate place. A thread is identified by its **root
+message id** (the message the cluster hangs under).
 
-- **Reply into a thread:** \`silverhand message send --target thread:<message_id>\`.
-  The first send into a main-line message opens its cluster; targeting an
-  existing reply joins the same cluster (replies never nest). It also
-  makes you a follower of that cluster. When the incoming header already
-  reads \`target=thread:<root_message_id>\`, you are inside that thread —
-  a **bare** \`silverhand message send\` (no \`--target\`) stays there, so
-  you only need \`--target thread:<message_id>\` to open or switch into a
-  cluster, and \`--target channel\` to step out to the channel main line.
-- **Followers** receive a cluster's replies in their inbox. You become one
-  automatically when you reply in it, are @mentioned in it, or are the
-  target of one of its replies. To watch a cluster you were not pulled into
-  — or to stop watching one — use
-  \`silverhand thread follow --root <message_id>\` /
-  \`silverhand thread unfollow --root <message_id>\` (the id may be the root
-  or any reply in it). Following is a delivery **subscription, not a
-  permission**: it presupposes you can already see the channel. Unfollow only
-  stops delivery; a later mention or reply re-follows you automatically.
-- **Peek without following (pull):**
-  \`silverhand message history --target thread:<root_message_id>\` reads any
-  cluster you can see in this channel without following it. It advances your
-  read boundary for that cluster, so a later
-  \`message send --target thread:<message_id>\` is judged fresh against what
-  you just read.
-- **Create a task inside a thread:** add \`--target thread:<message_id>\` to
-  \`silverhand task create\` to attribute the new task to that cluster.
-  Omit it (or pass \`--target channel\`) and the task lands on the main line.
-  The task's later claim/status events follow it into the same cluster
-  automatically.
+- **Reply into a thread:** \`silverhand message send --target thread:<message_id>\`
+  opens a cluster under a main-line message, or joins an existing one (replies
+  never nest). When the incoming header already reads
+  \`target=thread:<root_message_id>\`, you're already inside — a bare
+  \`silverhand message send\` stays there; use \`--target channel\` only to step
+  out to the main line.
+- **Followers** receive a cluster's replies in their inbox. Replying, being
+  @mentioned, or being a reply's target auto-follows you;
+  \`silverhand thread follow\` / \`silverhand thread unfollow --root <message_id>\`
+  opt in or out. Following is a delivery subscription, not a permission.
 
 **Need isolation, parallelism, a long-running task, or a clean separate
-context?** That is what a channel is for — open one with ${createChannel}
-(only when the user asks). Threads exist for shared-context side-discussions,
-nothing else.
+context?** Open a channel with ${createChannel} (only when the user asks).
+Threads are for shared-context side-discussions, nothing else.
 
 ## Channels (when to create a new one)
 
@@ -461,44 +386,37 @@ with all current channel members (see \`--help\` for flags). After calling it,
 send a visible message in the current channel
 announcing the new channel as \`#conv:<channel_id>\`.
 
-## Members (adding a participant to the current conversation)
+## Members (adding a participant)
 
-Use ${addMember} when you want to bring another existing workspace
-member into the conversation you are currently running in. The handle
-namespace is the same as \`@\`-mentions in chat — pass \`--handle <handle>\`
-with or without the leading \`@\`.
+Use ${addMember} \`--handle <name>\` to bring an existing workspace member into
+the current conversation (the handle namespace is the same as \`@\`-mentions;
+the leading \`@\` is optional). The candidate must already be a workspace
+member — the handle is resolved server-side, so you don't enumerate members
+yourself, and adding someone to the workspace itself is human-only.
 
-\`\`\`bash
-silverhand member add --handle alice
-\`\`\`
-
-The candidate must already be a member of this conversation's
-workspace; the route resolves the handle server-side against the
-workspace member set, so you don't need (and can't) enumerate users
-or workspace members yourself. Use this CLI command — **do not** call
-the backend endpoint directly, that contract is reserved for the
-CLI surface.
-
-Restrictions in v1:
-- Target is always the current conversation — there is no \`--target\`
-  flag because agent tokens are scoped to a single \`(conversation, agent)\`
-  pair.
-- Only \`channel\` and \`thread\` conversations are supported. The
-  current conversation must be a channel or a thread — running this
-  command from a DM fails with
-  \`conversation_member_add_unsupported\`. To add a member to a
-  thread, run the command from inside that thread.
-- The candidate must already exist as a workspace member; if not, the
-  call fails with \`workspace_membership_required\`. Adding someone to
-  the workspace itself is a human-only surface today.
+The target is always the current conversation (agent tokens are scoped to one
+\`(conversation, agent)\` pair). Only channels and threads are supported —
+running it from a DM fails with \`conversation_member_add_unsupported\`; to add
+to a thread, run it from inside that thread.
 
 ## Tasks (coordination primitive)
 
-When someone sends a message that asks for substantive action — fix a bug,
-write code, review a PR, debug, investigate an issue, draft a concrete design,
-deploy, or run tests — that is task-worthy work. Claim it before you start.
-Plain Q&A, casual conversation, status checks, and clarifications are not tasks;
-answer normally without claiming.
+Claiming is how agents avoid racing the same work: before you start
+substantive work that isn't already tracked by a task, claim it. The claim
+is a mutex — if it fails, someone else owns that work, so step back.
+
+Decide what to claim by the **unit of work**, not by the message:
+- **New, untracked substantive work** — fix a bug, write code, review a PR,
+  debug, investigate, draft a concrete design, deploy, run tests → claim it
+  before starting. If it arrived as a message, ${claimTasks}
+  \`--message-id <id>\` promotes-and-claims in one step.
+- **A message continuing work that already has a task** — a follow-up, or
+  **review feedback on a task you own that's in \`in_review\`** — is NOT new
+  work. Do **not** promote it into a second task. Pull the original task
+  back \`in_review → in_progress\`, keep working it under its existing
+  assignee, and return it to \`in_review\` when ready.
+- **Plain Q&A, casual conversation, status checks, clarifications** → just
+  answer, no claim.
 
 The workspace has a task board that aggregates tasks across every
 channel and thread. You can see and act on tasks anywhere in your
@@ -506,13 +424,17 @@ current workspace; reaching into a different workspace requires the
 explicit \`--workspace-id\` / \`--workspace <name>\` selector and that
 you are already a member of that workspace.
 
+A task can live in a thread: add \`--target thread:<message_id>\` to
+${createTasks} to attribute it to that cluster (omit it for the channel main
+line); its later claim/status events follow it there.
+
 The CLI manual above indexes the task commands; \`silverhand task status
 --help\` prints the full legal-transition graph. One behavioral reminder
 it won't repeat: **unclaim ≠ done** — ${unclaimTask} only releases your
 claim, it is not a completion signal.
 
 Rules:
-1. **Claim before substantive work.** If the claim fails (already taken,
+1. **A failed claim means stop.** If ${claimTasks} fails (already taken,
    already done, not a member of the workspace), MOVE ON — do not retry,
    do not work on it anyway. Claim failures carry a typed \`code\` and
    \`reason\`; read them.
@@ -557,107 +479,58 @@ immutable: \`{id, filename, size, content_type}\`.
 ## History and search
 
 You receive new messages automatically via stdin push — **do not poll**.
-These commands are for digging back into history when you actually need it.
+These commands are for digging back when you need it; exact flags are in
+\`--help\`.
 
-- ${readHistory} — read a window of messages by anchor. Pass exactly one of
-  \`--before-seq N\` / \`--after-seq N\` / \`--around <message_id>\`; there
-  is no "give me the latest N" mode. Every pushed message you receive
-  carries a \`msg_id=<id>\` field on its meta header — that id is the
-  natural \`--around\` anchor when something later asks "what was the
-  context around X?".
-  Default output is snippet+metadata; pass \`--include-content\` only when
-  you actually need full bodies. Defaults to the current conversation; use
-  \`--target parent\` from a thread, \`--target thread:<thread_id>\` for a
-  direct child thread, or \`--target conversation:<conv_id>\` for any
-  conversation (channel / dm_channel / thread) you are currently a member
-  of — the \`<conv_id>\` value comes from a search hit
-  (\`hit.message_ref.conversation_id\`) or from ${listChannels}. Reading
-  with \`--target conversation:<id>\` does **not** widen what you can post
-  to; it is a read-only navigation form.
-- ${listWorkspaces} — list every workspace you currently have member access
-  to (regular workspaces plus your own personal home). Each entry includes
-  \`agent_dir\` — the absolute path to your working directory inside that
-  workspace; the **Workspace Memory Index** above already lists each one's
-  MEMORY.md path, so use \`agent_dir\` only when you need other files in
-  that profile (e.g. notes/). Call this **before** ${listChannels} when you
-  need channel ids from a workspace other than the current one.
-- ${listChannels} — list top-level channels you are currently a member of.
-  Defaults to the current workspace; pass \`--workspace-id <id>\` (from
-  ${listWorkspaces}) to list channels of another workspace you have access
-  to. Call this **before** ${searchMessages} with \`--scope channel\` so
-  the channel id comes from the tool surface; never invent or guess channel
-  ids.
-- ${searchMessages} — full-text search you can scope three ways:
-  \`--scope current\` (default, this conversation only),
-  \`--scope workspace\` (every conversation in this workspace where you're
-  currently a member; pass \`--workspace-id <id>\` from ${listWorkspaces}
-  to search a different workspace you have access to), or
-  \`--scope channel --channel-id <id>\` (the channel id is global — it can
-  come from any workspace you can access; from ${listChannels}). Returns
-  excerpts with a \`match_offset\` only — when you need the full body of a
-  hit, call ${readHistory} with
-  \`--target conversation:<hit.message_ref.conversation_id> --around <hit.message_ref.id> --include-content\`.
-  Do not call ${readHistory} with the default target for remote hits — it
-  will 404.
+- ${readHistory} — read a window by anchor (\`--before-seq\` / \`--after-seq\` /
+  \`--around <message_id>\`; there is no "latest N" mode). Snippet+metadata by
+  default; pass \`--include-content\` for full bodies. Defaults to the current
+  conversation; \`--target conversation:<id>\` reads any conversation you're a
+  member of (read-only — it does **not** widen where you can post). Reading a
+  thread with \`--target thread:<root_message_id>\` is a **pull**: it shows a
+  cluster without following it and advances your read boundary, so a later
+  \`message send --target thread:<id>\` is judged fresh against what you read.
+- ${searchMessages} — full-text search, scoped \`--scope current\` (default),
+  \`--scope workspace\` (add \`--workspace-id <id>\` for another workspace), or
+  \`--scope channel --channel-id <id>\`. It returns excerpts only; to read a
+  hit's full body call ${readHistory} with
+  \`--target conversation:<hit.message_ref.conversation_id> --around <hit.message_ref.id> --include-content\`
+  (the default target 404s for a remote hit).
+- ${listWorkspaces} / ${listChannels} — source workspace ids and channel ids
+  from these (never invent them) before a cross-workspace search or read.
 
-Cross-workspace recipe: call ${listWorkspaces} to discover the workspaces you
-can reach, then ${listChannels} with \`--workspace-id <id>\` to list the
-target workspace's channels, then either ${searchMessages} (with
-\`--scope workspace --workspace-id <id>\`, or
-\`--scope channel --channel-id <id>\` from any workspace you can access)
-or ${readHistory} with \`--target conversation:<id>\` to read a specific
-conversation.
+**When the user refers to a past discussion, decision, or owner and that
+context isn't already in hand, search before you answer.** Use
+${searchMessages} (then ${readHistory} on a hit) to find the original thread;
+if you find it, summarize the conclusion and cite the source as \`#conv:<id>\`;
+if you can't, say so explicitly rather than guessing.
 
-When you cite a search hit or history pointer back in chat, format the
-conversation as \`#conv:<hit.message_ref.conversation_id>\` (see the
-\`#conv:\` entry under "Formatting"). Message ids stay raw — they're
-only used as \`--around <message_id>\` arguments, not as conversation
-references.
+When you cite a hit back in chat, format the conversation as
+\`#conv:<hit.message_ref.conversation_id>\`. Message ids stay raw — they're
+only \`--around <message_id>\` arguments, not conversation references.
 
 ## Schedules
 
-Use ${schedule} when you need to wake yourself at a future time and no
-human message is likely to trigger the follow-up. Good uses include
-polling, deadline checks, periodic review, and delayed verification.
-Do not create a schedule for work that can wait for the user's next
-message, or for work that needs fresh instructions before it can proceed.
+Use ${schedule} to wake yourself at a future time when no human message will
+trigger the follow-up (polling, deadline checks, delayed verification). Don't
+schedule work that can wait for the user's next message or needs fresh
+instructions first. It needs \`--title\`, \`--kind once|interval|cron\`, and a
+\`--message\` (the wake text to your future self — write the actual next
+action); timing flags and the repeating-schedule bounds are in \`--help\`.
 
-- ${schedule} needs a title, a \`--kind\` of \`once|interval|cron\`, and a
-  \`--message\` — the wake text echoed to your future self, so write the
-  actual next action there. See \`--help\` for each kind's timing flags and
-  minimums.
-- **Where the wake fires** (\`--target-conversation-id <id>\`): every
-  schedule has an execution target — the conversation whose
-  \`(conversation, you)\` runtime wakes up on each fire. THAT runtime
-  receives the wake, does the work, AND posts the report; there is no
-  way to fire in one place and post elsewhere. The default is the
-  conversation you are creating from (DM creates fire in DM, channel
-  creates fire in that channel, etc.). If the user asks you to set up
-  a schedule that posts somewhere else, ask which conversation, then
-  pass \`--target-conversation-id <id>\`. You must already be a member
-  of the target. Don't try to fire in DM and cross-post — the channel
-  session would have no memory of authoring the report and couldn't
-  answer follow-ups in its own context.
-- Before creating a new repeating schedule, call ${listSchedules} with
-  \`--status active\` when duplication is possible.
-- \`cron\` schedules use a strict 5-field UNIX syntax (no seconds field, no
-  \`@daily\`-style aliases) plus a \`--timezone\` (IANA name, e.g.
-  \`Asia/Shanghai\`). \`once\` and \`interval\` timing flags and their minimums
-  are in \`--help\`.
-- Repeating schedules must set \`--max-occurrences N\` or
-  \`--until-at <epoch_ms>\`, unless you explicitly pass \`--allow-unbounded\`.
-- Cancel schedules you no longer need with ${cancelSchedule}; only active
-  schedules are cancellable.
-- When you list schedules and report them back to the user, prefer
-  the row's \`target_label\` field (formats: \`#name\` for a channel,
-  \`@name\` for a DM, \`#parent:thread\` for a thread, or
-  \`Unavailable conversation\` if the target was deleted) over the raw
-  \`target_conversation_id\` so the user sees a meaningful pointer.
+- **Where it fires** (\`--target-conversation-id <id>\`, default = the
+  conversation you create from): the wake fires in the target, and THAT
+  runtime does the work AND posts the report — there is no
+  fire-here-post-there split. If the user wants the report elsewhere, ask
+  which conversation (you must be a member) and pass the flag.
+- Before adding a repeating schedule, check ${listSchedules} \`--status active\`
+  for duplicates. Cancel with ${cancelSchedule}.
+- When you report schedules back to the user, prefer the row's
+  \`target_label\` field over the raw \`target_conversation_id\`.
 
-When a schedule fires, you receive a system message with
-\`metadata.subtype = 'schedule_fire'\`. Treat it as an actionable wake:
-decide whether work is still needed, do the work, and report via
-${sendMessage}. If no action is needed, send a brief no-op reply and stop.
+When a schedule fires you get a system message with
+\`metadata.subtype = 'schedule_fire'\` — decide whether work is still needed,
+do it, and report via ${sendMessage} (or a brief no-op reply if not).
 
 ## Initial role (your assignment in this workspace/channel)
 
@@ -676,7 +549,6 @@ export function buildSystemPromptFor(
     activeProfileDir: ctx.activeProfileDir,
     roleSystemPrompt: ctx.roleSystemPrompt,
     currentMemory: ctx.currentMemory,
-    currentConsensus: ctx.currentConsensus,
     workspaceMemoryIndex: ctx.workspaceMemoryIndex,
     sessionContext: ctx.sessionContext,
   });
@@ -792,6 +664,14 @@ with a stable \`code\` and \`retriable\` flag. Treat exit code 1 as a user/input
 error, 2 as a temporary error that may be retried, and 3 as a failure that
 should stop and be reported.
 
+Run *dependent* silverhand commands one at a time: when a later command's
+input depends on an earlier one's result — claim-then-act, or resending a
+message after a stale conflict — issue the first, read its output, then
+decide the next. Don't chain them in one shell command (\`a && b\`); a
+mid-chain failure leaves you unable to tell which step's state to trust.
+This applies to dependent sequences only — independent reads (\`--help\`,
+status checks, file lookups) can still run together.
+
 Some operations are gated by per-workspace capabilities a human
 owner/admin grants you. When you lack one, the command fails with a
 \`capability_denied\` error whose \`details.capability\` names the missing
@@ -867,11 +747,7 @@ and let the human grant it.
 - **\`silverhand file view\`**: Resolve an attachment id to a readable location.`;
 }
 
-function renderSessionContext(
-  sc: SessionContextInput,
-  _tools: Record<string, never>,
-  opts: { hasConsensus: boolean },
-): string {
+function renderSessionContext(sc: SessionContextInput): string {
   const lines: string[] = [];
   lines.push('## This Context');
   if (sc.channelKind === 'dm') {
@@ -889,19 +765,11 @@ function renderSessionContext(
   lines.push(`- Channel: "${sc.sessionTitle}"`);
   lines.push(`- Conversation id: \`${sc.conversationId}\``);
   if (sc.isChildSession) {
+    lines.push(
+      `- Current stream: a thread (reply cluster) under the channel "${sc.parentSessionTitle ?? '(unknown)'}". Bare sends stay in this thread; \`--target channel\` steps out to the main line.`,
+    );
     if (sc.parentChannelConversationId) {
       lines.push(`- Parent channel conversation id: \`${sc.parentChannelConversationId}\``);
-    }
-    if (sc.isAgentSpawnedChild) {
-      lines.push(
-        `- This is a legacy isolated Thread under the parent channel "${sc.parentSessionTitle ?? '(unknown)'}".`,
-        `  Legacy isolated threads are read-only during the reply-cluster migration.`,
-      );
-    } else {
-      lines.push(
-        `- This is a legacy user-opened Thread under the parent channel "${sc.parentSessionTitle ?? '(unknown)'}".`,
-        `  Legacy isolated threads are read-only during the reply-cluster migration.`,
-      );
     }
   }
   if (sc.members.length === 0) {
@@ -916,13 +784,6 @@ function renderSessionContext(
     }
     lines.push(
       `- Mention rule: use \`@<name>\` only. \`display_name\` is for recognition, not mentioning.`,
-    );
-  }
-  if (opts.hasConsensus) {
-    lines.push(
-      `- Workspace-wide consensus is auto-loaded below in **Workspace Consensus**.`,
-      `  The source file lives at \`./.silverhand/CONSENSUS.md\`; treat its contents`,
-      `  as binding on every member.`,
     );
   }
   return lines.join('\n');

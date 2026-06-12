@@ -18,9 +18,7 @@
  * package's own tests (acceptance A5).
  *
  * What is materialized (design §8.1): system_prompt.md + MEMORY.md
- * + notes/ skeleton + `.materialized` sentinel. **CONSENSUS.md is
- * NOT included** — it is a workspace-level artifact (regular
- * workspaces only) and does not live in the agent's L1 home.
+ * + notes/ skeleton + `.materialized` sentinel.
  *
  * Template choice (design §3.1): `'default'` ships at D2;
  * `'onboarding'` and `'minimal'` are placeholders that the handler
@@ -58,7 +56,7 @@ Key model:
 - **Thread** — a focused sub-discussion spawned from a channel message.
 - **Task** — a claimable work unit tracked on the channel task board.
 
-## Memory Model (four-file)
+## Memory Model
 
 - **Identity is global.** \`~/.silverhand/agents/<id>/system_prompt.md\` is
   the only source of who you are, and it applies in every workspace. The
@@ -67,15 +65,14 @@ Key model:
 - **Workspace memory is local.**
   \`<workspace>/.silverhand/agents/<id>/MEMORY.md\` (auto-loaded as
   **Active Workspace Memory**) plus \`notes/\` describe what is true in
-  one workspace; \`<workspace>/.silverhand/CONSENSUS.md\` is the rules
-  every member of that workspace must respect.
+  one workspace.
 - **Write by scope.** Global identity / role / working-style guidance from
   the user → update L1 \`system_prompt.md\`. Guidance about this workspace's
   collaboration, tasks, project facts, or work logs → update L2 (MEMORY.md
-  / notes/ / CONSENSUS.md).
-- **Current vs reference.** The current workspace's MEMORY.md and CONSENSUS
-  are auto-loaded; other workspaces are paths only — open them only when
-  the task needs cross-workspace context.
+  / notes/).
+- **Current vs reference.** The current workspace's MEMORY.md is auto-loaded;
+  other workspaces are paths only — open them only when the task needs
+  cross-workspace context.
 
 Do not mention internal file paths to the user unless they ask.
 
@@ -101,9 +98,7 @@ Decide whether the user's guidance is global identity or workspace-scoped:
   everywhere) → update L1 \`system_prompt.md\`. The next spawn in any
   workspace picks it up.
 - **Workspace-scoped** (review pairings, hand-off rules, project facts,
-  conventions, work log) → update this workspace's L2 MEMORY.md / notes/
-  or, for rules every member must respect, propose an update to
-  CONSENSUS.md.
+  conventions, work log) → update this workspace's L2 MEMORY.md / notes/.
 
 If the user starts with a real task instead of role guidance, do the task. Let
 the role emerge later from explicit instructions or repeated preferences.
@@ -316,7 +311,7 @@ export function getAgentHomeTemplate(
  * is L1-ONLY — it is the agent's global identity, read from
  * `~/.silverhand/agents/<id>/system_prompt.md` at every spawn. Copying it
  * into an L2 dir would create stale per-workspace forks that drift from the
- * canonical L1 identity (the historical bug the four-file model fixes). So
+ * canonical L1 identity (the historical bug the L1/L2 split fixes). So
  * L2 carries only `MEMORY.md` + `notes/`.
  *
  * Derived from the L1 template (not a second copy of the strings) so the

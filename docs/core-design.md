@@ -395,7 +395,7 @@ slock 的 thread 只是**消息的服务端归类 + 投递过滤**——参与 t
 - **谁能 spawn**：agent 通过 MCP 工具 `create_thread`；human 通过 UI 在某条消息上点 **Thread**（详见 [`app-layout.md` §7](./app-layout.md#7-thread--child-session)）。两条路径产物相同（一行 child `conversations`），区别在 `spawned_by_agent_id`：agent spawn 非 NULL，human Thread 为 NULL，且只有 human Thread 会写入 `thread_anchor` 系统消息把 child 跟原消息绑定。
 - **拉谁进来**：必须从父 workspace 的 member pool 里选（防止跨 workspace 滥拉）
 - **嵌套深度**：**硬限 1 层**，thread 不能再开 thread（写死，不开放配置）
-- **Workspace**：thread 共享父的 `workspace_path`（同 workspace），CONSENSUS / agent memory 自然继承
+- **Workspace**：thread 共享父的 `workspace_path`（同 workspace），agent memory 自然继承
 - **DB**：conversations 表加 `parent_conversation_id` / `spawned_by_agent_id` / `closed_at` / `close_summary`，复用现有表结构，不另开表
 - **Inbox**：thread 自己一份 `agent_inboxes`（按 channel 维度切，跟普通 channel 一致）
 
@@ -534,15 +534,20 @@ System prompt 必须写明：**频繁双向通信通常是 spawn 决策本身有
 - System prompt（§4.7）增加段落：何时 create_thread / 何时 send_message(target='parent') / close_thread 礼仪 / 防 ping-pong
 
 
-## 4. Memory / Notes / Consensus —— 三层知识
+## 4. Memory / Notes —— 两层知识
 
-### 4.1 三层结构（核心思想：分层 + DM 为塑造层）
+> **2026-06-12 — 移除 workspace Consensus（L3）**：原 L3 `CONSENSUS.md`
+> 概念已删除。实践中 agent 很少主动编辑这个共享文件，且"看似共享、实则
+> 混淆多个 agent 各自记录"。每个 agent 自己的 L2 `MEMORY.md` / `notes/`
+> 已足够；需要全员强制遵守的约定应落在代码或 docs，而非一个被注入的共享
+> prompt 文件。下文为现行两层模型（#task:1086 / #task:1087）。
+
+### 4.1 两层结构（核心思想：分层 + DM 为塑造层）
 
 | 层级 | 内容 | 谁拥有 | 谁可写 | 通过什么场景塑造 |
 |------|------|--------|--------|-----------------|
 | **L1: Agent Global** | agent 的全局身份 / 角色定义（`system_prompt.md`）+ DM 记忆 | agent | 该 agent（在 DM 中）+ 用户（管理界面）| **DM** |
 | **L2: Per-Workspace Per-Agent Memory** | 该 agent 在该 workspace 内的局部知识（`MEMORY.md` + `notes/`）| (workspace, agent) | 该 agent 在该 workspace 工作时 | **Workspace onboarding + 该 workspace 内的对话** |
-| **L3: Workspace Consensus** | 该 workspace 内**所有 agent 都必须重视**的少数几条关键共识 | workspace | 所有 workspace member agents | **Workspace 内多 agent 对话** |
 
 > **关键设计（D2.g 校准，2026-05-27）**：角色定义只从 L1
 > `system_prompt.md` 读取；L2 不再承载一份 workspace-scoped
@@ -550,13 +555,6 @@ System prompt 必须写明：**频繁双向通信通常是 spawn 决策本身有
 > L2 `MEMORY.md` / `notes/`，全局身份和工作风格仍通过 DM 修改 L1。
 >
 > **DM 是塑造 L1 的专用场所**：DM 的 cwd **直接** = `~/.silverhand/agents/<id>/`（agent 全局 home），所以在 DM 里 agent 对自己 MEMORY 的更新等于更新 global，未来新 workspace 继承到这个新版本。
->
-> **CONSENSUS 必须保持精炼**：L3 不是聊天记录摘要、不是 todo、不是任何 agent 的个人笔记。它只容纳**该 workspace 内所有 agent 都需要遵守的少数关键约定**——例如"本项目只用 TypeScript，不写 JS"、"所有新 API 必须由 codex 写测试前端才能调用"这种。
->
-> - 判断标准：**"这条如果 agent 不知道，会产生严重后果吗？"** 否 → 进自己的 L2 MEMORY，不要进 CONSENSUS。
-> - 字数上限（硬性自律）：建议 < 2KB。超过就是信号——要么内容不够关键需要精简，要么应该拆进各自 L2。
-> - 平台层 system prompt 会明示这条标准，agent 应在动手写之前自问一遍。
-> - CONSENSUS 不是堆砌地"什么都往里放"的安全网。宁缺毋滥。
 
 ### 4.2 文件存储完整图
 
@@ -579,7 +577,6 @@ System prompt 必须写明：**频繁双向通信通常是 spawn 决策本身有
 <workspace>/                     ← workspace.workspace_path
 ├─ <用户的代码 / 项目文件>...
 └─ .silverhand/
-   ├─ CONSENSUS.md               ← L3：workspace 关键共识（精炼、<2KB）
    └─ agents/
       ├─ <agent-id>/             ← L2：per-workspace 拷贝
       │  ├─ MEMORY.md            ← L2：workspace 内累积的 agent 记忆
@@ -587,11 +584,11 @@ System prompt 必须写明：**频繁双向通信通常是 spawn 决策本身有
       └─ <agent-id-2>/...
 
 <os.tmpdir()>/silverhand/<spawn-id>/       ← 每次 spawn 的运行时临时文件
-├─ system-prompt.md              ← daemon 由 L1 + L2 MEMORY + CONSENSUS + session ctx 合成
+├─ system-prompt.md              ← daemon 由 L1 + L2 MEMORY + session ctx 合成
 └─ bin/silverhand                ← 每次 spawn 的 CLI shim
 ```
 
-**为什么 `<workspace>/.silverhand/` 下没有 `channels/` 目录**：channel 的 system-prompt + shim 是每次 spawn 临时合成的、只在 runtime 生命周期内有用，可以从 typed `runtime_start.options` + daemon-local L1/L2/CONSENSUS 文件重算。写进 workspace 会污染用户目录（git status 看到、文件浏览器看到）、channel 多了会堆积成一大堆无关内容。改放 OS tmp，spawn 前写、进程退出清，出错残留也由 OS 定期清理。**真正持久化的是 SQLite 里的 conversations / messages 行**——文件系统只负责跑起来。
+**为什么 `<workspace>/.silverhand/` 下没有 `channels/` 目录**：channel 的 system-prompt + shim 是每次 spawn 临时合成的、只在 runtime 生命周期内有用，可以从 typed `runtime_start.options` + daemon-local L1/L2 文件重算。写进 workspace 会污染用户目录（git status 看到、文件浏览器看到）、channel 多了会堆积成一大堆无关内容。改放 OS tmp，spawn 前写、进程退出清，出错残留也由 OS 定期清理。**真正持久化的是 SQLite 里的 conversations / messages 行**——文件系统只负责跑起来。
 
 **那既然可以重算，为什么还落盘？** 不是为了我们自己持久化，而是因为 **agent CLI 的 argv 接口强制要求文件路径**：
 
@@ -601,7 +598,7 @@ System prompt 必须写明：**频繁双向通信通常是 spawn 决策本身有
 
 换句话说，这些 /tmp 文件是**"给 child process 传参的一次性媒介"**，不是 silverhand 的状态。生命周期 = 从 spawn 前写入到进程退出，退出后残留只等 OS 清理。`os.tmpdir()` 的语义（跨重启不保证、定期清）刚好匹配。
 
-**DM 例外**：DM workspace 的 `workspace_path` **直接** = `~/.silverhand/agents/<agent-id>/`。也就是说 DM 没有自己的 `<workspace>/.silverhand/agents/<id>/` 嵌套——agent 在 DM 中的 cwd 就是它的 global home，所有读写都直接落到 L1。DM 也没有 CONSENSUS.md（单 agent + 单用户，"共识"就等于 memory）。
+**DM 例外**：DM workspace 的 `workspace_path` **直接** = `~/.silverhand/agents/<agent-id>/`。也就是说 DM 没有自己的 `<workspace>/.silverhand/agents/<id>/` 嵌套——agent 在 DM 中的 cwd 就是它的 global home，所有读写都直接落到 L1。
 
 ### 4.3 Workspace 创建后的对话式 onboarding（关键流程）
 
@@ -613,7 +610,7 @@ System prompt 必须写明：**频繁双向通信通常是 spawn 决策本身有
 
 1. INSERT workspace 行
 2. 计算 workspace_path（未填时按 §2.4 规则生成）并存入 server DB
-3. daemon-host materialize：mkdir workspace_path、mkdir `<workspace>/.silverhand/agents/`、建空 `CONSENSUS.md`
+3. daemon-host materialize：mkdir workspace_path、mkdir `<workspace>/.silverhand/agents/`
 4. daemon-host 对每个成员 agent seed L2 (`<workspace>/.silverhand/agents/<id>/MEMORY.md` + `notes/`)，不复制 L1 `system_prompt.md`
 5. 自动建一个 channel（title = `Onboarding`），spawn 所有 member agent 的 chat-bridge
 6. Backend 自动 INSERT 一条 `from_kind='system'` 的 message 进这个 channel（platform 写的"开场白"），所有 agent 通过 `check_messages` 收到
@@ -665,7 +662,6 @@ DM 不参与同步——DM 直接操作 L1（cwd = global home）。
 
 ```
 <workspace>/.silverhand/
-├─ CONSENSUS.md             ← L3（精炼、所有成员都重视的关键共识）
 └─ agents/<id>/             ← L2（DM 中此层不存在，cwd 就是 L1）
    ├─ MEMORY.md
    └─ notes/
@@ -673,7 +669,7 @@ DM 不参与同步——DM 直接操作 L1（cwd = global home）。
 
 > channel 级的临时文件（每次 spawn 合成的 system-prompt + CLI shim）放 `<os.tmpdir()>/silverhand/<spawn-id>/`，见 §4.2。不进 workspace。
 
-### 4.6 不引入 memory / consensus MCP 工具
+### 4.6 不引入 memory MCP 工具
 
 > 设计决策：**不引入** memory-related MCP 工具。
 >
@@ -683,9 +679,9 @@ DM 不参与同步——DM 直接操作 L1（cwd = global home）。
 
 每次 daemon-host 处理 `runtime_start` 时，使用 server 传来的 typed
 metadata（`agent.home_dir`、`workspace.path`、session/members/driver/env
-policy）在本机读取 L1/L2/CONSENSUS，并把最终 system prompt 写到
+policy）在本机读取 L1/L2，并把最终 system prompt 写到
 per-spawn tmp 目录的 `system-prompt.md`。Server 不读取、不缓存、不传输
-`system_prompt.md` / `MEMORY.md` / `CONSENSUS.md` bytes，也不准备 spawn
+`system_prompt.md` / `MEMORY.md` bytes，也不准备 spawn
 目录、cwd 或 child env。合成逻辑：
 
 ```
@@ -694,8 +690,6 @@ per-spawn tmp 目录的 `system-prompt.md`。Server 不读取、不缓存、不�
 [Initial role — L1 `<agent.home_dir>/system_prompt.md`，daemon 本机读取]
   ↓
 [Active Workspace Memory — L2 `<workspace.path>/.silverhand/agents/<id>/MEMORY.md`，16KB cap]
-  ↓
-[Workspace Consensus — `<workspace.path>/.silverhand/CONSENSUS.md`，4KB cap；agent_home/DM skip]
   ↓
 [Session 上下文 — workspace name、thread parent、conversation members、memory index 路径]
 ```
@@ -738,13 +732,11 @@ The human user is also present.
 1. Read `./.silverhand/agents/<your-id>/MEMORY.md` first. This is your
    recovery anchor — everything you need to know about who you are in
    this workspace and what's been happening.
-2. Read `./.silverhand/CONSENSUS.md` — the workspace's shared agreements
-   that bind all members.
-3. If your initial input contains a concrete incoming message, decide
+2. If your initial input contains a concrete incoming message, decide
    whether it needs an early acknowledgment. If yes, send a brief one
    via `send_reply` before deep context-gathering.
-4. Process the message(s), then reply via `send_reply`.
-5. Complete ALL the work the message implies before stopping. If it's
+3. Process the message(s), then reply via `send_reply`.
+4. Complete ALL the work the message implies before stopping. If it's
    multi-step (research → code → test), do all steps, report results,
    then stop. New messages will arrive automatically while you're alive
    — you do not need to poll.
@@ -794,17 +786,6 @@ after compaction**. Therefore:
   workspace this is, what's in progress, what the user has asked for, what
   other agents are doing.
 
-## Workspace consensus
-
-`./.silverhand/CONSENSUS.md` — agreements EVERY agent in this workspace
-must respect. Read at startup.
-
-- Keep it minimal. Only add when (a) the whole group has actually
-  agreed, AND (b) forgetting this would cause real problems.
-- If it's only useful to you, put it in your own MEMORY.md instead.
-- If it's a passing task or todo, don't write it here.
-- Target: stays under 2KB. If it grows, prune — don't keep appending.
-
 ## Multi-agent etiquette
 
 - Messages you receive carry a `from` field (user / agent name / system).
@@ -825,10 +806,9 @@ must respect. Read at startup.
 
 #### DM 场景的特例
 
-DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" / §"Workspace consensus" 段做调整：
+DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" 段做调整：
 
 - cwd 直接 = `~/.silverhand/agents/<your-id>/`，所有写都落 L1 global
-- 没有 workspace 维度的 CONSENSUS（"共识"对单 agent + 单用户没意义）
 - 加一段说明："You are in a DM. Updates to your MEMORY.md and notes will affect your global identity in all future workspaces."
 
 #### 为什么平台 prompt 要这么长？
@@ -853,7 +833,7 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" / §"Workspace 
    - 后端/daemon 自动建 `~/.silverhand/agents/<id>/{system_prompt.md, MEMORY.md, notes/, identity.json}`
 2. **建 Workspace**
    - 表单：名称（unique）+ 描述（可选）+ 工作目录（可选，留空自动生成）+ 勾选成员（agents，至少 1 个）
-   - 提交后系统完成：server 建 workspace 行并记录 workspace_path → daemon materialize `.silverhand/{CONSENSUS.md, agents/<id>/}` + L2 MEMORY/notes → 自动建一个 `Onboarding` channel → 自动 INSERT 一条 `from_kind='system'` 的开场白消息（见 §4.3）
+   - 提交后系统完成：server 建 workspace 行并记录 workspace_path → daemon materialize `.silverhand/agents/<id>/` + L2 MEMORY/notes → 自动建一个 `Onboarding` channel → 自动 INSERT 一条 `from_kind='system'` 的开场白消息（见 §4.3）
    - 用户进 workspace 看到的就是已经在跑的 onboarding channel，可以直接对话塑造各 agent 角色
 3. **建后续 Channel**（在某 workspace 内）
    - 标题
@@ -903,7 +883,7 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" / §"Workspace 
 ## 7. 非目标（v1 明确不做）
 
 - ❌ 跨机器同步同一份 workspace 文件（违反 §1.3 形态定位）
-- ❌ Memory / consensus 走专门 MCP 工具（用 Read/Write 即可）
+- ❌ Memory 走专门 MCP 工具（用 Read/Write 即可）
 - ❌ Agent 跨 workspace @mention 别 workspace 的 agent —— 违反 workspace 隔离
 - ❌ Workspace mid-channel 加减 member（要新建 channel）
 - ❌ 真实的 turn-taking 协议（信 system prompt 引导即可）
@@ -921,7 +901,7 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" / §"Workspace 
 | Project + per-host workspace binding | 砍掉 Project 这层 | 跨机器文件协作非目标，过度设计 |
 | `--auth-token` argv 注入 | env `AGENT_HUB_AUTH_TOKEN` | 避免 `ps` 暴露 token |
 | `.agent-hub` 目录名 | `.silverhand` | 跟 app 名统一 |
-| Memory 在 workspace 级别 | Memory 分三层（L1 agent-global / L2 workspace-instance / L3 workspace-consensus）| Agent 身份要跨 workspace 复用又要支持 workspace 内角色反转，单层 memory 做不到 |
+| Memory 在 workspace 级别 | Memory 分两层（L1 agent-global / L2 workspace-instance）| Agent 身份要跨 workspace 复用又要支持 workspace 内角色反转，单层 memory 做不到 |
 | L2 用 symlink 指 L1（隐式共享）| L2 只存 workspace-scoped MEMORY/notes；L1 `system_prompt.md` 是唯一角色源 | 角色身份要全局一致且由 DM 塑造；workspace 差异化知识放 L2，避免 prompt 分叉 |
 | DM 跟普通 workspace 一样有独立 workspace_path | DM workspace_path = `~/.silverhand/agents/<id>/`（直接落 L1）| DM 是塑造 agent 全局身份的专用场所，写到独立 workspace 就跟 workspace 没区别了 |
 | 应用数据放 Electron `userData` | 全部放 `~/.silverhand/`（db / config / agents / workspaces）| 用户能直接 `cd` 进去看；跟 `~/.claude` `~/.codex` 形成对称；跨 Electron 重装保留 |
@@ -932,7 +912,6 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" / §"Workspace 
 | 没有打断机制 / "需要时加 SIGINT" | 显式两层：soft（追加新指令走 §3.1 A 档 push）+ hard（Claude control_request interrupt → SIGTERM fallback） | 用户实际需要"换方向"和"立刻停"两种语义，slock 也是这套（control 协议 + 进程信号） |
 | Server-side 上下文压缩 / chat history 裁剪 | 全部不做，跟随 slock：压缩是 agent CLI 内部行为，silverhand 只 observer + push 暂停 + watchdog；messages 表 append-only 永不裁剪 | 压缩本质损失性，由 model runtime 自己决定最合适；server 介入会双重压缩 / 触发不一致 |
 | §4.7 平台 prompt 模板"几条 etiquette 提醒" | 完整操作手册（Critical rules / Startup sequence / Workspace & Memory / Compaction safety / Etiquette / Initial role），抄 slock 的覆盖度 | 单靠几句礼貌话不够：少了 startup sequence agent 不读 MEMORY、少了 compaction safety 压缩后 agent 失忆、少了 critical rule agent 把 reply 打到 stdout |
-| CONSENSUS = "多 agent 协作产物" | CONSENSUS = "所有成员都必须遵守的少数关键共识，<2KB" | 定义太宽会被滥用成堆砌式 todo / 聊天摘要，失去"共识"的价值 |
 | 子话题用 slock-style thread（消息归类）| §3.6 Thread：真隔离的子进程 + 父子双向通信（send_message target=parent/child）+ close_thread 强制 summary 回流；硬限 1 层嵌套 | slock thread 不隔离 agent 上下文（同进程订阅多 workspace），是 slock 单进程模型下的妥协。我们 channel-主导模型有条件做真隔离，干脆做对 |
 
 ---

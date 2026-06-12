@@ -46,7 +46,7 @@ const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts']);
 /**
  * Backend-local infrastructure modules permitted to touch the filesystem.
  * Paths are POSIX-relative to `packages/backend/src`. Each owns the server's
- * OWN on-disk state, never an agent-host (L1/L2/CONSENSUS/workspace) path:
+ * OWN on-disk state, never an agent-host (L1/L2/workspace) path:
  *   - db.ts                       → SQLite file open/WAL
  *   - logger.ts                   → JSONL log files under ~/.silverhand/logs
  *   - storage/blob-file-storage.ts→ attachment/blob storage (backend-local)

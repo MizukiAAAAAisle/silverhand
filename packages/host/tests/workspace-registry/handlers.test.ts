@@ -19,7 +19,6 @@ import {
   seedAgentL2,
   AgentFilesPurgeError,
   purgeAgentFiles,
-  WORKSPACE_CONSENSUS_DEFAULT,
   type RegistryBinding,
 } from '../../src/daemon/workspace-registry/index.js';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
@@ -69,28 +68,22 @@ describe('provisionWorkspace', () => {
     expect(r).toEqual({ ok: true, provisioned: true, bound_workspace_path: path });
 
     expect(existsSync(join(path, '.silverhand', 'agents'))).toBe(true);
-    const consensus = readFileSync(
-      join(path, '.silverhand', 'CONSENSUS.md'),
-      'utf-8',
-    );
-    expect(consensus).toBe(WORKSPACE_CONSENSUS_DEFAULT);
+    expect(existsSync(join(path, '.silverhand', 'CONSENSUS.md'))).toBe(false);
   });
 
-  it('is idempotent: re-provision reports provisioned=false and does not clobber CONSENSUS', async () => {
+  it('is idempotent: re-provision reports provisioned=false and preserves existing skeleton files', async () => {
     const registry = makeRegistry();
     await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
     const path = registry.resolve('ws_1');
-    // Mutate CONSENSUS so we can detect a clobber.
-    const consensusPath = join(path, '.silverhand', 'CONSENSUS.md');
-    const { writeFileSync } = await import('node:fs');
-    writeFileSync(consensusPath, '# edited by a member\n', 'utf-8');
+    const markerPath = join(path, '.silverhand', 'agents', 'marker');
+    writeFileSync(markerPath, 'preserve me\n', 'utf-8');
 
     const r = await provisionWorkspace(
       { workspace_id: 'ws_1', kind: 'regular' },
       { registry },
     );
     expect(r).toEqual({ ok: true, provisioned: false, bound_workspace_path: path });
-    expect(readFileSync(consensusPath, 'utf-8')).toBe('# edited by a member\n');
+    expect(readFileSync(markerPath, 'utf-8')).toBe('preserve me\n');
   });
 
   it('rejects kind=agent_home with unsupported_kind and writes nothing', async () => {

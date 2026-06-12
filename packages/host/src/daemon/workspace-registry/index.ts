@@ -31,7 +31,4 @@ export {
   type PurgeAgentFilesDeps,
 } from './files-purge-handler.js';
 export { mapFsErrno, type FsErrnoCode } from './fs-errno.js';
-export {
-  WORKSPACE_CONSENSUS_DEFAULT,
-  initWorkspaceSkeleton,
-} from './workspace-skeleton.js';
+export { initWorkspaceSkeleton } from './workspace-skeleton.js';

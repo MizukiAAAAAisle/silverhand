@@ -255,7 +255,7 @@ export function formatDeliveryInstruction(
 
   if (hasUserMessage && hasUserMessageForRecipient) {
     const mentionHint = nonSystemMentionsRecipient
-      ? '[user addressed you by name; a visible reply is expected.]\n'
+      ? 'user addressed you by name.\n'
       : '';
     return (
       mentionHint +
@@ -276,7 +276,7 @@ export function formatDeliveryInstruction(
 
   if (nonSystemMentionsRecipient) {
     return (
-      `[sender addressed you by name]\n` +
+      `sender addressed you by name.\n` +
       `Respond as appropriate — call \`${sendMessageTool}\` before stopping. ` +
       `Complete ALL your work before stopping.`
     );

@@ -6,8 +6,8 @@
  * scoped by Cindy `c8GvzR8Q5pcqp2QI`):
  *
  *  - **Structured fields only.** No payload bodies, no stdin / stdout
- *    chunks, no inbox row content, no system-prompt / MEMORY /
- *    CONSENSUS file content, no env values.
+ *    chunks, no inbox row content, no system-prompt / MEMORY content,
+ *    no env values.
  *  - **Field-name guard.** Any field whose name suggests content
  *    (`payload`, `chunk`, `body`, `text`, `prompt`, `env`, `env_*`,
  *    `stdout`, `stderr`, `soft_directive`) is

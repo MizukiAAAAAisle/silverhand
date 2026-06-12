@@ -1,8 +1,16 @@
 # Agent system prompt + memory model
 
 Locked design as of 2026-05-20. Authoritative for `system_prompt.md`,
-`MEMORY.md`, `notes/`, `CONSENSUS.md`, and the platform prompt assembly
-that injects them on every spawn.
+`MEMORY.md`, `notes/`, and the platform prompt assembly that injects them
+on every spawn.
+
+> **2026-06-12 — workspace Consensus removed.** The `CONSENSUS.md`
+> concept (an L3 workspace-wide shared file) was dropped: agents rarely
+> edited it, and a single shared file blurred multiple agents' separate
+> records. Each agent's own L2 `MEMORY.md` / `notes/` is sufficient.
+> The model below is the current three-file model; references to
+> `CONSENSUS.md` were removed from generation, prompt injection, and
+> docs (#task:1086 / #task:1087).
 
 ## Goals
 
@@ -12,29 +20,26 @@ that injects them on every spawn.
 - Memory and collaboration patterns that are workspace-scoped (review
   pairings, hand-off rules, work logs) stay with the workspace and do
   not leak across.
-- Common context (role, current workspace memory, workspace consensus)
-  is loaded for the agent on every spawn so it does not need to issue
-  Read calls to recover its baseline.
+- Common context (role, current workspace memory) is loaded for the
+  agent on every spawn so it does not need to issue Read calls to recover
+  its baseline.
 - Cross-workspace navigation is path-only: the agent sees an *index* of
   every workspace it belongs to, not the contents — opening a peer
   workspace's MEMORY.md is intentional, not implicit.
 
-## The four files
+## The three files
 
 | Path | Tier | Scope | Who writes |
 | --- | --- | --- | --- |
 | `~/.silverhand/agents/<id>/system_prompt.md` | L1 | global (all workspaces) | the agent (any workspace), guided by the scope rule |
 | `<workspace>/.silverhand/agents/<id>/MEMORY.md` | L2 | one workspace | the agent in that workspace |
 | `<workspace>/.silverhand/agents/<id>/notes/*` | L2 | one workspace | the agent in that workspace |
-| `<workspace>/.silverhand/CONSENSUS.md` | workspace | one workspace | every member, by agreement |
 
 For an agent's DM workspace (`workspace_kind = 'agent_home'`), the
 workspace path **coincides with** the L1 directory:
 `workspace_path = ~/.silverhand/agents/<id>`. So the same physical
 `MEMORY.md` and `notes/` serve as the DM's L2. There is no separate
-"DM-L2" copy. The DM workspace does **not** carry a `CONSENSUS.md` — a
-DM has only one member, so the prompt skips the Workspace Consensus
-section in `agent_home`.
+"DM-L2" copy.
 
 There is no L2 `system_prompt.md`. The role contract is L1-only and is
 read directly from `~/.silverhand/agents/<id>/system_prompt.md` by the
@@ -47,8 +52,7 @@ decide where to write by **scope**:
   `system_prompt.md`. Picked up by every workspace on the agent's next
   spawn.
 - **Workspace-scoped** (collaboration patterns, project facts, work
-  logs, consensus rules) → that workspace's L2 `MEMORY.md` / `notes/`,
-  or `CONSENSUS.md` for rules every member must respect.
+  logs) → that workspace's L2 `MEMORY.md` / `notes/`.
 
 ## Why no L2 system_prompt
 
@@ -67,7 +71,7 @@ exactly one `system_prompt.md` per agent.
 ## Spawn-time prompt assembly
 
 `ConversationManager.buildPromptContext(conversation, workspace, agent)`
-loads the four pieces and hands them to `buildPlatformPrompt`:
+loads the three pieces and hands them to `buildPlatformPrompt`:
 
 1. **Role (L1)** — `readFile(~/.silverhand/agents/<agent.id>/system_prompt.md)`,
    missing → empty string. Rendered as the trailing **Initial role**
@@ -75,9 +79,7 @@ loads the four pieces and hands them to `buildPlatformPrompt`:
 2. **Current workspace MEMORY.md** — `readFileWithCap(<active L2>/MEMORY.md, 16 KB)`.
    Cap is hard: oversize files are UTF-8-safely truncated and tagged
    `\n…(truncated)`. Missing → empty → renderer shows the missing-hint.
-3. **Workspace CONSENSUS.md** — `readFileWithCap(<workspace>/.silverhand/CONSENSUS.md, 4 KB)`.
-   Same semantics.
-4. **Workspace memory index** — for every workspace the agent is a
+3. **Workspace memory index** — for every workspace the agent is a
    member of (`WorkspaceRepo.listForAgent(agentId)`), build
    `{label, memoryPath}`. The current workspace's label is suffixed
    with ` (current)`. Renderer notes that the current workspace's
@@ -89,7 +91,6 @@ sections:
 ```
 ## Initial role          ← roleSystemPrompt (L1)
 ## Active Workspace Memory ← currentMemory (L2 of active workspace)
-## Workspace Consensus    ← currentConsensus (workspace CONSENSUS.md)
 ## Workspace Memory Index ← workspaceMemoryIndex (paths only)
 ```
 
@@ -142,7 +143,7 @@ Manual. There is no programmatic migration script:
    `<workspace>/.silverhand/agents/<id>/system_prompt.md` if it
    exists (it will no longer be re-seeded).
 3. Re-spawn the agent. The new prompt picks up L1 system_prompt + L2
-   MEMORY/notes + workspace CONSENSUS automatically.
+   MEMORY/notes automatically.
 
 ## Anti-patterns to keep out
 
@@ -160,7 +161,9 @@ Manual. There is no programmatic migration script:
 - **Do not add a host-id filter inside `buildWorkspaceMemoryIndex`.**
   Host equality is enforced at membership time; runtime filtering is
   redundant and can mask membership bugs.
-- **Do not render Workspace Consensus in `agent_home`.** The DM
-  workspace has only one member, so there is no "consensus" to record;
-  the prompt would otherwise nudge the agent to create a stray
-  `.silverhand/CONSENSUS.md` under the L1 directory.
+- **Do not re-introduce a workspace `CONSENSUS.md` / Workspace Consensus
+  section.** It was removed deliberately (#task:1086): agents rarely
+  edited the shared file and one shared doc blurred separate agents'
+  records. Per-agent L2 `MEMORY.md` / `notes/` is the home for durable
+  workspace knowledge; cross-agent agreements that must be enforced
+  belong in the codebase or docs, not a re-injected shared prompt file.

@@ -11,7 +11,6 @@ import type {
 } from './runtime-start-resolve.js';
 
 export const MEMORY_INJECT_CAP_BYTES = 16 * 1024;
-export const CONSENSUS_INJECT_CAP_BYTES = 4 * 1024;
 
 export async function readFileWithCap(
   path: string,
@@ -52,21 +51,12 @@ export async function buildPromptContextFromRuntimeStartOptions(
     MEMORY_INJECT_CAP_BYTES,
   );
 
-  const currentConsensus =
-    options.workspace.kind === 'agent_home'
-      ? null
-      : await readFileWithCap(
-          join(options.workspace.path, '.silverhand', 'CONSENSUS.md'),
-          CONSENSUS_INJECT_CAP_BYTES,
-        );
-
   return {
     agentId: options.agent.id,
     agentName: options.agent.name,
     activeProfileDir: activeProfilePromptDir(options.workspace, options.agent.id),
     roleSystemPrompt,
     currentMemory,
-    currentConsensus,
     workspaceMemoryIndex: buildWorkspaceMemoryIndexFromRuntimeStartOptions(
       options,
     ),
@@ -83,7 +73,6 @@ export async function buildPromptContextFromRuntimeStartOptions(
       isChildSession: options.session.kind === 'thread',
       parentSessionTitle: options.session.parent_title,
       parentChannelConversationId: options.session.parent_conversation_id,
-      isAgentSpawnedChild: options.session.spawned_by_agent_id !== null,
     },
   };
 }

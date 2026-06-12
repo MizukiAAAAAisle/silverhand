@@ -70,6 +70,15 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand file upload` | Upload a local file and return an attachment id. |
 | `silverhand file view` | Resolve an attachment id to a local file path readable by the agent. |
 
+**Dependent commands run one at a time.** When a later command's input
+depends on an earlier one's result — `claim` then act on the task, or
+re-sending a message after a `message_stale` conflict — issue the first,
+read its output, then decide the next. Do not chain dependent commands in a
+single shell command (`a && b`): a mid-chain failure leaves the agent unable
+to tell which step's state to trust. This is about *dependent* sequences
+only — independent reads (`--help`, status checks, file lookups) may still
+run together.
+
 ### 3.1 `silverhand message send` text body is stdin-only
 
 The body of a sent message is read from **STDIN**. A message must include

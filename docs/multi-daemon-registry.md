@@ -414,7 +414,7 @@ Four product-shape decisions are needed before sandbox daemons can ship. The reg
 
 ### 8.2 L1 / L2 file visibility
 
-`system_prompt.md` (L1) and `MEMORY.md` / `notes/` (L2) and `CONSENSUS.md` are filesystem-anchored under `~/.silverhand/agents/<id>/` and `<workspace>/.silverhand/`. A sandbox daemon must see these to inject them into the spawn-time prompt context (see `architecture-principles.md` §3 and `docs/agent-system-prompt-memory.md`).
+`system_prompt.md` (L1) and `MEMORY.md` / `notes/` (L2) are filesystem-anchored under `~/.silverhand/agents/<id>/` and `<workspace>/.silverhand/`. A sandbox daemon must see these to inject them into the spawn-time prompt context (see `architecture-principles.md` §3 and `docs/agent-system-prompt-memory.md`).
 
 Either:
 - L1/L2 lives inside the sandbox mount from the start; the renderer reads from there too (consistent view).

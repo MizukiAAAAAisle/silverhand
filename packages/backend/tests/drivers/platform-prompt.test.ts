@@ -13,7 +13,6 @@ function prompt(): string {
     activeProfileDir: './.silverhand/agents/agent-1',
     roleSystemPrompt: '_role_',
     currentMemory: { kind: 'missing' },
-    currentConsensus: { kind: 'missing' },
     workspaceMemoryIndex: [],
     sessionContext: {
       conversationId: 'conv-channel-1',
@@ -54,7 +53,6 @@ describe('buildPlatformPrompt', () => {
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
       currentMemory: { kind: 'missing' },
-      currentConsensus: { kind: 'missing' },
       workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'thread-1',
@@ -66,7 +64,6 @@ describe('buildPlatformPrompt', () => {
         isChildSession: true,
         parentSessionTitle: 'member activity',
         parentChannelConversationId: 'channel-1',
-        isAgentSpawnedChild: false,
       },
     });
 
@@ -128,7 +125,6 @@ describe('buildPlatformPrompt', () => {
       activeProfileDir: '.',
       roleSystemPrompt: '_role_',
       currentMemory: { kind: 'missing' },
-      currentConsensus: { kind: 'missing' },
       workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'dm-conv-1',
@@ -155,7 +151,6 @@ describe('buildPlatformPrompt', () => {
       activeProfileDir: './.silverhand//agents///agent-1/',
       roleSystemPrompt: '_role_',
       currentMemory: { kind: 'missing' },
-      currentConsensus: { kind: 'missing' },
       workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'conv-channel-1',
@@ -175,20 +170,21 @@ describe('buildPlatformPrompt', () => {
     expect(messy).not.toContain('//agents');
   });
 
-  it('requires task state updates before reporting completion', () => {
+  it('requires work-driven claiming and task state updates before reporting completion', () => {
     const text = prompt();
-    expect(text).toContain('Claim a task only when the message asks');
-    expect(text).toContain('substantive action');
-    expect(text).toContain('Do **not**');
-    expect(text).toContain('answering a question');
+    expect(text).toContain('**Claim work, not messages.**');
+    expect(text).toContain("substantive work *that isn't already");
+    expect(text).toContain('tracked by a task');
+    expect(text).toContain('race-guard');
+    expect(text).toContain('review feedback on a task you own');
+    expect(text).toContain('not** new work');
+    expect(text).toContain('instead of promoting the message');
+    expect(text).toContain('Plain Q&A');
     expect(text).toContain('casual conversation');
     expect(text).toContain('status checks');
     expect(text).toContain('clarifications');
-    expect(text).toContain('When in doubt, reply first');
-    expect(text).toContain('silverhand task claim --message-id <message_id>');
-    expect(text).toContain('Plain Q&A');
     expect(text).toContain('need no claim');
-    expect(text).toContain('Claim before substantive work');
+    expect(text).toContain('**A failed claim means stop.**');
     expect(text).toContain('Close the loop on tasks you own');
     expect(text).toContain('call `silverhand task status` first');
     expect(text).toContain('leaving the task state unchanged');
@@ -205,9 +201,35 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('`silverhand schedule list`');
     expect(text).toContain('`silverhand schedule cancel`');
     expect(text).toContain('future time');
-    expect(text).toContain('strict 5-field UNIX syntax');
+    expect(text).toContain('Where it fires');
     expect(text).toContain("metadata.subtype = 'schedule_fire'");
     expect(text).toMatch(/report via\s+`silverhand message send`/);
+    // cron 5-field syntax / max-occurrences detail now lives in `--help`,
+    // not the prompt (#task:1094 slimming).
+    expect(text).not.toContain('strict 5-field UNIX syntax');
+  });
+
+  it('teaches CJK-punctuation URL wrapping and search-first historical references', () => {
+    // Two slock imports (#task:1091):
+    //  - wrap a URL next to non-ASCII punctuation in <...> / markdown so the
+    //    trailing full-width comma isn't swallowed into the link.
+    //  - when the user references a past discussion not in hand, search
+    //    first and cite the source (or say it wasn't found).
+    const text = prompt();
+    expect(text).toContain('URLs next to non-ASCII punctuation');
+    expect(text).toContain('swallowed into the link');
+    expect(text).toContain('<http://127.0.0.1:3000>');
+    expect(text).toContain(
+      'When the user refers to a past discussion, decision, or owner',
+    );
+    expect(text).toContain('search before you answer');
+    expect(text).toContain('say so explicitly rather');
+
+    // Peek/pull semantics relocated from Threads into History (#task:1094):
+    // reading a thread is a pull that advances the read boundary.
+    expect(text).toContain('--target thread:<root_message_id>');
+    expect(text).toContain('is a **pull**');
+    expect(text).toContain('advances your read boundary');
   });
 
   it('renders the silverhand CLI command manual', () => {
@@ -218,7 +240,6 @@ describe('buildPlatformPrompt', () => {
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
       currentMemory: { kind: 'missing' },
-      currentConsensus: { kind: 'missing' },
       workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'conv-channel-1',
@@ -250,6 +271,12 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('message stale-resolve --resolution obsolete');
     expect(text).toContain('--anyway');
     expect(text).toContain('silverhand <noun> <verb> --help');
+    // Dependent silverhand commands run one at a time (slock import,
+    // rewritten to dependent-only so it doesn't ban independent parallel
+    // reads). #task:1091.
+    expect(text).toContain('Run *dependent* silverhand commands one at a time');
+    expect(text).toContain('claim-then-act');
+    expect(text).toContain('dependent sequences only');
     expect(text).toContain('**`silverhand message send`**: Send a message');
     expect(text).toContain('Use GitHub Flavored Markdown: headings, lists, tables');
     expect(text).toContain(
@@ -278,7 +305,7 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('Threads (reply clusters)');
     expect(text).toContain('reply cluster');
     expect(text).toContain('`silverhand message send --target thread:<message_id>`');
-    expect(text).toContain('`silverhand thread follow --root <message_id>`');
+    expect(text).toContain('`silverhand thread follow`');
     expect(text).toContain('`silverhand thread unfollow --root <message_id>`');
     expect(text).toContain('`silverhand channel create`');
     expect(text).toContain('**Only** call `silverhand channel create`');
@@ -305,17 +332,17 @@ describe('buildPlatformPrompt', () => {
     // target" and need not reason about runtime state.
     const text = prompt();
     expect(text).toContain('reply cluster');
-    expect(text).toContain("sharing the channel's context");
+    expect(text).toContain("shares the channel's context");
     expect(text).toMatch(/root\s+message\s+id/);
     expect(text).toContain('--target thread:<message_id>');
     expect(text).toContain('target=channel|thread:<root_message_id>');
     expect(text).toContain('target=thread:<root_message_id>');
     expect(text).toMatch(/stay in a thread by default/);
-    expect(text).toContain('makes you a follower');
+    expect(text).toContain('auto-follows you');
     expect(text).toMatch(/subscription, not a\s+permission/);
-    expect(text).toContain(
-      'silverhand message history --target thread:<root_message_id>',
-    );
+    // Peek (`message history --target thread:`) now lives under History and
+    // search, and task-in-thread under Tasks — relocated out of the Threads
+    // base definition (#task:1094). Asserted in their own sections below.
     expect(text).toMatch(/Need isolation, parallelism/);
     expect(text).toContain('`silverhand channel create`');
     expect(text).not.toContain('silverhand thread create');
@@ -349,7 +376,7 @@ describe('buildPlatformPrompt', () => {
     // Each grammar must keep its sub-heading anchor; tests below
     // assert the per-grammar bullets and the closing summary.
     expect(text).toMatch(/^### Reference grammars\s*$/m);
-    expect(text).toMatch(/^### Summary — when to use which\s*$/m);
+    expect(text).toMatch(/^### Rules\s*$/m);
     expect(text).toContain('`#conv:<conversation_id>`');
     expect(text).toMatch(/#conv:qdQwBXDqcq_GE63-/);
 
@@ -406,7 +433,7 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('announcing the new channel as');
     expect(text).toContain('`#conv:<channel_id>`');
     expect(text).toContain(
-      'When you cite a search hit or history pointer back in chat',
+      'When you cite a hit back in chat',
     );
     expect(text).toContain('`#conv:<hit.message_ref.conversation_id>`');
     expect(text).toMatch(/Message ids stay raw/);
@@ -471,19 +498,20 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('#task:5');
     expect(text).toMatch(/--task-number\s+5\b/);
 
-    // Cross-grammar summary picks the right form for the right job.
-    expect(text).toMatch(/Pick the most precise form available/i);
-
     // Channel-name semantics: scope = current workspace, ambiguous
     // names render inert (frontend keys lookup by channel `title` and
     // surfaces a sentinel for duplicate titles). The prompt should
     // describe the contract without leaning on UI-shape vocabulary;
-    // "inert text" is the output contract the renderer enforces.
+    // "inert" is the output contract the renderer enforces.
     expect(text).toMatch(/ambiguous/i);
-    expect(text).toMatch(/inert text/i);
+    expect(text).toMatch(/inert/i);
   });
 
-  it('renders legacy child-session context as read-only without close guidance', () => {
+  it('renders thread (child-session) context positively, with no legacy/migration language', () => {
+    // Legacy threads退场: the prompt describes only the current model
+    // (#task:1094). A thread session renders as the current reply-cluster
+    // stream — never "legacy ... read-only during migration", and the
+    // `isAgentSpawnedChild` prompt-contract field is gone.
     const text = buildPlatformPrompt({
       agentId: 'agent-1',
       agentName: 'Cindy',
@@ -491,7 +519,6 @@ describe('buildPlatformPrompt', () => {
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
       currentMemory: { kind: 'missing' },
-      currentConsensus: { kind: 'missing' },
       workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'thread-1',
@@ -503,47 +530,21 @@ describe('buildPlatformPrompt', () => {
         isChildSession: true,
         parentSessionTitle: 'member activity',
         parentChannelConversationId: 'channel-1',
-        isAgentSpawnedChild: false,
       },
     });
 
-    expect(text).toContain('legacy user-opened Thread');
-    expect(text).toContain('read-only during the reply-cluster migration');
-    expect(text).not.toContain('do not close this thread unless');
-    expect(text).not.toContain('User-opened Threads should remain open');
-    expect(text).not.toContain('then call `close_session`');
+    // Positive current-model rendering.
+    expect(text).toContain(
+      'Current stream: a thread (reply cluster) under the channel "member activity"',
+    );
+    expect(text).toContain('Bare sends stay in this thread');
+    expect(text).toContain('Parent channel conversation id: `channel-1`');
+
+    // No migration/legacy vocabulary survives anywhere in the prompt.
+    expect(text).not.toContain('legacy');
+    expect(text).not.toContain('migration');
     expect(text).not.toContain('silverhand thread close');
     expect(text).not.toContain('target=parent');
-    expect(text).not.toContain('posted_to_parent: true');
-  });
-
-  it('renders agent-spawned legacy child-session context as read-only', () => {
-    const text = buildPlatformPrompt({
-      agentId: 'agent-1',
-      agentName: 'Cindy',
-      runtime: 'claude',
-      activeProfileDir: './.silverhand/agents/agent-1',
-      roleSystemPrompt: '_role_',
-      currentMemory: { kind: 'missing' },
-      currentConsensus: { kind: 'missing' },
-      workspaceMemoryIndex: [],
-      sessionContext: {
-        conversationId: 'thread-1',
-        channelName: 'silverhand',
-        channelKind: 'regular',
-        sessionTitle: 'debug branch',
-        members: [],
-        selfAgentId: 'agent-1',
-        isChildSession: true,
-        parentSessionTitle: 'member activity',
-        parentChannelConversationId: 'channel-1',
-        isAgentSpawnedChild: true,
-      },
-    });
-
-    expect(text).toContain('legacy isolated Thread');
-    expect(text).toContain('read-only during the reply-cluster migration');
-    expect(text).not.toContain('silverhand thread close');
   });
 
   // ── Members block (PR-B) ────────────────────────────────────────
@@ -561,7 +562,6 @@ describe('buildPlatformPrompt', () => {
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
       currentMemory: { kind: 'missing' },
-      currentConsensus: { kind: 'missing' },
       workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'conv-channel-1',
@@ -645,7 +645,6 @@ describe('buildPlatformPrompt', () => {
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
       currentMemory: { kind: 'missing' },
-      currentConsensus: { kind: 'missing' },
       workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'conv-channel-1',
@@ -671,7 +670,6 @@ describe('buildPlatformPrompt', () => {
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
       currentMemory: { kind: 'missing' },
-      currentConsensus: { kind: 'missing' },
       workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'conv-channel-1',
@@ -721,7 +719,6 @@ describe('buildPlatformPrompt', () => {
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
       currentMemory: { kind: 'missing' },
-      currentConsensus: { kind: 'missing' },
       workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'conv-channel-1',
@@ -832,7 +829,6 @@ describe('buildPlatformPrompt', () => {
       activeProfileDir: './.silverhand/agents/agent-1',
       roleSystemPrompt: '_role_',
       currentMemory: { kind: 'missing' },
-      currentConsensus: { kind: 'missing' },
       workspaceMemoryIndex: [],
       sessionContext: {
         conversationId: 'conv-channel-1',
@@ -984,25 +980,22 @@ describe('buildPlatformPrompt', () => {
 });
 
 // -----------------------------------------------------------------------
-// Four-file model: auto-injection, workspace memory index, drift safeguards.
+// Three-file model: auto-injection, workspace memory index, drift safeguards.
 // See docs/agent-system-prompt-memory.md.
 // -----------------------------------------------------------------------
 
-describe('buildPlatformPrompt — four-file model', () => {
+describe('buildPlatformPrompt — three-file model', () => {
   // Helper accepts shorthand: a string = `{ kind: 'present', body }`,
   // an explicit InjectedFileContent passes through, undefined =
-  // `{ kind: 'missing' }`. `null` for currentConsensus opts the section
-  // out entirely (used by DM workspaces).
+  // `{ kind: 'missing' }`.
   function withInjections(args: {
     currentMemory?: string | InjectedFileContent;
-    currentConsensus?: string | InjectedFileContent | null;
     workspaceMemoryIndex?: Array<{ label: string; memoryPath: string }>;
     channelKind?: 'regular' | 'dm';
     roleSystemPrompt?: string;
     activeProfileDir?: string;
   }): string {
     const cm = args.currentMemory;
-    const cc = args.currentConsensus;
     return buildPlatformPrompt({
       agentId: 'agent-1',
       agentName: 'Cindy',
@@ -1013,12 +1006,6 @@ describe('buildPlatformPrompt — four-file model', () => {
         typeof cm === 'string'
           ? { kind: 'present', body: cm }
           : cm ?? { kind: 'missing' },
-      currentConsensus:
-        cc === null
-          ? null
-          : typeof cc === 'string'
-            ? { kind: 'present', body: cc }
-            : cc ?? { kind: 'missing' },
       workspaceMemoryIndex: args.workspaceMemoryIndex ?? [],
       sessionContext: {
         conversationId: 'conv-1',
@@ -1041,22 +1028,12 @@ describe('buildPlatformPrompt — four-file model', () => {
     expect(text).toContain('- token: ABC123');
   });
 
-  it('auto-injects CONSENSUS.md content under Workspace Consensus', () => {
-    const text = withInjections({
-      currentConsensus: '# Consensus\n\n- be kind to each other',
-    });
-    expect(text).toContain('## Workspace Consensus');
-    expect(text).toContain('be kind to each other');
-  });
-
-  it('renders missing-hint when MEMORY/CONSENSUS are missing', () => {
+  it('renders missing-hint when MEMORY is missing', () => {
     const text = withInjections({});
     // Section header always renders.
     expect(text).toContain('## Active Workspace Memory');
-    expect(text).toContain('## Workspace Consensus');
     // But no fenced body: missing-hint is rendered as italics.
     expect(text).toMatch(/Active Workspace Memory[\s\S]*No MEMORY\.md exists yet/);
-    expect(text).toMatch(/Workspace Consensus[\s\S]*No CONSENSUS\.md exists yet/);
   });
 
   it('renders an explicit error for unreadable files (vs missing)', () => {
@@ -1066,13 +1043,10 @@ describe('buildPlatformPrompt — four-file model', () => {
     // existing file.
     const text = withInjections({
       currentMemory: { kind: 'unreadable', reason: 'EACCES' },
-      currentConsensus: { kind: 'unreadable', reason: 'EIO' },
     });
     expect(text).toMatch(/unable to read[\s\S]*MEMORY\.md[\s\S]*EACCES/);
-    expect(text).toMatch(/unable to read[\s\S]*CONSENSUS\.md[\s\S]*EIO/);
     // And the create-one missing-hint must NOT appear when unreadable.
     expect(text).not.toMatch(/MEMORY\.md exists yet/);
-    expect(text).not.toMatch(/CONSENSUS\.md exists yet/);
   });
 
   it('renders the workspace memory index with the current workspace marked', () => {
@@ -1090,13 +1064,12 @@ describe('buildPlatformPrompt — four-file model', () => {
   });
 
   it('drops the legacy "read MEMORY.md first" startup instruction', () => {
-    // The four-file model auto-injects MEMORY/CONSENSUS, so the agent
-    // does NOT need to issue Read calls at startup. If the prompt re-grows
-    // those instructions, this regression test will fail.
+    // The three-file model auto-injects MEMORY, so the agent does NOT
+    // need to issue Read calls at startup. If the prompt re-grows those
+    // instructions, this regression test will fail.
     const text = withInjections({});
     expect(text).not.toContain('Read your active profile');
     expect(text).not.toMatch(/Read `[^`]*MEMORY\.md` first/);
-    expect(text).not.toMatch(/Read `\.\/\.silverhand\/CONSENSUS\.md` —/);
   });
 
   it('does not announce L2 system_prompt.md path (system_prompt is L1-only)', () => {
@@ -1135,38 +1108,17 @@ describe('buildPlatformPrompt — four-file model', () => {
     }
   });
 
-  it('skips Workspace Consensus entirely in DM (agent_home) workspaces', () => {
-    // R3: a DM has only one member, so "consensus" is meaningless.
-    // Rendering the section there would prompt the agent to create a
-    // stray .silverhand/CONSENSUS.md under the L1 directory.
-    const dm = withInjections({ channelKind: 'dm', currentConsensus: null });
-    expect(dm).not.toContain('## Workspace Consensus');
-    expect(dm).not.toMatch(/CONSENSUS\.md exists yet/);
-
-    const regular = withInjections({ channelKind: 'regular' });
-    expect(regular).toContain('## Workspace Consensus');
-  });
-
-  it('strips every CONSENSUS.md cue from DM prompt prose, not just the section', () => {
-    // Cindy round-2 review: dropping the Workspace Consensus *section*
-    // is necessary but not sufficient. The prose elsewhere in the
-    // prompt also pointed at CONSENSUS.md as if it were always loaded
-    // ("Your role, this workspace's MEMORY.md, and CONSENSUS.md are
-    // auto-loaded …", "**Initial role / Active Workspace Memory /
-    // Workspace Consensus** sections are re-injected …", "Workspace-
-    // wide consensus is auto-loaded below in **Workspace Consensus**
-    // …", etc). With the section actually missing in DM, that prose
-    // self-contradicted AND nudged the DM agent to create a stray
-    // .silverhand/CONSENSUS.md under its L1 dir.
-    const dm = withInjections({ channelKind: 'dm', currentConsensus: null });
-    expect(dm).not.toContain('CONSENSUS.md');
-    expect(dm).not.toContain('Workspace Consensus');
-    expect(dm).not.toContain('consensus');
-    // Sanity: the regular path still mentions all of these.
-    const regular = withInjections({ channelKind: 'regular' });
-    expect(regular).toContain('CONSENSUS.md');
-    expect(regular).toContain('Workspace Consensus');
-    expect(regular).toContain('consensus');
+  it('has no Workspace Consensus concept anywhere in the prompt', () => {
+    // The workspace Consensus concept was removed: agents rarely edited
+    // the shared CONSENSUS.md and it blurred per-agent memory. No channel
+    // kind should render the section, a CONSENSUS.md reference, or any
+    // consensus prose — for either regular workspaces or DMs.
+    for (const kind of ['dm', 'regular'] as const) {
+      const text = withInjections({ channelKind: kind });
+      expect(text).not.toContain('Workspace Consensus');
+      expect(text).not.toContain('CONSENSUS.md');
+      expect(text).not.toContain('consensus');
+    }
   });
 
   it('uses a longer fence when injected content contains triple backticks', () => {
