@@ -56,7 +56,8 @@ const TASK_SUBTYPE_DYNAMIC =
 const RETIRED_RENDERED_SUBTYPES = new Set<string>([
   // Reply-cluster cut3 removed isolated thread create/close producers,
   // but old rows remain readable and still use their structured desktop
-  // renderer until the legacy UI path is fully retired.
+  // renderer until the legacy isolated-thread UI path is fully retired.
+  'thread_anchor',
   'child_context',
   'thread_summary',
 ]);

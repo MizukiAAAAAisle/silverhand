@@ -44,6 +44,7 @@ import type { Driver, DriverSpawnContext, ParsedEvent } from '@silverhand/host/d
 import type { RuntimeKind } from '@silverhand/shared';
 import { AuthSessionService } from '../../src/auth/session.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
+import { MessageRepo } from '../../src/repos/message-repo.js';
 import {
   bootDaemonWithSupervisor,
   bootG2Harness,
@@ -228,26 +229,19 @@ describe('Standalone G2 — route-level runtime path (D4.b P1-1)', () => {
     // Seed one pending inbox row pre-start so the lifted route's
     // `runtimeHost.start` → `startDeliveryBacked` path has work to
     // do — the production daemon-spawn path uses `startup_delivery`
-    // to drain the inbox in the same RPC that spawns. (B2 used the
-    // same pattern directly through `runtimeHost.start`; this test
-    // exercises it through HTTP.)
-    const preStartMsgId = `route-pre-${env.sessionId}`;
-    db.prepare(
-      `INSERT INTO messages
-        (id, conversation_id, from_kind, from_agent_id, from_user_id,
-         content, metadata, seq, created_at)
-        VALUES (?, ?, 'user', NULL, ?, ?, NULL, 1, ?)`,
-    ).run(
-      preStartMsgId,
-      env.conversationId,
-      harness.userId,
-      'pre-start startup_delivery',
-      Date.now(),
-    );
+    // to drain the inbox in the same RPC that spawns. Use the message
+    // repo so seq allocation and stream heads stay in sync before the
+    // later route-level send inserts another message.
+    const preStartMessage = new MessageRepo(db).insertForConversation({
+      conversationId: env.conversationId,
+      fromKind: 'user',
+      fromUserId: harness.userId,
+      content: 'pre-start startup_delivery',
+    });
     new ConversationInboxRepo(db).enqueue(
       env.conversationId,
       env.agentId,
-      preStartMsgId,
+      preStartMessage.id,
     );
 
     daemon = await bootDaemonWithSupervisor(harness, {
@@ -410,23 +404,16 @@ describe('Standalone G2 — route-level runtime path (D4.b P1-1)', () => {
     const env = seedRouteEnv(harness, 'nodaemon');
 
     const { db } = harness.backend.context;
-    const pendingMsgId = `pending-${env.sessionId}`;
-    db.prepare(
-      `INSERT INTO messages
-        (id, conversation_id, from_kind, from_agent_id, from_user_id,
-         content, metadata, seq, created_at)
-        VALUES (?, ?, 'user', NULL, ?, ?, NULL, 1, ?)`,
-    ).run(
-      pendingMsgId,
-      env.conversationId,
-      harness.userId,
-      'must trigger transport',
-      Date.now(),
-    );
+    const pendingMessage = new MessageRepo(db).insertForConversation({
+      conversationId: env.conversationId,
+      fromKind: 'user',
+      fromUserId: harness.userId,
+      content: 'must trigger transport',
+    });
     new ConversationInboxRepo(db).enqueue(
       env.conversationId,
       env.agentId,
-      pendingMsgId,
+      pendingMessage.id,
     );
 
     const res = await postJson(
