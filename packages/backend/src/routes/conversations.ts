@@ -511,7 +511,7 @@ export function createConversationMessagingApp(
     }
   });
 
-  app.get(apiPaths.conversationChannelThreads(':id'), c => {
+  app.get(apiPaths.conversationThreads(':id'), c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
     // `getChannelLike` resolves channel / dm_channel only — a legacy

@@ -123,8 +123,6 @@ export const apiPaths = {
   conversationChannel: (id: string) => `/api/channels/${id}`,
   conversationChannelMessages: (id: string) => `/api/channels/${id}/messages`,
   conversationChannelAgents: (id: string) => `/api/channels/${id}/agents`,
-  /** Per-channel reply-cluster ("Threads") discovery list (#task:1074). */
-  conversationChannelThreads: (id: string) => `/api/channels/${id}/threads`,
   thread: (id: string) => `/api/threads/${id}`,
   threadMessages: (id: string) => `/api/threads/${id}/messages`,
   threadAgents: (id: string) => `/api/threads/${id}/agents`,
@@ -144,6 +142,10 @@ export const apiPaths = {
    *  unread state. Permission: workspace member of the target
    *  conversation's workspace. */
   conversationRef: (id: string) => `/api/conversations/${id}/ref`,
+  /** Per-channel reply-cluster ("Threads") discovery list (#task:1074).
+   *  Takes a conversation id but only resolves channel / dm_channel; a
+   *  legacy `kind='thread'` conversation is not channel-like → 404. */
+  conversationThreads: (id: string) => `/api/conversations/${id}/threads`,
   conversationLogDebug: (id: string) => `/api/conversations/${id}/log-debug`,
 
   /** Members (agents + humans) of any conversation by id (channel /

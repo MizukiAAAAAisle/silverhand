@@ -574,7 +574,7 @@ describe('canonical channel/thread routes', () => {
     expect(anchor).toBeDefined();
   });
 
-  it('rejects human writes to legacy threads; channel threads list excludes legacy thread conversations', async () => {
+  it('rejects human writes to legacy threads and retires public thread summaries', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
     const msg = await (
@@ -591,14 +591,8 @@ describe('canonical channel/thread routes', () => {
     });
     expect(post.status).toBe(409);
     expect(await post.json()).toMatchObject({ code: 'legacy_thread_read_only' });
-    // P2 (#task:1074): `/api/channels/:id/threads` now serves the reply-cluster
-    // discovery list (it previously 404'd after legacy-thread retirement). A
-    // legacy thread *conversation* is not a reply-cluster, and this channel has
-    // no cluster replies, so the list is empty rather than reviving the legacy
-    // thread.
-    const summaries = await http(t).get(`/api/channels/${channelId}/threads`);
-    expect(summaries.status).toBe(200);
-    expect(await summaries.json()).toEqual({ threads: [], next_cursor: null });
+    expect((await http(t).get(`/api/channels/${channelId}/threads`)).status)
+      .toBe(404);
 
     t.ctx.db
       .prepare(`UPDATE conversations SET closed_at = ?, status = 'archived' WHERE id = ?`)

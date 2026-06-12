@@ -33,7 +33,7 @@ function setCreatedAt(db: Db, id: string, ts: number): void {
   db.prepare(`UPDATE messages SET created_at = ? WHERE id = ?`).run(ts, id);
 }
 
-const threadsPath = (id: string) => apiPaths.conversationChannelThreads(id);
+const threadsPath = (id: string) => apiPaths.conversationThreads(id);
 
 describe('GET /api/channels/:id/threads', () => {
   let t: TestApp | null = null;
