@@ -71,19 +71,21 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
       applyTaskFilters(
         allTasks,
         filters,
-        // Global surface: "channel" === workspace (Cindy boundary —
-        // global scope is workspace-level, not conversation-level).
-        (task, workspaceId) => task.workspace_id === workspaceId,
+        // Channel-scoped filtering: every task (main-line, reply-cluster, or
+        // legacy fossil) resolves to a real channel through `channel_id`
+        // (the read model maps a fossil's channel_id to its parent channel).
+        (task, channelId) => task.channel_id === channelId,
       ),
     [allTasks, filters],
   );
 
-  // Active counts (not done, not closed) drive channel ordering + tally.
+  // Active counts (not done, not closed) drive channel ordering + tally,
+  // keyed by channel so the channel dropdown can sort by activity.
   const channelActiveCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const t of allTasks) {
       if (t.status !== 'done' && t.status !== 'closed') {
-        m.set(t.workspace_id, (m.get(t.workspace_id) ?? 0) + 1);
+        m.set(t.channel_id, (m.get(t.channel_id) ?? 0) + 1);
       }
     }
     return m;
@@ -93,26 +95,31 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
     [tasks],
   );
 
+  // Channel filter options — the real channels that have tasks, derived
+  // from the task set itself (the global pane spans every workspace scope
+  // and has no separate conversation list). A fossil task's `channel_id`
+  // already resolves to its parent channel, so legacy threads never appear
+  // as their own entries. `sublabel` carries the workspace so same-named
+  // channels across workspaces stay distinguishable.
   const channelOptions = useMemo<ChannelOption[]>(() => {
-    const sortByActivity = (
-      a: { id: string; name: string },
-      b: { id: string; name: string },
-    ): number => {
+    const wsKind = new Map(workspaces.map(w => [w.id, w.kind]));
+    const byId = new Map<string, ChannelOption>();
+    for (const t of allTasks) {
+      if (byId.has(t.channel_id)) continue;
+      byId.set(t.channel_id, {
+        id: t.channel_id,
+        label: t.channel_name,
+        kind: wsKind.get(t.workspace_id) === 'dm' ? 'dm' : 'channel',
+        sublabel: t.workspace_name,
+      });
+    }
+    return [...byId.values()].sort((a, b) => {
       const ac = channelActiveCounts.get(a.id) ?? 0;
       const bc = channelActiveCounts.get(b.id) ?? 0;
       if (ac !== bc) return bc - ac;
-      return a.name.localeCompare(b.name);
-    };
-    const regular = workspaces
-      .filter(w => w.kind !== 'dm')
-      .sort(sortByActivity)
-      .map(w => ({ id: w.id, label: w.name, kind: 'channel' as const }));
-    const dm = workspaces
-      .filter(w => w.kind === 'dm')
-      .sort(sortByActivity)
-      .map(w => ({ id: w.id, label: w.name.replace(/^dm-/, ''), kind: 'dm' as const }));
-    return [...regular, ...dm];
-  }, [workspaces, channelActiveCounts]);
+      return a.label.localeCompare(b.label);
+    });
+  }, [allTasks, workspaces, channelActiveCounts]);
 
   const assigneeOptions = useMemo(() => collectAssignees(allTasks), [allTasks]);
   const creatorOptions = useMemo(() => collectCreators(allTasks), [allTasks]);
@@ -124,7 +131,7 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
   const grouped = useMemo(() => groupByStatus(tasks), [tasks]);
 
   const selectedChannelName = filters.channelId
-    ? workspaces.find(w => w.id === filters.channelId)?.name
+    ? channelOptions.find(o => o.id === filters.channelId)?.label
     : null;
 
   return (

@@ -282,39 +282,34 @@ export function WorkspaceTasksDrawer({
     { workspaceScopeIds },
   );
 
-  // Channels with their threads grouped underneath — drives both the
-  // channel combobox options and the channel/thread match semantics.
-  const channelGroups = useMemo<ChannelGroup[]>(
-    () => buildChannelGroups(conversations),
-    [conversations],
-  );
-  const threadIds = useMemo(
-    () => new Set(conversations.filter(c => c.kind === 'thread').map(c => c.id)),
-    [conversations],
-  );
+  // Channel filter options — top-level channels only. Legacy fossil
+  // threads are no longer separate filter entries: reply-cluster tasks
+  // live in their parent channel, and a fossil task's `channel_id`
+  // already resolves to its parent channel, so every task is reachable
+  // through a channel option (single-model; no `kind='thread'` chips).
   const channelOptions = useMemo<ChannelOption[]>(() => {
-    const opts: ChannelOption[] = [];
-    for (const g of channelGroups) {
-      opts.push({ id: g.channel.id, label: g.channel.title, kind: 'channel' });
-      for (const t of g.threads) {
-        opts.push({ id: t.id, label: t.title, kind: 'thread', sublabel: g.channel.title });
-      }
-    }
-    return opts;
-  }, [channelGroups]);
+    return conversations
+      .filter(c => c.kind !== 'thread')
+      .slice()
+      .sort((a, b) => b.created_at - a.created_at)
+      .map(c => ({
+        id: c.id,
+        label: c.title,
+        kind: c.kind === 'dm_channel' ? ('dm' as const) : ('channel' as const),
+      }));
+  }, [conversations]);
 
   const tasks = useMemo(
     () =>
-      applyTaskFilters(allTasks, filters, (task, conversationId) =>
-        // A channel-option id that is a legacy fossil thread matches its
-        // tasks via the renamed `legacy_thread_conversation_id`. New
-        // reply-cluster tasks live in the channel itself, so they match the
-        // channel option through `channel_id` (never the legacy `thread_id`).
-        threadIds.has(conversationId)
-          ? task.legacy_thread_conversation_id === conversationId
-          : task.channel_id === conversationId,
+      applyTaskFilters(
+        allTasks,
+        filters,
+        // Channel-scoped: cluster + fossil tasks both resolve to a real
+        // channel through `channel_id` (the read model maps a fossil's
+        // channel_id to its parent channel).
+        (task, conversationId) => task.channel_id === conversationId,
       ),
-    [allTasks, filters, threadIds],
+    [allTasks, filters],
   );
   const updateStatus = useUpdateTaskStatus();
 
@@ -569,81 +564,6 @@ function groupByStatus(
   };
   for (const t of tasks) out[t.status].push(t);
   return out;
-}
-
-interface StripConversation {
-  id: string;
-  title: string;
-  closed_at: number | null;
-  created_at: number;
-}
-
-interface ChannelGroup {
-  channel: StripConversation;
-  threads: StripConversation[];
-}
-
-/**
- * Build a channels-with-threads tree from the flat conversation list.
- * Threads collapse under their parent so the strip reads as one chip
- * per channel (with a thread dropdown when relevant), matching how the
- * sidebar already organizes the same data.
- */
-function buildChannelGroups(
-  conversations: WorkspaceTasksDrawerProps['conversations'],
-): ChannelGroup[] {
-  const channels = conversations.filter(c => c.kind !== 'thread');
-  const threads = conversations.filter(c => c.kind === 'thread');
-  const byParent = new Map<string, StripConversation[]>();
-  for (const t of threads) {
-    if (!t.parent_channel_id) continue;
-    const arr = byParent.get(t.parent_channel_id) ?? [];
-    arr.push({
-      id: t.id,
-      title: t.title,
-      closed_at: t.closed_at,
-      created_at: t.created_at,
-    });
-    byParent.set(t.parent_channel_id, arr);
-  }
-  // Sort threads inside each channel newest-first to match the channel
-  // ordering.
-  for (const arr of byParent.values()) {
-    arr.sort((a, b) => b.created_at - a.created_at);
-  }
-  const channelGroups: ChannelGroup[] = channels
-    .map(c => ({
-      channel: {
-        id: c.id,
-        title: c.title,
-        closed_at: c.closed_at,
-        created_at: c.created_at,
-      },
-      threads: byParent.get(c.id) ?? [],
-    }))
-    .sort((a, b) => b.channel.created_at - a.channel.created_at);
-
-  // Orphaned threads — parent missing from the list. Render as their
-  // own chips after the channel groups so the user can still filter to
-  // them. This is defensive; the data should normally always include
-  // the parent.
-  const orphanThreads: ChannelGroup[] = [];
-  const knownChannelIds = new Set(channels.map(c => c.id));
-  for (const t of threads) {
-    if (t.parent_channel_id && knownChannelIds.has(t.parent_channel_id)) continue;
-    orphanThreads.push({
-      channel: {
-        id: t.id,
-        title: t.title,
-        closed_at: t.closed_at,
-        created_at: t.created_at,
-      },
-      threads: [],
-    });
-  }
-  orphanThreads.sort((a, b) => b.channel.created_at - a.channel.created_at);
-
-  return [...channelGroups, ...orphanThreads];
 }
 
 // ── Kanban column ────────────────────────────────────────────────────
