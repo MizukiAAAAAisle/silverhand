@@ -116,7 +116,7 @@ describe('thread legacy verbs', () => {
     expect(group?.removedVerbs?.create).toMatchObject({
       replacement: 'follow',
     });
-    expect(group?.removedVerbs?.create?.hint).toContain('--reply-to');
+    expect(group?.removedVerbs?.create?.hint).toContain('--target thread:');
     expect(group?.removedVerbs?.close).toMatchObject({
       replacement: 'unfollow',
     });
@@ -227,8 +227,8 @@ describe('file view command', () => {
   });
 });
 
-describe('task create --reply-to', () => {
-  // Locks the load-bearing contract: the optional --reply-to flag must
+describe('task create --target thread:<message_id>', () => {
+  // Locks the load-bearing contract: the optional thread target must
   // reach the wire as `reply_to_message_id`, and OMITTING it must leave
   // the field absent entirely (so the backend keeps the main-line default
   // `thread_root_id = NULL`). Without this, the flag could silently
@@ -262,6 +262,38 @@ describe('task create --reply-to', () => {
     const input = await captureCreateTasks({ title: 'T', 'reply-to': 'm1' });
     expect(input.tasks).toEqual([{ title: 'T' }]);
     expect(input.reply_to_message_id).toBe('m1');
+  });
+
+  it('forwards --target thread:<message_id> as reply_to_message_id', async () => {
+    const input = await captureCreateTasks({ title: 'T', target: 'thread:m1' });
+    expect(input.tasks).toEqual([{ title: 'T' }]);
+    expect(input.reply_to_message_id).toBe('m1');
+  });
+
+  it('treats --target channel as the explicit main-line destination', async () => {
+    const input = await captureCreateTasks({ title: 'T', target: 'channel' });
+    expect(input.tasks).toEqual([{ title: 'T' }]);
+    expect('reply_to_message_id' in input).toBe(false);
+  });
+
+  it('rejects --reply-to with --target as mutually_exclusive', async () => {
+    const cmd = findCommand('task', 'create');
+    await expect(
+      cmd!.run({
+        env: {
+          conversationId: 'conv',
+          agentId: 'agent',
+          serverUrl: 'http://127.0.0.1:4488',
+          authToken: 'token',
+        },
+        client: {} as BackendClient,
+        args: {
+          flags: { title: 'T', target: 'thread:m1', 'reply-to': 'm2' },
+          positional: [],
+          rest: [],
+        },
+      } as any),
+    ).rejects.toMatchObject({ subkind: 'mutually_exclusive' });
   });
 
   it('omits reply_to_message_id when --reply-to is absent (main-line default)', async () => {

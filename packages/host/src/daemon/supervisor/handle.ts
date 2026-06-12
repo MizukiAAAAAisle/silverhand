@@ -89,6 +89,11 @@ export interface PendingStaleEvent {
   currentSeq: number;
 }
 
+export interface DefaultReplyTarget {
+  readonly messageId: string;
+  readonly streamKey: string;
+}
+
 export interface RuntimeHandle {
   readonly conversationId: string;
   readonly agentId: string;
@@ -123,6 +128,17 @@ export interface RuntimeHandle {
    *  agent's own sends resolve. A reply target absent from this map is
    *  "unknown" — the send omits seen+stream_key (Case A loose). */
   replyTargetStreamByMessageId: Map<string, string>;
+  /** Default stream for a bare `message send` in the CURRENT model turn.
+   *  `null` means main line / no thread default. Set only from admitted
+   *  turn deliveries whose stream is unambiguous; explicit CLI targets
+   *  still override it. */
+  defaultReplyTarget: DefaultReplyTarget | null;
+  /** Same default inference for deliveries written mid-turn but not yet
+   *  admitted as precedent. `undefined` means no pending turn delivery has
+   *  contributed a default; `null` means pending deliveries are main/mixed
+   *  and therefore intentionally have no thread default. Promoted at the
+   *  next turn boundary alongside `pendingAdmissionSeqByStream`. */
+  pendingDefaultReplyTarget: DefaultReplyTarget | null | undefined;
   /** True once an admitted input batch is expected to be driving the
    *  current model action. Cleared on turn_end/runtime resolution.
    *  This covers the pre-first-output window where runState is still

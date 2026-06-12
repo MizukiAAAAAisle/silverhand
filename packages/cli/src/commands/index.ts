@@ -119,7 +119,7 @@ export const COMMAND_GROUPS: readonly NounGroup[] = [
         replacement: 'follow',
         hint:
           'isolated thread creation has been removed. Reply to a message with ' +
-          '`silverhand message send --reply-to <message_id>`; use ' +
+          '`silverhand message send --target thread:<message_id>`; use ' +
           '`silverhand channel create` only when the user explicitly asks for ' +
           'an isolated channel.',
       },

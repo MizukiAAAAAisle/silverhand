@@ -24,8 +24,7 @@ import type { Command } from './index.js';
 const sendCommand: Command = {
   verb: 'send',
   summary: 'Send a message to the current channel/thread.',
-  help: `silverhand message send [--target self|parent|<thread_id>]
-                          [--reply-to <message_id>]
+  help: `silverhand message send [--target channel|thread:<message_id>]
                           [--attachment <id> ...]
                           [--stale-resolution unaffected|revised]
                           [--anyway]
@@ -52,8 +51,8 @@ Two recommended call shapes:
   # attachment-only
   silverhand message send --attachment att_123
 
-  # reply into a thread (reply cluster) under message m_123
-  printf "%s" "in-thread answer" | silverhand message send --reply-to m_123
+  # explicitly send to a thread (reply cluster) under message m_123
+  printf "%s" "in-thread answer" | silverhand message send --target thread:m_123
 
 The single-quoted heredoc delimiter (\`<<'SILVERHAND_EOF'\`) disables
 shell expansion of \`$\`, backticks, and \`\\\`. The body is read as
@@ -61,18 +60,13 @@ raw bytes, decoded as UTF-8, and posted to the backend with **no
 normalization** — no BOM stripping, no CRLF→LF, no trim.
 
 Flags:
-  --target self|parent  Optional. "self" (default) sends to the current
-                        conversation. "parent" requires you to be inside
-                        a Thread; sends to that Thread's parent channel.
-                        Any other value is treated as a child Thread id
-                        you opened from this channel.
-  --reply-to <id>       Optional. Reply to a message in the current
-                        conversation, placing this send in that message's
-                        thread (reply cluster). The first reply to a
-                        main-line message opens its thread; replying to an
-                        existing reply joins the same thread (no nesting).
-                        Mutually exclusive with --target (a reply always
-                        lands in the current conversation's stream).
+  --target channel|thread:<id>
+                        Optional explicit destination. Omit it to send to
+                        the stream that woke this turn. "channel" forces the
+                        current channel's main line. "thread:<id>" sends to
+                        the reply cluster containing that message; a main-line
+                        message id opens/targets its thread, and a reply id
+                        joins the same thread (no nesting).
   --attachment <id>     Optional, repeatable. Attachment ids returned by
                         \`silverhand file upload\`. All ids must belong
                         to the current channel.
@@ -91,7 +85,6 @@ Pre-flight failures (exit 1):
   --text / --message was supplied → flag_removed (use stdin instead;
                                     these were never accepted but are
                                     intercepted with a stdin template)
-  --reply-to and --target together → mutually_exclusive
   stdin is a TTY and no attachment → stdin_is_tty (no body provided)
   stdin is empty and no attachment → empty_stdin
   stdin is not UTF-8             → invalid_utf8 (re-encode upstream)
@@ -194,19 +187,10 @@ stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null
       }
     }
 
-    const target = parseTarget(flagString(args, 'target'));
-    const replyTo = flagString(args, 'reply-to');
-    if (replyTo !== undefined && target !== undefined) {
-      throw new CliError({
-        code: 'validation_error',
-        subkind: 'mutually_exclusive',
-        message:
-          '--reply-to and --target are mutually exclusive: a reply always ' +
-          'lands in the current conversation\'s thread stream. Drop --target.',
-        retriable: false,
-        details: { flags: ['reply-to', 'target'] },
-      });
-    }
+    const destination = parseSendDestination(
+      flagString(args, 'target'),
+      flagString(args, 'reply-to'),
+    );
     const anyway = flagBool(args, 'anyway') ?? false;
     const staleResolution = parseSendStaleResolution(
       flagString(args, 'stale-resolution'),
@@ -224,8 +208,8 @@ stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null
       conversation_id: env.conversationId,
       agent_id: env.agentId,
       content,
-      ...(target ? { target } : {}),
-      ...(replyTo ? { reply_to_message_id: replyTo } : {}),
+      ...(destination.target ? { target: destination.target } : {}),
+      ...(destination.replyTo ? { reply_to_message_id: destination.replyTo } : {}),
       ...(attachmentIds && attachmentIds.length > 0
         ? { attachment_ids: attachmentIds }
         : {}),
@@ -242,8 +226,8 @@ stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null
     // polluted boundary.
     return await client.sendMessage({
       content,
-      ...(target ? { target } : {}),
-      ...(replyTo ? { reply_to_message_id: replyTo } : {}),
+      ...(destination.target ? { target: destination.target } : {}),
+      ...(destination.replyTo ? { reply_to_message_id: destination.replyTo } : {}),
       ...(anyway ? { freshness_bypass: true } : {}),
       ...(attachmentIds && attachmentIds.length > 0
         ? { attachment_ids: attachmentIds }
@@ -326,7 +310,7 @@ Flags:
 Reading a reply cluster (\`--target thread:<root_msg_id>\`) is a pull:
 gated by parent-channel visibility, it does NOT make you a follower, but
 it advances your observed boundary for that thread so a later
-\`message send --reply-to\` is judged fresh against what you just read.
+\`message send --target thread:<message_id>\` is judged fresh against what you just read.
 
 stdout: full AgentReadHistoryDto JSON.`,
   flags: ['before-seq', 'after-seq', 'around', 'target', 'limit'] as const,
@@ -364,8 +348,8 @@ stdout: full AgentReadHistoryDto JSON.`,
     // HTTP (the daemon never sees it), so when a daemon socket is present
     // we fire a daemon-local `agent_stream_observed` intent to advance
     // the `thread:<root>` observed boundary and map the surfaced ids —
-    // otherwise a read-then-`--reply-to` would be judged stale against a
-    // boundary the daemon never learned about. Gated on
+    // otherwise a read-then-`--target thread:<message_id>` would be judged
+    // stale against a boundary the daemon never learned about. Gated on
     // `target.thread_root_id` (set only for the cluster read form).
     // Direct/non-daemon fallback degrades to "A": no intent, no boundary
     // (no daemon owns observed state to advance). Best-effort: the read
@@ -503,10 +487,57 @@ export const messageCommands: readonly Command[] = [
   searchCommand,
 ];
 
-function parseTarget(raw: string | undefined): SendMessageTarget | undefined {
-  if (raw === undefined) return undefined;
-  if (raw === 'self' || raw === 'parent') return raw;
-  return { thread_id: raw };
+function parseSendDestination(
+  rawTarget: string | undefined,
+  rawReplyTo: string | undefined,
+): { target?: SendMessageTarget; replyTo?: string } {
+  const target = parseSendTarget(rawTarget);
+  if (rawReplyTo !== undefined && (target.target !== undefined || target.replyTo !== undefined)) {
+    throw new CliError({
+      code: 'validation_error',
+      subkind: 'mutually_exclusive',
+      message:
+        '--reply-to and --target are mutually exclusive: use ' +
+        '`--target thread:<message_id>` for thread sends.',
+      retriable: false,
+      details: { flags: ['reply-to', 'target'] },
+    });
+  }
+  if (rawReplyTo !== undefined) return { replyTo: rawReplyTo };
+  return target;
+}
+
+function parseSendTarget(
+  raw: string | undefined,
+): { target?: SendMessageTarget; replyTo?: string } {
+  if (raw === undefined) return {};
+  if (raw.length === 0) {
+    throw new CliError({
+      code: 'validation_error',
+      subkind: 'enum_invalid',
+      message: '--target must be channel or thread:<message_id>',
+      retriable: false,
+      details: { flag: 'target', value: raw },
+    });
+  }
+  if (raw === 'channel' || raw === 'self') return { target: 'self' };
+  if (raw === 'parent') return { target: 'parent' };
+  if (raw.startsWith('thread:')) {
+    const messageId = raw.slice('thread:'.length);
+    if (!messageId) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'enum_invalid',
+        message: '--target thread:<message_id> requires a message id after thread:',
+        retriable: false,
+        details: { flag: 'target', value: raw },
+      });
+    }
+    return { replyTo: messageId };
+  }
+  // Hidden compatibility for legacy isolated-thread targets. Public help
+  // teaches only `channel` and `thread:<message_id>`.
+  return { target: { thread_id: raw } };
 }
 
 function parseSendStaleResolution(

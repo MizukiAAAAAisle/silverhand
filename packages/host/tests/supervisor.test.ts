@@ -3305,6 +3305,227 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
 });
 
 describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', () => {
+  it('defaults a bare send to the single thread stream that admitted this turn', async () => {
+    const { supervisor } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const parsedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        postedBodies.push(parsedBody);
+        return new Response(
+          JSON.stringify({
+            message_id: 'm54',
+            message_seq: 54,
+            thread_root_id: 'mRoot',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      await supervisor.wake({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [52, 53],
+        kind: 'message',
+        text: 'thread turn batch',
+        delivered_up_to_seq: 53,
+        deliveries: [
+          {
+            delivery_id: 52,
+            message_id: 'm52',
+            seq: 52,
+            thread_root_id: 'mRoot',
+            delivery_kind: 'turn',
+          },
+          {
+            delivery_id: 53,
+            message_id: 'm53',
+            seq: 53,
+            thread_root_id: 'mRoot',
+            delivery_kind: 'turn',
+          },
+        ],
+      });
+
+      const result = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'plain reply should stay in thread',
+      });
+
+      expect(result).toMatchObject({ ok: true, message_id: 'm54' });
+      expect(postedBodies[0]?.['reply_to_message_id']).toBe('m53');
+      expect(postedBodies[0]?.['stream_key']).toBe('thread:mRoot');
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(53);
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('lets an explicit main-line target override the current thread default', async () => {
+    const { supervisor } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const parsedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        postedBodies.push(parsedBody);
+        return new Response(
+          JSON.stringify({
+            message_id: 'm54',
+            message_seq: 54,
+            thread_root_id: null,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      await supervisor.wake({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [53],
+        kind: 'message',
+        text: 'thread turn',
+        delivered_up_to_seq: 53,
+        deliveries: [
+          {
+            delivery_id: 53,
+            message_id: 'm53',
+            seq: 53,
+            thread_root_id: 'mRoot',
+            delivery_kind: 'turn',
+          },
+        ],
+      });
+
+      const result = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'explicit main-line reply',
+        target: 'self',
+      });
+
+      expect(result).toMatchObject({ ok: true, message_id: 'm54' });
+      expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
+      expect(postedBodies[0]?.['target']).toBe('self');
+      expect(postedBodies[0]?.['stream_key']).toBe('main');
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('does not infer a thread default from mixed or observe-only deliveries', async () => {
+    const { supervisor } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const parsedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        postedBodies.push(parsedBody);
+        return new Response(
+          JSON.stringify({
+            message_id: `m${60 + postedBodies.length}`,
+            message_seq: 60 + postedBodies.length,
+            thread_root_id: null,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      await supervisor.wake({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [50, 51],
+        kind: 'message',
+        text: 'mixed main + thread turn batch',
+        delivered_up_to_seq: 51,
+        deliveries: [
+          {
+            delivery_id: 50,
+            message_id: 'mMain',
+            seq: 50,
+            thread_root_id: null,
+            delivery_kind: 'turn',
+          },
+          {
+            delivery_id: 51,
+            message_id: 'm51',
+            seq: 51,
+            thread_root_id: 'mRoot',
+            delivery_kind: 'turn',
+          },
+        ],
+      });
+
+      await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'mixed batch defaults to main',
+      });
+      expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
+      expect(postedBodies[0]?.['stream_key']).toBe('main');
+
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+      postedBodies.length = 0;
+
+      await supervisor.start(baseStartParams);
+      await supervisor.wake({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [52],
+        kind: 'message',
+        text: 'observe-only thread batch',
+        delivered_up_to_seq: 52,
+        deliveries: [
+          {
+            delivery_id: 52,
+            message_id: 'm52',
+            seq: 52,
+            thread_root_id: 'mRoot',
+            delivery_kind: 'observe',
+          },
+        ],
+      });
+
+      await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'observe-only batch defaults to main',
+      });
+      expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
+      expect(postedBodies[0]?.['stream_key']).toBe('main');
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
   it('keeps main and thread observed boundaries independent and picks the reply target stream seen', async () => {
     const { supervisor } = makeSupervisor();
     const postedBodies: Record<string, unknown>[] = [];

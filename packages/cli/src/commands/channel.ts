@@ -13,7 +13,7 @@ const createCommand: Command = {
 
 ONLY use this when the user has explicitly requested a new top-level
 channel. Reply clusters stay in the current channel via
-\`silverhand message send --reply-to <message_id>\`; use a channel only
+\`silverhand message send --target thread:<message_id>\`; use a channel only
 when the user asks for isolation.
 
 After creation, you should announce the new channel id in the current

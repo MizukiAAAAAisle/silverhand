@@ -364,14 +364,31 @@ describe('silverhand message send (stdin-only, real subprocess)', () => {
     expect(reqBody.attachment_ids).toEqual(['att-1', 'att-2']);
   });
 
-  it('forwards --reply-to as reply_to_message_id and echoes thread_root_id', async () => {
+  it('maps --target channel to the current channel main-line target', async () => {
+    captured.length = 0;
+    const r = await runSend({
+      argv: ['--target', 'channel'],
+      stdin: 'main-line answer',
+    });
+    expect(r.code, r.stderr).toBe(0);
+    const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
+      content: string;
+      target?: string;
+      reply_to_message_id?: string;
+    };
+    expect(reqBody.content).toBe('main-line answer');
+    expect(reqBody.target).toBe('self');
+    expect(reqBody.reply_to_message_id).toBeUndefined();
+  });
+
+  it('maps --target thread:<message_id> to reply_to_message_id and echoes thread_root_id', async () => {
     captured.length = 0;
     nextSendResponse = {
       status: 200,
       body: { message_id: 'm-reply', message_seq: 12, thread_root_id: 'm-root' },
     };
     const r = await runSend({
-      argv: ['--reply-to', 'm-root'],
+      argv: ['--target', 'thread:m-root'],
       stdin: 'threaded answer',
     });
     expect(r.code, r.stderr).toBe(0);
@@ -387,9 +404,24 @@ describe('silverhand message send (stdin-only, real subprocess)', () => {
     expect(out.thread_root_id).toBe('m-root');
   });
 
+  it('keeps --reply-to as a compatibility alias for reply_to_message_id', async () => {
+    captured.length = 0;
+    const r = await runSend({
+      argv: ['--reply-to', 'm-root'],
+      stdin: 'threaded answer',
+    });
+    expect(r.code, r.stderr).toBe(0);
+    const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
+      reply_to_message_id?: string;
+      target?: string;
+    };
+    expect(reqBody.reply_to_message_id).toBe('m-root');
+    expect(reqBody.target).toBeUndefined();
+  });
+
   it('rejects --reply-to together with --target as mutually_exclusive', async () => {
     const r = await runSend({
-      argv: ['--reply-to', 'm-root', '--target', 'parent'],
+      argv: ['--reply-to', 'm-root', '--target', 'thread:m-other'],
       stdin: 'oops',
     });
     expect(r.code).toBe(1);

@@ -80,6 +80,7 @@ import { chooseSilverhandCliLauncher } from '../silverhand-cli-launcher.js';
 import type { SupervisorContract } from '../supervisor-contract.js';
 import type {
   ActivitySnippetKind,
+  DefaultReplyTarget,
   InitTimeoutReason,
   PendingStaleEvent,
   RuntimeHandle,
@@ -474,11 +475,16 @@ export class Supervisor implements SupervisorContract {
   }
 
   private admitPendingSeqForNewTurn(handle: RuntimeHandle, source: string): void {
-    if (handle.pendingAdmissionSeqByStream.size === 0) return;
-    const pending = [...handle.pendingAdmissionSeqByStream.entries()];
-    handle.pendingAdmissionSeqByStream.clear();
-    for (const [streamKey, seq] of pending) {
-      this.advanceObservedStream(handle, streamKey, seq, source);
+    if (handle.pendingAdmissionSeqByStream.size > 0) {
+      const pending = [...handle.pendingAdmissionSeqByStream.entries()];
+      handle.pendingAdmissionSeqByStream.clear();
+      for (const [streamKey, seq] of pending) {
+        this.advanceObservedStream(handle, streamKey, seq, source);
+      }
+    }
+    if (handle.pendingDefaultReplyTarget !== undefined) {
+      handle.defaultReplyTarget = handle.pendingDefaultReplyTarget;
+      handle.pendingDefaultReplyTarget = undefined;
     }
   }
 
@@ -499,6 +505,42 @@ export class Supervisor implements SupervisorContract {
     }
   }
 
+  private inferDefaultReplyTarget(
+    deliveries: readonly RuntimeDelivery[] | undefined,
+  ): DefaultReplyTarget | null | undefined {
+    if (!deliveries || deliveries.length === 0) return undefined;
+    let streamKey: string | null = null;
+    let latest: RuntimeDelivery | null = null;
+    for (const delivery of deliveries) {
+      if (delivery.delivery_kind !== 'turn') continue;
+      if (!delivery.thread_root_id) return null;
+      const deliveryStream = streamKeyForMessage(delivery.thread_root_id);
+      if (streamKey !== null && streamKey !== deliveryStream) return null;
+      streamKey = deliveryStream;
+      if (!latest || delivery.seq >= latest.seq) latest = delivery;
+    }
+    if (!latest || streamKey === null) return undefined;
+    return { messageId: latest.message_id, streamKey };
+  }
+
+  private mergePendingDefaultReplyTarget(
+    handle: RuntimeHandle,
+    inferred: DefaultReplyTarget | null | undefined,
+  ): void {
+    if (inferred === undefined) return;
+    const pending = handle.pendingDefaultReplyTarget;
+    if (pending === undefined) {
+      handle.pendingDefaultReplyTarget = inferred;
+      return;
+    }
+    if (pending === null || inferred === null) {
+      handle.pendingDefaultReplyTarget = null;
+      return;
+    }
+    handle.pendingDefaultReplyTarget =
+      pending.streamKey === inferred.streamKey ? inferred : null;
+  }
+
   /**
    * Admit a delivered batch into the per-stream observed boundary
    * (reply-cluster §6.4). With structured `deliveries[]` each row
@@ -515,6 +557,13 @@ export class Supervisor implements SupervisorContract {
     admitNow: boolean,
     source: string,
   ): void {
+    const inferredDefault = this.inferDefaultReplyTarget(deliveries);
+    if (admitNow) {
+      handle.defaultReplyTarget = inferredDefault ?? null;
+      handle.pendingDefaultReplyTarget = undefined;
+    } else {
+      this.mergePendingDefaultReplyTarget(handle, inferredDefault);
+    }
     if (deliveries && deliveries.length > 0) {
       for (const delivery of deliveries) {
         this.rememberReplyTargetStream(
@@ -632,12 +681,19 @@ export class Supervisor implements SupervisorContract {
     const pendingStale = handle.pendingStaleEvent;
     // Resolve which per-stream observed boundary this send is anchored to
     // (reply-cluster §6.4):
-    //  - no reply_to            → main line (always known).
-    //  - reply_to we have seen  → that cluster's stream (known).
-    //  - reply_to we have NOT seen → unknown (Case A loose, Q1=A): omit
-    //    seen+stream_key so the backend skips freshness for this
-    //    first-touch send instead of falsely stale-ing it.
-    const replyTo = params.reply_to_message_id;
+    //  - explicit target        → explicit stream (main for self/parent/
+    //    legacy thread target; reply_to for thread:<messageId> mapped by CLI).
+    //  - no explicit target     → default to the stream that admitted this
+    //    turn when unambiguous, otherwise main.
+    //  - reply target we saw    → that cluster's stream (known).
+    //  - reply target we did NOT see → unknown (Case A loose, Q1=A): omit
+    //    seen+stream_key so the backend skips freshness for this first-touch
+    //    send instead of falsely stale-ing it.
+    const defaultReplyTo =
+      params.reply_to_message_id === undefined && params.target === undefined
+        ? handle.defaultReplyTarget?.messageId
+        : undefined;
+    const replyTo = params.reply_to_message_id ?? defaultReplyTo;
     const targetStreamKey = replyTo
       ? handle.replyTargetStreamByMessageId.get(replyTo)
       : MAIN_STREAM_KEY;
@@ -1059,6 +1115,8 @@ export class Supervisor implements SupervisorContract {
       observedSeqByStream: new Map(),
       pendingAdmissionSeqByStream: new Map(),
       replyTargetStreamByMessageId: new Map(),
+      defaultReplyTarget: null,
+      pendingDefaultReplyTarget: undefined,
       inputTurnActive: driver.oneShot && !!params.startup_delivery,
       pendingStaleEvent: null,
       phase: startupBatch ? 'startup_pending' : 'spawning',
@@ -2652,6 +2710,8 @@ export class Supervisor implements SupervisorContract {
     handle.busy.outstandingToolUses = 0;
     handle.busy.compacting = false;
     handle.inputTurnActive = false;
+    handle.defaultReplyTarget = null;
+    handle.pendingDefaultReplyTarget = undefined;
   }
 
   /**

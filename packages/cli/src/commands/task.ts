@@ -194,17 +194,17 @@ const createCommand: Command = {
   summary: 'Create one or more tasks (no auto-claim).',
   help: `silverhand task create --title <title> [--body <body>]
                          [--title <title> [--body <body>]] ...
-                         [--reply-to <message_id>]
+                         [--target channel|thread:<message_id>]
 
 Create tasks in the current channel/thread. Repeat --title (and optional
 following --body) to create multiple in one call. Each --body is paired
 with the most recent --title; if omitted, the title is reused as body.
 
---reply-to <message_id> (optional) attributes the created task(s) to that
-message's thread (reply cluster) instead of the main line. Omit it and the
-task lands on the main line, as before. It applies to every task in the
-call. The id may be a thread root or any reply in it; the task is anchored
-to the cluster's root.
+--target thread:<message_id> (optional) attributes the created task(s) to
+that message's thread (reply cluster) instead of the main line. Omit
+--target, or pass --target channel, and the task lands on the main line as
+before. It applies to every task in the call. The id may be a thread root
+or any reply in it; the task is anchored to the cluster's root.
 
 If you intend to work on these immediately, follow up with
 \`silverhand task claim --task-number <n>\`.
@@ -216,7 +216,7 @@ Pre-flight failures (exit 1):
   --message was supplied → flag_removed (use --title / --body)
 
 stdout: CreateTasksResult JSON.`,
-  flags: ['title', 'body', 'reply-to'] as const,
+  flags: ['title', 'body', 'target', 'reply-to'] as const,
   // Agents reach for --message because half of the CLIs in their
   // training data treat it as the canonical "body" flag (gh, git,
   // hub, ...). 5/14 daily report logged one such hit. Routing it
@@ -262,13 +262,57 @@ stdout: CreateTasksResult JSON.`,
       const body = bodiesArr[idx];
       return body ? { title, body } : { title };
     });
-    const replyTo = flagString(args, 'reply-to');
+    const replyTo = parseTaskCreateReplyTarget(
+      flagString(args, 'target'),
+      flagString(args, 'reply-to'),
+    );
     return client.createTasks({
       tasks,
       ...(replyTo ? { reply_to_message_id: replyTo } : {}),
     });
   },
 };
+
+function parseTaskCreateReplyTarget(
+  rawTarget: string | undefined,
+  rawReplyTo: string | undefined,
+): string | undefined {
+  if (rawTarget !== undefined && rawReplyTo !== undefined) {
+    throw new CliError({
+      code: 'validation_error',
+      subkind: 'mutually_exclusive',
+      message:
+        '--reply-to and --target are mutually exclusive: use ' +
+        '`--target thread:<message_id>` for threaded task creation.',
+      retriable: false,
+      details: { flags: ['reply-to', 'target'] },
+    });
+  }
+  if (rawReplyTo !== undefined) return rawReplyTo;
+  if (rawTarget === undefined || rawTarget === 'channel' || rawTarget === 'self') {
+    return undefined;
+  }
+  if (rawTarget.startsWith('thread:')) {
+    const messageId = rawTarget.slice('thread:'.length);
+    if (!messageId) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'enum_invalid',
+        message: '--target thread:<message_id> requires a message id after thread:',
+        retriable: false,
+        details: { flag: 'target', value: rawTarget },
+      });
+    }
+    return messageId;
+  }
+  throw new CliError({
+    code: 'validation_error',
+    subkind: 'enum_invalid',
+    message: '--target must be channel or thread:<message_id>',
+    retriable: false,
+    details: { flag: 'target', value: rawTarget },
+  });
+}
 
 /** Resolve the optional `--workspace-id` / `--workspace <name>` pair
  *  into the wire-shape fields. They are mutually exclusive: passing
