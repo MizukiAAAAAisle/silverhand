@@ -10,7 +10,11 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
-import { useWorkspaces, useChannelsAcrossWorkspaces } from '@/features/workspaces/hooks';
+import {
+  useWorkspaces,
+  useChannelsAcrossWorkspaces,
+  useArchivedChannelsIndex,
+} from '@/features/workspaces/hooks';
 import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
 import {
   applyTaskFilters,
@@ -95,16 +99,34 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
     [tasks],
   );
 
-  // Channel filter options — EVERY channel across every member workspace,
-  // not just channels that currently have tasks. The global pane has no
-  // single-workspace conversation list, so it fans out per workspace
+  // Channel filter options — EVERY non-archived channel across every member
+  // workspace, not just channels that currently have tasks. The global pane
+  // has no single-workspace conversation list, so it fans out per workspace
   // (sharing the sidebar's channel cache). A task-derived backfill catches
-  // any channel that has tasks but is missing from the live lists (e.g.
-  // archived), so every task stays filterable. Legacy fossil threads
+  // any non-archived channel that has tasks but is missing from the live
+  // lists (a transient data-source gap), so every such task stays
+  // filterable; archived channels are explicitly excluded (shiki: the
+  // dropdown lists only non-archived channels). Legacy fossil threads
   // (`kind === 'thread'`) are never offered; a fossil task's channel_id
   // already resolves to its parent channel.
   const channelLists = useChannelsAcrossWorkspaces(
     useMemo(() => workspaces.map(w => w.id), [workspaces]),
+  );
+  // Authoritative archived-channel id set across every member workspace.
+  // The active channel lists already exclude archived channels, so the only
+  // way an archived channel can leak into the dropdown is the task-derived
+  // backfill below — `TaskSummaryDto` carries no archive flag, so we cross
+  // it against this index instead of resurrecting archived channels (shiki +
+  // Cindy: the backfill exists only to cover data-source gaps, never to bring
+  // archived back).
+  const archivedIndex = useArchivedChannelsIndex({
+    workspaceId: null,
+    since: null,
+    workspaceScopeIds: taskWorkspaceScopeIds,
+  });
+  const archivedChannelIds = useMemo(
+    () => new Set((archivedIndex.data ?? []).map(item => item.channel.id)),
+    [archivedIndex.data],
   );
   const channelOptions = useMemo<ChannelOption[]>(() => {
     const byId = new Map<string, ChannelOption>();
@@ -112,6 +134,9 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
       const list = channelLists[i]?.data ?? [];
       for (const conv of list) {
         if (conv.kind === 'thread') continue;
+        // Defensive: the active endpoint excludes archived, but never offer
+        // an archived channel even if one slips through.
+        if (conv.archived_at !== null) continue;
         if (byId.has(conv.id)) continue;
         byId.set(conv.id, {
           id: conv.id,
@@ -121,9 +146,13 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
         });
       }
     });
-    // Backfill channels that have tasks but weren't in the live lists.
+    // Backfill channels that have tasks but weren't in the live lists — for
+    // genuine data-source gaps only. Archived channels are deliberately
+    // excluded, not a gap, so skip them here (else an archived channel with
+    // tasks would be resurrected into the dropdown).
     for (const t of allTasks) {
       if (byId.has(t.channel_id)) continue;
+      if (archivedChannelIds.has(t.channel_id)) continue;
       const ws = workspaces.find(w => w.id === t.workspace_id);
       byId.set(t.channel_id, {
         id: t.channel_id,
@@ -138,7 +167,7 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
       if (ac !== bc) return bc - ac;
       return a.label.localeCompare(b.label);
     });
-  }, [workspaces, channelLists, allTasks, channelActiveCounts]);
+  }, [workspaces, channelLists, allTasks, channelActiveCounts, archivedChannelIds]);
 
   const assigneeOptions = useMemo(() => collectAssignees(allTasks), [allTasks]);
   const creatorOptions = useMemo(() => collectCreators(allTasks), [allTasks]);
