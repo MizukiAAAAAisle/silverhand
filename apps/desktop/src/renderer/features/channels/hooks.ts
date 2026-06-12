@@ -596,6 +596,14 @@ export function useThreadCluster(
   const enabled = !!channelId && !!rootMessageId;
   const key = clusterMessagesKey(channelId ?? 'none', rootMessageId ?? 'none');
 
+  const [hasNewerLiveGap, setHasNewerLiveGap] = useState(false);
+
+  // Reset the gap when the consumer switches channel or thread — a stale
+  // "newer replies below" hint from the previous cluster would be wrong.
+  useEffect(() => {
+    setHasNewerLiveGap(false);
+  }, [channelId, rootMessageId]);
+
   const query = useInfiniteQuery<
     ConversationMessagesDto,
     Error,
@@ -641,10 +649,35 @@ export function useThreadCluster(
     [query.data],
   );
 
+  // Whether the cached cluster window reaches the thread tail. A cluster
+  // can be mid-history after an around-reply jump: `primeAround` with a
+  // `threadRootId` commits an around-window into this SAME cache, so this
+  // is NOT always true — it mirrors `useChannelMessages.isAtTail`.
+  const isAtTail = query.data
+    ? lastPageIsTail(query.data as MessagesCache)
+    : true;
+
+  // Clear the gap whenever the window is back at tail (forward scroll
+  // reached it, a jump landed on a tail-inclusive window, or
+  // `resetToLatest` re-fetched it). Without this the hint would latch true.
+  useEffect(() => {
+    if (isAtTail) setHasNewerLiveGap(false);
+  }, [isAtTail]);
+
+  // Reset the cluster query to the latest (tail) window. We drop the
+  // around-window pages: an around-reply window may not be contiguous with
+  // the tail, and stitching disjoint ranges would corrupt the cursors.
+  const resetToLatest = useCallback(() => {
+    if (!channelId || !rootMessageId) return;
+    setHasNewerLiveGap(false);
+    void qc.resetQueries({ queryKey: key, exact: true });
+  }, [qc, channelId, rootMessageId, key]);
+
   const onEvent = useCallback(
     (e: ConversationStreamEvent) => {
       if (!channelId || !rootMessageId) return;
       if (e.kind === 'connected' && e.payload?.snapshot_required) {
+        setHasNewerLiveGap(false);
         void qc.invalidateQueries({ queryKey: key });
         return;
       }
@@ -658,10 +691,14 @@ export function useThreadCluster(
           return;
         }
         const cur = qc.getQueryData<MessagesCache>(key);
-        // Cluster windows open at tail and stay there; only append when
-        // the cached window still reaches the tail to avoid lying about
-        // position during a back-scroll.
-        if (!lastPageIsTail(cur)) return;
+        // Only append when the cached window still reaches the tail. After
+        // an around-reply jump the window is mid-history; appending there
+        // would lie about position, so mark the forward gap instead and let
+        // the UI offer "jump to latest" (mirrors useChannelMessages).
+        if (!lastPageIsTail(cur)) {
+          setHasNewerLiveGap(true);
+          return;
+        }
         qc.setQueryData<MessagesCache>(key, prev =>
           appendMessageToCache(prev, msg),
         );
@@ -678,7 +715,7 @@ export function useThreadCluster(
   );
   useConversationStream(enabled ? channelId : null, onEvent, 'channel');
 
-  return { ...query, data: messages };
+  return { ...query, data: messages, isAtTail, hasNewerLiveGap, resetToLatest };
 }
 
 /** Pinned-root context for a thread (reply cluster). The root message is

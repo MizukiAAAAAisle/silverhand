@@ -99,6 +99,12 @@ export function ThreadPanel({
   const rootCtx = useThreadRoot(channelId, rootMessageId);
   const cluster = useThreadCluster(channelId, rootMessageId);
   const messages = cluster.data;
+  // Window-position signals (mirrors the channel pane). A cluster can be
+  // mid-history after an around-reply jump (saved/search/task/notification
+  // → primeAround with threadRootId), so the back-to-bottom button must be
+  // able to reset to the true tail, not just scroll the local window.
+  const { isAtTail, hasNewerLiveGap, resetToLatest } = cluster;
+  const shouldResetToLatest = !isAtTail || hasNewerLiveGap;
   const savedIds = useSavedMessageIds();
   const { toggle: toggleSave } = useToggleSave();
 
@@ -285,6 +291,21 @@ export function ThreadPanel({
     pinBottomRef.current = true;
     setShowScrollBottom(false);
   }, []);
+
+  // Back-to-bottom click: when the cluster window is mid-history (a forward
+  // live gap, or an around-reply jump landed off-tail), local scrolling
+  // can't reach the newest replies — reset the query to the tail window and
+  // pin to bottom so the fresh data lands at the end. Otherwise just scroll
+  // the loaded window to its end. (Mirrors ChannelView's bottom button.)
+  const handleScrollBottomClick = useCallback(() => {
+    if (shouldResetToLatest) {
+      pinBottomRef.current = true;
+      setShowScrollBottom(false);
+      resetToLatest();
+      return;
+    }
+    scrollToBottom();
+  }, [shouldResetToLatest, resetToLatest, scrollToBottom]);
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -549,12 +570,12 @@ export function ThreadPanel({
 
           {/* Back-to-bottom — same primitive as the channel (#task:1050
               item 5). Appears once the user scrolls away from the tail. */}
-          {showScrollBottom ? (
+          {showScrollBottom || shouldResetToLatest ? (
             <button
               type="button"
-              aria-label="滚动到底部"
-              title="滚动到底部"
-              onClick={scrollToBottom}
+              aria-label={shouldResetToLatest ? '跳到最新回复' : '滚动到底部'}
+              title={shouldResetToLatest ? '跳到最新回复' : '滚动到底部'}
+              onClick={handleScrollBottomClick}
               className="absolute bottom-4 left-1/2 z-20 flex size-9 -translate-x-1/2 items-center justify-center rounded-full bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
             >
               <ArrowDown className="size-4" />
