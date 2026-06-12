@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import type {
   AddWorkspaceMemberInput,
@@ -399,6 +399,29 @@ export function useArchivedChannelsForWorkspace(
       }>(apiPaths.workspaceArchivedChannels(workspaceId!));
       return sortConversationList([...res.channels, ...res.threads]);
     },
+  });
+}
+
+/** Active channels (+ threads) for every supplied workspace, fetched in
+ *  parallel. Reuses the per-workspace `channelsKey` + queryFn of
+ *  `useChannelsForWorkspace`, so results share that hook's cache rather
+ *  than duplicating fetches. Returns one query result per input id,
+ *  index-aligned with `workspaceIds`. Used by the global Tasks pane, which
+ *  spans every member workspace and has no single-workspace channel list.
+ *  (Per-workspace WS invalidation is owned by `useChannelsForWorkspace`;
+ *  this hook is a read fan-out and intentionally adds no extra subscription.) */
+export function useChannelsAcrossWorkspaces(workspaceIds: readonly string[]) {
+  return useQueries({
+    queries: workspaceIds.map(id => ({
+      queryKey: channelsKey(id),
+      queryFn: async () => {
+        const res = await api<{
+          channels: ChannelLikeDto[];
+          threads: ThreadDto[];
+        }>(apiPaths.workspaceChannels(id));
+        return sortConversationList([...res.channels, ...res.threads]);
+      },
+    })),
   });
 }
 

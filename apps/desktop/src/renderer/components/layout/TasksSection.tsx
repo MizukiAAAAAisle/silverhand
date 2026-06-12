@@ -10,7 +10,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
-import { useWorkspaces } from '@/features/workspaces/hooks';
+import { useWorkspaces, useChannelsAcrossWorkspaces } from '@/features/workspaces/hooks';
 import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
 import {
   applyTaskFilters,
@@ -95,21 +95,40 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
     [tasks],
   );
 
-  // Channel filter options — the real channels that have tasks, derived
-  // from the task set itself (the global pane spans every workspace scope
-  // and has no separate conversation list). A fossil task's `channel_id`
-  // already resolves to its parent channel, so legacy threads never appear
-  // as their own entries. `sublabel` carries the workspace so same-named
-  // channels across workspaces stay distinguishable.
+  // Channel filter options — EVERY channel across every member workspace,
+  // not just channels that currently have tasks. The global pane has no
+  // single-workspace conversation list, so it fans out per workspace
+  // (sharing the sidebar's channel cache). A task-derived backfill catches
+  // any channel that has tasks but is missing from the live lists (e.g.
+  // archived), so every task stays filterable. Legacy fossil threads
+  // (`kind === 'thread'`) are never offered; a fossil task's channel_id
+  // already resolves to its parent channel.
+  const channelLists = useChannelsAcrossWorkspaces(
+    useMemo(() => workspaces.map(w => w.id), [workspaces]),
+  );
   const channelOptions = useMemo<ChannelOption[]>(() => {
-    const wsKind = new Map(workspaces.map(w => [w.id, w.kind]));
     const byId = new Map<string, ChannelOption>();
+    workspaces.forEach((w, i) => {
+      const list = channelLists[i]?.data ?? [];
+      for (const conv of list) {
+        if (conv.kind === 'thread') continue;
+        if (byId.has(conv.id)) continue;
+        byId.set(conv.id, {
+          id: conv.id,
+          label: conv.title,
+          kind: w.kind === 'dm' || conv.kind === 'dm_channel' ? 'dm' : 'channel',
+          sublabel: w.name,
+        });
+      }
+    });
+    // Backfill channels that have tasks but weren't in the live lists.
     for (const t of allTasks) {
       if (byId.has(t.channel_id)) continue;
+      const ws = workspaces.find(w => w.id === t.workspace_id);
       byId.set(t.channel_id, {
         id: t.channel_id,
         label: t.channel_name,
-        kind: wsKind.get(t.workspace_id) === 'dm' ? 'dm' : 'channel',
+        kind: ws?.kind === 'dm' ? 'dm' : 'channel',
         sublabel: t.workspace_name,
       });
     }
@@ -119,7 +138,7 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
       if (ac !== bc) return bc - ac;
       return a.label.localeCompare(b.label);
     });
-  }, [allTasks, workspaces, channelActiveCounts]);
+  }, [workspaces, channelLists, allTasks, channelActiveCounts]);
 
   const assigneeOptions = useMemo(() => collectAssignees(allTasks), [allTasks]);
   const creatorOptions = useMemo(() => collectCreators(allTasks), [allTasks]);
