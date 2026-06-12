@@ -8,12 +8,13 @@ import {
   RotateCcw,
   RotateCw,
   Sprout,
+  UserMinus,
   UserPlus,
 } from 'lucide-react';
 import {
   type ChannelContextMetadata,
   type ChildContextMetadata,
-  type ConversationMemberAddedMetadata,
+  type ConversationMemberChangeMetadata,
   type MessageDto,
   type RenameMetadata,
   type ScheduleFireMetadata,
@@ -27,7 +28,7 @@ import {
   type UserDto,
   readChannelContextMetadata,
   readChildContextMetadata,
-  readConversationMemberAddedMetadata,
+  readConversationMemberChangeMetadata,
   readRenameMetadata,
   readScheduleFireMetadata,
   readSessionClearedMetadata,
@@ -721,12 +722,18 @@ function TaskEventBody({
 type TaskEventDotKind = TaskStatus | 'unclaim';
 
 function TaskEventDot({ kind }: { kind: TaskEventDotKind }): JSX.Element {
+  // Status dots consume the board's per-status SOLID signal colour
+  // (`--task-status-*-solid`, #task:1018) so the chat-stream dot matches
+  // the task board chip in every theme. Each theme homes `-solid` on its
+  // own identity source (forza6 → poster `-bg`; warm/slack → saturated
+  // `-text`), so this single token reads correctly everywhere. `unclaim`
+  // is not a status — it keeps a neutral dashed-hollow marker.
   const cls: Record<TaskEventDotKind, string> = {
-    todo: 'bg-text-muted/60',
-    in_progress: 'bg-accent',
-    in_review: 'bg-warning',
-    done: 'bg-success',
-    closed: 'bg-text-muted/40',
+    todo: 'bg-[var(--task-status-todo-solid)]',
+    in_progress: 'bg-[var(--task-status-in-progress-solid)]',
+    in_review: 'bg-[var(--task-status-in-review-solid)]',
+    done: 'bg-[var(--task-status-done-solid)]',
+    closed: 'bg-[var(--task-status-closed-solid)]',
     unclaim: 'border border-dashed border-text-muted/60 bg-transparent',
   };
   return (
@@ -1354,36 +1361,47 @@ function RenameRow(props: RendererProps): JSX.Element {
   return (
     <div
       data-rename-row="1"
-      className="flex flex-wrap items-center justify-center gap-1.5 px-4 py-1 italic text-text-muted"
+      className="flex flex-wrap items-center justify-center gap-1.5 px-4 py-1 text-text-muted"
     >
-      <RotateCw aria-hidden className="size-3.5 shrink-0 not-italic opacity-60" />
+      <RotateCw aria-hidden className="size-3.5 shrink-0 opacity-60" />
       <span>workspace renamed</span>
-      <code className="not-italic rounded bg-bg-elevated px-1 font-mono text-text-secondary">
+      <code className="rounded bg-bg-elevated px-1 font-mono text-text-secondary">
         #{meta.old_name}
       </code>
-      <span aria-hidden className="not-italic">→</span>
-      <code className="not-italic rounded bg-bg-elevated px-1 font-mono text-text-primary">
+      <span aria-hidden>→</span>
+      <code className="rounded bg-bg-elevated px-1 font-mono text-text-primary">
         #{meta.new_name}
       </code>
     </div>
   );
 }
 
-// ─── conversation_member_added row ──────────────────────────────────────
+// ─── conversation_member_added / _removed row ───────────────────────────
 
-function ConversationMemberAddedRow(props: RendererProps): JSX.Element {
-  const meta = readConversationMemberAddedMetadata(
+/**
+ * One renderer for both member-change events so add and remove read
+ * identically (same chrome / centered narration / @-label treatment) —
+ * only the icon, verb, and preposition swap off `subtype`. Before this,
+ * remove had no structured renderer and fell through to the generic
+ * markdown fallback, rendering the raw `@actor removed @member …` text as
+ * italic with a pink auto-linked mention — visibly different from add
+ * (shiki hYkvtpZXDsU3PEkb).
+ */
+function ConversationMemberChangeRow(props: RendererProps): JSX.Element {
+  const meta = readConversationMemberChangeMetadata(
     (props.message.metadata ?? null) as Record<string, unknown> | null,
   );
   if (!meta) {
     return <GenericNarrationFallback {...props} />;
   }
+  const removed = meta.subtype === 'conversation_member_removed';
+  const Icon = removed ? UserMinus : UserPlus;
   return (
     <div
-      data-conversation-member-added="1"
+      data-conversation-member-change={removed ? 'removed' : 'added'}
       className="flex flex-wrap items-center justify-center gap-1.5 px-4 py-1 text-text-muted"
     >
-      <UserPlus aria-hidden className="size-3.5 shrink-0 opacity-60" />
+      <Icon aria-hidden className="size-3.5 shrink-0 opacity-60" />
       <span className="text-text-secondary">
         {participantLabel({
           kind: meta.actor_kind,
@@ -1391,7 +1409,7 @@ function ConversationMemberAddedRow(props: RendererProps): JSX.Element {
           displayName: meta.actor_display_name,
         })}
       </span>
-      <span>added</span>
+      <span>{removed ? 'removed' : 'added'}</span>
       <span className="font-medium text-text-primary">
         {participantLabel({
           kind: meta.member_kind,
@@ -1399,14 +1417,14 @@ function ConversationMemberAddedRow(props: RendererProps): JSX.Element {
           displayName: meta.member_display_name,
         })}
       </span>
-      <span>to this conversation</span>
+      <span>{removed ? 'from this conversation' : 'to this conversation'}</span>
     </div>
   );
 }
 
 function participantLabel(input: {
-  kind: ConversationMemberAddedMetadata['actor_kind']
-    | ConversationMemberAddedMetadata['member_kind'];
+  kind: ConversationMemberChangeMetadata['actor_kind']
+    | ConversationMemberChangeMetadata['member_kind'];
   name: string;
   displayName: string | null;
 }): string {
@@ -1458,7 +1476,8 @@ const systemMessageRenderers: Record<SystemSubtype, SystemMessageRenderer> = {
   // metadata fall through to generic italic narration).
   onboarding: OnboardingRow,
   rename: RenameRow,
-  conversation_member_added: ConversationMemberAddedRow,
+  conversation_member_added: ConversationMemberChangeRow,
+  conversation_member_removed: ConversationMemberChangeRow,
   mention_cc: MentionCcCard,
   thread_summary: ThreadSummaryCard,
 };

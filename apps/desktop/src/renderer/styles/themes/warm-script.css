@@ -104,6 +104,17 @@
   --task-status-done-text: var(--success);
   --task-status-done-border: none;
 
+  /* Solid status signal colour (#task:1018) — see forza6.css for the
+     cross-theme rationale. Warm-script chips are soft tints; their hue
+     identity lives in the saturated `-text` (muted / warning / accent /
+     success), so the dot maps `-solid` there. todo/closed stay neutral
+     muted, matching their chips. */
+  --task-status-todo-solid: var(--task-status-todo-text);
+  --task-status-in-progress-solid: var(--task-status-in-progress-text);
+  --task-status-in-review-solid: var(--task-status-in-review-text);
+  --task-status-done-solid: var(--task-status-done-text);
+  --task-status-closed-solid: var(--task-status-closed-text);
+
   /* ── Floating frame (§3.x) ──
      Menu / popover / hover-card 共用一套外框契约。warm-script 用
      现有 chrome 词汇：1px 极淡分隔线 + 中等圆角 + items 用 sm 圆角。

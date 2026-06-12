@@ -274,6 +274,19 @@
   --task-status-done-text: #F7F8F6;
   --task-status-done-border: none;
 
+  /* Solid status signal colour — the single representative hue a small
+     fill (e.g. the chat-stream TaskEventDot, #task:1018) uses to match
+     this status's board chip. In forza6 the chip identity lives in the
+     SATURATED `-bg` poster fill (text is on-fill ink/white), so `-solid`
+     references `-bg`. Other themes use soft-tint chips whose identity
+     lives in `-text`, so they map `-solid` there instead — the dot then
+     reads correctly in every theme off one token. */
+  --task-status-todo-solid: var(--task-status-todo-bg);
+  --task-status-in-progress-solid: var(--task-status-in-progress-bg);
+  --task-status-in-review-solid: var(--task-status-in-review-bg);
+  --task-status-done-solid: var(--task-status-done-bg);
+  --task-status-closed-solid: var(--task-status-closed-bg);
+
   /* ── Floating frame (§3.x) ──
      Menu / popover / hover-card 共用一套外框契约。forza6 走 poster
      sticker hardness：2px 全黑边 + 零圆角 + items 也零圆角（避免外方

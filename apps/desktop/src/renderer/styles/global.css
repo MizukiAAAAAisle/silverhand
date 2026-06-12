@@ -584,14 +584,33 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 }
 
 /* TaskStatusPill — same demotion: transparent fill, current-color
-   outline. `currentColor` here means the pill's own text color
-   (`text-accent` / `text-warning` / `text-success` / `text-text-muted`
-   per status), so each status keeps its color identity but loses the
-   filled bg that competes with the chip. */
+   outline. The outline + text colour is the status's SIGNATURE hue
+   (`--task-status-*-solid`, #task:1018) so the pill matches its sibling
+   TaskEventDot and the board chip in EVERY theme. Using `-solid` (not
+   the base `-text`) is what fixes forza6: there `-text` is on-fill ink
+   (the board chip is a saturated fill with ink text), so an ink outline
+   made in_review read dark instead of orange; `-solid` homes on the
+   poster `-bg` there and on the saturated `-text` in warm/slack, so one
+   token keeps dot + pill + chip in lockstep. */
 .system-activity-cluster [data-task-event-status] {
   background: transparent;
   border: 1px solid currentColor;
   opacity: 0.85;
+}
+.system-activity-cluster [data-task-event-status='todo'] {
+  color: var(--task-status-todo-solid);
+}
+.system-activity-cluster [data-task-event-status='in_progress'] {
+  color: var(--task-status-in-progress-solid);
+}
+.system-activity-cluster [data-task-event-status='in_review'] {
+  color: var(--task-status-in-review-solid);
+}
+.system-activity-cluster [data-task-event-status='done'] {
+  color: var(--task-status-done-solid);
+}
+.system-activity-cluster [data-task-event-status='closed'] {
+  color: var(--task-status-closed-solid);
 }
 
 /* TaskEventDot — drops one tier (8px → 6px) so it reads as a status

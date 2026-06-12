@@ -139,7 +139,15 @@
   --task-status-done-bg: rgba(46, 187, 133, 0.18);
   --task-status-done-text: #2EBB85;               /* success green, ~6.8:1 AA — "passed" */
   --task-status-done-border: 1px solid rgba(46, 187, 133, 0.40);
-  /* closed = 终态，最低噪 — 透明底 + muted 字 + subtle 描边。 */
+  /* Solid status signal colour (#task:1018) — see forza6.css for the
+     cross-theme rationale. slack-dark chips are translucent tints; the
+     hue identity lives in the saturated `-text` (muted / amber / blue /
+     green), so the dot maps `-solid` there. */
+  --task-status-todo-solid: var(--task-status-todo-text);
+  --task-status-in-progress-solid: var(--task-status-in-progress-text);
+  --task-status-in-review-solid: var(--task-status-in-review-text);
+  --task-status-done-solid: var(--task-status-done-text);
+  --task-status-closed-solid: var(--task-status-closed-text);
   --task-status-closed-bg: transparent;
   --task-status-closed-text: var(--text-muted);
   --task-status-closed-border: 1px solid var(--border-subtle);

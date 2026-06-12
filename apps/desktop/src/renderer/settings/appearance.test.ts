@@ -260,24 +260,37 @@ describe('theme markdown token cascade contract', () => {
      (`--task-status-*`) over generic (`--status-*`) because the
      namespace must stay narrow — these values are tuned for a single
      ~10px poster-display badge, not a general "status colour"
-     vocabulary. */
+     vocabulary.
+
+     #task:1018 adds a 6th per-status token, `-solid`: the single
+     representative hue a small fill (the chat-stream TaskEventDot) uses
+     to match this status's board chip. Each theme homes it on its own
+     identity source (forza6 → poster `-bg`; warm/slack tint chips →
+     saturated `-text`), so the contract is now 20 tokens (5 × {bg /
+     text / border / solid}). Declared per theme for the same
+     no-:root-leak reason as the rest of the family. */
   it('every theme explicitly defines task-status badge tokens', () => {
     const TASK_STATUS_TOKENS = [
       '--task-status-todo-bg',
       '--task-status-todo-text',
       '--task-status-todo-border',
+      '--task-status-todo-solid',
       '--task-status-in-progress-bg',
       '--task-status-in-progress-text',
       '--task-status-in-progress-border',
+      '--task-status-in-progress-solid',
       '--task-status-in-review-bg',
       '--task-status-in-review-text',
       '--task-status-in-review-border',
+      '--task-status-in-review-solid',
       '--task-status-done-bg',
       '--task-status-done-text',
       '--task-status-done-border',
+      '--task-status-done-solid',
       '--task-status-closed-bg',
       '--task-status-closed-text',
       '--task-status-closed-border',
+      '--task-status-closed-solid',
     ];
     for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
       for (const token of TASK_STATUS_TOKENS) {

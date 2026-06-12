@@ -1137,27 +1137,6 @@
   font-family: var(--appearance-prose-font, var(--font-sans));
 }
 
-/* Clustered system-event status pills (global.css:573) demote to a
-   transparent fill + `currentColor` outline+text, where currentColor
-   resolves to the status's `--task-status-*-text` token. In forza6 the
-   todo / done / closed text tokens are ON-FILL foregrounds (near-white
-   #F7F8F6 / #FFFFFF, legible only on their saturated board chips), so as
-   an outline on the light chat canvas they all but vanish — shiki saw
-   "CLOSED" disappear (#task:796). Re-home those three to their SIGNATURE
-   fill colour (the `-bg` token: slate / deep-green / indigo), which is
-   canvas-legible by construction and keeps each status's colour identity
-   (the rule's stated intent). in_progress / in_review already use a dark
-   ink text token, so they read fine as-is and are left untouched. */
-[data-theme='forza6'] .system-activity-cluster [data-task-event-status='todo'] {
-  color: var(--task-status-todo-bg);
-}
-[data-theme='forza6'] .system-activity-cluster [data-task-event-status='done'] {
-  color: var(--task-status-done-bg);
-}
-[data-theme='forza6'] .system-activity-cluster [data-task-event-status='closed'] {
-  color: var(--task-status-closed-bg);
-}
-
 /* ── Radix popper surfaces (v5.7) ──────────────────────────────────
    Every Radix floating surface (DropdownMenu / ContextMenu /
    Popover / HoverCard / Select / Tooltip) wraps its content in
