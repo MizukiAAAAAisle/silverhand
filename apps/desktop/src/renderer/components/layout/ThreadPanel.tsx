@@ -17,6 +17,7 @@ import {
 } from '@/features/channels/hooks';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+import { useSavedMessageIds, useToggleSave } from '@/features/saved/hooks';
 
 interface ThreadPanelProps {
   /** Parent channel conversation. Replies live in this conversation with
@@ -92,6 +93,8 @@ export function ThreadPanel({
   const rootCtx = useThreadRoot(channelId, rootMessageId);
   const cluster = useThreadCluster(channelId, rootMessageId);
   const messages = cluster.data;
+  const savedIds = useSavedMessageIds();
+  const { toggle: toggleSave } = useToggleSave();
 
   // Human follower state for this cluster (item 4 + 5). `viewer_following`
   // drives the header toggle / context-menu unfollow; `follower_agent_ids`
@@ -280,6 +283,8 @@ export function ThreadPanel({
         humanAvatarUrls={humanAvatarUrls}
         agentAvatarUrls={agentAvatarUrls}
         userResolver={userResolver}
+        saved={savedIds.has(m.id)}
+        onSave={msg => toggleSave(msg.id)}
       />
     );
 
