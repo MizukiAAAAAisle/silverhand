@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUpRight, Bell, BellOff, CornerUpLeft, Loader2, X } from 'lucide-react';
+import { toast } from 'sonner';
+import type { MessageDto } from '@silverhand/shared';
 import { groupMessages } from '@/components/chat/groupMessages';
 import { MessageItem } from '@/components/chat/MessageItem';
 import { SystemMessage } from '@/components/chat/SystemMessage';
 import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
 import { Composer } from '@/components/chat/Composer';
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
+import { useMessageSelection } from '@/components/chat/useMessageSelection';
+import { SelectionToolbar } from '@/components/chat/SelectionToolbar';
+import { ImagePreviewModal } from '@/components/chat/ImagePreviewModal';
+import { buildMarkdownTranscript } from '@/components/chat/markdownTranscript';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import {
@@ -132,9 +138,103 @@ export function ThreadPanel({
     viewerAvatarObjectUrl,
     viewer,
     userResolver,
+    liveChannels,
+    archivedChannels,
   } = useMessageRenderContext(workspaceId, channelId);
   const { data: agents = [] } = useAgents();
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
+
+  // ── Message actions (copy / share / multi-select export) ──────────────
+  // The same surface the channel pane offers (#task:1067): per-message
+  // Copy markdown, plus Share → multi-select → copy-transcript / export
+  // image. ThreadPanel renders raw `MessageItem` (not `ChannelView`'s
+  // `MessageList`), so the selection state + export handlers are wired
+  // here, mirroring `ChannelView` exactly. Selection resets on channel
+  // switch (`channelId`), thread switch (`selectionResetKey`, bumped in
+  // the rootMessageId effect below), and a fresh jump (`jumpMessageId`) —
+  // the reply-cluster equivalents of the channel's window-reset signals.
+  const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
+  const [selectionResetKey, setSelectionResetKey] = useState(0);
+  const selection = useMessageSelection({
+    channelId,
+    windowResetVersion: selectionResetKey,
+    jumpToMessageId: jumpMessageId ?? null,
+  });
+
+  // ESC exits selection mode (mirrors ChannelView). Bound only while
+  // selecting AND the image-preview modal is closed — Radix Dialog owns
+  // ESC while it's open. Don't steal ESC from focused inputs/textareas.
+  useEffect(() => {
+    if (!selection.active || imagePreviewOpen) return;
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) {
+        return;
+      }
+      event.preventDefault();
+      selection.exit();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selection, imagePreviewOpen]);
+
+  // Single-message copy: clipboard receives ONLY `message.content`.
+  const handleCopyMarkdown = useCallback(async (msg: MessageDto): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(msg.content);
+      toast.success('已复制到剪贴板');
+    } catch (err) {
+      toast.error('复制失败：' + (err instanceof Error ? err.message : String(err)));
+    }
+  }, []);
+  // Per-row Share: enter selection mode with this message preselected.
+  const handleShare = useCallback(
+    (msg: MessageDto) => selection.enter(msg),
+    [selection],
+  );
+  // Parent-channel title/kind for the export screenshot header + filename.
+  // The thread shares the parent channel's identity; fall back to the
+  // `parentTitle` prop when the channel list hasn't resolved yet.
+  const channelMeta = useMemo(() => {
+    const c =
+      liveChannels.find(x => x.id === channelId) ??
+      archivedChannels.find(x => x.id === channelId);
+    if (!c) {
+      return { title: parentTitle ?? null, kind: null as 'channel' | 'dm' | null };
+    }
+    return {
+      title: c.title,
+      kind:
+        c.kind === 'dm_channel'
+          ? ('dm' as const)
+          : c.kind === 'channel'
+            ? ('channel' as const)
+            : null,
+    };
+  }, [liveChannels, archivedChannels, channelId, parentTitle]);
+  // Multi-select transcript export → clipboard (sender headers included).
+  const handleCopyMarkdownTranscript = useCallback(async (): Promise<void> => {
+    const snapshots = selection.selectedSorted();
+    if (snapshots.length === 0) return;
+    const text = buildMarkdownTranscript(snapshots, { agentsById, viewer });
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`已复制 ${snapshots.length} 条消息到剪贴板`);
+      selection.exit();
+    } catch (err) {
+      toast.error('复制失败：' + (err instanceof Error ? err.message : String(err)));
+    }
+  }, [selection, agentsById, viewer]);
+  const handleSaveImage = useCallback(() => {
+    if (selection.count === 0) return;
+    setImagePreviewOpen(true);
+  }, [selection.count]);
+  const previewSnapshots = useMemo(
+    () => (imagePreviewOpen ? selection.selectedSorted() : []),
+    [imagePreviewOpen, selection],
+  );
 
   // Pre-bind the App handlers to this thread's workspace, mirroring
   // `ChannelView` exactly so the renderer receives the same shapes.
@@ -194,10 +294,13 @@ export function ThreadPanel({
     setShowScrollBottom(!atBottom);
   }, []);
 
-  // Reopening the panel for a (different) root resets to follow-bottom mode.
+  // Reopening the panel for a (different) root resets to follow-bottom mode
+  // and drops any in-flight selection (the frame the user was selecting in
+  // is gone).
   useEffect(() => {
     pinBottomRef.current = true;
     setShowScrollBottom(false);
+    setSelectionResetKey(v => v + 1);
   }, [rootMessageId]);
 
   // While pinned (initial open, or the user sitting at the tail), keep the
@@ -285,6 +388,11 @@ export function ThreadPanel({
         userResolver={userResolver}
         saved={savedIds.has(m.id)}
         onSave={msg => toggleSave(msg.id)}
+        selectionMode={selection.active}
+        selected={selection.isSelected(m.id)}
+        onToggleSelected={selection.toggle}
+        onCopyMarkdown={handleCopyMarkdown}
+        onShare={handleShare}
       />
     );
 
@@ -366,6 +474,29 @@ export function ThreadPanel({
         </div>
       ) : (
         <div className="relative flex min-h-0 flex-1 flex-col">
+          {selection.active ? (
+            <SelectionToolbar
+              count={selection.count}
+              onCancel={selection.exit}
+              onCopyMarkdown={handleCopyMarkdownTranscript}
+              onSaveImage={handleSaveImage}
+            />
+          ) : null}
+          <ImagePreviewModal
+            open={imagePreviewOpen}
+            onOpenChange={setImagePreviewOpen}
+            onExportComplete={selection.exit}
+            messages={previewSnapshots}
+            channelTitle={channelMeta.title}
+            channelKind={channelMeta.kind}
+            agentsById={agentsById}
+            agentsByName={agentsByName}
+            humansByName={humansByName}
+            channelsByName={channelsByName}
+            agentAvatarUrls={agentAvatarUrls}
+            viewer={viewer}
+            viewerAvatarObjectUrl={viewerAvatarObjectUrl}
+          />
           <div
             ref={scrollRef}
             onScroll={onScroll}
