@@ -9,39 +9,7 @@ import {
   selectVisibleConversations,
   shouldSecondaryFullscreen,
   type SecondaryDescriptor,
-  type SecondaryFallbackChannel,
-  type SecondaryLookupChannel,
 } from './secondary-pane';
-
-// Tiny in-memory channel directory used for `/t/<tid>` thread-path
-// fallback. PR-2: `?side` no longer reads this — it routes through the
-// ref hook (passed as the third argument to selectSecondaryDescriptor).
-const channels: SecondaryLookupChannel[] = [
-  {
-    id: 'c-primary',
-    kind: 'channel',
-    parent_conversation_id: null,
-    workspace_id: 'w-1',
-  },
-  {
-    id: 'c-other',
-    kind: 'channel',
-    parent_conversation_id: null,
-    workspace_id: 'w-1',
-  },
-  {
-    id: 't-of-primary',
-    kind: 'thread',
-    parent_conversation_id: 'c-primary',
-    workspace_id: 'w-1',
-  },
-  {
-    id: 'dm-self',
-    kind: 'dm_channel',
-    parent_conversation_id: null,
-    workspace_id: 'w-1',
-  },
-];
 
 function makeRefResult(
   status: ConversationByIdResult['status'],
@@ -103,19 +71,14 @@ const foreignDmRef: ConversationRef = {
 };
 
 describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
-  it('returns null when neither ?side nor /t/<tid> is set', () => {
-    const out = selectSecondaryDescriptor(
-      { sideConversationId: null, threadId: null },
-      channels,
-      null,
-    );
+  it('returns null when ?side is not set', () => {
+    const out = selectSecondaryDescriptor({ sideConversationId: null }, null);
     expect(out).toBeNull();
   });
 
   it('?side resolved (same workspace) carries full ref metadata', () => {
     const out = selectSecondaryDescriptor(
-      { sideConversationId: 'c-other', threadId: null },
-      channels,
+      { sideConversationId: 'c-other' },
       makeRefResult('resolved', localChannelRef),
     );
     expect(out).toEqual({
@@ -138,8 +101,7 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
     // The whole point of PR-2: `?side=<id>` may live in a workspace
     // other than the one currently in the primary pane.
     const out = selectSecondaryDescriptor(
-      { sideConversationId: 'c-foreign', threadId: null },
-      channels,
+      { sideConversationId: 'c-foreign' },
       makeRefResult('resolved', foreignChannelRef),
     );
     expect(out).toMatchObject({
@@ -154,8 +116,7 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
 
   it("?side resolved to a dm projects workspace_kind='dm' through to the descriptor", () => {
     const out = selectSecondaryDescriptor(
-      { sideConversationId: 'dm-foreign', threadId: null },
-      channels,
+      { sideConversationId: 'dm-foreign' },
       makeRefResult('resolved', foreignDmRef),
     );
     expect(out).toMatchObject({
@@ -166,18 +127,18 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
     });
   });
 
-  it('?side resolved to a thread carries parent_channel_id + parent_title', () => {
+  it('?side resolved to a legacy fossil thread degrades to not_found (viewer retired)', () => {
+    // The isolated-thread viewer was retired with the reply-cluster model.
+    // The chip popover still resolves the thread label via the ref hook,
+    // but the openable side pane is gone — fossils map to not_found.
     const out = selectSecondaryDescriptor(
-      { sideConversationId: 't-of-primary', threadId: null },
-      channels,
+      { sideConversationId: 't-of-primary' },
       makeRefResult('resolved', localThreadRef),
     );
-    expect(out).toMatchObject({
+    expect(out).toEqual({
       source: 'side',
-      status: 'resolved',
-      kind: 'thread',
-      parentChannelId: 'c-primary',
-      parentTitle: 'planning',
+      status: 'not_found',
+      id: 't-of-primary',
     });
   });
 
@@ -185,17 +146,15 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
     // Placeholder/skeleton needs the id to render `#conv:<id>` and offer
     // a Close button while the ref hook is in-flight.
     const out = selectSecondaryDescriptor(
-      { sideConversationId: 'c-foreign', threadId: null },
-      channels,
+      { sideConversationId: 'c-foreign' },
       makeRefResult('loading'),
     );
     expect(out).toEqual({ source: 'side', status: 'loading', id: 'c-foreign' });
   });
 
-  it('?side null sideRef defaults to loading (component hasn\'t emitted yet)', () => {
+  it("?side null sideRef defaults to loading (component hasn't emitted yet)", () => {
     const out = selectSecondaryDescriptor(
-      { sideConversationId: 'c-foreign', threadId: null },
-      channels,
+      { sideConversationId: 'c-foreign' },
       null,
     );
     expect(out).toEqual({ source: 'side', status: 'loading', id: 'c-foreign' });
@@ -203,8 +162,7 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
 
   it('?side unauthorized surfaces the placeholder status (not silently stripped)', () => {
     const out = selectSecondaryDescriptor(
-      { sideConversationId: 'c-foreign', threadId: null },
-      channels,
+      { sideConversationId: 'c-foreign' },
       makeRefResult('unauthorized'),
     );
     expect(out).toEqual({
@@ -216,8 +174,7 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
 
   it('?side not_found surfaces the placeholder status (not silently stripped)', () => {
     const out = selectSecondaryDescriptor(
-      { sideConversationId: 'c-foreign', threadId: null },
-      channels,
+      { sideConversationId: 'c-foreign' },
       makeRefResult('not_found'),
     );
     expect(out).toEqual({
@@ -225,56 +182,6 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
       status: 'not_found',
       id: 'c-foreign',
     });
-  });
-
-  it('falls back to /t/<tid> when no ?side is set (legacy path-based thread)', () => {
-    const out = selectSecondaryDescriptor(
-      { sideConversationId: null, threadId: 't-of-primary' },
-      channels,
-      null,
-    );
-    expect(out).toMatchObject({
-      source: 'thread-path',
-      status: 'resolved',
-      id: 't-of-primary',
-      kind: 'thread',
-      parentChannelId: 'c-primary',
-      workspaceId: 'w-1',
-    });
-  });
-
-  it('?side wins over /t/<tid> when both are present (priority table)', () => {
-    const out = selectSecondaryDescriptor(
-      { sideConversationId: 'c-other', threadId: 't-of-primary' },
-      channels,
-      makeRefResult('resolved', localChannelRef),
-    );
-    expect(out?.source).toBe('side');
-    expect(out).toMatchObject({ id: 'c-other' });
-  });
-
-  it('?side loading still wins over a resolvable /t/<tid> (no silent strip)', () => {
-    // Cindy review point 6: never silently drop ?side. While the ref
-    // hook is in-flight, we surface the loading placeholder rather
-    // than show the path-based thread underneath.
-    const out = selectSecondaryDescriptor(
-      { sideConversationId: 'c-foreign', threadId: 't-of-primary' },
-      channels,
-      makeRefResult('loading'),
-    );
-    expect(out).toEqual({ source: 'side', status: 'loading', id: 'c-foreign' });
-  });
-
-  it('returns null when /t/<tid> is not in lookup', () => {
-    // Legacy thread ids must resolve from the persisted workspace channel
-    // list. The reply-cluster UI no longer creates child conversations, so
-    // there is no ephemeral "just-created thread" lookup path.
-    const out = selectSecondaryDescriptor(
-      { sideConversationId: null, threadId: 't-deleted' },
-      channels,
-      null,
-    );
-    expect(out).toBeNull();
   });
 });
 
@@ -293,6 +200,10 @@ const sideChannelDescriptor: SecondaryDescriptor = {
   closedAt: null,
   archivedAt: null,
 };
+// A resolved thread-kind side can no longer be produced by
+// selectSecondaryDescriptor (fossils degrade to not_found), but the
+// downstream pure selectors must still handle a resolved descriptor of any
+// kind — keep one to exercise that logic directly.
 const sideThreadDescriptor: SecondaryDescriptor = {
   source: 'side',
   status: 'resolved',
@@ -321,14 +232,6 @@ const foreignSideDescriptor: SecondaryDescriptor = {
   closedAt: null,
   archivedAt: null,
 };
-const threadPathDescriptor: SecondaryDescriptor = {
-  source: 'thread-path',
-  status: 'resolved',
-  id: 't-of-primary',
-  kind: 'thread',
-  parentChannelId: 'c-primary',
-  workspaceId: 'w-1',
-};
 const loadingSide: SecondaryDescriptor = {
   source: 'side',
   status: 'loading',
@@ -348,12 +251,6 @@ const notFoundSide: SecondaryDescriptor = {
 describe('selectSecondaryWorkspaceContext — workspace prop projection', () => {
   it('returns null when there is no secondary', () => {
     expect(selectSecondaryWorkspaceContext(null)).toBeNull();
-  });
-
-  it('returns null for thread-path source (no workspace switch)', () => {
-    // /t/<tid> is always same-workspace; ChannelView keeps its
-    // implicit current-workspace context for path-based threads.
-    expect(selectSecondaryWorkspaceContext(threadPathDescriptor)).toBeNull();
   });
 
   it('returns null for non-resolved side (placeholder, no workspace yet)', () => {
@@ -396,7 +293,7 @@ describe('selectVisibleConversations — read-cursor visibility matrix', () => {
   it('only secondary visible when fullscreen + resolved secondary', () => {
     const out = selectVisibleConversations({
       primary,
-      secondary: threadPathDescriptor,
+      secondary: sideThreadDescriptor,
       fullscreen: true,
     });
     expect(out).toEqual({
@@ -500,7 +397,7 @@ describe('selectFocusedConversation — single-id focus rule', () => {
     const out = selectFocusedConversation({
       primary,
       primaryWorkspaceId: 'w-1',
-      secondary: threadPathDescriptor,
+      secondary: sideThreadDescriptor,
       fullscreen: true,
     });
     expect(out?.id).toBe('t-of-primary');
@@ -555,14 +452,13 @@ describe('shouldSecondaryFullscreen — render-time fullscreen gate', () => {
 
   it('false when fullscreen flag is off (split / overlay render)', () => {
     expect(shouldSecondaryFullscreen(sideChannelDescriptor, false)).toBe(false);
-    expect(shouldSecondaryFullscreen(threadPathDescriptor, false)).toBe(false);
+    expect(shouldSecondaryFullscreen(sideThreadDescriptor, false)).toBe(false);
     expect(shouldSecondaryFullscreen(loadingSide, false)).toBe(false);
   });
 
   it('true only when secondary is resolved AND fullscreen is set', () => {
     expect(shouldSecondaryFullscreen(sideChannelDescriptor, true)).toBe(true);
     expect(shouldSecondaryFullscreen(sideThreadDescriptor, true)).toBe(true);
-    expect(shouldSecondaryFullscreen(threadPathDescriptor, true)).toBe(true);
     expect(shouldSecondaryFullscreen(foreignSideDescriptor, true)).toBe(true);
   });
 
@@ -582,23 +478,11 @@ describe('shouldSecondaryFullscreen — render-time fullscreen gate', () => {
 
 // ── PR-2 cross-workspace integration: end-to-end descriptor → ChannelView prop chain ──
 
-const samePathThreadChannel: SecondaryFallbackChannel = {
-  id: 't-of-primary',
-  title: 'investigations',
-  kind: 'thread',
-  parent_conversation_id: 'c-primary',
-  closed_at: null,
-  archived_at: null,
-  workspace_id: 'w-1',
-};
-
 describe('selectSecondaryViewInputs — full descriptor → ChannelView prop chain', () => {
   it('returns null/primary fallbacks when there is no secondary', () => {
     const out = selectSecondaryViewInputs({
       secondary: null,
-      pathThreadChannel: null,
       primaryChannelKind: 'regular',
-      primaryChannelTitle: 'planning',
       primaryWorkspaceId: 'w-1',
     });
     expect(out).toEqual({
@@ -633,11 +517,9 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     };
     const out = selectSecondaryViewInputs({
       secondary: foreignSide,
-      pathThreadChannel: null,
       // Primary is on a different workspace, with a different kind.
       // The foreign side must IGNORE these primary fallbacks.
       primaryChannelKind: 'dm',
-      primaryChannelTitle: 'planning',
       primaryWorkspaceId: 'w-1',
     });
     expect(out.conversationDescriptor).toEqual({
@@ -683,9 +565,7 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     };
     const out = selectSecondaryViewInputs({
       secondary: foreignDmSide,
-      pathThreadChannel: null,
       primaryChannelKind: 'regular',
-      primaryChannelTitle: 'planning',
       primaryWorkspaceId: 'w-1',
     });
     expect(out.conversationDescriptor?.workspace_id).toBe('w-bob-home');
@@ -694,48 +574,9 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     expect(out.archiveWorkspaceId).toBe('w-bob-home');
   });
 
-  it('cross-workspace ?side resolved thread: parent_title comes from the foreign ref, not the primary', () => {
-    // The bug this test prevents: renderer used to fall back to
-    // `selectedChannel?.title` for thread sides' parentTitle (the
-    // primary workspace's currently-selected channel). For a
-    // cross-workspace thread that's the WRONG channel name. PR-2
-    // wires `secondaryDescriptor.parentTitle` from the ref payload.
-    const foreignThreadSide: SecondaryDescriptor = {
-      source: 'side',
-      status: 'resolved',
-      id: 't-foreign',
-      kind: 'thread',
-      title: 'perf-dive',
-      parentChannelId: 'c-foreign-parent',
-      parentTitle: 'team-y planning', // ← from the ref payload
-      workspaceId: 'w-2',
-      workspaceKind: 'regular',
-      workspacePath: '/tmp/w-2',
-      closedAt: null,
-      archivedAt: null,
-    };
-    const out = selectSecondaryViewInputs({
-      secondary: foreignThreadSide,
-      pathThreadChannel: null,
-      primaryChannelKind: 'regular',
-      // Primary's selected channel happens to share a name with a
-      // common channel — make sure we don't read this by accident.
-      primaryChannelTitle: 'general',
-      primaryWorkspaceId: 'w-1',
-    });
-    expect(out.isThread).toBe(true);
-    expect(out.parentTitle).toBe('team-y planning');
-    expect(out.conversationDescriptor?.parent_conversation_id).toBe('c-foreign-parent');
-    expect(out.conversationDescriptor?.workspace_id).toBe('w-2');
-    expect(out.archiveWorkspaceId).toBe('w-2');
-  });
-
   it('same-workspace ?side resolved channel: still routes through the ref descriptor', () => {
     // Even when the side conversation lives in the same workspace as
     // primary, PR-2 routes through the ref hook for consistency.
-    // workspace_id should match primary's by accident — but
-    // workspace_kind comes from the ref payload (still source of
-    // truth), not from a primary fallback.
     const localSide: SecondaryDescriptor = {
       source: 'side',
       status: 'resolved',
@@ -752,73 +593,12 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     };
     const out = selectSecondaryViewInputs({
       secondary: localSide,
-      pathThreadChannel: null,
       primaryChannelKind: 'regular',
-      primaryChannelTitle: 'general',
       primaryWorkspaceId: 'w-1',
     });
     expect(out.conversationDescriptor?.workspace_id).toBe('w-1');
     expect(out.archiveWorkspaceId).toBe('w-1');
     expect(out.isThread).toBe(false);
-  });
-
-  it('thread-path source: same-workspace; primary fallbacks fill kind/title; archive targets the path channel\'s workspace', () => {
-    const threadPathDesc: SecondaryDescriptor = {
-      source: 'thread-path',
-      status: 'resolved',
-      id: 't-of-primary',
-      kind: 'thread',
-      parentChannelId: 'c-primary',
-      workspaceId: 'w-1',
-    };
-    const out = selectSecondaryViewInputs({
-      secondary: threadPathDesc,
-      pathThreadChannel: samePathThreadChannel,
-      primaryChannelKind: 'regular',
-      primaryChannelTitle: 'planning',
-      primaryWorkspaceId: 'w-1',
-    });
-    expect(out.conversationDescriptor).toEqual({
-      id: 't-of-primary',
-      title: 'investigations',
-      kind: 'thread',
-      parent_conversation_id: 'c-primary',
-      closed_at: null,
-      archived_at: null,
-      workspace_id: 'w-1',
-    });
-    expect(out.channelKind).toBe('regular');
-    // Thread-path's parentTitle comes from primary's selected channel
-    // (always same-workspace by construction).
-    expect(out.parentTitle).toBe('planning');
-    expect(out.isThread).toBe(true);
-    expect(out.archiveWorkspaceId).toBe('w-1');
-  });
-
-  it('thread-path source without a path channel record: descriptor null, primary fallbacks for the rest', () => {
-    // Brief window after a thread is created but before the channels
-    // query refetch lands. Selector returns null descriptor; App.tsx
-    // skips the ChannelView render and waits for the next tick.
-    const threadPathDesc: SecondaryDescriptor = {
-      source: 'thread-path',
-      status: 'resolved',
-      id: 't-of-primary',
-      kind: 'thread',
-      parentChannelId: 'c-primary',
-      workspaceId: 'w-1',
-    };
-    const out = selectSecondaryViewInputs({
-      secondary: threadPathDesc,
-      pathThreadChannel: null,
-      primaryChannelKind: 'regular',
-      primaryChannelTitle: 'planning',
-      primaryWorkspaceId: 'w-1',
-    });
-    expect(out.conversationDescriptor).toBeNull();
-    expect(out.channelKind).toBe('regular');
-    expect(out.parentTitle).toBe('planning');
-    expect(out.isThread).toBe(true);
-    expect(out.archiveWorkspaceId).toBe('w-1');
   });
 
   it('non-resolved ?side: descriptor null, primary fallbacks (placeholder pane handles render)', () => {
@@ -829,9 +609,7 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     };
     const out = selectSecondaryViewInputs({
       secondary: loadingDesc,
-      pathThreadChannel: null,
       primaryChannelKind: 'regular',
-      primaryChannelTitle: 'planning',
       primaryWorkspaceId: 'w-1',
     });
     expect(out).toEqual({

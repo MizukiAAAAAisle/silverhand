@@ -66,7 +66,7 @@ describe('message routes', () => {
     t = null;
   });
 
-  it('human channel routes publish message and legacy thread writes are read-only', async () => {
+  it('human channel routes publish message and public legacy thread writes are gone', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
     const channelEvents: Array<{ kind: string; payload: any }> = [];
@@ -90,8 +90,7 @@ describe('message routes', () => {
     unsubChannel();
     unsubViewer();
 
-    expect(threadPost.status).toBe(409);
-    expect(await threadPost.json()).toMatchObject({ code: 'legacy_thread_read_only' });
+    expect(threadPost.status).toBe(404);
     expect(channelEvents).toEqual(
       expect.arrayContaining([
         {

@@ -268,14 +268,19 @@ describe('POST /internal/.../send-message', () => {
     );
     expect(r.status).toBe(409);
     expect(await r.json()).toMatchObject({ code: 'legacy_thread_read_only' });
-    const childMsgs = await (
-      await http(t).get(`/api/threads/${child.thread_id}/messages`)
-    ).json() as any;
-    expect(
-      childMsgs.messages.some(
-        (m: any) => m.from_kind === 'agent' && m.content === 'down to child',
-      ),
-    ).toBe(false);
+    const leaked = t.ctx.db
+      .prepare<
+        [string, string],
+        { one: 1 }
+      >(
+        `SELECT 1 AS one
+           FROM messages
+          WHERE conversation_id = ?
+            AND content = ?
+          LIMIT 1`,
+      )
+      .get(child.thread_id, 'down to child');
+    expect(leaked).toBeUndefined();
   });
 
 });

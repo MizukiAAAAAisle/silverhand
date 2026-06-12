@@ -1,5 +1,5 @@
-// Public attachment routes: channel/thread upload, attachment download, and
-// attachment delete. Upload goes via channel/thread context so the server
+// Public attachment routes: channel upload, attachment download, and
+// attachment delete. Upload goes via channel context so the server
 // resolves the access boundary; clients never specify channel_id directly.
 // Download is by id — auth is bearer (renderer) or v1-permissive (TODO when DM
 // membership is enforceable per blob).
@@ -42,18 +42,6 @@ export function createAttachmentsApp(deps: AttachmentsRouteDeps): Hono<AppEnv> {
       return c.json({ error: 'forbidden' }, 403);
     }
     return uploadAttachment(ctx, c, channel.id, 'user', viewerUserId);
-  });
-
-  app.post(apiPaths.threadAttachments(':id'), async c => {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'thread id required' }, 400);
-    const thread = conversations.getThread(id);
-    if (!thread) return c.json({ error: 'thread not found' }, 404);
-    const viewerUserId = requireViewerUserId(c);
-    if (!canPostToConversation(ctx, getUserPrincipal(c), thread.id)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    return uploadAttachment(ctx, c, thread.id, 'user', viewerUserId);
   });
 
   app.get(apiPaths.attachment(':id'), async c => {

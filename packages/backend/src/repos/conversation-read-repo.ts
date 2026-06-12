@@ -3,7 +3,15 @@ import type { ConversationReadRow } from '@silverhand/shared';
 
 export interface MessageUnreadByConversation {
   by_conversation: Record<string, number>;
+  latest_by_conversation: Record<string, MessageUnreadPointer>;
   total: number;
+}
+
+export interface MessageUnreadPointer {
+  conversation_id: string;
+  message_id: string;
+  seq: number;
+  thread_root_id: string | null;
 }
 
 export class ConversationReadRepo {
@@ -75,7 +83,14 @@ export class ConversationReadRepo {
       byConversation[row.conversation_id] = row.c;
       total += row.c;
     }
-    return { by_conversation: byConversation, total };
+    return {
+      by_conversation: byConversation,
+      latest_by_conversation: this.latestUnreadByConversationForWorkspace(
+        workspaceId,
+        viewerUserId,
+      ),
+      total,
+    };
   }
 
   unreadCountForConversation(conversationId: string, viewerUserId: string): number {
@@ -101,6 +116,87 @@ export class ConversationReadRepo {
       )
       .get(conversationId, viewerUserId, viewerUserId);
     return row?.c ?? 0;
+  }
+
+  latestUnreadForConversation(
+    conversationId: string,
+    viewerUserId: string,
+  ): MessageUnreadPointer | null {
+    const row = this.db
+      .prepare<[string, string, string], MessageUnreadPointer>(
+        `SELECT m.conversation_id,
+                m.id AS message_id,
+                m.seq,
+                m.thread_root_id
+           FROM messages m
+          WHERE m.conversation_id = ?
+            AND m.seq > COALESCE(
+              (
+                SELECT cr.last_read_seq
+                  FROM conversation_reads cr
+                 WHERE cr.user_id = ?
+                   AND cr.conversation_id = m.conversation_id
+              ),
+              0
+            )
+            AND m.from_kind != 'system'
+            AND NOT (
+              m.from_kind = 'user'
+              AND (m.from_user_id = ? OR m.from_user_id IS NULL)
+            )
+          ORDER BY m.seq DESC
+          LIMIT 1`,
+      )
+      .get(conversationId, viewerUserId, viewerUserId);
+    return row ?? null;
+  }
+
+  latestUnreadByConversationForWorkspace(
+    workspaceId: string,
+    viewerUserId: string,
+  ): Record<string, MessageUnreadPointer> {
+    const rows = this.db
+      .prepare<[string, string, string, string], MessageUnreadPointer>(
+        `WITH unread AS (
+           SELECT c.id AS conversation_id,
+                  m.id AS message_id,
+                  m.seq,
+                  m.thread_root_id,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY c.id
+                    ORDER BY m.seq DESC
+                  ) AS rn
+             FROM conversations c
+             JOIN conversation_users cu
+               ON cu.conversation_id = c.id
+              AND cu.user_id = ?
+             JOIN messages m
+               ON m.conversation_id = c.id
+              AND m.seq > COALESCE(
+                (
+                  SELECT cr.last_read_seq
+                    FROM conversation_reads cr
+                   WHERE cr.user_id = ?
+                     AND cr.conversation_id = c.id
+                ),
+                0
+              )
+              AND m.from_kind != 'system'
+              AND NOT (
+                m.from_kind = 'user'
+                AND (m.from_user_id = ? OR m.from_user_id IS NULL)
+              )
+            WHERE c.workspace_id = ?
+          )
+          SELECT conversation_id, message_id, seq, thread_root_id
+            FROM unread
+           WHERE rn = 1`,
+      )
+      .all(viewerUserId, viewerUserId, viewerUserId, workspaceId);
+
+    const latest: Record<string, MessageUnreadPointer> = {};
+    for (const row of rows) latest[row.conversation_id] = row;
+    return latest;
   }
 
   unreadCountsByWorkspace(viewerUserId: string): Record<string, number> {

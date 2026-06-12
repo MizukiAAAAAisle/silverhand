@@ -268,7 +268,7 @@ describe('workspace/conversation routes', () => {
     expect(await res.json()).toMatchObject({ code: 'host_mismatch' });
   });
 
-  it('enforces channel/thread kind guards on message routes', async () => {
+  it('serves channel message routes and retires public thread message routes', async () => {
     t = buildTestApp();
     const agentBody = await (
       await http(t).post('/api/agents', { name: 'bob', runtime: 'claude' })
@@ -300,7 +300,7 @@ describe('workspace/conversation routes', () => {
     expect((await http(t).get(`/api/channels/${threadId}/messages`)).status)
       .toBe(404);
     expect((await http(t).get(`/api/threads/${threadId}/messages`)).status)
-      .toBe(200);
+      .toBe(404);
   });
 
   it('writes user_id into conversation_users when creating a DM under agent_home (v25 PR-A blocker fix)', async () => {

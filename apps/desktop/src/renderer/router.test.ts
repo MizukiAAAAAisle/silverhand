@@ -1,20 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildChannelLayoutUrl,
   buildChannelPathPreservingSide,
-  buildClusterOpenUrl,
   buildSideOpenUrl,
   buildTaskOpenUrl,
+  buildThreadOpenUrl,
+  layoutMemoryFromRoute,
   parseRouteState,
-  withClusterQuery,
   withSideQuery,
   withTaskQuery,
+  withThreadQuery,
   withThreadsQuery,
 } from './router';
+import type { SecondaryRouteFields } from './router';
 
-// Tests focus on the URL → state matrix introduced by PR-1: how the new
-// `?side=<id>` query param interacts with the legacy `/t/<tid>` path
-// segment and the `?fullscreen=1` flag. The pure parser keeps these
-// shapes deterministic; the React selectors layer on top.
+// Tests focus on the URL → state matrix: the base path is
+// `/chat/w/:workspaceId/c/:channelId` (the legacy `/t/<threadId>` fossil
+// path segment was removed with the isolated-thread viewer) plus the
+// `?side` / `?thread` / `?threads` / `?fullscreen` / `?task` query
+// params. The pure parser keeps these shapes deterministic; the React
+// selectors layer on top.
 describe('parseRouteState — chat URL matrix', () => {
   it('parses workspace + channel without secondary', () => {
     const r = parseRouteState('/chat/w/w-1/c/c-a', '');
@@ -23,62 +28,23 @@ describe('parseRouteState — chat URL matrix', () => {
       chatView: 'channel',
       workspaceId: 'w-1',
       channelId: 'c-a',
-      threadId: null,
       sideConversationId: null,
       fullscreen: false,
-      threadFullscreen: false,
-    });
-  });
-
-  it('parses /t/<tid> as legacy thread (no ?side)', () => {
-    const r = parseRouteState('/chat/w/w-1/c/c-a/t/t-1', '');
-    expect(r).toMatchObject({
-      threadId: 't-1',
-      sideConversationId: null,
-      fullscreen: false,
-      threadFullscreen: false,
     });
   });
 
   it('parses ?side=<id> alone', () => {
     const r = parseRouteState('/chat/w/w-1/c/c-a', '?side=c-other');
     expect(r).toMatchObject({
-      threadId: null,
       sideConversationId: 'c-other',
       fullscreen: false,
-      threadFullscreen: false,
     });
   });
 
-  it('preserves ?side AND /t/<tid> simultaneously (priority handled by selector)', () => {
-    // Parsing must NOT drop either field — the priority decision
-    // (side > thread) lives in the selector layer so callers can audit
-    // the raw URL state.
-    const r = parseRouteState('/chat/w/w-1/c/c-a/t/t-1', '?side=c-other');
-    expect(r).toMatchObject({
-      threadId: 't-1',
-      sideConversationId: 'c-other',
-    });
-  });
-
-  it('?fullscreen=1 + /t/<tid> (no side) marks threadFullscreen=true', () => {
-    const r = parseRouteState('/chat/w/w-1/c/c-a/t/t-1', '?fullscreen=1');
+  it('parses ?side with ?fullscreen=1', () => {
+    const r = parseRouteState('/chat/w/w-1/c/c-a', '?side=c-other&fullscreen=1');
+    expect(r.sideConversationId).toBe('c-other');
     expect(r.fullscreen).toBe(true);
-    expect(r.threadFullscreen).toBe(true);
-  });
-
-  it('?fullscreen=1 + ?side suppresses threadFullscreen (back-compat shorthand only fires for path-thread)', () => {
-    // `threadFullscreen` is the legacy back-compat shorthand for "the
-    // path-thread is fullscreen". When `?side` is present it wins as
-    // secondary, so the path-thread is no longer the visible one and
-    // the shorthand goes false. Generic `fullscreen` stays true (and
-    // applies to the side per the priority table).
-    const r = parseRouteState(
-      '/chat/w/w-1/c/c-a/t/t-1',
-      '?side=c-other&fullscreen=1',
-    );
-    expect(r.fullscreen).toBe(true);
-    expect(r.threadFullscreen).toBe(false);
   });
 
   it('treats empty ?side= as unset (defensive — prevents spurious unresolved placeholder)', () => {
@@ -133,27 +99,24 @@ describe('withSideQuery — URL writer for openSide / closeSide', () => {
     expect(out).toBe('/chat/w/w-1/c/c-a?side=c-new');
   });
 
-  it('preserves /t/<tid> on the path so closeSide falls back to thread', () => {
-    // The whole point of the overlay model: closing `?side` should not
-    // touch the legacy thread path. The thread reappears as secondary.
-    const before = '/chat/w/w-1/c/c-a/t/t-1';
+  it('strips ?side on close', () => {
+    const before = '/chat/w/w-1/c/c-a';
     const opened = withSideQuery(before, '', 'c-other');
     expect(opened).toBe(`${before}?side=c-other`);
     const closed = withSideQuery(before, '?side=c-other', null);
-    expect(closed).toBe(before); // path-thread untouched
+    expect(closed).toBe(before);
   });
 
   it('strips ?side AND ?fullscreen on close', () => {
     // closeSide must drop fullscreen too — leaving fullscreen=1
     // dangling after closing a fullscreened side overlay would yank
-    // the underlying thread (or primary) into fullscreen mode
-    // unexpectedly.
+    // the primary into fullscreen mode unexpectedly.
     const out = withSideQuery(
-      '/chat/w/w-1/c/c-a/t/t-1',
+      '/chat/w/w-1/c/c-a',
       '?side=c-other&fullscreen=1',
       null,
     );
-    expect(out).toBe('/chat/w/w-1/c/c-a/t/t-1');
+    expect(out).toBe('/chat/w/w-1/c/c-a');
   });
 
   it('preserves unrelated query params on both open and close', () => {
@@ -177,8 +140,8 @@ describe('buildSideOpenUrl — openSide URL writer (PR-4 follow-up)', () => {
   // The whole point: sigil clicks promise "side pane, doesn't replace
   // your main view". If openSide inherited a stale `?fullscreen=1`,
   // `shouldSecondaryFullscreen` would render only the side and HIDE the
-  // primary + path-thread the user was reading. Locking this behavior
-  // here so a future refactor can't silently regress the prompt promise.
+  // primary the user was reading. Locking this behavior here so a future
+  // refactor can't silently regress the prompt promise.
 
   it('writes ?side=<id> on a bare path', () => {
     expect(buildSideOpenUrl('/chat/w/w-1/c/c-a', '', 'c-other')).toBe(
@@ -186,26 +149,16 @@ describe('buildSideOpenUrl — openSide URL writer (PR-4 follow-up)', () => {
     );
   });
 
-  it('strips ?fullscreen when opening side from a fullscreen thread', () => {
-    // User was at /chat/w/w-1/c/c-a/t/t-1?fullscreen=1 (thread fullscreen).
-    // Clicking #conv:<id> must NOT inherit fullscreen — that would hide both
-    // the channel and the thread under a fullscreen side pane.
+  it('strips ?fullscreen when opening side from a fullscreen view', () => {
+    // User was at a fullscreen view. Clicking #conv:<id> must NOT inherit
+    // fullscreen — that would hide the channel under a fullscreen side pane.
     const out = buildSideOpenUrl(
-      '/chat/w/w-1/c/c-a/t/t-1',
+      '/chat/w/w-1/c/c-a',
       '?fullscreen=1',
       'c-other',
     );
-    expect(out).toBe('/chat/w/w-1/c/c-a/t/t-1?side=c-other');
+    expect(out).toBe('/chat/w/w-1/c/c-a?side=c-other');
     expect(out).not.toContain('fullscreen');
-  });
-
-  it('preserves /t/<tid> on the path so closeSide falls back to thread', () => {
-    const out = buildSideOpenUrl(
-      '/chat/w/w-1/c/c-a/t/t-1',
-      '',
-      'c-other',
-    );
-    expect(out).toBe('/chat/w/w-1/c/c-a/t/t-1?side=c-other');
   });
 
   it('preserves unrelated query params and overwrites stale ?side', () => {
@@ -223,16 +176,15 @@ describe('buildSideOpenUrl — openSide URL writer (PR-4 follow-up)', () => {
 
 describe('buildChannelPathPreservingSide — view-in-channel keeps side overlay', () => {
   // PR-2 blocker per Cindy review of msg `tEZtWtHiHzpq8PxC`: clicking
-  // "View in channel" on a cross-workspace `?side=<thread>` previously
+  // "View in channel" on a cross-workspace `?side=<conv>` previously
   // navigated primary via `nav.toChannel(wid, cid)`, which writes a
-  // bare path and silently drops `?side`. The user's open thread
+  // bare path and silently drops `?side`. The user's open side pane
   // disappears even though they only asked to see its parent. This
-  // helper builds the URL with `?side` preserved, and is wired into
-  // `handleJumpToOriginal` for the `?side` source.
+  // helper builds the URL with `?side` preserved.
   it('writes /chat/w/<wid>/c/<cid>?side=<sideId> for cross-workspace parent jump', () => {
     expect(
-      buildChannelPathPreservingSide('w-other', 'c-parent', 't-side-thread'),
-    ).toBe('/chat/w/w-other/c/c-parent?side=t-side-thread');
+      buildChannelPathPreservingSide('w-other', 'c-parent', 'c-side'),
+    ).toBe('/chat/w/w-other/c/c-parent?side=c-side');
   });
 
   it('keeps the side overlay even when destination workspace differs from the side', () => {
@@ -240,15 +192,15 @@ describe('buildChannelPathPreservingSide — view-in-channel keeps side overlay'
     // `?side=<id>` resolves through `useConversationById` server-side,
     // so any conversation id is legal regardless of the primary's
     // workspace. The helper just writes the URL.
-    const out = buildChannelPathPreservingSide('w-A', 'c-A', 't-in-w-B');
-    expect(out).toBe('/chat/w/w-A/c/c-A?side=t-in-w-B');
+    const out = buildChannelPathPreservingSide('w-A', 'c-A', 'c-in-w-B');
+    expect(out).toBe('/chat/w/w-A/c/c-A?side=c-in-w-B');
   });
 
   it('does not propagate ?fullscreen — view-in-channel implies the user wants primary visible', () => {
     // Hard contract: the helper takes only (workspaceId, channelId,
     // sideId). It never reads or writes `?fullscreen`. Asserting via
     // shape — output never contains the substring.
-    const out = buildChannelPathPreservingSide('w-1', 'c-1', 't-1');
+    const out = buildChannelPathPreservingSide('w-1', 'c-1', 'c-side');
     expect(out).not.toContain('fullscreen');
   });
 });
@@ -296,7 +248,7 @@ describe('parseRouteState — ?task=<n> focused-task pointer (PR-4 commit 2)', (
     // must survive parsing. The drawer auto-opens via App.tsx based on
     // `focusedTaskNumber`, the side pane via `sideConversationId`.
     const r = parseRouteState(
-      '/chat/w/w-1/c/c-a/t/t-1',
+      '/chat/w/w-1/c/c-a',
       '?side=c-other&task=7&fullscreen=1',
     );
     expect(r.focusedTaskNumber).toBe(7);
@@ -323,7 +275,7 @@ describe('withTaskQuery — URL writer for openTask / closeTask', () => {
     // any unrelated params keep their state. The drawer's open/closed
     // status is React state, decoupled from this URL pointer.
     const out = withTaskQuery(
-      '/chat/w/w-1/c/c-a/t/t-1',
+      '/chat/w/w-1/c/c-a',
       '?side=c-other&task=12&fullscreen=1',
       null,
     );
@@ -364,7 +316,7 @@ describe('buildTaskOpenUrl — openTask URL writer', () => {
 
   it('preserves ?side and ?fullscreen — drawer focus is orthogonal', () => {
     const out = buildTaskOpenUrl(
-      '/chat/w/w-1/c/c-a/t/t-1',
+      '/chat/w/w-1/c/c-a',
       '?side=c-other&fullscreen=1',
       11,
     );
@@ -385,67 +337,68 @@ describe('buildTaskOpenUrl — openTask URL writer', () => {
   });
 });
 
-// Reply-cluster pane (`?cluster=<rootMessageId>`). A cluster is NOT a
-// conversation — it points at a main-line message whose thread the right
+// Thread pane (`?thread=<rootMessageId>`). A thread is NOT a
+// conversation — it points at a main-line message whose replies the right
 // pane shows. It is mutually exclusive with `?side` at the nav layer:
-// opening one clears the other.
-describe('parseRouteState — ?cluster=<rootMessageId> thread pane pointer', () => {
-  it('parses ?cluster=<id> alone', () => {
-    const r = parseRouteState('/chat/w/w-1/c/c-a', '?cluster=m-1');
+// opening one clears the other. (`?cluster=` was retired with the legacy
+// `/t/` viewer; the URL now speaks the user-facing "thread".)
+describe('parseRouteState — ?thread=<rootMessageId> thread pane pointer', () => {
+  it('parses ?thread=<id> alone', () => {
+    const r = parseRouteState('/chat/w/w-1/c/c-a', '?thread=m-1');
     expect(r).toMatchObject({
       channelId: 'c-a',
-      clusterRootId: 'm-1',
+      threadRootId: 'm-1',
       sideConversationId: null,
     });
   });
 
-  it('defaults clusterRootId to null with no query', () => {
+  it('defaults threadRootId to null with no query', () => {
     const r = parseRouteState('/chat/w/w-1/c/c-a', '');
-    expect(r.clusterRootId).toBeNull();
+    expect(r.threadRootId).toBeNull();
   });
 
-  it('treats empty ?cluster= as unset', () => {
-    const r = parseRouteState('/chat/w/w-1/c/c-a', '?cluster=');
-    expect(r.clusterRootId).toBeNull();
+  it('treats empty ?thread= as unset', () => {
+    const r = parseRouteState('/chat/w/w-1/c/c-a', '?thread=');
+    expect(r.threadRootId).toBeNull();
   });
 });
 
-describe('withClusterQuery — URL writer for openCluster / closeCluster', () => {
-  it('writes ?cluster=<id>, clearing ?side and ?fullscreen', () => {
-    const out = withClusterQuery(
+describe('withThreadQuery — URL writer for openThread / closeThread', () => {
+  it('writes ?thread=<id>, clearing ?side and ?fullscreen', () => {
+    const out = withThreadQuery(
       '/chat/w/w-1/c/c-a',
       '?side=c-other&fullscreen=1',
       'm-1',
     );
-    expect(out).toContain('cluster=m-1');
+    expect(out).toContain('thread=m-1');
     expect(out).not.toContain('side=c-other');
     expect(out).not.toContain('fullscreen=1');
   });
 
-  it('clears ?cluster (and ?fullscreen) when id is null', () => {
-    const closed = withClusterQuery(
+  it('clears ?thread (and ?fullscreen) when id is null', () => {
+    const closed = withThreadQuery(
       '/chat/w/w-1/c/c-a',
-      '?cluster=m-1&fullscreen=1',
+      '?thread=m-1&fullscreen=1',
       null,
     );
-    expect(closed).not.toContain('cluster');
+    expect(closed).not.toContain('thread');
     expect(closed).not.toContain('fullscreen');
   });
 
   it('preserves unrelated params (e.g. ?task) when opening', () => {
-    const out = withClusterQuery('/chat/w/w-1/c/c-a', '?task=7', 'm-1');
-    expect(out).toContain('cluster=m-1');
+    const out = withThreadQuery('/chat/w/w-1/c/c-a', '?task=7', 'm-1');
+    expect(out).toContain('thread=m-1');
     expect(out).toContain('task=7');
   });
 });
 
-describe('buildClusterOpenUrl — openCluster URL writer', () => {
-  it('is additive over withClusterQuery and mutually exclusive with side', () => {
-    expect(buildClusterOpenUrl('/chat/w/w-1/c/c-a', '', 'm-1')).toBe(
-      '/chat/w/w-1/c/c-a?cluster=m-1',
+describe('buildThreadOpenUrl — openThread URL writer', () => {
+  it('is additive over withThreadQuery and mutually exclusive with side', () => {
+    expect(buildThreadOpenUrl('/chat/w/w-1/c/c-a', '', 'm-1')).toBe(
+      '/chat/w/w-1/c/c-a?thread=m-1',
     );
-    const out = buildClusterOpenUrl('/chat/w/w-1/c/c-a', '?side=c-other', 'm-1');
-    expect(out).toContain('cluster=m-1');
+    const out = buildThreadOpenUrl('/chat/w/w-1/c/c-a', '?side=c-other', 'm-1');
+    expect(out).toContain('thread=m-1');
     expect(out).not.toContain('side=c-other');
   });
 });
@@ -457,7 +410,7 @@ describe('parseRouteState — ?threads=1 channel Threads-list pane (#task:1073)'
       channelId: 'c-a',
       threadsListOpen: true,
       sideConversationId: null,
-      clusterRootId: null,
+      threadRootId: null,
     });
   });
 
@@ -476,15 +429,15 @@ describe('parseRouteState — ?threads=1 channel Threads-list pane (#task:1073)'
 });
 
 describe('withThreadsQuery — URL writer for openThreadsList / closeThreadsList', () => {
-  it('writes ?threads=1, clearing ?side, ?cluster and ?fullscreen', () => {
+  it('writes ?threads=1, clearing ?side, ?thread and ?fullscreen', () => {
     const out = withThreadsQuery(
       '/chat/w/w-1/c/c-a',
-      '?side=c-other&cluster=m-1&fullscreen=1',
+      '?side=c-other&thread=m-1&fullscreen=1',
       true,
     );
     expect(out).toContain('threads=1');
     expect(out).not.toContain('side=c-other');
-    expect(out).not.toContain('cluster=m-1');
+    expect(out).not.toContain('thread=m-1');
     expect(out).not.toContain('fullscreen=1');
   });
 
@@ -505,24 +458,110 @@ describe('withThreadsQuery — URL writer for openThreadsList / closeThreadsList
   });
 });
 
-describe('mutual exclusion — opening side/cluster clears ?threads', () => {
+describe('mutual exclusion — opening side/thread clears ?threads', () => {
   it('buildSideOpenUrl drops an open ?threads', () => {
     const out = buildSideOpenUrl('/chat/w/w-1/c/c-a', '?threads=1', 'c-other');
     expect(out).toContain('side=c-other');
     expect(out).not.toContain('threads');
   });
 
-  it('withClusterQuery (open) drops an open ?threads', () => {
-    const out = withClusterQuery('/chat/w/w-1/c/c-a', '?threads=1', 'm-1');
-    expect(out).toContain('cluster=m-1');
+  it('withThreadQuery (open) drops an open ?threads', () => {
+    const out = withThreadQuery('/chat/w/w-1/c/c-a', '?threads=1', 'm-1');
+    expect(out).toContain('thread=m-1');
+    expect(out).not.toContain('threads=1');
+  });
+});
+
+describe('buildSideOpenUrl — clears ?thread (side/thread mutual exclusion)', () => {
+  it('opening a side overlay closes an open thread', () => {
+    const out = buildSideOpenUrl('/chat/w/w-1/c/c-a', '?thread=m-1', 'c-other');
+    expect(out).toContain('side=c-other');
+    expect(out).not.toContain('thread=m-1');
     expect(out).not.toContain('threads');
   });
 });
 
-describe('buildSideOpenUrl — clears ?cluster (side/cluster mutual exclusion)', () => {
-  it('opening a side overlay closes an open cluster', () => {
-    const out = buildSideOpenUrl('/chat/w/w-1/c/c-a', '?cluster=m-1', 'c-other');
-    expect(out).toContain('side=c-other');
-    expect(out).not.toContain('cluster=m-1');
+// Per-channel layout memory (#task:1081). `layoutMemoryFromRoute`
+// projects the route's secondary-pane fields into the persisted shape;
+// `buildChannelLayoutUrl` rebuilds the channel URL from that shape so a
+// sidebar switch back into the channel restores the same pane.
+describe('layoutMemoryFromRoute — RouteState → persisted layout', () => {
+  function fields(overrides: Partial<SecondaryRouteFields>): SecondaryRouteFields {
+    return {
+      sideConversationId: null,
+      threadRootId: null,
+      threadsListOpen: false,
+      ...overrides,
+    };
+  }
+
+  it('maps a bare channel to { none }', () => {
+    expect(layoutMemoryFromRoute(fields({}))).toEqual({ kind: 'none' });
+  });
+
+  it('maps ?threads=1 to a threads-list layout', () => {
+    expect(layoutMemoryFromRoute(fields({ threadsListOpen: true }))).toEqual({
+      kind: 'threads-list',
+    });
+  });
+
+  it('maps ?thread=<id> to a thread layout', () => {
+    expect(layoutMemoryFromRoute(fields({ threadRootId: 'm-1' }))).toEqual({
+      kind: 'thread',
+      rootId: 'm-1',
+    });
+  });
+
+  it('maps ?side=<id> to a side layout', () => {
+    expect(layoutMemoryFromRoute(fields({ sideConversationId: 'c-x' }))).toEqual({
+      kind: 'side',
+      id: 'c-x',
+    });
+  });
+
+  it('resolves side > thread > threads when a malformed URL sets several', () => {
+    expect(
+      layoutMemoryFromRoute(
+        fields({
+          sideConversationId: 'c-x',
+          threadRootId: 'm-1',
+          threadsListOpen: true,
+        }),
+      ),
+    ).toEqual({ kind: 'side', id: 'c-x' });
+  });
+});
+
+describe('buildChannelLayoutUrl — restore a channel with its layout', () => {
+  it('yields the bare path for none / null memory', () => {
+    expect(buildChannelLayoutUrl('w-1', 'c-a', null)).toBe('/chat/w/w-1/c/c-a');
+    expect(buildChannelLayoutUrl('w-1', 'c-a', { kind: 'none' })).toBe(
+      '/chat/w/w-1/c/c-a',
+    );
+  });
+
+  it('restores a threads-list pane', () => {
+    expect(
+      buildChannelLayoutUrl('w-1', 'c-a', { kind: 'threads-list' }),
+    ).toBe('/chat/w/w-1/c/c-a?threads=1');
+  });
+
+  it('restores a thread pane', () => {
+    expect(
+      buildChannelLayoutUrl('w-1', 'c-a', { kind: 'thread', rootId: 'm-1' }),
+    ).toBe('/chat/w/w-1/c/c-a?thread=m-1');
+  });
+
+  it('restores a side overlay', () => {
+    expect(
+      buildChannelLayoutUrl('w-1', 'c-a', { kind: 'side', id: 'c-x' }),
+    ).toBe('/chat/w/w-1/c/c-a?side=c-x');
+  });
+
+  it('round-trips: parse → memory → build → parse is stable', () => {
+    const built = buildChannelLayoutUrl('w-1', 'c-a', { kind: 'side', id: 'c-x' });
+    const [pathname, search] = built.split('?');
+    const r = parseRouteState(pathname!, search ? `?${search}` : '');
+    expect(layoutMemoryFromRoute(r)).toEqual({ kind: 'side', id: 'c-x' });
   });
 });

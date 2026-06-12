@@ -42,8 +42,15 @@ describe('POST /api/workspaces', () => {
     expect(typeof body.onboarding_channel_id).toBe('string');
     expect(body.channel.kind).toBe('channel');
 
-    const consensus = join(body.workspace.workspace_path, '.silverhand', 'CONSENSUS.md');
-    expect((await fs.stat(consensus)).isFile()).toBe(true);
+    await expect(
+      fs.stat(join(body.workspace.workspace_path, '.silverhand', 'CONSENSUS.md')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+
+    expect(
+      (
+        await fs.stat(join(body.workspace.workspace_path, '.silverhand', 'agents'))
+      ).isDirectory(),
+    ).toBe(true);
 
     expect(t.fake.starts.map(s => s.agentId).sort()).toEqual([aliceId, bobId].sort());
     expect(t.fake.delivered).toHaveLength(2);

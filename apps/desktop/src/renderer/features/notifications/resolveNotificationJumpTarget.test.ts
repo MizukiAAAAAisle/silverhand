@@ -104,7 +104,7 @@ describe('resolveNotificationJumpTarget', () => {
     expect(r).toBeNull();
   });
 
-  it('mention_self on a channel: returns {channelId, threadId: null}', async () => {
+  it('mention_self on a channel: returns {channelId}', async () => {
     const r = await resolveNotificationJumpTarget(
       makeNotification({ kind: 'mention_self', conversation_id: 'conv_a' }),
       mockQc({ conv_a: makeChannelRef() }),
@@ -112,12 +112,11 @@ describe('resolveNotificationJumpTarget', () => {
     expect(r).toEqual({
       workspaceId: 'ws_a',
       channelId: 'conv_a',
-      threadId: null,
       messageId: 'msg_a',
     });
   });
 
-  it('mention_self on a thread: lifts channelId to parent_channel_id, sets threadId', async () => {
+  it('mention_self on a legacy fossil thread: lifts channelId to parent_channel_id (thread no longer openable)', async () => {
     const r = await resolveNotificationJumpTarget(
       makeNotification({
         kind: 'mention_self',
@@ -129,7 +128,6 @@ describe('resolveNotificationJumpTarget', () => {
     expect(r).toEqual({
       workspaceId: 'ws_a',
       channelId: 'conv_a',
-      threadId: 'thread_a',
       messageId: 'msg_x',
     });
   });
@@ -160,7 +158,6 @@ describe('resolveNotificationJumpTarget', () => {
     expect(r).toEqual({
       workspaceId: 'ws_dm_agent',
       channelId: 'dm_mentions',
-      threadId: null,
       messageId: 'wrap_msg',
     });
   });
@@ -189,7 +186,6 @@ describe('resolveNotificationJumpTarget', () => {
     expect(r).toEqual({
       workspaceId: 'ws_remote',
       channelId: 'conv_remote',
-      threadId: null,
       messageId: 'msg_remote',
     });
   });
@@ -216,7 +212,6 @@ describe('resolveNotificationJumpTarget', () => {
     expect(r).toEqual({
       workspaceId: 'ws_remote',
       channelId: 'parent_remote',
-      threadId: 'thread_remote',
       messageId: 'msg_remote',
     });
   });
@@ -229,7 +224,6 @@ describe('resolveNotificationJumpTarget', () => {
     expect(r).toEqual({
       workspaceId: 'ws_a',
       channelId: 'conv_a',
-      threadId: null,
       messageId: 'msg_a',
     });
   });

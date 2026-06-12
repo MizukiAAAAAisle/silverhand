@@ -23,7 +23,7 @@ import { isTaskDrag, readTaskDrag, writeTaskDrag } from '@/features/tasks/taskDn
 import { useRelativeTime } from '@/components/chat/useRelativeTime';
 import { TaskStatusBadge, TaskCardContextMenu } from '@/components/tasks/TaskStatusBadge';
 import { TaskDropPlaceholder } from '@/components/tasks/TaskDropPlaceholder';
-import { TaskFilterBar, type ChannelOption } from '@/components/tasks/TaskFilterBar';
+import { TaskFilterBar, type ChannelOption, type ChannelFilterCandidate, buildChannelFilterOptions } from '@/components/tasks/TaskFilterBar';
 
 /**
  * NavRail "Tasks" section — global aggregate view across every channel
@@ -42,7 +42,6 @@ export interface TasksSectionProps {
   onJump: (params: {
     workspaceId?: string;
     channelId: string;
-    threadId?: string | null;
     threadRootId?: string | null;
     messageId: string;
   }) => void;
@@ -107,24 +106,25 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
     useMemo(() => workspaces.map(w => w.id), [workspaces]),
   );
   const channelOptions = useMemo<ChannelOption[]>(() => {
-    const byId = new Map<string, ChannelOption>();
+    // Eligibility (skip fossil threads + archived, dedup, map) is single-
+    // sourced in buildChannelFilterOptions; this surface only owns its scope
+    // (every member workspace's active channels) and its sort (active-task
+    // count desc, then label).
+    const candidates: ChannelFilterCandidate[] = [];
     workspaces.forEach((w, i) => {
       const list = channelLists[i]?.data ?? [];
       for (const conv of list) {
-        if (conv.kind === 'thread') continue;
-        // Defensive: the active endpoint excludes archived, but never offer
-        // an archived channel even if one slips through.
-        if (conv.archived_at !== null) continue;
-        if (byId.has(conv.id)) continue;
-        byId.set(conv.id, {
+        candidates.push({
           id: conv.id,
-          label: conv.title,
-          kind: w.kind === 'dm' || conv.kind === 'dm_channel' ? 'dm' : 'channel',
+          title: conv.title,
+          kind: conv.kind,
+          archived_at: conv.archived_at,
+          fromDmWorkspace: w.kind === 'dm',
           sublabel: w.name,
         });
       }
     });
-    return [...byId.values()].sort((a, b) => {
+    return buildChannelFilterOptions(candidates).sort((a, b) => {
       const ac = channelActiveCounts.get(a.id) ?? 0;
       const bc = channelActiveCounts.get(b.id) ?? 0;
       if (ac !== bc) return bc - ac;
@@ -206,11 +206,9 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
               onJump({
                 workspaceId: t.workspace_id,
                 channelId: t.channel_id,
-                // New reply-cluster tasks carry `thread_root_id`; legacy fossil
-                // tasks fall back to the renamed conversation id. Never the
-                // legacy `thread_id`.
+                // New reply-cluster tasks carry `thread_root_id`; the cluster
+                // pane opens to it.
                 threadRootId: t.thread_root_id,
-                threadId: t.legacy_thread_conversation_id,
                 messageId: t.message_id,
               })
             }

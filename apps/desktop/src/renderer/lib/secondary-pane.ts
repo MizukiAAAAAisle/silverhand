@@ -16,13 +16,13 @@
  *
  * Vocabulary:
  *
- *   - `secondaryDescriptor` — what the right pane shows. Source can be
- *     `?side=<id>` (overlay; cross-workspace capable via ref hook) or
- *     `/t/<tid>` (legacy thread fallback; same-workspace only). `side`
- *     always wins when both are present. The descriptor's status
- *     reflects either the ref-hook lifecycle (loading/resolved/
- *     unauthorized/not_found) for `?side`, or always `resolved` for
- *     thread-path (since path resolution is synchronous).
+ *   - `secondaryDescriptor` — what the right pane shows. The only source
+ *     is `?side=<id>` (overlay; cross-workspace capable via the ref
+ *     hook). The descriptor's status reflects the ref-hook lifecycle
+ *     (loading/resolved/unauthorized/not_found). A `?side` that resolves
+ *     to a legacy `kind='thread'` fossil is treated as not_found — the
+ *     isolated-thread viewer was retired with the reply-cluster model, so
+ *     fossils are no longer renderable in the secondary pane.
  *   - `visibleConversations` — set of conversations whose pane is
  *     currently on screen. Drives message read-cursor advancement.
  *     Fullscreen collapses to just the displayed pane; non-resolved
@@ -37,17 +37,6 @@
  */
 
 import type { ConversationByIdResult } from '@/features/conversations/useConversationById';
-
-/** Minimal shape needed for the `/t/<tid>` thread-path fallback. The
- *  PR-1 selector also used this for same-workspace `?side` lookup; in
- *  PR-2 the `?side` path now routes through the ref hook instead, so
- *  this shape only feeds the path-based fallback. */
-export interface SecondaryLookupChannel {
-  id: string;
-  kind: 'channel' | 'dm_channel' | 'thread';
-  parent_conversation_id: string | null;
-  workspace_id: string;
-}
 
 /**
  * Workspace context attached to a `?side` resolved descriptor. Drives
@@ -83,39 +72,33 @@ export type SecondaryDescriptor =
     }
   | { source: 'side'; status: 'loading'; id: string }
   | { source: 'side'; status: 'unauthorized'; id: string }
-  | { source: 'side'; status: 'not_found'; id: string }
-  | {
-      source: 'thread-path';
-      status: 'resolved';
-      id: string;
-      kind: 'thread';
-      parentChannelId: string;
-      workspaceId: string;
-    };
+  | { source: 'side'; status: 'not_found'; id: string };
 
 export interface SecondaryRouteInputs {
   /** From `useRouteState().sideConversationId`. */
   sideConversationId: string | null;
-  /** From `useRouteState().threadId` — legacy `/t/<tid>` path segment. */
-  threadId: string | null;
 }
 
 /**
- * Decide what the right-hand pane should show given URL state, the
- * thread-path channels lookup, and the ref-hook result for the `?side`
- * id (when set).
+ * Decide what the right-hand pane should show given URL state and the
+ * ref-hook result for the `?side` id (when set).
  *
- * Priority: `?side=<id>` wins over `/t/<tid>` whenever it's present
- * (Cindy review point 6: never silently drop `?side`). The selector
- * never produces a descriptor that requires "loading + null id" —
- * loading/unauthorized/not_found descriptors always carry the id so
- * the placeholder can render `#conv:<id>` and offer a Close button.
+ * The only secondary source is `?side=<id>`. The selector never produces
+ * a descriptor that requires "loading + null id" — loading/unauthorized/
+ * not_found descriptors always carry the id so the placeholder can render
+ * `#conv:<id>` and offer a Close button.
  *
  * Cross-workspace `?side` ids resolve through the ref hook
  * (`useConversationById`); the resolved branch carries workspace
  * metadata (`workspaceId`, `workspaceKind`, `workspacePath`,
  * `parentTitle`) so ChannelView can switch its workspace-scoped hooks
  * via the `workspaceContext` prop without a second round-trip.
+ *
+ * A `?side` that resolves to a legacy `kind='thread'` fossil is mapped to
+ * `not_found`: the isolated-thread viewer was retired with the
+ * reply-cluster model, so the secondary pane no longer renders threads.
+ * The chip popover (via `useConversationById`) still surfaces the
+ * thread's label — only the openable side pane is gone.
  *
  * `sideRef === null` is treated as "ref hook hasn't been read yet"
  * (i.e. the React component hasn't run yet); we surface this as
@@ -124,7 +107,6 @@ export interface SecondaryRouteInputs {
  */
 export function selectSecondaryDescriptor(
   route: SecondaryRouteInputs,
-  channels: readonly SecondaryLookupChannel[],
   sideRef: ConversationByIdResult | null,
 ): SecondaryDescriptor | null {
   if (route.sideConversationId) {
@@ -143,6 +125,12 @@ export function selectSecondaryDescriptor(
     // the descriptor is the single source of truth for downstream
     // wiring (no second hop into channels list / workspace store).
     const ref = sideRef!.ref!;
+    // Legacy isolated-thread fossils are no longer renderable in the
+    // secondary pane (the `/t/` viewer was retired). Surface them as
+    // the unavailable placeholder rather than rendering a broken pane.
+    if (ref.kind === 'thread') {
+      return { source: 'side', status: 'not_found', id };
+    }
     return {
       source: 'side',
       status: 'resolved',
@@ -157,23 +145,6 @@ export function selectSecondaryDescriptor(
       closedAt: ref.closed_at,
       archivedAt: ref.archived_at,
     };
-  }
-  if (route.threadId) {
-    const hit = channels.find(c => c.id === route.threadId);
-    if (hit && hit.kind === 'thread' && hit.parent_conversation_id) {
-      return {
-        source: 'thread-path',
-        status: 'resolved',
-        id: hit.id,
-        kind: 'thread',
-        parentChannelId: hit.parent_conversation_id,
-        workspaceId: hit.workspace_id,
-      };
-    }
-    // Thread id in URL but not (yet) in lookup: don't synthesize a
-    // descriptor. App.tsx applies its existing ephemeral-thread fallback
-    // and the parent-mismatch effect for these transient cases.
-    return null;
   }
   return null;
 }
@@ -209,39 +180,22 @@ export interface SecondaryConversationDescriptor {
   workspace_id: string;
 }
 
-/** Minimal shape needed to fall back to the path-based thread's
- *  channel record (PR-1 same-workspace flow). */
-export interface SecondaryFallbackChannel {
-  id: string;
-  title: string;
-  kind: 'channel' | 'dm_channel' | 'thread';
-  parent_conversation_id: string | null;
-  closed_at: number | null;
-  archived_at: number | null;
-  workspace_id: string;
-}
-
 export interface SecondaryViewInputs {
   /** ChannelView `conversation` prop value. Null when the secondary
    *  pane should not render a real ChannelView (no secondary, or a
-   *  thread-path source whose channel record isn't in the lookup
-   *  yet — the parent-mismatch effect handles that case). */
+   *  non-resolved `?side`). */
   conversationDescriptor: SecondaryConversationDescriptor | null;
   /** ChannelView `channelKind` prop value. For cross-workspace `?side`
    *  this comes from the ref's `workspace_kind`; otherwise falls
-   *  through to the primary's kind (correct because thread-path and
-   *  same-workspace `?side` are guaranteed same-workspace by
-   *  construction). */
+   *  through to the primary's kind. */
   channelKind: 'regular' | 'dm' | null;
-  /** ChannelView `parentTitle` prop value. For thread-typed sides
-   *  only; null for channel/dm sides. PR-2: cross-workspace `?side`
-   *  threads pull `parent_title` from the ref payload so the title
-   *  matches the *foreign* parent, not a same-id channel in the
-   *  primary workspace. */
+  /** ChannelView `parentTitle` prop value. Reserved for thread-typed
+   *  sides; always null now that the secondary pane only renders
+   *  channel/dm conversations. */
   parentTitle: string | null;
-  /** True iff the secondary pane is a thread (any source). Drives the
-   *  thread-only props (`onJumpToOriginal`, `onThreadAnchorResolved`,
-   *  the close-button label). */
+  /** True iff the secondary pane is a thread. Always false now that
+   *  fossil threads are no longer renderable in the secondary pane;
+   *  retained so downstream prop wiring stays explicit. */
   isThread: boolean;
   /** Workspace id to bake into the secondary archive mutation
    *  invalidation. Cross-workspace secondary needs the foreign
@@ -253,27 +207,19 @@ export interface SecondaryViewInputs {
 
 export interface SecondaryViewMappingInputs {
   secondary: SecondaryDescriptor | null;
-  /** Same-workspace fallback for thread-path source. Comes from the
-   *  current workspace's channels list. */
-  pathThreadChannel: SecondaryFallbackChannel | null;
-  /** Primary workspace's kind, used as fallback for thread-path
-   *  source and for same-workspace `?side` (which carries its own
+  /** Primary workspace's kind, used as fallback channel kind for
+   *  non-resolved `?side` (same-workspace `?side` carries its own
    *  `workspaceKind` so this is rarely consulted in practice). */
   primaryChannelKind: 'regular' | 'dm' | null;
-  /** Primary's currently-selected channel title — used as the parent
-   *  title for legacy thread-path source (parent always lives in the
-   *  primary workspace). Null when no primary channel is selected. */
-  primaryChannelTitle: string | null;
-  /** Primary workspace id, used as archive-invalidation target for
-   *  thread-path source (always same-workspace). */
+  /** Primary workspace id, used as archive-invalidation target when
+   *  there is no resolved secondary. */
   primaryWorkspaceId: string | null;
 }
 
 /**
- * Pure mapping from a SecondaryDescriptor (and the primary-pane
- * fallbacks for thread-path source) to the props ChannelView consumes
- * for the secondary pane. Extracted so the cross-workspace wiring
- * is unit-testable end-to-end without a renderHook setup.
+ * Pure mapping from a SecondaryDescriptor to the props ChannelView
+ * consumes for the secondary pane. Extracted so the cross-workspace
+ * wiring is unit-testable end-to-end without a renderHook setup.
  *
  * Cindy review of PR-2: "测试里加一个跨 workspace side 的集成点：
  * `?side=<other workspace channel>` resolved 后，ChannelView 收到
@@ -283,13 +229,7 @@ export interface SecondaryViewMappingInputs {
 export function selectSecondaryViewInputs(
   inputs: SecondaryViewMappingInputs,
 ): SecondaryViewInputs {
-  const {
-    secondary,
-    pathThreadChannel,
-    primaryChannelKind,
-    primaryChannelTitle,
-    primaryWorkspaceId,
-  } = inputs;
+  const { secondary, primaryChannelKind, primaryWorkspaceId } = inputs;
 
   if (!secondary) {
     return {
@@ -319,36 +259,6 @@ export function selectSecondaryViewInputs(
       parentTitle: isThread ? secondary.parentTitle : null,
       isThread,
       archiveWorkspaceId: secondary.workspaceId,
-    };
-  }
-
-  // Thread-path source: same-workspace by construction. Look up the
-  // channel record and fall back to primary metadata for kind/title.
-  if (secondary.source === 'thread-path' && secondary.status === 'resolved') {
-    const isThread = true;
-    if (!pathThreadChannel) {
-      return {
-        conversationDescriptor: null,
-        channelKind: primaryChannelKind,
-        parentTitle: primaryChannelTitle,
-        isThread,
-        archiveWorkspaceId: primaryWorkspaceId,
-      };
-    }
-    return {
-      conversationDescriptor: {
-        id: pathThreadChannel.id,
-        title: pathThreadChannel.title,
-        kind: pathThreadChannel.kind,
-        parent_conversation_id: pathThreadChannel.parent_conversation_id,
-        closed_at: pathThreadChannel.closed_at,
-        archived_at: pathThreadChannel.archived_at,
-        workspace_id: pathThreadChannel.workspace_id,
-      },
-      channelKind: primaryChannelKind,
-      parentTitle: primaryChannelTitle,
-      isThread,
-      archiveWorkspaceId: pathThreadChannel.workspace_id,
     };
   }
 

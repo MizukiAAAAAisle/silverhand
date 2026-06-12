@@ -1,13 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { X } from 'lucide-react';
 import { toPng } from 'html-to-image';
 import { toast } from 'sonner';
-import type { AgentDto, MessageDto, UserDto } from '@silverhand/shared';
+import type {
+  AgentDto,
+  MessageDto,
+  TaskSummaryDto,
+  UserDto,
+} from '@silverhand/shared';
+import { loadAttachmentBlobUrl } from '@/lib/attachment-blob-cache';
+import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
 import { MessageScreenshotView } from './MessageScreenshotView';
 import { suggestImageFilename } from './markdownTranscript';
 import { SelectionActionButton } from './SelectionToolbar';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
+import type { StaticTaskRefSummary } from './TaskRef';
 
 /** 1×1 transparent PNG. Used as html-to-image's `imagePlaceholder` so a
  *  single failed avatar doesn't abort the whole screenshot. */
@@ -40,6 +50,80 @@ function truncate(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n - 1) + '…';
 }
 
+function screenshotCanvasBackground(node: HTMLElement): string {
+  const screenshotRoot =
+    node.querySelector<HTMLElement>('[data-screenshot-root]') ?? node;
+  const foreground = parseRgbColor(
+    window.getComputedStyle(screenshotRoot).backgroundColor,
+  );
+  if (!foreground) return '#ffffff';
+  const base =
+    parseRgbColor(resolveBackgroundColor(screenshotRoot, 'var(--bg-base)')) ??
+    parseRgbColor(window.getComputedStyle(document.body).backgroundColor) ??
+    { r: 255, g: 255, b: 255, a: 1 };
+  const opaqueBase =
+    base.a >= 1 ? base : compositeOver(base, { r: 255, g: 255, b: 255, a: 1 });
+  const out =
+    foreground.a >= 1 ? foreground : compositeOver(foreground, opaqueBase);
+  return `rgb(${out.r}, ${out.g}, ${out.b})`;
+}
+
+interface Rgba {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+}
+
+function resolveBackgroundColor(context: HTMLElement, value: string): string {
+  const probe = document.createElement('span');
+  probe.style.position = 'absolute';
+  probe.style.pointerEvents = 'none';
+  probe.style.backgroundColor = value;
+  context.appendChild(probe);
+  const resolved = window.getComputedStyle(probe).backgroundColor;
+  probe.remove();
+  return resolved;
+}
+
+function parseRgbColor(value: string): Rgba | null {
+  const s = value.trim();
+  if (!s || s === 'transparent') return null;
+  const match = /^rgba?\((.+)\)$/i.exec(s);
+  if (!match) return null;
+  const parts = match[1]!
+    .split(/[,\s/]+/)
+    .map(part => part.trim())
+    .filter(Boolean);
+  const [rRaw, gRaw, bRaw, aRaw] = parts;
+  const r = Number(rRaw);
+  const g = Number(gRaw);
+  const b = Number(bRaw);
+  if (![r, g, b].every(Number.isFinite)) return null;
+  const a = aRaw === undefined ? 1 : Number(aRaw);
+  return {
+    r: clampByte(r),
+    g: clampByte(g),
+    b: clampByte(b),
+    a: Number.isFinite(a) ? Math.max(0, Math.min(1, a)) : 1,
+  };
+}
+
+function compositeOver(fg: Rgba, bg: Rgba): Rgba {
+  const a = fg.a + bg.a * (1 - fg.a);
+  if (a <= 0) return { r: 255, g: 255, b: 255, a: 1 };
+  return {
+    r: clampByte((fg.r * fg.a + bg.r * bg.a * (1 - fg.a)) / a),
+    g: clampByte((fg.g * fg.a + bg.g * bg.a * (1 - fg.a)) / a),
+    b: clampByte((fg.b * fg.a + bg.b * bg.a * (1 - fg.a)) / a),
+    a,
+  };
+}
+
+function clampByte(n: number): number {
+  return Math.max(0, Math.min(255, Math.round(n)));
+}
+
 /**
  * Image-export preview modal.
  *
@@ -62,6 +146,7 @@ export function ImagePreviewModal({
   onOpenChange,
   onExportComplete,
   messages,
+  workspaceId,
   channelTitle,
   channelKind,
   agentsById,
@@ -82,6 +167,7 @@ export function ImagePreviewModal({
    *  retrying stays cheap. */
   onExportComplete?: () => void;
   messages: readonly MessageDto[];
+  workspaceId?: string | null;
   channelTitle: string | null;
   channelKind: 'channel' | 'dm' | null;
   agentsById: ReadonlyMap<string, AgentDto>;
@@ -93,12 +179,19 @@ export function ImagePreviewModal({
   viewer?: UserDto;
   viewerAvatarObjectUrl?: string | null;
 }): JSX.Element {
+  const queryClient = useQueryClient();
   const [phase, setPhase] = useState<'idle' | 'rendering' | 'ready' | 'error'>(
     'idle',
   );
   const [error, setError] = useState<string | null>(null);
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [pngBytes, setPngBytes] = useState<Uint8Array | null>(null);
+  const [attachmentImageUrls, setAttachmentImageUrls] = useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
+  const [taskRefsByNumber, setTaskRefsByNumber] = useState<
+    ReadonlyMap<number, StaticTaskRefSummary>
+  >(() => new Map());
   const [busy, setBusy] = useState(false);
   // Offscreen container ref — html-to-image runs against this DOM
   // subtree. We position it offscreen rather than `display:none` so
@@ -114,6 +207,8 @@ export function ImagePreviewModal({
       setError(null);
       setDataUrl(null);
       setPngBytes(null);
+      setAttachmentImageUrls(new Map());
+      setTaskRefsByNumber(new Map());
       return;
     }
     setPhase('rendering');
@@ -129,6 +224,7 @@ export function ImagePreviewModal({
         if (!cancelled) setError('screenshot_root_missing');
         return;
       }
+      const backgroundColor = screenshotCanvasBackground(node);
       toPng(node, {
         pixelRatio: 2,
         // `cacheBust: true` appends `?cb=<ts>` to every <img> src so the
@@ -146,11 +242,10 @@ export function ImagePreviewModal({
         // gap than zero screenshot at all — single-avatar failures
         // should not block the user's share flow.
         imagePlaceholder: TRANSPARENT_PIXEL_DATA_URL,
-        // The offscreen container's background is already token-driven
-        // via Tailwind, but html-to-image renders transparent areas as
-        // alpha by default. Force an explicit canvas color so themes
-        // with a non-white bg-floating still produce a sensible PNG.
-        backgroundColor: '#ffffff',
+        // Match the rendered screenshot root instead of hard-coding
+        // white. The root itself uses theme tokens (`bg-bg-floating`);
+        // this option only fills transparent canvas edges / gaps.
+        backgroundColor,
       })
         .then(async url => {
           if (cancelled) return;
@@ -178,14 +273,27 @@ export function ImagePreviewModal({
           setPhase('error');
         });
     };
-    const raf = requestAnimationFrame(() => {
-      // One more frame — the first commit only mounts the JSX; React
-      // 18 with concurrent rendering may still be flushing styles.
-      requestAnimationFrame(runCapture);
+    const rafs: number[] = [];
+    const taskRefs = snapshotStaticTaskRefs(
+      messages,
+      workspaceId ?? null,
+      queryClient,
+    );
+    void preloadImageAttachments(messages).then(urls => {
+      if (cancelled) return;
+      setAttachmentImageUrls(urls);
+      setTaskRefsByNumber(taskRefs);
+      rafs.push(
+        requestAnimationFrame(() => {
+          // One more frame — the first commit only mounts the JSX; React
+          // 18 with concurrent rendering may still be flushing styles.
+          rafs.push(requestAnimationFrame(runCapture));
+        }),
+      );
     });
     return () => {
       cancelled = true;
-      cancelAnimationFrame(raf);
+      for (const raf of rafs) cancelAnimationFrame(raf);
     };
   }, [open]);
 
@@ -235,9 +343,17 @@ export function ImagePreviewModal({
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[90] bg-black/40" />
         <Dialog.Content data-modal-shell className="fixed left-1/2 top-1/2 z-[91] flex max-h-[80vh] w-[820px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--floating-radius,var(--radius-md))] border-[length:var(--control-border-width)] border-[color:var(--border-row-selected)] bg-bg-floating p-4 shadow-xl">
-          <Dialog.Title className="text-sm font-semibold text-text-primary">
-            图片预览
-          </Dialog.Title>
+          <div className="flex items-center gap-2">
+            <Dialog.Title className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">
+              Image Preview
+            </Dialog.Title>
+            <Dialog.Close
+              aria-label="Close"
+              className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+            >
+              <X className="size-4" />
+            </Dialog.Close>
+          </div>
           <Dialog.Description className="mt-1 text-xs text-text-muted">
             {messages.length === 0 ? '请选择至少一条消息' : ''}
           </Dialog.Description>
@@ -261,11 +377,6 @@ export function ImagePreviewModal({
           </div>
 
           <div className="mt-3 flex items-center justify-end gap-2 text-xs">
-            <SelectionActionButton
-              variant="neutral"
-              label="Cancel"
-              onClick={() => onOpenChange(false)}
-            />
             <SelectionActionButton
               variant="neutral"
               label="Copy"
@@ -303,7 +414,9 @@ export function ImagePreviewModal({
                 humansByName={humansByName}
                 channelsByName={channelsByName}
                 conversationRefsById={conversationRefsById}
+                taskRefsByNumber={taskRefsByNumber}
                 agentAvatarUrls={agentAvatarUrls}
+                attachmentImageUrls={attachmentImageUrls}
                 viewer={viewer}
                 viewerAvatarObjectUrl={viewerAvatarObjectUrl}
               />
@@ -312,5 +425,68 @@ export function ImagePreviewModal({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+const TASK_REF_RE = /#task:([1-9]\d*)(?!\w)/g;
+
+function extractTaskNumbers(messages: readonly MessageDto[]): number[] {
+  const numbers = new Set<number>();
+  for (const message of messages) {
+    let match: RegExpExecArray | null;
+    TASK_REF_RE.lastIndex = 0;
+    while ((match = TASK_REF_RE.exec(message.content)) !== null) {
+      const n = Number.parseInt(match[1]!, 10);
+      if (Number.isFinite(n) && n > 0) numbers.add(n);
+    }
+  }
+  return [...numbers].sort((a, b) => a - b);
+}
+
+function snapshotStaticTaskRefs(
+  messages: readonly MessageDto[],
+  workspaceId: string | null,
+  queryClient: QueryClient,
+): ReadonlyMap<number, StaticTaskRefSummary> {
+  if (!workspaceId) return new Map();
+  const taskNumbers = extractTaskNumbers(messages);
+  if (taskNumbers.length === 0) return new Map();
+  const out = new Map<number, StaticTaskRefSummary>();
+  for (const taskNumber of taskNumbers) {
+    const task = queryClient.getQueryData<TaskSummaryDto | null>(
+      taskByNumberKey(workspaceId, taskNumber),
+    );
+    if (!task) continue;
+    out.set(taskNumber, {
+      task_number: task.task_number,
+      title: task.title,
+    });
+  }
+  return out;
+}
+
+async function preloadImageAttachments(
+  messages: readonly MessageDto[],
+): Promise<ReadonlyMap<string, string>> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    for (const attachment of message.attachments ?? []) {
+      if (attachment.content_type.startsWith('image/')) ids.add(attachment.id);
+    }
+  }
+  if (ids.size === 0) return new Map();
+  const entries = await Promise.all(
+    Array.from(ids, async id => {
+      try {
+        return [id, await loadAttachmentBlobUrl(id)] as const;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return new Map(
+    entries.filter(
+      (entry): entry is readonly [string, string] => entry !== null,
+    ),
   );
 }

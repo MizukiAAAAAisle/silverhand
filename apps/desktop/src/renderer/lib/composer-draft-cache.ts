@@ -8,8 +8,6 @@ import {
 
 export const MAX_DRAFTS = 10;
 
-export type ComposerDraftRouteKind = 'channel' | 'thread';
-
 export type CachedPendingAttachment = {
   key: string;
   filename: string;
@@ -24,7 +22,6 @@ export type CachedPendingAttachment = {
 
 export type ComposerDraftSnapshot = {
   conversationId: string;
-  routeKind: ComposerDraftRouteKind;
   text: string;
   caret: number;
   pending: CachedPendingAttachment[];
@@ -99,11 +96,10 @@ export function dropSentAttachmentsFromDraft(
 
 export function patchComposerDraftText(
   conversationId: string,
-  routeKind: ComposerDraftRouteKind,
   text: string,
   caret: number,
 ): void {
-  const entry = ensureEntry(conversationId, routeKind);
+  const entry = ensureEntry(conversationId);
   entry.text = text;
   entry.caret = caret;
   entry.updatedAt = Date.now();
@@ -125,10 +121,9 @@ export function patchComposerDraftAttachment(
 
 export function upsertComposerDraftAttachment(
   conversationId: string,
-  routeKind: ComposerDraftRouteKind,
   attachment: CachedPendingAttachment,
 ): void {
-  upsertAttachment(conversationId, routeKind, attachment, true);
+  upsertAttachment(conversationId, attachment, true);
 }
 
 export function removeComposerDraftAttachment(
@@ -159,7 +154,6 @@ export function hasComposerDraftInFlightUpload(
 
 export function startComposerDraftAttachmentUpload(input: {
   conversationId: string;
-  routeKind: ComposerDraftRouteKind;
   attachmentKey: string;
   file: File;
   previewUrl?: string;
@@ -181,7 +175,7 @@ export function startComposerDraftAttachmentUpload(input: {
   }
   abandonedUploads.delete(key);
 
-  upsertAttachment(input.conversationId, input.routeKind, {
+  upsertAttachment(input.conversationId, {
     key: input.attachmentKey,
     filename: input.file.name,
     size: input.file.size,
@@ -233,7 +227,6 @@ export function __resetComposerDraftCacheForTests(): void {
 async function uploadAttachment(
   input: {
     conversationId: string;
-    routeKind: ComposerDraftRouteKind;
     attachmentKey: string;
     file: File;
     previewUrl?: string;
@@ -243,10 +236,7 @@ async function uploadAttachment(
 ): Promise<void> {
   try {
     const channelId = input.uploadChannelId ?? input.conversationId;
-    const path =
-      input.routeKind === 'thread'
-        ? apiPaths.threadAttachments(channelId)
-        : apiPaths.channelAttachments(channelId);
+    const path = apiPaths.channelAttachments(channelId);
     const form = new FormData();
     form.append('file', input.file, input.file.name);
     const dto = await apiUpload<AttachmentDto>(path, form);
@@ -287,13 +277,11 @@ async function uploadAttachment(
 
 function ensureEntry(
   conversationId: string,
-  routeKind: ComposerDraftRouteKind,
 ): ComposerDraftEntry {
   const existing = drafts.get(conversationId);
   if (existing) return existing;
   const entry: ComposerDraftEntry = {
     conversationId,
-    routeKind,
     text: '',
     caret: 0,
     pending: [],
@@ -305,11 +293,10 @@ function ensureEntry(
 
 function upsertAttachment(
   conversationId: string,
-  routeKind: ComposerDraftRouteKind,
   attachment: CachedPendingAttachment,
   shouldEmit: boolean,
 ): void {
-  const entry = ensureEntry(conversationId, routeKind);
+  const entry = ensureEntry(conversationId);
   const idx = entry.pending.findIndex(p => p.key === attachment.key);
   if (idx === -1) {
     entry.pending = [...entry.pending, cloneAttachment(attachment)];

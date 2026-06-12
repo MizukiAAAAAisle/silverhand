@@ -4,10 +4,6 @@ import { useMarkChannelRead, usePrimeConversationMessages } from './hooks';
 export interface MessageJumpTarget {
   workspaceId?: string;
   channelId: string;
-  /** Legacy isolated-thread conversation id. When set, the message lives
-   *  in that separate `kind='thread'` conversation (a read-only fossil) and
-   *  priming/locating targets it. Mutually exclusive with `threadRootId`. */
-  threadId?: string | null;
   /** New reply-cluster root message id. When set, the message is a reply
    *  in the parent CHANNEL (`channelId`) — priming targets the channel,
    *  while the cluster pane (`ThreadPanel`) opens to `threadRootId` and
@@ -22,12 +18,6 @@ interface PrimePending {
   messageId: string;
 }
 
-function conversationIdForJump(target: MessageJumpTarget): string {
-  // A reply-cluster message lives in the parent channel, so only the
-  // legacy thread conversation redirects the prime target.
-  return target.threadId ?? target.channelId;
-}
-
 export function useMessageJumpController() {
   const [jumpTarget, setJumpTarget] = useState<MessageJumpTarget | null>(null);
   const [primePending, setPrimePending] = useState<PrimePending | null>(null);
@@ -37,13 +27,14 @@ export function useMessageJumpController() {
 
   const requestJump = useCallback(
     (target: MessageJumpTarget) => {
-      const conversationId = conversationIdForJump(target);
-      const routeKind = target.threadId ? 'thread' : 'channel';
+      // A jump always targets the channel — a reply-cluster message lives
+      // in the parent channel, and the legacy isolated-thread target was
+      // retired.
+      const conversationId = target.channelId;
 
       setJumpTarget({
         workspaceId: target.workspaceId,
         channelId: target.channelId,
-        threadId: target.threadId ?? null,
         threadRootId: target.threadRootId ?? null,
         messageId: target.messageId,
       });
@@ -56,7 +47,7 @@ export function useMessageJumpController() {
         messageId: target.messageId,
       });
 
-      void primeAround(conversationId, routeKind, target.messageId, {
+      void primeAround(conversationId, target.messageId, {
         // A reply-cluster target primes the cluster cache (the same window
         // `useThreadCluster` reads) so ThreadPanel can scroll-locate the
         // reply. Without this the main-stream prime 404s on a reply id

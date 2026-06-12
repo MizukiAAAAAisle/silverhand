@@ -17,6 +17,7 @@ import type {
   ConversationMembersResponse,
   ConversationMessagesDto,
   MessageDto,
+  MessageUnreadByConversationDto,
   ReplyBadgeSummary,
   TaskChangedEvent,
   ThreadFollowerStateDto,
@@ -47,7 +48,6 @@ const clusterMessagesKey = (cid: string, rootId: string) =>
 const agentsKey = (cid: string) => ['channels', cid, 'agents'] as const;
 const MESSAGE_PAGE_LIMIT = 100;
 const AROUND_MESSAGE_LIMIT = 100;
-type ConversationRouteKind = 'channel' | 'thread';
 
 function parseApiErrorBody(err: ApiError): Record<string, unknown> | null {
   try {
@@ -397,7 +397,6 @@ function patchReplySummary(
  *  to `api()` so callers can abort the in-flight fetch. */
 async function fetchMessagesWindow(opts: {
   conversationId: string;
-  routeKind: ConversationRouteKind;
   pageParam?: MessagesPageParam;
   aroundMessageId?: string;
   /** When set, fetch the reply cluster rooted at this message id
@@ -420,10 +419,7 @@ async function fetchMessagesWindow(opts: {
   if (opts.threadRootId !== undefined) {
     params.set('thread_root_id', opts.threadRootId);
   }
-  const path =
-    opts.routeKind === 'thread'
-      ? apiPaths.threadMessages(opts.conversationId)
-      : apiPaths.channelMessages(opts.conversationId);
+  const path = apiPaths.channelMessages(opts.conversationId);
   return api<ConversationMessagesDto>(`${path}?${params.toString()}`, {
     signal: opts.signal,
   });
@@ -448,7 +444,6 @@ async function fetchMessagesWindow(opts: {
  */
 export function useChannelMessages(
   channelId: string | null,
-  routeKind: ConversationRouteKind = 'channel',
 ) {
   const qc = useQueryClient();
   const [hasNewerLiveGap, setHasNewerLiveGap] = useState(false);
@@ -473,7 +468,6 @@ export function useChannelMessages(
     queryFn: async ({ pageParam, signal }) =>
       fetchMessagesWindow({
         conversationId: channelId!,
-        routeKind,
         pageParam,
         limit: MESSAGE_PAGE_LIMIT,
         signal,
@@ -631,7 +625,7 @@ export function useChannelMessages(
     },
     [qc, channelId],
   );
-  useConversationStream(channelId, onEvent, routeKind);
+  useConversationStream(channelId, onEvent);
 
   return {
     ...query,
@@ -683,7 +677,6 @@ export function useThreadCluster(
     queryFn: async ({ pageParam, signal }) =>
       fetchMessagesWindow({
         conversationId: channelId!,
-        routeKind: 'channel',
         threadRootId: rootMessageId!,
         pageParam,
         limit: MESSAGE_PAGE_LIMIT,
@@ -779,7 +772,7 @@ export function useThreadCluster(
     },
     [qc, channelId, rootMessageId, key],
   );
-  useConversationStream(enabled ? channelId : null, onEvent, 'channel');
+  useConversationStream(enabled ? channelId : null, onEvent);
 
   return { ...query, data: messages, isAtTail, hasNewerLiveGap, resetToLatest };
 }
@@ -819,7 +812,6 @@ export function useThreadRoot(
     queryFn: ({ signal }) =>
       fetchMessagesWindow({
         conversationId: channelId!,
-        routeKind: 'channel',
         aroundMessageId: rootMessageId!,
         limit: 1,
         signal,
@@ -852,7 +844,7 @@ export function useThreadRoot(
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [qc, rootMessageId, key.join(':')],
   );
-  useConversationStream(enabled ? channelId : null, onEvent, 'channel');
+  useConversationStream(enabled ? channelId : null, onEvent);
 
   const root =
     query.data?.messages.find(m => m.id === rootMessageId) ?? null;
@@ -1004,7 +996,6 @@ export function usePrimeConversationMessages() {
   const primeAround = useCallback(
     async (
       conversationId: string,
-      routeKind: ConversationRouteKind,
       messageId: string,
       opts?: {
         shouldCommit?: () => boolean;
@@ -1029,7 +1020,6 @@ export function usePrimeConversationMessages() {
         if (opts?.signal?.aborted) return { committed: false, reason: 'aborted' };
         const page = await fetchMessagesWindow({
           conversationId,
-          routeKind,
           aroundMessageId: messageId,
           threadRootId: opts?.threadRootId,
           limit: AROUND_MESSAGE_LIMIT,
@@ -1094,7 +1084,6 @@ export function usePrimeConversationMessages() {
 /** Initial GET + live update on `agent_status` realtime events. */
 export function useChannelAgents(
   channelId: string | null,
-  routeKind: ConversationRouteKind = 'channel',
 ) {
   const qc = useQueryClient();
   const pendingStatusPatches = useRef<Map<string, ConversationAgentStatusPatch>>(
@@ -1110,9 +1099,7 @@ export function useChannelAgents(
     enabled: !!channelId,
     queryFn: async () => {
       const res = await api<{ agents: ConversationAgentDto[] }>(
-        routeKind === 'thread'
-          ? apiPaths.threadAgents(channelId!)
-          : apiPaths.channelAgents(channelId!),
+        apiPaths.channelAgents(channelId!),
       );
       return applyPendingSessionAgentPatches(
         res.agents,
@@ -1155,7 +1142,7 @@ export function useChannelAgents(
     },
     [qc, channelId],
   );
-  useConversationStream(channelId, onEvent, routeKind);
+  useConversationStream(channelId, onEvent);
 
   return query;
 }
@@ -1167,7 +1154,6 @@ export interface SendMessageInput {
 
 export function useSendMessage(
   channelId: string | null,
-  routeKind: ConversationRouteKind = 'channel',
   /** When set, the message is a reply into this root's cluster: the
    *  request carries `reply_to_message_id` and all optimistic cache
    *  writes target the cluster window (`clusterMessagesKey`) instead of
@@ -1187,10 +1173,7 @@ export function useSendMessage(
   return useMutation({
     mutationFn: async (input: SendMessageInput) => {
       if (!channelId) throw new Error('no channel selected');
-      const path =
-        routeKind === 'thread'
-          ? apiPaths.threadMessages(channelId)
-          : apiPaths.channelMessages(channelId);
+      const path = apiPaths.channelMessages(channelId);
       const body: {
         content: string;
         attachment_ids?: string[];
@@ -1298,15 +1281,11 @@ export function useSendMessage(
 
 export function useStartAgent(
   channelId: string | null,
-  routeKind: ConversationRouteKind = 'channel',
 ) {
   return useMutation({
     mutationFn: async (agentId: string) => {
       if (!channelId) throw new Error('no channel selected');
-      const path =
-        routeKind === 'thread'
-          ? apiPaths.threadAgentStart(channelId, agentId)
-          : apiPaths.channelAgentStart(channelId, agentId);
+      const path = apiPaths.channelAgentStart(channelId, agentId);
       await api(path, {
         method: 'POST',
       });
@@ -1319,7 +1298,6 @@ export function useStartAgent(
 
 export function useStopAgent(
   channelId: string | null,
-  routeKind: ConversationRouteKind = 'channel',
 ) {
   return useMutation({
     mutationFn: async (params: {
@@ -1328,10 +1306,7 @@ export function useStopAgent(
       directive?: string;
       }) => {
       if (!channelId) throw new Error('no channel selected');
-      const path =
-        routeKind === 'thread'
-          ? apiPaths.threadAgentStop(channelId, params.agentId)
-          : apiPaths.channelAgentStop(channelId, params.agentId);
+      const path = apiPaths.channelAgentStop(channelId, params.agentId);
       await api(path, {
         method: 'POST',
         body: JSON.stringify({
@@ -1345,16 +1320,12 @@ export function useStopAgent(
 
 export function useClearAgentSession(
   channelId: string | null,
-  routeKind: ConversationRouteKind = 'channel',
 ) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (agentId: string) => {
       if (!channelId) throw new Error('no channel selected');
-      const path =
-        routeKind === 'thread'
-          ? apiPaths.threadAgentClearSession(channelId, agentId)
-          : apiPaths.channelAgentClearSession(channelId, agentId);
+      const path = apiPaths.channelAgentClearSession(channelId, agentId);
       return api<ClearSessionResponse>(path, { method: 'POST' });
     },
     onSuccess: (res, agentId) => {
@@ -1444,7 +1415,6 @@ export function useRemoveAgentFromChannel(channelId: string | null) {
  */
 export function useAgentRunStates(
   channelId: string | null,
-  routeKind: ConversationRouteKind = 'channel',
 ) {
   const qc = useQueryClient();
   const key = channelId
@@ -1455,10 +1425,7 @@ export function useAgentRunStates(
     enabled: !!channelId,
     queryFn: async () => {
       const requestedAt = Date.now();
-      const path =
-        routeKind === 'thread'
-          ? apiPaths.threadAgentRunStates(channelId!)
-          : apiPaths.channelAgentRunStates(channelId!);
+      const path = apiPaths.channelAgentRunStates(channelId!);
       const res = await api<AgentRunStatesDto>(
         path,
       );
@@ -1489,7 +1456,7 @@ export function useAgentRunStates(
     },
     [qc, channelId],
   );
-  useConversationStream(channelId, onEvent, routeKind);
+  useConversationStream(channelId, onEvent);
 
   return query;
 }
@@ -1567,7 +1534,7 @@ export function useMessageUnreadCounts(
     queryKey,
     enabled: !!workspaceId && workspaceKind !== null,
     queryFn: async () => {
-      const res = await api<{ by_conversation: Record<string, number>; total: number }>(
+      const res = await api<MessageUnreadByConversationDto>(
         `/api/workspaces/${workspaceId}/message-unread`,
       );
       return res;
@@ -1602,14 +1569,9 @@ export function useMarkChannelRead() {
 export function useMarkMessageChannelRead() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (params: string | { id: string; kind?: ConversationRouteKind }) => {
+    mutationFn: async (params: string | { id: string }) => {
       const channelId = typeof params === 'string' ? params : params.id;
-      const kind = typeof params === 'string' ? 'channel' : params.kind ?? 'channel';
-      const path =
-        kind === 'thread'
-          ? apiPaths.threadMarkRead(channelId)
-          : apiPaths.channelMarkRead(channelId);
-      await api(path, { method: 'POST' });
+      await api(apiPaths.channelMarkRead(channelId), { method: 'POST' });
     },
     onSuccess: () => {
       // Only unread counters need to refresh after marking a conversation

@@ -41,7 +41,6 @@ interface AgentInfoPopoverProps {
   /** When set, looks up the agent's per-conversation status to render an
    *  IM-style presence line + (when crashed) a retry action. */
   conversationId?: string | null;
-  routeKind?: 'channel' | 'thread';
   /** `'click'` (default) opens on click for standalone controls.
    *  `'hover'` opens on pointer-enter and
    *  closes on pointer-leave with a small grace window so the user
@@ -95,7 +94,6 @@ export function AgentInfoPopover({
   side = 'bottom',
   align = 'start',
   conversationId,
-  routeKind = 'channel',
   trigger = 'click',
   avatarObjectUrl,
 }: AgentInfoPopoverProps): JSX.Element {
@@ -197,7 +195,6 @@ export function AgentInfoPopover({
                   <PresenceInline
                     agentId={agent.id}
                     conversationId={conversationId}
-                    routeKind={routeKind}
                   />
                 ) : null}
               </div>
@@ -223,7 +220,6 @@ export function AgentInfoPopover({
                 <AgentManagementActions
                   agent={agent}
                   conversationId={conversationId}
-                  routeKind={routeKind}
                   onDialogOpenChange={setManagementDialogOpen}
                 />
               </div>
@@ -255,13 +251,11 @@ const PRESENCE_DOT: Record<ConversationAgentStatus, string> = {
 function PresenceInline({
   agentId,
   conversationId,
-  routeKind = 'channel',
 }: {
   agentId: string;
   conversationId: string;
-  routeKind?: 'channel' | 'thread';
 }): JSX.Element {
-  const { data: sa = [] } = useChannelAgents(conversationId, routeKind);
+  const { data: sa = [] } = useChannelAgents(conversationId);
   const row = sa.find(s => s.agent_id === agentId);
   // Rendered inline next to the display name (#task:912 review round 7
   // — was a standalone row below; the user noted it took a band of
@@ -290,18 +284,16 @@ function PresenceInline({
 function AgentManagementActions({
   agent,
   conversationId,
-  routeKind = 'channel',
   onDialogOpenChange,
 }: {
   agent: AgentDto;
   conversationId: string;
-  routeKind?: 'channel' | 'thread';
   onDialogOpenChange: (open: boolean) => void;
 }): JSX.Element | null {
-  const { data: conversationAgents = [] } = useChannelAgents(conversationId, routeKind);
-  const start = useStartAgent(conversationId, routeKind);
-  const stop = useStopAgent(conversationId, routeKind);
-  const clearSession = useClearAgentSession(conversationId, routeKind);
+  const { data: conversationAgents = [] } = useChannelAgents(conversationId);
+  const start = useStartAgent(conversationId);
+  const stop = useStopAgent(conversationId);
+  const clearSession = useClearAgentSession(conversationId);
   const removeFromChannel = useRemoveAgentFromChannel(conversationId);
   const { data: viewer } = useViewerUser();
   // Resolve the viewer's role in THIS conversation's workspace so the
@@ -333,7 +325,7 @@ function AgentManagementActions({
 
   const pending = start.isPending || stop.isPending || clearSession.isPending;
   const agentLabel = `@${agent.name}`;
-  const convNoun = routeKind === 'thread' ? 'thread' : 'channel';
+  const convNoun = 'channel';
   const setClearDialogOpen = (open: boolean): void => {
     setClearOpen(open);
     onDialogOpenChange(open);

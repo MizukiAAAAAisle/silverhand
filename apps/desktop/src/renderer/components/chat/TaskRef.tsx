@@ -14,6 +14,49 @@ interface TaskRefProps {
   taskNumber: number;
 }
 
+export interface StaticTaskRefSummary {
+  task_number: number;
+  title: string;
+}
+
+/**
+ * Static, non-interactive `#task:<n>` chip for surfaces that must not
+ * mount the live `TaskRef` hook/query stack (PNG export, screenshot
+ * contracts). It intentionally carries the same `[data-task-ref]` chrome
+ * hook as live chips so theme styling stays consistent.
+ */
+export function TaskRefStaticChip({
+  taskNumber,
+  task,
+}: TaskRefProps & { task?: StaticTaskRefSummary | null }): JSX.Element {
+  const inertLabel = `#task:${taskNumber}`;
+  const label = task ? `#${task.task_number} · ${task.title}` : inertLabel;
+  return (
+    <span
+      className={
+        'inline-flex max-w-[220px] items-center gap-0.5 rounded-[var(--chip-radius)] px-1.5 -mx-0.5 font-medium' +
+        (task
+          ? ' bg-accent-soft text-accent'
+          : ' bg-bg-elevated text-text-muted')
+      }
+      title={`Task ${label}`}
+      data-task-ref={String(taskNumber)}
+      data-task-ref-state={task ? 'static-resolved' : 'static'}
+    >
+      <ClipboardCheck className="size-3 shrink-0 self-center" />
+      {task ? (
+        <span className="truncate">
+          <span className="font-mono">#{task.task_number}</span>
+          {' · '}
+          {task.title}
+        </span>
+      ) : (
+        <span className="truncate font-mono">{inertLabel}</span>
+      )}
+    </span>
+  );
+}
+
 /**
  * Inline chip rendering of a `#task:<n>` reference.
  *

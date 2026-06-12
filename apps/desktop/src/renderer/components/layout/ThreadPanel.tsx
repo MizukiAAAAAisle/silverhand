@@ -35,7 +35,7 @@ interface ThreadPanelProps {
   onClose: () => void;
   /** "View in channel": close this panel and scroll-locate + flash the
    *  root message in the main channel stream. Wired by App to
-   *  `requestJump` + `closeCluster`. Omitted = button hidden. */
+   *  `requestJump` + `closeThread`. Omitted = button hidden. */
   onViewInChannel?: () => void;
   /** Inline-ref resolution + navigation, threaded from App so a thread
    *  reply resolves `#conv:` / `#<channel>` / `#task:` sigils identically
@@ -357,7 +357,6 @@ export function ThreadPanel({
         key={m.id}
         message={m}
         conversationId={channelId}
-        routeKind="channel"
         agentsById={agentsById}
         agentsByName={agentsByName}
         humansByName={humansByName}
@@ -460,10 +459,12 @@ export function ThreadPanel({
               agentsByName,
               humansByName,
               channelsByName,
+              conversationRefsById,
               agentAvatarUrls,
               viewer,
               viewerAvatarObjectUrl,
             }}
+            workspaceId={workspaceId}
             channelTitle={channelMeta.title}
             channelKind={channelMeta.kind}
           />
@@ -537,7 +538,6 @@ export function ThreadPanel({
         key={`${channelId}#cluster#${rootMessageId}`}
         conversationId={channelId}
         threadRootId={rootMessageId}
-        routeKind="channel"
         disabled={closed || rootCtx.isError || !rootCtx.root}
         archived={archived}
         activityAgentIds={followerAgentIds}

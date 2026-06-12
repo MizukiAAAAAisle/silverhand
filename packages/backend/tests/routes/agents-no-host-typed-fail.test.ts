@@ -38,9 +38,7 @@
  * would mask itself as a transient transport issue. Cindy 5d/6
  * boundary call.
  *
- * Routes covered (both `/api/channels/:id/agents/:aid/start|stop`
- * and `/api/threads/:id/agents/:aid/start|stop` share the same
- * handler factory):
+   * Routes covered:
  *   - POST `/api/channels/:id/agents/:aid/start`
  *   - POST `/api/channels/:id/agents/:aid/stop`
  *

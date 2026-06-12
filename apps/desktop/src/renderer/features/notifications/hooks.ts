@@ -384,26 +384,25 @@ async function resolveTargetFromConversationId(
     return {
       workspaceId: workspaceId ?? undefined,
       channelId: conversationId,
-      threadId: null,
       messageId,
     };
   }
   const ref = data.ref;
   const resolvedWorkspaceId = workspaceId ?? ref.workspace_id;
   if (ref.kind === 'thread' && ref.parent_channel_id) {
-    // Legacy fossil thread: a genuinely separate conversation. Its id is
-    // the legacy thread conversation id (carried as `threadId`).
+    // Legacy fossil thread: the isolated-thread viewer was retired, so the
+    // reply is no longer openable. Land on the parent channel — the jump
+    // primer reports `not_found` for the thread-only message, the degraded
+    // behavior for retired fossils.
     return {
       workspaceId: resolvedWorkspaceId,
       channelId: ref.parent_channel_id,
-      threadId: ref.id,
       messageId,
     };
   }
   return {
     workspaceId: resolvedWorkspaceId,
     channelId: ref.id,
-    threadId: null,
     messageId,
   };
 }

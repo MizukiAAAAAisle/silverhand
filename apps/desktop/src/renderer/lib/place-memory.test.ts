@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Tiny localStorage polyfill — vitest runs this test in the node
@@ -28,12 +28,17 @@ const polyfill = {
 
 const {
   LAST_CHANNEL_KEY,
-  LAST_THREAD_KEY,
+  LAST_LAYOUT_KEY,
+  CLOSE_WATERMARK_KEY,
   clearPlaceMemory,
+  closeWatermarkByChannel,
+  getChannelLayout,
+  getCloseWatermark,
   lastChannelByWorkspace,
-  lastThreadByChannel,
+  lastLayoutByChannel,
   persistLastChannel,
-  persistLastThread,
+  recordChannelLayout,
+  recordCloseWatermark,
 } = await import('./place-memory');
 
 /**
@@ -44,13 +49,15 @@ describe('place-memory', () => {
   beforeEach(() => {
     memoryStore.clear();
     lastChannelByWorkspace.clear();
-    lastThreadByChannel.clear();
+    lastLayoutByChannel.clear();
+    closeWatermarkByChannel.clear();
   });
 
   afterEach(() => {
     memoryStore.clear();
     lastChannelByWorkspace.clear();
-    lastThreadByChannel.clear();
+    lastLayoutByChannel.clear();
+    closeWatermarkByChannel.clear();
   });
 
   it('persistLastChannel writes the in-memory map to localStorage', () => {
@@ -62,27 +69,124 @@ describe('place-memory', () => {
     expect(JSON.parse(raw!)).toEqual({ 'ws-1': 'ch-A', 'ws-2': 'ch-B' });
   });
 
-  it('persistLastThread writes the in-memory map to localStorage', () => {
-    lastThreadByChannel.set('ch-A', 't-1');
-    persistLastThread();
-    expect(JSON.parse(localStorage.getItem(LAST_THREAD_KEY)!)).toEqual({
-      'ch-A': 't-1',
-    });
-  });
-
-  it('clearPlaceMemory wipes both maps + both localStorage keys', () => {
+  it('clearPlaceMemory wipes the map + localStorage key', () => {
     lastChannelByWorkspace.set('ws-1', 'ch-A');
-    lastThreadByChannel.set('ch-A', 't-1');
     persistLastChannel();
-    persistLastThread();
     expect(localStorage.getItem(LAST_CHANNEL_KEY)).not.toBeNull();
-    expect(localStorage.getItem(LAST_THREAD_KEY)).not.toBeNull();
 
     clearPlaceMemory();
 
     expect(lastChannelByWorkspace.size).toBe(0);
-    expect(lastThreadByChannel.size).toBe(0);
     expect(localStorage.getItem(LAST_CHANNEL_KEY)).toBeNull();
-    expect(localStorage.getItem(LAST_THREAD_KEY)).toBeNull();
+  });
+
+  describe('per-channel layout memory', () => {
+    it('recordChannelLayout persists and getChannelLayout reads it back', () => {
+      recordChannelLayout('ch-A', { kind: 'threads-list' });
+      expect(getChannelLayout('ch-A')).toEqual({ kind: 'threads-list' });
+      expect(JSON.parse(localStorage.getItem(LAST_LAYOUT_KEY)!)).toEqual({
+        'ch-A': { kind: 'threads-list' },
+      });
+    });
+
+    it('getChannelLayout returns null for an unknown channel', () => {
+      expect(getChannelLayout('nope')).toBeNull();
+    });
+
+    it('recordChannelLayout overwrites a channel with its newest layout', () => {
+      recordChannelLayout('ch-A', { kind: 'threads-list' });
+      recordChannelLayout('ch-A', { kind: 'side', id: 'c-x' });
+      expect(getChannelLayout('ch-A')).toEqual({ kind: 'side', id: 'c-x' });
+    });
+
+    it('records an explicit none so a deliberate close survives re-entry', () => {
+      recordChannelLayout('ch-A', { kind: 'none' });
+      expect(getChannelLayout('ch-A')).toEqual({ kind: 'none' });
+    });
+
+    it('clearPlaceMemory wipes the layout map + its localStorage key', () => {
+      recordChannelLayout('ch-A', { kind: 'thread', rootId: 'm-1' });
+      expect(localStorage.getItem(LAST_LAYOUT_KEY)).not.toBeNull();
+
+      clearPlaceMemory();
+
+      expect(lastLayoutByChannel.size).toBe(0);
+      expect(localStorage.getItem(LAST_LAYOUT_KEY)).toBeNull();
+    });
+
+    it('drops malformed entries on load (validated against the layout shape)', async () => {
+      // A thread layout missing its rootId, and a side missing its id,
+      // are corrupt — the loader must drop them rather than hand back a
+      // half-built layout the URL builder would mis-serialize. A valid
+      // entry alongside them survives. Load happens at import time, so we
+      // seed the store and re-import the module with a fresh registry.
+      memoryStore.set(
+        LAST_LAYOUT_KEY,
+        JSON.stringify({
+          'ch-bad-thread': { kind: 'thread' },
+          'ch-bad-side': { kind: 'side' },
+          'ch-bad-kind': { kind: 'wat' },
+          'ch-good': { kind: 'side', id: 'c-x' },
+        }),
+      );
+      vi.resetModules();
+      const fresh = await import('./place-memory');
+      expect(fresh.getChannelLayout('ch-bad-thread')).toBeNull();
+      expect(fresh.getChannelLayout('ch-bad-side')).toBeNull();
+      expect(fresh.getChannelLayout('ch-bad-kind')).toBeNull();
+      expect(fresh.getChannelLayout('ch-good')).toEqual({
+        kind: 'side',
+        id: 'c-x',
+      });
+      vi.resetModules();
+    });
+  });
+
+  describe('explicit-close watermark', () => {
+    it('recordCloseWatermark persists and getCloseWatermark reads it back', () => {
+      recordCloseWatermark('ch-A', 42);
+      expect(getCloseWatermark('ch-A')).toBe(42);
+      expect(JSON.parse(localStorage.getItem(CLOSE_WATERMARK_KEY)!)).toEqual({
+        'ch-A': 42,
+      });
+    });
+
+    it('getCloseWatermark returns null for an unknown channel', () => {
+      expect(getCloseWatermark('nope')).toBeNull();
+    });
+
+    it('is monotonic — a newer seq raises the watermark', () => {
+      recordCloseWatermark('ch-A', 10);
+      recordCloseWatermark('ch-A', 25);
+      expect(getCloseWatermark('ch-A')).toBe(25);
+    });
+
+    it('never lowers an existing watermark with a smaller seq', () => {
+      recordCloseWatermark('ch-A', 25);
+      recordCloseWatermark('ch-A', 10);
+      expect(getCloseWatermark('ch-A')).toBe(25);
+    });
+
+    it('clearPlaceMemory wipes the watermark map + its localStorage key', () => {
+      recordCloseWatermark('ch-A', 7);
+      expect(localStorage.getItem(CLOSE_WATERMARK_KEY)).not.toBeNull();
+
+      clearPlaceMemory();
+
+      expect(closeWatermarkByChannel.size).toBe(0);
+      expect(localStorage.getItem(CLOSE_WATERMARK_KEY)).toBeNull();
+    });
+
+    it('drops malformed (non-number) entries on load', async () => {
+      memoryStore.set(
+        CLOSE_WATERMARK_KEY,
+        JSON.stringify({ 'ch-bad': 'nope', 'ch-good': 99 }),
+      );
+      vi.resetModules();
+      const fresh = await import('./place-memory');
+      expect(fresh.getCloseWatermark('ch-bad')).toBeNull();
+      expect(fresh.getCloseWatermark('ch-good')).toBe(99);
+      vi.resetModules();
+    });
   });
 });

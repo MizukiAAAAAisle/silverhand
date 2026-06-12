@@ -48,7 +48,6 @@ describe('composer draft cache', () => {
     const file = testFile('x', 'x.png', 'image/png');
     writeComposerDraft({
       conversationId: 'c1',
-      routeKind: 'channel',
       text: 'hello',
       caret: 3,
       pending: [
@@ -76,7 +75,6 @@ describe('composer draft cache', () => {
   it('does not store empty snapshots', () => {
     writeComposerDraft({
       conversationId: 'empty',
-      routeKind: 'channel',
       text: '   ',
       caret: 0,
       pending: [],
@@ -89,7 +87,6 @@ describe('composer draft cache', () => {
   it('evicts oldest entries over MAX_DRAFTS and cleans orphan attachments', () => {
     writeComposerDraft({
       conversationId: 'oldest',
-      routeKind: 'channel',
       text: 'old',
       caret: 0,
       pending: [
@@ -108,7 +105,6 @@ describe('composer draft cache', () => {
     for (let i = 0; i < MAX_DRAFTS; i += 1) {
       writeComposerDraft({
         conversationId: `c${i}`,
-        routeKind: 'channel',
         text: `draft ${i}`,
         caret: 0,
         pending: [],
@@ -127,7 +123,6 @@ describe('composer draft cache', () => {
 
     await startComposerDraftAttachmentUpload({
       conversationId: 'c1',
-      routeKind: 'channel',
       attachmentKey: 'a1',
       file,
       previewUrl: 'blob:image',
@@ -145,7 +140,6 @@ describe('composer draft cache', () => {
 
     await startComposerDraftAttachmentUpload({
       conversationId: 'c1',
-      routeKind: 'channel',
       attachmentKey: 'a1',
       file,
       previewUrl: 'blob:image',
@@ -161,7 +155,6 @@ describe('composer draft cache', () => {
   it('clear skips sent attachment ids but cleans unsent ids', () => {
     writeComposerDraft({
       conversationId: 'c1',
-      routeKind: 'channel',
       text: 'send',
       caret: 0,
       pending: [
@@ -184,7 +177,6 @@ describe('composer draft cache', () => {
     const pending = [donePending('sent-key', 'sent-id')];
     writeComposerDraft({
       conversationId: 'c1',
-      routeKind: 'channel',
       text: 'send',
       caret: 4,
       pending,
@@ -193,7 +185,6 @@ describe('composer draft cache', () => {
 
     writeComposerDraft({
       conversationId: 'c1',
-      routeKind: 'channel',
       text: 'send',
       caret: 4,
       pending,
@@ -215,7 +206,6 @@ describe('composer draft cache', () => {
     const file = testFile('new', 'new.png', 'image/png');
     writeComposerDraft({
       conversationId: 'c1',
-      routeKind: 'channel',
       text: 'submitted',
       caret: 9,
       pending: [donePending('sent-key', 'sent-id')],
@@ -223,7 +213,6 @@ describe('composer draft cache', () => {
     });
     const upload = startComposerDraftAttachmentUpload({
       conversationId: 'c1',
-      routeKind: 'channel',
       attachmentKey: 'new-key',
       file,
       previewUrl: 'blob:new',
@@ -256,7 +245,6 @@ describe('composer draft cache', () => {
     const file = testFile('image', 'image.png', 'image/png');
     const promise = startComposerDraftAttachmentUpload({
       conversationId: 'c1',
-      routeKind: 'channel',
       attachmentKey: 'a1',
       file,
       previewUrl: 'blob:image',

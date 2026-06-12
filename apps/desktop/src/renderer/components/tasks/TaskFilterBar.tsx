@@ -51,6 +51,52 @@ export interface ChannelOption {
   sublabel?: string;
 }
 
+/** A conversation considered for the channel-filter dropdown, normalized
+ *  from whatever read model the caller has on hand. */
+export interface ChannelFilterCandidate {
+  id: string;
+  title: string;
+  kind: 'channel' | 'dm_channel' | 'thread';
+  archived_at: number | null;
+  /** True when the owning workspace is a DM workspace — forces the 'dm'
+   *  icon even though the conversation kind is plain 'channel'. */
+  fromDmWorkspace?: boolean;
+  /** Secondary line, e.g. the owning workspace name in the cross-workspace
+   *  task pane. Omit for single-workspace surfaces. */
+  sublabel?: string;
+}
+
+/**
+ * Single source of truth for *which* conversations are valid channel-filter
+ * options. The eligibility rules — skip legacy fossil threads
+ * (`kind === 'thread'`), never offer an archived channel, dedup by id, and
+ * map to the dropdown's `ChannelOption` shape — live here ONLY, so the task
+ * pane (TasksSection) and the workspace task drawer (WorkspaceTasksDrawer)
+ * cannot drift. Callers own their own *scope* (which candidates to feed in)
+ * and their own *ordering* (sort the result); those are legitimate
+ * per-surface differences. Eligibility and option shape are not.
+ *
+ * Insertion order is preserved, so a caller that pre-sorts its candidates
+ * gets that order back.
+ */
+export function buildChannelFilterOptions(
+  candidates: Iterable<ChannelFilterCandidate>,
+): ChannelOption[] {
+  const byId = new Map<string, ChannelOption>();
+  for (const c of candidates) {
+    if (c.kind === 'thread') continue;
+    if (c.archived_at !== null) continue;
+    if (byId.has(c.id)) continue;
+    byId.set(c.id, {
+      id: c.id,
+      label: c.title,
+      kind: c.fromDmWorkspace || c.kind === 'dm_channel' ? 'dm' : 'channel',
+      ...(c.sublabel !== undefined ? { sublabel: c.sublabel } : {}),
+    });
+  }
+  return [...byId.values()];
+}
+
 /** Conversation-kind → icon, mirroring AgentConversationActivityList so
  *  every surface speaks one icon vocabulary. */
 function ChannelKindIcon({

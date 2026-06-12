@@ -123,17 +123,6 @@ export const apiPaths = {
   conversationChannel: (id: string) => `/api/channels/${id}`,
   conversationChannelMessages: (id: string) => `/api/channels/${id}/messages`,
   conversationChannelAgents: (id: string) => `/api/channels/${id}/agents`,
-  thread: (id: string) => `/api/threads/${id}`,
-  threadMessages: (id: string) => `/api/threads/${id}/messages`,
-  threadAgents: (id: string) => `/api/threads/${id}/agents`,
-  threadAgentStart: (id: string, agentId: string) =>
-    `/api/threads/${id}/agents/${agentId}/start`,
-  threadAgentStop: (id: string, agentId: string) =>
-    `/api/threads/${id}/agents/${agentId}/stop`,
-  threadAgentClearSession: (id: string, agentId: string) =>
-    `/api/threads/${id}/agents/${agentId}/clear-session`,
-  threadAgentRunStates: (id: string) => `/api/threads/${id}/agent-run-states`,
-  threadMarkRead: (id: string) => `/api/threads/${id}/mark-read`,
 
   /** Identity + routing metadata for ANY conversation by id (channel /
    *  dm_channel / thread). Backs cross-workspace secondary-pane
@@ -163,10 +152,9 @@ export const apiPaths = {
   conversationAgentMember: (id: string, agentId: string) =>
     `/api/conversations/${id}/members/agents/${agentId}`,
 
-  // attachments — upload via channel/thread context, download by id.
+  // attachments — upload via channel context, download by id.
   // Each upload creates an independent blob (no de-dup).
   channelAttachments: (id: string) => `/api/channels/${id}/attachments`,
-  threadAttachments: (id: string) => `/api/threads/${id}/attachments`,
   attachment: (id: string) => `/api/attachments/${id}`,
 
   /** Global message unread summary across all workspace/sidebar items.

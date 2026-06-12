@@ -3,6 +3,7 @@ import { SelectionToolbar } from '@/components/chat/SelectionToolbar';
 import { ImagePreviewModal } from '@/components/chat/ImagePreviewModal';
 import type { MessageActionSurface } from '@/components/chat/useMessageActionSurface';
 import type { MessageRenderContext } from '@/components/chat/useMessageRenderContext';
+import type { ConversationReference } from './ConversationRef';
 
 /** Render context the image-export modal needs: a subset of
  *  `MessageRenderContext` plus the agent avatar batch (lifted per surface
@@ -15,7 +16,10 @@ export type MessageActionChromeRenderContext = Pick<
   | 'channelsByName'
   | 'viewer'
   | 'viewerAvatarObjectUrl'
-> & { agentAvatarUrls: ReadonlyMap<string, string | null> };
+> & {
+  agentAvatarUrls: ReadonlyMap<string, string | null>;
+  conversationRefsById?: ReadonlyMap<string, ConversationReference>;
+};
 
 /**
  * The selection toolbar + image-export modal for the shared message action
@@ -27,11 +31,13 @@ export type MessageActionChromeRenderContext = Pick<
 export function MessageActionChrome({
   surface,
   renderCtx,
+  workspaceId,
   channelTitle,
   channelKind,
 }: {
   surface: MessageActionSurface;
   renderCtx: MessageActionChromeRenderContext;
+  workspaceId: string | null;
   channelTitle: string | null;
   channelKind: 'channel' | 'dm' | null;
 }): ReactElement {
@@ -50,12 +56,14 @@ export function MessageActionChrome({
         onOpenChange={surface.setImagePreviewOpen}
         onExportComplete={surface.selection.exit}
         messages={surface.previewSnapshots}
+        workspaceId={workspaceId}
         channelTitle={channelTitle}
         channelKind={channelKind}
         agentsById={renderCtx.agentsById}
         agentsByName={renderCtx.agentsByName}
         humansByName={renderCtx.humansByName}
         channelsByName={renderCtx.channelsByName}
+        conversationRefsById={renderCtx.conversationRefsById}
         agentAvatarUrls={renderCtx.agentAvatarUrls}
         viewer={renderCtx.viewer}
         viewerAvatarObjectUrl={renderCtx.viewerAvatarObjectUrl}

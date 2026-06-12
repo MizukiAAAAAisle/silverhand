@@ -15,7 +15,6 @@ interface SavedListViewProps {
   onJump: (params: {
     workspaceId?: string;
     channelId: string;
-    threadId?: string | null;
     threadRootId?: string | null;
     messageId: string;
   }) => void;
@@ -62,10 +61,8 @@ export function SavedListView({ onJump }: SavedListViewProps): JSX.Element {
                     workspaceId: item.workspace_id,
                     channelId: item.channel_id,
                     // New reply-cluster: the saved message carries its own
-                    // `thread_root_id`. Legacy fossil thread falls back to the
-                    // renamed conversation id. Never the legacy `thread_id`.
+                    // `thread_root_id`; the cluster pane opens to it.
                     threadRootId: item.message.thread_root_id,
-                    threadId: item.legacy_thread_conversation_id,
                     messageId: item.message.id,
                   })
                 }

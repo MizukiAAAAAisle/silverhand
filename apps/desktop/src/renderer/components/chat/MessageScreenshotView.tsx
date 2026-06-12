@@ -1,9 +1,16 @@
-import type { AgentDto, MessageDto, UserDto } from '@silverhand/shared';
-import { User } from 'lucide-react';
+import type {
+  AgentDto,
+  AttachmentSnapshot,
+  MessageDto,
+  UserDto,
+} from '@silverhand/shared';
+import { FileText, User } from 'lucide-react';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { getAttachmentBlobUrl } from '@/lib/attachment-blob-cache';
 import { Markdown } from './Markdown';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
+import type { StaticTaskRefSummary } from './TaskRef';
 
 /**
  * Static, NON-interactive renderer for the image-export pipeline.
@@ -34,7 +41,9 @@ export function MessageScreenshotView({
   humansByName,
   channelsByName,
   conversationRefsById,
+  taskRefsByNumber,
   agentAvatarUrls,
+  attachmentImageUrls,
   viewer,
   viewerAvatarObjectUrl,
   channelTitle,
@@ -46,7 +55,9 @@ export function MessageScreenshotView({
   humansByName?: ReadonlyMap<string, UserDto>;
   channelsByName?: ReadonlyMap<string, ChannelReference | null>;
   conversationRefsById?: ReadonlyMap<string, ConversationReference>;
+  taskRefsByNumber?: ReadonlyMap<number, StaticTaskRefSummary>;
   agentAvatarUrls?: ReadonlyMap<string, string | null>;
+  attachmentImageUrls?: ReadonlyMap<string, string>;
   viewer?: UserDto;
   viewerAvatarObjectUrl?: string | null;
   channelTitle?: string | null;
@@ -59,8 +70,22 @@ export function MessageScreenshotView({
     >
       {channelTitle ? (
         <div className="border-b border-border-subtle pb-2 text-sm font-semibold">
-          {channelKind === 'dm' ? '@' : '#'}
-          {channelTitle}
+          {channelKind === 'dm' ? (
+            <span
+              data-conversation-title
+              className="inline-flex items-center font-serif text-base font-semibold text-text-primary"
+            >
+              {channelTitle}
+            </span>
+          ) : (
+            <span
+              data-conversation-title
+              className="inline-flex items-center font-serif text-base font-semibold text-text-primary"
+            >
+              <span data-conversation-hash>#</span>
+              {channelTitle}
+            </span>
+          )}
         </div>
       ) : null}
       {messages.map(m => (
@@ -72,7 +97,9 @@ export function MessageScreenshotView({
           humansByName={humansByName}
           channelsByName={channelsByName}
           conversationRefsById={conversationRefsById}
+          taskRefsByNumber={taskRefsByNumber}
           agentAvatarUrls={agentAvatarUrls}
+          attachmentImageUrls={attachmentImageUrls}
           viewer={viewer}
           viewerAvatarObjectUrl={viewerAvatarObjectUrl}
         />
@@ -88,7 +115,9 @@ function ScreenshotRow({
   humansByName,
   channelsByName,
   conversationRefsById,
+  taskRefsByNumber,
   agentAvatarUrls,
+  attachmentImageUrls,
   viewer,
   viewerAvatarObjectUrl,
 }: {
@@ -98,7 +127,9 @@ function ScreenshotRow({
   humansByName?: ReadonlyMap<string, UserDto>;
   channelsByName?: ReadonlyMap<string, ChannelReference | null>;
   conversationRefsById?: ReadonlyMap<string, ConversationReference>;
+  taskRefsByNumber?: ReadonlyMap<number, StaticTaskRefSummary>;
   agentAvatarUrls?: ReadonlyMap<string, string | null>;
+  attachmentImageUrls?: ReadonlyMap<string, string>;
   viewer?: UserDto;
   viewerAvatarObjectUrl?: string | null;
 }): JSX.Element {
@@ -160,25 +191,75 @@ function ScreenshotRow({
                 ? new Map(conversationRefsById)
                 : undefined
             }
+            taskRefsByNumber={
+              taskRefsByNumber ? new Map(taskRefsByNumber) : undefined
+            }
             interactive={false}
           />
           {message.attachments && message.attachments.length > 0 ? (
-            <div className="mt-2 flex flex-wrap gap-2">
-              {message.attachments.map(a => (
-                <div
-                  key={a.id}
-                  className="inline-flex items-center gap-1 rounded-md border border-border-subtle bg-bg-elevated px-2 py-1 text-[11px] text-text-secondary"
-                >
-                  <span className="truncate max-w-[200px]">{a.filename}</span>
-                  <span className="text-text-muted">
-                    ({formatBytes(a.size)})
-                  </span>
-                </div>
-              ))}
-            </div>
+            <ScreenshotAttachmentList
+              attachments={message.attachments}
+              imageUrls={attachmentImageUrls}
+            />
           ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+function ScreenshotAttachmentList({
+  attachments,
+  imageUrls,
+}: {
+  attachments: AttachmentSnapshot[];
+  imageUrls?: ReadonlyMap<string, string>;
+}): JSX.Element {
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {attachments.map(attachment => (
+        <ScreenshotAttachmentTile
+          key={attachment.id}
+          attachment={attachment}
+          imageUrl={
+            attachment.content_type.startsWith('image/')
+              ? imageUrls?.get(attachment.id) ??
+                getAttachmentBlobUrl(attachment.id)
+              : undefined
+          }
+        />
+      ))}
+    </div>
+  );
+}
+
+function ScreenshotAttachmentTile({
+  attachment,
+  imageUrl,
+}: {
+  attachment: AttachmentSnapshot;
+  imageUrl?: string;
+}): JSX.Element {
+  const isImage = attachment.content_type.startsWith('image/');
+  if (isImage && imageUrl) {
+    return (
+      <figure className="block overflow-hidden rounded-md border border-border-subtle bg-bg-floating">
+        <img
+          src={imageUrl}
+          alt={attachment.filename}
+          className="block max-h-64 max-w-[320px] object-contain"
+          draggable={false}
+        />
+      </figure>
+    );
+  }
+  return (
+    <div className="flex max-w-[280px] items-center gap-2 rounded-md border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary">
+      <FileText className="size-4 shrink-0 text-text-muted" />
+      <span className="min-w-0 truncate">{attachment.filename}</span>
+      <span className="shrink-0 text-[10px] text-text-muted">
+        {formatBytes(attachment.size)}
+      </span>
     </div>
   );
 }

@@ -34,7 +34,6 @@ interface SearchPanelProps {
   onJumpMessage: (params: {
     workspaceId?: string;
     channelId: string;
-    threadId?: string | null;
     threadRootId?: string | null;
     messageId: string;
   }) => void;
@@ -42,7 +41,6 @@ interface SearchPanelProps {
   onOpenConversation: (
     workspaceId: string,
     channelId: string,
-    threadId?: string | null,
   ) => void;
 }
 
@@ -264,20 +262,14 @@ export function SearchPanel({
                           onOpenConversation(
                             result.workspace.id,
                             result.conversation.channel_id,
-                            // Conversation hits are channels or legacy fossil
-                            // threads. Open the fossil via its renamed legacy
-                            // conversation id, never the ambiguous `thread_id`.
-                            result.conversation.legacy_thread_conversation_id,
                           );
                         } else {
                           onJumpMessage({
                             workspaceId: result.workspace.id,
                             channelId: result.conversation.channel_id,
                             // New reply-cluster: jump uses the message's own
-                            // `thread_root_id`. Legacy fossil falls back to the
-                            // renamed conversation id.
+                            // `thread_root_id`; the cluster pane opens to it.
                             threadRootId: result.message.thread_root_id,
-                            threadId: result.conversation.legacy_thread_conversation_id,
                             messageId: result.message.id,
                           });
                         }

@@ -31,7 +31,7 @@ import { isTaskDrag, readTaskDrag, writeTaskDrag } from '@/features/tasks/taskDn
 import { useRelativeTime } from '@/components/chat/useRelativeTime';
 import { TaskStatusBadge, TaskCardContextMenu } from '@/components/tasks/TaskStatusBadge';
 import { TaskDropPlaceholder } from '@/components/tasks/TaskDropPlaceholder';
-import { TaskFilterBar, type ChannelOption } from '@/components/tasks/TaskFilterBar';
+import { TaskFilterBar, type ChannelOption, buildChannelFilterOptions } from '@/components/tasks/TaskFilterBar';
 
 /**
  * Workspace-wide tasks panel — a floating right-side drawer that overlays
@@ -54,6 +54,8 @@ export interface WorkspaceTasksDrawerProps {
     kind: 'channel' | 'dm_channel' | 'thread';
     /** Parent channel id if this is a thread; null for top-level channels. */
     parent_channel_id: string | null;
+    /** Archived channels are never offered as filter options. */
+    archived_at: number | null;
     closed_at: number | null;
     created_at: number;
   }>;
@@ -73,7 +75,6 @@ export interface WorkspaceTasksDrawerProps {
   onJumpToMessage?: (params: {
     workspaceId?: string;
     channelId: string;
-    threadId?: string | null;
     threadRootId?: string | null;
     messageId: string;
   }) => void;
@@ -282,21 +283,22 @@ export function WorkspaceTasksDrawer({
     { workspaceScopeIds },
   );
 
-  // Channel filter options — top-level channels only. Legacy fossil
-  // threads are no longer separate filter entries: reply-cluster tasks
-  // live in their parent channel, and a fossil task's `channel_id`
-  // already resolves to its parent channel, so every task is reachable
-  // through a channel option (single-model; no `kind='thread'` chips).
+  // Channel filter options. Eligibility (skip fossil threads + archived,
+  // dedup, map) is single-sourced in buildChannelFilterOptions so this
+  // drawer and the task pane cannot drift; this surface only owns its scope
+  // (this workspace's conversations) and its sort (newest-created first).
   const channelOptions = useMemo<ChannelOption[]>(() => {
-    return conversations
-      .filter(c => c.kind !== 'thread')
-      .slice()
-      .sort((a, b) => b.created_at - a.created_at)
-      .map(c => ({
-        id: c.id,
-        label: c.title,
-        kind: c.kind === 'dm_channel' ? ('dm' as const) : ('channel' as const),
-      }));
+    return buildChannelFilterOptions(
+      conversations
+        .slice()
+        .sort((a, b) => b.created_at - a.created_at)
+        .map(c => ({
+          id: c.id,
+          title: c.title,
+          kind: c.kind,
+          archived_at: c.archived_at,
+        })),
+    );
   }, [conversations]);
 
   const tasks = useMemo(
@@ -323,10 +325,9 @@ export function WorkspaceTasksDrawer({
     onJumpToMessage?.({
       workspaceId: t.workspace_id,
       channelId: t.channel_id,
-      // New reply-cluster tasks carry `thread_root_id`; legacy fossil tasks
-      // fall back to the renamed conversation id. Never the legacy `thread_id`.
+      // New reply-cluster tasks carry `thread_root_id`; the cluster pane
+      // opens to it.
       threadRootId: t.thread_root_id,
-      threadId: t.legacy_thread_conversation_id,
       messageId: t.message_id,
     });
     onOpenChange(false);

@@ -41,7 +41,6 @@ export interface MessageItemProps {
   /** Conversation this message belongs to. Forwarded to AgentInfoPopover so
    *  the author/avatar popover can show per-conversation presence + retry. */
   conversationId: string;
-  routeKind?: 'channel' | 'thread';
   /** Looked up by `from_agent_id` to resolve display name + runtime
    *  (avatar) and also by mention name (via `agentsByName`). */
   agentsById: Map<string, AgentDto>;
@@ -167,7 +166,6 @@ export interface MessageItemProps {
 export function MessageItem({
   message,
   conversationId,
-  routeKind = 'channel',
   agentsById,
   agentsByName,
   humansByName,
@@ -388,7 +386,6 @@ export function MessageItem({
           agent ? agentAvatarUrls?.get(agent.id) ?? null : null
         }
         conversationId={conversationId}
-        routeKind={routeKind}
         onNavigateAgent={navigateToAgent}
         onNavigateHuman={navigateToHuman}
       />
@@ -409,7 +406,6 @@ export function MessageItem({
                   human={human}
                   agent={agent}
                   conversationId={conversationId}
-                  routeKind={routeKind}
                   agentAvatarObjectUrl={agentAvatarObjectUrl}
                   humanAvatarObjectUrl={humanAvatarObjectUrl}
                   displayLabel={displayLabel}
@@ -426,7 +422,6 @@ export function MessageItem({
                 human={human}
                 agent={agent}
                 conversationId={conversationId}
-                routeKind={routeKind}
                 agentAvatarObjectUrl={agentAvatarObjectUrl}
                 humanAvatarObjectUrl={humanAvatarObjectUrl}
                 displayLabel={displayLabel}
@@ -679,7 +674,6 @@ function Avatar({
   agent,
   agentAvatarObjectUrl,
   conversationId,
-  routeKind,
   onNavigateAgent,
   onNavigateHuman,
 }: {
@@ -695,7 +689,6 @@ function Avatar({
    *  back to the runtime icon. */
   agentAvatarObjectUrl: string | null;
   conversationId: string;
-  routeKind: 'channel' | 'thread';
   onNavigateAgent: (agentId: string) => void;
   onNavigateHuman: (userId: string) => void;
 }): JSX.Element {
@@ -755,7 +748,6 @@ function Avatar({
       <AgentInfoPopover
         agent={agent}
         conversationId={conversationId}
-        routeKind={routeKind}
         trigger="hover"
         avatarObjectUrl={agentAvatarObjectUrl}
       >
@@ -802,7 +794,6 @@ function AuthorLabel({
   human,
   agent,
   conversationId,
-  routeKind,
   agentAvatarObjectUrl,
   humanAvatarObjectUrl,
   displayLabel,
@@ -813,7 +804,6 @@ function AuthorLabel({
   human: UserDto | undefined;
   agent: AgentDto | undefined;
   conversationId: string;
-  routeKind: 'channel' | 'thread';
   agentAvatarObjectUrl: string | null | undefined;
   humanAvatarObjectUrl: string | null;
   displayLabel: string;
@@ -825,7 +815,6 @@ function AuthorLabel({
       <AgentInfoPopover
         agent={agent}
         conversationId={conversationId}
-        routeKind={routeKind}
         trigger="hover"
         avatarObjectUrl={agentAvatarObjectUrl}
       >

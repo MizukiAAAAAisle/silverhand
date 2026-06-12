@@ -136,7 +136,15 @@ export function createConversationReadApp(
           viewerUserId,
         ),
     );
-    return c.json({ by_conversation: { [channel.id]: count }, total: count });
+    const latest = conversationReads.latestUnreadForConversation(
+      channel.id,
+      viewerUserId,
+    );
+    return c.json({
+      by_conversation: { [channel.id]: count },
+      latest_by_conversation: latest ? { [channel.id]: latest } : {},
+      total: count,
+    });
   });
 
   app.get(apiPaths.conversationChannelMessages(':id'), c => {
@@ -260,17 +268,6 @@ export function createConversationReadApp(
       return c.json({ error: 'forbidden' }, 403);
     }
     return c.json({ channel });
-  });
-
-  app.get(apiPaths.thread(':id'), c => {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'thread id required' }, 400);
-    const thread = conversations.getThread(id);
-    if (!thread) return c.json({ error: 'thread not found' }, 404);
-    if (!canViewConversation(ctx, getUserPrincipal(c), thread.id)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    return c.json({ thread });
   });
 
   /**
@@ -460,57 +457,6 @@ export function createConversationMessagingApp(
     return c.json({ last_read_seq: row.last_read_seq });
   }
 
-  app.get(apiPaths.threadMessages(':id'), c => {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'thread id required' }, 400);
-    const thread = conversations.getThread(id);
-    if (!thread) return c.json({ error: 'thread not found' }, 404);
-    if (!canViewConversation(ctx, getUserPrincipal(c), thread.id)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    const parsed = parseMessagesWindowQuery(c);
-    if (!parsed.ok) return parsed.response;
-    const { limit, beforeSeq, afterSeq, aroundMessageId } = parsed;
-    try {
-      const window = timedRouteSpan(
-        ctx,
-        'conversation.messages.window',
-        {
-          conversationId: thread.id,
-          kind: thread.kind,
-          limit,
-          beforeSeq,
-          afterSeq,
-          aroundMessageId,
-        },
-        () =>
-          messages.listWindowForConversation(thread.id, {
-            limit,
-            beforeSeq,
-            afterSeq,
-            aroundMessageId,
-          }),
-        result => ({
-          messageCount: result.messages.length,
-          hasMoreBefore: result.has_more_before,
-          hasMoreAfter: result.has_more_after,
-        }),
-      );
-      return c.json(window);
-    } catch (err) {
-      if (err instanceof AnchorMessageNotInConversationError) {
-        return c.json(
-          {
-            error: 'around_message_id not found in this conversation',
-            code: 'message_not_found',
-          },
-          404,
-        );
-      }
-      throw err;
-    }
-  });
-
   app.get(apiPaths.conversationThreads(':id'), c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
@@ -571,24 +517,6 @@ export function createConversationMessagingApp(
       result => ({ agentCount: result.length }),
     );
     return c.json({ agents: channelAgents });
-  });
-
-  app.get(apiPaths.threadAgents(':id'), c => {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'thread id required' }, 400);
-    const thread = conversations.getThread(id);
-    if (!thread) return c.json({ error: 'thread not found' }, 404);
-    if (!canViewConversation(ctx, getUserPrincipal(c), thread.id)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    const threadAgents = timedRouteSpan(
-      ctx,
-      'conversation.agents.list',
-      { conversationId: thread.id, kind: thread.kind },
-      () => conversations.listAgents(thread.id),
-      result => ({ agentCount: result.length }),
-    );
-    return c.json({ agents: threadAgents });
   });
 
   app.post('/api/channels/:id/pin', async c => {
@@ -773,24 +701,6 @@ export function createConversationMessagingApp(
     }
   });
 
-  app.get(apiPaths.threadAgentRunStates(':id'), c => {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'thread id required' }, 400);
-    const thread = conversations.getThread(id);
-    if (!thread) return c.json({ error: 'thread not found' }, 404);
-    if (!canViewConversation(ctx, getUserPrincipal(c), thread.id)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    const states = timedRouteSpan(
-      ctx,
-      'conversation.agent_run_states.snapshot',
-      { conversationId: thread.id, kind: thread.kind },
-      () => ctx.runtimeHost.getAgentRunStates(thread.id),
-      result => ({ stateCount: result.length }),
-    );
-    return c.json({ states });
-  });
-
   app.post(apiPaths.channelMessages(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
@@ -845,38 +755,6 @@ export function createConversationMessagingApp(
     }
   });
 
-  app.post(apiPaths.threadMessages(':id'), async c => {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'thread id required' }, 400);
-    const thread = conversations.getThread(id);
-    if (!thread) return c.json({ error: 'thread not found' }, 404);
-    if (!canPostToConversation(ctx, getUserPrincipal(c), thread.id)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    const body = await c.req.json().catch(() => ({}));
-    const parsed = SendMessageInputSchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
-    }
-    // Same best-effort delivery rationale as channelMessages above.
-    try {
-      const result = await ctx.conversationMessageService.sendMessage({
-        conversationId: thread.id,
-        actor: getUserPrincipal(c),
-        content: parsed.data.content,
-        attachmentIds: parsed.data.attachment_ids ?? [],
-        target: parsed.data.reply_to_message_id
-          ? { kind: 'thread', message_id: parsed.data.reply_to_message_id }
-          : undefined,
-      });
-      return c.json({ message: result.message }, 201);
-    } catch (err) {
-      const mapped = conversationMessageServiceErrorResponse(c, err);
-      if (mapped) return mapped;
-      throw err;
-    }
-  });
-
   app.post(apiPaths.channelMarkRead(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
@@ -886,17 +764,6 @@ export function createConversationMessagingApp(
       return c.json({ error: 'forbidden' }, 403);
     }
     return markConversationRead(channel.id, c);
-  });
-
-  app.post(apiPaths.threadMarkRead(':id'), async c => {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'thread id required' }, 400);
-    const thread = conversations.getThread(id);
-    if (!thread) return c.json({ error: 'thread not found' }, 404);
-    if (!canViewConversation(ctx, getUserPrincipal(c), thread.id)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    return markConversationRead(thread.id, c);
   });
 
   app.get(apiPaths.saved, c => {
@@ -1008,15 +875,6 @@ export function createConversationRuntimeApp(
     return startConversationAgent(channel.id, aid, c);
   });
 
-  app.post('/api/threads/:id/agents/:aid/start', async c => {
-    const id = c.req.param('id');
-    const aid = c.req.param('aid');
-    if (!id || !aid) return c.json({ error: 'thread id and agent id required' }, 400);
-    const thread = conversations.getThread(id);
-    if (!thread) return c.json({ error: 'thread not found' }, 404);
-    return startConversationAgent(thread.id, aid, c);
-  });
-
   app.post('/api/channels/:id/agents/:aid/stop', async c => {
     const id = c.req.param('id');
     const aid = c.req.param('aid');
@@ -1026,15 +884,6 @@ export function createConversationRuntimeApp(
     return stopConversationAgent(channel.id, aid, c);
   });
 
-  app.post('/api/threads/:id/agents/:aid/stop', async c => {
-    const id = c.req.param('id');
-    const aid = c.req.param('aid');
-    if (!id || !aid) return c.json({ error: 'thread id and agent id required' }, 400);
-    const thread = conversations.getThread(id);
-    if (!thread) return c.json({ error: 'thread not found' }, 404);
-    return stopConversationAgent(thread.id, aid, c);
-  });
-
   app.post('/api/channels/:id/agents/:aid/clear-session', async c => {
     const id = c.req.param('id');
     const aid = c.req.param('aid');
@@ -1042,15 +891,6 @@ export function createConversationRuntimeApp(
     const channel = conversations.getChannelLike(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
     return clearConversationAgentSession(channel.id, aid, c);
-  });
-
-  app.post('/api/threads/:id/agents/:aid/clear-session', async c => {
-    const id = c.req.param('id');
-    const aid = c.req.param('aid');
-    if (!id || !aid) return c.json({ error: 'thread id and agent id required' }, 400);
-    const thread = conversations.getThread(id);
-    if (!thread) return c.json({ error: 'thread not found' }, 404);
-    return clearConversationAgentSession(thread.id, aid, c);
   });
 
   async function startConversationAgent(

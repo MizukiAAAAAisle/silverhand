@@ -62,7 +62,7 @@ describe('ConversationReadRepo', () => {
       fromUserId: 'alice',
       content: 'other human',
     });
-    messages.insertForConversation({
+    const latestChannelUnread = messages.insertForConversation({
       conversationId: channel.id,
       fromKind: 'agent',
       content: 'agent',
@@ -72,7 +72,7 @@ describe('ConversationReadRepo', () => {
       fromKind: 'system',
       content: 'system',
     });
-    messages.insertForConversation({
+    const otherChannelUnread = messages.insertForConversation({
       conversationId: otherChannel.id,
       fromKind: 'user',
       fromUserId: 'alice',
@@ -87,8 +87,61 @@ describe('ConversationReadRepo', () => {
       [channel.id]: 2,
       [otherChannel.id]: 1,
     });
+    expect(byConversation.latest_by_conversation[channel.id]).toMatchObject({
+      conversation_id: channel.id,
+      message_id: latestChannelUnread.id,
+      seq: latestChannelUnread.seq,
+      thread_root_id: null,
+    });
+    expect(byConversation.latest_by_conversation[otherChannel.id]).toMatchObject({
+      conversation_id: otherChannel.id,
+      message_id: otherChannelUnread.id,
+      seq: otherChannelUnread.seq,
+      thread_root_id: null,
+    });
     expect(byConversation.total).toBe(3);
     expect(reads.unreadCountsByWorkspace('local')).toEqual({ [workspace.id]: 3 });
+  });
+
+  it('returns latest unread pointers with thread root and seq', () => {
+    const { workspace, messages, reads, channel } = bootstrap();
+
+    const root = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      content: 'root',
+    });
+    const reply = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      threadRootId: root.id,
+      content: 'thread reply',
+    });
+    messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'system',
+      threadRootId: root.id,
+      content: 'system event',
+    });
+    messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'mine',
+    });
+
+    const byConversation = reads.unreadCountsByConversationForWorkspace(
+      workspace.id,
+      'local',
+    );
+    const expected = {
+      conversation_id: channel.id,
+      message_id: reply.id,
+      seq: reply.seq,
+      thread_root_id: root.id,
+    };
+    expect(byConversation.latest_by_conversation[channel.id]).toEqual(expected);
+    expect(reads.latestUnreadForConversation(channel.id, 'local')).toEqual(expected);
   });
 
   it('excludes conversations the viewer is not a member of from aggregates', () => {
@@ -97,7 +150,7 @@ describe('ConversationReadRepo', () => {
     db.prepare(
       `DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?`,
     ).run(otherChannel.id, 'local');
-    messages.insertForConversation({
+    const unread = messages.insertForConversation({
       conversationId: channel.id,
       fromKind: 'agent',
       content: 'visible',
@@ -112,6 +165,14 @@ describe('ConversationReadRepo', () => {
       reads.unreadCountsByConversationForWorkspace(workspace.id, 'local'),
     ).toEqual({
       by_conversation: { [channel.id]: 1 },
+      latest_by_conversation: {
+        [channel.id]: {
+          conversation_id: channel.id,
+          message_id: unread.id,
+          seq: unread.seq,
+          thread_root_id: null,
+        },
+      },
       total: 1,
     });
     expect(reads.unreadCountsByWorkspace('local')).toEqual({ [workspace.id]: 1 });

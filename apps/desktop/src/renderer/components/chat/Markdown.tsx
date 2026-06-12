@@ -3,12 +3,16 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { Check, Copy } from 'lucide-react';
+import { AtSign, Check, Copy, CornerDownRight, Hash } from 'lucide-react';
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { Mention } from './Mention';
 import { ChannelRef, type ChannelReference } from './ChannelRef';
-import { ConversationRef, type ConversationReference } from './ConversationRef';
-import { TaskRef } from './TaskRef';
+import {
+  ConversationRef,
+  shortConversationId,
+  type ConversationReference,
+} from './ConversationRef';
+import { TaskRef, TaskRefStaticChip, type StaticTaskRefSummary } from './TaskRef';
 
 interface MarkdownProps {
   content: string;
@@ -47,16 +51,21 @@ interface MarkdownProps {
    *  `onOpenConversationRef` is supplied. */
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
+  /** Static task summaries for export / screenshot rendering. Live
+   *  `TaskRef` resolves with hooks; non-interactive export trees consume
+   *  this map instead so `#task:<n>` can still show `#<n> · title`
+   *  without mounting query/popover components. */
+  taskRefsByNumber?: Map<number, StaticTaskRefSummary>;
   /** Set to `false` for export / screenshot rendering. When false:
    *  - fenced code blocks render as a bare `<pre>` (no copy / expand
    *    buttons, no overflow useEffect)
    *  - plain external links collapse to a styled `<span>` (no href,
    *    no onClick, no IPC)
    *  - internal refs (mention / channel / #conv / #task) render as
-   *    static accent-colored spans without mounting `<Mention>`,
-   *    `<ChannelRef>`, `<ConversationRef>`, or `<TaskRef>` — those
-   *    components run hooks / queries that have no place inside an
-   *    offscreen screenshot tree.
+   *    static output without mounting `<Mention>`, `<ChannelRef>`,
+   *    `<ConversationRef>`, or live `<TaskRef>` — those components run
+   *    hooks / queries that have no place inside an offscreen screenshot
+   *    tree. `#task` uses a pure static chip with the same theme hook.
    *
    *  Default `true` keeps the in-channel behaviour exactly as before.
    *  This is consumed by `MessageScreenshotView` (Cindy's review of
@@ -94,6 +103,7 @@ function MarkdownInner({
   onOpenChannelRef,
   conversationRefsById,
   onOpenConversationRef,
+  taskRefsByNumber,
   interactive = true,
 }: MarkdownProps): JSX.Element {
   // Plugin instance is recreated per render but is a thin closure;
@@ -131,36 +141,58 @@ function MarkdownInner({
             if (!interactive) {
               if (typeof href === 'string') {
                 if (href.startsWith(MENTION_PREFIX)) {
+                  const name = href.slice(MENTION_PREFIX.length);
+                  const mentionAgent = agentsByName?.get(name);
+                  const mentionHuman = humansByName?.get(name);
                   return (
-                    <span className="font-medium text-accent">
-                      @{href.slice(MENTION_PREFIX.length)}
-                    </span>
+                    <StaticMentionRef
+                      name={name}
+                      label={
+                        mentionAgent?.display_name?.trim() ||
+                        mentionAgent?.name ||
+                        mentionHuman?.display_name?.trim() ||
+                        mentionHuman?.name ||
+                        null
+                      }
+                      resolved={!!mentionAgent || !!mentionHuman}
+                      humanId={mentionHuman?.id}
+                    />
                   );
                 }
                 if (href.startsWith(CHANNEL_PREFIX)) {
+                  const name = href.slice(CHANNEL_PREFIX.length);
                   return (
-                    <span className="font-medium text-accent">
-                      #{href.slice(CHANNEL_PREFIX.length)}
-                    </span>
+                    <StaticChannelRef
+                      name={name}
+                      channel={channelsByName?.get(name)}
+                    />
                   );
                 }
                 if (href.startsWith(CONVERSATION_PREFIX)) {
+                  const id = href.slice(CONVERSATION_PREFIX.length);
                   return (
-                    <span className="font-medium text-accent">
-                      #conv:{href.slice(CONVERSATION_PREFIX.length)}
-                    </span>
+                    <StaticConversationRef
+                      id={id}
+                      conversation={conversationRefsById?.get(id)}
+                    />
                   );
                 }
                 if (href.startsWith(TASK_PREFIX)) {
-                  return (
-                    <span className="font-medium text-accent">
-                      #task:{href.slice(TASK_PREFIX.length)}
-                    </span>
-                  );
+                  const raw = href.slice(TASK_PREFIX.length);
+                  const taskNumber = Number.parseInt(raw, 10);
+                  if (/^[1-9]\d*$/.test(raw) && Number.isFinite(taskNumber)) {
+                    return (
+                      <TaskRefStaticChip
+                        taskNumber={taskNumber}
+                        task={taskRefsByNumber?.get(taskNumber)}
+                      />
+                    );
+                  }
+                  return <span>{children}</span>;
                 }
               }
               return (
-                <span className="markdown-link-static underline">
+                <span className="markdown-link-static text-accent underline underline-offset-2">
                   {children}
                 </span>
               );
@@ -276,6 +308,122 @@ function MarkdownInner({
 }
 
 export const Markdown = memo(MarkdownInner);
+
+function StaticMentionRef({
+  name,
+  label,
+  resolved,
+  humanId,
+}: {
+  name: string;
+  label: string | null;
+  resolved: boolean;
+  humanId?: string;
+}): JSX.Element {
+  if (!resolved) {
+    return <span className="text-text-muted">@{name}</span>;
+  }
+  return (
+    <span
+      className="rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent"
+      aria-label={`@${name}`}
+      data-mention-kind={humanId ? 'human' : 'agent'}
+      data-mention-id={humanId}
+    >
+      @{label ?? name}
+    </span>
+  );
+}
+
+function StaticChannelRef({
+  name,
+  channel,
+}: {
+  name: string;
+  channel: ChannelReference | null | undefined;
+}): JSX.Element {
+  if (!channel) {
+    return (
+      <span
+        className="font-mono text-text-muted"
+        data-channel-ref-state={channel === null ? 'ambiguous' : 'unresolved'}
+      >
+        #{name}
+      </span>
+    );
+  }
+  return (
+    <span
+      className={
+        'inline-flex items-baseline gap-0.5 rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent' +
+        (channel.closed_at != null ? ' opacity-60' : '')
+      }
+      title={`#${channel.title}`}
+      data-channel-ref-state="resolved-no-handler"
+      data-channel-ref-id={channel.id}
+    >
+      <Hash className="size-3 shrink-0 self-center" />
+      {channel.title}
+    </span>
+  );
+}
+
+function StaticConversationRef({
+  id,
+  conversation,
+}: {
+  id: string;
+  conversation: ConversationReference | undefined;
+}): JSX.Element {
+  const label = conversation
+    ? conversationDisplayName(conversation)
+    : `#conv:${shortConversationId(id)}`;
+  const icon = conversationIcon(conversation?.kind);
+  return (
+    <span
+      className="inline-flex max-w-[220px] items-center gap-0.5 rounded-[var(--chip-radius)] bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent"
+      aria-label={
+        conversation
+          ? `${kindLabel(conversation.kind)} · ${label}`
+          : `Conversation #conv:${id}`
+      }
+      data-conversation-ref={id}
+    >
+      {icon}
+      <span className={conversation ? 'truncate' : 'truncate font-mono'}>
+        {label}
+      </span>
+    </span>
+  );
+}
+
+function conversationDisplayName(conversation: ConversationReference): string {
+  if (conversation.kind === 'thread') {
+    const parentTitle = conversation.parent_title?.trim();
+    return parentTitle
+      ? `${parentTitle}:${conversation.title}`
+      : conversation.title;
+  }
+  return conversation.title;
+}
+
+function kindLabel(kind: ConversationReference['kind']): string {
+  if (kind === 'thread') return 'Thread';
+  if (kind === 'dm_channel') return 'DM';
+  return 'Channel';
+}
+
+function conversationIcon(
+  kind: ConversationReference['kind'] | undefined,
+): JSX.Element {
+  if (kind === 'thread') {
+    return <CornerDownRight className="size-3 shrink-0 self-center" />;
+  }
+  if (kind === 'dm_channel') {
+    return <AtSign className="size-3 shrink-0 self-center" />;
+  }
+  return <Hash className="size-3 shrink-0 self-center" />;
+}
 
 // Walks the mdast tree and replaces inline `@handle`, `#handle`, and
 // `#conv:<conversation_id>` substrings inside text nodes with link nodes

@@ -49,7 +49,6 @@ import { ComposerActivityHeader } from './ComposerActivityHeader';
 
 interface ComposerProps {
   conversationId: string;
-  routeKind?: 'channel' | 'thread';
   /** When set, this composer posts replies into the given root's reply
    *  cluster (sends `reply_to_message_id`) and keeps its own draft,
    *  isolated from the channel's main composer. The channel id in
@@ -100,7 +99,6 @@ type SubmittingSnapshot = {
  */
 export function Composer({
   conversationId,
-  routeKind = 'channel',
   threadRootId,
   disabled: disabledProp,
   archived = false,
@@ -134,7 +132,7 @@ export function Composer({
   // events + a one-tick guard avoids accidentally sending the partial
   // text on candidate selection.
   const [composing, setComposing] = useState(false);
-  const send = useSendMessage(conversationId, routeKind, threadRootId);
+  const send = useSendMessage(conversationId, threadRootId);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -167,13 +165,13 @@ export function Composer({
     caretRef.current = nextCaret;
     setDraftState(nextDraft);
     setCaretState(nextCaret);
-    patchComposerDraftText(draftKey, routeKind, nextDraft, nextCaret);
+    patchComposerDraftText(draftKey, nextDraft, nextCaret);
   }
 
   function updateCaret(nextCaret: number): void {
     caretRef.current = nextCaret;
     setCaretState(nextCaret);
-    patchComposerDraftText(draftKey, routeKind, draftRef.current, nextCaret);
+    patchComposerDraftText(draftKey, draftRef.current, nextCaret);
   }
 
   function detachSubmittingDraftForEdit(): void {
@@ -186,7 +184,6 @@ export function Composer({
     submittingSnapshotRef.current = null;
     patchComposerDraftText(
       draftKey,
-      routeKind,
       draftRef.current,
       caretRef.current,
     );
@@ -202,14 +199,13 @@ export function Composer({
         void startComposerDraftAttachmentUpload({
           conversationId: draftKey,
           uploadChannelId: conversationId,
-          routeKind,
           attachmentKey: item.key,
           file: item.file,
           previewUrl: item.previewUrl,
         });
       }
     }
-  }, [draftKey, conversationId, routeKind]);
+  }, [draftKey, conversationId]);
 
   useEffect(() => {
     return subscribeComposerDraft(draftKey, event => {
@@ -246,7 +242,6 @@ export function Composer({
           ? submitting.snapshot
           : {
               conversationId: draftKey,
-              routeKind,
               text: draftRef.current,
               caret: caretRef.current,
               pending: pendingRef.current,
@@ -257,7 +252,7 @@ export function Composer({
         updatedAt: Date.now(),
       });
     };
-  }, [draftKey, routeKind]);
+  }, [draftKey]);
 
   const { data: agents = [] } = useAgents();
   const { data: users = [] } = useUsers();
@@ -408,7 +403,6 @@ export function Composer({
     const sentAttachmentIds = ready.map(item => item.id);
     const submittedSnapshot: ComposerDraftSnapshot = {
       conversationId: draftKey,
-      routeKind,
       text: content,
       caret: content.length,
       pending: submittedPending,
@@ -448,12 +442,11 @@ export function Composer({
         }
         patchComposerDraftText(
           draftKey,
-          routeKind,
           submittedSnapshot.text,
           submittedSnapshot.caret,
         );
         for (const item of submittedSnapshot.pending) {
-          upsertComposerDraftAttachment(draftKey, routeKind, item);
+          upsertComposerDraftAttachment(draftKey, item);
         }
       });
   }
@@ -485,7 +478,6 @@ export function Composer({
       void startComposerDraftAttachmentUpload({
         conversationId: draftKey,
         uploadChannelId: conversationId,
-        routeKind,
         attachmentKey: key,
         file,
         previewUrl,
@@ -635,7 +627,6 @@ export function Composer({
             onHover={setActive}
             agentAvatarUrls={agentAvatarUrls}
             humanAvatarUrls={humanAvatarUrls}
-            routeKind={routeKind}
           />
         ) : null}
         {/* Composer shell: border + bg + focus-ring live on the
@@ -661,7 +652,6 @@ export function Composer({
         >
           <ComposerActivityHeader
             conversationId={conversationId}
-            routeKind={routeKind}
             agents={agents}
             agentAvatarUrls={agentAvatarUrls}
             restrictToAgentIds={activityAgentIds}
@@ -976,7 +966,6 @@ function PickerMenu({
   onHover,
   agentAvatarUrls,
   humanAvatarUrls,
-  routeKind,
 }: {
   items: PickerItem[];
   active: number;
@@ -984,9 +973,6 @@ function PickerMenu({
   onHover: (index: number) => void;
   agentAvatarUrls: Map<string, string | null>;
   humanAvatarUrls: Map<string, string | null>;
-  /** Drives the IN section header label — "IN THIS CHANNEL" vs
-   *  "IN THIS THREAD". Defaults to channel when omitted. */
-  routeKind?: 'channel' | 'thread';
 }): JSX.Element {
   // #task:876 (2026-06-03): split header labels per section. We compute
   // the boundary index here (first item with !inConversation) and let
@@ -1000,8 +986,6 @@ function PickerMenu({
   const hasInSection = items.some(
     item => item.kind !== 'channel' && item.inConversation,
   );
-  const inHeader =
-    routeKind === 'thread' ? 'THREAD' : 'CHANNEL';
   return (
     <div
       className="absolute bottom-full left-0 mb-1.5 w-64 max-h-64 overflow-y-auto bg-bg-floating p-1 shadow-lg"
@@ -1017,10 +1001,10 @@ function PickerMenu({
               renders when the IN section is non-empty AND we haven't
               already passed it (i === 0 with at least one IN row). */}
           {i === 0 && hasInSection ? (
-            <SectionHeader label={`IN THIS ${inHeader}`} />
+            <SectionHeader label="IN THIS CHANNEL" />
           ) : null}
           {i === headerBoundaryIndex ? (
-            <SectionHeader label={`NOT IN THIS ${inHeader}`} />
+            <SectionHeader label="NOT IN THIS CHANNEL" />
           ) : null}
           <Row
             item={item}

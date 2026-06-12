@@ -2,7 +2,15 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { AgentDto, MessageDto } from '@silverhand/shared';
+import type {
+  AgentDto,
+  AttachmentSnapshot,
+  MessageDto,
+  UserDto,
+} from '@silverhand/shared';
+import type { ChannelReference } from './ChannelRef';
+import type { ConversationReference } from './ConversationRef';
+import type { StaticTaskRefSummary } from './TaskRef';
 import { MessageScreenshotView } from './MessageScreenshotView';
 
 // Cindy review of 2f8a2ca (P1 blocker): export view was reusing the
@@ -16,8 +24,8 @@ import { MessageScreenshotView } from './MessageScreenshotView';
 //   - no code-block chrome class names (`.code-block__copy`,
 //     `.code-block__expand`)
 //   - plain external links collapse to span — no `href`, no `onclick`
-//   - internal refs render as static accent spans, not the live ref
-//     components
+//   - internal refs render as static chips matching the live trigger
+//     visual contract, not the live ref components
 //
 // Tests SSR-render via renderToStaticMarkup so we assert on the HTML
 // output directly (matching the Markdown.test.ts pattern for this
@@ -45,11 +53,27 @@ function agent(id: string, overrides: Partial<AgentDto> = {}): AgentDto {
   } as AgentDto;
 }
 
+function human(id: string, overrides: Partial<UserDto> = {}): UserDto {
+  return {
+    id,
+    name: id,
+    display_name: id,
+    avatar_url: null,
+    created_at: 0,
+    updated_at: 0,
+    ...overrides,
+  } as UserDto;
+}
+
 function msg(
   id: string,
   seq: number,
   content: string,
-  partial: { from_kind?: 'user' | 'agent'; from_agent_id?: string | null } = {},
+  partial: {
+    from_kind?: 'user' | 'agent';
+    from_agent_id?: string | null;
+    attachments?: AttachmentSnapshot[] | null;
+  } = {},
 ): MessageDto {
   return {
     id,
@@ -59,7 +83,7 @@ function msg(
     from_user_id: null,
     content,
     metadata: null,
-    attachments: null,
+    attachments: partial.attachments ?? null,
     seq,
     created_at: 1_700_000_000_000 + seq * 1000,
     thread_root_id: null,
@@ -72,9 +96,22 @@ function msg(
   };
 }
 
-function render(messages: MessageDto[]): string {
+function render(
+  messages: MessageDto[],
+  options: {
+    channelKind?: 'channel' | 'dm';
+    channelTitle?: string;
+    agentsByName?: ReadonlyMap<string, AgentDto>;
+    humansByName?: ReadonlyMap<string, UserDto>;
+    channelsByName?: ReadonlyMap<string, ChannelReference | null>;
+    conversationRefsById?: ReadonlyMap<string, ConversationReference>;
+    taskRefsByNumber?: ReadonlyMap<number, StaticTaskRefSummary>;
+    attachmentImageUrls?: ReadonlyMap<string, string>;
+  } = {},
+): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const agentsById = new Map([['a1', agent('a1', { display_name: 'Alice' })]]);
+  const agentsByName = options.agentsByName ?? agentsById;
   return renderToStaticMarkup(
     React.createElement(
       QueryClientProvider,
@@ -82,15 +119,38 @@ function render(messages: MessageDto[]): string {
       React.createElement(MessageScreenshotView, {
         messages,
         agentsById,
-        agentsByName: agentsById,
-        channelTitle: 'design',
-        channelKind: 'channel' as const,
+        agentsByName,
+        humansByName: options.humansByName,
+        channelsByName: options.channelsByName,
+        channelTitle: options.channelTitle ?? 'design',
+        channelKind: options.channelKind ?? ('channel' as const),
+        conversationRefsById: options.conversationRefsById,
+        taskRefsByNumber: options.taskRefsByNumber,
+        attachmentImageUrls: options.attachmentImageUrls,
       }),
     ),
   );
 }
 
 describe('MessageScreenshotView — non-interactive contract', () => {
+  it('renders the export channel header with the same channel symbol hook', () => {
+    const html = render([msg('m1', 1, 'hello')]);
+    expect(html).toContain('data-conversation-title');
+    expect(html).toContain('data-conversation-hash');
+    expect(html).toContain('>#</span>');
+    expect(html).toContain('design');
+  });
+
+  it('does not apply the channel hash hook to DM export headers', () => {
+    const html = render([msg('m1', 1, 'hello')], {
+      channelKind: 'dm',
+      channelTitle: 'Alice',
+    });
+    expect(html).toContain('data-conversation-title');
+    expect(html).not.toContain('data-conversation-hash');
+    expect(html).toContain('Alice');
+  });
+
   it('renders zero <button> elements for fenced code blocks', () => {
     const html = render([
       msg(
@@ -131,9 +191,10 @@ describe('MessageScreenshotView — non-interactive contract', () => {
     // applies — pinning it lets future drift trip a test instead of
     // silently re-exposing real anchors.
     expect(html).toContain('markdown-link-static');
+    expect(html).toContain('text-accent');
   });
 
-  it('internal @mention refs collapse to static accent span (no Mention component)', () => {
+  it('unresolved @mention refs collapse to muted static text (no Mention component)', () => {
     const html = render([msg('m1', 1, 'ping @bob about it')]);
     // `<Mention>` wraps a button + popover trigger; static path is a
     // bare span. So the dom should NOT contain any button-role
@@ -143,21 +204,115 @@ describe('MessageScreenshotView — non-interactive contract', () => {
     expect(html).not.toContain('data-radix');
   });
 
-  it('#conv: refs render as static accent span (no ConversationRef hook)', () => {
+  it('resolved @mention refs use display labels without live popovers', () => {
+    const html = render([msg('m1', 1, 'ping @alice and @shiki')], {
+      agentsByName: new Map([
+        ['alice', agent('agent-alice', { name: 'alice', display_name: 'Alice' })],
+      ]),
+      humansByName: new Map([
+        ['shiki', human('u-shiki', { name: 'shiki', display_name: 'shiki' })],
+      ]),
+    });
+    expect(html).toContain('@Alice');
+    expect(html).toContain('@shiki');
+    expect(html).toContain('data-mention-kind="agent"');
+    expect(html).toContain('data-mention-kind="human"');
+    expect(html).not.toMatch(/<button/);
+    expect(html).not.toContain('data-radix');
+  });
+
+  it('#conv: refs render as static chips (no ConversationRef hook)', () => {
     const html = render([msg('m1', 1, 'see #conv:abcdefghijklmnop for details')]);
     expect(html).toContain('#conv:abcdefghijklmnop');
+    expect(html).toContain('data-conversation-ref="abcdefghijklmnop"');
     expect(html).not.toMatch(/<button/);
   });
 
-  it('#task: refs render as static accent span (no TaskRef hook)', () => {
+  it('resolved #conv: refs render human-readable labels in static export', () => {
+    const refs = new Map<string, ConversationReference>([
+      [
+        'abcdefghijklmnop',
+        {
+          id: 'abcdefghijklmnop',
+          kind: 'channel',
+          title: 'infra',
+        },
+      ],
+    ]);
+    const html = render([msg('m1', 1, 'see #conv:abcdefghijklmnop')], {
+      conversationRefsById: refs,
+    });
+    expect(html).toContain('data-conversation-ref="abcdefghijklmnop"');
+    expect(html).toContain('bg-accent-soft');
+    expect(html).toContain('text-accent');
+    expect(html).toContain('infra');
+    expect(html).not.toContain('#conv:abcdefghijklmnop');
+    expect(html).not.toMatch(/<button/);
+  });
+
+  it('resolved thread #conv: refs render without pretending to be a channel', () => {
+    const refs = new Map<string, ConversationReference>([
+      [
+        'qrstuvwxyzabcdef',
+        {
+          id: 'qrstuvwxyzabcdef',
+          kind: 'thread',
+          title: 'launch',
+          parent_channel_id: 'parent-1',
+          parent_title: 'infra',
+        },
+      ],
+    ]);
+    const html = render([msg('m1', 1, 'see #conv:qrstuvwxyzabcdef')], {
+      conversationRefsById: refs,
+    });
+    expect(html).toContain('infra:launch');
+    expect(html).not.toContain('#infra:launch');
+    expect(html).not.toContain('#conv:qrstuvwxyzabcdef');
+    expect(html).not.toMatch(/<button/);
+  });
+
+  it('#task: refs render as static task chips (no live TaskRef hook)', () => {
     const html = render([msg('m1', 1, 'fixed in #task:42')]);
+    expect(html).toContain('data-task-ref="42"');
+    expect(html).toContain('data-task-ref-state="static"');
     expect(html).toContain('#task:42');
     expect(html).not.toMatch(/<button/);
+    expect(html).not.toMatch(/role="button"/);
+  });
+
+  it('#task: refs use preloaded static task titles in export', () => {
+    const html = render([msg('m1', 1, 'fixed in #task:42')], {
+      taskRefsByNumber: new Map([
+        [42, { task_number: 42, title: 'Thread screenshot polish' }],
+      ]),
+    });
+    expect(html).toContain('data-task-ref="42"');
+    expect(html).toContain('data-task-ref-state="static-resolved"');
+    expect(html).toContain('bg-accent-soft');
+    expect(html).toContain('text-accent');
+    expect(html).toContain('#42');
+    expect(html).toContain('Thread screenshot polish');
+    expect(html).not.toContain('#task:42');
+    expect(html).not.toMatch(/<button/);
+    expect(html).not.toMatch(/role="button"/);
   });
 
   it('#<channel> refs render as static accent span (no ChannelRef component)', () => {
     const html = render([msg('m1', 1, 'discuss in #design please')]);
     expect(html).toContain('#design');
+    expect(html).not.toMatch(/<button/);
+  });
+
+  it('resolved #<channel> refs use the same static channel chip shape', () => {
+    const html = render([msg('m1', 1, 'discuss in #design please')], {
+      channelsByName: new Map([
+        ['design', { id: 'c-design', title: 'design' }],
+      ]),
+    });
+    expect(html).toContain('data-channel-ref-state="resolved-no-handler"');
+    expect(html).toContain('data-channel-ref-id="c-design"');
+    expect(html).toContain('design');
     expect(html).not.toMatch(/<button/);
   });
 
@@ -183,5 +338,49 @@ describe('MessageScreenshotView — non-interactive contract', () => {
     // hljs splits the bash content; assert on a surviving token.
     expect(html).toContain('echo');
     expect(html).toContain('link');
+  });
+
+  it('renders cached image attachments as static images', () => {
+    const html = render(
+      [
+        msg('m1', 1, 'attached', {
+          attachments: [
+            {
+              id: 'att-1',
+              filename: 'screenshot.png',
+              size: 1234,
+              content_type: 'image/png',
+            },
+          ],
+        }),
+      ],
+      { attachmentImageUrls: new Map([['att-1', 'blob:screenshot']]) },
+    );
+    expect(html).toContain('<img');
+    expect(html).toContain('src="blob:screenshot"');
+    expect(html).toContain('bg-bg-floating');
+    expect(html).toContain('screenshot.png');
+    expect(html).not.toContain('<figcaption');
+    expect(html).not.toMatch(/<button/);
+  });
+
+  it('renders non-image attachments with the same static file chip shape as chat', () => {
+    const html = render([
+      msg('m1', 1, 'attached', {
+        attachments: [
+          {
+            id: 'att-2',
+            filename: 'notes.txt',
+            size: 512,
+            content_type: 'text/plain',
+          },
+        ],
+      }),
+    ]);
+    expect(html).toContain('notes.txt');
+    expect(html).toContain('512 B');
+    expect(html).toContain('bg-bg-floating');
+    expect(html).toContain('text-text-secondary');
+    expect(html).not.toMatch(/<button/);
   });
 });

@@ -6,7 +6,6 @@ import type {
   AgentDto,
   ChannelConversationDto,
   DmChannelDto,
-  ThreadDto,
   WorkspaceDto,
 } from '@silverhand/shared';
 import { api, getBackendInfo } from '@/lib/api';
@@ -87,27 +86,14 @@ export function EventsApp(): JSX.Element {
     retry: false,
     queryFn: async (): Promise<ConversationOption> => {
       if (!conversationId) throw new Error('missing conversation id');
-      try {
-        const res = await api<{ channel: ChannelLike }>(`/api/channels/${conversationId}`);
-        return optionFromChannel(
-          res.channel,
-          workspaces.find(w => w.id === res.channel.workspace_id)?.name,
-        );
-      } catch {
-        const res = await api<{ thread: ThreadDto }>(`/api/threads/${conversationId}`);
-        const workspaceName =
-          workspaces.find(w => w.id === res.thread.workspace_id)?.name ??
-          res.thread.workspace_id.slice(0, 6);
-        return {
-          id: res.thread.id,
-          title: res.thread.title,
-          workspaceId: res.thread.workspace_id,
-          workspaceName,
-          scope: 'thread',
-          closed_at: res.thread.closed_at,
-          created_at: res.thread.created_at,
-        };
-      }
+      // The legacy isolated-thread viewer was retired, so only channels
+      // resolve here. A fossil-thread id throws and the events panel shows
+      // no selection (retry:false) — the degraded behavior for fossils.
+      const res = await api<{ channel: ChannelLike }>(`/api/channels/${conversationId}`);
+      return optionFromChannel(
+        res.channel,
+        workspaces.find(w => w.id === res.channel.workspace_id)?.name,
+      );
     },
   });
 

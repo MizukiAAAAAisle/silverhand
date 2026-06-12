@@ -259,14 +259,7 @@ function isChannelSwitchDiagnosticPath(path: string): boolean {
     return true;
   }
   if (/^\/api\/workspaces\/[^/]+\/channels(\/archived)?$/.test(path)) return true;
-  if (
-    /^\/api\/channels\/[^/]+\/(messages|agents|agent-run-states|threads|mark-read|message-unread)$/.test(
-      path,
-    )
-  ) {
-    return true;
-  }
-  return /^\/api\/threads\/[^/]+\/(messages|agents|agent-run-states|mark-read)$/.test(
+  return /^\/api\/channels\/[^/]+\/(messages|agents|agent-run-states|threads|mark-read|message-unread)$/.test(
     path,
   );
 }

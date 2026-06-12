@@ -119,7 +119,6 @@ function displayNameOf(agent: AgentDto | undefined): string {
 
 interface ComposerActivityHeaderProps {
   conversationId: string;
-  routeKind: 'channel' | 'thread';
   /** Reused from the Composer's own batch hooks — no extra fetch. */
   agents: AgentDto[];
   agentAvatarUrls: Map<string, string | null>;
@@ -149,12 +148,11 @@ interface ComposerActivityHeaderProps {
  */
 export function ComposerActivityHeader({
   conversationId,
-  routeKind,
   agents,
   agentAvatarUrls,
   restrictToAgentIds,
 }: ComposerActivityHeaderProps): JSX.Element | null {
-  const { data: runStates = [] } = useAgentRunStates(conversationId, routeKind);
+  const { data: runStates = [] } = useAgentRunStates(conversationId);
   const [expanded, setExpanded] = useState(false);
 
   const agentsById = useMemo(() => {

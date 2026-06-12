@@ -41,8 +41,8 @@ interface AgentWorkspacePaneProps {
  *  - The old single-shot snapshot route (`AgentWorkspaceCard`) baked
  *    the renderer's categorisation into the wire (`system_prompt` /
  *    `MEMORY` / `notes`). That wire shape locked the UI: any future
- *    file (e.g. `CONSENSUS.md` lives at the workspace level today, but
- *    a per-agent variant would have nowhere to go) needed wire churn.
+ *    file (e.g. a new per-agent config file) would have nowhere to go
+ *    without wire churn.
  *  - The new pair speaks one virtual-path namespace rooted at the
  *    agent home dir. The UI can categorize (or not) however it wants;
  *    new files just appear in the tree.

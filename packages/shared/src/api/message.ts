@@ -142,8 +142,19 @@ export const MarkConversationReadDtoSchema = z.object({
 });
 export type MarkConversationReadDto = z.infer<typeof MarkConversationReadDtoSchema>;
 
+export const MessageUnreadPointerDtoSchema = z.object({
+  conversation_id: z.string(),
+  message_id: z.string(),
+  seq: z.number().int().nonnegative(),
+  thread_root_id: z.string().nullable(),
+});
+export type MessageUnreadPointerDto = z.infer<
+  typeof MessageUnreadPointerDtoSchema
+>;
+
 export const MessageUnreadByConversationDtoSchema = z.object({
   by_conversation: z.record(z.string(), z.number()),
+  latest_by_conversation: z.record(z.string(), MessageUnreadPointerDtoSchema),
   total: z.number(),
 });
 export type MessageUnreadByConversationDto = z.infer<

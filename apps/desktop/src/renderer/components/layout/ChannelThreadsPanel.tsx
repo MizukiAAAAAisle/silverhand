@@ -16,7 +16,7 @@ interface ChannelThreadsPanelProps {
   /** Parent channel title, shown in the header. */
   parentTitle?: string | null;
   onClose: () => void;
-  /** Open one cluster: App wires this to `nav.openCluster(rootMessageId)`,
+  /** Open one thread: App wires this to `nav.openThread(rootMessageId)`,
    *  which replaces this list with the `ThreadPanel` for that thread. */
   onOpenThread: (rootMessageId: string) => void;
 }

@@ -229,7 +229,6 @@ function ActiveChannelView({
   onOpenChannelRef,
   onOpenTask,
 }: ChannelViewProps & { conversation: ChannelDescriptor }): JSX.Element {
-  const routeKind = conversation.parent_conversation_id ? 'thread' : 'channel';
   const {
     data: messages = [],
     isLoading,
@@ -241,7 +240,7 @@ function ActiveChannelView({
     resetToLatest,
     replyCountsByRoot,
     replySummariesByRoot,
-  } = useChannelMessages(conversation.id, routeKind);
+  } = useChannelMessages(conversation.id);
 
   // Advance the message read cursor in real-time as new messages arrive.
   // ChannelView is only rendered when the channel is visible, so any
@@ -250,13 +249,13 @@ function ActiveChannelView({
   const markRead = useMarkMessageChannelRead();
   const onStreamEvent = useCallback(
     (e: { kind: string }) => {
-      if (e.kind === 'message') markRead.mutate({ id: conversation.id, kind: routeKind });
+      if (e.kind === 'message') markRead.mutate(conversation.id);
     },
     // markRead.mutate is stable; conversation.id drives re-subscription.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [conversation.id, routeKind],
+    [conversation.id],
   );
-  useConversationStream(conversation.id, onStreamEvent, routeKind);
+  useConversationStream(conversation.id, onStreamEvent);
 
   const { data: agents = [] } = useAgents();
   // Single batch fetch for every agent avatar in this channel — threaded
@@ -274,9 +273,9 @@ function ActiveChannelView({
     conversation.parent_conversation_id === null &&
     !!onArchiveChannel;
   const { data: viewer } = useViewerUser();
-  const { data: channelAgents = [] } = useChannelAgents(conversation.id, routeKind);
-  const startAgent = useStartAgent(conversation.id, routeKind);
-  const stopAgent = useStopAgent(conversation.id, routeKind);
+  const { data: channelAgents = [] } = useChannelAgents(conversation.id);
+  const startAgent = useStartAgent(conversation.id);
+  const stopAgent = useStopAgent(conversation.id);
   const agentIds = useMemo(
     () => channelAgents.map(agent => agent.agent_id),
     [channelAgents],
@@ -301,11 +300,11 @@ function ActiveChannelView({
   const restartTitle =
     agentIds.length === 0
       ? 'No agents to restart'
-      : `Restart ${routeKind === 'thread' ? 'Thread' : 'Channel'} agents`;
+      : 'Restart Channel agents';
   const stopTitle =
     agentIds.length === 0
       ? 'No agents to stop'
-      : `Stop ${routeKind === 'thread' ? 'Thread' : 'Channel'} agents`;
+      : 'Stop Channel agents';
   const restartAgents = useCallback(async () => {
     if (agentActionDisabled) return;
     for (const agent of channelAgents) {
@@ -329,7 +328,6 @@ function ActiveChannelView({
   const memberStrip = (
     <MemberStrip
       channelId={conversation.id}
-      routeKind={routeKind}
       conversationAgents={channelAgents}
       agentAvatarUrls={agentAvatarUrls}
     />
@@ -623,7 +621,6 @@ function ActiveChannelView({
             onOpenThread={onOpenThread}
             replyCountsByRoot={replyCountsByRoot}
             replySummariesByRoot={replySummariesByRoot}
-            routeKind={routeKind}
             conversationRefsById={conversationRefsById}
             onOpenConversationRef={onOpenConversationRef}
             onOpenChannelRef={onOpenChannelRef ? handleOpenChannelRef : undefined}
@@ -633,7 +630,6 @@ function ActiveChannelView({
         <Composer
           key={conversation.id}
           conversationId={conversation.id}
-          routeKind={routeKind}
           disabled={closed}
           archived={isArchived}
         />
@@ -653,12 +649,10 @@ const MEMBER_STRIP_VISIBLE_CAP = 8;
 
 function MemberStrip({
   channelId,
-  routeKind,
   conversationAgents,
   agentAvatarUrls,
 }: {
   channelId: string;
-  routeKind: 'channel' | 'thread';
   conversationAgents: ConversationAgentDto[];
   agentAvatarUrls: Map<string, string | null>;
 }): JSX.Element {
@@ -716,7 +710,7 @@ function MemberStrip({
   if (visibleMembers.length === 0 && conversationAgents.length === 0) {
     return (
       <span className="shrink-0 text-[10px] italic text-text-muted">
-        {routeKind === 'thread' ? 'Thread' : 'Channel'} 还没有成员
+        Channel 还没有成员
       </span>
     );
   }
@@ -744,7 +738,6 @@ function MemberStrip({
               key={`agent:${member.agent_id}`}
               agent={agent}
               conversationId={channelId}
-              routeKind={routeKind}
               trigger="hover"
               side="bottom"
               align="end"
@@ -931,7 +924,6 @@ function MessageList({
   onOpenThread,
   replyCountsByRoot,
   replySummariesByRoot,
-  routeKind,
   conversationRefsById,
   onOpenConversationRef,
   onOpenChannelRef,
@@ -978,7 +970,6 @@ function MessageList({
    *  when a root has an entry the badge upgrades to avatars + last-reply
    *  time; absent → count-only fallback. */
   replySummariesByRoot?: Record<string, ReplyBadgeSummary>;
-  routeKind: 'channel' | 'thread';
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
   /** Pre-bound (workspace already resolved) click handler for inline
@@ -1340,7 +1331,6 @@ function MessageList({
         <ChannelMessageItem
           message={m}
           conversationId={channelId}
-          routeKind={routeKind}
           agentsById={agentsById}
           agentsByName={agentsByName}
           humansByName={humansByName}
@@ -1371,7 +1361,6 @@ function MessageList({
     },
     [
       channelId,
-      routeKind,
       agentsById,
       agentsByName,
       humansByName,
@@ -1402,10 +1391,12 @@ function MessageList({
           agentsByName,
           humansByName,
           channelsByName,
+          conversationRefsById,
           agentAvatarUrls,
           viewer,
           viewerAvatarObjectUrl,
         }}
+        workspaceId={workspaceId}
         channelTitle={channelMeta.title}
         channelKind={channelMeta.kind}
       />
