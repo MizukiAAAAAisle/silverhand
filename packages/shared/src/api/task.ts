@@ -5,6 +5,7 @@ import {
   TaskAssigneeTypeSchema,
   TaskStatusSchema,
 } from '../db/schema.js';
+import { MessageSendTargetSchema } from './internal-agent.js';
 import { AgentCapabilitySchema } from './workspace.js';
 
 export const TaskAssigneeDtoSchema = z.object({
@@ -88,6 +89,9 @@ export const CreateTasksInputSchema = z.object({
       }),
     )
     .min(1),
+  target: MessageSendTargetSchema.optional(),
+  /** @deprecated Compatibility alias for pre-`target: {kind:'thread'}`
+   *  agent runtimes. New callers must use `target`. */
   reply_to_message_id: z.string().min(1).optional(),
 });
 export type CreateTasksInput = z.infer<typeof CreateTasksInputSchema>;

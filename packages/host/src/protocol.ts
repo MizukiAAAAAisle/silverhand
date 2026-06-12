@@ -79,15 +79,19 @@ import {
 // speaks a different version.
 //
 // v2 (reply-cluster §6.4): `runtime_start.startup_delivery.deliveries`,
-// `runtime_wake.deliveries`, `agent_message_send.reply_to_message_id`,
-// and the new `agent_stream_observed` intent were added to the strict
-// command surface. A v1 daemon strict-parses the new keys as unknown and
-// rejects the command (and has no handler for the new intent), so the
-// version MUST gate at hello rather than silently breaking business
-// commands. `agent_stream_observed` lands in the SAME v2 surface (it was
-// added before v2 shipped to any deployment) — no further bump.
+// `runtime_wake.deliveries`, and the new `agent_stream_observed` intent were
+// added to the strict command surface. A v1 daemon strict-parses the new keys
+// as unknown and rejects the command (and has no handler for the new intent),
+// so the version MUST gate at hello rather than silently breaking business
+// commands. `agent_stream_observed` lands in the SAME v2 surface (it was added
+// before v2 shipped to any deployment) — no further bump.
+//
+// v3 (#task:1063): `agent_message_send.target` became the public stream
+// identity object (`{kind:'channel'}` / `{kind:'thread', message_id}`).
+// Older v2 daemons would strict-reject the new object at business-command time,
+// so this must also fail loud during hello.
 
-export const HOST_PROTOCOL_VERSION = 2;
+export const HOST_PROTOCOL_VERSION = 3;
 
 export const KNOWN_CAPABILITIES_V1 = [
   'runtime.claude',
@@ -306,9 +310,8 @@ export const AgentMessageSendParamsSchema = z
     agent_id: z.string().min(1),
     content: z.string(),
     target: SendMessageTargetSchema.optional(),
-    /** Reply-cluster anchor (§6): the message id this send replies to.
-     *  The daemon resolves it to a target stream_key + seen boundary
-     *  before forwarding to the backend. */
+    /** @deprecated Compatibility alias for old CLI/prompt builds. New
+     *  callers use `target: {kind:'thread', message_id}`. */
     reply_to_message_id: z.string().min(1).optional(),
     attachment_ids: z.array(z.string().min(1)).optional(),
     stale_resolution_reason: AgentSendStaleResolutionReasonSchema.optional(),

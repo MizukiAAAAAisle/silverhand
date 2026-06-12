@@ -13,10 +13,22 @@ import {
 } from './_zod-helpers.js';
 import { AttachmentSnapshotSchema } from './attachment.js';
 
-export const SendMessageTargetSchema = z.union([
+export const MessageSendTargetSchema = z.union([
+  z.object({ kind: z.literal('channel') }).strict(),
+  z.object({ kind: z.literal('thread'), message_id: z.string().min(1) }).strict(),
+]);
+export type MessageSendTarget = z.infer<typeof MessageSendTargetSchema>;
+
+export const LegacySendMessageTargetSchema = z.union([
   z.literal('self'),
   z.literal('parent'),
   z.object({ thread_id: z.string().min(1) }),
+]);
+export type LegacySendMessageTarget = z.infer<typeof LegacySendMessageTargetSchema>;
+
+export const SendMessageTargetSchema = z.union([
+  MessageSendTargetSchema,
+  LegacySendMessageTargetSchema,
 ]);
 export type SendMessageTarget = z.infer<typeof SendMessageTargetSchema>;
 
@@ -41,16 +53,16 @@ export type AgentSendStaleResolutionReason = z.infer<
 
 export const AgentSendMessageInputSchema = z.object({
   content: z.string(),
+  /** Public send destination. `channel` is the current channel main line;
+   *  `thread` is keyed by any message id in the target cluster. */
   target: SendMessageTargetSchema.optional(),
-  /** Reply-cluster anchor (v43/§6): when set, this send is a reply to
-   *  that message and lands in its thread stream. First reply to a
-   *  main-line message creates the thread; replying to an existing reply
-   *  joins the same root (no nested threads). */
+  /** @deprecated Compatibility alias for pre-`target: {kind:'thread'}`
+   *  agent runtimes. New callers must use `target`. */
   reply_to_message_id: z.string().min(1).optional(),
   /** Daemon's assertion of which per-stream boundary `seen_up_to_seq`
    *  was read against (`'main'` or `thread:<rootMessageId>`). The backend
-   *  independently resolves the stream from `reply_to_message_id` and
-   *  hard-rejects a mismatch (§6.4). Observability + safety; absent on a
+   *  independently resolves the stream from `target` and hard-rejects a
+   *  mismatch (§6.4). Observability + safety; absent on a
    *  freshness-bypass / unknown-target send. */
   stream_key: z.string().min(1).optional(),
   /** Runtime-observed target conversation seq for outbound freshness CAS.

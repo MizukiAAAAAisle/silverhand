@@ -351,6 +351,15 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
       );
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
+    if (parsed.data.target !== undefined && parsed.data.reply_to_message_id !== undefined) {
+      return c.json(
+        {
+          error: 'target and reply_to_message_id are mutually exclusive',
+          code: 'target_conflict',
+        },
+        400,
+      );
+    }
     const principal = getAgentPrincipal(c);
     if (!canPostToConversation(ctx, principal, principal.conversationId)) {
       return c.json({ error: 'forbidden' }, 403);
@@ -367,7 +376,7 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
         content: parsed.data.content,
         attachmentIds: parsed.data.attachment_ids ?? [],
         target: parsed.data.target,
-        replyToMessageId: parsed.data.reply_to_message_id,
+        legacyReplyToMessageId: parsed.data.reply_to_message_id,
         assertedStreamKey: parsed.data.stream_key,
         seenUpToSeq: parsed.data.seen_up_to_seq,
         staleEventId: parsed.data.stale_event_id,
@@ -834,6 +843,15 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
+    if (parsed.data.target !== undefined && parsed.data.reply_to_message_id !== undefined) {
+      return c.json(
+        {
+          error: 'target and reply_to_message_id are mutually exclusive',
+          code: 'target_conflict',
+        },
+        400,
+      );
+    }
     const principal = getAgentPrincipal(c);
     if (!canPostToConversation(ctx, principal, principal.conversationId)) {
       return c.json({ error: 'forbidden' }, 403);
@@ -847,7 +865,8 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
       conversationId: principal.conversationId,
       actor: principal,
       tasks: parsed.data.tasks,
-      replyToMessageId: parsed.data.reply_to_message_id,
+      target: parsed.data.target,
+      legacyReplyToMessageId: parsed.data.reply_to_message_id,
     });
     if ('error' in result) {
       return c.json(

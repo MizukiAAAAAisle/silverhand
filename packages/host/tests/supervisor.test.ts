@@ -3357,7 +3357,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       });
 
       expect(result).toMatchObject({ ok: true, message_id: 'm54' });
-      expect(postedBodies[0]?.['reply_to_message_id']).toBe('m53');
+      expect(postedBodies[0]?.['target']).toEqual({ kind: 'thread', message_id: 'm53' });
+      expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
       expect(postedBodies[0]?.['stream_key']).toBe('thread:mRoot');
       expect(postedBodies[0]?.['seen_up_to_seq']).toBe(53);
     } finally {
@@ -3412,12 +3413,12 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
         conversation_id: 'c1',
         agent_id: 'a1',
         content: 'explicit main-line reply',
-        target: 'self',
+        target: { kind: 'channel' },
       });
 
       expect(result).toMatchObject({ ok: true, message_id: 'm54' });
       expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
-      expect(postedBodies[0]?.['target']).toBe('self');
+      expect(postedBodies[0]?.['target']).toEqual({ kind: 'channel' });
       expect(postedBodies[0]?.['stream_key']).toBe('main');
       expect(postedBodies[0]?.['seen_up_to_seq']).toBe(0);
     } finally {
@@ -3481,6 +3482,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
         content: 'mixed batch defaults to main',
       });
       expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
+      expect(postedBodies[0]?.['target']).toEqual({ kind: 'channel' });
       expect(postedBodies[0]?.['stream_key']).toBe('main');
 
       await supervisor.stop({
@@ -3515,6 +3517,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
         content: 'observe-only batch defaults to main',
       });
       expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
+      expect(postedBodies[0]?.['target']).toEqual({ kind: 'channel' });
       expect(postedBodies[0]?.['stream_key']).toBe('main');
     } finally {
       vi.unstubAllGlobals();
@@ -3537,7 +3540,16 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
         postedBodies.push(parsedBody);
         const seq = nextSeq++;
         // Echo a resolved root for reply sends; main-line sends carry null.
-        const replyTo = parsedBody['reply_to_message_id'];
+        const target = parsedBody['target'];
+        const replyTo =
+          target
+          && typeof target === 'object'
+          && 'kind' in target
+          && target.kind === 'thread'
+          && 'message_id' in target
+          && typeof target.message_id === 'string'
+            ? target.message_id
+            : undefined;
         const threadRootId =
           typeof replyTo === 'string'
             ? replyTo === 'm51'
@@ -3581,10 +3593,11 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
         conversation_id: 'c1',
         agent_id: 'a1',
         content: 'first reply',
-        reply_to_message_id: 'mRoot',
+        target: { kind: 'thread', message_id: 'mRoot' },
       });
       expect(reply1).toMatchObject({ ok: true, message_id: 'm51' });
-      expect(postedBodies[0]?.['reply_to_message_id']).toBe('mRoot');
+      expect(postedBodies[0]?.['target']).toEqual({ kind: 'thread', message_id: 'mRoot' });
+      expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
       expect(postedBodies[0]?.['stream_key']).toBe('thread:mRoot');
       expect(postedBodies[0]?.['seen_up_to_seq']).toBe(0);
 
@@ -3595,9 +3608,11 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
         conversation_id: 'c1',
         agent_id: 'a1',
         content: 'second reply',
-        reply_to_message_id: 'm51',
+        target: { kind: 'thread', message_id: 'm51' },
       });
       expect(reply2).toMatchObject({ ok: true });
+      expect(postedBodies[1]?.['target']).toEqual({ kind: 'thread', message_id: 'm51' });
+      expect(postedBodies[1]).not.toHaveProperty('reply_to_message_id');
       expect(postedBodies[1]?.['stream_key']).toBe('thread:mRoot');
       expect(postedBodies[1]?.['seen_up_to_seq']).toBe(51);
 
@@ -3609,6 +3624,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
         content: 'main line',
       });
       expect(mainSend).toMatchObject({ ok: true });
+      expect(postedBodies[2]?.['target']).toEqual({ kind: 'channel' });
+      expect(postedBodies[2]).not.toHaveProperty('reply_to_message_id');
       expect(postedBodies[2]?.['stream_key']).toBe('main');
       expect(postedBodies[2]?.['seen_up_to_seq']).toBe(50);
     } finally {
@@ -3644,10 +3661,11 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
         conversation_id: 'c1',
         agent_id: 'a1',
         content: 'reply to a message I never saw',
-        reply_to_message_id: 'mGhost',
+        target: { kind: 'thread', message_id: 'mGhost' },
       });
       expect(result).toMatchObject({ ok: true, message_id: 'm77' });
-      expect(postedBodies[0]?.['reply_to_message_id']).toBe('mGhost');
+      expect(postedBodies[0]?.['target']).toEqual({ kind: 'thread', message_id: 'mGhost' });
+      expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
       expect(postedBodies[0]).not.toHaveProperty('seen_up_to_seq');
       expect(postedBodies[0]).not.toHaveProperty('stream_key');
 
@@ -3657,9 +3675,11 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
         conversation_id: 'c1',
         agent_id: 'a1',
         content: 'follow-up reply',
-        reply_to_message_id: 'mGhost',
+        target: { kind: 'thread', message_id: 'mGhost' },
       });
       expect(followup).toMatchObject({ ok: true });
+      expect(postedBodies[1]?.['target']).toEqual({ kind: 'thread', message_id: 'mGhost' });
+      expect(postedBodies[1]).not.toHaveProperty('reply_to_message_id');
       expect(postedBodies[1]?.['stream_key']).toBe('thread:mGhost');
       expect(postedBodies[1]?.['seen_up_to_seq']).toBe(0);
     } finally {
@@ -3704,9 +3724,11 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
         conversation_id: 'c1',
         agent_id: 'a1',
         content: 'late reply after reading',
-        reply_to_message_id: 'mRoot',
+        target: { kind: 'thread', message_id: 'mRoot' },
       });
       expect(reply).toMatchObject({ ok: true });
+      expect(postedBodies[0]?.['target']).toEqual({ kind: 'thread', message_id: 'mRoot' });
+      expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
       expect(postedBodies[0]?.['stream_key']).toBe('thread:mRoot');
       expect(postedBodies[0]?.['seen_up_to_seq']).toBe(60);
 
@@ -3715,8 +3737,10 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
         conversation_id: 'c1',
         agent_id: 'a1',
         content: 'reply to a surfaced reply',
-        reply_to_message_id: 'm60',
+        target: { kind: 'thread', message_id: 'm60' },
       });
+      expect(postedBodies[1]?.['target']).toEqual({ kind: 'thread', message_id: 'm60' });
+      expect(postedBodies[1]).not.toHaveProperty('reply_to_message_id');
       expect(postedBodies[1]?.['stream_key']).toBe('thread:mRoot');
     } finally {
       vi.unstubAllGlobals();
@@ -3761,9 +3785,11 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
         conversation_id: 'c1',
         agent_id: 'a1',
         content: 'first reply to a freshly read root',
-        reply_to_message_id: 'mLone',
+        target: { kind: 'thread', message_id: 'mLone' },
       });
       expect(reply).toMatchObject({ ok: true });
+      expect(postedBodies[0]?.['target']).toEqual({ kind: 'thread', message_id: 'mLone' });
+      expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
       expect(postedBodies[0]?.['stream_key']).toBe('thread:mLone');
       expect(postedBodies[0]?.['seen_up_to_seq']).toBe(0);
     } finally {

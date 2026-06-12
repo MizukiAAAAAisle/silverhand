@@ -738,7 +738,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         content: 'threaded answer',
-        replyToMessageId: root.id,
+        target: { kind: 'thread', message_id: root.id },
       });
       expect(result.message.thread_root_id).toBe(root.id);
       // a reply to that reply joins the SAME root (no nested threads)
@@ -746,7 +746,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
         content: 'follow-up',
-        replyToMessageId: result.message.id,
+        target: { kind: 'thread', message_id: result.message.id },
       });
       expect(nested.message.thread_root_id).toBe(root.id);
     } finally {
@@ -768,7 +768,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         content: 'threaded answer',
-        replyToMessageId: root.id,
+        target: { kind: 'thread', message_id: root.id },
         assertedStreamKey: `thread:${root.id}`,
         seenUpToSeq: 0,
       });
@@ -789,7 +789,7 @@ describe('ConversationMessageService.sendMessage', () => {
           conversationId: t.channel.id,
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
           content: 'wrong stream',
-          replyToMessageId: root.id,
+          target: { kind: 'thread', message_id: root.id },
           assertedStreamKey: 'main',
           seenUpToSeq: 0,
         }),
@@ -807,7 +807,7 @@ describe('ConversationMessageService.sendMessage', () => {
           conversationId: t.channel.id,
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
           content: 'orphan reply',
-          replyToMessageId: 'does-not-exist',
+          target: { kind: 'thread', message_id: 'does-not-exist' },
         }),
       ).rejects.toMatchObject({ code: 'reply_target_not_found' });
     } finally {
@@ -830,7 +830,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
         content: 'thread reply',
-        replyToMessageId: root.id,
+        target: { kind: 'thread', message_id: root.id },
         seenUpToSeq: 0,
       });
       const result = await t.service.sendMessage({
@@ -859,7 +859,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
         content: 'first thread reply',
-        replyToMessageId: root.id,
+        target: { kind: 'thread', message_id: root.id },
         seenUpToSeq: 0,
       });
       // a concurrent main-line message advances the conversation-global seq
@@ -882,7 +882,7 @@ describe('ConversationMessageService.sendMessage', () => {
           conversationId: t.channel.id,
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
           content: 'stale thread draft',
-          replyToMessageId: root.id,
+          target: { kind: 'thread', message_id: root.id },
           seenUpToSeq: firstReply.message.seq,
         }),
       ).rejects.toMatchObject({
@@ -1231,7 +1231,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
         content: 'human reply',
-        replyToMessageId: root.id,
+        target: { kind: 'thread', message_id: root.id },
       });
       expect(reply.message.thread_root_id).toBe(root.id);
 
@@ -1250,7 +1250,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
         content: 'plain follow-up',
-        replyToMessageId: root.id,
+        target: { kind: 'thread', message_id: root.id },
       });
       await waitFor(() =>
         t.fake.delivered.some(
@@ -1310,7 +1310,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         content: 'alice reply',
-        replyToMessageId: root.id,
+        target: { kind: 'thread', message_id: root.id },
       });
       // bob leaves the channel; his follower row lingers but is not authoritative.
       t.conversations.removeAgent(t.channel.id, t.bob.id);
@@ -1322,7 +1322,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         content: 'second reply',
-        replyToMessageId: root.id,
+        target: { kind: 'thread', message_id: root.id },
       });
       // give any post-commit delivery a chance to run, then assert bob got none.
       await new Promise(resolve => setTimeout(resolve, 30));
@@ -1363,7 +1363,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         content: 'reply one',
-        replyToMessageId: root.id,
+        target: { kind: 'thread', message_id: root.id },
       });
 
       // bob mentions @carol in a thread reply: carol is followed (mention) and
@@ -1373,7 +1373,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
         content: '@carol please look',
-        replyToMessageId: reply1.message.id,
+        target: { kind: 'thread', message_id: reply1.message.id },
       });
 
       // follower with source 'mention'.
@@ -1416,7 +1416,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         content: 'alice reply',
-        replyToMessageId: root.id,
+        target: { kind: 'thread', message_id: root.id },
       });
       const before = t.conversationInboxes
         .listPending(t.channel.id, t.alice.id)
@@ -1428,7 +1428,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
         content: '@alice ping',
-        replyToMessageId: root.id,
+        target: { kind: 'thread', message_id: root.id },
       });
 
       const aliceFollow = t.threadFollowers
@@ -1473,7 +1473,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         content: 'reply one',
-        replyToMessageId: root.id,
+        target: { kind: 'thread', message_id: root.id },
       });
       // carol's own in-thread message, inserted directly (bypassing the
       // service) so it does NOT register a follow — carol stays a non-follower
@@ -1489,7 +1489,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
         content: 'reply three',
-        replyToMessageId: root.id,
+        target: { kind: 'thread', message_id: root.id },
       });
 
       // Now pull carol in mid-thread via mention. Backfill must include
@@ -1499,7 +1499,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         content: '@carol catch up',
-        replyToMessageId: root.id,
+        target: { kind: 'thread', message_id: root.id },
       });
 
       const inbox = t.conversationInboxes
@@ -1551,7 +1551,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         content: '@carol catch up on everything',
-        replyToMessageId: root.id,
+        target: { kind: 'thread', message_id: root.id },
       });
 
       const inbox = t.conversationInboxes

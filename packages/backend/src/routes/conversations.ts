@@ -785,7 +785,9 @@ export function createConversationMessagingApp(
         actor: getUserPrincipal(c),
         content: parsed.data.content,
         attachmentIds: parsed.data.attachment_ids ?? [],
-        replyToMessageId: parsed.data.reply_to_message_id,
+        target: parsed.data.reply_to_message_id
+          ? { kind: 'thread', message_id: parsed.data.reply_to_message_id }
+          : undefined,
       });
       return c.json({ message: result.message }, 201);
     } catch (err) {
@@ -815,7 +817,9 @@ export function createConversationMessagingApp(
         actor: getUserPrincipal(c),
         content: parsed.data.content,
         attachmentIds: parsed.data.attachment_ids ?? [],
-        replyToMessageId: parsed.data.reply_to_message_id,
+        target: parsed.data.reply_to_message_id
+          ? { kind: 'thread', message_id: parsed.data.reply_to_message_id }
+          : undefined,
       });
       return c.json({ message: result.message }, 201);
     } catch (err) {

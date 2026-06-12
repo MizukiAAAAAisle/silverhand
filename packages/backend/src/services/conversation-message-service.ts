@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import type {
   AgentRunTerminalReason,
   AgentSendStaleResolutionReason,
+  LegacySendMessageTarget,
+  MessageSendTarget,
   MessageDto,
   SendMessageTarget,
 } from '@silverhand/shared';
@@ -61,16 +63,15 @@ export interface SendMessageInput {
   actor: SendMessageActor;
   content: string;
   attachmentIds?: string[];
+  /** Public send destination. Omitted means the current channel main line. */
   target?: SendMessageTarget;
-  /** Reply-cluster anchor (v43): when set, this send is a reply to that
-   *  message and lands in its thread stream. First reply to a main-line
-   *  message creates the thread; replying to an existing reply joins the
-   *  same root (no nested threads). See docs/thread-reply-cluster-v1.md. */
-  replyToMessageId?: string;
+  /** @deprecated Compatibility alias for old agent/runtime callers. New
+   *  callers must pass `target: { kind: 'thread', message_id }`. */
+  legacyReplyToMessageId?: string;
   /** Daemon's assertion of which per-stream boundary `seenUpToSeq` was
    *  read against (`'main'` or `thread:<rootMessageId>`). When present it
-   *  is cross-checked against the stream the backend resolves from
-   *  `replyToMessageId`; a mismatch hard-rejects (§6.4). */
+   *  is cross-checked against the stream the backend resolves from `target`;
+   *  a mismatch hard-rejects (§6.4). */
   assertedStreamKey?: string;
   seenUpToSeq?: number;
   staleEventId?: string;
@@ -82,6 +83,11 @@ export interface SendMessageResult {
   message: MessageDto;
   targetConversationId: string;
 }
+
+type NormalizedMessageTarget =
+  | { kind: 'channel' }
+  | { kind: 'thread'; messageId: string }
+  | { kind: 'legacy'; target: LegacySendMessageTarget };
 
 export interface ResolveStaleMessageInput {
   conversationId: string;
@@ -166,6 +172,7 @@ export type TargetErrorCode =
   | 'legacy_thread_target_deprecated'
   | 'target_closed'
   | 'target_archived'
+  | 'target_conflict'
   | 'reply_target_not_found'
   | 'stream_key_mismatch'
   | 'legacy_thread_read_only';
@@ -356,8 +363,8 @@ export class ConversationMessageService {
   async sendMessage(input: SendMessageInput): Promise<SendMessageResult> {
     assertActorConversationMatch(input.actor, input.conversationId);
     const policy = POLICIES[input.actor.kind];
-    const target = input.target ?? 'self';
-    if (!policy.allowTarget && target !== 'self') {
+    const target = this.normalizeMessageTarget(input);
+    if (!policy.allowTarget && target.kind === 'legacy') {
       throw new PolicyError(
         'target_not_allowed_for_user',
         'user messages cannot target another conversation',
@@ -394,16 +401,18 @@ export class ConversationMessageService {
         }
         this.validateActor(input.actor, policy, sourceConversation.id);
 
-        const targetConversation = this.resolveTarget(sourceConversation, target);
+        const targetConversation = target.kind === 'legacy'
+          ? this.resolveLegacyTarget(sourceConversation, target.target)
+          : sourceConversation;
         if (targetConversation.kind === 'thread') {
           throw new TargetError(
             'legacy_thread_read_only',
-            'legacy isolated threads are read-only; use message send --reply-to for reply clusters or a channel for isolated work',
+            'legacy isolated threads are read-only; use message send --target thread:<message_id> for reply clusters or a channel for isolated work',
           );
         }
-        const threadRootId = this.resolveThreadRoot(
+        const threadRootId = this.resolveThreadRootForTarget(
           targetConversation.id,
-          input.replyToMessageId,
+          target,
         );
         this.assertStreamKeyConsistent(input, threadRootId);
         const attachmentIds = input.attachmentIds ?? [];
@@ -705,24 +714,43 @@ export class ConversationMessageService {
     );
   }
 
-  /** Resolve a `--reply-to` target into its thread root. A reply to a
-   *  main-line message roots a new thread at that message; a reply to an
-   *  existing reply joins the same root (no nested threads). Returns null
-   *  for a non-reply (main-line) send. Throws when the target message is
-   *  not in the conversation. */
-  private resolveThreadRoot(
+  private normalizeMessageTarget(input: SendMessageInput): NormalizedMessageTarget {
+    if (input.legacyReplyToMessageId !== undefined) {
+      if (input.target !== undefined) {
+        throw new TargetError(
+          'target_conflict',
+          'target and legacyReplyToMessageId are mutually exclusive',
+        );
+      }
+      return { kind: 'thread', messageId: input.legacyReplyToMessageId };
+    }
+    const target = input.target;
+    if (target === undefined) return { kind: 'channel' };
+    if (typeof target === 'object' && 'kind' in target) {
+      return target.kind === 'thread'
+        ? { kind: 'thread', messageId: target.message_id }
+        : { kind: 'channel' };
+    }
+    return { kind: 'legacy', target };
+  }
+
+  /** Resolve a `target: {kind:'thread'}` message id into its thread root. A
+   *  main-line message roots a new thread at that message; an existing reply
+   *  joins the same root (no nested threads). Returns null for channel/main
+   *  sends. Throws when the target message is not in the conversation. */
+  private resolveThreadRootForTarget(
     targetConversationId: string,
-    replyToMessageId: string | undefined,
+    target: NormalizedMessageTarget,
   ): string | null {
-    if (replyToMessageId === undefined) return null;
+    if (target.kind !== 'thread') return null;
     const replied = this.messages.getInConversation(
       targetConversationId,
-      replyToMessageId,
+      target.messageId,
     );
     if (!replied) {
       throw new TargetError(
         'reply_target_not_found',
-        'reply target message not found in target conversation',
+        'target message not found in target conversation',
       );
     }
     return replied.thread_root_id ?? replied.id;
@@ -744,7 +772,8 @@ export class ConversationMessageService {
       {
         conversationId: input.conversationId,
         actorKind: input.actor.kind,
-        replyToMessageId: input.replyToMessageId ?? null,
+        target: input.target ?? null,
+        legacyReplyToMessageId: input.legacyReplyToMessageId ?? null,
         asserted_stream_key: input.assertedStreamKey,
         resolved_stream_key: canonical,
       },
@@ -802,9 +831,9 @@ export class ConversationMessageService {
     }
   }
 
-  private resolveTarget(
+  private resolveLegacyTarget(
     sourceConversation: NonNullable<ReturnType<ConversationRepo['get']>>,
-    target: SendMessageTarget,
+    target: LegacySendMessageTarget,
   ): NonNullable<ReturnType<ConversationRepo['get']>> {
     if (target === 'self') return sourceConversation;
     if (target === 'parent') {

@@ -260,6 +260,11 @@ const MAIN_STREAM_KEY = 'main';
  *  send omits seen+stream_key rather than guessing the wrong stream. */
 const REPLY_TARGET_STREAM_CACHE_CAP = 4096;
 
+type EffectiveMessageTarget =
+  | { kind: 'channel' }
+  | { kind: 'thread'; messageId: string }
+  | { kind: 'legacy'; target: AgentMessageSendParams['target'] };
+
 /** The stream a message LIVES in — what its arrival/our own send
  *  advances as the observed boundary. `thread_root_id === null` ⇒ main
  *  line; otherwise the reply cluster rooted at that message. */
@@ -541,6 +546,25 @@ export class Supervisor implements SupervisorContract {
       pending.streamKey === inferred.streamKey ? inferred : null;
   }
 
+  private effectiveMessageTarget(
+    handle: RuntimeHandle,
+    params: AgentMessageSendParams,
+  ): EffectiveMessageTarget {
+    if (params.reply_to_message_id !== undefined) {
+      return { kind: 'thread', messageId: params.reply_to_message_id };
+    }
+    const target = params.target;
+    if (target && typeof target === 'object' && 'kind' in target) {
+      return target.kind === 'thread'
+        ? { kind: 'thread', messageId: target.message_id }
+        : { kind: 'channel' };
+    }
+    if (target !== undefined) return { kind: 'legacy', target };
+    return handle.defaultReplyTarget
+      ? { kind: 'thread', messageId: handle.defaultReplyTarget.messageId }
+      : { kind: 'channel' };
+  }
+
   /**
    * Admit a delivered batch into the per-stream observed boundary
    * (reply-cluster §6.4). With structured `deliveries[]` each row
@@ -681,39 +705,42 @@ export class Supervisor implements SupervisorContract {
     const pendingStale = handle.pendingStaleEvent;
     // Resolve which per-stream observed boundary this send is anchored to
     // (reply-cluster §6.4):
-    //  - explicit target        → explicit stream (main for self/parent/
-    //    legacy thread target; reply_to for thread:<messageId> mapped by CLI).
+    //  - explicit target        → explicit stream (`channel` or
+    //    `thread:<messageId>`; legacy target shapes remain adapter-only).
     //  - no explicit target     → default to the stream that admitted this
     //    turn when unambiguous, otherwise main.
     //  - reply target we saw    → that cluster's stream (known).
     //  - reply target we did NOT see → unknown (Case A loose, Q1=A): omit
     //    seen+stream_key so the backend skips freshness for this first-touch
     //    send instead of falsely stale-ing it.
-    const defaultReplyTo =
-      params.reply_to_message_id === undefined && params.target === undefined
-        ? handle.defaultReplyTarget?.messageId
-        : undefined;
-    const replyTo = params.reply_to_message_id ?? defaultReplyTo;
-    const targetStreamKey = replyTo
-      ? handle.replyTargetStreamByMessageId.get(replyTo)
+    const effectiveTarget = this.effectiveMessageTarget(handle, params);
+    const threadTargetMessageId =
+      effectiveTarget.kind === 'thread' ? effectiveTarget.messageId : undefined;
+    const targetStreamKey = threadTargetMessageId
+      ? handle.replyTargetStreamByMessageId.get(threadTargetMessageId)
       : MAIN_STREAM_KEY;
     const targetKnown = targetStreamKey !== undefined;
-    if (replyTo && !targetKnown) {
+    if (threadTargetMessageId && !targetKnown) {
       this.logger.info(
         {
           kind: 'process',
           action: 'missing_reply_target_message',
           conversationId: handle.conversationId,
           agent_id: handle.agentId,
-          reply_to_message_id: replyTo,
+          target_message_id: threadTargetMessageId,
         },
         'reply target unknown to daemon — sending without per-stream freshness (Case A)',
       );
     }
+    const targetBody =
+      effectiveTarget.kind === 'thread'
+        ? { kind: 'thread', message_id: effectiveTarget.messageId }
+        : effectiveTarget.kind === 'channel'
+          ? { kind: 'channel' }
+          : effectiveTarget.target;
     const body: Record<string, unknown> = {
       content: params.content,
-      ...(params.target ? { target: params.target } : {}),
-      ...(replyTo ? { reply_to_message_id: replyTo } : {}),
+      ...(targetBody ? { target: targetBody } : {}),
       ...(params.attachment_ids ? { attachment_ids: params.attachment_ids } : {}),
       ...(params.freshness_bypass
         ? { freshness_bypass: true }
@@ -771,11 +798,11 @@ export class Supervisor implements SupervisorContract {
     // `--reply-to` of either resolves to the right stream.
     const resolvedRoot =
       typeof json['thread_root_id'] === 'string' ? json['thread_root_id'] : null;
-    if (replyTo) {
+    if (threadTargetMessageId) {
       const stream = resolvedRoot
         ? `thread:${resolvedRoot}`
-        : replyTargetStreamKey(replyTo, null);
-      this.rememberReplyTargetStream(handle, replyTo, stream);
+        : replyTargetStreamKey(threadTargetMessageId, null);
+      this.rememberReplyTargetStream(handle, threadTargetMessageId, stream);
       this.rememberReplyTargetStream(handle, messageId, stream);
     }
     // Observed-advance asymmetry (Cindy ruling): a send into a KNOWN

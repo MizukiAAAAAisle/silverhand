@@ -6,6 +6,7 @@ import {
   type ConversationDto,
   type CreateTasksOpError,
   type CreateTasksResult,
+  type MessageSendTarget,
   type MessageRow,
   type TaskAssigneeDto,
   type TaskChangedEvent,
@@ -77,9 +78,12 @@ export interface CreateTasksInput {
   conversationId: string;
   actor: TaskActor;
   tasks: { title: string; body?: string }[];
-  /** Optional message this batch should hang under as a reply-cluster
-   *  task body. Omitted keeps task creation on the main line. */
-  replyToMessageId?: string;
+  /** Optional public destination. Omitted / channel keeps task creation on
+   *  the main line; thread anchors the task body under that message's
+   *  reply cluster. */
+  target?: MessageSendTarget;
+  /** @deprecated Compatibility alias for old CLI/runtime callers. */
+  legacyReplyToMessageId?: string;
 }
 
 export type ClaimTaskInput =
@@ -403,8 +407,9 @@ export class TaskService {
       }
     }
     let threadRootId: string | null = null;
-    if (input.replyToMessageId) {
-      const target = this.fetchMessage(input.replyToMessageId);
+    const targetMessageId = this.taskThreadTargetMessageId(input);
+    if (targetMessageId) {
+      const target = this.fetchMessage(targetMessageId);
       if (!target || target.conversation_id !== input.conversationId) {
         return { error: 'reply_target_not_found' };
       }
@@ -457,6 +462,11 @@ export class TaskService {
     }
 
     return { tasks: created };
+  }
+
+  private taskThreadTargetMessageId(input: CreateTasksInput): string | undefined {
+    return input.legacyReplyToMessageId
+      ?? (input.target?.kind === 'thread' ? input.target.message_id : undefined);
   }
 
   // ── Claim ───────────────────────────────────────────────────────

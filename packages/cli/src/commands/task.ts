@@ -1,7 +1,7 @@
 /**
  * `silverhand task` — list, create, claim, unclaim, status.
  */
-import type { TaskStatus } from '@silverhand/shared';
+import type { MessageSendTarget, TaskStatus } from '@silverhand/shared';
 import { CliError } from '../errors.js';
 import {
   flagBool,
@@ -262,21 +262,21 @@ stdout: CreateTasksResult JSON.`,
       const body = bodiesArr[idx];
       return body ? { title, body } : { title };
     });
-    const replyTo = parseTaskCreateReplyTarget(
+    const target = parseTaskCreateTarget(
       flagString(args, 'target'),
       flagString(args, 'reply-to'),
     );
     return client.createTasks({
       tasks,
-      ...(replyTo ? { reply_to_message_id: replyTo } : {}),
+      ...(target ? { target } : {}),
     });
   },
 };
 
-function parseTaskCreateReplyTarget(
+function parseTaskCreateTarget(
   rawTarget: string | undefined,
   rawReplyTo: string | undefined,
-): string | undefined {
+): MessageSendTarget | undefined {
   if (rawTarget !== undefined && rawReplyTo !== undefined) {
     throw new CliError({
       code: 'validation_error',
@@ -288,9 +288,11 @@ function parseTaskCreateReplyTarget(
       details: { flags: ['reply-to', 'target'] },
     });
   }
-  if (rawReplyTo !== undefined) return rawReplyTo;
+  if (rawReplyTo !== undefined) {
+    return { kind: 'thread', message_id: rawReplyTo };
+  }
   if (rawTarget === undefined || rawTarget === 'channel' || rawTarget === 'self') {
-    return undefined;
+    return rawTarget === undefined ? undefined : { kind: 'channel' };
   }
   if (rawTarget.startsWith('thread:')) {
     const messageId = rawTarget.slice('thread:'.length);
@@ -303,7 +305,7 @@ function parseTaskCreateReplyTarget(
         details: { flag: 'target', value: rawTarget },
       });
     }
-    return messageId;
+    return { kind: 'thread', message_id: messageId };
   }
   throw new CliError({
     code: 'validation_error',

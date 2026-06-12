@@ -159,7 +159,7 @@ describe('TaskService.createTasks', () => {
     }
   });
 
-  it('createTasks with replyToMessageId writes task body and task_create event to that thread stream', async () => {
+  it('createTasks with a thread target writes task body and task_create event to that thread stream', async () => {
     const t = bootstrap();
     try {
       const root = t.messages.insertForConversation({
@@ -180,7 +180,7 @@ describe('TaskService.createTasks', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'thread task' }],
-        replyToMessageId: reply.id,
+        target: { kind: 'thread', message_id: reply.id },
       });
 
       expect('tasks' in result).toBe(true);
@@ -210,7 +210,7 @@ describe('TaskService.createTasks', () => {
     }
   });
 
-  it('createTasks with a missing or cross-conversation replyToMessageId fails without inserting', async () => {
+  it('createTasks with a missing or cross-conversation thread target fails without inserting', async () => {
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
@@ -230,7 +230,7 @@ describe('TaskService.createTasks', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'missing target' }],
-        replyToMessageId: 'missing-message',
+        target: { kind: 'thread', message_id: 'missing-message' },
       });
       expect(missing).toEqual({ error: 'reply_target_not_found' });
 
@@ -238,7 +238,7 @@ describe('TaskService.createTasks', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'cross target' }],
-        replyToMessageId: otherMsg.id,
+        target: { kind: 'thread', message_id: otherMsg.id },
       });
       expect(cross).toEqual({ error: 'reply_target_not_found' });
 

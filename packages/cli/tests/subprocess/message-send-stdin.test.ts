@@ -373,15 +373,15 @@ describe('silverhand message send (stdin-only, real subprocess)', () => {
     expect(r.code, r.stderr).toBe(0);
     const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
       content: string;
-      target?: string;
+      target?: unknown;
       reply_to_message_id?: string;
     };
     expect(reqBody.content).toBe('main-line answer');
-    expect(reqBody.target).toBe('self');
+    expect(reqBody.target).toEqual({ kind: 'channel' });
     expect(reqBody.reply_to_message_id).toBeUndefined();
   });
 
-  it('maps --target thread:<message_id> to reply_to_message_id and echoes thread_root_id', async () => {
+  it('maps --target thread:<message_id> to the public thread target and echoes thread_root_id', async () => {
     captured.length = 0;
     nextSendResponse = {
       status: 200,
@@ -395,16 +395,16 @@ describe('silverhand message send (stdin-only, real subprocess)', () => {
     const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
       content: string;
       reply_to_message_id?: string;
-      target?: string;
+      target?: unknown;
     };
     expect(reqBody.content).toBe('threaded answer');
-    expect(reqBody.reply_to_message_id).toBe('m-root');
-    expect(reqBody.target).toBeUndefined();
+    expect(reqBody.target).toEqual({ kind: 'thread', message_id: 'm-root' });
+    expect(reqBody.reply_to_message_id).toBeUndefined();
     const out = JSON.parse(r.stdout) as { thread_root_id?: string | null };
     expect(out.thread_root_id).toBe('m-root');
   });
 
-  it('keeps --reply-to as a compatibility alias for reply_to_message_id', async () => {
+  it('keeps --reply-to as a hidden compatibility alias for the public thread target', async () => {
     captured.length = 0;
     const r = await runSend({
       argv: ['--reply-to', 'm-root'],
@@ -413,10 +413,10 @@ describe('silverhand message send (stdin-only, real subprocess)', () => {
     expect(r.code, r.stderr).toBe(0);
     const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
       reply_to_message_id?: string;
-      target?: string;
+      target?: unknown;
     };
-    expect(reqBody.reply_to_message_id).toBe('m-root');
-    expect(reqBody.target).toBeUndefined();
+    expect(reqBody.target).toEqual({ kind: 'thread', message_id: 'm-root' });
+    expect(reqBody.reply_to_message_id).toBeUndefined();
   });
 
   it('rejects --reply-to together with --target as mutually_exclusive', async () => {

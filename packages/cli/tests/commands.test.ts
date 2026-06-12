@@ -229,11 +229,11 @@ describe('file view command', () => {
 
 describe('task create --target thread:<message_id>', () => {
   // Locks the load-bearing contract: the optional thread target must
-  // reach the wire as `reply_to_message_id`, and OMITTING it must leave
-  // the field absent entirely (so the backend keeps the main-line default
-  // `thread_root_id = NULL`). Without this, the flag could silently
-  // regress to "accepted but never forwarded" — backend/schema/typecheck
-  // would all stay green (#task:1056 review, requested by Cindy).
+  // reach the wire as the public `target` object, and OMITTING it must
+  // leave the field absent entirely (so the backend keeps the main-line
+  // default `thread_root_id = NULL`). Without this, the flag could
+  // silently regress to "accepted but never forwarded" — backend/schema/
+  // typecheck would all stay green (#task:1056 review).
   function captureCreateTasks(flags: Record<string, string>) {
     const cmd = findCommand('task', 'create');
     expect(cmd).toBeDefined();
@@ -253,26 +253,29 @@ describe('task create --target thread:<message_id>', () => {
           authToken: 'token',
         },
         client,
-        args: { flags, positional: [], rest: [] },
-      } as any)
-      .then(() => captured as { tasks: unknown[]; reply_to_message_id?: string });
+      args: { flags, positional: [], rest: [] },
+    } as any)
+      .then(() => captured as { tasks: unknown[]; target?: unknown; reply_to_message_id?: string });
   }
 
-  it('forwards --reply-to as reply_to_message_id', async () => {
+  it('keeps --reply-to as a hidden compatibility alias for the public thread target', async () => {
     const input = await captureCreateTasks({ title: 'T', 'reply-to': 'm1' });
     expect(input.tasks).toEqual([{ title: 'T' }]);
-    expect(input.reply_to_message_id).toBe('m1');
+    expect(input.target).toEqual({ kind: 'thread', message_id: 'm1' });
+    expect('reply_to_message_id' in input).toBe(false);
   });
 
-  it('forwards --target thread:<message_id> as reply_to_message_id', async () => {
+  it('forwards --target thread:<message_id> as the public thread target', async () => {
     const input = await captureCreateTasks({ title: 'T', target: 'thread:m1' });
     expect(input.tasks).toEqual([{ title: 'T' }]);
-    expect(input.reply_to_message_id).toBe('m1');
+    expect(input.target).toEqual({ kind: 'thread', message_id: 'm1' });
+    expect('reply_to_message_id' in input).toBe(false);
   });
 
   it('treats --target channel as the explicit main-line destination', async () => {
     const input = await captureCreateTasks({ title: 'T', target: 'channel' });
     expect(input.tasks).toEqual([{ title: 'T' }]);
+    expect(input.target).toEqual({ kind: 'channel' });
     expect('reply_to_message_id' in input).toBe(false);
   });
 
@@ -296,9 +299,10 @@ describe('task create --target thread:<message_id>', () => {
     ).rejects.toMatchObject({ subkind: 'mutually_exclusive' });
   });
 
-  it('omits reply_to_message_id when --reply-to is absent (main-line default)', async () => {
+  it('omits target and reply_to_message_id when no target is provided (main-line default)', async () => {
     const input = await captureCreateTasks({ title: 'T' });
     expect(input.tasks).toEqual([{ title: 'T' }]);
+    expect('target' in input).toBe(false);
     expect('reply_to_message_id' in input).toBe(false);
   });
 });

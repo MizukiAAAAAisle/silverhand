@@ -3,6 +3,7 @@
  */
 import type {
   AgentSendStaleResolutionReason,
+  MessageSendTarget,
   SendMessageTarget,
 } from '@silverhand/shared';
 import {
@@ -209,7 +210,6 @@ stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null
       agent_id: env.agentId,
       content,
       ...(destination.target ? { target: destination.target } : {}),
-      ...(destination.replyTo ? { reply_to_message_id: destination.replyTo } : {}),
       ...(attachmentIds && attachmentIds.length > 0
         ? { attachment_ids: attachmentIds }
         : {}),
@@ -227,7 +227,6 @@ stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null
     return await client.sendMessage({
       content,
       ...(destination.target ? { target: destination.target } : {}),
-      ...(destination.replyTo ? { reply_to_message_id: destination.replyTo } : {}),
       ...(anyway ? { freshness_bypass: true } : {}),
       ...(attachmentIds && attachmentIds.length > 0
         ? { attachment_ids: attachmentIds }
@@ -490,9 +489,9 @@ export const messageCommands: readonly Command[] = [
 function parseSendDestination(
   rawTarget: string | undefined,
   rawReplyTo: string | undefined,
-): { target?: SendMessageTarget; replyTo?: string } {
+): { target?: SendMessageTarget } {
   const target = parseSendTarget(rawTarget);
-  if (rawReplyTo !== undefined && (target.target !== undefined || target.replyTo !== undefined)) {
+  if (rawReplyTo !== undefined && target !== undefined) {
     throw new CliError({
       code: 'validation_error',
       subkind: 'mutually_exclusive',
@@ -503,14 +502,14 @@ function parseSendDestination(
       details: { flags: ['reply-to', 'target'] },
     });
   }
-  if (rawReplyTo !== undefined) return { replyTo: rawReplyTo };
-  return target;
+  if (rawReplyTo !== undefined) {
+    return { target: { kind: 'thread', message_id: rawReplyTo } };
+  }
+  return target ? { target } : {};
 }
 
-function parseSendTarget(
-  raw: string | undefined,
-): { target?: SendMessageTarget; replyTo?: string } {
-  if (raw === undefined) return {};
+function parseSendTarget(raw: string | undefined): SendMessageTarget | undefined {
+  if (raw === undefined) return undefined;
   if (raw.length === 0) {
     throw new CliError({
       code: 'validation_error',
@@ -520,8 +519,9 @@ function parseSendTarget(
       details: { flag: 'target', value: raw },
     });
   }
-  if (raw === 'channel' || raw === 'self') return { target: 'self' };
-  if (raw === 'parent') return { target: 'parent' };
+  if (raw === 'channel') return { kind: 'channel' };
+  if (raw === 'self') return { kind: 'channel' };
+  if (raw === 'parent') return 'parent';
   if (raw.startsWith('thread:')) {
     const messageId = raw.slice('thread:'.length);
     if (!messageId) {
@@ -533,11 +533,12 @@ function parseSendTarget(
         details: { flag: 'target', value: raw },
       });
     }
-    return { replyTo: messageId };
+    const target: MessageSendTarget = { kind: 'thread', message_id: messageId };
+    return target;
   }
   // Hidden compatibility for legacy isolated-thread targets. Public help
   // teaches only `channel` and `thread:<message_id>`.
-  return { target: { thread_id: raw } };
+  return { thread_id: raw };
 }
 
 function parseSendStaleResolution(
