@@ -37,10 +37,8 @@ import { findThreadAnchor, readAnchorMessageId } from '@/components/chat/threadA
 import { SystemMessage } from '@/components/chat/SystemMessage';
 import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
 import { groupMessages } from '@/components/chat/groupMessages';
-import { SelectionToolbar } from '@/components/chat/SelectionToolbar';
-import { useMessageSelection } from '@/components/chat/useMessageSelection';
-import { ImagePreviewModal } from '@/components/chat/ImagePreviewModal';
-import { buildMarkdownTranscript } from '@/components/chat/markdownTranscript';
+import { useMessageActionSurface } from '@/components/chat/useMessageActionSurface';
+import { MessageActionChrome } from '@/components/chat/MessageActionChrome';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
@@ -56,7 +54,6 @@ import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { useUsersById } from '@/features/users/hooks';
-import { useSavedMessageIds, useToggleSave } from '@/features/saved/hooks';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
@@ -972,29 +969,6 @@ function MessageList({
     liveChannels,
     archivedChannels,
   } = useMessageRenderContext(workspaceId, channelId);
-  const savedIds = useSavedMessageIds();
-  const { toggle: toggleSave } = useToggleSave();
-  const handleCopyMarkdown = useCallback(async (msg: MessageDto): Promise<void> => {
-    // Single-message copy semantic: clipboard receives ONLY
-    // `message.content`. Multi-message transcript export with sender
-    // headers goes through `handleCopyMarkdownTranscript` below — same
-    // clipboard target, different payload shape.
-    try {
-      await navigator.clipboard.writeText(msg.content);
-      toast.success('已复制到剪贴板');
-    } catch (err) {
-      toast.error(
-        '复制失败：' + (err instanceof Error ? err.message : String(err)),
-      );
-    }
-  }, []);
-  // Image preview modal lives here so the modal is part of MessageList's
-  // tree and clears on channel switch via the same React subtree teardown
-  // that invalidates the message data. Selection-mode export handlers
-  // are declared further down (after `selection` is in scope) and the
-  // modal's `open` state is just a React boolean.
-  const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
-
   const handleOpenThread = (msg: MessageDto): void => {
     onOpenThread?.(msg.id);
   };
@@ -1054,60 +1028,22 @@ function MessageList({
   // start way above zero so we have headroom for many prepend rounds.
   const [firstItemIndex, setFirstItemIndex] = useState(FIRST_ITEM_INDEX_START);
   const [windowResetVersion, setWindowResetVersion] = useState(0);
-  // Multi-select state for the export-as-image / export-as-markdown
-  // pipelines. Owned at MessageList scope (not lifted to ChannelView)
-  // so the cleanup deps — channel switch, window reset, fresh jump —
-  // live in the same scope and don't require callback round-trips.
-  // The Share entry that activates this state is intentionally NOT
-  // wired in C1 (no `onShare` prop reaches MessageItem yet) — Cindy's
-  // "no half-baked Share entry" constraint. The toolbar therefore
-  // stays unmounted in C1.
-  const selection = useMessageSelection({
+  // Shared message action surface — selection state + copy / share /
+  // export handlers, identical to the thread reply-cluster pane
+  // (#task:1067), so the per-row action props can't drift apart. The
+  // list/window strategy is NOT shared: this pane keeps Virtuoso + the
+  // main-stream window reset. `windowResetVersion` / `jumpToMessageId` are
+  // the selection-clearing signals for a latest↔around window replacement.
+  const actions = useMessageActionSurface({
     channelId,
     windowResetVersion,
     jumpToMessageId,
+    agentsById,
+    viewer,
   });
-
-  // ESC exits selection mode (shiki `9J_EUts8PMReL6p1`). We only bind
-  // the listener while selection is active AND the image preview modal
-  // is closed — Radix Dialog already consumes ESC to close itself, and
-  // we don't want the same keystroke both closing the modal and
-  // dropping the selection (which would lose the user's queue for a
-  // possible retry). We use the bubble phase + check `event.defaultPrevented`
-  // so a focused composer / input that calls preventDefault on Escape
-  // (e.g. IME cancel) wins; otherwise fall through to selection exit.
-  useEffect(() => {
-    if (!selection.active || imagePreviewOpen) return;
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return;
-      // Avoid stealing ESC from inputs/textareas — those have their
-      // own meaning for ESC (blur, IME cancel).
-      const target = event.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (
-        tag === 'INPUT' ||
-        tag === 'TEXTAREA' ||
-        target?.isContentEditable
-      ) {
-        return;
-      }
-      event.preventDefault();
-      selection.exit();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [selection, imagePreviewOpen]);
-
-  // Per-row Share entry: enter selection mode with this message
-  // preselected. `enter` is idempotent — re-entering from selecting
-  // just adds another message. Used by MessageItem's right-click menu.
-  const handleShare = useCallback(
-    (msg: MessageDto) => selection.enter(msg),
-    [selection],
-  );
-  // Channel title — surfaced in the screenshot header and used as the
-  // suggested filename base. Top-level channels live in liveChannels;
-  // we only want the title, so an inline find is fine.
+  // Channel title/kind — surfaced in the screenshot header and used as the
+  // suggested filename base. Top-level channels live in liveChannels; we
+  // only want the title, so an inline find is fine.
   const channelMeta = useMemo(() => {
     const c =
       liveChannels.find(x => x.id === channelId) ??
@@ -1123,35 +1059,6 @@ function MessageList({
             : null,
     };
   }, [liveChannels, archivedChannels, channelId]);
-  const handleCopyMarkdownTranscript = useCallback(async (): Promise<void> => {
-    const snapshots = selection.selectedSorted();
-    if (snapshots.length === 0) return;
-    const text = buildMarkdownTranscript(snapshots, {
-      agentsById,
-      viewer,
-    });
-    // shiki `vBRFDuOuOqhsYzow`: multi-select share is clipboard, not a
-    // save dialog. Same destination as the single-message Copy markdown
-    // path — only the payload shape differs (transcript with sender
-    // headers vs. raw content).
-    try {
-      await navigator.clipboard.writeText(text);
-      toast.success(`已复制 ${snapshots.length} 条消息到剪贴板`);
-      selection.exit();
-    } catch (err) {
-      toast.error(
-        '复制失败：' + (err instanceof Error ? err.message : String(err)),
-      );
-    }
-  }, [selection, agentsById, viewer]);
-  const handleSaveImage = useCallback(() => {
-    if (selection.count === 0) return;
-    setImagePreviewOpen(true);
-  }, [selection.count]);
-  const previewSnapshots = useMemo(
-    () => (imagePreviewOpen ? selection.selectedSorted() : []),
-    [imagePreviewOpen, selection],
-  );
   const firstItemIndexRef = useRef(FIRST_ITEM_INDEX_START);
   const lastTopItemKeyRef = useRef<string | null>(null);
   const lastJumpRemountKeyRef = useRef<string | null>(null);
@@ -1434,8 +1341,7 @@ function MessageList({
           onOpenChannelRef={onOpenChannelRef}
           conversationRefsById={conversationRefsById}
           onOpenConversationRef={onOpenConversationRef}
-          saved={savedIds.has(m.id)}
-          onSave={msg => toggleSave(msg.id)}
+          {...actions.rowActionProps(m)}
           onStartThread={onOpenThread ? handleOpenThread : undefined}
           threadReplyCount={
             (replyCountsByRoot?.[m.id] ?? 0) > 0
@@ -1449,11 +1355,6 @@ function MessageList({
           highlighted={
             highlightedMessageId != null && m.id === highlightedMessageId
           }
-          selectionMode={selection.active}
-          selected={selection.isSelected(m.id)}
-          onToggleSelected={selection.toggle}
-          onCopyMarkdown={handleCopyMarkdown}
-          onShare={handleShare}
           userResolver={userResolver}
         />
       );
@@ -1468,8 +1369,7 @@ function MessageList({
       onOpenChannelRef,
       conversationRefsById,
       onOpenConversationRef,
-      savedIds,
-      toggleSave,
+      actions.rowActionProps,
       onOpenThread,
       handleOpenThread,
       replyCountsByRoot,
@@ -1477,39 +1377,25 @@ function MessageList({
       viewer,
       agentAvatarUrls,
       highlightedMessageId,
-      selection.active,
-      selection.isSelected,
-      selection.toggle,
-      handleCopyMarkdown,
-      handleShare,
       userResolver,
     ],
   );
 
   return (
     <div className="relative min-h-0 min-w-0 flex-1 flex flex-col">
-      {selection.active ? (
-        <SelectionToolbar
-          count={selection.count}
-          onCancel={selection.exit}
-          onCopyMarkdown={handleCopyMarkdownTranscript}
-          onSaveImage={handleSaveImage}
-        />
-      ) : null}
-      <ImagePreviewModal
-        open={imagePreviewOpen}
-        onOpenChange={setImagePreviewOpen}
-        onExportComplete={selection.exit}
-        messages={previewSnapshots}
+      <MessageActionChrome
+        surface={actions}
+        renderCtx={{
+          agentsById,
+          agentsByName,
+          humansByName,
+          channelsByName,
+          agentAvatarUrls,
+          viewer,
+          viewerAvatarObjectUrl,
+        }}
         channelTitle={channelMeta.title}
         channelKind={channelMeta.kind}
-        agentsById={agentsById}
-        agentsByName={agentsByName}
-        humansByName={humansByName}
-        channelsByName={channelsByName}
-        agentAvatarUrls={agentAvatarUrls}
-        viewer={viewer}
-        viewerAvatarObjectUrl={viewerAvatarObjectUrl}
       />
       <div className="relative min-h-0 min-w-0 flex-1">
       {isLoading ? (
