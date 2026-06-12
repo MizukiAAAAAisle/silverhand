@@ -3,9 +3,10 @@
 // colliding with the in-flight task.ts / system-messages.ts `thread_root_id`
 // edits. Re-exported via api/index.ts → @silverhand/shared.
 //
-// This is the contract for `GET /api/channels/:id/threads` — the per-channel
-// "Threads" list (every reply-cluster in one channel, newest activity first).
-// See docs/thread-discovery-p2-requirements.md.
+// This is the contract for `GET /api/conversations/:id/threads` — the
+// per-channel "Threads" list (every reply-cluster in one channel, newest
+// activity first). The path takes a conversation id but only resolves
+// channel / dm_channel. See docs/thread-discovery-p2-requirements.md.
 import { z } from 'zod';
 
 /** Author identity kind for a thread row. 'human' mirrors the

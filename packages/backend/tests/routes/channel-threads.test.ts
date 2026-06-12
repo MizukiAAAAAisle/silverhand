@@ -35,7 +35,7 @@ function setCreatedAt(db: Db, id: string, ts: number): void {
 
 const threadsPath = (id: string) => apiPaths.conversationThreads(id);
 
-describe('GET /api/channels/:id/threads', () => {
+describe('GET /api/conversations/:id/threads', () => {
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
