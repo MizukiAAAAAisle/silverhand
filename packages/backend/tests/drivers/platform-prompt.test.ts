@@ -277,7 +277,7 @@ describe('buildPlatformPrompt', () => {
     const text = prompt();
     expect(text).toContain('Threads (reply clusters)');
     expect(text).toContain('reply cluster');
-    expect(text).toContain('`silverhand message send --reply-to <message_id>`');
+    expect(text).toContain('`silverhand message send --target thread:<message_id>`');
     expect(text).toContain('`silverhand thread follow --root <message_id>`');
     expect(text).toContain('`silverhand thread unfollow --root <message_id>`');
     expect(text).toContain('`silverhand channel create`');
@@ -294,7 +294,8 @@ describe('buildPlatformPrompt', () => {
     //      the channel, sharing the channel's context. It is NOT a
     //      separate conversation or a separate agent session (the old
     //      model). Identified by its root message id.
-    //   2. Three operations: reply (`--reply-to`), follow/unfollow
+    //   2. Three operations: reply (`--target thread:<message_id>`, or a
+    //      bare send when already in the thread), follow/unfollow
     //      (a delivery subscription, not a permission), and pull
     //      (`message history --target thread:<root>` — read without
     //      following). Isolation/parallelism → a channel, not a thread.
@@ -306,10 +307,10 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('reply cluster');
     expect(text).toContain("sharing the channel's context");
     expect(text).toMatch(/root\s+message\s+id/);
-    expect(text).toContain('--reply-to');
+    expect(text).toContain('--target thread:<message_id>');
     expect(text).toContain('target=channel|thread:<root_message_id>');
     expect(text).toContain('target=thread:<root_message_id>');
-    expect(text).toMatch(/when your response should stay in the same\s+thread/);
+    expect(text).toMatch(/stay in a thread by default/);
     expect(text).toContain('makes you a follower');
     expect(text).toMatch(/subscription, not a\s+permission/);
     expect(text).toContain(

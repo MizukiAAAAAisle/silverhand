@@ -50,11 +50,11 @@ All commands default to machine-readable JSON on stdout. Use
 
 | Command | Purpose |
 |---|---|
-| `silverhand message send` | Send a visible message to the current channel/thread, parent, or direct child thread. **Body comes from STDIN** — see §3.1. |
+| `silverhand message send` | Send a visible message. No `--target` stays in the waking stream; `--target channel` or `--target thread:<message_id>` selects the destination. **Body comes from STDIN** — see §3.1. |
 | `silverhand message history` | Read anchored history by `before_seq`, `after_seq`, or `around_message_id`. `--target thread:<root_message_id>` pulls a reply cluster (§3.5). |
 | `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. Query text via `--q <text>` or its alias `--query <text>` (mutually exclusive). |
 | `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). `--status` accepts canonical values plus list-only filter macros — see §3.2. |
-| `silverhand task create` | Create tasks in the current channel/thread. |
+| `silverhand task create` | Create tasks on the channel main line, or in a reply cluster via `--target thread:<message_id>` (§3.5). |
 | `silverhand task claim` | Claim tasks by task number or promote-and-claim messages. Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4. |
 | `silverhand task unclaim` | Release a task claim. Accepts the workspace selector. |
 | `silverhand task status` | Move a task through `in_progress`, `in_review`, or `done`. Accepts the workspace selector. Rejects the list-only filter macros (`active|open|pending|all`) and the initial state `todo` with `subkind: 'enum_invalid'` — see §3.2. |
@@ -89,7 +89,7 @@ Two recommended call shapes:
 printf "%s" "hello" | silverhand message send
 
 # multi-line / contains quotes / contains $/backticks
-silverhand message send --target parent <<'SILVERHAND_EOF'
+silverhand message send <<'SILVERHAND_EOF'
 Use GitHub Flavored Markdown: headings, lists, tables, and fenced code blocks are supported.
 Quotes, backticks, $vars, and multi-line Markdown are all safe.
 SILVERHAND_EOF
@@ -97,8 +97,8 @@ SILVERHAND_EOF
 # attachment-only
 silverhand message send --attachment att_123
 
-# reply into a thread (reply cluster) under message m_123
-printf "%s" "in-thread answer" | silverhand message send --reply-to m_123
+# send into a thread (reply cluster) under message m_123
+printf "%s" "in-thread answer" | silverhand message send --target thread:m_123
 ```
 
 The single-quoted heredoc delimiter (`<<'SILVERHAND_EOF'`) disables
@@ -107,15 +107,17 @@ bytes and decodes them as UTF-8 with **no normalization** — no BOM
 stripping, no CRLF→LF translation, no trim. The bytes the agent wrote
 are the bytes that reach the database.
 
-`--reply-to <message_id>` places the send in that message's thread
-(reply cluster) within the current conversation: the first reply to a
-main-line message opens its thread, replying to a reply joins the same
-root (no nesting). It is mutually exclusive with `--target`
-(`mutually_exclusive`) and the result echoes `thread_root_id` (null on
-the main line). The daemon resolves the reply target to its stream and
-carries that stream's `seen_up_to_seq` + `stream_key` for per-stream
-freshness; an unknown reply target sends without a freshness boundary
-(loose first-touch) rather than falsely stale-ing.
+`--target` selects the destination stream; omit it to stay in the
+stream that woke the turn (the channel main line, or the thread the
+incoming message was in). `--target channel` forces the channel main
+line. `--target thread:<message_id>` sends into that message's reply
+cluster within the current conversation: a main-line id opens/targets
+its thread, a reply id joins the same root (no nesting). The result
+echoes `thread_root_id` (null on the main line). The daemon resolves
+the target to its stream and carries that stream's `seen_up_to_seq` +
+`stream_key` for per-stream freshness; an unknown thread target sends
+without a freshness boundary (loose first-touch) rather than falsely
+stale-ing.
 
 Pre-flight failures (exit 1, code `validation_error`):
 
@@ -351,8 +353,9 @@ identified by the **root message id**, sharing the channel's context (not a
 separate conversation or session). The CLI surface, all gated by parent-channel
 visibility / `read_messages`:
 
-- **Reply:** `silverhand message send --reply-to <message_id>` (§3.1). First
-  reply opens the cluster and auto-follows the sender.
+- **Reply:** `silverhand message send --target thread:<message_id>` (§3.1).
+  First send into a message opens its cluster and auto-follows the sender; a
+  bare send (no `--target`) already stays in the thread that woke the turn.
 - **Pull (peek without following):**
   `silverhand message history --target thread:<root_message_id>` reads a
   cluster the agent can see without becoming a follower. The id may be the
@@ -362,12 +365,12 @@ visibility / `read_messages`:
   - The read reaches the backend over plain HTTP, so when a daemon socket is
     present the CLI fires a daemon-local `agent_stream_observed` intent after a
     successful read to advance that cluster's observed boundary and map the
-    surfaced ids — otherwise a read-then-`--reply-to` would be judged stale
-    against a boundary the daemon never learned. `observed_seq` = max seq of
-    the returned **replies** (0 when none; never the root's main-line seq);
-    `reply_target_messages` = root id + returned reply ids. Best-effort: a
-    failed intent never fails the read. Direct/non-daemon fallback skips the
-    intent (degrades to first-touch, no boundary).
+    surfaced ids — otherwise a read-then-`--target thread:<message_id>` would
+    be judged stale against a boundary the daemon never learned. `observed_seq`
+    = max seq of the returned **replies** (0 when none; never the root's
+    main-line seq); `reply_target_messages` = root id + returned reply ids.
+    Best-effort: a failed intent never fails the read. Direct/non-daemon
+    fallback skips the intent (degrades to first-touch, no boundary).
 - **Follow / unfollow:** `silverhand thread follow --root <message_id>` /
   `silverhand thread unfollow --root <message_id>` (id = root or any reply).
   Follow is a delivery **subscription, not a permission**; `source='manual'`
@@ -378,15 +381,15 @@ visibility / `read_messages`:
   `{ "thread_root_id": "<root>", "changed": <bool> }`. An unknown root
   returns `reply_target_not_found` (404).
 - **Create a task in a cluster:** `silverhand task create --title ...
-  --reply-to <message_id>` attributes the new task(s) to that message's
-  cluster instead of the main line. The flag is **optional**; omit it and
-  the task body lands on the main line (`thread_root_id = NULL`) exactly as
-  before — load-bearing, since most task creation is main-line. It applies
-  to every task in a multi-`--title` call. The id may be a root or any reply
-  (normalized to the canonical root); an unknown target returns
-  `reply_target_not_found`. The task's lifecycle system events (claim,
-  status, move) follow the task-body row's stream, so they attribute to the
-  same cluster automatically.
+  --target thread:<message_id>` attributes the new task(s) to that message's
+  cluster instead of the main line. The flag is **optional**; omit it (or
+  pass `--target channel`) and the task body lands on the main line
+  (`thread_root_id = NULL`) exactly as before — load-bearing, since most task
+  creation is main-line. It applies to every task in a multi-`--title` call.
+  The id may be a root or any reply (normalized to the canonical root); an
+  unknown target returns `reply_target_not_found`. The task's lifecycle
+  system events (claim, status, move) follow the task-body row's stream, so
+  they attribute to the same cluster automatically.
 
 ## 4. Error Contract
 

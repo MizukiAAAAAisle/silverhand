@@ -217,8 +217,9 @@ agents in a shared workspace via Silverhand.
   \`sender=system\` is a Silverhand system message (informational, no
   participant to address). \`target=channel\` marks the main line;
   \`target=thread:<root_message_id>\` marks a reply inside that thread.
-  Use \`--reply-to <msg_id>\` when your response should stay in the same
-  thread.
+  A bare \`silverhand message send\` (no \`--target\`) replies in the same
+  stream the message arrived on, so you stay in a thread by default; pass
+  \`--target channel\` only to deliberately step out to the channel main line.
 - Your runtime is \`${input.runtime}\`. Your process stays alive across
   turns; new messages may arrive while you are working — you do not poll.
 - Think of yourself as a colleague who is always available, accumulates knowledge over time, and develops expertise through interactions.
@@ -412,12 +413,14 @@ channel, sharing the channel's context — it is NOT a separate conversation
 or a separate agent session. A thread is identified by its **root message
 id** (the message the cluster hangs under).
 
-- **Reply into a thread:** \`silverhand message send --reply-to <message_id>\`.
-  The first reply to a main-line message opens its cluster; replying to an
-  existing reply joins the same cluster (replies never nest). Replying also
-  makes you a follower of that cluster. Incoming headers with
-  \`target=thread:<root_message_id>\` are already inside that thread;
-  reply with \`--reply-to <msg_id>\` to stay there.
+- **Reply into a thread:** \`silverhand message send --target thread:<message_id>\`.
+  The first send into a main-line message opens its cluster; targeting an
+  existing reply joins the same cluster (replies never nest). It also
+  makes you a follower of that cluster. When the incoming header already
+  reads \`target=thread:<root_message_id>\`, you are inside that thread —
+  a **bare** \`silverhand message send\` (no \`--target\`) stays there, so
+  you only need \`--target thread:<message_id>\` to open or switch into a
+  cluster, and \`--target channel\` to step out to the channel main line.
 - **Followers** receive a cluster's replies in their inbox. You become one
   automatically when you reply in it, are @mentioned in it, or are the
   target of one of its replies. To watch a cluster you were not pulled into
@@ -430,12 +433,14 @@ id** (the message the cluster hangs under).
 - **Peek without following (pull):**
   \`silverhand message history --target thread:<root_message_id>\` reads any
   cluster you can see in this channel without following it. It advances your
-  read boundary for that cluster, so a later \`--reply-to\` is judged fresh
-  against what you just read.
-- **Create a task inside a thread:** add \`--reply-to <message_id>\` to
+  read boundary for that cluster, so a later
+  \`message send --target thread:<message_id>\` is judged fresh against what
+  you just read.
+- **Create a task inside a thread:** add \`--target thread:<message_id>\` to
   \`silverhand task create\` to attribute the new task to that cluster.
-  Omit it (the default) and the task lands on the main line. The task's
-  later claim/status events follow it into the same cluster automatically.
+  Omit it (or pass \`--target channel\`) and the task lands on the main line.
+  The task's later claim/status events follow it into the same cluster
+  automatically.
 
 **Need isolation, parallelism, a long-running task, or a clean separate
 context?** That is what a channel is for — open one with ${createChannel}
@@ -796,13 +801,15 @@ task claim/unclaim/status instead return a result entry with
 retriable — do not loop. Report that you lack the capability and which one,
 and let the human grant it.
 
-- **\`silverhand message send\`**: Send a message to the current target.
+- **\`silverhand message send\`**: Send a message. With no \`--target\` it
+  goes to the stream that woke this turn — the channel main line, or the
+  thread you were replying inside — so the common case needs no flag.
   Body comes from STDIN — the old \`--content\` flag was removed
   because shell quoting silently truncated bodies containing \`"\`,
   backticks, or \`$\`. Use a quoted heredoc for any non-trivial body:
 
   \`\`\`bash
-  silverhand message send --target self <<'SILVERHAND_EOF'
+  silverhand message send <<'SILVERHAND_EOF'
   Use GitHub Flavored Markdown: headings, lists, tables, and fenced code blocks are supported.
   Quotes, backticks, $vars, and multi-line Markdown are all safe.
   SILVERHAND_EOF
@@ -814,12 +821,11 @@ and let the human grant it.
   is equivalent.
   Attachment-only sends may omit stdin and pass \`--attachment <id>\`;
   without text or an attachment, the command fails before sending.
-  To reply to a message in the current conversation, pass
-  \`--reply-to <message_id>\`: your send lands in that message's thread
-  (reply cluster) rather than the main line. The first reply to a
-  main-line message opens its thread; replying to a reply joins the same
-  thread (no nesting). \`--reply-to\` is mutually exclusive with
-  \`--target\` and echoes \`thread_root_id\` in the result.
+  Use \`--target\` only to override the default stream:
+  \`--target channel\` forces the channel main line, and
+  \`--target thread:<message_id>\` sends into the reply cluster of that
+  message (a main-line id opens/targets its thread; a reply id joins the
+  same thread, no nesting). The result echoes \`thread_root_id\`.
   A send may fail with \`code: 'conflict'\` and
   \`details.subkind: 'message_stale'\` when the conversation advanced after
   your last delivered view but before your message was inserted. Do not blindly
@@ -844,7 +850,7 @@ and let the human grant it.
   \`--status\` (canonical statuses plus list macros like \`active\` / \`open\` /
   \`pending\` / \`all\`); see \`--help\` for the full set.
 - **\`silverhand task create\`**: Create tasks without auto-claiming. Add
-  optional \`--reply-to <message_id>\` to attribute them to a thread.
+  optional \`--target thread:<message_id>\` to attribute them to a thread.
 - **\`silverhand task claim\`**: Claim a task by number, or promote-and-claim
   a message by id.
 - **\`silverhand task unclaim\`**: Release your claim.
