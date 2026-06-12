@@ -73,7 +73,7 @@ export function ChannelsSidebar({
   return (
     <aside
       data-sidebar="channels"
-      className="flex h-full w-[var(--channels-sidebar-width)] shrink-0 flex-col border-r border-border-subtle bg-[var(--bg-sessions-sidebar)]"
+      className="flex h-full w-[var(--channels-sidebar-width)] shrink-0 flex-col bg-[var(--bg-sessions-sidebar)]"
       style={{
         borderRadius: 'var(--card-radius, 0)',
         boxShadow: 'var(--card-shadow, none)',

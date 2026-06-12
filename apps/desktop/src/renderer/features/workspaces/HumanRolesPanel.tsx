@@ -30,11 +30,6 @@ const ROLE_LABEL: Record<WorkspaceRole, string> = {
   member: 'Member',
 };
 
-const ROLE_HINT: Record<Exclude<WorkspaceRole, 'owner'>, string> = {
-  admin: 'Manages members and agent permissions',
-  member: 'Participates; cannot change governance',
-};
-
 function viewerRoleLabel(role: WorkspaceRole | null | undefined): string {
   return role ? ROLE_LABEL[role].toLowerCase() : 'non-member';
 }
@@ -226,21 +221,16 @@ function RoleSelect({
               <Select.Item
                 key={role}
                 value={role}
-                className="flex cursor-default items-start gap-2 rounded-[var(--control-radius)] px-2 py-1.5 text-text-primary outline-none data-[highlighted]:bg-bg-hover"
+                className="flex cursor-default items-center gap-2 rounded-[var(--control-radius)] px-2 py-1.5 text-text-primary outline-none data-[highlighted]:bg-bg-hover"
               >
-                <span className="flex w-3.5 shrink-0 justify-center pt-0.5">
+                <span className="flex w-3.5 shrink-0 justify-center">
                   <Select.ItemIndicator>
                     <Check className="size-3" />
                   </Select.ItemIndicator>
                 </span>
-                <span className="flex min-w-0 flex-col">
-                  <Select.ItemText asChild>
-                    <span className="text-xs font-medium">{ROLE_LABEL[role]}</span>
-                  </Select.ItemText>
-                  <span className="text-[11px] leading-tight text-text-muted">
-                    {ROLE_HINT[role]}
-                  </span>
-                </span>
+                <Select.ItemText asChild>
+                  <span className="text-xs font-medium">{ROLE_LABEL[role]}</span>
+                </Select.ItemText>
               </Select.Item>
             ))}
           </Select.Viewport>
