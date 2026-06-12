@@ -126,9 +126,14 @@ function SavedItem({
         className={
           // Row radius routed via `--row-radius` token (#task:912 review
           // round 2). Saved items are list records — slack-dark gets
-          // 6px Slack-style rounding; warm/forza6 keep `0`.
-          'rounded-[var(--row-radius)] border-2 bg-bg-floating px-4 py-3 transition-colors ' +
-          (hover ? 'border-accent' : 'border-border')
+          // 6px Slack-style rounding; warm/forza6 keep `0`. Border width
+          // follows `--control-border-width` (forza6=2px, slack/warm=1px)
+          // so the card adapts per theme instead of a hardcoded 2px; hover
+          // goes to ink (`--border-control-hover`), not accent pink — a row
+          // hover is a utility signal, so it stays off the brand hue (matches
+          // the channel Threads list).
+          'rounded-[var(--row-radius)] border-[length:var(--control-border-width)] bg-bg-floating px-4 py-3 transition-colors ' +
+          (hover ? 'border-[color:var(--border-control-hover)]' : 'border-border')
         }
       >
         <header className="mb-2 flex items-center gap-2 text-xs text-text-muted">
