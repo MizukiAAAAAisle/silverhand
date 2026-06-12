@@ -17,6 +17,7 @@ import type {
   ConversationMembersResponse,
   ConversationMessagesDto,
   MessageDto,
+  ReplyBadgeSummary,
   TaskChangedEvent,
   ThreadFollowerStateDto,
   ThreadFollowMutationDto,
@@ -314,11 +315,22 @@ function applyTaskChangedToCache(
  *  one page's window, so we update the page that already carries the key
  *  or the page holding the root message (the first reply seeds the key).
  *  Roots not in any loaded page are a no-op — the next window fetch
- *  re-derives the authoritative count. */
+ *  re-derives the authoritative count.
+ *
+ *  When `reply` is given (a live non-system reply) and the page already
+ *  carries an enriched `reply_summaries_by_root` entry for the root (P1,
+ *  #task:1073), the summary is patched in the same pass: `last_reply_at`
+ *  advances, `reply_count` bumps, and the replier moves to the front of the
+ *  (≤3) avatar cluster. We only patch EXISTING summary entries — never
+ *  fabricate one — so a backend that hasn't shipped the sidecar keeps a
+ *  consistent count-only badge everywhere. `replier_total` is an optimistic
+ *  estimate (incremented only when the replier isn't already in the shown
+ *  set); it self-heals on the next window refetch. */
 function bumpReplyCountInCache(
   data: MessagesCache | undefined,
   rootId: string,
   delta = 1,
+  reply?: MessageDto,
 ): MessagesCache | undefined {
   if (!data) return data;
   return {
@@ -331,11 +343,47 @@ function bumpReplyCountInCache(
       const hasRoot = page.messages.some(m => m.id === rootId);
       if (!hasKey && !hasRoot) return page;
       const next = Math.max(0, (page.reply_counts_by_root[rootId] ?? 0) + delta);
+      const prevSummary = page.reply_summaries_by_root?.[rootId];
+      const nextSummaries =
+        reply && delta > 0 && prevSummary
+          ? {
+              ...page.reply_summaries_by_root,
+              [rootId]: patchReplySummary(prevSummary, reply),
+            }
+          : page.reply_summaries_by_root;
       return {
         ...page,
         reply_counts_by_root: { ...page.reply_counts_by_root, [rootId]: next },
+        ...(nextSummaries ? { reply_summaries_by_root: nextSummaries } : {}),
       };
     }),
+  };
+}
+
+/** Optimistically fold a live reply into an existing enriched summary (P1).
+ *  Pure; never fabricates a summary (callers gate on presence). */
+function patchReplySummary(
+  summary: ReplyBadgeSummary,
+  reply: MessageDto,
+): ReplyBadgeSummary {
+  const replier =
+    reply.from_kind === 'user'
+      ? { kind: 'human' as const, id: reply.from_user_id ?? '' }
+      : { kind: 'agent' as const, id: reply.from_agent_id ?? '' };
+  const already = summary.repliers.some(
+    r => r.kind === replier.kind && r.id === replier.id,
+  );
+  const repliers = [
+    replier,
+    ...summary.repliers.filter(
+      r => !(r.kind === replier.kind && r.id === replier.id),
+    ),
+  ].slice(0, 3);
+  return {
+    reply_count: summary.reply_count + 1,
+    last_reply_at: Math.max(summary.last_reply_at, reply.created_at),
+    repliers,
+    replier_total: already ? summary.replier_total : summary.replier_total + 1,
   };
 }
 
@@ -499,6 +547,23 @@ export function useChannelMessages(
     return merged;
   }, [query.data]);
 
+  // Per-root enriched reply-badge summaries (P1, #task:1073). Optional
+  // sidecar — merged page-by-page like the counts (later pages win). Absent
+  // until the backend ships `reply_summaries_by_root`; an empty map then
+  // means every badge renders count-only.
+  const replySummariesByRoot = useMemo(() => {
+    const merged: Record<string, ReplyBadgeSummary> = {};
+    for (const page of query.data?.pages ?? []) {
+      if (!page.reply_summaries_by_root) continue;
+      for (const [rootId, summary] of Object.entries(
+        page.reply_summaries_by_root,
+      )) {
+        merged[rootId] = summary;
+      }
+    }
+    return merged;
+  }, [query.data]);
+
   /** Reset the active query to the latest window. We do NOT keep the
    *  previous pages here: an around-message window may not be
    *  contiguous with latest, and stitching disjoint ranges would
@@ -538,7 +603,7 @@ export function useChannelMessages(
           // never appends to the main stream.
           if (msg.from_kind !== 'system') {
             qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
-              bumpReplyCountInCache(prev, msg.thread_root_id!),
+              bumpReplyCountInCache(prev, msg.thread_root_id!, 1, msg),
             );
           }
           return;
@@ -575,6 +640,7 @@ export function useChannelMessages(
     hasNewerLiveGap,
     resetToLatest,
     replyCountsByRoot,
+    replySummariesByRoot,
   };
 }
 

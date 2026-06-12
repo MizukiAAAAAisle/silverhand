@@ -123,6 +123,15 @@ export interface RouteState {
    *  `sideConversationId` at the nav layer (opening one clears the other);
    *  `?side` wins if both somehow coexist. */
   clusterRootId: string | null;
+  /** Channel Threads-list pane flag (`?threads=1`). When set, the right
+   *  pane shows the list of every reply-cluster in the current channel
+   *  (newest activity first) so threaded messages are discoverable without
+   *  scrolling the whole stream (#task:1073, P2). Like the reply cluster it
+   *  is NOT a conversation — it is a channel-scoped index resolved against
+   *  `channelId` — and it is mutually exclusive with `sideConversationId`
+   *  and `clusterRootId` at the nav layer (opening any one clears the
+   *  others). */
+  threadsListOpen: boolean;
   /** Tasks-drawer focus pointer (`?task=<task_number>`). When set, the
    *  drawer opens to "all" filter and scrolls/highlights the row. The
    *  number is workspace-scoped — resolution uses the workspace of the
@@ -180,6 +189,11 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   // Defensive: empty string treated as unset (mirrors `?side`). The value
   // is a main-line message id whose reply cluster the right pane shows.
   const clusterRootId = rawCluster && rawCluster.length > 0 ? rawCluster : null;
+  // Channel Threads-list pane: a simple boolean flag (`?threads=1`). The
+  // list is channel-scoped (resolved against `channelId`), so no id is
+  // carried — the flag alone is enough to switch the right pane to the
+  // index view.
+  const threadsListOpen = searchParams.get('threads') === '1';
   const rawTask = searchParams.get('task');
   // Defensive: positive-integer-string only — no leading zeros, no
   // decimals, no trailing garbage. `parseInt` would silently accept
@@ -215,6 +229,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
     threadId: threadId ?? null,
     sideConversationId,
     clusterRootId,
+    threadsListOpen,
     focusedTaskNumber,
     fullscreen,
     threadFullscreen,
@@ -354,6 +369,8 @@ export function buildSideOpenUrl(
   // side overlay closes any open reply cluster. No-op when `?cluster` is
   // absent, so existing side-pane URLs are unaffected.
   params.delete('cluster');
+  // Same exclusion for the channel Threads-list pane (#task:1073).
+  params.delete('threads');
   const qs = params.toString();
   return qs ? `${pathname}?${qs}` : pathname;
 }
@@ -384,6 +401,7 @@ export function withClusterQuery(
   } else {
     params.set('cluster', rootMessageId);
     params.delete('side');
+    params.delete('threads');
     params.delete('fullscreen');
   }
   const next = params.toString();
@@ -402,6 +420,38 @@ export function buildClusterOpenUrl(
   rootMessageId: string,
 ): string {
   return withClusterQuery(pathname, search, rootMessageId);
+}
+
+/**
+ * Build a URL with `?threads` written or cleared. Pure helper mirroring
+ * `withClusterQuery` for the channel Threads-list pane (#task:1073).
+ *
+ * Rules:
+ *  - `open === false` → strip `?threads` AND `?fullscreen` (closing the
+ *    list removes the secondary pane; a `/t/<tid>` left on the path falls
+ *    back to a non-fullscreen split).
+ *  - `open === true` → set `?threads=1`, strip `?side`, `?cluster` and
+ *    `?fullscreen` (the list is a fresh secondary pane, mutually exclusive
+ *    with the side overlay and the reply cluster).
+ *  - Other query params (`task`, …) are preserved verbatim.
+ */
+export function withThreadsQuery(
+  pathname: string,
+  search: string,
+  open: boolean,
+): string {
+  const params = new URLSearchParams(search);
+  if (!open) {
+    params.delete('threads');
+    params.delete('fullscreen');
+  } else {
+    params.set('threads', '1');
+    params.delete('side');
+    params.delete('cluster');
+    params.delete('fullscreen');
+  }
+  const next = params.toString();
+  return next ? `${pathname}?${next}` : pathname;
 }
 
 /**
@@ -450,6 +500,14 @@ export function useNav(): {
   /** Close the reply-cluster pane. Strips `?cluster` (and `?fullscreen`);
    *  the base path's thread, if any, becomes secondary again. */
   closeCluster: () => void;
+  /** Open the channel Threads-list pane in the right pane. Writes
+   *  `?threads=1` (clearing `?side`/`?cluster`/`?fullscreen`) via `replace`
+   *  so it doesn't pile history entries (#task:1073). */
+  openThreadsList: () => void;
+  /** Close the channel Threads-list pane. Strips `?threads` (and
+   *  `?fullscreen`); the base path's thread, if any, becomes secondary
+   *  again. */
+  closeThreadsList: () => void;
   /** Focus a task in the workspace tasks drawer by writing `?task=<n>`.
    *  The drawer auto-opens, switches to "all" filter, scrolls the row
    *  into view, and applies a brief highlight. `replace` so re-clicking
@@ -495,6 +553,14 @@ export function useNav(): {
   );
   const closeCluster = useCallback(() => {
     const next = withClusterQuery(location.pathname, location.search, null);
+    navigate(next, { replace: true });
+  }, [navigate, location.pathname, location.search]);
+  const openThreadsList = useCallback(() => {
+    const next = withThreadsQuery(location.pathname, location.search, true);
+    navigate(next, { replace: true });
+  }, [navigate, location.pathname, location.search]);
+  const closeThreadsList = useCallback(() => {
+    const next = withThreadsQuery(location.pathname, location.search, false);
     navigate(next, { replace: true });
   }, [navigate, location.pathname, location.search]);
   const openTask = useCallback(
@@ -562,6 +628,8 @@ export function useNav(): {
     closeSide,
     openCluster,
     closeCluster,
+    openThreadsList,
+    closeThreadsList,
     openTask,
     closeTask,
   }), [
@@ -582,6 +650,8 @@ export function useNav(): {
     closeSide,
     openCluster,
     closeCluster,
+    openThreadsList,
+    closeThreadsList,
     openTask,
     closeTask,
   ]);

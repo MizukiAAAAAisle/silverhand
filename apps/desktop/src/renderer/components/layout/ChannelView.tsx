@@ -16,6 +16,7 @@ import {
   ArrowDown,
   CornerDownRight,
   Maximize2,
+  CornerUpLeft,
   Minimize2,
   MoreHorizontal,
   Power,
@@ -28,6 +29,7 @@ import type {
   HumanMemberDto,
   MemberDto,
   MessageDto,
+  ReplyBadgeSummary,
 } from '@silverhand/shared';
 import { Composer } from '@/components/chat/Composer';
 import { ChannelMessageItem } from '@/components/chat/ChannelMessageItem';
@@ -114,6 +116,13 @@ interface ChannelViewProps {
    *  pane. Receives the root message id. When undefined the Thread action
    *  is hidden (secondary panes can't open nested threads). */
   onOpenThread?: (rootMessageId: string) => void;
+  /** Open the channel Threads-list pane (#task:1073). When set, the header
+   *  renders a Threads toggle. Only the primary channel pane passes this —
+   *  thread/dm/side panes have no channel-scoped thread index. */
+  onOpenThreadsList?: () => void;
+  /** Whether the Threads-list pane is currently open (drives the toggle's
+   *  active styling + aria-pressed). */
+  threadsListActive?: boolean;
   /** When set, renders an X button in the header that calls this back.
    *  Used by the right-side secondary pane to close itself. */
   onCloseChild?: () => void;
@@ -204,6 +213,8 @@ function ActiveChannelView({
   jumpPrimePending = false,
   onJumped,
   onOpenThread,
+  onOpenThreadsList,
+  threadsListActive = false,
   onCloseChild,
   closeLabel = '关闭 Thread',
   onJumpToOriginal,
@@ -229,6 +240,7 @@ function ActiveChannelView({
     hasNewerLiveGap,
     resetToLatest,
     replyCountsByRoot,
+    replySummariesByRoot,
   } = useChannelMessages(conversation.id, routeKind);
 
   // Advance the message read cursor in real-time as new messages arrive.
@@ -468,6 +480,23 @@ function ActiveChannelView({
         ) : null}
 
         <div data-channel-actions className="ml-auto flex shrink-0 items-center gap-1">
+          {onOpenThreadsList ? (
+            <button
+              type="button"
+              onClick={onOpenThreadsList}
+              aria-label="Threads"
+              aria-pressed={threadsListActive}
+              title="Threads"
+              className={
+                'flex size-8 shrink-0 items-center justify-center rounded-[6px] ' +
+                (threadsListActive
+                  ? 'bg-bg-hover text-text-primary'
+                  : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
+              }
+            >
+              <CornerUpLeft className="size-4" />
+            </button>
+          ) : null}
           {canManageAllChannelAgents ? (
             <>
               <button
@@ -593,6 +622,7 @@ function ActiveChannelView({
             onResetToLatest={resetToLatest}
             onOpenThread={onOpenThread}
             replyCountsByRoot={replyCountsByRoot}
+            replySummariesByRoot={replySummariesByRoot}
             routeKind={routeKind}
             conversationRefsById={conversationRefsById}
             onOpenConversationRef={onOpenConversationRef}
@@ -900,6 +930,7 @@ function MessageList({
   onResetToLatest,
   onOpenThread,
   replyCountsByRoot,
+  replySummariesByRoot,
   routeKind,
   conversationRefsById,
   onOpenConversationRef,
@@ -943,6 +974,10 @@ function MessageList({
    *  (`reply_counts_by_root`). Drives the inline "{count} Reply" badge.
    *  A root with 0 (or absent) shows the hover "Thread" action instead. */
   replyCountsByRoot?: Record<string, number>;
+  /** Per-root enriched reply-badge summaries (P1, #task:1073). Optional —
+   *  when a root has an entry the badge upgrades to avatars + last-reply
+   *  time; absent → count-only fallback. */
+  replySummariesByRoot?: Record<string, ReplyBadgeSummary>;
   routeKind: 'channel' | 'thread';
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
@@ -1251,54 +1286,27 @@ function MessageList({
     onJumped,
   ]);
 
-  // Apply the one-shot flash class once the target lands in the DOM.
-  // Virtuoso renders rows asynchronously after `scrollToIndex`, so
-  // we rAF-poll for the target. On success we flash, then call
-  // `onJumped` — the single point where jumpTarget cleanup happens.
-  // On giveup (target never materialised within ~2s @ 144Hz) we
-  // clear local flash state but deliberately do NOT call `onJumped`:
-  // that would clear the parent's `jumpTarget`, hiding the user's
-  // intent without ever showing the row.
+  // One-shot flash lifecycle. The flash *visual* is declarative — the row
+  // renders `.msg-jump-flash` from its `jumpFlash` prop (see `renderItem`),
+  // so whichever DOM node Virtuoso mounts for this id picks the animation
+  // up. This is deliberately NOT an imperative `getElementById().classList`
+  // toggle: a jump remounts Virtuoso (`shouldRemountForJump` fires even when
+  // the target is already on-screen) and `markRead`'s refetch can reset the
+  // window — both replace the target's DOM node, and an imperatively-added
+  // class is lost on the new node while the effect (keyed only on
+  // `flashedMessageId`) never re-runs. That was the "already-visible target
+  // doesn't highlight" bug (#task:1076). Here we only hold the flag for the
+  // 3s animation, then clear it and signal `onJumped` (the single jumpTarget
+  // cleanup point). `flashedMessageId` is only ever set once the target is
+  // present in `items` (completion gate above), so there is no "never
+  // materialised" branch to guard.
   useEffect(() => {
     if (!flashedMessageId) return;
-    let cancelled = false;
-    let attempts = 0;
-    let cleanup: (() => void) | null = null;
-
-    const tryFlash = (): void => {
-      if (cancelled) return;
-      const target = document.getElementById(`msg-${flashedMessageId}`);
-      if (target) {
-        target.classList.add('msg-jump-flash');
-        const timer = setTimeout(() => {
-          target.classList.remove('msg-jump-flash');
-          if (!cancelled) {
-            setFlashedMessageId(null);
-            onJumped?.();
-          }
-        }, 3000);
-        cleanup = () => {
-          clearTimeout(timer);
-          target.classList.remove('msg-jump-flash');
-        };
-        return;
-      }
-      // Not rendered yet — try again next frame. Cap at 300 frames
-      // (~2s @ 144Hz, ~5s @ 60Hz) which is plenty of time for
-      // Virtuoso to materialise the target row.
-      if (attempts++ < 300) {
-        requestAnimationFrame(tryFlash);
-      } else if (!cancelled) {
-        setFlashedMessageId(null);
-        // Deliberately do NOT call onJumped on giveup — see effect
-        // header.
-      }
-    };
-    tryFlash();
-    return () => {
-      cancelled = true;
-      cleanup?.();
-    };
+    const timer = setTimeout(() => {
+      setFlashedMessageId(null);
+      onJumped?.();
+    }, 3000);
+    return () => clearTimeout(timer);
   }, [flashedMessageId, onJumped]);
 
   const renderItem = useCallback(
@@ -1348,6 +1356,7 @@ function MessageList({
               ? replyCountsByRoot?.[m.id]
               : undefined
           }
+          threadReplySummary={replySummariesByRoot?.[m.id]}
           viewerAvatarObjectUrl={viewerAvatarObjectUrl}
           viewer={viewer}
           humanAvatarUrls={humanAvatarUrls}
@@ -1355,6 +1364,7 @@ function MessageList({
           highlighted={
             highlightedMessageId != null && m.id === highlightedMessageId
           }
+          jumpFlash={flashedMessageId != null && m.id === flashedMessageId}
           userResolver={userResolver}
         />
       );
@@ -1373,10 +1383,12 @@ function MessageList({
       onOpenThread,
       handleOpenThread,
       replyCountsByRoot,
+      replySummariesByRoot,
       viewerAvatarObjectUrl,
       viewer,
       agentAvatarUrls,
       highlightedMessageId,
+      flashedMessageId,
       userResolver,
     ],
   );

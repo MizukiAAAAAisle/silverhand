@@ -13,6 +13,7 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import { ChannelsSidebar } from '@/components/layout/ChannelsSidebar';
 import { ChannelView } from '@/components/layout/ChannelView';
 import { ThreadPanel } from '@/components/layout/ThreadPanel';
+import { ChannelThreadsPanel } from '@/components/layout/ChannelThreadsPanel';
 import { SavedListView } from '@/components/layout/SavedListView';
 import { SearchPanel } from '@/components/layout/SearchPanel';
 import { ArchivedChannelsPanel } from '@/components/layout/ArchivedChannelsPanel';
@@ -232,6 +233,7 @@ function RegisteredAppShell(): JSX.Element {
     threadId: openThreadId,
     sideConversationId,
     clusterRootId,
+    threadsListOpen,
     focusedTaskNumber,
     fullscreen: routeFullscreen,
     threadFullscreen,
@@ -1202,6 +1204,12 @@ function RegisteredAppShell(): JSX.Element {
       jumpPrimePending={parentJumpPrimePending}
       onJumped={handleJumped}
       onOpenThread={nav.openCluster}
+      // Threads-list pane toggle (#task:1073). Only the primary channel pane
+      // gets it — a thread/dm primary has no channel-scoped thread index.
+      onOpenThreadsList={
+        parentDescriptor?.kind === 'channel' ? nav.openThreadsList : undefined
+      }
+      threadsListActive={threadsListOpen}
       highlightedMessageId={highlightedMessageIdForParent}
       onArchiveChannel={handleArchiveChannelMutation}
       archivePending={archiveChannel.isPending}
@@ -1326,6 +1334,23 @@ function RegisteredAppShell(): JSX.Element {
         onOpenTask={handleOpenTask}
         jumpMessageId={clusterJumpMessageId}
         onJumped={handleJumped}
+      />
+    );
+  } else if (threadsListOpen && selectedChannelId && selectedWorkspaceId) {
+    // Channel Threads-list pane (`?threads=1`, #task:1073). Like the reply
+    // cluster it is NOT a conversation — it is a channel-scoped index — so it
+    // renders here rather than through `secondaryDescriptor`/`ChannelView`,
+    // and only when no side/cluster secondary is present (those win, matching
+    // the nav-layer mutual exclusion in `withThreadsQuery`). Opening a row
+    // calls `nav.openCluster`, which clears `?threads` and swaps in the
+    // ThreadPanel for that cluster.
+    secondaryView = (
+      <ChannelThreadsPanel
+        channelId={selectedChannelId}
+        workspaceId={selectedWorkspaceId}
+        parentTitle={selectedChannel?.title ?? null}
+        onClose={nav.closeThreadsList}
+        onOpenThread={nav.openCluster}
       />
     );
   }

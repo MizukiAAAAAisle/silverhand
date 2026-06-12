@@ -1,13 +1,16 @@
 import { type FocusEvent, useCallback, useEffect, useState } from 'react';
 import dayjs from 'dayjs';
+import relativeTime from 'dayjs/plugin/relativeTime';
 import { Bookmark, Check, ClipboardCheck, CornerUpLeft, FileText, User } from 'lucide-react';
 import type {
   AgentDto,
   AttachmentSnapshot,
   MessageDto,
+  ReplyBadgeSummary,
   UserDto,
 } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { UserAvatar } from '@/components/UserAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
 import { useNav } from '@/router';
@@ -27,6 +30,11 @@ import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 import { MessageContextMenu } from './MessageContextMenu';
 import { useMessageLayoutMode } from './useMessageLayoutMode';
+
+// Idempotent — the reply badge's "{time} ago" label uses dayjs.fromNow().
+// Other modules (useRelativeTime) extend the same plugin; re-extending is a
+// no-op, so doing it here keeps MessageItem self-contained.
+dayjs.extend(relativeTime);
 
 export interface MessageItemProps {
   message: MessageDto;
@@ -63,6 +71,11 @@ export interface MessageItemProps {
    *  creating a new one — handler short-circuits the POST). Undefined
    *  = no thread, button shows "Thread". */
   threadReplyCount?: number;
+  /** Enriched reply-badge data for this root (P1, #task:1073). When present
+   *  the inline badge upgrades from "{N} Replies" to a Slack-style strip:
+   *  stacked replier avatars + count + last-reply time. Absent → count-only
+   *  fallback (driven by `threadReplyCount`). */
+  threadReplySummary?: ReplyBadgeSummary;
   onSave?: (msg: MessageDto) => void;
   saved?: boolean;
   /** Object URL pointing at the current viewer's avatar blob (or null
@@ -89,6 +102,13 @@ export interface MessageItemProps {
    *  the thread pane is open. Doesn't expose the action bar, since the
    *  highlight is informational, not interactive. */
   highlighted?: boolean;
+  /** One-shot "jump flash": render the `.msg-jump-flash` animation class
+   *  on this row. Declarative (not an imperative `classList.add`) so the
+   *  flash survives a Virtuoso remount / refetch-driven window reset — the
+   *  failure mode that swallowed the flash when the jump target was already
+   *  on-screen (#task:1076). Whichever DOM node renders this id picks the
+   *  class up from props and plays the animation from the start. */
+  jumpFlash?: boolean;
   /** When the parent's MessageList is in multi-select mode this row
    *  renders a checkbox column on the leading side (mirrored when
    *  `alignRight`). Idle mode: no checkbox, no extra column. */
@@ -158,9 +178,11 @@ export function MessageItem({
   onOpenConversationRef,
   onStartThread,
   threadReplyCount,
+  threadReplySummary,
   onSave,
   saved = false,
   highlighted = false,
+  jumpFlash = false,
   viewerAvatarObjectUrl = null,
   viewer,
   humanAvatarUrls,
@@ -259,6 +281,59 @@ export function MessageItem({
   // in the export queue.
   const framed = hover || highlighted || (selectionMode && selected);
 
+  // "{N} Reply/Replies" — pluralized to match the ThreadPanel header
+  // (which says "N replies"); the badge previously hard-coded "Reply".
+  const replyBadgeLabel =
+    threadReplyCount === undefined
+      ? ''
+      : `${threadReplyCount} ${threadReplyCount === 1 ? 'Reply' : 'Replies'}`;
+
+  // P1 (#task:1073): when the enriched summary is present, the badge upgrades
+  // to avatars + count + last-reply time. `repliers.length > 0` guards the
+  // avatar strip; otherwise we keep the count-only label.
+  const enrichedReply =
+    threadReplySummary && threadReplySummary.repliers.length > 0
+      ? threadReplySummary
+      : null;
+  const replyRelativeTime = enrichedReply
+    ? dayjs(enrichedReply.last_reply_at).fromNow()
+    : '';
+  const replyBadgeTitle = enrichedReply
+    ? `${replyBadgeLabel} · last reply ${replyRelativeTime}`
+    : replyBadgeLabel;
+  const renderReplierAvatar = (
+    replier: { kind: 'agent' | 'human'; id: string },
+    size: number,
+  ): JSX.Element => {
+    if (replier.kind === 'agent') {
+      const a = agentsById.get(replier.id);
+      if (a) {
+        return (
+          <AgentAvatar
+            runtime={a.runtime}
+            size={size}
+            avatarObjectUrl={agentAvatarUrls?.get(a.id) ?? null}
+            alt={a.display_name || a.name}
+            title={a.display_name || a.name}
+          />
+        );
+      }
+    }
+    const u = replier.kind === 'human' ? humansById?.get(replier.id) : undefined;
+    return (
+      <UserAvatar
+        size={size}
+        avatarObjectUrl={
+          replier.kind === 'human'
+            ? humanAvatarUrls?.get(replier.id) ?? null
+            : null
+        }
+        alt={u?.name}
+        title={u?.name}
+      />
+    );
+  };
+
   const row = (
     <div
       id={`msg-${message.id}`}
@@ -289,6 +364,7 @@ export function MessageItem({
         // box is invisible at 0 radius anyway, so consistency here is
         // about *framed* presentations.
         'relative flex items-start gap-3 rounded-[var(--row-radius)] border-2 px-2 py-1.5 transition-colors ' +
+        (jumpFlash ? 'msg-jump-flash ' : '') +
         (selectionMode ? 'cursor-pointer ' : '') +
         (alignRight ? 'flex-row-reverse' : 'flex-row') +
         ' ' +
@@ -394,7 +470,18 @@ export function MessageItem({
             `threadReplyCount !== undefined`. It carries real
             information ("this message has N replies, click to open"),
             so it earns its space below the bubble and stays visible
-            without hover. */}
+            without hover. The whole pill is the button (no nested
+            ActionButton) so there is no un-clickable padding gap; it
+            rests neutral and lifts to ink on hover — the reply count is
+            a navigation affordance, not a brand moment, so it stays off
+            the saturated accent.
+
+            P1 (#task:1073): with an enriched summary the badge shows the
+            recent repliers' avatars + count + last-reply time (Slack-style)
+            so a threaded message is a strong, scannable signal rather than a
+            quiet pill. Avatars carry the "who", time carries the "fresh?";
+            the count stays ink, not accent — louder via INFORMATION, not by
+            spending the brand hue. */}
         {threadReplyCount !== undefined && onStartThread ? (
           <div
             className={
@@ -402,19 +489,42 @@ export function MessageItem({
               (alignRight ? 'justify-end' : 'justify-start')
             }
           >
-            <span
+            <button
+              type="button"
               data-panel-pill="thread"
-              className="inline-flex items-center border border-border-subtle px-2 py-0.5 transition-colors hover:border-accent hover:bg-bg-hover"
+              onClick={() => onStartThread(message)}
+              title={replyBadgeTitle}
+              aria-label={replyBadgeTitle}
+              className="inline-flex items-center gap-1.5 border border-border-subtle px-2 py-0.5 text-text-muted transition-colors hover:border-[color:var(--border-control-hover)] hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
             >
-              <ActionButton
-                icon={<CornerUpLeft className="size-3.5" />}
-                label={`${threadReplyCount} Reply`}
-                active
-                onClick={() => onStartThread(message)}
-                alwaysVisible
-                hovered={hover}
-              />
-            </span>
+              {enrichedReply ? (
+                <>
+                  <span className="flex items-center gap-[3px]">
+                    {enrichedReply.repliers.map(r => (
+                      <span key={`${r.kind}:${r.id}`} className="shrink-0">
+                        {renderReplierAvatar(r, 18)}
+                      </span>
+                    ))}
+                    {enrichedReply.replier_total >
+                    enrichedReply.repliers.length ? (
+                      <span className="flex size-[18px] shrink-0 items-center justify-center rounded-none bg-bg-muted text-[9px] font-medium text-text-muted">
+                        +
+                        {enrichedReply.replier_total -
+                          enrichedReply.repliers.length}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="font-medium">{replyBadgeLabel}</span>
+                  <span className="text-text-muted">·</span>
+                  <span className="text-text-muted">{replyRelativeTime}</span>
+                </>
+              ) : (
+                <>
+                  <CornerUpLeft className="size-3.5 shrink-0" />
+                  <span>{replyBadgeLabel}</span>
+                </>
+              )}
+            </button>
           </div>
         ) : null}
       </div>

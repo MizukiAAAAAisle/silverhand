@@ -8,6 +8,7 @@ import {
   withClusterQuery,
   withSideQuery,
   withTaskQuery,
+  withThreadsQuery,
 } from './router';
 
 // Tests focus on the URL → state matrix introduced by PR-1: how the new
@@ -446,6 +447,75 @@ describe('buildClusterOpenUrl — openCluster URL writer', () => {
     const out = buildClusterOpenUrl('/chat/w/w-1/c/c-a', '?side=c-other', 'm-1');
     expect(out).toContain('cluster=m-1');
     expect(out).not.toContain('side=c-other');
+  });
+});
+
+describe('parseRouteState — ?threads=1 channel Threads-list pane (#task:1073)', () => {
+  it('parses ?threads=1 as threadsListOpen', () => {
+    const r = parseRouteState('/chat/w/w-1/c/c-a', '?threads=1');
+    expect(r).toMatchObject({
+      channelId: 'c-a',
+      threadsListOpen: true,
+      sideConversationId: null,
+      clusterRootId: null,
+    });
+  });
+
+  it('defaults threadsListOpen to false with no query', () => {
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '').threadsListOpen).toBe(false);
+  });
+
+  it('treats any value other than "1" as closed', () => {
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?threads=0').threadsListOpen).toBe(
+      false,
+    );
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?threads=').threadsListOpen).toBe(
+      false,
+    );
+  });
+});
+
+describe('withThreadsQuery — URL writer for openThreadsList / closeThreadsList', () => {
+  it('writes ?threads=1, clearing ?side, ?cluster and ?fullscreen', () => {
+    const out = withThreadsQuery(
+      '/chat/w/w-1/c/c-a',
+      '?side=c-other&cluster=m-1&fullscreen=1',
+      true,
+    );
+    expect(out).toContain('threads=1');
+    expect(out).not.toContain('side=c-other');
+    expect(out).not.toContain('cluster=m-1');
+    expect(out).not.toContain('fullscreen=1');
+  });
+
+  it('clears ?threads (and ?fullscreen) when closing', () => {
+    const closed = withThreadsQuery(
+      '/chat/w/w-1/c/c-a',
+      '?threads=1&fullscreen=1',
+      false,
+    );
+    expect(closed).not.toContain('threads');
+    expect(closed).not.toContain('fullscreen');
+  });
+
+  it('preserves unrelated params (e.g. ?task) when opening', () => {
+    const out = withThreadsQuery('/chat/w/w-1/c/c-a', '?task=7', true);
+    expect(out).toContain('threads=1');
+    expect(out).toContain('task=7');
+  });
+});
+
+describe('mutual exclusion — opening side/cluster clears ?threads', () => {
+  it('buildSideOpenUrl drops an open ?threads', () => {
+    const out = buildSideOpenUrl('/chat/w/w-1/c/c-a', '?threads=1', 'c-other');
+    expect(out).toContain('side=c-other');
+    expect(out).not.toContain('threads');
+  });
+
+  it('withClusterQuery (open) drops an open ?threads', () => {
+    const out = withClusterQuery('/chat/w/w-1/c/c-a', '?threads=1', 'm-1');
+    expect(out).toContain('cluster=m-1');
+    expect(out).not.toContain('threads');
   });
 });
 
