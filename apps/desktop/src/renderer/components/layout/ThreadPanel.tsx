@@ -242,6 +242,31 @@ export function ThreadPanel({
     [imagePreviewOpen, selection],
   );
 
+  // Drop any active selection when the cluster WINDOW is replaced (not just
+  // grown by prepend/append). A disjoint replacement — reset-to-latest, an
+  // off-tail composer send rebuilding to a tail page, a reconnect
+  // invalidate, or an around-reply jump — leaves `selection.selected`
+  // holding rows that are no longer in view. ChannelView gets this for free
+  // from `useMessageSelection`'s `windowResetVersion`; the cluster needs the
+  // same signal (Cindy `0f9d2ba` re-review blocker). Detect replacement by
+  // the window's top-row identity vanishing from the new window. We
+  // deliberately do NOT update the ref across a transient empty window
+  // (`resetToLatest` clears the cache to [] before the tail refetch lands),
+  // so the pre-reset top is still remembered when the fresh window arrives.
+  const prevTopIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const topId = messages[0]?.id ?? null;
+    if (topId == null) return; // keep prevTopIdRef across transient empties
+    const prevTop = prevTopIdRef.current;
+    prevTopIdRef.current = topId;
+    if (prevTop == null || prevTop === topId) return;
+    // Prepend/append keep the old top somewhere in the window; only a
+    // disjoint replacement makes it disappear entirely.
+    if (!messages.some(m => m.id === prevTop)) {
+      setSelectionResetKey(v => v + 1);
+    }
+  }, [messages]);
+
   // Pre-bind the App handlers to this thread's workspace, mirroring
   // `ChannelView` exactly so the renderer receives the same shapes.
   const handleOpenChannelRef = useCallback(
