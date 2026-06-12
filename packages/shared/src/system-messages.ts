@@ -50,6 +50,7 @@ export const SYSTEM_SUBTYPES = [
   'schedule_fire',
   'session_cleared',
   'conversation_member_added',
+  'conversation_member_removed',
   'rename',
   'task_create',
   'task_claim',
@@ -191,8 +192,10 @@ export const TaskSystemActorSchema = z.discriminatedUnion('kind', [
 ]);
 export type TaskSystemActor = z.infer<typeof TaskSystemActorSchema>;
 
-export const ConversationMemberAddedMetadataSchema = z.object({
-  subtype: z.literal('conversation_member_added'),
+/** Actor + member snapshot fields shared by the member added / removed
+ *  system messages — both events carry the identical participant pair, so
+ *  the only thing that differs is the `subtype` discriminator. */
+const conversationMemberChangeFields = {
   actor_kind: z.enum(['user', 'agent', 'system']),
   actor_id: z.string(),
   actor_name: z.string(),
@@ -201,9 +204,33 @@ export const ConversationMemberAddedMetadataSchema = z.object({
   member_id: z.string(),
   member_name: z.string(),
   member_display_name: z.string().nullable(),
+} as const;
+
+export const ConversationMemberAddedMetadataSchema = z.object({
+  subtype: z.literal('conversation_member_added'),
+  ...conversationMemberChangeFields,
 });
 export type ConversationMemberAddedMetadata = z.infer<
   typeof ConversationMemberAddedMetadataSchema
+>;
+
+export const ConversationMemberRemovedMetadataSchema = z.object({
+  subtype: z.literal('conversation_member_removed'),
+  ...conversationMemberChangeFields,
+});
+export type ConversationMemberRemovedMetadata = z.infer<
+  typeof ConversationMemberRemovedMetadataSchema
+>;
+
+/** Union of the two member-change events. The frontend renders both with
+ *  one row component (icon + verb + preposition keyed off `subtype`), so a
+ *  single reader that keeps the discriminator is what it consumes. */
+export const ConversationMemberChangeMetadataSchema = z.discriminatedUnion(
+  'subtype',
+  [ConversationMemberAddedMetadataSchema, ConversationMemberRemovedMetadataSchema],
+);
+export type ConversationMemberChangeMetadata = z.infer<
+  typeof ConversationMemberChangeMetadataSchema
 >;
 
 export function readConversationMemberAddedMetadata(
@@ -211,6 +238,14 @@ export function readConversationMemberAddedMetadata(
 ): ConversationMemberAddedMetadata | null {
   if (!metadata) return null;
   const parsed = ConversationMemberAddedMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data : null;
+}
+
+export function readConversationMemberChangeMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): ConversationMemberChangeMetadata | null {
+  if (!metadata) return null;
+  const parsed = ConversationMemberChangeMetadataSchema.safeParse(metadata);
   return parsed.success ? parsed.data : null;
 }
 

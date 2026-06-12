@@ -153,9 +153,8 @@ describe('GET /api/conversations/:id/members', () => {
       channelId,
       title: 'perf-dive',
     });
-    // Snapshot the parent's agents into the thread (the production path
-    // goes via ThreadService; here the unit test uses ConversationRepo
-    // directly, then opts into the same per-thread membership rows).
+    // Snapshot the parent's agents into the legacy thread fixture; direct
+    // repo insertion does not imply per-thread membership rows.
     for (const ca of conversations.listAgents(channelId)) {
       conversations.addAgent(thread.id, ca.agent_id);
     }
@@ -751,7 +750,15 @@ describe('DELETE /api/conversations/:id/members/agents/:agentId', () => {
     expect((memberRemovedMessage?.payload as any)?.message).toMatchObject({
       from_kind: 'system',
       content: '@local-test removed @bob from this conversation.',
-      metadata: null,
+      metadata: {
+        subtype: 'conversation_member_removed',
+        actor_kind: 'user',
+        actor_id: 'local',
+        actor_name: 'local-test',
+        member_kind: 'agent',
+        member_id: bob.agentId,
+        member_name: 'bob',
+      },
     });
     expect(conversationEvents).toContainEqual({
       kind: 'conversation_members_changed',

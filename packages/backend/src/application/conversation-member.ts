@@ -302,7 +302,8 @@ export async function removeConversationMember(
     return deps.messages.insertForConversation({
       conversationId: conversation.id,
       fromKind: 'system',
-      content: `${conversationMemberAddedLabel(actor)} removed ${conversationMemberAddedLabel(member)} from this conversation.`,
+      content: conversationMemberRemovedContent({ actor, member }),
+      metadata: conversationMemberRemovedMetadata({ actor, member }),
     });
   })();
 
@@ -520,6 +521,30 @@ export function conversationMemberAddedMetadata(input: {
 }): Record<string, unknown> {
   return {
     subtype: systemSubtype('conversation_member_added'),
+    actor_kind: input.actor.kind,
+    actor_id: input.actor.id,
+    actor_name: input.actor.name,
+    actor_display_name: input.actor.displayName,
+    member_kind: input.member.kind,
+    member_id: input.member.id,
+    member_name: input.member.name,
+    member_display_name: input.member.displayName,
+  };
+}
+
+export function conversationMemberRemovedContent(input: {
+  actor: ConversationMemberAddedActorSnapshot;
+  member: ConversationMemberAddedMemberSnapshot;
+}): string {
+  return `${conversationMemberAddedLabel(input.actor)} removed ${conversationMemberAddedLabel(input.member)} from this conversation.`;
+}
+
+export function conversationMemberRemovedMetadata(input: {
+  actor: ConversationMemberAddedActorSnapshot;
+  member: ConversationMemberAddedMemberSnapshot;
+}): Record<string, unknown> {
+  return {
+    subtype: systemSubtype('conversation_member_removed'),
     actor_kind: input.actor.kind,
     actor_id: input.actor.id,
     actor_name: input.actor.name,
