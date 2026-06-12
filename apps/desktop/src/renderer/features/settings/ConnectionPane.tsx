@@ -177,12 +177,24 @@ export function ConnectionPane(): JSX.Element {
   }, [currentUrl]);
 
   const [banner, setBanner] = useState<SaveServerUrlBanner | null>(null);
+  const [reconnectBannerStartedAt, setReconnectBannerStartedAt] = useState<
+    number | null
+  >(null);
+  const updateDraft = (value: string): void => {
+    setDraft(value);
+    setBanner(null);
+    setReconnectBannerStartedAt(null);
+  };
 
   const save = useMutation({
     mutationFn: async (serverUrl: string): Promise<DesktopSaveServerUrlResult> =>
       window.agentHub.saveServerUrl({ serverUrl }),
     onSuccess: result => {
-      setBanner(describeSaveServerUrlOutcome(result));
+      const nextBanner = describeSaveServerUrlOutcome(result);
+      setBanner(nextBanner);
+      setReconnectBannerStartedAt(
+        nextBanner.dismissOnReady ? Date.now() : null,
+      );
       if (result.ok) {
         void qc.invalidateQueries({ queryKey: backendInfoKey });
         void qc.invalidateQueries({ queryKey: hostsKey });
@@ -203,6 +215,7 @@ export function ConnectionPane(): JSX.Element {
       }
     },
     onError: err => {
+      setReconnectBannerStartedAt(null);
       setBanner({
         tone: 'error',
         title: 'Could not save.',
@@ -228,6 +241,7 @@ export function ConnectionPane(): JSX.Element {
     e.preventDefault();
     if (saveDisabled) return;
     setBanner(null);
+    setReconnectBannerStartedAt(null);
     save.mutate(draft.trim());
   };
 
@@ -265,6 +279,27 @@ export function ConnectionPane(): JSX.Element {
       }),
     [localHostStatus, localHostAttachedAt, remoteAttached],
   );
+  useEffect(() => {
+    const readyObservedAt = remoteAttached
+      ? localHostStatusQuery.dataUpdatedAt
+      : localHostAttachedAt ?? 0;
+    if (
+      banner?.dismissOnReady &&
+      reconnectBannerStartedAt !== null &&
+      localConnectionView.tone === 'success' &&
+      readyObservedAt >= reconnectBannerStartedAt
+    ) {
+      setBanner(null);
+      setReconnectBannerStartedAt(null);
+    }
+  }, [
+    banner,
+    localConnectionView.tone,
+    localHostAttachedAt,
+    localHostStatusQuery.dataUpdatedAt,
+    reconnectBannerStartedAt,
+    remoteAttached,
+  ]);
 
   const hosts: ReadonlyArray<HostDto> = useMemo(
     () => hostsQuery.data?.hosts ?? [],
@@ -405,7 +440,7 @@ export function ConnectionPane(): JSX.Element {
               inputMode="url"
               placeholder="http://127.0.0.1:8765"
               value={draft}
-              onChange={e => setDraft(e.target.value)}
+              onChange={e => updateDraft(e.target.value)}
               disabled={save.isPending}
               className="max-w-md font-mono text-xs"
             />

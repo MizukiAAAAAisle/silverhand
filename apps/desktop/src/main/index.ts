@@ -2789,6 +2789,34 @@ async function runProfilePhase2(
   return performProfilePhase2({ profile }, deps);
 }
 
+function applyProfileToActiveRemoteBackend(input: {
+  profile: ServerConnectionProfile;
+  testKind: (ProbeServerInfoResult & { ok: true })['kind'];
+}): void {
+  if (!backend || backend.kind !== 'remote') return;
+  if (input.testKind === 'loopback_ok') return;
+  const insecure = input.testKind === 'insecure_dev_remote';
+  if (backend.url === input.profile.server_url && backend.insecure === insecure) {
+    return;
+  }
+
+  const previousUrl = backend.url;
+  backend = buildRemoteBackendHandle({
+    serverUrl: input.profile.server_url,
+    insecure,
+  });
+  installBackendEventWsOriginOverride();
+  void syncEventWsSessionCookie(userSessionToken);
+  logger?.info(
+    {
+      previousUrl,
+      serverUrl: input.profile.server_url,
+      insecure,
+    },
+    'D4.a profile:saveWithTest retargeted active remote backend handle',
+  );
+}
+
 async function handleProfileSaveWithTest(
   input: { serverUrl: string } | undefined,
 ): Promise<ProfileSaveWithTestResult> {
@@ -2866,6 +2894,10 @@ async function handleProfileSaveWithTest(
   // disk only as `partial_apply_pending` in-memory state; the profile
   // commit above is already durable so we never roll it back.
   const phase2 = await runProfilePhase2(writeResult.profile);
+  applyProfileToActiveRemoteBackend({
+    profile: writeResult.profile,
+    testKind: test.kind,
+  });
   partialApplyState = derivePartialApplyState(phase2, Date.now());
   if (phase2.kind === 'partial_apply_pending') {
     logger?.warn(

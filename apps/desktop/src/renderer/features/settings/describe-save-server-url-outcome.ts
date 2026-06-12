@@ -43,6 +43,12 @@ export interface SaveServerUrlBanner {
    * the second row.
    */
   description: string;
+  /**
+   * The saved config is waiting for a live readiness proof. Surfaces
+   * that observe a separate connection-state signal may dismiss this
+   * banner once that signal reports Ready for the current save.
+   */
+  dismissOnReady?: true;
 }
 
 export function describeSaveServerUrlOutcome(
@@ -78,6 +84,7 @@ export function describeSaveServerUrlOutcome(
           tone: 'info',
           title: 'Saved. Reconnecting…',
           description: `No connection was confirmed within ${formatMs(result.elapsedMs)}. The server may still be starting or unreachable.`,
+          dismissOnReady: true,
         };
       case 'reloaded_remote':
         // `#task:1021` — REMOTE backend. The address is saved and the
@@ -96,6 +103,7 @@ export function describeSaveServerUrlOutcome(
           title: 'Saved. Reconnecting…',
           description:
             'Watch “This computer” for the live connection status.',
+          dismissOnReady: true,
         };
       default: {
         // Exhaustiveness gate — adding a new ok arm without

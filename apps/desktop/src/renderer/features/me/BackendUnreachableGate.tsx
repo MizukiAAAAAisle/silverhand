@@ -14,16 +14,15 @@
  * The gate intentionally does NOT show signup/login fields — the
  * server's policy is unknown so any field choice would be a guess.
  *
- * #task:991 (shiki) — the one thing a user wants here is to fix the
- * address. The earlier build sent them into the Setup Wizard (a deep
- * entry) just to retype a URL. Now the server URL is **edited in
- * place**: a pencil icon on the URL row flips it into an input +
- * Save / Cancel. Save goes through the same `saveServerUrl` IPC the
- * Settings → Connection pane uses — that path is an Electron IPC to
- * main (rewrite daemon-config + reload the daemon), NOT a backend
- * HTTP call, so it works precisely when the backend is unreachable.
- * On a successful save we re-probe via `onRetry`: if the new address
- * is reachable the gate unmounts; if not, the save banner explains.
+ * #task:991 / #task:1075 (shiki) — the one thing a user wants here
+ * is to fix the address. The server URL is **edited in place**: a
+ * pencil icon on the URL row flips it into an input + Save / Cancel.
+ * Save uses the profile pipeline (`profile:saveWithTest`), not the
+ * Settings reload IPC: at this boot gate the user may not have a
+ * claimed local host yet, so a daemon reload precondition would create
+ * the impossible loop "fix URL → sign in first → can't sign in because
+ * URL is broken". On a successful profile save main retargets the
+ * active remote handle, then we re-probe via `onRetry`.
  *
  * Cindy review boundary (P1-2 tighter constraint): the gate must
  * NOT default to "signup enabled = true/false". The renderer renders
@@ -36,10 +35,9 @@ import { classifyServerUrl } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/cn';
-import {
-  describeSaveServerUrlOutcome,
-  type SaveServerUrlBanner,
-} from '@/features/settings/describe-save-server-url-outcome';
+import type { SaveServerUrlBanner } from '@/features/settings/describe-save-server-url-outcome';
+import { describeProbeOutcome } from '@/features/setup/describe-probe-outcome';
+import type { DesktopProfileSaveWithTestResult } from '../../../preload/api';
 
 export interface BackendUnreachableGateProps {
   /** The active backend's origin (e.g. `https://backend.example.test`)
@@ -94,10 +92,12 @@ export function BackendUnreachableGate({
     setSaving(true);
     setBanner(null);
     try {
-      const result = await window.agentHub.saveServerUrl({ serverUrl: trimmed });
-      setBanner(describeSaveServerUrlOutcome(result));
+      const result = await window.agentHub.saveServerConnectionProfile({
+        serverUrl: trimmed,
+      });
+      setBanner(describeProfileSaveForGate(result));
       if (result.ok) {
-        // Address committed + daemon reloaded. Collapse the editor and
+        // Address committed + active remote handle retargeted. Collapse the editor and
         // re-probe: a reachable new address makes the gate unmount; an
         // unreachable one keeps us here with the banner explaining why.
         setEditing(false);
@@ -260,4 +260,36 @@ export function BackendUnreachableGate({
       </div>
     </main>
   );
+}
+
+function describeProfileSaveForGate(
+  result: DesktopProfileSaveWithTestResult,
+): SaveServerUrlBanner {
+  if (result.ok) {
+    return {
+      tone: 'success',
+      title: 'Saved. Retrying connection…',
+      description: `Using ${result.profile.server_url}.`,
+    };
+  }
+  if (result.phase === 'test') {
+    const banner = describeProbeOutcome(result.test);
+    return {
+      tone: banner.tone === 'success' ? 'success' : 'error',
+      title: banner.title,
+      description: banner.description,
+    };
+  }
+  if (result.phase === 'commit_guard') {
+    return {
+      tone: 'error',
+      title: 'Cannot save this server URL in this build.',
+      description: result.message,
+    };
+  }
+  return {
+    tone: 'error',
+    title: 'Could not write the profile.',
+    description: result.detail ?? 'Check that Silverhand can write to its app data folder.',
+  };
 }

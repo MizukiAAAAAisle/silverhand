@@ -51,6 +51,7 @@ describe('describeSaveServerUrlOutcome — success arms', () => {
     expect(banner.title).toMatch(/reconnect|reconnecting/i);
     // Anti-claim: the headline MUST NOT say "Connected".
     expect(banner.title.toLowerCase()).not.toMatch(/\bconnected\b/);
+    expect(banner.dismissOnReady).toBe(true);
     // Cindy note 1 verbatim: the renderer cannot collapse
     // connectivity_unverified into the reloaded copy. Cross-check
     // by direct comparison against the reloaded headline.
@@ -90,6 +91,7 @@ describe('describeSaveServerUrlOutcome — success arms', () => {
     expect(banner.description.toLowerCase()).not.toMatch(/\babove\b|\bbelow\b/);
     // Anti-claim: must not say "Connected".
     expect(banner.title.toLowerCase()).not.toMatch(/\bconnected\b/);
+    expect(banner.dismissOnReady).toBe(true);
   });
 
   it('formatMs switches to seconds at >= 1000ms', () => {
