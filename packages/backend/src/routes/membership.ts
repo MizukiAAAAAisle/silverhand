@@ -45,8 +45,17 @@ import { MembershipService } from '../services/membership-service.js';
 import { addWorkspaceAgentMember } from '../application/add-workspace-agent-member.js';
 import {
   addConversationMember,
+  conversationMemberAddedActorSnapshot,
+  conversationMemberAddedAgentSnapshot,
+  conversationMemberAddedHumanSnapshot,
+  type ConversationMemberAddedActorSnapshot,
+  type ConversationMemberAddedMemberSnapshot,
+  conversationMemberRemovedContent,
+  conversationMemberRemovedMetadata,
+  publishMemberRemoved,
   removeConversationMember,
 } from '../application/conversation-member.js';
+import { type PostCommitEffect, runPostCommitEffects } from '../application/post-commit.js';
 import { placementErrorResponse, conversationMemberResultResponse } from './responses.js';
 
 export interface MembershipRouteDeps {
@@ -175,33 +184,147 @@ function updateWorkspaceHumanMemberRole(
   return { member, human_member: { ...input.user, ...member } };
 }
 
+type RemovedConversationTarget = {
+  id: string;
+  workspace_id: string;
+};
+
+type RemovedConversationPublish = {
+  conversation: RemovedConversationTarget;
+  message: ReturnType<MessageRepo['insertForConversation']>;
+};
+
+function workspaceConversationsWithAgent(
+  conversations: ConversationRepo,
+  workspaceId: string,
+  agentId: string,
+): RemovedConversationTarget[] {
+  return conversations
+    .list()
+    .filter(conversation =>
+      conversation.workspace_id === workspaceId
+      && conversations.getAgent(conversation.id, agentId) !== null,
+    )
+    .map(conversation => ({
+      id: conversation.id,
+      workspace_id: conversation.workspace_id,
+    }));
+}
+
+function workspaceConversationsWithUser(
+  conversations: ConversationRepo,
+  workspaceId: string,
+  userId: string,
+): RemovedConversationTarget[] {
+  return conversations
+    .list()
+    .filter(conversation =>
+      conversation.workspace_id === workspaceId
+      && conversations.getUser(conversation.id, userId) !== null,
+    )
+    .map(conversation => ({
+      id: conversation.id,
+      workspace_id: conversation.workspace_id,
+    }));
+}
+
+function removeWorkspaceMemberAndConversationRows(
+  ctx: BackendContext,
+  conversations: ConversationRepo,
+  messages: MessageRepo,
+  input: {
+    targets: RemovedConversationTarget[];
+    actor: ConversationMemberAddedActorSnapshot;
+    member: ConversationMemberAddedMemberSnapshot;
+    removeWorkspaceMember: () => void;
+  },
+): RemovedConversationPublish[] {
+  return ctx.db.transaction(() => {
+    const publishes: RemovedConversationPublish[] = [];
+    for (const conversation of input.targets) {
+      if (input.member.kind === 'agent') {
+        conversations.removeAgent(conversation.id, input.member.id);
+      } else {
+        conversations.removeUser(conversation.id, input.member.id);
+      }
+      const message = messages.insertForConversation({
+        conversationId: conversation.id,
+        fromKind: 'system',
+        content: conversationMemberRemovedContent({
+          actor: input.actor,
+          member: input.member,
+        }),
+        metadata: conversationMemberRemovedMetadata({
+          actor: input.actor,
+          member: input.member,
+        }),
+      });
+      publishes.push({ conversation, message });
+    }
+    input.removeWorkspaceMember();
+    return publishes;
+  })();
+}
+
+async function publishWorkspaceMemberRemovalEffects(
+  ctx: BackendContext,
+  input: {
+    removed: RemovedConversationPublish[];
+    viewerEvent?: { userId: string; workspaceId: string };
+  },
+): Promise<void> {
+  const effects: PostCommitEffect[] = input.removed.map(
+    ({ conversation, message }) => () => publishMemberRemoved(ctx, conversation, message),
+  );
+  const viewerEvent = input.viewerEvent;
+  if (viewerEvent) {
+    effects.push(() =>
+      publishViewerWorkspacesChanged(ctx, viewerEvent.userId, {
+        change: 'removed',
+        workspace_id: viewerEvent.workspaceId,
+      }),
+    );
+  }
+  await runPostCommitEffects(effects, ctx.logger);
+}
+
 /**
  * Remove a human member from a workspace. Mirrors the agent-remove cascade
- * (`app.delete` below): drops the user's `conversation_users` row in every
- * conversation of the workspace, then the `workspace_users` membership row.
- * Humans run no process, so there is nothing to stop. The two-table cascade
- * runs in ONE transaction so a mid-sequence failure can't leave the user
- * half-removed (orphan `conversation_users` with no `workspace_users`). The
- * `removed` publish happens AFTER commit so a rolled-back delete never emits
- * a phantom event (same post-commit discipline as create-workspace). Caller
- * has already verified the target is a non-owner human member.
+ * (`app.delete` below): for every conversation that actually contains the
+ * human, delete the `conversation_users` row and insert the matching
+ * `conversation_member_removed` system message, then delete the
+ * `workspace_users` membership row in the SAME transaction. Humans run no
+ * process, so there is nothing to stop. All publishes happen AFTER commit so a
+ * rolled-back delete never emits a phantom event. Caller has already verified
+ * the target is a non-owner human member.
  */
-function removeWorkspaceHumanMember(
+async function removeWorkspaceHumanMember(
   ctx: BackendContext,
   workspaces: WorkspaceRepo,
   conversations: ConversationRepo,
-  input: { workspaceId: string; userId: string },
-): void {
-  ctx.db.transaction(() => {
-    for (const conversation of conversations.list()) {
-      if (conversation.workspace_id !== input.workspaceId) continue;
-      conversations.removeUser(conversation.id, input.userId);
-    }
-    workspaces.removeUserMember(input.workspaceId, input.userId);
-  })();
-  publishViewerWorkspacesChanged(ctx, input.userId, {
-    change: 'removed',
-    workspace_id: input.workspaceId,
+  messages: MessageRepo,
+  input: {
+    workspaceId: string;
+    user: UserDto;
+    actor: ConversationMemberAddedActorSnapshot;
+  },
+): Promise<void> {
+  const targets = workspaceConversationsWithUser(
+    conversations,
+    input.workspaceId,
+    input.user.id,
+  );
+  const member = conversationMemberAddedHumanSnapshot(input.user);
+  const removed = removeWorkspaceMemberAndConversationRows(ctx, conversations, messages, {
+    targets,
+    actor: input.actor,
+    member,
+    removeWorkspaceMember: () =>
+      workspaces.removeUserMember(input.workspaceId, input.user.id),
+  });
+  await publishWorkspaceMemberRemovalEffects(ctx, {
+    removed,
+    viewerEvent: { userId: input.user.id, workspaceId: input.workspaceId },
   });
 }
 
@@ -212,22 +335,22 @@ function removeWorkspaceHumanMember(
  * (agent branch delegates to the AddWorkspaceAgentMember use case).
  *
  * DELETE `…/members/:agentId` (agent) is admin-gated and stops + removes the
- * agent from every conversation of the workspace, then removes the workspace
- * membership. It stays best-effort (per-conversation stop + removeAgent, then
- * removeMember, 204 — no tx / system message / event; a use-case version is a
- * future increment).
+ * agent from every conversation of the workspace where it is actually present,
+ * writes one `conversation_member_removed` system message per conversation,
+ * then removes the workspace membership in the same DB transaction.
  *
  * DELETE `…/members/users/:userId` (human) is owner-gated (human-roster is
  * owner-only); the owner itself is never removable (`owner_removal_unsupported`
- * 400). Humans run no process, so it just cascades `conversation_users` +
- * `workspace_users` in one transaction, then publishes `removed` to the
- * viewer scope post-commit. 204.
+ * 400). Humans run no process, so it cascades `conversation_users` +
+ * per-conversation removed messages + `workspace_users` in one transaction,
+ * then publishes conversation/member-list updates plus `removed` to the viewer
+ * scope post-commit. 204.
  */
 export function createWorkspaceMembershipApp(
   deps: MembershipRouteDeps,
 ): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { ctx, agents, workspaces, conversations } = deps;
+  const { ctx, agents, users, workspaces, conversations, messages } = deps;
 
   app.get(apiPaths.workspaceMembers(':id'), c => {
     const id = c.req.param('id');
@@ -351,11 +474,21 @@ export function createWorkspaceMembershipApp(
     }
     const workspace = workspaces.get(id);
     if (!workspace || workspace.workspace_kind !== 'regular') return c.body(null, 204);
-    if (!canGovernWorkspace(ctx, getUserPrincipal(c), workspace.id, 'admin')) {
+    const principal = getUserPrincipal(c);
+    if (!canGovernWorkspace(ctx, principal, workspace.id, 'admin')) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    for (const conversation of conversations.list()) {
-      if (conversation.workspace_id !== workspace.id) continue;
+    const agent = agents.get(agentId);
+    if (!agent) {
+      workspaces.removeMember(workspace.id, agentId);
+      return c.body(null, 204);
+    }
+    const targets = workspaceConversationsWithAgent(
+      conversations,
+      workspace.id,
+      agentId,
+    );
+    for (const conversation of targets) {
       await ctx.runtimeHost
         .stop(conversation.id, agentId, 'hard')
         .catch(err =>
@@ -364,13 +497,20 @@ export function createWorkspaceMembershipApp(
             'workspace member remove: stop failed',
           ),
         );
-      conversations.removeAgent(conversation.id, agentId);
     }
-    workspaces.removeMember(workspace.id, agentId);
+    const actor = conversationMemberAddedActorSnapshot({ agents, users }, principal);
+    const member = conversationMemberAddedAgentSnapshot(agent);
+    const removed = removeWorkspaceMemberAndConversationRows(ctx, conversations, messages, {
+      targets,
+      actor,
+      member,
+      removeWorkspaceMember: () => workspaces.removeMember(workspace.id, agentId),
+    });
+    await publishWorkspaceMemberRemovalEffects(ctx, { removed });
     return c.body(null, 204);
   });
 
-  app.delete(apiPaths.workspaceHumanMember(':id', ':userId'), c => {
+  app.delete(apiPaths.workspaceHumanMember(':id', ':userId'), async c => {
     const id = c.req.param('id');
     const userId = c.req.param('userId');
     if (!id || !userId) {
@@ -393,9 +533,18 @@ export function createWorkspaceMembershipApp(
     // ownership transfer is unsupported (same invariant as the role PATCH).
     // Owner-gating means the actor cannot remove themselves either.
     if (currentRole === 'owner') return ownerRemovalUnsupported(c);
-    removeWorkspaceHumanMember(ctx, workspaces, conversations, {
+    const user = ctx.userService.getDto(userId);
+    if (!user) {
+      return c.json({ error: 'workspace human member not found' }, 404);
+    }
+    const actor = conversationMemberAddedActorSnapshot(
+      { agents, users },
+      getUserPrincipal(c),
+    );
+    await removeWorkspaceHumanMember(ctx, workspaces, conversations, messages, {
       workspaceId: workspace.id,
-      userId,
+      user,
+      actor,
     });
     return c.body(null, 204);
   });

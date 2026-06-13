@@ -412,7 +412,7 @@ export async function removeConversationMember(
  * verbatim (spec §5): `message` → `conversation_members_changed` →
  * `workspace_channels_changed`.
  */
-function publishMemberRemoved(
+export function publishMemberRemoved(
   ctx: BackendContext,
   conversation: { id: string; workspace_id: string },
   message: ReturnType<MessageRepo['insertForConversation']>,

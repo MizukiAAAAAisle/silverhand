@@ -248,10 +248,82 @@ describe('workspace metadata and membership routes', () => {
       role: 'owner',
     });
 
-    const rm = await http(t).del(
-      `/api/workspaces/${workspace.workspace.id}/members/${agentId}`,
+    const firstChannel = await (
+      await http(t).post(`/api/workspaces/${workspace.workspace.id}/channels`, {
+        title: 'ops-room',
+        member_agent_ids: [agentId],
+      })
+    ).json() as any;
+    const secondChannel = await (
+      await http(t).post(`/api/workspaces/${workspace.workspace.id}/channels`, {
+        title: 'ops-room-2',
+        member_agent_ids: [agentId],
+      })
+    ).json() as any;
+    const channelIds = [firstChannel.channel.id, secondChannel.channel.id];
+    t.fake.stops = [];
+    const conversationEvents = new Map<string, Array<{ kind: string; payload: unknown }>>(
+      channelIds.map(channelId => [channelId, []]),
     );
-    expect(rm.status).toBe(204);
+    const unsubConversations = channelIds.map(channelId =>
+      t!.ctx.events.subscribe(channelId, e => {
+        conversationEvents.get(channelId)!.push({ kind: e.kind, payload: e.payload });
+      }),
+    );
+    const workspaceEvents: Array<{ kind: string; payload: unknown }> = [];
+    const unsubWorkspace = t.ctx.events.subscribeScope(
+      `workspace:${workspace.workspace.id}`,
+      e => workspaceEvents.push({ kind: e.kind, payload: e.payload }),
+    );
+    let removeStatus = 0;
+    try {
+      const rm = await http(t).del(
+        `/api/workspaces/${workspace.workspace.id}/members/${agentId}`,
+      );
+      removeStatus = rm.status;
+    } finally {
+      unsubConversations.forEach(unsub => unsub());
+      unsubWorkspace();
+    }
+    expect(removeStatus).toBe(204);
+    expect(t.fake.stops).toEqual(expect.arrayContaining(
+      channelIds.map(channelId => ({
+        conversationId: channelId,
+        agentId,
+        mode: 'hard',
+      })),
+    ));
+    for (const channelId of channelIds) {
+      const events = conversationEvents.get(channelId) ?? [];
+      const memberRemovedMessage = events.find(e => e.kind === 'message');
+      expect((memberRemovedMessage?.payload as any)?.message).toMatchObject({
+        from_kind: 'system',
+        content: '@local-test removed @carol from this conversation.',
+        metadata: {
+          subtype: 'conversation_member_removed',
+          actor_kind: 'user',
+          actor_id: 'local',
+          actor_name: 'local-test',
+          member_kind: 'agent',
+          member_id: agentId,
+          member_name: 'carol',
+        },
+      });
+      expect(events).toContainEqual({
+        kind: 'conversation_members_changed',
+        payload: {
+          conversation_id: channelId,
+          workspace_id: workspace.workspace.id,
+        },
+      });
+      expect(workspaceEvents).toContainEqual({
+        kind: 'workspace_channels_changed',
+        payload: {
+          workspace_id: workspace.workspace.id,
+          channel_id: channelId,
+        },
+      });
+    }
     const list2 = await (
       await http(t).get(`/api/workspaces/${workspace.workspace.id}/members`)
     ).json() as any;
@@ -553,6 +625,15 @@ describe('workspace metadata and membership routes', () => {
     const unsubscribeViewer = t.ctx.events.subscribeScope('viewer:teammate', event => {
       viewerEvents.push({ kind: event.kind, payload: event.payload });
     });
+    const conversationEvents: Array<{ kind: string; payload: unknown }> = [];
+    const unsubscribeConversation = t.ctx.events.subscribe(onboardingChannelId, event => {
+      conversationEvents.push({ kind: event.kind, payload: event.payload });
+    });
+    const workspaceEvents: Array<{ kind: string; payload: unknown }> = [];
+    const unsubscribeWorkspace = t.ctx.events.subscribeScope(
+      `workspace:${workspaceId}`,
+      event => workspaceEvents.push({ kind: event.kind, payload: event.payload }),
+    );
 
     let status: number;
     try {
@@ -562,6 +643,8 @@ describe('workspace metadata and membership routes', () => {
       status = res.status;
     } finally {
       unsubscribeViewer();
+      unsubscribeConversation();
+      unsubscribeWorkspace();
     }
     expect(status).toBe(204);
     // removed carries no role (the viewer no longer has one here); renderer
@@ -572,6 +655,34 @@ describe('workspace metadata and membership routes', () => {
         payload: { change: 'removed', workspace_id: workspaceId },
       },
     ]);
+    const memberRemovedMessage = conversationEvents.find(e => e.kind === 'message');
+    expect((memberRemovedMessage?.payload as any)?.message).toMatchObject({
+      from_kind: 'system',
+      content: '@local-test removed @teammate-test from this conversation.',
+      metadata: {
+        subtype: 'conversation_member_removed',
+        actor_kind: 'user',
+        actor_id: 'local',
+        actor_name: 'local-test',
+        member_kind: 'human',
+        member_id: 'teammate',
+        member_name: 'teammate-test',
+      },
+    });
+    expect(conversationEvents).toContainEqual({
+      kind: 'conversation_members_changed',
+      payload: {
+        conversation_id: onboardingChannelId,
+        workspace_id: workspaceId,
+      },
+    });
+    expect(workspaceEvents).toContainEqual({
+      kind: 'workspace_channels_changed',
+      payload: {
+        workspace_id: workspaceId,
+        channel_id: onboardingChannelId,
+      },
+    });
 
     const after = await (
       await http(t).get(`/api/workspaces/${workspaceId}/members`)
