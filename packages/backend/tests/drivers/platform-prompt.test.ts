@@ -29,16 +29,15 @@ function prompt(): string {
 describe('buildPlatformPrompt', () => {
   it('requires visible replies through the silverhand CLI', () => {
     const text = prompt();
-    expect(text).toContain('Never');
-    expect(text).toContain('put chat replies in your normal output');
-    expect(text).toContain('When you receive a message, reply via');
+    expect(text).toContain('Reply only through the CLI.');
+    expect(text).toContain('invisible to the conversation');
     expect(text).toContain('silverhand message send');
   });
 
   it('keeps system announcements informational unless explicitly requested', () => {
     const text = prompt();
     expect(text).toContain('type=system');
-    expect(text).toContain("Don't reply unless the message explicitly");
+    expect(text).toMatch(/unless it explicitly asks you to/);
   });
 
   it('renders conversation ids in the context block', () => {
@@ -74,7 +73,7 @@ describe('buildPlatformPrompt', () => {
   it('avoids generic platform wording in the rendered agent manual', () => {
     const text = prompt();
     expect(text).toContain('via Silverhand');
-    expect(text).toContain('Silverhand system messages');
+    expect(text).toContain('Silverhand notice');
     expect(text).not.toContain('via the Silverhand chat platform');
     expect(text).not.toContain('platform announcements');
     expect(text).not.toContain('The platform shows what you did');
@@ -82,25 +81,25 @@ describe('buildPlatformPrompt', () => {
 
   it('hardens multi-agent etiquette against ping loops', () => {
     const text = prompt();
-    expect(text).toContain('## Conversation etiquette');
-    expect(text).toContain('Never reply to your own agent message');
-    expect(text).toContain(
-      "Do not acknowledge, summarize, echo or restate another agent's work",
+    expect(text).toContain('### When to speak');
+    expect(text).toMatch(/never reply to your own message/);
+    expect(text).toMatch(
+      /Never acknowledge, summarize, or restate another agent's\s+work/,
     );
-    expect(text).toContain('Only send messages when you have actionable content');
+    expect(text).toMatch(/Send a message only when you have actionable\s+content/);
     expect(text).not.toContain('unique value to add');
   });
 
   it('keeps MEMORY.md as a compact index and sends detailed history to notes', () => {
     const text = prompt();
-    expect(text).toContain('should point to that source, not repeat it');
+    expect(text).toMatch(/stand alone as your recovery point/);
     expect(text).toContain('target under 10KB');
-    expect(text).toContain('It is an index, not the detailed work log');
+    expect(text).toMatch(/short, scannable index/);
     expect(text).toContain('run a memory checkpoint');
-    expect(text).toContain('update the relevant notes file');
-    expect(text).toContain('Otherwise leave MEMORY.md unchanged');
+    expect(text).toMatch(/update the relevant notes file/);
+    expect(text).toMatch(/otherwise leave it/);
     expect(text).toContain('./.silverhand/agents/agent-1/notes/work-log.md');
-    expect(text).toContain('Do not append long per-task bullets to MEMORY.md');
+    expect(text).toMatch(/append per-task\s+bullets/);
     expect(text).not.toContain(
       "Keep MEMORY.md complete enough that compression preserves",
     );
@@ -114,9 +113,9 @@ describe('buildPlatformPrompt', () => {
     // header was removed when system_prompt.md moved to L1-only.
     expect(regular).toContain('~/.silverhand/agents/agent-1/system_prompt.md');
     expect(regular).toContain('./.silverhand/agents/agent-1/MEMORY.md');
-    expect(regular).toContain('Current vs reference.');
+    expect(regular).toMatch(/only when a task needs cross-workspace\s+context/);
     expect(regular).toContain('./.silverhand/agents/agent-1/notes/');
-    expect(regular).toContain('These paths are internal working context');
+    expect(regular).toMatch(/These paths are internal\s+working context/);
 
     const dm = buildPlatformPrompt({
       agentId: 'agent-1',
@@ -173,21 +172,21 @@ describe('buildPlatformPrompt', () => {
   it('requires work-driven claiming and task state updates before reporting completion', () => {
     const text = prompt();
     expect(text).toContain('**Claim work, not messages.**');
-    expect(text).toContain("substantive work *that isn't already");
+    expect(text).toMatch(/substantive work \*not already/);
     expect(text).toContain('tracked by a task');
     expect(text).toContain('race-guard');
-    expect(text).toContain('review feedback on a task you own');
-    expect(text).toContain('not** new work');
-    expect(text).toContain('instead of promoting the message');
+    expect(text).toMatch(/review feedback on a\s+task you own/);
+    expect(text).toMatch(/not new work/);
+    expect(text).toMatch(/Don't open a second task/);
     expect(text).toContain('Plain Q&A');
-    expect(text).toContain('casual conversation');
+    expect(text).toContain('conversation');
     expect(text).toContain('status checks');
     expect(text).toContain('clarifications');
     expect(text).toContain('need no claim');
     expect(text).toContain('**A failed claim means stop.**');
-    expect(text).toContain('Close the loop on tasks you own');
-    expect(text).toContain('call `silverhand task status` first');
-    expect(text).toContain('leaving the task state unchanged');
+    expect(text).toMatch(/Close the loop\./);
+    expect(text).toMatch(/`silverhand task status` first/);
+    expect(text).toMatch(/leaving the state stale/);
     // #task:530: workspace selector guidance must be present so agents
     // discover --workspace-id / --workspace from the prompt alone.
     expect(text).toContain('--workspace-id');
@@ -223,7 +222,7 @@ describe('buildPlatformPrompt', () => {
       'When the user refers to a past discussion, decision, or owner',
     );
     expect(text).toContain('search before you answer');
-    expect(text).toContain('say so explicitly rather');
+    expect(text).toMatch(/say so rather than\s+guessing/);
 
     // Peek/pull semantics relocated from Threads into History (#task:1094):
     // reading a thread is a pull that advances the read boundary.
@@ -252,42 +251,39 @@ describe('buildPlatformPrompt', () => {
       },
     });
 
-    expect(text).toContain('## Communication by silverhand CLI');
-    expect(text).toContain(
-      'You should use the silverhand CLI for all chat / task / workspace',
+    expect(text).toContain('## Tool Reference (silverhand CLI)');
+    expect(text).toMatch(
+      /Use the silverhand CLI for all chat \/ task \/ workspace/,
     );
     expect(text).toMatch(/Subcommands default\s+to `--json`/);
-    expect(text).toContain('stderr is the primary failure context for you');
-    expect(text).toContain('with a non-zero code');
-    expect(text).toContain('stable `code` and `retriable` flag');
+    expect(text).toMatch(/stderr is the primary failure context/);
+    expect(text).toMatch(/exits\s+non-zero/);
+    expect(text).toMatch(/stable\s+`code` and `retriable` flag/);
     expect(text).toContain('exit code 1 as a user/input');
-    expect(text).toContain('2 as a temporary error');
+    expect(text).toMatch(/2 as a\s+temporary error/);
     expect(text).toContain('3 as a failure');
     expect(text).toContain("details.subkind: 'message_stale'");
     expect(text).toContain('details.newer_messages');
-    expect(text).toContain('Do not blindly');
+    expect(text).toMatch(/Don't blindly/);
     expect(text).toContain('--stale-resolution unaffected');
     expect(text).toContain('--stale-resolution revised');
     expect(text).toContain('message stale-resolve --resolution obsolete');
     expect(text).toContain('--anyway');
     expect(text).toContain('silverhand <noun> <verb> --help');
-    // Dependent silverhand commands run one at a time (slock import,
-    // rewritten to dependent-only so it doesn't ban independent parallel
-    // reads). #task:1091.
+    // Dependent silverhand commands run one at a time, but independent
+    // reads may still run in parallel (#task:1091).
     expect(text).toContain('Run *dependent* silverhand commands one at a time');
     expect(text).toContain('claim-then-act');
-    expect(text).toContain('dependent sequences only');
+    expect(text).toMatch(/Independent reads/);
     expect(text).toContain('**`silverhand message send`**: Send a message');
-    expect(text).toContain('Use GitHub Flavored Markdown: headings, lists, tables');
-    expect(text).toContain(
-      '**`silverhand task list`**: View the workspace task board',
-    );
-    expect(text).toContain(
-      '**`silverhand schedule create`**: Schedule a self-wake',
-    );
-    expect(text).toContain('**`silverhand file upload`**: Upload a local file');
-    expect(text).toContain('via `silverhand message send` before');
-    expect(text).toContain('call `silverhand task status` first');
+    expect(text).toMatch(/GitHub-Flavored Markdown — headings, lists, tables/);
+    expect(text).toMatch(/\*\*`silverhand task list`\*\*: View the task board/);
+    expect(text).toMatch(/\*\*`silverhand schedule create`\*\*/);
+    expect(text).toMatch(/\*\*`silverhand schedule list`\*\*/);
+    expect(text).toMatch(/\*\*`silverhand schedule cancel`\*\*/);
+    expect(text).toMatch(/\*\*`silverhand file upload`\*\*/);
+    expect(text).toContain("<<'SILVERHAND_EOF'");
+    expect(text).toMatch(/`silverhand task status` first/);
     expect(text).not.toContain('mcp_chat_send_message');
     expect(text).not.toContain('mcp__chat__');
     expect(text).not.toContain('All cross-agent interaction is through MCP tools');
@@ -300,53 +296,56 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toContain('auth failure');
   });
 
-  it('uses reply-cluster thread terminology and gates agent-created top-level channels', () => {
+  it('uses current thread terminology and gates agent-created top-level channels', () => {
     const text = prompt();
-    expect(text).toContain('Threads (reply clusters)');
-    expect(text).toContain('reply cluster');
-    expect(text).toContain('`silverhand message send --target thread:<message_id>`');
+    expect(text).toContain('## Threads');
+    expect(text).toContain('focused side-discussions attached to a specific message');
+    expect(text).toContain('--target thread:<message_id>');
+    expect(text).toContain('Use real `msg_id` values');
     expect(text).toContain('`silverhand thread follow`');
     expect(text).toContain('`silverhand thread unfollow --root <message_id>`');
     expect(text).toContain('`silverhand channel create`');
     expect(text).toContain('**Only** call `silverhand channel create`');
     expect(text).toContain('explicitly');
+    expect(text).toContain('When isolation');
+    expect(text).toContain('or a separate context is genuinely needed');
     expect(text).toContain('current workspace');
     expect(text).not.toContain('`mcp__chat__spawn_child_session`');
     expect(text).not.toContain('`mcp__chat__create_session`');
   });
 
-  it('teaches the reply-cluster thread model (shared context, not a separate session)', () => {
+  it('teaches the thread model (shared context, current stream, current ids)', () => {
     // The thread model the agent must internalize:
-    //   1. A thread is a *reply cluster* — replies under one message in
-    //      the channel, sharing the channel's context. It is NOT a
-    //      separate conversation or a separate agent session (the old
-    //      model). Identified by its root message id.
-    //   2. Three operations: reply (`--target thread:<message_id>`, or a
-    //      bare send when already in the thread), follow/unfollow
-    //      (a delivery subscription, not a permission), and pull
-    //      (`message history --target thread:<root>` — read without
-    //      following). Isolation/parallelism → a channel, not a thread.
+    //   1. A thread is attached to one message, shares channel context and
+    //      the current session, and keeps related replies out of the main line.
+    //   2. Start/join with `--target thread:<message_id>`, or bare-send when
+    //      already in the thread. Use current `msg_id` / `target=thread:<root>`
+    //      terminology, not old `msg=` or `:shortid` wording.
+    //   3. Follow/unfollow controls inbox delivery. Channel creation policy
+    //      lives under Channels, not in this section.
     //
     // We deliberately do NOT teach runtime delivery semantics (wake /
     // auto-start). The agent default-assumes "the message reaches the
     // target" and need not reason about runtime state.
     const text = prompt();
-    expect(text).toContain('reply cluster');
-    expect(text).toContain("shares the channel's context");
-    expect(text).toMatch(/root\s+message\s+id/);
+    expect(text).toMatch(/share\s+this channel's context/);
+    expect(text).toContain('current session');
+    expect(text).toContain('Use real `msg_id` values');
     expect(text).toContain('--target thread:<message_id>');
     expect(text).toContain('target=channel|thread:<root_message_id>');
     expect(text).toContain('target=thread:<root_message_id>');
-    expect(text).toMatch(/stay in a thread by default/);
+    expect(text).toMatch(/stay\s+in a thread by default/);
+    expect(text).toContain('replies never nest');
     expect(text).toContain('auto-follows you');
-    expect(text).toMatch(/subscription, not a\s+permission/);
+    expect(text).toContain('Unfollow only when your work there is clearly complete');
     // Peek (`message history --target thread:`) now lives under History and
     // search, and task-in-thread under Tasks — relocated out of the Threads
     // base definition (#task:1094). Asserted in their own sections below.
-    expect(text).toMatch(/Need isolation, parallelism/);
     expect(text).toContain('`silverhand channel create`');
     expect(text).not.toContain('silverhand thread create');
     expect(text).not.toContain('silverhand thread close');
+    expect(text).not.toContain('Use the `msg=` field');
+    expect(text).not.toContain(':shortid');
 
     // Drift guard: the OLD independent-session model must never return.
     expect(text).not.toContain('Threads run as separate agent sessions');
@@ -372,7 +371,7 @@ describe('buildPlatformPrompt', () => {
     // heading per @shiki direction (msg `gTMLaOKaVGwhatkj`). Section
     // anchor pins that heading shape so future rewrites can't silently
     // reintroduce a per-sigil heading.
-    expect(text).toMatch(/^## Formatting\s*$/m);
+    expect(text).toMatch(/^## Formatting Reference\s*$/m);
     // Each grammar must keep its sub-heading anchor; tests below
     // assert the per-grammar bullets and the closing summary.
     expect(text).toMatch(/^### Reference grammars\s*$/m);
@@ -457,7 +456,7 @@ describe('buildPlatformPrompt', () => {
     // Formatting section enumerates all four reference grammars
     // (`@<handle>`, `#<channel_name>`, `#conv:<id>`, `#task:<n>`)
     // with per-form scenarios and a closing summary.
-    expect(text).toMatch(/^## Formatting\s*$/m);
+    expect(text).toMatch(/^## Formatting Reference\s*$/m);
     expect(text).toContain('`#task:<n>`');
     // Concrete example uses a real task number alongside #conv: so
     // both grammars reinforce each other in one mental model.
@@ -1081,15 +1080,15 @@ describe('buildPlatformPrompt — three-file model', () => {
     expect(text).toContain('~/.silverhand/agents/agent-1/system_prompt.md');
   });
 
-  it('renders the four-bullet write-by-scope skeleton', () => {
-    // R1 wording check — the L1/L2 prompt section locked with @shiki.
-    // If the prompt drifts away from this skeleton, this regression test
-    // forces a deliberate re-locking decision.
+  it('renders the L1/L2 split chosen by scope of guidance', () => {
+    // The Knowledge Model section teaches the L1 (identity, global) vs L2
+    // (workspace memory, local) split and that the layer is chosen by the
+    // SCOPE of the guidance. Contract guard: if the prompt drifts away from
+    // this model, force a deliberate re-locking decision.
     const text = withInjections({});
-    expect(text).toContain('Identity is global.');
-    expect(text).toContain('Workspace memory is local.');
-    expect(text).toContain('Write by scope.');
-    expect(text).toContain('Current vs reference.');
+    expect(text).toMatch(/L1 — identity \(global\)/);
+    expect(text).toMatch(/L2 — workspace memory \(local\)/);
+    expect(text).toMatch(/Choose the layer by the \*scope\*/);
   });
 
   it('drops every "DM-only / redirect-to-DM" write-side restriction', () => {
