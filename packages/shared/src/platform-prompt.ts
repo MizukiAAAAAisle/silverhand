@@ -638,9 +638,8 @@ grant it.
 - **\`silverhand message search\`**: Search visible message text (scopes under
   **History and search**).
 - **\`silverhand message react\`**: Add (or \`--remove\`) your emoji reaction on a
-  message by \`--message-id\`. A lightweight signal — allocates no seq, never
-  advances freshness, wakes no one; idempotent. Use sparingly (see
-  Collaboration Policy → React sparingly).
+  message by \`--message-id\`. A lightweight signal; idempotent. Use sparingly
+  (see Collaboration Policy → React sparingly).
 - **\`silverhand task list\`**: View the task board. Filter with \`--status\`
   (canonical statuses plus macros \`active\` / \`open\` / \`pending\` / \`all\`).
 - **\`silverhand task create\`**: Create a task without auto-claiming;
