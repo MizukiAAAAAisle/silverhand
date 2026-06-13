@@ -16,9 +16,10 @@ Authoritative design docs (read the relevant one before non-trivial work):
 - `docs/server-env-config.md` + `docs/build-release.md` — standalone-server env contract; desktop DMG packaging.
 - `docs/cli-system.md` — the agent-facing `silverhand` CLI surface, env contract, errors, maintenance checklist.
 - `docs/agent-system-prompt-memory.md` — the three-file model (L1 `system_prompt.md`, L2 `MEMORY.md` / `notes/`) and spawn-time prompt assembly.
+- `docs/platform-prompt-design.md` — **READ before editing the platform prompt** (`packages/shared/src/platform-prompt.ts`). The canonical section skeleton, load-bearing content that must not be silently dropped, security-critical renderers, and test discipline that hold across edits.
 - `docs/agent-run-state.md` — `AgentRunState` lifecycle, snippet accumulation, compaction-as-state, Activity Bubble.
 - `docs/app-layout.md` + `docs/design-new-theme.md` — UI structure / interaction spec and theme tokens.
-- `docs/progress.md` — append-only history; add a dated section after meaningful changes.
+- `docs/progress.md` — recent-changes log; add a dated section after meaningful changes, and prune stale/old entries to keep it short (full history lives in `git log`).
 - `docs/electron-install-troubleshooting.md` — fix for `pnpm dev` failing with `Error: Electron uninstall` (it's an `extract-zip` failure, **not** a mirror/download problem).
 
 ## Common commands
@@ -70,7 +71,7 @@ pnpm workspaces, all `workspace:*` linked:
 - **Onboarding system messages must be imperative**, not descriptive — descriptive prompts ("welcome, please introduce yourself") frequently produce no reply. See `ONBOARDING_BODY` in `packages/backend/src/provision.ts`.
 - **No "stop" affordance in the composer.** Per IM design, message sending is one-shot; agent execution control belongs elsewhere (TBD). Don't reintroduce it.
 - **Renderer composer is IME-safe.** Enter sends, Shift+Enter newlines, but `onCompositionStart/End` + `e.nativeEvent.isComposing` must guard against firing during CJK input.
-- **Driver platform prompt** (`packages/shared/src/platform-prompt.ts`) prescribes a terse voice: one-or-two-sentence default, no filler acknowledgments, no idle narration, no echoing tool calls. Keep edits consistent with that voice.
+- **Driver platform prompt** (`packages/shared/src/platform-prompt.ts`) prescribes a terse voice: one-or-two-sentence default, no filler acknowledgments, no idle narration, no echoing tool calls. Keep edits consistent with that voice. **Before editing it, read `docs/platform-prompt-design.md`** — the design contract (section order, load-bearing rules, security-critical renderers, test discipline) that any edit must uphold.
 - **CLI changes must update both `docs/cli-system.md` and the platform prompt.** Any change to `packages/cli`, agent-facing DTO schemas, internal agent routes, task behavior, or `silverhand` command guidance must keep `docs/cli-system.md` and `packages/shared/src/platform-prompt.ts` in sync in the same change.
 - **DDD discipline is how this codebase resists rot.** `docs/core-design.md` is the domain model's source of truth and the **ubiquitous language** — one concept gets one name across code / DB / DTOs / UI / docs (when code conflicts with that doc, the code is the bug). `docs/architecture-principles.md` encodes the core domain invariant (Human/Agent isomorphism). Keep domain logic in services / domain, not leaked into routes, transport, or the renderer; respect bounded-context boundaries between packages (`shared` owns the model + schema, `host` owns runtime, `backend` owns orchestration); model-first, then map to the SQLite schema — never let the schema or a quick patch dictate the model. Naming drift (two names for one lifecycle) is the first rot signal — converge it, don't add a synonym.
 - **Better-sqlite3** is used synchronously; backend code assumes WAL mode and single-process writes. No connection pooling.
