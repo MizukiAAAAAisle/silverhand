@@ -4,11 +4,12 @@ import { Plus, Search } from 'lucide-react';
 import type { AgentDto, MemberDto, UserDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
+import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { useUsers } from '@/features/users/hooks';
 import { ApiError } from '@/lib/api';
-import { useWorkspaceMemberLists } from '../workspaces/hooks';
+import { useWorkspaceMemberLists, useWorkspaces } from '../workspaces/hooks';
 import { useConversationMembers } from './useConversationMembers';
 import { useAddConversationMember } from './useAddConversationMember';
 
@@ -25,15 +26,18 @@ export interface AddConversationMemberPopoverProps {
  * subtle hover background — so it reads as a low-key affordance rather
  * than competing with the avatar chips beside it. Inside, the popover
  * lists every eligible member that is NOT yet in this conversation:
- * workspace agents, workspace humans, and (for workspace admins/owners)
- * humans from the global directory. Humans outside the workspace are
- * intentionally eligible for governance users: the server's add-member
- * use case creates the workspace membership first under the same
- * admin-level roster guard. Agents stay workspace-scoped because agent
- * workspace membership carries capability seeding. Members are first-class
- * regardless of kind, so the row treats them uniformly: avatar + display
- * name + `@handle` on a single line, with the avatar component picked by
- * kind.
+ * workspace agents + humans, and (for workspace admins/owners) both
+ * humans and agents from the global directory. Targets outside the
+ * workspace are eligible for governance users because the server's
+ * add-member use case provisions the workspace membership first under
+ * the same admin-level guard — humans via a plain roster insert, agents
+ * via the placement / L2-seed / capability-default path. External agents
+ * are filtered to the workspace's own host (`host_id` match) because an
+ * agent can only join a workspace on its own host, so cross-host agents
+ * would always fail placement — hiding them keeps the picker free of
+ * dead candidates. Members are first-class regardless of kind, so the
+ * row treats them uniformly: avatar + display name + `@handle` on a
+ * single line, with the avatar component picked by kind.
  *
  * Caller is responsible for hiding this affordance when the
  * conversation shouldn't accept adds (DM channel, closed conversation,
@@ -85,8 +89,13 @@ function PopoverBody({
 }: AddConversationMemberPopoverProps): JSX.Element {
   const memberLists = useWorkspaceMemberLists(workspaceId);
   const viewerRole = memberLists.data?.viewerRole ?? null;
-  const canPickGlobalHumans = viewerRole === 'owner' || viewerRole === 'admin';
-  const humans = useUsers({ enabled: canPickGlobalHumans });
+  // Governance users (owner/admin) may pull targets from the global
+  // directory; the server auto-provisions workspace membership on add.
+  // Same gate for humans and agents (agent workspace-add is admin-level).
+  const canPickGlobal = viewerRole === 'owner' || viewerRole === 'admin';
+  const humans = useUsers({ enabled: canPickGlobal });
+  const agents = useAgents({ enabled: canPickGlobal });
+  const workspaces = useWorkspaces();
   const conversationMembers = useConversationMembers(conversationId);
   const addMember = useAddConversationMember(conversationId, workspaceId);
 
@@ -95,13 +104,28 @@ function PopoverBody({
 
   const wsAgents: AgentDto[] = memberLists.data?.agents ?? [];
   const wsHumans: UserDto[] = memberLists.data?.humans ?? [];
+  // The workspace's own host. External agents must match it to be
+  // pickable — an agent can only join a workspace on its own host, so a
+  // cross-host pick would always fail placement. Null while the
+  // workspace list loads; no agent's `host_id` matches null, so external
+  // agents simply appear once it resolves (gated by `isLoading` below).
+  const workspaceHostId =
+    workspaces.data?.find(w => w.id === workspaceId)?.workspace_host_id ?? null;
   const pickableHumans = useMemo(() => {
-    if (!canPickGlobalHumans) return wsHumans;
+    if (!canPickGlobal) return wsHumans;
     const workspaceIds = new Set(wsHumans.map(u => u.id));
     const externalHumans = (humans.data ?? []).filter(u => !workspaceIds.has(u.id));
     return [...wsHumans, ...externalHumans];
-  }, [canPickGlobalHumans, wsHumans, humans.data]);
-  const wsAgentAvatars = useAgentAvatarObjectUrls(wsAgents);
+  }, [canPickGlobal, wsHumans, humans.data]);
+  const pickableAgents = useMemo(() => {
+    if (!canPickGlobal) return wsAgents;
+    const workspaceIds = new Set(wsAgents.map(a => a.id));
+    const externalAgents = (agents.data ?? []).filter(
+      a => !workspaceIds.has(a.id) && a.host_id === workspaceHostId,
+    );
+    return [...wsAgents, ...externalAgents];
+  }, [canPickGlobal, wsAgents, agents.data, workspaceHostId]);
+  const agentAvatars = useAgentAvatarObjectUrls(pickableAgents);
   const humanAvatars = useUserAvatarObjectUrls(pickableHumans);
 
   // Set of `agent:<id>` / `human:<id>` for current conversation
@@ -118,7 +142,7 @@ function PopoverBody({
   const candidates = useMemo<PickableMember[]>(() => {
     const q = query.trim().toLowerCase();
     const list: PickableMember[] = [];
-    for (const a of wsAgents) {
+    for (const a of pickableAgents) {
       if (inConversation.has(`agent:${a.id}`)) continue;
       if (q && !matchesAgent(a, q)) continue;
       list.push({ kind: 'agent', agent: a });
@@ -129,7 +153,7 @@ function PopoverBody({
       list.push({ kind: 'human', user: u });
     }
     return list;
-  }, [wsAgents, pickableHumans, inConversation, query]);
+  }, [pickableAgents, pickableHumans, inConversation, query]);
 
   const onPick = async (c: PickableMember): Promise<void> => {
     setError(null);
@@ -148,7 +172,7 @@ function PopoverBody({
 
   const isLoading =
     !memberLists.data
-    || (canPickGlobalHumans && !humans.data)
+    || (canPickGlobal && (!humans.data || !agents.data || !workspaces.data))
     || conversationMembers.status === 'loading';
 
   return (
@@ -193,7 +217,7 @@ function PopoverBody({
                     <AgentAvatar
                       runtime={c.agent.runtime}
                       size={20}
-                      avatarObjectUrl={wsAgentAvatars.get(c.agent.id) ?? null}
+                      avatarObjectUrl={agentAvatars.get(c.agent.id) ?? null}
                       alt={displayName}
                     />
                   ) : (
@@ -264,6 +288,13 @@ function formatError(err: unknown): string {
     switch (code) {
       case 'workspace_membership_required':
         return 'Agent 需要先加入 workspace 后才能添加。';
+      case 'host_mismatch':
+        // Defensive: the picker filters cross-host agents out, so this
+        // only surfaces on a race. Agents can't join a workspace on a
+        // different host.
+        return 'Agent 不在此 workspace 的 host 上,无法加入。';
+      case 'host_attach_pending':
+        return '当前 host 未连接,稍后再试。';
       case 'candidate_not_found':
         return '候选不存在,可能刚被删除。';
       case 'handle_ambiguous':

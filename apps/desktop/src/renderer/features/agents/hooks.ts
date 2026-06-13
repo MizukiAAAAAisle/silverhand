@@ -24,13 +24,14 @@ const agentRuntimeStateKey = (id: string) => ['agents', id, 'runtime-state'] as 
 const agentDeleteImpactKey = (id: string) => ['agents', id, 'delete-impact'] as const;
 const agentSchedulesKey = (id: string, status: ScheduleListStatusFilter) =>
   ['agents', id, 'schedules', status] as const;
-export function useAgents() {
+export function useAgents(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: agentsKey,
     queryFn: async () => {
       const res = await api<{ agents: AgentDto[] }>('/api/agents');
       return res.agents;
     },
+    enabled: options?.enabled ?? true,
   });
 }
 
