@@ -110,6 +110,8 @@ export const HUMAN_GOVERNANCE_ROUTES: readonly GovernanceRouteDecl[] = [
   { method: 'POST', path: '/api/channels/:id/pin', minRole: 'admin', roleScope: 'workspace' },
   { method: 'DELETE', path: '/api/channels/:id/pin', minRole: 'admin', roleScope: 'workspace' },
   { method: 'PATCH', path: '/api/channels/:id/archive', minRole: 'admin', roleScope: 'workspace' },
+  // Channel rename (title edit) — same governance class as archive.
+  { method: 'PATCH', path: '/api/channels/:id', minRole: 'admin', roleScope: 'workspace' },
   // Conversation member add (doc §6.1 names this a governance write).
   // roleScope is 'conversation' — the FIRST live use of conversation
   // scope: effective role = override ?? workspace_role, and cut 1 has no

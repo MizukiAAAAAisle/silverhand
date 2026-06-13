@@ -73,6 +73,11 @@ export interface SetArchivedInput {
   archived: boolean;
 }
 
+export interface RenameChannelInput {
+  channelId: string;
+  title: string;
+}
+
 export type WorkspaceUnsuitableCode =
   | 'workspace_not_found'
   | 'workspace_not_regular'
@@ -506,6 +511,82 @@ export class ChannelService {
       result.channel.id,
     );
     return { channel: result.channel };
+  }
+
+  /**
+   * Rename a top-level channel and broadcast the change so neither
+   * agents nor live UIs keep a stale title.
+   *
+   * Mirrors the workspace-rename contract (routes/workspaces.ts) at the
+   * channel scope: update the title, then — only when it actually
+   * changed — emit a `rename` system message into the channel
+   * (`scope: 'conversation'`), deliver it to every member agent so the
+   * new name reaches their context, and publish
+   * `workspace_channels_changed` so the sidebar/header refetch the new
+   * title. Unlike workspace names (plain handles, `#old → #new`),
+   * channel titles are freeform (spaces / CJK), so the prose quotes
+   * them rather than using a `#` sigil.
+   *
+   * A no-op rename (same title) short-circuits: no system message, no
+   * delivery, no event — returning the unchanged channel.
+   */
+  async renameChannel(
+    input: RenameChannelInput,
+  ): Promise<{ channel: ChannelConversationDto }> {
+    const existing = this.conversations.get(input.channelId);
+    if (!existing) {
+      throw repoError('not_found', 'channel not found');
+    }
+    if (existing.kind !== 'channel') {
+      throw repoError('not_renamable', 'only top-level channels can be renamed');
+    }
+
+    const oldTitle = existing.title;
+    if (input.title === oldTitle) {
+      // No-op: nothing changed, so emit nothing. Re-fetch through the
+      // channel-typed getter — `existing` is the wider ConversationDto
+      // and `kind === 'channel'` was checked above, so this resolves to
+      // a ChannelConversationDto.
+      const channel = this.conversations.getChannelLike(input.channelId);
+      if (!channel || channel.kind !== 'channel') {
+        throw repoError('not_found', 'channel not found');
+      }
+      return { channel };
+    }
+
+    const updated = this.conversations.updateTitle(input.channelId, input.title);
+    if (!updated) {
+      throw repoError('not_found', 'channel not found');
+    }
+
+    const announce = this.messages.insertForConversation({
+      conversationId: updated.id,
+      fromKind: 'system',
+      content:
+        `This channel was renamed from “${oldTitle}” to “${input.title}”. ` +
+        `Update any references in your MEMORY.md when you next edit it.`,
+      metadata: {
+        subtype: systemSubtype('rename'),
+        old_name: oldTitle,
+        new_name: input.title,
+        scope: 'conversation',
+      },
+    });
+
+    for (const ca of this.conversations.listAgents(updated.id)) {
+      await this.deliverBestEffort(
+        updated.id,
+        ca.agent_id,
+        announce.id,
+        'channel rename delivery failed',
+      );
+    }
+    this.events.publish(updated.id, {
+      kind: 'message',
+      payload: { message: announce },
+    });
+    this.publishWorkspaceChannelsChanged(updated.workspace_id, updated.id);
+    return { channel: updated };
   }
 
   private publishWorkspaceChannelsChanged(workspaceId: string, channelId: string): void {

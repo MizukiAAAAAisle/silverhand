@@ -574,13 +574,23 @@ export function readChannelContextMetadata(
 // ── rename metadata (PR-6) ───────────────────────────────────────────
 
 /**
- * Metadata shape for `rename` system messages — emitted into every
- * open channel of a workspace when its display name changes. The
- * renderer uses the structured names to draw a compact audit row
- * (`↻ workspace renamed #old → #new`) without re-parsing the prose.
+ * Metadata shape for `rename` system messages — emitted when a
+ * renamable entity's display name changes. Two scopes share this one
+ * subtype:
+ *   - `scope: 'workspace'` — emitted into every open channel of a
+ *     workspace when the workspace name changes (names are plain
+ *     handles, rendered `#old → #new`).
+ *   - `scope: 'conversation'` — emitted into a single channel when its
+ *     own title changes (titles are freeform — may contain spaces /
+ *     CJK — so the renderer quotes them rather than using a `#` sigil).
+ * The renderer uses the structured names + scope to draw a compact
+ * audit row without re-parsing the prose.
  *
- *  - `old_name` / `new_name`: the workspace name before and after
- *    the change. Both are plain workspace handles (no `#` prefix).
+ *  - `old_name` / `new_name`: the name before and after the change.
+ *  - `scope`: which kind of entity was renamed. Defaults to
+ *    `'workspace'` so legacy rows (written before channel rename
+ *    existed, when the only producer was workspace rename) parse
+ *    correctly without a stored field.
  *
  * Note: there is no `actor_user_id` field. The route is user-principal
  * only (single-user v1) so the actor is implicit. If multi-user
@@ -590,6 +600,7 @@ export const RenameMetadataSchema = z.object({
   subtype: z.literal('rename'),
   old_name: z.string(),
   new_name: z.string(),
+  scope: z.enum(['workspace', 'conversation']).default('workspace'),
 });
 export type RenameMetadata = z.infer<typeof RenameMetadataSchema>;
 

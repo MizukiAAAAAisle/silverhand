@@ -211,6 +211,15 @@ export const ArchiveChannelInputSchema = z.object({
 });
 export type ArchiveChannelInput = z.infer<typeof ArchiveChannelInputSchema>;
 
+/** Body for `PATCH /api/channels/:id` — rename a top-level channel.
+ *  `title` uses the same freeform constraint as channel creation
+ *  (1–128 chars, no regex: spaces / CJK allowed). Only the title is
+ *  mutable here; archive / pin have their own dedicated routes. */
+export const UpdateChannelInputSchema = z.object({
+  title: z.string().min(1).max(128),
+});
+export type UpdateChannelInput = z.infer<typeof UpdateChannelInputSchema>;
+
 /** Query for `GET /api/archived-channels`. `since` is epoch ms (inclusive
  *  lower bound on `archived_at`); the frontend converts 30d/14d/7d
  *  presets to a timestamp client-side. `workspace_id` narrows the list

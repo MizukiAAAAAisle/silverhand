@@ -181,6 +181,7 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
             subtype: systemSubtype('rename'),
             old_name: workspace.name,
             new_name: parsed.data.name,
+            scope: 'workspace',
           },
         });
         for (const ca of conversations.listAgents(channel.id)) {

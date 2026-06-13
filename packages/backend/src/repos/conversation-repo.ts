@@ -524,6 +524,24 @@ export class ConversationRepo {
     return row ? rowToChannel(row) : null;
   }
 
+  /** Rename a top-level channel. Gated to `kind = 'channel'` in the
+   *  WHERE clause (same as `setArchived`) so a thread/dm id silently
+   *  matches nothing and returns null — the service layer turns that
+   *  into a typed `not_renamable` / `not_found` error. */
+  updateTitle(id: string, title: string): ChannelConversationDto | null {
+    const now = Date.now();
+    const result = this.db
+      .prepare(
+        `UPDATE conversations
+         SET title = ?, updated_at = ?
+         WHERE id = ? AND kind = 'channel'`,
+      )
+      .run(title, now, id);
+    if (result.changes === 0) return null;
+    const row = this.getRaw(id);
+    return row ? rowToChannel(row) : null;
+  }
+
   /** Cascade archive state to every thread under a channel. Mirrors
    *  Slack/Discord semantics: archiving a channel freezes all its
    *  threads; unarchiving releases only the archive flag (a thread

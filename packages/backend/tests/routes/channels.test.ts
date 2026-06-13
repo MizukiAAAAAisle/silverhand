@@ -137,6 +137,7 @@ describe('workspace metadata and membership routes', () => {
     expect(renameParsed).not.toBeNull();
     expect(renameParsed!.old_name).toBe('old');
     expect(renameParsed!.new_name).toBe('newname');
+    expect(renameParsed!.scope).toBe('workspace');
     expect(t.fake.delivered.some(d => d.messageId === renameMsg.id)).toBe(true);
   });
 
@@ -869,6 +870,179 @@ describe('PATCH /api/channels/:id/archive', () => {
       { archived: 'yes' },
     );
     expect(bad.status).toBe(400);
+  });
+});
+
+describe('PATCH /api/channels/:id (rename)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('renames a channel, broadcasts a scoped rename system message, and delivers to members', async () => {
+    t = buildTestApp();
+    const aliceId = await makeAgent(t, 'alice');
+    const workspace = await (
+      await http(t).post('/api/workspaces', {
+        name: 'renametest',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    const created = await (
+      await http(t).post(
+        `/api/workspaces/${workspace.workspace.id}/channels`,
+        { title: 'planning', member_agent_ids: [aliceId] },
+      )
+    ).json() as any;
+    const channelId: string = created.channel.id;
+    t.fake.starts = [];
+    t.fake.delivered = [];
+    const events: Array<{ kind: string }> = [];
+    const unsub = t.ctx.events.subscribeScope(
+      `workspace:${workspace.workspace.id}`,
+      e => events.push({ kind: e.kind }),
+    );
+
+    const res = await http(t).patch(`/api/channels/${channelId}`, {
+      title: 'roadmap',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.channel.title).toBe('roadmap');
+    // Rename must not nudge lifecycle fields.
+    expect(body.channel.status).toBe(created.channel.status);
+    expect(body.channel.closed_at).toBeNull();
+
+    const msgs = await (
+      await http(t).get(`/api/channels/${channelId}/messages`)
+    ).json() as any;
+    const renameMsg = msgs.messages.find(
+      (m: any) => m.metadata?.subtype === 'rename',
+    );
+    expect(renameMsg).toBeTruthy();
+    // Channel-scoped rename: structured metadata carries the old/new
+    // title and scope='conversation' so the renderer can distinguish it
+    // from a workspace rename.
+    const parsed = readRenameMetadata(renameMsg.metadata);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.old_name).toBe('planning');
+    expect(parsed!.new_name).toBe('roadmap');
+    expect(parsed!.scope).toBe('conversation');
+    // The system message must reach the member agent's context.
+    expect(t.fake.delivered.some(d => d.messageId === renameMsg.id)).toBe(true);
+
+    unsub();
+    expect(events).toContainEqual({ kind: 'workspace_channels_changed' });
+  });
+
+  it('no-op rename (same title) makes no change and emits nothing', async () => {
+    t = buildTestApp();
+    const aliceId = await makeAgent(t, 'alice');
+    const workspace = await (
+      await http(t).post('/api/workspaces', {
+        name: 'noop',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    const created = await (
+      await http(t).post(
+        `/api/workspaces/${workspace.workspace.id}/channels`,
+        { title: 'planning', member_agent_ids: [aliceId] },
+      )
+    ).json() as any;
+    const channelId: string = created.channel.id;
+    t.fake.delivered = [];
+    const events: Array<{ kind: string }> = [];
+    const unsub = t.ctx.events.subscribeScope(
+      `workspace:${workspace.workspace.id}`,
+      e => events.push({ kind: e.kind }),
+    );
+
+    const res = await http(t).patch(`/api/channels/${channelId}`, {
+      title: 'planning',
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).channel.title).toBe('planning');
+
+    const msgs = await (
+      await http(t).get(`/api/channels/${channelId}/messages`)
+    ).json() as any;
+    expect(
+      msgs.messages.some((m: any) => m.metadata?.subtype === 'rename'),
+    ).toBe(false);
+
+    unsub();
+    expect(t.fake.delivered).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it('rejects threads and dm_channels with 400 not_renamable', async () => {
+    t = buildTestApp();
+    const aliceId = await makeAgent(t, 'alice');
+    const workspace = await (
+      await http(t).post('/api/workspaces', {
+        name: 'rejectrename',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    const created = await (
+      await http(t).post(
+        `/api/workspaces/${workspace.workspace.id}/channels`,
+        { title: 'planning', member_agent_ids: [aliceId] },
+      )
+    ).json() as any;
+    const conversations = new ConversationRepo(t.ctx.db);
+    const thread = conversations.insertThread({
+      channelId: created.channel.id,
+      title: 'thread',
+    });
+    const threadRes = await http(t).patch(`/api/channels/${thread.id}`, {
+      title: 'renamed-thread',
+    });
+    expect(threadRes.status).toBe(400);
+    expect(((await threadRes.json()) as any).code).toBe('not_renamable');
+
+    const dmChannel = conversations.listDmChannels()[0];
+    expect(dmChannel).toBeTruthy();
+    const dmRes = await http(t).patch(`/api/channels/${dmChannel!.id}`, {
+      title: 'renamed-dm',
+    });
+    expect(dmRes.status).toBe(400);
+    expect(((await dmRes.json()) as any).code).toBe('not_renamable');
+  });
+
+  it('returns 404 for unknown ids and 400 for invalid bodies', async () => {
+    t = buildTestApp();
+    const missing = await http(t).patch('/api/channels/missing', {
+      title: 'whatever',
+    });
+    expect(missing.status).toBe(404);
+
+    const aliceId = await makeAgent(t, 'alice');
+    const workspace = await (
+      await http(t).post('/api/workspaces', {
+        name: 'badrenamebody',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    const created = await (
+      await http(t).post(
+        `/api/workspaces/${workspace.workspace.id}/channels`,
+        { title: 'planning', member_agent_ids: [aliceId] },
+      )
+    ).json() as any;
+    const channelId: string = created.channel.id;
+
+    const empty = await http(t).patch(`/api/channels/${channelId}`, {
+      title: '',
+    });
+    expect(empty.status).toBe(400);
+
+    const tooLong = await http(t).patch(`/api/channels/${channelId}`, {
+      title: 'x'.repeat(129),
+    });
+    expect(tooLong.status).toBe(400);
   });
 });
 

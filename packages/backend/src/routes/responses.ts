@@ -199,6 +199,7 @@ const repoErrorStatusMap: Record<string, 400 | 404 | 409 | 429> = {
   not_found: 404,
   thread: 400,
   not_archivable: 400,
+  not_renamable: 400,
 };
 
 export function channelServiceErrorResponse(c: Context, err: unknown): Response | null {

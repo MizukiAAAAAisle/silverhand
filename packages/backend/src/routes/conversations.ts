@@ -16,6 +16,7 @@ import {
   ConversationLogDebugInputSchema,
   MarkConversationReadInputSchema,
   SearchQueryInputSchema,
+  UpdateChannelInputSchema,
   SendMessageInputSchema,
   TEMP_CONVERSATION_DEBUG_WINDOW_MS,
 } from '@silverhand/shared';
@@ -572,6 +573,36 @@ export function createConversationMessagingApp(
       const result = await ctx.channelService.setArchived({
         channelId: id,
         archived: parsed.data.archived,
+      });
+      return c.json({ channel: result.channel });
+    } catch (err) {
+      const mapped = channelServiceErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
+  });
+
+  // Rename a top-level channel. Mirrors the archive handler's gate
+  // (workspace `admin`) and error mapping; the service owns the title
+  // write + `rename` system-message broadcast + delivery + the
+  // `workspace_channels_changed` publish.
+  app.patch(apiPaths.conversationChannel(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'channel id required' }, 400);
+    const conversation = conversations.get(id);
+    if (!conversation) return c.json({ error: 'channel not found' }, 404);
+    if (!canGovernWorkspace(ctx, getUserPrincipal(c), conversation.workspace_id, 'admin')) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = UpdateChannelInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    try {
+      const result = await ctx.channelService.renameChannel({
+        channelId: id,
+        title: parsed.data.title,
       });
       return c.json({ channel: result.channel });
     } catch (err) {
