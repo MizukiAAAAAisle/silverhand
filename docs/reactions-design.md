@@ -21,7 +21,7 @@
 - 不做 reaction 通知/计入未读。reaction 是低优先级信号，不该制造 unread。
 - 不做自定义 emoji / 图片 emoji。只接受 Unicode emoji。
 - 不做 reaction 触发 workflow（如"👍 即 approve task"）。reaction 不进入任务状态机。
-- 不做 per-emoji 的细粒度权限。能看会话即能 react。
+- 不做 per-emoji 的细粒度权限。reaction 是**写操作**,用**发消息同级**的写权限(human=可发消息;agent internal route require `send_messages` capability)——`read_messages` 不能写 reaction。详见 §12.D(消歧后口径,supersede 旧"能看会话即能 react"的措辞)。
 - **v1 human UI 只做最小 chips**（@Cindy 2026-06-09 补、@Alice 采纳）：消息下方
   reaction chips + 点自己已有 reaction 取消。**emoji picker / hover 反应者列表
   后置**——否则「轻量 ack」会膨胀成一整套社交互动 UI。此项是零迁移成本的延后：
@@ -279,3 +279,83 @@ S1/S2 是 @Cindy 的后端主场；S4 是我（renderer/desktop）；S3 跨层�
 - **human `/api` 路由**：**本期就做**。否则 renderer 没法点 reaction，只做 agent 链路会把产品做半截。**（Cindy 建议，已采纳进切片 S2）**
 
 以上 4 条 Cindy 与我意见一致，若 @shiki 无异议即作为 v1 基线锁定。
+
+---
+
+## 12. 2026-06-14 repo-delta 修订（@Alice + @Cindy 共识）
+
+> 本节是 2026-06-02 草案落地前的现读修订。草案写完后 repo 发生结构性变化
+> （thread = reply-cluster、`application/` use-case 层 + `read-model/`、per-stream
+> freshness CAS、drift-guard 硬检查），以下与正文冲突处**以本节为准**。来源：
+> @Alice 架构/契约评估 + @Cindy #task:1118 后端现读评审，两方一致。
+> **@shiki 2026-06-14 拍板：本节 repo-delta 作为 v1 基线锁定；§12.E（system message
+> 不可被 react）确定 v1 禁止。** 视觉/S4 渲染契约由 @Norman 直接与 @shiki 对焦，不在本节。
+
+### A. CAS 排除 = 不变量（keystone，@shiki 提）
+reaction 写入**既不分配 conversation message seq、也不推进任何 stream 的 freshness
+head、也不动 read-cursor/observed-boundary**。现状 freshness = 按 stream 维度的 seq
+CAS（`conversation-message-service.ts:218/231` "conversation advanced from seq N"），
+stream 分 `main`（`thread_root_id IS NULL`）与 `cluster`/thread（`id=root OR
+thread_root_id=root`，`message-repo.ts:712`）——「channel + thread」即这两条 stream，
+两者皆不可推。
+理由比"clean"更硬：reaction 目的是**降噪**；一旦推进 stream head，会(a)让所有 in-flight
+的 agent `message send` 因一个 emoji 变 `message_stale`，(b)在 freshness/未读语义里冒充
+"新内容"——降噪器反成噪音放大器。§3.1 独立表已天然不写 message 行，守住"广播只走
+ScopeEventBus 自有 event kind，绝不借推 stream head 蹭 replay/freshness 基建"即可。
+同族覆盖 §1 非目标的"不进 unread/通知"：reaction 不进任何投递 / 唤醒 / freshness 通道。
+
+### B. write/read 分层重定向（§5/§6 retarget）
+草案的"ReactionService（或并入 MessageService）"已过时。
+- **写** → `application/add-reaction.ts` / `remove-reaction.ts` 两个 use-case；WS 广播作为
+  **post-commit effect** 走 `runPostCommitEffects`（不在 service 内联，no domain-event）。
+- **读**（§6 的 `IN(...) GROUP BY` 聚合 + §3.5 viewer 贯穿）→ 归 `read-model/`，不散在
+  `message-repo` ad-hoc。
+
+### C. thread = reply-cluster（草案时还没有）
+- §5.2 event payload **必须带 `conversation_id + thread_root_id`**：transport 仍走扁平
+  `conversation:<cid>` scope（thread 共享父 channel scope），但 renderer 要靠 thread 上下文
+  把 chip 更新路由到正确 surface（主线 vs thread pane）。
+- renderer cache 按当前 main/cluster key 设计（@Cindy）：patch/失效 `messagesKey(channelId)`
+  与 `clusterMessagesKey(channelId, threadRootId)`；`snapshot_required` 时**直接 invalidate
+  相关 message queries，不靠 replay 补**（与 §5.2 "count 绝对赋值"同一抗漂移原则）。
+- §3.5 `viewer_reacted` 聚合要能服务 thread-pull（`history --target thread:`）读到的消息。
+
+### D. 权限口径消歧 = 发消息同级写权限（@Cindy，已采纳）
+草案 §1 与 §11 措辞冲突（"能看会话即能 react" vs "能发消息即能 react"）。**定为后者**：
+reaction 是写操作，human 走发送消息同级写权限；agent internal route require `send_messages`
+capability；`read_messages` 不能写 reaction。v1 仍不拆独立 `reactions` capability scope。
+（§1 非目标 bullet 已就地改齐。）
+
+### E. system message v1 不可被 react（@Cindy 提，@shiki 2026-06-14 拍板：确定 v1 禁止）
+§3.2 已拒绝 reactor=system；本条是**另一向**：被 react 的目标若是 system row，v1 也禁止
+（`target.from_kind !== 'system'`）。否则需为 `SystemActivityCluster` 聚合设计 cluster 内单行
+chip，把"轻量 ack"拖成 system-event UI 重构。v1 先只允许 human/agent message。
+
+### F. closed/archived 校验范围扩大（§3.6 仍成立）
+检查现在还覆盖 thread parent + thread 本身（`conversation-message-service.ts:847/866`）。
+reaction 写入复用 closed/archived 校验时，main 和 thread 两路都要挡。
+
+### G. drift-guard 进切片（@Cindy；硬检查，非收尾）
+新增 public/internal routes + shared schemas 后，同切片内必须同步 endpoint registry
+snapshot 与 api barrel export snapshot——这是 repo 的硬检查，不是落地后再补的小事。
+
+### H. S1 测试锁"不改 stream head"（@Cindy；= A 的可执行锁）
+S1 除表/唯一约束/幂等/closed-archived 拒绝外，**必须断言** reaction add/remove 不改变
+`messages.seq`、`conversations.latest_message_seq`、`conversation_stream_heads.latest_seq`。
+这是防止后人误把 reaction 当 message event 接进 CAS 的执行级守卫。
+
+### I. 仍成立 / 杂项
+- ws-frame `EventFrame.kind` 仍是开放 `string`（`ws-frames.ts:107`）——§5.2 的"新增 shared
+  payload schema、**别**把 kind 收紧成 union"依然正确。
+- isomorphism（`reactor_kind+reactor_id`）、显式 add/remove 非 toggle、幂等 UNIQUE、count
+  绝对赋值——不受 repo 变化影响。
+- §9 etiquette prompt 规则要按 `docs/platform-prompt-design.md` 的设计契约（9 段骨架 /
+  load-bearing / 测试纪律）放对段、走测试纪律，不按行号塞；CLI 三处同步（cli-system.md +
+  platform-prompt + dto）硬约束不变。
+- **版本/锚点漂移**：migration 现到 **v45**，reactions 表是 **v46**（非草案的 v36）；正文所有
+  行号锚点（DtoSchema ~841、paths ~191、MessageItem ~108…）全漂，当概念文档读、落地现搜。
+
+### 修订后切片方向（supersede §10）
+CAS 排除不变量(A/H) + write/read 分层(B) + thread_root payload & cache key(C) +
+send-permission write gate(D) + system-message v1 禁止(E) + closed/archived 两路(F) +
+drift-guard 进切片(G)。S1/S2 后端归 @Cindy，S4 renderer 归 @Norman，S3 跨层两边同步。
