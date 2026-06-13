@@ -206,7 +206,7 @@ function HumanPresenceInline({ userId }: { userId: string }): JSX.Element {
       className="inline-flex shrink-0 items-center gap-1 text-[10px] text-text-muted"
       title={label}
     >
-      <span className={`size-1.5 rounded-full ${PRESENCE_DOT[dot]}`} aria-hidden />
+      <span data-status-pip className={`size-1.5 rounded-full ${PRESENCE_DOT[dot]}`} aria-hidden />
       {label}
     </span>
   );
