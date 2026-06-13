@@ -54,6 +54,7 @@ import {
   usePinWorkspace,
   usePinChannel,
   useArchiveChannel,
+  useRenameChannel,
   type ChannelListItem,
 } from '@/features/workspaces/hooks';
 import { useSavedMessages } from '@/features/saved/hooks';
@@ -334,6 +335,7 @@ function RegisteredAppShell(): JSX.Element {
   const pinWorkspace = usePinWorkspace();
   const pinChannel = usePinChannel(selectedWorkspaceId ?? null);
   const archiveChannel = useArchiveChannel(selectedWorkspaceId ?? null);
+  const renameChannel = useRenameChannel(selectedWorkspaceId ?? null);
   // Shared cache with SavedListView and useToggleSave — invalidations
   // from save/unsave mutations propagate the count update here too.
   const { data: savedItems } = useSavedMessages();
@@ -948,6 +950,19 @@ function RegisteredAppShell(): JSX.Element {
     [archiveChannel, selectedWorkspaceId],
   );
 
+  // Async so ChannelView's rename dialog can await success/failure and
+  // surface a save error inline (mutateAsync rejects on 403 / 400).
+  const handleRenameChannelMutation = useCallback(
+    async (channelId: string, title: string) => {
+      await renameChannel.mutateAsync({
+        channelId,
+        title,
+        workspaceId: selectedWorkspaceId ?? undefined,
+      });
+    },
+    [renameChannel, selectedWorkspaceId],
+  );
+
   // Memoize the descriptor objects so ChannelView's `conversation` prop
   // keeps the same identity unless the underlying channel actually changes.
   const parentDescriptor = useMemo(
@@ -984,6 +999,15 @@ function RegisteredAppShell(): JSX.Element {
       archiveChannel.mutate({ channelId, archived, workspaceId: wid });
     },
     [archiveChannel, secondaryViewInputs.archiveWorkspaceId, selectedWorkspaceId],
+  );
+
+  const handleRenameSecondaryChannelMutation = useCallback(
+    async (channelId: string, title: string) => {
+      const wid =
+        secondaryViewInputs.archiveWorkspaceId ?? selectedWorkspaceId ?? undefined;
+      await renameChannel.mutateAsync({ channelId, title, workspaceId: wid });
+    },
+    [renameChannel, secondaryViewInputs.archiveWorkspaceId, selectedWorkspaceId],
   );
 
   // Same for the per-pane jumpTarget — the inline ternary recreated the
@@ -1049,6 +1073,7 @@ function RegisteredAppShell(): JSX.Element {
       }
       threadsListActive={threadsListOpen}
       onArchiveChannel={handleArchiveChannelMutation}
+      onRenameChannel={handleRenameChannelMutation}
       archivePending={archiveChannel.isPending}
       conversationRefsById={conversationRefsById}
       onOpenConversationRef={nav.openSide}
@@ -1101,6 +1126,7 @@ function RegisteredAppShell(): JSX.Element {
           // invalidation targets the foreign workspace's channels list,
           // not the primary's.
           onArchiveChannel={handleArchiveSecondaryChannelMutation}
+          onRenameChannel={handleRenameSecondaryChannelMutation}
           archivePending={archiveChannel.isPending}
           conversationRefsById={conversationRefsById}
           onOpenConversationRef={nav.openSide}

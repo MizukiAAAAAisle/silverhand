@@ -165,7 +165,7 @@ describe('SystemActivityCluster (PR-10)', () => {
     expect(html).toContain('lucide-rotate-ccw');
     // rename signal
     expect(html).toContain('data-rename-row="1"');
-    expect(html).toContain('lucide-rotate-cw');
+    expect(html).toContain('lucide-pencil');
   });
 
   it('a 1-element cluster still uses the cluster wrapper (so even a lone audit row visually demotes)', () => {

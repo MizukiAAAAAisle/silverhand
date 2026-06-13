@@ -11,16 +11,14 @@ import {
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { toast } from 'sonner';
 import {
-  Archive,
-  ArchiveRestore,
   ArrowDown,
   CornerDownRight,
   Maximize2,
   CornerUpLeft,
   Minimize2,
-  MoreHorizontal,
   Power,
   RefreshCw,
+  Settings,
   X,
 } from 'lucide-react';
 import type {
@@ -48,10 +46,7 @@ import { HoverPopover } from '@/components/chat/HoverPopover';
 import { useConversationMembers } from '@/features/conversations/useConversationMembers';
 import { AddConversationMemberPopover } from '@/features/conversations/AddConversationMemberPopover';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
-import {
-  AppDropdownMenu,
-  AppDropdownMenuItem,
-} from '@/components/menus/AppContextMenu';
+import { ChannelSettingsDialog } from './ChannelSettingsDialog';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
@@ -155,6 +150,10 @@ interface ChannelViewProps {
    *  organizational only — it does not disable messaging or agents. */
   onArchiveChannel?: (channelId: string, archived: boolean) => void;
   archivePending?: boolean;
+  /** Persist a new channel title. Async so the rename dialog can surface
+   *  save errors inline and stay open on failure. Only wired for
+   *  top-level regular channels; absence hides the Rename entry. */
+  onRenameChannel?: (channelId: string, title: string) => Promise<void>;
   /** Current-workspace top-level conversation id map for inline `#conv:<id>` refs. */
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
@@ -225,6 +224,7 @@ function ActiveChannelView({
   isFullscreen,
   onArchiveChannel,
   archivePending = false,
+  onRenameChannel,
   conversationRefsById,
   onOpenConversationRef,
   onOpenChannelRef,
@@ -273,6 +273,17 @@ function ActiveChannelView({
     conversation.kind === 'channel' &&
     conversation.parent_conversation_id === null &&
     !!onArchiveChannel;
+  // Rename shares archive's structural gate (top-level regular channel),
+  // minus the archive-specific bits, plus "not closed" — a closed channel
+  // is read-only. The parent decides the permission by whether it passes
+  // `onRenameChannel` at all.
+  const canRenameChannel =
+    channelKind === 'regular' &&
+    conversation.kind === 'channel' &&
+    conversation.parent_conversation_id === null &&
+    !closed &&
+    !!onRenameChannel;
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const { data: viewer } = useViewerUser();
   const { data: channelAgents = [] } = useChannelAgents(conversation.id);
   const startAgent = useStartAgent(conversation.id);
@@ -520,33 +531,16 @@ function ActiveChannelView({
               </button>
             </>
           ) : null}
-          {canToggleArchive ? (
-            <AppDropdownMenu
-              trigger={
-                <button
-                  type="button"
-                  aria-label="Channel actions"
-                  title="Channel actions"
-                  className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
-                >
-                  <MoreHorizontal className="size-4" />
-                </button>
-              }
+          {canRenameChannel || canToggleArchive ? (
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Channel settings"
+              title="Channel settings"
+              className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
-              <AppDropdownMenuItem
-                disabled={archivePending}
-                icon={
-                  isArchived ? (
-                    <ArchiveRestore className="size-3.5" />
-                  ) : (
-                    <Archive className="size-3.5" />
-                  )
-                }
-                onSelect={() => onArchiveChannel?.(conversation.id, !isArchived)}
-              >
-                {isArchived ? 'Restore' : 'Archive'}
-              </AppDropdownMenuItem>
-            </AppDropdownMenu>
+              <Settings className="size-4" />
+            </button>
           ) : null}
           {onToggleFullscreen ? (
             <button
@@ -576,6 +570,26 @@ function ActiveChannelView({
           ) : null}
         </div>
       </header>
+
+      {canRenameChannel || canToggleArchive ? (
+        <ChannelSettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          currentTitle={conversation.title}
+          onRename={
+            canRenameChannel && onRenameChannel
+              ? title => onRenameChannel(conversation.id, title)
+              : undefined
+          }
+          isArchived={isArchived}
+          onToggleArchive={
+            canToggleArchive && onArchiveChannel
+              ? archived => onArchiveChannel(conversation.id, archived)
+              : undefined
+          }
+          archivePending={archivePending}
+        />
+      ) : null}
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* Message area + activity dock share a relative box so the dock

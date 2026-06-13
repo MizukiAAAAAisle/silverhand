@@ -536,6 +536,45 @@ export function useArchiveChannel(workspaceId: string | null) {
   });
 }
 
+export function useRenameChannel(workspaceId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      channelId,
+      title,
+    }: {
+      channelId: string;
+      title: string;
+      workspaceId?: string;
+    }) => {
+      const res = await api<{ channel: ChannelConversationDto }>(
+        apiPaths.conversationChannel(channelId),
+        { method: 'PATCH', body: JSON.stringify({ title }) },
+      );
+      return res.channel;
+    },
+    onSuccess: (channel, vars) => {
+      const targetWorkspaceId =
+        vars.workspaceId ?? channel.workspace_id ?? workspaceId;
+      // Rename keeps the row in place (unlike archive), but the title is
+      // mirrored into several read models, so refresh all of them rather
+      // than only the active list — a rename on an archived channel (the
+      // header settings menu is reachable while archived) or in a foreign
+      // secondary pane would otherwise show a stale title until an
+      // unrelated WS event happened to refetch:
+      //   - active + archived channel lists (sidebar groups)
+      //   - the global archived-channels index
+      //   - the conversation-ref cache (#conv:<id> chips / secondary pane)
+      if (targetWorkspaceId) {
+        qc.invalidateQueries({ queryKey: channelsKey(targetWorkspaceId) });
+        qc.invalidateQueries({ queryKey: archivedChannelsKey(targetWorkspaceId) });
+      }
+      qc.invalidateQueries({ queryKey: ['archived-channels'] });
+      qc.invalidateQueries({ queryKey: ['conversation-ref', channel.id] });
+    },
+  });
+}
+
 export function useWorkspaceMembers(workspaceId: string | null) {
   return useQuery({
     queryKey: workspaceId ? membersKey(workspaceId) : ['workspaces', 'none', 'members'],

@@ -4,9 +4,9 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock,
+  Pencil,
   Quote,
   RotateCcw,
-  RotateCw,
   Sprout,
   UserMinus,
   UserPlus,
@@ -1346,7 +1346,7 @@ function OnboardingRow({
 //
 // Rename messages carry `{old_name, new_name}` in metadata since
 // PR-6's predecessor — the renderer parses them into a compact
-// audit row (`↻ workspace renamed #old → #new`) so the prose body
+// audit row (`✎ workspace renamed old → new`) so the prose body
 // (which exists for the agent-stdin imperative wrap) doesn't have
 // to be the user-visible surface. Legacy rows without metadata fall
 // through to generic narration.
@@ -1358,20 +1358,32 @@ function RenameRow(props: RendererProps): JSX.Element {
   if (!meta) {
     return <GenericNarrationFallback {...props} />;
   }
+  // `scope` splits a workspace rename (broadcast to every channel) from a
+  // single channel rename (#task:1108/1109). Channel titles are freeform
+  // (spaces / CJK), so the `#` name sigil is dropped for them; workspace
+  // names stay `#`-prefixed since they're name-addressable. Legacy rows
+  // lack `scope` → schema default 'workspace' preserves the original
+  // rendering. The names render as plain inline text (old = muted, new =
+  // emphasised) — the earlier `<code>` chips read as visual noise in the
+  // stream (@shiki feedback msg `otnb0ykIuDaNTtoC`).
+  const isConversation = meta.scope === 'conversation';
+  const namePrefix = isConversation ? '' : '#';
   return (
     <div
       data-rename-row="1"
       className="flex flex-wrap items-center justify-center gap-1.5 px-4 py-1 text-text-muted"
     >
-      <RotateCw aria-hidden className="size-3.5 shrink-0 opacity-60" />
-      <span>workspace renamed</span>
-      <code className="rounded bg-bg-elevated px-1 font-mono text-text-secondary">
-        #{meta.old_name}
-      </code>
+      <Pencil aria-hidden className="size-3.5 shrink-0 opacity-60" />
+      <span>{isConversation ? 'channel renamed' : 'workspace renamed'}</span>
+      <span className="text-text-secondary">
+        {namePrefix}
+        {meta.old_name}
+      </span>
       <span aria-hidden>→</span>
-      <code className="rounded bg-bg-elevated px-1 font-mono text-text-primary">
-        #{meta.new_name}
-      </code>
+      <span className="font-medium text-text-primary">
+        {namePrefix}
+        {meta.new_name}
+      </span>
     </div>
   );
 }

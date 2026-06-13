@@ -659,11 +659,13 @@ describe('SystemMessage channel refs', () => {
   });
 
   // PR-6: rename reads `{old_name, new_name}` and draws a compact
-  // audit row (`↻ workspace renamed #old → #new`) instead of relying
+  // audit row (`✎ workspace renamed old → new`) instead of relying
   // on the prose body. Legacy rows without metadata fall through to
-  // generic italic narration.
+  // generic italic narration. The names render as plain inline text —
+  // the earlier `<code>` chips read as visual noise (@shiki
+  // `otnb0ykIuDaNTtoC`).
 
-  it('renders rename with ↻ icon + old → new code chips when metadata is present', () => {
+  it('renders rename with ✎ pencil icon + plain old → new text when metadata is present', () => {
     const msg = makeSystemMessage(
       'rename',
       { old_name: 'version2', new_name: 'version3' },
@@ -671,13 +673,13 @@ describe('SystemMessage channel refs', () => {
     );
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-rename-row="1"');
-    expect(html).toContain('lucide-rotate-cw');
+    expect(html).toContain('lucide-pencil');
     expect(html).toContain('#version2');
     expect(html).toContain('#version3');
     expect(html).toContain('→');
-    // Old-name and new-name both rendered as <code> chips.
-    expect(html).toMatch(/<code[^>]*>#version2<\/code>/);
-    expect(html).toMatch(/<code[^>]*>#version3<\/code>/);
+    // Names are plain inline text, NOT wrapped in <code> chips.
+    expect(html).not.toMatch(/<code[^>]*>#version2<\/code>/);
+    expect(html).not.toMatch(/<code[^>]*>#version3<\/code>/);
   });
 
   it('renames without enriched metadata fall back to generic italic narration', () => {
