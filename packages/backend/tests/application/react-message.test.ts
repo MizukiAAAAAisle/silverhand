@@ -338,6 +338,51 @@ describe('react-message use cases (application layer)', () => {
     expect(res.error.code).toBe('forbidden');
   });
 
+  it('locks message_id to the agent token conversation: a member of BOTH A and B cannot react cross-conversation', async () => {
+    // Cindy review boundary: an agent whose token is bound to conversation A
+    // must not use it to react on a message in conversation B, EVEN when it
+    // is a member of B. The lock is canViewConversation's agent branch
+    // (permissions.ts: principal.conversationId === message.conversation_id),
+    // mirroring how send only ever writes to the principal's own conversation
+    // — react is strictly no-broader. (The token↔(cid,aid) binding is the
+    // transport-layer half; this pins the domain-layer half.)
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const ws = await createWorkspace(t, 'twoconv-ws', [alice]);
+    const channelA = await createChannel(t, ws, 'room-a', [alice]);
+    const channelB = await createChannel(t, ws, 'room-b', [alice]);
+    const messageInB = insertMessage(t, channelB);
+    const deps = reactDeps(t);
+
+    // Principal bound to A (as the token would be), targeting B's message.
+    const res = await addReaction(deps, {
+      principal: { kind: 'agent', agentId: alice, conversationId: channelA },
+      messageId: messageInB,
+      emoji: '👍',
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('unreachable');
+    expect(res.error.code).toBe('forbidden');
+    // No write leaked into B.
+    expect(
+      t.ctx.db
+        .prepare<[string], { n: number }>(
+          'SELECT COUNT(*) AS n FROM message_reactions WHERE message_id = ?',
+        )
+        .get(messageInB)?.n,
+    ).toBe(0);
+
+    // Sanity: the SAME agent reacting with a B-bound principal succeeds, so
+    // the rejection is specifically the cross-conversation lock, not a
+    // blanket membership failure.
+    const ok = await addReaction(deps, {
+      principal: { kind: 'agent', agentId: alice, conversationId: channelB },
+      messageId: messageInB,
+      emoji: '👍',
+    });
+    expect(ok.ok).toBe(true);
+  });
+
   it('§12.F: rejects reacting in an archived conversation', async () => {
     t = buildTestApp();
     const ws = await createWorkspace(t, 'arch-ws', []);
