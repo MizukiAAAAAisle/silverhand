@@ -705,6 +705,7 @@ function Avatar({
       return (
         <HumanInfoPopover
           human={human}
+          userId={human.id}
           trigger="hover"
           avatarObjectUrl={humanAvatarObjectUrl}
         >
@@ -835,6 +836,7 @@ function AuthorLabel({
     return (
       <HumanInfoPopover
         human={human}
+        userId={human.id}
         trigger="hover"
         avatarObjectUrl={humanAvatarObjectUrl}
       >

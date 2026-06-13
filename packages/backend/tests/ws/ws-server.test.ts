@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import type { RawData } from 'ws';
 import {
@@ -18,6 +18,8 @@ import {
 import { startBackend, type RunningBackend } from '../../src/index.js';
 import { EVENT_WS_PATH, installEventWebSocketServer } from '../../src/ws/ws-server.js';
 import type { EventWsServerController, EventWsServerOptions } from '../../src/ws/ws-server.js';
+import { PresenceRegistry } from '../../src/presence/presence-registry.js';
+import { UserRepo } from '../../src/repos/user-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 interface TestWsServer {
@@ -142,7 +144,7 @@ describe('event WebSocket server', () => {
       type: 'subscribed',
       scope: 'app',
       epoch: t.ctx.events.epoch,
-      seq: 0,
+      seq: 1,
     });
 
     const eventFrame = readFrame(ws);
@@ -151,11 +153,48 @@ describe('event WebSocket server', () => {
     expect(event).toMatchObject({
       type: 'event',
       scope: 'app',
-      seq: 1,
+      seq: 2,
       epoch: t.ctx.events.epoch,
       kind: 'workspace_list_changed',
       payload: { ok: true },
     });
+  });
+
+  it('publishes human presence transitions from websocket lifecycle', async () => {
+    t = buildTestApp();
+    t.ctx.presence = new PresenceRegistry({
+      events: t.ctx.events,
+      users: new UserRepo(t.ctx.db),
+      offlineGraceMs: 0,
+      logger: t.ctx.logger,
+    });
+    const publishSpy = vi.spyOn(t.ctx.events, 'publishToScope');
+    server = await openServer(t);
+
+    const { ws } = await connectAuthenticated(
+      server.url,
+      t.ctx.authSessions.issueSession({ userId: 'local' }).userToken,
+    );
+    sockets.push(ws);
+    expect(publishSpy).toHaveBeenCalledWith('app', 'user_presence', {
+      user_id: 'local',
+      presence: 'online',
+      last_seen_at: null,
+    });
+
+    const closed = waitForClose(ws);
+    ws.close();
+    await closed;
+    await new Promise(resolve => setTimeout(resolve, 5));
+
+    expect(publishSpy).toHaveBeenCalledWith('app', 'user_presence', {
+      user_id: 'local',
+      presence: 'offline',
+      last_seen_at: expect.any(Number),
+    });
+    expect(new UserRepo(t.ctx.db).get('local')?.last_seen_at).toEqual(
+      expect.any(Number),
+    );
   });
 
   it('rewrites viewer:self and forbids subscribing to another viewer', async () => {

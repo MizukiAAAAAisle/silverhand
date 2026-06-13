@@ -21,6 +21,7 @@ import { createHostApp } from './routes/hosts.js';
 import { createWorkspacesApp } from './routes/workspaces.js';
 import { createTasksApp } from './routes/tasks.js';
 import { createNotificationsApp } from './routes/notifications.js';
+import { createPresenceApp } from './routes/presence.js';
 import { createUsersApp } from './routes/users.js';
 import { createAuthApp } from './routes/auth.js';
 import { createSettingsApp } from './routes/settings.js';
@@ -480,6 +481,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
 
   // Current viewer, user directory, and avatar routes.
   app.route('/', createUsersApp({ ctx }));
+
+  // Global human presence snapshot. Delta events publish on app scope.
+  app.route('/', createPresenceApp({ ctx, users }));
 
   // Viewer notification routes.
   app.route('/', createNotificationsApp({ ctx, notifications }));

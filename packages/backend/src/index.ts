@@ -32,6 +32,7 @@ import { AuthSessionService } from './auth/session.js';
 import { HostRepo } from './repos/host-repo.js';
 import { ensureWorkspacesRoot } from './workspaces-root.js';
 import { ScopeEventBus } from './ws/scope-event-bus.js';
+import { PresenceRegistry } from './presence/presence-registry.js';
 import {
   installEventWebSocketServer,
   type EventWsServerController,
@@ -310,6 +311,12 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   // server_url at all: the host daemon injects the control-plane URL locally.
   // Stays null for standalone (daemon dials in).
   let startEmbeddedOutboundConnect: (() => void) | null = null;
+  const events = new ScopeEventBus();
+  const presence = new PresenceRegistry({
+    events,
+    users: new UserRepo(db),
+    logger,
+  });
 
   const ctx: BackendContext = {
     db,
@@ -343,7 +350,8 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     taskService: undefined as unknown as TaskService,
     scheduleService: undefined as unknown as ScheduleService,
     idleReaperService: undefined as unknown as IdleReaperService,
-    events: new ScopeEventBus(),
+    events,
+    presence,
     silverhandCliLauncher,
     agentTokens: new AgentTokenStore(),
     passwordCredentials: new PasswordCredentialService(db),
@@ -559,6 +567,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
               eventWs?.close(),
               hostWs?.close(),
             ]);
+            ctx.presence.dispose();
             // Close the embedded local-Unix adapter's socket (the
             // standalone adapter only views the bootstrap-owned hostWs,
             // so its close() is a no-op).

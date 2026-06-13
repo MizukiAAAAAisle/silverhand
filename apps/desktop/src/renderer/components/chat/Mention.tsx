@@ -111,6 +111,7 @@ function HumanMention({ human }: { human: UserDto }): JSX.Element {
   return (
     <HumanInfoPopover
       human={human}
+      userId={human.id}
       trigger="hover"
       avatarObjectUrl={avatarObjectUrl}
     >

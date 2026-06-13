@@ -60,6 +60,17 @@ export class UserRepo {
       .all();
   }
 
+  touchLastSeen(id: string, seenAt: number): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE users
+            SET last_seen_at = ?
+          WHERE id = ?`,
+      )
+      .run(seenAt, id);
+    return result.changes > 0;
+  }
+
   /**
    * INSERT a new user row. Callers must run this inside the transaction
    * that creates any adjacent credential or bridge rows.

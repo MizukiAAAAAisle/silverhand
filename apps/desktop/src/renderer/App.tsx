@@ -45,6 +45,7 @@ import { SideUnresolvedPlaceholder } from '@/components/layout/SideUnresolvedPla
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import { useConversationById } from '@/features/conversations/useConversationById';
 import { useAgents } from '@/features/agents/hooks';
+import { usePresenceSync } from '@/features/presence/hooks';
 import {
   useWorkspaces,
   useViewerWorkspacesSync,
@@ -191,6 +192,12 @@ function RegisteredAppShell(): JSX.Element {
   // also catches "added to your first workspace". See
   // docs/viewer-visibility-sync-v1.md.
   useViewerWorkspacesSync();
+
+  // Keep human online/offline presence live. Mounted ONCE here (post-auth,
+  // independent of any view) so the global `app`-scope `user_presence`
+  // deltas patch the shared ['presence'] cache regardless of which surface
+  // is reading it. See docs/human-presence-v1.md.
+  usePresenceSync();
 
   // Shutdown overlay — shown when the main process starts its graceful
   // quit sequence. Steps arrive via IPC; null means not shutting down.

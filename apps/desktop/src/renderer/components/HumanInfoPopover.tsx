@@ -1,6 +1,15 @@
 import * as Popover from '@radix-ui/react-popover';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import dayjs from 'dayjs';
+import relativeTime from 'dayjs/plugin/relativeTime';
 import { User as UserIcon } from 'lucide-react';
+import {
+  humanPresenceText,
+  presenceDotStatus,
+  usePresenceById,
+} from '@/features/presence/hooks';
+
+dayjs.extend(relativeTime);
 
 /**
  * Permissive shape so both `UserDto` (full row, available when the human
@@ -20,6 +29,15 @@ interface HumanInfoPopoverProps {
   /** The element that triggers the popover (rendered via Radix
    *  `asChild`). */
   children: ReactNode;
+  /**
+   * The human's user id. When provided, the card shows an inline
+   * online/offline presence line next to the name — the human
+   * counterpart to `AgentInfoPopover`'s per-conversation presence.
+   * Presence is global (event-WS connection derived), so no
+   * `conversationId` is needed. Omit (e.g. when only a name is known)
+   * and the line is skipped.
+   */
+  userId?: string;
   side?: 'top' | 'bottom' | 'left' | 'right';
   align?: 'start' | 'center' | 'end';
   /** `'click'` opens on click for standalone controls. `'hover'`
@@ -50,13 +68,15 @@ const HOVER_CLOSE_DELAY_MS = 120;
 
 /**
  * Compact human (user) info card — the human counterpart to
- * `AgentInfoPopover`. Shows avatar + display name + handle, nothing
- * else. Intentionally lighter than the agent popover: humans are not
- * processes, so there is no per-conversation presence line, no
- * crashed-retry affordance, no management actions, and no Joined date
- * (per shiki — `joined_at` on workspace_users is back-fill / install
- * noise; the right Joined surface, if any, is per-conversation, not
- * registration-row).
+ * `AgentInfoPopover`. Shows avatar + display name + handle, plus an
+ * inline global online/offline presence line when a `userId` is given
+ * (the human analogue of the agent popover's per-conversation
+ * `PresenceInline`). Still lighter than the agent popover: humans are
+ * not processes, so presence is global (not per-conversation), and
+ * there is no crashed-retry affordance, no management actions, and no
+ * Joined date (per shiki — `joined_at` on workspace_users is back-fill /
+ * install noise; the right Joined surface, if any, is per-conversation,
+ * not registration-row).
  *
  * Hover mode is implemented via controlled `open` rather than Radix's
  * separate HoverCard primitive to keep the dep surface narrow and
@@ -65,6 +85,7 @@ const HOVER_CLOSE_DELAY_MS = 120;
 export function HumanInfoPopover({
   human,
   children,
+  userId,
   side = 'bottom',
   align = 'start',
   trigger = 'hover',
@@ -141,8 +162,11 @@ export function HumanInfoPopover({
               </span>
             )}
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-semibold text-text-primary">
-                {label}
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="min-w-0 truncate text-sm font-semibold text-text-primary">
+                  {label}
+                </span>
+                {userId ? <HumanPresenceInline userId={userId} /> : null}
               </div>
               <div className="truncate font-mono text-xs text-text-muted">
                 @{human.name}
@@ -152,5 +176,38 @@ export function HumanInfoPopover({
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
+  );
+}
+
+const PRESENCE_DOT: Record<'active' | 'idle', string> = {
+  active: 'bg-success',
+  idle: 'bg-text-muted/40',
+};
+
+/**
+ * Inline online/offline line next to the name — the human counterpart
+ * to `AgentInfoPopover`'s `PresenceInline`. Reads the shared global
+ * `['presence']` cache (kept live by `usePresenceSync` in the app
+ * shell), so it costs no extra fetch per popover. A cache miss reads as
+ * offline (no live connection observed). Only mounts while the popover
+ * content is open, matching the agent popover's per-instance read.
+ */
+function HumanPresenceInline({ userId }: { userId: string }): JSX.Element {
+  const presence = usePresenceById().get(userId);
+  const dot = presenceDotStatus(presence?.presence);
+  const lastSeenAt = presence?.last_seen_at ?? null;
+  const label = humanPresenceText(
+    presence?.presence,
+    lastSeenAt,
+    lastSeenAt != null ? dayjs(lastSeenAt).fromNow() : '',
+  );
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 text-[10px] text-text-muted"
+      title={label}
+    >
+      <span className={`size-1.5 rounded-full ${PRESENCE_DOT[dot]}`} aria-hidden />
+      {label}
+    </span>
   );
 }

@@ -56,6 +56,7 @@ import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { useUsersById } from '@/features/users/hooks';
+import { usePresenceById, presenceDotStatus } from '@/features/presence/hooks';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
@@ -801,9 +802,12 @@ function HumanMemberChip({
 }): JSX.Element {
   const label = human.display_name?.trim() || human.name;
   const initial = label.charAt(0).toUpperCase();
+  const presence = usePresenceById().get(human.user_id);
+  const dot = presenceDotStatus(presence?.presence);
   return (
     <HumanInfoPopover
       human={human}
+      userId={human.user_id}
       trigger="hover"
       side="bottom"
       align="end"
@@ -827,6 +831,12 @@ function HumanMemberChip({
         ) : (
           <span aria-hidden>{initial}</span>
         )}
+        <span
+          className={
+            'pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating shadow-sm '
+            + STATUS_DOT[dot]
+          }
+        />
       </button>
     </HumanInfoPopover>
   );

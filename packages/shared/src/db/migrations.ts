@@ -2815,6 +2815,13 @@ export const migrations: Migration[] = [
       ALTER TABLE conversation_inboxes ADD COLUMN delivery_kind TEXT;
     `,
   },
+  {
+    version: 45,
+    name: 'users_last_seen_at',
+    up: `
+      ALTER TABLE users ADD COLUMN last_seen_at INTEGER;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

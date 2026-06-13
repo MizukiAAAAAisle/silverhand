@@ -10,6 +10,7 @@ import {
   useViewerUser,
 } from '@/features/me/hooks';
 import { useUsers } from '@/features/users/hooks';
+import { usePresenceById, presenceDotStatus } from '@/features/presence/hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { Button } from '@/components/ui/button';
@@ -61,6 +62,10 @@ export function MembersPanel({
     : allUsers;
   const otherAvatarUrls = useUserAvatarObjectUrls(otherHumans);
   const humansCount = (viewer ? 1 : 0) + otherHumans.length;
+  // Human online/offline pip — online → green `active`, offline/unknown →
+  // muted `idle`, reusing the AGENTS dot vocabulary. Cache kept live by
+  // usePresenceSync() in the app shell. See docs/human-presence-v1.md.
+  const presenceById = usePresenceById();
 
   return (
     <>
@@ -119,6 +124,7 @@ export function MembersPanel({
             }
             title={viewer.display_name || viewer.name}
             subtitle={CURRENT_USER_SUBTITLE}
+            status={presenceDotStatus(presenceById.get(viewer.id)?.presence)}
             selected={selectedUserId === viewer.id}
             onClick={
               onSelectUser ? () => onSelectUser(viewer.id) : undefined
@@ -139,6 +145,7 @@ export function MembersPanel({
               }
               title={u.display_name || u.name}
               subtitle={`@${u.name}`}
+              status={presenceDotStatus(presenceById.get(u.id)?.presence)}
               selected={selectedUserId === u.id}
               onClick={onSelectUser ? () => onSelectUser(u.id) : undefined}
             />

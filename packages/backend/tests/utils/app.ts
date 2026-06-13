@@ -25,6 +25,7 @@ import type {
 import { silverhandCors } from '../../src/cors.js';
 import type { AppEnv } from '../../src/auth/principal.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
+import { PresenceRegistry } from '../../src/presence/presence-registry.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
@@ -857,6 +858,12 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     agents: new AgentRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
   });
+  const events = new ScopeEventBus();
+  const presence = new PresenceRegistry({
+    events,
+    users: new UserRepo(db),
+    logger: silentLogger,
+  });
 
   const ctx: BackendContext = {
     db,
@@ -888,7 +895,8 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     taskService: undefined as unknown as TaskService,
     scheduleService: undefined as unknown as ScheduleService,
     idleReaperService: undefined as unknown as IdleReaperService,
-    events: new ScopeEventBus(),
+    events,
+    presence,
     silverhandCliLauncher: { command: 'noop', args: [] },
     agentTokens: new AgentTokenStore(),
     passwordCredentials,

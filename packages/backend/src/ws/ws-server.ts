@@ -1,4 +1,5 @@
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { apiPaths, EVENT_WS_SESSION_COOKIE } from '@silverhand/shared';
@@ -56,13 +57,16 @@ export function installEventWebSocketServer(
       return;
     }
     wss.handleUpgrade(req, socket, head, ws => {
+      const connectionId = randomUUID();
       const connection = new EventWsConnection(ws, ctx, {
         ...opts,
         viewerUserId,
       });
       connections.set(ws, connection);
+      ctx.presence.onConnect(viewerUserId, connectionId);
       ws.on('close', () => {
         connections.delete(ws);
+        ctx.presence.onDisconnect(viewerUserId, connectionId);
       });
       wss.emit('connection', ws, req);
       connection.start();
@@ -93,6 +97,7 @@ export function installEventWebSocketServer(
         terminateAfterGrace,
       ]);
       await new Promise<void>(resolve => wss.close(() => resolve()));
+      ctx.presence.dispose();
     },
   };
 }

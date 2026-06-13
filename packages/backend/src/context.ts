@@ -21,6 +21,7 @@ import type { RuntimeHostPlacementControl } from './runtime/host-placement.js';
 import type { OutboundFrameAdapter } from './runtime/outbound-frame-adapter.js';
 import type { WorkspaceRegistryBackfiller } from './runtime/workspace-registry-backfill.js';
 import type { HostWsServerController } from './ws/host-ws-server.js';
+import type { PresenceRegistry } from './presence/presence-registry.js';
 
 export type BackendDeploymentMode = 'embedded' | 'standalone';
 
@@ -146,6 +147,8 @@ export interface BackendContext {
   idleReaperService: IdleReaperService;
   /** In-process pub/sub for live UI updates. */
   events: ScopeEventBus;
+  /** Process-local projection of live human event-WS connections. */
+  presence: PresenceRegistry;
   /** How the per-spawn PATH shim should invoke the Silverhand CLI. */
   silverhandCliLauncher: SilverhandCliLauncher | null;
   /** Per-process bearer tokens scoped to one agent/conversation runtime. */

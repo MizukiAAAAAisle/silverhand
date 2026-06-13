@@ -183,6 +183,8 @@ export interface UserRow {
   avatar_content_type: string | null;
   /** Canonical login handle for remote auth. NULL rows are profile-only. */
   email: string | null;
+  /** Last offline transition timestamp for human presence. NULL until first disconnect. */
+  last_seen_at: number | null;
   created_at: number;
   updated_at: number;
 }

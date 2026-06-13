@@ -3,6 +3,7 @@ export const apiPaths = {
   serverInfo: '/api/server/info',
   runtimes: '/api/runtimes',
   eventWebSocket: '/api/ws/events',
+  presence: '/api/presence',
 
   // hosts
   hosts: '/api/hosts',
