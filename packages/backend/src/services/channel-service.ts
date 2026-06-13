@@ -529,6 +529,12 @@ export class ChannelService {
    *
    * A no-op rename (same title) short-circuits: no system message, no
    * delivery, no event — returning the unchanged channel.
+   *
+   * The title write and the `rename` system-message insert run in a
+   * single transaction (better-sqlite3 nests the insert's own
+   * transaction via a savepoint) so a failed broadcast can never leave
+   * a renamed channel with no audit/notification row. Delivery and the
+   * `workspace_channels_changed` publish are post-commit side effects.
    */
   async renameChannel(
     input: RenameChannelInput,
@@ -554,24 +560,26 @@ export class ChannelService {
       return { channel };
     }
 
-    const updated = this.conversations.updateTitle(input.channelId, input.title);
-    if (!updated) {
-      throw repoError('not_found', 'channel not found');
-    }
-
-    const announce = this.messages.insertForConversation({
-      conversationId: updated.id,
-      fromKind: 'system',
-      content:
-        `This channel was renamed from “${oldTitle}” to “${input.title}”. ` +
-        `Update any references in your MEMORY.md when you next edit it.`,
-      metadata: {
-        subtype: systemSubtype('rename'),
-        old_name: oldTitle,
-        new_name: input.title,
-        scope: 'conversation',
-      },
-    });
+    const { updated, announce } = this.db.transaction(() => {
+      const updated = this.conversations.updateTitle(input.channelId, input.title);
+      if (!updated) {
+        throw repoError('not_found', 'channel not found');
+      }
+      const announce = this.messages.insertForConversation({
+        conversationId: updated.id,
+        fromKind: 'system',
+        content:
+          `This channel was renamed from “${oldTitle}” to “${input.title}”. ` +
+          `Update any references in your MEMORY.md when you next edit it.`,
+        metadata: {
+          subtype: systemSubtype('rename'),
+          old_name: oldTitle,
+          new_name: input.title,
+          scope: 'conversation',
+        },
+      });
+      return { updated, announce };
+    })();
 
     for (const ca of this.conversations.listAgents(updated.id)) {
       await this.deliverBestEffort(

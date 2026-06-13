@@ -38,8 +38,15 @@ export const DmChannelDtoSchema = ConversationDtoSchema.extend({
 });
 export type DmChannelDto = z.infer<typeof DmChannelDtoSchema>;
 
+/** The single constraint for a channel's display title — shared by
+ *  channel creation and rename so the two paths cannot drift (one
+ *  concept, one rule). Freeform (spaces / CJK allowed), but trimmed
+ *  and non-empty: a pure-whitespace title is rejected at the API
+ *  boundary, not just by the UI. */
+export const ChannelTitleSchema = z.string().trim().min(1).max(128);
+
 export const CreateConversationChannelInputSchema = z.object({
-  title: z.string().min(1).max(128),
+  title: ChannelTitleSchema,
   member_agent_ids: z.array(z.string()).default([]),
   member_user_ids: z.array(z.string()).optional(),
 });
@@ -212,11 +219,11 @@ export const ArchiveChannelInputSchema = z.object({
 export type ArchiveChannelInput = z.infer<typeof ArchiveChannelInputSchema>;
 
 /** Body for `PATCH /api/channels/:id` — rename a top-level channel.
- *  `title` uses the same freeform constraint as channel creation
- *  (1–128 chars, no regex: spaces / CJK allowed). Only the title is
- *  mutable here; archive / pin have their own dedicated routes. */
+ *  Reuses `ChannelTitleSchema` (trimmed, 1–128) so rename and create
+ *  validate titles identically. Only the title is mutable here;
+ *  archive / pin have their own dedicated routes. */
 export const UpdateChannelInputSchema = z.object({
-  title: z.string().min(1).max(128),
+  title: ChannelTitleSchema,
 });
 export type UpdateChannelInput = z.infer<typeof UpdateChannelInputSchema>;
 

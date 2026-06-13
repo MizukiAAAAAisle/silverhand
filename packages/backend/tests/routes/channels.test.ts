@@ -1039,10 +1039,40 @@ describe('PATCH /api/channels/:id (rename)', () => {
     });
     expect(empty.status).toBe(400);
 
+    // Pure-whitespace title is rejected at the API boundary (trimmed
+    // then min(1)) — not only by the UI.
+    const blank = await http(t).patch(`/api/channels/${channelId}`, {
+      title: '   ',
+    });
+    expect(blank.status).toBe(400);
+
     const tooLong = await http(t).patch(`/api/channels/${channelId}`, {
       title: 'x'.repeat(129),
     });
     expect(tooLong.status).toBe(400);
+  });
+
+  it('trims surrounding whitespace from the new title', async () => {
+    t = buildTestApp();
+    const aliceId = await makeAgent(t, 'alice');
+    const workspace = await (
+      await http(t).post('/api/workspaces', {
+        name: 'trimrename',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    const created = await (
+      await http(t).post(
+        `/api/workspaces/${workspace.workspace.id}/channels`,
+        { title: 'planning', member_agent_ids: [aliceId] },
+      )
+    ).json() as any;
+
+    const res = await http(t).patch(`/api/channels/${created.channel.id}`, {
+      title: '  roadmap  ',
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).channel.title).toBe('roadmap');
   });
 });
 
