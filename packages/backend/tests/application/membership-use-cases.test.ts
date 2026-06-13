@@ -277,23 +277,155 @@ describe('AddConversationMemberUseCase (application layer)', () => {
     });
   });
 
-  it('rejects a candidate that is not a workspace member', async () => {
+  it('auto-adds a non-workspace agent to the workspace before adding them to the channel', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const bob = await makeAgent(t, 'bob');
-    const ws = await createRegularWorkspace(t, 'not-ws-member', [alice]);
+    const ws = await createRegularWorkspace(t, 'agent-auto-workspace', [alice]);
     const channelId = await createChannel(t, ws, 'room', [alice]);
     const deps = conversationDeps(t);
+    const cap = captureOrderedEvents(t, channelId, ws);
 
     const result = await addConversationMember(deps, {
       conversationId: channelId,
       principal: LOCAL_USER,
       member: { kind: 'agent', agent_id: bob },
     });
+    cap.stop();
+
+    expect(result.ok).toBe(true);
+    expect(deps.workspaces.isMember(ws, bob)).toBe(true);
+    expect(deps.conversations.getAgent(channelId, bob)).not.toBeNull();
+    expect([...new AgentCapabilityRepo(t.ctx.db).list(ws, bob)].sort()).toEqual(
+      [...AGENT_CAPABILITIES].sort(),
+    );
+    expect(cap.events).toEqual([
+      'message',
+      'conversation_members_changed',
+      'workspace_channels_changed',
+    ]);
+  });
+
+  it('auto-adds a non-workspace human to the workspace before adding them to the channel', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const ws = await createRegularWorkspace(t, 'human-auto-workspace', [alice]);
+    const channelId = await createChannel(t, ws, 'room', [alice]);
+    const deps = conversationDeps(t);
+    t.ctx.db
+      .prepare(`DELETE FROM workspace_users WHERE workspace_id = ? AND user_id = ?`)
+      .run(ws, 'teammate');
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?`)
+      .run(channelId, 'teammate');
+
+    const cap = captureOrderedEvents(t, channelId, ws);
+    const viewerEvents: Array<{ kind: string; payload: unknown }> = [];
+    const offViewer = t.ctx.events.subscribeScope('viewer:teammate', e =>
+      viewerEvents.push({ kind: e.kind, payload: e.payload }),
+    );
+
+    const result = await addConversationMember(deps, {
+      conversationId: channelId,
+      principal: LOCAL_USER,
+      member: { kind: 'human', user_id: 'teammate' },
+    });
+    cap.stop();
+    offViewer();
+
+    expect(result.ok).toBe(true);
+    expect(deps.workspaces.isUserMember(ws, 'teammate')).toBe(true);
+    expect(deps.conversations.getUser(channelId, 'teammate')).not.toBeNull();
+    expect(viewerEvents).toContainEqual({
+      kind: 'viewer_workspaces_changed',
+      payload: {
+        change: 'added',
+        workspace_id: ws,
+        role: 'member',
+      },
+    });
+    expect(cap.events).toEqual([
+      'message',
+      'conversation_members_changed',
+      'workspace_channels_changed',
+    ]);
+  });
+
+  it('lets workspace admins auto-provision non-workspace humans', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const ws = await createRegularWorkspace(t, 'human-auto-workspace-admin', [alice]);
+    const channelId = await createChannel(t, ws, 'room', [alice]);
+    const deps = conversationDeps(t);
+    t.ctx.db
+      .prepare(`UPDATE workspace_users SET role = 'admin' WHERE workspace_id = ? AND user_id = ?`)
+      .run(ws, 'local');
+    t.ctx.db
+      .prepare(`DELETE FROM workspace_users WHERE workspace_id = ? AND user_id = ?`)
+      .run(ws, 'teammate');
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?`)
+      .run(channelId, 'teammate');
+
+    const result = await addConversationMember(deps, {
+      conversationId: channelId,
+      principal: LOCAL_USER,
+      member: { kind: 'human', user_id: 'teammate' },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(deps.workspaces.isUserMember(ws, 'teammate')).toBe(true);
+    expect(deps.conversations.getUser(channelId, 'teammate')).not.toBeNull();
+  });
+
+  it('does not let an agent principal auto-add a non-workspace human', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const ws = await createRegularWorkspace(t, 'agent-no-human-auto-workspace', [alice]);
+    const channelId = await createChannel(t, ws, 'room', [alice]);
+    const deps = conversationDeps(t);
+    t.ctx.db
+      .prepare(`DELETE FROM workspace_users WHERE workspace_id = ? AND user_id = ?`)
+      .run(ws, 'teammate');
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?`)
+      .run(channelId, 'teammate');
+
+    const result = await addConversationMember(deps, {
+      conversationId: channelId,
+      principal: { kind: 'agent', agentId: alice, conversationId: channelId },
+      member: { handle: '@teammate-test' },
+    });
+
     expect(result).toMatchObject({
       ok: false,
       error: { code: 'workspace_membership_required' },
     });
+    expect(deps.workspaces.isUserMember(ws, 'teammate')).toBe(false);
+    expect(deps.conversations.getUser(channelId, 'teammate')).toBeNull();
+  });
+
+  it('does not let an agent principal auto-add a non-workspace agent', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    const ws = await createRegularWorkspace(t, 'agent-no-agent-auto-workspace', [alice]);
+    const channelId = await createChannel(t, ws, 'room', [alice]);
+    const deps = conversationDeps(t);
+
+    const result = await addConversationMember(deps, {
+      conversationId: channelId,
+      principal: { kind: 'agent', agentId: alice, conversationId: channelId },
+      member: { handle: '@bob' },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'workspace_membership_required' },
+    });
+    expect(deps.workspaces.isMember(ws, bob)).toBe(false);
+    expect(deps.conversations.getAgent(channelId, bob)).toBeNull();
+    expect(new AgentCapabilityRepo(t.ctx.db).list(ws, bob)).toEqual([]);
   });
 
   it('is a duplicate-safe no-op: re-adding an existing member emits no phantom event', async () => {

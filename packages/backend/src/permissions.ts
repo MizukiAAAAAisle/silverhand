@@ -161,9 +161,10 @@ export function workspaceRole(
  * (which granted every human member admin-equivalent power). A
  * governance op is allowed when the principal can view the workspace
  * (existence + membership) AND holds at least `minRole`. Pass `'owner'`
- * for existential / human-roster ops (archive, delete, human-member
- * management), `'admin'` for day-to-day governance (channel create/
- * delete, agent-member management, settings incl. rename).
+ * for existential / human role/removal ops (archive, delete, human-member
+ * role changes/removal), `'admin'` for day-to-day governance (channel
+ * create/delete, human/agent-member add, agent-member remove, settings
+ * incl. rename).
  */
 export function canGovernWorkspace(
   ctx: BackendContext,

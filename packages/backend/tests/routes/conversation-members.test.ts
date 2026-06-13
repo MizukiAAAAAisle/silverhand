@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { internalPaths } from '@silverhand/shared';
+import { AGENT_CAPABILITIES, internalPaths } from '@silverhand/shared';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
@@ -442,7 +442,7 @@ describe('POST /api/conversations/:id/members', () => {
     });
   });
 
-  it('rejects candidates that are not workspace members', async () => {
+  it('auto-adds non-workspace agents and humans for human admins', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const bob = await makeAgent(t, 'bob');
@@ -457,30 +457,115 @@ describe('POST /api/conversations/:id/members', () => {
       kind: 'agent',
       agent_id: bob.agentId,
     });
-    expect(agentRes.status).toBe(422);
-    expect((await agentRes.json()) as any).toMatchObject({
-      code: 'workspace_membership_required',
-    });
+    expect(agentRes.status).toBe(200);
+    const agentBody = await agentRes.json() as any;
+    expect(
+      agentBody.members
+        .filter((m: any) => m.kind === 'agent')
+        .map((m: any) => m.agent_id),
+    ).toContain(bob.agentId);
+    const workspaceAgent = t.ctx.db
+      .prepare<[string, string], { count: number }>(
+        `SELECT COUNT(*) AS count
+           FROM workspace_members
+          WHERE workspace_id = ? AND agent_id = ?`,
+      )
+      .get(reg.workspaceId, bob.agentId);
+    expect(workspaceAgent?.count).toBe(1);
+    const agentCaps = t.ctx.db
+      .prepare<[string, string], { capability: string }>(
+        `SELECT capability
+           FROM workspace_agent_capabilities
+          WHERE workspace_id = ? AND agent_id = ?
+          ORDER BY capability ASC`,
+      )
+      .all(reg.workspaceId, bob.agentId)
+      .map(r => r.capability);
+    expect(agentCaps).toEqual([...AGENT_CAPABILITIES].sort());
 
     t.ctx.db
       .prepare(`DELETE FROM workspace_users WHERE workspace_id = ? AND user_id = ?`)
       .run(reg.workspaceId, 'teammate');
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?`)
+      .run(channelId, 'teammate');
+    const viewerEvents: Array<{ kind: string; payload: unknown }> = [];
+    const unsubscribeViewer = t.ctx.events.subscribeScope(
+      'viewer:teammate',
+      e => viewerEvents.push({ kind: e.kind, payload: e.payload }),
+    );
     const humanRes = await http(t).post(membersPath(channelId), {
       kind: 'human',
       user_id: 'teammate',
     });
-    expect(humanRes.status).toBe(422);
-    expect((await humanRes.json()) as any).toMatchObject({
-      code: 'workspace_membership_required',
+    unsubscribeViewer();
+    expect(humanRes.status).toBe(200);
+    const humanBody = await humanRes.json() as any;
+    expect(
+      humanBody.members
+        .filter((m: any) => m.kind === 'human')
+        .map((m: any) => m.user_id),
+    ).toContain('teammate');
+    const workspaceUser = t.ctx.db
+      .prepare<[string, string], { role: string }>(
+        `SELECT role FROM workspace_users WHERE workspace_id = ? AND user_id = ?`,
+      )
+      .get(reg.workspaceId, 'teammate');
+    expect(workspaceUser).toEqual({ role: 'member' });
+    expect(viewerEvents).toContainEqual({
+      kind: 'viewer_workspaces_changed',
+      payload: {
+        change: 'added',
+        workspace_id: reg.workspaceId,
+        role: 'member',
+      },
     });
 
     const handleRes = await http(t).post(membersPath(channelId), {
       handle: '@bob',
     });
-    expect(handleRes.status).toBe(422);
-    expect((await handleRes.json()) as any).toMatchObject({
-      code: 'workspace_membership_required',
+    expect(handleRes.status).toBe(200);
+  });
+
+  it('lets workspace admins auto-add non-workspace humans', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const reg = await createRegularWorkspace(t, 'admin-human-auto-workspace', [
+      alice.agentId,
+    ]);
+    const channelId = await createChannel(t, reg.workspaceId, 'restricted', [
+      alice.agentId,
+    ]);
+    t.ctx.db
+      .prepare(`UPDATE workspace_users SET role = 'admin' WHERE workspace_id = ? AND user_id = ?`)
+      .run(reg.workspaceId, 'local');
+    t.ctx.db
+      .prepare(`DELETE FROM workspace_users WHERE workspace_id = ? AND user_id = ?`)
+      .run(reg.workspaceId, 'teammate');
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?`)
+      .run(channelId, 'teammate');
+
+    const res = await http(t).post(membersPath(channelId), {
+      kind: 'human',
+      user_id: 'teammate',
     });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(
+      body.members
+        .filter((m: any) => m.kind === 'human')
+        .map((m: any) => m.user_id),
+    ).toContain('teammate');
+    const workspaceUser = t.ctx.db
+      .prepare<[string, string], { role: string }>(
+        `SELECT role
+           FROM workspace_users
+          WHERE workspace_id = ? AND user_id = ?`,
+      )
+      .get(reg.workspaceId, 'teammate');
+    expect(workspaceUser).toEqual({ role: 'member' });
   });
 
   it('returns candidate_not_found for an unknown handle', async () => {
@@ -679,6 +764,71 @@ describe('POST /api/conversations/:id/members', () => {
         member_name: 'bob',
       },
     });
+  });
+
+  it('does not let an agent principal auto-add a non-workspace human by handle', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const reg = await createRegularWorkspace(t, 'agent-no-human-auto-workspace', [
+      alice.agentId,
+    ]);
+    const channelId = await createChannel(t, reg.workspaceId, 'agent-room', [
+      alice.agentId,
+    ]);
+    t.ctx.db
+      .prepare(`DELETE FROM workspace_users WHERE workspace_id = ? AND user_id = ?`)
+      .run(reg.workspaceId, 'teammate');
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?`)
+      .run(channelId, 'teammate');
+
+    const res = await http(t).post(
+      internalPaths.agentAddConversationMember(channelId, alice.agentId),
+      { handle: '@teammate-test' },
+    );
+
+    expect(res.status).toBe(422);
+    expect((await res.json()) as any).toMatchObject({
+      code: 'workspace_membership_required',
+    });
+    const workspaceUser = t.ctx.db
+      .prepare<[string, string], { count: number }>(
+        `SELECT COUNT(*) AS count
+           FROM workspace_users
+          WHERE workspace_id = ? AND user_id = ?`,
+      )
+      .get(reg.workspaceId, 'teammate');
+    expect(workspaceUser?.count).toBe(0);
+  });
+
+  it('does not let an agent principal auto-add a non-workspace agent by handle', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    const reg = await createRegularWorkspace(t, 'agent-no-agent-auto-workspace', [
+      alice.agentId,
+    ]);
+    const channelId = await createChannel(t, reg.workspaceId, 'agent-room', [
+      alice.agentId,
+    ]);
+
+    const res = await http(t).post(
+      internalPaths.agentAddConversationMember(channelId, alice.agentId),
+      { handle: '@bob' },
+    );
+
+    expect(res.status).toBe(422);
+    expect((await res.json()) as any).toMatchObject({
+      code: 'workspace_membership_required',
+    });
+    const workspaceAgent = t.ctx.db
+      .prepare<[string, string], { count: number }>(
+        `SELECT COUNT(*) AS count
+           FROM workspace_members
+          WHERE workspace_id = ? AND agent_id = ?`,
+      )
+      .get(reg.workspaceId, bob.agentId);
+    expect(workspaceAgent?.count).toBe(0);
   });
 
   it('keeps the agent-facing internal route handle-only', async () => {

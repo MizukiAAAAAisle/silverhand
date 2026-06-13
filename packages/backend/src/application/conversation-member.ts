@@ -1,6 +1,7 @@
 import {
   type AddConversationMemberInput,
   type UserDto,
+  type WorkspaceRoleDto,
   systemSubtype,
 } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
@@ -12,6 +13,7 @@ import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { MembershipService } from '../services/membership-service.js';
 import { canAddConversationMember, canEditAgent, canGovernWorkspace, canViewConversation } from '../permissions.js';
+import { addWorkspaceAgentMember } from './add-workspace-agent-member.js';
 import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
 
 /**
@@ -41,6 +43,15 @@ export type AddConversationMemberError =
   | { code: 'forbidden' }
   | { code: 'candidate_not_found'; message: string }
   | { code: 'workspace_membership_required'; message: string }
+  | { code: 'workspace_agent_placement'; cause: unknown }
+  | {
+      code: 'workspace_agent_seed_failed';
+      failure: {
+        code: string;
+        message: string;
+        status: 400 | 403 | 404 | 409 | 502 | 503 | 504 | 507;
+      };
+    }
   | { code: 'handle_ambiguous'; candidates: HandleCandidate[] };
 
 export type AddConversationMemberResult =
@@ -93,9 +104,14 @@ export async function addConversationMember(
     }
   }
 
+  const canAutoProvisionWorkspaceMember =
+    input.principal.kind === 'user'
+    && canGovernWorkspace(deps.ctx, input.principal, conversation.workspace_id, 'admin');
+
   const resolved = resolveConversationMemberInput(deps, {
     workspaceId: conversation.workspace_id,
     member: input.member,
+    allowAutoWorkspaceMembership: canAutoProvisionWorkspaceMember,
   });
   if (!resolved.ok) return { ok: false, error: resolved.error };
 
@@ -106,14 +122,54 @@ export async function addConversationMember(
     if (!agent) {
       return { ok: false, error: { code: 'candidate_not_found', message: 'agent not found' } };
     }
-    if (!deps.workspaces.isMember(conversation.workspace_id, agent.id)) {
-      return {
-        ok: false,
-        error: {
-          code: 'workspace_membership_required',
-          message: 'agent is not a member of this workspace',
+    const workspaceWasMember = deps.workspaces.isMember(conversation.workspace_id, agent.id);
+    if (!workspaceWasMember) {
+      if (!canAutoProvisionWorkspaceMember) {
+        return {
+          ok: false,
+          error: {
+            code: 'workspace_membership_required',
+            message: 'agent is not a member of this workspace',
+          },
+        };
+      }
+      const workspace = deps.workspaces.get(conversation.workspace_id);
+      if (!workspace) {
+        throw new Error(`conversation ${conversation.id} references missing workspace ${conversation.workspace_id}`);
+      }
+      const workspaceMember = await addWorkspaceAgentMember(
+        { ctx: deps.ctx, agents: deps.agents, workspaces: deps.workspaces },
+        {
+          workspace: {
+            id: workspace.id,
+            workspace_path: workspace.workspace_path,
+            workspace_host_id: workspace.workspace_host_id,
+          },
+          agentId: agent.id,
         },
-      };
+      );
+      if (!workspaceMember.ok) {
+        switch (workspaceMember.error.code) {
+          case 'agent_not_found':
+            return {
+              ok: false,
+              error: { code: 'candidate_not_found', message: 'agent not found' },
+            };
+          case 'placement':
+            return {
+              ok: false,
+              error: { code: 'workspace_agent_placement', cause: workspaceMember.error.cause },
+            };
+          case 'seed_failed':
+            return {
+              ok: false,
+              error: {
+                code: 'workspace_agent_seed_failed',
+                failure: workspaceMember.error.failure,
+              },
+            };
+        }
+      }
     }
     const alreadyMember = deps.conversations.getAgent(conversation.id, agent.id) !== null;
     if (!alreadyMember) {
@@ -138,7 +194,8 @@ export async function addConversationMember(
   if (!user) {
     return { ok: false, error: { code: 'candidate_not_found', message: 'user not found' } };
   }
-  if (!deps.workspaces.isUserMember(conversation.workspace_id, user.id)) {
+  const workspaceWasMember = deps.workspaces.isUserMember(conversation.workspace_id, user.id);
+  if (!workspaceWasMember && !canAutoProvisionWorkspaceMember) {
     return {
       ok: false,
       error: {
@@ -148,22 +205,60 @@ export async function addConversationMember(
     };
   }
   const alreadyMember = deps.conversations.getUser(conversation.id, user.id) !== null;
-  if (!alreadyMember) {
+  if (!workspaceWasMember || !alreadyMember) {
     const actor = conversationMemberAddedActorSnapshot(deps, input.principal);
     const memberSnap = conversationMemberAddedHumanSnapshot(user);
-    const message = deps.ctx.db.transaction(() => {
-      deps.conversations.addUser(conversation.id, user.id);
-      return deps.messages.insertForConversation({
-        conversationId: conversation.id,
-        fromKind: 'system',
-        content: conversationMemberAddedContent({ actor, member: memberSnap }),
-        metadata: conversationMemberAddedMetadata({ actor, member: memberSnap }),
-      });
+    const write = deps.ctx.db.transaction(() => {
+      const workspaceMember = workspaceWasMember
+        ? null
+        : deps.workspaces.addUserMember(conversation.workspace_id, user.id);
+      let message: ReturnType<MessageRepo['insertForConversation']> | null = null;
+      if (!alreadyMember) {
+        deps.conversations.addUser(conversation.id, user.id);
+        message = deps.messages.insertForConversation({
+          conversationId: conversation.id,
+          fromKind: 'system',
+          content: conversationMemberAddedContent({ actor, member: memberSnap }),
+          metadata: conversationMemberAddedMetadata({ actor, member: memberSnap }),
+        });
+      }
+      return { workspaceMember, message };
     })();
-    effects.push(() => publishMemberAdded(deps.ctx, conversation, message));
+    const workspaceMember = write.workspaceMember;
+    if (workspaceMember) {
+      effects.push(() =>
+        publishViewerWorkspacesChanged(deps.ctx, user.id, {
+          change: 'added',
+          workspace_id: conversation.workspace_id,
+          role: workspaceMember.role,
+        }),
+      );
+    }
+    const message = write.message;
+    if (message) {
+      effects.push(() => publishMemberAdded(deps.ctx, conversation, message));
+    }
   }
   await runPostCommitEffects(effects, deps.ctx.logger);
   return { ok: true, members: deps.membership.listMembers(conversation.id) };
+}
+
+type ViewerWorkspaceChange = 'added' | 'role_changed' | 'removed';
+
+function publishViewerWorkspacesChanged(
+  ctx: BackendContext,
+  userId: string,
+  payload: {
+    change: ViewerWorkspaceChange;
+    workspace_id: string;
+    role?: WorkspaceRoleDto;
+  },
+): void {
+  ctx.events.publishToScope(
+    `viewer:${userId}`,
+    'viewer_workspaces_changed',
+    payload,
+  );
 }
 
 /**
@@ -355,7 +450,11 @@ function normalizeMemberHandle(handle: string): string {
 
 function resolveConversationMemberInput(
   deps: { agents: AgentRepo; users: UserRepo; workspaces: WorkspaceRepo },
-  input: { workspaceId: string; member: AddConversationMemberInput },
+  input: {
+    workspaceId: string;
+    member: AddConversationMemberInput;
+    allowAutoWorkspaceMembership: boolean;
+  },
 ):
   | { ok: true; member: ResolvedConversationMemberInput }
   | { ok: false; error: AddConversationMemberError } {
@@ -392,8 +491,12 @@ function resolveConversationMemberInput(
     return { ok: false, error: { code: 'candidate_not_found', message: 'candidate not found' } };
   }
 
-  const workspaceCandidates = candidates.filter(candidate => candidate.workspaceMember);
-  if (workspaceCandidates.length === 0) {
+  const eligibleCandidates = candidates.filter(
+    candidate =>
+      candidate.workspaceMember
+      || input.allowAutoWorkspaceMembership,
+  );
+  if (eligibleCandidates.length === 0) {
     return {
       ok: false,
       error: {
@@ -403,12 +506,12 @@ function resolveConversationMemberInput(
     };
   }
 
-  if (workspaceCandidates.length > 1) {
+  if (eligibleCandidates.length > 1) {
     return {
       ok: false,
       error: {
         code: 'handle_ambiguous',
-        candidates: workspaceCandidates.map(candidate => ({
+        candidates: eligibleCandidates.map(candidate => ({
           kind: candidate.kind,
           id: candidate.id,
           display_name: candidate.display_name,
@@ -418,9 +521,9 @@ function resolveConversationMemberInput(
     };
   }
 
-  const candidate = workspaceCandidates[0];
+  const candidate = eligibleCandidates[0];
   if (!candidate) {
-    throw new Error('resolveConversationMemberInput: expected exactly one workspace candidate');
+    throw new Error('resolveConversationMemberInput: expected exactly one eligible candidate');
   }
   return {
     ok: true,

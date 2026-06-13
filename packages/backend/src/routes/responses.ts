@@ -172,6 +172,16 @@ export function conversationMemberResultResponse(
       return c.json({ error: error.message, code: 'candidate_not_found' }, 404);
     case 'workspace_membership_required':
       return c.json({ error: error.message, code: 'workspace_membership_required' }, 422);
+    case 'workspace_agent_placement': {
+      const mapped = placementErrorResponse(c, error.cause);
+      if (mapped) return mapped;
+      throw error.cause;
+    }
+    case 'workspace_agent_seed_failed':
+      return c.json(
+        { error: error.failure.message, code: error.failure.code },
+        error.failure.status,
+      );
     case 'handle_ambiguous':
       return c.json(
         { error: 'handle is ambiguous', code: 'handle_ambiguous', candidates: error.candidates },

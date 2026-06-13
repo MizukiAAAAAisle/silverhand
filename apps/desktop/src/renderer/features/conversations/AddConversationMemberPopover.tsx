@@ -5,6 +5,8 @@ import type { AgentDto, MemberDto, UserDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
+import { useUsers } from '@/features/users/hooks';
 import { ApiError } from '@/lib/api';
 import { useWorkspaceMemberLists } from '../workspaces/hooks';
 import { useConversationMembers } from './useConversationMembers';
@@ -22,10 +24,15 @@ export interface AddConversationMemberPopoverProps {
  * The trigger sits flush in the chip row with no resting fill — only a
  * subtle hover background — so it reads as a low-key affordance rather
  * than competing with the avatar chips beside it. Inside, the popover
- * lists every workspace member (agents + humans, no group split) that
- * is NOT yet in this conversation. Members are first-class regardless
- * of kind, so the row treats them uniformly: avatar + display name +
- * `@handle` on a single line, with the avatar component picked by
+ * lists every eligible member that is NOT yet in this conversation:
+ * workspace agents, workspace humans, and (for workspace admins/owners)
+ * humans from the global directory. Humans outside the workspace are
+ * intentionally eligible for governance users: the server's add-member
+ * use case creates the workspace membership first under the same
+ * admin-level roster guard. Agents stay workspace-scoped because agent
+ * workspace membership carries capability seeding. Members are first-class
+ * regardless of kind, so the row treats them uniformly: avatar + display
+ * name + `@handle` on a single line, with the avatar component picked by
  * kind.
  *
  * Caller is responsible for hiding this affordance when the
@@ -77,19 +84,25 @@ function PopoverBody({
   conversationId,
 }: AddConversationMemberPopoverProps): JSX.Element {
   const memberLists = useWorkspaceMemberLists(workspaceId);
+  const viewerRole = memberLists.data?.viewerRole ?? null;
+  const canPickGlobalHumans = viewerRole === 'owner' || viewerRole === 'admin';
+  const humans = useUsers({ enabled: canPickGlobalHumans });
   const conversationMembers = useConversationMembers(conversationId);
-  const addMember = useAddConversationMember(conversationId);
+  const addMember = useAddConversationMember(conversationId, workspaceId);
 
   const [query, setQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const wsAgents: AgentDto[] = memberLists.data?.agents ?? [];
   const wsHumans: UserDto[] = memberLists.data?.humans ?? [];
+  const pickableHumans = useMemo(() => {
+    if (!canPickGlobalHumans) return wsHumans;
+    const workspaceIds = new Set(wsHumans.map(u => u.id));
+    const externalHumans = (humans.data ?? []).filter(u => !workspaceIds.has(u.id));
+    return [...wsHumans, ...externalHumans];
+  }, [canPickGlobalHumans, wsHumans, humans.data]);
   const wsAgentAvatars = useAgentAvatarObjectUrls(wsAgents);
-  // The batch avatar hook is structural over `{id, avatar_url}` and
-  // works for users too. Naming is historical; agents and humans share
-  // the same fetch/dedup path.
-  const wsHumanAvatars = useAgentAvatarObjectUrls(wsHumans);
+  const humanAvatars = useUserAvatarObjectUrls(pickableHumans);
 
   // Set of `agent:<id>` / `human:<id>` for current conversation
   // members. Used to filter workspace members down to "not yet in
@@ -110,13 +123,13 @@ function PopoverBody({
       if (q && !matchesAgent(a, q)) continue;
       list.push({ kind: 'agent', agent: a });
     }
-    for (const u of wsHumans) {
+    for (const u of pickableHumans) {
       if (inConversation.has(`human:${u.id}`)) continue;
       if (q && !matchesHuman(u, q)) continue;
       list.push({ kind: 'human', user: u });
     }
     return list;
-  }, [wsAgents, wsHumans, inConversation, query]);
+  }, [wsAgents, pickableHumans, inConversation, query]);
 
   const onPick = async (c: PickableMember): Promise<void> => {
     setError(null);
@@ -134,7 +147,9 @@ function PopoverBody({
   };
 
   const isLoading =
-    !memberLists.data || conversationMembers.status === 'loading';
+    !memberLists.data
+    || (canPickGlobalHumans && !humans.data)
+    || conversationMembers.status === 'loading';
 
   return (
     <div className="flex flex-col gap-2">
@@ -157,7 +172,7 @@ function PopoverBody({
               ? '加载中…'
               : query
                 ? '没有匹配项'
-                : '所有 workspace 成员都已在此会话'}
+                : '所有可添加成员都已在此会话'}
           </li>
         ) : (
           candidates.map(c => {
@@ -184,7 +199,7 @@ function PopoverBody({
                   ) : (
                     <UserAvatar
                       size={20}
-                      avatarObjectUrl={wsHumanAvatars.get(c.user.id) ?? null}
+                      avatarObjectUrl={humanAvatars.get(c.user.id) ?? null}
                       alt={displayName}
                     />
                   )}
@@ -248,7 +263,7 @@ function formatError(err: unknown): string {
     const code = parseCode(err.body);
     switch (code) {
       case 'workspace_membership_required':
-        return '该候选不再是 workspace 成员,请刷新后重试。';
+        return 'Agent 需要先加入 workspace 后才能添加。';
       case 'candidate_not_found':
         return '候选不存在,可能刚被删除。';
       case 'handle_ambiguous':

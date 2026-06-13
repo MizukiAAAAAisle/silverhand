@@ -73,17 +73,14 @@ export const HUMAN_GOVERNANCE_ROUTES: readonly GovernanceRouteDecl[] = [
   { method: 'DELETE', path: '/api/workspaces/:id/pin', minRole: 'admin', roleScope: 'workspace' },
   // Create a channel in the workspace.
   { method: 'POST', path: '/api/workspaces/:id/channels', minRole: 'admin', roleScope: 'workspace' },
-  // Member management. ENTRY gate is `admin` (adding/removing an AGENT
-  // member is admin-level). The human-member branch of POST escalates to
-  // an inner `canGovernWorkspace(..., 'owner')` check inside the handler
-  // (human-roster control is owner-only, doc §1.1); the registry records
-  // the entry minimum.
+  // Member management. Adding either an agent or a human workspace member is
+  // admin-level; human role changes/removal remain owner-only below.
   {
     method: 'POST',
     path: '/api/workspaces/:id/members',
     minRole: 'admin',
     roleScope: 'workspace',
-    note: 'entry=admin (agent-member add); human-member add escalates to owner inside the handler',
+    note: 'adds agent or human workspace members; new humans join as member',
   },
   {
     method: 'PATCH',
@@ -118,7 +115,9 @@ export const HUMAN_GOVERNANCE_ROUTES: readonly GovernanceRouteDecl[] = [
   // per-conversation override so effective == workspace role today. The
   // USER principal is gated on conversation visibility + this admin
   // effective role inside the handler (additive: you cannot govern a
-  // conversation you cannot see). The AGENT principal reaches the SAME
+  // conversation you cannot see). User principals may auto-provision a
+  // missing workspace membership for a human or same-host agent before
+  // adding it to the conversation. The AGENT principal reaches the SAME
   // handler via the internal route, where the
   // `manage_conversation_members` capability gate is already enforced
   // (AGENT_ROUTE_CAPABILITIES.agentAddConversationMember,
@@ -128,7 +127,7 @@ export const HUMAN_GOVERNANCE_ROUTES: readonly GovernanceRouteDecl[] = [
     path: '/api/conversations/:id/members',
     minRole: 'admin',
     roleScope: 'conversation',
-    note: 'user principal: view + admin effective role; agent principal gated by enforced manage_conversation_members capability at the internal route (agentAddConversationMember)',
+    note: 'user principal: view + admin effective role, with workspace auto-provision for humans/same-host agents; agent principal gated by enforced manage_conversation_members capability at the internal route (agentAddConversationMember)',
   },
   {
     method: 'DELETE',

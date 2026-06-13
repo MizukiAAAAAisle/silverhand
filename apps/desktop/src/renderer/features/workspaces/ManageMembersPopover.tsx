@@ -37,12 +37,12 @@ interface ManageMembersPopoverProps {
  * stays anchored to its trigger in the titlebar.
  *
  * Role gating mirrors the backend governance gates, per-kind (a member must
- * never see a control that would only 403): agent add/remove needs admin+,
- * human add/remove needs owner. So the add selector hides entirely for plain
- * members, narrows to agents-only for admins, and is full for owners; the
- * agent Trash2 shows for admin+, the human Trash2 only for owners and never
- * on the owner row. `membersKey` invalidates on `role_changed`, so a
- * promotion re-lights these controls live.
+ * never see a control that would only 403): agent add/remove and human add
+ * need admin+, while human remove needs owner. So the add selector hides
+ * entirely for plain members and is full for admins/owners; the agent Trash2
+ * shows for admin+, the human Trash2 only for owners and never on the owner
+ * row. `membersKey` invalidates on `role_changed`, so a promotion re-lights
+ * these controls live.
  *
  * Removal: agents have a Trash2 row action backed by `DELETE
  * /api/workspaces/:id/members/:agentId` (admin+). Humans have a Trash2 backed
@@ -106,17 +106,16 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
   const [error, setError] = useState<string | null>(null);
 
   // Mirror the backend governance gates so members never see dead controls.
-  // Agent add/remove is admin+ (POST + DELETE /api/workspaces/:id/members
-  // [/:agentId], minRole admin); human add is owner-only (the POST handler
-  // escalates the human branch to owner), and human remove is owner-only
+  // Agent add/remove and human add are admin+; human remove is owner-only
   // (`DELETE /api/workspaces/:id/members/users/:userId`). Gating is per-kind,
   // not a popover-level boolean, because agents and humans share one
   // selector/list. `membersKey` invalidates on `role_changed`, so these flags
   // re-light live after a promotion — no manual refresh.
   const viewerRole = memberLists?.viewerRole ?? null;
   const canManageAgents = viewerRole === 'owner' || viewerRole === 'admin';
-  const canManageHumans = viewerRole === 'owner';
-  const canAddAny = canManageAgents || canManageHumans;
+  const canAddHumans = viewerRole === 'owner' || viewerRole === 'admin';
+  const canRemoveHumans = viewerRole === 'owner';
+  const canAddAny = canManageAgents || canAddHumans;
 
   const agentMemberIds = useMemo(
     () => new Set(agentMembers.map(m => m.id)),
@@ -137,13 +136,13 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
         if (!agentMemberIds.has(a.id)) list.push({ kind: 'agent', agent: a });
       }
     }
-    if (canManageHumans) {
+    if (canAddHumans) {
       for (const u of users) {
         if (!humanMemberIds.has(u.id)) list.push({ kind: 'human', user: u });
       }
     }
     return list;
-  }, [agents, users, agentMemberIds, humanMemberIds, canManageAgents, canManageHumans]);
+  }, [agents, users, agentMemberIds, humanMemberIds, canManageAgents, canAddHumans]);
 
   // Flat member list (everyone currently enrolled). Same ordering
   // contract as `candidates`.
@@ -192,7 +191,7 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
         * kind. Choosing an option fires the mutation and clears the value so
         * the trigger reverts to its placeholder (controlled value="" so
         * picking the same candidate twice is fine). The label narrows to
-        * "添加 agent" for admins, who cannot add humans. */}
+        * "添加成员" for every admin+ viewer. */}
       {canAddAny ? (
         <Select.Root
           value=""
@@ -200,13 +199,13 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
           disabled={addMember.isPending}
         >
           <Select.Trigger
-            aria-label={canManageHumans ? '添加成员' : '添加 agent'}
+            aria-label={canAddHumans ? '添加成员' : '添加 agent'}
             className="flex w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus disabled:cursor-not-allowed disabled:opacity-60 data-[placeholder]:text-text-muted"
           >
             <span className="flex items-center gap-1.5">
               <UserPlus className="size-3.5 text-text-muted" />
               <Select.Value
-                placeholder={canManageHumans ? '添加成员…' : '添加 agent…'}
+                placeholder={canAddHumans ? '添加成员…' : '添加 agent…'}
               />
             </span>
             <Select.Icon>
@@ -336,7 +335,7 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
                     * `owner_removal_unsupported`, so removing an owner can't even
                     * be attempted. */}
                   {m.kind === 'human' &&
-                  canManageHumans &&
+                  canRemoveHumans &&
                   m.user.role !== 'owner' ? (
                     <button
                       type="button"

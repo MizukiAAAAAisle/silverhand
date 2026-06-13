@@ -208,8 +208,8 @@ function removeWorkspaceHumanMember(
 /**
  * Workspace membership surface (api router): GET list + POST add + two DELETEs
  * (agent-remove and human-remove), as a mountable sub-app. GET is viewer-gated
- * (`canViewWorkspace`); POST is admin-gated, human branch escalates to owner,
- * agent branch delegates to the AddWorkspaceAgentMember use case.
+ * (`canViewWorkspace`); POST is admin-gated for both human and agent adds
+ * (agent branch delegates to the AddWorkspaceAgentMember use case).
  *
  * DELETE `…/members/:agentId` (agent) is admin-gated and stops + removes the
  * agent from every conversation of the workspace, then removes the workspace
@@ -260,12 +260,9 @@ export function createWorkspaceMembershipApp(
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     if ('kind' in parsed.data && parsed.data.kind === 'human') {
-      // Human-roster control is owner-only. The entry gate above is `admin`
-      // (covers the agent-member-add path); adding a HUMAN member escalates to
-      // an inner owner check. New humans join as `member` (addUserMember default).
-      if (!canGovernWorkspace(ctx, getUserPrincipal(c), workspace.id, 'owner')) {
-        return c.json({ error: 'forbidden' }, 403);
-      }
+      // Human add is admin-gated by the entry check above. New humans join as
+      // `member` (addUserMember default); role changes/removal stay owner-only
+      // in their dedicated routes.
       const user = ctx.userService.getDto(parsed.data.user_id);
       if (!user) return c.json({ error: 'user not found' }, 404);
       return c.json(
@@ -383,8 +380,8 @@ export function createWorkspaceMembershipApp(
     if (!workspace || workspace.workspace_kind !== 'regular') {
       return c.json({ error: 'workspace not found' }, 404);
     }
-    // Human-roster management is owner-only (mirrors human add `:213` and
-    // role PATCH above), unlike the admin-gated agent-remove.
+    // Human removal is owner-only (mirrors role PATCH), unlike admin-gated
+    // human add and agent remove.
     if (!canGovernWorkspace(ctx, getUserPrincipal(c), workspace.id, 'owner')) {
       return c.json({ error: 'forbidden' }, 403);
     }

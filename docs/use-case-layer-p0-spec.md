@@ -125,7 +125,7 @@ precondition → idempotency → tx → publish)埋在一个 ~150 行的 route h
 
 | 逻辑项 | 留 Route | 进 Use Case | 留 Repo | 时机 | 搬运说明 |
 |---|:--:|:--:|:--:|:--:|---|
-| body 解析、human 分支 owner 检查(`:3046-3057`) | ✅ | | | — | human-roster owner-only,留 route 授权;human 加成员是独立小路径,本刀聚焦 agent 分支 |
+| body 解析、人类 governance gate | ✅ | | | — | `POST /api/workspaces/:id/members` 的入口是 admin；human role/remove 仍 owner-only。该小路径保留 route 授权,本刀聚焦 agent 分支 |
 | 授权:入口 `admin` gate | ✅ | | | — | route |
 | placement / host equality(`assertAgentMatchesHost` `:3068` + repo 内 `assertHostEqualityForMembership` `workspace-repo.ts:414`) | | ✅ | | **② pre-commit** | **采纳约束②**:host/placement 是 workspace placement policy,不是表级持久化前提。统一收进 use case 的 ② precondition,**从 `insertMembership` 移除** → 同时清掉 `WorkspaceRepo → AgentRepo/placement` 隐性领域依赖;route 映射 `placementErrorResponse` |
 | **L2 seed**(daemon)`seedMemberAgentL2`(`:3074-3083`) | | ✅ | | **② pre-commit(awaited)** | 用 §1.1 下沉后的 HTTP-agnostic 版本;必须 seed 成功**才**进事务(§2.1 铁律);失败返回 typed code/status,不写行 |

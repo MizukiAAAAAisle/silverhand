@@ -335,6 +335,32 @@ describe('workspace metadata and membership routes', () => {
     });
   });
 
+  it('lets workspace admins add human workspace members', async () => {
+    t = buildTestApp();
+    const workspace = await (
+      await http(t).post('/api/workspaces', { name: 'humans-admin-add' })
+    ).json() as any;
+    t.ctx.db
+      .prepare(`UPDATE workspace_users SET role = 'admin' WHERE workspace_id = ? AND user_id = ?`)
+      .run(workspace.workspace.id, 'local');
+    t.ctx.db
+      .prepare(`DELETE FROM workspace_users WHERE workspace_id = ? AND user_id = ?`)
+      .run(workspace.workspace.id, 'teammate');
+
+    const add = await http(t).post(
+      `/api/workspaces/${workspace.workspace.id}/members`,
+      { kind: 'human', user_id: 'teammate' },
+    );
+
+    expect(add.status).toBe(201);
+    const body = await add.json() as any;
+    expect(body.member).toMatchObject({
+      workspace_id: workspace.workspace.id,
+      user_id: 'teammate',
+      role: 'member',
+    });
+  });
+
   it('returns the current viewer role from the workspace membership edge', async () => {
     t = buildTestApp();
     const workspace = await (

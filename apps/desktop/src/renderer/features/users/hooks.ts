@@ -23,13 +23,14 @@ const GC_MS = 5 * 60 * 1000;
  * Trust boundary is signup gate, not workspace scope. If we ever tighten
  * to workspace-scoped users, swap to `useWorkspaceMemberLists()`.
  */
-export function useUsers() {
+export function useUsers(options?: { enabled?: boolean }) {
   return useQuery<UsersResponse, Error, UserDto[]>({
     queryKey: usersKey,
     queryFn: () => api<UsersResponse>(apiPaths.users),
     select: res => res.users,
     staleTime: STALE_MS,
     gcTime: GC_MS,
+    enabled: options?.enabled ?? true,
   });
 }
 

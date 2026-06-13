@@ -20,11 +20,11 @@ import { api } from '@/lib/api';
  *
  * Membership rules enforced by the route (so the renderer doesn't
  * need to re-check):
- *   - Candidate must already be a member of this conversation's
- *     workspace (`workspace_membership_required` 422). The picker
- *     hides non-workspace candidates so this branch is rarely hit,
- *     but races (member removed mid-pick) still surface as the
- *     locked error code.
+ *   - Agent candidates must already be members of this conversation's
+ *     workspace (`workspace_membership_required` 422). Human candidates
+ *     may be outside the workspace for admin/owner callers; the server
+ *     provisions workspace membership as part of the same
+ *     permission-protected add action.
  *   - Conversation must be `kind === 'channel' || 'thread'` and not
  *     closed (`conversation_member_add_unsupported` 422 /
  *     `conversation_closed` 409). The trigger button hides on DM
@@ -35,10 +35,14 @@ import { api } from '@/lib/api';
  *
  * On success we invalidate the conversation members cache so the
  * conversation header member strip + any open `useConversationMembers`
- * subscriber refresh. We do NOT invalidate workspace members because
- * the candidate was already a workspace member by precondition.
+ * subscriber refresh. If a workspace id is available, also invalidate
+ * workspace members because a human add may have provisioned workspace
+ * membership under the hood.
  */
-export function useAddConversationMember(conversationId: string | null) {
+export function useAddConversationMember(
+  conversationId: string | null,
+  workspaceId?: string,
+) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: AddConversationMemberInput) => {
@@ -54,6 +58,11 @@ export function useAddConversationMember(conversationId: string | null) {
       if (conversationId) {
         qc.invalidateQueries({
           queryKey: ['conversation-members', conversationId],
+        });
+      }
+      if (workspaceId) {
+        qc.invalidateQueries({
+          queryKey: ['workspaces', workspaceId, 'members'],
         });
       }
     },

@@ -83,12 +83,14 @@ specific conversation.
 | Edit workspace settings — name / description / icon (**includes rename**) | ✓ | ✓ | ✗ |
 | Edit agent **capabilities** in this workspace (§2) | ✓ | ✓ | ✗ |
 | Channel-level role override (§1.3) | ✓ | ✓ | ✗ |
-| Add / remove **human** member | ✓ | ✗ | ✗ |
+| Add **human** member | ✓ | ✓ | ✗ |
+| Remove **human** member / change human role | ✓ | ✗ | ✗ |
 | Grant / revoke `admin` | ✓ | ✗ | ✗ |
 | **Archive / delete** workspace | ✓ | ✗ | ✗ |
 
 Rule of thumb: `admin` = day-to-day operation (channels, agents, capabilities, workspace settings incl.
-rename); `owner` = existential + human-roster control (archive/delete, human members, admin grants).
+rename, adding humans as workspace members); `owner` = existential + human-role/removal control
+(archive/delete, human role changes/removal, admin grants).
 **Exactly one owner per workspace.** (Rename is `admin`, deliberately not owner-only — Cindy
 `DSJLtPe7FkicAV0u` #3; it is a setting, not existential. The §1.2 behavior delta lists only the
 owner-only existential ops, which do **not** include rename.) Owner is set once at migration (§1.2)
@@ -356,10 +358,11 @@ The agent axis is not the only half that drifts — Layer A also re-points `canM
 - **Human-governance registry** — every public route that mutates workspace/membership/conversation
   governance → `{ minRole, roleScope: 'workspace' | 'conversation' }` (Cindy `DSJLtPe7FkicAV0u` #4 —
   carry `roleScope` from the start so channel-scoped governance §1.3 doesn't force a re-split later).
-  `roleScope: 'workspace'` reads the workspace role (archive/delete, human roster, admin grant);
+  `roleScope: 'workspace'` reads the workspace role (archive/delete, human-member add,
+  human-member role/remove, admin grant);
   `roleScope: 'conversation'` reads the **effective conversation role** = `override ?? workspace_role`
   (conversation member add, channel-scoped governance). Must cover at least: workspace update / archive
-  / delete / pin; workspace human-member add/remove; workspace agent-member add/remove
+  / delete / pin; workspace human-member add; workspace human-member role/remove; workspace agent-member add/remove
   (`manage_workspace_agents`); channel create / archive / pin / delete; conversation member add.
   Without this, the human half drifts back to "any member can do anything" exactly as the agent half
   drifted to `canPostToConversation`.
@@ -507,8 +510,9 @@ resolution, so the two axes stay orthogonal and the drift test (§6) still holds
 The human-axis **role management UI** for workspace roles (`owner` / `admin` / `member`) — *not* a
 human capability model; humans are governed by role, agents by capability (§0, the two-axis split).
 The backend already models all three roles (`workspace_users.role`) and now exposes them via
-`human_members[].role`; this TODO is the missing surface: admin grant/revoke, human member add/remove
-with role, and — if/when un-deferred — owner transfer (currently out of scope, amendment 1). Today the
+`human_members[].role`; this TODO is the missing surface: admin grant/revoke, human member removal
+and role editing, and — if/when un-deferred — owner transfer (currently out of scope, amendment 1). Human
+member add is admin-level and can be surfaced separately without exposing a role selector. Today the
 UI only **consumes** `viewer_role` to gate the agent editor and shows owner read-only. Must keep the two
 axes separate (§6.4): the human role UI never edits agent capabilities and vice-versa.
 
