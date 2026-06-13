@@ -601,6 +601,7 @@ function ActiveChannelView({
             channelId={conversation.id}
             workspaceId={conversation.workspace_id}
             messages={visibleMessages}
+            canReact={!closed && !isArchived}
             isLoading={isLoading}
             hasMoreBefore={!!hasPreviousPage}
             isFetchingEarlier={isFetchingPreviousPage}
@@ -951,6 +952,7 @@ function MessageList({
   conversationRefsById,
   onOpenConversationRef,
   onOpenChannelRef,
+  canReact,
 }: {
   channelId: string;
   workspaceId: string;
@@ -999,6 +1001,10 @@ function MessageList({
   /** Pre-bound (workspace already resolved) click handler for inline
    *  `#<channel_name>` chips. */
   onOpenChannelRef?: (channelId: string) => void;
+  /** Whether the viewer may react in this channel — false when closed or
+   *  archived. Threaded down to each MessageItem so the reaction write
+   *  affordances hide in a read-only channel (#task:1122 dogfood). */
+  canReact: boolean;
 }): JSX.Element {
   // Render context (lookup maps + sigil resolution + resolved viewer)
   // comes from the shared hook so the channel pane and the thread
@@ -1355,6 +1361,7 @@ function MessageList({
         <ChannelMessageItem
           message={m}
           conversationId={channelId}
+          canReact={canReact}
           agentsById={agentsById}
           agentsByName={agentsByName}
           humansByName={humansByName}
@@ -1385,6 +1392,7 @@ function MessageList({
     },
     [
       channelId,
+      canReact,
       agentsById,
       agentsByName,
       humansByName,

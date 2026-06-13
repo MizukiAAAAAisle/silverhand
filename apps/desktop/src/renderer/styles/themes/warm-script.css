@@ -186,6 +186,11 @@
      TaskStatusPill 是当前唯一胶囊消费者，shiki 决定先保留胶囊。 */
   --control-radius: 6px;
   --chip-radius: 4px;
+  /* Reaction-chip neutral fills. Reaction chips are a utility count element,
+     not a brand moment — no saturated hue; the viewer's own reaction uses
+     `--accent-soft` for a stronger fill instead of a color reversal. */
+  --reaction-chip-bg: rgba(31, 27, 20, 0.06);
+  --reaction-chip-bg-hover: rgba(31, 27, 20, 0.11);
 
   /* ── Closed-status chip (#task:770 closed-as-status cutover) ──
      closed 是终态 status（第 5 列），不再是跟 status 正交的 archived 可见性

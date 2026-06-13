@@ -357,6 +357,7 @@ export function ThreadPanel({
         key={m.id}
         message={m}
         conversationId={channelId}
+        canReact={!closed && !archived}
         agentsById={agentsById}
         agentsByName={agentsByName}
         humansByName={humansByName}

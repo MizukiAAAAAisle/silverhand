@@ -81,6 +81,7 @@ function msg(
     task_workspace_id: null,
     task_closed_at: null,
     task_assignee: null,
+    reactions: null,
   };
 }
 

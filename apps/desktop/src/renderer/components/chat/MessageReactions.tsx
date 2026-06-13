@@ -1,0 +1,185 @@
+import { useState } from 'react';
+import * as HoverCard from '@radix-ui/react-hover-card';
+import { SmilePlus } from 'lucide-react';
+import type { MessageDto, ReactionAggregateDto } from '@silverhand/shared';
+import { useMessageReactors } from '@/features/channels/reaction-hooks';
+import { ReactionPicker } from './ReactionPicker';
+
+export interface MessageReactionsProps {
+  message: MessageDto;
+  alignRight: boolean;
+  /** Toggle the viewer's reaction. `remove` is the current `viewer_reacted`
+   *  for an existing chip (re-click removes own), or always `false` from the
+   *  picker (picking adds). */
+  onReact: (emoji: string, remove: boolean) => void;
+  /** Bubbles the inline picker's open state so the host row stays framed. */
+  onPickerOpenChange?: (open: boolean) => void;
+  /** When false (closed/archived channel), chips render display-only — no
+   *  click-to-toggle and no trailing add affordance — but existing counts and
+   *  the hover "who reacted" list stay (#task:1122 dogfood follow-up). */
+  canReact?: boolean;
+}
+
+/**
+ * The reaction-chip row rendered below a message body (S4, #task:1122).
+ *
+ * Same component in both the main-line and reply-cluster surfaces — reactions
+ * key off `message_id`, so there is no per-surface fork. Renders nothing when
+ * the message has no reactions: the only add affordance then is the message's
+ * top-right "React" corner button (owned by MessageItem). Once a reaction
+ * exists, the row also carries a trailing smiley-plus add chip.
+ *
+ * Chips are utility count elements, not a brand moment: no border, a neutral
+ * background fill (`--reaction-chip-*`), and the viewer's own reaction is
+ * distinguished by a stronger `--accent-soft` fill rather than a color
+ * reversal. Radius follows `--chip-radius` (square in forza6).
+ */
+export function MessageReactions({
+  message,
+  alignRight,
+  onReact,
+  onPickerOpenChange,
+  canReact = true,
+}: MessageReactionsProps): JSX.Element | null {
+  const reactions = message.reactions;
+  if (!reactions || reactions.length === 0) return null;
+  return (
+    <div
+      data-reaction-row
+      className={
+        'mt-1.5 flex flex-wrap items-center gap-1.5 ' +
+        (alignRight ? 'justify-end' : 'justify-start')
+      }
+    >
+      {reactions.map(agg => (
+        <ReactionChip
+          key={agg.emoji}
+          messageId={message.id}
+          agg={agg}
+          interactive={canReact}
+          onClick={() => onReact(agg.emoji, agg.viewer_reacted)}
+        />
+      ))}
+      {canReact ? (
+        <ReactionPicker
+          align={alignRight ? 'end' : 'start'}
+          onOpenChange={onPickerOpenChange}
+          onPick={emoji => onReact(emoji, false)}
+          trigger={
+            <button
+              type="button"
+              data-reaction-add
+              aria-label="Add reaction"
+              title="Add reaction"
+              className="flex h-[22px] items-center rounded-[var(--chip-radius)] bg-[var(--reaction-chip-bg)] px-2 text-text-muted transition-colors hover:bg-[var(--reaction-chip-bg-hover)] hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+            >
+              <SmilePlus className="size-3.5" />
+            </button>
+          }
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ReactionChip({
+  messageId,
+  agg,
+  onClick,
+  interactive,
+}: {
+  messageId: string;
+  agg: ReactionAggregateDto;
+  onClick: () => void;
+  interactive: boolean;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  // Lazy: reactor names load only while hovered (§6 perf).
+  const reactors = useMessageReactors(messageId, open);
+  const names =
+    reactors.data
+      ?.find(d => d.emoji === agg.emoji)
+      ?.reactors.map(r => r.display_name) ?? [];
+  // Shared visual; only the interactive chip gets the hover-fill shift and
+  // the focus ring (a display-only chip in a read-only channel must not look
+  // clickable).
+  const chipClass =
+    'flex h-[22px] items-center gap-1 rounded-[var(--chip-radius)] px-2 text-xs tabular-nums text-text-primary transition-colors ' +
+    (agg.viewer_reacted
+      ? 'bg-[var(--accent-soft)]'
+      : interactive
+        ? 'bg-[var(--reaction-chip-bg)] hover:bg-[var(--reaction-chip-bg-hover)]'
+        : 'bg-[var(--reaction-chip-bg)]');
+  const inner = (
+    <>
+      <span className="text-[13px] leading-none">{agg.emoji}</span>
+      <span
+        className={
+          'font-semibold ' +
+          (agg.viewer_reacted ? 'text-text-primary' : 'text-text-muted')
+        }
+      >
+        {agg.count}
+      </span>
+    </>
+  );
+  const countLabel = `${agg.emoji}, ${agg.count} reaction${
+    agg.count === 1 ? '' : 's'
+  }`;
+  return (
+    <HoverCard.Root
+      open={open}
+      onOpenChange={setOpen}
+      openDelay={350}
+      closeDelay={120}
+    >
+      <HoverCard.Trigger asChild>
+        {interactive ? (
+          <button
+            type="button"
+            data-reaction-chip
+            aria-pressed={agg.viewer_reacted}
+            aria-label={
+              countLabel +
+              (agg.viewer_reacted ? ', you reacted' : '') +
+              `, click to ${agg.viewer_reacted ? 'remove' : 'add'}`
+            }
+            onClick={onClick}
+            className={
+              chipClass +
+              ' focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus'
+            }
+          >
+            {inner}
+          </button>
+        ) : (
+          <div
+            data-reaction-chip
+            aria-label={countLabel + (agg.viewer_reacted ? ', you reacted' : '')}
+            className={chipClass}
+          >
+            {inner}
+          </div>
+        )}
+      </HoverCard.Trigger>
+      <HoverCard.Portal>
+        <HoverCard.Content
+          align="start"
+          sideOffset={6}
+          collisionPadding={8}
+          data-popover-frame="info"
+          className="z-[80] max-w-[240px] rounded-[var(--floating-radius)] border border-border bg-bg-floating px-2.5 py-1.5 text-xs text-text-primary shadow-lg outline-none"
+        >
+          <span className="mr-1">{agg.emoji}</span>
+          {reactors.isLoading && names.length === 0 ? (
+            <span className="text-text-muted">…</span>
+          ) : names.length > 0 ? (
+            <span>{names.join('、')}</span>
+          ) : (
+            <span className="text-text-muted">—</span>
+          )}
+        </HoverCard.Content>
+      </HoverCard.Portal>
+    </HoverCard.Root>
+  );
+}

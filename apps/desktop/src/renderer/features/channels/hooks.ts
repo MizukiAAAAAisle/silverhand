@@ -17,14 +17,17 @@ import type {
   ConversationMembersResponse,
   ConversationMessagesDto,
   MessageDto,
+  MessageReactionChangedEvent,
   MessageUnreadByConversationDto,
+  ReactionAggregateDto,
   ReplyBadgeSummary,
   TaskChangedEvent,
   ThreadFollowerStateDto,
   ThreadFollowMutationDto,
 } from '@silverhand/shared';
-import { apiPaths } from '@silverhand/shared';
+import { apiPaths, MESSAGE_REACTION_CHANGED_EVENT } from '@silverhand/shared';
 import { api, ApiError } from '@/lib/api';
+import { messageReactorsKey } from '@/features/channels/reaction-hooks';
 import { getCurrentUserId } from '@/lib/current-user';
 import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
 import {
@@ -38,13 +41,19 @@ import {
 } from '@/hooks/useConversationStream';
 import { applyTaskChangedToTaskByNumberCache } from '@/features/tasks/useTaskByNumber';
 
-const messagesKey = (cid: string) => ['channels', cid, 'messages'] as const;
+export const messagesKey = (cid: string) =>
+  ['channels', cid, 'messages'] as const;
 /** Cache key for one reply cluster's window. A cluster lives in the same
  *  channel conversation as its root (rows with `thread_root_id = rootId`),
  *  so it is keyed off the channel id plus the root message id — distinct
  *  from the main-stream window (`messagesKey`) which excludes replies. */
-const clusterMessagesKey = (cid: string, rootId: string) =>
+export const clusterMessagesKey = (cid: string, rootId: string) =>
   ['channels', cid, 'cluster', rootId, 'messages'] as const;
+/** Cache key for the thread pane's root row. The root message lives in the
+ *  main stream, but ThreadPanel loads it through its own single-row window
+ *  query so the pane can mount independently of the channel list. */
+export const threadRootKey = (cid: string, rootId: string) =>
+  ['channels', cid, 'thread-root', rootId] as const;
 const agentsKey = (cid: string) => ['channels', cid, 'agents'] as const;
 const MESSAGE_PAGE_LIMIT = 100;
 const AROUND_MESSAGE_LIMIT = 100;
@@ -305,6 +314,137 @@ function applyTaskChangedToCache(
     return pageChanged ? { ...page, messages } : page;
   });
   return changed ? { ...data, pages } : data;
+}
+
+/** Apply a `message_reaction_changed` event to a SINGLE message row.
+ *
+ *  Count is **absolute-assigned** from the event (`ev.count`, the server's
+ *  authoritative post-change aggregate), never derived from `op` +/- — WS
+ *  replay / reorder + the viewer's own optimism would otherwise drift
+ *  (docs/reactions-design.md §5.2). `viewer_reacted` flips ONLY when the
+ *  event's reactor is the current viewer; other reactors bump the count but
+ *  leave the viewer flag untouched. `count <= 0` drops the emoji's chip;
+ *  the array collapses to `null` when the last reaction goes.
+ *
+ *  The caller is responsible for matching `message.id === ev.message_id`;
+ *  this is the one place the reaction-merge logic lives so the main window,
+ *  reply-cluster window, and the thread-pane root row all stay consistent
+ *  (#task:1122 review, P1.1 — no second copy of the merge). */
+export function applyReactionToMessage(
+  message: MessageDto,
+  ev: MessageReactionChangedEvent,
+  viewerUserId: string | null,
+): MessageDto {
+  const viewerMatch =
+    ev.reactor_kind === 'user' && ev.reactor_id === viewerUserId;
+  const prev = message.reactions ?? [];
+  const idx = prev.findIndex(r => r.emoji === ev.emoji);
+  let next: ReactionAggregateDto[];
+  if (ev.count <= 0) {
+    next = prev.filter(r => r.emoji !== ev.emoji);
+  } else if (idx === -1) {
+    next = [
+      ...prev,
+      {
+        emoji: ev.emoji,
+        count: ev.count,
+        viewer_reacted: viewerMatch && ev.op === 'add',
+      },
+    ];
+  } else {
+    next = prev.map((r, i) =>
+      i === idx
+        ? {
+            emoji: r.emoji,
+            count: ev.count,
+            viewer_reacted: viewerMatch ? ev.op === 'add' : r.viewer_reacted,
+          }
+        : r,
+    );
+  }
+  return { ...message, reactions: next.length ? next : null };
+}
+
+/** Apply a `message_reaction_changed` event to a message-window cache.
+ *
+ *  Delegates the per-row merge to {@link applyReactionToMessage}; this just
+ *  walks the infinite-query pages and is a no-op when the message isn't in
+ *  this window — so the same handler can be fired against both the
+ *  main-stream and reply-cluster caches and only the one actually holding
+ *  the row changes. */
+function applyReactionChangedToCache(
+  data: MessagesCache | undefined,
+  ev: MessageReactionChangedEvent,
+  viewerUserId: string | null,
+): MessagesCache | undefined {
+  if (!data) return data;
+  let changed = false;
+  const pages = data.pages.map(page => {
+    let pageChanged = false;
+    const messages = page.messages.map(message => {
+      if (message.id !== ev.message_id) return message;
+      changed = true;
+      pageChanged = true;
+      return applyReactionToMessage(message, ev, viewerUserId);
+    });
+    return pageChanged ? { ...page, messages } : page;
+  });
+  return changed ? { ...data, pages } : data;
+}
+
+/** Patch every channel-scope cache a `message_reaction_changed` event
+ *  touches: the main-stream window, the reply-cluster window (only when the
+ *  event targets a reply), and the lazy hover reactor-detail query —
+ *  invalidated so an already-open "who reacted" list refetches instead of
+ *  showing names stale by up to its `staleTime` (#task:1122 review, P1.2).
+ *  Mirrors `applyTaskChangedToTaskByNumberCache`'s QueryClient-operating
+ *  shape so the WS handler stays a thin caller and the cache effects are
+ *  unit-testable without a stream mock. */
+export function applyReactionChangedToChannelCaches(
+  qc: QueryClient,
+  channelId: string,
+  ev: MessageReactionChangedEvent,
+  viewerUserId: string | null,
+): void {
+  qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
+    applyReactionChangedToCache(prev, ev, viewerUserId),
+  );
+  if (ev.thread_root_id) {
+    qc.setQueryData<MessagesCache>(
+      clusterMessagesKey(channelId, ev.thread_root_id),
+      prev => applyReactionChangedToCache(prev, ev, viewerUserId),
+    );
+  }
+  void qc.invalidateQueries({ queryKey: messageReactorsKey(ev.message_id) });
+}
+
+/** Patch the thread pane's root-row query for a `message_reaction_changed`
+ *  event. The root lives in the main stream (the event's `thread_root_id` is
+ *  null), so {@link applyReactionChangedToChannelCaches} only updates the
+ *  LEFT-side main cache — without this the open pane's root reaction stays
+ *  stale until a manual refetch (#task:1122 review, P1.1). Reuses the one
+ *  merge helper; no-op unless the event targets this exact root. */
+export function applyReactionChangedToThreadRootCache(
+  qc: QueryClient,
+  channelId: string,
+  rootMessageId: string,
+  ev: MessageReactionChangedEvent,
+  viewerUserId: string | null,
+): void {
+  if (ev.message_id !== rootMessageId) return;
+  qc.setQueryData<ConversationMessagesDto>(
+    threadRootKey(channelId, rootMessageId),
+    prev => {
+      if (!prev) return prev;
+      let changed = false;
+      const messages = prev.messages.map(m => {
+        if (m.id !== rootMessageId) return m;
+        changed = true;
+        return applyReactionToMessage(m, ev, viewerUserId);
+      });
+      return changed ? { ...prev, messages } : prev;
+    },
+  );
 }
 
 /** Adjust a root's reply-count badge in the main-stream cache by `delta`.
@@ -622,6 +762,18 @@ export function useChannelMessages(
           applyTaskChangedToCache(prev, task),
         );
       }
+      if (e.kind === MESSAGE_REACTION_CHANGED_EVENT) {
+        const ev = e.payload as MessageReactionChangedEvent | undefined;
+        if (!ev?.message_id) return;
+        // Patches main-stream + reply-cluster windows and invalidates the
+        // lazy hover reactor list (each a no-op when not in cache).
+        applyReactionChangedToChannelCaches(
+          qc,
+          channelId,
+          ev,
+          getCurrentUserId(),
+        );
+      }
     },
     [qc, channelId],
   );
@@ -799,12 +951,7 @@ export function useThreadRoot(
 ) {
   const qc = useQueryClient();
   const enabled = !!channelId && !!rootMessageId;
-  const key = [
-    'channels',
-    channelId ?? 'none',
-    'thread-root',
-    rootMessageId ?? 'none',
-  ] as const;
+  const key = threadRootKey(channelId ?? 'none', rootMessageId ?? 'none');
 
   const query = useQuery<ConversationMessagesDto>({
     queryKey: key,
@@ -821,6 +968,25 @@ export function useThreadRoot(
   const onEvent = useCallback(
     (e: ConversationStreamEvent) => {
       if (!rootMessageId) return;
+      // Reactions on the root row land here too: the root lives in the main
+      // stream, so its reaction event carries `thread_root_id === null` and
+      // the channel handler only patches the LEFT-side main cache. The
+      // thread pane's root row is a separate query (`thread-root` key), so
+      // without this branch a reaction on the root stays stale in the open
+      // pane until a manual refetch (#task:1122 review, P1.1). Reuse the one
+      // merge helper — no second copy of the reaction logic.
+      if (e.kind === MESSAGE_REACTION_CHANGED_EVENT) {
+        const ev = e.payload as MessageReactionChangedEvent | undefined;
+        if (!ev) return;
+        applyReactionChangedToThreadRootCache(
+          qc,
+          channelId ?? 'none',
+          rootMessageId,
+          ev,
+          getCurrentUserId(),
+        );
+        return;
+      }
       if (e.kind !== 'message') return;
       const msg = e.payload?.message as MessageDto | undefined;
       if (!msg) return;
@@ -1253,6 +1419,7 @@ export function useSendMessage(
         task_title: null,
         task_workspace_id: null,
         task_closed_at: null,
+        reactions: null,
       };
       qc.setQueryData<MessagesCache>(key, cur =>
         appendMessageToCache(cur, tempMsg),

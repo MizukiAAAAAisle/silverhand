@@ -1,7 +1,7 @@
 import { type FocusEvent, useCallback, useEffect, useState } from 'react';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { Bookmark, Check, ClipboardCheck, CornerUpLeft, FileText, User } from 'lucide-react';
+import { Bookmark, Check, ClipboardCheck, CornerUpLeft, FileText, SmilePlus, User } from 'lucide-react';
 import type {
   AgentDto,
   AttachmentSnapshot,
@@ -29,6 +29,9 @@ import { Markdown } from './Markdown';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 import { MessageContextMenu } from './MessageContextMenu';
+import { MessageReactions } from './MessageReactions';
+import { ReactionPicker } from './ReactionPicker';
+import { useToggleReaction } from '@/features/channels/reaction-hooks';
 import { useMessageLayoutMode } from './useMessageLayoutMode';
 
 // Idempotent — the reply badge's "{time} ago" label uses dayjs.fromNow().
@@ -77,6 +80,12 @@ export interface MessageItemProps {
   threadReplySummary?: ReplyBadgeSummary;
   onSave?: (msg: MessageDto) => void;
   saved?: boolean;
+  /** Whether the viewer may add/remove reactions here. False in a closed or
+   *  archived (read-only) channel: the backend rejects the write, so the
+   *  React entry, the inline add chip, and chip click-to-toggle are hidden —
+   *  existing reaction chips stay visible as display-only counts
+   *  (#task:1122 dogfood follow-up). */
+  canReact?: boolean;
   /** Object URL pointing at the current viewer's avatar blob (or null
    *  if the viewer has no avatar / isn't loaded yet). Lifted into the
    *  parent pane so a single fetch drives every message render in the
@@ -179,6 +188,7 @@ export function MessageItem({
   threadReplySummary,
   onSave,
   saved = false,
+  canReact = true,
   highlighted = false,
   jumpFlash = false,
   viewerAvatarObjectUrl = null,
@@ -264,6 +274,11 @@ export function MessageItem({
   // when focus leaves the wrapper subtree (not when it just hops
   // between sibling buttons inside).
   const [focusWithin, setFocusWithin] = useState(false);
+  // Pins the row "framed" + keeps the hover-revealed corner controls visible
+  // while a reaction picker (corner or inline) is open — the picker portals
+  // out, so the row would otherwise collapse from under it.
+  const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
+  const toggleReaction = useToggleReaction();
   const handleActionsBlur = useCallback(
     (event: FocusEvent<HTMLDivElement>) => {
       const next = event.relatedTarget as Node | null;
@@ -277,7 +292,8 @@ export function MessageItem({
   // reveals the action bar. Selection-mode also keeps the frame on
   // selected rows so the user can see at a glance which messages are
   // in the export queue.
-  const framed = hover || highlighted || (selectionMode && selected);
+  const framed =
+    hover || highlighted || reactionPickerOpen || (selectionMode && selected);
 
   // "{N} Reply/Replies" — pluralized to match the ThreadPanel header
   // (which says "N replies"); the badge previously hard-coded "Reply".
@@ -461,6 +477,16 @@ export function MessageItem({
           ) : null}
         </div>
 
+        <MessageReactions
+          message={message}
+          alignRight={alignRight}
+          canReact={canReact}
+          onReact={(emoji, remove) =>
+            toggleReaction.mutate({ messageId: message.id, emoji, remove })
+          }
+          onPickerOpenChange={setReactionPickerOpen}
+        />
+
         {/* Inline thread-replies badge — only rendered when
             `threadReplyCount !== undefined`. It carries real
             information ("this message has N replies, click to open"),
@@ -556,9 +582,35 @@ export function MessageItem({
           'absolute top-1 z-10 flex items-center gap-3 text-xs transition-opacity ' +
           (alignRight ? 'left-2' : 'right-2') +
           ' ' +
-          (hover || focusWithin ? 'opacity-100' : 'pointer-events-none opacity-0')
+          (hover || focusWithin || reactionPickerOpen
+            ? 'opacity-100'
+            : 'pointer-events-none opacity-0')
         }
       >
+        {canReact ? (
+          <ReactionPicker
+            align="end"
+            onOpenChange={setReactionPickerOpen}
+            onPick={emoji =>
+              toggleReaction.mutate({
+                messageId: message.id,
+                emoji,
+                remove: false,
+              })
+            }
+            trigger={
+              <button
+                type="button"
+                title="React"
+                aria-label="React"
+                className="flex items-center gap-1 rounded-sm text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+              >
+                <SmilePlus className="size-3.5" />
+                <span>React</span>
+              </button>
+            }
+          />
+        ) : null}
         {onStartThread && threadReplyCount === undefined ? (
           <ActionButton
             icon={<CornerUpLeft className="size-3.5" />}

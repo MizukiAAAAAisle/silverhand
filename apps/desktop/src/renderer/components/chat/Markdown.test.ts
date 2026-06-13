@@ -153,6 +153,7 @@ describe('SystemMessage channel refs', () => {
       task_workspace_id: null,
       task_closed_at: null,
       task_assignee: null,
+      reactions: null,
     };
   }
 
@@ -792,6 +793,7 @@ describe('SystemMessage task event rows (PR-2)', () => {
       task_workspace_id: null,
       task_closed_at: null,
       task_assignee: null,
+      reactions: null,
     };
   }
 
