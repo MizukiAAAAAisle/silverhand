@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
+import { MessageReactionRepo } from '../../src/repos/message-reaction-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
@@ -458,5 +459,98 @@ describe('POST /internal/.../read-history', () => {
     const body = await res.json() as any;
     expect(body.target.thread_root_id).toBe(root.id);
     expect(body.messages.map((m: any) => m.message_ref.id)).toEqual([root.id]);
+  });
+
+  // Reaction visibility on the agent read surface (docs/reactions-design.md
+  // §12.C): an agent that can `message react` must also SEE reactions when it
+  // reads history — counts plus its own `viewer_reacted` — on both the main
+  // line and the reply-cluster pull. This is the S2 "read-history agent viewer
+  // semantics" contract, not S4 renderer.
+  it('main-line read-history carries reaction aggregates with the calling agent as viewer', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const aliceId = agentIds.alice!;
+    const messages = new MessageRepo(t.ctx.db);
+    const reacted = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'a message that gets reactions',
+    });
+    const plain = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'a message with no reactions',
+    });
+
+    // The agent reacts via its own CLI route — the exact write path Cindy
+    // flagged ("写得了但看不见"). A human also reacts with a different emoji.
+    const react = await http(t).post(
+      `/internal/conversations/${channelId}/agents/${aliceId}/react-message`,
+      { message_id: reacted.id, emoji: '👀' },
+    );
+    expect(react.status).toBe(200);
+    new MessageReactionRepo(t.ctx.db).add(reacted.id, 'user', 'local', '🎉', Date.now());
+
+    const res = await http(t).post(readHistoryPath(channelId, aliceId), {
+      after_seq: 0,
+      limit: 50,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    const byId = new Map<string, any>(
+      body.messages.map((m: any) => [m.message_ref.id, m]),
+    );
+    // Agent's own 👀 → viewer_reacted true; the human's 🎉 → present, not the
+    // agent's. Order is first-reaction-time then emoji; assert set-wise.
+    expect(byId.get(reacted.id).reactions).toEqual(
+      expect.arrayContaining([
+        { emoji: '👀', count: 1, viewer_reacted: true },
+        { emoji: '🎉', count: 1, viewer_reacted: false },
+      ]),
+    );
+    expect(byId.get(reacted.id).reactions).toHaveLength(2);
+    // A message with no reactions → null.
+    expect(byId.get(plain.id).reactions).toBeNull();
+  });
+
+  it('reply-cluster read-history carries viewer_reacted for the calling agent (§12.C thread-pull)', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const aliceId = agentIds.alice!;
+    const messages = new MessageRepo(t.ctx.db);
+    const root = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'cluster root',
+    });
+    const reply = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'a reply that the agent reacts to',
+      threadRootId: root.id,
+    });
+
+    const react = await http(t).post(
+      `/internal/conversations/${channelId}/agents/${aliceId}/react-message`,
+      { message_id: reply.id, emoji: '👍' },
+    );
+    expect(react.status).toBe(200);
+
+    const res = await http(t).post(readHistoryPath(channelId, aliceId), {
+      target: { thread_root_id: root.id },
+      after_seq: 0,
+      limit: 50,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    const replyRow = body.messages.find(
+      (m: any) => m.message_ref.id === reply.id,
+    );
+    expect(replyRow.reactions).toEqual([
+      { emoji: '👍', count: 1, viewer_reacted: true },
+    ]);
+    // The unreacted root carries null.
+    const rootRow = body.messages.find((m: any) => m.message_ref.id === root.id);
+    expect(rootRow.reactions).toBeNull();
   });
 });

@@ -431,6 +431,11 @@ silverhand message react --message-id m_123 --emoji 👀 --remove
   reacting requires the same `send_messages` capability and conversation-post
   access as sending, and closed/archived conversations reject the write.
 - stdout: `{ "changed": <bool>, "emoji": "<emoji>", "count": <n> }`.
+- **Reading them back.** `silverhand message history` (including the
+  `--target thread:<root>` reply-cluster pull) carries each message's
+  `reactions: [{ emoji, count, viewer_reacted }] | null`, where
+  `viewer_reacted` is the calling agent's own — so an agent that reacted can
+  see the result. Reactions never affect history's freshness/anchoring.
 
 ## 4. Error Contract
 

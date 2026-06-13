@@ -177,6 +177,56 @@ describe('react-message use cases (application layer)', () => {
     expect(messageCount).toBe(1);
   });
 
+  it('§12.A: reacting on a reply moves neither the main nor the cluster stream head; event carries thread_root_id', async () => {
+    // shiki: CAS exclusion is "both channel and thread". §12.A lists main
+    // (thread_root_id IS NULL) and cluster (id=root OR thread_root_id=root)
+    // as the two streams; a reaction must move NEITHER head. A real reply is
+    // inserted first so the cluster head sits at a non-zero seq before we react.
+    t = buildTestApp();
+    const ws = await createWorkspace(t, 'cas-thread-ws', []);
+    const channelId = await createChannel(t, ws, 'room', []);
+    const repo = new MessageRepo(t.ctx.db);
+    const root = repo.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'cluster root',
+    });
+    const reply = repo.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      content: 'a reply',
+      threadRootId: root.id,
+    });
+    const deps = reactDeps(t);
+
+    const mainBefore = repo.streamHeadLatestSeq(channelId, null);
+    const clusterBefore = repo.streamHeadLatestSeq(channelId, root.id);
+    // The reply's insert advanced the cluster head to a real, non-zero seq.
+    expect(clusterBefore).toBe(reply.seq);
+    const latestBefore = freshnessSnapshot(t, channelId).latestMessageSeq;
+
+    const payloads: any[] = [];
+    const off = t.ctx.events.subscribeScope(`conversation:${channelId}`, e => {
+      if (e.kind === MESSAGE_REACTION_CHANGED_EVENT) payloads.push(e.payload);
+    });
+    const res = await addReaction(deps, {
+      principal: LOCAL_USER,
+      messageId: reply.id,
+      emoji: '👍',
+    });
+    off();
+
+    expect(res).toEqual({ ok: true, changed: true, emoji: '👍', count: 1 });
+    // Neither stream head moved, nor did the conversation's latest seq.
+    expect(repo.streamHeadLatestSeq(channelId, null)).toBe(mainBefore);
+    expect(repo.streamHeadLatestSeq(channelId, root.id)).toBe(clusterBefore);
+    expect(freshnessSnapshot(t, channelId).latestMessageSeq).toBe(latestBefore);
+    // The event carries the cluster root so the renderer can route the chip
+    // to the thread pane (§12.C).
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].thread_root_id).toBe(root.id);
+  });
+
   it('reactor isomorphism: a user and an agent react to the same message as distinct reactors', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');

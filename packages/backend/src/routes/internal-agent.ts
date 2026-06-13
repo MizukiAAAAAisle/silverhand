@@ -577,7 +577,11 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
         agentId: principal.agentId,
         limit: parsed.data.limit,
       },
-      () => buildReadHistoryDto(ctx, target.conversation, parsed.data, target.threadRootId),
+      () =>
+        buildReadHistoryDto(ctx, target.conversation, parsed.data, target.threadRootId, {
+          kind: 'agent',
+          id: principal.agentId,
+        }),
       out => ({
         messageCount: 'messages' in out ? out.messages.length : 0,
       }),

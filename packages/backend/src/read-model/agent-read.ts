@@ -19,6 +19,10 @@
 import type { BackendContext } from '../context.js';
 import { ConversationRepo } from '../repos/conversation-repo.js';
 import { messageRowToDto } from '../repos/message-repo.js';
+import {
+  loadReactionAggregates,
+  type ReactionViewer,
+} from './message-reactions.js';
 import type {
   AgentListChannelsDto,
   AgentListedChannel,
@@ -28,6 +32,7 @@ import type {
   MessageRef,
   MessageRow,
   MessageSenderRef,
+  ReactionAggregateDto,
   ReadHistoryMessage,
   ReadHistoryTarget,
   ReadHistoryTargetRef,
@@ -279,6 +284,7 @@ function historyRowToMessage(
   row: HistoryMessageRow,
   target: ReadHistoryTargetRef,
   includeContent: boolean,
+  reactions: ReactionAggregateDto[] | null,
 ): ReadHistoryMessage {
   const dto = messageRowToDto(row, { assigneeName: row.task_assignee_name });
   return {
@@ -287,6 +293,7 @@ function historyRowToMessage(
     snippet: snippetFor(dto.content),
     metadata: dto.metadata,
     attachments: dto.attachments,
+    reactions,
     ...(includeContent ? { content: dto.content } : {}),
   };
 }
@@ -470,6 +477,7 @@ export function buildReadHistoryDto(
     limit: number;
   },
   threadRootId: string | null = null,
+  viewer: ReactionViewer = null,
 ): AgentReadHistoryDto | { error: string; code: string; status: 404 } {
   const target = targetRef(targetConversation, threadRootId);
   let rows: HistoryMessageRow[];
@@ -544,6 +552,15 @@ export function buildReadHistoryDto(
 
   const minSeq = rows[0]?.seq ?? null;
   const maxSeq = rows.at(-1)?.seq ?? null;
+  // One bulk reaction-aggregate query for the whole window (no N+1), scoped
+  // to the calling agent so `viewer_reacted` is the agent's own. Absence in
+  // the map → `reactions: null` on that message. Serves the reply-cluster
+  // pull form too, since the rows already carry cluster scoping (§12.C).
+  const aggregates = loadReactionAggregates(
+    ctx,
+    rows.map(row => row.id),
+    viewer,
+  );
   return {
     target,
     anchor,
@@ -551,7 +568,12 @@ export function buildReadHistoryDto(
     include_content: input.include_content,
     include_system: input.include_system,
     messages: rows.map(row =>
-      historyRowToMessage(row, target, input.include_content),
+      historyRowToMessage(
+        row,
+        target,
+        input.include_content,
+        aggregates.get(row.id) ?? null,
+      ),
     ),
     has_more_before:
       minSeq === null

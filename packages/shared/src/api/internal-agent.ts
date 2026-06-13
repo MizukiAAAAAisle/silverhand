@@ -12,6 +12,7 @@ import {
   hasMessagePayload,
 } from './_zod-helpers.js';
 import { AttachmentSnapshotSchema } from './attachment.js';
+import { ReactionAggregateDtoSchema } from './reactions.js';
 
 export const MessageSendTargetSchema = z.union([
   z.object({ kind: z.literal('channel') }).strict(),
@@ -254,6 +255,12 @@ export const ReadHistoryMessageSchema = z.object({
   snippet: z.string(),
   metadata: z.record(z.unknown()).nullable(),
   attachments: z.array(AttachmentSnapshotSchema).nullable(),
+  /** Per-emoji reaction aggregates from the CALLING agent's viewer
+   *  perspective (`viewer_reacted` is the agent's own). `null` when the
+   *  message has no reactions. Carried on read-history (incl. the
+   *  reply-cluster pull form) so an agent that can `message react` can
+   *  also see the result — docs/reactions-design.md §12.C. */
+  reactions: z.array(ReactionAggregateDtoSchema).nullable(),
   content: z.string().optional(),
 });
 export type ReadHistoryMessage = z.infer<typeof ReadHistoryMessageSchema>;
