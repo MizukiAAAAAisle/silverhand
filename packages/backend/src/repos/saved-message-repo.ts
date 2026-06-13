@@ -77,6 +77,7 @@ function rowToDto(row: JoinedRow): SavedMessageDto {
         ? (JSON.parse(row.m_metadata) as Record<string, unknown>)
         : null,
       attachments: extractAttachmentSnapshots(row.m_metadata),
+      reactions: null,
       seq: row.m_seq,
       created_at: row.m_created_at,
       thread_root_id: row.m_thread_root_id,

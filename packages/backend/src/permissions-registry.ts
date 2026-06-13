@@ -276,6 +276,7 @@ export const AGENT_ROUTE_CAPABILITIES: Record<
   agentSearchMessages: { status: 'enforced', capability: 'read_messages', scope: 'resolved target: channel.workspace_id | workspace_id arg | principal\'s' },
   agentSendConversationMessage: { status: 'enforced', capability: 'send_messages', scope: 'principal conversation\'s workspace' },
   agentResolveStaleMessage: { status: 'enforced', capability: 'send_messages', scope: 'principal conversation\'s workspace' },
+  agentReactMessage: { status: 'enforced', capability: 'send_messages', scope: 'principal conversation\'s workspace' },
   agentCreateChannel: { status: 'enforced', capability: 'create_channels', scope: 'principal conversation\'s workspace' },
   agentListConversationTasks: { status: 'enforced', capability: 'read_tasks', scope: 'effective workspace (workspace_id arg supported)' },
   agentCreateConversationTasks: { status: 'enforced', capability: 'create_tasks', scope: 'principal conversation\'s workspace' },

@@ -9,6 +9,7 @@ import { AttachmentRepo } from './repos/attachment-repo.js';
 import { HostRepo } from './repos/host-repo.js';
 import { HostTokenService } from './auth/host-token.js';
 import { MessageRepo } from './repos/message-repo.js';
+import { MessageReactionRepo } from './repos/message-reaction-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
 import { SavedMessageRepo } from './repos/saved-message-repo.js';
 import { SearchRepo } from './repos/search-repo.js';
@@ -288,6 +289,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   const workspaces = new WorkspaceRepo(ctx.db, { workspacesRoot: ctx.workspacesRoot });
   const conversations = new ConversationRepo(ctx.db);
   const messages = new MessageRepo(ctx.db);
+  const reactions = new MessageReactionRepo(ctx.db);
   const attachments = new AttachmentRepo(ctx.db);
   const saved = new SavedMessageRepo(ctx.db);
   const search = new SearchRepo(ctx.db);
@@ -468,6 +470,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       saved,
       search,
       agents,
+      reactions,
     }),
   );
 

@@ -276,6 +276,7 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('claim-then-act');
     expect(text).toMatch(/Independent reads/);
     expect(text).toContain('**`silverhand message send`**: Send a message');
+    expect(text).toMatch(/\*\*`silverhand message react`\*\*/);
     expect(text).toMatch(/GitHub-Flavored Markdown — headings, lists, tables/);
     expect(text).toMatch(/\*\*`silverhand task list`\*\*: View the task board/);
     expect(text).toMatch(/\*\*`silverhand schedule create`\*\*/);

@@ -39,6 +39,13 @@ import {
   MessageRepo,
 } from '../repos/message-repo.js';
 import {
+  MessageReactionRepo,
+} from '../repos/message-reaction-repo.js';
+import {
+  addReaction,
+  removeReaction,
+} from '../application/react-message.js';
+import {
   UserRepo,
 } from '../repos/user-repo.js';
 import {
@@ -58,6 +65,7 @@ import {
   agentServiceErrorStatus,
   channelServiceErrorResponse,
   conversationMessageServiceErrorResponse,
+  reactionResultResponse,
   scheduleServiceErrorResponse,
 } from './responses.js';
 import {
@@ -74,6 +82,7 @@ import {
   AgentFollowThreadInputSchema,
   AgentListChannelsQuerySchema,
   AgentReadHistoryInputSchema,
+  AgentReactMessageInputSchema,
   AgentResolveStaleMessageInputSchema,
   AgentSearchMessagesInputSchema,
   AgentSendMessageInputSchema,
@@ -93,6 +102,7 @@ import {
 import {
   Hono,
 } from 'hono';
+import type { Context } from 'hono';
 import {
   join,
 } from 'node:path';
@@ -252,6 +262,7 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
   const agents = new AgentRepo(ctx.db);
   const conversations = new ConversationRepo(ctx.db);
   const messages = new MessageRepo(ctx.db);
+  const reactions = new MessageReactionRepo(ctx.db);
   const workspaces = new WorkspaceRepo(ctx.db, { workspacesRoot: ctx.workspacesRoot });
   const users = new UserRepo(ctx.db);
   const membership = new MembershipService({ agents, users, conversations });
@@ -394,6 +405,55 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
       throw err;
     }
   });
+
+  // Agent reacts to a message (docs/reactions-design.md §5.1 / §12.D). A
+  // reaction is a WRITE, so it carries the same `send_messages` capability
+  // gate as posting a message — not a read capability. POST adds, DELETE
+  // removes; both take `{message_id, emoji}`. The use case enforces that the
+  // target message is in the agent's own conversation (via canViewConversation
+  // on the agent principal), rejects system messages, and excludes the write
+  // from the message CAS (§12.A).
+  const handleAgentReact = async (
+    c: Context,
+    op: 'add' | 'remove',
+  ): Promise<Response> => {
+    const cid = c.req.param('cid');
+    const aid = c.req.param('aid');
+    if (!cid || !aid) {
+      return c.json({ error: 'conversation id and agent id required' }, 400);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = AgentReactMessageInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const principal = getAgentPrincipal(c);
+    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    {
+      const denied = requireAgentCapability(c, ctx, principal, 'send_messages',
+        conversations.get(principal.conversationId)?.workspace_id);
+      if (denied) return denied;
+    }
+    const input = {
+      principal,
+      messageId: parsed.data.message_id,
+      emoji: parsed.data.emoji,
+    };
+    const result =
+      op === 'add'
+        ? await addReaction({ ctx, conversations, messages, reactions }, input)
+        : await removeReaction({ ctx, conversations, messages, reactions }, input);
+    return reactionResultResponse(c, result);
+  };
+
+  app.post(internalPaths.agentReactMessage(':cid', ':aid'), c =>
+    handleAgentReact(c, 'add'),
+  );
+  app.delete(internalPaths.agentReactMessage(':cid', ':aid'), c =>
+    handleAgentReact(c, 'remove'),
+  );
 
   app.post(internalPaths.agentResolveStaleMessage(':cid', ':aid'), async c => {
     const cid = c.req.param('cid');

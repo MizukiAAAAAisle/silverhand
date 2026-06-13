@@ -12,6 +12,7 @@ import {
   hasMessagePayload,
 } from './_zod-helpers.js';
 import { AttachmentSnapshotSchema } from './attachment.js';
+import { ReactionAggregateDtoSchema } from './reactions.js';
 import { TaskAssigneeDtoSchema } from './task.js';
 
 export const MessageDtoSchema = z.object({
@@ -25,6 +26,12 @@ export const MessageDtoSchema = z.object({
   /** Attachment snapshots attached to this message (null when none).
    *  Mirrored from `metadata.attachments` for typed access. */
   attachments: z.array(AttachmentSnapshotSchema).nullable(),
+  /** Viewer-scoped reaction aggregates (one per distinct emoji), or null
+   *  when the message has no reactions OR the read path did not enrich them.
+   *  Lean by design — reactor identities load lazily via
+   *  `GET /api/messages/:id/reactions` on hover (docs/reactions-design.md §6).
+   *  `viewer_reacted` is relative to the reading principal. */
+  reactions: z.array(ReactionAggregateDtoSchema).nullable(),
   seq: z.number(),
   created_at: z.number(),
   /** Reply-cluster thread anchor (v43). NULL = root / main-line message;

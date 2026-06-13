@@ -36,6 +36,9 @@ export const CLI_INVOKE_ROUTES: readonly CliInvokeRoute[] = [
   // message
   { method: 'POST', suffix: 'send-message', noun: 'message', verb: 'send' },
   { method: 'POST', suffix: 'stale-message-resolution', noun: 'message', verb: 'stale-resolve' },
+  // react-message is registered as both POST (add) and DELETE (remove); the
+  // map models one method per route and the middleware tags the add path.
+  { method: 'POST', suffix: 'react-message', noun: 'message', verb: 'react' },
   { method: 'POST', suffix: 'read-history', noun: 'message', verb: 'history' },
   { method: 'POST', suffix: 'search-messages', noun: 'message', verb: 'search' },
   // task

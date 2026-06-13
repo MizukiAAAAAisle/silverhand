@@ -55,7 +55,7 @@ export class BackendClient {
   }
 
   private async request<T>(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'DELETE',
     path: string,
     body?: unknown,
     query?: Record<string, string | number | readonly string[] | readonly number[] | undefined>,
@@ -108,6 +108,21 @@ export class BackendClient {
       'POST',
       internalPaths.agentResolveStaleMessage(this.env.conversationId, this.env.agentId),
       input,
+    );
+  }
+
+  /** Add or remove the agent's own emoji reaction on a message
+   *  (docs/reactions-design.md §7). Idempotent: re-adding / re-removing
+   *  returns `changed: false`. */
+  reactToMessage(input: {
+    message_id: string;
+    emoji: string;
+    remove?: boolean;
+  }): Promise<{ changed: boolean; emoji: string; count: number }> {
+    return this.request(
+      input.remove ? 'DELETE' : 'POST',
+      internalPaths.agentReactMessage(this.env.conversationId, this.env.agentId),
+      { message_id: input.message_id, emoji: input.emoji },
     );
   }
 

@@ -167,6 +167,12 @@ export const apiPaths = {
   search: '/api/search',
   messageSave: (id: string) => `/api/messages/${id}/save`,
 
+  /** Message reactions (docs/reactions-design.md §5.1). POST adds, DELETE
+   *  removes (both `{emoji}` in body); GET returns the lazy reactor detail
+   *  (`{emoji, reactors:[{kind,id,display_name}]}[]`) for hover, kept off the
+   *  message-window DTO per §6 perf. */
+  messageReactions: (id: string) => `/api/messages/${id}/reactions`,
+
   // single message lookup — used by thread anchor preview to backfill
   // old rows whose metadata snapshot is missing (pre-PR4-fix data).
   message: (id: string) => `/api/messages/${id}`,
@@ -248,6 +254,11 @@ export const internalPaths = {
   /** Agent adds an existing workspace member to its current channel. */
   agentAddConversationMember: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/members`,
+  /** Agent reacts to a message with an emoji (POST add / DELETE remove,
+   *  `{message_id, emoji}` body). Requires the `send_messages` capability —
+   *  reaction is a write (docs/reactions-design.md §12.D). */
+  agentReactMessage: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/react-message`,
 
   // Canonical task endpoints used by the Silverhand CLI.
   agentListConversationTasks: (cid: string, aid: string) =>

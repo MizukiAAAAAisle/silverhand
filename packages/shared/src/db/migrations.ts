@@ -2822,6 +2822,36 @@ export const migrations: Migration[] = [
       ALTER TABLE users ADD COLUMN last_seen_at INTEGER;
     `,
   },
+  {
+    version: 46,
+    name: 'message_reactions',
+    up: `
+      -- Message reactions (docs/reactions-design.md §3.1 / §12).
+      -- Reactions are an out-of-band projection on a message, NOT messages
+      -- themselves: a separate table so they never write a message row, never
+      -- allocate a conversation seq, and never advance a stream head — the CAS
+      -- exclusion invariant (§12.A). High-frequency, multi-actor, aggregated
+      -- data; a metadata-JSON blob would have concurrent-write clobber + no
+      -- per-reactor uniqueness, so it gets its own table + unique constraint.
+      --
+      -- reactor identity is isomorphic (reactor_kind + reactor_id), mirroring
+      -- messages.from_* — never a user_id/agent_id column pair
+      -- (architecture-principles.md §1 #5). No FK on reactor_id: it softly
+      -- references either users(id) or agents(id) by kind.
+      CREATE TABLE message_reactions (
+        id            TEXT PRIMARY KEY,
+        message_id    TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        reactor_kind  TEXT NOT NULL CHECK (reactor_kind IN ('user', 'agent')),
+        reactor_id    TEXT NOT NULL,
+        emoji         TEXT NOT NULL,
+        created_at    INTEGER NOT NULL,
+        UNIQUE (message_id, reactor_kind, reactor_id, emoji)
+      );
+
+      CREATE INDEX idx_message_reactions_message
+        ON message_reactions(message_id);
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

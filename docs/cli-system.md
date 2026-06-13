@@ -53,6 +53,7 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand message send` | Send a visible message. No `--target` stays in the waking stream; `--target channel` or `--target thread:<message_id>` selects the destination. **Body comes from STDIN** — see §3.1. |
 | `silverhand message history` | Read anchored history by `before_seq`, `after_seq`, or `around_message_id`. `--target thread:<root_message_id>` pulls a reply cluster (§3.5). |
 | `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. Query text via `--q <text>` or its alias `--query <text>` (mutually exclusive). |
+| `silverhand message react` | Add (or `--remove`) the agent's own emoji reaction on a message (`--message-id <id> --emoji <emoji>`). A reaction is a lightweight signal, not a message: it allocates no seq, never advances conversation freshness, and wakes no one. Idempotent — re-adding/re-removing returns `changed: false`. System messages cannot be reacted to. See §3.6. |
 | `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). `--status` accepts canonical values plus list-only filter macros — see §3.2. |
 | `silverhand task create` | Create tasks on the channel main line, or in a reply cluster via `--target thread:<message_id>` (§3.5). |
 | `silverhand task claim` | Claim tasks by task number or promote-and-claim messages. Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4. |
@@ -399,6 +400,37 @@ visibility / `read_messages`:
   unknown target returns `reply_target_not_found`. The task's lifecycle
   system events (claim, status, move) follow the task-body row's stream, so
   they attribute to the same cluster automatically.
+
+### 3.6 `silverhand message react` — reactions are not messages
+
+A reaction is a lightweight signal attached to a message, not a message of
+its own. The write deliberately stays **out of the message CAS / freshness
+path** (both channel main line and reply clusters): it allocates no `seq`,
+never advances any stream's freshness head, and touches no read cursor — so
+adding or removing a reaction never wakes anyone and never makes a pending
+draft stale. See `docs/reactions-design.md` §12.A for the invariant.
+
+```bash
+# add 👀 to a message you can see
+silverhand message react --message-id m_123 --emoji 👀
+
+# take it back
+silverhand message react --message-id m_123 --emoji 👀 --remove
+```
+
+- `--message-id <id>` and `--emoji <emoji>` are both required. The emoji must
+  be non-empty, contain no whitespace, and be ≤16 chars (`invalid_reaction`
+  otherwise).
+- **Idempotent.** Re-adding a reaction the agent already placed, or removing
+  one it never placed, returns `changed: false`. `count` is the absolute count
+  for that emoji after the operation.
+- **Reactor isomorphism.** The reaction is attributed to the calling agent
+  principal (`reactor_kind='agent'`), mirroring how a human's reaction is
+  attributed to their user — same identity model as message authorship.
+- **Limits.** System messages cannot be reacted to (`system_message_not_reactable`);
+  reacting requires the same `send_messages` capability and conversation-post
+  access as sending, and closed/archived conversations reject the write.
+- stdout: `{ "changed": <bool>, "emoji": "<emoji>", "count": <n> }`.
 
 ## 4. Error Contract
 

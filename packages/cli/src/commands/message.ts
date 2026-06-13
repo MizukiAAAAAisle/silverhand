@@ -281,6 +281,57 @@ stdout: { "resolved": true } or { "resolved": false, "reason": "no_pending_stale
   },
 };
 
+const reactCommand: Command = {
+  verb: 'react',
+  summary: 'Add or remove your emoji reaction on a message.',
+  help: `silverhand message react --message-id <id> --emoji <emoji> [--remove]
+
+Add or remove your reaction on a message. Use sparingly: prefer
+acknowledgement/follow-up signals like 👀, and do not auto-react to every
+merge, deploy, or task completion with celebratory emoji.
+
+A reaction is a lightweight signal, not a message: it allocates no seq,
+never advances the conversation's freshness, and does not wake anyone.
+Idempotent — re-adding a reaction you already placed, or removing one you
+never placed, returns \`changed: false\`. React on any message you can
+see in the current conversation (channel or thread); system messages
+cannot be reacted to.
+
+Flags:
+  --message-id <id>  Required. The message to react to (from an incoming
+                     header's msg_id, history, or a send result).
+  --emoji <emoji>    Required. A single emoji (max 16 chars, no whitespace).
+  --remove           Remove your reaction instead of adding it.
+
+stdout: { "changed": <bool>, "emoji": "<emoji>", "count": <n> }`,
+  flags: ['message-id', 'emoji'] as const,
+  booleanFlags: ['remove'],
+  async run({ client, args }) {
+    const messageId = flagString(args, 'message-id');
+    if (!messageId) {
+      throw new CliError({
+        code: 'validation_error',
+        message: '--message-id is required',
+        retriable: false,
+      });
+    }
+    const emoji = flagString(args, 'emoji');
+    if (!emoji) {
+      throw new CliError({
+        code: 'validation_error',
+        message: '--emoji is required',
+        retriable: false,
+      });
+    }
+    const remove = flagBool(args, 'remove') ?? false;
+    return await client.reactToMessage({
+      message_id: messageId,
+      emoji,
+      ...(remove ? { remove: true } : {}),
+    });
+  },
+};
+
 const historyCommand: Command = {
   verb: 'history',
   summary: 'Read an anchored window of message history.',
@@ -482,6 +533,7 @@ stdout: AgentSearchMessagesDto JSON.`,
 export const messageCommands: readonly Command[] = [
   sendCommand,
   staleResolveCommand,
+  reactCommand,
   historyCommand,
   searchCommand,
 ];

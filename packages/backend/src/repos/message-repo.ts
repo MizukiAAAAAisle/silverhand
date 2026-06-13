@@ -197,6 +197,11 @@ export function messageRowToDto(
     content: row.content,
     metadata,
     attachments: extractAttachmentSnapshots(metadata),
+    // Reactions are a viewer-scoped enrichment loaded separately (read-model
+    // loadReactionAggregates); the bare row→DTO mapping is viewer-neutral, so
+    // it defaults to null and the read route fills it for the human/agent
+    // viewer (docs/reactions-design.md §3.5).
+    reactions: null,
     seq: row.seq,
     created_at: row.created_at,
     thread_root_id: row.thread_root_id,

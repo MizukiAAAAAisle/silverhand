@@ -9,6 +9,7 @@ import {
   HostWsCommandTransportError,
 } from '../ws/host-ws-server.js';
 import type { AddConversationMemberResult } from '../application/conversation-member.js';
+import type { ReactionResult } from '../application/react-message.js';
 import type { RepoError } from '../repos/conversation-repo.js';
 import {
   ActorError as ChannelActorError,
@@ -187,6 +188,45 @@ export function conversationMemberResultResponse(
         { error: 'handle is ambiguous', code: 'handle_ambiguous', candidates: error.candidates },
         422,
       );
+  }
+}
+
+/**
+ * Map a {@link ReactionResult} (add/remove) to an HTTP response. Shared by
+ * the human `/api/messages/:id/reactions` and internal agent `react-message`
+ * routes so both surfaces emit the same status/code set
+ * (docs/reactions-design.md §5).
+ */
+export function reactionResultResponse(
+  c: Context,
+  result: ReactionResult,
+): Response {
+  if (result.ok) {
+    return c.json({
+      changed: result.changed,
+      emoji: result.emoji,
+      count: result.count,
+    });
+  }
+  const error = result.error;
+  switch (error.code) {
+    case 'invalid_reaction':
+      return c.json({ error: error.message, code: 'invalid_reaction' }, 422);
+    case 'message_not_found':
+      return c.json({ error: error.message, code: 'message_not_found' }, 404);
+    case 'system_message_not_reactable':
+      return c.json(
+        { error: error.message, code: 'system_message_not_reactable' },
+        422,
+      );
+    case 'conversation_not_found':
+      return c.json({ error: error.message, code: 'conversation_not_found' }, 404);
+    case 'forbidden':
+      return c.json({ error: error.message, code: 'forbidden' }, 403);
+    case 'conversation_closed':
+      return c.json({ error: error.message, code: 'conversation_closed' }, 409);
+    case 'conversation_archived':
+      return c.json({ error: error.message, code: 'conversation_archived' }, 409);
   }
 }
 

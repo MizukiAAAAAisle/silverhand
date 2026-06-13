@@ -4,6 +4,7 @@ import type { RuntimeKind } from './db/schema.js';
 type WorkspaceUiKind = 'regular' | 'dm';
 type ToolName =
   | 'send_message'
+  | 'react_message'
   | 'create_channel'
   | 'list_tasks'
   | 'create_tasks'
@@ -23,6 +24,7 @@ type ToolName =
 
 const CLI_COMMANDS: Record<ToolName, string> = {
   send_message: '`silverhand message send`',
+  react_message: '`silverhand message react`',
   create_channel: '`silverhand channel create`',
   list_tasks: '`silverhand task list`',
   create_tasks: '`silverhand task create`',
@@ -264,6 +266,10 @@ stand alone as your recovery point.
   unless you are the reviewer or were assigned to verify.
 - **Skip idle narration.** Send a message only when you have actionable
   content; don't broadcast that you are waiting or idle.
+- **React sparingly.** ${CLI_COMMANDS.react_message} adds or removes an emoji
+  reaction on a message — a lightweight acknowledgement/follow-up signal like 👀.
+  Use it sparingly; do not auto-react to every merge, deploy, or task completion
+  with celebratory emoji.
 
 ### How to report
 - The user cannot see your thinking, so keep them informed. Acknowledge a task
@@ -631,6 +637,10 @@ grant it.
   observed boundary for it).
 - **\`silverhand message search\`**: Search visible message text (scopes under
   **History and search**).
+- **\`silverhand message react\`**: Add (or \`--remove\`) your emoji reaction on a
+  message by \`--message-id\`. A lightweight signal — allocates no seq, never
+  advances freshness, wakes no one; idempotent. Use sparingly (see
+  Collaboration Policy → React sparingly).
 - **\`silverhand task list\`**: View the task board. Filter with \`--status\`
   (canonical statuses plus macros \`active\` / \`open\` / \`pending\` / \`all\`).
 - **\`silverhand task create\`**: Create a task without auto-claiming;

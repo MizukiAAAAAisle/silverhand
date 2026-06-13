@@ -15,6 +15,7 @@ import {
   ArchiveChannelInputSchema,
   ConversationLogDebugInputSchema,
   MarkConversationReadInputSchema,
+  ReactMessageInputSchema,
   SearchQueryInputSchema,
   UpdateChannelInputSchema,
   SendMessageInputSchema,
@@ -29,6 +30,7 @@ import type { ConversationReadRepo } from '../repos/conversation-read-repo.js';
 import type { SavedMessageRepo } from '../repos/saved-message-repo.js';
 import type { SearchRepo } from '../repos/search-repo.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
+import type { MessageReactionRepo } from '../repos/message-reaction-repo.js';
 import { getUserPrincipal, requireViewerUserId } from '../auth/principal.js';
 import {
   canEditAgent,
@@ -41,9 +43,15 @@ import {
 import { timedRouteSpan } from '../observability/route-span.js';
 import { AnchorMessageNotInConversationError, InvalidThreadsCursorError } from '../repos/message-repo.js';
 import {
+  addReaction,
+  removeReaction,
+} from '../application/react-message.js';
+import { loadReactionAggregates, loadReactionDetail } from '../read-model/message-reactions.js';
+import {
   channelServiceErrorResponse,
   conversationMessageServiceErrorResponse,
   placementErrorResponse,
+  reactionResultResponse,
   runtimeStartErrorResponse,
 } from './responses.js';
 import {
@@ -223,7 +231,21 @@ export function createConversationReadApp(
           const window = threadRootId
             ? messages.listWindowForThreadCluster(channel.id, threadRootId, opts)
             : messages.listWindowForMainStream(channel.id, opts);
-          const rootIds = window.messages
+          // Enrich each message with the viewer's reaction aggregates in one
+          // bulk query (no N+1, §6). Viewer = the human reading the window, so
+          // `viewer_reacted` is that user's. Reactor identities stay off this
+          // payload (lazy hover endpoint).
+          const viewerUserId = requireViewerUserId(c);
+          const aggregates = loadReactionAggregates(
+            ctx,
+            window.messages.map(message => message.id),
+            { kind: 'user', id: viewerUserId },
+          );
+          const messagesWithReactions = window.messages.map(message => ({
+            ...message,
+            reactions: aggregates.get(message.id) ?? null,
+          }));
+          const rootIds = messagesWithReactions
             .filter(
               message =>
                 message.thread_root_id === null && message.from_kind !== 'system',
@@ -231,6 +253,7 @@ export function createConversationReadApp(
             .map(message => message.id);
           return {
             ...window,
+            messages: messagesWithReactions,
             reply_counts_by_root: messages.replyCountsByRoot(channel.id, rootIds),
             reply_summaries_by_root: messages.replyBadgeSummariesByRoot(
               channel.id,
@@ -831,13 +854,14 @@ export interface ConversationRuntimeRouteDeps {
   saved: SavedMessageRepo;
   search: SearchRepo;
   agents: AgentRepo;
+  reactions: MessageReactionRepo;
 }
 
 export function createConversationRuntimeApp(
   deps: ConversationRuntimeRouteDeps,
 ): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { ctx, conversations, messages, saved, search, agents } = deps;
+  const { ctx, conversations, messages, saved, search, agents, reactions } = deps;
 
   app.post(apiPaths.messageSave(':id'), c => {
     const id = c.req.param('id');
@@ -875,6 +899,50 @@ export function createConversationRuntimeApp(
       { message_id: id, action: 'unsave' },
     );
     return c.body(null, 204);
+  });
+
+  // Message reactions (docs/reactions-design.md §5.1). Human viewer principal.
+  // POST adds / DELETE removes (`{emoji}` body); GET returns the lazy reactor
+  // detail for the hover tooltip. The use case owns visibility / closed /
+  // system-message / emoji guards and the post-commit WS broadcast.
+  app.post(apiPaths.messageReactions(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'message id required' }, 400);
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = ReactMessageInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const result = await addReaction(
+      { ctx, conversations, messages, reactions },
+      { principal: getUserPrincipal(c), messageId: id, emoji: parsed.data.emoji },
+    );
+    return reactionResultResponse(c, result);
+  });
+
+  app.delete(apiPaths.messageReactions(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'message id required' }, 400);
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = ReactMessageInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const result = await removeReaction(
+      { ctx, conversations, messages, reactions },
+      { principal: getUserPrincipal(c), messageId: id, emoji: parsed.data.emoji },
+    );
+    return reactionResultResponse(c, result);
+  });
+
+  app.get(apiPaths.messageReactions(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'message id required' }, 400);
+    const message = messages.getById(id);
+    if (!message || !canViewConversation(ctx, getUserPrincipal(c), message.conversation_id)) {
+      return c.json({ error: 'message not found' }, 404);
+    }
+    return c.json({ reactions: loadReactionDetail(ctx, id) });
   });
 
   app.get(apiPaths.search, c => {
