@@ -114,7 +114,7 @@ spawn-prep temp dir (`spawn-prep.ts`) and are cleaned up with it.
 
 ### 4.2 Codex adapter
 
-Codex has no verified "extra config file" flag; the confirmed additive mechanism
+Codex has no "extra config file" flag; the confirmed additive mechanism
 is `-c` / `--config` overrides, which sit at the top of codex's config layering
 and merge over the user's `~/.codex/config.toml`. So:
 
@@ -123,13 +123,24 @@ and merge over the user's `~/.codex/config.toml`. So:
   override of the whole `mcp_servers` table) so it *merges* with the user's
   existing servers instead of replacing the table.
 - The inline-TOML value is produced by a **TOML serializer** (handles
-  string/array/nested-table quoting for `args` / `env` / `headers`), never hand
-  concatenated. `-c` and its value are separate argv elements (no shell, no
+  string/array/nested-table quoting for `args` / `env` / `http_headers`), never
+  hand concatenated. `-c` and its value are separate argv elements (no shell, no
   re-parsing).
+- Each canonical server is first projected to **Codex's native key names**
+  (`toCodexServerConfig`): stdio → `command` / `args` / `env`; remote (canonical
+  `http`/`sse`) → `url` + `http_headers` (canonical `headers`). Codex has **no
+  `type` discriminator** — the remote transport is inferred (`streamable_http`)
+  from `url` — and does not understand the canonical `type`/`headers` keys, so
+  emitting them verbatim would leave a remote server silently unusable.
 - **Never** write `~/.codex/config.toml`; **never** call `codex mcp add`.
-- Codex is not on every dev PATH; runtime verification is a follow-up. If a
-  verified additive config-file flag is found later, swap the adapter mechanism
-  to a temp TOML file — the canonical raw JSON and the CLI/UI are unchanged.
+- **Verified** against the bundled binary `codex-cli 0.140.0`
+  (`/Applications/Codex.app/Contents/Resources/codex` — the native bundle the
+  daemon prefers via `runtimes.ts` PLATFORM_CANDIDATES, *not* a PATH `codex`):
+  `codex app-server` accepts the `-c mcp_servers.*` overrides; `codex mcp add
+  --url …` round-trips to `url` / `http_headers` (table) / `bearer_token_env_var`
+  / `env_http_headers` with transport `streamable_http` and no `type` key,
+  matching the projection. Canonical `env_http_headers` / `bearer_token_env_var`
+  are a future schema addition (v1 canonical carries only `headers`).
 
 ## 5. CLI surface — the `profile` domain noun
 

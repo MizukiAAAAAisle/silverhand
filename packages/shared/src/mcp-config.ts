@@ -201,11 +201,15 @@ export function toCodexMcpOverrides(
  *    url form; whether the endpoint actually connects is the runtime's
  *    concern, not ours (we never pre-check MCP server connectivity).
  *
- * NOTE: Codex is not installed in this dev image, so the exact remote-key
- * spelling (`http_headers`) is per Codex's documented config and pinned by
- * `toCodexMcpOverrides` tests; runtime verification on a real codex binary is
- * the one open follow-up. The projection is isolated so a key correction is a
- * one-line change.
+ * Verified against the bundled Codex binary (`codex-cli 0.140.0`,
+ * `/Applications/Codex.app/Contents/Resources/codex` — the same native
+ * bundle the daemon resolves, see `runtimes.ts` PLATFORM_CANDIDATES): a
+ * remote server's TOML keys are `url` / `http_headers` (a table) /
+ * `bearer_token_env_var` / `env_http_headers`, with the transport inferred
+ * as `streamable_http` from `url` and NO `type` key; stdio uses
+ * `command` / `args` / `env`. `codex mcp add ... --url ...` round-trips to
+ * exactly this shape, and `codex app-server` accepts the same `-c
+ * mcp_servers.<name>=<toml>` overrides the daemon appends to its argv.
  */
 export function toCodexServerConfig(
   server: McpServerConfig,
