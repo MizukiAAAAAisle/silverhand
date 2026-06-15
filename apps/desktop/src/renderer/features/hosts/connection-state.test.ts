@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import {
   describeConnectionState,
   formatAttachedSince,
+  isLocalHostAttached,
   type LocalHostStatus,
 } from './connection-state';
 
@@ -168,6 +169,30 @@ describe('describeConnectionState — remoteAttached (remote-mode readiness, #ta
       describeConnectionState('error', null, NOW, { remoteAttached: true })
         .label,
     ).toBe('Offline');
+  });
+});
+
+describe('isLocalHostAttached — COMPUTERS sidebar pip (#task:1132)', () => {
+  it('remote-server + local computer: available host-status ⇒ attached (was the bug)', () => {
+    // The regressed case. In remote-server mode `attachedAt` is
+    // structurally null, so the OLD predicate (attachedAt-only) read the
+    // genuinely-online local computer as offline. The remote backend's
+    // host-status `availability === 'available'` is the second source.
+    expect(
+      isLocalHostAttached({ attachedAt: null, remoteAvailable: true }),
+    ).toBe(true);
+  });
+
+  it('embedded: a local attach timestamp ⇒ attached even without the remote probe', () => {
+    expect(
+      isLocalHostAttached({ attachedAt: 1_000, remoteAvailable: false }),
+    ).toBe(true);
+  });
+
+  it('genuinely connecting / offline: no timestamp + not available ⇒ not attached', () => {
+    expect(
+      isLocalHostAttached({ attachedAt: null, remoteAvailable: false }),
+    ).toBe(false);
   });
 });
 

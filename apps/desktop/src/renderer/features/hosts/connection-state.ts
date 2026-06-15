@@ -124,6 +124,27 @@ export interface DescribeConnectionOpts {
   remoteAttached?: boolean;
 }
 
+/**
+ * #task:1132 — whether the local host's COMPUTERS-sidebar status pip
+ * should read "attached" (online). The full `describeConnectionState`
+ * mapper above is overkill for the binary `active | idle` pip, but the
+ * remote-mode trap is identical: the embedded `attachedAt` timestamp is
+ * the primary proof, yet in a remote-server deployment it is
+ * structurally `null` (the attachment registry lives in the remote
+ * backend, not this process), so the local computer would read offline
+ * even while the daemon is genuinely attached. The second source is the
+ * remote backend's host-status `availability === 'available'`.
+ *
+ * Pure + exported so a unit test pins the regressed remote+local case
+ * without rendering the sidebar.
+ */
+export function isLocalHostAttached(opts: {
+  attachedAt: number | null;
+  remoteAvailable: boolean;
+}): boolean {
+  return opts.attachedAt !== null || opts.remoteAvailable;
+}
+
 export function describeConnectionState(
   status: LocalHostStatus,
   attachedAt: number | null,

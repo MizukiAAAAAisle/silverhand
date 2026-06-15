@@ -112,10 +112,11 @@ interface ChannelViewProps {
    *  pane. Receives the root message id. When undefined the Thread action
    *  is hidden (secondary panes can't open nested threads). */
   onOpenThread?: (rootMessageId: string) => void;
-  /** Open the channel Threads-list pane (#task:1073). When set, the header
+  /** Toggle the channel Threads-list pane (#task:1073) — opens when
+   *  closed, closes when open (#task:1126 follow-up). When set, the header
    *  renders a Threads toggle. Only the primary channel pane passes this —
    *  thread/dm/side panes have no channel-scoped thread index. */
-  onOpenThreadsList?: () => void;
+  onToggleThreadsList?: () => void;
   /** Whether the Threads-list pane is currently open (drives the toggle's
    *  active styling + aria-pressed). */
   threadsListActive?: boolean;
@@ -213,7 +214,7 @@ function ActiveChannelView({
   jumpPrimePending = false,
   onJumped,
   onOpenThread,
-  onOpenThreadsList,
+  onToggleThreadsList,
   threadsListActive = false,
   onCloseChild,
   closeLabel = '关闭 Thread',
@@ -490,10 +491,10 @@ function ActiveChannelView({
         ) : null}
 
         <div data-channel-actions className="ml-auto flex shrink-0 items-center gap-1">
-          {onOpenThreadsList ? (
+          {onToggleThreadsList ? (
             <button
               type="button"
-              onClick={onOpenThreadsList}
+              onClick={onToggleThreadsList}
               aria-label="Threads"
               aria-pressed={threadsListActive}
               title="Threads"

@@ -534,6 +534,10 @@ export function useNav(): {
   /** Close the channel Threads-list pane. Strips `?threads` (and
    *  `?fullscreen`). */
   closeThreadsList: () => void;
+  /** Toggle the channel Threads-list pane — opens it when closed, closes
+   *  it when open. Drives the header Threads icon's click-to-toggle
+   *  behaviour (#task:1126 follow-up). */
+  toggleThreadsList: () => void;
   /** Focus a task in the workspace tasks drawer by writing `?task=<n>`.
    *  The drawer auto-opens, switches to "all" filter, scrolls the row
    *  into view, and applies a brief highlight. `replace` so re-clicking
@@ -587,6 +591,11 @@ export function useNav(): {
   }, [navigate, location.pathname, location.search]);
   const closeThreadsList = useCallback(() => {
     const next = withThreadsQuery(location.pathname, location.search, false);
+    navigate(next, { replace: true });
+  }, [navigate, location.pathname, location.search]);
+  const toggleThreadsList = useCallback(() => {
+    const open = new URLSearchParams(location.search).get('threads') === '1';
+    const next = withThreadsQuery(location.pathname, location.search, !open);
     navigate(next, { replace: true });
   }, [navigate, location.pathname, location.search]);
   const openTask = useCallback(
@@ -645,6 +654,7 @@ export function useNav(): {
     closeThread,
     openThreadsList,
     closeThreadsList,
+    toggleThreadsList,
     openTask,
     closeTask,
   }), [
@@ -666,6 +676,7 @@ export function useNav(): {
     closeThread,
     openThreadsList,
     closeThreadsList,
+    toggleThreadsList,
     openTask,
     closeTask,
   ]);

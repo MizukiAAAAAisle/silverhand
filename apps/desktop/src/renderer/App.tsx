@@ -7,7 +7,9 @@ import { HostDetailView } from '@/features/hosts/HostDetailView';
 import {
   useBackendInfoSnapshot,
   useHostsQuery,
+  useHostStatusQuery,
 } from '@/features/hosts/hooks';
+import { isLocalHostAttached } from '@/features/hosts/connection-state';
 import { MembersPanel } from '@/components/layout/MembersPanel';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { ChannelsSidebar } from '@/components/layout/ChannelsSidebar';
@@ -651,9 +653,31 @@ function RegisteredAppShell(): JSX.Element {
   const computerHosts = hostsQuery.data?.hosts ?? [];
   const localHostIdForComputers =
     backendInfoQuery.data?.local_host_id ?? null;
-  const localHostAttached =
-    backendInfoQuery.data?.local_host_ws_attached_at !== null &&
-    backendInfoQuery.data?.local_host_ws_attached_at !== undefined;
+  const localHostStatusForComputers =
+    backendInfoQuery.data?.local_host_status ?? 'unclaimed';
+  const localHostAttachedAt =
+    backendInfoQuery.data?.local_host_ws_attached_at ?? null;
+  // #task:1132 — in a remote-server deployment `local_host_ws_attached_at`
+  // is structurally null (the attachment registry lives in the remote
+  // backend, not in this desktop process), so the embedded attach
+  // timestamp never lands and the COMPUTERS sidebar showed the local
+  // computer as `idle` (offline) even when the daemon is genuinely
+  // attached. Mirror the ConnectionPane fix (#task:1010): consult the
+  // remote backend's host-status — `availability === 'available'` is the
+  // same authority every other remote-mode fact flows through — but ONLY
+  // in the ambiguous window (`claimed` + no local attach timestamp). In
+  // embedded mode `attachedAt` lands fast, so this probe disables almost
+  // immediately and never adds traffic.
+  const needsLocalRemoteAttachProbe =
+    localHostStatusForComputers === 'claimed' && localHostAttachedAt === null;
+  const localHostStatusQuery = useHostStatusQuery(localHostIdForComputers, {
+    enabled: needsLocalRemoteAttachProbe && localHostIdForComputers !== null,
+    pollUntilAvailable: true,
+  });
+  const localHostAttached = isLocalHostAttached({
+    attachedAt: localHostAttachedAt,
+    remoteAvailable: localHostStatusQuery.data?.availability === 'available',
+  });
   useEffect(() => {
     if (computerHosts.length === 0) return;
     // Drop a stale selection (e.g. the host was revoked from another
@@ -1068,8 +1092,8 @@ function RegisteredAppShell(): JSX.Element {
       onOpenThread={nav.openThread}
       // Threads-list pane toggle (#task:1073). Only the primary channel pane
       // gets it — a thread/dm primary has no channel-scoped thread index.
-      onOpenThreadsList={
-        parentDescriptor?.kind === 'channel' ? nav.openThreadsList : undefined
+      onToggleThreadsList={
+        parentDescriptor?.kind === 'channel' ? nav.toggleThreadsList : undefined
       }
       threadsListActive={threadsListOpen}
       onArchiveChannel={handleArchiveChannelMutation}
