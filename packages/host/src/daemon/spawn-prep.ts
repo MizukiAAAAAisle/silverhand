@@ -19,6 +19,10 @@ export interface SpawnPrepHandle {
   systemPromptPath: string;
   lastDeliveredSeqPath: string;
   binDir: string;
+  /** The per-spawn temp dir (mkdtemp root). Other spawn-time generated
+   *  files (e.g. the profile MCP config handed to a runtime) are written
+   *  under here so they're cleaned up together. */
+  dir: string;
   cleanup(): Promise<void>;
 }
 
@@ -46,6 +50,7 @@ export async function prepareSpawnFiles(
     systemPromptPath,
     lastDeliveredSeqPath,
     binDir,
+    dir,
     cleanup: async () => {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     },

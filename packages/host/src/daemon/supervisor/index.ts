@@ -76,6 +76,7 @@ import {
   prepareSpawnFiles,
   type SilverhandCliLauncher,
 } from '../spawn-prep.js';
+import { buildProfileMcpSpawnArgs } from '../mcp-spawn.js';
 import { chooseSilverhandCliLauncher } from '../silverhand-cli-launcher.js';
 import type { SupervisorContract } from '../supervisor-contract.js';
 import type {
@@ -1041,6 +1042,18 @@ export class Supervisor implements SupervisorContract {
     };
 
     const args = driver.buildArgs(spawnCtx);
+    // Profile MCP (#task:1135): append the subject's additive MCP layer.
+    // Keyed by runtime, drops the whole layer (loud) on a bad file but never
+    // blocks spawn. Appended after buildArgs — both runtimes parse these flags
+    // regardless of position.
+    const mcpSpawn = await buildProfileMcpSpawnArgs({
+      runtimeKind,
+      agentHomeDir: resolvedOptions.agent.home_dir,
+      spawnDir: spawnPrep.dir,
+      agentId: params.agent_id,
+      logger: this.logger,
+    });
+    args.push(...mcpSpawn.args);
     const env = buildDaemonSpawnEnv({
       driver,
       options: startOptions,

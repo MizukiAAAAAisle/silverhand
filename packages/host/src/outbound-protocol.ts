@@ -37,6 +37,11 @@ import {
   AgentFilesPurgeErrorCodeSchema,
   AgentFilesPurgeParamsSchema,
   AgentFilesPurgeResultSchema,
+  AgentProfileMcpErrorCodeSchema,
+  AgentProfileMcpReadParamsSchema,
+  AgentProfileMcpReadResultSchema,
+  AgentProfileMcpWriteParamsSchema,
+  AgentProfileMcpWriteResultSchema,
   HelloResultSchema,
   HostStatusParamsSchema,
   HostStatusResultSchema,
@@ -98,6 +103,11 @@ export {
   AgentFilesPurgeParamsSchema,
   AgentFilesPurgeResultSchema,
   AgentFilesPurgeErrorCodeSchema,
+  AgentProfileMcpReadParamsSchema,
+  AgentProfileMcpReadResultSchema,
+  AgentProfileMcpWriteParamsSchema,
+  AgentProfileMcpWriteResultSchema,
+  AgentProfileMcpErrorCodeSchema,
   RuntimeStartErrorCodeSchema,
   type WorkspaceProvisionParams,
   type WorkspaceProvisionResult,
@@ -111,6 +121,11 @@ export {
   type AgentFilesPurgeParams,
   type AgentFilesPurgeResult,
   type AgentFilesPurgeErrorCode,
+  type AgentProfileMcpReadParams,
+  type AgentProfileMcpReadResult,
+  type AgentProfileMcpWriteParams,
+  type AgentProfileMcpWriteResult,
+  type AgentProfileMcpErrorCode,
   type RuntimeStartErrorCode,
 } from './protocol.js';
 
@@ -273,6 +288,22 @@ export type AgentFilesPurgeWireError = z.infer<
   typeof AgentFilesPurgeWireErrorSchema
 >;
 
+// #task:1135: profile-mcp write widens its wire error with the same
+// per-command scoping — `invalid_config` (fail-loud re-validation),
+// `fs_unavailable` (E* host-fs error), `internal_error`.
+export const AgentProfileMcpWireErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorSchema.shape.code,
+      AgentProfileMcpErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+export type AgentProfileMcpWireError = z.infer<
+  typeof AgentProfileMcpWireErrorSchema
+>;
+
 // D4.e-6: runtime_start widens its wire error with the same per-command
 // scoping. The daemon now resolves all host paths and fails closed; the
 // backend reads `workspace_not_provisioned` (backfill + retry),
@@ -395,6 +426,20 @@ export const outboundServerCommandSchemas = {
     params: AgentFilesPurgeParamsSchema,
     result: AgentFilesPurgeResultSchema,
     error: AgentFilesPurgeWireErrorSchema,
+  },
+  /** #task:1135 — profile-mcp read/write: the host-local truth behind
+   *  `silverhand profile mcp get|set`. Read returns raw|null (absent is
+   *  normal); write re-validates fail-loud then atomically replaces the
+   *  L1 `mcp.json`. */
+  agent_profile_mcp_read: {
+    params: AgentProfileMcpReadParamsSchema,
+    result: AgentProfileMcpReadResultSchema,
+    error: AgentProfileMcpWireErrorSchema,
+  },
+  agent_profile_mcp_write: {
+    params: AgentProfileMcpWriteParamsSchema,
+    result: AgentProfileMcpWriteResultSchema,
+    error: AgentProfileMcpWireErrorSchema,
   },
   /** #task:808 — dynamic host snapshot for the ComputerPane / host
    *  registry view. Payload is host-facts only (OS, daemon process,

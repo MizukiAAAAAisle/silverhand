@@ -44,6 +44,10 @@ import {
   type AgentL2SeedResult,
   type AgentFilesPurgeParams,
   type AgentFilesPurgeResult,
+  type AgentProfileMcpReadParams,
+  type AgentProfileMcpReadResult,
+  type AgentProfileMcpWriteParams,
+  type AgentProfileMcpWriteResult,
   type ConversationLogDebugParams,
   type HostOutboundAttachParams,
   type HostOutboundAttachResult,
@@ -224,6 +228,20 @@ export interface DispatcherOptions {
   agentFilesPurgeHandler?: (
     params: AgentFilesPurgeParams,
   ) => AgentFilesPurgeResult | Promise<AgentFilesPurgeResult>;
+  /**
+   * #task:1135 — handlers for `agent_profile_mcp_read` /
+   * `agent_profile_mcp_write` (the host-local truth behind
+   * `silverhand profile mcp get|set`). Production wiring:
+   * `readAgentProfileMcp` / `writeAgentProfileMcp`. Typed errors
+   * (`AgentProfileMcpError`) are projected with their code by the
+   * DaemonTypedError catch arm.
+   */
+  agentProfileMcpReadHandler?: (
+    params: AgentProfileMcpReadParams,
+  ) => AgentProfileMcpReadResult | Promise<AgentProfileMcpReadResult>;
+  agentProfileMcpWriteHandler?: (
+    params: AgentProfileMcpWriteParams,
+  ) => AgentProfileMcpWriteResult | Promise<AgentProfileMcpWriteResult>;
 }
 
 export class IntentDispatcher {
@@ -288,6 +306,16 @@ export class IntentDispatcher {
         params: AgentFilesPurgeParams,
       ) => AgentFilesPurgeResult | Promise<AgentFilesPurgeResult>)
     | undefined;
+  private readonly agentProfileMcpReadHandler:
+    | ((
+        params: AgentProfileMcpReadParams,
+      ) => AgentProfileMcpReadResult | Promise<AgentProfileMcpReadResult>)
+    | undefined;
+  private readonly agentProfileMcpWriteHandler:
+    | ((
+        params: AgentProfileMcpWriteParams,
+      ) => AgentProfileMcpWriteResult | Promise<AgentProfileMcpWriteResult>)
+    | undefined;
   private intentCount = 0;
   private shuttingDown = false;
 
@@ -317,6 +345,8 @@ export class IntentDispatcher {
     this.agentWorkspaceFileReadHandler = opts.agentWorkspaceFileReadHandler;
     this.agentL2SeedHandler = opts.agentL2SeedHandler;
     this.agentFilesPurgeHandler = opts.agentFilesPurgeHandler;
+    this.agentProfileMcpReadHandler = opts.agentProfileMcpReadHandler;
+    this.agentProfileMcpWriteHandler = opts.agentProfileMcpWriteHandler;
   }
 
   /** Signal that subsequent intents should be rejected with
@@ -797,6 +827,19 @@ export class IntentDispatcher {
         return this.requireAgentFilesPurgeHandler()(
           params as AgentFilesPurgeParams,
         );
+      case 'agent_profile_mcp_read':
+        // #task:1135 — read the subject's L1 mcp.json. Slot wired to
+        // `readAgentProfileMcp`. Typed errors (AgentProfileMcpError)
+        // are projected by the DaemonTypedError catch arm.
+        return this.requireAgentProfileMcpReadHandler()(
+          params as AgentProfileMcpReadParams,
+        );
+      case 'agent_profile_mcp_write':
+        // #task:1135 — validate + atomically write the subject's L1
+        // mcp.json. Slot wired to `writeAgentProfileMcp`.
+        return this.requireAgentProfileMcpWriteHandler()(
+          params as AgentProfileMcpWriteParams,
+        );
     }
   }
 
@@ -943,5 +986,27 @@ export class IntentDispatcher {
       );
     }
     return this.agentFilesPurgeHandler;
+  }
+
+  private requireAgentProfileMcpReadHandler(): (
+    params: AgentProfileMcpReadParams,
+  ) => AgentProfileMcpReadResult | Promise<AgentProfileMcpReadResult> {
+    if (!this.agentProfileMcpReadHandler) {
+      throw new Error(
+        'agent_profile_mcp_read intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.agentProfileMcpReadHandler;
+  }
+
+  private requireAgentProfileMcpWriteHandler(): (
+    params: AgentProfileMcpWriteParams,
+  ) => AgentProfileMcpWriteResult | Promise<AgentProfileMcpWriteResult> {
+    if (!this.agentProfileMcpWriteHandler) {
+      throw new Error(
+        'agent_profile_mcp_write intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.agentProfileMcpWriteHandler;
   }
 }

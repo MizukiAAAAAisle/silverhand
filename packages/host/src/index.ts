@@ -126,6 +126,11 @@ export {
   type AgentFilesPurgeParams,
   type AgentFilesPurgeResult,
   type AgentFilesPurgeErrorCode,
+  type AgentProfileMcpReadParams,
+  type AgentProfileMcpReadResult,
+  type AgentProfileMcpWriteParams,
+  type AgentProfileMcpWriteResult,
+  type AgentProfileMcpErrorCode,
 } from './protocol.js';
 export {
   OUTBOUND_DAEMON_EVENT_KINDS,

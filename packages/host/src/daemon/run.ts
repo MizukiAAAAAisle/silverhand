@@ -66,6 +66,10 @@ import {
   readAgentWorkspaceFile,
 } from './agent-workspace-fs/index.js';
 import {
+  readAgentProfileMcp,
+  writeAgentProfileMcp,
+} from './agent-profile-mcp/index.js';
+import {
   RuntimeStartResolveError,
   type RuntimeStartResolveDeps,
 } from './runtime-start-resolve.js';
@@ -695,6 +699,20 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         agentHomeRootDir,
       });
     },
+    // #task:1135 — agent_profile_mcp_read / _write: the host-local truth
+    // behind `silverhand profile mcp get|set`. L1 resolves from the daemon's
+    // homedir (test override via `agentMaterializeHomeDir`); the write handler
+    // re-validates the canonical schema and replaces `mcp.json` atomically.
+    agentProfileMcpReadHandler: async params =>
+      readAgentProfileMcp(params, {
+        homeDir: opts.testHooks?.agentMaterializeHomeDir,
+        agentHomeRootDir,
+      }),
+    agentProfileMcpWriteHandler: async params =>
+      writeAgentProfileMcp(params, {
+        homeDir: opts.testHooks?.agentMaterializeHomeDir,
+        agentHomeRootDir,
+      }),
   });
   commandForwarder = command =>
     dispatcher.dispatch(command.id, String(command.kind), command.params);

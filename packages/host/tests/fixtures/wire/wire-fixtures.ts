@@ -460,6 +460,33 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'agent_files_purge' },
   },
   {
+    name: 'request/agent_profile_mcp_read',
+    description:
+      "#task:1135: read the agent's L1 mcp.json (the host-local truth behind `silverhand profile mcp get`). Backend sends ONLY {agent_id} — no path; the daemon resolves the L1 dir from agent_id (I1).",
+    frame: enc({
+      id: 'req-agent-profile-mcp-read-1',
+      intent: 'agent_profile_mcp_read',
+      params: {
+        agent_id: 'aid_FpzaAEM',
+      },
+    }),
+    kind: { kind: 'request', intent: 'agent_profile_mcp_read' },
+  },
+  {
+    name: 'request/agent_profile_mcp_write',
+    description:
+      "#task:1135: replace the agent's L1 mcp.json (behind `silverhand profile mcp set`). Backend sends {agent_id, raw}; the daemon re-validates fail-loud then writes atomically. raw is the verbatim JSON text.",
+    frame: enc({
+      id: 'req-agent-profile-mcp-write-1',
+      intent: 'agent_profile_mcp_write',
+      params: {
+        agent_id: 'aid_FpzaAEM',
+        raw: '{"mcpServers":{"fs":{"command":"npx","args":["-y","server-fs"]}}}',
+      },
+    }),
+    kind: { kind: 'request', intent: 'agent_profile_mcp_write' },
+  },
+  {
     name: 'request/agent_message_send',
     description:
       'Agent runtime asks the daemon to send a visible message; daemon owns freshness boundary stamping before backend side-effect.',
@@ -1340,6 +1367,32 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     }),
     kind: { kind: 'response_success', intent: 'agent_files_purge' },
   },
+  {
+    name: 'response/agent_profile_mcp_read',
+    description:
+      '#task:1135: daemon returned the raw mcp.json text. raw:null is the normal "no MCP configured" case (absent file), NOT an error.',
+    frame: enc({
+      id: 'req-agent-profile-mcp-read-1',
+      result: {
+        ok: true,
+        raw: '{"mcpServers":{"fs":{"command":"npx"}}}',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_profile_mcp_read' },
+  },
+  {
+    name: 'response/agent_profile_mcp_write',
+    description:
+      '#task:1135: daemon atomically replaced mcp.json and returned the byte count written.',
+    frame: enc({
+      id: 'req-agent-profile-mcp-write-1',
+      result: {
+        ok: true,
+        bytes_written: 63,
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_profile_mcp_write' },
+  },
 ];
 
 // ── Error response fixtures ────────────────────────────────────────
@@ -1885,6 +1938,68 @@ const RUNTIME_START_ERROR_FIXTURES: WireFixture[] = [
     kind: { kind: 'response_error_typed', intent: 'runtime_start' },
   },
 ];
+// #task:1135 agent_profile_mcp_{read,write} typed errors. Both intents share
+// the AgentProfileMcpErrorCode set; one fixture per (intent, code) slot so the
+// wire-contract catalogue test sees full coverage.
+const AGENT_PROFILE_MCP_ERROR_FIXTURES: WireFixture[] = [
+  {
+    name: 'response/agent_profile_mcp_read-error-invalid_config',
+    description:
+      'Read does not normally produce invalid_config, but the code is shared across the intent pair; pinned so the wire schema accepts it on the read arm too.',
+    frame: enc({
+      id: 'req-agent-profile-mcp-read-1',
+      error: { code: 'invalid_config', message: 'mcp.json failed schema validation' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_profile_mcp_read' },
+  },
+  {
+    name: 'response/agent_profile_mcp_read-error-fs_unavailable',
+    description:
+      'Hard fs error reading mcp.json (perm/IO — not ENOENT, which maps to raw:null success).',
+    frame: enc({
+      id: 'req-agent-profile-mcp-read-1',
+      error: { code: 'fs_unavailable', message: 'EACCES: permission denied, open mcp.json' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_profile_mcp_read' },
+  },
+  {
+    name: 'response/agent_profile_mcp_read-error-internal_error',
+    description: 'Catch-all for an unexpected failure reading the profile MCP config.',
+    frame: enc({
+      id: 'req-agent-profile-mcp-read-1',
+      error: { code: 'internal_error', message: 'unexpected read failure' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_profile_mcp_read' },
+  },
+  {
+    name: 'response/agent_profile_mcp_write-error-invalid_config',
+    description:
+      'Write re-validates fail-loud: a payload that fails the canonical schema is rejected and nothing is persisted.',
+    frame: enc({
+      id: 'req-agent-profile-mcp-write-1',
+      error: { code: 'invalid_config', message: 'invalid mcp config: mcpServers.fs: unrecognized key "bogus"' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_profile_mcp_write' },
+  },
+  {
+    name: 'response/agent_profile_mcp_write-error-fs_unavailable',
+    description: 'Hard fs error during the atomic tmp-write + rename of mcp.json.',
+    frame: enc({
+      id: 'req-agent-profile-mcp-write-1',
+      error: { code: 'fs_unavailable', message: 'ENOSPC: no space left on device' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_profile_mcp_write' },
+  },
+  {
+    name: 'response/agent_profile_mcp_write-error-internal_error',
+    description: 'Catch-all for an unexpected failure writing the profile MCP config.',
+    frame: enc({
+      id: 'req-agent-profile-mcp-write-1',
+      error: { code: 'internal_error', message: 'unexpected write failure' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_profile_mcp_write' },
+  },
+];
 RESPONSES_ERROR_TYPED.push(
   ...WORKSPACE_PROVISION_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_INDEX_ERROR_FIXTURES,
@@ -1892,6 +2007,7 @@ RESPONSES_ERROR_TYPED.push(
   ...AGENT_WORKSPACE_FILE_READ_ERROR_FIXTURES,
   ...AGENT_L2_SEED_ERROR_FIXTURES,
   ...AGENT_FILES_PURGE_ERROR_FIXTURES,
+  ...AGENT_PROFILE_MCP_ERROR_FIXTURES,
   ...RUNTIME_START_ERROR_FIXTURES,
 );
 

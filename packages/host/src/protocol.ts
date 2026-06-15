@@ -1932,6 +1932,73 @@ const AgentFilesPurgeIpcErrorSchema = z
   .strict();
 
 
+// ── #task:1135: profile MCP read / write ─────────────────────────────
+// Backs `silverhand profile mcp get|set`. The subject's raw MCP config is
+// host-local L1 truth (`<home>/.silverhand/agents/<id>/mcp.json`); the backend
+// never stores raw bytes. Read returns the raw text (or null when absent — the
+// normal "no MCP" case, NOT an error). Write validates the canonical schema
+// (fail-loud `invalid_config`) and atomically replaces the file. The daemon
+// resolves the L1 dir itself (`resolveAgentDir`) — no fs path crosses the wire.
+export const AgentProfileMcpReadParamsSchema = z
+  .object({ agent_id: z.string().min(1) })
+  .strict();
+export type AgentProfileMcpReadParams = z.infer<
+  typeof AgentProfileMcpReadParamsSchema
+>;
+
+export const AgentProfileMcpReadResultSchema = z
+  .object({
+    ok: z.literal(true),
+    /** Raw file text, or null when no `mcp.json` exists yet. */
+    raw: z.string().nullable(),
+  })
+  .strict();
+export type AgentProfileMcpReadResult = z.infer<
+  typeof AgentProfileMcpReadResultSchema
+>;
+
+export const AgentProfileMcpWriteParamsSchema = z
+  .object({
+    agent_id: z.string().min(1),
+    /** Raw JSON text to persist. The daemon re-validates (belt) and writes
+     *  atomically; the backend route is the primary validation authority. */
+    raw: z.string(),
+  })
+  .strict();
+export type AgentProfileMcpWriteParams = z.infer<
+  typeof AgentProfileMcpWriteParamsSchema
+>;
+
+export const AgentProfileMcpWriteResultSchema = z
+  .object({
+    ok: z.literal(true),
+    bytes_written: z.number().int().nonnegative(),
+  })
+  .strict();
+export type AgentProfileMcpWriteResult = z.infer<
+  typeof AgentProfileMcpWriteResultSchema
+>;
+
+export const AgentProfileMcpErrorCodeSchema = z.enum([
+  /** Raw failed canonical validation (bad JSON / schema). Write-only;
+   *  fail-loud, nothing is persisted. Route projects 400. */
+  'invalid_config',
+  /** Hard host-local fs failure (perm/IO/EROFS). Route projects 503. */
+  'fs_unavailable',
+  'internal_error',
+]);
+export type AgentProfileMcpErrorCode = z.infer<
+  typeof AgentProfileMcpErrorCodeSchema
+>;
+
+const AgentProfileMcpIpcErrorSchema = z
+  .object({
+    code: z.union([ResponseErrorCodeSchema, AgentProfileMcpErrorCodeSchema]),
+    message: z.string(),
+  })
+  .strict();
+
+
 /**
  * Single source of truth for the intent ↔ params / result / error
  * type triple. The client uses it to enforce that
@@ -2111,6 +2178,16 @@ export const intentSchemas = {
     params: AgentFilesPurgeParamsSchema,
     result: AgentFilesPurgeResultSchema,
     error: AgentFilesPurgeIpcErrorSchema,
+  },
+  agent_profile_mcp_read: {
+    params: AgentProfileMcpReadParamsSchema,
+    result: AgentProfileMcpReadResultSchema,
+    error: AgentProfileMcpIpcErrorSchema,
+  },
+  agent_profile_mcp_write: {
+    params: AgentProfileMcpWriteParamsSchema,
+    result: AgentProfileMcpWriteResultSchema,
+    error: AgentProfileMcpIpcErrorSchema,
   },
 } as const;
 

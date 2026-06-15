@@ -38,6 +38,8 @@ describe('outbound protocol — command catalogue', () => {
       'agent_files_purge',
       'agent_l2_seed',
       'agent_materialize',
+      'agent_profile_mcp_read',
+      'agent_profile_mcp_write',
       'agent_workspace_file_read',
       'agent_workspace_index',
       'agent_workspace_tree',
