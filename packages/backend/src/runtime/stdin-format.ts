@@ -47,6 +47,15 @@ export interface MessageLite {
   created_at: number;
   subtype?: string | null;
   attachments?: AttachmentSnapshot[] | null;
+  /** Present when this row is a task anchor. When both are set the stdin
+   *  header gains a `task=#<number> status=<status>` suffix so an agent
+   *  woken by the message sees at a glance it's a task, not plain chat.
+   *  General to ALL task messages (human `Send as task`, `claim
+   *  --message-id` promotion, `create_tasks` body rows), not `as_task`
+   *  only. Title is intentionally NOT in the header (escaping/whitespace;
+   *  it's the message's first line anyway). */
+  task_number?: number | null;
+  task_status?: string | null;
 }
 
 /**
@@ -125,23 +134,30 @@ export function formatStdinMessageHeader(
   const target = msg.thread_root_id
     ? `thread:${msg.thread_root_id}`
     : 'channel';
+  // Task anchor suffix — appended to every kind's header when the row is a
+  // task, so an agent sees `task=#<n> status=<status>` regardless of who
+  // sent it. Machine-scannable; no title (see MessageLite).
+  const taskSuffix =
+    msg.task_number != null && msg.task_status != null
+      ? ` task=#${msg.task_number} status=${msg.task_status}`
+      : '';
   switch (msg.from_kind) {
     case 'agent': {
       const handle = msg.from_agent_id
         ? agentNameById(msg.from_agent_id)
         : undefined;
       const sender = handle ? `@${handle}` : 'agent';
-      return `msg_id=${msg.id} sender=${sender} type=agent target=${target} time=${time}`;
+      return `msg_id=${msg.id} sender=${sender} type=agent target=${target} time=${time}${taskSuffix}`;
     }
     case 'user': {
       const resolved = msg.from_user_id
         ? userNameById(msg.from_user_id) ?? defaultUserHandle
         : defaultUserHandle;
       const sender = resolved ? `@${resolved}` : 'user';
-      return `msg_id=${msg.id} sender=${sender} type=human target=${target} time=${time}`;
+      return `msg_id=${msg.id} sender=${sender} type=human target=${target} time=${time}${taskSuffix}`;
     }
     case 'system': {
-      return `msg_id=${msg.id} sender=system type=system target=${target} time=${time}`;
+      return `msg_id=${msg.id} sender=system type=system target=${target} time=${time}${taskSuffix}`;
     }
   }
 }

@@ -800,6 +800,7 @@ export function createConversationMessagingApp(
         target: parsed.data.reply_to_message_id
           ? { kind: 'thread', message_id: parsed.data.reply_to_message_id }
           : undefined,
+        asTask: parsed.data.as_task ?? false,
       });
       return c.json({ message: result.message }, 201);
     } catch (err) {

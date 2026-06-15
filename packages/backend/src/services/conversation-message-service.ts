@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   AgentRunTerminalReason,
   AgentSendStaleResolutionReason,
+  ConversationDto,
   LegacySendMessageTarget,
   MessageSendTarget,
   MessageDto,
@@ -77,6 +78,11 @@ export interface SendMessageInput {
   staleEventId?: string;
   staleResolutionReason?: AgentSendStaleResolutionReason;
   freshnessBypass?: boolean;
+  /** Human composer `Send as task`: atomically promote this message into
+   *  an open todo task in the send transaction (one canonical row that is
+   *  both message and task anchor). Only the human send route plumbs this;
+   *  the agent route has its own schema and uses `create_tasks` instead. */
+  asTask?: boolean;
 }
 
 export interface SendMessageResult {
@@ -264,6 +270,29 @@ export interface ConversationMessageServiceOptions {
   runtimeHost: AgentRuntimeHost;
   events: ScopeEventBus;
   logger: BackendLogger;
+  /** Task-context collaborator for `Send as task`. Narrow role interface
+   *  (not the whole TaskService) so this service depends on the open-task
+   *  creation capability, not the task bounded context's internals. */
+  sendAsTaskWriter: SendAsTaskWriter;
+}
+
+/**
+ * The slice of the task context the send path needs for `Send as task`.
+ * `createOpenTaskFromMessageInTxn` runs inside the send transaction (DB
+ * write, no own transaction); `announceOpenTaskCreated` is the post-commit
+ * event publish. TaskService satisfies this structurally.
+ */
+export interface SendAsTaskWriter {
+  createOpenTaskFromMessageInTxn(args: {
+    messageId: string;
+    taskWorkspaceId: string;
+  }): { taskNumber: number; title: string };
+  announceOpenTaskCreated(args: {
+    conversation: ConversationDto;
+    messageId: string;
+    taskNumber: number;
+    title: string;
+  }): void;
 }
 
 /**
@@ -297,6 +326,9 @@ interface SendMessageTxResult {
    *  delivery instead of the main-line channel-member fan-out. */
   threadDelivery: ThreadDeliveryPlan | null;
   skippedFreshnessReason: string | null;
+  /** Non-null when `asTask` promoted this send into an open todo task;
+   *  drives the post-commit `task_changed` announcement. */
+  taskInfo: { taskNumber: number; title: string } | null;
 }
 
 const REPLIED: AgentRunTerminalReason = 'replied';
@@ -343,6 +375,7 @@ export class ConversationMessageService {
   private readonly runtimeHost: AgentRuntimeHost;
   private readonly events: ScopeEventBus;
   private readonly logger: BackendLogger;
+  private readonly sendAsTaskWriter: SendAsTaskWriter;
 
   constructor(opts: ConversationMessageServiceOptions) {
     this.db = opts.db;
@@ -358,6 +391,7 @@ export class ConversationMessageService {
     this.runtimeHost = opts.runtimeHost;
     this.events = opts.events;
     this.logger = opts.logger;
+    this.sendAsTaskWriter = opts.sendAsTaskWriter;
   }
 
   async sendMessage(input: SendMessageInput): Promise<SendMessageResult> {
@@ -425,6 +459,25 @@ export class ConversationMessageService {
             threadRootId,
             snapshots,
           });
+        // `Send as task`: promote the just-inserted row into an open todo
+        // task in THIS transaction so message + task anchor are atomic.
+        // We patch the returned DTO's task fields so the send response and
+        // distribution render the task pill immediately (the row IS the
+        // task — no separate task-created system message). The board picks
+        // it up via the post-commit `task_changed` event.
+        let taskInfo: { taskNumber: number; title: string } | null = null;
+        if (input.asTask) {
+          taskInfo = this.sendAsTaskWriter.createOpenTaskFromMessageInTxn({
+            messageId: message.id,
+            taskWorkspaceId: targetConversation.workspace_id,
+          });
+          message.task_number = taskInfo.taskNumber;
+          message.task_status = 'todo';
+          message.task_title = taskInfo.title;
+          message.task_workspace_id = targetConversation.workspace_id;
+          message.task_assignee = null;
+          message.task_closed_at = null;
+        }
         // Reply-cluster durable semantics (§6): when this send is a thread
         // reply, register auto-followers and backfill prior thread history
         // into newly-followed agents' inboxes — all inside this transaction
@@ -444,6 +497,7 @@ export class ConversationMessageService {
           sourceConversation,
           targetConversation,
           message,
+          taskInfo,
           // Main-line recipients only; thread replies deliver via
           // `threadDelivery` (follower-gated), not the channel-wide fan-out.
           recipients:
@@ -500,6 +554,18 @@ export class ConversationMessageService {
         },
         'conversation-message-service: freshness CAS skipped',
       );
+    }
+
+    // `Send as task` post-commit: surface the new open task on the board /
+    // caches via `task_changed`. No system message — the canonical message
+    // row is the announcement; the board is its projection.
+    if (txResult.taskInfo) {
+      this.sendAsTaskWriter.announceOpenTaskCreated({
+        conversation: txResult.targetConversation,
+        messageId: txResult.message.id,
+        taskNumber: txResult.taskInfo.taskNumber,
+        title: txResult.taskInfo.title,
+      });
     }
 
     if (input.actor.kind === 'agent' && input.staleEventId) {

@@ -435,6 +435,16 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger,
+    // Lazy delegator to the task context for `Send as task`. TaskService is
+    // constructed just below; the closures resolve `ctx.taskService` at
+    // call time (runtime), so construction order is irrelevant and no cycle
+    // forms.
+    sendAsTaskWriter: {
+      createOpenTaskFromMessageInTxn: args =>
+        ctx.taskService.createOpenTaskFromMessageInTxn(args),
+      announceOpenTaskCreated: args =>
+        ctx.taskService.announceOpenTaskCreated(args),
+    },
   });
   ctx.taskService = new TaskService({
     db,

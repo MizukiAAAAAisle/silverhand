@@ -98,6 +98,72 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
       /^msg_id=m-reply sender=@Alice type=agent target=thread:m-root time=/,
     );
   });
+
+  it('appends task=#<n> status=<status> when the row is a task anchor', () => {
+    const header = formatStdinMessageHeader(
+      {
+        id: 'm-task',
+        thread_root_id: null,
+        from_kind: 'user',
+        from_agent_id: null,
+        from_user_id: 'u1',
+        content: 'Fix the flaky test',
+        created_at: 0,
+        task_number: 123,
+        task_status: 'todo',
+      },
+      agentName,
+      userName,
+      undefined,
+    );
+
+    expect(header).toMatch(
+      /^msg_id=m-task sender=@shiki type=human target=channel time=\S+ task=#123 status=todo$/,
+    );
+  });
+
+  it('omits the task suffix for a non-task message', () => {
+    const header = formatStdinMessageHeader(
+      {
+        id: 'm-plain',
+        thread_root_id: null,
+        from_kind: 'user',
+        from_agent_id: null,
+        from_user_id: 'u1',
+        content: 'just chatting',
+        created_at: 0,
+        task_number: null,
+        task_status: null,
+      },
+      agentName,
+      userName,
+      undefined,
+    );
+
+    expect(header).not.toContain('task=');
+    expect(header).not.toContain('status=');
+  });
+
+  it('carries the current status for a promoted (in_progress) task', () => {
+    const header = formatStdinMessageHeader(
+      {
+        id: 'm-claimed',
+        thread_root_id: null,
+        from_kind: 'agent',
+        from_agent_id: 'a1',
+        from_user_id: null,
+        content: 'work it',
+        created_at: 0,
+        task_number: 7,
+        task_status: 'in_progress',
+      },
+      agentName,
+      userName,
+      undefined,
+    );
+
+    expect(header).toContain('task=#7 status=in_progress');
+  });
 });
 
 function systemMessage(overrides: Partial<MessageLite> = {}): MessageLite {

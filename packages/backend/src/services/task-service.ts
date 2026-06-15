@@ -429,17 +429,7 @@ export class TaskService {
             content: t.body && t.body.length > 0 ? t.body : t.title,
             threadRootId,
           });
-          const nextNumber = this.allocateTaskNumber(taskWorkspaceId);
-          this.db
-            .prepare(
-              `UPDATE messages
-               SET task_number = ?,
-                   task_status = 'todo',
-                   task_title = ?,
-                   task_workspace_id = ?
-               WHERE id = ?`,
-            )
-            .run(nextNumber, t.title, taskWorkspaceId, msg.id);
+          const nextNumber = this.writeOpenTaskRow(msg.id, taskWorkspaceId, t.title);
           out.push({ message_id: msg.id, task_number: nextNumber, title: t.title });
         }
         return out;
@@ -467,6 +457,69 @@ export class TaskService {
   private taskThreadTargetMessageId(input: CreateTasksInput): string | undefined {
     return input.legacyReplyToMessageId
       ?? (input.target?.kind === 'thread' ? input.target.message_id : undefined);
+  }
+
+  // ── Send-as-task (human composer) ────────────────────────────────
+  // `Send as task` promotes the just-sent message into an open todo task
+  // in the SAME transaction as the send, so message + task anchor are
+  // atomic. This is the human/agent-isomorphic create-from-message
+  // operation: it reuses `writeOpenTaskRow` (the one open-task writer,
+  // shared with `createTasks`) and the promotion title rule
+  // (`firstLine(content)`), and never sets an assignee or touches status
+  // beyond `todo`. It deliberately does NOT go through the claim-promote
+  // path (which would force `in_progress` + assignee = claimer).
+
+  /**
+   * Mark an already-inserted message row as an open todo task. MUST be
+   * called inside the caller's transaction (e.g. the send transaction) —
+   * it opens no transaction of its own. Title is derived from the
+   * message body via the same `firstLine` rule as agent promotion.
+   * Throws if the message is missing, is a system row, or is already a
+   * task (callers should only invoke it on a freshly-inserted send).
+   */
+  createOpenTaskFromMessageInTxn(args: {
+    messageId: string;
+    taskWorkspaceId: string;
+  }): { taskNumber: number; title: string } {
+    const msg = this.fetchMessage(args.messageId);
+    if (!msg) {
+      throw new Error(`createOpenTaskFromMessage: message ${args.messageId} not found`);
+    }
+    if (msg.from_kind === 'system') {
+      throw new Error('createOpenTaskFromMessage: system message cannot be a task');
+    }
+    if (msg.task_number !== null) {
+      throw new Error('createOpenTaskFromMessage: message is already a task');
+    }
+    const title = firstLine(msg.content);
+    const taskNumber = this.writeOpenTaskRow(args.messageId, args.taskWorkspaceId, title);
+    return { taskNumber, title };
+  }
+
+  /**
+   * Post-commit announcement for a send-as-task creation: publishes the
+   * `task_changed` (create) event so the task board / caches surface the
+   * new open task live. It does NOT insert a "created task #N" system
+   * message — for send-as-task the canonical message row IS the task
+   * announcement (contract: one row, no duplicate). The board is a
+   * projection of that row, not a second copy.
+   */
+  announceOpenTaskCreated(args: {
+    conversation: ConversationDto;
+    messageId: string;
+    taskNumber: number;
+    title: string;
+  }): void {
+    this.publishTaskChanged({
+      conversation: args.conversation,
+      kind: 'create',
+      messageId: args.messageId,
+      taskNumber: args.taskNumber,
+      title: args.title,
+      status: 'todo',
+      assignee: null,
+      closedAt: null,
+    });
   }
 
   // ── Claim ───────────────────────────────────────────────────────
@@ -1493,6 +1546,33 @@ export class TaskService {
       )
       .get(workspaceId);
     return row?.next ?? 1;
+  }
+
+  /**
+   * The single open-task writer: allocate the next workspace-scoped task
+   * number and stamp an existing message row as an open (`todo`) task
+   * with the given title and NO assignee. Transaction-agnostic — runs
+   * inside the caller's transaction. Shared by `createTasks` and
+   * `createOpenTaskFromMessageInTxn` so there is exactly one place that
+   * defines what "open task" means on the row.
+   */
+  private writeOpenTaskRow(
+    messageId: string,
+    taskWorkspaceId: string,
+    title: string,
+  ): number {
+    const nextNumber = this.allocateTaskNumber(taskWorkspaceId);
+    this.db
+      .prepare(
+        `UPDATE messages
+         SET task_number = ?,
+             task_status = 'todo',
+             task_title = ?,
+             task_workspace_id = ?
+         WHERE id = ?`,
+      )
+      .run(nextNumber, title, taskWorkspaceId, messageId);
+    return nextNumber;
   }
 
   private fetchTaskByNumber(

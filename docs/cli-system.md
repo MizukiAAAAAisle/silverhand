@@ -437,6 +437,35 @@ silverhand message react --message-id m_123 --emoji 👀 --remove
   `viewer_reacted` is the calling agent's own — so an agent that reacted can
   see the result. Reactions never affect history's freshness/anchoring.
 
+### 3.7 Agent input: message delivery header
+
+Messages pushed to an agent on stdin are prefixed with a single canonical
+**meta header** line (formatter: `packages/backend/src/runtime/stdin-format.ts`,
+`formatStdinMessageHeader`). The platform prompt documents this for the agent;
+the format itself is an agent-facing contract, repeated here so CLI/runtime and
+prompt stay in sync (see the maintenance checklist).
+
+```
+msg_id=<id> sender=@<handle>|system type=agent|human|system target=channel|thread:<root_message_id> time=<iso>
+```
+
+- `target=channel` is the main line; `target=thread:<root_message_id>` is a
+  reply inside that message's cluster.
+- **Task anchor suffix.** When the delivered row is itself a task, the header
+  gains a trailing ` task=#<number> status=<status>` (e.g.
+  `… time=<iso> task=#1124 status=todo`). The suffix is the machine-readable
+  fact that the message **is a task anchor**, not plain chat; `task=#<number>`
+  and `status=<status>` are authoritative. It is general to **all** task
+  messages — human `Send as task`, a `task claim --message-id` promotion
+  (`status=in_progress`), and `create_tasks` body rows alike — and is omitted
+  entirely for non-task messages. The **title is deliberately not in the
+  header** (escaping/whitespace); for the precise title read the task
+  DTO/`task list`. Where the title comes from depends on the path: for human
+  `Send as task` and `claim --message-id` promotion it is derived from the
+  message body's first line, so the body opens with the title; `create_tasks`
+  rows can carry an explicit title with a separate body, so there the body's
+  first line is **not** guaranteed to equal the title.
+
 ## 4. Error Contract
 
 stderr is the primary failure context for agents. It must be concise,

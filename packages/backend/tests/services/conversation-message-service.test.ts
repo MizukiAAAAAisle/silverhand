@@ -117,6 +117,14 @@ function bootstrap() {
     runtimeHost: fake as unknown as AgentRuntimeHost,
     events,
     logger,
+    // These tests never set `asTask`; stub the writer so it's a hard error
+    // if a path unexpectedly tries to promote.
+    sendAsTaskWriter: {
+      createOpenTaskFromMessageInTxn: () => {
+        throw new Error('sendAsTaskWriter not configured in this test');
+      },
+      announceOpenTaskCreated: () => {},
+    },
   });
   const workspace = workspaces.insert({
     name: 'eng',
