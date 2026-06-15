@@ -70,6 +70,9 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand schedule cancel` | Cancel a schedule. |
 | `silverhand file upload` | Upload a local file and return an attachment id. |
 | `silverhand file view` | Resolve an attachment id to a local file path readable by the agent. |
+| `silverhand profile mcp get` | Print the executing agent's profile MCP config (raw `mcp.json`, or `raw: null` when unset). Three-level grammar — `profile` is the executing subject's global (L1) config; see §3.8. |
+| `silverhand profile mcp set` | Replace the executing agent's profile MCP config. Raw JSON on **STDIN**; validated then written verbatim. Effect is **next spawn** (no hot reload). See §3.8. |
+| `silverhand profile mcp validate` | Validate `mcp.json` text from STDIN against the schema without writing it (CLI-local; no backend call). See §3.8. |
 
 **Dependent commands run one at a time.** When a later command's input
 depends on an earlier one's result — `claim` then act on the task, or
@@ -465,6 +468,59 @@ msg_id=<id> sender=@<handle>|system type=agent|human|system target=channel|threa
   message body's first line, so the body opens with the title; `create_tasks`
   rows can carry an explicit title with a separate body, so there the body's
   first line is **not** guaranteed to equal the title.
+
+### 3.8 `silverhand profile mcp` — per-subject MCP config
+
+`profile` is the **third dispatch level** in the CLI: `silverhand profile
+<facet> <verb>`. Unlike the two-level nouns, a faceted noun groups its verbs
+under a *facet* token. `profile` is the executing subject's **global (L1)
+config** — the config that travels with the agent across every workspace —
+and it is subject-agnostic (Human/Agent isomorphism). The only facet in v1 is
+`mcp`; future facets (avatar, display-name) slot in alongside it, and future
+*workspace-scoped* config gets its own `silverhand workspace <facet> <verb>`
+noun rather than a `--scope` flag.
+
+**What it manages.** Custom MCP servers for the executing agent, stored as raw
+JSON at the agent's L1 `mcp.json`. The host file is the single source of truth
+(no DB copy); the agent pane reads that same file back. The format is the
+standard MCP shape:
+
+```json
+{
+  "mcpServers": {
+    "my-stdio":  { "command": "npx", "args": ["-y", "some-server"] },
+    "my-remote": { "type": "http", "url": "https://example.com/mcp" }
+  }
+}
+```
+
+Server names match `/^[A-Za-z0-9_-]{1,64}$/`. Stdio servers take
+`command`/`args`/`env`; `http`/`sse` servers take `url`/`headers`.
+
+**Verbs.**
+
+- `get` — print `{ raw: <string|null> }`. `null` is the normal "no MCP
+  configured" case, not an error.
+- `set` — read the full `mcp.json` from STDIN, validate it, write it
+  **verbatim** (your formatting is preserved). REPLACES the whole config; pipe
+  `{"mcpServers":{}}` to clear it. A bad payload is rejected with
+  `validation_error` (code `invalid_config` on the wire) and nothing is
+  written.
+- `validate` — validate STDIN against the schema **without** writing. Pure
+  CLI-local pre-check; makes no backend call. Prints
+  `{ ok: true, server_count: <n> }`.
+
+**Loading semantics.** The config is loaded **additively** at the agent's
+**next spawn** — a running agent does NOT pick up a change until it is
+respawned. At spawn each server name is namespaced to
+`silverhand_profile__<name>` so it never shadows the user's own MCP servers,
+and silverhand merges it on top of the runtime's native config rather than
+replacing it (claude `--mcp-config`, codex per-server `-c mcp_servers.*`). A
+hand-edited / unparseable `mcp.json` drops the ENTIRE MCP layer at spawn
+(logged, never a partial subset) but the agent still spawns. MCP *server*
+connection failures are the runtime's concern, not silverhand's.
+
+Canonical design: `docs/agent-mcp-config-v1.md`.
 
 ## 4. Error Contract
 
