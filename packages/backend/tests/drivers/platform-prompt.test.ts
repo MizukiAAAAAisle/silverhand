@@ -297,6 +297,39 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toContain('auth failure');
   });
 
+  it('renders a concept-only Profile section between This Context and Knowledge Model', () => {
+    const text = prompt();
+    // Section present and positioned per the skeleton (§2): after This
+    // Context, before Knowledge Model — identity/global config is more
+    // foundational than workspace memory.
+    const ctxIdx = text.indexOf('## This Context');
+    const profileIdx = text.indexOf('## Your Profile');
+    const kmIdx = text.indexOf('## Knowledge Model');
+    expect(ctxIdx).toBeGreaterThan(-1);
+    expect(profileIdx).toBeGreaterThan(ctxIdx);
+    expect(kmIdx).toBeGreaterThan(profileIdx);
+
+    const section = text.slice(profileIdx, kmIdx);
+    // Concept + behavior: own global (L1) config, cross-workspace, and a
+    // pointer to the CLI surface.
+    expect(section).toMatch(/global \(L1\)/);
+    expect(section).toMatch(/across every workspace/);
+    expect(section).toMatch(/silverhand profile/);
+    // §5 one-home: the section must NOT re-list the mcp verb index — that
+    // lives only in Tool Reference.
+    expect(section).not.toMatch(/get\|set\|add/);
+    // §5 no-future-residue: only current facts, no roadmap fields.
+    expect(section).not.toMatch(/avatar|display.?name|description/i);
+  });
+
+  it('keeps the profile mcp verb index in exactly one home (Tool Reference)', () => {
+    const text = prompt();
+    // The full verb index string must appear once, not duplicated into the
+    // Profile concept section (§5 one-home-per-fact).
+    const occurrences = text.split('get|set|add|remove|clear|validate|probe').length - 1;
+    expect(occurrences).toBe(1);
+  });
+
   it('uses current thread terminology and gates agent-created top-level channels', () => {
     const text = prompt();
     expect(text).toContain('## Threads');

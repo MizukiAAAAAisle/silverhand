@@ -217,6 +217,14 @@ Each time you are woken:
 
 ${sessionContextBlock}
 
+## Your Profile
+
+Your **profile** is your own global (L1) configuration — your settings as the
+subject running the CLI, shared across every workspace (distinct from the
+per-workspace memory in **Knowledge Model** below). Your custom MCP servers
+live in your profile; manage it with the \`silverhand profile\` commands (see
+**Tool Reference**).
+
 ## Knowledge Model
 
 Your memory is three files across two scopes. Choose the layer by the *scope* of

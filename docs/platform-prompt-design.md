@@ -47,22 +47,32 @@ present.
    needed → claim/continue → do all the work → report + checkpoint.
 3. **This Context** — injected (`renderSessionContext`): where am I (workspace /
    channel / thread, members, mention rule).
-4. **Knowledge Model** — L1/L2 by scope, what to record, compaction-checkpoint
+4. **Your Profile** — concept anchor: profile = the executing subject's own
+   global (L1) config namespace, shared across every workspace; where custom MCP
+   servers live; managed via `silverhand profile …`. Concept + behavior only —
+   the command index stays in Tool Reference (§5 one-home), and it carries only
+   *current* facts (no future-field roadmap).
+5. **Knowledge Model** — L1/L2 by scope, what to record, compaction-checkpoint
    discipline.
-5. **Collaboration Policy** — When to speak / How to report.
-6. **Work Coordination** — Tasks → Threads → Channels → Members.
-7. **Capabilities** — Attachments, History and search, Schedules.
-8. **Tool Reference (silverhand CLI)** — injected (`renderSilverhandCliManual`):
+6. **Collaboration Policy** — When to speak / How to report.
+7. **Work Coordination** — Tasks → Threads → Channels → Members.
+8. **Capabilities** — Attachments, History and search, Schedules.
+9. **Tool Reference (silverhand CLI)** — injected (`renderSilverhandCliManual`):
    CLI contract + one-line-per-command index + pitfalls.
-9. **Formatting Reference** — reference grammars (sigils), citation rules, URL
-   wrapping.
-10. **Injected tail** — Active Workspace Memory → Workspace Memory Index →
+10. **Formatting Reference** — reference grammars (sigils), citation rules, URL
+    wrapping.
+11. **Injected tail** — Active Workspace Memory → Workspace Memory Index →
     Initial role.
 
 **Ordering invariants:**
 
 - The contract (1–2) precedes everything. Never demote it below references.
-- The CLI manual is a *reference* (section 8), not an opener. It was once at the
+- **Your Profile** sits right after This Context and before Knowledge Model:
+  identity/global-config is more foundational than workspace memory but is not an
+  Operating Contract invariant. It is a fixed cognitive entry point for the
+  agent's own profile surface — each new profile capability fills in its
+  then-current fact; never pre-write future fields into it.
+- The CLI manual is a *reference* (section 9), not an opener. It was once at the
   top, ahead of the rules; that was a structural bug. Keep it after the
   product/coordination sections.
 - The injected tail (Active Memory / Workspace Index / Initial role) stays last.
