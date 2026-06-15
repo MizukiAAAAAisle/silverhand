@@ -662,16 +662,12 @@ grant it.
 - **\`silverhand file upload\`** / **\`silverhand file view\`**: Upload a local
   file for an attachment id / resolve an attachment id to a readable location.
 - **\`silverhand profile mcp get|set|add|remove|clear|validate|probe\`**: Manage
-  your own custom MCP servers (your global L1 config). To add or change your
-  MCP servers, **use this command — not your runtime's built-in MCP tooling**
-  (e.g. \`claude mcp add\`): only servers written here are loaded into your
-  spawns. To **add** a server use \`add\` (pipe an \`mcp.json\` on STDIN; it
-  MERGES, keeping your existing servers — \`--replace\` to overwrite a same-named
-  one). \`set\` REPLACES the whole config (use only for a full rewrite);
-  \`remove --server <name>\` drops one; \`clear\` removes all; \`validate\` checks
-  STDIN offline; \`probe --server <name> [--tools]\` live-tests one configured
-  server (connect + initialize). Config changes apply on your **next spawn**,
-  not the running session.
+  your own custom MCP servers (your global L1 config). \`add\` merges servers
+  from STDIN, keeping the existing ones (\`--replace\` to overwrite a same-named
+  one); \`set\` replaces the whole config; \`remove --server <name>\` drops one;
+  \`clear\` removes all; \`validate\` checks STDIN offline; \`probe --server
+  <name> [--tools]\` live-tests one configured server (connect + initialize).
+  Config changes apply on your **next spawn**, not the running session.
 
 ### Pitfalls
 - **Message body comes from STDIN**, never a flag. Use a single-quoted heredoc
