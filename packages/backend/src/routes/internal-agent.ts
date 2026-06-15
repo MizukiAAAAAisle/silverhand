@@ -70,6 +70,8 @@ import {
 } from './responses.js';
 import {
   dispatchAgentWorkspaceIndex,
+  dispatchAgentProfileMcpRead,
+  dispatchAgentProfileMcpWrite,
   resolveOutboundForHost,
   type DataPlaneFailure,
   type DataPlaneHttpStatus,
@@ -90,6 +92,7 @@ import {
   CliTraceInputSchema,
   CreateTasksInputSchema,
   ListTasksQuerySchema,
+  parseMcpConfig,
   ScheduleCancelInputSchema,
   ScheduleCreateInputSchema,
   ScheduleListInputSchema,
@@ -1225,6 +1228,90 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
       if (status) return c.json(agentServiceErrorBody(err), status);
       throw err;
     }
+  });
+
+  // ── Agent-owned profile MCP (silverhand CLI → backend) ────────────
+  // #task:1135 — `silverhand profile mcp get|set`. `profile` is the
+  // executing subject's L1 (agent-global) config; the routes hang off the
+  // calling conversation so the internal principal middleware (cid+aid →
+  // AgentPrincipal) authenticates self-only via `canEditAgent`. The raw
+  // `mcp.json` is host-local truth: GET reads it through the data-plane
+  // dispatch (raw|null, absent is normal); SET validates the payload here
+  // (fail-loud `invalid_config`) BEFORE the atomic host write. Effect is
+  // next-spawn (no hot reload) — the CLI/prompt say so.
+
+  app.get(internalPaths.agentProfileMcpGet(':cid', ':aid'), async c => {
+    const cid = c.req.param('cid');
+    const aid = c.req.param('aid');
+    if (!cid || !aid) {
+      return c.json({ error: 'conversation id and agent id required' }, 400);
+    }
+    if (!conversations.get(cid)) return c.json({ error: 'conversation not found' }, 404);
+    const agent = agents.get(aid);
+    if (!agent) return c.json({ error: 'agent not found' }, 404);
+    const principal = getAgentPrincipal(c);
+    if (!canEditAgent(ctx, principal, aid)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const outbound = resolveOutboundForHost(
+      ctx.outboundFrameAdapter?.() ?? null,
+      agent.host_id,
+    );
+    if (outbound.kind === 'failed') {
+      return c.json({ error: outbound.message, code: outbound.code }, outbound.status);
+    }
+    const mcp = await dispatchAgentProfileMcpRead(
+      outbound.adapter,
+      agent.host_id,
+      outbound.connectionId,
+      { agent_id: aid },
+    );
+    if (mcp.kind === 'failed') {
+      return c.json({ error: mcp.message, code: mcp.code }, mcp.status);
+    }
+    return c.json({ raw: mcp.result.raw });
+  });
+
+  app.post(internalPaths.agentProfileMcpSet(':cid', ':aid'), async c => {
+    const cid = c.req.param('cid');
+    const aid = c.req.param('aid');
+    if (!cid || !aid) {
+      return c.json({ error: 'conversation id and agent id required' }, 400);
+    }
+    if (!conversations.get(cid)) return c.json({ error: 'conversation not found' }, 404);
+    const agent = agents.get(aid);
+    if (!agent) return c.json({ error: 'agent not found' }, 404);
+    const principal = getAgentPrincipal(c);
+    if (!canEditAgent(ctx, principal, aid)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    // The body is the raw JSON text the agent piped in. Read it verbatim —
+    // the file persists the user's own formatting, not a re-serialized copy.
+    const raw = await c.req.text();
+    // Backend is the PRIMARY validation authority: reject a bad payload here
+    // (fail-loud) so nothing crosses the wire / touches disk. The daemon
+    // re-validates as belt-and-suspenders.
+    const parsed = parseMcpConfig(raw);
+    if (!parsed.ok) {
+      return c.json({ error: parsed.error, code: 'invalid_config' }, 400);
+    }
+    const outbound = resolveOutboundForHost(
+      ctx.outboundFrameAdapter?.() ?? null,
+      agent.host_id,
+    );
+    if (outbound.kind === 'failed') {
+      return c.json({ error: outbound.message, code: outbound.code }, outbound.status);
+    }
+    const written = await dispatchAgentProfileMcpWrite(
+      outbound.adapter,
+      agent.host_id,
+      outbound.connectionId,
+      { agent_id: aid, raw },
+    );
+    if (written.kind === 'failed') {
+      return c.json({ error: written.message, code: written.code }, written.status);
+    }
+    return c.json({ ok: true, bytes_written: written.result.bytes_written });
   });
 
   // ── Agent-owned schedules (silverhand CLI → backend) ──────────────

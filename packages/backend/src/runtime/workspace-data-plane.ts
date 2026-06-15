@@ -3,6 +3,10 @@ import type {
   AgentL2SeedResult,
   AgentFilesPurgeParams,
   AgentFilesPurgeResult,
+  AgentProfileMcpReadParams,
+  AgentProfileMcpReadResult,
+  AgentProfileMcpWriteParams,
+  AgentProfileMcpWriteResult,
   AgentWorkspaceIndexParams,
   AgentWorkspaceIndexResult,
   AgentWorkspaceTreeParams,
@@ -49,6 +53,8 @@ export type DataPlaneFailureCode =
   | 'unsupported_template'
   // typed wire code (agent_files_purge)
   | 'partial_purge'
+  // typed wire code (agent_profile_mcp_write)
+  | 'invalid_config'
   // typed wire codes (agent_workspace_tree / agent_workspace_file_read)
   | 'forbidden_path'
   | 'not_found'
@@ -80,6 +86,7 @@ const INDEX_TIMEOUT_MS = 30_000;
 const READ_TIMEOUT_MS = 30_000;
 const SEED_TIMEOUT_MS = 30_000;
 const PURGE_TIMEOUT_MS = 30_000;
+const PROFILE_MCP_TIMEOUT_MS = 30_000;
 
 /**
  * Resolve the live outbound adapter + connection id for `hostId`, or a
@@ -167,6 +174,11 @@ export function mapDataPlaneError(err: unknown): DataPlaneFailure {
         // a directory when the read endpoint asked for a file. 404 — same
         // semantics as a renderer asking for a non-existent agent.
         return fail('not_found', err.message, 404, false);
+      case 'invalid_config':
+        // #task:1135 — agent_profile_mcp_write: the raw MCP payload failed the
+        // canonical schema on host-side re-validation. The route validates
+        // first, so this is belt-and-suspenders; 400, not retriable.
+        return fail('invalid_config', err.message, 400, false);
       case 'internal_error':
       default:
         return fail('daemon_internal_error', err.message, 502, false);
@@ -351,6 +363,64 @@ export async function dispatchAgentFilesPurge(
       timeoutMs: PURGE_TIMEOUT_MS,
       expectedConnectionId: connectionId,
     });
+    return { kind: 'ok', result };
+  } catch (err) {
+    return mapDataPlaneError(err);
+  }
+}
+
+/**
+ * #task:1135 — dispatch `agent_profile_mcp_read` to the owning daemon: read
+ * the agent's L1 `mcp.json` (the host-local truth behind `silverhand profile
+ * mcp get` and the agent-pane "Profile MCP" view). The daemon resolves the L1
+ * dir from `agent_id` (I1) and returns the raw text or `null` (absent = the
+ * normal "no MCP configured" case, not an error).
+ */
+export async function dispatchAgentProfileMcpRead(
+  adapter: OutboundFrameAdapter,
+  hostId: string,
+  connectionId: string,
+  params: AgentProfileMcpReadParams,
+): Promise<DataPlaneOutcome<AgentProfileMcpReadResult>> {
+  try {
+    const result = await adapter.sendCommand(
+      hostId,
+      'agent_profile_mcp_read',
+      params,
+      {
+        timeoutMs: PROFILE_MCP_TIMEOUT_MS,
+        expectedConnectionId: connectionId,
+      },
+    );
+    return { kind: 'ok', result };
+  } catch (err) {
+    return mapDataPlaneError(err);
+  }
+}
+
+/**
+ * #task:1135 — dispatch `agent_profile_mcp_write` to the owning daemon: replace
+ * the agent's L1 `mcp.json` (behind `silverhand profile mcp set`). The backend
+ * route is the primary validation authority (rejects `invalid_config` before
+ * dispatch); the daemon re-validates fail-loud then writes ATOMICALLY. Effect
+ * is next-spawn (no hot reload).
+ */
+export async function dispatchAgentProfileMcpWrite(
+  adapter: OutboundFrameAdapter,
+  hostId: string,
+  connectionId: string,
+  params: AgentProfileMcpWriteParams,
+): Promise<DataPlaneOutcome<AgentProfileMcpWriteResult>> {
+  try {
+    const result = await adapter.sendCommand(
+      hostId,
+      'agent_profile_mcp_write',
+      params,
+      {
+        timeoutMs: PROFILE_MCP_TIMEOUT_MS,
+        expectedConnectionId: connectionId,
+      },
+    );
     return { kind: 'ok', result };
   } catch (err) {
     return mapDataPlaneError(err);

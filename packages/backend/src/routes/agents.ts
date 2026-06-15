@@ -43,6 +43,7 @@ import {
 import {
   dispatchAgentWorkspaceFileRead,
   dispatchAgentWorkspaceTree,
+  dispatchAgentProfileMcpRead,
   resolveOutboundForHost,
 } from '../runtime/workspace-data-plane.js';
 import {
@@ -546,6 +547,38 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
       return c.json({ error: file.message, code: file.code }, file.status);
     }
     return c.json({ file: file.result.file });
+  });
+
+  // #task:1135 — agent-pane "Profile MCP" section: read the agent's L1
+  // `mcp.json` through the same data-plane dispatch the CLI `profile mcp get`
+  // uses, so embedded + remote daemons share one path. Returns
+  // `{ raw: string | null }` — null is the normal "no MCP configured" case
+  // (NOT a 404), so the pane renders an empty state instead of an error.
+  app.get(apiPaths.agentProfileMcp(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'agent id required' }, 400);
+    const agent = agents.get(id);
+    if (!agent) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
+    const outbound = resolveOutboundForHost(
+      ctx.outboundFrameAdapter?.() ?? null,
+      agent.host_id,
+    );
+    if (outbound.kind === 'failed') {
+      return c.json({ error: outbound.message, code: outbound.code }, outbound.status);
+    }
+    const mcp = await dispatchAgentProfileMcpRead(
+      outbound.adapter,
+      agent.host_id,
+      outbound.connectionId,
+      { agent_id: agent.id },
+    );
+    if (mcp.kind === 'failed') {
+      return c.json({ error: mcp.message, code: mcp.code }, mcp.status);
+    }
+    return c.json({ raw: mcp.result.raw });
   });
 
   app.get('/api/agents/:id/runtime-state', c => {

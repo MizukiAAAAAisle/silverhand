@@ -57,6 +57,12 @@ const NON_CLI_INTERNAL_ROUTES = new Set([
 const KNOWN_VERBS = new Set<string>();
 for (const g of COMMAND_GROUPS) {
   for (const c of g.commands) KNOWN_VERBS.add(`${g.noun} ${c.verb}`);
+  // Faceted nouns (3-level: `silverhand <noun> <facet> <verb>`) expose
+  // their CLI surface as the compound `<facet> <verb>` verb in the route
+  // map (e.g. `profile` → `mcp get`), matching the cli-invoke tag.
+  for (const f of g.facets ?? []) {
+    for (const c of f.commands) KNOWN_VERBS.add(`${g.noun} ${f.facet} ${c.verb}`);
+  }
 }
 
 /** Strip the literal `:cid` / `:aid` placeholders + the
@@ -166,34 +172,32 @@ describe('CLI invoke route map', () => {
 
   it('every CLI_INVOKE_ROUTES entry method matches the backend route registration', () => {
     // Reverse direction: walk the route map, find the matching
-    // internalPaths helper by suffix, and assert the methods agree.
-    // This catches the case where someone updates the map to a method
-    // that isn't actually registered (the cli-invoke middleware would
-    // then start logging None.None for that endpoint).
+    // internalPaths helper by (method, suffix), and assert it is
+    // registered. Keyed by method+suffix — not suffix alone — because a
+    // single resource can expose two methods on one suffix (e.g.
+    // `profile/mcp` GET=get / POST=set), and a suffix-only map would
+    // collapse them and mis-attribute the method.
     const registered = buildRegistrationMap();
     const builders = Object.entries(internalPaths).filter(
       ([name]) => !NON_CLI_INTERNAL_ROUTES.has(name),
     );
-    const suffixToName = new Map<string, string>();
+    const keyToName = new Map<string, string>();
     for (const [name, fn] of builders) {
       const probed =
         isAttachmentWildcardRoute(name)
           ? (fn as (...a: string[]) => string)(':cid', ':aid', 'ATT')
           : (fn as (...a: string[]) => string)(':cid', ':aid');
       const suffix = suffixOf(probed).replace('/ATT/', '/*/');
-      suffixToName.set(suffix, name);
+      const method = registered.get(name);
+      if (method) keyToName.set(`${method} ${suffix}`, name);
     }
     for (const r of CLI_INVOKE_ROUTES) {
-      const name = suffixToName.get(r.suffix);
+      const name = keyToName.get(`${r.method} ${r.suffix}`);
       expect(
         name,
-        `CLI_INVOKE_ROUTES entry ${r.method} ${r.suffix} has no matching internalPaths helper`,
+        `CLI_INVOKE_ROUTES entry ${r.method} ${r.suffix} has no internalPaths helper registered as ${r.method} (the map will produce None.None in cli-*.log)`,
       ).toBeDefined();
       const actualMethod = registered.get(name!);
-      expect(
-        actualMethod,
-        `CLI_INVOKE_ROUTES entry ${r.method} ${r.suffix} → internalPaths.${name} is not registered in any backend route source`,
-      ).toBeDefined();
       expect(
         actualMethod,
         `CLI_INVOKE_ROUTES entry ${r.method} ${r.suffix} → backend route sources register ${actualMethod} for internalPaths.${name}; the map will produce None.None in cli-*.log`,
