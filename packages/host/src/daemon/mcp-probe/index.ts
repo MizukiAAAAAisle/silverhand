@@ -170,25 +170,22 @@ async function readSourceConfig(
 }
 
 /** Build the real SDK transport for a server, honoring its declared type. The
- *  prefix is never applied here — a probe talks to the raw endpoint. */
-function buildTransport(server: McpServerConfig): Transport {
+ *  prefix is never applied here — a probe talks to the raw endpoint.
+ *  Exported for the transport-construction regression test. */
+export function buildTransport(server: McpServerConfig): Transport {
   if ('url' in server) {
     const url = new URL(server.url);
     const headers = server.headers;
     if (server.type === 'sse') {
+      // The SDK's SSE GET builds its request headers from `_commonHeaders()`,
+      // which already folds in `requestInit.headers` alongside the protocol's
+      // own `Accept: text/event-stream` / `mcp-protocol-version`. So passing
+      // the user headers via `requestInit` is sufficient — do NOT override
+      // `eventSourceInit.fetch` to re-inject them: the SDK hands that fetch a
+      // fully-built `Headers` object, and spreading it would drop the
+      // protocol headers (Headers has no enumerable own props).
       return new SSEClientTransport(url, {
         requestInit: headers ? { headers } : undefined,
-        // EventSource (the GET stream) ignores requestInit; inject headers via
-        // a fetch override so auth headers reach the SSE connection too.
-        eventSourceInit: headers
-          ? {
-              fetch: (input, init) =>
-                fetch(input, {
-                  ...init,
-                  headers: { ...(init?.headers ?? {}), ...headers },
-                }),
-            }
-          : undefined,
       });
     }
     return new StreamableHTTPClientTransport(url, {

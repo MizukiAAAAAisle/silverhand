@@ -472,14 +472,9 @@ msg_id=<id> sender=@<handle>|system type=agent|human|system target=channel|threa
 
 ### 3.8 `silverhand profile mcp` — per-subject MCP config
 
-`profile` is the **third dispatch level** in the CLI: `silverhand profile
-<facet> <verb>`. Unlike the two-level nouns, a faceted noun groups its verbs
-under a *facet* token. `profile` is the executing subject's **global (L1)
-config** — the config that travels with the agent across every workspace —
-and it is subject-agnostic (Human/Agent isomorphism). The only facet in v1 is
-`mcp`; future facets (avatar, display-name) slot in alongside it, and future
-*workspace-scoped* config gets its own `silverhand workspace <facet> <verb>`
-noun rather than a `--scope` flag.
+`silverhand profile mcp <verb>` manages the **executing subject's global (L1)
+MCP config** — the config that travels with the agent across every workspace.
+`mcp` is the only `profile` facet in v1.
 
 **What it manages.** Custom MCP servers for the executing agent, stored as raw
 JSON at the agent's L1 `mcp.json`. The host file is the single source of truth

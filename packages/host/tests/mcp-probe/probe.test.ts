@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import { probeMcpServer } from '../../src/daemon/mcp-probe/index.js';
+import { buildTransport, probeMcpServer } from '../../src/daemon/mcp-probe/index.js';
 
 /**
  * Daemon handler for `mcp_probe` (#task:1137) — the live MCP diagnostic behind
@@ -126,5 +127,35 @@ describe('mcp_probe daemon handler', () => {
     expect(r.message).not.toContain('abc.def.ghi');
     // The non-secret prefix of the URL survives so the diagnostic is useful.
     expect(r.message).toContain('https://evil.test/mcp');
+  });
+});
+
+/**
+ * SSE transport construction (Cindy #task:1137 review blocker). The SDK's SSE
+ * GET folds `requestInit.headers` into its `_commonHeaders()` alongside the
+ * protocol's own `Accept: text/event-stream` / `mcp-protocol-version`, so user
+ * headers must ride on `requestInit` only — a custom `eventSourceInit.fetch`
+ * override would be handed a fully-built `Headers` object and spreading it
+ * (no enumerable own props) would silently drop the protocol headers. Pin that
+ * we pass headers via `requestInit` and never re-introduce the override.
+ */
+describe('buildTransport — SSE header handling', () => {
+  it('passes user headers via requestInit and adds no eventSourceInit override', () => {
+    const headers = { Authorization: 'Bearer user-token', 'X-Tenant': 'acme' };
+    const transport = buildTransport({
+      type: 'sse',
+      url: 'https://x.test/sse',
+      headers,
+    } as never);
+
+    expect(transport).toBeInstanceOf(SSEClientTransport);
+    // White-box on the pinned SDK (1.29.0): headers flow through requestInit,
+    // and there is no eventSourceInit.fetch override to clobber them.
+    const t = transport as unknown as {
+      _requestInit?: { headers?: Record<string, string> };
+      _eventSourceInit?: unknown;
+    };
+    expect(t._requestInit?.headers).toEqual(headers);
+    expect(t._eventSourceInit).toBeUndefined();
   });
 });
