@@ -72,6 +72,7 @@ import {
   dispatchAgentWorkspaceIndex,
   dispatchAgentProfileMcpRead,
   dispatchAgentProfileMcpWrite,
+  dispatchMcpProbe,
   resolveOutboundForHost,
   type DataPlaneFailure,
   type DataPlaneHttpStatus,
@@ -93,6 +94,7 @@ import {
   CreateTasksInputSchema,
   ListTasksQuerySchema,
   parseMcpConfig,
+  McpProbeRequestSchema,
   ScheduleCancelInputSchema,
   ScheduleCreateInputSchema,
   ScheduleListInputSchema,
@@ -1312,6 +1314,56 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
       return c.json({ error: written.message, code: written.code }, written.status);
     }
     return c.json({ ok: true, bytes_written: written.result.bytes_written });
+  });
+
+  // #task:1137 — `silverhand profile mcp probe`. Live one-shot MCP connection
+  // to a named profile server (initialize + optional tools/list), closed
+  // immediately by the daemon. Same self-only `canEditAgent` gate as get/set
+  // (a probe connects to the user's endpoint with their secrets). The
+  // connection's own success/failure rides in the `McpProbeResult` body; only
+  // host-transport faults map to an HTTP error.
+  app.post(internalPaths.agentProfileMcpProbe(':cid', ':aid'), async c => {
+    const cid = c.req.param('cid');
+    const aid = c.req.param('aid');
+    if (!cid || !aid) {
+      return c.json({ error: 'conversation id and agent id required' }, 400);
+    }
+    if (!conversations.get(cid)) return c.json({ error: 'conversation not found' }, 404);
+    const agent = agents.get(aid);
+    if (!agent) return c.json({ error: 'agent not found' }, 404);
+    const principal = getAgentPrincipal(c);
+    if (!canEditAgent(ctx, principal, aid)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = McpProbeRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { error: 'invalid input', code: 'invalid_input', issues: parsed.error.issues },
+        400,
+      );
+    }
+    const outbound = resolveOutboundForHost(
+      ctx.outboundFrameAdapter?.() ?? null,
+      agent.host_id,
+    );
+    if (outbound.kind === 'failed') {
+      return c.json({ error: outbound.message, code: outbound.code }, outbound.status);
+    }
+    const probe = await dispatchMcpProbe(
+      outbound.adapter,
+      agent.host_id,
+      outbound.connectionId,
+      {
+        source: { kind: 'profile', agent_id: aid },
+        server_name: parsed.data.server_name,
+        include_tools: parsed.data.include_tools,
+      },
+    );
+    if (probe.kind === 'failed') {
+      return c.json({ error: probe.message, code: probe.code }, probe.status);
+    }
+    return c.json(probe.result);
   });
 
   // ── Agent-owned schedules (silverhand CLI → backend) ──────────────

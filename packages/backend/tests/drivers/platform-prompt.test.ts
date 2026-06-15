@@ -931,6 +931,16 @@ describe('buildPlatformPrompt', () => {
           out.add(flag);
         }
       }
+      // Faceted nouns (3-level, e.g. `profile mcp <verb>`) keep their
+      // commands under `facets`, not `group.commands` — descend so their
+      // flags (`--server`, `--tools`, …) join the universe too.
+      for (const facet of group.facets ?? []) {
+        for (const command of facet.commands) {
+          for (const flag of extractFlags(command.help)) {
+            out.add(flag);
+          }
+        }
+      }
     }
     return out;
   }

@@ -74,9 +74,11 @@ export const CLI_INVOKE_ROUTES: readonly CliInvokeRoute[] = [
   { method: 'GET', suffix: 'attachments/*/download', noun: 'file', verb: 'view' },
   // profile (3-level: `silverhand profile mcp <verb>`). GET and POST share
   // one suffix; the middleware tags by method (read vs replace). `validate`
-  // is CLI-local (no backend route), so it has no entry here.
+  // is CLI-local (no backend route), so it has no entry here. `probe` is a
+  // distinct sub-suffix (live one-shot connection, #task:1137).
   { method: 'GET', suffix: 'profile/mcp', noun: 'profile', verb: 'mcp get' },
   { method: 'POST', suffix: 'profile/mcp', noun: 'profile', verb: 'mcp set' },
+  { method: 'POST', suffix: 'profile/mcp/probe', noun: 'profile', verb: 'mcp probe' },
 ];
 
 /**

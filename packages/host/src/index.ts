@@ -131,6 +131,10 @@ export {
   type AgentProfileMcpWriteParams,
   type AgentProfileMcpWriteResult,
   type AgentProfileMcpErrorCode,
+  type McpProbeParams,
+  type McpProbeResult,
+  type McpProbeSource,
+  type McpProbeErrorCode,
 } from './protocol.js';
 export {
   OUTBOUND_DAEMON_EVENT_KINDS,

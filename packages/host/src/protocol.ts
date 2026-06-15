@@ -63,6 +63,7 @@ import {
   AgentWorkspaceTreeSchema,
   ConversationKindSchema,
   HostKindSchema,
+  McpProbeResultSchema,
   MemberDtoSchema,
   ParsedEventKindSchema,
   ParsedEventSchema,
@@ -1998,6 +1999,56 @@ const AgentProfileMcpIpcErrorSchema = z
   })
   .strict();
 
+// ── #task:1137: live MCP probe ───────────────────────────────────────
+// Backs `silverhand profile mcp probe` and the agent-pane "Test connection" /
+// "List tools" buttons. The daemon opens ONE short-lived MCP connection to the
+// named server, runs `initialize` (+ optional `tools/list`), and closes it
+// immediately. The probe SOURCE is scope-discriminated so a future workspace
+// layer reuses the command: v1 ships the `profile` arm only (the agent's L1
+// `mcp.json`); a workspace arm slots in alongside without re-signing the
+// command. The server is named by its RAW name — a probe connects to the real
+// endpoint, never the `silverhand_<scope>__` runtime name.
+export const McpProbeSourceSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('profile'), agent_id: z.string().min(1) }).strict(),
+  // future: z.object({ kind: z.literal('workspace'), workspace_id: ... })
+]);
+export type McpProbeSource = z.infer<typeof McpProbeSourceSchema>;
+
+export const McpProbeParamsSchema = z
+  .object({
+    source: McpProbeSourceSchema,
+    /** Raw (user-visible) server name to probe. */
+    server_name: z.string().min(1),
+    /** When true, also run `tools/list` after `initialize`. */
+    include_tools: z.boolean().optional(),
+  })
+  .strict();
+export type McpProbeParams = z.infer<typeof McpProbeParamsSchema>;
+
+// The probe RESULT shape is canonical in `@silverhand/shared` (shared with the
+// backend route, CLI, and renderer). Re-export it here so the intent registry
+// and dispatcher source all three of an intent's types from one module.
+export type { McpProbeResult } from '@silverhand/shared';
+
+// Outcome of the connect/initialize/tools walk (canonical shape in
+// `@silverhand/shared`): connection/handshake/tools failures live INSIDE the
+// result (`ok:false` + `phase`), they are not IPC errors.
+
+export const McpProbeErrorCodeSchema = z.enum([
+  /** Host-local fs fault that prevents reading the source config at all
+   *  (perm/IO; ENOENT is handled as a normal `not_found` result). 503. */
+  'fs_unavailable',
+  'internal_error',
+]);
+export type McpProbeErrorCode = z.infer<typeof McpProbeErrorCodeSchema>;
+
+const McpProbeIpcErrorSchema = z
+  .object({
+    code: z.union([ResponseErrorCodeSchema, McpProbeErrorCodeSchema]),
+    message: z.string(),
+  })
+  .strict();
+
 
 /**
  * Single source of truth for the intent ↔ params / result / error
@@ -2188,6 +2239,11 @@ export const intentSchemas = {
     params: AgentProfileMcpWriteParamsSchema,
     result: AgentProfileMcpWriteResultSchema,
     error: AgentProfileMcpIpcErrorSchema,
+  },
+  mcp_probe: {
+    params: McpProbeParamsSchema,
+    result: McpProbeResultSchema,
+    error: McpProbeIpcErrorSchema,
   },
 } as const;
 

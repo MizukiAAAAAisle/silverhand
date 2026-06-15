@@ -106,11 +106,47 @@ stdout: { "ok": true, "server_count": <n> } on success; a
   },
 };
 
+const probeCommand: Command = {
+  verb: 'probe',
+  summary: "Live-test one of this agent's profile MCP servers (connect + initialize).",
+  help: `silverhand profile mcp probe --server <name> [--tools]
+
+Open a ONE-SHOT live connection to a configured profile MCP server,
+run the MCP \`initialize\` handshake, and close it immediately. Unlike
+\`validate\` (static, offline), this actually reaches the server. The
+connection never outlives the call.
+
+  --server <name>   Raw server name (the key in your mcp.json) to probe.
+  --tools           Also run \`tools/list\` and return the tool names.
+
+stdout: a McpProbeResult —
+  { "ok": true,  "phase": "initialize", "server_info": {...} }      (--tools off)
+  { "ok": true,  "phase": "tools", "tools": [{ "name", "description" }] }
+  { "ok": false, "phase": "parse|not_found|connect|initialize|tools",
+    "message": "<redacted reason>" }
+Connection failures are reported in the body (not an error). Secrets
+(header/env values, URL query) never appear in \`message\`.`,
+  flags: ['server'] as const,
+  booleanFlags: ['tools'] as const,
+  async run({ client, args }) {
+    const server = args.flags.server;
+    if (typeof server !== 'string' || server.length === 0) {
+      throw new CliError({
+        code: 'validation_error',
+        message:
+          '`--server <name>` is required: the raw MCP server name to probe.',
+        retriable: false,
+      });
+    }
+    return client.probeProfileMcp(server, args.flags.tools === true);
+  },
+};
+
 export const profileFacets: readonly FacetGroup[] = [
   {
     facet: 'mcp',
     summary: 'Get, set, or validate this agent\'s custom MCP servers.',
-    commands: [getCommand, setCommand, validateCommand],
+    commands: [getCommand, setCommand, validateCommand, probeCommand],
   },
 ];
 

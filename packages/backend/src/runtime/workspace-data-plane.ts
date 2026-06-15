@@ -7,6 +7,8 @@ import type {
   AgentProfileMcpReadResult,
   AgentProfileMcpWriteParams,
   AgentProfileMcpWriteResult,
+  McpProbeParams,
+  McpProbeResult,
   AgentWorkspaceIndexParams,
   AgentWorkspaceIndexResult,
   AgentWorkspaceTreeParams,
@@ -87,6 +89,10 @@ const READ_TIMEOUT_MS = 30_000;
 const SEED_TIMEOUT_MS = 30_000;
 const PURGE_TIMEOUT_MS = 30_000;
 const PROFILE_MCP_TIMEOUT_MS = 30_000;
+// #task:1137 — probe walks connect+initialize (≤10s) then optional tools/list
+// (≤10s) host-side; the data-plane wait must exceed that sum plus transport
+// slack so a slow-but-valid server isn't cut off before the host's own timeout.
+const MCP_PROBE_TIMEOUT_MS = 45_000;
 
 /**
  * Resolve the live outbound adapter + connection id for `hostId`, or a
@@ -421,6 +427,31 @@ export async function dispatchAgentProfileMcpWrite(
         expectedConnectionId: connectionId,
       },
     );
+    return { kind: 'ok', result };
+  } catch (err) {
+    return mapDataPlaneError(err);
+  }
+}
+
+/**
+ * #task:1137 — dispatch `mcp_probe` to the owning daemon: open a one-shot live
+ * MCP connection to one of the agent's profile servers (initialize + optional
+ * tools/list) and close it. The daemon resolves the server config from the
+ * source (v1 `profile` → the agent's L1 `mcp.json`) and connects to the RAW
+ * endpoint. Connection/handshake/tools failures come back INSIDE the result
+ * (`ok:false` + phase); only a host fault maps to a failed outcome here.
+ */
+export async function dispatchMcpProbe(
+  adapter: OutboundFrameAdapter,
+  hostId: string,
+  connectionId: string,
+  params: McpProbeParams,
+): Promise<DataPlaneOutcome<McpProbeResult>> {
+  try {
+    const result = await adapter.sendCommand(hostId, 'mcp_probe', params, {
+      timeoutMs: MCP_PROBE_TIMEOUT_MS,
+      expectedConnectionId: connectionId,
+    });
     return { kind: 'ok', result };
   } catch (err) {
     return mapDataPlaneError(err);

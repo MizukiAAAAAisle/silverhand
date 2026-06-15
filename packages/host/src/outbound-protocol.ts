@@ -16,6 +16,7 @@
 import { z } from 'zod';
 import {
   AgentRunStateSchema,
+  McpProbeResultSchema,
   ParsedEventKindSchema,
   ParsedEventSchema,
 } from '@silverhand/shared';
@@ -42,6 +43,8 @@ import {
   AgentProfileMcpReadResultSchema,
   AgentProfileMcpWriteParamsSchema,
   AgentProfileMcpWriteResultSchema,
+  McpProbeErrorCodeSchema,
+  McpProbeParamsSchema,
   HelloResultSchema,
   HostStatusParamsSchema,
   HostStatusResultSchema,
@@ -304,6 +307,18 @@ export type AgentProfileMcpWireError = z.infer<
   typeof AgentProfileMcpWireErrorSchema
 >;
 
+// #task:1137: mcp_probe widens its wire error with the same per-command
+// scoping — `fs_unavailable` (E* host-fs error reading the source config),
+// `internal_error`. Connection/handshake/tools failures are NOT errors; they
+// ride in the result (`ok:false` + phase).
+export const McpProbeWireErrorSchema = z
+  .object({
+    code: z.union([ResponseErrorSchema.shape.code, McpProbeErrorCodeSchema]),
+    message: z.string(),
+  })
+  .strict();
+export type McpProbeWireError = z.infer<typeof McpProbeWireErrorSchema>;
+
 // D4.e-6: runtime_start widens its wire error with the same per-command
 // scoping. The daemon now resolves all host paths and fails closed; the
 // backend reads `workspace_not_provisioned` (backfill + retry),
@@ -440,6 +455,15 @@ export const outboundServerCommandSchemas = {
     params: AgentProfileMcpWriteParamsSchema,
     result: AgentProfileMcpWriteResultSchema,
     error: AgentProfileMcpWireErrorSchema,
+  },
+  /** #task:1137 — mcp_probe: one-shot live MCP connection (initialize +
+   *  optional tools/list) to a named server, closed immediately. Backs
+   *  `silverhand profile mcp probe` + the agent-pane Test connection / List
+   *  tools buttons. Failures of the connection itself ride in the result. */
+  mcp_probe: {
+    params: McpProbeParamsSchema,
+    result: McpProbeResultSchema,
+    error: McpProbeWireErrorSchema,
   },
   /** #task:808 — dynamic host snapshot for the ComputerPane / host
    *  registry view. Payload is host-facts only (OS, daemon process,

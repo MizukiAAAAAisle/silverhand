@@ -73,6 +73,7 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand profile mcp get` | Print the executing agent's profile MCP config (raw `mcp.json`, or `raw: null` when unset). Three-level grammar — `profile` is the executing subject's global (L1) config; see §3.8. |
 | `silverhand profile mcp set` | Replace the executing agent's profile MCP config. Raw JSON on **STDIN**; validated then written verbatim. Effect is **next spawn** (no hot reload). See §3.8. |
 | `silverhand profile mcp validate` | Validate `mcp.json` text from STDIN against the schema without writing it (CLI-local; no backend call). See §3.8. |
+| `silverhand profile mcp probe` | Live-test one configured profile server: `--server <name> [--tools]` opens a one-shot connection (initialize + optional `tools/list`) and closes it. See §3.8. |
 
 **Dependent commands run one at a time.** When a later command's input
 depends on an earlier one's result — `claim` then act on the task, or
@@ -509,6 +510,15 @@ Server names match `/^[A-Za-z0-9_-]{1,64}$/`. Stdio servers take
 - `validate` — validate STDIN against the schema **without** writing. Pure
   CLI-local pre-check; makes no backend call. Prints
   `{ ok: true, server_count: <n> }`.
+- `probe` — **live** counterpart to `validate`. `--server <name> [--tools]`
+  opens ONE short-lived connection to that configured server, runs the MCP
+  `initialize` handshake (+ `tools/list` with `--tools`), and closes it
+  immediately — the connection never outlives the call. Prints a
+  `McpProbeResult`: `{ ok, phase: parse|not_found|connect|initialize|tools,
+  message?, server_info?, tools? }`. Connection failures ride in the body (not
+  an error); secret values (header/env, URL query) never appear in `message`.
+  Self-only (`canEditAgent`). The daemon runs the connection (host owns the
+  secrets); the backend only authorizes + dispatches.
 
 **Loading semantics.** The config is loaded **additively** at the agent's
 **next spawn** — a running agent does NOT pick up a change until it is

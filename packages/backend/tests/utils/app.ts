@@ -341,6 +341,20 @@ export class FakeHostWsServerController implements HostWsServerController {
         | OutboundServerCommandResult<'agent_files_purge'>
         | Promise<OutboundServerCommandResult<'agent_files_purge'>>)
     | null = null;
+  /**
+   * #task:1137 — override the `mcp_probe` ack. The real daemon opens a live MCP
+   * connection (impossible in a fake), so the default returns a deterministic
+   * stub: `not_found` when the named server isn't in the seeded `mcp.json`,
+   * otherwise an `ok` result (phase `tools` when `include_tools`, else
+   * `initialize`). Tests swap this to assert failure phases / redaction.
+   */
+  mcpProbeAckOverride:
+    | ((
+        params: OutboundServerCommandParams<'mcp_probe'>,
+      ) =>
+        | OutboundServerCommandResult<'mcp_probe'>
+        | Promise<OutboundServerCommandResult<'mcp_probe'>>)
+    | null = null;
 
   /**
    * D4.e-1 3b P2 (Cindy) — a tiny in-memory stand-in for the daemon
@@ -535,6 +549,43 @@ export class FakeHostWsServerController implements HostWsServerController {
         raw = null; // absent → the normal "no MCP configured" case
       }
       return { ok: true as const, raw } as OutboundServerCommandResult<K>;
+    }
+    if (kind === 'mcp_probe') {
+      const p = params as OutboundServerCommandParams<'mcp_probe'>;
+      if (this.mcpProbeAckOverride) {
+        return (await this.mcpProbeAckOverride(
+          p,
+        )) as OutboundServerCommandResult<K>;
+      }
+      // Default stub: a fake daemon can't open a real MCP connection, so
+      // resolve only as far as config presence — `not_found` if the server
+      // isn't in the seeded mcp.json, otherwise a successful probe.
+      const mcpPath = joinPath(
+        this.silverhandDir,
+        'agents',
+        p.source.agent_id,
+        'mcp.json',
+      );
+      let raw: string | null = null;
+      try {
+        raw = await fsp.readFile(mcpPath, 'utf-8');
+      } catch {
+        raw = null;
+      }
+      const present =
+        raw !== null && raw.includes(`"${p.server_name}"`);
+      if (!present) {
+        return {
+          ok: false as const,
+          phase: 'not_found' as const,
+        } as OutboundServerCommandResult<K>;
+      }
+      return {
+        ok: true as const,
+        phase: p.include_tools ? ('tools' as const) : ('initialize' as const),
+        server_info: { name: 'fake-server', version: '1' },
+        ...(p.include_tools ? { tools: [{ name: 'fake_tool' }] } : {}),
+      } as OutboundServerCommandResult<K>;
     }
     if (kind === 'agent_l2_seed') {
       const p = params as OutboundServerCommandParams<'agent_l2_seed'>;

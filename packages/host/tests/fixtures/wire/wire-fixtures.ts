@@ -487,6 +487,21 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'agent_profile_mcp_write' },
   },
   {
+    name: 'request/mcp_probe',
+    description:
+      "#task:1137: live-probe one of the agent's profile MCP servers. Backend sends the scope-keyed source ({kind:'profile', agent_id}), the raw server_name, and include_tools; the daemon opens a one-shot connection and resolves the server config itself (I1).",
+    frame: enc({
+      id: 'req-mcp-probe-1',
+      intent: 'mcp_probe',
+      params: {
+        source: { kind: 'profile', agent_id: 'aid_FpzaAEM' },
+        server_name: 'github',
+        include_tools: true,
+      },
+    }),
+    kind: { kind: 'request', intent: 'mcp_probe' },
+  },
+  {
     name: 'request/agent_message_send',
     description:
       'Agent runtime asks the daemon to send a visible message; daemon owns freshness boundary stamping before backend side-effect.',
@@ -1393,6 +1408,21 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     }),
     kind: { kind: 'response_success', intent: 'agent_profile_mcp_write' },
   },
+  {
+    name: 'response/mcp_probe',
+    description:
+      '#task:1137: daemon connected + initialized + listed tools, then closed the one-shot connection. Connection/handshake/tools failures ride in the result body (ok:false + phase), not as a typed error.',
+    frame: enc({
+      id: 'req-mcp-probe-1',
+      result: {
+        ok: true,
+        phase: 'tools',
+        server_info: { name: 'github-mcp', version: '1.2.3' },
+        tools: [{ name: 'list_issues', description: 'List issues' }],
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'mcp_probe' },
+  },
 ];
 
 // ── Error response fixtures ────────────────────────────────────────
@@ -2000,6 +2030,30 @@ const AGENT_PROFILE_MCP_ERROR_FIXTURES: WireFixture[] = [
     kind: { kind: 'response_error_typed', intent: 'agent_profile_mcp_write' },
   },
 ];
+// #task:1137 mcp_probe typed errors. Only host-local faults are errors —
+// connection/handshake/tools failures are part of the McpProbeResult body
+// (ok:false + phase), never a typed IPC error.
+const MCP_PROBE_ERROR_FIXTURES: WireFixture[] = [
+  {
+    name: 'response/mcp_probe-error-fs_unavailable',
+    description:
+      'Hard fs error reading the source mcp.json (perm/IO — ENOENT maps to a not_found result, not an error).',
+    frame: enc({
+      id: 'req-mcp-probe-1',
+      error: { code: 'fs_unavailable', message: 'EACCES: permission denied, open mcp.json' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'mcp_probe' },
+  },
+  {
+    name: 'response/mcp_probe-error-internal_error',
+    description: 'Catch-all for an unexpected host failure setting up the probe.',
+    frame: enc({
+      id: 'req-mcp-probe-1',
+      error: { code: 'internal_error', message: 'unexpected probe failure' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'mcp_probe' },
+  },
+];
 RESPONSES_ERROR_TYPED.push(
   ...WORKSPACE_PROVISION_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_INDEX_ERROR_FIXTURES,
@@ -2008,6 +2062,7 @@ RESPONSES_ERROR_TYPED.push(
   ...AGENT_L2_SEED_ERROR_FIXTURES,
   ...AGENT_FILES_PURGE_ERROR_FIXTURES,
   ...AGENT_PROFILE_MCP_ERROR_FIXTURES,
+  ...MCP_PROBE_ERROR_FIXTURES,
   ...RUNTIME_START_ERROR_FIXTURES,
 );
 

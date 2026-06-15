@@ -69,6 +69,7 @@ import {
   readAgentProfileMcp,
   writeAgentProfileMcp,
 } from './agent-profile-mcp/index.js';
+import { probeMcpServer } from './mcp-probe/index.js';
 import {
   RuntimeStartResolveError,
   type RuntimeStartResolveDeps,
@@ -710,6 +711,14 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
       }),
     agentProfileMcpWriteHandler: async params =>
       writeAgentProfileMcp(params, {
+        homeDir: opts.testHooks?.agentMaterializeHomeDir,
+        agentHomeRootDir,
+      }),
+    // #task:1137 — mcp_probe: open a one-shot live MCP connection to a named
+    // server (initialize + optional tools/list) and close it immediately. L1
+    // resolves from the same homedir as read/write.
+    mcpProbeHandler: async params =>
+      probeMcpServer(params, {
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
         agentHomeRootDir,
       }),

@@ -26,6 +26,7 @@ import {
   type ConversationMembersResponse,
   type CreateTasksInput,
   type CreateTasksResult,
+  type McpProbeResult,
   type ScheduleCancelInput,
   type ScheduleCancelOutput,
   type ScheduleCreateInput,
@@ -348,6 +349,22 @@ export class BackendClient {
       throw mapHttpError(res.status, text);
     }
     return (await res.json()) as { ok: boolean; bytes_written: number };
+  }
+
+  /** Live-probe one of the agent's own profile MCP servers (#task:1137).
+   *  Opens a one-shot connection on the host (initialize + optional
+   *  tools/list) and returns the diagnostic snapshot. `serverName` is the RAW
+   *  name; connection/handshake/tools failures come back as
+   *  `{ ok:false, phase, message }`, not thrown. */
+  probeProfileMcp(
+    serverName: string,
+    includeTools: boolean,
+  ): Promise<McpProbeResult> {
+    return this.request(
+      'POST',
+      internalPaths.agentProfileMcpProbe(this.env.conversationId, this.env.agentId),
+      { server_name: serverName, include_tools: includeTools },
+    );
   }
 
   // ── Attachments ──────────────────────────────────────────────────

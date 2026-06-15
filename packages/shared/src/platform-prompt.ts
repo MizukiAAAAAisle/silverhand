@@ -661,10 +661,11 @@ grant it.
   **\`silverhand schedule cancel\`**: Manage self-wakes.
 - **\`silverhand file upload\`** / **\`silverhand file view\`**: Upload a local
   file for an attachment id / resolve an attachment id to a readable location.
-- **\`silverhand profile mcp get|set|validate\`**: Manage your own custom MCP
-  servers (your global L1 config). \`set\` reads the full \`mcp.json\` from
-  STDIN; \`validate\` checks STDIN without writing. Changes apply on your
-  **next spawn**, not the running session.
+- **\`silverhand profile mcp get|set|validate|probe\`**: Manage your own custom
+  MCP servers (your global L1 config). \`set\` reads the full \`mcp.json\` from
+  STDIN; \`validate\` checks STDIN offline; \`probe --server <name> [--tools]\`
+  live-tests one configured server (connect + initialize). Config changes apply
+  on your **next spawn**, not the running session.
 
 ### Pitfalls
 - **Message body comes from STDIN**, never a flag. Use a single-quoted heredoc

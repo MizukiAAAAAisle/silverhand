@@ -122,17 +122,18 @@ describe('command catalogue', () => {
 });
 
 describe('profile facet (3-level: profile mcp <verb>)', () => {
-  it('exposes the mcp facet with get/set/validate', () => {
+  it('exposes the mcp facet with get/set/validate/probe', () => {
     const facet = findFacet('profile', 'mcp');
     expect(facet).toBeDefined();
     const verbs = facet!.commands.map(c => c.verb);
-    expect(verbs).toEqual(['get', 'set', 'validate']);
+    expect(verbs).toEqual(['get', 'set', 'validate', 'probe']);
   });
 
   it('resolves a facet command by (noun, facet, verb)', () => {
     expect(findFacetCommand('profile', 'mcp', 'get')).toBeDefined();
     expect(findFacetCommand('profile', 'mcp', 'set')).toBeDefined();
     expect(findFacetCommand('profile', 'mcp', 'validate')).toBeDefined();
+    expect(findFacetCommand('profile', 'mcp', 'probe')).toBeDefined();
     expect(findFacetCommand('profile', 'mcp', 'bogus')).toBeUndefined();
     expect(findFacet('profile', 'bogus')).toBeUndefined();
   });

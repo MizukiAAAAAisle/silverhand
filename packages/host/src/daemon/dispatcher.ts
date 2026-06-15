@@ -48,6 +48,8 @@ import {
   type AgentProfileMcpReadResult,
   type AgentProfileMcpWriteParams,
   type AgentProfileMcpWriteResult,
+  type McpProbeParams,
+  type McpProbeResult,
   type ConversationLogDebugParams,
   type HostOutboundAttachParams,
   type HostOutboundAttachResult,
@@ -242,6 +244,16 @@ export interface DispatcherOptions {
   agentProfileMcpWriteHandler?: (
     params: AgentProfileMcpWriteParams,
   ) => AgentProfileMcpWriteResult | Promise<AgentProfileMcpWriteResult>;
+  /**
+   * #task:1137 — handler for `mcp_probe` (the live MCP diagnostic behind
+   * `silverhand profile mcp probe` and the agent-pane Test connection / List
+   * tools buttons). Production wiring: `probeMcpServer`. Connection/handshake/
+   * tools failures come back INSIDE the result (`ok:false` + phase); only a
+   * host-local fault throws a typed `McpProbeError`.
+   */
+  mcpProbeHandler?: (
+    params: McpProbeParams,
+  ) => McpProbeResult | Promise<McpProbeResult>;
 }
 
 export class IntentDispatcher {
@@ -316,6 +328,9 @@ export class IntentDispatcher {
         params: AgentProfileMcpWriteParams,
       ) => AgentProfileMcpWriteResult | Promise<AgentProfileMcpWriteResult>)
     | undefined;
+  private readonly mcpProbeHandler:
+    | ((params: McpProbeParams) => McpProbeResult | Promise<McpProbeResult>)
+    | undefined;
   private intentCount = 0;
   private shuttingDown = false;
 
@@ -347,6 +362,7 @@ export class IntentDispatcher {
     this.agentFilesPurgeHandler = opts.agentFilesPurgeHandler;
     this.agentProfileMcpReadHandler = opts.agentProfileMcpReadHandler;
     this.agentProfileMcpWriteHandler = opts.agentProfileMcpWriteHandler;
+    this.mcpProbeHandler = opts.mcpProbeHandler;
   }
 
   /** Signal that subsequent intents should be rejected with
@@ -840,6 +856,11 @@ export class IntentDispatcher {
         return this.requireAgentProfileMcpWriteHandler()(
           params as AgentProfileMcpWriteParams,
         );
+      case 'mcp_probe':
+        // #task:1137 — one-shot live MCP probe. Slot wired to
+        // `probeMcpServer`. Connection/handshake/tools failures come back in
+        // the result; only host faults throw (McpProbeError).
+        return this.requireMcpProbeHandler()(params as McpProbeParams);
     }
   }
 
@@ -1008,5 +1029,16 @@ export class IntentDispatcher {
       );
     }
     return this.agentProfileMcpWriteHandler;
+  }
+
+  private requireMcpProbeHandler(): (
+    params: McpProbeParams,
+  ) => McpProbeResult | Promise<McpProbeResult> {
+    if (!this.mcpProbeHandler) {
+      throw new Error(
+        'mcp_probe intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.mcpProbeHandler;
   }
 }

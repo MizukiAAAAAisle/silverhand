@@ -44,6 +44,7 @@ describe('outbound protocol — command catalogue', () => {
       'agent_workspace_index',
       'agent_workspace_tree',
       'host_status',
+      'mcp_probe',
       'rotate_token',
       'runtime_clear_session',
       'runtime_close_activity_log',

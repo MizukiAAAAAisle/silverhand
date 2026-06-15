@@ -44,10 +44,12 @@ import {
   dispatchAgentWorkspaceFileRead,
   dispatchAgentWorkspaceTree,
   dispatchAgentProfileMcpRead,
+  dispatchMcpProbe,
   resolveOutboundForHost,
 } from '../runtime/workspace-data-plane.js';
 import {
   CreateAgentInputSchema,
+  McpProbeRequestSchema,
   ScheduleListInputSchema,
   UpdateAgentInputSchema,
   apiPaths,
@@ -590,6 +592,54 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
       return c.json({ error: mcp.message, code: mcp.code }, mcp.status);
     }
     return c.json({ raw: mcp.result.raw });
+  });
+
+  // #task:1137 — public probe mirror for the agent pane (Test connection /
+  // List tools). Same gate as the raw read: canViewAgent (404 anti-enum) THEN
+  // canEditAgent (403) — a probe connects to the user's endpoint with their
+  // secrets, so a non-editor viewer must not trigger it. The daemon opens a
+  // one-shot connection and closes it; the connection's own success/failure is
+  // the `McpProbeResult` body (200), only host-transport faults are HTTP errors.
+  app.post(apiPaths.agentProfileMcpProbe(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'agent id required' }, 400);
+    const agent = agents.get(id);
+    if (!agent) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
+    if (!canEditAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = McpProbeRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { error: 'invalid input', code: 'invalid_input', issues: parsed.error.issues },
+        400,
+      );
+    }
+    const outbound = resolveOutboundForHost(
+      ctx.outboundFrameAdapter?.() ?? null,
+      agent.host_id,
+    );
+    if (outbound.kind === 'failed') {
+      return c.json({ error: outbound.message, code: outbound.code }, outbound.status);
+    }
+    const probe = await dispatchMcpProbe(
+      outbound.adapter,
+      agent.host_id,
+      outbound.connectionId,
+      {
+        source: { kind: 'profile', agent_id: agent.id },
+        server_name: parsed.data.server_name,
+        include_tools: parsed.data.include_tools,
+      },
+    );
+    if (probe.kind === 'failed') {
+      return c.json({ error: probe.message, code: probe.code }, probe.status);
+    }
+    return c.json(probe.result);
   });
 
   app.get('/api/agents/:id/runtime-state', c => {

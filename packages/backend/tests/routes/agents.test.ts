@@ -853,6 +853,138 @@ describe('GET /api/agents/:id/profile/mcp', () => {
   });
 });
 
+// #task:1137 — public probe mirror. Same secret-aware gate as the raw read
+// (canViewAgent THEN canEditAgent); a probe connects to the user's endpoint
+// with their secrets, so a non-editor viewer must not be able to trigger it.
+describe('POST /api/agents/:id/profile/mcp/probe', () => {
+  let t: TestApp | null = null;
+  afterEach(() => { t?.cleanup(); t = null; });
+
+  it('creator probes a server (200, relays the McpProbeResult)', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    let received: any = null;
+    t.fakeHostWs!.mcpProbeAckOverride = p => {
+      received = p;
+      return {
+        ok: true as const,
+        phase: 'initialize' as const,
+        server_info: { name: 'srv', version: '2' },
+      } as never;
+    };
+    const res = await http(t).post(
+      `/api/agents/${created.agent.id}/profile/mcp/probe`,
+      { server_name: 'github' },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body).toEqual({
+      ok: true,
+      phase: 'initialize',
+      server_info: { name: 'srv', version: '2' },
+    });
+    // The route forwards the scope-keyed source + raw server name.
+    expect(received.source).toEqual({ kind: 'profile', agent_id: created.agent.id });
+    expect(received.server_name).toBe('github');
+  });
+
+  it('forwards include_tools to the daemon', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    let received: any = null;
+    t.fakeHostWs!.mcpProbeAckOverride = p => {
+      received = p;
+      return {
+        ok: true as const,
+        phase: 'tools' as const,
+        tools: [{ name: 'list_channels' }],
+      } as never;
+    };
+    const res = await http(t).post(
+      `/api/agents/${created.agent.id}/profile/mcp/probe`,
+      { server_name: 'github', include_tools: true },
+    );
+    expect(res.status).toBe(200);
+    expect(received.include_tools).toBe(true);
+    const body = await res.json() as any;
+    expect(body.tools).toEqual([{ name: 'list_channels' }]);
+  });
+
+  it('400 when server_name is missing', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    const res = await http(t).post(
+      `/api/agents/${created.agent.id}/profile/mcp/probe`,
+      {},
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('404 for an unknown agent', async () => {
+    t = buildTestApp();
+    const res = await http(t).post('/api/agents/aid_missing/profile/mcp/probe', {
+      server_name: 'x',
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('same-workspace teammate (viewer, non-editor) is 403; probe never dispatched', async () => {
+    t = buildTestApp();
+    t.ctx.db.exec(
+      `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+       DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+    );
+    const teammateHeaders = {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    };
+    const created = await (
+      await http(t).post(
+        '/api/agents',
+        { name: 'shared-agent', runtime: 'claude' },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+    const ws = await (
+      await http(t).post(
+        '/api/workspaces',
+        { name: 'visible-ws' },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(ws.workspace.id, created.agent.id, Date.now());
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
+         VALUES (?, 'local', ?)`,
+      )
+      .run(ws.workspace.id, Date.now());
+
+    expect((await http(t).get(`/api/agents/${created.agent.id}`)).status).toBe(
+      200,
+    );
+    t.fakeHostWs!.calls.length = 0;
+    const denied = await http(t).post(
+      `/api/agents/${created.agent.id}/profile/mcp/probe`,
+      { server_name: 'github' },
+    );
+    expect(denied.status).toBe(403);
+    expect(
+      t.fakeHostWs!.calls.filter(c => c.kind === 'mcp_probe'),
+    ).toHaveLength(0);
+  });
+});
+
 describe('GET /api/agents/:id/runtime-state', () => {
   let t: TestApp | null = null;
   afterEach(() => { t?.cleanup(); t = null; });

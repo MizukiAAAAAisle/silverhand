@@ -259,6 +259,78 @@ export function serializeTomlValue(value: unknown): string {
   throw new Error(`cannot serialize value to TOML: ${String(value)}`);
 }
 
+// ── Live probe (#task:1137) — one-shot MCP connection diagnostic ─────────
+//
+// `probe` is the LIVE counterpart to the static `parseMcpConfig` check: it
+// actually opens a single short-lived MCP connection to a declared server,
+// runs the `initialize` handshake, and optionally `tools/list`, then closes
+// immediately (the connection never outlives the call). It is a user-triggered
+// diagnostic snapshot, NOT runtime MCP health state and NOT reused at agent
+// spawn. Shapes live here (shared) so the daemon handler, the backend route,
+// the CLI, and the renderer all agree; the SDK-driven connection itself lives
+// in `packages/host` (node-only). Workspace-scoped MCP will reuse these shapes
+// unchanged — only the host's source resolver + the route's permission gate
+// differ by scope.
+
+/**
+ * The stages a probe walks: `parse` the config → find the named server
+ * (`not_found` if absent) → `connect` the transport → MCP `initialize` →
+ * (optional) `tools/list`. `phase` names the DEEPEST stage reached: on success
+ * it is the last completed stage (`initialize` for a connection test, `tools`
+ * when tools were listed); on failure it is the stage that failed.
+ */
+export const MCP_PROBE_PHASES = [
+  'parse',
+  'not_found',
+  'connect',
+  'initialize',
+  'tools',
+] as const;
+export const McpProbePhaseSchema = z.enum(MCP_PROBE_PHASES);
+export type McpProbePhase = z.infer<typeof McpProbePhaseSchema>;
+
+/** One tool reported by a server's `tools/list` (name + optional description).
+ *  Tool metadata is not secret; header/env values never appear here. */
+export const McpProbeToolSchema = z
+  .object({ name: z.string(), description: z.string().optional() })
+  .strict();
+export type McpProbeTool = z.infer<typeof McpProbeToolSchema>;
+
+/**
+ * The result of a single live probe. `message` is REDACTED — it never contains
+ * header/env values, URL query strings, or bearer tokens, only safe shape info
+ * (present on failure, optional on success). `server_info` comes from the
+ * `initialize` result (not a secret); `tools` is present only when
+ * `include_tools` was requested and the probe reached the `tools` phase.
+ */
+export const McpProbeResultSchema = z
+  .object({
+    ok: z.boolean(),
+    phase: McpProbePhaseSchema,
+    message: z.string().optional(),
+    server_info: z
+      .object({ name: z.string().optional(), version: z.string().optional() })
+      .strict()
+      .optional(),
+    tools: z.array(McpProbeToolSchema).optional(),
+  })
+  .strict();
+export type McpProbeResult = z.infer<typeof McpProbeResultSchema>;
+
+/**
+ * The public probe REQUEST body (CLI → backend route). The server is named by
+ * its RAW name (the user-visible key, never the `silverhand_<scope>__` runtime
+ * name — a probe connects to the real endpoint). The subject/scope is resolved
+ * server-side from the caller's identity, so it is NOT part of this body.
+ */
+export const McpProbeRequestSchema = z
+  .object({
+    server_name: z.string().min(1),
+    include_tools: z.boolean().optional(),
+  })
+  .strict();
+export type McpProbeRequest = z.infer<typeof McpProbeRequestSchema>;
+
 /** TOML bare key if safe, else a quoted key. */
 function serializeTomlKey(key: string): string {
   return /^[A-Za-z0-9_-]+$/.test(key) ? key : serializeTomlString(key);

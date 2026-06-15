@@ -80,6 +80,7 @@
   "GET /api/agents/:id/workspace/tree",
   "GET /api/agents/:id/workspace/file",
   "GET /api/agents/:id/profile/mcp",
+  "POST /api/agents/:id/profile/mcp/probe",
   "GET /api/agents/:id/runtime-state",
   "GET /api/agents/:id/schedules",
   "POST /api/agents/:id/schedules/:scheduleId/cancel",
@@ -127,6 +128,7 @@
   "DELETE /internal/conversations/:cid/agents/:aid/avatar",
   "GET /internal/conversations/:cid/agents/:aid/profile/mcp",
   "POST /internal/conversations/:cid/agents/:aid/profile/mcp",
+  "POST /internal/conversations/:cid/agents/:aid/profile/mcp/probe",
   "POST /internal/conversations/:cid/agents/:aid/schedules",
   "POST /internal/conversations/:cid/agents/:aid/schedules/list",
   "POST /internal/conversations/:cid/agents/:aid/schedules/cancel"

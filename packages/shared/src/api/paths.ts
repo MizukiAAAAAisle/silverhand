@@ -62,6 +62,12 @@ export const apiPaths = {
    *  `canViewAgent` would let them see the agent exists. The write path is
    *  agent-self-only via the internal CLI route — there is no public PUT. */
   agentProfileMcp: (id: string) => `/api/agents/${id}/profile/mcp`,
+  /** Live-probe one of an agent's profile MCP servers (#task:1137). POST
+   *  `{ server_name, include_tools? }`; returns a `McpProbeResult`. Same
+   *  `canEditAgent` gate as the read mirror (a probe connects to the user's
+   *  endpoint with their secrets) — a non-editor viewer is 403'd. The renderer
+   *  (Test connection / List tools buttons) calls this. */
+  agentProfileMcpProbe: (id: string) => `/api/agents/${id}/profile/mcp/probe`,
   agentRuntimeState: (id: string) => `/api/agents/${id}/runtime-state`,
   agentStop: (id: string) => `/api/agents/${id}/stop`,
   agentDeleteImpact: (id: string) => `/api/agents/${id}/delete-impact`,
@@ -336,5 +342,11 @@ export const internalPaths = {
    *  Backs `silverhand profile mcp set`. */
   agentProfileMcpSet: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/profile/mcp`,
+  /** Agent live-probes one of its own profile MCP servers (#task:1137). Body
+   *  is `{ server_name, include_tools? }`; returns a `McpProbeResult`. The
+   *  daemon opens a one-shot connection and closes it. Self-only via the
+   *  internal principal middleware. Backs `silverhand profile mcp probe`. */
+  agentProfileMcpProbe: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/profile/mcp/probe`,
 
 } as const;
