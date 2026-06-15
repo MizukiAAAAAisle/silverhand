@@ -9,9 +9,13 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from 'react';
-import { Hash, Paperclip, X } from 'lucide-react';
+import { ChevronDown, Hash, ListTodo, Paperclip, X } from 'lucide-react';
 import type { AgentDto, ChannelConversationDto } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
+import {
+  AppDropdownMenu,
+  AppDropdownMenuItem,
+} from '@/components/menus/AppContextMenu';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useAgents } from '@/features/agents/hooks';
@@ -392,7 +396,7 @@ export function Composer({
     || pending.some(p => p.state === 'uploading')
     || (!draft.trim() && pending.filter(p => p.state === 'done').length === 0);
 
-  function submit(): void {
+  function submit(asTask = false): void {
     const content = draft.trim();
     const ready = pending
       .filter(p => p.state === 'done' && p.attachment)
@@ -421,7 +425,7 @@ export function Composer({
     setCaretState(0);
     setPendingState([]);
     void send
-      .mutateAsync({ content, attachments: ready })
+      .mutateAsync({ content, attachments: ready, asTask })
       .then(() => {
         const submitting = submittingSnapshotRef.current;
         if (submitting?.editGeneration !== editGeneration) return;
@@ -583,7 +587,10 @@ export function Composer({
     if (e.shiftKey) return; // newline
     if (composing || e.nativeEvent.isComposing) return; // IME candidate
     e.preventDefault();
-    submit();
+    // ⌘+Enter sends as task (mac is the only target); plain Enter sends a
+    // normal message. The split send-button's caret menu is the
+    // discoverable equivalent.
+    submit(e.metaKey);
   }
 
   function onSubmit(e: FormEvent): void {
@@ -714,17 +721,64 @@ export function Composer({
             >
               <Paperclip className="size-4" />
             </button>
-            <Button
-              type="submit"
-              variant="default"
-              size="sm"
-              disabled={sendDisabled}
-              title="发送消息"
-              data-composer-action="send"
-              className="h-7"
-            >
-              Send
-            </Button>
+            {/* Split send-button: the primary half submits a normal
+             *  message (Enter); the caret half opens a one-item menu to
+             *  "Send as task" (⌘+Enter). A one-shot per-send choice, not a
+             *  sticky mode — there's no toggle state to mis-fire or reset
+             *  (#task:1125). The 1px gap shows the toolbar bg as a hairline
+             *  seam, so the two halves read as one control without a
+             *  hardcoded divider color (theme-safe).
+             *
+             *  Radius (#task:1128): only the OUTER corners follow
+             *  `--control-radius`; the inner (seam) corners must be square
+             *  so the two halves read as one control. We can't just add
+             *  `rounded-r-none`/`rounded-l-none` on top of Button's base
+             *  `rounded-[var(--control-radius)]` — that base is an
+             *  arbitrary-value shorthand and Tailwind v4's utility ordering
+             *  can let it re-round the inner corners. Instead, lead with
+             *  `rounded-none` (same `border-radius` group, so tailwind-merge
+             *  drops the base shorthand entirely) and re-add only the outer
+             *  side, leaving zero ordering ambiguity. forza6 (radius 0) is
+             *  naturally square either way. */}
+            <div className="flex items-stretch gap-px">
+              <Button
+                type="submit"
+                variant="default"
+                size="sm"
+                disabled={sendDisabled}
+                title="发送消息（Enter）"
+                data-composer-action="send"
+                className="h-7 rounded-none rounded-l-[var(--control-radius)]"
+              >
+                Send
+              </Button>
+              <AppDropdownMenu
+                align="end"
+                trigger={
+                  <Button
+                    type="button"
+                    variant="default"
+                    size="sm"
+                    disabled={sendDisabled}
+                    aria-label="更多发送选项"
+                    title="更多发送选项"
+                    data-composer-action="send-more"
+                    className="h-7 rounded-none rounded-r-[var(--control-radius)] px-1.5"
+                  >
+                    <ChevronDown className="size-3.5" />
+                  </Button>
+                }
+              >
+                <AppDropdownMenuItem
+                  icon={<ListTodo className="size-3.5" />}
+                  trailing="⌘↵"
+                  disabled={sendDisabled}
+                  onSelect={() => submit(true)}
+                >
+                  Send as task
+                </AppDropdownMenuItem>
+              </AppDropdownMenu>
+            </div>
           </div>
         </div>
       </div>

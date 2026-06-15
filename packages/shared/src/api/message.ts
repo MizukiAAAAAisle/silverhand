@@ -130,6 +130,12 @@ export const SendMessageInputSchema = z.object({
   /** Reply-cluster target message id. A main-line target opens a cluster;
    *  replying to an existing reply joins that reply's root. */
   reply_to_message_id: z.string().min(1).optional(),
+  /** Send-as-task intent (#task:1124/1125). When true, the same send
+   *  transaction promotes the inserted message into an open `todo` task
+   *  (title derived from the body's first line, no assignee) — the human
+   *  counterpart of an agent's message-promotion. Omitted/false = a plain
+   *  message. Thread targets keep the task anchored in the reply cluster. */
+  as_task: z.boolean().optional(),
 }).refine(hasMessagePayload, {
   message: 'message must include text or at least one attachment',
   path: ['content'],

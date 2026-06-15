@@ -1316,6 +1316,10 @@ export function useChannelAgents(
 export interface SendMessageInput {
   content: string;
   attachments?: AttachmentDto[];
+  /** When true, promote this send into an open `todo` task in the same
+   *  request (#task:1125). Maps to `as_task` on the wire; the backend
+   *  derives the task title from the first line and leaves it unassigned. */
+  asTask?: boolean;
 }
 
 export function useSendMessage(
@@ -1344,6 +1348,7 @@ export function useSendMessage(
         content: string;
         attachment_ids?: string[];
         reply_to_message_id?: string;
+        as_task?: boolean;
       } = {
         content: input.content,
       };
@@ -1352,6 +1357,9 @@ export function useSendMessage(
       }
       if (threadRootId) {
         body.reply_to_message_id = threadRootId;
+      }
+      if (input.asTask) {
+        body.as_task = true;
       }
       const res = await api<{ message: MessageDto }>(
         path,
