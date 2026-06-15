@@ -190,9 +190,7 @@ export function CreateChannelDialog({
             />
           </div>
 
-          {isDm ? (
-            <DmMemberHint />
-          ) : (
+          {isDm ? null : (
             <RegularMemberPicker
               candidates={candidates}
               selected={selectedMembers}
@@ -228,14 +226,6 @@ export function CreateChannelDialog({
         </form>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function DmMemberHint(): JSX.Element {
-  return (
-    <div className="rounded-md border border-border-subtle bg-bg-floating px-3 py-2 text-xs text-text-secondary">
-      DM Channel 会自动包含 Workspace 对应的成员，无需选择。
-    </div>
   );
 }
 
