@@ -5,6 +5,7 @@ export * from './db/index.js';
 export * from './driver/index.js';
 export * from './config.js';
 export * from './logging.js';
+export * from './mcp-config.js';
 export * from './mime.js';
 export * from './platform-prompt.js';
 export * from './proxy-env.js';

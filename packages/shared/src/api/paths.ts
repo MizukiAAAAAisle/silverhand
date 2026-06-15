@@ -55,6 +55,12 @@ export const apiPaths = {
    *  fail-closed (404 not_found, never a leaked path). 64KB preview cap;
    *  the response carries `truncated` so the UI can surface a banner. */
   agentWorkspaceFile: (id: string) => `/api/agents/${id}/workspace/file`,
+  /** #task:1135 — read an agent's profile MCP config for the agent-pane
+   *  "Profile MCP" section. Returns `{ raw: string | null }` (null when no
+   *  `mcp.json`). Read gate matches `GET /api/agents/:id`. The write path
+   *  is agent-self-only via the internal CLI route — there is no public
+   *  PUT mirror. */
+  agentProfileMcp: (id: string) => `/api/agents/${id}/profile/mcp`,
   agentRuntimeState: (id: string) => `/api/agents/${id}/runtime-state`,
   agentStop: (id: string) => `/api/agents/${id}/stop`,
   agentDeleteImpact: (id: string) => `/api/agents/${id}/delete-impact`,
@@ -315,5 +321,19 @@ export const internalPaths = {
    *  CLI does not retry and does not surface failures from this call. */
   agentCliTrace: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/cli-trace`,
+
+  /** Agent reads its own profile MCP config (#task:1135). Returns
+   *  `{ raw: string | null }` — null when the agent has no `mcp.json`.
+   *  Token middleware enforces `principal.agentId === aid` (self-only).
+   *  Backs `silverhand profile mcp get` and the agent-pane "Profile MCP"
+   *  view (the pane calls the public mirror on `/api/agents/:id`). */
+  agentProfileMcpGet: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/profile/mcp`,
+  /** Agent replaces its own profile MCP config (#task:1135). Body is the
+   *  raw JSON text; the backend validates it (fail-loud `invalid_config`)
+   *  before dispatching the atomic host write. Self-only as above.
+   *  Backs `silverhand profile mcp set`. */
+  agentProfileMcpSet: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/profile/mcp`,
 
 } as const;
