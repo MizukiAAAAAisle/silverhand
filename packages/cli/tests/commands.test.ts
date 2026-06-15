@@ -122,16 +122,27 @@ describe('command catalogue', () => {
 });
 
 describe('profile facet (3-level: profile mcp <verb>)', () => {
-  it('exposes the mcp facet with get/set/validate/probe', () => {
+  it('exposes the mcp facet with get/set/add/remove/clear/validate/probe', () => {
     const facet = findFacet('profile', 'mcp');
     expect(facet).toBeDefined();
     const verbs = facet!.commands.map(c => c.verb);
-    expect(verbs).toEqual(['get', 'set', 'validate', 'probe']);
+    expect(verbs).toEqual([
+      'get',
+      'set',
+      'add',
+      'remove',
+      'clear',
+      'validate',
+      'probe',
+    ]);
   });
 
   it('resolves a facet command by (noun, facet, verb)', () => {
     expect(findFacetCommand('profile', 'mcp', 'get')).toBeDefined();
     expect(findFacetCommand('profile', 'mcp', 'set')).toBeDefined();
+    expect(findFacetCommand('profile', 'mcp', 'add')).toBeDefined();
+    expect(findFacetCommand('profile', 'mcp', 'remove')).toBeDefined();
+    expect(findFacetCommand('profile', 'mcp', 'clear')).toBeDefined();
     expect(findFacetCommand('profile', 'mcp', 'validate')).toBeDefined();
     expect(findFacetCommand('profile', 'mcp', 'probe')).toBeDefined();
     expect(findFacetCommand('profile', 'mcp', 'bogus')).toBeUndefined();
@@ -172,6 +183,110 @@ describe('profile facet (3-level: profile mcp <verb>)', () => {
     expect(captured).toBe(raw);
     expect(result).toMatchObject({ ok: true });
   });
+
+  // add/remove/clear are CLI-orchestrated over get+set (the host stays an
+  // opaque verbatim writer — #task:1135). Their merge / collision /
+  // not-found logic lives ONLY here, so it is unit-tested here.
+
+  /** Mock client whose getProfileMcp returns `existingRaw` and whose
+   *  setProfileMcp records the written text. */
+  function mcpClient(existingRaw: string | null) {
+    const calls: { wrote?: string } = {};
+    const client = {
+      getProfileMcp: async () => ({ raw: existingRaw }),
+      setProfileMcp: async (raw: string) => {
+        calls.wrote = raw;
+        return { ok: true, bytes_written: raw.length };
+      },
+    } as unknown as BackendClient;
+    return { client, calls };
+  }
+
+  it('add merges a new server, preserving existing ones', async () => {
+    const cmd = findFacetCommand('profile', 'mcp', 'add')!;
+    const { client, calls } = mcpClient('{"mcpServers":{"a":{"command":"x"}}}');
+    const result = await runWithStdin(
+      cmd,
+      '{"mcpServers":{"b":{"type":"http","url":"https://e/"}}}',
+      client,
+    );
+    expect(result).toEqual({ ok: true, added: ['b'], total: 2 });
+    expect(JSON.parse(calls.wrote!)).toEqual({
+      mcpServers: {
+        a: { command: 'x' },
+        b: { type: 'http', url: 'https://e/' },
+      },
+    });
+  });
+
+  it('add fails with conflict on a same-named server and writes nothing', async () => {
+    const cmd = findFacetCommand('profile', 'mcp', 'add')!;
+    const { client, calls } = mcpClient('{"mcpServers":{"a":{"command":"x"}}}');
+    await expect(
+      runWithStdin(cmd, '{"mcpServers":{"a":{"command":"y"}}}', client),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    expect(calls.wrote).toBeUndefined();
+  });
+
+  it('add --replace overwrites only the named server, keeping the rest', async () => {
+    const cmd = findFacetCommand('profile', 'mcp', 'add')!;
+    const { client, calls } = mcpClient(
+      '{"mcpServers":{"a":{"command":"old"},"b":{"command":"keep"}}}',
+    );
+    const result = await runWithStdin(
+      cmd,
+      '{"mcpServers":{"a":{"command":"new"}}}',
+      client,
+      { replace: true },
+    );
+    expect(result).toEqual({ ok: true, added: ['a'], total: 2 });
+    expect(JSON.parse(calls.wrote!)).toEqual({
+      mcpServers: { a: { command: 'new' }, b: { command: 'keep' } },
+    });
+  });
+
+  it('add onto an unset config writes just the new servers', async () => {
+    const cmd = findFacetCommand('profile', 'mcp', 'add')!;
+    const { client, calls } = mcpClient(null);
+    const result = await runWithStdin(cmd, '{"mcpServers":{"a":{"command":"x"}}}', client);
+    expect(result).toEqual({ ok: true, added: ['a'], total: 1 });
+    expect(JSON.parse(calls.wrote!)).toEqual({ mcpServers: { a: { command: 'x' } } });
+  });
+
+  it('remove deletes the named server and keeps the others', async () => {
+    const cmd = findFacetCommand('profile', 'mcp', 'remove')!;
+    const { client, calls } = mcpClient(
+      '{"mcpServers":{"a":{"command":"x"},"b":{"command":"y"}}}',
+    );
+    const result = await runWithStdin(cmd, '', client, { server: 'a' });
+    expect(result).toEqual({ ok: true, removed: 'a', remaining: 1 });
+    expect(JSON.parse(calls.wrote!)).toEqual({ mcpServers: { b: { command: 'y' } } });
+  });
+
+  it('remove fails with not_found for an absent server (no write)', async () => {
+    const cmd = findFacetCommand('profile', 'mcp', 'remove')!;
+    const { client, calls } = mcpClient('{"mcpServers":{"a":{"command":"x"}}}');
+    await expect(
+      runWithStdin(cmd, '', client, { server: 'zzz' }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    expect(calls.wrote).toBeUndefined();
+  });
+
+  it('remove fails with not_found when no config is set', async () => {
+    const cmd = findFacetCommand('profile', 'mcp', 'remove')!;
+    const { client } = mcpClient(null);
+    await expect(
+      runWithStdin(cmd, '', client, { server: 'a' }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('clear writes an empty config', async () => {
+    const cmd = findFacetCommand('profile', 'mcp', 'clear')!;
+    const { client, calls } = mcpClient('{"mcpServers":{"a":{"command":"x"}}}');
+    const result = await runWithStdin(cmd, '', client);
+    expect(result).toEqual({ ok: true, cleared: true });
+    expect(JSON.parse(calls.wrote!)).toEqual({ mcpServers: {} });
+  });
 });
 
 /** Run a command whose `run` reads stdin, by feeding `input` through a
@@ -181,6 +296,7 @@ async function runWithStdin(
   cmd: import('../src/commands/index.js').Command,
   input: string,
   client: BackendClient,
+  flags: Record<string, unknown> = {},
 ): Promise<unknown> {
   const realStdin = Object.getOwnPropertyDescriptor(process, 'stdin');
   const fake = {
@@ -199,7 +315,7 @@ async function runWithStdin(
         authToken: 'token',
       },
       client,
-      args: { flags: {}, positional: [], rest: [] },
+      args: { flags, positional: [], rest: [] },
     } as any);
   } finally {
     if (realStdin) Object.defineProperty(process, 'stdin', realStdin);

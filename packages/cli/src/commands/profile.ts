@@ -15,7 +15,7 @@
  * `silverhand_profile__<name>` at spawn so they never collide with the user's
  * own MCP servers.
  */
-import { parseMcpConfig } from '@silverhand/shared';
+import { parseMcpConfig, type McpServerConfig } from '@silverhand/shared';
 import type { Command, FacetGroup } from './index.js';
 import { CliError } from '../errors.js';
 
@@ -43,8 +43,9 @@ const setCommand: Command = {
 
 Replace the executing agent's profile MCP config. Pipe the full
 \`mcp.json\` text on stdin — it is validated and written VERBATIM
-(your own formatting is preserved). This REPLACES the whole config;
-to remove all servers, pipe \`{"mcpServers":{}}\`.
+(your own formatting is preserved). This REPLACES the whole config, so
+to just ADD a server use \`add\` (it merges, keeping your others); use
+\`clear\` to wipe everything or \`remove\` to drop a single server.
 
 The config is the standard MCP shape:
 
@@ -142,11 +143,179 @@ Connection failures are reported in the body (not an error). Secrets
   },
 };
 
+const addCommand: Command = {
+  verb: 'add',
+  summary:
+    "Add servers to the executing agent's profile MCP config (merges; never clobbers existing).",
+  help: `silverhand profile mcp add [--replace]
+
+Add one or more MCP servers to the executing agent's profile config,
+MERGING into what is already there — existing servers are always kept.
+This is the safe way to "add an MCP server"; \`set\` REPLACES the whole
+config and would drop your other servers.
+
+Pipe a standard \`mcp.json\` on stdin; its \`mcpServers\` are merged into
+the current config.
+
+  --replace   Allow overwriting a server that already exists under the
+              same name. WITHOUT it, a name collision fails with conflict
+              and nothing is written — so \`add\` never silently clobbers
+              an existing server. Even with --replace, only the named
+              servers change; all others are preserved.
+
+Effect is NEXT SPAWN — a running agent keeps the old config until it is
+respawned.
+
+stdin:  a standard mcp.json ({ "mcpServers": { ... } }); validated
+        (invalid JSON / schema → validation_error, nothing written).
+stdout: { "ok": true, "added": [<names>], "total": <n> }.`,
+  flags: [] as const,
+  booleanFlags: ['replace'] as const,
+  async run({ client, args }) {
+    const raw = await readRawStdin('silverhand profile mcp add');
+    const input = parseMcpConfig(raw);
+    if (!input.ok) {
+      throw new CliError({
+        code: 'validation_error',
+        message: input.error,
+        retriable: false,
+      });
+    }
+    const incoming = input.config.mcpServers;
+    const names = Object.keys(incoming);
+    if (names.length === 0) {
+      throw new CliError({
+        code: 'validation_error',
+        message: 'nothing to add: the piped mcpServers is empty.',
+        retriable: false,
+      });
+    }
+    const { raw: currentRaw } = await client.getProfileMcp();
+    let current: Record<string, McpServerConfig> = {};
+    if (currentRaw != null) {
+      const cur = parseMcpConfig(currentRaw);
+      if (!cur.ok) {
+        throw new CliError({
+          code: 'validation_error',
+          message: `current mcp.json is not valid (${cur.error}); fix it with \`set\` first.`,
+          retriable: false,
+        });
+      }
+      current = cur.config.mcpServers;
+    }
+    if (args.flags.replace !== true) {
+      const collisions = names.filter(name => name in current);
+      if (collisions.length > 0) {
+        throw new CliError({
+          code: 'conflict',
+          message:
+            `server(s) already exist: ${collisions.join(', ')}. ` +
+            'Use --replace to overwrite them, or `remove` them first. ' +
+            'Other servers are never touched.',
+          retriable: false,
+        });
+      }
+    }
+    const merged = { ...current, ...incoming };
+    await client.setProfileMcp(`${JSON.stringify({ mcpServers: merged }, null, 2)}\n`);
+    return { ok: true, added: names, total: Object.keys(merged).length };
+  },
+};
+
+const removeCommand: Command = {
+  verb: 'remove',
+  summary: "Remove one server from the executing agent's profile MCP config.",
+  help: `silverhand profile mcp remove --server <name>
+
+Remove a single server from the executing agent's profile MCP config,
+leaving the others untouched. Reads the current \`mcp.json\`, deletes
+the named server, and writes the rest back.
+
+  --server <name>   The server name (key in your mcp.json) to remove.
+
+A server name that is not present fails with not_found (nothing is
+written). To wipe the whole config instead, use \`clear\`.
+
+Effect is NEXT SPAWN — a running agent keeps the old config until it
+is respawned.
+
+stdout: { "ok": true, "removed": <name>, "remaining": <n> }.`,
+  flags: ['server'] as const,
+  async run({ client, args }) {
+    const server = args.flags.server;
+    if (typeof server !== 'string' || server.length === 0) {
+      throw new CliError({
+        code: 'validation_error',
+        message:
+          '`--server <name>` is required: the MCP server name to remove.',
+        retriable: false,
+      });
+    }
+    const { raw } = await client.getProfileMcp();
+    if (raw == null) {
+      throw new CliError({
+        code: 'not_found',
+        message: 'no profile MCP config to remove from (it is unset).',
+        retriable: false,
+      });
+    }
+    const parsed = parseMcpConfig(raw);
+    if (!parsed.ok) {
+      throw new CliError({
+        code: 'validation_error',
+        message: `current mcp.json is not valid (${parsed.error}); fix it with \`set\` first.`,
+        retriable: false,
+      });
+    }
+    const servers = parsed.config.mcpServers;
+    if (!(server in servers)) {
+      throw new CliError({
+        code: 'not_found',
+        message: `server '${server}' is not in the profile MCP config.`,
+        retriable: false,
+      });
+    }
+    delete servers[server];
+    // Re-serialize the canonical config (a structural edit reformats by
+    // design); set re-validates and writes it on the owning host.
+    await client.setProfileMcp(`${JSON.stringify({ mcpServers: servers }, null, 2)}\n`);
+    return { ok: true, removed: server, remaining: Object.keys(servers).length };
+  },
+};
+
+const clearCommand: Command = {
+  verb: 'clear',
+  summary: "Remove ALL servers from the executing agent's profile MCP config.",
+  help: `silverhand profile mcp clear
+
+Clear the executing agent's profile MCP config — removes ALL servers
+(writes \`{ "mcpServers": {} }\`). \`get\` then returns an empty config,
+not null. To remove a single server instead, use \`remove\`.
+
+Effect is NEXT SPAWN — a running agent keeps the old config until it
+is respawned.
+
+stdout: { "ok": true, "cleared": true }.`,
+  flags: [] as const,
+  async run({ client }) {
+    await client.setProfileMcp('{\n  "mcpServers": {}\n}\n');
+    return { ok: true, cleared: true };
+  },
+};
+
 export const profileFacets: readonly FacetGroup[] = [
   {
     facet: 'mcp',
-    summary: 'Get, set, or validate this agent\'s custom MCP servers.',
-    commands: [getCommand, setCommand, validateCommand, probeCommand],
+    summary: "Manage this agent's custom MCP servers.",
+    commands: [
+      getCommand,
+      setCommand,
+      addCommand,
+      removeCommand,
+      clearCommand,
+      validateCommand,
+      probeCommand,
+    ],
   },
 ];
 

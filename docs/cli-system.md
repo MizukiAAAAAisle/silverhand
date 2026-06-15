@@ -498,10 +498,22 @@ Server names match `/^[A-Za-z0-9_-]{1,64}$/`. Stdio servers take
 - `get` — print `{ raw: <string|null> }`. `null` is the normal "no MCP
   configured" case, not an error.
 - `set` — read the full `mcp.json` from STDIN, validate it, write it
-  **verbatim** (your formatting is preserved). REPLACES the whole config; pipe
-  `{"mcpServers":{}}` to clear it. A bad payload is rejected with
-  `validation_error` (code `invalid_config` on the wire) and nothing is
-  written.
+  **verbatim** (your formatting is preserved). REPLACES the whole config — to
+  just add a server use `add` (it merges); use `clear` to wipe it or `remove`
+  to drop a single server. A bad payload is rejected with `validation_error`
+  (code `invalid_config` on the wire) and nothing is written.
+- `add` — **merge** one or more servers into the current config from STDIN
+  (a standard `mcp.json`); existing servers are always preserved. A name that
+  already exists fails with `conflict` and nothing is written, unless
+  `--replace` is passed (then only the named server is overwritten; all others
+  stay). This is the safe "add an MCP server" path — `set` would clobber the
+  rest. Prints `{ ok: true, added: [<names>], total: <n> }`.
+- `remove` — `--server <name>` drops a single server from the config, leaving
+  the others intact (read → delete key → write back). A name that is not
+  present fails with `not_found` and nothing is written. Prints
+  `{ ok: true, removed: <name>, remaining: <n> }`.
+- `clear` — remove ALL servers (writes `{ "mcpServers": {} }`). `get` then
+  returns the empty config, not `null`. Prints `{ ok: true, cleared: true }`.
 - `validate` — validate STDIN against the schema **without** writing. Pure
   CLI-local pre-check; makes no backend call. Prints
   `{ ok: true, server_count: <n> }`.
