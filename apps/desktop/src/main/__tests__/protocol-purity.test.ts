@@ -304,4 +304,54 @@ describe('desktop protocol purity catalogue', () => {
 
     expect(offenders).toEqual([]);
   });
+
+  // #task:1133 — embedded-only-source guard. Some signals are observable
+  // ONLY inside the embedded backend process and are structurally
+  // null/empty in a remote-server deployment (the registry lives in the
+  // remote backend, not the desktop). Reading one without a remote second
+  // source is the #task:1132 / #task:1010 bug class (a connected local
+  // computer rendered offline). These two guards keep new consumers from
+  // re-introducing it.
+  it('every renderer local_host_ws_attached_at consumer also consults the remote availability fallback (#task:1132 class)', () => {
+    // `local_host_ws_attached_at` is the in-process WS attach timestamp;
+    // it is structurally null when the backend runs remotely. Any renderer
+    // surface that derives connection/online state from it MUST also
+    // consult host-status `availability` — directly, or via the
+    // connection-state helpers (`isLocalHostAttached` /
+    // `describeConnectionState`) / `useHostStatusQuery` that fold it in.
+    // The #task:1132 bug was App.tsx mapping `attached_at === null`
+    // straight to offline with no availability fallback. A new consumer
+    // that does the same trips this guard; the fix is to route the
+    // judgment through the helper, not to add the file here.
+    const fallbackTokens =
+      /\bavailability\b|\bisLocalHostAttached\b|\bdescribeConnectionState\b|\buseHostStatusQuery\b/;
+    const offenders = sourceFiles(rendererRoot, new Set(['.ts', '.tsx']))
+      .filter(source => source.content.includes('local_host_ws_attached_at'))
+      .filter(source => !fallbackTokens.test(source.content))
+      .map(source => source.path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('keeps main getEmbeddedHostWsController() call sites catalogued with remote-arm degrade semantics (#task:1133)', () => {
+    // `getEmbeddedHostWsController()` returns null on the remote arm (no
+    // in-process WS attachment registry). Every call site is an
+    // observe/degrade path that handles the null arm (watchdog stays
+    // un-armed; status comes from a renderer poll / typed claim error
+    // instead of registry observation). The count is pinned so a NEW
+    // consumer forces the author to confirm + document the remote-arm
+    // degrade before it lands — the same review the #task:1132 class needs.
+    // Catalogued sites in main/index.ts: local-host attach snapshot,
+    // attach-watchdog arm, host_outbound_attach watchdog, save-URL verify
+    // watchdog, profile phase-2 watchdog, shutdown detach.
+    const callSites = sourceFiles(mainRoot, new Set(['.ts'])).flatMap(source =>
+      [
+        ...stripComments(source.content).matchAll(
+          /(?<!function\s)getEmbeddedHostWsController\(\)/g,
+        ),
+      ].map(() => source.path),
+    );
+
+    expect(callSites.length).toBe(6);
+  });
 });

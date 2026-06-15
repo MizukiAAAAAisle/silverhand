@@ -186,9 +186,14 @@ export class AttachmentService {
         },
       };
     }
-    // Remote storages return a download URL; the caller will
-    // fetch + cache locally. The URL form is owned by the storage backend
-    // when it lands.
+    // TODO(remote-blob): when s3/oss storage lands, return an
+    // `AttachmentLocateDto` of `{ storage, download_url, filename,
+    // content_type }` here instead of throwing, and wrap the agent
+    // locate route (`routes/internal-agent.ts` agentLocateAttachment)
+    // in a try/catch so this no longer surfaces as an uncaught 500.
+    // Currently UNREACHABLE: the only wired storage is
+    // `LocalBlobFileStorage` (kind='local'), so every uploaded row has
+    // `storage='local'` and never reaches this branch. Audited #task:1133.
     throw new BlobFileStorageError(
       'remote_locate_not_implemented',
       `locate for storage=${row.storage} not yet implemented`,

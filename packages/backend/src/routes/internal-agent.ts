@@ -1094,6 +1094,12 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
           conversations.get(principal.conversationId)?.workspace_id);
         if (denied) return denied;
       }
+      // TODO(remote-blob): `locateForAgent` throws
+      // `remote_locate_not_implemented` for non-local storage (s3/oss).
+      // Currently unreachable (only `LocalBlobFileStorage` is wired), but
+      // when remote blob storage lands this and the download route below
+      // must wrap the call in a try/catch that maps the throw to a
+      // download_url response instead of an uncaught 500. Audited #task:1133.
       const located = await ctx.attachmentService.locateForAgent(
         attachmentId,
         principal.conversationId,
