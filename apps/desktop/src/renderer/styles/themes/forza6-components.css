@@ -696,14 +696,21 @@
 /* ── #v5.3 — Send button as poster sticker ───────────────────────────
    shiki later promoted Composer's icon-only send button to a default
    text button. For forza6 this block now only keeps the theme's
-   poster treatment: magenta surface, near-black text, square-ish
-   corners, and display caps. */
+   poster treatment: magenta surface, near-black text, square corners,
+   and display caps.
+
+   #task:1128: corners are fully square (0, not the old 2px). The send
+   button is the left half of a split send-button; a 2px radius here
+   rounded the inner (seam) corner against the square caret half, so
+   the two halves read as mismatched. forza6's 0-radius poster vocab
+   wants hard corners anyway. The caret half (`send-more`) is already
+   square via its Tailwind classes. */
 [data-theme='forza6'] [data-composer-action='send'] {
   background-color: var(--brand-primary);
   color: var(--text-on-brand);
   width: auto;
   padding: 0 12px;
-  border-radius: 2px;
+  border-radius: 0;
   font-family: var(--font-display);
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -946,21 +953,14 @@
   transform: translateY(-1px);
   box-shadow: 2.5px 2.5px 0 var(--forza6-ink);
 }
-/* Threads toggle is the one aria-pressed button in the cluster — it
-   stamps "in" when active: inverted ink fill reads as a pressed sticker
-   (mirrors the selected sidebar `#` chip's ink mass). The `:hover`
-   variant is spelled out explicitly because the cluster's generic
-   `button:hover` rule (specificity (0,4,1)) otherwise outranks a bare
-   `[aria-pressed='true']` (0,3,1) and would repaint the active toggle's
-   ground back to white while the ink-fill `color:white` lingers —
-   white-on-white (Cindy `RInGcb3XWuZAf1en`). This (0,5,1) selector holds
-   the inversion through hover; transform/shadow lift still come from the
-   generic hover rule (those properties don't conflict). */
-[data-theme='forza6'] [data-channel-actions] button[aria-pressed='true'],
-[data-theme='forza6'] [data-channel-actions] button[aria-pressed='true']:hover:not(:disabled) {
-  background-color: var(--forza6-ink);
-  color: var(--bg-floating);
-}
+/* aria-pressed buttons in the cluster (conv-header Threads toggle, and
+   the Thread-header follow/unfollow toggle) get NO forza6 active fill —
+   shiki `rkfn6GQ1O7G8OBaL` (#task:1126): a filled "selected" ground on a
+   header utility icon toggle is too loud (reads as navigation-level
+   identity selection). The active state is carried quietly by the JSX
+   glyph colour (`text-text-muted` → `text-text-primary` when active) and,
+   for follow, the Bell → BellOff icon swap. (Earlier #1109 painted an
+   inverted-ink fill here; intentionally dropped.) */
 
 /* ── #v5.6 — Task panel (drawer + TasksSection) poster polish ────────
    shiki `kx1DNk-PwdkIcQ_Y` "先做核心 4 个". WorkspaceTasksDrawer.tsx
