@@ -114,6 +114,45 @@ describe('toCodexMcpOverrides', () => {
     ]);
   });
 
+  it('projects a stdio server to command/args/env and drops the type marker', () => {
+    const config = {
+      mcpServers: { fs: { type: 'stdio' as const, command: 'npx' } },
+    };
+    // `type` is a canonical marker, NOT a Codex key — it must not appear.
+    expect(toCodexMcpOverrides(config)).toEqual([
+      'mcp_servers.silverhand_profile__fs={command = "npx"}',
+    ]);
+  });
+
+  it('projects an http server to Codex native keys (url + http_headers, no type/headers)', () => {
+    // Cindy #task:1135 Blocker 2: Codex uses `url` + `http_headers`, has no
+    // `type` discriminator and no `headers` key. Pin the exact projection so
+    // a regression to verbatim canonical serialization fails here.
+    const config = {
+      mcpServers: {
+        remote: {
+          type: 'http' as const,
+          url: 'https://example.com/mcp',
+          headers: { Authorization: 'Bearer x' },
+        },
+      },
+    };
+    expect(toCodexMcpOverrides(config)).toEqual([
+      'mcp_servers.silverhand_profile__remote={url = "https://example.com/mcp", http_headers = {Authorization = "Bearer x"}}',
+    ]);
+  });
+
+  it('maps an sse server to the same url form (Codex remote transport is url-based)', () => {
+    const config = {
+      mcpServers: {
+        stream: { type: 'sse' as const, url: 'https://example.com/sse' },
+      },
+    };
+    expect(toCodexMcpOverrides(config)).toEqual([
+      'mcp_servers.silverhand_profile__stream={url = "https://example.com/sse"}',
+    ]);
+  });
+
   it('returns [] when there are no servers', () => {
     expect(toCodexMcpOverrides(EMPTY_MCP_CONFIG)).toEqual([]);
   });

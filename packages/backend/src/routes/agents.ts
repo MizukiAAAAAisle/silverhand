@@ -554,6 +554,14 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
   // uses, so embedded + remote daemons share one path. Returns
   // `{ raw: string | null }` — null is the normal "no MCP configured" case
   // (NOT a 404), so the pane renders an empty state instead of an error.
+  //
+  // Gate (Cindy #task:1135 review, Blocker 1): raw `mcp.json` can carry
+  // secrets (env tokens, HTTP auth headers). `canViewAgent` gates a
+  // same-workspace teammate IN (anti-enumeration / existence), but reading
+  // raw secrets requires `canEditAgent` — the creator/self branch, same
+  // bar as editing the agent. A viewer who is not the editor gets 403, not
+  // the raw bytes. "We don't censor secrets" means we don't inspect the
+  // owner's own file, NOT that any viewer may read it.
   app.get(apiPaths.agentProfileMcp(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'agent id required' }, 400);
@@ -561,6 +569,9 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     if (!agent) return c.json({ error: 'agent not found' }, 404);
     if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
       return c.json({ error: 'agent not found' }, 404);
+    }
+    if (!canEditAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'forbidden' }, 403);
     }
     const outbound = resolveOutboundForHost(
       ctx.outboundFrameAdapter?.() ?? null,

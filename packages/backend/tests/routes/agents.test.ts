@@ -752,6 +752,107 @@ describe('GET /api/agents/:id/workspace/file', () => {
   });
 });
 
+// #task:1135 — public mirror the agent pane reads. Its gate is STRICTER than
+// agent visibility: raw `mcp.json` can carry secrets (env tokens, HTTP auth
+// headers), so `canViewAgent` is necessary but not sufficient — a teammate who
+// can see the agent must additionally pass `canEditAgent` (creator/self) to
+// read the raw bytes (Cindy #task:1135 review, Blocker 1).
+describe('GET /api/agents/:id/profile/mcp', () => {
+  let t: TestApp | null = null;
+  afterEach(() => { t?.cleanup(); t = null; });
+
+  it('creator reads their own profile MCP (200, raw:null when no mcp.json)', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    const res = await http(t).get(
+      `/api/agents/${created.agent.id}/profile/mcp`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.raw).toBeNull();
+  });
+
+  it('relays the raw mcp.json bytes from the daemon to the creator', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    const raw = JSON.stringify({ mcpServers: { fs: { command: 'npx' } } });
+    t.fakeHostWs!.agentProfileMcpReadAckOverride = () =>
+      ({ ok: true as const, raw }) as never;
+    const res = await http(t).get(
+      `/api/agents/${created.agent.id}/profile/mcp`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.raw).toBe(raw);
+  });
+
+  it('404 for an unknown agent', async () => {
+    t = buildTestApp();
+    const res = await http(t).get('/api/agents/aid_missing/profile/mcp');
+    expect(res.status).toBe(404);
+  });
+
+  it('same-workspace teammate (viewer, non-editor) is 403, NOT given raw secrets', async () => {
+    t = buildTestApp();
+    t.ctx.db.exec(
+      `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+       DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+    );
+    const teammateHeaders = {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    };
+    // 'teammate' owns the agent; make it workspace-visible to 'local' so
+    // `canViewAgent` passes for 'local' but `canEditAgent` does not.
+    const created = await (
+      await http(t).post(
+        '/api/agents',
+        { name: 'shared-agent', runtime: 'claude' },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+    const ws = await (
+      await http(t).post(
+        '/api/workspaces',
+        { name: 'visible-ws' },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(ws.workspace.id, created.agent.id, Date.now());
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
+         VALUES (?, 'local', ?)`,
+      )
+      .run(ws.workspace.id, Date.now());
+
+    // 'local' (default viewer) can SEE the agent…
+    expect((await http(t).get(`/api/agents/${created.agent.id}`)).status).toBe(
+      200,
+    );
+    // …but reading raw profile MCP requires canEditAgent → 403, and the
+    // daemon is never even asked.
+    t.fakeHostWs!.calls.length = 0;
+    const denied = await http(t).get(
+      `/api/agents/${created.agent.id}/profile/mcp`,
+    );
+    expect(denied.status).toBe(403);
+    const body = await denied.json() as any;
+    expect(body.raw).toBeUndefined();
+    expect(
+      t.fakeHostWs!.calls.filter(c => c.kind === 'agent_profile_mcp_read'),
+    ).toHaveLength(0);
+  });
+});
+
 describe('GET /api/agents/:id/runtime-state', () => {
   let t: TestApp | null = null;
   afterEach(() => { t?.cleanup(); t = null; });

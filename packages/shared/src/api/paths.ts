@@ -57,9 +57,10 @@ export const apiPaths = {
   agentWorkspaceFile: (id: string) => `/api/agents/${id}/workspace/file`,
   /** #task:1135 — read an agent's profile MCP config for the agent-pane
    *  "Profile MCP" section. Returns `{ raw: string | null }` (null when no
-   *  `mcp.json`). Read gate matches `GET /api/agents/:id`. The write path
-   *  is agent-self-only via the internal CLI route — there is no public
-   *  PUT mirror. */
+   *  `mcp.json`). Read requires `canEditAgent` (creator/self): raw mcp.json
+   *  can carry secrets, so a non-editor viewer is 403'd even though
+   *  `canViewAgent` would let them see the agent exists. The write path is
+   *  agent-self-only via the internal CLI route — there is no public PUT. */
   agentProfileMcp: (id: string) => `/api/agents/${id}/profile/mcp`,
   agentRuntimeState: (id: string) => `/api/agents/${id}/runtime-state`,
   agentStop: (id: string) => `/api/agents/${id}/stop`,

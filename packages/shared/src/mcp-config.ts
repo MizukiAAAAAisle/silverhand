@@ -170,10 +170,13 @@ export function toClaudeMcpConfig(
  * is a serialized TOML inline table (quoting handled by {@link serializeTomlValue}),
  * never a hand-built string. Returns `[]` when there are no servers.
  *
- * The mapping mirrors the canonical shape: stdio → `command`/`args`/`env`;
- * http/sse → `url`/`headers` (+ `type`). Codex's exact http MCP keys are part
- * of the codex runtime-verification follow-up (the canonical raw + this
- * structure are unchanged regardless).
+ * Each server is first projected through {@link toCodexServerConfig} into
+ * Codex's NATIVE key names — Codex does not understand the canonical
+ * `type`/`headers` keys (those are Claude's `--mcp-config` shape). Mismatched
+ * keys would be silently ignored by Codex, leaving a remote server unusable
+ * (Cindy #task:1135 review, Blocker 2). Projecting fail-loud here means a
+ * server Codex cannot represent throws, which the spawn loader catches into a
+ * loud, all-or-nothing layer drop.
  */
 export function toCodexMcpOverrides(
   config: McpConfig,
@@ -182,9 +185,43 @@ export function toCodexMcpOverrides(
   const overrides: string[] = [];
   for (const [name, server] of Object.entries(config.mcpServers)) {
     const key = `mcp_servers.${runtimeMcpServerName(scope, name)}`;
-    overrides.push(`${key}=${serializeTomlValue(server)}`);
+    overrides.push(`${key}=${serializeTomlValue(toCodexServerConfig(server))}`);
   }
   return overrides;
+}
+
+/**
+ * Project one canonical server into Codex's native `[mcp_servers.<name>]`
+ * shape. Codex uses snake_case TOML keys and has NO `type` discriminator —
+ * a remote server is identified by the presence of `url`:
+ *  - stdio   → `{ command, args?, env? }` (the `type` marker is dropped).
+ *  - http/sse→ `{ url, http_headers? }` (drop `type`; canonical literal
+ *    `headers` → Codex `http_headers`). Codex's remote transport is
+ *    url-based, so both `http` and `sse` canonical servers map to the same
+ *    url form; whether the endpoint actually connects is the runtime's
+ *    concern, not ours (we never pre-check MCP server connectivity).
+ *
+ * NOTE: Codex is not installed in this dev image, so the exact remote-key
+ * spelling (`http_headers`) is per Codex's documented config and pinned by
+ * `toCodexMcpOverrides` tests; runtime verification on a real codex binary is
+ * the one open follow-up. The projection is isolated so a key correction is a
+ * one-line change.
+ */
+export function toCodexServerConfig(
+  server: McpServerConfig,
+): Record<string, unknown> {
+  // The union isn't a TS-discriminated one (stdio's `type` is optional), so
+  // narrow on the structural marker: a remote server is the one with `url`.
+  if ('url' in server) {
+    const out: Record<string, unknown> = { url: server.url };
+    if (server.headers) out.http_headers = server.headers;
+    return out;
+  }
+  // stdio (type omitted or 'stdio'): command is required by the schema.
+  const out: Record<string, unknown> = { command: server.command };
+  if (server.args) out.args = server.args;
+  if (server.env) out.env = server.env;
+  return out;
 }
 
 /**

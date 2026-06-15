@@ -141,6 +141,12 @@ describe('buildProfileMcpSpawnArgs', () => {
     for (const o of overrides) {
       expect(o.startsWith('mcp_servers.silverhand_profile__')).toBe(true);
     }
+    // The remote server is projected to Codex native keys (url, no
+    // canonical type/headers leakage). Cindy Blocker 2.
+    const remote = overrides.find(o => o.includes('__remote'))!;
+    expect(remote).toContain('url = "https://example.com/mcp"');
+    expect(remote).not.toContain('type =');
+    expect(remote).not.toContain('headers =');
   });
 
   it('bad JSON: drops the WHOLE layer, logs loud, still returns [] (agent spawns)', async () => {

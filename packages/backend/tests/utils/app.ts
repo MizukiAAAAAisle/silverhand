@@ -306,6 +306,17 @@ export class FakeHostWsServerController implements HostWsServerController {
       ) => OutboundServerCommandResult<'agent_workspace_file_read'>)
     | null = null;
   /**
+   * #task:1135 — override the `agent_profile_mcp_read` ack. Default mirrors
+   * the daemon: read `mcp.json` under the seeded L1 dir and return its raw
+   * text, or `{ raw: null }` when absent (the normal "no MCP" case). Tests
+   * swap this to surface a custom payload or typed error.
+   */
+  agentProfileMcpReadAckOverride:
+    | ((
+        params: OutboundServerCommandParams<'agent_profile_mcp_read'>,
+      ) => OutboundServerCommandResult<'agent_profile_mcp_read'>)
+    | null = null;
+  /**
    * D4.e-3 — override the `agent_l2_seed` ack. Tests that want to exercise a
    * specific `seeded`/`l2_present` result can swap this. Default seeds the
    * member's L2 dir on the shared embedded test fs under the recorded
@@ -502,6 +513,28 @@ export class FakeHostWsServerController implements HostWsServerController {
         );
       }
       return { ok: true as const, file } as OutboundServerCommandResult<K>;
+    }
+    if (kind === 'agent_profile_mcp_read') {
+      const p =
+        params as OutboundServerCommandParams<'agent_profile_mcp_read'>;
+      if (this.agentProfileMcpReadAckOverride) {
+        return this.agentProfileMcpReadAckOverride(
+          p,
+        ) as OutboundServerCommandResult<K>;
+      }
+      const mcpPath = joinPath(
+        this.silverhandDir,
+        'agents',
+        p.agent_id,
+        'mcp.json',
+      );
+      let raw: string | null = null;
+      try {
+        raw = await fsp.readFile(mcpPath, 'utf-8');
+      } catch {
+        raw = null; // absent → the normal "no MCP configured" case
+      }
+      return { ok: true as const, raw } as OutboundServerCommandResult<K>;
     }
     if (kind === 'agent_l2_seed') {
       const p = params as OutboundServerCommandParams<'agent_l2_seed'>;

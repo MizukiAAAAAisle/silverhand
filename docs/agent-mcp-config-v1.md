@@ -177,6 +177,14 @@ The agent pane shows the raw `mcp.json` under the label **Profile MCP** (not a
 bare "MCP JSON"), reading the **local file** content (not a DB copy) so there is
 no drift. When the workspace layer lands it sits beside it as **Workspace MCP**.
 
+The pane reads via the public mirror `GET /api/agents/:id/profile/mcp`
+(`{ raw: string | null }`, null = no `mcp.json`). Its read gate is **stricter
+than agent visibility**: raw `mcp.json` can carry secrets (env tokens, HTTP auth
+headers), so a same-workspace teammate who can *see* the agent (`canViewAgent`)
+is still **403**'d unless they can *edit* it (`canEditAgent` = creator/self).
+"We don't censor the owner's own secrets" means we don't inspect the file, NOT
+that any viewer may read it.
+
 ## 8. Wire & module layout
 
 - **`packages/shared`** — canonical zod schema (`McpConfig`), the pure
@@ -190,7 +198,7 @@ no drift. When the workspace layer lands it sits beside it as **Workspace MCP**.
   - drivers `{claude,codex}.ts` call the shared adapters at `buildArgs` time;
     spawn-prep writes any temp files.
 - **`packages/backend`** — `runtime/workspace-data-plane.ts` dispatch wrappers +
-  internal-agent routes the CLI hits (`GET/PUT profile mcp`), resolving the
+  internal-agent routes the CLI hits (`GET`/`POST profile mcp`), resolving the
   caller agent's owning host.
 - **`packages/cli`** — `commands/profile.ts` + sub-noun grammar in
   `commands/index.ts`.
