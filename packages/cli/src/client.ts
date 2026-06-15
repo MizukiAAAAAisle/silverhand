@@ -313,6 +313,43 @@ export class BackendClient {
     );
   }
 
+  // ── Profile (L1 agent-global config) ─────────────────────────────
+  /** Read the agent's own profile MCP config (#task:1135). `raw` is the
+   *  verbatim `mcp.json` text, or `null` when the agent has none. */
+  getProfileMcp(): Promise<{ raw: string | null }> {
+    return this.request(
+      'GET',
+      internalPaths.agentProfileMcpGet(this.env.conversationId, this.env.agentId),
+    );
+  }
+
+  /** Replace the agent's own profile MCP config (#task:1135). Sends the
+   *  raw JSON text VERBATIM (not re-encoded through JSON.stringify) so the
+   *  persisted file keeps the agent's own formatting; the backend reads it
+   *  via `c.req.text()`, validates it, then writes it atomically on the
+   *  owning host. Effect is next-spawn (no hot reload). */
+  async setProfileMcp(raw: string): Promise<{ ok: boolean; bytes_written: number }> {
+    markRequestAttempted();
+    const url =
+      this.env.serverUrl +
+      internalPaths.agentProfileMcpSet(this.env.conversationId, this.env.agentId);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: this.headers(),
+        body: raw,
+      });
+    } catch (err) {
+      throw fromNetworkError(err);
+    }
+    if (!res.ok) {
+      const text = await safeReadText(res);
+      throw mapHttpError(res.status, text);
+    }
+    return (await res.json()) as { ok: boolean; bytes_written: number };
+  }
+
   // ── Attachments ──────────────────────────────────────────────────
   /** Upload a file from disk. Backend derives channel ownership from
    *  the calling conversation; the agent never specifies channel id. */

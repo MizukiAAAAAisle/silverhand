@@ -24,6 +24,7 @@ import { memberCommands } from './member.js';
 import { workspaceCommands } from './workspace.js';
 import { scheduleCommands } from './schedule.js';
 import { fileCommands } from './file.js';
+import { profileFacets } from './profile.js';
 
 export interface Command {
   /** "send", "create", "list" — the verb part. */
@@ -60,6 +61,12 @@ export interface NounGroup {
   noun: string;
   summary: string;
   commands: readonly Command[];
+  /** Optional THIRD dispatch level. A faceted noun groups its verbs under
+   *  a facet token: `silverhand <noun> <facet> <verb>`. Used by `profile`
+   *  (`profile mcp get|set|validate`) and reserved for future domain-scoped
+   *  config (`workspace mcp …`). A faceted noun's flat `commands` is `[]`;
+   *  the dispatcher tries facets first, so the two layers never collide. */
+  facets?: readonly FacetGroup[];
   /** Verbs this noun USED to accept (or that agents commonly reach for
    *  by mistake). When the agent types one, the dispatcher throws
    *  `validation_error` with `subkind: 'verb_removed'` and the supplied
@@ -68,6 +75,14 @@ export interface NounGroup {
    *  generic line tend to retry with another guess instead of reading
    *  the help. */
   removedVerbs?: Readonly<Record<string, RemovedVerbSpec>>;
+}
+
+export interface FacetGroup {
+  /** "mcp" — the facet part of `silverhand <noun> <facet> <verb>`. */
+  facet: string;
+  /** One-line summary (printed in `silverhand <noun> --help`). */
+  summary: string;
+  commands: readonly Command[];
 }
 
 export interface RemovedVerbSpec {
@@ -159,6 +174,13 @@ export const COMMAND_GROUPS: readonly NounGroup[] = [
     summary: 'Upload a local file or resolve an attachment id.',
     commands: fileCommands,
   },
+  {
+    noun: 'profile',
+    summary:
+      "Manage the executing subject's global (L1) config — e.g. custom MCP servers.",
+    commands: [],
+    facets: profileFacets,
+  },
 ];
 
 export function findGroup(noun: string): NounGroup | undefined {
@@ -167,4 +189,16 @@ export function findGroup(noun: string): NounGroup | undefined {
 
 export function findCommand(noun: string, verb: string): Command | undefined {
   return findGroup(noun)?.commands.find(c => c.verb === verb);
+}
+
+export function findFacet(noun: string, facet: string): FacetGroup | undefined {
+  return findGroup(noun)?.facets?.find(f => f.facet === facet);
+}
+
+export function findFacetCommand(
+  noun: string,
+  facet: string,
+  verb: string,
+): Command | undefined {
+  return findFacet(noun, facet)?.commands.find(c => c.verb === verb);
 }

@@ -12,7 +12,8 @@
 import { performance } from 'node:perf_hooks';
 import { BackendClient } from './client.js';
 import { reportPreflightFailure, wasRequestAttempted } from './cli-trace.js';
-import { findCommand, findGroup } from './commands/index.js';
+import { findCommand, findFacet, findGroup } from './commands/index.js';
+import type { Command } from './commands/index.js';
 import { loadEnv } from './env.js';
 import {
   CliError,
@@ -20,7 +21,7 @@ import {
   fromUnknown,
   writeError,
 } from './errors.js';
-import { nounHelp, topLevelHelp, verbHelp } from './help.js';
+import { nounHelp, topLevelHelp, verbHelp, facetHelp, facetVerbHelp } from './help.js';
 import { writeJson } from './output.js';
 import { parseArgs } from './parse.js';
 import { assertKnownFlags } from './strict-flags.js';
@@ -76,6 +77,44 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
+  // Faceted noun (three-level grammar): `silverhand <noun> <facet> <verb>`.
+  // A faceted noun (e.g. `profile`) groups its verbs under a facet token;
+  // its flat `commands` list is empty, so we resolve facet → verb here
+  // instead of the two-level path below.
+  if (group.facets && group.facets.length > 0) {
+    const facetToken = argv[1]!;
+    traceCtx.verb = facetToken;
+    const facet = findFacet(noun, facetToken);
+    if (!facet) {
+      throw new CliError({
+        code: 'validation_error',
+        message: `unknown facet "${facetToken}" under noun "${noun}"; run \`silverhand ${noun} --help\``,
+        retriable: false,
+      });
+    }
+    // `silverhand <noun> <facet>` or `... --help` → list the facet's verbs.
+    if (argv.length === 2 || argv[2] === '--help' || argv[2] === '-h') {
+      const help = facetHelp(noun, facetToken);
+      if (help) process.stdout.write(help + '\n');
+      return 0;
+    }
+    const fverb = argv[2]!;
+    traceCtx.verb = `${facetToken} ${fverb}`;
+    const fcmd = facet.commands.find(c => c.verb === fverb);
+    if (!fcmd) {
+      throw new CliError({
+        code: 'validation_error',
+        message: `unknown verb "${fverb}" under "${noun} ${facetToken}"; run \`silverhand ${noun} ${facetToken} --help\``,
+        retriable: false,
+      });
+    }
+    return executeCommand(fcmd, argv.slice(3), {
+      noun,
+      verb: `${facetToken} ${fverb}`,
+      helpText: facetVerbHelp(noun, facetToken, fverb),
+    });
+  }
+
   const verb = argv[1]!;
   traceCtx.verb = verb;
   const cmd = findCommand(noun, verb);
@@ -102,11 +141,30 @@ async function main(argv: string[]): Promise<number> {
     });
   }
 
+  return executeCommand(cmd, argv.slice(2), {
+    noun,
+    verb,
+    helpText: verbHelp(noun, verb),
+  });
+}
+
+/**
+ * Shared command execution tail used by both the two-level and faceted
+ * dispatch paths: handle `--help`, parse + strict-validate flags, reject
+ * stray positionals, then load env and run. `label.verb` is the verb token
+ * for error text — for a faceted command it is the compound `"<facet>
+ * <verb>"` so the strict-flag / positional errors read
+ * `silverhand profile mcp set …`.
+ */
+async function executeCommand(
+  cmd: Command,
+  tail: string[],
+  label: { noun: string; verb: string; helpText: string | null },
+): Promise<number> {
+  const { noun, verb } = label;
   // `silverhand <noun> <verb> --help` → command help.
-  const tail = argv.slice(2);
   if (tail.includes('--help') || tail.includes('-h')) {
-    const help = verbHelp(noun, verb);
-    if (help) process.stdout.write(help + '\n');
+    if (label.helpText) process.stdout.write(label.helpText + '\n');
     return 0;
   }
 

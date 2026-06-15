@@ -2,7 +2,13 @@
  * Help text generators. All output goes to stdout (since `--help` is
  * not a failure) so agents can capture it via normal stdout redirection.
  */
-import { COMMAND_GROUPS, findCommand, findGroup } from './commands/index.js';
+import {
+  COMMAND_GROUPS,
+  findCommand,
+  findFacet,
+  findFacetCommand,
+  findGroup,
+} from './commands/index.js';
 
 const VERSION = '0.0.0';
 
@@ -41,6 +47,16 @@ export function nounHelp(noun: string): string | null {
   const lines: string[] = [];
   lines.push(`silverhand ${noun} — ${group.summary}`);
   lines.push('');
+  // Faceted noun (3-level): list facets, not verbs.
+  if (group.facets && group.facets.length > 0) {
+    lines.push('Facets:');
+    for (const f of group.facets) {
+      lines.push(`  ${f.facet.padEnd(10)} ${f.summary}`);
+    }
+    lines.push('');
+    lines.push(`Run \`silverhand ${noun} <facet> --help\` to list verbs.`);
+    return lines.join('\n');
+  }
   lines.push('Verbs:');
   for (const c of group.commands) {
     lines.push(`  ${c.verb.padEnd(10)} ${c.summary}`);
@@ -50,8 +66,36 @@ export function nounHelp(noun: string): string | null {
   return lines.join('\n');
 }
 
+export function facetHelp(noun: string, facet: string): string | null {
+  const group = findGroup(noun);
+  const f = findFacet(noun, facet);
+  if (!group || !f) return null;
+  const lines: string[] = [];
+  lines.push(`silverhand ${noun} ${facet} — ${f.summary}`);
+  lines.push('');
+  lines.push('Verbs:');
+  for (const c of f.commands) {
+    lines.push(`  ${c.verb.padEnd(10)} ${c.summary}`);
+  }
+  lines.push('');
+  lines.push(
+    `Run \`silverhand ${noun} ${facet} <verb> --help\` for flag-level usage.`,
+  );
+  return lines.join('\n');
+}
+
 export function verbHelp(noun: string, verb: string): string | null {
   const cmd = findCommand(noun, verb);
+  if (!cmd) return null;
+  return cmd.help;
+}
+
+export function facetVerbHelp(
+  noun: string,
+  facet: string,
+  verb: string,
+): string | null {
+  const cmd = findFacetCommand(noun, facet, verb);
   if (!cmd) return null;
   return cmd.help;
 }

@@ -2,11 +2,31 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { COMMAND_GROUPS, findCommand, findGroup } from '../src/commands/index.js';
+import {
+  COMMAND_GROUPS,
+  findCommand,
+  findFacet,
+  findFacetCommand,
+  findGroup,
+} from '../src/commands/index.js';
 import type { BackendClient } from '../src/client.js';
 
+/** Every leaf command, whether flat (`noun verb`) or faceted
+ *  (`noun facet verb`), with a human label for assertion messages. */
+function allCommands(): Array<{ label: string; cmd: import('../src/commands/index.js').Command }> {
+  const out: Array<{ label: string; cmd: import('../src/commands/index.js').Command }> = [];
+  for (const g of COMMAND_GROUPS) {
+    for (const c of g.commands) out.push({ label: `${g.noun} ${c.verb}`, cmd: c });
+    for (const f of g.facets ?? []) {
+      for (const c of f.commands)
+        out.push({ label: `${g.noun} ${f.facet} ${c.verb}`, cmd: c });
+    }
+  }
+  return out;
+}
+
 describe('command catalogue', () => {
-  it('exposes the eight nouns we promised in the prompt', () => {
+  it('exposes the nine nouns we promised in the prompt', () => {
     const nouns = COMMAND_GROUPS.map(g => g.noun);
     expect(nouns).toEqual([
       'message',
@@ -17,6 +37,7 @@ describe('command catalogue', () => {
       'workspace',
       'schedule',
       'file',
+      'profile',
     ]);
   });
 
@@ -55,11 +76,9 @@ describe('command catalogue', () => {
   });
 
   it('every command has a non-empty help block', () => {
-    for (const g of COMMAND_GROUPS) {
-      for (const c of g.commands) {
-        expect(c.help, `${g.noun} ${c.verb}`).toMatch(/silverhand /);
-        expect(c.summary.length, `${g.noun} ${c.verb}`).toBeGreaterThan(0);
-      }
+    for (const { label, cmd } of allCommands()) {
+      expect(cmd.help, label).toMatch(/silverhand /);
+      expect(cmd.summary.length, label).toBeGreaterThan(0);
     }
   });
 
@@ -75,10 +94,8 @@ describe('command catalogue', () => {
     // any flag and re-introduce the "agent typed a typo, got the full
     // board" footgun. Workspace.list legitimately takes nothing — it
     // declares an empty `flags: []`.
-    for (const g of COMMAND_GROUPS) {
-      for (const c of g.commands) {
-        expect(c.flags, `${g.noun} ${c.verb} missing flags declaration`).toBeDefined();
-      }
+    for (const { label, cmd } of allCommands()) {
+      expect(cmd.flags, `${label} missing flags declaration`).toBeDefined();
     }
   });
 
@@ -96,18 +113,97 @@ describe('command catalogue', () => {
       /AUTH_TOKEN/,
       /\bauth failure\b/i,
     ];
-    for (const g of COMMAND_GROUPS) {
-      for (const c of g.commands) {
-        for (const re of forbidden) {
-          expect(
-            c.help,
-            `${g.noun} ${c.verb} help leaks "${re}"`,
-          ).not.toMatch(re);
-        }
+    for (const { label, cmd } of allCommands()) {
+      for (const re of forbidden) {
+        expect(cmd.help, `${label} help leaks "${re}"`).not.toMatch(re);
       }
     }
   });
 });
+
+describe('profile facet (3-level: profile mcp <verb>)', () => {
+  it('exposes the mcp facet with get/set/validate', () => {
+    const facet = findFacet('profile', 'mcp');
+    expect(facet).toBeDefined();
+    const verbs = facet!.commands.map(c => c.verb);
+    expect(verbs).toEqual(['get', 'set', 'validate']);
+  });
+
+  it('resolves a facet command by (noun, facet, verb)', () => {
+    expect(findFacetCommand('profile', 'mcp', 'get')).toBeDefined();
+    expect(findFacetCommand('profile', 'mcp', 'set')).toBeDefined();
+    expect(findFacetCommand('profile', 'mcp', 'validate')).toBeDefined();
+    expect(findFacetCommand('profile', 'mcp', 'bogus')).toBeUndefined();
+    expect(findFacet('profile', 'bogus')).toBeUndefined();
+  });
+
+  it('the profile noun has no flat verbs (facet-only)', () => {
+    expect(findGroup('profile')?.commands).toEqual([]);
+  });
+
+  it('validate is CLI-local: parses stdin and reports server_count, no backend call', async () => {
+    const cmd = findFacetCommand('profile', 'mcp', 'validate')!;
+    const raw = JSON.stringify({
+      mcpServers: { a: { command: 'x' }, b: { type: 'http', url: 'https://e/' } },
+    });
+    const result = await runWithStdin(cmd, raw, {} as BackendClient);
+    expect(result).toEqual({ ok: true, server_count: 2 });
+  });
+
+  it('validate rejects bad JSON with validation_error (no backend call)', async () => {
+    const cmd = findFacetCommand('profile', 'mcp', 'validate')!;
+    await expect(
+      runWithStdin(cmd, '{ not json', {} as BackendClient),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+  });
+
+  it('set pipes raw stdin verbatim to the client', async () => {
+    const cmd = findFacetCommand('profile', 'mcp', 'set')!;
+    let captured: string | undefined;
+    const client = {
+      setProfileMcp: async (raw: string) => {
+        captured = raw;
+        return { ok: true, bytes_written: raw.length };
+      },
+    } as unknown as BackendClient;
+    const raw = '{"mcpServers":{"a":{"command":"x"}}}';
+    const result = await runWithStdin(cmd, raw, client);
+    expect(captured).toBe(raw);
+    expect(result).toMatchObject({ ok: true });
+  });
+});
+
+/** Run a command whose `run` reads stdin, by feeding `input` through a
+ *  faked `process.stdin` async-iterator (the same shape the command's
+ *  `for await (const chunk of process.stdin)` consumes). */
+async function runWithStdin(
+  cmd: import('../src/commands/index.js').Command,
+  input: string,
+  client: BackendClient,
+): Promise<unknown> {
+  const realStdin = Object.getOwnPropertyDescriptor(process, 'stdin');
+  const fake = {
+    isTTY: false,
+    async *[Symbol.asyncIterator]() {
+      yield Buffer.from(input, 'utf8');
+    },
+  };
+  Object.defineProperty(process, 'stdin', { value: fake, configurable: true });
+  try {
+    return await cmd.run({
+      env: {
+        conversationId: 'conv',
+        agentId: 'agent',
+        serverUrl: 'http://127.0.0.1:4488',
+        authToken: 'token',
+      },
+      client,
+      args: { flags: {}, positional: [], rest: [] },
+    } as any);
+  } finally {
+    if (realStdin) Object.defineProperty(process, 'stdin', realStdin);
+  }
+}
 
 describe('thread legacy verbs', () => {
   it('removes create/close and keeps explicit migration hints', () => {
