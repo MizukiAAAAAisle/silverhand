@@ -4,6 +4,7 @@ import { AgentHeader } from './AgentHeader';
 import { AgentProfileCard } from './AgentProfileCard';
 import { AgentSchedulesCard } from './AgentSchedulesCard';
 import { AgentWorkspacePane } from './AgentWorkspacePane';
+import { AgentMcpPane } from './AgentMcpPane';
 import { AgentConversationActivityList } from './AgentConversationActivityList';
 import { AgentSidebar, type AgentSection } from './AgentSidebar';
 import {
@@ -16,6 +17,7 @@ const SECTION_STORAGE_KEY = 'silverhand:layout.agent-section';
 const VALID_SECTIONS: ReadonlyArray<AgentSection> = [
   'profile',
   'workspace',
+  'mcp',
   'runtime',
   'schedules',
 ];
@@ -134,6 +136,9 @@ export function AgentView({
                     agent={agent}
                     runtimeState={runtimeQuery.data}
                   />
+                ) : null}
+                {section === 'mcp' ? (
+                  <AgentMcpPane agentId={agent.id} runtime={agent.runtime} />
                 ) : null}
                 {section === 'runtime' ? (
                   <AgentConversationActivityList

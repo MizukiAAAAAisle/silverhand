@@ -1,8 +1,8 @@
 import { type ComponentType, type SVGProps } from 'react';
-import { Activity, CalendarClock, FolderTree, User } from 'lucide-react';
+import { Activity, CalendarClock, FolderTree, Plug, User } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
-export type AgentSection = 'profile' | 'workspace' | 'runtime' | 'schedules';
+export type AgentSection = 'profile' | 'workspace' | 'mcp' | 'runtime' | 'schedules';
 
 interface SectionItem {
   id: AgentSection;
@@ -29,6 +29,12 @@ export const AGENT_SECTIONS: ReadonlyArray<SectionItem> = [
     label: 'Workspace',
     icon: FolderTree,
     hint: 'L1 system prompt, MEMORY, notes.',
+  },
+  {
+    id: 'mcp',
+    label: 'MCP',
+    icon: Plug,
+    hint: 'Profile MCP servers — raw config + summary.',
   },
   {
     id: 'runtime',

@@ -7,12 +7,14 @@ import type {
   AgentWorkspaceFileRead,
   AgentWorkspaceTree,
   CreateAgentInput,
+  McpProbeRequest,
+  McpProbeResult,
   ScheduleDto,
   ScheduleListStatusFilter,
   UpdateAgentInput,
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
-import { api, apiUpload } from '@/lib/api';
+import { api, apiUpload, ApiError } from '@/lib/api';
 
 const agentsKey = ['agents'] as const;
 const agentKey = (id: string) => ['agents', id] as const;
@@ -42,6 +44,55 @@ export function useAgent(agentId: string | null) {
     queryFn: async () => {
       const res = await api<{ agent: AgentDto }>(`/api/agents/${agentId}`);
       return res.agent;
+    },
+  });
+}
+
+const agentProfileMcpKey = (id: string) => ['agents', id, 'profile-mcp'] as const;
+
+/**
+ * Read the agent's raw profile MCP config (`mcp.json`, or `null` when unset).
+ * The endpoint is `canEditAgent`-gated — the raw can carry secrets, so a
+ * non-editor viewer gets a 403 (surfaced as a "private" state, not retried).
+ * 4xx responses are terminal: retrying can't turn a forbidden/not-found into
+ * bytes, it only delays the locked/empty state.
+ */
+export function useAgentProfileMcp(agentId: string | null) {
+  return useQuery({
+    queryKey: agentId ? agentProfileMcpKey(agentId) : ['agents', 'none', 'profile-mcp'],
+    enabled: !!agentId,
+    queryFn: async () => {
+      const res = await api<{ raw: string | null }>(apiPaths.agentProfileMcp(agentId!));
+      return res.raw;
+    },
+    retry: (count, err) =>
+      !(err instanceof ApiError && err.status >= 400 && err.status < 500) && count < 2,
+  });
+}
+
+/**
+ * Live MCP **probe** — connect to one server's real endpoint, run the protocol
+ * `initialize` handshake and, when `include_tools`, `tools/list`. A mutation,
+ * not a query: it is an explicit, side-effectful, user-triggered diagnostic
+ * (never on mount, never polled). The host owns the whole connection
+ * lifecycle (one-shot connect → close in `finally`); the renderer just fires
+ * the request and renders the returned snapshot. The endpoint is
+ * `canEditAgent`-gated, same as the raw read.
+ *
+ * One mutation instance per ServerRow so each row's pending/result state is
+ * isolated. `server_name` is the RAW name (the host connects to the real
+ * endpoint, not the `silverhand_profile__` runtime alias).
+ */
+export function useMcpProbe(agentId: string) {
+  return useMutation({
+    mutationFn: async (body: McpProbeRequest) => {
+      // Route returns the bare `McpProbeResult` (200), canEditAgent-gated;
+      // protocol failures are `{ok:false, phase}` at 200, only host-transport
+      // faults are HTTP errors. (#task:1137 backend, agents.ts:603.)
+      return api<McpProbeResult>(apiPaths.agentProfileMcpProbe(agentId), {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
     },
   });
 }
