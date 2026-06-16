@@ -97,6 +97,31 @@ with these is the bug.
    **not** suppressed: forcing it instant would make the landing row hard-cut
    while siblings fade — a visible inconsistency for an invisible difference.
 
+3. **Two freezes, two row-sets — value-freeze is siblings-only, never the
+   dragged row.** The freeze is split into two signals on purpose
+   (`freezeColorTransition` = every row through the bridge, per invariant 2;
+   `freezeColorValue` = siblings only — strips `:hover` so a row sliding under a
+   stationary cursor can't paint a hover bg). The split is **structural, not
+   residue**: the dragged row lands under the cursor on drop, so its true value
+   is `hover`. If its *value* were also frozen (to the resting value) during the
+   drag, then at the frame the freeze lifts there is a value delta
+   (resting → hover); if the transition has re-attached on that same frame, the
+   browser animates the delta — the fade-in doesn't disappear, it just defers
+   from the drop frame to the unfreeze frame. Keeping the dragged row's value
+   **live at all times** (only its transition frozen) guarantees no unfreeze
+   boundary ever carries an animatable delta. **Do NOT** collapse the two into a
+   single signal — it reintroduces the fade-in. Making the dragged row hide its
+   hover bg mid-drag would require a staggered two-frame unfreeze (value first,
+   transition next frame), strictly more complex — not done.
+
+This whole color-freeze apparatus exists *solely* to preserve the resting
+`transition-colors` hover-fade during drag. That fade is kept deliberately: every
+sidebar row type (workspace rail, channel list, search / saved / archived) uses
+the same 150ms fade, so dropping it on draggable channel rows alone would split
+the sidebar's row language for no semantic reason. Switching the sidebar to
+instant hover is a *global* design decision (its own task), out of scope here —
+and only that decision would let this apparatus be deleted.
+
 ## Storage (migration v47)
 
 ```sql

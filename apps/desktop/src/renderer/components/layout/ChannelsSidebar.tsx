@@ -398,15 +398,18 @@ function SortableChannelItem({
     listeners,
   } = useSortable({ id: channel.id, animateLayoutChanges });
   // No DragOverlay (reverted — overlay regressed tracking/visibility, and the
-  // in-place version is already crisp on a controlled release; the fast-flick
-  // settle is deferred polish). The row itself translates with the pointer;
-  // keep zIndex + relative so it stays above siblings as it crosses them. We do
-  // NOT dim it (a 0.5→1 snap reads as a flicker). The crispness comes from the
-  // sibling-only hover-color freeze (see `dragging`) + the animateLayoutChanges
-  // settle guard, not from an overlay.
+  // in-place version is already crisp on a controlled release). The row itself
+  // translates with the pointer; keep zIndex + relative so it stays above
+  // siblings as it crosses them. Dim it to 0.6 while dragging as a "lifted"
+  // affordance (shiki). NOTE: a dim was removed once because the 0.6→1 restore
+  // on release could read as a one-frame pop; re-added deliberately now that the
+  // desync / color flickers are gone — if the release frame ever pops, add a
+  // `transition-opacity` settle. Crispness otherwise comes from the sibling-only
+  // hover-color freeze (see `freezeColorValue`) + the animateLayoutChanges guard.
   const style: CSSProperties = {
     transform: transform ? `translate3d(0, ${transform.y}px, 0)` : undefined,
     transition,
+    opacity: isDragging ? 0.6 : undefined,
     zIndex: isDragging ? 1 : undefined,
     position: isDragging ? 'relative' : undefined,
   };
@@ -428,8 +431,8 @@ function SortableChannelItem({
         workspaceKind={workspaceKind}
         unreadCount={unreadByChannel[channel.id] ?? 0}
         draggable
-        sorting={isSorting || bridging}
-        dragging={isSorting && !isDragging}
+        freezeColorTransition={isSorting || bridging}
+        freezeColorValue={isSorting && !isDragging}
       />
     </li>
   );
@@ -480,8 +483,8 @@ function ChannelRow({
   workspaceKind,
   unreadCount,
   draggable,
-  sorting = false,
-  dragging = false,
+  freezeColorTransition = false,
+  freezeColorValue = false,
 }: {
   channel: ChannelNode;
   selected: boolean;
@@ -494,50 +497,41 @@ function ChannelRow({
   /** Manual mode: show the grab cursor so the row reads as draggable. The
    *  drag listeners live on the parent `<li>`, not here. */
   draggable?: boolean;
-  /** True while ANY row in this group is being dragged (`isSorting`) AND
-   *  through the post-drop bridge window (`bridging`, until the cache catches
-   *  up). We use this to freeze the color TRANSITION (drop `transition-colors`)
-   *  on EVERY row for that whole span. Rows shuffle under a near-stationary
-   *  pointer, so `:hover` / selected bg recompute as one slides under the
-   *  cursor; with `transition-colors` live, that recompute plays a ~150ms
-   *  bg/border/color fade. Two-round CDP (Alice + Cindy) pinned the residual
-   *  "原地微微一闪" to exactly this on the ACTIVE row: its bg animates over
-   *  150ms at the drag boundary. Freezing only the transition (not the color
-   *  VALUE) makes the change instant + imperceptible.
+  /* COLOR-FREEZE MODEL — two orthogonal axes (frame-level CDP narrative in
+   * docs/list-sort-v1.md §Renderer composition). Rows shuffle under a
+   * near-stationary pointer during a drag, so `:hover` / selected bg recompute
+   * as a row slides under the cursor — and with `transition-colors` live that
+   * recompute plays a ~150ms fade (the post-drop flicker). Two independent
+   * freezes suppress it:
    *
-   *  WHY the bridge matters (downward-drag asymmetry): `isSorting` flips false
-   *  on the exact drop frame (dnd clears `active`), but on downward drops the
-   *  active row briefly loses `:hover` that same frame (its new slot isn't
-   *  under the pointer for one frame) → bg→transparent → if the transition is
-   *  already re-armed it animates transparent→hover. `isSorting` alone can't
-   *  cover that frame; extending the freeze across `bridging` (pendingDrop)
-   *  does. Upward drops keep `:hover` so they never showed it.
+   *     what \ when    →  freeze prop
+   *     transition     →  freezeColorTransition  (all rows, drag + bridge)
+   *     value (:hover) →  freezeColorValue       (siblings only, during drag)
    *
-   *  WHY this is separate from `dragging`: the active row must keep its real
-   *  hover/selected color VALUE throughout (it tracks the pointer), so we do
-   *  NOT strip its `:hover` classes — only its transition. Stripping the value
-   *  on the active row (the old whole-group freeze) showed resting bg mid-drag
-   *  then a resting→hover fade-IN on release. So: transition freeze = all rows
-   *  (`sorting`); value freeze (`:hover` strip + pin hide) = siblings only
-   *  (`dragging`). See docs/list-sort-v1.md §Renderer composition. */
-  sorting?: boolean;
-  /** True while ANOTHER row in this group is being dragged — i.e. this is a
-   *  SIBLING of the active row (`isSorting && !isDragging`). For siblings we
-   *  also freeze the color VALUE: drop the `:hover` classes (so a row sliding
-   *  under the cursor can't paint a hover bg) and hide the hover-pin (its
-   *  opacity fade is another drop-frame flicker source). The ACTIVE row is
-   *  deliberately excluded here — it keeps its genuine hover/selected color
-   *  (see `sorting` for why), and only its transition is frozen. */
-  dragging?: boolean;
+   * GUARDRAIL — these MUST stay two separate signals; do NOT collapse them.
+   * The active row keeps its REAL hover/selected VALUE the whole time (it sits
+   * under the cursor), with only its transition frozen. Freezing its value too
+   * would create a value delta at the un-freeze boundary that the re-armed
+   * transition animates → the fade reappears, just relocated to the bridge-end
+   * frame. So: transition-freeze = all rows, value-freeze = siblings only. */
+  /** Freeze the color TRANSITION (drop `transition-colors`). True for EVERY row
+   *  across the drag AND the post-drop bridge (`isSorting || bridging`) — the
+   *  bridge half covers the drop frame, where on downward drags the active row
+   *  briefly loses `:hover` while `isSorting` has already flipped false. */
+  freezeColorTransition?: boolean;
+  /** Freeze the color VALUE — strip `:hover` + hide the hover-pin. SIBLINGS
+   *  only (`isSorting && !isDragging`); never the active row (see guardrail). */
+  freezeColorValue?: boolean;
 }): JSX.Element {
   const isClosed = channel.closed_at !== null;
   const isPinned = channel.pinned_at !== null;
   const isArchived = channel.archived_at !== null;
   const [hovered, setHovered] = useState(false);
 
-  // Pin control shows on hover or when already pinned — but NEVER mid-drag
-  // (its opacity fade is one of the flicker sources we freeze, see `dragging`).
-  const showPin = isPinned || (hovered && !dragging);
+  // Pin control shows on hover or when already pinned — but NEVER mid-drag for
+  // siblings (its opacity fade is a flicker source the value-freeze covers; see
+  // freezeColorValue).
+  const showPin = isPinned || (hovered && !freezeColorValue);
   // Archive/Restore is a channel-like organization action (#task:1145):
   // it applies to any top-level channel-like row — `channel` in a regular
   // workspace AND `dm_channel` in an agent_home/DM — and only excludes
@@ -548,11 +542,12 @@ function ChannelRow({
     (channel.kind === 'channel' || channel.kind === 'dm_channel');
   const hasManagementMenu = showArchiveMenu;
 
-  // While dragging, drop the hover classes entirely so a row sliding under the
-  // pointer can't paint a hover bg (and can't transition back out on drop).
+  // Siblings mid-drag: drop the hover classes so a row sliding under the pointer
+  // can't paint a hover bg (and can't transition back out on drop). Value-freeze
+  // — siblings only; see freezeColorValue.
   const rowBg = selected
     ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-    : dragging
+    : freezeColorValue
       ? 'border-transparent text-text-secondary'
       : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary';
 
@@ -561,14 +556,11 @@ function ChannelRow({
       data-row-selected={selected || undefined}
       className={
         'sidebar-row-border flex w-full items-stretch border ' +
-        // Color transitions are great for hover, but on the drop frame they
-        // animate the bg/border/color back ~150ms (= the "原地微微一闪" on the
-        // active row, CDP-confirmed). Drop them for EVERY row while sorting
-        // (`sorting`, incl. the active row) so any color recompute lands
-        // instantly. The active row still keeps its real hover/selected color
-        // VALUE (only siblings strip it, via `dragging`) — see the `sorting`
-        // prop doc.
-        (sorting ? '' : 'transition-colors ') +
+        // Freeze the color transition on every row during the drag + bridge so
+        // any hover/selected recompute lands instantly (no ~150ms fade). The
+        // active row keeps its real value, only its transition frozen; siblings
+        // also freeze the value (rowBg above). See freezeColorTransition.
+        (freezeColorTransition ? '' : 'transition-colors ') +
         rowBg +
         (draggable ? ' cursor-grab select-none active:cursor-grabbing' : '')
       }

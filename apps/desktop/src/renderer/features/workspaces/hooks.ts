@@ -557,13 +557,18 @@ function applyOrderToPayload(prev: SortCachePayload, orderedIds: string[]): Sort
   };
 }
 
-/** Synchronously apply a drag's new order to the cache. Call this in the drop
- *  handler BEFORE `useReorderSort().mutate`, so React re-renders in the
- *  dropped order in the SAME tick dnd-kit clears the drag transform. Going
- *  through the mutation's `onMutate` instead lands the cache write a microtask
- *  too late, so the row visibly snaps back to its old slot then jumps to the
- *  new one. The mutation then persists + reconciles (onSuccess) / refetches on
- *  error. */
+/** Apply a drag's new order to the inline viewer-sort cache, synchronously —
+ *  the deterministic CACHE/persistence mirror of the drop (dense ranks +
+ *  mode=manual). It does NOT carry frame-level sync: a `setQueryData` here does
+ *  NOT re-render in the same frame dnd-kit clears the drag transform, because
+ *  React Query's observer notify is microtask-batched, so the cache-driven
+ *  reorder lands a frame later (CDP-confirmed B-type desync — the row would
+ *  snap to its old slot then jump). Same-frame reordering is owned by the
+ *  renderer's `pendingDrop` local state (ChannelsSidebar), set in the same drop
+ *  event — do NOT delete `pendingDrop` on the assumption this cache write covers
+ *  the frame; it doesn't. See docs/list-sort-v1.md §Renderer composition. The
+ *  mutation then persists (no success reconcile — see useReorderSort); errors
+ *  refetch. */
 export function useApplySortOrder() {
   const qc = useQueryClient();
   return (listKey: string, orderedIds: string[]): void => {
