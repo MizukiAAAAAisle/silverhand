@@ -110,7 +110,7 @@ export function SidebarSectionHeader({
   );
 
   return (
-    <header className="mb-1 flex items-stretch justify-between text-sm font-medium tracking-wider text-text-muted">
+    <header className="mb-1 flex items-stretch justify-between text-[12px] font-medium tracking-wider text-text-muted">
       {collapsible ? (
         <button
           type="button"
@@ -193,7 +193,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
           <span className="inline-flex shrink-0 items-center leading-none text-text-muted">{icon}</span>
         ) : null}
         <span className={
-          'flex min-w-0 flex-1 items-baseline gap-1.5 ' +
+          'flex min-w-0 flex-1 gap-1.5 ' +
           (badge && badge > 0 && !selected ? 'font-semibold text-text-primary' : '')
         }>
           <span className="truncate">{title}</span>

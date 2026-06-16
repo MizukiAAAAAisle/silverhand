@@ -320,7 +320,8 @@
 
   /* ── Markdown body sizes (cross-theme baseline) ──
      14/14/12/0.88em 与 forza6 一致 —— design-new-theme §Q 簇说"切主题
-     不应该字号变"，slack-dark 接入时顺手对齐。 */
+     不应该字号变"，slack-dark 接入时顺手对齐。正文保持 14 即便 root 是
+     16px（#task:1148 间距修复）—— 16px 只为间距整数化，不动正文。 */
   --md-prose-size: 14px;
   --md-code-size: 14px;
   --system-message-size: 12px;
@@ -331,8 +332,8 @@
   --duration: 200ms;
 
   /* ── Chat default ──
-     14px 与 forza6 / appearance slider 默认对齐（warm-script 仍 15px 是
-     遗留差异，待 Q 簇统一扫描时一并改）。 */
+     14px 与 forza6 / appearance slider 默认对齐（warm-script 15px 保留
+     +1 遗留差异，待 Q 簇统一扫描时一并改）。 */
   --chat-font-size: 14px;
 
   /* ── Compat: forza6-introduced tokens (design-new-theme §3 关键 3) ──

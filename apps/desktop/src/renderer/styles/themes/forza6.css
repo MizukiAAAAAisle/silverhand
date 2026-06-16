@@ -574,15 +574,15 @@
      override name is unambiguous and never collides with the theme
      primitive.
 
+     14px conversation body. Root is 16px (#task:1148, to put Tailwind's
+     0.25rem spacing unit on a whole-pixel grid), but the reading-text
+     size is deliberately held at 14px (shiki review of #task:1148): the
+     16px move was for spacing / chrome integer-alignment, not body size.
      14px (not 13) because Space Grotesk is a geometric grotesk — its
      stroke contrast and curve geometry go soft below ~14px, and the
-     macOS subpixel-AA pullback in Mojave+ amplifies the effect. The
-     previous 13px baseline was tuned for Inter (humanist UI face,
-     hinted for small sizes); when we reverted body to Space Grotesk we
-     missed the recalibration. 14px gets the face's geometric identity
-     (round O, flat a) back into reading weight. shiki + Cindy
-     converged on 14 independently (msgs `PldL0VieHyiYtc27` /
-     `XCfTGJt3FuONjlKX` / `5yqOk4dFiDT9ty_q`). */
+     macOS subpixel-AA pullback in Mojave+ amplifies the effect; the 14px
+     floor is a recalibration up from a 13px Inter baseline (shiki +
+     Cindy, `PldL0VieHyiYtc27` / `XCfTGJt3FuONjlKX` / `5yqOk4dFiDT9ty_q`). */
   --md-prose-size: 14px;
   --md-code-size: 14px;
   /* System message rows (task events, schedule banners, rename chips —

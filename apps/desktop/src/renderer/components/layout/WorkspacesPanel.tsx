@@ -319,7 +319,7 @@ function WorkspaceRow({
     <div
       data-row-selected={selected || undefined}
       className={
-        'sidebar-row-border flex w-full items-stretch border ' +
+        'sidebar-row-border flex h-8 w-full items-stretch border ' +
         // Freeze the color transition on every row during drag + bridge so any
         // hover/selected recompute lands instantly (no ~150ms fade).
         (freezeColorTransition ? '' : 'transition-colors ') +
@@ -330,7 +330,7 @@ function WorkspaceRow({
       <button
         type="button"
         onClick={() => ctx.onSelectWorkspace(workspace.id)}
-        className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm"
+        className="flex min-w-0 flex-1 items-center gap-2 px-2 text-left text-sm leading-[16px]"
       >
         <span className="shrink-0 text-text-muted">{icon}</span>
         <span

@@ -87,7 +87,7 @@ export function AgentSidebar({ active, onChange }: AgentSidebarProps): JSX.Eleme
               // forza6-components.css, scoped via the parent aside's
               // `aria-label="Agent sections"`. Radius comes from the
               // global `[data-panel-control]` rule (token-driven).
-              'flex items-center gap-2 px-2 py-1.5 text-left text-sm transition-colors',
+              'flex h-8 items-center gap-2 px-2 text-left text-[12px] transition-colors',
               selected
                 ? 'bg-bg-hover/60 text-text-primary'
                 : 'text-text-muted hover:bg-bg-hover/40 hover:text-text-primary',

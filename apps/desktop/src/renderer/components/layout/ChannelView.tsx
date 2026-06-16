@@ -499,7 +499,7 @@ function ActiveChannelView({
               aria-pressed={threadsListActive}
               title="Threads"
               className={
-                'flex size-8 shrink-0 items-center justify-center rounded-[6px] ' +
+                'flex size-7 shrink-0 items-center justify-center rounded-[6px] ' +
                 (threadsListActive
                   ? 'bg-bg-hover text-text-primary'
                   : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
@@ -516,7 +516,7 @@ function ActiveChannelView({
                 disabled={agentActionDisabled}
                 aria-label={restartTitle}
                 title={restartTitle}
-                className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
+                className="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
               >
                 <RefreshCw className="size-4" />
               </button>
@@ -526,7 +526,7 @@ function ActiveChannelView({
                 disabled={agentActionDisabled}
                 aria-label={stopTitle}
                 title={stopTitle}
-                className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
+                className="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
               >
                 <Power className="size-4" />
               </button>
@@ -538,7 +538,7 @@ function ActiveChannelView({
               onClick={() => setSettingsOpen(true)}
               aria-label="Channel settings"
               title="Channel settings"
-              className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+              className="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
               <Settings className="size-4" />
             </button>
@@ -549,7 +549,7 @@ function ActiveChannelView({
               onClick={onToggleFullscreen}
               aria-label={isFullscreen ? '退出全屏' : '全屏'}
               title={isFullscreen ? '退出全屏' : '全屏'}
-              className="flex size-8 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
+              className="flex size-7 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
               {isFullscreen ? (
                 <Minimize2 className="size-4" />
@@ -564,7 +564,7 @@ function ActiveChannelView({
               onClick={onCloseChild}
               aria-label={closeLabel}
               title={closeLabel}
-              className="flex size-8 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
+              className="flex size-7 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
               <X className="size-4" />
             </button>

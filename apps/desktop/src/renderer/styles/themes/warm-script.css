@@ -303,7 +303,9 @@
      primitive. See settings/apply.ts.
 
      14px matches forza6 so the slider/Settings preview reads the same
-     across themes (single product baseline, no per-theme drift here). */
+     across themes (single product baseline, no per-theme drift here).
+     Body held at 14 even though root is 16px (#task:1148 spacing fix) —
+     the 16px move was for spacing, not reading-text size. */
   --md-prose-size: 14px;
   --md-code-size: 14px;
   /* System message row size — one tier below markdown body; chrome,

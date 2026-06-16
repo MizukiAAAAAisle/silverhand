@@ -200,7 +200,7 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
         >
           <Select.Trigger
             aria-label={canAddHumans ? '添加成员' : '添加 agent'}
-            className="flex w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus disabled:cursor-not-allowed disabled:opacity-60 data-[placeholder]:text-text-muted"
+            className="flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2.5 text-sm text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus disabled:cursor-not-allowed disabled:opacity-60 data-[placeholder]:text-text-muted"
           >
             <span className="flex items-center gap-1.5">
               <UserPlus className="size-3.5 text-text-muted" />
@@ -292,7 +292,7 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
               return (
                 <li
                   key={`${m.kind}:${id}`}
-                  className="flex items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base px-2 py-1"
+                  className="flex h-8 items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base px-2"
                 >
                   {m.kind === 'agent' ? (
                     <AgentAvatar
