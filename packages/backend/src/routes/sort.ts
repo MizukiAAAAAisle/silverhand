@@ -37,8 +37,21 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
   /** The legal hard groups for a list kind — rail vs channel sidebar. */
   function legalGroups(listKey: string): SortGroup[] {
     return listKey === 'workspaces'
-      ? ['dm', 'regular:pinned', 'regular:unpinned']
+      ? ['pinned', 'dm', 'regular']
       : ['pinned', 'unpinned'];
+  }
+
+  /**
+   * The mode SCOPE a (list, group) pair toggles. The rail's mode is per
+   * section, so each hard group is its own scope; the channel sidebar is
+   * list-wide, so every group resolves to the sentinel scope ''. This is the
+   * single source for both `setMode` and `reorder` (order ⟹ manual) so the
+   * mode a drag flips matches the mode a menu sets — and it mirrors the
+   * renderer's `modeScopeOf`, so optimistic write and server agree. Pass a
+   * group already validated as legal for the list.
+   */
+  function modeScopeOf(listKey: string, group: SortGroup): string {
+    return listKey === 'workspaces' ? group : '';
   }
 
   /**
@@ -57,13 +70,14 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
       for (const ws of workspaces.list()) {
         if (ws.archived_at != null) continue;
         if (!canViewWorkspace(ctx, principal, ws.id)) continue;
-        if (ws.workspace_kind === 'agent_home') {
+        // Pin is the PRIMARY axis: a pinned workspace OR pinned DM lands in the
+        // cross-kind `pinned` group; only the unpinned tail is split by kind.
+        if (ws.pinned_at != null) {
+          groups.set(ws.id, 'pinned');
+        } else if (ws.workspace_kind === 'agent_home') {
           groups.set(ws.id, 'dm');
         } else if (ws.workspace_kind === 'regular') {
-          groups.set(
-            ws.id,
-            ws.pinned_at != null ? 'regular:pinned' : 'regular:unpinned',
-          );
+          groups.set(ws.id, 'regular');
         }
       }
       return { ok: true, groups };
@@ -102,11 +116,29 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
         resolved.status,
       );
     }
-    sort.setMode(principal.userId, parsed.data.list_key, parsed.data.mode);
+    // Resolve the mode scope from list_key + group, and reject a group/list
+    // mismatch (don't guess): the rail requires a section group, the channel
+    // sidebar is list-wide and must not carry one.
+    const { list_key: listKey, group, mode } = parsed.data;
+    if (listKey === 'workspaces') {
+      if (group === undefined || !legalGroups(listKey).includes(group)) {
+        return c.json(
+          { error: 'group is required and must be valid for this list', group },
+          400,
+        );
+      }
+    } else if (group !== undefined) {
+      return c.json(
+        { error: 'group is not supported for this list (list-wide mode)', group },
+        400,
+      );
+    }
+    const scope = group !== undefined ? modeScopeOf(listKey, group) : '';
+    sort.setMode(principal.userId, listKey, scope, mode);
     return c.json({
       viewer_sort: sort.getState(
         principal.userId,
-        parsed.data.list_key,
+        listKey,
         resolved.groups.keys(),
       ),
     });
@@ -163,7 +195,12 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
         400,
       );
     }
-    sort.reorder(principal.userId, listKey, orderedIds);
+    sort.reorder(
+      principal.userId,
+      listKey,
+      modeScopeOf(listKey, group),
+      orderedIds,
+    );
     return c.json({
       viewer_sort: sort.getState(principal.userId, listKey, resolved.groups.keys()),
     });

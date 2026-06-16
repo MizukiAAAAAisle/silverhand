@@ -35,7 +35,7 @@ describe('list sort — viewer state on list responses', () => {
     t = null;
   });
 
-  it('workspace + channel list responses carry viewer_sort, default mode recent / empty', async () => {
+  it('workspace + channel list responses carry viewer_sort, default empty modes', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
@@ -43,16 +43,17 @@ describe('list sort — viewer state on list responses', () => {
     const wsList = (await (await http(t).get('/api/workspaces')).json()) as any;
     expect(wsList.viewer_sort).toMatchObject({
       list_key: 'workspaces',
-      mode: 'recent',
       entries: [],
     });
+    // No mode rows yet → empty map (every scope defaults to 'recent').
+    expect(wsList.viewer_sort.modes).toEqual({});
 
     const chList = (await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json()) as any;
     expect(chList.viewer_sort).toMatchObject({
       list_key: `channels:${wsId}`,
-      mode: 'recent',
       entries: [],
     });
+    expect(chList.viewer_sort.modes).toEqual({});
   });
 });
 
@@ -63,20 +64,59 @@ describe('PUT /api/sort/mode', () => {
     t = null;
   });
 
-  it('upserts the per-list mode and reflects it on the list response', async () => {
+  it('upserts a channel list-wide mode (scope "") and reflects it on the list', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const wsId = await makeWorkspace(t, 'eng', agentId);
+    const listKey = `channels:${wsId}`;
+
+    const res = await http(t).put('/api/sort/mode', { list_key: listKey, mode: 'manual' });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).viewer_sort.modes['']).toBe('manual');
+
+    const chList = (await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json()) as any;
+    expect(chList.viewer_sort.modes['']).toBe('manual');
+  });
+
+  it('upserts ONE rail section mode (per-group scope), leaving sibling scopes untouched', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     await makeWorkspace(t, 'eng', agentId);
 
     const res = await http(t).put('/api/sort/mode', {
       list_key: 'workspaces',
+      group: 'regular',
       mode: 'manual',
     });
     expect(res.status).toBe(200);
-    expect(((await res.json()) as any).viewer_sort.mode).toBe('manual');
+    const modes = ((await res.json()) as any).viewer_sort.modes;
+    expect(modes.regular).toBe('manual');
+    // Only the toggled scope is written — `pinned` / `dm` stay at default.
+    expect(modes.pinned).toBeUndefined();
+    expect(modes.dm).toBeUndefined();
 
     const wsList = (await (await http(t).get('/api/workspaces')).json()) as any;
-    expect(wsList.viewer_sort.mode).toBe('manual');
+    expect(wsList.viewer_sort.modes.regular).toBe('manual');
+  });
+
+  it('rejects a workspaces mode set without a group (rail mode is per-section)', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    await makeWorkspace(t, 'eng', agentId);
+    const res = await http(t).put('/api/sort/mode', { list_key: 'workspaces', mode: 'manual' });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a channel mode set that carries a group (channel is list-wide)', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const wsId = await makeWorkspace(t, 'eng', agentId);
+    const res = await http(t).put('/api/sort/mode', {
+      list_key: `channels:${wsId}`,
+      group: 'pinned',
+      mode: 'manual',
+    });
+    expect(res.status).toBe(400);
   });
 
   it('rejects an invalid list_key', async () => {
@@ -257,10 +297,11 @@ describe('PUT /api/sort/order', () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     await makeWorkspace(t, 'eng', agentId);
-    // 'pinned' is a channel-sidebar group, not a workspace-rail group.
+    // 'unpinned' is a channel-sidebar group, not a workspace-rail group
+    // (the rail uses pinned / dm / regular).
     const res = await http(t).put('/api/sort/order', {
       list_key: 'workspaces',
-      group: 'pinned',
+      group: 'unpinned',
       ordered_ids: [],
     });
     expect(res.status).toBe(400);
@@ -274,9 +315,9 @@ describe('PUT /api/sort/order', () => {
     await makeChannel(t, wsId, 'two', agentId);
     const listKey = `channels:${wsId}`;
 
-    // Default mode is 'recent' — never set it manually.
+    // Default: no mode row → channel reads 'recent' (scope '' absent).
     const before = (await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json()) as any;
-    expect(before.viewer_sort.mode).toBe('recent');
+    expect(before.viewer_sort.modes['']).toBeUndefined();
 
     const chList = (await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json()) as any;
     const allIds: string[] = chList.channels.map((c: any) => c.id);
@@ -286,11 +327,37 @@ describe('PUT /api/sort/order', () => {
       ordered_ids: [...allIds].reverse(),
     });
     expect(res.status).toBe(200);
-    // Response reflects the atomic mode flip…
-    expect(((await res.json()) as any).viewer_sort.mode).toBe('manual');
+    // Response reflects the atomic mode flip on the list-wide scope ''…
+    expect(((await res.json()) as any).viewer_sort.modes['']).toBe('manual');
     // …and it persists on the next list read.
     const after = (await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json()) as any;
-    expect(after.viewer_sort.mode).toBe('manual');
+    expect(after.viewer_sort.modes['']).toBe('manual');
+  });
+
+  it('a rail reorder flips ONLY the dragged section scope to manual', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const a = await makeWorkspace(t, 'alpha', agentId);
+    const b = await makeWorkspace(t, 'beta', agentId);
+
+    // Drag the (unpinned) `regular` rail section.
+    const wsList = (await (await http(t).get('/api/workspaces')).json()) as any;
+    const regularIds = wsList.workspaces
+      .filter((w: any) => w.workspace_kind === 'regular' && w.archived_at == null)
+      .map((w: any) => w.id);
+    expect(regularIds).toEqual(expect.arrayContaining([a, b]));
+
+    const res = await http(t).put('/api/sort/order', {
+      list_key: 'workspaces',
+      group: 'regular',
+      ordered_ids: [...regularIds].reverse(),
+    });
+    expect(res.status).toBe(200);
+    const modes = ((await res.json()) as any).viewer_sort.modes;
+    expect(modes.regular).toBe('manual');
+    // The `pinned` / `dm` sections keep their own (default) mode — no rail-wide flip.
+    expect(modes.pinned).toBeUndefined();
+    expect(modes.dm).toBeUndefined();
   });
 });
 
@@ -363,5 +430,48 @@ describe('pin/unpin clears manual rank (cross-group boundary)', () => {
     const c1Entry = after.viewer_sort.entries.find((e: any) => e.entity_id === c1);
     // Either no rank row, or rank cleared to null.
     expect(c1Entry?.rank ?? null).toBeNull();
+  });
+
+  it('a DM workspace can be pinned and joins the cross-kind `pinned` rail group', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const regularWs = await makeWorkspace(t, 'eng', agentId);
+
+    // The agent's auto-provisioned DM (agent_home) workspace.
+    const before = (await (await http(t).get('/api/workspaces')).json()) as any;
+    const dmWs = before.workspaces.find(
+      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === agentId,
+    );
+    expect(dmWs).toBeTruthy();
+    expect(dmWs.pinned_at).toBeNull();
+
+    // Pin the DM — previously rejected (regular-only); now cross-kind.
+    expect((await http(t).post(`/api/workspaces/${dmWs.id}/pin`, undefined)).status).toBe(200);
+    // Pin the regular workspace too — both now live in the unified `pinned` group.
+    expect((await http(t).post(`/api/workspaces/${regularWs}/pin`, undefined)).status).toBe(200);
+
+    // A cross-kind reorder of the `pinned` group (DM + regular together) is
+    // accepted — proof both resolve to the same live group.
+    const res = await http(t).put('/api/sort/order', {
+      list_key: 'workspaces',
+      group: 'pinned',
+      ordered_ids: [dmWs.id, regularWs],
+    });
+    expect(res.status).toBe(200);
+    const after = (await (await http(t).get('/api/workspaces')).json()) as any;
+    expect(after.workspaces.find((w: any) => w.id === dmWs.id).pinned_at).not.toBeNull();
+  });
+
+  it('a DM workspace can be unpinned (cross-kind unpin)', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const list = (await (await http(t).get('/api/workspaces')).json()) as any;
+    const dmWs = list.workspaces.find(
+      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === agentId,
+    );
+    expect((await http(t).post(`/api/workspaces/${dmWs.id}/pin`, undefined)).status).toBe(200);
+    expect((await http(t).del(`/api/workspaces/${dmWs.id}/pin`)).status).toBe(200);
+    const after = (await (await http(t).get('/api/workspaces')).json()) as any;
+    expect(after.workspaces.find((w: any) => w.id === dmWs.id).pinned_at).toBeNull();
   });
 });

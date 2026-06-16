@@ -2900,6 +2900,36 @@ export const migrations: Migration[] = [
         ON user_sort_entry(user_id, list_key);
     `,
   },
+  {
+    version: 48,
+    name: 'user_list_sort_mode_per_scope',
+    up: `
+      -- Per-SCOPE sort mode (#task:1146). The workspace rail's sort mode is now
+      -- per hard-group (pinned / dm / regular) instead of one per list, so a
+      -- "scope" column joins the key. The channel sidebar stays list-wide via
+      -- the sentinel scope '' (one mode for the whole list, unchanged).
+      --   scope ''                       = list-wide  (channels:<ws_id>)
+      --   scope 'pinned'|'dm'|'regular'  = one rail section (workspaces)
+      -- SQLite can't add a column to a PRIMARY KEY in place, so rebuild the
+      -- table and fold every existing row into the list-wide scope ''. Existing
+      -- channel rows are already list-wide (correct). Pre-existing 'workspaces'
+      -- rows become a harmless orphan at scope '' — the rail now reads its modes
+      -- at the group scopes, so they simply fall back to the default 'recent'
+      -- (an accepted reset; the rail's group taxonomy is changing anyway).
+      ALTER TABLE user_list_sort_mode RENAME TO user_list_sort_mode_old;
+      CREATE TABLE user_list_sort_mode (
+        user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        list_key   TEXT NOT NULL,
+        scope      TEXT NOT NULL DEFAULT '',
+        mode       TEXT NOT NULL CHECK (mode IN ('recent', 'manual')),
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, list_key, scope)
+      );
+      INSERT INTO user_list_sort_mode (user_id, list_key, scope, mode, updated_at)
+        SELECT user_id, list_key, '', mode, updated_at FROM user_list_sort_mode_old;
+      DROP TABLE user_list_sort_mode_old;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

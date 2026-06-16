@@ -1,9 +1,26 @@
 import { useMemo } from 'react';
-import { Archive, Bookmark, Search } from 'lucide-react';
+import { Archive, Bookmark, Plus, Search } from 'lucide-react';
 import type { AgentDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
+import { Button } from '@/components/ui/button';
 import { useHostProvenanceGate } from '@/features/hosts/hooks';
-import { WorkspaceGroup, type WorkspaceItem } from './WorkspacesPanel';
+import {
+  useAgentAvatarObjectUrls,
+  type AgentAvatarSource,
+} from '@/features/agents/avatar-hooks';
+import {
+  useSetSortMode,
+  useWorkspaceSortState,
+} from '@/features/workspaces/hooks';
+import { sortModeOf } from '@/lib/viewer-sort';
+import { useListDragSort } from './list-drag-sort';
+import { SortModeMenu } from './SortModeMenu';
+import {
+  WorkspaceGroup,
+  isWorkspacePinned,
+  type WorkspaceItem,
+  type WorkspaceSortConfig,
+} from './WorkspacesPanel';
 
 interface SidebarProps {
   workspaces: WorkspaceItem[];
@@ -33,19 +50,92 @@ interface SidebarProps {
   savedCount: number | undefined;
 }
 
+/** The rail is one sortable list (`list_key='workspaces'`) with three live hard
+ *  groups; a workspace's group is partitioned from its pin state first (PINNED
+ *  is cross-kind), then its kind. Never stored. Each group is its own mode scope
+ *  (#task:1146). See docs/list-sort-v1.md. */
+type RailGroup = 'pinned' | 'dm' | 'regular';
+
+function railGroupKeyOf(workspace: WorkspaceItem): RailGroup {
+  if (isWorkspacePinned(workspace)) return 'pinned';
+  return workspace.kind === 'dm' ? 'dm' : 'regular';
+}
+
 export function Sidebar(props: SidebarProps): JSX.Element {
   const hostProvenance = useHostProvenanceGate();
-  const { dms, regular, archived } = useMemo(() => {
+  // Live partition: PINNED is the cross-kind top group (any pinned workspace OR
+  // pinned DM); DM / WORKSPACES hold only the UNPINNED tail of each kind. So a
+  // pinned DM leaves the DM section and joins PINNED (#task:1146 pin redesign).
+  const { pinned, dms, regular, archived } = useMemo(() => {
+    const pinned: WorkspaceItem[] = [];
     const dms: WorkspaceItem[] = [];
     const regular: WorkspaceItem[] = [];
     const archived: WorkspaceItem[] = [];
     for (const w of props.workspaces) {
       if (w.archived) archived.push(w);
+      else if (isWorkspacePinned(w)) pinned.push(w);
       else if (w.kind === 'dm') dms.push(w);
       else regular.push(w);
     }
-    return { dms, regular, archived };
+    return { pinned, dms, regular, archived };
   }, [props.workspaces]);
+
+  // Resolve DM-agent avatar object URLs ONCE for the whole rail, over the
+  // STABLE union of every DM agent (across pinned / dm / archived). Pin/unpin
+  // only moves a DM between sections — the set of (agent, avatar_url) pairs is
+  // unchanged — so this map stays identical and no avatar tears down + refetches
+  // (the flash shiki saw came from per-section resolution churning on pin).
+  // #task:1146
+  const dmAvatarSources = useMemo<AgentAvatarSource[]>(() => {
+    const agentsById = props.agentsById;
+    if (!agentsById) return [];
+    const out: AgentAvatarSource[] = [];
+    for (const w of props.workspaces) {
+      if (w.kind !== 'dm' || !w.dm_agent_id) continue;
+      const agent = agentsById.get(w.dm_agent_id);
+      if (!agent) continue;
+      out.push({ id: agent.id, avatar_url: agent.avatar_url });
+    }
+    return out;
+  }, [props.workspaces, props.agentsById]);
+  const dmAgentAvatarUrls = useAgentAvatarObjectUrls(dmAvatarSources);
+
+  // Per-user rail ordering (#task:1146). The whole rail is ONE list; the drag
+  // state machine (synchronous drop override, color-freeze, settle guard) lives
+  // in the shared useListDragSort — the same hook the channel sidebar uses, so
+  // the CDP-tuned flicker invariants can't drift between the two surfaces.
+  // `modeScopeOf: g => g` makes each section its own [recent|manual] scope.
+  const { data: viewerSort } = useWorkspaceSortState();
+  const setSortMode = useSetSortMode();
+  const { orderedGroups, onReorder, bridging } = useListDragSort<
+    RailGroup,
+    WorkspaceItem
+  >({
+    listKey: 'workspaces',
+    groups: { pinned, dm: dms, regular },
+    viewerSort,
+    getId: w => w.id,
+    getCreatedAt: w => w.created_at,
+    modeScopeOf: g => g,
+  });
+  const orderedPinned = orderedGroups.pinned;
+  const orderedDms = orderedGroups.dm;
+  const orderedRegular = orderedGroups.regular;
+
+  // Each rail section owns its own sort menu (reads + writes that group's scope)
+  // and its own single-group drag config.
+  const sortMenuFor = (group: RailGroup): JSX.Element => (
+    <SortModeMenu
+      mode={sortModeOf(viewerSort, group)}
+      onChange={m => setSortMode.mutate({ list_key: 'workspaces', group, mode: m })}
+    />
+  );
+  const sortConfigFor = (group: RailGroup): WorkspaceSortConfig<RailGroup> => ({
+    order: [group],
+    groupKeyOf: railGroupKeyOf,
+    bridging,
+    onReorder,
+  });
 
   // While the Saved view is active, suppress workspace highlighting so
   // the Saved entry visually owns selection.
@@ -123,29 +213,63 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           <span>Archived</span>
         </button>
 
+        {orderedPinned.length > 0 ? (
+          <WorkspaceGroup
+            label="PINNED"
+            kind="regular"
+            workspaces={orderedPinned}
+            selectedWorkspaceId={workspaceHighlight}
+            onSelectWorkspace={props.onSelectWorkspace}
+            onPinWorkspace={props.onPinWorkspace}
+            canRevealWorkspace={workspace =>
+              hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
+            }
+            headerAction={sortMenuFor('pinned')}
+            agentsById={props.agentsById}
+            dmAgentAvatarUrls={dmAgentAvatarUrls}
+            sort={sortConfigFor('pinned')}
+          />
+        ) : null}
         <WorkspaceGroup
           label="DM"
           kind="dm"
-          workspaces={dms}
-          selectedWorkspaceId={workspaceHighlight}
-          onSelectWorkspace={props.onSelectWorkspace}
-          canRevealWorkspace={workspace =>
-            hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
-          }
-          emptyHint="新建 agent 时会自动创建 DM"
-          agentsById={props.agentsById}
-        />
-        <WorkspaceGroup
-          label="WORKSPACES"
-          kind="regular"
-          workspaces={regular}
+          workspaces={orderedDms}
           selectedWorkspaceId={workspaceHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
           onPinWorkspace={props.onPinWorkspace}
           canRevealWorkspace={workspace =>
             hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
           }
-          onAdd={props.onCreateWorkspace}
+          emptyHint="新建 agent 时会自动创建 DM"
+          agentsById={props.agentsById}
+          dmAgentAvatarUrls={dmAgentAvatarUrls}
+          headerAction={sortMenuFor('dm')}
+          sort={sortConfigFor('dm')}
+        />
+        <WorkspaceGroup
+          label="WORKSPACES"
+          kind="regular"
+          workspaces={orderedRegular}
+          selectedWorkspaceId={workspaceHighlight}
+          onSelectWorkspace={props.onSelectWorkspace}
+          onPinWorkspace={props.onPinWorkspace}
+          canRevealWorkspace={workspace =>
+            hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
+          }
+          headerAction={
+            <span className="flex items-center">
+              {sortMenuFor('regular')}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={props.onCreateWorkspace}
+                aria-label="add WORKSPACES"
+              >
+                <Plus className="size-3.5" />
+              </Button>
+            </span>
+          }
           emptyHint={
             <>
               还没有工作区。点{' '}
@@ -156,6 +280,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             </>
           }
           agentsById={props.agentsById}
+          dmAgentAvatarUrls={dmAgentAvatarUrls}
+          sort={sortConfigFor('regular')}
         />
         {archived.length > 0 ? (
           <WorkspaceGroup
@@ -169,6 +295,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             }
             defaultExpanded={false}
             agentsById={props.agentsById}
+            dmAgentAvatarUrls={dmAgentAvatarUrls}
           />
         ) : null}
       </nav>

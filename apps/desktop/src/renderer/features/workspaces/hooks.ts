@@ -19,8 +19,8 @@ import type {
   WorkspaceHumanMemberDto,
   WorkspaceMembersResponse,
   WorkspaceRole,
+  SetSortModeInput,
   SortGroup,
-  SortMode,
   ViewerSortStateDto,
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
@@ -503,12 +503,16 @@ function sortListQueryKey(listKey: string): readonly unknown[] | null {
   return null;
 }
 
-/** Toggle a list's sort mode (recent|manual). Optimistic on the list cache's
- *  inline `viewerSort`, reconciled with the authoritative server state. */
+/** Toggle one SCOPE's sort mode (recent|manual). The scope is selected by
+ *  `group`: `'workspaces'` requires a rail group (`pinned|dm|regular`),
+ *  `'channels:<id>'` omits it (list-wide scope `''`). Optimistic on the list
+ *  cache's inline `viewerSort.modes`, reconciled with the authoritative server
+ *  state. The optimistic scope key MUST match what the backend derives from
+ *  (list_key, group) so the menu can't show a false state. */
 export function useSetSortMode() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (input: { list_key: string; mode: SortMode }) => {
+    mutationFn: async (input: SetSortModeInput) => {
       const res = await api<{ viewer_sort: ViewerSortStateDto }>(apiPaths.sortMode, {
         method: 'PUT',
         body: JSON.stringify(input),
@@ -521,9 +525,13 @@ export function useSetSortMode() {
       await qc.cancelQueries({ queryKey: key });
       const prev = qc.getQueryData<SortCachePayload>(key);
       if (prev) {
+        const scope = input.group ?? '';
         qc.setQueryData<SortCachePayload>(key, {
           ...prev,
-          viewerSort: { ...prev.viewerSort, mode: input.mode },
+          viewerSort: {
+            ...prev.viewerSort,
+            modes: { ...prev.viewerSort.modes, [scope]: input.mode },
+          },
         });
       }
       return { key, prev };
@@ -543,17 +551,29 @@ export function useSetSortMode() {
 }
 
 /** Apply a group's new drag order to the inline viewer-sort cache: dense
- *  0..n ranks for the dragged ids + flip mode to `manual` (mirrors the
- *  backend's atomic `order ⟹ manual`). Pure — returns the next payload. */
-function applyOrderToPayload(prev: SortCachePayload, orderedIds: string[]): SortCachePayload {
+ *  0..n ranks for the dragged ids + flip the dragged group's SCOPE mode to
+ *  `manual` (mirrors the backend's atomic, per-scope `order ⟹ manual`). The
+ *  `scope` is the same one `sortModeOf`/`useSetSortMode` use for this group
+ *  (rail: the group; channel: `''`) — dragging one rail group must flip ONLY
+ *  that group's mode, never the whole rail. Pure — returns the next payload. */
+function applyOrderToPayload(
+  prev: SortCachePayload,
+  scope: SortGroup | undefined,
+  orderedIds: string[],
+): SortCachePayload {
   const byId = new Map(prev.viewerSort.entries.map(e => [e.entity_id, e] as const));
   orderedIds.forEach((id, rank) => {
     const e = byId.get(id);
     byId.set(id, e ? { ...e, rank } : { entity_id: id, rank, last_accessed_at: null });
   });
+  const scopeKey = scope ?? '';
   return {
     ...prev,
-    viewerSort: { ...prev.viewerSort, mode: 'manual', entries: [...byId.values()] },
+    viewerSort: {
+      ...prev.viewerSort,
+      modes: { ...prev.viewerSort.modes, [scopeKey]: 'manual' },
+      entries: [...byId.values()],
+    },
   };
 }
 
@@ -571,11 +591,11 @@ function applyOrderToPayload(prev: SortCachePayload, orderedIds: string[]): Sort
  *  refetch. */
 export function useApplySortOrder() {
   const qc = useQueryClient();
-  return (listKey: string, orderedIds: string[]): void => {
+  return (listKey: string, scope: SortGroup | undefined, orderedIds: string[]): void => {
     const key = sortListQueryKey(listKey);
     if (!key) return;
     const prev = qc.getQueryData<SortCachePayload>(key);
-    if (prev) qc.setQueryData<SortCachePayload>(key, applyOrderToPayload(prev, orderedIds));
+    if (prev) qc.setQueryData<SortCachePayload>(key, applyOrderToPayload(prev, scope, orderedIds));
   };
 }
 

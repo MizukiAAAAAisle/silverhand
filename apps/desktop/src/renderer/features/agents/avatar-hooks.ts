@@ -107,8 +107,15 @@ export function useAgentAvatarObjectUrls(
 ): Map<string, string | null> {
   // Build a stable cache key per (id, avatar_url) pair so the effect
   // only re-runs when the relevant subset of input actually changes.
+  // Deduped + SORTED so the key depends only on the SET of pairs, never their
+  // order — reordering the input list (e.g. a drag-sorted sidebar) must not
+  // tear down + refetch every avatar (that resets each URL to null mid-flight
+  // and flashes the runtime fallback). #task:1146
   const cacheKey = useMemo(
-    () => agents.map(a => `${a.id}:${a.avatar_url ?? ''}`).join('|'),
+    () =>
+      Array.from(new Set(agents.map(a => `${a.id}:${a.avatar_url ?? ''}`)))
+        .sort()
+        .join('|'),
     [agents],
   );
 

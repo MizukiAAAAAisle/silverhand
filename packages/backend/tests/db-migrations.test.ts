@@ -3418,4 +3418,100 @@ describe('database migrations', () => {
       }
     });
   });
+
+  // v48 rebuilds user_list_sort_mode to add `scope` to the primary key, so the
+  // workspace rail can carry a per-section mode while channels stay list-wide.
+  // A table-rebuild + PK migration is the kind that breaks silently later, so
+  // pin the upgrade: old (user_id, list_key) rows fold into scope '', the new
+  // PK is (user_id, list_key, scope), and the same (user, list) can now hold
+  // distinct per-scope modes.
+  describe('v48 user_list_sort_mode_per_scope', () => {
+    it('folds existing v47 rows into scope "" and re-keys on (user_id, list_key, scope)', () => {
+      const db = openDbAt(47);
+      try {
+        const now = 1_700_000_000_000;
+        db.prepare(
+          `INSERT INTO users (id, name, display_name, created_at, updated_at)
+           VALUES ('u1', 'viewer', 'Viewer', ?, ?)`,
+        ).run(now, now);
+
+        // v47 shape: PK (user_id, list_key), NO scope column.
+        const v47Cols = (
+          db.pragma('table_info(user_list_sort_mode)') as Array<{ name: string }>
+        ).map(c => c.name);
+        expect(v47Cols).not.toContain('scope');
+        db.prepare(
+          `INSERT INTO user_list_sort_mode (user_id, list_key, mode, updated_at)
+           VALUES ('u1', 'workspaces', 'manual', ?)`,
+        ).run(now);
+        db.prepare(
+          `INSERT INTO user_list_sort_mode (user_id, list_key, mode, updated_at)
+           VALUES ('u1', 'channels:ws1', 'recent', ?)`,
+        ).run(now);
+
+        applyMigrationsThrough(db, 48);
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 48`).get(),
+        ).toBeDefined();
+
+        // New column + composite PK shape.
+        const cols = db.pragma('table_info(user_list_sort_mode)') as Array<{
+          name: string;
+          notnull: number;
+          pk: number;
+        }>;
+        expect(cols.find(c => c.name === 'scope')?.notnull).toBe(1);
+        const pkCols = cols
+          .filter(c => c.pk > 0)
+          .sort((a, b) => a.pk - b.pk)
+          .map(c => c.name);
+        expect(pkCols).toEqual(['user_id', 'list_key', 'scope']);
+
+        // Every pre-existing row folds into the list-wide sentinel scope ''.
+        const rows = db
+          .prepare(
+            `SELECT list_key, scope, mode FROM user_list_sort_mode ORDER BY list_key`,
+          )
+          .all();
+        expect(rows).toEqual([
+          { list_key: 'channels:ws1', scope: '', mode: 'recent' },
+          { list_key: 'workspaces', scope: '', mode: 'manual' },
+        ]);
+
+        // The new key lets one (user, list) hold distinct per-scope modes —
+        // the rail's per-section toggles — impossible under the old PK.
+        db.prepare(
+          `INSERT INTO user_list_sort_mode (user_id, list_key, scope, mode, updated_at)
+           VALUES ('u1', 'workspaces', 'pinned', 'manual', ?)`,
+        ).run(now);
+        db.prepare(
+          `INSERT INTO user_list_sort_mode (user_id, list_key, scope, mode, updated_at)
+           VALUES ('u1', 'workspaces', 'dm', 'recent', ?)`,
+        ).run(now);
+        const wsModes = db
+          .prepare(
+            `SELECT scope, mode FROM user_list_sort_mode
+             WHERE user_id = 'u1' AND list_key = 'workspaces' ORDER BY scope`,
+          )
+          .all();
+        expect(wsModes).toEqual([
+          { scope: '', mode: 'manual' },
+          { scope: 'dm', mode: 'recent' },
+          { scope: 'pinned', mode: 'manual' },
+        ]);
+
+        // …but the PK still rejects a duplicate (user, list, scope).
+        expect(() =>
+          db
+            .prepare(
+              `INSERT INTO user_list_sort_mode (user_id, list_key, scope, mode, updated_at)
+               VALUES ('u1', 'workspaces', 'pinned', 'recent', ?)`,
+            )
+            .run(now),
+        ).toThrow(/UNIQUE|PRIMARY/i);
+      } finally {
+        db.close();
+      }
+    });
+  });
 });

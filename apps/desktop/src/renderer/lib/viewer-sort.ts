@@ -1,9 +1,10 @@
 // Adapter between the wire `viewer_sort` DTO (sparse per-entity state) and the
 // DTO-agnostic pure sorter in `./list-sort`. Components call `sortGroup` per
-// live hard group (channel: pinned/unpinned; rail: dm / regular:pinned /
-// regular:unpinned) with the viewer's mode. Keeping this here lets the sorter
-// stay free of `@silverhand/shared`. See docs/list-sort-v1.md (#task:1146).
-import type { ViewerSortStateDto } from '@silverhand/shared';
+// live hard group (channel: pinned/unpinned; rail: pinned/dm/regular) with the
+// viewer's per-SCOPE mode (see `sortModeOf`). Keeping this here lets the sorter
+// stay free of the sorter's own `@silverhand/shared` dependency. See
+// docs/list-sort-v1.md (#task:1146).
+import type { SortGroup, ViewerSortStateDto } from '@silverhand/shared';
 import { sortByMode, type ListSortMode, type SortableEntry } from './list-sort';
 
 export type SortEntryLookup = (id: string) => {
@@ -23,9 +24,16 @@ export function sortEntryLookup(
   return id => map.get(id) ?? { rank: null, lastAccessedAt: null };
 }
 
-/** Absent stored mode = the default, `recent`. */
-export function sortModeOf(viewerSort: ViewerSortStateDto | undefined): ListSortMode {
-  return viewerSort?.mode ?? 'recent';
+/** The viewer's mode for one SCOPE of a list. A scope is an independently
+ *  toggleable [recent|manual] axis:
+ *    - workspace rail : scope = the hard group (`'pinned' | 'dm' | 'regular'`).
+ *    - channel sidebar: scope = `''` (list-wide) — pass no `group`.
+ *  Absent stored mode = the default, `recent`. */
+export function sortModeOf(
+  viewerSort: ViewerSortStateDto | undefined,
+  group?: SortGroup,
+): ListSortMode {
+  return viewerSort?.modes[group ?? ''] ?? 'recent';
 }
 
 /** Sort one already-partitioned live group of domain items by the viewer's

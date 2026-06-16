@@ -313,6 +313,8 @@ function RegisteredAppShell(): JSX.Element {
   // `<workspaceId>:<channelId>` we stamped, so re-renders that don't change
   // the selection don't re-POST /api/sort/touch.
   const lastTouchedChannelRef = useRef<string | null>(null);
+  // Same dedup for the workspace rail's recent-opened stamp (#task:1146).
+  const lastTouchedWorkspaceRef = useRef<string | null>(null);
   // The channel just archived from the PRIMARY pane that cleared selection
   // to the workspace empty state (no neighbor to fall back to). The
   // auto-select effect must NOT re-pick it while the stale active list
@@ -635,6 +637,20 @@ function RegisteredAppShell(): JSX.Element {
       entity_id: selectedChannelId,
     });
   }, [selectedWorkspaceId, selectedChannelId, activeChannels]);
+
+  // Stamp "recently opened" for the workspace rail whenever the viewer selects
+  // a workspace (#task:1146). Same write-point (selection, not activity) +
+  // fire-and-forget + per-workspace dedup as the channel stamp above. Archived
+  // workspaces are out of the rail's sort scope, so skip them (the backend
+  // filters them on read anyway, but this avoids the redundant POST).
+  useEffect(() => {
+    if (!selectedWorkspaceId) return;
+    const ws = workspaces.find(w => w.id === selectedWorkspaceId);
+    if (!ws || ws.archived_at !== null) return;
+    if (lastTouchedWorkspaceRef.current === selectedWorkspaceId) return;
+    lastTouchedWorkspaceRef.current = selectedWorkspaceId;
+    touchSort.mutate({ list_key: 'workspaces', entity_id: selectedWorkspaceId });
+  }, [selectedWorkspaceId, workspaces]);
 
   // Remember the channel's secondary-pane layout (threads-list / thread /
   // side / none) so switching away and back restores it instead of
@@ -1537,6 +1553,7 @@ function RegisteredAppShell(): JSX.Element {
                       unread: messageUnreadSummary?.by_workspace?.[w.id] ?? 0,
                       pinned_at: w.pinned_at,
                       archived: w.archived_at !== null,
+                      created_at: w.created_at,
                     }))}
                     agentsById={agentsById}
                     selectedWorkspaceId={selectedWorkspaceId}

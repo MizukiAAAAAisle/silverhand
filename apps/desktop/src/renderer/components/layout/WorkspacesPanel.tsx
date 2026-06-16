@@ -1,7 +1,8 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { Copy, FolderOpen, Pin, PinOff, User } from 'lucide-react';
 import { toast } from 'sonner';
-import type { AgentDto } from '@silverhand/shared';
+import type { AgentDto, SortGroup } from '@silverhand/shared';
+import { useSortable } from '@dnd-kit/sortable';
 import {
   AppContextMenu,
   AppContextMenuItem,
@@ -9,10 +10,12 @@ import {
 } from '@/components/menus/AppContextMenu';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import {
-  useAgentAvatarObjectUrls,
-  type AgentAvatarSource,
-} from '@/features/agents/avatar-hooks';
-import { SidebarRow, SidebarSection } from './sidebar-shared';
+  SortableGroup,
+  animateLayoutChanges,
+  deriveRowFreeze,
+  sortableItemStyle,
+} from '@/components/layout/list-drag-sort';
+import { SidebarSection } from './sidebar-shared';
 
 type WorkspaceUiKind = 'regular' | 'dm';
 
@@ -31,9 +34,30 @@ export interface WorkspaceItem {
   /** True for soft-archived workspaces — drives the Archived sidebar
    *  group; the row itself looks the same once you're inside it. */
   archived?: boolean;
+  /** Creation time — stable fallback/tiebreak for the viewer sort modes
+   *  (#task:1146). */
+  created_at: number;
 }
 
-interface WorkspaceGroupProps {
+/** Live drag-sort wiring for ONE sortable group (#task:1146). When present,
+ *  `WorkspaceGroup` partitions its (already-ordered) workspaces into the
+ *  `order` hard sub-groups — each its own DnD context, dividers between — and
+ *  renders draggable rows. Absent → a plain non-sortable list (the Archived
+ *  group). The drag state machine itself lives in the shared `useListDragSort`
+ *  (owned by `Sidebar`); this just carries the per-row callbacks down. */
+export interface WorkspaceSortConfig<GroupKey extends SortGroup = SortGroup> {
+  /** Sub-group render order. Each rail section now drives a single group:
+   *  `['pinned']`, `['dm']`, or `['regular']`. */
+  order: GroupKey[];
+  /** The hard group a workspace lives in (live pin/kind). */
+  groupKeyOf: (workspace: WorkspaceItem) => GroupKey;
+  /** Post-drop bridge window — see `deriveRowFreeze`. */
+  bridging: boolean;
+  /** Commit a group's new full order. */
+  onReorder: (group: GroupKey, orderedIds: string[]) => void;
+}
+
+interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
   label: string;
   /** Default kind for icon picking when a row's `kind` is the same.
    *  For mixed groups (e.g. Archived combines DM + regular) the per-row
@@ -45,20 +69,31 @@ interface WorkspaceGroupProps {
   onPinWorkspace?: (id: string, pinned: boolean) => void;
   canRevealWorkspace?: (workspace: WorkspaceItem) => boolean;
   /** Optional `+` button. DM groups omit this — DM workspaces are
-   *  auto-created when an agent is provisioned. */
+   *  auto-created when an agent is provisioned. Ignored when `headerAction`
+   *  is set (the caller composes its own action cluster, e.g. sort + add). */
   onAdd?: () => void;
+  /** Header right-slot content (e.g. the sort menu, or sort + add). Takes
+   *  precedence over `onAdd`. */
+  headerAction?: ReactNode;
   /** Shown when `workspaces` is empty. */
   emptyHint?: ReactNode;
   /** Whether the group starts expanded. Defaults to true; archive group
    *  defaults to false so it stays out of the way. */
   defaultExpanded?: boolean;
-  /** Lookup of all workspace agents, keyed by id. When present, DM
-   *  workspace rows resolve their `dm_agent_id` here and render the
-   *  agent's uploaded avatar (or runtime icon fallback) via
-   *  `<AgentAvatar>` instead of the generic `User` glyph. Optional so
-   *  callers without agent context (tests / future surfaces) still get
-   *  a sane fallback. #task:919 */
+  /** Lookup of all workspace agents, keyed by id. DM workspace rows resolve
+   *  their `dm_agent_id` here for the agent's runtime + display name. The
+   *  avatar object URLs themselves come via `dmAgentAvatarUrls` (resolved ONCE
+   *  at the rail level, not per-section) so pin/unpin moving a DM between
+   *  sections doesn't churn every avatar. Optional so callers without agent
+   *  context still get a sane fallback. #task:919 / #task:1146 */
   agentsById?: ReadonlyMap<string, AgentDto>;
+  /** Resolved DM-agent avatar object URLs, keyed by agent id. Owned by the
+   *  parent (`Sidebar`) over the STABLE union of all rail DM agents, so this
+   *  map is identical across pin/unpin/reorder — no per-section refetch flash
+   *  (#task:1146). */
+  dmAgentAvatarUrls: ReadonlyMap<string, string | null>;
+  /** When set, the group is drag-sortable (#task:1146). */
+  sort?: WorkspaceSortConfig<GroupKey>;
 }
 
 const ICON_BY_KIND: Record<WorkspaceUiKind, JSX.Element> = {
@@ -70,7 +105,49 @@ const ICON_BY_KIND: Record<WorkspaceUiKind, JSX.Element> = {
   dm: <User className="size-3.5" />,
 };
 
-export function WorkspaceGroup({
+/** Per-row context shared by the sortable + flat render paths so a row is the
+ *  SAME component regardless of entry point (one entity, one shape). */
+interface RailRowContext {
+  selectedWorkspaceId: string | null;
+  onSelectWorkspace: (id: string) => void;
+  onPinWorkspace?: (id: string, pinned: boolean) => void;
+  canRevealWorkspace?: (workspace: WorkspaceItem) => boolean;
+  agentsById?: ReadonlyMap<string, AgentDto>;
+  dmAgentAvatarUrls: ReadonlyMap<string, string | null>;
+}
+
+function rowIconFor(workspace: WorkspaceItem, ctx: RailRowContext): JSX.Element {
+  // DM rows: render the agent's avatar (or runtime icon fallback) instead of
+  // the generic `User` glyph. Falls back to `ICON_BY_KIND.dm` when the agent
+  // lookup is missing or the agent is no longer in the list. #task:919
+  const dmAgent =
+    workspace.kind === 'dm' && workspace.dm_agent_id
+      ? ctx.agentsById?.get(workspace.dm_agent_id) ?? null
+      : null;
+  return dmAgent ? (
+    <AgentAvatar
+      runtime={dmAgent.runtime}
+      size={16}
+      avatarObjectUrl={ctx.dmAgentAvatarUrls.get(dmAgent.id) ?? null}
+      alt={dmAgent.display_name || dmAgent.name}
+    />
+  ) : (
+    ICON_BY_KIND[workspace.kind]
+  );
+}
+
+function canPinWorkspace(workspace: WorkspaceItem, ctx: RailRowContext): boolean {
+  // Both regular workspaces and DMs are pinnable into the cross-kind PINNED
+  // group (#task:1146 pin redesign). Archived rows never pin. The backend pin
+  // route accepts regular | agent_home; the gate here just mirrors that.
+  return (
+    (workspace.kind === 'regular' || workspace.kind === 'dm') &&
+    !workspace.archived &&
+    !!ctx.onPinWorkspace
+  );
+}
+
+export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   label,
   workspaces,
   selectedWorkspaceId,
@@ -78,226 +155,244 @@ export function WorkspaceGroup({
   onPinWorkspace,
   canRevealWorkspace,
   onAdd,
+  headerAction,
   emptyHint,
   defaultExpanded,
   agentsById,
-}: WorkspaceGroupProps): JSX.Element {
-  // Collect every DM agent rendered in THIS group so we can batch-fetch
-  // their avatar object URLs once per group. The list is stable across
-  // renders unless workspaces or the agent lookup actually changes,
-  // which keeps `useAgentAvatarObjectUrls`' cacheKey stable. Regular
-  // workspaces contribute nothing here; archived groups (mixed kinds)
-  // pick up their DM members the same way. #task:919
-  const dmAgentSources = useMemo<AgentAvatarSource[]>(() => {
-    if (!agentsById) return [];
-    const out: AgentAvatarSource[] = [];
-    for (const w of workspaces) {
-      if (w.kind !== 'dm' || !w.dm_agent_id) continue;
-      const agent = agentsById.get(w.dm_agent_id);
-      if (!agent) continue;
-      out.push({ id: agent.id, avatar_url: agent.avatar_url });
-    }
-    return out;
-  }, [workspaces, agentsById]);
-  const dmAgentAvatarUrls = useAgentAvatarObjectUrls(dmAgentSources);
+  dmAgentAvatarUrls,
+  sort,
+}: WorkspaceGroupProps<GroupKey>): JSX.Element {
+  const ctx: RailRowContext = {
+    selectedWorkspaceId,
+    onSelectWorkspace,
+    onPinWorkspace,
+    canRevealWorkspace,
+    agentsById,
+    dmAgentAvatarUrls,
+  };
 
   return (
     <SidebarSection
       label={label}
       count={workspaces.length}
-      onAdd={onAdd}
+      onAdd={headerAction ? undefined : onAdd}
+      action={headerAction}
       collapsible
       defaultExpanded={defaultExpanded ?? true}
     >
       {workspaces.length === 0 ? (
         <li className="px-2 py-2 text-xs text-text-muted">{emptyHint ?? '空'}</li>
+      ) : sort ? (
+        renderSortableGroups(workspaces, sort, ctx)
       ) : (
-        workspaces.map(w => {
-          const title = w.kind === 'dm' ? displayDmName(w.name) : w.name;
-          const canPin = w.kind === 'regular' && !w.archived && !!onPinWorkspace;
-          const canReveal = canRevealWorkspace?.(w) ?? false;
-          const pinned = isWorkspacePinned(w);
-          // DM rows: render the agent's avatar (or runtime icon
-          // fallback) instead of the generic `User` glyph. Falls back
-          // gracefully to `ICON_BY_KIND.dm` when the agent lookup is
-          // missing (caller didn't thread `agentsById`) or the agent
-          // is no longer in the list (just-deleted, transient gap).
-          // shiki #task:919.
-          const dmAgent =
-            w.kind === 'dm' && w.dm_agent_id
-              ? agentsById?.get(w.dm_agent_id) ?? null
-              : null;
-          const icon = dmAgent ? (
-            <AgentAvatar
-              runtime={dmAgent.runtime}
-              size={16}
-              avatarObjectUrl={dmAgentAvatarUrls.get(dmAgent.id) ?? null}
-              alt={dmAgent.display_name || dmAgent.name}
-            />
-          ) : (
-            ICON_BY_KIND[w.kind]
-          );
-          return (
-            <AppContextMenu
-              key={w.id}
-              trigger={
-                canPin ? (
-                  <li>
-                    <WorkspaceRow
-                      workspace={w}
-                      title={title}
-                      selected={w.id === selectedWorkspaceId}
-                      onClick={() => onSelectWorkspace(w.id)}
-                      onPin={(id, pinned) => onPinWorkspace?.(id, pinned)}
-                    />
-                  </li>
-                ) : (
-                  <SidebarRow
-                    icon={icon}
-                    title={title}
-                    selected={w.id === selectedWorkspaceId}
-                    status={w.active ? 'active' : null}
-                    badge={w.unread}
-                    onClick={() => onSelectWorkspace(w.id)}
-                  />
-                )
-              }
-            >
-              {canPin ? (
-                <AppContextMenuItem
-                  icon={
-                    pinned ? (
-                      <PinOff className="size-3.5" />
-                    ) : (
-                      <Pin className="size-3.5" />
-                    )
-                  }
-                  onSelect={() => onPinWorkspace?.(w.id, !pinned)}
-                >
-                  {pinned ? 'Unpin' : 'Pin'}
-                </AppContextMenuItem>
-              ) : null}
-              {canPin ? <AppContextMenuSeparator /> : null}
-              {canReveal ? (
-                <AppContextMenuItem
-                  icon={<FolderOpen className="size-3.5" />}
-                  onSelect={() => {
-                    void window.agentHub.showItemInFolder(w.workspace_path);
-                  }}
-                >
-                  Open in Finder
-                </AppContextMenuItem>
-              ) : null}
-              <AppContextMenuItem
-                icon={<Copy className="size-3.5" />}
-                onSelect={() => {
-                  void copyWorkspacePath(w.workspace_path);
-                }}
-              >
-                Copy path
-              </AppContextMenuItem>
-            </AppContextMenu>
-          );
-        })
+        workspaces.map(w => (
+          <li key={w.id}>
+            <WorkspaceRow workspace={w} ctx={ctx} />
+          </li>
+        ))
       )}
     </SidebarSection>
   );
 }
 
-interface WorkspaceRowProps {
-  workspace: WorkspaceItem;
-  title: string;
-  selected: boolean;
-  onClick: () => void;
-  onPin: (id: string, pinned: boolean) => void;
+/** Render the workspaces as drag-sortable hard sub-groups in `sort.order`,
+ *  each its own DnD context (no cross-group drag), a divider between non-empty
+ *  groups. The workspaces are already in final order (Sidebar sorted them), so
+ *  partitioning preserves within-group order. */
+function renderSortableGroups<GroupKey extends SortGroup>(
+  workspaces: WorkspaceItem[],
+  sort: WorkspaceSortConfig<GroupKey>,
+  ctx: RailRowContext,
+): ReactNode {
+  const partitions = sort.order
+    .map(key => ({ key, items: workspaces.filter(w => sort.groupKeyOf(w) === key) }))
+    .filter(p => p.items.length > 0);
+
+  return partitions.map((p, i) => (
+    <Fragment key={p.key}>
+      {i > 0 ? (
+        <li>
+          <div className="mx-2 my-1 border-t border-border-subtle" />
+        </li>
+      ) : null}
+      <SortableGroup
+        ids={p.items.map(w => w.id)}
+        onReorder={ordered => sort.onReorder(p.key, ordered)}
+      >
+        {p.items.map(w => (
+          <SortableWorkspaceItem
+            key={w.id}
+            workspace={w}
+            ctx={ctx}
+            bridging={sort.bridging}
+          />
+        ))}
+      </SortableGroup>
+    </Fragment>
+  ));
 }
 
+/** Drag-sortable rail row — the `<li>` is BOTH the sortable node AND the drag
+ *  surface (listeners here, not on the inner row, so they bypass the Radix
+ *  context-menu `Slot`). Whole-row drag (no grip), 4px activation. Mirrors the
+ *  channel sidebar's `SortableChannelItem`; the drag style + color-freeze
+ *  signals come from the shared list-drag-sort helpers. */
+function SortableWorkspaceItem({
+  workspace,
+  ctx,
+  bridging,
+}: {
+  workspace: WorkspaceItem;
+  ctx: RailRowContext;
+  bridging: boolean;
+}): JSX.Element {
+  const {
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+    isSorting,
+    attributes,
+    listeners,
+  } = useSortable({ id: workspace.id, animateLayoutChanges });
+  const freeze = deriveRowFreeze(isSorting, isDragging, bridging);
+  return (
+    <li
+      ref={setNodeRef}
+      style={sortableItemStyle({ transform, transition, isDragging })}
+      className="touch-none"
+      {...attributes}
+      {...listeners}
+    >
+      <WorkspaceRow
+        workspace={workspace}
+        ctx={ctx}
+        draggable
+        freezeColorTransition={freeze.freezeColorTransition}
+        freezeColorValue={freeze.freezeColorValue}
+      />
+    </li>
+  );
+}
+
+/** The workspace rail row + its context menu. One component for every entry
+ *  point (sortable DM / regular, flat archived) so the row never differs by
+ *  origin (#task:1146; one entity, one shape). The context menu lives INSIDE
+ *  the row (like `ChannelRow`) so the sortable `<li>` above can own the drag
+ *  listeners without the Radix `Slot` swallowing them. */
 function WorkspaceRow({
   workspace,
-  title,
-  selected,
-  onClick,
-  onPin,
-}: WorkspaceRowProps): JSX.Element {
-  const [hovered, setHovered] = useState(false);
+  ctx,
+  draggable,
+  freezeColorTransition = false,
+  freezeColorValue = false,
+}: {
+  workspace: WorkspaceItem;
+  ctx: RailRowContext;
+  /** Manual mode: show the grab cursor. Listeners live on the parent `<li>`. */
+  draggable?: boolean;
+  /** Freeze the color TRANSITION (drop `transition-colors`) — every row across
+   *  drag + bridge. See deriveRowFreeze / docs/list-sort-v1.md §Renderer
+   *  composition. */
+  freezeColorTransition?: boolean;
+  /** Freeze the color VALUE (strip `:hover`) — SIBLINGS only; never the dragged
+   *  row (see the guardrail in deriveRowFreeze). */
+  freezeColorValue?: boolean;
+}): JSX.Element {
+  const title = workspace.kind === 'dm' ? displayDmName(workspace.name) : workspace.name;
+  const icon = rowIconFor(workspace, ctx);
+  const canPin = canPinWorkspace(workspace, ctx);
+  const canReveal = ctx.canRevealWorkspace?.(workspace) ?? false;
+  const selected = workspace.id === ctx.selectedWorkspaceId;
   const isPinned = isWorkspacePinned(workspace);
-  const showPin = hovered || isPinned;
+  const unread = workspace.unread;
+
+  // Siblings mid-drag: drop the hover classes so a row sliding under the
+  // pointer can't paint a hover bg. Value-freeze — siblings only.
   const rowBg = selected
     ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-    : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary';
+    : freezeColorValue
+      ? 'border-transparent text-text-secondary'
+      : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary';
 
-  return (
+  const row = (
     <div
-      className={'sidebar-row-border flex w-full items-stretch border transition-colors ' + rowBg}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      data-row-selected={selected || undefined}
+      className={
+        'sidebar-row-border flex w-full items-stretch border ' +
+        // Freeze the color transition on every row during drag + bridge so any
+        // hover/selected recompute lands instantly (no ~150ms fade).
+        (freezeColorTransition ? '' : 'transition-colors ') +
+        rowBg +
+        (draggable ? ' cursor-grab select-none active:cursor-grabbing' : '')
+      }
     >
       <button
         type="button"
-        onClick={onClick}
+        onClick={() => ctx.onSelectWorkspace(workspace.id)}
         className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm"
       >
-        <span className="shrink-0 text-text-muted">{ICON_BY_KIND[workspace.kind]}</span>
+        <span className="shrink-0 text-text-muted">{icon}</span>
         <span
           className={
             'flex min-w-0 flex-1 items-baseline gap-1.5 ' +
-            (workspace.unread && workspace.unread > 0 && !selected
-              ? 'font-semibold text-text-primary'
-              : '')
+            (unread && unread > 0 && !selected ? 'font-semibold text-text-primary' : '')
           }
         >
           <span className="truncate">{title}</span>
         </span>
-        {workspace.unread && workspace.unread > 0 ? (
+        {unread && unread > 0 ? (
           <span
             data-sidebar-unread
             className={
               'inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums ' +
-              (selected
-                ? 'bg-bg-floating text-accent'
-                : 'bg-accent text-text-on-accent')
+              (selected ? 'bg-bg-floating text-accent' : 'bg-accent text-text-on-accent')
             }
-            aria-label={`${workspace.unread} unread`}
+            aria-label={`${unread} unread`}
           >
-            {workspace.unread > 99 ? '99+' : workspace.unread}
+            {unread > 99 ? '99+' : unread}
           </span>
         ) : workspace.active ? (
           <span className="size-1.5 rounded-full bg-success" />
         ) : null}
       </button>
-
-      <button
-        type="button"
-        aria-label={isPinned ? '取消固定' : '固定'}
-        title={isPinned ? '取消固定' : '固定'}
-        onClick={e => {
-          e.stopPropagation();
-          onPin(workspace.id, !isPinned);
-        }}
-        className={
-          'group/pin flex shrink-0 items-center justify-center px-1 ' +
-          (!showPin ? 'pointer-events-none opacity-0' : '') +
-          (selected
-            ? isPinned
-              ? ' text-text-on-selected'
-              : ' text-text-on-selected/60 hover:text-text-on-selected'
-            : isPinned
-              ? ' text-accent'
-              : ' text-text-muted hover:text-text-primary')
-        }
-        tabIndex={showPin ? 0 : -1}
-      >
-        {isPinned ? (
-          <PinOff data-pin-icon className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
-        ) : (
-          <Pin data-pin-icon className="size-3 transition-transform group-hover/pin:scale-125 group-hover/pin:[stroke-width:2.5]" />
-        )}
-      </button>
     </div>
+  );
+
+  return (
+    <AppContextMenu trigger={row}>
+      {canPin ? (
+        <AppContextMenuItem
+          icon={isPinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
+          onSelect={() => ctx.onPinWorkspace?.(workspace.id, !isPinned)}
+        >
+          {isPinned ? 'Unpin' : 'Pin'}
+        </AppContextMenuItem>
+      ) : null}
+      {canPin ? <AppContextMenuSeparator /> : null}
+      {canReveal ? (
+        <AppContextMenuItem
+          icon={<FolderOpen className="size-3.5" />}
+          onSelect={() => {
+            void window.agentHub.showItemInFolder(workspace.workspace_path);
+          }}
+        >
+          Open in Finder
+        </AppContextMenuItem>
+      ) : null}
+      <AppContextMenuItem
+        icon={<Copy className="size-3.5" />}
+        onSelect={() => {
+          void copyWorkspacePath(workspace.workspace_path);
+        }}
+      >
+        Copy path
+      </AppContextMenuItem>
+    </AppContextMenu>
   );
 }
 
-function isWorkspacePinned(workspace: WorkspaceItem): boolean {
+export function isWorkspacePinned(workspace: WorkspaceItem): boolean {
   return workspace.pinned_at !== null && workspace.pinned_at !== undefined;
 }
 

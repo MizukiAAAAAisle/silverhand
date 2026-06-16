@@ -29,6 +29,7 @@ export function SortModeMenu({
           type="button"
           variant="ghost"
           size="icon"
+          className="h-6 w-6"
           aria-label="Sort"
           title="Sort"
         >

@@ -14,12 +14,19 @@ final order with a pure helper.
 
 Two concerns, two scopes:
 
-- **mode** — per *list*. One `[recent | manual]` toggle per list. Default
-  `recent` (recently-**opened** by this viewer). A manual reorder (drag) also
-  switches the list to `manual` atomically (`order ⟹ manual`, see API), so drag
-  works from any mode.
+- **mode** — per *scope* (#task:1146). A scope is one independently toggleable
+  `[recent | manual]` axis. Default `recent` (recently-**opened** by this
+  viewer). A manual reorder (drag) also switches that scope to `manual`
+  atomically (`order ⟹ manual`, see API), so drag works from any mode. How many
+  scopes a list has depends on the list kind (see hard groups below):
+  - **workspace rail** — mode is **per hard-group**: the `pinned`, `dm`, and
+    `regular` sections each carry their own toggle ("the PIN group has its own
+    sort"). Scope = the group key.
+  - **channel sidebar** — mode is **list-wide** (one toggle for the whole list),
+    unchanged. Scope = the sentinel `''`.
 - **per-entity state** — `rank` (manual order) + `last_accessed_at`
-  (recent-opened), per entity per list.
+  (recent-opened), per entity per list. **Not** keyed by group/scope — a single
+  value per `(user, list, entity)`; grouping is a sort-time partition.
 
 `list_key` namespaces a list:
 
@@ -43,20 +50,25 @@ ranks across buckets.
 
 Hard groups (sort-time partition; manual drag is within a group, never across):
 
-- workspace rail: `dm` (agent_home) / `regular:pinned` / `regular:unpinned`.
-  DM workspaces have **no pin** (`canPin = regular && !archived`), so there is no
-  `dm:pinned`. Archived workspaces are out of sorting scope entirely.
+- workspace rail: `pinned` (cross-kind) / `dm` / `regular`. **Pin is the primary
+  axis** (#task:1146): a pinned regular workspace OR a pinned DM both land in the
+  unified `pinned` group; `dm` / `regular` hold only the **unpinned** tail of
+  that kind. DM (agent_home) workspaces are pinnable (`canPin = (regular ||
+  agent_home) && !archived`) — pinning is a shared aggregate field (admin-gated),
+  ordering is per-viewer. Archived workspaces are out of sorting scope entirely.
 - channel sidebar: `pinned` / `unpinned`. Threads are out of sorting scope.
 
 Crossing a pin boundary (pin/unpin) **clears the entity's manual rank** for all
 viewers (`SortRepo.clearEntityRank`), so it falls to the new group's manual tail
-until re-dragged — this also prevents the two groups' dense rank numbering from
-colliding.
+until re-dragged — this also prevents the groups' dense rank numbering from
+colliding. A DM pinned/unpinned crosses `dm ↔ pinned`; a regular workspace
+crosses `regular ↔ pinned`.
 
 ### Renderer composition (pure helper)
 
-`live partition (rail: agent_home→dm, regular→pin tier; channel→pin tier)` →
-within each group by mode:
+`live partition (rail: pinned?→pinned, else agent_home→dm / regular→regular;
+channel→pin tier)` → within each group by **that scope's** mode
+(`sortModeOf(state, group?)` — group omitted ⇒ scope `''`):
 
 - `recent` → `last_accessed_at DESC` (NULLs last).
 - `manual` → `rank ASC` (NULLs last, then `created_at`, then id tiebreak).
@@ -122,15 +134,18 @@ the sidebar's row language for no semantic reason. Switching the sidebar to
 instant hover is a *global* design decision (its own task), out of scope here —
 and only that decision would let this apparatus be deleted.
 
-## Storage (migration v47)
+## Storage (migrations v47, v48)
 
 ```sql
+-- v47 created this table keyed (user_id, list_key); v48 adds `scope` to the key
+-- so the rail can hold a per-section mode while channels stay list-wide.
 CREATE TABLE user_list_sort_mode (
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   list_key   TEXT NOT NULL,
+  scope      TEXT NOT NULL DEFAULT '',  -- '' = list-wide (channels); 'pinned'|'dm'|'regular' = a rail section
   mode       TEXT NOT NULL CHECK (mode IN ('recent', 'manual')),
   updated_at INTEGER NOT NULL,
-  PRIMARY KEY (user_id, list_key)
+  PRIMARY KEY (user_id, list_key, scope)
 );
 
 CREATE TABLE user_sort_entry (
@@ -139,9 +154,15 @@ CREATE TABLE user_sort_entry (
   entity_id        TEXT NOT NULL,   -- soft ref to workspaces|conversations by list_key (no FK, polymorphic)
   rank             INTEGER,         -- NULL = not manually arranged
   last_accessed_at INTEGER,         -- NULL = never opened
-  PRIMARY KEY (user_id, list_key, entity_id)
+  PRIMARY KEY (user_id, list_key, entity_id)  -- NOT keyed by scope: rank is one value per entity, group is a live partition
 );
 ```
+
+The v48 rebuild folds every pre-existing mode row into `scope = ''`. Channel rows
+were already list-wide (correct); any pre-existing `workspaces` row becomes a
+harmless orphan at `''` (the rail now reads its modes at the group scopes, so it
+falls back to the default `recent` — an accepted reset, since the rail's group
+taxonomy changed in the same change).
 
 Orphan `user_sort_entry` rows after a delete / membership-removal / archive are
 kept in storage but **filtered out of every wire response**: `getState` takes the
@@ -159,25 +180,35 @@ Read state is carried **inline** on the list responses — no separate GET:
 - `GET /api/workspaces/:id/channels` → `{ channels, threads, viewer_sort }`,
   `viewer_sort.list_key = 'channels:<ws_id>'`.
 
+`viewer_sort.modes` is a **per-scope map** (`Record<scope, 'recent'|'manual'>`,
+sparse — an absent scope means `recent`). Channel lists carry the single scope
+`''`; the rail carries up to `pinned` / `dm` / `regular`. Read with the renderer
+helper `sortModeOf(state, group?)` — group omitted ⇒ scope `''` (so channel call
+sites are unchanged), rail passes its section group.
+
 Mutations return the authoritative `{ viewer_sort }` for optimistic reconcile
 (touch excepted):
 
-- `PUT /api/sort/mode { list_key, mode }` → `{ viewer_sort }`. Validates list
-  scope (existence + visibility) like order/touch — a viewer can't persist a
-  preference for a non-existent / forbidden list.
+- `PUT /api/sort/mode { list_key, group?, mode }` → `{ viewer_sort }`. Validates
+  list scope (existence + visibility) like order/touch. `group` selects the mode
+  scope: `list_key 'workspaces'` **requires** a legal rail group (`pinned|dm|
+  regular`); `channels:<ws>` **forbids** `group` (list-wide, scope `''`). A
+  mismatch is a 400 (don't guess).
 - `PUT /api/sort/order { list_key, group, ordered_ids }` → `{ viewer_sort }`.
   `ordered_ids` must be **exactly** the live members of `group` (any order, no
   missing / extra / duplicate / cross-group id). `group` must be a legal hard
-  group for the list kind (rail: `dm|regular:pinned|regular:unpinned`; channel:
+  group for the list kind (rail: `pinned|dm|regular`; channel:
   `pinned|unpinned`) — an illegal group is rejected even with empty
   `ordered_ids`. The backend validates against live pin/kind state and rejects
   otherwise (400) — a partial submission would leave other members' ranks stale
   and collide within the group, so it is not a patch. On success it rewrites
-  dense ranks (0..n) for the group **and sets the list's mode to `manual` in the
-  same transaction** — `order ⟹ manual` is an invariant, so a drag works from
-  any mode (including `recent`) in a single call and there is never a window
-  where manual ranks exist while the mode still reads `recent`. The response's
-  `viewer_sort.mode` comes back `manual`.
+  dense ranks (0..n) for the group **and sets the relevant scope's mode to
+  `manual` in the same transaction** — `order ⟹ manual` is an invariant. The
+  scope a drag flips is derived from `list_key + group` exactly as `mode` is
+  (rail: the dragged group; channel: `''`), so dragging the rail's `pinned`
+  section leaves `dm` / `regular` modes untouched, and a channel drag flips its
+  one list-wide mode. The response's `viewer_sort.modes[scope]` comes back
+  `manual`.
 - `POST /api/sort/touch { list_key, entity_id }` → `{ ok: true }`. Idempotent
   upsert of `last_accessed_at`. Called **only on selection**. Renderer sends it
   fire-and-forget (non-blocking) and dedups/throttles per `(viewer, target)`;

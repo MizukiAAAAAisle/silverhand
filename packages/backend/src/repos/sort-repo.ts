@@ -33,12 +33,14 @@ export class SortRepo {
     listKey: string,
     visibleEntityIds?: Iterable<string>,
   ): ViewerSortStateDto {
-    const modeRow = this.db
-      .prepare<[string, string], { mode: SortMode }>(
-        `SELECT mode FROM user_list_sort_mode
+    const modeRows = this.db
+      .prepare<[string, string], { scope: string; mode: SortMode }>(
+        `SELECT scope, mode FROM user_list_sort_mode
          WHERE user_id = ? AND list_key = ?`,
       )
-      .get(viewerUserId, listKey);
+      .all(viewerUserId, listKey);
+    const modes: Record<string, SortMode> = {};
+    for (const row of modeRows) modes[row.scope] = row.mode;
     const rows = this.db
       .prepare<[string, string], ViewerSortEntryDto>(
         `SELECT entity_id, rank, last_accessed_at FROM user_sort_entry
@@ -54,36 +56,49 @@ export class SortRepo {
           })();
     return {
       list_key: listKey,
-      mode: modeRow?.mode ?? 'recent',
+      modes,
       entries,
     };
   }
 
-  /** Upsert the per-list sort mode. */
-  setMode(viewerUserId: string, listKey: string, mode: SortMode): void {
+  /**
+   * Upsert one scope's sort mode. `scope` is '' for a list-wide list (channel
+   * sidebar) or a hard group ('pinned'|'dm'|'regular') for a per-section list
+   * (workspace rail). The caller (route) derives scope from list_key + group
+   * and validates it; the repo just persists.
+   */
+  setMode(viewerUserId: string, listKey: string, scope: string, mode: SortMode): void {
     const now = Date.now();
     this.db
-      .prepare<[string, string, SortMode, number]>(
-        `INSERT INTO user_list_sort_mode (user_id, list_key, mode, updated_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(user_id, list_key) DO UPDATE SET
+      .prepare<[string, string, string, SortMode, number]>(
+        `INSERT INTO user_list_sort_mode (user_id, list_key, scope, mode, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, list_key, scope) DO UPDATE SET
            mode = excluded.mode,
            updated_at = excluded.updated_at`,
       )
-      .run(viewerUserId, listKey, mode, now);
+      .run(viewerUserId, listKey, scope, mode, now);
   }
 
   /**
    * Rewrite dense ranks for one group's entities (rank = position in
-   * `orderedIds`) AND set the list's mode to 'manual' — atomically, in one
-   * transaction. Reordering is an explicit "arrange manually" act, so
+   * `orderedIds`) AND set the relevant SCOPE's mode to 'manual' — atomically,
+   * in one transaction. Reordering is an explicit "arrange manually" act, so
    * `order ⟹ manual` is an invariant: there is never a window where manual
    * ranks exist while the mode still reads 'recent' (which would make the mode
-   * label lie). Preserves each row's last_accessed_at. Other groups' rows are
-   * untouched — grouping is a sort-time concern, so cross-group rank values
-   * never interact. Caller validates group membership first.
+   * label lie). `scope` is the mode axis the drag belongs to ('' list-wide for
+   * channels; the dragged group for the rail) — only that scope flips, so
+   * dragging the rail's `pinned` section leaves `dm`/`regular` modes untouched.
+   * Preserves each row's last_accessed_at. Other groups' rows are untouched —
+   * grouping is a sort-time concern, so cross-group rank values never interact.
+   * Caller validates group membership + derives scope first.
    */
-  reorder(viewerUserId: string, listKey: string, orderedIds: string[]): void {
+  reorder(
+    viewerUserId: string,
+    listKey: string,
+    scope: string,
+    orderedIds: string[],
+  ): void {
     const now = Date.now();
     const rankStmt = this.db.prepare<[string, string, string, number]>(
       `INSERT INTO user_sort_entry
@@ -92,15 +107,15 @@ export class SortRepo {
        ON CONFLICT(user_id, list_key, entity_id) DO UPDATE SET
          rank = excluded.rank`,
     );
-    const modeStmt = this.db.prepare<[string, string, number]>(
-      `INSERT INTO user_list_sort_mode (user_id, list_key, mode, updated_at)
-       VALUES (?, ?, 'manual', ?)
-       ON CONFLICT(user_id, list_key) DO UPDATE SET
+    const modeStmt = this.db.prepare<[string, string, string, number]>(
+      `INSERT INTO user_list_sort_mode (user_id, list_key, scope, mode, updated_at)
+       VALUES (?, ?, ?, 'manual', ?)
+       ON CONFLICT(user_id, list_key, scope) DO UPDATE SET
          mode = 'manual',
          updated_at = excluded.updated_at`,
     );
     const tx = this.db.transaction((ids: string[]) => {
-      modeStmt.run(viewerUserId, listKey, now);
+      modeStmt.run(viewerUserId, listKey, scope, now);
       ids.forEach((id, i) => rankStmt.run(viewerUserId, listKey, id, i));
     });
     tx(orderedIds);

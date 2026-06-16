@@ -239,9 +239,14 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'workspace id required' }, 400);
     const workspace = workspaces.get(id);
+    // Pin is cross-kind (#task:1146): both regular workspaces and DM
+    // (agent_home) workspaces can be pinned into the rail's unified `pinned`
+    // group. This is only a kind filter — the real gate is the admin
+    // governance check below, which resolves correctly for the DM owner.
     if (
       !workspace ||
-      workspace.workspace_kind !== 'regular' ||
+      (workspace.workspace_kind !== 'regular' &&
+        workspace.workspace_kind !== 'agent_home') ||
       workspace.archived_at !== null
     ) {
       return c.json({ error: 'workspace not found' }, 404);
@@ -261,9 +266,12 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'workspace id required' }, 400);
     const workspace = workspaces.get(id);
+    // Cross-kind unpin (#task:1146) — mirror the pin guard. Kind filter only;
+    // governance is enforced below.
     if (
       !workspace ||
-      workspace.workspace_kind !== 'regular' ||
+      (workspace.workspace_kind !== 'regular' &&
+        workspace.workspace_kind !== 'agent_home') ||
       workspace.archived_at !== null
     ) {
       return c.json({ error: 'workspace not found' }, 404);

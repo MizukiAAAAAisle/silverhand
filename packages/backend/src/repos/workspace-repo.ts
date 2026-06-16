@@ -362,11 +362,14 @@ export class WorkspaceRepo {
 
   setPinned(id: string, pinned: boolean): WorkspaceDto | null {
     const now = Date.now();
+    // Pin is cross-kind (#task:1146): regular AND DM (agent_home) workspaces
+    // can be pinned into the rail's unified `pinned` group. (Archived ones are
+    // gated out at the route.)
     this.db
       .prepare(
         `UPDATE workspaces
          SET pinned_at = ?, updated_at = ?
-         WHERE id = ? AND workspace_kind = 'regular'`,
+         WHERE id = ? AND workspace_kind IN ('regular', 'agent_home')`,
       )
       .run(pinned ? now : null, now, id);
     return this.get(id);

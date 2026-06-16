@@ -17,18 +17,13 @@ export type SortMode = z.infer<typeof SortModeSchema>;
 
 /**
  * Hard-group descriptor for a manual reorder. Groups are partitioned LIVE
- * from an entity's pin/kind state — NOT stored. DM workspaces have no pin
- * (so no `dm:pinned`); if DM pin ever ships, split `dm` then.
- *   workspace rail : 'dm' | 'regular:pinned' | 'regular:unpinned'
+ * from an entity's pin/kind state — NOT stored. Pin is the PRIMARY axis on the
+ * rail: a pinned workspace OR pinned DM both land in the cross-kind `pinned`
+ * group; `dm` / `regular` hold only the UNPINNED tail of that kind (#task:1146).
+ *   workspace rail : 'pinned' (cross-kind) | 'dm' | 'regular'
  *   channel sidebar: 'pinned' | 'unpinned'
  */
-export const SortGroupSchema = z.enum([
-  'dm',
-  'regular:pinned',
-  'regular:unpinned',
-  'pinned',
-  'unpinned',
-]);
+export const SortGroupSchema = z.enum(['pinned', 'dm', 'regular', 'unpinned']);
 export type SortGroup = z.infer<typeof SortGroupSchema>;
 
 /**
@@ -54,16 +49,32 @@ export type ViewerSortEntryDto = z.infer<typeof ViewerSortEntryDtoSchema>;
  * The viewer's sort state for one list. Carried inline on list responses
  * (workspace list, channel list) and returned authoritatively by the
  * mode/order mutations so the renderer can reconcile an optimistic drag.
+ *
+ * `modes` is the per-SCOPE mode map (#task:1146). A scope is one independently
+ * toggleable [recent|manual] axis within the list:
+ *   - workspace rail : scope = the hard group ('pinned' | 'dm' | 'regular') —
+ *     each rail section has its own mode.
+ *   - channel sidebar: scope = '' (the sentinel "list-wide" scope) — one mode
+ *     for the whole list, exactly as before.
+ * Sparse: an absent scope means the default, 'recent'. Read with the renderer
+ * helper `sortModeOf(state, group?)` (group omitted ⇒ scope '').
  */
 export const ViewerSortStateDtoSchema = z.object({
   list_key: z.string(),
-  mode: SortModeSchema,
+  modes: z.record(SortModeSchema),
   entries: z.array(ViewerSortEntryDtoSchema),
 });
 export type ViewerSortStateDto = z.infer<typeof ViewerSortStateDtoSchema>;
 
+/**
+ * Set one scope's mode. `group` selects the scope:
+ *   - list_key 'workspaces'   → `group` REQUIRED (the rail section to toggle).
+ *   - list_key 'channels:<id>' → `group` MUST be omitted (list-wide, scope '').
+ * The route enforces this and rejects a mismatch (400) rather than guessing.
+ */
 export const SetSortModeInputSchema = z.object({
   list_key: SortListKeySchema,
+  group: SortGroupSchema.optional(),
   mode: SortModeSchema,
 });
 export type SetSortModeInput = z.infer<typeof SetSortModeInputSchema>;
