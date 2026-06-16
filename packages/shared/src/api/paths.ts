@@ -116,6 +116,12 @@ export const apiPaths = {
    *  workspace, archived date). Per-workspace endpoint above is still
    *  used by the workspace-scoped query path. */
   archivedChannels: '/api/archived-channels',
+  /** Per-user (viewer-scoped) list sort state mutations (#task:1147).
+   *  Read state is carried inline on the workspace / channel list responses;
+   *  these only WRITE preferences. All viewer-scoped. */
+  sortMode: '/api/sort/mode',
+  sortOrder: '/api/sort/order',
+  sortTouch: '/api/sort/touch',
   channelMessages: (id: string) => `/api/channels/${id}/messages`,
   channelThreadFollowers: (id: string, rootMessageId: string) =>
     `/api/channels/${id}/threads/${rootMessageId}/followers`,

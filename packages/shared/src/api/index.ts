@@ -15,5 +15,6 @@ export * from './internal-agent.js';
 export * from './notification.js';
 export * from './schedule.js';
 export * from './presence.js';
+export * from './sort.js';
 export * from './paths.js';
 export * from './principal-header.js';

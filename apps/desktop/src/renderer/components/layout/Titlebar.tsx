@@ -1,7 +1,6 @@
 import {
   CheckSquare,
   Columns2,
-  MessageSquarePlus,
   PanelLeft,
   PanelLeftDashed,
   Settings,
@@ -56,7 +55,6 @@ interface TitlebarProps {
    *  workspace is missing from the main sidebar list. */
   workspaceArchivedAt: number | null;
   onOpenWorkspaceSettings?: () => void;
-  onCreateChannel?: () => void;
   /** Tasks panel trigger. Provided only when a chat workspace is selected.
    *  Click opens the workspace-wide tasks drawer (4-column kanban). */
   onOpenTasks?: () => void;
@@ -87,7 +85,6 @@ export function Titlebar({
   workspacePath,
   workspaceArchivedAt,
   onOpenWorkspaceSettings,
-  onCreateChannel,
   onOpenTasks,
   taskCount,
   workspaceSidebarVisible,
@@ -97,7 +94,6 @@ export function Titlebar({
 }: TitlebarProps): JSX.Element {
   const hasWorkspace = workspaceName !== null;
   const showManageMembers = hasWorkspace && workspaceKind !== 'dm' && !!workspaceId;
-  const showCreateChannel = hasWorkspace && !!onCreateChannel;
   const showSettings = hasWorkspace && !!onOpenWorkspaceSettings;
   const showTasks = hasWorkspace && !!onOpenTasks;
   const isArchived = workspaceArchivedAt !== null;
@@ -192,18 +188,6 @@ export function Titlebar({
         <span className="rounded-full bg-bg-elevated px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-text-muted">
           archived
         </span>
-      ) : null}
-
-      {showCreateChannel ? (
-        <button
-          type="button"
-          onClick={onCreateChannel}
-          aria-label="新建 Channel"
-          title="新建 Channel"
-          className="no-drag flex size-6 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
-        >
-          <MessageSquarePlus className="size-3.5" />
-        </button>
       ) : null}
 
       {showTasks ? (

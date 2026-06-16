@@ -41,6 +41,51 @@ export function SidebarSection({
   const [expanded, setExpanded] = useState(defaultExpanded);
   const showBody = !collapsible || expanded;
 
+  return (
+    <section className="px-1.5 pb-3">
+      <SidebarSectionHeader
+        label={label}
+        icon={icon}
+        count={count}
+        onAdd={onAdd}
+        action={action}
+        collapsible={collapsible}
+        expanded={expanded}
+        onToggle={() => setExpanded(v => !v)}
+      />
+      {showBody ? <ul className="space-y-0.5">{children}</ul> : null}
+    </section>
+  );
+}
+
+interface SectionHeaderProps {
+  label: string;
+  icon?: ReactNode;
+  count?: number;
+  onAdd?: () => void;
+  action?: ReactNode;
+  collapsible?: boolean;
+  /** Current expanded state (only meaningful when `collapsible`). */
+  expanded?: boolean;
+  onToggle?: () => void;
+}
+
+/**
+ * The section-header row, extracted so non-`SidebarSection` surfaces (the
+ * channel sidebar's fixed header, #task:1146) get the IDENTICAL treatment —
+ * muted tracking-wider label + count on the left, an `action` slot (or `+`
+ * add button) on the right. Stateless: collapse state is owned by the caller.
+ */
+export function SidebarSectionHeader({
+  label,
+  icon,
+  count,
+  onAdd,
+  action,
+  collapsible = false,
+  expanded = true,
+  onToggle,
+}: SectionHeaderProps): JSX.Element {
   const headerInner = (
     <span className="flex items-center gap-1">
       {collapsible ? (
@@ -65,30 +110,27 @@ export function SidebarSection({
   );
 
   return (
-    <section className="px-1.5 pb-3">
-      <header className="mb-1 flex items-stretch justify-between text-sm font-medium tracking-wider text-text-muted">
-        {collapsible ? (
-          <button
-            type="button"
-            onClick={() => setExpanded(v => !v)}
-            className="flex flex-1 items-center px-2 py-1 text-left hover:text-text-secondary"
-            aria-expanded={expanded}
-          >
-            {headerInner}
-          </button>
-        ) : (
-          <span className="flex flex-1 items-center px-2 py-1">{headerInner}</span>
-        )}
-        {action ? (
-          action
-        ) : onAdd ? (
-          <Button variant="ghost" size="icon" onClick={onAdd} aria-label={`add ${label}`}>
-            <Plus className="size-3.5" />
-          </Button>
-        ) : null}
-      </header>
-      {showBody ? <ul className="space-y-0.5">{children}</ul> : null}
-    </section>
+    <header className="mb-1 flex items-stretch justify-between text-sm font-medium tracking-wider text-text-muted">
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex flex-1 items-center px-2 py-1 text-left hover:text-text-secondary"
+          aria-expanded={expanded}
+        >
+          {headerInner}
+        </button>
+      ) : (
+        <span className="flex flex-1 items-center px-2 py-1">{headerInner}</span>
+      )}
+      {action ? (
+        action
+      ) : onAdd ? (
+        <Button variant="ghost" size="icon" onClick={onAdd} aria-label={`add ${label}`}>
+          <Plus className="size-3.5" />
+        </Button>
+      ) : null}
+    </header>
   );
 }
 

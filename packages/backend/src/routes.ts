@@ -17,9 +17,11 @@ import { ConversationReadRepo } from './repos/conversation-read-repo.js';
 import { ConversationInboxRepo } from './repos/conversation-inbox-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
+import { SortRepo } from './repos/sort-repo.js';
 import { detectRuntimes } from '@silverhand/host/runtimes';
 import { createHostApp } from './routes/hosts.js';
 import { createWorkspacesApp } from './routes/workspaces.js';
+import { createSortApp } from './routes/sort.js';
 import { createTasksApp } from './routes/tasks.js';
 import { createNotificationsApp } from './routes/notifications.js';
 import { createPresenceApp } from './routes/presence.js';
@@ -296,6 +298,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   const conversationInboxes = new ConversationInboxRepo(ctx.db);
   const notifications = new NotificationRepo(ctx.db);
   const conversationReads = new ConversationReadRepo(ctx.db);
+  const sort = new SortRepo(ctx.db);
   const users = new UserRepo(ctx.db);
   const hostTokens = new HostTokenService(ctx.db);
   const membership = new MembershipService({ agents, users, conversations });
@@ -424,8 +427,11 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   // Workspace lifecycle, metadata, and workspace-channel collection routes.
   app.route(
     '/',
-    createWorkspacesApp({ ctx, agents, users, workspaces, conversations, messages }),
+    createWorkspacesApp({ ctx, agents, users, workspaces, conversations, messages, sort }),
   );
+
+  // Per-user list sort mutations (rail + channel sidebar ordering).
+  app.route('/', createSortApp({ ctx, workspaces, conversations, sort }));
 
   // Workspace membership routes.
   app.route('/', createWorkspaceMembershipApp(membershipDeps));
@@ -451,6 +457,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       messages,
       conversationReads,
       saved,
+      sort,
     }),
   );
 

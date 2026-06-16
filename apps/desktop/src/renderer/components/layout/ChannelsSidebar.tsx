@@ -1,18 +1,47 @@
-import { useState } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   Archive,
   ArchiveRestore,
   Copy,
   Hash,
+  MessageSquarePlus,
   Pin,
   PinOff,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers';
+import {
+  SortableContext,
+  arrayMove,
+  defaultAnimateLayoutChanges,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+  type AnimateLayoutChanges,
+} from '@dnd-kit/sortable';
+import {
   AppContextMenu,
   AppContextMenuItem,
   AppContextMenuSeparator,
 } from '@/components/menus/AppContextMenu';
+import { SidebarSectionHeader } from '@/components/layout/sidebar-shared';
+import { SortModeMenu } from '@/components/layout/SortModeMenu';
+import { Button } from '@/components/ui/button';
+import {
+  useChannelSortState,
+  useReorderSort,
+  useSetSortMode,
+  useApplySortOrder,
+} from '@/features/workspaces/hooks';
+import { sortEntryLookup, sortGroup, sortModeOf } from '@/lib/viewer-sort';
 
 type WorkspaceUiKind = 'regular' | 'dm';
 
@@ -25,12 +54,19 @@ interface ChannelNode {
   closed_at: number | null;
   pinned_at: number | null;
   archived_at: number | null;
+  /** Creation time — stable fallback/tiebreak for sort modes (#task:1146). */
+  created_at: number;
 }
 
 interface ChannelsSidebarProps {
   /** null when no workspace is selected — used only to choose the empty
-   *  hint copy. Workspace name + actions live in the titlebar now. */
+   *  hint copy. Workspace name + workspace-level actions live in the
+   *  titlebar; channel-list-level actions (create + sort) live in this
+   *  sidebar's own header (#task:1146). */
   workspaceName: string | null;
+  /** The selected workspace id — drives the viewer's per-list sort state
+   *  (`channels:<id>`) + reorder/mode mutations. null when none selected. */
+  workspaceId: string | null;
   /** Active (non-archived) top-level channels, server-filtered. In the
    *  reply-cluster model a thread is no longer a conversation node, so it
    *  never appears in this tree — the sidebar only renders top-level
@@ -43,6 +79,10 @@ interface ChannelsSidebarProps {
   onSelectChannel: (id: string) => void;
   onPinChannel: (channelId: string, pinned: boolean) => void;
   onArchiveChannel: (channelId: string, archived: boolean) => void;
+  /** Create a channel — moved here from the titlebar (#task:1146). Absent
+   *  when creation isn't applicable (no workspace selected / not in channel
+   *  view); when absent the header shows the sort entry only. */
+  onCreateChannel?: () => void;
   archivePending?: boolean;
   /** Unread notification counts keyed by channel id. Used to render
    *  per-channel badges. Missing key ≡ zero. */
@@ -51,24 +91,168 @@ interface ChannelsSidebarProps {
 
 export function ChannelsSidebar({
   workspaceName,
+  workspaceId,
   channels,
   workspaceKind,
   selectedChannelId,
   onSelectChannel,
   onPinChannel,
   onArchiveChannel,
+  onCreateChannel,
   archivePending = false,
   unreadByChannel = {},
 }: ChannelsSidebarProps): JSX.Element {
-  // The sidebar renders top-level channels only. Threads are reply
-  // clusters under a message now, not conversation nodes, so they are
-  // never shown here (legacy `kind='thread'` rows carry a
-  // `parent_channel_id` and are excluded by this filter). Pinned channels
-  // float above unpinned ones — the backend already returns them sorted,
-  // we split here only to render an optional separator between the groups.
+  const { data: viewerSort } = useChannelSortState(workspaceId, workspaceKind);
+  const setSortMode = useSetSortMode();
+  const reorderSort = useReorderSort();
+  const applySortOrder = useApplySortOrder();
+
+  const listKey = workspaceId ? `channels:${workspaceId}` : null;
+  const mode = sortModeOf(viewerSort);
+  const lookup = sortEntryLookup(viewerSort);
+
+  // The sidebar renders top-level channels only (threads are reply clusters
+  // now, never conversation nodes). Pinned channels are a hard top group;
+  // within each group the viewer's sort mode orders the rows — recent-opened
+  // (last_accessed_at) or manual drag (rank). See docs/list-sort-v1.md.
+  //
+  // A drop applies its new order to LOCAL state (`pendingDrop`) synchronously
+  // inside the onDragEnd event — see onReorder for why. That override is laid
+  // on top of the cache-derived order here, and self-clears once the cache
+  // catches up (effect below). Outside the bridge window the cache stays the
+  // sole render source, so mode switches / pin / other-device / error-refetch
+  // all flow through normally.
+  const [pendingDrop, setPendingDrop] = useState<{
+    listKey: string;
+    pinned?: string[];
+    unpinned?: string[];
+  } | null>(null);
+
+  const applyPendingOrder = (
+    sorted: ChannelNode[],
+    groupKey: 'pinned' | 'unpinned',
+  ): ChannelNode[] => {
+    const override =
+      pendingDrop && pendingDrop.listKey === listKey ? pendingDrop[groupKey] : undefined;
+    if (!override) return sorted;
+    const pos = new Map(override.map((id, i) => [id, i] as const));
+    return [...sorted].sort(
+      (a, b) =>
+        (pos.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (pos.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+    );
+  };
+
   const topLevel = channels.filter(s => s.parent_channel_id === null);
-  const pinnedTop = topLevel.filter(s => s.pinned_at !== null);
-  const unpinnedTop = topLevel.filter(s => s.pinned_at === null);
+  const sortCh = (items: ChannelNode[], groupKey: 'pinned' | 'unpinned'): ChannelNode[] =>
+    applyPendingOrder(sortGroup(items, mode, c => c.id, c => c.created_at, lookup), groupKey);
+  const pinnedTop = sortCh(
+    topLevel.filter(s => s.pinned_at !== null),
+    'pinned',
+  );
+  const unpinnedTop = sortCh(
+    topLevel.filter(s => s.pinned_at === null),
+    'unpinned',
+  );
+
+  // Drop the override once the cache-derived order matches it (cache caught up,
+  // a microtask after the drop) — at which point it is a no-op and re-render is
+  // invisible. This is Alice's reconcile rule: our own optimistic write makes
+  // derived == override, so clearing causes no thrash.
+  useEffect(() => {
+    if (!pendingDrop) return;
+    if (pendingDrop.listKey !== listKey) {
+      setPendingDrop(null);
+      return;
+    }
+    const settled = (groupKey: 'pinned' | 'unpinned', items: ChannelNode[]): boolean => {
+      const override = pendingDrop[groupKey];
+      if (!override) return true;
+      const derived = sortGroup(items, mode, c => c.id, c => c.created_at, lookup).map(c => c.id);
+      return derived.length === override.length && derived.every((id, i) => id === override[i]);
+    };
+    if (
+      settled('pinned', topLevel.filter(s => s.pinned_at !== null)) &&
+      settled('unpinned', topLevel.filter(s => s.pinned_at === null))
+    ) {
+      setPendingDrop(null);
+    }
+  }, [pendingDrop, listKey, mode, lookup, topLevel]);
+
+  // True from the drop event until the cache catches up (pendingDrop clears) —
+  // the post-drop "bridge" window. We extend the color-transition freeze across
+  // it: on the drop frame the active row briefly loses `:hover` (its new slot
+  // isn't under the pointer for one frame on downward drags), and if
+  // `transition-colors` is live then, the recovery animates a 150ms fade =
+  // residual flicker. `isSorting` alone flips false exactly on that frame
+  // (dnd clears active), so it can't cover it; `bridging` does. See ChannelRow.
+  const bridging = pendingDrop !== null && pendingDrop.listKey === listKey;
+
+  const rowProps = {
+    selectedChannelId,
+    onSelect: onSelectChannel,
+    onPin: onPinChannel,
+    onArchive: onArchiveChannel,
+    archivePending,
+    workspaceKind,
+    unreadByChannel,
+    bridging,
+  };
+
+  // A drag is an explicit "I want to arrange these myself" action, so rows
+  // are draggable in BOTH modes — gating it behind a mode toggle reads as a
+  // bug (shiki + Cindy). Committing an order also flips the list to Manual
+  // atomically on the backend (`PUT /api/sort/order` sets mode=manual, per
+  // Alice).
+  //
+  // Render-order ordering on drop must change in the SAME React commit as
+  // dnd-kit's internal drag-reset, or a 1-frame desync flickers on fast
+  // release: dnd clears the active row's transform immediately (frame N), but
+  // the cache-driven reorder lands a frame later (frame N+1) because React
+  // Query's observer notify is microtask-batched — so for one frame the row
+  // snaps back to its OLD slot, then jumps to the new one (Cindy's CDP, B-type;
+  // flushSync can't fix it — there's nothing pending to flush). The fix:
+  // `setPendingDrop` is React state set inside this event handler, so it
+  // batches with dnd's reset into one commit → DOM reorders the same frame the
+  // transform clears. INVARIANT: drop-time list reorder must be driven by
+  // synchronous local state (`pendingDrop`) in the same onDragEnd React commit.
+  // Do not collapse this back to pure `setQueryData` or any async-store-driven
+  // reorder, or transform clearing and DOM reordering split by one frame and
+  // the B-type desync returns (see docs/list-sort-v1.md §Renderer composition).
+  // The cache write (applySortOrder) + mutation are pure persistence; the
+  // override self-clears once the cache catches up. On error, drop the override
+  // so the invalidate-driven revert to the old order shows.
+  const onReorder = (groupKey: 'pinned' | 'unpinned', ordered: string[]): void => {
+    if (!listKey) return;
+    setPendingDrop(prev => ({
+      ...(prev && prev.listKey === listKey ? prev : { listKey }),
+      listKey,
+      [groupKey]: ordered,
+    }));
+    applySortOrder(listKey, ordered);
+    reorderSort.mutate(
+      { list_key: listKey, group: groupKey, ordered_ids: ordered },
+      { onError: () => setPendingDrop(null) },
+    );
+  };
+
+  const renderGroup = (
+    group: ChannelNode[],
+    groupKey: 'pinned' | 'unpinned',
+  ): ReactNode => {
+    if (listKey) {
+      const ids = group.map(c => c.id);
+      return (
+        <SortableGroup ids={ids} onReorder={ordered => onReorder(groupKey, ordered)}>
+          {group.map(channel => (
+            <SortableChannelItem key={channel.id} channel={channel} {...rowProps} />
+          ))}
+        </SortableGroup>
+      );
+    }
+    return group.map(channel => (
+      <ChannelTreeItem key={channel.id} channel={channel} {...rowProps} />
+    ));
+  };
 
   return (
     <aside
@@ -80,44 +264,50 @@ export function ChannelsSidebar({
         overflow: 'hidden',
       }}
     >
-      <div className="scrollbar-hide flex-1 overflow-y-auto px-1.5 py-1.5">
+      {workspaceName ? (
+        <div className="shrink-0 px-1.5 pt-1.5">
+          <SidebarSectionHeader
+            label="CHANNELS"
+            count={topLevel.length}
+            action={
+              <span className="flex items-center">
+                <SortModeMenu
+                  mode={mode}
+                  onChange={m =>
+                    listKey && setSortMode.mutate({ list_key: listKey, mode: m })
+                  }
+                />
+                {onCreateChannel ? (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={onCreateChannel}
+                    aria-label="新建 Channel"
+                    title="新建 Channel"
+                  >
+                    <MessageSquarePlus className="size-3.5" />
+                  </Button>
+                ) : null}
+              </span>
+            }
+          />
+        </div>
+      ) : null}
+
+      <div className="scrollbar-hide flex-1 overflow-y-auto px-1.5 pb-1.5">
         {!workspaceName ? (
           <EmptyHint message="选择左侧 Workspace" />
         ) : topLevel.length === 0 ? (
           <EmptyHint message="还没有 Channel。点 + 开始" />
         ) : (
           <ul className="space-y-0.5">
-            {pinnedTop.map(top => (
-              <ChannelTreeItem
-                key={top.id}
-                channel={top}
-                selectedChannelId={selectedChannelId}
-                onSelect={onSelectChannel}
-                onPin={onPinChannel}
-                onArchive={onArchiveChannel}
-                archivePending={archivePending}
-                workspaceKind={workspaceKind}
-                unreadByChannel={unreadByChannel}
-              />
-            ))}
+            {renderGroup(pinnedTop, 'pinned')}
             {pinnedTop.length > 0 && unpinnedTop.length > 0 ? (
               <li>
                 <div className="mx-2 my-1 border-t border-border-subtle" />
               </li>
             ) : null}
-            {unpinnedTop.map(top => (
-              <ChannelTreeItem
-                key={top.id}
-                channel={top}
-                selectedChannelId={selectedChannelId}
-                onSelect={onSelectChannel}
-                onPin={onPinChannel}
-                onArchive={onArchiveChannel}
-                archivePending={archivePending}
-                workspaceKind={workspaceKind}
-                unreadByChannel={unreadByChannel}
-              />
-            ))}
+            {renderGroup(unpinnedTop, 'unpinned')}
           </ul>
         )}
       </div>
@@ -131,6 +321,20 @@ function EmptyHint({ message }: { message: string }): JSX.Element {
   );
 }
 
+interface RowChildProps {
+  selectedChannelId: string | null;
+  onSelect: (id: string) => void;
+  onPin: (channelId: string, pinned: boolean) => void;
+  onArchive: (channelId: string, archived: boolean) => void;
+  archivePending: boolean;
+  workspaceKind: WorkspaceUiKind | null;
+  unreadByChannel: Record<string, number>;
+  /** Post-drop bridge window (see ChannelsSidebar). Threaded to
+   *  SortableChannelItem to extend the color-transition freeze past the drop
+   *  frame. Ignored by the non-sortable ChannelTreeItem. */
+  bridging: boolean;
+}
+
 function ChannelTreeItem({
   channel,
   selectedChannelId,
@@ -140,16 +344,7 @@ function ChannelTreeItem({
   archivePending,
   workspaceKind,
   unreadByChannel,
-}: {
-  channel: ChannelNode;
-  selectedChannelId: string | null;
-  onSelect: (id: string) => void;
-  onPin: (channelId: string, pinned: boolean) => void;
-  onArchive: (channelId: string, archived: boolean) => void;
-  archivePending: boolean;
-  workspaceKind: WorkspaceUiKind | null;
-  unreadByChannel: Record<string, number>;
-}): JSX.Element {
+}: { channel: ChannelNode } & RowChildProps): JSX.Element {
   return (
     <li>
       <ChannelRow
@@ -166,6 +361,115 @@ function ChannelTreeItem({
   );
 }
 
+// Animate sibling rows WHILE sorting (the smooth "make way" slide as you drag
+// over them), but skip dnd-kit's post-drop settle animation. We reorder the
+// data synchronously on drop, so the row is already in its final DOM slot — a
+// settle would then animate a leftover transform→0, the visible "jump" (worst
+// on the row that lands at the top, largest displacement). Per Alice + Cindy:
+// keep the sort animation, kill only the settle (a full DragOverlay is the
+// last-resort if during-drag feel ever regresses).
+const animateLayoutChanges: AnimateLayoutChanges = args =>
+  args.isSorting ? defaultAnimateLayoutChanges(args) : false;
+
+/** Drag-sortable row for manual ordering. The `<li>` is BOTH the sortable
+ *  node (`setNodeRef`) AND the drag surface — the dnd-kit `attributes` +
+ *  `listeners` live here, not on the inner row, so they don't have to pass
+ *  through the Radix context-menu `Slot` (which was swallowing the pointer
+ *  activation). The whole row drags (no grip — per shiki); a 4px pointer
+ *  activation distance keeps a plain click selecting. Vertical-only. */
+function SortableChannelItem({
+  channel,
+  selectedChannelId,
+  onSelect,
+  onPin,
+  onArchive,
+  archivePending,
+  workspaceKind,
+  unreadByChannel,
+  bridging,
+}: { channel: ChannelNode } & RowChildProps): JSX.Element {
+  const {
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+    isSorting,
+    attributes,
+    listeners,
+  } = useSortable({ id: channel.id, animateLayoutChanges });
+  // No DragOverlay (reverted — overlay regressed tracking/visibility, and the
+  // in-place version is already crisp on a controlled release; the fast-flick
+  // settle is deferred polish). The row itself translates with the pointer;
+  // keep zIndex + relative so it stays above siblings as it crosses them. We do
+  // NOT dim it (a 0.5→1 snap reads as a flicker). The crispness comes from the
+  // sibling-only hover-color freeze (see `dragging`) + the animateLayoutChanges
+  // settle guard, not from an overlay.
+  const style: CSSProperties = {
+    transform: transform ? `translate3d(0, ${transform.y}px, 0)` : undefined,
+    transition,
+    zIndex: isDragging ? 1 : undefined,
+    position: isDragging ? 'relative' : undefined,
+  };
+  return (
+    <li
+      ref={setNodeRef}
+      style={style}
+      className="touch-none"
+      {...attributes}
+      {...listeners}
+    >
+      <ChannelRow
+        channel={channel}
+        selected={channel.id === selectedChannelId}
+        onClick={() => onSelect(channel.id)}
+        onPin={onPin}
+        onArchive={onArchive}
+        archivePending={archivePending}
+        workspaceKind={workspaceKind}
+        unreadCount={unreadByChannel[channel.id] ?? 0}
+        draggable
+        sorting={isSorting || bridging}
+        dragging={isSorting && !isDragging}
+      />
+    </li>
+  );
+}
+
+function SortableGroup({
+  ids,
+  onReorder,
+  children,
+}: {
+  ids: string[];
+  onReorder: (orderedIds: string[]) => void;
+  children: ReactNode;
+}): JSX.Element {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+      onDragEnd={({ active, over }) => {
+        if (!over || active.id === over.id) return;
+        const oldIndex = ids.indexOf(String(active.id));
+        const newIndex = ids.indexOf(String(over.id));
+        if (oldIndex < 0 || newIndex < 0) return;
+        // Always send the COMPLETE group order — the backend requires
+        // ordered_ids set-equal to the live group (#task:1147).
+        onReorder(arrayMove(ids, oldIndex, newIndex));
+      }}
+    >
+      <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+        {children}
+      </SortableContext>
+    </DndContext>
+  );
+}
+
 function ChannelRow({
   channel,
   selected,
@@ -175,6 +479,9 @@ function ChannelRow({
   archivePending,
   workspaceKind,
   unreadCount,
+  draggable,
+  sorting = false,
+  dragging = false,
 }: {
   channel: ChannelNode;
   selected: boolean;
@@ -184,17 +491,53 @@ function ChannelRow({
   archivePending: boolean;
   workspaceKind: WorkspaceUiKind | null;
   unreadCount: number;
+  /** Manual mode: show the grab cursor so the row reads as draggable. The
+   *  drag listeners live on the parent `<li>`, not here. */
+  draggable?: boolean;
+  /** True while ANY row in this group is being dragged (`isSorting`) AND
+   *  through the post-drop bridge window (`bridging`, until the cache catches
+   *  up). We use this to freeze the color TRANSITION (drop `transition-colors`)
+   *  on EVERY row for that whole span. Rows shuffle under a near-stationary
+   *  pointer, so `:hover` / selected bg recompute as one slides under the
+   *  cursor; with `transition-colors` live, that recompute plays a ~150ms
+   *  bg/border/color fade. Two-round CDP (Alice + Cindy) pinned the residual
+   *  "原地微微一闪" to exactly this on the ACTIVE row: its bg animates over
+   *  150ms at the drag boundary. Freezing only the transition (not the color
+   *  VALUE) makes the change instant + imperceptible.
+   *
+   *  WHY the bridge matters (downward-drag asymmetry): `isSorting` flips false
+   *  on the exact drop frame (dnd clears `active`), but on downward drops the
+   *  active row briefly loses `:hover` that same frame (its new slot isn't
+   *  under the pointer for one frame) → bg→transparent → if the transition is
+   *  already re-armed it animates transparent→hover. `isSorting` alone can't
+   *  cover that frame; extending the freeze across `bridging` (pendingDrop)
+   *  does. Upward drops keep `:hover` so they never showed it.
+   *
+   *  WHY this is separate from `dragging`: the active row must keep its real
+   *  hover/selected color VALUE throughout (it tracks the pointer), so we do
+   *  NOT strip its `:hover` classes — only its transition. Stripping the value
+   *  on the active row (the old whole-group freeze) showed resting bg mid-drag
+   *  then a resting→hover fade-IN on release. So: transition freeze = all rows
+   *  (`sorting`); value freeze (`:hover` strip + pin hide) = siblings only
+   *  (`dragging`). See docs/list-sort-v1.md §Renderer composition. */
+  sorting?: boolean;
+  /** True while ANOTHER row in this group is being dragged — i.e. this is a
+   *  SIBLING of the active row (`isSorting && !isDragging`). For siblings we
+   *  also freeze the color VALUE: drop the `:hover` classes (so a row sliding
+   *  under the cursor can't paint a hover bg) and hide the hover-pin (its
+   *  opacity fade is another drop-frame flicker source). The ACTIVE row is
+   *  deliberately excluded here — it keeps its genuine hover/selected color
+   *  (see `sorting` for why), and only its transition is frozen. */
+  dragging?: boolean;
 }): JSX.Element {
   const isClosed = channel.closed_at !== null;
   const isPinned = channel.pinned_at !== null;
   const isArchived = channel.archived_at !== null;
   const [hovered, setHovered] = useState(false);
 
-  // Pin control shows on hover or when already pinned. A sibling <button>
-  // is used — not a nested interactive — so keyboard focus and click
-  // semantics are correct. stopPropagation prevents the row click handler
-  // from firing when the pin button is activated.
-  const showPin = hovered || isPinned;
+  // Pin control shows on hover or when already pinned — but NEVER mid-drag
+  // (its opacity fade is one of the flicker sources we freeze, see `dragging`).
+  const showPin = isPinned || (hovered && !dragging);
   // Archive/Restore is a channel-like organization action (#task:1145):
   // it applies to any top-level channel-like row — `channel` in a regular
   // workspace AND `dm_channel` in an agent_home/DM — and only excludes
@@ -205,14 +548,30 @@ function ChannelRow({
     (channel.kind === 'channel' || channel.kind === 'dm_channel');
   const hasManagementMenu = showArchiveMenu;
 
+  // While dragging, drop the hover classes entirely so a row sliding under the
+  // pointer can't paint a hover bg (and can't transition back out on drop).
   const rowBg = selected
     ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-    : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary';
+    : dragging
+      ? 'border-transparent text-text-secondary'
+      : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary';
 
   const row = (
     <div
       data-row-selected={selected || undefined}
-      className={'sidebar-row-border flex w-full items-stretch border transition-colors ' + rowBg}
+      className={
+        'sidebar-row-border flex w-full items-stretch border ' +
+        // Color transitions are great for hover, but on the drop frame they
+        // animate the bg/border/color back ~150ms (= the "原地微微一闪" on the
+        // active row, CDP-confirmed). Drop them for EVERY row while sorting
+        // (`sorting`, incl. the active row) so any color recompute lands
+        // instantly. The active row still keeps its real hover/selected color
+        // VALUE (only siblings strip it, via `dragging`) — see the `sorting`
+        // prop doc.
+        (sorting ? '' : 'transition-colors ') +
+        rowBg +
+        (draggable ? ' cursor-grab select-none active:cursor-grabbing' : '')
+      }
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >

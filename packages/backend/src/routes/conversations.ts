@@ -28,6 +28,7 @@ import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { ConversationReadRepo } from '../repos/conversation-read-repo.js';
 import type { SavedMessageRepo } from '../repos/saved-message-repo.js';
+import type { SortRepo } from '../repos/sort-repo.js';
 import type { SearchRepo } from '../repos/search-repo.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { MessageReactionRepo } from '../repos/message-reaction-repo.js';
@@ -439,13 +440,14 @@ export interface ConversationMessagingRouteDeps {
   messages: MessageRepo;
   conversationReads: ConversationReadRepo;
   saved: SavedMessageRepo;
+  sort: SortRepo;
 }
 
 export function createConversationMessagingApp(
   deps: ConversationMessagingRouteDeps,
 ): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { ctx, conversations, messages, conversationReads, saved } = deps;
+  const { ctx, conversations, messages, conversationReads, saved, sort } = deps;
 
   async function markConversationRead(
     conversationId: string,
@@ -553,6 +555,8 @@ export function createConversationMessagingApp(
     }
     try {
       const result = await ctx.channelService.setPinned({ channelId: id, pinned: true });
+      // Crossing the pin boundary abandons the manual rank in the old group.
+      sort.clearEntityRank(`channels:${channel.workspace_id}`, id);
       return c.json({ channel: result.channel });
     } catch (err) {
       const mapped = channelServiceErrorResponse(c, err);
@@ -571,6 +575,7 @@ export function createConversationMessagingApp(
     }
     try {
       const result = await ctx.channelService.setPinned({ channelId: id, pinned: false });
+      sort.clearEntityRank(`channels:${channel.workspace_id}`, id);
       return c.json({ channel: result.channel });
     } catch (err) {
       const mapped = channelServiceErrorResponse(c, err);

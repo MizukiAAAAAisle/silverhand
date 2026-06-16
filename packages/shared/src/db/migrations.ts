@@ -2852,6 +2852,54 @@ export const migrations: Migration[] = [
         ON message_reactions(message_id);
     `,
   },
+  {
+    version: 47,
+    name: 'user_list_sort',
+    up: `
+      -- Per-user (viewer-scoped) list sort state for the workspace rail and
+      -- each workspace's channel sidebar (#task:1146 / #task:1147).
+      --
+      -- This is personal VIEW STATE, not an aggregate field: ordering is
+      -- "how THIS viewer arranged the list", so it never lives on the
+      -- workspace / conversation aggregate (which would pollute it with
+      -- viewer-relative data). It is its own read model with its own tables.
+      --
+      -- list_key namespaces a list: 'workspaces' (the rail) | 'channels:<ws_id>'
+      -- (one workspace's channel sidebar). mode is per-LIST (one [recent|manual]
+      -- toggle per list); absence of a row = default 'recent'.
+      CREATE TABLE user_list_sort_mode (
+        user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        list_key   TEXT NOT NULL,
+        mode       TEXT NOT NULL CHECK (mode IN ('recent', 'manual')),
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, list_key)
+      );
+
+      -- Per-entity viewer state within a list: manual rank + recent-opened
+      -- timestamp. rank is a SINGLE value per (user, list, entity) — the hard
+      -- groups (rail: dm / regular:pinned / regular:unpinned; channel:
+      -- pinned / unpinned) are partitioned LIVE at sort time from the entity's
+      -- own pin/kind state, NOT baked into a bucket key here. That keeps
+      -- pin/unpin from having to migrate ranks across buckets.
+      --   rank NULL             = not manually arranged (tails by created_at).
+      --   last_accessed_at NULL = never opened by this viewer.
+      -- entity_id softly references workspaces(id) OR conversations(id) by
+      -- list_key (no FK — polymorphic, mirroring message_reactions.reactor_id);
+      -- orphaned rows after a delete are harmless (filtered out when joined
+      -- against the live list).
+      CREATE TABLE user_sort_entry (
+        user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        list_key         TEXT NOT NULL,
+        entity_id        TEXT NOT NULL,
+        rank             INTEGER,
+        last_accessed_at INTEGER,
+        PRIMARY KEY (user_id, list_key, entity_id)
+      );
+
+      CREATE INDEX idx_user_sort_entry_lookup
+        ON user_sort_entry(user_id, list_key);
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

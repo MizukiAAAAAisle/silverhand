@@ -92,10 +92,14 @@ export function AppDropdownMenu({
   trigger,
   children,
   align = 'end',
+  contentClassName,
 }: {
   trigger: ReactElement;
   children: ReactNode;
   align?: 'start' | 'center' | 'end';
+  /** Extra classes merged onto the menu content — e.g. a narrower
+   *  `min-w-*` than the shared default for compact menus. */
+  contentClassName?: string;
 }): JSX.Element {
   return (
     <DropdownMenu.Root>
@@ -104,7 +108,7 @@ export function AppDropdownMenu({
         <DropdownMenu.Content
           align={align}
           sideOffset={4}
-          className={MENU_CONTENT_CLASS}
+          className={cn(MENU_CONTENT_CLASS, contentClassName)}
         >
           {children}
         </DropdownMenu.Content>

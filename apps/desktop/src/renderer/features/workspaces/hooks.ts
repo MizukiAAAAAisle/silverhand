@@ -19,6 +19,9 @@ import type {
   WorkspaceHumanMemberDto,
   WorkspaceMembersResponse,
   WorkspaceRole,
+  SortGroup,
+  SortMode,
+  ViewerSortStateDto,
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
@@ -119,13 +122,37 @@ export function sortConversationList(items: ChannelListItem[]): ChannelListItem[
   });
 }
 
+/** The workspace rail list cache now carries the viewer's inline sort state
+ *  (#task:1146). Readers default to the items array via `select` (so existing
+ *  consumers are untouched); `useWorkspaceSortState` selects `viewerSort` off
+ *  the same cache. Writers (e.g. optimistic create) must preserve the shape. */
+export interface WorkspaceListPayload {
+  items: WorkspaceListItem[];
+  viewerSort: ViewerSortStateDto;
+}
+
+async function fetchWorkspaces(): Promise<WorkspaceListPayload> {
+  const res = await api<{ workspaces: WorkspaceDto[]; viewer_sort: ViewerSortStateDto }>(
+    apiPaths.workspaces,
+  );
+  return { items: res.workspaces.map(workspaceToListItem), viewerSort: res.viewer_sort };
+}
+
 export function useWorkspaces() {
   return useQuery({
     queryKey: workspacesKey,
-    queryFn: async () => {
-      const res = await api<{ workspaces: WorkspaceDto[] }>(apiPaths.workspaces);
-      return res.workspaces.map(workspaceToListItem);
-    },
+    queryFn: fetchWorkspaces,
+    select: r => r.items,
+  });
+}
+
+/** The viewer's sort state (`mode` + sparse per-entity `entries`) for the
+ *  workspace rail, read off the same `useWorkspaces` cache. */
+export function useWorkspaceSortState() {
+  return useQuery({
+    queryKey: workspacesKey,
+    queryFn: fetchWorkspaces,
+    select: r => r.viewerSort,
   });
 }
 
@@ -257,12 +284,13 @@ export function useCreateWorkspace() {
     },
     onSuccess: async res => {
       const workspace = workspaceToListItem(res.workspace);
-      qc.setQueryData<WorkspaceListItem[]>(workspacesKey, prev => {
-        const cur = prev ?? [];
-        if (cur.some(c => c.id === workspace.id)) {
-          return cur.map(c => (c.id === workspace.id ? workspace : c));
-        }
-        return [...cur, workspace];
+      qc.setQueryData<WorkspaceListPayload>(workspacesKey, prev => {
+        if (!prev) return prev;
+        const cur = prev.items;
+        const items = cur.some(c => c.id === workspace.id)
+          ? cur.map(c => (c.id === workspace.id ? workspace : c))
+          : [...cur, workspace];
+        return { ...prev, items };
       });
       await qc.invalidateQueries({ queryKey: workspacesKey });
     },
@@ -337,6 +365,25 @@ export function usePinWorkspace() {
   });
 }
 
+/** Channel sidebar list cache, now carrying the viewer's inline sort state
+ *  (#task:1146). Mirrors `WorkspaceListPayload`. */
+export interface ChannelListPayload {
+  items: ChannelListItem[];
+  viewerSort: ViewerSortStateDto;
+}
+
+async function fetchWorkspaceChannels(workspaceId: string): Promise<ChannelListPayload> {
+  const res = await api<{
+    channels: ChannelLikeDto[];
+    threads: ThreadDto[];
+    viewer_sort: ViewerSortStateDto;
+  }>(apiPaths.workspaceChannels(workspaceId));
+  return {
+    items: sortConversationList([...res.channels, ...res.threads]),
+    viewerSort: res.viewer_sort,
+  };
+}
+
 export function useChannelsForWorkspace(
   workspaceId: string | null,
   workspaceKind: 'regular' | 'dm' | null = 'regular',
@@ -364,18 +411,25 @@ export function useChannelsForWorkspace(
     };
   }, [qc, workspaceId, workspaceKind]);
 
-  return useQuery<ChannelListItem[]>({
+  return useQuery({
     queryKey: workspaceId ? channelsKey(workspaceId) : ['workspaces', 'none', 'channels'],
     enabled: !!workspaceId && workspaceKind !== null,
-    queryFn: async () => {
-      const res = await api<{
-        channels: ChannelLikeDto[];
-        threads: ThreadDto[];
-      }>(
-        apiPaths.workspaceChannels(workspaceId!),
-      );
-      return sortConversationList([...res.channels, ...res.threads]);
-    },
+    queryFn: () => fetchWorkspaceChannels(workspaceId!),
+    select: r => r.items,
+  });
+}
+
+/** The viewer's sort state (`mode` + sparse `entries`) for one workspace's
+ *  channel sidebar, read off the same `useChannelsForWorkspace` cache. */
+export function useChannelSortState(
+  workspaceId: string | null,
+  workspaceKind: 'regular' | 'dm' | null = 'regular',
+) {
+  return useQuery({
+    queryKey: workspaceId ? channelsKey(workspaceId) : ['workspaces', 'none', 'channels'],
+    enabled: !!workspaceId && workspaceKind !== null,
+    queryFn: () => fetchWorkspaceChannels(workspaceId!),
+    select: r => r.viewerSort,
   });
 }
 
@@ -431,14 +485,152 @@ export function useChannelsAcrossWorkspaces(workspaceIds: readonly string[]) {
   return useQueries({
     queries: workspaceIds.map(id => ({
       queryKey: channelsKey(id),
-      queryFn: async () => {
-        const res = await api<{
-          channels: ChannelLikeDto[];
-          threads: ThreadDto[];
-        }>(apiPaths.workspaceChannels(id));
-        return sortConversationList([...res.channels, ...res.threads]);
-      },
+      queryFn: () => fetchWorkspaceChannels(id),
+      select: (r: ChannelListPayload) => r.items,
     })),
+  });
+}
+
+// ---- Per-user list sort mutations (#task:1146 / #task:1147) ----
+
+type SortCachePayload = { items: unknown; viewerSort: ViewerSortStateDto };
+
+function sortListQueryKey(listKey: string): readonly unknown[] | null {
+  if (listKey === 'workspaces') return workspacesKey;
+  if (listKey.startsWith('channels:')) {
+    return channelsKey(listKey.slice('channels:'.length));
+  }
+  return null;
+}
+
+/** Toggle a list's sort mode (recent|manual). Optimistic on the list cache's
+ *  inline `viewerSort`, reconciled with the authoritative server state. */
+export function useSetSortMode() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { list_key: string; mode: SortMode }) => {
+      const res = await api<{ viewer_sort: ViewerSortStateDto }>(apiPaths.sortMode, {
+        method: 'PUT',
+        body: JSON.stringify(input),
+      });
+      return res.viewer_sort;
+    },
+    onMutate: async input => {
+      const key = sortListQueryKey(input.list_key);
+      if (!key) return undefined;
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<SortCachePayload>(key);
+      if (prev) {
+        qc.setQueryData<SortCachePayload>(key, {
+          ...prev,
+          viewerSort: { ...prev.viewerSort, mode: input.mode },
+        });
+      }
+      return { key, prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.key && ctx.prev) qc.setQueryData(ctx.key, ctx.prev);
+    },
+    onSuccess: (viewerSort, input) => {
+      const key = sortListQueryKey(input.list_key);
+      if (key) {
+        qc.setQueryData<SortCachePayload>(key, prev =>
+          prev ? { ...prev, viewerSort } : prev,
+        );
+      }
+    },
+  });
+}
+
+/** Apply a group's new drag order to the inline viewer-sort cache: dense
+ *  0..n ranks for the dragged ids + flip mode to `manual` (mirrors the
+ *  backend's atomic `order ⟹ manual`). Pure — returns the next payload. */
+function applyOrderToPayload(prev: SortCachePayload, orderedIds: string[]): SortCachePayload {
+  const byId = new Map(prev.viewerSort.entries.map(e => [e.entity_id, e] as const));
+  orderedIds.forEach((id, rank) => {
+    const e = byId.get(id);
+    byId.set(id, e ? { ...e, rank } : { entity_id: id, rank, last_accessed_at: null });
+  });
+  return {
+    ...prev,
+    viewerSort: { ...prev.viewerSort, mode: 'manual', entries: [...byId.values()] },
+  };
+}
+
+/** Synchronously apply a drag's new order to the cache. Call this in the drop
+ *  handler BEFORE `useReorderSort().mutate`, so React re-renders in the
+ *  dropped order in the SAME tick dnd-kit clears the drag transform. Going
+ *  through the mutation's `onMutate` instead lands the cache write a microtask
+ *  too late, so the row visibly snaps back to its old slot then jumps to the
+ *  new one. The mutation then persists + reconciles (onSuccess) / refetches on
+ *  error. */
+export function useApplySortOrder() {
+  const qc = useQueryClient();
+  return (listKey: string, orderedIds: string[]): void => {
+    const key = sortListQueryKey(listKey);
+    if (!key) return;
+    const prev = qc.getQueryData<SortCachePayload>(key);
+    if (prev) qc.setQueryData<SortCachePayload>(key, applyOrderToPayload(prev, orderedIds));
+  };
+}
+
+/** Persist a manual drag order for ONE live group. The renderer always sends
+ *  the COMPLETE group order (`ordered_ids` set-equal to the live group); the
+ *  backend rejects partial/duplicate/cross-group ids and flips mode to manual
+ *  atomically (#task:1147). The optimistic cache write happens synchronously
+ *  in the drop handler via `useApplySortOrder` and is DETERMINISTIC — identical
+ *  to what the backend computes (mode=manual + dense 0..n ranks for the same
+ *  ordered_ids). So we intentionally do NOT reconcile the success response onto
+ *  the cache: a second `setQueryData` a network-RTT after the drop re-renders
+ *  the list (the server's `entries` array order can differ from ours, defeating
+ *  structural sharing) and shows as a post-drop flicker. The optimistic state
+ *  stands; only errors refetch the authoritative order.
+ *
+ *  BOUNDARY (Cindy): the no-reconcile shortcut is valid for `order` ONLY,
+ *  because its success response is a deterministic function of the request —
+ *  the backend validated the complete live group and can only return that same
+ *  group's 0..n ranks + mode=manual; there is no server-side sort/normalization
+ *  the client must absorb. Do NOT copy this to setMode/touch (or any future
+ *  mutation): those touch more than one local group or lack an isomorphic local
+ *  truth, so they still need to reconcile. The error path keeps refetching, so
+ *  stale/race still recovers. */
+export function useReorderSort() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      list_key: string;
+      group: SortGroup;
+      ordered_ids: string[];
+    }) => {
+      const res = await api<{ viewer_sort: ViewerSortStateDto }>(apiPaths.sortOrder, {
+        method: 'PUT',
+        body: JSON.stringify(input),
+      });
+      return res.viewer_sort;
+    },
+    onMutate: async input => {
+      // Cancel in-flight list refetches so they can't clobber the
+      // already-applied synchronous optimistic order.
+      const key = sortListQueryKey(input.list_key);
+      if (key) await qc.cancelQueries({ queryKey: key });
+    },
+    onError: (_e, input) => {
+      // The optimistic order was applied synchronously and we didn't snapshot
+      // the pre-drag state here; refetch the authoritative order instead.
+      const key = sortListQueryKey(input.list_key);
+      if (key) void qc.invalidateQueries({ queryKey: key });
+    },
+  });
+}
+
+/** Stamp recent-opened on selection. Fire-and-forget, non-blocking; the
+ *  reorder applies on the next list fetch (no jump under the cursor). The
+ *  caller dedups/throttles per (viewer, target); the upsert is idempotent. */
+export function useTouchSort() {
+  return useMutation({
+    mutationFn: async (input: { list_key: string; entity_id: string }) => {
+      await api(apiPaths.sortTouch, { method: 'POST', body: JSON.stringify(input) });
+    },
   });
 }
 

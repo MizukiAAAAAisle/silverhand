@@ -33,6 +33,7 @@ import type { UserRepo } from '../repos/user-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
+import type { SortRepo } from '../repos/sort-repo.js';
 import { getUserPrincipal, requireViewerUserId } from '../auth/principal.js';
 import { canGovernWorkspace, canViewWorkspace } from '../permissions.js';
 import { timedRouteSpan } from '../observability/route-span.js';
@@ -49,19 +50,30 @@ export interface WorkspacesRouteDeps {
   workspaces: WorkspaceRepo;
   conversations: ConversationRepo;
   messages: MessageRepo;
+  sort: SortRepo;
 }
 
 export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { ctx, agents, users, workspaces, conversations, messages } = deps;
+  const { ctx, agents, users, workspaces, conversations, messages, sort } = deps;
 
-  app.get(apiPaths.workspaces, c =>
-    c.json({
-      workspaces: workspaces
-        .list()
-        .filter(workspace => canViewWorkspace(ctx, getUserPrincipal(c), workspace.id)),
-    }),
-  );
+  app.get(apiPaths.workspaces, c => {
+    const principal = getUserPrincipal(c);
+    const visible = workspaces
+      .list()
+      .filter(workspace => canViewWorkspace(ctx, principal, workspace.id));
+    return c.json({
+      workspaces: visible,
+      // Filter sort entries to the live SORTABLE set so neither a stale
+      // entity_id (removed/non-member) nor an out-of-scope archived workspace
+      // leaks on the wire — archived is shown in its own rail group, not sorted.
+      viewer_sort: sort.getState(
+        principal.userId,
+        'workspaces',
+        visible.filter(w => w.archived_at == null).map(w => w.id),
+      ),
+    });
+  });
 
   app.post(apiPaths.workspaces, async c => {
     const body = await c.req.json().catch(() => ({}));
@@ -239,6 +251,9 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     }
     const updated = workspaces.setPinned(workspace.id, true);
     if (!updated) return c.json({ error: 'workspace pin failed' }, 500);
+    // Crossing the pin boundary abandons the manual rank in the old group
+    // (it falls to the new group's manual tail until re-dragged).
+    sort.clearEntityRank('workspaces', workspace.id);
     return c.json({ workspace: updated });
   });
 
@@ -258,6 +273,7 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     }
     const updated = workspaces.setPinned(workspace.id, false);
     if (!updated) return c.json({ error: 'workspace unpin failed' }, 500);
+    sort.clearEntityRank('workspaces', workspace.id);
     return c.json({ workspace: updated });
   });
 
@@ -345,6 +361,12 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     return c.json({
       channels,
       threads,
+      // Filter to the live channel set so a stale entity_id never leaks.
+      viewer_sort: sort.getState(
+        principal.userId,
+        `channels:${workspace.id}`,
+        channels.map(ch => ch.id),
+      ),
     });
   });
 

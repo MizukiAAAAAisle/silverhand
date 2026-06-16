@@ -57,6 +57,7 @@ import {
   usePinChannel,
   useArchiveChannel,
   useRenameChannel,
+  useTouchSort,
   type ChannelListItem,
 } from '@/features/workspaces/hooks';
 import { useSavedMessages } from '@/features/saved/hooks';
@@ -308,6 +309,10 @@ function RegisteredAppShell(): JSX.Element {
   const lastSelectedMessageReadKey = useRef<string | null>(null);
   const lastThreadMessageReadKey = useRef<string | null>(null);
   const lastNotificationReadId = useRef<string | null>(null);
+  // Dedup guard for the recent-opened touch ping (#task:1146): the last
+  // `<workspaceId>:<channelId>` we stamped, so re-renders that don't change
+  // the selection don't re-POST /api/sort/touch.
+  const lastTouchedChannelRef = useRef<string | null>(null);
   // The channel just archived from the PRIMARY pane that cleared selection
   // to the workspace empty state (no neighbor to fall back to). The
   // auto-select effect must NOT re-pick it while the stale active list
@@ -351,6 +356,7 @@ function RegisteredAppShell(): JSX.Element {
   const pinWorkspace = usePinWorkspace();
   const pinChannel = usePinChannel(selectedWorkspaceId ?? null);
   const archiveChannel = useArchiveChannel(selectedWorkspaceId ?? null);
+  const touchSort = useTouchSort();
   const renameChannel = useRenameChannel(selectedWorkspaceId ?? null);
   // Shared cache with SavedListView and useToggleSave — invalidations
   // from save/unsave mutations propagate the count update here too.
@@ -607,6 +613,28 @@ function RegisteredAppShell(): JSX.Element {
       persistLastChannel();
     }
   }, [selectedWorkspaceId, selectedChannelId]);
+
+  // Stamp "recently opened" for the channel sort list whenever the viewer
+  // selects a top-level channel (#task:1146). Recent = recently-OPENED by
+  // this viewer, so the write-point is selection, not message activity.
+  // Fire-and-forget + deduped per (workspace, channel) so a re-render with
+  // the same selection doesn't re-ping; the reorder lands on the next list
+  // fetch (no jump under the cursor). Threads are out of scope — only stamp
+  // when the selected id is a top-level channel in the active list.
+  useEffect(() => {
+    if (!selectedWorkspaceId || !selectedChannelId) return;
+    const isTopLevel = activeChannels.some(
+      c => c.id === selectedChannelId && c.parent_conversation_id === null,
+    );
+    if (!isTopLevel) return;
+    const key = `${selectedWorkspaceId}:${selectedChannelId}`;
+    if (lastTouchedChannelRef.current === key) return;
+    lastTouchedChannelRef.current = key;
+    touchSort.mutate({
+      list_key: `channels:${selectedWorkspaceId}`,
+      entity_id: selectedChannelId,
+    });
+  }, [selectedWorkspaceId, selectedChannelId, activeChannels]);
 
   // Remember the channel's secondary-pane layout (threads-list / thread /
   // side / none) so switching away and back restores it instead of
@@ -1334,11 +1362,6 @@ function RegisteredAppShell(): JSX.Element {
         onOpenWorkspaceSettings={
           selectedWorkspace ? () => setWorkspaceSettingsOpen(true) : undefined
         }
-        onCreateChannel={
-          appSection === 'chat' && view === 'channel' && selectedWorkspace
-            ? () => setCreateChannelOpen(true)
-            : undefined
-        }
         onOpenTasks={
           appSection === 'chat' && view === 'channel' && selectedWorkspace
             ? () => setTasksDrawerOpen(true)
@@ -1598,6 +1621,7 @@ function RegisteredAppShell(): JSX.Element {
                     >
                       <ChannelsSidebar
                         workspaceName={selectedWorkspace?.name ?? null}
+                        workspaceId={selectedWorkspaceId}
                         channels={activeChannels.map(s => ({
                           id: s.id,
                           title: s.title,
@@ -1608,6 +1632,7 @@ function RegisteredAppShell(): JSX.Element {
                           closed_at: s.closed_at,
                           pinned_at: s.pinned_at,
                           archived_at: s.archived_at,
+                          created_at: s.created_at,
                         }))}
                         workspaceKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
                         // PR-2: highlight the secondary pane's row in
@@ -1636,6 +1661,11 @@ function RegisteredAppShell(): JSX.Element {
                             workspaceId: selectedWorkspaceId ?? undefined,
                           });
                         }}
+                        onCreateChannel={
+                          appSection === 'chat' && view === 'channel' && selectedWorkspace
+                            ? () => setCreateChannelOpen(true)
+                            : undefined
+                        }
                         archivePending={archiveChannel.isPending}
                         unreadByChannel={channelUnreadCounts ?? {}}
                       />
