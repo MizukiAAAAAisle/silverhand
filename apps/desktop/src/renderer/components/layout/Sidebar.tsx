@@ -159,7 +159,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           type="button"
           onClick={props.onSelectSearch}
           className={cn(
-            'sidebar-row-border mx-1.5 mb-1 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 py-1.5 text-left text-sm transition-colors',
+            'sidebar-row-border mx-1.5 mb-1 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm transition-colors',
             props.searchActive
               ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
               : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
@@ -173,7 +173,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           type="button"
           onClick={props.onSelectSaved}
           className={cn(
-            'sidebar-row-border mx-1.5 mb-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 py-1.5 text-left text-sm transition-colors',
+            'sidebar-row-border mx-1.5 mb-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm transition-colors',
             props.savedActive
               ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
               : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
@@ -203,7 +203,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           type="button"
           onClick={props.onSelectArchived}
           className={cn(
-            'sidebar-row-border mx-1.5 mb-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 py-1.5 text-left text-sm transition-colors',
+            'sidebar-row-border mx-1.5 mb-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm transition-colors',
             props.archivedActive
               ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
               : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',

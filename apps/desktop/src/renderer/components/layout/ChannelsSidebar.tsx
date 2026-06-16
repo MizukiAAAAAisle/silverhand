@@ -390,7 +390,7 @@ function ChannelRow({
     <div
       data-row-selected={selected || undefined}
       className={
-        'sidebar-row-border flex h-8 w-full items-stretch border ' +
+        'sidebar-row-border flex h-8 w-full items-stretch border px-2 ' +
         // Freeze the color transition on every row during the drag + bridge so
         // any hover/selected recompute lands instantly (no ~150ms fade). The
         // active row keeps its real value, only its transition frozen; siblings
@@ -404,7 +404,7 @@ function ChannelRow({
       <button
         type="button"
         onClick={onClick}
-        className="flex min-w-0 flex-1 items-center gap-1.5 pl-2 text-left text-[12px]"
+        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[12px]"
       >
         <Hash
           data-channel-icon
