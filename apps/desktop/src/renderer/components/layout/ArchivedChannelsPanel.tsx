@@ -20,6 +20,7 @@ import { AgentAvatar } from '@/components/AgentAvatar';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { cn } from '@/lib/cn';
+import { dmWorkspaceLabel, workspaceDisplayName } from '@/lib/workspace-name';
 
 type WorkspaceFilter = 'all' | `workspace:${string}`;
 type ArchiveDateFilter = 'all' | '30d' | '14d' | '7d';
@@ -215,8 +216,8 @@ function WorkspaceArchiveSelect({
             <SelectItem value="all" icon={<Archive className="size-3.5" />}>
               All workspaces
             </SelectItem>
-            {/* DM group leads, mirroring SearchPanel's WorkspaceFilterSelect
-                order (DM before Channels) so the two dropdowns read the same. */}
+            {/* DMs group leads, mirroring SearchPanel's WorkspaceFilterSelect
+                order so the two workspace-filter dropdowns read the same. */}
             {dms.length > 0 ? (
               <Select.Group>
                 <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
@@ -231,7 +232,7 @@ function WorkspaceArchiveSelect({
                       workspace.archived_at !== null ? 'archived workspace' : undefined
                     }
                   >
-                    {dmScopeLabel(workspace.name)}
+                    {workspaceDisplayName(workspace)}
                   </SelectItem>
                 ))}
               </Select.Group>
@@ -250,7 +251,7 @@ function WorkspaceArchiveSelect({
                       workspace.archived_at !== null ? 'archived workspace' : undefined
                     }
                   >
-                    {workspace.name}
+                    {workspaceDisplayName(workspace)}
                   </SelectItem>
                 ))}
               </Select.Group>
@@ -427,30 +428,19 @@ function WorkspaceGlyph(): JSX.Element {
 }
 
 /**
- * DM (agent_home) scope label for the mixed Archived recovery index
- * (#task:1145, shiki). The same agent surfaces under two name shapes here:
- * the WorkspaceListItem carries a UI `dm-` prefix (`workspaceToListItem`),
- * while the backend archived aggregate returns the bare agent name
- * (`insertAgentHome` sets `name = agent.name`). `stripDmPrefix` normalizes
- * both so a DM scope reads "DM <agentName>" in the filter dropdown AND the
- * row context — distinguishable from a regular workspace name while every
- * row keeps the same `#` channel glyph (DM is channel-like, not a separate
- * icon). Mirrors `displayDmName` in WorkspacesPanel (which formats the
- * sidebar as `@<agentName>`).
+ * Workspace label for an archived row's context (#task:1145, label converged
+ * #task:1156). A regular `channel` row shows its bare workspace name; a
+ * `dm_channel` row shows `@<agentName>` — the same handle the filter dropdown
+ * and the rail use (one shared `dmWorkspaceLabel`, no per-surface variant).
+ * The DM name arrives bare here (`insertAgentHome` sets `name = agent.name`);
+ * `dmWorkspaceLabel` also strips the `dm-` UI prefix the dropdown shape carries,
+ * so both normalize to the same handle.
  */
-function stripDmPrefix(name: string): string {
-  return name.startsWith('dm-') ? name.slice(3) : name;
-}
-
-export function dmScopeLabel(name: string): string {
-  return `DM ${stripDmPrefix(name)}`;
-}
-
 export function archivedRowWorkspaceLabel(
   item: ArchivedChannelListItemDto,
 ): string {
   return item.channel.kind === 'dm_channel'
-    ? dmScopeLabel(item.workspace.name)
+    ? dmWorkspaceLabel(item.workspace.name)
     : item.workspace.name;
 }
 
@@ -511,7 +501,7 @@ function workspaceFilterLabel(
   }
   return workspace.kind === 'dm'
     ? {
-        label: dmScopeLabel(workspace.name),
+        label: workspaceDisplayName(workspace),
         icon: dmWorkspaceIcon(workspace, agentsById, agentAvatarUrls),
       }
     : { label: workspace.name, icon: <WorkspaceGlyph /> };

@@ -16,6 +16,7 @@ import {
   sortableItemStyle,
 } from '@/components/layout/list-drag-sort';
 import { SidebarSection } from './sidebar-shared';
+import { dmWorkspaceLabel } from '@/lib/workspace-name';
 
 type WorkspaceUiKind = 'regular' | 'dm';
 
@@ -299,7 +300,7 @@ function WorkspaceRow({
    *  row (see the guardrail in deriveRowFreeze). */
   freezeColorValue?: boolean;
 }): JSX.Element {
-  const title = workspace.kind === 'dm' ? displayDmName(workspace.name) : workspace.name;
+  const title = workspace.kind === 'dm' ? dmWorkspaceLabel(workspace.name) : workspace.name;
   const icon = rowIconFor(workspace, ctx);
   const canPin = canPinWorkspace(workspace, ctx);
   const canReveal = ctx.canRevealWorkspace?.(workspace) ?? false;
@@ -403,10 +404,4 @@ async function copyWorkspacePath(path: string): Promise<void> {
   } catch {
     toast.error('复制路径失败');
   }
-}
-
-/** DM workspaces are stored as `dm-<agentName>` (see provision.ts).
- *  Strip the prefix in the sidebar so the user just sees `@<agentName>`. */
-function displayDmName(stored: string): string {
-  return stored.startsWith('dm-') ? `@${stored.slice(3)}` : stored;
 }

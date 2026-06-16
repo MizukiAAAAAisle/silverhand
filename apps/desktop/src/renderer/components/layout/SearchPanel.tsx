@@ -28,6 +28,7 @@ import {
   type UserNameResolver,
 } from '@/lib/current-user';
 import { cn } from '@/lib/cn';
+import { workspaceDisplayName } from '@/lib/workspace-name';
 
 interface SearchPanelProps {
   workspaces: WorkspaceListItem[];
@@ -44,7 +45,7 @@ interface SearchPanelProps {
   ) => void;
 }
 
-type WorkspaceFilter = 'all' | 'scope:dm' | 'scope:regular' | `workspace:${string}`;
+type WorkspaceFilter = 'all' | `workspace:${string}`;
 type SenderFilter = 'all' | `user:${string}` | `agent:${string}`;
 type TimeRange = 'all' | 'today' | 'week1' | 'week2' | 'month';
 
@@ -350,46 +351,38 @@ function WorkspaceFilterSelect({
             <SelectItem value="all" icon={<SearchIcon className="size-3.5" />}>
               All locations
             </SelectItem>
-            <Select.Group>
-              <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-                DM
-              </Select.Label>
-              <SelectItem
-                value="scope:dm"
-                icon={<User className="size-3.5" />}
-              >
-                All DMs
-              </SelectItem>
-              {dms.map(workspace => (
-                <SelectItem
-                  key={workspace.id}
-                  value={`workspace:${workspace.id}`}
-                  icon={dmWorkspaceIcon(workspace, agentsById, agentAvatarUrls)}
-                >
-                  {formatWorkspaceName(workspace)}
-                </SelectItem>
-              ))}
-            </Select.Group>
-            <Select.Group>
-              <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-                Channels
-              </Select.Label>
-              <SelectItem
-                value="scope:regular"
-                icon={<WorkspaceGlyph />}
-              >
-                All channels
-              </SelectItem>
-              {regular.map(workspace => (
-                <SelectItem
-                  key={workspace.id}
-                  value={`workspace:${workspace.id}`}
-                  icon={<WorkspaceGlyph />}
-                >
-                  {formatWorkspaceName(workspace)}
-                </SelectItem>
-              ))}
-            </Select.Group>
+            {dms.length > 0 ? (
+              <Select.Group>
+                <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                  DMs
+                </Select.Label>
+                {dms.map(workspace => (
+                  <SelectItem
+                    key={workspace.id}
+                    value={`workspace:${workspace.id}`}
+                    icon={dmWorkspaceIcon(workspace, agentsById, agentAvatarUrls)}
+                  >
+                    {workspaceDisplayName(workspace)}
+                  </SelectItem>
+                ))}
+              </Select.Group>
+            ) : null}
+            {regular.length > 0 ? (
+              <Select.Group>
+                <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                  Workspaces
+                </Select.Label>
+                {regular.map(workspace => (
+                  <SelectItem
+                    key={workspace.id}
+                    value={`workspace:${workspace.id}`}
+                    icon={<WorkspaceGlyph />}
+                  >
+                    {workspaceDisplayName(workspace)}
+                  </SelectItem>
+                ))}
+              </Select.Group>
+            ) : null}
           </Select.Viewport>
         </Select.Content>
       </Select.Portal>
@@ -730,7 +723,7 @@ function resultMeta(
   if (result.type === 'conversation') {
     return [
       result.conversation.kind === 'thread' ? 'Thread' : 'Channel',
-      formatWorkspaceName(result.workspace),
+      workspaceDisplayName(result.workspace),
       dayjs(result.conversation.created_at).format('YYYY-MM-DD HH:mm'),
     ];
   }
@@ -741,7 +734,7 @@ function resultMeta(
       : 'system';
   return [
     result.workspace.kind === 'dm' ? 'DM message' : 'Message',
-    formatWorkspaceName(result.workspace),
+    workspaceDisplayName(result.workspace),
     result.conversation.title,
     sender,
     dayjs(result.message.created_at).format('YYYY-MM-DD HH:mm'),
@@ -749,14 +742,14 @@ function resultMeta(
 }
 
 function resultTitle(result: SearchResultDto): string {
-  if (result.type === 'workspace') return formatWorkspaceName(result.workspace);
+  if (result.type === 'workspace') return workspaceDisplayName(result.workspace);
   if (result.type === 'conversation') return result.conversation.title;
   return result.conversation.title;
 }
 
 function resultExcerpt(result: SearchResultDto, query: string): string | null {
   if (result.type === 'workspace') return result.workspace.description;
-  if (result.type === 'conversation') return formatWorkspaceName(result.workspace);
+  if (result.type === 'conversation') return workspaceDisplayName(result.workspace);
   return buildExcerpt(result.message.content, query);
 }
 
@@ -776,16 +769,6 @@ function formatAgentName(
   if (!agentId) return '@agent';
   const agent = agentsById.get(agentId);
   return `@${agent?.display_name?.trim() || fallback || agentId}`;
-}
-
-function formatWorkspaceName(workspace: {
-  name: string;
-  kind: 'regular' | 'dm';
-}): string {
-  if (workspace.kind !== 'dm') return workspace.name;
-  return workspace.name.startsWith('dm-')
-    ? `@${workspace.name.slice(3)}`
-    : workspace.name;
 }
 
 function buildExcerpt(content: string, query: string): string {
@@ -820,8 +803,6 @@ function parseWorkspaceFilter(value: WorkspaceFilter): {
   scope: 'all' | 'regular' | 'dm';
   workspaceId?: string;
 } {
-  if (value === 'scope:dm') return { scope: 'dm' };
-  if (value === 'scope:regular') return { scope: 'regular' };
   if (value.startsWith('workspace:')) {
     return { scope: 'all', workspaceId: value.slice('workspace:'.length) };
   }
@@ -866,18 +847,12 @@ function workspaceFilterLabel(
   agentsById: Map<string, AgentDto>,
   agentAvatarUrls: Map<string, string | null>,
 ): { label: string; icon: JSX.Element } {
-  if (value === 'scope:dm') {
-    return { label: 'All DMs', icon: <User className="size-3.5" /> };
-  }
-  if (value === 'scope:regular') {
-    return { label: 'All channels', icon: <WorkspaceGlyph /> };
-  }
   if (value.startsWith('workspace:')) {
     const workspaceId = value.slice('workspace:'.length);
     const workspace = workspaces.find(w => w.id === workspaceId);
     if (workspace) {
       return {
-        label: formatWorkspaceName(workspace),
+        label: workspaceDisplayName(workspace),
         icon:
           workspace.kind === 'dm' ? (
             dmWorkspaceIcon(workspace, agentsById, agentAvatarUrls)

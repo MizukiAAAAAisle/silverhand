@@ -1,8 +1,9 @@
 /**
- * #task:1145 — the global Archived recovery index mixes regular channels
- * AND archived DMs (`dm_channel`). A DM row/scope must read "DM <agentName>"
- * so it's distinguishable from a regular workspace name while every row
- * keeps the same `#` channel glyph (DM is channel-like, not a separate icon).
+ * #task:1145 / #task:1156 — the global Archived recovery index mixes regular
+ * channels AND archived DMs (`dm_channel`). A DM row's workspace context must
+ * read `@<agentName>` — the same handle the filter dropdown and the rail use
+ * (label convergence #task:1156; was `DM <agentName>`) — while every row keeps
+ * the same `#` channel glyph (DM is channel-like, not a separate icon).
  *
  * The subtle part is that the SAME agent surfaces under two name shapes:
  *   - the `WorkspaceListItem` (filter dropdown) carries a UI `dm-` prefix
@@ -10,30 +11,16 @@
  *   - the backend archived aggregate (`item.workspace.name`) returns the
  *     bare agent name (`insertAgentHome` sets `name = agent.name`), e.g.
  *     `Norman`.
- * Both must normalize to the identical "DM Norman" label. This pins that
- * convergence so a future change to either name shape fails loud.
+ * Both must normalize to the identical `@Norman` label. The prefix-stripping
+ * convergence itself is pinned in `lib/workspace-name.test.ts`; here we pin the
+ * archived row's kind → label wiring.
  */
 import { describe, expect, it } from 'vitest';
 import type { ArchivedChannelListItemDto } from '@silverhand/shared';
 import {
   archivedRowOpenTarget,
   archivedRowWorkspaceLabel,
-  dmScopeLabel,
 } from './ArchivedChannelsPanel';
-
-describe('dmScopeLabel — both name shapes converge to "DM <agentName>"', () => {
-  it('strips the UI `dm-` prefix (WorkspaceListItem / dropdown shape)', () => {
-    expect(dmScopeLabel('dm-Norman')).toBe('DM Norman');
-  });
-
-  it('passes a bare agent name through (backend aggregate shape)', () => {
-    expect(dmScopeLabel('Norman')).toBe('DM Norman');
-  });
-
-  it('only strips a leading `dm-`, not an interior or partial match', () => {
-    expect(dmScopeLabel('admin-bot')).toBe('DM admin-bot');
-  });
-});
 
 describe('archivedRowWorkspaceLabel — kind drives the context label', () => {
   const baseChannel = {
@@ -54,13 +41,13 @@ describe('archivedRowWorkspaceLabel — kind drives the context label', () => {
     expect(archivedRowWorkspaceLabel(item)).toBe('Engineering');
   });
 
-  it('`dm_channel` row renders "DM <agentName>" from the bare aggregate name', () => {
+  it('`dm_channel` row renders `@<agentName>` from the bare aggregate name', () => {
     const item = {
       channel: { ...baseChannel, kind: 'dm_channel' },
       workspace: { id: 'w2', name: 'Norman', archived_at: null },
       thread_count: 0,
     } as unknown as ArchivedChannelListItemDto;
-    expect(archivedRowWorkspaceLabel(item)).toBe('DM Norman');
+    expect(archivedRowWorkspaceLabel(item)).toBe('@Norman');
   });
 });
 
