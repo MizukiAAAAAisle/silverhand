@@ -126,7 +126,11 @@ describe('SystemActivityCluster (PR-10)', () => {
       fullTaskMeta({ task_status: 'in_review' }),
       { id: 'b' },
     );
-    const c = makeSystemMessage('rename', { old_name: 'v2', new_name: 'v3' }, { id: 'c' });
+    const c = makeSystemMessage(
+      'task_unclaim',
+      fullTaskMeta({ task_status: 'todo' }),
+      { id: 'c' },
+    );
     const html = renderCluster([a, b, c], [seededTask()]);
     // Three rows → three system-message-row wrappers, each with the
     // PR-10 data attribute.
@@ -134,12 +138,16 @@ describe('SystemActivityCluster (PR-10)', () => {
     expect(matches).toHaveLength(3);
   });
 
-  it('mixes task event + session_cleared + rename rows in the same cluster (no subtype gating in renderer)', () => {
-    // The grouping decision (which subtypes participate in clusters)
-    // lives in `groupMessages.ts`. The renderer accepts whatever the
-    // grouping pass put in and faithfully renders each subtype using
-    // its standalone SystemMessage renderer. This test pins that
-    // contract: the renderer doesn't second-guess grouping.
+  it('faithfully renders whatever subtypes it is handed, without re-gating (defensive passthrough)', () => {
+    // DEFENSIVE-INPUT test — NOT a grouping contract. The decision of
+    // which subtypes actually cluster lives in `groupMessages.ts`, and
+    // since #task:1145 `session_cleared` / `rename` are NOT clusterable
+    // (they render standalone). This test only pins that the cluster
+    // component is a dumb passthrough: if some caller ever hands it a
+    // mixed/arbitrary message list, it renders each subtype via the
+    // standalone SystemMessage renderer instead of dropping or
+    // re-filtering rows. Using non-clusterable subtypes here on purpose,
+    // to prove the renderer doesn't second-guess its input.
     const a = makeSystemMessage('task_claim', fullTaskMeta(), { id: 'a' });
     const b = makeSystemMessage(
       'session_cleared',

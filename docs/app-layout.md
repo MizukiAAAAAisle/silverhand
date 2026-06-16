@@ -161,14 +161,20 @@ new BrowserWindow({
 | Item | Icon | 行为 | 范围 |
 |---|---|---|---|
 | Pin / Unpin | `Pin` / `PinOff` | `pinChannel.mutate({ channelId, pinned: !pinned })` | top-level channel / dm_channel；thread 隐藏 |
-| Archive / Restore | `Archive` / `ArchiveRestore` | `archiveChannel.mutate({ channelId, archived: !archived })` | regular workspace 的 top-level `channel`；DM channel 与 thread 隐藏 |
+| Archive / Restore | `Archive` / `ArchiveRestore` | `archiveChannel.mutate({ channelId, archived: !archived })` | top-level channel-like：`channel`（regular workspace）或 `dm_channel`（agent_home/DM）；thread 隐藏（#task:1145） |
 | Copy name | `Copy` | `navigator.clipboard.writeText(channel.title)` + toast | channel / dm_channel / thread 全部可用 |
 
 Thread 行本批只提供 `Copy name`，不扩展 pin/archive 语义，保持 top-level-only 规则。
 
 ### ChannelView header More
 
-ChannelView 头部的 `MoreHorizontal` 点击菜单继续保持 dropdown 交互，不改成右键；但样式迁到 `AppDropdownMenu` 同一套 token。当前条目为 Archive / Restore（沿用 `canToggleArchive`：regular workspace、top-level channel）。
+ChannelView 头部的 `MoreHorizontal` 点击菜单继续保持 dropdown 交互，不改成右键；但样式迁到 `AppDropdownMenu` 同一套 token。条目为 Rename / Archive / Restore，组织行为按 channel-like 同构（`canRenameChannel` / `canToggleArchive`：top-level `channel` 或 `dm_channel`，只拒 thread；rename 另需「未 closed」）——DM channel 与 regular channel 走同一套入口（#task:1145）。
+
+归档当前主选 channel 时，主面板按 sidebar 顺序做 **neighbor-aware 兜底选择**：优先选下一条 active top-level，否则上一条，都没有则清空到 workspace 空态（纯函数 `lib/archive-fallback.ts#pickFallbackAfterArchive`，单测覆盖）。只有归档「主面板正在看的那条」才移动选择；secondary 面板归档 / restore 不抢主选（#task:1145）。
+
+### Archived Channels 面板
+
+全局 Archived 是跨 collection 的恢复索引（含 regular `channel` 与 agent_home `dm_channel`，#task:1144/#task:1145）。Workspace 过滤 dropdown 按 **Workspaces / DMs 两组**分组（镜像 Message Search 的 workspace filter）：regular 组用 `W` glyph，DM 组用 agent avatar（`dmWorkspaceIcon`，dropdown scope 图标专用）。列表行本身仍统一 `#` channel glyph（DM 是 channel-like，不另给图标），靠 "DM <agent>" 文字上下文区分。点击 archived DM 行经 `archivedRowOpenTarget` 跳到该 DM 的 agent_home workspace + dm_channel（不沿用当前 workspace 上下文）；`useArchivedChannelsForWorkspace` 对 regular / dm 都 enable，目标 workspace 才能加载 archived 列表并解析出会话（#task:1145）。
 
 ---
 

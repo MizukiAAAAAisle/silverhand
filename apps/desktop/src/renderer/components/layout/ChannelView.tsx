@@ -269,21 +269,21 @@ function ActiveChannelView({
 
   const closed = conversation.closed_at !== null;
   const isArchived = conversation.archived_at !== null;
-  const canToggleArchive =
-    channelKind === 'regular' &&
-    conversation.kind === 'channel' &&
-    conversation.parent_conversation_id === null &&
-    !!onArchiveChannel;
-  // Rename shares archive's structural gate (top-level regular channel),
-  // minus the archive-specific bits, plus "not closed" — a closed channel
-  // is read-only. The parent decides the permission by whether it passes
-  // `onRenameChannel` at all.
+  // Rename / archive are channel-like organization behaviors (#task:1145):
+  // they apply to any top-level channel-like conversation — `channel` in a
+  // regular workspace AND `dm_channel` in an agent_home/DM — and only exclude
+  // threads. `conversation.kind` is the precise discriminant (channel ⟺
+  // regular workspace, dm_channel ⟺ DM home), so we no longer gate on the
+  // workspace `channelKind` beyond "a workspace is selected". The parent
+  // decides the actual permission by whether it passes the handler at all;
+  // rename additionally requires "not closed" (a closed channel is read-only).
+  const isTopLevelChannelLike =
+    channelKind !== null &&
+    (conversation.kind === 'channel' || conversation.kind === 'dm_channel') &&
+    conversation.parent_conversation_id === null;
+  const canToggleArchive = isTopLevelChannelLike && !!onArchiveChannel;
   const canRenameChannel =
-    channelKind === 'regular' &&
-    conversation.kind === 'channel' &&
-    conversation.parent_conversation_id === null &&
-    !closed &&
-    !!onRenameChannel;
+    isTopLevelChannelLike && !closed && !!onRenameChannel;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { data: viewer } = useViewerUser();
   const { data: channelAgents = [] } = useChannelAgents(conversation.id);

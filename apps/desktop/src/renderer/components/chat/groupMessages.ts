@@ -2,13 +2,16 @@
  * Activity-cluster grouping for the message stream (PR-10).
  *
  * Background — see the discussion thread that spawned PR-10:
- * `task_*`, `session_cleared`, and `rename` are high-frequency
+ * the `task_*` family (create/claim/unclaim/status) are high-frequency
  * low-priority lifecycle events. PR-1..9 cleaned each one up at the
  * single-row level, but rendering each as a "mini message row" with
  * the same vertical rhythm and weight as actual chat messages still
  * shreds the reading flow when several land in a row. Slack/Discord
  * solve this by demoting such events to muted activity narration; this
  * grouping pass is the renderer-side primitive that lets us do the same.
+ * (`rename` / `session_cleared` were originally clustered too but were
+ * removed in #task:1145 — they're one-off notices, not bursty, so they
+ * render standalone.)
  *
  * # What this module does (and does NOT do)
  *
@@ -64,17 +67,23 @@
 import type { MessageDto, SystemSubtype } from '@silverhand/shared';
 
 /** Subtypes that participate in activity clusters. Locked with @Cindy
- *  in the PR-10 design discussion. Note: `task_create` IS in the set
- *  even though it's a "genesis" event — the actual anchor for the task
- *  is the task DB row + the task drawer, not the system message; the
- *  `task_create` system row is just another lifecycle note. */
+ *  in the PR-10 design discussion, narrowed by shiki in #task:1145.
+ *  Note: `task_create` IS in the set even though it's a "genesis" event —
+ *  the actual anchor for the task is the task DB row + the task drawer, not
+ *  the system message; the `task_create` system row is just another
+ *  lifecycle note.
+ *
+ *  `rename` and `session_cleared` were REMOVED (#task:1145): they are
+ *  one-off, standalone lifecycle notices (not high-frequency runs like the
+ *  task_* family), so the cluster's left rail read as noise on a lone
+ *  rename row. They now render standalone, without the cluster chrome. The
+ *  task_* family keeps the activity-strip treatment because those genuinely
+ *  arrive in bursts during active work. */
 export const CLUSTERABLE_SUBTYPES: ReadonlySet<SystemSubtype> = new Set<SystemSubtype>([
   'task_create',
   'task_claim',
   'task_unclaim',
   'task_status',
-  'session_cleared',
-  'rename',
 ]);
 
 /** 5-minute window between consecutive activity events to remain in

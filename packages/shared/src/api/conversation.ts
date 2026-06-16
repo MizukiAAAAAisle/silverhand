@@ -248,13 +248,18 @@ export type ArchivedChannelsQueryInput = z.infer<
   typeof ArchivedChannelsQueryInputSchema
 >;
 
-/** Row in the global archived-channels list. `workspace.archived_at`
+/** Row in the global archived-channels list. This index is a deliberately
+ *  cross-cutting recovery surface: it spans both channel-like collections
+ *  (regular `channel` and `dm_channel`), so a user who archived a DM can
+ *  still find and restore it from the default Archived entry. The
+ *  workspace-scoped read paths (`/workspaces/:id/channels/archived`) stay
+ *  segregated — only this global index merges. `workspace.archived_at`
  *  is included so the UI can flag rows whose workspace itself is
  *  archived without a second lookup. `thread_count` is computed
  *  server-side so the row can render "N threads" without requesting
  *  the threads themselves. */
 export const ArchivedChannelListItemDtoSchema = z.object({
-  channel: ChannelConversationDtoSchema,
+  channel: ChannelLikeDtoSchema,
   workspace: z.object({
     id: z.string(),
     name: z.string(),

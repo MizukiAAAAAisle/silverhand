@@ -171,7 +171,7 @@ describe('ConversationRepo canonical schema', () => {
         owner_agent_id: agent.id,
         dm_channel_id: dm.id,
       });
-      expect(t.conversations.listDmChannelsForWorkspace(home.id).map(c => c.id))
+      expect(t.conversations.listAllDmChannelsForWorkspace(home.id).map(c => c.id))
         .toEqual([dm.id, mentions.id]);
       expect(t.conversations.getDmChannel(dm.id)).toMatchObject({
         id: dm.id,

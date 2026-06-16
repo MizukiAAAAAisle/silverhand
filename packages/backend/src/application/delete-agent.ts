@@ -243,7 +243,7 @@ export async function deleteAgent(
   //    agent -> agent_home -> conversations, but physical files need an explicit
   //    pass. Best-effort — must not block the 204.
   const dmChannels = impact.owned_home
-    ? conversations.listDmChannelsForWorkspace(impact.owned_home.id)
+    ? conversations.listAllDmChannelsForWorkspace(impact.owned_home.id)
     : [];
   for (const dm of dmChannels) {
     await ctx.attachmentService.sweepForChannel(dm.id).catch(err =>

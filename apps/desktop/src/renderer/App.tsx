@@ -114,6 +114,10 @@ export {
   clearPlaceMemory,
 };
 import { resolveChannelOpen } from '@/lib/channel-open';
+import {
+  pickDefaultChannel,
+  pickFallbackAfterArchive,
+} from '@/lib/archive-fallback';
 
 export function App(): JSX.Element {
   useAppearance();
@@ -304,6 +308,16 @@ function RegisteredAppShell(): JSX.Element {
   const lastSelectedMessageReadKey = useRef<string | null>(null);
   const lastThreadMessageReadKey = useRef<string | null>(null);
   const lastNotificationReadId = useRef<string | null>(null);
+  // The channel just archived from the PRIMARY pane that cleared selection
+  // to the workspace empty state (no neighbor to fall back to). The
+  // auto-select effect must NOT re-pick it while the stale active list
+  // still contains it (React Query invalidation hasn't refetched yet),
+  // otherwise the clear is instantly undone (#task:1145). Cleared once the
+  // active list no longer contains it.
+  const recentlyArchivedPrimaryRef = useRef<{
+    workspaceId: string;
+    channelId: string;
+  } | null>(null);
 
   const { data: workspaces = [] } = useWorkspaces();
   const { data: agents = [] } = useAgents();
@@ -503,6 +517,15 @@ function RegisteredAppShell(): JSX.Element {
     if (!selectedWorkspaceId) return;
     if (selectedChannelId) return;
     if (channels.length === 0) return;
+    // A channel just archived from the primary pane that cleared selection
+    // must be excluded from BOTH the remembered and the fallback branch —
+    // the stale active/channels lists can still contain it until the query
+    // invalidation lands, and re-selecting it would undo the clear
+    // (#task:1145). Scoped to the same workspace the archive happened in.
+    const excludeId =
+      recentlyArchivedPrimaryRef.current?.workspaceId === selectedWorkspaceId
+        ? recentlyArchivedPrimaryRef.current.channelId
+        : null;
     // If a jump asked for a specific channel, honor it instead of the
     // remembered/default — Saved → jump shouldn't snap back.
     if (jumpTarget && channels.some(s => s.id === jumpTarget.channelId)) {
@@ -512,7 +535,10 @@ function RegisteredAppShell(): JSX.Element {
       return;
     }
     const remembered = lastChannelByWorkspace.get(selectedWorkspaceId);
-    const stillExists = remembered && channels.some(s => s.id === remembered);
+    const stillExists =
+      remembered &&
+      remembered !== excludeId &&
+      channels.some(s => s.id === remembered);
     if (stillExists) {
       // Channel-open precedence (#task:1082): a fresh unread reply in one
       // of this channel's threads (and newer than the explicit-close
@@ -541,14 +567,16 @@ function RegisteredAppShell(): JSX.Element {
       }
       return;
     }
-    // Default: pick the first ACTIVE top-level channel. We deliberately
-    // don't fall through to archivedChannels[0] — opening an archived
-    // channel that lives in the (default-collapsed) Archived group would
-    // be invisible to the user. With no active channels, leave selection
-    // empty and let the chat pane render an empty state.
-    const fallback = activeChannels.find(s => s.parent_conversation_id === null);
-    if (!fallback) return;
-    nav.go(`/chat/w/${selectedWorkspaceId}/c/${fallback.id}`, { replace: true });
+    // Default: pick the first ACTIVE top-level channel, excluding a
+    // just-archived primary still lingering in the stale list. We
+    // deliberately don't fall through to archivedChannels[0] — opening an
+    // archived channel that lives in the (default-collapsed) Archived group
+    // would be invisible to the user. With no active channels, leave
+    // selection empty and let the chat pane render an empty state.
+    const topLevel = activeChannels.filter(s => s.parent_conversation_id === null);
+    const fallbackId = pickDefaultChannel(topLevel, excludeId);
+    if (!fallbackId) return;
+    nav.go(`/chat/w/${selectedWorkspaceId}/c/${fallbackId}`, { replace: true });
   }, [
     selectedWorkspaceId,
     selectedChannelId,
@@ -557,6 +585,17 @@ function RegisteredAppShell(): JSX.Element {
     jumpTarget,
     nav.go,
   ]);
+
+  // Release the recently-archived exclusion once the active list no longer
+  // contains it (the archive invalidation has refetched) — from then on the
+  // id is genuinely gone and the auto-select effect needs no special-casing
+  // (#task:1145).
+  useEffect(() => {
+    const rec = recentlyArchivedPrimaryRef.current;
+    if (rec && !activeChannels.some(c => c.id === rec.channelId)) {
+      recentlyArchivedPrimaryRef.current = null;
+    }
+  }, [activeChannels]);
 
   // Record the user's selection so we can restore it next time they
   // come back to this workspace. Persist on every change so quitting
@@ -965,13 +1004,64 @@ function RegisteredAppShell(): JSX.Element {
 
   const handleArchiveChannelMutation = useCallback(
     (channelId: string, archived: boolean) => {
-      archiveChannel.mutate({
-        channelId,
-        archived,
-        workspaceId: selectedWorkspaceId ?? undefined,
-      });
+      // Only when archiving the channel currently in the PRIMARY pane do we
+      // move selection — otherwise the primary would be left pointing at a
+      // now-archived conversation (#task:1145). Archiving from the secondary
+      // pane / restoring don't reach here (separate handlers), so they never
+      // steal primary selection.
+      const movesPrimary = archived && channelId === selectedChannelId;
+      archiveChannel.mutate(
+        {
+          channelId,
+          archived,
+          workspaceId: selectedWorkspaceId ?? undefined,
+        },
+        movesPrimary
+          ? {
+              onSuccess: () => {
+                const wid = selectedWorkspaceId;
+                if (!wid) return;
+                // `activeChannels` here still includes the just-archived
+                // channel (the list invalidation hasn't landed yet), which is
+                // exactly what the neighbor-aware picker needs to find its
+                // siblings. Threads are filtered out — only top-level rows
+                // are navigable primaries.
+                const topLevel = activeChannels.filter(
+                  c => c.parent_conversation_id === null,
+                );
+                const fallbackId = pickFallbackAfterArchive(topLevel, channelId);
+                if (fallbackId) {
+                  nav.toChannel(wid, fallbackId);
+                  return;
+                }
+                // No active top-level channel remains → clear to the
+                // workspace empty state. Two guards are needed because the
+                // archive invalidation hasn't refetched yet, so the stale
+                // active/`channels` lists still contain the just-archived
+                // row: (1) drop the remembered channel so the auto-select
+                // effect's *remembered* branch can't restore it; (2) record
+                // it in `recentlyArchivedPrimaryRef` so the effect's
+                // *fallback* branch also excludes it (#task:1145).
+                recentlyArchivedPrimaryRef.current = {
+                  workspaceId: wid,
+                  channelId,
+                };
+                lastChannelByWorkspace.delete(wid);
+                persistLastChannel();
+                nav.toWorkspace(wid);
+              },
+            }
+          : undefined,
+      );
     },
-    [archiveChannel, selectedWorkspaceId],
+    [
+      archiveChannel,
+      selectedWorkspaceId,
+      selectedChannelId,
+      activeChannels,
+      nav.toChannel,
+      nav.toWorkspace,
+    ],
   );
 
   // Async so ChannelView's rename dialog can await success/failure and
@@ -1090,10 +1180,17 @@ function RegisteredAppShell(): JSX.Element {
       jumpPrimePending={parentJumpPrimePending}
       onJumped={handleJumped}
       onOpenThread={nav.openThread}
-      // Threads-list pane toggle (#task:1073). Only the primary channel pane
-      // gets it — a thread/dm primary has no channel-scoped thread index.
+      // Threads-list pane toggle (#task:1073). The primary pane gets it for
+      // any top-level channel-like conversation — both `channel` and
+      // `dm_channel` carry a channel-scoped thread index (the backend's
+      // threads route resolves via `getChannelLike`, #task:1143). Thread /
+      // dm-side / `?side` *secondary* primaries don't (they aren't the
+      // channel-scoped index), so they keep it undefined.
       onToggleThreadsList={
-        parentDescriptor?.kind === 'channel' ? nav.toggleThreadsList : undefined
+        parentDescriptor?.kind === 'channel' ||
+        parentDescriptor?.kind === 'dm_channel'
+          ? nav.toggleThreadsList
+          : undefined
       }
       threadsListActive={threadsListOpen}
       onArchiveChannel={handleArchiveChannelMutation}
@@ -1465,9 +1562,17 @@ function RegisteredAppShell(): JSX.Element {
             ) : view === 'archived' ? (
               <ArchivedChannelsPanel
                 workspaces={workspaces}
-                onOpenChannel={(workspaceId, channelId) =>
-                  nav.toChannel(workspaceId, channelId)
-                }
+                onOpenChannel={(workspaceId, channelId) => {
+                  // Mirror SearchPanel: resolve through the same nav helper
+                  // so a cross-workspace open lands on the right UI workspace
+                  // item. For the archived aggregate `workspaceId` is already
+                  // the channel's own workspace id (agent_home for a DM), so
+                  // this is a no-op there — but it keeps both cross-workspace
+                  // panels on one resolution path (#task:1145).
+                  const navWorkspaceId = resolveNavWorkspaceId(workspaceId, channelId);
+                  if (!navWorkspaceId) return;
+                  nav.toChannel(navWorkspaceId, channelId);
+                }}
               />
             ) : (
               <>

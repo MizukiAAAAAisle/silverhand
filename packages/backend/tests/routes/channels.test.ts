@@ -945,7 +945,7 @@ describe('PATCH /api/channels/:id/archive', () => {
     expect(t.fake.delivered).toEqual([]);
   });
 
-  it('rejects threads and dm_channels with 400 not_archivable', async () => {
+  it('rejects threads with 400 not_archivable but archives dm_channels', async () => {
     t = buildTestApp();
     const aliceId = await makeAgent(t, 'alice');
     const workspace = await (
@@ -972,14 +972,22 @@ describe('PATCH /api/channels/:id/archive', () => {
     expect(threadRes.status).toBe(400);
     expect(((await threadRes.json()) as any).code).toBe('not_archivable');
 
+    // dm_channel is channel-like: archive/restore is supported and the
+    // caller (agent_home owner) passes the workspace governance gate.
     const dmChannel = conversations.listDmChannels()[0];
     expect(dmChannel).toBeTruthy();
     const dmRes = await http(t).patch(
       `/api/channels/${dmChannel!.id}/archive`,
       { archived: true },
     );
-    expect(dmRes.status).toBe(400);
-    expect(((await dmRes.json()) as any).code).toBe('not_archivable');
+    expect(dmRes.status).toBe(200);
+    expect(((await dmRes.json()) as any).channel.archived_at).not.toBeNull();
+    const dmRestore = await http(t).patch(
+      `/api/channels/${dmChannel!.id}/archive`,
+      { archived: false },
+    );
+    expect(dmRestore.status).toBe(200);
+    expect(((await dmRestore.json()) as any).channel.archived_at).toBeNull();
   });
 
   it('returns 404 for unknown ids and 400 for invalid bodies', async () => {
@@ -1007,6 +1015,45 @@ describe('PATCH /api/channels/:id/archive', () => {
       { archived: 'yes' },
     );
     expect(bad.status).toBe(400);
+  });
+
+  it('archived dm and its child threads move from the active dm list to the archived dm list', async () => {
+    t = buildTestApp();
+    await makeAgent(t, 'alice');
+    const conversations = new ConversationRepo(t.ctx.db);
+    const dm = conversations.listDmChannels()[0];
+    expect(dm).toBeTruthy();
+    const homeId = dm!.workspace_id;
+    // A child thread of the DM must travel with its parent across archive.
+    const dmThread = conversations.insertThread({
+      channelId: dm!.id,
+      title: 'dm-thread',
+    });
+
+    // Before archiving: the DM and its thread appear in the active tree.
+    const before = (await (
+      await http(t).get(`/api/workspaces/${homeId}/channels`)
+    ).json()) as any;
+    expect(before.channels.map((c: any) => c.id)).toContain(dm!.id);
+    expect(before.threads.map((c: any) => c.id)).toContain(dmThread.id);
+
+    const arch = await http(t).patch(`/api/channels/${dm!.id}/archive`, {
+      archived: true,
+    });
+    expect(arch.status).toBe(200);
+
+    // After: parent + thread sidecar both leave active and surface in archived.
+    const active = (await (
+      await http(t).get(`/api/workspaces/${homeId}/channels`)
+    ).json()) as any;
+    expect(active.channels.map((c: any) => c.id)).not.toContain(dm!.id);
+    expect(active.threads.map((c: any) => c.id)).not.toContain(dmThread.id);
+
+    const archived = (await (
+      await http(t).get(`/api/workspaces/${homeId}/channels/archived`)
+    ).json()) as any;
+    expect(archived.channels.map((c: any) => c.id)).toContain(dm!.id);
+    expect(archived.threads.map((c: any) => c.id)).toContain(dmThread.id);
   });
 });
 
@@ -1114,7 +1161,7 @@ describe('PATCH /api/channels/:id (rename)', () => {
     expect(events).toEqual([]);
   });
 
-  it('rejects threads and dm_channels with 400 not_renamable', async () => {
+  it('rejects threads with 400 not_renamable but renames dm_channels', async () => {
     t = buildTestApp();
     const aliceId = await makeAgent(t, 'alice');
     const workspace = await (
@@ -1140,13 +1187,15 @@ describe('PATCH /api/channels/:id (rename)', () => {
     expect(threadRes.status).toBe(400);
     expect(((await threadRes.json()) as any).code).toBe('not_renamable');
 
+    // dm_channel is channel-like: rename is supported (creation already
+    // accepts a user-supplied title — this just closes the edit gap).
     const dmChannel = conversations.listDmChannels()[0];
     expect(dmChannel).toBeTruthy();
     const dmRes = await http(t).patch(`/api/channels/${dmChannel!.id}`, {
       title: 'renamed-dm',
     });
-    expect(dmRes.status).toBe(400);
-    expect(((await dmRes.json()) as any).code).toBe('not_renamable');
+    expect(dmRes.status).toBe(200);
+    expect(((await dmRes.json()) as any).channel.title).toBe('renamed-dm');
   });
 
   it('returns 404 for unknown ids and 400 for invalid bodies', async () => {
@@ -1439,6 +1488,63 @@ describe('GET /api/archived-channels (cross-workspace aggregate)', () => {
     expect(
       (await http(t).get('/api/archived-channels?since=not-a-number')).status,
     ).toBe(400);
+  });
+
+  it('spans channel-like: default includes archived DMs, regular filter excludes them, agent_home filter includes them', async () => {
+    t = buildTestApp();
+    const aliceId = await makeAgent(t, 'alice');
+    // A regular workspace with an archived regular channel.
+    const ws = await (
+      await http(t).post('/api/workspaces', {
+        name: 'reg',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    const rc = await (
+      await http(t).post(`/api/workspaces/${ws.workspace.id}/channels`, {
+        title: 'rc',
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    expect(
+      (await http(t).patch(`/api/channels/${rc.channel.id}/archive`, { archived: true })).status,
+    ).toBe(200);
+
+    // A DM lives in alice's agent_home; archive it too.
+    const conversations = new ConversationRepo(t.ctx.db);
+    const dm = conversations.listDmChannels()[0];
+    expect(dm).toBeTruthy();
+    const homeId = dm!.workspace_id;
+    expect(
+      (await http(t).patch(`/api/channels/${dm!.id}/archive`, { archived: true })).status,
+    ).toBe(200);
+
+    // Default (no workspace filter): the global recovery index spans both
+    // collections — regular channel AND DM — and the DM row carries its
+    // dm_channel kind plus its agent_home workspace context.
+    const all = await (await http(t).get('/api/archived-channels')).json() as any;
+    const allIds = all.channels.map((r: any) => r.channel.id);
+    expect(allIds).toContain(rc.channel.id);
+    expect(allIds).toContain(dm!.id);
+    const dmRow = all.channels.find((r: any) => r.channel.id === dm!.id);
+    expect(dmRow.channel.kind).toBe('dm_channel');
+    expect(dmRow.workspace.id).toBe(homeId);
+
+    // Filtering to the regular workspace excludes the DM.
+    const regOnly = await (
+      await http(t).get(`/api/archived-channels?workspace_id=${ws.workspace.id}`)
+    ).json() as any;
+    const regIds = regOnly.channels.map((r: any) => r.channel.id);
+    expect(regIds).toContain(rc.channel.id);
+    expect(regIds).not.toContain(dm!.id);
+
+    // Filtering to the agent_home includes the DM, excludes the regular channel.
+    const homeOnly = await (
+      await http(t).get(`/api/archived-channels?workspace_id=${homeId}`)
+    ).json() as any;
+    const homeIds = homeOnly.channels.map((r: any) => r.channel.id);
+    expect(homeIds).toContain(dm!.id);
+    expect(homeIds).not.toContain(rc.channel.id);
   });
 });
 

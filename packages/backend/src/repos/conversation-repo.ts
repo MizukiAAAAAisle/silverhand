@@ -201,7 +201,7 @@ export class ConversationRepo {
     forUserId?: string;
   } = {}): ArchivedAggregateRow[] {
     const where: string[] = [
-      `c.kind = 'channel'`,
+      `c.kind IN ('channel', 'dm_channel')`,
       `c.archived_at IS NOT NULL`,
     ];
     const args: Array<string | number> = [];
@@ -252,7 +252,7 @@ export class ConversationRepo {
         ...conversation
       } = r;
       return {
-        channel: rowToChannel(conversation),
+        channel: assertChannelLike(conversation),
         workspace: {
           id: conversation.workspace_id,
           name: workspace_name,
@@ -295,9 +295,39 @@ export class ConversationRepo {
     return row ? rowToDmChannel(row) : null;
   }
 
-  listDmChannelsForWorkspace(
+  // DM collection reads, mirroring the regular-channel trichotomy
+  // (`listActive` / `listArchived` / `listAll` `ChannelsForWorkspace`).
+  // The DM list is its own sidebar collection: archived DMs hide from the
+  // active list and surface in the DM-scoped Archived view — they are
+  // never merged into the regular channel lists. Active/all keep the
+  // Onboarding-first ordering; archived sorts most-recently-archived first
+  // (mirrors `listArchivedChannelsForWorkspace`).
+  listActiveDmChannelsForWorkspace(
     workspaceId: string,
     opts: { forUserId?: string } = {},
+  ): DmChannelDto[] {
+    return this.queryDmChannelsForWorkspace(workspaceId, { ...opts, archived: false });
+  }
+
+  listArchivedDmChannelsForWorkspace(
+    workspaceId: string,
+    opts: { forUserId?: string } = {},
+  ): DmChannelDto[] {
+    return this.queryDmChannelsForWorkspace(workspaceId, { ...opts, archived: true });
+  }
+
+  /** All DM channels regardless of archive state — used where a caller
+   *  must NOT silently skip archived DMs (agent-delete impact + cascade). */
+  listAllDmChannelsForWorkspace(
+    workspaceId: string,
+    opts: { forUserId?: string } = {},
+  ): DmChannelDto[] {
+    return this.queryDmChannelsForWorkspace(workspaceId, opts);
+  }
+
+  private queryDmChannelsForWorkspace(
+    workspaceId: string,
+    opts: { forUserId?: string; archived?: boolean } = {},
   ): DmChannelDto[] {
     const args: Array<string> = [workspaceId];
     let userJoin = '';
@@ -308,6 +338,21 @@ export class ConversationRepo {
       )`;
       args.push(opts.forUserId);
     }
+    let archivedClause = '';
+    if (opts.archived === true) {
+      archivedClause = 'AND c.archived_at IS NOT NULL';
+    } else if (opts.archived === false) {
+      archivedClause = 'AND c.archived_at IS NULL';
+    }
+    const orderBy =
+      opts.archived === true
+        ? 'c.archived_at DESC, c.created_at ASC'
+        : `CASE
+                     WHEN c.title = 'Onboarding' THEN 0
+                     WHEN owner.id IS NOT NULL AND c.title = 'dm-' || owner.name THEN 1
+                     ELSE 2
+                   END,
+                   c.created_at ASC`;
     const rows = this.db
       .prepare<typeof args, ConversationRow>(
         `SELECT c.*
@@ -317,12 +362,8 @@ export class ConversationRepo {
           WHERE c.workspace_id = ?
             AND c.kind = 'dm_channel'
             ${userJoin}
-          ORDER BY CASE
-                     WHEN c.title = 'Onboarding' THEN 0
-                     WHEN owner.id IS NOT NULL AND c.title = 'dm-' || owner.name THEN 1
-                     ELSE 2
-                   END,
-                   c.created_at ASC`,
+            ${archivedClause}
+          ORDER BY ${orderBy}`,
       )
       .all(...args);
     return rows.map(rowToDmChannel);
@@ -510,36 +551,39 @@ export class ConversationRepo {
   setArchived(
     id: string,
     archived: boolean,
-  ): ChannelConversationDto | null {
+  ): ChannelConversationDto | DmChannelDto | null {
     const now = Date.now();
     const result = this.db
       .prepare(
         `UPDATE conversations
          SET archived_at = ?, updated_at = ?
-         WHERE id = ? AND kind = 'channel'`,
+         WHERE id = ? AND kind IN ('channel', 'dm_channel')`,
       )
       .run(archived ? now : null, now, id);
     if (result.changes === 0) return null;
     const row = this.getRaw(id);
-    return row ? rowToChannel(row) : null;
+    return row ? assertChannelLike(row) : null;
   }
 
-  /** Rename a top-level channel. Gated to `kind = 'channel'` in the
-   *  WHERE clause (same as `setArchived`) so a thread/dm id silently
-   *  matches nothing and returns null — the service layer turns that
-   *  into a typed `not_renamable` / `not_found` error. */
-  updateTitle(id: string, title: string): ChannelConversationDto | null {
+  /** Rename a channel-like conversation (`channel | dm_channel`). Gated to
+   *  those kinds in the WHERE clause so a thread id silently matches
+   *  nothing and returns null — the service layer turns that into a typed
+   *  `not_renamable` / `not_found` error. */
+  updateTitle(
+    id: string,
+    title: string,
+  ): ChannelConversationDto | DmChannelDto | null {
     const now = Date.now();
     const result = this.db
       .prepare(
         `UPDATE conversations
          SET title = ?, updated_at = ?
-         WHERE id = ? AND kind = 'channel'`,
+         WHERE id = ? AND kind IN ('channel', 'dm_channel')`,
       )
       .run(title, now, id);
     if (result.changes === 0) return null;
     const row = this.getRaw(id);
-    return row ? rowToChannel(row) : null;
+    return row ? assertChannelLike(row) : null;
   }
 
   /** Cascade archive state to every thread under a channel. Mirrors
@@ -815,7 +859,7 @@ export class ConversationRepo {
 }
 
 export interface ArchivedAggregateRow {
-  channel: ChannelConversationDto;
+  channel: ChannelConversationDto | DmChannelDto;
   workspace: {
     id: string;
     name: string;

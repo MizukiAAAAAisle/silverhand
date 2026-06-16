@@ -39,7 +39,7 @@ export function computeDeleteImpact(
     .listForAgent(agentId)
     .filter(w => w.workspace_kind === 'regular');
   const dmChannels = ownedHome
-    ? conversations.listDmChannelsForWorkspace(ownedHome.id)
+    ? conversations.listAllDmChannelsForWorkspace(ownedHome.id)
     : conversations.listDmChannelsForAgent(agentId);
   const dm = dmChannels[0] ?? null;
 

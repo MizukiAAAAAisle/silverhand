@@ -47,8 +47,9 @@ describe('isClusterableMessage', () => {
   });
 
   it('returns false for system messages with a non-clusterable subtype', () => {
-    // Spot-check the four "info block" subtypes that PR-10 deliberately
-    // keeps standalone.
+    // Spot-check the "info block" subtypes that PR-10 deliberately keeps
+    // standalone, plus `rename` / `session_cleared` which were removed from
+    // the clusterable set in #task:1145 (one-off notices, not bursty).
     for (const subtype of [
       'schedule_fire',
       'thread_anchor',
@@ -57,6 +58,8 @@ describe('isClusterableMessage', () => {
       'thread_summary',
       'mention_cc',
       'onboarding',
+      'rename',
+      'session_cleared',
     ]) {
       expect(isClusterableMessage(makeMsg({ id: 'a', subtype }))).toBe(false);
     }
@@ -120,13 +123,14 @@ describe('groupMessages — basic flow', () => {
     });
   });
 
-  it('mixes clusterable subtypes (task_* / session_cleared / rename) in the same cluster', () => {
+  it('mixes different task_* subtypes in the same cluster', () => {
     // The grouping key is "any clusterable subtype + adjacent + 5min" —
-    // not "same subtype". A task_claim followed by a rename is still
-    // one activity strip.
+    // not "same subtype". A task_claim followed by a task_status is still
+    // one activity strip. (`rename` / `session_cleared` are NOT clusterable
+    // since #task:1145 — see the non-clusterable spot-check above.)
     const a = makeMsg({ id: 'a', subtype: 'task_claim', createdAt: T0 });
-    const b = makeMsg({ id: 'b', subtype: 'session_cleared', createdAt: T0 + 1_000 });
-    const c = makeMsg({ id: 'c', subtype: 'rename', createdAt: T0 + 2_000 });
+    const b = makeMsg({ id: 'b', subtype: 'task_status', createdAt: T0 + 1_000 });
+    const c = makeMsg({ id: 'c', subtype: 'task_unclaim', createdAt: T0 + 2_000 });
     const out = groupMessages([a, b, c]);
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({ kind: 'cluster', messages: [a, b, c] });
@@ -289,7 +293,7 @@ describe('groupMessages — purity', () => {
       makeMsg({ id: 'a', subtype: 'task_claim', createdAt: T0 }),
       makeMsg({ id: 'real', fromKind: 'user', createdAt: T0 + 1_000 }),
       makeMsg({ id: 'b', subtype: 'task_status', createdAt: T0 + 2_000 }),
-      makeMsg({ id: 'c', subtype: 'session_cleared', createdAt: T0 + 3_000 }),
+      makeMsg({ id: 'c', subtype: 'task_unclaim', createdAt: T0 + 3_000 }),
     ];
     const a = groupMessages(msgs);
     const b = groupMessages(msgs);

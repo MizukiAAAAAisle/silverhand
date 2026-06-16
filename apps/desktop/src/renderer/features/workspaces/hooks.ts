@@ -379,10 +379,27 @@ export function useChannelsForWorkspace(
   });
 }
 
-/** Archived channels (and their threads) for a regular workspace.
- *  Backed by `GET /api/workspaces/:id/channels/archived`. agent_home /
- *  DM workspaces always return an empty list. WS invalidation lives on
- *  `useChannelsForWorkspace` — both queries share the same trigger. */
+/** Whether the archived channel-like query should run for a workspace of
+ *  this kind. Enabled for BOTH `regular` (archived `channel`s) and `dm`
+ *  (agent_home archived `dm_channel`s) — the backend endpoint is
+ *  channel-like since #task:1144. Extracted + exported so a regression test
+ *  pins `dm` enabled and this can't silently revert to regular-only
+ *  (#task:1145). */
+export function archivedChannelsEnabledForKind(
+  workspaceKind: 'regular' | 'dm' | null,
+): boolean {
+  return workspaceKind === 'regular' || workspaceKind === 'dm';
+}
+
+/** Archived channel-like conversations (and their threads) for a workspace.
+ *  Backed by `GET /api/workspaces/:id/channels/archived`. Enabled for BOTH
+ *  regular workspaces (archived `channel`s) and agent_home / DM workspaces
+ *  (archived `dm_channel`s) — the backend endpoint is channel-like and
+ *  returns archived DMs for agent_home since #task:1144. This union feeds
+ *  `channels` in App.tsx, so an archived DM opened from the global Archived
+ *  panel resolves to a real `selectedChannel` instead of a blank pane
+ *  (#task:1145). WS invalidation lives on `useChannelsForWorkspace` — both
+ *  queries share the same trigger. */
 export function useArchivedChannelsForWorkspace(
   workspaceId: string | null,
   workspaceKind: 'regular' | 'dm' | null = 'regular',
@@ -391,7 +408,7 @@ export function useArchivedChannelsForWorkspace(
     queryKey: workspaceId
       ? archivedChannelsKey(workspaceId)
       : ['workspaces', 'none', 'channels', 'archived'],
-    enabled: !!workspaceId && workspaceKind === 'regular',
+    enabled: !!workspaceId && archivedChannelsEnabledForKind(workspaceKind),
     queryFn: async () => {
       const res = await api<{
         channels: ChannelLikeDto[];
@@ -516,7 +533,7 @@ export function useArchiveChannel(workspaceId: string | null) {
       archived: boolean;
       workspaceId?: string;
     }) => {
-      const res = await api<{ channel: ChannelConversationDto }>(
+      const res = await api<{ channel: ChannelLikeDto }>(
         apiPaths.channelArchive(channelId),
         { method: 'PATCH', body: JSON.stringify({ archived }) },
       );
@@ -547,7 +564,7 @@ export function useRenameChannel(workspaceId: string | null) {
       title: string;
       workspaceId?: string;
     }) => {
-      const res = await api<{ channel: ChannelConversationDto }>(
+      const res = await api<{ channel: ChannelLikeDto }>(
         apiPaths.conversationChannel(channelId),
         { method: 'PATCH', body: JSON.stringify({ title }) },
       );

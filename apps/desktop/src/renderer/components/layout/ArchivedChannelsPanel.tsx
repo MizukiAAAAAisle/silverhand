@@ -8,13 +8,17 @@ import {
   ChevronDown,
   Clock,
   Hash,
+  User,
 } from 'lucide-react';
-import type { ArchivedChannelListItemDto } from '@silverhand/shared';
+import type { AgentDto, ArchivedChannelListItemDto } from '@silverhand/shared';
 import {
   useArchiveChannel,
   useArchivedChannelsIndex,
   type WorkspaceListItem,
 } from '@/features/workspaces/hooks';
+import { AgentAvatar } from '@/components/AgentAvatar';
+import { useAgents } from '@/features/agents/hooks';
+import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { cn } from '@/lib/cn';
 
 type WorkspaceFilter = 'all' | `workspace:${string}`;
@@ -47,13 +51,22 @@ export function ArchivedChannelsPanel({
 }: ArchivedChannelsPanelProps): JSX.Element {
   const [workspaceFilter, setWorkspaceFilter] = useState<WorkspaceFilter>('all');
   const [dateFilter, setDateFilter] = useState<ArchiveDateFilter>('all');
-  const regularWorkspaces = useMemo(
-    () => workspaces.filter(workspace => workspace.kind === 'regular'),
+  // Both collections feed this recovery index (#task:1145): regular
+  // workspaces' archived channels AND agent_home (DM) workspaces' archived
+  // dm_channels. The backend aggregate is channel-like, so the panel offers
+  // both as filter scopes and subscribes to both for live invalidation —
+  // otherwise an archived DM would be unfindable/unrestorable from the
+  // default Archived entry.
+  const filterableWorkspaces = useMemo(
+    () =>
+      workspaces.filter(
+        workspace => workspace.kind === 'regular' || workspace.kind === 'dm',
+      ),
     [workspaces],
   );
   const workspaceScopeIds = useMemo(
-    () => regularWorkspaces.map(workspace => workspace.id),
-    [regularWorkspaces],
+    () => filterableWorkspaces.map(workspace => workspace.id),
+    [filterableWorkspaces],
   );
   const workspaceId = workspaceFilter.startsWith('workspace:')
     ? workspaceFilter.slice('workspace:'.length)
@@ -92,7 +105,7 @@ export function ArchivedChannelsPanel({
           <FilterBlock label="Workspace" className="w-full sm:w-72">
             <WorkspaceArchiveSelect
               value={workspaceFilter}
-              workspaces={regularWorkspaces}
+              workspaces={filterableWorkspaces}
               onChange={setWorkspaceFilter}
             />
           </FilterBlock>
@@ -120,7 +133,10 @@ export function ArchivedChannelsPanel({
                 key={item.channel.id}
                 item={item}
                 restorePending={archiveChannel.isPending}
-                onOpen={() => onOpenChannel(item.workspace.id, item.channel.id)}
+                onOpen={() => {
+                  const target = archivedRowOpenTarget(item);
+                  onOpenChannel(target.workspaceId, target.channelId);
+                }}
                 onRestore={() =>
                   archiveChannel.mutate({
                     channelId: item.channel.id,
@@ -163,7 +179,20 @@ function WorkspaceArchiveSelect({
   workspaces: WorkspaceListItem[];
   onChange: (value: WorkspaceFilter) => void;
 }): JSX.Element {
-  const selected = workspaceFilterLabel(value, workspaces);
+  const { data: agents = [] } = useAgents();
+  const dms = workspaces.filter(workspace => workspace.kind === 'dm');
+  const regular = workspaces.filter(workspace => workspace.kind === 'regular');
+  const agentsById = useMemo(
+    () => new Map(agents.map(agent => [agent.id, agent])),
+    [agents],
+  );
+  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
+  const selected = workspaceFilterLabel(
+    value,
+    workspaces,
+    agentsById,
+    agentAvatarUrls,
+  );
   return (
     <Select.Root value={value} onValueChange={v => onChange(v as WorkspaceFilter)}>
       <Select.Trigger aria-label="Workspace filter" className={SELECT_TRIGGER_CLASS}>
@@ -186,16 +215,46 @@ function WorkspaceArchiveSelect({
             <SelectItem value="all" icon={<Archive className="size-3.5" />}>
               All workspaces
             </SelectItem>
-            {workspaces.map(workspace => (
-              <SelectItem
-                key={workspace.id}
-                value={`workspace:${workspace.id}`}
-                icon={<WorkspaceGlyph />}
-                suffix={workspace.archived_at !== null ? 'archived workspace' : undefined}
-              >
-                {workspace.name}
-              </SelectItem>
-            ))}
+            {/* DM group leads, mirroring SearchPanel's WorkspaceFilterSelect
+                order (DM before Channels) so the two dropdowns read the same. */}
+            {dms.length > 0 ? (
+              <Select.Group>
+                <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                  DMs
+                </Select.Label>
+                {dms.map(workspace => (
+                  <SelectItem
+                    key={workspace.id}
+                    value={`workspace:${workspace.id}`}
+                    icon={dmWorkspaceIcon(workspace, agentsById, agentAvatarUrls)}
+                    suffix={
+                      workspace.archived_at !== null ? 'archived workspace' : undefined
+                    }
+                  >
+                    {dmScopeLabel(workspace.name)}
+                  </SelectItem>
+                ))}
+              </Select.Group>
+            ) : null}
+            {regular.length > 0 ? (
+              <Select.Group>
+                <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                  Workspaces
+                </Select.Label>
+                {regular.map(workspace => (
+                  <SelectItem
+                    key={workspace.id}
+                    value={`workspace:${workspace.id}`}
+                    icon={<WorkspaceGlyph />}
+                    suffix={
+                      workspace.archived_at !== null ? 'archived workspace' : undefined
+                    }
+                  >
+                    {workspace.name}
+                  </SelectItem>
+                ))}
+              </Select.Group>
+            ) : null}
           </Select.Viewport>
         </Select.Content>
       </Select.Portal>
@@ -313,7 +372,7 @@ function ArchivedChannelRow({
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
               <span className="font-medium text-text-primary">
-                {item.workspace.name}
+                {archivedRowWorkspaceLabel(item)}
               </span>
               {item.workspace.archived_at !== null ? (
                 <>
@@ -367,19 +426,95 @@ function WorkspaceGlyph(): JSX.Element {
   );
 }
 
+/**
+ * DM (agent_home) scope label for the mixed Archived recovery index
+ * (#task:1145, shiki). The same agent surfaces under two name shapes here:
+ * the WorkspaceListItem carries a UI `dm-` prefix (`workspaceToListItem`),
+ * while the backend archived aggregate returns the bare agent name
+ * (`insertAgentHome` sets `name = agent.name`). `stripDmPrefix` normalizes
+ * both so a DM scope reads "DM <agentName>" in the filter dropdown AND the
+ * row context — distinguishable from a regular workspace name while every
+ * row keeps the same `#` channel glyph (DM is channel-like, not a separate
+ * icon). Mirrors `displayDmName` in WorkspacesPanel (which formats the
+ * sidebar as `@<agentName>`).
+ */
+function stripDmPrefix(name: string): string {
+  return name.startsWith('dm-') ? name.slice(3) : name;
+}
+
+export function dmScopeLabel(name: string): string {
+  return `DM ${stripDmPrefix(name)}`;
+}
+
+export function archivedRowWorkspaceLabel(
+  item: ArchivedChannelListItemDto,
+): string {
+  return item.channel.kind === 'dm_channel'
+    ? dmScopeLabel(item.workspace.name)
+    : item.workspace.name;
+}
+
+/** Nav target for opening an archived row. Always the channel's OWN
+ *  workspace — for a DM row that's the agent_home workspace (the aggregate
+ *  sets `workspace.id = conversation.workspace_id`), NOT whatever workspace
+ *  is currently selected. The destination workspace then loads its archived
+ *  channel-like list (`useArchivedChannelsForWorkspace`, now enabled for DM)
+ *  so the row resolves to a real conversation instead of a blank pane
+ *  (#task:1145). Pure so the "dm row → agent_home ws + dm_channel" contract
+ *  is unit-testable without rendering. */
+export function archivedRowOpenTarget(item: ArchivedChannelListItemDto): {
+  workspaceId: string;
+  channelId: string;
+} {
+  return { workspaceId: item.workspace.id, channelId: item.channel.id };
+}
+
+/** DM workspaces are 1:1 with an agent — show that agent's avatar so the DM
+ *  group reads as "talking to @x" instead of a row of identical glyphs.
+ *  Falls back to the neutral person glyph when the agent can't be resolved
+ *  (workspace not yet provisioned / agent list still loading). Mirrors
+ *  SearchPanel's `dmWorkspaceIcon` (#task:1145). NOTE: this is the dropdown
+ *  *scope* icon only — archived rows themselves keep the uniform `#` channel
+ *  glyph (DM is channel-like, per shiki). */
+function dmWorkspaceIcon(
+  workspace: WorkspaceListItem,
+  agentsById: Map<string, AgentDto>,
+  agentAvatarUrls: Map<string, string | null>,
+): JSX.Element {
+  const agent = workspace.dm_agent_id
+    ? agentsById.get(workspace.dm_agent_id)
+    : undefined;
+  if (!agent) return <User className="size-3.5" />;
+  return (
+    <AgentAvatar
+      runtime={agent.runtime}
+      size={16}
+      avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
+      alt={agent.display_name?.trim() || agent.name}
+    />
+  );
+}
+
 function workspaceFilterLabel(
   value: WorkspaceFilter,
   workspaces: WorkspaceListItem[],
+  agentsById: Map<string, AgentDto>,
+  agentAvatarUrls: Map<string, string | null>,
 ): { label: string; icon: JSX.Element } {
   if (value === 'all') {
     return { label: 'All workspaces', icon: <Archive className="size-3.5" /> };
   }
   const id = value.slice('workspace:'.length);
   const workspace = workspaces.find(w => w.id === id);
-  return {
-    label: workspace?.name ?? 'Workspace',
-    icon: <WorkspaceGlyph />,
-  };
+  if (!workspace) {
+    return { label: 'Workspace', icon: <WorkspaceGlyph /> };
+  }
+  return workspace.kind === 'dm'
+    ? {
+        label: dmScopeLabel(workspace.name),
+        icon: dmWorkspaceIcon(workspace, agentsById, agentAvatarUrls),
+      }
+    : { label: workspace.name, icon: <WorkspaceGlyph /> };
 }
 
 function archiveDateSince(value: ArchiveDateFilter): number | null {

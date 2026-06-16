@@ -126,9 +126,10 @@ export function SystemMessage(props: SystemMessageProps): JSX.Element {
   // (banners + cards that aren't conversational replies) align to the
   // avatar column instead of the regular content column, giving them
   // the full row width minus a small symmetric gutter — matches
-  // Slack/Discord block-level system events. Activity-cluster
-  // narration (task_* / session_cleared / rename) keeps the content
-  // column alignment because it reads as commentary alongside
+  // Slack/Discord block-level system events. Conversation-adjacent
+  // narration — task_* activity clusters, plus standalone rename /
+  // session_cleared (no longer clustered since #task:1145) — keeps the
+  // content column alignment because it reads as commentary alongside
   // replies. The split is expressed as `data-system-layout="info"` on
   // the wrapper; the layout CSS (`.system-message-row[data-system-
   // layout="info"]` in `global.css`) does the alignment override.
@@ -1499,8 +1500,10 @@ const systemMessageRenderers: Record<SystemSubtype, SystemMessageRenderer> = {
  * dividers that aren't conversational replies. These get the wider
  * avatar-column alignment in CSS (`.system-message-row[data-system-
  * layout="info"]`), giving them the full row gutter on both sides
- * for banner/card visual weight. Cluster narration (`task_*` /
- * `session_cleared` / `rename`) is intentionally NOT in this set —
+ * for banner/card visual weight. Conversation-adjacent narration —
+ * `task_*` activity clusters, plus standalone `rename` / `session_cleared`
+ * (the latter two dropped from the clusterable set in #task:1145) — is
+ * intentionally NOT in this set —
  * those read as conversation-adjacent commentary and stay in the
  * regular content column. Generic / legacy fallbacks also stay at
  * content column (default behavior of `.system-message-row`).

@@ -7,9 +7,11 @@
 // lives in routes/conversations.ts keyed by `/api/conversations` · `/api/channels/:id`.
 //
 // One deliberate exception rides here: `GET /api/archived-channels` is a flat,
-// cross-workspace read (not workspace-rooted), but it lists archived WORKSPACE
-// channels and sits mid-block — it is the workspace-channel collection's global
-// aggregate. Parked here rather than spun into a one-route island / extra mount.
+// cross-workspace read (not workspace-rooted). It is the channel-like global
+// aggregate: a recovery surface spanning both `channel` and `dm_channel` so an
+// archived DM is still reachable from the default Archived entry (the
+// workspace-scoped read paths stay collection-segregated; only this index
+// merges). Parked here rather than spun into a one-route island / extra mount.
 //
 // The two orchestration-heavy routes delegate to createWorkspace /
 // deleteWorkspace use cases; this module owns only HTTP parsing, authorization,
@@ -318,39 +320,28 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
           )
         : timedRouteSpan(
             ctx,
-            'workspace.dm_channel.list',
+            'workspace.dm_channel.list_active',
             { workspaceId: workspace.id },
             () =>
-              conversations.listDmChannelsForWorkspace(workspace.id, {
+              conversations.listActiveDmChannelsForWorkspace(workspace.id, {
                 forUserId,
               }),
             result => ({ channelCount: result.length }),
           );
     // Active endpoint only returns threads whose parent is also active —
-    // the response is a self-contained tree, no orphan threads.
-    const threads =
-      workspace.workspace_kind === 'regular'
-        ? timedRouteSpan(
-            ctx,
-            'workspace.threads.list_active',
-            { workspaceId: workspace.id },
-            () =>
-              conversations.listThreadsForWorkspace(workspace.id, {
-                parentArchived: false,
-                forUserId,
-              }),
-            result => ({ threadCount: result.length }),
-          )
-        : timedRouteSpan(
-            ctx,
-            'workspace.threads.list',
-            { workspaceId: workspace.id },
-            () =>
-              conversations.listThreadsForWorkspace(workspace.id, {
-                forUserId,
-              }),
-            result => ({ threadCount: result.length }),
-          );
+    // the response is a self-contained tree, no orphan threads. Applies to
+    // both regular channels and DM channels (parent-kind-agnostic).
+    const threads = timedRouteSpan(
+      ctx,
+      'workspace.threads.list_active',
+      { workspaceId: workspace.id },
+      () =>
+        conversations.listThreadsForWorkspace(workspace.id, {
+          parentArchived: false,
+          forUserId,
+        }),
+      result => ({ threadCount: result.length }),
+    );
     return c.json({
       channels,
       threads,
@@ -368,14 +359,36 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     if (!canViewWorkspace(ctx, principal, workspace.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    // agent_home workspaces don't support channel archive (their only
-    // conversation is the dm_channel). Return an empty tree so the
-    // frontend can call this hook unconditionally.
-    if (workspace.workspace_kind !== 'regular') {
-      return c.json({ channels: [], threads: [] });
-    }
     const forUserId =
       principal.kind === 'user' ? principal.userId : undefined;
+    // agent_home / DM workspaces have their own archived collection
+    // (archived DMs + the threads under them). It is kept SEPARATE from
+    // the regular channel Archived view — same response shape, never
+    // merged into one list (the DM list is its own sidebar collection).
+    if (workspace.workspace_kind !== 'regular') {
+      const dmChannels = timedRouteSpan(
+        ctx,
+        'workspace.dm_channel.list_archived',
+        { workspaceId: workspace.id },
+        () =>
+          conversations.listArchivedDmChannelsForWorkspace(workspace.id, {
+            forUserId,
+          }),
+        result => ({ channelCount: result.length }),
+      );
+      const dmThreads = timedRouteSpan(
+        ctx,
+        'workspace.threads.list_archived',
+        { workspaceId: workspace.id },
+        () =>
+          conversations.listThreadsForWorkspace(workspace.id, {
+            parentArchived: true,
+            forUserId,
+          }),
+        result => ({ threadCount: result.length }),
+      );
+      return c.json({ channels: dmChannels, threads: dmThreads });
+    }
     const channels = timedRouteSpan(
       ctx,
       'workspace.channels.list_archived',

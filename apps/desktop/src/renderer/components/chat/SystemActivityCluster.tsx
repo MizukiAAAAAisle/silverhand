@@ -5,8 +5,10 @@ import type { ConversationReference } from './ConversationRef';
 
 /**
  * Activity cluster — renders a contiguous run of low-priority system
- * events (`task_*` / `session_cleared` / `rename`) as a single muted
- * narration strip rather than as N independent message rows (PR-10).
+ * events (the `task_*` family) as a single muted narration strip rather
+ * than as N independent message rows (PR-10). (`rename` / `session_cleared`
+ * were removed from the clusterable set in #task:1145 — they render
+ * standalone.)
  *
  * The grouping decision lives in `groupMessages.ts`; this component
  * only paints the visual frame:

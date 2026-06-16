@@ -195,8 +195,14 @@ function ChannelRow({
   // semantics are correct. stopPropagation prevents the row click handler
   // from firing when the pin button is activated.
   const showPin = hovered || isPinned;
+  // Archive/Restore is a channel-like organization action (#task:1145):
+  // it applies to any top-level channel-like row — `channel` in a regular
+  // workspace AND `dm_channel` in an agent_home/DM — and only excludes
+  // threads. `channel.kind` is the precise discriminant, so we no longer
+  // gate on the workspace `workspaceKind` beyond "a workspace is selected".
   const showArchiveMenu =
-    workspaceKind === 'regular' && channel.kind === 'channel';
+    workspaceKind !== null &&
+    (channel.kind === 'channel' || channel.kind === 'dm_channel');
   const hasManagementMenu = showArchiveMenu;
 
   const rowBg = selected

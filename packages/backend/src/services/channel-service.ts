@@ -465,21 +465,26 @@ export class ChannelService {
 
   async setArchived(
     input: SetArchivedInput,
-  ): Promise<{ channel: ChannelConversationDto }> {
+  ): Promise<{ channel: ChannelConversationDto | DmChannelDto }> {
     const existing = this.conversations.get(input.channelId);
     if (!existing) {
       throw repoError('not_found', 'channel not found');
     }
-    if (existing.kind !== 'channel') {
-      throw repoError('not_archivable', 'only top-level channels can be archived');
+    if (existing.kind === 'thread') {
+      throw repoError('not_archivable', 'threads cannot be archived');
     }
 
     // Cascade to child threads in the same transaction so a partial
     // failure can't leave the channel and its threads with diverging
     // archive state. Unarchive only clears `archived_at`; threads that
-    // were independently closed stay closed.
+    // were independently closed stay closed. Cascade is keyed on
+    // `parent_conversation_id`, so it applies to channel and dm_channel
+    // parents alike.
     const result = this.db.transaction(
-      (): { channel: ChannelConversationDto; affectedThreadIds: string[] } => {
+      (): {
+        channel: ChannelConversationDto | DmChannelDto;
+        affectedThreadIds: string[];
+      } => {
         const updated = this.conversations.setArchived(
           input.channelId,
           input.archived,
@@ -538,23 +543,23 @@ export class ChannelService {
    */
   async renameChannel(
     input: RenameChannelInput,
-  ): Promise<{ channel: ChannelConversationDto }> {
+  ): Promise<{ channel: ChannelConversationDto | DmChannelDto }> {
     const existing = this.conversations.get(input.channelId);
     if (!existing) {
       throw repoError('not_found', 'channel not found');
     }
-    if (existing.kind !== 'channel') {
-      throw repoError('not_renamable', 'only top-level channels can be renamed');
+    if (existing.kind === 'thread') {
+      throw repoError('not_renamable', 'threads cannot be renamed');
     }
 
     const oldTitle = existing.title;
     if (input.title === oldTitle) {
       // No-op: nothing changed, so emit nothing. Re-fetch through the
-      // channel-typed getter — `existing` is the wider ConversationDto
-      // and `kind === 'channel'` was checked above, so this resolves to
-      // a ChannelConversationDto.
+      // channel-like getter — `existing` is the wider ConversationDto and
+      // the `thread` kind was excluded above, so this resolves to a
+      // ChannelConversationDto | DmChannelDto.
       const channel = this.conversations.getChannelLike(input.channelId);
-      if (!channel || channel.kind !== 'channel') {
+      if (!channel) {
         throw repoError('not_found', 'channel not found');
       }
       return { channel };
