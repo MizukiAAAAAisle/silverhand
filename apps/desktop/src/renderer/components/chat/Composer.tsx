@@ -1042,7 +1042,7 @@ function PickerMenu({
   );
   return (
     <div
-      className="absolute bottom-full left-0 mb-1.5 w-64 max-h-64 overflow-y-auto bg-bg-floating p-1 shadow-lg"
+      className="scrollbar-hide absolute bottom-full left-0 mb-1.5 w-64 max-h-64 overflow-y-auto bg-bg-floating p-1 shadow-lg"
       data-composer-picker=""
       data-dropdown-frame
       role="listbox"
