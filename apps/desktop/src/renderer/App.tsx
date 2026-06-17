@@ -1770,17 +1770,6 @@ function RegisteredAppShell(): JSX.Element {
           onOpenChange={setTasksDrawerOpen}
           workspaceId={selectedWorkspace.id}
           workspaceName={selectedWorkspace.name}
-          workspaceScopeIds={selectedWorkspace.workspace_scope_ids}
-          conversations={activeChannels.map(s => ({
-            id: s.id,
-            title: s.title,
-            kind: s.kind,
-            parent_channel_id:
-              s.kind === 'thread' ? s.parent_conversation_id : null,
-            archived_at: s.archived_at,
-            closed_at: s.closed_at,
-            created_at: s.created_at,
-          }))}
           defaultConversationId={selectedChannelId}
           focusedTaskNumber={focusedTaskNumber}
           onClearFocus={nav.closeTask}

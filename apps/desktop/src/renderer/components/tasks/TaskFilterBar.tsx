@@ -7,11 +7,9 @@ import {
 } from 'react';
 import * as Popover from '@radix-ui/react-popover';
 import {
-  AtSign,
   Check,
   ChevronDown,
   Hash,
-  MessageSquareText,
   PenLine,
   RotateCcw,
   Search,
@@ -42,12 +40,19 @@ import {
  */
 export interface ChannelOption {
   id: string;
+  /** Primary line — always the channel TITLE. This is a channel picker, so
+   *  the row reads as the channel; the source (workspace / DM agent) goes in
+   *  `sublabel` (shiki #task:1165). */
   label: string;
-  /** Drives the leading icon so the dropdown matches the project's
-   *  conversation icon vocabulary (Hash/AtSign/MessageSquareText) instead
-   *  of literal #/@/↳ characters (shiki feedback). Defaults to 'channel'. */
-  kind?: 'channel' | 'dm' | 'thread';
-  /** Secondary line (e.g. parent channel for a thread). */
+  /** Data-source group for the dropdown's section split (#task:1165):
+   *  'dm' = the channel comes from a DM workspace, 'workspace' = a regular
+   *  workspace channel. Grouping is a PRESENTATION axis only — the filter
+   *  value stays a plain channel id. */
+  group: 'dm' | 'workspace';
+  /** Secondary line = the source: the workspace name for a regular channel,
+   *  `@<agent>` for a DM channel. This is what disambiguates an agent's
+   *  multiple DM channels (same title space, distinct titles, shared
+   *  `@agent` subtitle). */
   sublabel?: string;
 }
 
@@ -58,11 +63,10 @@ export interface ChannelFilterCandidate {
   title: string;
   kind: 'channel' | 'dm_channel' | 'thread';
   archived_at: number | null;
-  /** True when the owning workspace is a DM workspace — forces the 'dm'
-   *  icon even though the conversation kind is plain 'channel'. */
+  /** True when the owning workspace is a DM workspace — drives the data-source
+   *  group even though the conversation kind is plain 'channel'. */
   fromDmWorkspace?: boolean;
-  /** Secondary line, e.g. the owning workspace name in the cross-workspace
-   *  task pane. Omit for single-workspace surfaces. */
+  /** Secondary line = the source (workspace name, or `@<agent>` for a DM). */
   sublabel?: string;
 }
 
@@ -87,26 +91,24 @@ export function buildChannelFilterOptions(
     if (c.kind === 'thread') continue;
     if (c.archived_at !== null) continue;
     if (byId.has(c.id)) continue;
+    const isDm = c.fromDmWorkspace || c.kind === 'dm_channel';
     byId.set(c.id, {
       id: c.id,
       label: c.title,
-      kind: c.fromDmWorkspace || c.kind === 'dm_channel' ? 'dm' : 'channel',
+      group: isDm ? 'dm' : 'workspace',
       ...(c.sublabel !== undefined ? { sublabel: c.sublabel } : {}),
     });
   }
   return [...byId.values()];
 }
 
-/** Conversation-kind → icon, mirroring AgentConversationActivityList so
- *  every surface speaks one icon vocabulary. */
-function ChannelKindIcon({
-  kind,
-}: {
-  kind: ChannelOption['kind'];
-}): JSX.Element {
-  if (kind === 'dm') return <AtSign className="size-3.5" />;
-  if (kind === 'thread') return <MessageSquareText className="size-3.5" />;
-  return <Hash className="size-3.5" />;
+/** Leading icon for every channel-filter row and the trigger. This is a
+ *  channel picker, so the icon is uniformly the `#` glyph — carrying the
+ *  `data-channel-icon` hook so it picks up the sidebar's `#` sticker recipe
+ *  (forza6), the same `#` icon as ChannelsSidebar. The source (workspace /
+ *  DM agent) is conveyed by the subtitle, not the icon (shiki #task:1165). */
+function ChannelGlyph(): JSX.Element {
+  return <Hash data-channel-icon className="size-3.5" />;
 }
 
 export interface TaskFilterBarProps {
@@ -351,6 +353,44 @@ function ChannelFilter({
         (o.sublabel?.toLowerCase().includes(q) ?? false),
     );
   }, [options, query]);
+  // Split the (already group-then-alpha sorted) options into their data-
+  // source sections so each gets a header. Order is fixed: Workspaces then
+  // DMs (#task:1165). The ALL row stays ungrouped at the top.
+  const sections = useMemo(
+    () =>
+      [
+        { key: 'workspace' as const, label: 'Workspaces' },
+        { key: 'dm' as const, label: 'DMs' },
+      ]
+        .map(s => ({ ...s, items: filtered.filter(o => o.group === s.key) }))
+        .filter(s => s.items.length > 0),
+    [filtered],
+  );
+
+  const renderOption = (o: ChannelOption): JSX.Element => (
+    <OptionRow
+      key={o.id}
+      selected={value === o.id}
+      onSelect={() => {
+        onChange(o.id);
+        setOpen(false);
+      }}
+    >
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span className="shrink-0 text-text-muted">
+          <ChannelGlyph />
+        </span>
+        <span className="flex min-w-0 flex-col">
+          <span className="truncate">{o.label}</span>
+          {o.sublabel ? (
+            <span className="truncate text-[10px] text-text-muted">
+              {o.sublabel}
+            </span>
+          ) : null}
+        </span>
+      </span>
+    </OptionRow>
+  );
 
   return (
     <Popover.Root
@@ -362,7 +402,7 @@ function ChannelFilter({
     >
       <Popover.Trigger asChild>
         <FilterTrigger
-          icon={<ChannelKindIcon kind={selected?.kind} />}
+          icon={<ChannelGlyph />}
           active={value !== null}
           aria-label="Channel"
         >
@@ -398,29 +438,13 @@ function ChannelFilter({
             >
               {allChannelsLabel}
             </OptionRow>
-            {filtered.map(o => (
-              <OptionRow
-                key={o.id}
-                selected={value === o.id}
-                onSelect={() => {
-                  onChange(o.id);
-                  setOpen(false);
-                }}
-              >
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="shrink-0 text-text-muted">
-                    <ChannelKindIcon kind={o.kind} />
-                  </span>
-                  <span className="flex min-w-0 flex-col">
-                    <span className="truncate">{o.label}</span>
-                    {o.sublabel ? (
-                      <span className="truncate text-[10px] text-text-muted">
-                        {o.sublabel}
-                      </span>
-                    ) : null}
-                  </span>
-                </span>
-              </OptionRow>
+            {sections.map(section => (
+              <div key={section.key}>
+                <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-text-muted">
+                  {section.label}
+                </div>
+                {section.items.map(renderOption)}
+              </div>
             ))}
             {filtered.length === 0 ? (
               <p className="px-2 py-3 text-center text-[11px] italic text-text-muted">

@@ -20,6 +20,7 @@ import type { LucideIcon } from 'lucide-react';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
+import { useTaskChannelOptions } from '@/features/tasks/useTaskChannelOptions';
 import {
   applyTaskFilters,
   collectAssignees,
@@ -31,7 +32,7 @@ import { isTaskDrag, readTaskDrag, writeTaskDrag } from '@/features/tasks/taskDn
 import { useRelativeTime } from '@/components/chat/useRelativeTime';
 import { TaskStatusBadge, TaskCardContextMenu } from '@/components/tasks/TaskStatusBadge';
 import { TaskDropPlaceholder } from '@/components/tasks/TaskDropPlaceholder';
-import { TaskFilterBar, type ChannelOption, buildChannelFilterOptions } from '@/components/tasks/TaskFilterBar';
+import { TaskFilterBar } from '@/components/tasks/TaskFilterBar';
 
 /**
  * Workspace-wide tasks panel — a floating right-side drawer that overlays
@@ -47,18 +48,6 @@ export interface WorkspaceTasksDrawerProps {
   onOpenChange: (open: boolean) => void;
   workspaceId: string;
   workspaceName: string | null;
-  workspaceScopeIds?: readonly string[];
-  conversations: Array<{
-    id: string;
-    title: string;
-    kind: 'channel' | 'dm_channel' | 'thread';
-    /** Parent channel id if this is a thread; null for top-level channels. */
-    parent_channel_id: string | null;
-    /** Archived channels are never offered as filter options. */
-    archived_at: number | null;
-    closed_at: number | null;
-    created_at: number;
-  }>;
   /** Initially-selected conversation for the filter. null → all conversations. */
   defaultConversationId: string | null;
   /** Workspace-scoped task number to focus. When set (sourced from
@@ -215,8 +204,6 @@ export function WorkspaceTasksDrawer({
   onOpenChange,
   workspaceId,
   workspaceName,
-  workspaceScopeIds,
-  conversations,
   defaultConversationId,
   focusedTaskNumber = null,
   onClearFocus,
@@ -273,33 +260,25 @@ export function WorkspaceTasksDrawer({
     return () => document.removeEventListener('keydown', handler);
   }, [open, closeDrawer]);
 
-  // Always fetch the workspace-wide list (all statuses, incl. closed —
-  // it's just the 5th column). Channel / assignee / creator are sliced
-  // client-side via applyTaskFilters (channel match spans a channel + its
-  // threads, which the API's single `conversation_id` filter can't
-  // express — see #214).
+  // Channel options + scope ids come from the SAME hook the global Tasks
+  // pane uses (#task:1165), so both surfaces' dropdowns list the identical
+  // grouped set (DM + regular workspace channels) and can't drift. The
+  // drawer is the same board, just pre-focused on the current channel via
+  // `defaultConversationId` (the baseline below).
+  const { channelOptions, workspaceScopeIds } = useTaskChannelOptions();
+
+  // Fetch the cross-workspace list (all statuses, incl. closed — it's just
+  // the 5th column). The drawer is now the global board with a default
+  // channel focus, so it must fetch every workspace's tasks: selecting an
+  // external channel from the unified dropdown would otherwise yield an
+  // empty list. Channel / assignee / creator are sliced client-side via
+  // applyTaskFilters (channel match spans a channel + its threads, which
+  // the API's single `conversation_id` filter can't express — see #214).
+  // Shares React Query cache with the pane's identical `useTasks({})` call.
   const { data: allTasks = [], isLoading } = useTasks(
-    { workspace_id: workspaceId },
+    {},
     { workspaceScopeIds },
   );
-
-  // Channel filter options. Eligibility (skip fossil threads + archived,
-  // dedup, map) is single-sourced in buildChannelFilterOptions so this
-  // drawer and the task pane cannot drift; this surface only owns its scope
-  // (this workspace's conversations) and its sort (newest-created first).
-  const channelOptions = useMemo<ChannelOption[]>(() => {
-    return buildChannelFilterOptions(
-      conversations
-        .slice()
-        .sort((a, b) => b.created_at - a.created_at)
-        .map(c => ({
-          id: c.id,
-          title: c.title,
-          kind: c.kind,
-          archived_at: c.archived_at,
-        })),
-    );
-  }, [conversations]);
 
   const tasks = useMemo(
     () =>
@@ -336,12 +315,25 @@ export function WorkspaceTasksDrawer({
   // Focus trap: keep focus inside drawer while open.
   const drawerRef = useRef<HTMLDivElement>(null);
 
-  // Visual highlight for the focused-task row. Distinct from
-  // `focusedTaskNumber` (the URL-driven *intent* — "scroll me here"):
-  // once delivered, we clear the URL pointer via `onClearFocus` but
-  // keep the highlight on for ~1.4s so a quick second click on the
-  // same chip still produces a perceptible flash.
-  const [highlightedTaskNumber, setHighlightedTaskNumber] = useState<number | null>(
+  // Resolve the `?task=<n>` focus (workspace-scoped) to a UNIQUE task. Now
+  // that the drawer holds cross-workspace data, a bare task_number can
+  // collide across workspaces — so we disambiguate by (workspaceId,
+  // task_number) and key the scroll + highlight on the resulting
+  // message_id, which is globally unique. (#task:1165)
+  const focusedMessageId = useMemo(() => {
+    if (focusedTaskNumber == null) return null;
+    const match = allTasks.find(
+      t => t.workspace_id === workspaceId && t.task_number === focusedTaskNumber,
+    );
+    return match?.message_id ?? null;
+  }, [allTasks, workspaceId, focusedTaskNumber]);
+
+  // Visual highlight for the focused-task row, keyed by message_id (unique
+  // across workspaces). Distinct from `focusedTaskNumber` (the URL-driven
+  // *intent* — "scroll me here"): once delivered we clear the URL pointer
+  // via `onClearFocus` but keep the highlight on for ~1.4s so a quick
+  // second click on the same chip still produces a perceptible flash.
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(
     null,
   );
   // Scroll-and-highlight on focused-task arrival. We wait one
@@ -350,23 +342,29 @@ export function WorkspaceTasksDrawer({
   // appeared in the DOM. Once we find the element we scroll it into
   // view and immediately call `onClearFocus` so the URL drops the
   // pointer; the highlight outlives the URL state via
-  // `highlightedTaskNumber` to keep visual feedback uncoupled from
+  // `highlightedMessageId` to keep visual feedback uncoupled from
   // navigation.
   useEffect(() => {
     if (!open) return;
     if (focusedTaskNumber == null) return;
     if (isLoading) return; // tasks list not ready yet — wait for fetch
+    if (focusedMessageId == null) {
+      // The number didn't resolve to a task in this workspace — drop the
+      // URL pointer so we don't keep retrying a phantom focus.
+      onClearFocus?.();
+      return;
+    }
     let cancelled = false;
     const handle = requestAnimationFrame(() => {
       if (cancelled) return;
       const root = drawerRef.current;
       if (!root) return;
       const el = root.querySelector<HTMLElement>(
-        `[data-task-number="${focusedTaskNumber}"]`,
+        `[data-task-message-id="${focusedMessageId}"]`,
       );
       if (el) {
         el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-        setHighlightedTaskNumber(focusedTaskNumber);
+        setHighlightedMessageId(focusedMessageId);
       }
       onClearFocus?.();
     });
@@ -374,17 +372,17 @@ export function WorkspaceTasksDrawer({
       cancelled = true;
       cancelAnimationFrame(handle);
     };
-  }, [open, focusedTaskNumber, isLoading, onClearFocus]);
+  }, [open, focusedTaskNumber, focusedMessageId, isLoading, onClearFocus]);
 
   // Auto-clear the highlight ring after a short pulse so the row
   // settles back into the column visually. Independent of the URL —
   // re-clicking the same chip refreshes `focusedTaskNumber` (no-op if
   // unchanged), so the effect above re-arms the highlight.
   useEffect(() => {
-    if (highlightedTaskNumber == null) return;
-    const t = setTimeout(() => setHighlightedTaskNumber(null), 1400);
+    if (highlightedMessageId == null) return;
+    const t = setTimeout(() => setHighlightedMessageId(null), 1400);
     return () => clearTimeout(t);
-  }, [highlightedTaskNumber]);
+  }, [highlightedMessageId]);
 
   return (
     <>
@@ -499,7 +497,7 @@ export function WorkspaceTasksDrawer({
                 onStatusChange={(messageId, status) =>
                   updateStatus.mutate({ messageId, status })
                 }
-                highlightedTaskNumber={highlightedTaskNumber}
+                highlightedMessageId={highlightedMessageId}
               />
             ))}
           </div>
@@ -578,7 +576,7 @@ function KanbanColumn({
   isLoading,
   onCardClick,
   onStatusChange,
-  highlightedTaskNumber,
+  highlightedMessageId,
 }: {
   title: string;
   status: TaskStatus;
@@ -588,7 +586,7 @@ function KanbanColumn({
   isLoading: boolean;
   onCardClick: (t: TaskSummaryDto) => void;
   onStatusChange: (messageId: string, next: TaskStatus) => void;
-  highlightedTaskNumber: number | null;
+  highlightedMessageId: string | null;
 }): JSX.Element {
   // Drag-over highlight (#task:779) — mirrors TasksSection.
   const [dragOver, setDragOver] = useState(false);
@@ -651,7 +649,7 @@ function KanbanColumn({
               <li key={t.message_id}>
                 <TaskCard
                   task={t}
-                  highlighted={highlightedTaskNumber === t.task_number}
+                  highlighted={highlightedMessageId === t.message_id}
                   onClick={() => onCardClick(t)}
                   onStatusChange={next => onStatusChange(t.message_id, next)}
                 />
@@ -683,6 +681,7 @@ function TaskCard({
     <TaskCardContextMenu status={task.status} onStatusChange={onStatusChange}>
       <div
         data-task-number={task.task_number}
+        data-task-message-id={task.message_id}
         draggable
         onDragStart={e => {
           writeTaskDrag(e.dataTransfer, { messageId: task.message_id, from: task.status });

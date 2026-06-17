@@ -32,12 +32,13 @@ export type PersonFilter =
   | { kind: 'person'; person: PersonRef };
 
 export interface TaskFilters {
-  /** Surface-specific id (global → workspace id; drawer → conversation
-   *  id, i.e. a channel or thread). null = no channel narrowing. The
-   *  match semantics differ per surface, so callers pass a `matchChannel`
-   *  predicate to `applyTaskFilters` rather than baking channel logic in
-   *  here (Cindy boundary: don't flatten workspace/channel vs
-   *  conversation/thread into one plane). */
+  /** Conversation id to narrow to — a channel id (matches that channel and
+   *  all its threads) or a thread id (matches only that thread). null = no
+   *  channel narrowing. Both the global pane and the drawer now match by
+   *  `task.channel_id === channelId` (#task:1165 unified them onto one
+   *  cross-workspace board); callers still pass a `matchChannel` predicate
+   *  to `applyTaskFilters` rather than baking channel logic in here, so the
+   *  match stays surface-controlled. */
   channelId: string | null;
   assignee: PersonFilter;
   creator: PersonFilter;
@@ -74,8 +75,10 @@ function matchPerson(
  * task list.
  *
  * `matchChannel` is supplied by each surface so channel semantics stay
- * surface-correct: the global board matches by workspace, the drawer
- * matches a channel plus all its threads.
+ * surface-controlled. Both the global pane and the drawer match a channel
+ * (plus all its threads) by `task.channel_id === channelId`; the predicate
+ * stays a parameter so a future surface can refine the match without
+ * touching this core.
  */
 export function applyTaskFilters(
   tasks: TaskSummaryDto[],

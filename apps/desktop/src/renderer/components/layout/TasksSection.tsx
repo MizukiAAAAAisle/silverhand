@@ -10,8 +10,8 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
-import { useWorkspaces, useChannelsAcrossWorkspaces } from '@/features/workspaces/hooks';
 import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
+import { useTaskChannelOptions } from '@/features/tasks/useTaskChannelOptions';
 import {
   applyTaskFilters,
   collectAssignees,
@@ -23,7 +23,7 @@ import { isTaskDrag, readTaskDrag, writeTaskDrag } from '@/features/tasks/taskDn
 import { useRelativeTime } from '@/components/chat/useRelativeTime';
 import { TaskStatusBadge, TaskCardContextMenu } from '@/components/tasks/TaskStatusBadge';
 import { TaskDropPlaceholder } from '@/components/tasks/TaskDropPlaceholder';
-import { TaskFilterBar, type ChannelOption, type ChannelFilterCandidate, buildChannelFilterOptions } from '@/components/tasks/TaskFilterBar';
+import { TaskFilterBar } from '@/components/tasks/TaskFilterBar';
 
 /**
  * NavRail "Tasks" section — global aggregate view across every channel
@@ -50,20 +50,16 @@ export interface TasksSectionProps {
 export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
   const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
   const updateStatus = useUpdateTaskStatus();
-  const { data: workspaces = [] } = useWorkspaces();
-  const taskWorkspaceScopeIds = useMemo(
-    () => [...new Set(workspaces.flatMap(workspace => workspace.workspace_scope_ids))],
-    [workspaces],
-  );
+  // Channel options + scope ids come from the SAME hook the drawer uses
+  // (#task:1165) so the two surfaces' dropdowns can't drift — DM + regular
+  // workspace channels, grouped by data source.
+  const { channelOptions, workspaceScopeIds } = useTaskChannelOptions();
 
   // Fetch broadly across every workspace scope (all statuses, incl.
   // closed — it's just the 5th column). Channel / assignee / creator are
   // sliced client-side (no pagination, dto carries the fields) — see
   // features/tasks/taskFilters.ts.
-  const { data: allTasks = [] } = useTasks(
-    {},
-    { workspaceScopeIds: taskWorkspaceScopeIds },
-  );
+  const { data: allTasks = [] } = useTasks({}, { workspaceScopeIds });
 
   const tasks = useMemo(
     () =>
@@ -78,59 +74,10 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
     [allTasks, filters],
   );
 
-  // Active counts (not done, not closed) drive channel ordering + tally,
-  // keyed by channel so the channel dropdown can sort by activity.
-  const channelActiveCounts = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const t of allTasks) {
-      if (t.status !== 'done' && t.status !== 'closed') {
-        m.set(t.channel_id, (m.get(t.channel_id) ?? 0) + 1);
-      }
-    }
-    return m;
-  }, [allTasks]);
   const totalActive = useMemo(
     () => tasks.filter(t => t.status !== 'done' && t.status !== 'closed').length,
     [tasks],
   );
-
-  // Channel filter options = every non-archived channel across every member
-  // workspace, sourced purely from the active channel read model (these
-  // endpoints already exclude archived). The dropdown is a channel picker,
-  // not a task index, so it does NOT reach into the task list to surface
-  // channels — if a task points at a channel that's no longer in the active
-  // list (archived / unavailable), it's intentionally not offered. Legacy
-  // fossil threads (`kind === 'thread'`) are never offered; a fossil task's
-  // channel_id already resolves to its parent channel.
-  const channelLists = useChannelsAcrossWorkspaces(
-    useMemo(() => workspaces.map(w => w.id), [workspaces]),
-  );
-  const channelOptions = useMemo<ChannelOption[]>(() => {
-    // Eligibility (skip fossil threads + archived, dedup, map) is single-
-    // sourced in buildChannelFilterOptions; this surface only owns its scope
-    // (every member workspace's active channels) and its sort (active-task
-    // count desc, then label).
-    const candidates: ChannelFilterCandidate[] = [];
-    workspaces.forEach((w, i) => {
-      const list = channelLists[i]?.data ?? [];
-      for (const conv of list) {
-        candidates.push({
-          id: conv.id,
-          title: conv.title,
-          kind: conv.kind,
-          archived_at: conv.archived_at,
-          fromDmWorkspace: w.kind === 'dm',
-          sublabel: w.name,
-        });
-      }
-    });
-    return buildChannelFilterOptions(candidates).sort((a, b) => {
-      const ac = channelActiveCounts.get(a.id) ?? 0;
-      const bc = channelActiveCounts.get(b.id) ?? 0;
-      if (ac !== bc) return bc - ac;
-      return a.label.localeCompare(b.label);
-    });
-  }, [workspaces, channelLists, channelActiveCounts]);
 
   const assigneeOptions = useMemo(() => collectAssignees(allTasks), [allTasks]);
   const creatorOptions = useMemo(() => collectCreators(allTasks), [allTasks]);
