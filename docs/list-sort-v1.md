@@ -78,61 +78,70 @@ absent from `entries` joins as both-null.
 
 #### Drop-frame sync invariant (drag reorder)
 
-The drag-reorder UI must hold two frame-level invariants, both learned the hard
-way via CDP (see `apps/desktop/.../ChannelsSidebar.tsx`). Code that conflicts
-with these is the bug.
+The drag-reorder UI must hold one frame-level invariant, learned the hard way
+via CDP (see `apps/desktop/.../ChannelsSidebar.tsx`). Code that conflicts with
+it is the bug.
 
-1. **Reorder in the same React commit as dnd's drag-reset.** On drop, dnd-kit
-   clears the active row's transform synchronously (frame N). If the new list
-   order is sourced from the React Query cache, the reorder lands a frame later
-   (frame N+1) — RQ's observer notify is microtask-batched — so for one frame
-   the row snaps back to its OLD slot, then jumps to the new one (CDP "B-type"
-   desync). Fix: `onDragEnd` sets a synchronous component-local override
-   (`pendingDrop`) that batches with dnd's reset into one commit; the cache
-   write + mutation are **pure persistence**, and the override self-clears once
-   the cache catches up (≈1–2 frames). **Do NOT** drive the drop reorder from
-   pure `setQueryData` or any async-store notification — `flushSync` can't save
-   it (nothing is pending to flush), the desync just returns.
+**Reorder in the same React commit as dnd's drag-reset.** On drop, dnd-kit
+clears the active row's transform synchronously (frame N). If the new list order
+is sourced from the React Query cache, the reorder lands a frame later (frame
+N+1) — RQ's observer notify is microtask-batched — so for one frame the row snaps
+back to its OLD slot, then jumps to the new one (CDP "B-type" desync). Fix:
+`onDragEnd` sets a synchronous component-local override (`pendingDrop`) that
+batches with dnd's reset into one commit; the cache write + mutation are **pure
+persistence**, and the override self-clears once the cache catches up (≈1–2
+frames). **Do NOT** drive the drop reorder from pure `setQueryData` or any
+async-store notification — `flushSync` can't save it (nothing is pending to
+flush), the desync just returns. This is a **position** invariant, independent of
+color — it holds regardless of whether rows animate their colors.
 
-2. **Freeze color transitions across the whole drop bridge, not just the
-   drag.** Rows carry a `transition-colors`; if it is live at the drop/reorder
-   commit frame, the row landing under the cursor momentarily loses its hover
-   value (bg → transparent for one frame) and then animates back to hover over
-   ~150ms = a visible in-place flicker (only on down-drags, where the cursor
-   settles on a *different* row than it started on; up-drags land on the
-   already-colored dragged row). Keying the freeze on `isSorting` alone is one
-   frame too short — it flips false exactly on the commit frame. Fix: freeze the
-   color transition for `isSorting || bridging`, where `bridging` = this list's
-   `pendingDrop` is still settling, so the hover value re-stabilizes with no
-   transition. A separate, *imperceptible* residual (the drop-target's normal
-   hover fade arriving a few frames after the bridge clears) is intentionally
-   **not** suppressed: forcing it instant would make the landing row hard-cut
-   while siblings fade — a visible inconsistency for an invisible difference.
+> **Historical note — color-freeze apparatus removed (#task:1162).** Sidebar
+> rows once carried a 150ms `transition-colors` hover-fade. That fade forced a
+> second, color-level apparatus *only during drag* (`deriveRowFreeze` →
+> `freezeColorTransition` all-rows + `freezeColorValue` siblings-only) to stop a
+> row sliding under the cursor from flickering its hover bg at the drop frame,
+> and the same fade caused a flicker on selection change. shiki cut the hover-fade
+> outright — rows are now instant on hover **and** selection, since the affordance
+> polish wasn't worth the structural cost (instant-hover sidebars are standard,
+> cf. VS Code). So that whole color-freeze apparatus was **deleted**: with no row
+> color transition, the drop color-flicker class is gone by construction, and only
+> `pendingDrop` (the position invariant above) remains. **Re-introducing any row
+> color transition would bring the color-freeze requirement back** — recover the
+> removed apparatus from git history rather than re-deriving it.
 
-3. **Two freezes, two row-sets — value-freeze is siblings-only, never the
-   dragged row.** The freeze is split into two signals on purpose
-   (`freezeColorTransition` = every row through the bridge, per invariant 2;
-   `freezeColorValue` = siblings only — strips `:hover` so a row sliding under a
-   stationary cursor can't paint a hover bg). The split is **structural, not
-   residue**: the dragged row lands under the cursor on drop, so its true value
-   is `hover`. If its *value* were also frozen (to the resting value) during the
-   drag, then at the frame the freeze lifts there is a value delta
-   (resting → hover); if the transition has re-attached on that same frame, the
-   browser animates the delta — the fade-in doesn't disappear, it just defers
-   from the drop frame to the unfreeze frame. Keeping the dragged row's value
-   **live at all times** (only its transition frozen) guarantees no unfreeze
-   boundary ever carries an animatable delta. **Do NOT** collapse the two into a
-   single signal — it reintroduces the fade-in. Making the dragged row hide its
-   hover bg mid-drag would require a staggered two-frame unfreeze (value first,
-   transition next frame), strictly more complex — not done.
+#### Recent visible order is a frozen read model (#task:1161)
 
-This whole color-freeze apparatus exists *solely* to preserve the resting
-`transition-colors` hover-fade during drag. That fade is kept deliberately: every
-sidebar row type (workspace rail, channel list, search / saved / archived) uses
-the same 150ms fade, so dropping it on draggable channel rows alone would split
-the sidebar's row language for no semantic reason. Switching the sidebar to
-instant hover is a *global* design decision (its own task), out of scope here —
-and only that decision would let this apparatus be deleted.
+`recent` is an **MRU axis** (the ⌘Tab / editor-switcher family, *not* Slack/Discord
+activity-order). The naive form — sort live by each row's `last_accessed_at` — has a
+dogfood-fatal flaw: opening a row stamps its key (touch), the next `viewer_sort`
+refetch lands the fresh key, and the row you just clicked reflows to the top **under
+your pointer**. The MRU family's standard answer is a snapshot: freeze the order
+during use, re-materialize only on re-entry.
+
+So the visible recent order is composed as a **read model**, single-sourced in
+`useListDragSort` (`lib/recent-order-snapshot.ts`):
+
+- **Touch stays pure persistence.** `POST /api/sort/touch` writes `last_accessed_at`
+  and nothing else — it never reorders the visible list. This is the same
+  persistence-vs-presentation split as the `pendingDrop` drop override above.
+- **Freeze the key, admit additions/removals.** Each id's recent sort key is frozen
+  to its value at *entry*. An id that appears after entry (new / restored row) is
+  **admitted and frozen on first sight**: it orders by its live key that frame
+  (landing at its natural recent slot) *and* that key is written into the snapshot,
+  so a later open of that row can't reflow it either. This is "admit and freeze",
+  **not** "unknown id ⇒ forever live" — the latter just relocates the click-jump
+  from entry-list rows to post-mount rows. Admission is **per-new-id**: never
+  recapture the *whole* snapshot on a membership change — that re-freezes
+  already-clicked rows at their bumped keys and reintroduces the original jump.
+  Removed ids drop out. Manual scopes never consult the snapshot (rank-ordered).
+- **Re-snapshot trigger is decoupled from selection/touch — load-bearing.** The
+  snapshot recaptures *only* on `recentSnapshotToken` change: the list changes
+  (`listKey`), or a scope toggles into/out of recent (the recent-scope set,
+  order-independent), plus the first real load. The token **must not** encode
+  `last_accessed_at` / entry values. Re-snapshotting *at the selection moment* would
+  re-eat the just-written key and the jump returns — the decoupling **is** the fix.
+- Captured synchronously in render via a ref compare (not an effect), so the first
+  painted frame is already frozen — no live-then-freeze flash.
 
 ## Storage (migrations v47, v48)
 
@@ -212,10 +221,12 @@ Mutations return the authoritative `{ viewer_sort }` for optimistic reconcile
 - `POST /api/sort/touch { list_key, entity_id }` → `{ ok: true }`. Idempotent
   upsert of `last_accessed_at`. Called **only on selection**. Renderer sends it
   fire-and-forget (non-blocking) and dedups/throttles per `(viewer, target)`;
-  the upsert is idempotent as a backstop.
+  the upsert is idempotent as a backstop. **Persistence only** — it never reorders
+  the visible recent list (see *Recent visible order is a frozen read model*).
 
-`ViewerSortStateDto = { list_key, mode, entries: { entity_id, rank, last_accessed_at }[] }`
-(exported from `@silverhand/shared`).
+`ViewerSortStateDto = { list_key, modes: Record<scope, 'recent'|'manual'>, entries: { entity_id, rank, last_accessed_at }[] }`
+(exported from `@silverhand/shared`; `modes` is the per-scope map — sparse, absent
+scope ⇒ default `recent`; channel lists use the single sentinel scope `''`).
 
 ## Decisions / non-goals
 

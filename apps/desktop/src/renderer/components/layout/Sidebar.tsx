@@ -101,13 +101,13 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   const dmAgentAvatarUrls = useAgentAvatarObjectUrls(dmAvatarSources);
 
   // Per-user rail ordering (#task:1146). The whole rail is ONE list; the drag
-  // state machine (synchronous drop override, color-freeze, settle guard) lives
-  // in the shared useListDragSort — the same hook the channel sidebar uses, so
-  // the CDP-tuned flicker invariants can't drift between the two surfaces.
+  // state machine (synchronous drop override, settle guard) lives in the shared
+  // useListDragSort — the same hook the channel sidebar uses, so the CDP-tuned
+  // drop invariants can't drift between the two surfaces.
   // `modeScopeOf: g => g` makes each section its own [recent|manual] scope.
   const { data: viewerSort } = useWorkspaceSortState();
   const setSortMode = useSetSortMode();
-  const { orderedGroups, onReorder, bridging } = useListDragSort<
+  const { orderedGroups, onReorder } = useListDragSort<
     RailGroup,
     WorkspaceItem
   >({
@@ -133,7 +133,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   const sortConfigFor = (group: RailGroup): WorkspaceSortConfig<RailGroup> => ({
     order: [group],
     groupKeyOf: railGroupKeyOf,
-    bridging,
     onReorder,
   });
 

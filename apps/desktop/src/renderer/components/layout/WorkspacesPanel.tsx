@@ -12,7 +12,6 @@ import { AgentAvatar } from '@/components/AgentAvatar';
 import {
   SortableGroup,
   animateLayoutChanges,
-  deriveRowFreeze,
   sortableItemStyle,
 } from '@/components/layout/list-drag-sort';
 import { SidebarSection } from './sidebar-shared';
@@ -52,8 +51,6 @@ export interface WorkspaceSortConfig<GroupKey extends SortGroup = SortGroup> {
   order: GroupKey[];
   /** The hard group a workspace lives in (live pin/kind). */
   groupKeyOf: (workspace: WorkspaceItem) => GroupKey;
-  /** Post-drop bridge window — see `deriveRowFreeze`. */
-  bridging: boolean;
   /** Commit a group's new full order. */
   onReorder: (group: GroupKey, orderedIds: string[]) => void;
 }
@@ -229,12 +226,7 @@ function renderSortableGroups<GroupKey extends SortGroup>(
         onReorder={ordered => sort.onReorder(p.key, ordered)}
       >
         {p.items.map(w => (
-          <SortableWorkspaceItem
-            key={w.id}
-            workspace={w}
-            ctx={ctx}
-            bridging={sort.bridging}
-          />
+          <SortableWorkspaceItem key={w.id} workspace={w} ctx={ctx} />
         ))}
       </SortableGroup>
     </Fragment>
@@ -244,27 +236,17 @@ function renderSortableGroups<GroupKey extends SortGroup>(
 /** Drag-sortable rail row — the `<li>` is BOTH the sortable node AND the drag
  *  surface (listeners here, not on the inner row, so they bypass the Radix
  *  context-menu `Slot`). Whole-row drag (no grip), 4px activation. Mirrors the
- *  channel sidebar's `SortableChannelItem`; the drag style + color-freeze
- *  signals come from the shared list-drag-sort helpers. */
+ *  channel sidebar's `SortableChannelItem`; the drag style comes from the
+ *  shared list-drag-sort helpers. */
 function SortableWorkspaceItem({
   workspace,
   ctx,
-  bridging,
 }: {
   workspace: WorkspaceItem;
   ctx: RailRowContext;
-  bridging: boolean;
 }): JSX.Element {
-  const {
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-    isSorting,
-    attributes,
-    listeners,
-  } = useSortable({ id: workspace.id, animateLayoutChanges });
-  const freeze = deriveRowFreeze(isSorting, isDragging, bridging);
+  const { setNodeRef, transform, transition, isDragging, attributes, listeners } =
+    useSortable({ id: workspace.id, animateLayoutChanges });
   return (
     <li
       ref={setNodeRef}
@@ -273,13 +255,7 @@ function SortableWorkspaceItem({
       {...attributes}
       {...listeners}
     >
-      <WorkspaceRow
-        workspace={workspace}
-        ctx={ctx}
-        draggable
-        freezeColorTransition={freeze.freezeColorTransition}
-        freezeColorValue={freeze.freezeColorValue}
-      />
+      <WorkspaceRow workspace={workspace} ctx={ctx} draggable />
     </li>
   );
 }
@@ -293,20 +269,11 @@ function WorkspaceRow({
   workspace,
   ctx,
   draggable,
-  freezeColorTransition = false,
-  freezeColorValue = false,
 }: {
   workspace: WorkspaceItem;
   ctx: RailRowContext;
   /** Manual mode: show the grab cursor. Listeners live on the parent `<li>`. */
   draggable?: boolean;
-  /** Freeze the color TRANSITION (drop `transition-colors`) — every row across
-   *  drag + bridge. See deriveRowFreeze / docs/list-sort-v1.md §Renderer
-   *  composition. */
-  freezeColorTransition?: boolean;
-  /** Freeze the color VALUE (strip `:hover`) — SIBLINGS only; never the dragged
-   *  row (see the guardrail in deriveRowFreeze). */
-  freezeColorValue?: boolean;
 }): JSX.Element {
   const title = workspace.kind === 'dm' ? dmWorkspaceLabel(workspace.name) : workspace.name;
   const icon = rowIconFor(workspace, ctx);
@@ -316,22 +283,18 @@ function WorkspaceRow({
   const isPinned = isWorkspacePinned(workspace);
   const unread = workspace.unread;
 
-  // Siblings mid-drag: drop the hover classes so a row sliding under the
-  // pointer can't paint a hover bg. Value-freeze — siblings only.
   const rowBg = selected
     ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-    : freezeColorValue
-      ? 'border-transparent text-text-secondary'
-      : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary';
+    : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary';
 
   const row = (
     <div
       data-row-selected={selected || undefined}
       className={
         'sidebar-row-border flex h-8 w-full items-stretch border ' +
-        // Freeze the color transition on every row during drag + bridge so any
-        // hover/selected recompute lands instantly (no ~150ms fade).
-        (freezeColorTransition ? '' : 'transition-colors ') +
+        // No `transition-colors`: selected/hover switch instantly (#task:1162).
+        // Selected is a discrete committed state — fading it read as the
+        // leaving-row "flicker". Mirrors ChannelRow.
         rowBg +
         (draggable ? ' cursor-grab select-none active:cursor-grabbing' : '')
       }

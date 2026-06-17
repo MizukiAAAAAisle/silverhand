@@ -42,8 +42,8 @@ import { recentKeyForAndAdmit, recentSnapshotToken, useRecentKeySnapshot } from 
  * Scope boundary (Cindy's review contract): this hook owns ONLY the state
  * machine — it is list-agnostic over a generic `GroupKey` + item type. The
  * consumer keeps everything visual: the live partition (pin/kind → groups),
- * the per-row `SortableXxxItem` shell (calls `useSortable` + `sortableItemStyle`
- * + `deriveRowFreeze`), the row component (ChannelRow / WorkspaceRow), and the
+ * the per-row `SortableXxxItem` shell (calls `useSortable` + `sortableItemStyle`),
+ * the row component (ChannelRow / WorkspaceRow), and the
  * header chrome (SortModeMenu, add button). Row-shape differences and 2-vs-3
  * groups never leak in — only the `GroupKey` union changes.
  *
@@ -69,10 +69,6 @@ export interface ListDragSort<GroupKey extends SortGroup, T> {
    *  backend rejects partial / cross-group ids and flips mode→manual
    *  atomically, #task:1147). Drives the synchronous override + persistence. */
   onReorder: (group: GroupKey, orderedIds: string[]) => void;
-  /** Post-drop "bridge" window (drop frame until the cache catches up). Feed
-   *  into `deriveRowFreeze` so the color-transition freeze covers the drop
-   *  frame, where `isSorting` alone has already flipped false. */
-  bridging: boolean;
 }
 
 export function useListDragSort<GroupKey extends SortGroup, T>(params: {
@@ -203,8 +199,6 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
     // prior in-place version had; the body is cheap + idempotent.
   }, [pendingDrop, listKey, viewerSort, modeScopeOf, lookup, groups, getId, getCreatedAt]);
 
-  const bridging = hasOverride;
-
   const onReorder = (group: GroupKey, orderedIds: string[]): void => {
     if (!listKey) return;
     // INVARIANT #1: synchronous local state set inside the drop event so it
@@ -228,38 +222,7 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
     );
   };
 
-  return { orderedGroups, onReorder, bridging };
-}
-
-/**
- * COLOR-FREEZE derivation (INVARIANT #2 + #3, docs/list-sort-v1.md). Single
- * source for the two freeze flags so neither consumer can drift them. Rows
- * shuffle under a near-stationary pointer during a drag, so `:hover` / selected
- * bg recompute as a row slides under the cursor — with `transition-colors` live
- * that recompute plays a ~150ms fade (the post-drop flicker).
- *
- *   freezeColorTransition  (every row, drag + bridge)  — drop `transition-colors`
- *   freezeColorValue       (siblings only, during drag) — strip `:hover` value
- *
- * GUARDRAIL: these MUST stay two separate signals. The dragged row keeps its
- * REAL hover/selected VALUE the whole time (it sits under the cursor) with only
- * its transition frozen; freezing its value too would create a value delta at
- * the un-freeze boundary that the re-armed transition animates → the fade just
- * relocates to the bridge-end frame. So transition-freeze = all rows,
- * value-freeze = siblings only.
- */
-export function deriveRowFreeze(
-  isSorting: boolean,
-  isDragging: boolean,
-  bridging: boolean,
-): { freezeColorTransition: boolean; freezeColorValue: boolean } {
-  return {
-    // bridge half covers the drop frame, where on downward drags the active row
-    // briefly loses `:hover` while `isSorting` has already flipped false.
-    freezeColorTransition: isSorting || bridging,
-    // siblings only — never the active row (see guardrail).
-    freezeColorValue: isSorting && !isDragging,
-  };
+  return { orderedGroups, onReorder };
 }
 
 /** The dragged row's inline style. Single-sourced so the lift affordance

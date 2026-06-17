@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { Power } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { NavRail } from '@/components/layout/NavRail';
@@ -786,6 +786,20 @@ function RegisteredAppShell(): JSX.Element {
   );
 
   const selectedChannel = channels.find(s => s.id === selectedChannelId) ?? null;
+  // Decouple the heavy PRIMARY pane (ChannelView + message list) from the cheap
+  // sidebar highlight (#task:1162). Selecting a channel re-renders ChannelView
+  // with a new conversation, which tears down the old message list (~hundreds of
+  // nodes) and renders the new one — a ~460ms synchronous reconcile (CDP-measured
+  // in dev) that, sharing the click's commit, blocked the row-highlight paint by
+  // the same ~460ms. `useDeferredValue` lets the urgent commit update only the
+  // sidebar's `selectedChannelId` (instant highlight) while ChannelView keeps the
+  // STILL-stale deferred descriptor and short-circuits via its `memo`; the heavy
+  // teardown/rebuild then runs in a low-priority pass AFTER the highlight paints.
+  // Everything else (touch/mark-read effects, thread panels) stays on the urgent
+  // `selectedChannelId`; only the primary view's descriptor + jump target defer.
+  const deferredChannelId = useDeferredValue(selectedChannelId);
+  const deferredSelectedChannel =
+    channels.find(s => s.id === deferredChannelId) ?? null;
   const conversationRefsById = useMemo(() => {
     const m = new Map<string, ConversationReference>();
     const topLevelById = new Map(
@@ -1121,11 +1135,20 @@ function RegisteredAppShell(): JSX.Element {
     [renameChannel, selectedWorkspaceId],
   );
 
-  // Memoize the descriptor objects so ChannelView's `conversation` prop
-  // keeps the same identity unless the underlying channel actually changes.
-  const parentDescriptor = useMemo(
+  // Memoize the descriptor objects so ChannelView's `conversation` prop keeps a
+  // stable identity unless the underlying channel actually changes.
+  // Urgent descriptor for NON-primary consumers (the thread panel) — tracks the
+  // live selection with no defer, so closed/archived can't lag behind the
+  // panel's urgent title/id (#task:1162: ONLY the heavy primary pane defers).
+  const selectedChannelDescriptor = useMemo(
     () => buildChannelDescriptor(selectedChannel),
     [buildChannelDescriptor, selectedChannel],
+  );
+  // Deferred descriptor — feeds ONLY the heavy primary ChannelView (+ its jump
+  // target / header toggle) so a channel switch can't block the highlight commit.
+  const deferredParentDescriptor = useMemo(
+    () => buildChannelDescriptor(deferredSelectedChannel),
+    [buildChannelDescriptor, deferredSelectedChannel],
   );
   const channelKindForView = selectedWorkspace?.kind === 'dm'
     ? 'dm'
@@ -1169,15 +1192,17 @@ function RegisteredAppShell(): JSX.Element {
   );
 
   // Same for the per-pane jumpTarget — the inline ternary recreated the
-  // object each render, breaking memoization down the tree.
+  // object each render, breaking memoization down the tree. Matched against the
+  // DEFERRED channel so it tracks what the primary pane actually shows and stays
+  // stable across the urgent highlight commit (#task:1162).
   const parentJumpTarget = useMemo(
     () =>
       jumpTarget &&
       !jumpTarget.threadRootId &&
-      jumpTarget.channelId === selectedChannelId
+      jumpTarget.channelId === deferredChannelId
         ? { channelId: jumpTarget.channelId, messageId: jumpTarget.messageId }
         : null,
-    [jumpTarget, selectedChannelId],
+    [jumpTarget, deferredChannelId],
   );
   // Jumping *into* the secondary pane is not supported — the only matcher
   // here was the legacy "jump to thread", which was retired with the
@@ -1218,7 +1243,7 @@ function RegisteredAppShell(): JSX.Element {
   const parentView = (
     <ChannelView
       channelKind={channelKindForView}
-      conversation={parentDescriptor}
+      conversation={deferredParentDescriptor}
       parentTitle={null}
       jumpTarget={parentJumpTarget}
       jumpPrimePending={parentJumpPrimePending}
@@ -1231,8 +1256,8 @@ function RegisteredAppShell(): JSX.Element {
       // dm-side / `?side` *secondary* primaries don't (they aren't the
       // channel-scoped index), so they keep it undefined.
       onToggleThreadsList={
-        parentDescriptor?.kind === 'channel' ||
-        parentDescriptor?.kind === 'dm_channel'
+        deferredParentDescriptor?.kind === 'channel' ||
+        deferredParentDescriptor?.kind === 'dm_channel'
           ? nav.toggleThreadsList
           : undefined
       }
@@ -1324,8 +1349,8 @@ function RegisteredAppShell(): JSX.Element {
         workspaceId={threadWorkspaceId}
         rootMessageId={threadRoot}
         parentTitle={selectedChannel?.title ?? null}
-        closed={parentDescriptor?.closed_at != null}
-        archived={parentDescriptor?.archived_at != null}
+        closed={selectedChannelDescriptor?.closed_at != null}
+        archived={selectedChannelDescriptor?.archived_at != null}
         onClose={nav.closeThread}
         onViewInChannel={() => {
           // Scroll-locate + flash the root in the main channel stream,
