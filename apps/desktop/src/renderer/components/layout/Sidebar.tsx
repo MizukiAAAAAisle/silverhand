@@ -158,13 +158,18 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           * tight inner gap + `mb-3` below (matching the inter-section `pb-3`)
           * to separate them from the workspace nav by spacing alone — no hard
           * divider, which read as odd above just three entries (#task:1159,
-          * shiki review). */}
+          * shiki review).
+          *
+          * No `transition-colors`: these rows carry the SAME selected classes as
+          * channel/workspace rows, so selection must commit instantly here too —
+          * fading a discrete committed state is the flicker (#task:1162). Keeps
+          * all three sidebar row classes (rail / channel / tool) one row-language. */}
         <div className="mb-3 space-y-0.5">
           <button
             type="button"
             onClick={props.onSelectSearch}
             className={cn(
-              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm transition-colors',
+              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm',
               props.searchActive
                 ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
                 : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
@@ -178,7 +183,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             type="button"
             onClick={props.onSelectSaved}
             className={cn(
-              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm transition-colors',
+              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm',
               props.savedActive
                 ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
                 : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
@@ -208,7 +213,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             type="button"
             onClick={props.onSelectArchived}
             className={cn(
-              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm transition-colors',
+              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm',
               props.archivedActive
                 ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
                 : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
