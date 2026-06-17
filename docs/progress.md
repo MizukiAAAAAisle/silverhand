@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-06-18 — task-rail / chat-return 切换性能（#task:1168/1169/1170）
+
+NavRail 顶层 section 切换卡顿三连。CDP 实测驱动（probe 见 `/tmp/cdp-taskrail.mjs` 进入 / `/tmp/cdp-tasktochat.mjs` 离开）。
+
+- **#task:1168（commit `12c1da2`）** — 高亮与重视图解耦：`App.tsx` `deferredSection = useDeferredValue(appSection)`，NavRail 高亮读紧急 `appSection`（点击即亮），主视图分支读 deferred 值（重内容晚一拍渲）。配套 `React.memo(TasksSection)` + ref-backed `onJump` 是必要卫生——否则 deferred 离开时 urgent pass 反复重渲离场的重 TasksSection（曾致返回 chat 冻屏 3.5s）。
+- **#task:1169（commit `74442cd`）** — Kanban 列折叠态消化「量级」：五列恒等宽 `flex-1` 均分，Closed 默认折叠；折叠只不 render body/卡片（header/count/drop 原地留），列宽不变 → 零抖动且不引横滚。性能收益来自首屏卡片 1356→274（与列宽无关）。状态走纯内存 `useKanbanColumnCollapse`（module store，非 localStorage——per-viewer UI 偏好规矩见 `docs/list-sort-v1.md`）。
+
+### #task:1170 — chat-return 残留卡顿（结论：A 保守，不改结构）
+
+shiki：dev 下切回 chat 仍卡，release 不卡。CDP A/B 归因：
+
+| 配置 | 进入·高亮 | 离开·高亮 | 离开·ChannelView mount | 离开·blocked |
+|---|---|---|---|---|
+| HEAD（defer✓ strict✓） | 16ms | 10ms | 650ms | ~530ms / 5-6 longtask |
+| StrictMode✗（defer✓） | — | 9ms | 322–441ms | 160–340ms / 2-4 |
+| defer✗（strict✓） | 124–185ms | 23ms | 496–520ms | 416–439ms / 5 |
+
+- **残留卡顿 = ChannelView 外壳 remount（~500–650ms）**，被 dev `<React.StrictMode>` 双挂 ~翻倍。**注意不是消息条数**——消息列表本身已是虚拟化的（`ChannelView.tsx` 用 react-virtuoso + `messageListVirtualization.ts`）；重的是外壳：composer / MemberStrip / 头像批量 fetch / Virtuoso init / effects。release 无 StrictMode + minified ≈「strict✗」行 → release 顺 / dev 卡的真因。这部分是 **dev artifact，不为它动结构**。
+- **`deferredSection` 保留（不删）**：A/B 证明它在「进入」方向仍值钱（进入高亮 16ms vs 删后 124–185ms，274 卡的板同步挂载会挡高亮）；对「离开」只小赚 ~110ms，且离开大头是外壳 remount 非调度。
+- **决策 = A（shiki 拍）**：dev 残留卡顿是 StrictMode artifact，不为它删 defer / 动 ChannelView 结构。**future trigger**：万一日后 release 也出现 chat remount stutter（慢机器 / 外壳更重），正解 = **拆 ChannelView 外壳懒挂，或 keep-alive chat 子树**——**不是「加虚拟化」（列表已虚拟化）**。两条结构解里 keep-alive 代价更大且非 `display:none` 小改：`ChannelView.tsx:251-260` 写死「mounted == visible → 收到消息即 mark-read」，后台常驻会破坏未读计数，keep-alive 必须连带给 mark-read 加可见性门。优先考虑「外壳懒挂」（不背后台生命周期债）。
+
+### #task:1170 后续 — 「点击 rail 绝不卡」感知层 split（shiki 拍 go）
+
+shiki 澄清真实目标：**点击 rail 这一步绝不许卡**（高亮 + 两 sidebar 必须立即出），conv view 数据加载卡可接受。原结构里两 sidebar 和 ChannelView 一起挂在 `deferredSection` 分支 → 入 chat 时一起晚一拍。Alice CDP（`<Profiler>`）实测三者 render 都 ~2ms，证明 sidebar 够轻、可安全提到 urgent。
+
+- **改法**：顶层 section 从「`deferredSection` 互斥三元」改成「独立条件兄弟 + `SectionLayer` 包装」。**挂载/卸载仍由 `deferredSection` 驱动**（重 teardown 留延迟 commit），**可见性由紧急 `appSection` 驱动**（`SectionLayer` 切 `display:contents↔none`，过渡帧隐藏退场区但不卸载——真 unmount 在 deferred 追上后由兄弟条件触发，**非 keep-alive**）。chat 子树两 sidebar 走紧急 `appSection`（点击即出），只有重的 conv（ChannelView/SplitPane）gate 在 `deferredSection === 'chat'`、之前显 `ConversationViewSkeleton`。skeleton 门按**目的地**（`deferredSection === 'chat'`）非前驱，拦住「`appSection='chat'` 但 deferred 还停上一区」那帧露出旧内容。
+- **本质 = 感知层**：deferred 长任务（TasksSection 拆除 + ChannelView effects，dev 被 StrictMode 翻倍）仍在跑，只是跑在已画好的 rail+sidebar 背后、不再冻屏。**不缩 CPU**——别据此删 defer。
+- 文件：`App.tsx` + 新 `components/layout/SectionLayer.tsx` + `components/layout/ConversationViewSkeleton.tsx`。typecheck 干净 / desktop 957。Alice CDP 验「点击→rail+两 sidebar <1 帧、中间帧无旧内容、退场区最终真 unmount（非 display:none 常驻）」。
+
 ## 2026-06-05 — forza6 海报主题 rework + follow-up polish（#task:917/918/919/920，已验收 closed）
 
 把 forza6 做成完整的「赛车海报」视觉系统（不只换色，走 **token + component-skin 两层**），七个 pane 通刷 + 一组 follow-up 打磨。四个 task 全部 closed。

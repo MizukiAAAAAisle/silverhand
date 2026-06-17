@@ -14,6 +14,8 @@ import { MembersPanel } from '@/components/layout/MembersPanel';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { ChannelsSidebar } from '@/components/layout/ChannelsSidebar';
 import { ChannelView } from '@/components/layout/ChannelView';
+import { ConversationViewSkeleton } from '@/components/layout/ConversationViewSkeleton';
+import { SectionLayer } from '@/components/layout/SectionLayer';
 import { ThreadPanel } from '@/components/layout/ThreadPanel';
 import { ChannelThreadsPanel } from '@/components/layout/ChannelThreadsPanel';
 import { SavedListView } from '@/components/layout/SavedListView';
@@ -811,6 +813,12 @@ function RegisteredAppShell(): JSX.Element {
   // they reflect the true target section. Cross-section switches are the only
   // thing affected — channel↔channel stays 'chat' so `deferredChannelId`
   // alone governs it.
+  //
+  // #task:1170 refines this for the chat section specifically: chat's cheap
+  // shell (the two sidebars + splitters) is lifted onto urgent `appSection` so
+  // a rail click paints it instantly, while only the heavy conversation pane
+  // stays gated on `deferredSection`. See the section-render block below for the
+  // full mount-vs-visibility split.
   const deferredSection = useDeferredValue(appSection);
   const conversationRefsById = useMemo(() => {
     const m = new Map<string, ConversationReference>();
@@ -1469,11 +1477,50 @@ function RegisteredAppShell(): JSX.Element {
             else nav.toComputers();
           }}
         />
-        {deferredSection === 'settings' ? (
-          <SettingsPage />
-        ) : deferredSection === 'tasks' ? (
-          <TasksSection onJump={handleJumpToMessageStable} />
-        ) : deferredSection === 'members' ? (
+        {/* ===== Top-level section views (#task:1168 + #task:1170) =====
+          *
+          * Rendered as INDEPENDENT conditional siblings (not a mutually-
+          * exclusive ternary) so that during a section switch the outgoing and
+          * incoming sections can briefly coexist — one visible, one hidden —
+          * which is what lets the chat shell paint instantly without dragging
+          * the previous section's teardown onto the click commit.
+          *
+          * Two axes, deliberately driven by DIFFERENT section values (this is
+          * intentional, not a typo — see the three invariants in #task:1170):
+          *
+          *   • MOUNT / UNMOUNT  ← `deferredSection` (low-priority).
+          *     Each `deferredSection === X` guard mounts a section and, once the
+          *     deferred value moves off X, truly UNMOUNTS it on the deferred
+          *     commit. So a heavy teardown (TasksSection's 274-card dnd-kit
+          *     cleanup; ChannelView's effects) never runs on the urgent click
+          *     commit that must paint the rail highlight. NB: this is a real
+          *     unmount, NOT keep-alive — display:none below only spans the
+          *     transition frames; a section is never left permanently
+          *     mounted-but-hidden (that would resurrect the mark-read side
+          *     effect we rejected, ChannelView.tsx:248-260).
+          *
+          *   • VISIBILITY  ← urgent `appSection`, via <SectionLayer> toggling
+          *     display:contents↔none. The rail click updates `appSection`
+          *     synchronously, so the click commit instantly flips WHICH mounted
+          *     section is shown, even though the deferred mount/unmount lags a
+          *     step behind.
+          *
+          * Non-chat sections are hidden only while `appSection === 'chat'` (chat
+          * is urgently taking over on top); during non-chat→non-chat switches
+          * the outgoing one stays visible until the incoming one mounts, so we
+          * never flash blank. */}
+        {deferredSection === 'settings' && (
+          <SectionLayer visible={appSection !== 'chat'}>
+            <SettingsPage />
+          </SectionLayer>
+        )}
+        {deferredSection === 'tasks' && (
+          <SectionLayer visible={appSection !== 'chat'}>
+            <TasksSection onJump={handleJumpToMessageStable} />
+          </SectionLayer>
+        )}
+        {deferredSection === 'members' && (
+          <SectionLayer visible={appSection !== 'chat'}>
           <>
             <aside
               data-sidebar="members"
@@ -1526,7 +1573,10 @@ function RegisteredAppShell(): JSX.Element {
               </main>
             )}
           </>
-        ) : deferredSection === 'computers' ? (
+          </SectionLayer>
+        )}
+        {deferredSection === 'computers' && (
+          <SectionLayer visible={appSection !== 'chat'}>
           <>
             <aside
               data-sidebar="computers"
@@ -1569,7 +1619,19 @@ function RegisteredAppShell(): JSX.Element {
               </main>
             )}
           </>
-        ) : (
+          </SectionLayer>
+        )}
+        {/* CHAT: the cheap shell (workspace + channel sidebars + their
+          * splitters) mounts on URGENT `appSection` so a rail click paints it
+          * immediately (~5ms render, Alice CDP). It is mounted while EITHER
+          * value is 'chat': `appSection === 'chat'` covers instant ENTRY;
+          * `deferredSection === 'chat'` keeps the shell on screen for the
+          * one-step EXIT (chat→X) until the destination mounts, so we never
+          * flash blank. Whenever it's mounted it's the section to show, so it's
+          * always visible. The heavy conversation pane inside is gated
+          * separately on `deferredSection` with a skeleton (see below). */}
+        {(appSection === 'chat' || deferredSection === 'chat') && (
+          <SectionLayer visible>
           <>
             <div
               className="sidebar-slot"
@@ -1752,19 +1814,42 @@ function RegisteredAppShell(): JSX.Element {
                     active={channelsSidebar.isDragging}
                   />
                 ) : null}
-                {secondaryView &&
-                shouldSecondaryFullscreen(secondaryDescriptor, routeFullscreen) ? (
-                  secondaryView
+                {/* Heavy conversation pane — the only part of the chat section
+                  * kept on `deferredSection`. While the deferred value hasn't
+                  * caught up to 'chat' (i.e. we just entered chat and the shell
+                  * above is already painted), show a skeleton instead of
+                  * mounting ChannelView, so the mount's ~hundreds-of-ms commit
+                  * work stays off the click critical path.
+                  *
+                  * The gate is `deferredSection === 'chat'` — keyed by
+                  * DESTINATION, not predecessor. That's deliberate: on entry
+                  * `appSection` is already 'chat' but `deferredSection` still
+                  * names the previous section; gating on the predecessor would
+                  * briefly mount this pane over the half-torn-down old section.
+                  * Keying on the destination shows the skeleton for exactly the
+                  * frames before the conv is ready, never stale previous
+                  * content. (PERCEPTION win only — the deferred mount/teardown
+                  * longtask still runs a beat later behind the painted shell;
+                  * it does NOT reduce that CPU work, so don't drop the defer on
+                  * the assumption it does.) */}
+                {deferredSection === 'chat' ? (
+                  secondaryView &&
+                  shouldSecondaryFullscreen(secondaryDescriptor, routeFullscreen) ? (
+                    secondaryView
+                  ) : (
+                    <SplitPane
+                      left={parentView}
+                      right={secondaryView}
+                      storageKey="silverhand.layout.split-ratio"
+                    />
+                  )
                 ) : (
-                  <SplitPane
-                    left={parentView}
-                    right={secondaryView}
-                    storageKey="silverhand.layout.split-ratio"
-                  />
+                  <ConversationViewSkeleton />
                 )}
               </>
             )}
           </>
+          </SectionLayer>
         )}
       </div>
 
