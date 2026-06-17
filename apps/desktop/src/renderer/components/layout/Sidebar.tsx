@@ -155,63 +155,70 @@ export function Sidebar(props: SidebarProps): JSX.Element {
       }}
     >
       <nav className="flex-1 overflow-y-auto py-1.5">
-        <button
-          type="button"
-          onClick={props.onSelectSearch}
-          className={cn(
-            'sidebar-row-border mx-1.5 mb-1 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm transition-colors',
-            props.searchActive
-              ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-              : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
-          )}
-        >
-          <Search className="size-3.5" />
-          <span>Search</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={props.onSelectSaved}
-          className={cn(
-            'sidebar-row-border mx-1.5 mb-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm transition-colors',
-            props.savedActive
-              ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-              : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
-          )}
-        >
-          <Bookmark
+        {/* App-level tool entries (Search/Saved/Archived). Kept a SOFT group:
+          * tight inner gap + `mb-3` below (matching the inter-section `pb-3`)
+          * to separate them from the workspace nav by spacing alone — no hard
+          * divider, which read as odd above just three entries (#task:1159,
+          * shiki review). */}
+        <div className="mb-3 space-y-0.5">
+          <button
+            type="button"
+            onClick={props.onSelectSearch}
             className={cn(
-              'size-3.5',
-              props.savedActive ? 'fill-current' : '',
+              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm transition-colors',
+              props.searchActive
+                ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
+                : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
             )}
-          />
-          <span>Saved</span>
-          {props.savedCount !== undefined && props.savedCount > 0 ? (
-            <span
-              data-sidebar-count
-              className={cn(
-                'text-xs tabular-nums',
-                props.savedActive ? 'text-text-on-selected/70' : 'text-text-muted',
-              )}
-            >
-              {props.savedCount}
-            </span>
-          ) : null}
-        </button>
+          >
+            <Search className="size-4" />
+            <span>Search</span>
+          </button>
 
-        <button
-          type="button"
-          onClick={props.onSelectArchived}
-          className={cn(
-            'sidebar-row-border mx-1.5 mb-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm transition-colors',
-            props.archivedActive
-              ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-              : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
-          )}
-        >
-          <Archive className="size-3.5" />
-          <span>Archived</span>
-        </button>
+          <button
+            type="button"
+            onClick={props.onSelectSaved}
+            className={cn(
+              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm transition-colors',
+              props.savedActive
+                ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
+                : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
+            )}
+          >
+            <Bookmark
+              className={cn(
+                'size-4',
+                props.savedActive ? 'fill-current' : '',
+              )}
+            />
+            <span>Saved</span>
+            {props.savedCount !== undefined && props.savedCount > 0 ? (
+              <span
+                data-sidebar-count
+                className={cn(
+                  'text-xs tabular-nums',
+                  props.savedActive ? 'text-text-on-selected/70' : 'text-text-muted',
+                )}
+              >
+                {props.savedCount}
+              </span>
+            ) : null}
+          </button>
+
+          <button
+            type="button"
+            onClick={props.onSelectArchived}
+            className={cn(
+              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm transition-colors',
+              props.archivedActive
+                ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
+                : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
+            )}
+          >
+            <Archive className="size-4" />
+            <span>Archived</span>
+          </button>
+        </div>
 
         {orderedPinned.length > 0 ? (
           <WorkspaceGroup

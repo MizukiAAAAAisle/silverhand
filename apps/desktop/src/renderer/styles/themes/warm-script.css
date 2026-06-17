@@ -339,3 +339,17 @@
   --text-on-structure: var(--bg-base);
   --text-on-dark-pop: var(--accent);
 }
+
+/* Workspace `W` identity badge — filled square, warm-script language
+   (#task:1160). Same intent as the forza6 badge: give the workspace glyph an
+   avatar-weight filled square so it stops reading as plain muted text next to
+   DM avatars. warm-script is a LIGHT theme, so the `--bg-structure-dark` /
+   `--text-on-structure` contract (warm ink on paper) pops on the cream sidebar
+   on its own — no border/shadow (avatars carry none here). Square to match the
+   square avatars; glyph shrinks to sit inside the fill rather than flush. */
+[data-theme='warm-script'] [data-workspace-icon] {
+  background-color: var(--bg-structure-dark);
+  color: var(--text-on-structure);
+  border-radius: 0;
+  font-size: 11px;
+}

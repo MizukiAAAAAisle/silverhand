@@ -545,6 +545,31 @@
   box-shadow: 2px 2px 0 var(--forza6-ink);
 }
 
+/* ── Workspace `W` identity badge — filled ink square (#task:1160) ──
+   WorkspacesPanel renders a bare serif `W` (`[data-workspace-icon]`) for
+   PINNED / WORKSPACES / ARCHIVED rows. In base themes it inherits the row's
+   muted ink, so next to DM rows — which carry a filled square avatar — the
+   workspace glyph reads as plain text and gets lost in the list (shiki).
+
+   Fix: paint it as a FILLED square badge so a workspace row gets the same
+   "identity object" weight as a DM avatar — and nothing more. Deliberately NO
+   poster shadow / border: the `#` channel chip is a sticker (it earns the hard
+   ink shadow as a primary nav target), but the workspace badge only needs to
+   match an avatar's weight, and avatars carry no shadow. The first cut added
+   the sticker shadow (rest + a heavier selected lift) and read as over-
+   designed (shiki) — so this is just fill + glyph. Hue allocation in forza6 is
+   fully spent (yellow=tasks/`#`, pink=accent/unread, lime=selection, orange=
+   in_review, teal=hosts, indigo=code/closed), so we use a neutral ink fill +
+   paper glyph rather than grabbing a festival hue; it still pops on the cream/
+   lime ground and rhymes with the near-ink Codex/Cursor avatar squares. Square
+   (radius 0), glyph shrinks to sit inside the fill rather than flush. */
+[data-theme='forza6'] [data-workspace-icon] {
+  background-color: var(--forza6-ink);
+  color: var(--forza6-paper);
+  border-radius: 0;
+  font-size: 11px;
+}
+
 /* ── Sidebar single-row count badges — subdued metadata (v6.5r, #task:917) ─
    `Sidebar.tsx` Saved row renders a count span at the right edge
    tagged `data-sidebar-count`. The group-count rule above (lines

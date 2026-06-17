@@ -345,8 +345,26 @@
   --accent-2: var(--accent);
   --text-on-accent-2: var(--text-on-accent);
   /* dark 主题下"近黑结构层"应该比 bg-base 更深 —— 用一档真黑给契约
-     完整定义；component 层目前没有 slack-dark 特化消费点。 */
+     完整定义。(workspace badge 改用浅填充,见下,不再消费它。) */
   --bg-structure-dark: #0E1013;
   --text-on-structure: var(--text-primary);
   --text-on-dark-pop: var(--accent);
+}
+
+/* Workspace `W` identity badge — filled square, slack-dark language
+   (#task:1160). Same intent as the forza6/warm badge: avatar-weight filled
+   square so the workspace glyph isn't plain muted text beside DM avatars.
+   First cut used the near-black `--bg-structure-dark` fill (to rhyme with the
+   Codex/Cursor avatar squares) — but those ARE the avatars that disappear on
+   the dark sidebar, so the badge was nearly invisible (shiki). Invert it: a
+   LIGHT neutral fill + dark glyph pops on the dark ground the same way the pale
+   Claude/Gemini avatars do. `--text-secondary` is the lightest non-screaming
+   neutral available in a dark theme (no light surface token exists), and we
+   stay neutral — no festival hue grabbed. Light tile self-delineates, so no
+   border; square to match avatars; glyph shrinks to sit inside the fill. */
+[data-theme='slack-dark'] [data-workspace-icon] {
+  background-color: var(--text-secondary);
+  color: var(--bg-base);
+  border-radius: 0;
+  font-size: 11px;
 }

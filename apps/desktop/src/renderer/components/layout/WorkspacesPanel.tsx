@@ -99,11 +99,19 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
 
 const ICON_BY_KIND: Record<WorkspaceUiKind, JSX.Element> = {
   regular: (
-    <span className="inline-flex size-3.5 items-center justify-center font-serif text-[14px] font-semibold leading-none">
+    // `data-workspace-icon`: theme-neutral identity hook. Base themes render
+    // the bare serif glyph; forza6 paints it as a filled ink poster badge so a
+    // workspace row carries the same visual weight as a DM row's avatar
+    // (#task:1160 — shiki: the muted `W` blended into the list next to DM
+    // avatars). Layout/size stays here; identity painting lives in the theme.
+    <span
+      data-workspace-icon
+      className="inline-flex size-4 items-center justify-center font-serif text-[16px] font-semibold leading-none"
+    >
       W
     </span>
   ),
-  dm: <User className="size-3.5" />,
+  dm: <User className="size-4" />,
 };
 
 /** Per-row context shared by the sortable + flat render paths so a row is the
