@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import {
   Archive,
   CheckCircle2,
@@ -47,7 +47,9 @@ export interface TasksSectionProps {
   }) => void;
 }
 
-export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
+export const TasksSection = memo(function TasksSection({
+  onJump,
+}: TasksSectionProps): JSX.Element {
   const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
   const updateStatus = useUpdateTaskStatus();
   // Channel options + scope ids come from the SAME hook the drawer uses
@@ -167,7 +169,7 @@ export function TasksSection({ onJump }: TasksSectionProps): JSX.Element {
       </div>
     </main>
   );
-}
+});
 
 // ── helpers ────────────────────────────────────────────────────────
 

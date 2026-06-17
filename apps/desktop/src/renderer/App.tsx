@@ -800,6 +800,18 @@ function RegisteredAppShell(): JSX.Element {
   const deferredChannelId = useDeferredValue(selectedChannelId);
   const deferredSelectedChannel =
     channels.find(s => s.id === deferredChannelId) ?? null;
+  // Same decoupling at the TOP-LEVEL view axis (#task:1168). The NavRail
+  // highlight reads urgent `appSection` (instant), while the heavy main-view
+  // branch (TasksSection's cross-workspace fetch + 5-column kanban, Settings,
+  // members/computers detail) renders off `deferredSection` — so clicking the
+  // Tasks rail paints the highlight first and the board mounts in a low-
+  // priority pass AFTER, instead of jamming both into one commit. Only the
+  // BRANCH SELECTION defers; effect guards, focus targets, and titlebar
+  // callbacks (lines ~506/713/838/1407/1707) stay on urgent `appSection` so
+  // they reflect the true target section. Cross-section switches are the only
+  // thing affected — channel↔channel stays 'chat' so `deferredChannelId`
+  // alone governs it.
+  const deferredSection = useDeferredValue(appSection);
   const conversationRefsById = useMemo(() => {
     const m = new Map<string, ConversationReference>();
     const topLevelById = new Map(
@@ -999,6 +1011,24 @@ function RegisteredAppShell(): JSX.Element {
       nav.toChannel(wid, params.channelId);
     }
   };
+
+  // Stable identity for TasksSection's onJump so `React.memo(TasksSection)`
+  // can bail out when App re-renders for unrelated reasons. Load-bearing on
+  // the deferred-section path (#task:1168): while LEAVING Tasks, the urgent
+  // pass still reads `deferredSection === 'tasks'`, so TasksSection stays
+  // mounted for one commit — and this agent-heavy app fires frequent
+  // SSE-driven App re-renders, each of which would otherwise re-render all
+  // ~1356 cards at high priority and repeatedly restart the low-priority
+  // switch-to-chat transition (Alice CDP: 3.5s on-screen freeze). A
+  // ref-backed callback gives a stable identity without the stale-closure
+  // risk of useCallback-wrapping the big handler below. Mirrors the stable
+  // refs ChannelView relies on for the same reason (L1068).
+  const jumpToMessageRef = useRef(handleJumpToMessage);
+  jumpToMessageRef.current = handleJumpToMessage;
+  const handleJumpToMessageStable = useCallback(
+    (params: MessageJumpTarget) => jumpToMessageRef.current(params),
+    [],
+  );
 
   const handleWorkspaceDeleted = (): void => {
     // Pick the next workspace in the same kind-group as the deleted one,
@@ -1439,11 +1469,11 @@ function RegisteredAppShell(): JSX.Element {
             else nav.toComputers();
           }}
         />
-        {appSection === 'settings' ? (
+        {deferredSection === 'settings' ? (
           <SettingsPage />
-        ) : appSection === 'tasks' ? (
-          <TasksSection onJump={params => handleJumpToMessage(params)} />
-        ) : appSection === 'members' ? (
+        ) : deferredSection === 'tasks' ? (
+          <TasksSection onJump={handleJumpToMessageStable} />
+        ) : deferredSection === 'members' ? (
           <>
             <aside
               data-sidebar="members"
@@ -1496,7 +1526,7 @@ function RegisteredAppShell(): JSX.Element {
               </main>
             )}
           </>
-        ) : appSection === 'computers' ? (
+        ) : deferredSection === 'computers' ? (
           <>
             <aside
               data-sidebar="computers"
