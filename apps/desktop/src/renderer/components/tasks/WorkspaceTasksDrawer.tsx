@@ -11,6 +11,8 @@ import {
   Archive,
   CheckCircle2,
   CheckSquare,
+  ChevronDown,
+  ChevronRight,
   Circle,
   CircleDashed,
   CircleEllipsis,
@@ -20,6 +22,7 @@ import type { LucideIcon } from 'lucide-react';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
+import { useKanbanColumnCollapse } from '@/features/tasks/useKanbanColumnCollapse';
 import { useTaskChannelOptions } from '@/features/tasks/useTaskChannelOptions';
 import {
   applyTaskFilters,
@@ -590,6 +593,11 @@ function KanbanColumn({
 }): JSX.Element {
   // Drag-over highlight (#task:779) — mirrors TasksSection.
   const [dragOver, setDragOver] = useState(false);
+  // Per-column collapse (#task:1169) — shared store with the NavRail pane, so
+  // the two surfaces stay in sync within a session. Mirrors TasksSection.
+  const { isCollapsed, toggle } = useKanbanColumnCollapse();
+  const collapsed = isCollapsed(status);
+  const Chevron = collapsed ? ChevronRight : ChevronDown;
   return (
     <section
       data-tasks-column
@@ -616,6 +624,12 @@ function KanbanColumn({
       className={cn(
         // Mirrors TasksSection — column hugs content height with a
         // `max-h-full` cap; body scrolls inside when content overflows.
+        //
+        // All five columns keep an EQUAL flex width whether collapsed or not
+        // (#task:1169 follow-up, shiki): collapsing only drops the body, never
+        // resizes a column, so the live columns don't jitter when Closed
+        // folds/unfolds. Closed stays 1/5 width — shiki accepts that; the perf
+        // win was never rendering its 1000+ cards, not reclaiming width.
         'flex min-h-0 max-h-full flex-1 flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-base transition-colors',
         (status === 'done' || status === 'closed') && 'opacity-80',
         // Drop affordance (`data-drop-target`) is painted in CSS, not here —
@@ -624,40 +638,50 @@ function KanbanColumn({
         // review). See global.css / forza6-components.css.
       )}
     >
-      <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-3 py-2">
-        <Icon className={cn('size-3.5 shrink-0', iconClass)} aria-hidden />
+      <button
+        type="button"
+        data-tasks-column-header
+        onClick={() => toggle(status)}
+        aria-expanded={!collapsed}
+        aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${title} column`}
+        className="flex w-full shrink-0 cursor-pointer items-center gap-2 border-b border-border-subtle px-3 py-2 text-left transition-colors hover:bg-bg-hover"
+      >
+        <Chevron className="size-3.5 shrink-0 text-text-muted" aria-hidden />
+        <Icon data-tasks-column-icon className={cn('size-3.5 shrink-0', iconClass)} aria-hidden />
         <span className="text-[11px] font-medium uppercase tracking-wider text-text-secondary">
           {title}
         </span>
         <span className="text-[10px] tabular-nums text-text-muted">
           {tasks.length}
         </span>
-      </header>
-      <div className="min-h-0 flex-auto overflow-y-auto p-2">
-        {isLoading ? (
-          <p className="px-2 py-3 text-center text-[11px] text-text-muted">
-            加载中…
-          </p>
-        ) : tasks.length === 0 && !dragOver ? (
-          <p className="px-2 py-3 text-center text-[11px] italic text-text-muted">
-            No {title.toLowerCase()} tasks
-          </p>
-        ) : (
-          <ul className="space-y-1.5">
-            {dragOver ? <TaskDropPlaceholder /> : null}
-            {tasks.map(t => (
-              <li key={t.message_id}>
-                <TaskCard
-                  task={t}
-                  highlighted={highlightedMessageId === t.message_id}
-                  onClick={() => onCardClick(t)}
-                  onStatusChange={next => onStatusChange(t.message_id, next)}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      </button>
+      {collapsed ? null : (
+        <div className="min-h-0 flex-auto overflow-y-auto p-2">
+          {isLoading ? (
+            <p className="px-2 py-3 text-center text-[11px] text-text-muted">
+              加载中…
+            </p>
+          ) : tasks.length === 0 && !dragOver ? (
+            <p className="px-2 py-3 text-center text-[11px] italic text-text-muted">
+              No {title.toLowerCase()} tasks
+            </p>
+          ) : (
+            <ul className="space-y-1.5">
+              {dragOver ? <TaskDropPlaceholder /> : null}
+              {tasks.map(t => (
+                <li key={t.message_id}>
+                  <TaskCard
+                    task={t}
+                    highlighted={highlightedMessageId === t.message_id}
+                    onClick={() => onCardClick(t)}
+                    onStatusChange={next => onStatusChange(t.message_id, next)}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </section>
   );
 }

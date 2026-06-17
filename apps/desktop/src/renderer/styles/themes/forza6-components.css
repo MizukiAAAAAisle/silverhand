@@ -1047,17 +1047,17 @@
 [data-theme='forza6'] [data-tasks-column][data-status='closed'] {
   border-top-color: var(--task-status-closed-bg);
 }
-[data-theme='forza6'] [data-tasks-column] > header {
+[data-theme='forza6'] [data-tasks-column] > [data-tasks-column-header] {
   border-bottom-color: #0A0A0A;
   background-color: transparent;
 }
-[data-theme='forza6'] [data-tasks-column] > header > span:first-of-type {
+[data-theme='forza6'] [data-tasks-column] > [data-tasks-column-header] > span:first-of-type {
   font-family: var(--font-display);
   font-size: 12px;
   letter-spacing: 0.14em;
   color: #0A0A0A;
 }
-[data-theme='forza6'] [data-tasks-column] > header > span:last-of-type {
+[data-theme='forza6'] [data-tasks-column] > [data-tasks-column-header] > span:last-of-type {
   font-family: var(--appearance-code-font, var(--font-mono));
   font-feature-settings: 'tnum';
   color: var(--brand-primary);
@@ -1076,8 +1076,8 @@
 [data-theme='forza6'] [data-tasks-column][data-drop-target] {
   border-color: #0A0A0A;
 }
-[data-theme='forza6'] [data-tasks-column][data-drop-target] > header > span:first-of-type,
-[data-theme='forza6'] [data-tasks-column][data-drop-target] > header > span:last-of-type {
+[data-theme='forza6'] [data-tasks-column][data-drop-target] > [data-tasks-column-header] > span:first-of-type,
+[data-theme='forza6'] [data-tasks-column][data-drop-target] > [data-tasks-column-header] > span:last-of-type {
   color: var(--text-on-selected);
 }
 
@@ -1133,25 +1133,30 @@
    colour per status across the three surfaces (shiki #task:917
    "列头颜色，和 task status 以及 列头的 icon 颜色 三者保持一致").
    Same column-top-accent rule now also reads from `var(--task-status-
-   X-bg)` instead of literal hex, so the colour source is unified. */
+   X-bg)` instead of literal hex, so the colour source is unified.
+
+   The selector targets `[data-tasks-column-icon]` (the status glyph) and
+   NOT every `> svg`: the header is a collapse toggle button (#task:1169)
+   that also holds a neutral chevron — the per-status colour must hit only
+   the status icon, never the chevron. */
 [data-theme='forza6']
-  [data-tasks-column][data-status='todo'] > header > svg {
+  [data-tasks-column][data-status='todo'] > [data-tasks-column-header] > [data-tasks-column-icon] {
   color: var(--task-status-todo-bg);
 }
 [data-theme='forza6']
-  [data-tasks-column][data-status='in_progress'] > header > svg {
+  [data-tasks-column][data-status='in_progress'] > [data-tasks-column-header] > [data-tasks-column-icon] {
   color: var(--task-status-in-progress-bg);
 }
 [data-theme='forza6']
-  [data-tasks-column][data-status='in_review'] > header > svg {
+  [data-tasks-column][data-status='in_review'] > [data-tasks-column-header] > [data-tasks-column-icon] {
   color: var(--task-status-in-review-bg);
 }
 [data-theme='forza6']
-  [data-tasks-column][data-status='done'] > header > svg {
+  [data-tasks-column][data-status='done'] > [data-tasks-column-header] > [data-tasks-column-icon] {
   color: var(--task-status-done-bg);
 }
 [data-theme='forza6']
-  [data-tasks-column][data-status='closed'] > header > svg {
+  [data-tasks-column][data-status='closed'] > [data-tasks-column-header] > [data-tasks-column-icon] {
   color: var(--task-status-closed-bg);
 }
 

@@ -998,7 +998,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   background-color: var(--bg-row-selected);
   border-color: var(--accent);
 }
-[data-tasks-column][data-drop-target] > header > span,
-[data-tasks-column][data-drop-target] > header > svg {
+[data-tasks-column][data-drop-target] > [data-tasks-column-header] > span,
+[data-tasks-column][data-drop-target] > [data-tasks-column-header] > svg {
   color: var(--text-on-selected);
 }

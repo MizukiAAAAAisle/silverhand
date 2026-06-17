@@ -1,0 +1,69 @@
+import { useSyncExternalStore } from 'react';
+import type { TaskStatus } from '@silverhand/shared';
+
+/**
+ * Per-column collapse state for the task kanban (NavRail pane + titlebar
+ * drawer share one store, so toggling in one surface reflects in the other
+ * within the session).
+ *
+ * Persistence is deliberately **in-memory only** (#task:1169, Alice + Cindy
+ * review): column collapse is a per-viewer UI preference of the same family as
+ * list-sort mode/rank, whose persistence model is already fixed to
+ * server-side viewer-scope in `docs/list-sort-v1.md` ("not localStorage —
+ * Silverhand is multi-surface; localStorage would split per surface").
+ * Reaching for localStorage here would (a) fork that state per
+ * desktop/web/standalone surface and (b) open a second persistence paradigm
+ * that drifts from list-sort. So we keep zero cross-session persistence: a
+ * user's toggles live in a module-level store and are shared across the pane,
+ * the drawer, and navigation **within the session**, but a window
+ * reload / fresh session resets to the default (Closed collapsed). It's the
+ * archival terminal column, so that default is sensible.
+ *
+ * The public interface (`isCollapsed` / `toggle`) is the contract: if
+ * "remember my expanded columns" ever becomes a real requirement, swap the
+ * module store below for the server-side viewer-scoped read model — the call
+ * sites in TasksSection / WorkspaceTasksDrawer don't change.
+ */
+
+// Closed is collapsed by default — it's the archived terminal column and
+// holds the bulk of historical tasks, so hiding its (potentially very large)
+// card list also keeps the initial board mount cheap.
+const DEFAULT_COLLAPSED: readonly TaskStatus[] = ['closed'];
+
+// Module-level single source of truth. Snapshot identity only changes when a
+// column is actually toggled, so `useSyncExternalStore` stays stable.
+let collapsed: ReadonlySet<TaskStatus> = new Set(DEFAULT_COLLAPSED);
+const listeners = new Set<() => void>();
+
+function subscribe(onChange: () => void): () => void {
+  listeners.add(onChange);
+  return () => {
+    listeners.delete(onChange);
+  };
+}
+
+function getSnapshot(): ReadonlySet<TaskStatus> {
+  return collapsed;
+}
+
+/** Toggle a column's collapsed state and notify every mounted surface. */
+export function toggleColumnCollapse(status: TaskStatus): void {
+  const next = new Set(collapsed);
+  if (next.has(status)) next.delete(status);
+  else next.add(status);
+  collapsed = next;
+  for (const notify of listeners) notify();
+}
+
+export interface KanbanColumnCollapse {
+  isCollapsed: (status: TaskStatus) => boolean;
+  toggle: (status: TaskStatus) => void;
+}
+
+export function useKanbanColumnCollapse(): KanbanColumnCollapse {
+  const set = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  return {
+    isCollapsed: (status: TaskStatus) => set.has(status),
+    toggle: toggleColumnCollapse,
+  };
+}
