@@ -11,7 +11,6 @@ import {
   HostRevokeResponseSchema,
   HostRotateTokenEmbeddedResponseSchema,
   RuntimeKindSchema,
-  ServerInfoSchema,
   X_SILVERHAND_LEGACY_USER_ID_HEADER,
   X_SILVERHAND_PRINCIPAL_HEADER,
   apiPaths,
@@ -118,6 +117,7 @@ import {
   probeServerInfo,
   type ProbeServerInfoResult,
 } from './server-connection-test.js';
+import { fetchServerInfoWithRetry } from './fetch-server-info.js';
 
 /**
  * D4.a Commit 5d — typed union of the two boot-time backend
@@ -688,16 +688,9 @@ function parseJson(text: string): unknown {
 }
 
 async function fetchServerInfo(): Promise<ServerInfo> {
-  const res = await fetch(backendUrl(apiPaths.serverInfo));
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`${res.status} ${res.statusText}: ${text}`);
-  }
-  const parsed = ServerInfoSchema.safeParse(parseJson(text));
-  if (!parsed.success) {
-    throw new Error(`invalid server info response: ${parsed.error.message}`);
-  }
-  return parsed.data;
+  return fetchServerInfoWithRetry({
+    url: backendUrl(apiPaths.serverInfo),
+  });
 }
 
 async function validateUserSessionToken(
