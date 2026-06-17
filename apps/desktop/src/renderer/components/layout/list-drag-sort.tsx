@@ -23,7 +23,13 @@ import {
 } from '@dnd-kit/sortable';
 import type { SortGroup, ViewerSortStateDto } from '@silverhand/shared';
 import { useApplySortOrder, useReorderSort } from '@/features/workspaces/hooks';
-import { sortEntryLookup, sortGroup, sortModeOf } from '@/lib/viewer-sort';
+import {
+  sortEntryLookup,
+  sortGroup,
+  sortModeOf,
+  type SortEntryLookup,
+} from '@/lib/viewer-sort';
+import { recentKeyForAndAdmit, recentSnapshotToken, useRecentKeySnapshot } from '@/lib/recent-order-snapshot';
 
 /**
  * Shared drag-reorder LOGIC for the per-user sortable lists (#task:1146) —
@@ -97,6 +103,35 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
   const modeFor = (group: GroupKey) =>
     sortModeOf(viewerSort, modeScopeOf?.(group));
 
+  // Recent-mode visible order is a FROZEN read model (#task:1161): freeze each
+  // id's recent key (`last_accessed_at`) at entry so opening a row can't reflow
+  // it under the pointer on the next `viewer_sort` refetch. This makes the fix
+  // refetch-source-agnostic — we don't chase which query revalidates on
+  // selection; the order is simply stable by construction. The snapshot
+  // re-captures ONLY on triggers DECOUPLED from selection/touch, encoded in
+  // `snapshotToken`: the list changes (listKey), or a scope toggles into recent
+  // (its membership in `recentScopes`). It MUST NOT change on a touch /
+  // last_accessed refetch — re-snapshotting then would re-eat the just-written
+  // key and the jump returns (Alice's invariant). Manual scopes are rank-ordered
+  // and never consult the snapshot. Ids that appear after entry (new / restored
+  // rows) have no snapshot entry and fall back to their live key, so they still
+  // enter at their natural recent slot.
+  const recentScopes = new Set<string>();
+  for (const group of Object.keys(groups) as GroupKey[]) {
+    if (modeFor(group) === 'recent') recentScopes.add(modeScopeOf?.(group) ?? '');
+  }
+  const snapshotToken = recentSnapshotToken(listKey, recentScopes, viewerSort !== undefined);
+  const recentSnapshot = useRecentKeySnapshot(snapshotToken, () => {
+    const keyById = new Map<string, number | null>();
+    for (const group of Object.keys(groups) as GroupKey[]) {
+      if (modeFor(group) !== 'recent') continue;
+      for (const item of groups[group]) {
+        keyById.set(getId(item), lookup(getId(item)).lastAccessedAt);
+      }
+    }
+    return keyById;
+  });
+
   // `byGroup` is keyed by the GroupKey union — zero hard-coded group literals,
   // so the same state covers channel (pinned/unpinned) and rail (pinned / dm /
   // regular).
@@ -124,8 +159,22 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
 
   const orderedGroups = {} as Record<GroupKey, T[]>;
   for (const group of Object.keys(groups) as GroupKey[]) {
+    const mode = modeFor(group);
+    // Recent groups order by the FROZEN key (snapshot for known ids); an id not
+    // yet in the snapshot is admitted at its live key and frozen from then on
+    // (admit-and-freeze). Manual groups bypass the snapshot (rank-ordered).
+    const groupLookup: SortEntryLookup =
+      mode === 'recent'
+        ? id => {
+            const e = lookup(id);
+            return {
+              rank: e.rank,
+              lastAccessedAt: recentKeyForAndAdmit(recentSnapshot, id, e.lastAccessedAt),
+            };
+          }
+        : lookup;
     orderedGroups[group] = applyOverride(
-      sortGroup(groups[group], modeFor(group), getId, getCreatedAt, lookup),
+      sortGroup(groups[group], mode, getId, getCreatedAt, groupLookup),
       group,
     );
   }
