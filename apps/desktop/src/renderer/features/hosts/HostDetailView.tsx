@@ -948,6 +948,7 @@ function AgentStatusPip({
       className="inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-text-muted"
     >
       <span
+        data-status-pip
         className={cn(
           'size-1.5 rounded-full',
           online === 'online' ? 'bg-success' : 'bg-text-muted/40',
