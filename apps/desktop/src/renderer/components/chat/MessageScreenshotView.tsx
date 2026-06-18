@@ -8,6 +8,7 @@ import { FileText, User } from 'lucide-react';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { getAttachmentBlobUrl } from '@/lib/attachment-blob-cache';
 import { Markdown } from './Markdown';
+import { MessageRowContent } from './MessageRowContent';
 import { ReactionChipRow } from './ReactionChipRow';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
@@ -161,8 +162,15 @@ function ScreenshotRow({
         }
         viewerAvatarObjectUrl={viewerAvatarObjectUrl ?? null}
       />
-      <div className="min-w-0 max-w-[640px] flex-1">
-        <header className="mb-1 flex items-baseline gap-2 text-xs">
+      {/* Shared content layer (#task:1173 P1). The export fills each required
+          slot with a STATIC node and passes `null` for the live-only
+          adornments (header task tag, thread badge) — making its deliberate
+          omission explicit. A new default-visible adornment added to the
+          shared registry won't compile here until the export declares it. */}
+      <MessageRowContent
+        alignRight={false}
+        columnClassName="min-w-0 max-w-[640px] flex-1"
+        author={
           <span
             className={
               'font-medium ' + (isUser ? 'text-text-primary' : 'text-accent')
@@ -170,49 +178,41 @@ function ScreenshotRow({
           >
             {senderName}
           </span>
-          <span className="text-[11px] text-text-muted">{time}</span>
-        </header>
-        <div className="text-sm text-text-primary">
-          {/* Reuse Markdown renderer but omit every interaction
-              callback. Inline @-mention / #-channel pills still
-              resolve via the explicit lookup maps; click handlers
-              are intentionally absent so the captured DOM contains
-              no buttons. */}
+        }
+        timestamp={<span className="text-[11px] text-text-muted">{time}</span>}
+        headerMeta={null}
+        body={
+          /* Reuse Markdown renderer but omit every interaction callback.
+             Inline @-mention / #-channel pills still resolve via the explicit
+             lookup maps; click handlers are intentionally absent so the
+             captured DOM contains no buttons. */
           <Markdown
             content={message.content}
             conversationId={message.conversation_id}
             agentsByName={new Map(agentsByName)}
             humansByName={humansByName ? new Map(humansByName) : undefined}
-            agentAvatarUrls={
-              agentAvatarUrls
-                ? new Map(agentAvatarUrls)
-                : undefined
-            }
-            channelsByName={
-              channelsByName ? new Map(channelsByName) : undefined
-            }
+            agentAvatarUrls={agentAvatarUrls ? new Map(agentAvatarUrls) : undefined}
+            channelsByName={channelsByName ? new Map(channelsByName) : undefined}
             conversationRefsById={
-              conversationRefsById
-                ? new Map(conversationRefsById)
-                : undefined
+              conversationRefsById ? new Map(conversationRefsById) : undefined
             }
             taskRefsByNumber={
               taskRefsByNumber ? new Map(taskRefsByNumber) : undefined
             }
             interactive={false}
           />
-          {message.attachments && message.attachments.length > 0 ? (
+        }
+        attachments={
+          message.attachments && message.attachments.length > 0 ? (
             <ScreenshotAttachmentList
               attachments={message.attachments}
               imageUrls={attachmentImageUrls}
             />
-          ) : null}
-        </div>
-        {/* Reactions: same static chip primitive as the live row, so a
-            reaction shown in chat is always shown in the export too
-            (#task:1173). Renders nothing when there are no reactions. */}
-        <ReactionChipRow reactions={message.reactions} />
-      </div>
+          ) : null
+        }
+        reactions={<ReactionChipRow reactions={message.reactions} />}
+        trailing={null}
+      />
     </div>
   );
 }

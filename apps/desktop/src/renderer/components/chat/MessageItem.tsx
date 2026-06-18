@@ -30,6 +30,7 @@ import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 import { MessageContextMenu } from './MessageContextMenu';
 import { MessageReactions } from './MessageReactions';
+import { MessageRowContent } from './MessageRowContent';
 import { ReactionPicker } from './ReactionPicker';
 import { useToggleReaction } from '@/features/channels/reaction-hooks';
 import { useMessageLayoutMode } from './useMessageLayoutMode';
@@ -348,6 +349,112 @@ export function MessageItem({
     );
   };
 
+  // ── MessageRowContent slot nodes ────────────────────────────────────────
+  // The shared content layer owns section order + layout; MessageItem fills
+  // each (required) slot with its INTERACTIVE node. Anything default-visible
+  // must flow through a slot here — that is the anti-drift contract with the
+  // static export path (see MessageRowContent). `headerMeta`/`trailing` are
+  // live-only adornments; the export passes `null` for them explicitly.
+  const authorNode = (
+    <AuthorLabel
+      isUser={isUser}
+      human={human}
+      agent={agent}
+      conversationId={conversationId}
+      agentAvatarObjectUrl={agentAvatarObjectUrl}
+      humanAvatarObjectUrl={humanAvatarObjectUrl}
+      displayLabel={displayLabel}
+      onNavigateAgent={navigateToAgent}
+      onNavigateHuman={navigateToHuman}
+    />
+  );
+  const timestampNode = (
+    <time
+      dateTime={new Date(message.created_at).toISOString()}
+      title={timeTooltip}
+      className="text-[11px] text-text-muted"
+    >
+      {timeLabel}
+    </time>
+  );
+  const bodyNode = (
+    <Markdown
+      content={message.content}
+      conversationId={conversationId}
+      agentsByName={agentsByName}
+      humansByName={humansByName}
+      agentAvatarUrls={agentAvatarUrls}
+      channelsByName={channelsByName}
+      onOpenChannelRef={onOpenChannelRef}
+      conversationRefsById={conversationRefsById}
+      onOpenConversationRef={onOpenConversationRef}
+    />
+  );
+  const attachmentsNode =
+    message.attachments && message.attachments.length > 0 ? (
+      <AttachmentList attachments={message.attachments} alignRight={alignRight} />
+    ) : null;
+  const reactionsNode = (
+    <MessageReactions
+      message={message}
+      alignRight={alignRight}
+      canReact={canReact}
+      onReact={(emoji, remove) =>
+        toggleReaction.mutate({ messageId: message.id, emoji, remove })
+      }
+      onPickerOpenChange={setReactionPickerOpen}
+    />
+  );
+  // Inline thread-replies badge — only when the message has an open thread.
+  // Carries real information (N replies, click to open), so it earns persistent
+  // space below the bubble. With an enriched summary it upgrades to a
+  // Slack-style strip (replier avatars + count + last-reply time); the count
+  // stays ink, not accent — louder via INFORMATION, not by spending the brand
+  // hue. Live-only: the export omits it (passes `null`).
+  const trailingNode =
+    threadReplyCount !== undefined && onStartThread ? (
+      <div
+        className={
+          'mt-1 flex items-center text-xs ' +
+          (alignRight ? 'justify-end' : 'justify-start')
+        }
+      >
+        <button
+          type="button"
+          data-panel-pill="thread"
+          onClick={() => onStartThread(message)}
+          title={replyBadgeTitle}
+          aria-label={replyBadgeTitle}
+          className="inline-flex items-center gap-1.5 border border-border-subtle px-2 py-0.5 text-text-muted transition-colors hover:border-[color:var(--border-control-hover)] hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+        >
+          {enrichedReply ? (
+            <>
+              <span className="flex items-center gap-[3px]">
+                {enrichedReply.repliers.map(r => (
+                  <span key={`${r.kind}:${r.id}`} className="shrink-0">
+                    {renderReplierAvatar(r, 18)}
+                  </span>
+                ))}
+                {enrichedReply.replier_total > enrichedReply.repliers.length ? (
+                  <span className="flex size-[18px] shrink-0 items-center justify-center rounded-none bg-bg-muted text-[9px] font-medium text-text-muted">
+                    +{enrichedReply.replier_total - enrichedReply.repliers.length}
+                  </span>
+                ) : null}
+              </span>
+              <span className="font-medium">{replyBadgeLabel}</span>
+              <span className="text-text-muted">·</span>
+              <span className="text-text-muted">{replyRelativeTime}</span>
+            </>
+          ) : (
+            <>
+              <CornerUpLeft className="size-3.5 shrink-0" />
+              <span>{replyBadgeLabel}</span>
+            </>
+          )}
+        </button>
+      </div>
+    ) : null;
+
   const row = (
     <div
       id={`msg-${message.id}`}
@@ -405,150 +512,17 @@ export function MessageItem({
         onNavigateAgent={navigateToAgent}
         onNavigateHuman={navigateToHuman}
       />
-      <div className="min-w-0 max-w-[85%]">
-        <header className={'mb-1 text-xs ' + (alignRight ? 'text-right' : '')}>
-          {alignRight ? (
-            <>
-              <time
-                dateTime={new Date(message.created_at).toISOString()}
-                title={timeTooltip}
-                className="text-[11px] text-text-muted"
-              >
-                {timeLabel}
-              </time>
-              <span className="ml-2 inline-block">
-                <AuthorLabel
-                  isUser={isUser}
-                  human={human}
-                  agent={agent}
-                  conversationId={conversationId}
-                  agentAvatarObjectUrl={agentAvatarObjectUrl}
-                  humanAvatarObjectUrl={humanAvatarObjectUrl}
-                  displayLabel={displayLabel}
-                  onNavigateAgent={navigateToAgent}
-                  onNavigateHuman={navigateToHuman}
-                />
-              </span>
-              {taskTag}
-            </>
-          ) : (
-            <>
-              <AuthorLabel
-                isUser={isUser}
-                human={human}
-                agent={agent}
-                conversationId={conversationId}
-                agentAvatarObjectUrl={agentAvatarObjectUrl}
-                humanAvatarObjectUrl={humanAvatarObjectUrl}
-                displayLabel={displayLabel}
-                onNavigateAgent={navigateToAgent}
-                onNavigateHuman={navigateToHuman}
-              />
-              <time
-                dateTime={new Date(message.created_at).toISOString()}
-                title={timeTooltip}
-                className="ml-2 text-[11px] text-text-muted"
-              >
-                {timeLabel}
-              </time>
-              {taskTag}
-            </>
-          )}
-        </header>
-
-        <div
-          className={
-            'text-sm text-text-primary ' + (alignRight ? 'text-right' : '')
-          }
-        >
-          <Markdown
-            content={message.content}
-            conversationId={conversationId}
-            agentsByName={agentsByName}
-            humansByName={humansByName}
-            agentAvatarUrls={agentAvatarUrls}
-            channelsByName={channelsByName}
-            onOpenChannelRef={onOpenChannelRef}
-            conversationRefsById={conversationRefsById}
-            onOpenConversationRef={onOpenConversationRef}
-          />
-          {message.attachments && message.attachments.length > 0 ? (
-            <AttachmentList attachments={message.attachments} alignRight={alignRight} />
-          ) : null}
-        </div>
-
-        <MessageReactions
-          message={message}
-          alignRight={alignRight}
-          canReact={canReact}
-          onReact={(emoji, remove) =>
-            toggleReaction.mutate({ messageId: message.id, emoji, remove })
-          }
-          onPickerOpenChange={setReactionPickerOpen}
-        />
-
-        {/* Inline thread-replies badge — only rendered when
-            `threadReplyCount !== undefined`. It carries real
-            information ("this message has N replies, click to open"),
-            so it earns its space below the bubble and stays visible
-            without hover. The whole pill is the button (no nested
-            ActionButton) so there is no un-clickable padding gap; it
-            rests neutral and lifts to ink on hover — the reply count is
-            a navigation affordance, not a brand moment, so it stays off
-            the saturated accent.
-
-            P1 (#task:1073): with an enriched summary the badge shows the
-            recent repliers' avatars + count + last-reply time (Slack-style)
-            so a threaded message is a strong, scannable signal rather than a
-            quiet pill. Avatars carry the "who", time carries the "fresh?";
-            the count stays ink, not accent — louder via INFORMATION, not by
-            spending the brand hue. */}
-        {threadReplyCount !== undefined && onStartThread ? (
-          <div
-            className={
-              'mt-1 flex items-center text-xs ' +
-              (alignRight ? 'justify-end' : 'justify-start')
-            }
-          >
-            <button
-              type="button"
-              data-panel-pill="thread"
-              onClick={() => onStartThread(message)}
-              title={replyBadgeTitle}
-              aria-label={replyBadgeTitle}
-              className="inline-flex items-center gap-1.5 border border-border-subtle px-2 py-0.5 text-text-muted transition-colors hover:border-[color:var(--border-control-hover)] hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
-            >
-              {enrichedReply ? (
-                <>
-                  <span className="flex items-center gap-[3px]">
-                    {enrichedReply.repliers.map(r => (
-                      <span key={`${r.kind}:${r.id}`} className="shrink-0">
-                        {renderReplierAvatar(r, 18)}
-                      </span>
-                    ))}
-                    {enrichedReply.replier_total >
-                    enrichedReply.repliers.length ? (
-                      <span className="flex size-[18px] shrink-0 items-center justify-center rounded-none bg-bg-muted text-[9px] font-medium text-text-muted">
-                        +
-                        {enrichedReply.replier_total -
-                          enrichedReply.repliers.length}
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="font-medium">{replyBadgeLabel}</span>
-                  <span className="text-text-muted">·</span>
-                  <span className="text-text-muted">{replyRelativeTime}</span>
-                </>
-              ) : (
-                <>
-                  <CornerUpLeft className="size-3.5 shrink-0" />
-                  <span>{replyBadgeLabel}</span>
-                </>
-              )}
-            </button>
-          </div>
-        ) : null}
-      </div>
+      <MessageRowContent
+        alignRight={alignRight}
+        columnClassName="min-w-0 max-w-[85%]"
+        author={authorNode}
+        timestamp={timestampNode}
+        headerMeta={taskTag}
+        body={bodyNode}
+        attachments={attachmentsNode}
+        reactions={reactionsNode}
+        trailing={trailingNode}
+      />
 
       {/* Frame-corner action controls (Save + Thread) — absolutely
           pinned to the top-right of the framed message row (mirrored
