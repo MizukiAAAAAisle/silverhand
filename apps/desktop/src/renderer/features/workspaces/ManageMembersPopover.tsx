@@ -199,13 +199,13 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
           disabled={addMember.isPending}
         >
           <Select.Trigger
-            aria-label={canAddHumans ? '添加成员' : '添加 agent'}
+            aria-label={canAddHumans ? 'Add member' : 'Add agent'}
             className="flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2.5 text-sm text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus disabled:cursor-not-allowed disabled:opacity-60 data-[placeholder]:text-text-muted"
           >
             <span className="flex items-center gap-1.5">
               <UserPlus className="size-3.5 text-text-muted" />
               <Select.Value
-                placeholder={canAddHumans ? '添加成员…' : '添加 agent…'}
+                placeholder={canAddHumans ? 'Add member…' : 'Add agent…'}
               />
             </span>
             <Select.Icon>
@@ -221,7 +221,7 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
               <Select.Viewport className="p-1">
                 {candidates.length === 0 ? (
                   <div className="px-2 py-2 text-center text-xs italic text-text-muted">
-                    所有候选都已经在 Workspace 里
+                    All candidates are already in the Workspace
                   </div>
                 ) : (
                   candidates.map(c => {
@@ -277,9 +277,9 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
 
       <Section title={`MEMBERS · ${members.length}`}>
         {membersLoading ? (
-          <Hint>加载中…</Hint>
+          <Hint>Loading…</Hint>
         ) : members.length === 0 ? (
-          <Hint>还没有成员</Hint>
+          <Hint>No members yet</Hint>
         ) : (
           <ul className="flex flex-col gap-1">
             {members.map(m => {
@@ -323,8 +323,8 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
                       type="button"
                       onClick={() => handleRemove(m.agent.id)}
                       disabled={removeMember.isPending}
-                      aria-label="移除"
-                      title="移除成员"
+                      aria-label="Remove"
+                      title="Remove member"
                       className="ml-auto flex size-6 items-center justify-center rounded-[var(--chip-radius)] text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-60"
                     >
                       <Trash2 className="size-3.5" />
@@ -341,8 +341,8 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
                       type="button"
                       onClick={() => handleRemoveHuman(m.user.user_id)}
                       disabled={removeHumanMember.isPending}
-                      aria-label="移除"
-                      title="移除成员"
+                      aria-label="Remove"
+                      title="Remove member"
                       className="ml-auto flex size-6 items-center justify-center rounded-[var(--chip-radius)] text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-60"
                     >
                       <Trash2 className="size-3.5" />
@@ -383,21 +383,21 @@ function decodeCandidate(value: string): AddWorkspaceMemberInput {
  */
 function formatAddError(err: unknown): string {
   if (err instanceof ApiError) {
-    if (err.status === 403) return '没有权限管理此 workspace 成员。';
+    if (err.status === 403) return 'You do not have permission to manage members of this workspace.';
     if (err.status === 404) {
       try {
         const parsed = JSON.parse(err.body) as { error?: string };
-        if (parsed.error === 'user not found') return '该用户不存在或已被删除。';
-        if (parsed.error === 'agent not found') return '该 agent 不存在或已被删除。';
+        if (parsed.error === 'user not found') return 'This user does not exist or has been deleted.';
+        if (parsed.error === 'agent not found') return 'This agent does not exist or has been deleted.';
       } catch {
         /* swallow — fall through */
       }
-      return '该 workspace 不存在。';
+      return 'This workspace does not exist.';
     }
-    if (err.status === 400) return '参数无效,请刷新后重试。';
-    return `添加失败 (HTTP ${err.status})。`;
+    if (err.status === 400) return 'Invalid parameters. Please refresh and try again.';
+    return `Failed to add member (HTTP ${err.status}).`;
   }
-  return '添加失败,请重试。';
+  return 'Failed to add member. Please try again.';
 }
 
 /**
@@ -408,13 +408,13 @@ function formatAddError(err: unknown): string {
  */
 function formatRemoveHumanError(err: unknown): string {
   if (err instanceof ApiError) {
-    if (err.kind === 'backend_unreachable') return '移除失败:无法连接后端。';
-    if (err.status === 403) return '没有权限移除此成员(需要 owner)。';
-    if (err.status === 400) return '无法移除 workspace owner。';
-    if (err.status === 404) return '该成员不存在或已被移除。';
-    return `移除失败 (HTTP ${err.status})。`;
+    if (err.kind === 'backend_unreachable') return 'Remove failed: cannot reach the backend.';
+    if (err.status === 403) return 'You do not have permission to remove this member (owner required).';
+    if (err.status === 400) return 'Cannot remove the workspace owner.';
+    if (err.status === 404) return 'This member does not exist or has already been removed.';
+    return `Failed to remove member (HTTP ${err.status}).`;
   }
-  return '移除失败,请重试。';
+  return 'Failed to remove member. Please try again.';
 }
 
 function Section({

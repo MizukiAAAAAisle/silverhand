@@ -49,7 +49,7 @@ export function CreateAgentDialog({
     e.preventDefault();
     setError(null);
     if (!name.trim()) {
-      setError('请填写 agent 名字');
+      setError('Please enter an agent name');
       return;
     }
     try {
@@ -70,16 +70,15 @@ export function CreateAgentDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>新建 Agent</DialogTitle>
+          <DialogTitle>New Agent</DialogTitle>
           <DialogDescription>
-            Agent 是一个跨频道复用的身份。创建后会自动开一个 DM 频道供你塑造它的全局角色；
-            display name、model 等可在 agent profile 中编辑。
+            A reusable identity that works across all your channels.
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ag-name">名字</Label>
+            <Label htmlFor="ag-name">Name</Label>
             <Input
               id="ag-name"
               value={name}
@@ -88,7 +87,8 @@ export function CreateAgentDialog({
               autoFocus
             />
             <span className="text-xs text-text-muted">
-              字母 / 数字 / 短横 / 下划线（用于 @mention，创建后不可改）
+              Letters / digits / hyphens / underscores (used for @mention,
+              cannot be changed after creation)
             </span>
           </div>
 
@@ -109,12 +109,24 @@ export function CreateAgentDialog({
                       setRuntime(rt.value as RuntimeKind);
                     }}
                     className={
-                      'rounded-[var(--control-radius)] border px-3 py-1.5 text-xs transition-colors ' +
+                      // Selected = the theme's own selection colour as the fill
+                      // (`--bg-row-selected`: forza6 acid lime / warm yellow /
+                      // slack blue) — NOT gray and NOT accent-pink (both
+                      // rejected), the native "selected" semantic that's loud
+                      // enough to read at a glance. Ink border + lime fill is
+                      // forza6's poster pairing (same as inline-code). Text is
+                      // held CONSTANT at text-primary across states (shiki) and
+                      // stays legible on every theme's fill. Border WIDTH follows
+                      // the per-theme `--control-border-width` token (forza6 2px,
+                      // warm/slack 1px). Real cross-theme tokens — the old
+                      // `accent-base`/`border-default`/`border-strong` classes
+                      // were undefined no-ops (#task:1176).
+                      'rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs transition-colors ' +
                       (isDisabled
-                        ? 'cursor-not-allowed border-border-default/60 text-text-muted opacity-50'
+                        ? 'cursor-not-allowed border-border-subtle text-text-muted opacity-50'
                         : isSelected
-                        ? 'border-accent-base bg-accent-soft text-text-primary'
-                        : 'border-border-default text-text-secondary hover:border-border-strong')
+                        ? 'border-text-primary bg-[var(--bg-row-selected)] text-text-primary'
+                        : 'border-border-subtle text-text-primary hover:border-border')
                     }
                   >
                     {rt.label}
@@ -132,10 +144,10 @@ export function CreateAgentDialog({
               variant="ghost"
               onClick={() => onOpenChange(false)}
             >
-              取消
+              Cancel
             </Button>
             <Button type="submit" disabled={createAgent.isPending}>
-              {createAgent.isPending ? '创建中…' : '创建'}
+              {createAgent.isPending ? 'Creating…' : 'Create'}
             </Button>
           </DialogFooter>
         </form>

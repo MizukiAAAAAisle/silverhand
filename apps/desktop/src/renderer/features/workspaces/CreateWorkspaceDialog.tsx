@@ -111,7 +111,7 @@ export function CreateWorkspaceDialog({
     e.preventDefault();
     setError(null);
     if (!name.trim()) {
-      setError('请填写 Workspace 名称');
+      setError('Please enter a Workspace name');
       return;
     }
     try {
@@ -141,15 +141,15 @@ export function CreateWorkspaceDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>新建 Workspace</DialogTitle>
+          <DialogTitle>New Workspace</DialogTitle>
           <DialogDescription>
-            一个本地目录上的协作空间，创建后会自动开 Onboarding Channel。
+            A shared space backed by a local project directory.
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ch-name">名称</Label>
+            <Label htmlFor="ch-name">Name</Label>
             <Input
               id="ch-name"
               value={name}
@@ -160,7 +160,7 @@ export function CreateWorkspaceDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ch-path">工作目录（可选）</Label>
+            <Label htmlFor="ch-path">Working directory (optional)</Label>
             {canPickLocalFolder ? (
               // Local host: native folder picker is the primary affordance;
               // the typed input mirrors the picked path and stays editable.
@@ -172,7 +172,7 @@ export function CreateWorkspaceDialog({
                   id="ch-path"
                   value={workspacePath}
                   onChange={e => setWorkspacePath(e.target.value)}
-                  placeholder="留空则由该 host 的 daemon 在其托管目录下自动创建"
+                  placeholder="Leave empty to let this host's daemon create it automatically under its managed directory"
                   className="font-mono text-xs"
                 />
                 <Button
@@ -180,8 +180,8 @@ export function CreateWorkspaceDialog({
                   variant="outline"
                   size="md"
                   onClick={pickDirectory}
-                  aria-label="浏览"
-                  title="浏览"
+                  aria-label="Browse"
+                  title="Browse"
                   className="w-9 shrink-0 px-0"
                 >
                   <FolderOpen className="size-4" />
@@ -197,7 +197,7 @@ export function CreateWorkspaceDialog({
                     className="self-start text-xs text-text-muted underline underline-offset-2"
                     onClick={() => setShowAdvancedPath(true)}
                   >
-                    使用 host 托管目录（默认）· 高级：手动指定路径
+                    Use host-managed directory (default) · Advanced: specify a path manually
                   </button>
                 ) : (
                   <>
@@ -205,12 +205,12 @@ export function CreateWorkspaceDialog({
                       id="ch-path"
                       value={workspacePath}
                       onChange={e => setWorkspacePath(e.target.value)}
-                      placeholder="该 host 上的绝对路径（由其 daemon 校验）"
+                      placeholder="Absolute path on this host (validated by its daemon)"
                       className="font-mono text-xs"
                     />
                     <span className="text-xs text-text-muted">
-                      远程 / 沙箱 host 无法用本地选择器浏览；留空则使用 daemon
-                      托管目录。
+                      Remote / sandbox hosts can't be browsed with the local
+                      picker; leave empty to use the daemon-managed directory.
                     </span>
                   </>
                 )}
@@ -220,14 +220,15 @@ export function CreateWorkspaceDialog({
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="ch-add-member">
-              初始成员
+              Initial members
               <span className="ml-1 text-text-muted">
                 ({selectedMembers.length} / {memberCandidates.length})
               </span>
             </Label>
             {memberCandidates.length === 0 ? (
               <span className="text-xs text-text-muted">
-                还没有可添加的成员。可以稍后从 Members 面板加入。
+                No members available to add yet. You can add them later from the
+                Members panel.
               </span>
             ) : (
               <MemberPicker
@@ -237,10 +238,10 @@ export function CreateWorkspaceDialog({
                 onChange={setSelectedMembers}
                 placeholder={
                   selectedMembers.length === 0
-                    ? '选择初始成员…'
-                    : '继续添加成员…'
+                    ? 'Select initial members…'
+                    : 'Add more members…'
                 }
-                allSelectedText="已添加全部成员"
+                allSelectedText="All members added"
               />
             )}
           </div>
@@ -253,10 +254,10 @@ export function CreateWorkspaceDialog({
               variant="ghost"
               onClick={() => onOpenChange(false)}
             >
-              取消
+              Cancel
             </Button>
             <Button type="submit" disabled={createWorkspace.isPending}>
-              {createWorkspace.isPending ? '创建中…' : '创建'}
+              {createWorkspace.isPending ? 'Creating…' : 'Create'}
             </Button>
           </DialogFooter>
         </form>
