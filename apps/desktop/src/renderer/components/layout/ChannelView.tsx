@@ -459,7 +459,8 @@ function ActiveChannelView({
               data-conversation-title
               className="min-w-0 truncate font-serif text-base font-semibold text-text-primary"
             >
-              {conversation.kind === 'channel' ? (
+              {conversation.kind === 'channel' ||
+              conversation.kind === 'dm_channel' ? (
                 <span data-conversation-hash>#</span>
               ) : null}
               {conversation.title}
