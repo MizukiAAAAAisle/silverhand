@@ -6,6 +6,7 @@ import type {
   AgentDto,
   AttachmentSnapshot,
   MessageDto,
+  ReactionAggregateDto,
   UserDto,
 } from '@silverhand/shared';
 import type { ChannelReference } from './ChannelRef';
@@ -73,6 +74,7 @@ function msg(
     from_kind?: 'user' | 'agent';
     from_agent_id?: string | null;
     attachments?: AttachmentSnapshot[] | null;
+    reactions?: ReactionAggregateDto[] | null;
   } = {},
 ): MessageDto {
   return {
@@ -93,7 +95,7 @@ function msg(
     task_workspace_id: null,
     task_closed_at: null,
     task_assignee: null,
-    reactions: null,
+    reactions: partial.reactions ?? null,
   };
 }
 
@@ -383,5 +385,50 @@ describe('MessageScreenshotView — non-interactive contract', () => {
     expect(html).toContain('bg-bg-floating');
     expect(html).toContain('text-text-secondary');
     expect(html).not.toMatch(/<button/);
+  });
+
+  // #task:1173 — reactions were invisible on screenshots because the export
+  // renderer is a separate render path that never rendered them. These
+  // parity assertions lock the structural fix: reactions visible in chat must
+  // be visible in the export, still through a button/hook/portal-free chip.
+  it('renders reaction chips in the export with emoji + count', () => {
+    const html = render([
+      msg('m1', 1, 'shipped', {
+        reactions: [
+          { emoji: '🎉', count: 3, viewer_reacted: false },
+          { emoji: '👀', count: 1, viewer_reacted: true },
+        ],
+      }),
+    ]);
+    expect(html).toContain('data-reaction-row');
+    expect(html).toContain('data-reaction-chip');
+    expect(html).toContain('🎉');
+    expect(html).toContain('🎉, 3 reactions');
+    expect(html).toContain('👀');
+    expect(html).toContain('👀, 1 reaction');
+    // Counts render as text alongside the glyph.
+    expect(html).toContain('>3</span>');
+    expect(html).toContain('>1</span>');
+  });
+
+  it('reaction chips in the export carry no interactive surface', () => {
+    const html = render([
+      msg('m1', 1, 'shipped', {
+        reactions: [{ emoji: '🎉', count: 2, viewer_reacted: true }],
+      }),
+    ]);
+    // The live row uses <button> chips, a HoverCard portal, and an add
+    // picker; the static export variant must have none of them.
+    expect(html).not.toMatch(/<button/);
+    expect(html).not.toMatch(/role="button"/);
+    expect(html).not.toContain('data-radix');
+    expect(html).not.toContain('data-reaction-add');
+    expect(html).not.toContain('aria-pressed');
+  });
+
+  it('omits the reaction row entirely when a message has no reactions', () => {
+    const html = render([msg('m1', 1, 'no reactions here')]);
+    expect(html).not.toContain('data-reaction-row');
+    expect(html).not.toContain('data-reaction-chip');
   });
 });

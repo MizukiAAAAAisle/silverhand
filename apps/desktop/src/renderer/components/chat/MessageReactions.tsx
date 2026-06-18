@@ -4,6 +4,12 @@ import { SmilePlus } from 'lucide-react';
 import type { MessageDto, ReactionAggregateDto } from '@silverhand/shared';
 import { useMessageReactors } from '@/features/channels/reaction-hooks';
 import { ReactionPicker } from './ReactionPicker';
+import {
+  ReactionChipBody,
+  reactionChipClass,
+  reactionChipCountLabel,
+  reactionRowClass,
+} from './ReactionChipRow';
 
 export interface MessageReactionsProps {
   message: MessageDto;
@@ -21,7 +27,8 @@ export interface MessageReactionsProps {
 }
 
 /**
- * The reaction-chip row rendered below a message body (S4, #task:1122).
+ * The live, interactive reaction-chip row rendered below a message body
+ * (S4, #task:1122).
  *
  * Same component in both the main-line and reply-cluster surfaces — reactions
  * key off `message_id`, so there is no per-surface fork. Renders nothing when
@@ -29,10 +36,12 @@ export interface MessageReactionsProps {
  * top-right "React" corner button (owned by MessageItem). Once a reaction
  * exists, the row also carries a trailing smiley-plus add chip.
  *
- * Chips are utility count elements, not a brand moment: no border, a neutral
- * background fill (`--reaction-chip-*`), and the viewer's own reaction is
- * distinguished by a stronger `--accent-soft` fill rather than a color
- * reversal. Radius follows `--chip-radius` (square in forza6).
+ * The chip VISUAL (fill / radius / sizing / glyph + count) is NOT defined here
+ * — it comes from `ReactionChipRow` (`reactionChipClass` / `ReactionChipBody` /
+ * `reactionRowClass`), the single source shared with the static export row so
+ * reactions can never be styled in chat yet vanish from screenshots (#task:1173).
+ * This component only LAYERS interactivity on top: click-to-toggle, the
+ * "who reacted" HoverCard, and the add picker.
  */
 export function MessageReactions({
   message,
@@ -44,13 +53,7 @@ export function MessageReactions({
   const reactions = message.reactions;
   if (!reactions || reactions.length === 0) return null;
   return (
-    <div
-      data-reaction-row
-      className={
-        'mt-1.5 flex flex-wrap items-center gap-1.5 ' +
-        (alignRight ? 'justify-end' : 'justify-start')
-      }
-    >
+    <div data-reaction-row className={reactionRowClass(alignRight)}>
       {reactions.map(agg => (
         <ReactionChip
           key={agg.emoji}
@@ -100,32 +103,12 @@ function ReactionChip({
     reactors.data
       ?.find(d => d.emoji === agg.emoji)
       ?.reactors.map(r => r.display_name) ?? [];
-  // Shared visual; only the interactive chip gets the hover-fill shift and
-  // the focus ring (a display-only chip in a read-only channel must not look
-  // clickable).
-  const chipClass =
-    'flex h-[22px] items-center gap-1 rounded-[var(--chip-radius)] px-2 text-xs tabular-nums text-text-primary transition-colors ' +
-    (agg.viewer_reacted
-      ? 'bg-[var(--accent-soft)]'
-      : interactive
-        ? 'bg-[var(--reaction-chip-bg)] hover:bg-[var(--reaction-chip-bg-hover)]'
-        : 'bg-[var(--reaction-chip-bg)]');
-  const inner = (
-    <>
-      <span className="text-[13px] leading-none">{agg.emoji}</span>
-      <span
-        className={
-          'font-semibold ' +
-          (agg.viewer_reacted ? 'text-text-primary' : 'text-text-muted')
-        }
-      >
-        {agg.count}
-      </span>
-    </>
-  );
-  const countLabel = `${agg.emoji}, ${agg.count} reaction${
-    agg.count === 1 ? '' : 's'
-  }`;
+  // Shared visual (single-sourced in ReactionChipRow); only the interactive
+  // chip gets the hover-fill shift and the focus ring — a display-only chip in
+  // a read-only channel must not look clickable.
+  const chipClass = reactionChipClass(agg, interactive);
+  const inner = <ReactionChipBody agg={agg} />;
+  const countLabel = reactionChipCountLabel(agg);
   return (
     <HoverCard.Root
       open={open}

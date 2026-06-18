@@ -8,6 +8,7 @@ import { FileText, User } from 'lucide-react';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { getAttachmentBlobUrl } from '@/lib/attachment-blob-cache';
 import { Markdown } from './Markdown';
+import { ReactionChipRow } from './ReactionChipRow';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 import type { StaticTaskRefSummary } from './TaskRef';
@@ -30,9 +31,13 @@ import type { StaticTaskRefSummary } from './TaskRef';
  * names/avatars consistently.
  *
  * What we render per row (per @shiki spec): avatar + display name +
- * absolute time + markdown body + attachment chips. NOT rendered:
- * reactions, saved indicator, hover bar, checkbox, thread-replies
- * badge, task tag, system rows.
+ * absolute time + markdown body + attachment chips + reaction chips.
+ * Reactions go through the SAME `ReactionChipRow` primitive as the live
+ * row (#task:1173) — a static, button/hook/portal-free variant — so a
+ * reaction visible in chat is always visible in the screenshot too.
+ * NOT rendered (interactive affordances, not default-visible content):
+ * saved indicator, hover bar, checkbox, thread-replies badge, task tag,
+ * system rows.
  */
 export function MessageScreenshotView({
   messages,
@@ -203,6 +208,10 @@ function ScreenshotRow({
             />
           ) : null}
         </div>
+        {/* Reactions: same static chip primitive as the live row, so a
+            reaction shown in chat is always shown in the export too
+            (#task:1173). Renders nothing when there are no reactions. */}
+        <ReactionChipRow reactions={message.reactions} />
       </div>
     </div>
   );
