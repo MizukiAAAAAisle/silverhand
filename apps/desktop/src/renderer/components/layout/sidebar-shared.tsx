@@ -115,13 +115,13 @@ export function SidebarSectionHeader({
         <button
           type="button"
           onClick={onToggle}
-          className="flex flex-1 items-center px-2 py-0.5 text-left hover:text-text-secondary"
+          className="flex flex-1 items-center px-2 h-6 text-left hover:text-text-secondary"
           aria-expanded={expanded}
         >
           {headerInner}
         </button>
       ) : (
-        <span className="flex flex-1 items-center px-2 py-0.5">{headerInner}</span>
+        <span className="flex flex-1 items-center px-2 h-6">{headerInner}</span>
       )}
       {action ? (
         action

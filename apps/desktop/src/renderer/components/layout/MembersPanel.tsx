@@ -77,6 +77,7 @@ export function MembersPanel({
           <Button
             variant="ghost"
             size="icon"
+            className="h-6 w-6"
             onClick={() => setOpen(true)}
             aria-label="新建 agent"
           >
