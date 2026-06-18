@@ -1,6 +1,7 @@
-import type { AgentRow, AgentDto } from '@silverhand/shared';
+import type { AgentRow, AgentDto, UpdateAgentInput } from '@silverhand/shared';
 import { validateAvatarFile } from '@silverhand/shared';
 import type { BlobFileStorage } from '../storage/blob-file-storage.js';
+import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import { AgentRepo } from '../repos/agent-repo.js';
 
 /**
@@ -26,6 +27,7 @@ export class AgentServiceError extends Error {
 export interface AgentServiceOptions {
   agents: AgentRepo;
   blobStorage: BlobFileStorage;
+  events: ScopeEventBus;
 }
 
 export interface UploadAgentAvatarInput {
@@ -53,10 +55,38 @@ export interface UploadAgentAvatarInput {
 export class AgentService {
   private readonly agents: AgentRepo;
   private readonly blobStorage: BlobFileStorage;
+  private readonly events: ScopeEventBus;
 
   constructor(opts: AgentServiceOptions) {
     this.agents = opts.agents;
     this.blobStorage = opts.blobStorage;
+    this.events = opts.events;
+  }
+
+  /**
+   * The single seam that broadcasts an agent-DTO change to all clients.
+   * Every write path (this service's avatar methods + `updateAgent`, used
+   * by both the human `PATCH /api/agents/:id` route and the agent-self
+   * `profile update` route) funnels through here, so no route hand-copies
+   * a publish and the model can't drift. `app` scope + minimal `{agent_id}`
+   * payload — no private data globally (mirrors `user_presence`).
+   */
+  private publishChanged(id: string): void {
+    this.events.publishToScope('app', 'agent_changed', { agent_id: id });
+  }
+
+  /**
+   * Update an agent's stored fields (profile metadata + runtime/model)
+   * and broadcast `agent_changed` on success. Returns null when the agent
+   * does not exist (no event). This is the text/metadata counterpart of
+   * the avatar methods; both the public human PATCH and the internal
+   * agent-self profile route call it so the refresh event is emitted once,
+   * in one place, regardless of who wrote.
+   */
+  updateAgent(id: string, input: UpdateAgentInput): AgentDto | null {
+    const updated = this.agents.update(id, input);
+    if (updated) this.publishChanged(id);
+    return updated;
   }
 
   async uploadAvatar(
@@ -121,6 +151,7 @@ export class AgentService {
         });
     }
 
+    this.publishChanged(id);
     return updated;
   }
 
@@ -154,6 +185,7 @@ export class AgentService {
     void this.blobStorage
       .delete({ storage: this.blobStorage.kind, storageKey: previousKey })
       .catch(() => {});
+    this.publishChanged(id);
     return updated;
   }
 

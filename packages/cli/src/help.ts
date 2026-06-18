@@ -47,14 +47,28 @@ export function nounHelp(noun: string): string | null {
   const lines: string[] = [];
   lines.push(`silverhand ${noun} — ${group.summary}`);
   lines.push('');
-  // Faceted noun (3-level): list facets, not verbs.
+  // Faceted noun (3-level): list facets. A faceted noun may ALSO carry
+  // flat verbs (e.g. `profile mcp <verb>` + `profile get|update`); list
+  // those too so they are discoverable from `silverhand <noun> --help`.
   if (group.facets && group.facets.length > 0) {
     lines.push('Facets:');
     for (const f of group.facets) {
       lines.push(`  ${f.facet.padEnd(10)} ${f.summary}`);
     }
     lines.push('');
-    lines.push(`Run \`silverhand ${noun} <facet> --help\` to list verbs.`);
+    if (group.commands.length > 0) {
+      lines.push('Verbs:');
+      for (const c of group.commands) {
+        lines.push(`  ${c.verb.padEnd(10)} ${c.summary}`);
+      }
+      lines.push('');
+      lines.push(
+        `Run \`silverhand ${noun} <facet> --help\` to list a facet's verbs, ` +
+          `or \`silverhand ${noun} <verb> --help\` for a flat verb.`,
+      );
+    } else {
+      lines.push(`Run \`silverhand ${noun} <facet> --help\` to list verbs.`);
+    }
     return lines.join('\n');
   }
   lines.push('Verbs:');

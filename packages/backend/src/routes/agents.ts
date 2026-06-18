@@ -390,7 +390,11 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
         );
       }
     }
-    const updated = agents.update(id, parsed.data);
+    // Route the write through the service so the `agent_changed` refresh
+    // event is published in ONE seam (shared with the avatar routes and the
+    // agent-self `profile update` route) — no per-route publish to drift.
+    const updated = ctx.agentService.updateAgent(id, parsed.data);
+    if (!updated) return c.json({ error: 'agent not found' }, 404);
     return c.json({ agent: updated });
   });
 

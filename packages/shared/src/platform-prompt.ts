@@ -669,6 +669,11 @@ grant it.
   **\`silverhand schedule cancel\`**: Manage self-wakes.
 - **\`silverhand file upload\`** / **\`silverhand file view\`**: Upload a local
   file for an attachment id / resolve an attachment id to a readable location.
+- **\`silverhand profile get\`** / **\`silverhand profile update\`**: Read or
+  change your own profile (\`display_name\`, \`description\`, avatar). Self-only;
+  there is no target flag. Avatar updates can use a local file, an http(s)
+  image, or clear the current avatar. \`avatar_url\` in output is read-only.
+  Changes are live (not next-spawn).
 - **\`silverhand profile mcp get|set|add|remove|clear|validate|probe\`**: Manage
   your own custom MCP servers (your global L1 config). \`add\` merges servers
   from STDIN, keeping the existing ones (\`--replace\` to overwrite a same-named

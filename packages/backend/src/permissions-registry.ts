@@ -279,6 +279,14 @@ export const AGENT_ROUTE_CAPABILITIES: Record<
     status: 'none-justified',
     reason: 'agent-self profile (L1 identity axis); self-only via canEditAgent, live one-shot diagnostic — no persisted state, no per-workspace action (#task:1137)',
   },
+  agentProfileGet: {
+    status: 'none-justified',
+    reason: 'agent-self profile metadata read (identity axis); self-only via canEditAgent, no per-workspace action (#task:1178)',
+  },
+  agentProfileUpdate: {
+    status: 'none-justified',
+    reason: 'agent-self profile metadata write (display_name/description, identity axis); self-only via canEditAgent, no per-workspace action (#task:1178)',
+  },
 
   // ── Enforced: capability gated at request time per doc §3 ────────────
   agentReadHistory: { status: 'enforced', capability: 'read_messages', scope: 'target conversation\'s workspace' },

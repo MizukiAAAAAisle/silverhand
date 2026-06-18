@@ -24,7 +24,7 @@ import { memberCommands } from './member.js';
 import { workspaceCommands } from './workspace.js';
 import { scheduleCommands } from './schedule.js';
 import { fileCommands } from './file.js';
-import { profileFacets } from './profile.js';
+import { profileFacets, profileCommands } from './profile.js';
 
 export interface Command {
   /** "send", "create", "list" — the verb part. */
@@ -178,7 +178,7 @@ export const COMMAND_GROUPS: readonly NounGroup[] = [
     noun: 'profile',
     summary:
       "Manage the executing subject's global (L1) config — e.g. custom MCP servers.",
-    commands: [],
+    commands: profileCommands,
     facets: profileFacets,
   },
 ];

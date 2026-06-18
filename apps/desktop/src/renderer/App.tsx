@@ -49,6 +49,7 @@ import { SideUnresolvedPlaceholder } from '@/components/layout/SideUnresolvedPla
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import { useConversationById } from '@/features/conversations/useConversationById';
 import { useAgents } from '@/features/agents/hooks';
+import { useAgentSync } from '@/features/agents/agent-sync';
 import { usePresenceSync } from '@/features/presence/hooks';
 import {
   useWorkspaces,
@@ -208,6 +209,13 @@ function RegisteredAppShell(): JSX.Element {
   // deltas patch the shared ['presence'] cache regardless of which surface
   // is reading it. See docs/human-presence-v1.md.
   usePresenceSync();
+
+  // Keep every AgentDto (name / description / avatar / runtime / model)
+  // live. Mounted ONCE here (post-auth, independent of any view) so the
+  // global `app`-scope `agent_changed` event invalidates the ['agents']
+  // query tree regardless of who made the edit — this client's UI, another
+  // window, or an agent's own `silverhand profile update`. See #task:1178.
+  useAgentSync();
 
   // Shutdown overlay — shown when the main process starts its graceful
   // quit sequence. Steps arrive via IPC; null means not shutting down.

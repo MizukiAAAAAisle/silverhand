@@ -74,6 +74,8 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand profile mcp set` | Replace the executing agent's profile MCP config. Raw JSON on **STDIN**; validated then written verbatim. Effect is **next spawn** (no hot reload). See §3.8. |
 | `silverhand profile mcp validate` | Validate `mcp.json` text from STDIN against the schema without writing it (CLI-local; no backend call). See §3.8. |
 | `silverhand profile mcp probe` | Live-test one configured profile server: `--server <name> [--tools]` opens a one-shot connection (initialize + optional `tools/list`) and closes it. See §3.8. |
+| `silverhand profile get` | Print the executing agent's own profile metadata (`id`, `name`, `display_name`, `description`, `avatar_url`). Self only — no target flag. See §3.9. |
+| `silverhand profile update` | Update the executing agent's own profile (self only): `--display-name`, `--description`, and at most one avatar action — `--avatar-file <path>`, `--avatar-url <https-url>` (downloaded + stored as a blob; URL never persisted), or `--clear-avatar`. One multipart request; inputs are validated before any write. See §3.9. |
 
 **Dependent commands run one at a time.** When a later command's input
 depends on an earlier one's result — `claim` then act on the task, or
@@ -538,6 +540,52 @@ hand-edited / unparseable `mcp.json` drops the ENTIRE MCP layer at spawn
 connection failures are the runtime's concern, not silverhand's.
 
 Canonical design: `docs/agent-mcp-config-v1.md`.
+
+### 3.9 `silverhand profile get|update` — per-subject profile metadata
+
+`silverhand profile <verb>` (flat, alongside the `mcp` facet) manages the
+**executing subject's own profile metadata** — `display_name`, `description`,
+and avatar. Like `profile mcp`, it is **self only**: there is no `--agent-id`
+flag, so the command can only act on whoever runs the CLI (self-edit is
+structural, not merely gated). The dispatcher tries the facet token first and
+falls through to a flat verb, so `profile mcp <verb>` and `profile get|update`
+never collide.
+
+Unlike profile MCP (a host-local L1 file reached over the data plane), these
+fields are DB columns / a blob on the `agents` row, so the backend writes them
+directly — the change is **live**, not next-spawn. On every successful write the
+backend publishes an `agent_changed` WS event (`app` scope, payload
+`{ agent_id }`) so all connected clients refetch the agent and its avatar — the
+same seam the human `PATCH /api/agents/:id` and avatar routes use, so a profile
+edit propagates everywhere regardless of who made it.
+
+- `silverhand profile get` → a bare `AgentProfileDto`: `{ id, name,
+  display_name, description, avatar_url }`. `avatar_url` is a derived,
+  read-only Silverhand URL (`/api/agents/:id/avatar?v=…`) or null — never a
+  foreign URL.
+- `silverhand profile update` — pass any of `--display-name <name>` (1..64
+  chars), `--description <text>` (≤2000), and at most ONE avatar action:
+  - `--avatar-file <path>` — a LOCAL image (absolute path).
+  - `--avatar-url <https-url>` — an http(s) image, DOWNLOADED and stored as the
+    avatar blob. The URL is a one-shot import source; it is never persisted or
+    hot-linked. The download happens CLI-side (the backend never fetches an
+    agent-supplied URL → no SSRF surface), with http(s)-only, bounded
+    redirects, a streaming size cap, a timeout, and fail-loud errors.
+  - `--clear-avatar` — remove the avatar.
+
+Avatars are PNG/JPEG/GIF/WEBP, 5 MB max; the type is sniffed from the bytes and
+the backend avatar service is the authoritative MIME/size/storage validator
+(shared with the human-UI upload path). The whole edit is ONE multipart request
+whose text and avatar inputs are all validated **before any write**, so a bad
+value never lands a partial edit. It is **not** cross-store atomic, though: the
+avatar blob is written before the text columns with no transaction spanning blob
+storage and SQLite, so an infra failure on the text write after a successful
+avatar write leaves the avatar changed (a single-`agents.update` clean form is a
+follow-up). The avatar bytes ride a `file` part (never base64 in JSON). Returns
+the updated `AgentProfileDto` (bare, same shape as `get`).
+
+Canonical design: `docs/agent-mcp-config-v1.md` (profile surface); avatar
+storage mirrors the public `POST /api/agents/:id/avatar` path.
 
 ## 4. Error Contract
 

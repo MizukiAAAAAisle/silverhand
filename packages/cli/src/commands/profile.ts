@@ -3,10 +3,12 @@
  * config that travels with the agent across every workspace. Subject-agnostic
  * (Human/Agent isomorphism): it always targets whoever is running the CLI.
  *
- * Three-level grammar: `silverhand profile <facet> <verb>`. The only facet in
- * v1 is `mcp` (custom MCP servers); future facets (avatar, display-name) slot
- * in alongside it, and future workspace-scoped config gets its own
- * `silverhand workspace <facet> <verb>` noun rather than a `--scope` flag.
+ * Two grammars coexist under this noun (#task:1178):
+ *   - Faceted:  `silverhand profile mcp <verb>`  — custom MCP servers.
+ *   - Flat:     `silverhand profile get|update`  — profile metadata
+ *               (display name / description / avatar). The dispatcher tries
+ *               the facet token first; an unknown facet falls through to a
+ *               flat verb, so `profile mcp …` and `profile get` never clash.
  *
  * MCP config is stored as raw JSON at the agent's L1 `mcp.json` (the host is
  * the single source of truth — no DB copy). It is loaded ADDITIVELY at the
@@ -14,9 +16,27 @@
  * `-c mcp_servers.*` overrides. Server names are namespaced to
  * `silverhand_profile__<name>` at spawn so they never collide with the user's
  * own MCP servers.
+ *
+ * Profile metadata (display_name / description / avatar) lives in DB columns
+ * on `agents`, NOT in an L1 file — so `profile get|update` write straight
+ * through the backend (no host round-trip). The avatar is a stored BLOB; its
+ * `avatar_url` is a derived read-only Silverhand route, never a foreign URL.
+ * `--avatar-url` is a one-shot IMPORT source: the CLI downloads the bytes
+ * here (never the backend — no SSRF surface) and uploads them like a local
+ * file; the URL itself is never persisted.
  */
-import { parseMcpConfig, type McpServerConfig } from '@silverhand/shared';
+import { readFile } from 'node:fs/promises';
+import { basename, isAbsolute } from 'node:path';
+import {
+  AVATAR_MAX_BYTES,
+  AVATAR_MAX_SIZE_LABEL,
+  UpdateProfileInputSchema,
+  parseMcpConfig,
+  type McpServerConfig,
+  type UpdateProfileInput,
+} from '@silverhand/shared';
 import type { Command, FacetGroup } from './index.js';
+import { flagBool, flagString } from '../parse.js';
 import { CliError } from '../errors.js';
 
 const getCommand: Command = {
@@ -317,6 +337,360 @@ export const profileFacets: readonly FacetGroup[] = [
       probeCommand,
     ],
   },
+];
+
+// ── Flat profile-metadata verbs (`profile get|update`, #task:1178) ─────
+
+interface AvatarBytes {
+  buffer: Buffer;
+  filename: string;
+  contentType: string;
+}
+
+/** Sniff the image MIME from magic bytes — the four types the avatar
+ *  service accepts. We sniff the actual BYTES (never trust a URL's
+ *  Content-Type header or a filename suffix), so a mislabeled source
+ *  fails loud here; the backend avatar service stays the authoritative
+ *  size/type validator. Returns null when the bytes are not a supported
+ *  image. */
+function sniffImageMime(buf: Buffer): string | null {
+  if (
+    buf.length >= 8 &&
+    buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47 &&
+    buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a
+  ) {
+    return 'image/png';
+  }
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (buf.length >= 6 && buf.toString('ascii', 0, 4) === 'GIF8') {
+    return 'image/gif';
+  }
+  if (
+    buf.length >= 12 &&
+    buf.toString('ascii', 0, 4) === 'RIFF' &&
+    buf.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+  return null;
+}
+
+/** Wrap raw avatar bytes after a cheap, fail-fast local pre-check (empty
+ *  / size cap / sniffed type). The backend avatar service re-validates
+ *  authoritatively — this just sets a correct content-type and rejects an
+ *  obvious non-image before the upload round-trip. */
+function toAvatarBytes(buffer: Buffer, filename: string): AvatarBytes {
+  if (buffer.byteLength === 0) {
+    throw new CliError({
+      code: 'validation_error',
+      message: 'avatar source is empty (0 bytes).',
+      retriable: false,
+    });
+  }
+  if (buffer.byteLength > AVATAR_MAX_BYTES) {
+    throw new CliError({
+      code: 'validation_error',
+      message: `avatar must be ${AVATAR_MAX_SIZE_LABEL} or smaller.`,
+      retriable: false,
+    });
+  }
+  const contentType = sniffImageMime(buffer);
+  if (!contentType) {
+    throw new CliError({
+      code: 'validation_error',
+      message: 'avatar must be a PNG, JPEG, GIF, or WEBP image (checked from the bytes).',
+      retriable: false,
+    });
+  }
+  return { buffer, filename, contentType };
+}
+
+/** Resolve avatar bytes from a LOCAL file. Mirrors `file upload`'s
+ *  absolute-path contract; MIME is sniffed from the bytes. */
+async function readAvatarFile(path: string): Promise<AvatarBytes> {
+  if (!isAbsolute(path)) {
+    throw new CliError({
+      code: 'validation_error',
+      message: '--avatar-file must be an absolute path.',
+      retriable: false,
+    });
+  }
+  let buffer: Buffer;
+  try {
+    buffer = await readFile(path);
+  } catch (err) {
+    throw new CliError({
+      code: 'not_found',
+      message: `cannot read avatar file at ${path}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      retriable: false,
+    });
+  }
+  return toAvatarBytes(buffer, basename(path));
+}
+
+const MAX_AVATAR_REDIRECTS = 5;
+const AVATAR_DOWNLOAD_TIMEOUT_MS = 20_000;
+
+/** Download an avatar from an http(s) URL — CLI-SIDE BY DESIGN, never the
+ *  backend. The backend must never fetch an agent-supplied URL (that would
+ *  open an SSRF surface from the trusted network); the agent runtime
+ *  already has network access, so a CLI fetch adds none. The URL is a
+ *  one-shot IMPORT source — it is never persisted; the stored avatar is the
+ *  blob. Guards: http(s) only, bounded redirects, streaming size cap,
+ *  timeout, fail-loud. */
+async function downloadAvatar(rawUrl: string): Promise<AvatarBytes> {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new CliError({
+      code: 'validation_error',
+      message: `--avatar-url is not a valid URL: ${rawUrl}`,
+      retriable: false,
+    });
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), AVATAR_DOWNLOAD_TIMEOUT_MS);
+  try {
+    let current = url;
+    let redirects = 0;
+    let res: Response;
+    for (;;) {
+      if (current.protocol !== 'http:' && current.protocol !== 'https:') {
+        throw new CliError({
+          code: 'validation_error',
+          message: `--avatar-url must be http(s); got ${current.protocol}`,
+          retriable: false,
+        });
+      }
+      res = await fetch(current, { redirect: 'manual', signal: controller.signal });
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get('location');
+        if (!loc) break;
+        if (++redirects > MAX_AVATAR_REDIRECTS) {
+          throw new CliError({
+            code: 'validation_error',
+            message: `--avatar-url exceeded ${MAX_AVATAR_REDIRECTS} redirects.`,
+            retriable: false,
+          });
+        }
+        current = new URL(loc, current);
+        continue;
+      }
+      break;
+    }
+    if (!res.ok) {
+      throw new CliError({
+        code: 'validation_error',
+        message: `--avatar-url download failed: HTTP ${res.status}.`,
+        retriable: false,
+      });
+    }
+    const buffer = await readBodyCapped(res, AVATAR_MAX_BYTES);
+    const name = basename(current.pathname) || 'avatar';
+    return toAvatarBytes(buffer, name);
+  } catch (err) {
+    if (err instanceof CliError) throw err;
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new CliError({
+        code: 'validation_error',
+        message: `--avatar-url download timed out after ${AVATAR_DOWNLOAD_TIMEOUT_MS}ms.`,
+        retriable: false,
+      });
+    }
+    throw new CliError({
+      code: 'validation_error',
+      message: `--avatar-url download failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      retriable: false,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Read a fetch body, aborting once it exceeds `cap` bytes so a huge
+ *  remote file can't OOM the CLI (the size cap is also re-enforced by the
+ *  avatar service on the uploaded bytes). */
+async function readBodyCapped(res: Response, cap: number): Promise<Buffer> {
+  const body = res.body;
+  if (!body) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.byteLength > cap) {
+      throw new CliError({
+        code: 'validation_error',
+        message: `avatar must be ${AVATAR_MAX_SIZE_LABEL} or smaller.`,
+        retriable: false,
+      });
+    }
+    return buf;
+  }
+  const chunks: Buffer[] = [];
+  let total = 0;
+  const reader = body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      total += value.byteLength;
+      if (total > cap) {
+        await reader.cancel();
+        throw new CliError({
+          code: 'validation_error',
+          message: `avatar exceeds ${AVATAR_MAX_SIZE_LABEL}; download aborted.`,
+          retriable: false,
+        });
+      }
+      chunks.push(Buffer.from(value));
+    }
+  }
+  return Buffer.concat(chunks);
+}
+
+const profileGetCommand: Command = {
+  verb: 'get',
+  summary: "Print the executing agent's own profile (display name, description, avatar).",
+  help: `silverhand profile get
+
+Print the executing agent's own profile metadata — the identity and the
+fields it can change with \`profile update\`. This is the SELF view (always
+whoever runs the CLI; there is no target flag). Distinct from
+\`profile mcp get\` (custom MCP config).
+
+stdout: an AgentProfileDto —
+  { "id", "name", "display_name",
+    "description": <string|null>, "avatar_url": <string|null> }
+\`avatar_url\` is a derived, read-only Silverhand URL (or null) — set the
+avatar via \`profile update --avatar-file|--avatar-url\`, never by writing
+this field.`,
+  flags: [] as const,
+  async run({ client }) {
+    const { profile } = await client.getProfile();
+    return profile;
+  },
+};
+
+const profileUpdateCommand: Command = {
+  verb: 'update',
+  summary: "Update the executing agent's own profile (display name, description, avatar).",
+  help: `silverhand profile update [--display-name <name>] [--description <text>]
+                          [--avatar-file <path> | --avatar-url <url> | --clear-avatar]
+
+Update the executing agent's OWN profile (self only — there is no target
+flag; the subject is always whoever runs the CLI). Pass any combination of
+the text flags; at most ONE avatar action.
+
+  --display-name <name>   New display name (1..64 chars).
+  --description <text>    New description (<= 2000 chars; "" sets it empty).
+  --avatar-file <path>    Set the avatar from a LOCAL file (absolute path).
+  --avatar-url <url>      Set the avatar by downloading an http(s) image.
+                          The URL is a one-shot import source — Silverhand
+                          stores the bytes as its own avatar blob and never
+                          persists or hot-links the URL.
+  --clear-avatar          Remove the current avatar.
+
+Avatar: PNG / JPEG / GIF / WEBP, ${AVATAR_MAX_SIZE_LABEL} max. The type is
+checked from the bytes; the backend avatar service is the authoritative
+size/type validator. \`--avatar-file\`, \`--avatar-url\`, and \`--clear-avatar\`
+are mutually exclusive.
+
+Order: the URL is downloaded (and the file read) BEFORE any write, so a bad
+source leaves your profile untouched; the avatar is applied before the text.
+
+stdout: the updated AgentProfileDto (same shape as \`profile get\`).`,
+  flags: ['display-name', 'description', 'avatar-file', 'avatar-url'] as const,
+  booleanFlags: ['clear-avatar'] as const,
+  async run({ client, args }) {
+    const displayName = flagString(args, 'display-name');
+    const description = flagString(args, 'description');
+    const avatarFile = flagString(args, 'avatar-file');
+    const avatarUrl = flagString(args, 'avatar-url');
+    const clearAvatar = flagBool(args, 'clear-avatar') === true;
+
+    const avatarActions =
+      [avatarFile !== undefined, avatarUrl !== undefined, clearAvatar].filter(Boolean)
+        .length;
+    if (avatarActions > 1) {
+      throw new CliError({
+        code: 'validation_error',
+        message: 'choose at most one of --avatar-file, --avatar-url, --clear-avatar.',
+        retriable: false,
+      });
+    }
+    const hasText = displayName !== undefined || description !== undefined;
+    if (!hasText && avatarActions === 0) {
+      throw new CliError({
+        code: 'validation_error',
+        message:
+          'nothing to update: pass at least one of --display-name, --description, ' +
+          '--avatar-file, --avatar-url, --clear-avatar.',
+        retriable: false,
+      });
+    }
+
+    // 1. Pre-validate text against the shared contract for a fast, clear
+    //    error (the backend re-validates as the authority).
+    let textInput: UpdateProfileInput | null = null;
+    if (hasText) {
+      const candidate: Record<string, unknown> = {};
+      if (displayName !== undefined) candidate.display_name = displayName;
+      if (description !== undefined) candidate.description = description;
+      const parsed = UpdateProfileInputSchema.safeParse(candidate);
+      if (!parsed.success) {
+        throw new CliError({
+          code: 'validation_error',
+          message: parsed.error.issues[0]?.message ?? 'invalid profile fields',
+          retriable: false,
+        });
+      }
+      textInput = parsed.data;
+    }
+
+    // 2. Resolve avatar bytes (read file / download URL) BEFORE the write,
+    //    so a bad source never reaches the backend (Cindy #4).
+    let avatarBytes: AvatarBytes | null = null;
+    if (avatarFile !== undefined) avatarBytes = await readAvatarFile(avatarFile);
+    else if (avatarUrl !== undefined) avatarBytes = await downloadAvatar(avatarUrl);
+
+    // 3. Apply the whole edit in ONE request — text + avatar travel together
+    //    and are all pre-validated (text schema + downloaded/read avatar bytes)
+    //    before any write, so a bad source can't land a partial edit. The
+    //    backend is NOT cross-store atomic (avatar blob then text columns, no
+    //    spanning txn), but returns the canonical updated profile.
+    const { profile } = await client.updateProfile({
+      ...(textInput?.display_name !== undefined
+        ? { display_name: textInput.display_name }
+        : {}),
+      ...(textInput && 'description' in textInput
+        ? { description: textInput.description ?? '' }
+        : {}),
+      ...(avatarBytes
+        ? {
+            avatar: {
+              action: 'set' as const,
+              buffer: avatarBytes.buffer,
+              filename: avatarBytes.filename,
+              contentType: avatarBytes.contentType,
+            },
+          }
+        : clearAvatar
+          ? { avatar: { action: 'clear' as const } }
+          : {}),
+    });
+    return profile;
+  },
+};
+
+/** Flat verbs on the `profile` noun — coexist with the `mcp` facet via the
+ *  dispatcher's facet-then-flat resolution. */
+export const profileCommands: readonly Command[] = [
+  profileGetCommand,
+  profileUpdateCommand,
 ];
 
 /** Read all of stdin as a UTF-8 string. Fails loudly when stdin is a TTY

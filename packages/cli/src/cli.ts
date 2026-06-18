@@ -83,36 +83,34 @@ async function main(argv: string[]): Promise<number> {
   // instead of the two-level path below.
   if (group.facets && group.facets.length > 0) {
     const facetToken = argv[1]!;
-    traceCtx.verb = facetToken;
     const facet = findFacet(noun, facetToken);
-    if (!facet) {
-      throw new CliError({
-        code: 'validation_error',
-        message: `unknown facet "${facetToken}" under noun "${noun}"; run \`silverhand ${noun} --help\``,
-        retriable: false,
+    if (facet) {
+      traceCtx.verb = facetToken;
+      // `silverhand <noun> <facet>` or `... --help` → list the facet's verbs.
+      if (argv.length === 2 || argv[2] === '--help' || argv[2] === '-h') {
+        const help = facetHelp(noun, facetToken);
+        if (help) process.stdout.write(help + '\n');
+        return 0;
+      }
+      const fverb = argv[2]!;
+      traceCtx.verb = `${facetToken} ${fverb}`;
+      const fcmd = facet.commands.find(c => c.verb === fverb);
+      if (!fcmd) {
+        throw new CliError({
+          code: 'validation_error',
+          message: `unknown verb "${fverb}" under "${noun} ${facetToken}"; run \`silverhand ${noun} ${facetToken} --help\``,
+          retriable: false,
+        });
+      }
+      return executeCommand(fcmd, argv.slice(3), {
+        noun,
+        verb: `${facetToken} ${fverb}`,
+        helpText: facetVerbHelp(noun, facetToken, fverb),
       });
     }
-    // `silverhand <noun> <facet>` or `... --help` → list the facet's verbs.
-    if (argv.length === 2 || argv[2] === '--help' || argv[2] === '-h') {
-      const help = facetHelp(noun, facetToken);
-      if (help) process.stdout.write(help + '\n');
-      return 0;
-    }
-    const fverb = argv[2]!;
-    traceCtx.verb = `${facetToken} ${fverb}`;
-    const fcmd = facet.commands.find(c => c.verb === fverb);
-    if (!fcmd) {
-      throw new CliError({
-        code: 'validation_error',
-        message: `unknown verb "${fverb}" under "${noun} ${facetToken}"; run \`silverhand ${noun} ${facetToken} --help\``,
-        retriable: false,
-      });
-    }
-    return executeCommand(fcmd, argv.slice(3), {
-      noun,
-      verb: `${facetToken} ${fverb}`,
-      helpText: facetVerbHelp(noun, facetToken, fverb),
-    });
+    // Not a known facet → fall through to flat verb resolution below, so a
+    // faceted noun can ALSO carry flat verbs: `profile mcp <verb>` (facet)
+    // and `profile get|update` (flat) coexist without colliding (#task:1178).
   }
 
   const verb = argv[1]!;

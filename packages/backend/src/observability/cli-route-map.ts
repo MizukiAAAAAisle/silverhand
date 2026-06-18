@@ -79,6 +79,12 @@ export const CLI_INVOKE_ROUTES: readonly CliInvokeRoute[] = [
   { method: 'GET', suffix: 'profile/mcp', noun: 'profile', verb: 'mcp get' },
   { method: 'POST', suffix: 'profile/mcp', noun: 'profile', verb: 'mcp set' },
   { method: 'POST', suffix: 'profile/mcp/probe', noun: 'profile', verb: 'mcp probe' },
+  // profile metadata (flat: `silverhand profile get|update`, #task:1178).
+  // GET reads, POST applies the whole edit (text + avatar) in one multipart
+  // request. Same `profile` suffix, tagged by method — matched AFTER the
+  // longer `profile/mcp*` suffixes so the facet routes win their paths.
+  { method: 'GET', suffix: 'profile', noun: 'profile', verb: 'get' },
+  { method: 'POST', suffix: 'profile', noun: 'profile', verb: 'update' },
 ];
 
 /**

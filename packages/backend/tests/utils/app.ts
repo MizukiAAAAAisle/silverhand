@@ -926,9 +926,11 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     users: new UserRepo(db),
     blobStorage,
   });
+  const events = new ScopeEventBus();
   const agentService = new AgentService({
     agents: new AgentRepo(db),
     blobStorage,
+    events,
   });
   const passwordCredentials = new PasswordCredentialService(
     db,
@@ -942,7 +944,6 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     agents: new AgentRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
   });
-  const events = new ScopeEventBus();
   const presence = new PresenceRegistry({
     events,
     users: new UserRepo(db),

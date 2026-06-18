@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { AVATAR_MAX_BYTES } from '@silverhand/shared';
 import {
   COMMAND_GROUPS,
   findCommand,
@@ -66,13 +67,15 @@ describe('command catalogue', () => {
       ['schedule', 'cancel'],
       ['file', 'upload'],
       ['file', 'view'],
+      ['profile', 'get'],
+      ['profile', 'update'],
     ];
     for (const [noun, verb] of expected) {
       const cmd = findCommand(noun, verb);
       expect(cmd, `${noun} ${verb}`).toBeDefined();
     }
     const total = COMMAND_GROUPS.reduce((acc, g) => acc + g.commands.length, 0);
-    expect(total).toBe(21);
+    expect(total).toBe(23);
   });
 
   it('every command has a non-empty help block', () => {
@@ -149,8 +152,16 @@ describe('profile facet (3-level: profile mcp <verb>)', () => {
     expect(findFacet('profile', 'bogus')).toBeUndefined();
   });
 
-  it('the profile noun has no flat verbs (facet-only)', () => {
-    expect(findGroup('profile')?.commands).toEqual([]);
+  it('the profile noun carries BOTH flat verbs and the mcp facet (#task:1178)', () => {
+    // Flat `profile get|update` coexist with the `mcp` facet — the
+    // dispatcher tries the facet token first, then falls through to a
+    // flat verb, so `profile mcp get` and `profile get` never collide.
+    const flat = findGroup('profile')?.commands.map(c => c.verb);
+    expect(flat).toEqual(['get', 'update']);
+    expect(findCommand('profile', 'get')).toBeDefined();
+    expect(findCommand('profile', 'update')).toBeDefined();
+    // The facet is unaffected.
+    expect(findFacetCommand('profile', 'mcp', 'get')).toBeDefined();
   });
 
   it('validate is CLI-local: parses stdin and reports server_count, no backend call', async () => {
@@ -321,6 +332,189 @@ async function runWithStdin(
     if (realStdin) Object.defineProperty(process, 'stdin', realStdin);
   }
 }
+
+describe('profile update behavior (#task:1178)', () => {
+  // Magic-byte PNG header — enough for `sniffImageMime` to classify it as
+  // image/png (it reads only the leading signature, not a full decode).
+  const PNG_BYTES = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x00,
+  ]);
+
+  function profileUpdateCmd(): import('../src/commands/index.js').Command {
+    const cmd = findCommand('profile', 'update');
+    expect(cmd).toBeDefined();
+    return cmd!;
+  }
+
+  /** A client that records every `updateProfile` call and returns `profile`
+   *  (the command unwraps `{ profile }` and prints the bare DTO). */
+  function captureUpdateClient(
+    profile: Record<string, unknown> = {
+      id: 'agent',
+      name: 'a',
+      display_name: 'A',
+      description: null,
+      avatar_url: null,
+    },
+  ) {
+    const calls: { count: number; input?: any } = { count: 0 };
+    const client = {
+      updateProfile: async (input: unknown) => {
+        calls.count++;
+        calls.input = input;
+        return { profile };
+      },
+    } as unknown as BackendClient;
+    return { client, calls };
+  }
+
+  function runProfileUpdate(
+    flags: Record<string, unknown>,
+    client: BackendClient,
+  ): Promise<unknown> {
+    return profileUpdateCmd().run({
+      env: {
+        conversationId: 'conv',
+        agentId: 'agent',
+        serverUrl: 'http://127.0.0.1:4488',
+        authToken: 'token',
+      },
+      client,
+      args: { flags, positional: [], rest: [] },
+    } as any);
+  }
+
+  it('rejects more than one avatar action and never calls the client', async () => {
+    const { client, calls } = captureUpdateClient();
+    await expect(
+      runProfileUpdate({ 'avatar-file': '/abs/a.png', 'clear-avatar': true }, client),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    expect(calls.count).toBe(0);
+  });
+
+  it('rejects an empty update (no flags) without calling the client', async () => {
+    const { client, calls } = captureUpdateClient();
+    await expect(runProfileUpdate({}, client)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(calls.count).toBe(0);
+  });
+
+  it('rejects a non-absolute --avatar-file before any client call', async () => {
+    const { client, calls } = captureUpdateClient();
+    await expect(
+      runProfileUpdate({ 'avatar-file': 'relative.png' }, client),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    expect(calls.count).toBe(0);
+  });
+
+  it('--avatar-file sends text + sniffed avatar bytes in one update', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'silverhand-avatar-file-'));
+    try {
+      const p = join(dir, 'a.png');
+      await writeFile(p, PNG_BYTES);
+      const fresh = {
+        id: 'agent',
+        name: 'a',
+        display_name: 'Alice',
+        description: 'd',
+        avatar_url: '/api/agents/agent/avatar?v=1',
+      };
+      const { client, calls } = captureUpdateClient(fresh);
+      const result = await runProfileUpdate(
+        { 'display-name': 'Alice', 'avatar-file': p },
+        client,
+      );
+      expect(calls.count).toBe(1);
+      expect(calls.input.display_name).toBe('Alice');
+      expect(calls.input.avatar).toMatchObject({
+        action: 'set',
+        filename: 'a.png',
+        contentType: 'image/png',
+      });
+      expect(Buffer.isBuffer(calls.input.avatar.buffer)).toBe(true);
+      expect((calls.input.avatar.buffer as Buffer).equals(PNG_BYTES)).toBe(true);
+      // The command unwraps `{ profile }` → returns the bare DTO.
+      expect(result).toEqual(fresh);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('--clear-avatar sends a clear action and no bytes', async () => {
+    const { client, calls } = captureUpdateClient();
+    await runProfileUpdate({ 'clear-avatar': true }, client);
+    expect(calls.count).toBe(1);
+    expect(calls.input.avatar).toEqual({ action: 'clear' });
+  });
+
+  it('--avatar-url downloads CLI-side and uploads the sniffed blob', async () => {
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(PNG_BYTES, { status: 200 })) as typeof fetch;
+    try {
+      const { client, calls } = captureUpdateClient();
+      await runProfileUpdate({ 'avatar-url': 'https://example.test/a.png' }, client);
+      expect(calls.count).toBe(1);
+      expect(calls.input.avatar).toMatchObject({
+        action: 'set',
+        contentType: 'image/png',
+      });
+      expect((calls.input.avatar.buffer as Buffer).equals(PNG_BYTES)).toBe(true);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it('--avatar-url that 404s never calls the client', async () => {
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(null, { status: 404 })) as typeof fetch;
+    try {
+      const { client, calls } = captureUpdateClient();
+      await expect(
+        runProfileUpdate({ 'avatar-url': 'https://example.test/x.png' }, client),
+      ).rejects.toMatchObject({ code: 'validation_error' });
+      expect(calls.count).toBe(0);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it('--avatar-url that exceeds the redirect cap never calls the client', async () => {
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(null, {
+        status: 302,
+        headers: { location: 'https://example.test/next' },
+      })) as typeof fetch;
+    try {
+      const { client, calls } = captureUpdateClient();
+      await expect(
+        runProfileUpdate({ 'avatar-url': 'https://example.test/a.png' }, client),
+      ).rejects.toMatchObject({ code: 'validation_error' });
+      expect(calls.count).toBe(0);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it('--avatar-url over the size cap aborts the download, no client call', async () => {
+    const big = new Uint8Array(AVATAR_MAX_BYTES + 1024);
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(big, { status: 200 })) as typeof fetch;
+    try {
+      const { client, calls } = captureUpdateClient();
+      await expect(
+        runProfileUpdate({ 'avatar-url': 'https://example.test/big.png' }, client),
+      ).rejects.toMatchObject({ code: 'validation_error' });
+      expect(calls.count).toBe(0);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+});
 
 describe('thread legacy verbs', () => {
   it('removes create/close and keeps explicit migration hints', () => {

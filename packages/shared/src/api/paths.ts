@@ -355,4 +355,23 @@ export const internalPaths = {
   agentProfileMcpProbe: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/profile/mcp/probe`,
 
+  /** Agent reads its own profile metadata (#task:1178). Returns an
+   *  `AgentProfileDto` (display_name / description / avatar_url + identity).
+   *  Token middleware enforces `principal.agentId === aid` (self-only).
+   *  Backs `silverhand profile get`. The avatar bytes themselves are
+   *  served by the existing `agentAvatar` route via `avatar_url`. */
+  agentProfileGet: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/profile`,
+  /** Agent updates its own profile (#task:1178) in ONE multipart request —
+   *  `display_name` / `description` text fields plus an optional avatar
+   *  action (`avatar_action=set` with a `file` part, or `avatar_action=
+   *  clear`). One handler applies the whole edit atomically (no partial
+   *  write) and the avatar bytes ride a `file` part so they never base64
+   *  into JSON; the avatar service stays the MIME/size/storage validator.
+   *  Same URL as the GET above (method-distinguished). Self-only as above.
+   *  Returns the updated `AgentProfileDto`. Backs `silverhand profile
+   *  update`. */
+  agentProfileUpdate: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/profile`,
+
 } as const;

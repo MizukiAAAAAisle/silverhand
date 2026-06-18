@@ -14,6 +14,7 @@ import {
   type AgentFollowThreadInput,
   type AgentFollowThreadOutput,
   type AgentListWorkspacesDto,
+  type AgentProfileDto,
   type AgentReadHistoryDto,
   type AgentReadHistoryInput,
   type AgentSearchMessagesDto,
@@ -365,6 +366,63 @@ export class BackendClient {
       internalPaths.agentProfileMcpProbe(this.env.conversationId, this.env.agentId),
       { server_name: serverName, include_tools: includeTools },
     );
+  }
+
+  /** Read the agent's own profile metadata (#task:1178) — display_name /
+   *  description / avatar_url + identity. Backs `silverhand profile get`. */
+  getProfile(): Promise<{ profile: AgentProfileDto }> {
+    return this.request(
+      'GET',
+      internalPaths.agentProfileGet(this.env.conversationId, this.env.agentId),
+    );
+  }
+
+  /** Update the agent's own profile in ONE request (#task:1178). Text
+   *  fields + the avatar action travel together as multipart/form-data so
+   *  the whole edit is applied by a single backend handler (no partial
+   *  write across calls) and the avatar bytes ride a `file` part (never
+   *  base64 in JSON). The backend's avatar service is the authoritative
+   *  MIME/size/storage validator. Returns the updated profile. */
+  async updateProfile(input: {
+    display_name?: string;
+    description?: string;
+    avatar?:
+      | { action: 'set'; buffer: Buffer; filename: string; contentType: string }
+      | { action: 'clear' };
+  }): Promise<{ profile: AgentProfileDto }> {
+    markRequestAttempted();
+    const url =
+      this.env.serverUrl +
+      internalPaths.agentProfileUpdate(this.env.conversationId, this.env.agentId);
+    const form = new FormData();
+    if (input.display_name !== undefined) form.append('display_name', input.display_name);
+    if (input.description !== undefined) form.append('description', input.description);
+    if (input.avatar?.action === 'set') {
+      form.append('avatar_action', 'set');
+      const blob = new Blob([input.avatar.buffer], { type: input.avatar.contentType });
+      form.append('file', blob, input.avatar.filename);
+    } else if (input.avatar?.action === 'clear') {
+      form.append('avatar_action', 'clear');
+    }
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        // No Content-Type — fetch sets the multipart boundary itself.
+        headers: {
+          [AUTH_TOKEN_HEADER]: `Bearer ${this.env.authToken}`,
+          'X-Agent-Hub-Caller': 'silverhand-cli',
+        },
+        body: form,
+      });
+    } catch (err) {
+      throw fromNetworkError(err);
+    }
+    if (!res.ok) {
+      const text = await safeReadText(res);
+      throw mapHttpError(res.status, text);
+    }
+    return (await res.json()) as { profile: AgentProfileDto };
   }
 
   // ── Attachments ──────────────────────────────────────────────────

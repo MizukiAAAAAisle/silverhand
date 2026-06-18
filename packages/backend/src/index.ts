@@ -282,9 +282,11 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     blobStorage,
   });
 
+  const events = new ScopeEventBus();
   const agentService = new AgentService({
     agents: new AgentRepo(db),
     blobStorage,
+    events,
   });
   const placement = new RuntimeHostPlacementResolver({
     hosts: new HostRepo(db),
@@ -311,7 +313,6 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   // server_url at all: the host daemon injects the control-plane URL locally.
   // Stays null for standalone (daemon dials in).
   let startEmbeddedOutboundConnect: (() => void) | null = null;
-  const events = new ScopeEventBus();
   const presence = new PresenceRegistry({
     events,
     users: new UserRepo(db),

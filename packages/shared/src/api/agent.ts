@@ -92,6 +92,61 @@ export const UpdateAgentInputSchema = z
   .refine(v => Object.keys(v).length > 0, { message: 'no fields to update' });
 export type UpdateAgentInput = z.infer<typeof UpdateAgentInputSchema>;
 
+// ── Self-profile (`silverhand profile get|update`, #task:1178) ─────────
+//
+// The executing subject's view of its OWN profile metadata. This is a
+// SUBSET of AgentDto (identity + the editable text fields + the derived
+// avatar_url) — deliberately not the full row, because `profile get` is
+// "what can I see/change about myself", not the agent-admin DTO.
+//
+// `avatar_url` is the SAME derived read field as AgentDto: always our
+// internal `/api/agents/:id/avatar?v=<updated_at>` route, never a foreign
+// URL. The write side stores a blob; this read side only ever points at
+// that blob (or null). See the avatar service for the storage truth.
+export const AgentProfileDtoSchema = z.object({
+  id: z.string(),
+  /** Immutable mention handle — shown for context, not editable here. */
+  name: z.string(),
+  display_name: z.string(),
+  description: z.string().nullable(),
+  avatar_url: z.string().nullable(),
+});
+export type AgentProfileDto = z.infer<typeof AgentProfileDtoSchema>;
+
+// Text fields of `silverhand profile update`. Avatar is intentionally
+// ABSENT — bytes ride the multipart avatar route, never base64 in JSON.
+// Mirrors the display_name / description subset of UpdateAgentInputSchema
+// so the two write paths share one validation contract (single source of
+// truth for the field rules).
+export const UpdateProfileInputSchema = z
+  .object({
+    display_name: DisplayNameSchema.optional(),
+    description: z.string().max(2000).nullable().optional(),
+  })
+  .refine(v => Object.keys(v).length > 0, { message: 'no fields to update' });
+export type UpdateProfileInput = z.infer<typeof UpdateProfileInputSchema>;
+
+/**
+ * `agent_changed` — WS event on the **`app`** scope, published by the
+ * backend whenever an agent's stored `AgentDto` changes through ANY write
+ * path: human `PATCH /api/agents/:id`, human avatar upload/delete, or the
+ * agent's own `silverhand profile update` (display_name / description /
+ * avatar — and also runtime / model / fast_mode). Clients invalidate the
+ * `['agents']` query prefix (covering the list, the `['agents', id]`
+ * detail, and the avatar object-url, which re-fetches on its own because
+ * the refetched DTO carries a bumped `avatar_url` `?v=` cache-buster).
+ *
+ * Payload is intentionally minimal — just the id, no private data — so it
+ * is safe on the global `app` scope (mirrors `user_presence`). The backend
+ * is the single source of refresh; renderer mutation `onSuccess` may keep
+ * a local fast-path but is no longer the sole propagation mechanism. The
+ * kind string is `'agent_changed'`. (#task:1178)
+ */
+export const AgentChangedEventSchema = z.object({
+  agent_id: z.string(),
+});
+export type AgentChangedEvent = z.infer<typeof AgentChangedEventSchema>;
+
 // GET /api/agents/:id/workspace/tree + GET /api/agents/:id/workspace/file —
 // see "agent home workspace files (tree + read pair)" below for the wire
 // contract that backs the two-column workspace pane in the renderer.

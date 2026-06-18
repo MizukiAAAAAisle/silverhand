@@ -342,6 +342,22 @@ describe('PATCH /api/agents/:id', () => {
     expect(patched.agent.name).toBe('alice'); // immutable
   });
 
+  it('publishes agent_changed on the app scope so other clients refetch', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    const changed: string[] = [];
+    t.ctx.events.subscribeScope('app', e => {
+      if (e.kind === 'agent_changed') changed.push((e.payload as any).agent_id);
+    });
+    const res = await http(t).patch(`/api/agents/${created.agent.id}`, {
+      display_name: 'Alice (reviewer)',
+    });
+    expect(res.status).toBe(200);
+    expect(changed).toContain(created.agent.id);
+  });
+
   it('400 on empty body (refines noop)', async () => {
     t = buildTestApp();
     const created = await (
