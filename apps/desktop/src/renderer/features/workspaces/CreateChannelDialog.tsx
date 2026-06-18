@@ -151,7 +151,7 @@ export function CreateChannelDialog({
     e.preventDefault();
     setError(null);
     if (!title.trim()) {
-      setError('请填写 Channel 标题');
+      setError('Please enter a channel title');
       return;
     }
     // DM channels are always 1:1 — no member selection needed.
@@ -174,18 +174,18 @@ export function CreateChannelDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>新建 Channel</DialogTitle>
-          <DialogDescription>Channel 拥有独立上下文</DialogDescription>
+          <DialogTitle>New Channel</DialogTitle>
+          <DialogDescription>A focused space with its own conversation context.</DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="se-title">标题</Label>
+            <Label htmlFor="se-title">Title</Label>
             <Input
               id="se-title"
               value={title}
               onChange={e => setTitle(e.target.value)}
-              placeholder="修复 login bug"
+              placeholder="fix the login bug"
               autoFocus
             />
           </div>
@@ -217,10 +217,10 @@ export function CreateChannelDialog({
               variant="ghost"
               onClick={() => onOpenChange(false)}
             >
-              取消
+              Cancel
             </Button>
             <Button type="submit" disabled={createChannel.isPending}>
-              {createChannel.isPending ? '创建中…' : '创建'}
+              {createChannel.isPending ? 'Creating…' : 'Create'}
             </Button>
           </DialogFooter>
         </form>
@@ -241,9 +241,10 @@ function RegularMemberPicker({
   if (candidates.length === 0) {
     return (
       <div className="flex flex-col gap-1.5">
-        <Label>成员</Label>
+        <Label>Members</Label>
         <span className="text-xs text-text-muted">
-          这个 Workspace 还没有成员。先去 Members 面板加。
+          This workspace has no members yet. Add them from the Members panel
+          first.
         </span>
       </div>
     );
@@ -252,7 +253,7 @@ function RegularMemberPicker({
   return (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor="se-add-member">
-        成员
+        Members
         <span className="ml-1 text-text-muted">
           ({selected.length} / {candidates.length})
         </span>
@@ -264,9 +265,9 @@ function RegularMemberPicker({
         value={selected}
         onChange={onChange}
         placeholder={
-          selected.length === 0 ? '选择要加入的成员…' : '继续添加成员…'
+          selected.length === 0 ? 'Select members to add…' : 'Add more members…'
         }
-        allSelectedText="已添加全部成员"
+        allSelectedText="All members added"
       />
     </div>
   );
