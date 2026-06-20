@@ -524,6 +524,7 @@ export function ThreadPanel({
           {showScrollBottom || shouldResetToLatest ? (
             <button
               type="button"
+              data-scroll-bottom
               aria-label={shouldResetToLatest ? '跳到最新回复' : '滚动到底部'}
               title={shouldResetToLatest ? '跳到最新回复' : '滚动到底部'}
               onClick={handleScrollBottomClick}

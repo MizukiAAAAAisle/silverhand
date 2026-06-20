@@ -202,7 +202,7 @@ export function AgentProfileCard({
             <div className="mt-1 flex items-center gap-1.5 px-2 text-xs text-text-muted">
               <span className="font-mono">@{agent.name}</span>
               <Lock className="size-3" />
-              <span>handle is locked in v1</span>
+              <span>handle is locked</span>
             </div>
           </div>
         </div>

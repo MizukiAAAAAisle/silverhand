@@ -545,6 +545,29 @@
   box-shadow: 2px 2px 0 var(--forza6-ink);
 }
 
+/* ── Scroll-to-bottom FAB — poster sticker, not Material blob (#task:1184) ──
+   The back-to-bottom button (ChannelView + ThreadPanel, one shared primitive)
+   ships as a round pink pill with a soft `shadow-lg` blur — the generic
+   Material FAB. In forza6 that round/blurred shape is the lone non-poster
+   element floating over the message list; everything else is a square,
+   ink-framed sticker.
+
+   Adapt it into the poster sticker family: square (0 radius) + ink frame at
+   the shared `--control-border-width` (forza6 = 2px) + hard offset ink shadow
+   replacing the blur. Fill is WHITE (`--bg-floating`, the floating-surface
+   token) + ink glyph — shiki review: pink fill + black frame read ugly, so
+   this drops `bg-accent` for the same white-paper-on-ink recipe as the other
+   chrome stickers (the FAB earns ink frame + glyph, not a loud pink ground).
+   Theme-neutral hook; warm / slack keep the Tailwind round pink pill + soft
+   shadow untouched. */
+[data-theme='forza6'] [data-scroll-bottom] {
+  background-color: var(--bg-floating);
+  color: var(--forza6-ink);
+  border: var(--control-border-width) solid var(--forza6-ink);
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--forza6-ink);
+}
+
 /* ── Workspace `W` identity badge — filled ink square (#task:1160) ──
    WorkspacesPanel renders a bare serif `W` (`[data-workspace-icon]`) for
    PINNED / WORKSPACES / ARCHIVED rows. In base themes it inherits the row's

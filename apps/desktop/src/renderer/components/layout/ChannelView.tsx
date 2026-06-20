@@ -1511,6 +1511,7 @@ function MessageList({
       {showScrollBottom || shouldResetToLatest ? (
         <button
           type="button"
+          data-scroll-bottom
           aria-label={shouldResetToLatest ? '跳到最新消息' : '滚动到底部'}
           title={shouldResetToLatest ? '跳到最新消息' : '滚动到底部'}
           onClick={() => {
