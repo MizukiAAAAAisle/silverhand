@@ -180,7 +180,7 @@ function ScreenshotRow({
           </span>
         }
         timestamp={<span className="text-[11px] text-text-muted">{time}</span>}
-        headerMeta={null}
+        taskTag={null}
         body={
           /* Reuse Markdown renderer but omit every interaction callback.
              Inline @-mention / #-channel pills still resolve via the explicit
@@ -210,7 +210,11 @@ function ScreenshotRow({
             />
           ) : null
         }
-        reactions={<ReactionChipRow reactions={message.reactions} />}
+        reactions={
+          message.reactions && message.reactions.length > 0 ? (
+            <ReactionChipRow reactions={message.reactions} />
+          ) : null
+        }
         trailing={null}
       />
     </div>

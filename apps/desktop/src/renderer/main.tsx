@@ -18,7 +18,7 @@ import '@fontsource/space-grotesk/500.css';
 import '@fontsource/space-grotesk/600.css';
 import '@fontsource/space-grotesk/700.css';
 // Space Mono — forza6's sigil/code face. 400/700 cover inline `code`,
-// task sigils (#NNN), TaskMetaTag claim chips, etc.
+// task sigils (#NNN), MessageTaskTag claim chips, etc.
 import '@fontsource/space-mono/400.css';
 import '@fontsource/space-mono/700.css';
 import './styles/global.css';

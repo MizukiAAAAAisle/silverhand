@@ -1,7 +1,7 @@
 import { type FocusEvent, useCallback, useEffect, useState } from 'react';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { Bookmark, Check, ClipboardCheck, CornerUpLeft, FileText, SmilePlus, User } from 'lucide-react';
+import { Bookmark, Check, CornerUpLeft, FileText, SmilePlus, User } from 'lucide-react';
 import type {
   AgentDto,
   AttachmentSnapshot,
@@ -32,6 +32,8 @@ import { MessageContextMenu } from './MessageContextMenu';
 import { MessageReactions } from './MessageReactions';
 import { MessageRowContent } from './MessageRowContent';
 import { ReactionPicker } from './ReactionPicker';
+import { StatusPicker, taskStatusLabel, TASK_STATUS_ICON } from '@/components/tasks/TaskStatusBadge';
+import { useUpdateTaskStatus } from '@/features/tasks/hooks';
 import { useToggleReaction } from '@/features/channels/reaction-hooks';
 import { useMessageLayoutMode } from './useMessageLayoutMode';
 
@@ -257,13 +259,14 @@ export function MessageItem({
     (userId: string) => toMembersUser(userId),
     [toMembersUser],
   );
-  const taskTag = (
-    <TaskMetaTag
-      message={message}
-      agentsById={agentsById}
-      userResolver={userResolver}
-    />
-  );
+  const taskTag =
+    message.task_number !== null && message.task_status !== null ? (
+      <MessageTaskTag
+        message={message}
+        agentsById={agentsById}
+        userResolver={userResolver}
+      />
+    ) : null;
   const [hover, setHover] = useState(false);
   // React-driven focus-within: tracking it as state and OR-ing into
   // the visibility class is more reliable than relying on Tailwind's
@@ -353,7 +356,7 @@ export function MessageItem({
   // The shared content layer owns section order + layout; MessageItem fills
   // each (required) slot with its INTERACTIVE node. Anything default-visible
   // must flow through a slot here — that is the anti-drift contract with the
-  // static export path (see MessageRowContent). `headerMeta`/`trailing` are
+  // static export path (see MessageRowContent). `taskTag`/`trailing` are
   // live-only adornments; the export passes `null` for them explicitly.
   const authorNode = (
     <AuthorLabel
@@ -394,65 +397,63 @@ export function MessageItem({
     message.attachments && message.attachments.length > 0 ? (
       <AttachmentList attachments={message.attachments} alignRight={alignRight} />
     ) : null;
-  const reactionsNode = (
-    <MessageReactions
-      message={message}
-      alignRight={alignRight}
-      canReact={canReact}
-      onReact={(emoji, remove) =>
-        toggleReaction.mutate({ messageId: message.id, emoji, remove })
-      }
-      onPickerOpenChange={setReactionPickerOpen}
-    />
-  );
+  // Null when the message has no reactions — keeps the shared bottom row
+  // (task tag · replies · reactions) from rendering an empty slot.
+  const reactionsNode =
+    message.reactions && message.reactions.length > 0 ? (
+      <MessageReactions
+        message={message}
+        alignRight={alignRight}
+        canReact={canReact}
+        onReact={(emoji, remove) =>
+          toggleReaction.mutate({ messageId: message.id, emoji, remove })
+        }
+        onPickerOpenChange={setReactionPickerOpen}
+      />
+    ) : null;
   // Inline thread-replies badge — only when the message has an open thread.
   // Carries real information (N replies, click to open), so it earns persistent
   // space below the bubble. With an enriched summary it upgrades to a
   // Slack-style strip (replier avatars + count + last-reply time); the count
   // stays ink, not accent — louder via INFORMATION, not by spending the brand
-  // hue. Live-only: the export omits it (passes `null`).
+  // hue. Live-only: the export omits it (passes `null`). A bare inline element
+  // — the shared bottom row (MessageRowContent) owns spacing + alignment so
+  // task tag · replies · reactions share one line.
   const trailingNode =
     threadReplyCount !== undefined && onStartThread ? (
-      <div
-        className={
-          'mt-1 flex items-center text-xs ' +
-          (alignRight ? 'justify-end' : 'justify-start')
-        }
+      <button
+        type="button"
+        data-panel-pill="thread"
+        onClick={() => onStartThread(message)}
+        title={replyBadgeTitle}
+        aria-label={replyBadgeTitle}
+        className="inline-flex h-[22px] items-center gap-1.5 border border-border-subtle px-2 text-xs text-text-muted transition-colors hover:border-[color:var(--border-control-hover)] hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
       >
-        <button
-          type="button"
-          data-panel-pill="thread"
-          onClick={() => onStartThread(message)}
-          title={replyBadgeTitle}
-          aria-label={replyBadgeTitle}
-          className="inline-flex items-center gap-1.5 border border-border-subtle px-2 py-0.5 text-text-muted transition-colors hover:border-[color:var(--border-control-hover)] hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
-        >
-          {enrichedReply ? (
-            <>
-              <span className="flex items-center gap-[3px]">
-                {enrichedReply.repliers.map(r => (
-                  <span key={`${r.kind}:${r.id}`} className="shrink-0">
-                    {renderReplierAvatar(r, 18)}
-                  </span>
-                ))}
-                {enrichedReply.replier_total > enrichedReply.repliers.length ? (
-                  <span className="flex size-[18px] shrink-0 items-center justify-center rounded-none bg-bg-muted text-[9px] font-medium text-text-muted">
-                    +{enrichedReply.replier_total - enrichedReply.repliers.length}
-                  </span>
-                ) : null}
-              </span>
-              <span className="font-medium">{replyBadgeLabel}</span>
-              <span className="text-text-muted">·</span>
-              <span className="text-text-muted">{replyRelativeTime}</span>
-            </>
-          ) : (
-            <>
-              <CornerUpLeft className="size-3.5 shrink-0" />
-              <span>{replyBadgeLabel}</span>
-            </>
-          )}
-        </button>
-      </div>
+        {enrichedReply ? (
+          <>
+            <span className="flex items-center gap-[3px]">
+              {enrichedReply.repliers.map(r => (
+                <span key={`${r.kind}:${r.id}`} className="shrink-0">
+                  {renderReplierAvatar(r, 16)}
+                </span>
+              ))}
+              {enrichedReply.replier_total > enrichedReply.repliers.length ? (
+                <span className="flex size-[16px] shrink-0 items-center justify-center rounded-none bg-bg-muted text-[9px] font-medium text-text-muted">
+                  +{enrichedReply.replier_total - enrichedReply.repliers.length}
+                </span>
+              ) : null}
+            </span>
+            <span className="font-medium">{replyBadgeLabel}</span>
+            <span className="text-text-muted">·</span>
+            <span className="text-text-muted">{replyRelativeTime}</span>
+          </>
+        ) : (
+          <>
+            <CornerUpLeft className="size-3.5 shrink-0" />
+            <span>{replyBadgeLabel}</span>
+          </>
+        )}
+      </button>
     ) : null;
 
   const row = (
@@ -517,7 +518,7 @@ export function MessageItem({
         columnClassName="min-w-0 max-w-[85%]"
         author={authorNode}
         timestamp={timestampNode}
-        headerMeta={taskTag}
+        taskTag={taskTag}
         body={bodyNode}
         attachments={attachmentsNode}
         reactions={reactionsNode}
@@ -622,15 +623,27 @@ export function MessageItem({
   );
 }
 
-const TASK_STATUS_LABELS: Record<NonNullable<MessageDto['task_status']>, string> = {
-  todo: 'todo',
-  in_progress: 'doing',
-  in_review: 'review',
-  done: 'done',
-  closed: 'closed',
-};
-
-function TaskMetaTag({
+/**
+ * Task tag for a message that has been claimed/promoted as a task.
+ *
+ * Lives at the message's BOTTOM edge — its own row ahead of reactions and
+ * the thread-reply badge (shiki #task:1185), aligned to the message's
+ * reading edge.
+ *
+ * It is ONE cohesive tag (shiki review: the split lead + chip read as
+ * scattered). The whole tag is a single button: `<status-icon> #<num> ·
+ * <assignee>`, status-coloured via the shared `[data-task-status]` token
+ * contract (so it states its status at a glance and matches every other
+ * status chip per theme — incl. forza6's poster caps / 0-radius). The status
+ * is carried by the leading glyph (from the shared `TASK_STATUS_ICON` source,
+ * so it tracks the kanban board) + the fill colour — no redundant status
+ * text. Clicking anywhere on the tag opens the "Move to" picker, which drives
+ * `useUpdateTaskStatus` (`POST /api/tasks/:id/status`) — the same any→any path
+ * the inline `#task:N` reference uses. The task title lives in the tooltip.
+ *
+ * Renders nothing for a non-task message.
+ */
+function MessageTaskTag({
   message,
   agentsById,
   userResolver,
@@ -639,39 +652,52 @@ function TaskMetaTag({
   agentsById: Map<string, AgentDto>;
   userResolver?: UserNameResolver;
 }): JSX.Element | null {
-  if (message.task_number === null) return null;
+  const updateStatus = useUpdateTaskStatus();
+  if (message.task_number === null || message.task_status === null) return null;
 
+  const status = message.task_status;
+  const label = taskStatusLabel(status);
+  const StatusIcon = TASK_STATUS_ICON[status];
   const assignee = message.task_assignee
     ? formatTaskAssignee(message.task_assignee, agentsById, userResolver)
     : null;
-  const status = message.task_status
-    ? TASK_STATUS_LABELS[message.task_status]
-    : null;
-  const title = [
-    `Task #${message.task_number}`,
-    status,
-    assignee,
-    message.task_title,
-  ]
+  const title = [`Task #${message.task_number}`, label, assignee, message.task_title]
     .filter(Boolean)
     .join(' · ');
 
   return (
-    <span
-      title={title}
-      className="ml-2 inline-flex h-5 max-w-[200px] items-center gap-1 border border-[var(--border-task-tag)] bg-[var(--bg-task-tag)] px-1.5 align-middle text-[11px] font-semibold leading-none text-[var(--text-on-task-tag)]"
+    <StatusPicker
+      current={status}
+      onChange={next =>
+        updateStatus.mutate({ messageId: message.id, status: next })
+      }
     >
-      <ClipboardCheck className="size-3 shrink-0" aria-hidden />
-      {/* ASCII sigil (`#NNN`) in mono so the number lines up identically
-          across tags; the assignee handle stays sans because display_name
-          may contain CJK and mono CJK fallback (PingFang etc.) looks
-          uneven next to ASCII digits. See forza6 font split spec
-          (msg vWYNLYq_Wtw6P4rj). */}
-      <span className="min-w-0 truncate">
-        <span className="font-mono">#{message.task_number}</span>
-        {assignee ? <span> · {assignee}</span> : null}
-      </span>
-    </span>
+      <button
+        type="button"
+        data-message-task-tag
+        // Status colour / border / radius all flow from the shared
+        // `[data-task-status]` token contract (global.css + per-theme),
+        // so this tag stays in lockstep with the board chips. No bg /
+        // border / colour utilities here — they would fight the tokens.
+        data-task-status={status}
+        title={title}
+        aria-label={`Task #${message.task_number}（${label}）— 点击更改状态`}
+        // Stop the click from reaching the row's selection/jump capture.
+        onClick={e => e.stopPropagation()}
+        className="inline-flex h-[22px] max-w-[220px] cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-[var(--chip-radius)] px-2 text-[11px] font-medium leading-none transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+      >
+        {/* Status glyph from the shared TASK_STATUS_ICON source (kanban /
+            drawer use the same), so a future icon swap updates everywhere. */}
+        <StatusIcon className="size-3 shrink-0" aria-hidden />
+        {/* ASCII sigil (`#NNN`) in mono so the number reads as a task
+            reference; forza6 swaps it to poster display caps via the
+            `[data-task-status]` font rule, which is on-theme there. */}
+        <span className="font-mono shrink-0">#{message.task_number}</span>
+        {assignee ? (
+          <span className="min-w-0 truncate font-normal">· {assignee}</span>
+        ) : null}
+      </button>
+    </StatusPicker>
   );
 }
 

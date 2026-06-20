@@ -1,6 +1,14 @@
 import { useState, type ReactElement, type ReactNode } from 'react';
 import * as Popover from '@radix-ui/react-popover';
-import { ArrowRight } from 'lucide-react';
+import {
+  Archive,
+  ArrowRight,
+  CheckCircle2,
+  Circle,
+  CircleDashed,
+  CircleEllipsis,
+  type LucideIcon,
+} from 'lucide-react';
 import type { TaskStatus } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import {
@@ -48,6 +56,29 @@ const ALL_STATUSES: TaskStatus[] = [
   'done',
   'closed',
 ];
+
+/** Canonical lowercase status label (`todo` / `in progress` / …). Exported so
+ *  other surfaces (e.g. the message task tag) render the SAME vocabulary
+ *  instead of forking their own label map. */
+export function taskStatusLabel(status: TaskStatus): string {
+  return LABELS[status];
+}
+
+/**
+ * Canonical per-status icon. The SINGLE source for the status glyph vocabulary
+ * (shiki #task:1185: "icon 引用同一个 source，到时候更改 icon 可以一起更新") —
+ * the kanban board (`TasksSection`), the drawer (`WorkspaceTasksDrawer`) and the
+ * message task tag all read from here, so swapping a glyph updates every
+ * surface at once. Colour stays per-consumer via the `--task-status-*-text`
+ * tokens; only the glyph is centralised.
+ */
+export const TASK_STATUS_ICON: Record<TaskStatus, LucideIcon> = {
+  todo: Circle,
+  in_progress: CircleDashed,
+  in_review: CircleEllipsis,
+  done: CheckCircle2,
+  closed: Archive,
+};
 
 const CHIP =
   // `leading-none` (v6.5n, #task:917): the chip is by definition a
@@ -107,7 +138,14 @@ export function TaskStatusBadge({
   );
 }
 
-function StatusPicker({
+/**
+ * The click-to-change status picker, extracted as the trigger-wrapping
+ * primitive so any element can become a "click to move task to another
+ * status" affordance — `TaskStatusBadge` (the chip), and the message task
+ * tag (the whole tag, #task:1185). `children` is the trigger (Radix
+ * `asChild`), so the consumer owns the trigger's look.
+ */
+export function StatusPicker({
   current,
   onChange,
   onOpenChange,

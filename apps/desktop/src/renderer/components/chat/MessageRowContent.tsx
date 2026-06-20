@@ -23,7 +23,7 @@ import type { ReactNode } from 'react';
  * forgot the export" — the exact recurrence this task fixes (reactions were
  * invisible on screenshots) — becomes a build error rather than a silent gap.
  *
- * That is why even genuinely live-only adornments (`headerMeta` = task tag,
+ * That is why even genuinely live-only adornments (`taskTag` = task tag,
  * `trailing` = thread-replies badge) are required: the export passes `null`,
  * making its deliberate omission explicit instead of implicit. The single
  * residual hole — inlining an adornment straight into the live chrome wrapper
@@ -47,8 +47,10 @@ export interface MessageRowContentProps {
   /** Timestamp node (a `<time>`/`<span>` with its intrinsic type styles only;
    *  the positional margin is owned by this layout). */
   timestamp: ReactNode;
-  /** Live-only inline header adornment (the task tag). Export passes `null`. */
-  headerMeta: ReactNode;
+  /** Live-only below-content task tag — its own row at the message's bottom
+   *  edge, ahead of `reactions` / `trailing` (#task:1185). Export passes
+   *  `null`. */
+  taskTag: ReactNode;
   /** Rendered markdown body. */
   body: ReactNode;
   /** Attachment list node, or `null` when the message has no attachments. */
@@ -66,7 +68,7 @@ export function MessageRowContent({
   columnClassName,
   author,
   timestamp,
-  headerMeta,
+  taskTag,
   body,
   attachments,
   reactions,
@@ -79,13 +81,11 @@ export function MessageRowContent({
           <>
             {timestamp}
             <span className="ml-2 inline-block">{author}</span>
-            {headerMeta}
           </>
         ) : (
           <>
             {author}
             <span className="ml-2">{timestamp}</span>
-            {headerMeta}
           </>
         )}
       </header>
@@ -99,8 +99,23 @@ export function MessageRowContent({
         {attachments}
       </div>
 
-      {reactions}
-      {trailing}
+      {/* One shared bottom row — task tag · replies · reactions on a single
+          line, no wrapping (shiki #task:1185). Each child is a bare inline
+          element; this row owns the top spacing + alignment + gap, so they
+          never stack. Renders only when at least one is present. Reversed for
+          own-messages so the task tag hugs the reading (right) edge. */}
+      {taskTag || trailing || reactions ? (
+        <div
+          className={
+            'mt-1.5 flex flex-nowrap items-center gap-2 ' +
+            (alignRight ? 'flex-row-reverse' : '')
+          }
+        >
+          {taskTag}
+          {trailing}
+          {reactions}
+        </div>
+      ) : null}
     </div>
   );
 }

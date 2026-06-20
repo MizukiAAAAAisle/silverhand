@@ -1,13 +1,8 @@
 import { memo, useMemo, useState } from 'react';
 import {
-  Archive,
-  CheckCircle2,
   CheckSquare,
   ChevronDown,
   ChevronRight,
-  Circle,
-  CircleDashed,
-  CircleEllipsis,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
@@ -24,7 +19,11 @@ import {
 } from '@/features/tasks/taskFilters';
 import { isTaskDrag, readTaskDrag, writeTaskDrag } from '@/features/tasks/taskDnd';
 import { useRelativeTime } from '@/components/chat/useRelativeTime';
-import { TaskStatusBadge, TaskCardContextMenu } from '@/components/tasks/TaskStatusBadge';
+import {
+  TaskStatusBadge,
+  TaskCardContextMenu,
+  TASK_STATUS_ICON,
+} from '@/components/tasks/TaskStatusBadge';
 import { TaskDropPlaceholder } from '@/components/tasks/TaskDropPlaceholder';
 import { TaskFilterBar } from '@/components/tasks/TaskFilterBar';
 
@@ -195,31 +194,31 @@ const COLUMNS: ReadonlyArray<ColumnSpec> = [
   {
     status: 'todo',
     label: 'Todo',
-    icon: Circle,
+    icon: TASK_STATUS_ICON.todo,
     iconClass: 'text-[color:var(--task-status-todo-text)]',
   },
   {
     status: 'in_progress',
     label: 'In progress',
-    icon: CircleDashed,
+    icon: TASK_STATUS_ICON.in_progress,
     iconClass: 'text-[color:var(--task-status-in-progress-text)]',
   },
   {
     status: 'in_review',
     label: 'In review',
-    icon: CircleEllipsis,
+    icon: TASK_STATUS_ICON.in_review,
     iconClass: 'text-[color:var(--task-status-in-review-text)]',
   },
   {
     status: 'done',
     label: 'Done',
-    icon: CheckCircle2,
+    icon: TASK_STATUS_ICON.done,
     iconClass: 'text-[color:var(--task-status-done-text)]',
   },
   {
     status: 'closed',
     label: 'Closed',
-    icon: Archive,
+    icon: TASK_STATUS_ICON.closed,
     iconClass: 'text-[color:var(--task-status-closed-text)]',
   },
 ];

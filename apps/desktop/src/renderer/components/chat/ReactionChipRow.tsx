@@ -21,10 +21,13 @@ import type { ReactionAggregateDto } from '@silverhand/shared';
  */
 
 /** Row wrapper class shared by the live and static reaction rows so the two
- *  never drift in spacing / wrapping / alignment. */
+ *  never drift in spacing / wrapping / alignment. Top spacing + alignment of
+ *  the message's bottom row is owned by `MessageRowContent` (task tag ·
+ *  replies · reactions share one line, #task:1185); this class only governs
+ *  the chips' own flex/gap. */
 export function reactionRowClass(alignRight: boolean): string {
   return (
-    'mt-1.5 flex flex-wrap items-center gap-1.5 ' +
+    'flex flex-wrap items-center gap-1.5 ' +
     (alignRight ? 'justify-end' : 'justify-start')
   );
 }

@@ -168,9 +168,6 @@
   --text-nav-rail: var(--forza6-ink);
   --text-nav-rail-hover: var(--forza6-ink);
   --bg-nav-rail-hover: rgba(0, 0, 0, 0.06);
-  --bg-task-tag: var(--brand-primary);
-  --text-on-task-tag: var(--text-on-brand);
-  --border-task-tag: rgba(0, 0, 0, 0.18);
   --sidebar-row-border-width: 2px;
 
   /* ── Sidebar row state — festive lime selected; lighter pink wash on hover ──
