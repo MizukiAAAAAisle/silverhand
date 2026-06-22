@@ -1,0 +1,471 @@
+import type { ConversationActivityEvent } from '@silverhand/shared';
+
+/**
+ * Presentation helpers for the Activity timeline. Pure, framework-free, and
+ * unit-tested — the React layer (`AgentActivityTimeline`) only renders what
+ * these return.
+ *
+ * Scope contract (#task:1187, agreed with Cindy/Alice): this is a pure
+ * PRESENTATION layer over the raw `conversation_events` rows. It never mutates
+ * the event stream, never invents tool RESULT bodies (those stay marker-only —
+ * the privacy decision from #task:1186), and the codex fragment coalescing here
+ * is a DISPLAY fallback only — the durable retention/pagination fix lives in a
+ * separate backend coalescer (Cindy).
+ */
+
+// ── path abbreviation ──────────────────────────────────────────────────────
+
+/** Collapse an absolute home path to `~/…` so `Read /Users/x/work/a.ts`
+ *  reads as `Read ~/work/a.ts`. Best-effort, macOS + linux home shapes. */
+export function abbreviateHome(p: string): string {
+  return p
+    .replace(/\/Users\/[^/\s]+\//g, '~/')
+    .replace(/\/home\/[^/\s]+\//g, '~/');
+}
+
+// ── tool_call presentation ─────────────────────────────────────────────────
+
+export type ToolDetail =
+  | { kind: 'code'; text: string }
+  | { kind: 'json'; text: string }
+  | { kind: 'diff'; removed: string; added: string };
+
+export interface ToolPresentation {
+  /** Verb shown bold, e.g. `Bash`, `Read`, `Edit`, `silverhand task status`. */
+  verb: string;
+  /** Inline argument after the verb (monospace), e.g. `ls ~/work`. */
+  arg: string | null;
+  /** Optional richer body rendered below the title. */
+  detail: ToolDetail | null;
+}
+
+function asRecord(input: unknown): Record<string, unknown> | null {
+  return input !== null && typeof input === 'object' && !Array.isArray(input)
+    ? (input as Record<string, unknown>)
+    : null;
+}
+
+function s(rec: Record<string, unknown> | null, key: string): string | null {
+  const v = rec?.[key];
+  return typeof v === 'string' ? v : null;
+}
+
+function jsonDetail(input: unknown): ToolDetail | null {
+  if (input === null || input === undefined) return null;
+  if (typeof input === 'string') {
+    return input.length > 0 ? { kind: 'code', text: input } : null;
+  }
+  try {
+    const text = JSON.stringify(input, null, 2);
+    if (!text || text === '{}' || text === 'null' || text === '[]') return null;
+    return { kind: 'json', text };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Strip a `(/path/)?{zsh,bash,sh} -…c <quoted>` launcher down to its inner
+ * command, so a wrapped `silverhand …` is seen at command position. ONLY this
+ * exact launcher shape is unwrapped — a quoted *argument* to any other program
+ * (`rg "silverhand …"`) is returned unchanged, so it is never mistaken for a
+ * launcher.
+ *
+ * The relaxed part: once the launcher head + opening quote is confirmed, the
+ * inner command is everything to the end of the string — the closing quote is
+ * dropped only if present. A truncated command (the 500-char broadcast cap can
+ * cut mid-heredoc) has no closing quote, but we still unwrap so the inner
+ * `silverhand …` is recognised. This relaxation is gated on the launcher head,
+ * so it never re-opens the `rg "silverhand …"` false positive.
+ */
+function unwrapShellLauncher(command: string): string {
+  const trimmed = command.trim();
+  const m = /^(?:\S*\/)?(?:zsh|bash|sh)\s+-[a-z]*c[a-z]*\s+(['"])([\s\S]*)$/i.exec(
+    trimmed,
+  );
+  if (!m) return trimmed;
+  let inner = m[2]!;
+  if (inner.endsWith(m[1]!)) inner = inner.slice(0, -1);
+  return inner.trim();
+}
+
+/**
+ * Scan an (unwrapped) shell command left-to-right, tracking `'` / `"` quote
+ * state, and return the first `silverhand <noun> [verb]` that sits at a
+ * COMMAND position — the command start or right after an UNQUOTED separator
+ * (`;` `&` `|` `(`). A `silverhand` substring inside a quoted argument —
+ * `rg "silverhand …"`, `rg "(silverhand …)"`, `echo '; silverhand …'` — is
+ * never accepted, so the trace can't fabricate a fake action. Deliberately a
+ * small scanner, not a full shell parser: newline is NOT a separator (so a
+ * heredoc body line isn't mistaken for a command) and backticks aren't tracked.
+ */
+function findSilverhandCommand(
+  inner: string,
+): { noun: string; verb?: string } | null {
+  let quote: string | null = null;
+  let atCmdPos = true;
+  for (let i = 0; i < inner.length; i++) {
+    const c = inner[i]!;
+    if (quote) {
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      atCmdPos = false;
+      continue;
+    }
+    if (c === ' ' || c === '\t') continue;
+    if (c === ';' || c === '&' || c === '|' || c === '(') {
+      atCmdPos = true;
+      continue;
+    }
+    if (atCmdPos) {
+      const m = /^silverhand\s+([a-z][a-z-]*)(?:\s+([a-z][a-z-]*))?/i.exec(
+        inner.slice(i),
+      );
+      if (m) return { noun: m[1]!.toLowerCase(), verb: m[2]?.toLowerCase() };
+    }
+    atCmdPos = false;
+  }
+  return null;
+}
+
+/**
+ * Recognise a `silverhand <noun> [verb] …` CLI invocation and present it as a
+ * product-flavoured label rather than raw bash. The `silverhand` CLI is the
+ * agent's primary way of acting, so these show up constantly — a clean
+ * `Task claim` / `Message send` reads far better than the full command.
+ *
+ * Wrapped launchers (`/bin/zsh -lc "silverhand …"`) are unwrapped first; the
+ * quote-aware scanner (`findSilverhandCommand`) then accepts `silverhand` only
+ * at a real command position, never inside a quoted argument. Flags / heredoc
+ * bodies are dropped from the title, EXCEPT a `task` action surfaces its
+ * `--task-number` / `--status` as light secondary metadata (`#1187 → in_review`)
+ * — parsed only from the already-identified silverhand command, never the wider
+ * shell text.
+ */
+function presentSilverhandCli(command: string): ToolPresentation | null {
+  const inner = unwrapShellLauncher(command);
+  const found = findSilverhandCommand(inner);
+  if (!found) return null;
+  const { noun, verb: verbTok } = found;
+  const cap = noun.charAt(0).toUpperCase() + noun.slice(1);
+  let label = verbTok ? `${cap} ${verbTok.replace(/-/g, ' ')}` : cap;
+  // A few product-flavoured overrides (shiki/Cindy #task:1187):
+  //  - `task status` mutates a task's status → reads as "Task update".
+  //  - a `message send` carrying stale resolution is the conflict-retry path
+  //    shiki tracks distinctly → surface the "stale" suffix.
+  if (noun === 'task' && verbTok === 'status') label = 'Task update';
+  if (
+    noun === 'message' &&
+    verbTok === 'send' &&
+    /--stale-resolution|--anyway/.test(inner)
+  ) {
+    label = 'Message send stale';
+  }
+
+  // Task actions carry their target id + status change as secondary metadata.
+  // `--message-id` promote/claim has no task number → don't fabricate one.
+  let arg: string | null = null;
+  if (noun === 'task') {
+    const num = /--task-number[=\s]+(\d+)/.exec(inner)?.[1] ?? null;
+    const status =
+      verbTok === 'status' ? (/--status[=\s]+([a-z_]+)/.exec(inner)?.[1] ?? null) : null;
+    if (num && status) arg = `#${num} → ${status}`;
+    else if (num) arg = `#${num}`;
+    else if (status) arg = `→ ${status}`;
+  }
+  return { verb: label, arg, detail: null };
+}
+
+/**
+ * Map a `(name, input)` tool call to a legible presentation. Known tools get a
+ * verb + inline arg (+ optional diff/code body); anything unrecognised or
+ * malformed falls back to the raw name + pretty JSON — never a crash.
+ *
+ * Tool names span runtimes: claude/cursor use Claude-Code names (`Bash`,
+ * `Read`, `Edit`, `Write`, `Grep`, `Glob`, `Task`, `Skill`, `WebFetch`,
+ * `WebSearch`); codex uses `shell`, `file_change`, `web_search`, `mcp_*`.
+ */
+export function presentToolCall(name: string, input: unknown): ToolPresentation {
+  const rec = asRecord(input);
+  const n = name.toLowerCase();
+
+  if (n === 'bash' || n === 'shell') {
+    const verb = n === 'shell' ? 'Shell' : 'Bash';
+    const command = s(rec, 'command') ?? (typeof input === 'string' ? input : null);
+    if (command !== null) {
+      const cli = presentSilverhandCli(command);
+      if (cli) return cli;
+      const abbr = abbreviateHome(command.trim());
+      if (abbr.includes('\n')) {
+        return { verb, arg: null, detail: { kind: 'code', text: abbr } };
+      }
+      return { verb, arg: abbr.length > 0 ? abbr : null, detail: null };
+    }
+    return { verb, arg: null, detail: jsonDetail(input) };
+  }
+
+  if (n === 'read') {
+    const fp = s(rec, 'file_path') ?? s(rec, 'path');
+    if (fp) return { verb: 'Read', arg: abbreviateHome(fp), detail: null };
+  }
+
+  if (n === 'edit' || n === 'multiedit') {
+    const fp = s(rec, 'file_path') ?? s(rec, 'path');
+    const oldS = s(rec, 'old_string');
+    const newS = s(rec, 'new_string');
+    if (fp && (oldS !== null || newS !== null)) {
+      return {
+        verb: 'Edit',
+        arg: abbreviateHome(fp),
+        detail: { kind: 'diff', removed: oldS ?? '', added: newS ?? '' },
+      };
+    }
+    if (fp) return { verb: 'Edit', arg: abbreviateHome(fp), detail: jsonDetail(input) };
+  }
+
+  if (n === 'write') {
+    const fp = s(rec, 'file_path') ?? s(rec, 'path');
+    const content = s(rec, 'content');
+    if (fp) {
+      return {
+        verb: 'Write',
+        arg: abbreviateHome(fp),
+        detail: content !== null ? { kind: 'diff', removed: '', added: content } : null,
+      };
+    }
+  }
+
+  // codex file_change — `{ path, kind: 'add'|'modify'|'delete' }`
+  if (n === 'file_change') {
+    const p = s(rec, 'path');
+    const kind = s(rec, 'kind');
+    if (p) {
+      return {
+        verb: 'Edit',
+        arg: `${abbreviateHome(p)}${kind ? ` (${kind})` : ''}`,
+        detail: null,
+      };
+    }
+  }
+
+  if (n === 'grep') {
+    const pattern = s(rec, 'pattern');
+    const path = s(rec, 'path');
+    if (pattern !== null) {
+      return {
+        verb: 'Grep',
+        arg: `${pattern}${path ? ` in ${abbreviateHome(path)}` : ''}`,
+        detail: null,
+      };
+    }
+  }
+
+  if (n === 'glob') {
+    const pattern = s(rec, 'pattern');
+    const path = s(rec, 'path');
+    if (pattern !== null) {
+      return {
+        verb: 'Glob',
+        arg: `${pattern}${path ? ` in ${abbreviateHome(path)}` : ''}`,
+        detail: null,
+      };
+    }
+  }
+
+  if (n === 'task') {
+    const desc = s(rec, 'description') ?? s(rec, 'subagent_type');
+    return { verb: 'Task', arg: desc, detail: desc ? null : jsonDetail(input) };
+  }
+
+  if (n === 'skill') {
+    const cmd = s(rec, 'command') ?? s(rec, 'skill');
+    return { verb: 'Skill', arg: cmd, detail: cmd ? null : jsonDetail(input) };
+  }
+
+  if (n === 'webfetch') {
+    const url = s(rec, 'url');
+    if (url) return { verb: 'Fetch', arg: url, detail: null };
+  }
+
+  if (n === 'websearch' || n === 'web_search') {
+    const q = s(rec, 'query');
+    if (q !== null) return { verb: 'Search', arg: q, detail: null };
+  }
+
+  // Unknown / MCP / malformed input → raw name + pretty JSON.
+  return { verb: name, arg: null, detail: jsonDetail(input) };
+}
+
+// ── fragment coalescing (display fallback for codex token streams) ──────────
+
+export type ActivityDisplayItem =
+  | {
+      type: 'group';
+      key: string;
+      kind: 'thinking' | 'text';
+      text: string;
+      representative: ConversationActivityEvent;
+      count: number;
+    }
+  | {
+      type: 'event';
+      key: string;
+      event: ConversationActivityEvent;
+      /** "This operation finished." Set on a `tool_call` whose matching
+       *  `tool_output` was folded in, and on a `compaction_started` whose
+       *  matching `compaction_finished` was folded in — both render a
+       *  completion marker (✓ / done icon) in place of the in-flight state. */
+      completed?: boolean;
+    };
+
+function textOf(e: ConversationActivityEvent): string {
+  const p = e.payload as Record<string, unknown> | null;
+  const v = p?.['text'];
+  return typeof v === 'string' ? v : '';
+}
+
+function callIdOf(e: ConversationActivityEvent): string | null {
+  const v = (e.payload as Record<string, unknown> | null)?.['tool_call_id'];
+  return typeof v === 'string' ? v : null;
+}
+
+/**
+ * Coalesce a sorted (ascending-by-id) event list into display items:
+ *
+ *  - maximal runs of consecutive same-kind `thinking` / `text` rows fold into
+ *    one group (concatenated text) — codex emits one row PER token delta, so a
+ *    reasoning block arrives as dozens of one-word rows; grouping restores
+ *    block granularity. A run breaks on ANY non-fragment kind AND on a
+ *    thinking↔text switch, so distinct passes never merge across a tool call.
+ *  - a `tool_output` is NOT shown on its own (the marker-only body carries no
+ *    information — #task:1186). When its `tool_call_id` matches a `tool_call`
+ *    in the window the output is dropped and the call is flagged `completed`
+ *    (rendered as a ✓ after the title); an orphan output (no matching call,
+ *    e.g. its call paged out) degrades to one light `returned` line.
+ *  - a `compaction_started` / `compaction_finished` pair folds the same way:
+ *    the started row shows a loading marker until its finished pairs in (FIFO,
+ *    no id on these rows), then flips to a done marker and the finished is
+ *    dropped. An orphan finished is a standalone done row; an orphan started
+ *    stays loading (never fabricated as complete).
+ *  - every other kind passes through as a singleton.
+ *
+ * Raw ids/rows are untouched (a group keys off its first id), so this composes
+ * with `mergeActivityById` dedupe/backfill and with any persist-side coalescer
+ * (a single already-merged block is just a length-1 run → unchanged).
+ */
+export function coalesceActivity(
+  events: ReadonlyArray<ConversationActivityEvent>,
+): ActivityDisplayItem[] {
+  // Pass 1: correlate tool_call ⇄ tool_output by id within the window.
+  const callIds = new Set<string>();
+  const outputIds = new Set<string>();
+  for (const e of events) {
+    const id = callIdOf(e);
+    if (id === null) continue;
+    if (e.kind === 'tool_call') callIds.add(id);
+    else if (e.kind === 'tool_output') outputIds.add(id);
+  }
+
+  // Pass 1b: pair compaction_started ⇄ compaction_finished. These rows carry no
+  // correlation id, so we pair by order — each finished closes the EARLIEST
+  // still-open started (FIFO). Edges (Cindy #task:1187): a finished with no open
+  // started is an orphan → standalone done; a started with no later finished
+  // stays loading (never fabricate a completion). `compactionDoneStartIds` are
+  // the started rows that got a finished (render as done); `foldedFinishedIds`
+  // are the finished rows folded into their started (dropped from the list).
+  const compactionDoneStartIds = new Set<number>();
+  const foldedFinishedIds = new Set<number>();
+  {
+    const openStarts: number[] = [];
+    for (const e of events) {
+      if (e.kind === 'compaction_started') {
+        openStarts.push(e.id);
+      } else if (e.kind === 'compaction_finished') {
+        const startId = openStarts.shift();
+        if (startId !== undefined) {
+          compactionDoneStartIds.add(startId);
+          foldedFinishedIds.add(e.id);
+        }
+      }
+    }
+  }
+
+  const out: ActivityDisplayItem[] = [];
+  let run: ConversationActivityEvent[] = [];
+  let runKind: 'thinking' | 'text' | null = null;
+
+  const flush = (): void => {
+    if (run.length === 0) return;
+    const first = run[0]!;
+    out.push({
+      type: 'group',
+      key: `g${first.id}`,
+      kind: runKind!,
+      text: run.map(textOf).join(''),
+      representative: first,
+      count: run.length,
+    });
+    run = [];
+    runKind = null;
+  };
+
+  for (const e of events) {
+    if (e.kind === 'thinking' || e.kind === 'text') {
+      if (runKind === e.kind) {
+        run.push(e);
+      } else {
+        flush();
+        run = [e];
+        runKind = e.kind;
+      }
+      continue;
+    }
+
+    flush();
+
+    if (e.kind === 'tool_output') {
+      const id = callIdOf(e);
+      // Folded into its tool_call → drop. Orphan → fall through to a light row.
+      if (id !== null && callIds.has(id)) continue;
+      out.push({ type: 'event', key: String(e.id), event: e });
+      continue;
+    }
+
+    if (e.kind === 'tool_call') {
+      const id = callIdOf(e);
+      out.push({
+        type: 'event',
+        key: String(e.id),
+        event: e,
+        completed: id !== null && outputIds.has(id),
+      });
+      continue;
+    }
+
+    if (e.kind === 'compaction_started') {
+      // Loading until a finished pairs in, then `completed` flips it to the
+      // done marker (the paired finished is dropped below).
+      out.push({
+        type: 'event',
+        key: String(e.id),
+        event: e,
+        completed: compactionDoneStartIds.has(e.id),
+      });
+      continue;
+    }
+
+    if (e.kind === 'compaction_finished') {
+      // Folded into its started → drop. Orphan → standalone done row.
+      if (foldedFinishedIds.has(e.id)) continue;
+      out.push({ type: 'event', key: String(e.id), event: e });
+      continue;
+    }
+
+    out.push({ type: 'event', key: String(e.id), event: e });
+  }
+  flush();
+  return out;
+}

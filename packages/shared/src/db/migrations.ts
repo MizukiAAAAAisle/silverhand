@@ -2930,6 +2930,14 @@ export const migrations: Migration[] = [
       DROP TABLE user_list_sort_mode_old;
     `,
   },
+  {
+    version: 49,
+    name: 'conversation_activity_agent_index',
+    up: `
+      CREATE INDEX IF NOT EXISTS idx_conversation_events_agent
+        ON conversation_events(conversation_id, agent_id, id);
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

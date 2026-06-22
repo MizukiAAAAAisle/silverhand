@@ -58,6 +58,8 @@ export type TaskAssigneeType = z.infer<typeof TaskAssigneeTypeSchema>;
 
 export const ConversationEventKindSchema = z.enum([
   'session_init',
+  'thinking',
+  'text',
   'tool_call',
   'tool_output',
   'file_change',
@@ -66,6 +68,9 @@ export const ConversationEventKindSchema = z.enum([
   'compaction_started',
   'compaction_finished',
   'turn_end',
+  'error',
+  'unknown',
+  'parsed_event_dropped',
 ]);
 export type ConversationEventKind = z.infer<typeof ConversationEventKindSchema>;
 

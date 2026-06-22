@@ -15,6 +15,7 @@ import {
 } from '@silverhand/host';
 import type { AgentRunState, RuntimeKind } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
+import { ConversationEventRepo } from '../../src/repos/conversation-event-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
@@ -1817,6 +1818,7 @@ function makeUnixHandler(fix: Fixture): RuntimeEventHandler {
           fix.events.push({ conv, kind: payload.kind, payload: payload.payload }),
       },
     ),
+    conversationActivity: new ConversationEventRepo(fix.db),
     logger: SILENT_LOGGER,
   });
 }

@@ -59,7 +59,12 @@
  *     spawn replays them.
  */
 import type { EventFrame, RuntimeStatusResult } from '@silverhand/host';
-import type { AgentRunState, ParsedEvent } from '@silverhand/shared';
+import type {
+  AgentRunState,
+  ConversationActivityEvent,
+  ParsedEvent,
+  ParsedEventKind,
+} from '@silverhand/shared';
 import type { ActivityLogWriter } from './activity-log-writer.js';
 import type { RunStateCache } from './run-state-cache.js';
 import { sanitizeParsedEventForBroadcast } from './event-sanitize.js';
@@ -166,6 +171,37 @@ export type RuntimeExitHandler = (
  * the pending-wake window. */
 export type RuntimeInitTimeoutHandler = (conversationId: string, agentId: string) => void;
 
+export interface ConversationActivitySink {
+  recordParsedEvent(params: {
+    conversationId: string;
+    agentId: string;
+    event: ParsedEvent;
+    createdAt: number;
+  }): ConversationActivityEvent | null;
+  recordParsedEventDropped(params: {
+    conversationId: string;
+    agentId: string;
+    parsedKind: ParsedEventKind;
+    encodedBytes: number;
+    reason: string;
+    createdAt: number;
+  }): ConversationActivityEvent;
+}
+
+type ConversationActivityRecordResult =
+  | ConversationActivityEvent
+  | ConversationActivityEvent[]
+  | null;
+
+type TextActivityKind = 'thinking' | 'text';
+
+interface PendingTextActivityBlock {
+  kind: TextActivityKind;
+  text: string;
+  omittedChars: number;
+  createdAt: number;
+}
+
 export interface RuntimeEventHandlerLogger {
   info(meta: object, msg: string): void;
   warn(meta: object, msg: string): void;
@@ -177,6 +213,8 @@ const NOOP_LOGGER: RuntimeEventHandlerLogger = {
   warn: () => {},
   error: () => {},
 };
+
+const CONVERSATION_ACTIVITY_TEXT_BLOCK_MAX_CHARS = 16 * 1024;
 
 export interface RuntimeEventHandlerDeps {
   client: RuntimeEventSource;
@@ -225,6 +263,10 @@ export interface RuntimeEventHandlerDeps {
    * with the original ConversationManager runtime contract. Writing
    * must never block or fail the SSE publish path. */
   activityLog?: ActivityLogWriter;
+  /** Optional product activity sink. When present, parsed runtime events
+   *  are inserted into `conversation_events` and the inserted row DTO is
+   *  published as `conversation_activity` on the conversation scope. */
+  conversationActivity?: ConversationActivitySink;
   logger?: RuntimeEventHandlerLogger;
 }
 
@@ -235,6 +277,41 @@ export interface RuntimeEventHandlerDeps {
  */
 function makeDaemonInstanceKey(daemonPid: number, startedAt: number): string {
   return `pid:${daemonPid}@${startedAt}`;
+}
+
+function activityBlockKey(conversationId: string, agentId: string): string {
+  return `${conversationId}|${agentId}`;
+}
+
+function truncateTextActivityFragment(text: string): {
+  text: string;
+  omittedChars: number;
+} {
+  if (text.length <= CONVERSATION_ACTIVITY_TEXT_BLOCK_MAX_CHARS) {
+    return { text, omittedChars: 0 };
+  }
+  return {
+    text: text.slice(0, CONVERSATION_ACTIVITY_TEXT_BLOCK_MAX_CHARS),
+    omittedChars: text.length - CONVERSATION_ACTIVITY_TEXT_BLOCK_MAX_CHARS,
+  };
+}
+
+function appendTextActivityFragment(
+  block: PendingTextActivityBlock,
+  fragment: string,
+): void {
+  if (fragment.length === 0) return;
+  if (block.omittedChars > 0) {
+    block.omittedChars += fragment.length;
+    return;
+  }
+  const available = CONVERSATION_ACTIVITY_TEXT_BLOCK_MAX_CHARS - block.text.length;
+  if (available <= 0) {
+    block.omittedChars += fragment.length;
+    return;
+  }
+  block.text += fragment.slice(0, available);
+  block.omittedChars += Math.max(0, fragment.length - available);
 }
 
 export class RuntimeEventHandler {
@@ -252,7 +329,9 @@ export class RuntimeEventHandler {
     trigger: 'initial' | 'reconnect' | 'daemon_ready',
   ) => void | Promise<void>;
   private readonly activityLog?: ActivityLogWriter;
+  private readonly conversationActivity?: ConversationActivitySink;
   private readonly logger: RuntimeEventHandlerLogger;
+  private readonly pendingTextActivityBlocks = new Map<string, PendingTextActivityBlock>();
 
   private unsubscribeEvents: (() => void) | null = null;
   private unsubscribeReconnect: (() => void) | null = null;
@@ -298,6 +377,7 @@ export class RuntimeEventHandler {
     this.onInitTimeoutCb = deps.onInitTimeout;
     this.onHydrateCompleteCb = deps.onHydrateComplete;
     this.activityLog = deps.activityLog;
+    this.conversationActivity = deps.conversationActivity;
     this.logger = deps.logger ?? NOOP_LOGGER;
   }
 
@@ -499,6 +579,18 @@ export class RuntimeEventHandler {
             event: sanitizeParsedEventForBroadcast(frame.parsed),
           },
         });
+        this.recordConversationActivity({
+          conversationId: frame.conversation_id,
+          agentId: frame.agent_id,
+          createdAt: frame.ts,
+          record: sink =>
+            this.recordParsedConversationActivity(sink, {
+              conversationId: frame.conversation_id,
+              agentId: frame.agent_id,
+              event: frame.parsed,
+              createdAt: frame.ts,
+            }),
+        });
         // B1 (Cindy `usjxj8AxX4AvJ5E-`): claude's `system.init` arrives
         // as a parsed `session_init` event. Project to DB
         // (`status='active', cli_session_id=<id>`) + `agent_status` SSE
@@ -597,6 +689,27 @@ export class RuntimeEventHandler {
       });
       this.activityLog?.write(state);
     }
+    this.recordConversationActivity({
+      conversationId: frame.conversation_id,
+      agentId: frame.agent_id,
+      createdAt: frame.ts,
+      record: sink =>
+        [
+          ...this.flushTextActivityBlock(
+            sink,
+            frame.conversation_id,
+            frame.agent_id,
+          ),
+          sink.recordParsedEventDropped({
+            conversationId: frame.conversation_id,
+            agentId: frame.agent_id,
+            parsedKind: frame.parsed_kind,
+            encodedBytes: frame.encoded_bytes,
+            reason: frame.reason,
+            createdAt: frame.ts,
+          }),
+        ],
+    });
     this.logger.warn(
       {
         kind: 'event',
@@ -610,6 +723,126 @@ export class RuntimeEventHandler {
       },
       'parsed event dropped at wire; projected metadata-only run-state loss marker',
     );
+  }
+
+  private recordConversationActivity(params: {
+    conversationId: string;
+    agentId: string;
+    createdAt: number;
+    record: (sink: ConversationActivitySink) => ConversationActivityRecordResult;
+  }): void {
+    if (!this.conversationActivity) return;
+    try {
+      const result = params.record(this.conversationActivity);
+      const events = Array.isArray(result)
+        ? result
+        : result
+          ? [result]
+          : [];
+      for (const event of events) {
+        this.events.publish(params.conversationId, {
+          kind: 'conversation_activity',
+          payload: event,
+        });
+      }
+    } catch (err) {
+      this.logger.error(
+        {
+          kind: 'event',
+          event: 'conversation_activity_persist_failed',
+          conversationId: params.conversationId,
+          agent_id: params.agentId,
+          created_at: params.createdAt,
+          err: (err as Error).message,
+        },
+        'conversation activity persist failed',
+      );
+    }
+  }
+
+  private recordParsedConversationActivity(
+    sink: ConversationActivitySink,
+    params: {
+      conversationId: string;
+      agentId: string;
+      event: ParsedEvent;
+      createdAt: number;
+    },
+  ): ConversationActivityEvent[] {
+    if (params.event.kind === 'thinking' || params.event.kind === 'text') {
+      return this.bufferTextActivityBlock(sink, {
+        conversationId: params.conversationId,
+        agentId: params.agentId,
+        kind: params.event.kind,
+        text: params.event.text,
+        createdAt: params.createdAt,
+      });
+    }
+
+    const events = this.flushTextActivityBlock(
+      sink,
+      params.conversationId,
+      params.agentId,
+    );
+    const current = sink.recordParsedEvent(params);
+    if (current) events.push(current);
+    return events;
+  }
+
+  private bufferTextActivityBlock(
+    sink: ConversationActivitySink,
+    params: {
+      conversationId: string;
+      agentId: string;
+      kind: TextActivityKind;
+      text: string;
+      createdAt: number;
+    },
+  ): ConversationActivityEvent[] {
+    const key = activityBlockKey(params.conversationId, params.agentId);
+    const previous = this.pendingTextActivityBlocks.get(key);
+    const events =
+      previous && previous.kind !== params.kind
+        ? this.flushTextActivityBlock(sink, params.conversationId, params.agentId)
+        : [];
+
+    if (params.text.length === 0) return events;
+
+    const current = this.pendingTextActivityBlocks.get(key);
+    if (!current) {
+      this.pendingTextActivityBlocks.set(key, {
+        kind: params.kind,
+        ...truncateTextActivityFragment(params.text),
+        createdAt: params.createdAt,
+      });
+      return events;
+    }
+
+    appendTextActivityFragment(current, params.text);
+    return events;
+  }
+
+  private flushTextActivityBlock(
+    sink: ConversationActivitySink,
+    conversationId: string,
+    agentId: string,
+  ): ConversationActivityEvent[] {
+    const key = activityBlockKey(conversationId, agentId);
+    const block = this.pendingTextActivityBlocks.get(key);
+    if (!block) return [];
+    this.pendingTextActivityBlocks.delete(key);
+    if (block.text.length === 0 && block.omittedChars === 0) return [];
+    const text =
+      block.omittedChars > 0
+        ? `${block.text}...<truncated ${block.omittedChars} chars>`
+        : block.text;
+    const event = sink.recordParsedEvent({
+      conversationId,
+      agentId,
+      event: { kind: block.kind, text },
+      createdAt: block.createdAt,
+    });
+    return event ? [event] : [];
   }
 
   private forwardInitTimeout(
@@ -699,6 +932,17 @@ export class RuntimeEventHandler {
     const fatalError = this.fatalErrorFlag.has(flagKey);
     this.initFailureFlag.delete(flagKey);
     this.fatalErrorFlag.delete(flagKey);
+    this.recordConversationActivity({
+      conversationId: frame.conversation_id,
+      agentId: frame.agent_id,
+      createdAt: frame.ts,
+      record: sink =>
+        this.flushTextActivityBlock(
+          sink,
+          frame.conversation_id,
+          frame.agent_id,
+        ),
+    });
     const key = this.cache.daemonInstanceKey;
     // Cache mutation is gated on a latched daemon key (events from a
     // pre-hydrate window can't safely write the cache because the

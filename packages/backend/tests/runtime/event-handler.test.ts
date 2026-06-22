@@ -29,6 +29,7 @@ import type { AgentRunState } from '@silverhand/shared';
 import { RunStateCache } from '../../src/runtime/run-state-cache.js';
 import {
   RuntimeEventHandler,
+  type ConversationActivitySink,
   type EventPublisher,
   type InboxAckSink,
   type RuntimeEventHandlerDeps,
@@ -985,6 +986,324 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     expect(payload.agent_id).toBe('a1');
     expect(payload.event.kind).toBe('text');
     expect(payload.event.text).toBe('hello world');
+  });
+
+  it('persists parsed event before publishing canonical conversation_activity', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          pid: 1234,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const activityCalls: Array<Parameters<ConversationActivitySink['recordParsedEvent']>[0]> = [];
+    const conversationActivity: ConversationActivitySink = {
+      recordParsedEvent(params) {
+        activityCalls.push(params);
+        return {
+          id: 42,
+          conversation_id: params.conversationId,
+          agent_id: params.agentId,
+          kind: 'tool_call',
+          payload: { name: 'Bash' },
+          created_at: params.createdAt,
+        };
+      },
+      recordParsedEventDropped() {
+        throw new Error('not used');
+      },
+    };
+    const handler = makeHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+      conversationActivity,
+    });
+    await handler.start();
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'tool_call', name: 'Bash', input: { command: 'pwd' } } as never,
+      ts: 1700000001000,
+    });
+
+    expect(activityCalls).toEqual([
+      {
+        conversationId: 'c1',
+        agentId: 'a1',
+        event: { kind: 'tool_call', name: 'Bash', input: { command: 'pwd' } },
+        createdAt: 1700000001000,
+      },
+    ]);
+    expect(published.map(p => p.kind)).toEqual([
+      'agent_event',
+      'conversation_activity',
+    ]);
+    expect(published[1]).toEqual({
+      conv: 'c1',
+      kind: 'conversation_activity',
+      payload: {
+        id: 42,
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        kind: 'tool_call',
+        payload: { name: 'Bash' },
+        created_at: 1700000001000,
+      },
+    });
+  });
+
+  it('coalesces consecutive thinking/text fragments and flushes before boundary events', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          pid: 1234,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    let nextId = 1;
+    const activityCalls: Array<Parameters<ConversationActivitySink['recordParsedEvent']>[0]> = [];
+    const conversationActivity: ConversationActivitySink = {
+      recordParsedEvent(params) {
+        activityCalls.push(params);
+        if (params.event.kind === 'unknown') return null;
+        const payload =
+          params.event.kind === 'thinking' || params.event.kind === 'text'
+            ? { text: params.event.text }
+            : params.event.kind === 'tool_call'
+              ? { name: params.event.name }
+              : null;
+        return {
+          id: nextId++,
+          conversation_id: params.conversationId,
+          agent_id: params.agentId,
+          kind: params.event.kind as never,
+          payload,
+          created_at: params.createdAt,
+        };
+      },
+      recordParsedEventDropped() {
+        throw new Error('not used');
+      },
+    };
+    const handler = makeHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+      conversationActivity,
+    });
+    await handler.start();
+
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'thinking', text: 'find' } as never,
+      ts: 1700000001000,
+    });
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'thinking', text: 'ing' } as never,
+      ts: 1700000001001,
+    });
+    expect(activityCalls).toEqual([]);
+
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'text', text: 'answer ' } as never,
+      ts: 1700000001002,
+    });
+    expect(activityCalls.map(call => call.event)).toEqual([
+      { kind: 'thinking', text: 'finding' },
+    ]);
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'text', text: 'body' } as never,
+      ts: 1700000001003,
+    });
+
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'tool_call', name: 'Bash', input: { command: 'pwd' } } as never,
+      ts: 1700000001004,
+    });
+
+    expect(activityCalls.map(call => call.event)).toEqual([
+      { kind: 'thinking', text: 'finding' },
+      { kind: 'text', text: 'answer body' },
+      { kind: 'tool_call', name: 'Bash', input: { command: 'pwd' } },
+    ]);
+    expect(activityCalls[0]!.createdAt).toBe(1700000001000);
+    expect(activityCalls[1]!.createdAt).toBe(1700000001002);
+    const activityPublishes = published.filter(p => p.kind === 'conversation_activity');
+    expect(activityPublishes.map(p => (p.payload as { kind: string }).kind)).toEqual([
+      'thinking',
+      'text',
+      'tool_call',
+    ]);
+  });
+
+  it('flushes a pending text block when the runtime exits', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          pid: 1234,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const activityCalls: Array<Parameters<ConversationActivitySink['recordParsedEvent']>[0]> = [];
+    const conversationActivity: ConversationActivitySink = {
+      recordParsedEvent(params) {
+        activityCalls.push(params);
+        return {
+          id: 7,
+          conversation_id: params.conversationId,
+          agent_id: params.agentId,
+          kind: params.event.kind as never,
+          payload: { text: params.event.kind === 'text' ? params.event.text : '' },
+          created_at: params.createdAt,
+        };
+      },
+      recordParsedEventDropped() {
+        throw new Error('not used');
+      },
+    };
+    const handler = makeHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+      conversationActivity,
+    });
+    await handler.start();
+
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'text', text: 'partial reply' } as never,
+      ts: 1700000001000,
+    });
+    emit(exitFrame('c1', 'a1', false, 1, 1700000002000));
+
+    expect(activityCalls.map(call => call.event)).toEqual([
+      { kind: 'text', text: 'partial reply' },
+    ]);
+    expect(published.some(p => p.kind === 'conversation_activity')).toBe(true);
+  });
+
+  it('caps coalesced text blocks independently of tool input sanitization', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          pid: 1234,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher } = makePublisher();
+    const { sink } = makeInboxAck();
+    const activityCalls: Array<Parameters<ConversationActivitySink['recordParsedEvent']>[0]> = [];
+    const conversationActivity: ConversationActivitySink = {
+      recordParsedEvent(params) {
+        activityCalls.push(params);
+        return {
+          id: activityCalls.length,
+          conversation_id: params.conversationId,
+          agent_id: params.agentId,
+          kind: params.event.kind as never,
+          payload: null,
+          created_at: params.createdAt,
+        };
+      },
+      recordParsedEventDropped() {
+        throw new Error('not used');
+      },
+    };
+    const handler = makeHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+      conversationActivity,
+    });
+    await handler.start();
+
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'thinking', text: 'x'.repeat(10_000) } as never,
+      ts: 1700000001000,
+    });
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'thinking', text: 'y'.repeat(10_000) } as never,
+      ts: 1700000001001,
+    });
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'turn_end' } as never,
+      ts: 1700000001002,
+    });
+
+    const block = activityCalls[0]!.event as { kind: 'thinking'; text: string };
+    expect(block.kind).toBe('thinking');
+    expect(block.text).toContain('<truncated 3616 chars>');
+    expect(block.text.length).toBeGreaterThan(16_384);
+    expect(activityCalls[1]!.event).toEqual({ kind: 'turn_end' });
   });
 
   it('large tool_call.input is sanitized BEFORE publish (truncation marker present)', async () => {

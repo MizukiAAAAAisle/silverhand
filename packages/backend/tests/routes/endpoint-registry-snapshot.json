@@ -55,6 +55,7 @@
   "PATCH /api/channels/:id/archive",
   "PATCH /api/channels/:id",
   "GET /api/channels/:id/agent-run-states",
+  "GET /api/conversations/:id/agents/:aid/activity",
   "GET /api/channels/:id/threads/:rootMessageId/followers",
   "POST /api/channels/:id/threads/:rootMessageId/follow",
   "DELETE /api/channels/:id/threads/:rootMessageId/follow",

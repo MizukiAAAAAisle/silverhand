@@ -368,6 +368,26 @@ export class FakeHostWsServerController implements HostWsServerController {
 
   constructor(private readonly silverhandDir: string) {}
 
+  private agentWorkspaceBaseDir(
+    params: { agent_id: string; workspace_id?: string },
+    hostId: string,
+    commandKind: OutboundServerCommandKind,
+  ): string {
+    const workspaceId = params.workspace_id;
+    if (!workspaceId || isAgentHomeWorkspaceId(workspaceId, params.agent_id)) {
+      return joinPath(this.silverhandDir, 'agents', params.agent_id);
+    }
+    const boundPath = this.boundWorkspacePaths.get(workspaceId);
+    if (!boundPath) {
+      throw new HostWsCommandResponseError(
+        'workspace_not_provisioned' as never,
+        `workspace ${workspaceId} is not provisioned; cannot resolve agent workspace`,
+        { hostId, commandKind, requestId: 'fake' },
+      );
+    }
+    return joinPath(boundPath, '.silverhand', 'agents', params.agent_id);
+  }
+
   activeConnectionCount(): number {
     return 1;
   }
@@ -501,7 +521,7 @@ export class FakeHostWsServerController implements HostWsServerController {
           p,
         ) as OutboundServerCommandResult<K>;
       }
-      const dir = joinPath(this.silverhandDir, 'agents', p.agent_id);
+      const dir = this.agentWorkspaceBaseDir(p, hostId, kind);
       const tree = await listFakeAgentWorkspaceTree(dir);
       return { ok: true as const, tree } as OutboundServerCommandResult<K>;
     }
@@ -513,7 +533,7 @@ export class FakeHostWsServerController implements HostWsServerController {
           p,
         ) as OutboundServerCommandResult<K>;
       }
-      const dir = joinPath(this.silverhandDir, 'agents', p.agent_id);
+      const dir = this.agentWorkspaceBaseDir(p, hostId, kind);
       const file = await readFakeAgentWorkspaceFile(dir, p.path);
       if (!file) {
         throw new HostWsCommandResponseError(

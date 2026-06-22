@@ -13,6 +13,11 @@ import {
   AgentWorkspaceFsError,
   readAgentWorkspaceFile,
 } from '../../src/daemon/agent-workspace-fs/index.js';
+import {
+  WorkspaceRegistry,
+  type RegistryBinding,
+} from '../../src/daemon/workspace-registry/index.js';
+import { agentHomeWorkspaceId } from '@silverhand/shared';
 import { AgentWorkspaceFileReadParamsSchema } from '../../src/protocol.js';
 
 /**
@@ -29,19 +34,37 @@ import { AgentWorkspaceFileReadParamsSchema } from '../../src/protocol.js';
  */
 
 const AGENT_ID = 'aid-read-file';
+const BINDING: RegistryBinding = {
+  server_origin: 'test://agent-workspace-read-file',
+  host_id: 'host_read_file',
+};
 
 let homeDir = '';
+let stateDir = '';
 function agentDir(): string {
   return join(homeDir, '.silverhand', 'agents', AGENT_ID);
+}
+function makeRegistry(): WorkspaceRegistry {
+  return new WorkspaceRegistry({
+    stateDir,
+    binding: BINDING,
+    now: () => 1_700_000_000_000,
+  });
+}
+function l2AgentDir(registry: WorkspaceRegistry, workspaceId = 'ws_1'): string {
+  const workspaceDir = registry.provision(workspaceId).path;
+  return join(workspaceDir, '.silverhand', 'agents', AGENT_ID);
 }
 
 describe('readAgentWorkspaceFile', () => {
   beforeEach(() => {
     homeDir = mkdtempSync(join(tmpdir(), 'shrf-home-'));
+    stateDir = mkdtempSync(join(tmpdir(), 'shrf-state-'));
   });
   afterEach(() => {
     try {
       rmSync(homeDir, { recursive: true, force: true });
+      rmSync(stateDir, { recursive: true, force: true });
     } catch {
       /* best-effort */
     }
@@ -61,6 +84,65 @@ describe('readAgentWorkspaceFile', () => {
     expect(r.file.content).toBe('i remember');
     expect(r.file.truncated).toBe(false);
     expect(r.file.size).toBe('i remember'.length);
+  });
+
+  it('reads from a scoped regular workspace L2 dir instead of the agent home', async () => {
+    const home = agentDir();
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, 'MEMORY.md'), 'home memory');
+
+    const registry = makeRegistry();
+    const scoped = l2AgentDir(registry);
+    mkdirSync(scoped, { recursive: true });
+    writeFileSync(join(scoped, 'MEMORY.md'), 'workspace memory');
+
+    const r = await readAgentWorkspaceFile(
+      { agent_id: AGENT_ID, workspace_id: 'ws_1', path: 'MEMORY.md' },
+      { homeDir, registry },
+    );
+    expect(r.file.content).toBe('workspace memory');
+  });
+
+  it('resolves an agent-home workspace id back to home without consulting the registry', async () => {
+    const dir = agentDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'system_prompt.md'), 'l1 prompt');
+
+    const r = await readAgentWorkspaceFile(
+      {
+        agent_id: AGENT_ID,
+        workspace_id: agentHomeWorkspaceId(AGENT_ID),
+        path: 'system_prompt.md',
+      },
+      { homeDir },
+    );
+    expect(r.file.content).toBe('l1 prompt');
+  });
+
+  it('fails closed for a regular workspace id when no registry is available', async () => {
+    await expect(
+      readAgentWorkspaceFile(
+        { agent_id: AGENT_ID, workspace_id: 'ws_1', path: 'MEMORY.md' },
+        { homeDir },
+      ),
+    ).rejects.toMatchObject({
+      code: 'registry_unavailable',
+    });
+  });
+
+  it('fails closed for a never-provisioned regular workspace id', async () => {
+    await expect(
+      readAgentWorkspaceFile(
+        {
+          agent_id: AGENT_ID,
+          workspace_id: 'ws_missing',
+          path: 'MEMORY.md',
+        },
+        { homeDir, registry: makeRegistry() },
+      ),
+    ).rejects.toMatchObject({
+      code: 'workspace_not_provisioned',
+    });
   });
 
   it('reads a nested file via virtual path with `/` separator', async () => {

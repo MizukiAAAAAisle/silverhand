@@ -90,6 +90,7 @@ import {
 } from '@/lib/secondary-pane';
 import {
   buildChannelLayoutUrl,
+  buildChannelPathPreservingAgent,
   layoutMemoryFromRoute,
   routes,
   useNav,
@@ -264,6 +265,7 @@ function RegisteredAppShell(): JSX.Element {
     fullscreen: routeFullscreen,
     agentId: selectedAgentId,
     userId: selectedUserId,
+    agentPanelId,
   } = route;
   const workspaceSidebarPane = layout.workspaceSidebar;
   const channelSidebarPane = layout.channelSidebar;
@@ -936,6 +938,17 @@ function RegisteredAppShell(): JSX.Element {
   const handleSelectChannel = (id: string): void => {
     const target = channels.find(s => s.id === id);
     if (!selectedWorkspaceId) return;
+    // A=Activity-follows-channel (#task:1189): while an agent side panel is
+    // docked it owns the right pane, so switching the left channel must keep
+    // `?agent` and just re-point the locked Activity context — not restore that
+    // channel's remembered thread/side (which would drop the panel). Skip the
+    // legacy thread fossil, which always opens as a `?side` overlay.
+    if (agentPanelId && target?.kind !== 'thread') {
+      nav.go(
+        buildChannelPathPreservingAgent(selectedWorkspaceId, id, agentPanelId),
+      );
+      return;
+    }
     // Read cursors are advanced by the navigation effects above. Keeping
     // this handler side-effect free avoids duplicate mark-read/refetch storms.
     if (target?.kind === 'thread') {
@@ -990,9 +1003,18 @@ function RegisteredAppShell(): JSX.Element {
   // even when it doesn't match the primary selection.
   const handleOpenChannelByName = useCallback(
     (workspaceId: string, channelId: string) => {
+      // Preserve the docked agent panel across a `#<channel>` jump too, so A
+      // stays consistent: clicking a channel ref re-points the panel's Activity
+      // context instead of closing it (#task:1189).
+      if (agentPanelId) {
+        nav.go(
+          buildChannelPathPreservingAgent(workspaceId, channelId, agentPanelId),
+        );
+        return;
+      }
       nav.toChannel(workspaceId, channelId);
     },
-    [nav.toChannel],
+    [agentPanelId, nav.go, nav.toChannel],
   );
 
   // Auto-open the tasks drawer when `?task=<n>` lands in the URL. The
@@ -1329,7 +1351,25 @@ function RegisteredAppShell(): JSX.Element {
   //     isolated-thread fossil) → SideUnresolvedPlaceholder.
   //   - null → no secondary, render only `parentView`.
   let secondaryView: JSX.Element | null = null;
-  if (secondaryDescriptor) {
+  if (agentPanelId) {
+    // Agent side panel (`?agent=<id>`, #task:1189). Renders an agent's compact
+    // panel beside the channel so chat + the agent's Activity show together
+    // (dual-screen). It is NOT a conversation, so it sits ahead of the
+    // `secondaryDescriptor`/thread/threads-list chain (and `?agent` is mutually
+    // exclusive with all of them at the nav layer). Activity locks to the
+    // current channel (A — shiki).
+    secondaryView = (
+      <AgentView
+        key={`side-${agentPanelId}`}
+        variant="side"
+        agentId={agentPanelId}
+        contextConversationId={selectedChannelId}
+        contextWorkspaceId={selectedWorkspaceId ?? null}
+        onClose={nav.closeAgentPanel}
+        onDeleted={nav.closeAgentPanel}
+      />
+    );
+  } else if (secondaryDescriptor) {
     if (
       secondaryDescriptor.source === 'side' &&
       secondaryDescriptor.status !== 'resolved'

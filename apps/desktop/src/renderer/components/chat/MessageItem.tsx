@@ -250,10 +250,15 @@ export function MessageItem({
   const createdAt = dayjs(message.created_at);
   const timeLabel = createdAt.format('MM/DD HH:mm');
   const timeTooltip = createdAt.format('YYYY-MM-DD HH:mm:ss');
-  const { toMembers, toMembersUser } = useNav();
+  const { openAgentPanel, toMembersUser } = useNav();
+  // Clicking an agent avatar/name in the message stream opens the agent's
+  // compact side panel (`?agent=`) instead of jumping to the full members
+  // page — so the channel stays put and Activity reads beside it
+  // (dual-screen, #task:1189). The full page is still reachable via the
+  // panel's ⤢ expand button or the Members section.
   const navigateToAgent = useCallback(
-    (agentId: string) => toMembers(agentId),
-    [toMembers],
+    (agentId: string) => openAgentPanel(agentId),
+    [openAgentPanel],
   );
   const navigateToHuman = useCallback(
     (userId: string) => toMembersUser(userId),

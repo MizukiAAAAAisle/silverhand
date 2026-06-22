@@ -18,10 +18,38 @@ import { api, apiUpload, ApiError } from '@/lib/api';
 
 const agentsKey = ['agents'] as const;
 const agentKey = (id: string) => ['agents', id] as const;
-const agentWorkspaceTreeKey = (id: string) =>
-  ['agents', id, 'workspace', 'tree'] as const;
-const agentWorkspaceFileKey = (id: string, path: string) =>
-  ['agents', id, 'workspace', 'file', path] as const;
+/**
+ * Which directory an Agent Workspace read targets (Cindy #task:1190):
+ *  - `home` → no `workspace_id` param → the agent home / L1 dir (full page);
+ *  - `workspace` → `?workspace_id=<id>` → that workspace's L2 dir (side panel).
+ * The resolver is source-blind on the wire — the frontend never builds a path,
+ * only names a workspace. Passing an agent_home/DM workspace id resolves back to
+ * home (expected overlap), so the renderer never branches on source.
+ */
+export type AgentWorkspaceSource =
+  | { kind: 'home' }
+  | { kind: 'workspace'; workspaceId: string };
+
+/** Cache-scope segment so home vs each workspace get distinct query entries.
+ *  The prefix `['agents', id, 'workspace']` still matches all of them, so the
+ *  pane's coarse refresh-invalidate keeps working. */
+function sourceScope(source: AgentWorkspaceSource): string {
+  return source.kind === 'workspace' ? `ws:${source.workspaceId}` : 'home';
+}
+
+/** The `?workspace_id=` query fragment for a source (`''` for home → existing
+ *  L1 behaviour). Exported for the contract test — the param name must match
+ *  the backend exactly. */
+export function workspaceScopeQuery(source: AgentWorkspaceSource): string {
+  return source.kind === 'workspace'
+    ? `workspace_id=${encodeURIComponent(source.workspaceId)}`
+    : '';
+}
+
+const agentWorkspaceTreeKey = (id: string, scope: string) =>
+  ['agents', id, 'workspace', 'tree', scope] as const;
+const agentWorkspaceFileKey = (id: string, scope: string, path: string) =>
+  ['agents', id, 'workspace', 'file', scope, path] as const;
 const agentRuntimeStateKey = (id: string) => ['agents', id, 'runtime-state'] as const;
 const agentDeleteImpactKey = (id: string) => ['agents', id, 'delete-impact'] as const;
 const agentSchedulesKey = (id: string, status: ScheduleListStatusFilter) =>
@@ -224,16 +252,22 @@ export function useClearAgentAvatar(agentId: string | null) {
   });
 }
 
-export function useAgentWorkspaceTree(agentId: string | null) {
+export function useAgentWorkspaceTree(
+  agentId: string | null,
+  source: AgentWorkspaceSource = { kind: 'home' },
+) {
+  const scope = sourceScope(source);
   return useQuery({
     queryKey: agentId
-      ? agentWorkspaceTreeKey(agentId)
+      ? agentWorkspaceTreeKey(agentId, scope)
       : ['agents', 'none', 'workspace', 'tree'],
     enabled: !!agentId,
     queryFn: async () => {
-      const res = await api<{ tree: AgentWorkspaceTree }>(
-        apiPaths.agentWorkspaceTree(agentId!),
-      );
+      const query = workspaceScopeQuery(source);
+      const url = query
+        ? `${apiPaths.agentWorkspaceTree(agentId!)}?${query}`
+        : apiPaths.agentWorkspaceTree(agentId!);
+      const res = await api<{ tree: AgentWorkspaceTree }>(url);
       return res.tree;
     },
     // The tree is essentially static for the human's purposes — files
@@ -244,26 +278,33 @@ export function useAgentWorkspaceTree(agentId: string | null) {
 }
 
 /**
- * Read one file by virtual path. The path is the cache key suffix —
- * switching the selected file is a fresh query, and React Query's
- * structural-share keeps the previous file's content rendered until
- * the new one resolves so the preview never blanks.
+ * Read one file by virtual path, scoped to `source` (home or a workspace L2).
+ * The (scope, path) pair is the cache key suffix — switching the selected file
+ * or the source is a fresh query, and React Query's structural-share keeps the
+ * previous content rendered until the new one resolves so the preview never
+ * blanks.
  *
- * Pass `null` to disable the query (no file selected → preview shows
- * an empty-state).
+ * Pass `null` path to disable the query (no file selected → preview shows an
+ * empty-state).
  */
 export function useAgentWorkspaceFile(
   agentId: string | null,
+  source: AgentWorkspaceSource,
   path: string | null,
 ) {
+  const scope = sourceScope(source);
   return useQuery({
     queryKey:
       agentId && path
-        ? agentWorkspaceFileKey(agentId, path)
+        ? agentWorkspaceFileKey(agentId, scope, path)
         : ['agents', 'none', 'workspace', 'file'],
     enabled: !!agentId && !!path,
     queryFn: async () => {
-      const url = `${apiPaths.agentWorkspaceFile(agentId!)}?path=${encodeURIComponent(path!)}`;
+      const params = new URLSearchParams({ path: path! });
+      if (source.kind === 'workspace') {
+        params.set('workspace_id', source.workspaceId);
+      }
+      const url = `${apiPaths.agentWorkspaceFile(agentId!)}?${params.toString()}`;
       const res = await api<{ file: AgentWorkspaceFileRead }>(url);
       return res.file;
     },

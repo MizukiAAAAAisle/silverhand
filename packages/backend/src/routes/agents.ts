@@ -17,11 +17,13 @@ import {
   getUserPrincipal,
   resolveViewerUserId,
   type AppEnv,
+  type Principal,
 } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
 import {
   canEditAgent,
   canViewAgent,
+  canViewWorkspace,
 } from '../permissions.js';
 import {
   computeDeleteImpact,
@@ -139,6 +141,71 @@ function mapAgentCreateFailureToStatus(
       return _exhaustive;
     }
   }
+}
+
+type AgentWorkspaceScope =
+  | { ok: true; workspaceId: string | null }
+  | {
+      ok: false;
+      status: 400 | 403 | 404;
+      code: string;
+      message: string;
+    };
+
+function resolveAgentWorkspaceScope(params: {
+  ctx: BackendContext;
+  principal: Principal;
+  workspaces: WorkspaceRepo;
+  agentId: string;
+  workspaceId: string | undefined;
+}): AgentWorkspaceScope {
+  const rawWorkspaceId = params.workspaceId;
+  if (rawWorkspaceId === undefined) return { ok: true, workspaceId: null };
+  if (rawWorkspaceId.length === 0) {
+    return {
+      ok: false,
+      status: 400,
+      code: 'invalid_workspace_id',
+      message: 'workspace_id query param must not be empty',
+    };
+  }
+
+  const workspace = params.workspaces.get(rawWorkspaceId);
+  if (!workspace) {
+    return {
+      ok: false,
+      status: 404,
+      code: 'workspace_not_found',
+      message: 'workspace not found',
+    };
+  }
+  if (!canViewWorkspace(params.ctx, params.principal, workspace.id)) {
+    return {
+      ok: false,
+      status: 403,
+      code: 'forbidden',
+      message: 'forbidden',
+    };
+  }
+
+  // Scoped reads always gate membership against the requested workspace, even
+  // when that workspace is an agent_home/DM id that resolves to the same L1
+  // home dir. The no-param path is the existing broad "can view this agent"
+  // home view; `workspace_id` is the narrower per-workspace/L2 view.
+  const isMember =
+    workspace.workspace_kind === 'agent_home'
+      ? workspace.owner_agent_id === params.agentId
+      : params.workspaces.isMember(workspace.id, params.agentId);
+  if (!isMember) {
+    return {
+      ok: false,
+      status: 404,
+      code: 'workspace_agent_not_member',
+      message: 'agent is not a member of this workspace',
+    };
+  }
+
+  return { ok: true, workspaceId: workspace.id };
 }
 
 export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
@@ -484,18 +551,30 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
 
   // Two-protocol read pair backing the two-column AgentWorkspacePane:
   // `/workspace/tree` returns the flat tree (every
-  // visible file/dir under the agent home dir); `/workspace/file?path=…`
+  // visible file/dir under the agent home dir by default, or under the
+  // agent's L2 dir for `?workspace_id=…`); `/workspace/file?path=…`
   // reads one file by virtual path. Both go through the same data-plane
-  // dispatch so embedded + remote daemons share one code path. The
-  // `?path=` query param is forwarded opaquely — the daemon owns the
-  // security check (parser + per-segment lstat + realpath boundary).
+  // dispatch so embedded + remote daemons share one code path. The backend
+  // gates the semantic source (`workspace_id`); the daemon owns path
+  // resolution + virtual-path security.
   app.get(apiPaths.agentWorkspaceTree(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'agent id required' }, 400);
     const agent = agents.get(id);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
-    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+    const principal = getUserPrincipal(c);
+    if (!canViewAgent(ctx, principal, agent.id)) {
       return c.json({ error: 'agent not found' }, 404);
+    }
+    const scope = resolveAgentWorkspaceScope({
+      ctx,
+      principal,
+      workspaces,
+      agentId: agent.id,
+      workspaceId: c.req.query('workspace_id'),
+    });
+    if (!scope.ok) {
+      return c.json({ error: scope.message, code: scope.code }, scope.status);
     }
     const outbound = resolveOutboundForHost(
       ctx.outboundFrameAdapter?.() ?? null,
@@ -508,7 +587,10 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
       outbound.adapter,
       agent.host_id,
       outbound.connectionId,
-      { agent_id: agent.id },
+      {
+        agent_id: agent.id,
+        ...(scope.workspaceId ? { workspace_id: scope.workspaceId } : {}),
+      },
     );
     if (tree.kind === 'failed') {
       return c.json({ error: tree.message, code: tree.code }, tree.status);
@@ -521,8 +603,19 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     if (!id) return c.json({ error: 'agent id required' }, 400);
     const agent = agents.get(id);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
-    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+    const principal = getUserPrincipal(c);
+    if (!canViewAgent(ctx, principal, agent.id)) {
       return c.json({ error: 'agent not found' }, 404);
+    }
+    const scope = resolveAgentWorkspaceScope({
+      ctx,
+      principal,
+      workspaces,
+      agentId: agent.id,
+      workspaceId: c.req.query('workspace_id'),
+    });
+    if (!scope.ok) {
+      return c.json({ error: scope.message, code: scope.code }, scope.status);
     }
     // The query param is the only piece of caller-supplied input that
     // crosses the wire. The backend does NO shape work on it — the
@@ -547,7 +640,11 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
       outbound.adapter,
       agent.host_id,
       outbound.connectionId,
-      { agent_id: agent.id, path },
+      {
+        agent_id: agent.id,
+        path,
+        ...(scope.workspaceId ? { workspace_id: scope.workspaceId } : {}),
+      },
     );
     if (file.kind === 'failed') {
       return c.json({ error: file.message, code: file.code }, file.status);

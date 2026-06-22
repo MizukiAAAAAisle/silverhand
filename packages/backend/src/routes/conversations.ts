@@ -32,6 +32,7 @@ import type { SortRepo } from '../repos/sort-repo.js';
 import type { SearchRepo } from '../repos/search-repo.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { MessageReactionRepo } from '../repos/message-reaction-repo.js';
+import type { ConversationEventRepo } from '../repos/conversation-event-repo.js';
 import { getUserPrincipal, requireViewerUserId } from '../auth/principal.js';
 import {
   canEditAgent,
@@ -439,6 +440,7 @@ export interface ConversationMessagingRouteDeps {
   conversations: ConversationRepo;
   messages: MessageRepo;
   conversationReads: ConversationReadRepo;
+  conversationEvents: ConversationEventRepo;
   saved: SavedMessageRepo;
   sort: SortRepo;
 }
@@ -447,7 +449,15 @@ export function createConversationMessagingApp(
   deps: ConversationMessagingRouteDeps,
 ): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { ctx, conversations, messages, conversationReads, saved, sort } = deps;
+  const {
+    ctx,
+    conversations,
+    messages,
+    conversationReads,
+    conversationEvents,
+    saved,
+    sort,
+  } = deps;
 
   async function markConversationRead(
     conversationId: string,
@@ -656,6 +666,60 @@ export function createConversationMessagingApp(
       result => ({ stateCount: result.length }),
     );
     return c.json({ states });
+  });
+
+  app.get(apiPaths.conversationAgentActivity(':id', ':aid'), c => {
+    const id = c.req.param('id');
+    const agentId = c.req.param('aid');
+    if (!id || !agentId) {
+      return c.json({ error: 'conversation id and agent id required' }, 400);
+    }
+    const conversation = conversations.get(id);
+    if (!conversation) return c.json({ error: 'conversation not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), conversation.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    if (!conversations.getAgent(conversation.id, agentId)) {
+      return c.json({ error: 'agent is not a member of this conversation' }, 404);
+    }
+
+    let limit = 100;
+    const limitRaw = c.req.query('limit');
+    if (limitRaw !== undefined) {
+      const n = Number(limitRaw);
+      if (!Number.isInteger(n) || n < 1) {
+        return c.json({ error: 'invalid limit', code: 'invalid_limit' }, 400);
+      }
+      limit = Math.min(200, n);
+    }
+
+    let beforeId: number | null = null;
+    const beforeIdRaw = c.req.query('before_id');
+    if (beforeIdRaw !== undefined) {
+      const n = Number(beforeIdRaw);
+      if (!Number.isInteger(n) || n < 1) {
+        return c.json({ error: 'invalid before_id', code: 'invalid_before_id' }, 400);
+      }
+      beforeId = n;
+    }
+
+    const page = timedRouteSpan(
+      ctx,
+      'conversation.activity.list',
+      { conversationId: conversation.id, agentId, limit, beforeId },
+      () =>
+        conversationEvents.listForConversationAgent({
+          conversationId: conversation.id,
+          agentId,
+          limit,
+          beforeId,
+        }),
+      result => ({
+        eventCount: result.events.length,
+        hasMore: result.next_before_id != null,
+      }),
+    );
+    return c.json(page);
   });
 
   app.get(apiPaths.channelThreadFollowers(':id', ':rootMessageId'), c => {

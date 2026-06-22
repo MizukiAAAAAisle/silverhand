@@ -1715,6 +1715,12 @@ export const AgentWorkspaceTreeParamsSchema = z
      *  resolution (`computeAgentDir`) — no server-derived path
      *  crosses the wire. */
     agent_id: z.string().min(1),
+    /** Optional L2 scope. Omitted = the agent home/L1 dir. Present =
+     *  resolve this workspace id daemon-side to the agent's per-workspace
+     *  memory dir. Agent-home/DM workspace ids naturally resolve back to the
+     *  same home dir; regular workspace ids resolve through the daemon
+     *  workspace registry. No filesystem path crosses the wire. */
+    workspace_id: z.string().min(1).optional(),
   })
   .strict();
 export type AgentWorkspaceTreeParams = z.infer<
@@ -1739,6 +1745,9 @@ export const AgentWorkspaceFileReadParamsSchema = z
   .object({
     /** The agent whose home dir is the read base. */
     agent_id: z.string().min(1),
+    /** Optional L2 scope. Omitted = read from the agent home/L1 dir. Present =
+     *  read from the daemon-resolved per-workspace memory dir. */
+    workspace_id: z.string().min(1).optional(),
     /** Virtual path under the agent home (e.g. `system_prompt.md`,
      *  `notes/work-log.md`). The daemon parses + resolves with the
      *  per-segment rules described above. */
@@ -1776,6 +1785,13 @@ export const AgentWorkspaceFsErrorCodeSchema = z.enum([
    *  the leaf is a directory when the read endpoint asked for a file,
    *  etc). Route projects 404. */
   'not_found',
+  /** A scoped regular workspace id exists in the control plane but has no
+   *  daemon registry binding, so the daemon refuses to guess a path. Route
+   *  projects 409. */
+  'workspace_not_provisioned',
+  /** The daemon cannot consult its workspace registry (no control-plane
+   *  binding yet, foreign/corrupt registry file). Route projects 503. */
+  'registry_unavailable',
   /** Hard host-local fs failure (perm/IO/EROFS/…). Route projects 503. */
   'fs_unavailable',
   'internal_error',

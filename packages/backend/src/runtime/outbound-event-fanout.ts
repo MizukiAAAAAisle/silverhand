@@ -21,6 +21,7 @@ import {
   ConversationInboxRepo,
   type ClaimedConversationInboxItem,
 } from '../repos/conversation-inbox-repo.js';
+import { ConversationEventRepo } from '../repos/conversation-event-repo.js';
 import { ConversationRepo } from '../repos/conversation-repo.js';
 import { HostRepo } from '../repos/host-repo.js';
 import { MessageRepo } from '../repos/message-repo.js';
@@ -151,6 +152,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   private readonly staleEventConnectionsWarned = new Set<string>();
   private readonly inboxRepo: ConversationInboxRepo;
   private readonly conversations: ConversationRepo;
+  private readonly conversationEvents: ConversationEventRepo;
   private readonly agents: AgentRepo;
   private readonly hosts: HostRepo;
   private readonly users: UserRepo;
@@ -172,6 +174,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   constructor(private readonly opts: OutboundRuntimeEventFanoutOptions) {
     this.inboxRepo = new ConversationInboxRepo(opts.db);
     this.conversations = new ConversationRepo(opts.db);
+    this.conversationEvents = new ConversationEventRepo(opts.db);
     this.agents = new AgentRepo(opts.db);
     this.hosts = new HostRepo(opts.db);
     this.users = new UserRepo(opts.db);
@@ -1585,6 +1588,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         new ConversationRepo(this.opts.db),
         this.opts.events,
       ),
+      conversationActivity: this.conversationEvents,
       onParsedEvent: (cid, aid, event) =>
         coordinator.onParsedEvent(cid, aid, event),
       onRuntimeExit: (cid, aid, meta) => {

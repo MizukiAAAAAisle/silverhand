@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildAgentPanelOpenUrl,
   buildChannelLayoutUrl,
+  buildChannelPathPreservingAgent,
   buildChannelPathPreservingSide,
   buildSideOpenUrl,
   buildTaskOpenUrl,
   buildThreadOpenUrl,
   layoutMemoryFromRoute,
   parseRouteState,
+  withAgentQuery,
   withSideQuery,
   withTaskQuery,
   withThreadQuery,
@@ -478,6 +481,100 @@ describe('buildSideOpenUrl — clears ?thread (side/thread mutual exclusion)', (
     expect(out).toContain('side=c-other');
     expect(out).not.toContain('thread=m-1');
     expect(out).not.toContain('threads');
+  });
+});
+
+// Agent side panel (`?agent=<agentId>`, #task:1189). Carries an agent id (not
+// a conversation), rendered by `AgentView variant="side"` in the chat-section
+// right pane, and mutually exclusive with every conversation-based secondary.
+describe('parseRouteState — ?agent=<id> agent side panel', () => {
+  it('parses ?agent as agentPanelId, distinct from the /members/:agentId route', () => {
+    const r = parseRouteState('/chat/w/w-1/c/c-a', '?agent=a-9');
+    expect(r).toMatchObject({
+      section: 'chat',
+      channelId: 'c-a',
+      agentPanelId: 'a-9',
+      agentId: null,
+      sideConversationId: null,
+      threadRootId: null,
+      threadsListOpen: false,
+    });
+  });
+
+  it('defaults agentPanelId to null and treats empty as unset', () => {
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '').agentPanelId).toBeNull();
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?agent=').agentPanelId).toBeNull();
+  });
+});
+
+describe('withAgentQuery / buildAgentPanelOpenUrl — open / close the agent panel', () => {
+  it('opens ?agent, clearing every conversation-based pane + fullscreen', () => {
+    const out = buildAgentPanelOpenUrl(
+      '/chat/w/w-1/c/c-a',
+      '?side=c-other&thread=m-1&threads=1&fullscreen=1',
+      'a-9',
+    );
+    expect(out).toContain('agent=a-9');
+    expect(out).not.toContain('side=c-other');
+    expect(out).not.toContain('thread=m-1');
+    expect(out).not.toContain('threads=1');
+    expect(out).not.toContain('fullscreen=1');
+  });
+
+  it('preserves unrelated params (e.g. ?task) when opening', () => {
+    const out = buildAgentPanelOpenUrl('/chat/w/w-1/c/c-a', '?task=7', 'a-9');
+    expect(out).toContain('agent=a-9');
+    expect(out).toContain('task=7');
+  });
+
+  it('clears ?agent (and ?fullscreen) when closing', () => {
+    const closed = withAgentQuery(
+      '/chat/w/w-1/c/c-a',
+      '?agent=a-9&fullscreen=1',
+      null,
+    );
+    expect(closed).not.toContain('agent');
+    expect(closed).not.toContain('fullscreen');
+  });
+});
+
+describe('mutual exclusion — opening a conversation pane clears ?agent', () => {
+  it('buildSideOpenUrl drops an open ?agent', () => {
+    const out = buildSideOpenUrl('/chat/w/w-1/c/c-a', '?agent=a-9', 'c-other');
+    expect(out).toContain('side=c-other');
+    expect(out).not.toContain('agent');
+  });
+
+  it('withThreadQuery (open) drops an open ?agent', () => {
+    const out = withThreadQuery('/chat/w/w-1/c/c-a', '?agent=a-9', 'm-1');
+    expect(out).toContain('thread=m-1');
+    expect(out).not.toContain('agent');
+  });
+
+  it('withThreadsQuery (open) drops an open ?agent', () => {
+    const out = withThreadsQuery('/chat/w/w-1/c/c-a', '?agent=a-9', true);
+    expect(out).toContain('threads=1');
+    expect(out).not.toContain('agent');
+  });
+});
+
+describe('buildChannelPathPreservingAgent — A=Activity-follows-channel (#task:1189)', () => {
+  it('writes a fresh channel path carrying ?agent (panel survives the switch)', () => {
+    expect(buildChannelPathPreservingAgent('w-1', 'c-new', 'a-9')).toBe(
+      '/chat/w/w-1/c/c-new?agent=a-9',
+    );
+  });
+
+  it('does NOT restore a remembered secondary — only ?agent rides along', () => {
+    const out = buildChannelPathPreservingAgent('w-1', 'c-new', 'a-9');
+    expect(out).not.toContain('side');
+    expect(out).not.toContain('thread');
+    expect(out).not.toContain('threads');
+    expect(out).not.toContain('fullscreen');
+    // round-trips back to the same agentPanelId, distinct from the route segment
+    const r = parseRouteState('/chat/w/w-1/c/c-new', '?agent=a-9');
+    expect(r.agentPanelId).toBe('a-9');
+    expect(r.agentId).toBeNull();
   });
 });
 

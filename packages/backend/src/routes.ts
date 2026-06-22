@@ -17,6 +17,7 @@ import { ConversationReadRepo } from './repos/conversation-read-repo.js';
 import { ConversationInboxRepo } from './repos/conversation-inbox-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
+import { ConversationEventRepo } from './repos/conversation-event-repo.js';
 import { SortRepo } from './repos/sort-repo.js';
 import { detectRuntimes } from '@silverhand/host/runtimes';
 import { createHostApp } from './routes/hosts.js';
@@ -298,6 +299,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   const conversationInboxes = new ConversationInboxRepo(ctx.db);
   const notifications = new NotificationRepo(ctx.db);
   const conversationReads = new ConversationReadRepo(ctx.db);
+  const conversationEvents = new ConversationEventRepo(ctx.db);
   const sort = new SortRepo(ctx.db);
   const users = new UserRepo(ctx.db);
   const hostTokens = new HostTokenService(ctx.db);
@@ -456,6 +458,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       conversations,
       messages,
       conversationReads,
+      conversationEvents,
       saved,
       sort,
     }),

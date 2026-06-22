@@ -3,6 +3,7 @@
 import { z } from 'zod';
 import {
   ConversationAgentStatusSchema,
+  ConversationEventKindSchema,
   ConversationKindSchema,
   ConversationStatusSchema,
   RuntimeKindSchema,
@@ -199,6 +200,33 @@ export const ClearSessionResponseSchema = z.object({
   was_running: z.boolean(),
 });
 export type ClearSessionResponse = z.infer<typeof ClearSessionResponseSchema>;
+
+export const ConversationActivityPayloadSchema = z
+  .record(z.string(), z.unknown())
+  .nullable();
+export type ConversationActivityPayload = z.infer<
+  typeof ConversationActivityPayloadSchema
+>;
+
+export const ConversationActivityEventSchema = z.object({
+  id: z.number().int(),
+  conversation_id: z.string(),
+  agent_id: z.string().nullable(),
+  kind: ConversationEventKindSchema,
+  payload: ConversationActivityPayloadSchema,
+  created_at: z.number().int(),
+});
+export type ConversationActivityEvent = z.infer<
+  typeof ConversationActivityEventSchema
+>;
+
+export const ConversationActivityListResponseSchema = z.object({
+  events: z.array(ConversationActivityEventSchema),
+  next_before_id: z.number().int().nullable(),
+});
+export type ConversationActivityListResponse = z.infer<
+  typeof ConversationActivityListResponseSchema
+>;
 
 export const ChannelDtoSchema = ChannelConversationDtoSchema;
 export type ChannelDto = ChannelConversationDto;

@@ -41,14 +41,14 @@ export const apiPaths = {
   // agents
   agents: '/api/agents',
   agent: (id: string) => `/api/agents/${id}`,
-  /** #task:811 — flat tree of every visible file/directory under the
-   *  agent home dir. The two-column AgentWorkspacePane drives left-side
-   *  navigation off this list; `path` values are valid inputs to the
-   *  read endpoint below. Path semantics are agent-home-rooted today; a
-   *  future scope/workspace selector will be additive (see
-   *  AgentWorkspaceTreeNodeSchema). */
+  /** #task:811/#1190 — flat tree of every visible file/directory under the
+   *  agent home dir by default, or under the agent's per-workspace L2 memory
+   *  dir when `?workspace_id=` is supplied. The two-column
+   *  AgentWorkspacePane/Browser drives left-side navigation off this list;
+   *  `path` values are valid inputs to the read endpoint below. */
   agentWorkspaceTree: (id: string) => `/api/agents/${id}/workspace/tree`,
-  /** #task:811 — read one file from the agent home dir by virtual path.
+  /** #task:811/#1190 — read one file from the selected agent memory source
+   *  (home/L1 by default, workspace L2 with `?workspace_id=`) by virtual path.
    *  The `path` query param is parsed segment-by-segment and rejects
    *  empty / `.` / `..` / dotfile / NUL / backslash segments; symlinks
    *  (intermediate or leaf) and any escape from the agent-home base are
@@ -156,6 +156,8 @@ export const apiPaths = {
    *  legacy `kind='thread'` conversation is not channel-like → 404. */
   conversationThreads: (id: string) => `/api/conversations/${id}/threads`,
   conversationLogDebug: (id: string) => `/api/conversations/${id}/log-debug`,
+  conversationAgentActivity: (id: string, agentId: string) =>
+    `/api/conversations/${id}/agents/${agentId}/activity`,
 
   /** Members (agents + humans) of any conversation by id (channel /
    *  dm_channel / thread). Backs the chat-header member chips. The

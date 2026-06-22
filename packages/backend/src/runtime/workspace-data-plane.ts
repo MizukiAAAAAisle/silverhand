@@ -151,10 +151,10 @@ export function mapDataPlaneError(err: unknown): DataPlaneFailure {
       case 'registry_unavailable':
         return fail('registry_unavailable', err.message, 503, true);
       case 'workspace_not_provisioned':
-        // agent_l2_seed: the workspace has no registry binding on the owning
-        // host. The seed routes ensure provisioning (backfill) BEFORE
-        // dispatch, so this is a genuine precondition conflict, not a path
-        // the caller can fix by retrying as-is.
+        // agent_l2_seed / scoped agent_workspace_tree|file: the workspace has
+        // no registry binding on the owning host. Routes that need a regular
+        // workspace path must seed/provision before dispatch; the daemon must
+        // never guess a filesystem path.
         return fail('workspace_not_provisioned', err.message, 409, false);
       case 'unsupported_template':
         // agent_l2_seed: the template_choice has no host-side L2 entry. The
@@ -267,11 +267,12 @@ export async function dispatchAgentWorkspaceIndex(
 }
 
 /**
- * #task:811 — dispatch `agent_workspace_tree` to the owning daemon. The
- * daemon walks the agent home dir and returns a flat list of every visible
- * entry; the backend relays it verbatim — no fs read, no path derivation.
- * Hard host-local fs failure (perm/IO/EROFS) → `fs_unavailable` (503), the
- * backend never falls back to its own disk.
+ * #task:811/#1190 — dispatch `agent_workspace_tree` to the owning daemon.
+ * The daemon walks either the agent home dir (no `workspace_id`) or the
+ * daemon-resolved per-workspace memory dir (`workspace_id`) and returns a flat
+ * list of every visible entry; the backend relays it verbatim — no fs read, no
+ * path derivation. Hard host-local fs failure (perm/IO/EROFS) →
+ * `fs_unavailable` (503), the backend never falls back to its own disk.
  */
 export async function dispatchAgentWorkspaceTree(
   adapter: OutboundFrameAdapter,
@@ -291,12 +292,12 @@ export async function dispatchAgentWorkspaceTree(
 }
 
 /**
- * #task:811 — dispatch `agent_workspace_file_read` to the owning daemon.
+ * #task:811/#1190 — dispatch `agent_workspace_file_read` to the owning daemon.
  * The daemon enforces the path security rules (segment shape, per-segment
- * lstat, realpath boundary) before returning the file bytes; the backend
- * forwards `path` opaquely and surfaces the daemon's typed error verdict
- * directly. The 64KB cap is daemon-side; the backend just relays
- * `truncated`.
+ * lstat, realpath boundary) under the selected semantic source before
+ * returning the file bytes; the backend forwards `path` opaquely and surfaces
+ * the daemon's typed error verdict directly. The 64KB cap is daemon-side; the
+ * backend just relays `truncated`.
  */
 export async function dispatchAgentWorkspaceFileRead(
   adapter: OutboundFrameAdapter,

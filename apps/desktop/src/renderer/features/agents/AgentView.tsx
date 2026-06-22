@@ -1,16 +1,31 @@
 import { useEffect, useState } from 'react';
-import type { AgentRuntimeConversation } from '@silverhand/shared';
+import {
+  Activity,
+  CalendarClock,
+  FolderTree,
+  User,
+  X,
+} from 'lucide-react';
+import type {
+  AgentDto,
+  AgentRuntimeConversation,
+  AgentRuntimeStateDto,
+} from '@silverhand/shared';
+import { cn } from '@/lib/cn';
+import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentHeader } from './AgentHeader';
 import { AgentProfileCard } from './AgentProfileCard';
 import { AgentSchedulesCard } from './AgentSchedulesCard';
-import { AgentWorkspacePane } from './AgentWorkspacePane';
+import { AgentWorkspaceContainer, AgentWorkspacePane } from './AgentWorkspacePane';
 import { AgentMcpPane } from './AgentMcpPane';
-import { AgentConversationActivityList } from './AgentConversationActivityList';
+import { AgentActivityPane } from './AgentActivityPane';
+import { AgentActivityTimeline } from './AgentActivityTimeline';
 import { AgentSidebar, type AgentSection } from './AgentSidebar';
 import {
   useAgent,
   useAgentRuntimeState,
 } from './hooks';
+import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { useHostProvenanceGate } from '@/features/hosts/hooks';
 
 const SECTION_STORAGE_KEY = 'silverhand:layout.agent-section';
@@ -18,7 +33,7 @@ const VALID_SECTIONS: ReadonlyArray<AgentSection> = [
   'profile',
   'workspace',
   'mcp',
-  'runtime',
+  'activity',
   'schedules',
 ];
 
@@ -34,6 +49,8 @@ function readSection(): AgentSection {
   return 'profile';
 }
 
+export type AgentViewVariant = 'full' | 'side';
+
 interface AgentViewProps {
   agentId: string;
   /** Called after a successful delete so the parent can navigate
@@ -43,12 +60,31 @@ interface AgentViewProps {
    *  channel/thread. Optional: if not provided, the column is
    *  still shown but rows aren't actionable. */
   onOpenConversation?: (s: AgentRuntimeConversation) => void;
+  /** `full` (default) = the members-section page with the vertical section
+   *  rail + hero header. `side` = the compact right-pane panel docked beside
+   *  a channel (#task:1189): horizontal tabs, no hero chrome, Activity locked
+   *  to the docked channel. Same data/content components, two layout shells. */
+  variant?: AgentViewVariant;
+  /** side only: the conversation the panel is docked beside. The Activity
+   *  tab locks to this channel (no roster picker) — that's the dual-screen
+   *  "watch this channel's agent activity" use case (A, shiki #task:1189). */
+  contextConversationId?: string | null;
+  /** side only: the workspace the docked channel belongs to. The Workspace tab
+   *  scopes to this workspace's L2 memory (#task:1191). A DM/agent-home id
+   *  resolves back to the agent home dir on the backend — no frontend branch. */
+  contextWorkspaceId?: string | null;
+  /** side only: close the panel (the × button). */
+  onClose?: () => void;
 }
 
 export function AgentView({
   agentId,
   onDeleted,
   onOpenConversation,
+  variant = 'full',
+  contextConversationId = null,
+  contextWorkspaceId = null,
+  onClose,
 }: AgentViewProps): JSX.Element {
   const agentQuery = useAgent(agentId);
   const runtimeQuery = useAgentRuntimeState(agentId);
@@ -67,7 +103,13 @@ export function AgentView({
   }, [section]);
 
   if (agentQuery.isLoading) {
-    return (
+    return variant === 'side' ? (
+      <SidePanelShell onClose={onClose}>
+        <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
+          Loading agent…
+        </div>
+      </SidePanelShell>
+    ) : (
       <main
         className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
         style={{
@@ -81,7 +123,13 @@ export function AgentView({
     );
   }
   if (agentQuery.isError || !agentQuery.data) {
-    return (
+    return variant === 'side' ? (
+      <SidePanelShell onClose={onClose}>
+        <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
+          Agent not found.
+        </div>
+      </SidePanelShell>
+    ) : (
       <main
         className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
         style={{
@@ -96,6 +144,18 @@ export function AgentView({
   }
 
   const agent = agentQuery.data;
+
+  if (variant === 'side') {
+    return (
+      <AgentSidePanel
+        agent={agent}
+        runtimeState={runtimeQuery.data}
+        contextConversationId={contextConversationId}
+        contextWorkspaceId={contextWorkspaceId}
+        onClose={onClose}
+      />
+    );
+  }
 
   return (
     <main
@@ -128,6 +188,15 @@ export function AgentView({
                 canRevealPath={hostProvenance.canUseLocalHostPathFor(agent.host_id)}
               />
             </div>
+          ) : section === 'activity' ? (
+            // Activity is a master-detail surface (conversation rail +
+            // per-conversation timeline) that owns its own two scroll
+            // regions — like the workspace pane, no outer padding/scroll.
+            <AgentActivityPane
+              agentId={agent.id}
+              state={runtimeQuery.data}
+              onOpenConversation={onOpenConversation}
+            />
           ) : (
             <div className="flex-1 overflow-y-auto">
               <div className="px-8 py-6">
@@ -140,12 +209,6 @@ export function AgentView({
                 {section === 'mcp' ? (
                   <AgentMcpPane agentId={agent.id} runtime={agent.runtime} />
                 ) : null}
-                {section === 'runtime' ? (
-                  <AgentConversationActivityList
-                    state={runtimeQuery.data}
-                    onOpenConversation={onOpenConversation}
-                  />
-                ) : null}
                 {section === 'schedules' ? (
                   <AgentSchedulesCard agentId={agent.id} />
                 ) : null}
@@ -155,5 +218,277 @@ export function AgentView({
         </div>
       </div>
     </main>
+  );
+}
+
+// ── side-panel variant (#task:1189) ─────────────────────────────────────────
+
+const SIDE_SECTION_STORAGE_KEY = 'silverhand:layout.agent-side-section';
+
+interface SideSectionItem {
+  id: 'activity' | 'workspace' | 'profile' | 'schedules';
+  label: string;
+  icon: typeof Activity;
+}
+
+// Activity is first because the dock's whole reason to exist is watching a
+// channel's activity beside the chat (shiki #task:1189). Workspace shows the
+// current workspace's L2 memory in a compact single-column form (#task:1191) —
+// the wide two-column file browser lives on the full members page; it sits after
+// Profile (shiki). MCP (raw config) stays full-page-only: a wide power-user
+// surface that doesn't belong in a narrow dock.
+const SIDE_SECTIONS: ReadonlyArray<SideSectionItem> = [
+  { id: 'activity', label: 'Activity', icon: Activity },
+  { id: 'profile', label: 'Profile', icon: User },
+  { id: 'workspace', label: 'Workspace', icon: FolderTree },
+  { id: 'schedules', label: 'Schedules', icon: CalendarClock },
+];
+
+function readSideSection(): SideSectionItem['id'] {
+  try {
+    const raw = localStorage.getItem(SIDE_SECTION_STORAGE_KEY);
+    if (
+      raw === 'activity' ||
+      raw === 'workspace' ||
+      raw === 'profile' ||
+      raw === 'schedules'
+    ) {
+      return raw;
+    }
+  } catch {
+    /* private mode / quota — fall back to default */
+  }
+  return 'activity';
+}
+
+/**
+ * Bare panel chrome (header + close) used by the side variant's loading /
+ * error states so they still read as a dockable panel, not a full page.
+ */
+function SidePanelShell({
+  onClose,
+  children,
+}: {
+  onClose?: () => void;
+  children: React.ReactNode;
+}): JSX.Element {
+  return (
+    <section
+      className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-bg-base"
+      style={{
+        borderRadius: 'var(--card-radius, 0)',
+        boxShadow: 'var(--card-shadow, none)',
+      }}
+    >
+      <header className="flex items-center justify-end border-b border-border-subtle px-3 py-2.5">
+        {onClose ? (
+          <button
+            type="button"
+            onClick={onClose}
+            title="关闭"
+            aria-label="关闭"
+            className="grid place-items-center p-1 text-text-muted transition-colors hover:text-text-primary"
+          >
+            <X className="size-4" />
+          </button>
+        ) : null}
+      </header>
+      <div className="flex min-h-0 flex-1 flex-col">{children}</div>
+    </section>
+  );
+}
+
+/**
+ * Compact agent panel for the chat-section right pane. Same content components
+ * as the full page (`AgentProfileCard` / `AgentSchedulesCard` / the Activity
+ * timeline) — only the shell differs: a slim identity header (avatar, name,
+ * description, × close), a horizontal tab bar (Activity / Profile / Workspace /
+ * Schedules), and an Activity tab locked to the docked channel (no roster
+ * picker). One content layer, two layout shells — so a future change to a
+ * section lands in both at once.
+ */
+function AgentSidePanel({
+  agent,
+  runtimeState,
+  contextConversationId,
+  contextWorkspaceId,
+  onClose,
+}: {
+  agent: AgentDto;
+  runtimeState: AgentRuntimeStateDto | undefined;
+  contextConversationId: string | null;
+  contextWorkspaceId: string | null;
+  onClose?: () => void;
+}): JSX.Element {
+  const [section, setSection] = useState<SideSectionItem['id']>(() =>
+    readSideSection(),
+  );
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDE_SECTION_STORAGE_KEY, section);
+    } catch {
+      /* ignore */
+    }
+  }, [section]);
+
+  const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
+
+  // A=Activity-follows-channel membership gate (#task:1189, Cindy P2): the
+  // per-(agent, conversation) activity endpoint is membership-gated, so blindly
+  // mounting the timeline for a channel the agent isn't in renders the backend
+  // 404 as "Couldn't load activity." — a network-error look for a benign
+  // "not in this channel" state. The runtime roster already lists every
+  // conversation the agent belongs to, so check it first and show a light empty
+  // state instead. `undefined` runtime = not loaded yet → neutral, not absent.
+  const runtimeLoaded = runtimeState !== undefined;
+  const inThisChannel =
+    contextConversationId !== null &&
+    (runtimeState?.conversation_agents ?? []).some(
+      r => r.conversation_id === contextConversationId,
+    );
+
+  return (
+    <section
+      className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-bg-base"
+      style={{
+        borderRadius: 'var(--card-radius, 0)',
+        boxShadow: 'var(--card-shadow, none)',
+      }}
+    >
+      {/* identity header — slim, square sticker avatar (forza6), no hero */}
+      {/* identity header — slim, square sticker avatar (forza6), no hero */}
+      <header className="flex items-center gap-2.5 border-b border-border-subtle px-3 py-2.5">
+        <AgentAvatar
+          runtime={agent.runtime}
+          size={28}
+          avatarObjectUrl={avatarObjectUrl}
+          alt={agent.display_name || agent.name}
+        />
+        <div className="min-w-0 flex-1 overflow-hidden">
+          {/* line 1: handle + description on one line. The handle stays intact
+              (`shrink-0`); the description takes the remaining width and
+              ellipsis-truncates on overflow (shiki). Two-line block height is
+              fixed regardless of description length. */}
+          <div className="flex items-baseline gap-1.5">
+            <span className="shrink-0 text-[13px] font-semibold leading-tight text-text-primary">
+              {agent.display_name || agent.name}
+            </span>
+            {agent.description ? (
+              <span
+                className="min-w-0 flex-1 truncate text-[12px] font-normal leading-tight text-text-muted"
+                title={agent.description}
+              >
+                {agent.description}
+              </span>
+            ) : null}
+          </div>
+          <p className="truncate text-[11px] capitalize leading-tight text-text-muted">
+            {agent.runtime}
+            {agent.model ? ` · ${agent.model}` : ''}
+          </p>
+        </div>
+        {onClose ? (
+          <button
+            type="button"
+            onClick={onClose}
+            title="关闭"
+            aria-label="关闭"
+            className="grid shrink-0 place-items-center p-1 text-text-muted transition-colors hover:text-text-primary"
+          >
+            <X className="size-4" />
+          </button>
+        ) : null}
+      </header>
+
+      {/* horizontal tab bar. Quiet selection (mirrors AgentSidebar's "not a
+          primary nav surface" stance): ink underline + bolder text only, no
+          fill — the forza6 ink-fill reversal is reserved for sidebar `#`
+          identity selection, a section tab doesn't borrow it. No
+          `transition-colors` on the active flip (it's a discrete committed
+          state, #task:1162); hover tint is the only animated affordance. */}
+      <nav
+        role="tablist"
+        aria-label="Agent panel sections"
+        className="flex shrink-0 items-center gap-1 border-b border-border-subtle px-2"
+      >
+        {SIDE_SECTIONS.map(tab => {
+          const selected = tab.id === section;
+          const Icon = tab.icon;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              onClick={() => setSection(tab.id)}
+              className={cn(
+                'flex items-center gap-1.5 border-b-2 px-2.5 py-2 text-[12px] -mb-px',
+                selected
+                  ? 'border-text-primary font-medium text-text-primary'
+                  : 'border-transparent text-text-muted hover:text-text-secondary',
+              )}
+            >
+              <Icon className="size-3.5" strokeWidth={selected ? 2.25 : 2} />
+              {tab.label}
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* content */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {section === 'activity' ? (
+          !contextConversationId ? (
+            <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-text-muted">
+              打开一个频道后，这里会显示该频道里的活动。
+            </div>
+          ) : !runtimeLoaded ? (
+            <p className="py-8 text-center text-xs text-text-muted">Loading…</p>
+          ) : !inThisChannel ? (
+            <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-text-muted">
+              {agent.display_name || agent.name} 不在当前频道。
+            </div>
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <AgentActivityTimeline
+                key={contextConversationId}
+                conversationId={contextConversationId}
+                agentId={agent.id}
+              />
+            </div>
+          )
+        ) : section === 'workspace' ? (
+          // Current workspace's L2 memory in compact form (#task:1191). The
+          // container manages its own scroll, so no padded wrapper. A
+          // DM/agent-home context resolves to the agent home dir on the backend
+          // (expected overlap) — no frontend branch, and the copy stays neutral
+          // about which files appear (it may include system_prompt.md in a DM).
+          <div className="flex min-h-0 flex-1 flex-col">
+            <AgentWorkspaceContainer
+              // Key by source so switching workspace remounts with fresh
+              // selection — a path picked under workspace A never transiently
+              // fetches under B (Cindy #task:1191 P1).
+              key={contextWorkspaceId ?? 'home'}
+              agentId={agent.id}
+              source={
+                contextWorkspaceId
+                  ? { kind: 'workspace', workspaceId: contextWorkspaceId }
+                  : { kind: 'home' }
+              }
+              layout="compact"
+              header={null}
+            />
+          </div>
+        ) : section === 'profile' ? (
+          <div className="flex-1 overflow-y-auto px-4 py-4">
+            <AgentProfileCard agent={agent} runtimeState={runtimeState} />
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto px-4 py-4">
+            <AgentSchedulesCard agentId={agent.id} />
+          </div>
+        )}
+      </div>
+    </section>
   );
 }

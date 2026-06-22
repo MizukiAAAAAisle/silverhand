@@ -84,7 +84,11 @@ function AgentMention({
         type="button"
         onClick={event => {
           event.preventDefault();
-          nav.toMembers(agent.id);
+          // Agent mention chips open the compact side panel (`?agent=`),
+          // identical to clicking an agent avatar in the stream — so the
+          // channel stays put and Activity reads beside it (#task:1189).
+          // Human mentions still go to the full user page (HumanMention).
+          nav.openAgentPanel(agent.id);
         }}
         className="rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
         aria-label={`@${agent.name}`}

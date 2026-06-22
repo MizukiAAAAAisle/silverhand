@@ -1698,7 +1698,10 @@ const AGENT_WORKSPACE_INDEX_ERROR_FIXTURES: WireFixture[] = [
 ];
 // #task:811 agent_workspace_tree typed errors. Same taxonomy as the
 // sibling agent_workspace_file_read intent (`AgentWorkspaceFsError`):
-// forbidden_path / not_found / fs_unavailable / internal_error.
+// forbidden_path / not_found / workspace_not_provisioned /
+// registry_unavailable / fs_unavailable / internal_error. The two
+// registry codes (#task:1190) only fire for a scoped `workspace_id`;
+// the home (unscoped) tree never resolves a registry binding.
 // `forbidden_path` here is mostly defensive — the tree handler walks
 // from the agent home dir downward and never accepts a caller-supplied
 // path — but the wire taxonomy is shared so the renderer can write one
@@ -1724,6 +1727,32 @@ const AGENT_WORKSPACE_TREE_ERROR_FIXTURES: WireFixture[] = [
     frame: enc({
       id: 'req-agent-workspace-tree-1',
       error: { code: 'not_found', message: 'path not found' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_workspace_tree' },
+  },
+  {
+    name: 'response/agent_workspace_tree-error-workspace_not_provisioned',
+    description:
+      'A scoped regular workspace id has no daemon registry binding, so the daemon refuses to guess a path rather than silently fall back to the agent home dir. Surfaced when the tree is requested for a workspace_id this daemon has never provisioned; the backend may backfill + retry. Maps to HTTP 409 at the route layer.',
+    frame: enc({
+      id: 'req-agent-workspace-tree-1',
+      error: {
+        code: 'workspace_not_provisioned',
+        message: 'workspace is not provisioned on this daemon',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_workspace_tree' },
+  },
+  {
+    name: 'response/agent_workspace_tree-error-registry_unavailable',
+    description:
+      'The daemon cannot consult its registry at all (missing control-plane binding, foreign/corrupt registry file) so it cannot resolve any workspace_id. Hard fail, distinct from workspace_not_provisioned (which is retryable). Maps to HTTP 503.',
+    frame: enc({
+      id: 'req-agent-workspace-tree-1',
+      error: {
+        code: 'registry_unavailable',
+        message: 'daemon registry is unavailable',
+      },
     }),
     kind: { kind: 'response_error_typed', intent: 'agent_workspace_tree' },
   },
@@ -1779,6 +1808,38 @@ const AGENT_WORKSPACE_FILE_READ_ERROR_FIXTURES: WireFixture[] = [
     frame: enc({
       id: 'req-agent-workspace-file-read-1',
       error: { code: 'not_found', message: 'path not found' },
+    }),
+    kind: {
+      kind: 'response_error_typed',
+      intent: 'agent_workspace_file_read',
+    },
+  },
+  {
+    name: 'response/agent_workspace_file_read-error-workspace_not_provisioned',
+    description:
+      'A scoped regular workspace id has no daemon registry binding, so the daemon refuses to guess a path rather than silently fall back to the agent home dir. The backend may backfill + retry. Maps to HTTP 409 at the route layer.',
+    frame: enc({
+      id: 'req-agent-workspace-file-read-1',
+      error: {
+        code: 'workspace_not_provisioned',
+        message: 'workspace is not provisioned on this daemon',
+      },
+    }),
+    kind: {
+      kind: 'response_error_typed',
+      intent: 'agent_workspace_file_read',
+    },
+  },
+  {
+    name: 'response/agent_workspace_file_read-error-registry_unavailable',
+    description:
+      'The daemon cannot consult its registry at all (missing control-plane binding, foreign/corrupt registry file) so it cannot resolve any workspace_id. Hard fail, distinct from workspace_not_provisioned (which is retryable). Maps to HTTP 503.',
+    frame: enc({
+      id: 'req-agent-workspace-file-read-1',
+      error: {
+        code: 'registry_unavailable',
+        message: 'daemon registry is unavailable',
+      },
     }),
     kind: {
       kind: 'response_error_typed',

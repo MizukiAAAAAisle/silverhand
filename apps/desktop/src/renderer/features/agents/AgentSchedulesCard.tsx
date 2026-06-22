@@ -60,26 +60,24 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
 
   return (
     <div className="flex flex-col gap-3">
-      <header className="flex items-center gap-3">
-        <p className="min-w-0 flex-1 text-xs text-text-muted">
-          Self-scheduled wakes. Read-only here, cancel only.
-        </p>
-        <div className="flex shrink-0 items-stretch gap-1">
-          <FilterTabs value={filter} onChange={setFilter} />
-          <button
-            type="button"
-            onClick={() => query.refetch()}
-            disabled={query.isFetching}
-            data-panel-control="row-action"
-            className="inline-flex min-w-7 items-center justify-center px-1.5 text-[11px] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
-            aria-label="Refresh schedules"
-            title="Refresh"
-          >
-            <RefreshCcw
-              className={`size-3 ${query.isFetching ? 'animate-spin' : ''}`}
-            />
-          </button>
-        </div>
+      {/* Toolbar: filter + refresh, left-aligned. The "Self-scheduled wakes…"
+          description was dropped (shiki) — the card's read-only/cancel-only
+          nature is conveyed by the rows themselves, not a caption. */}
+      <header className="flex items-stretch gap-1">
+        <FilterTabs value={filter} onChange={setFilter} />
+        <button
+          type="button"
+          onClick={() => query.refetch()}
+          disabled={query.isFetching}
+          data-panel-control="row-action"
+          className="inline-flex min-w-7 items-center justify-center px-1.5 text-[11px] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
+          aria-label="Refresh schedules"
+          title="Refresh"
+        >
+          <RefreshCcw
+            className={`size-3 ${query.isFetching ? 'animate-spin' : ''}`}
+          />
+        </button>
       </header>
 
       {query.isError ? (
@@ -536,10 +534,9 @@ function FireCounter({ row }: { row: ScheduleDto }): JSX.Element {
 
 function StatusPill({ status }: { status: ScheduleStatus }): JSX.Element {
   // Maps the persisted `ScheduleStatus` enum to a solid saturated
-  // surface + on-color foreground (festival-tile recipe), mirroring
-  // AgentConversationActivityList's pill vocabulary. `*-soft` washes
-  // looked dull next to forza6's brand chrome — solid tiles read as
-  // deliberate state markers in every theme.
+  // surface + on-color foreground (festival-tile recipe). `*-soft`
+  // washes looked dull next to forza6's brand chrome — solid tiles
+  // read as deliberate state markers in every theme.
   const cls =
     status === 'pending'
       ? 'bg-success text-text-on-success'

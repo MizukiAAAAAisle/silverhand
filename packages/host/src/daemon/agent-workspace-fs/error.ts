@@ -14,6 +14,10 @@ import type { AgentWorkspaceFsErrorCode } from '../../protocol.js';
  *  - `not_found` — graceful missing along the walk (ENOENT / ENOTDIR
  *    on a non-leaf, leaf is a directory when the read endpoint asked
  *    for a file, etc). Maps to HTTP 404.
+ *  - `workspace_not_provisioned` — a scoped regular workspace id has no daemon
+ *    registry binding, so we refuse to guess a path. Maps to HTTP 409.
+ *  - `registry_unavailable` — the daemon cannot consult its registry
+ *    (missing control-plane binding, foreign/corrupt file). Maps to HTTP 503.
  *  - `fs_unavailable` — host-local fs read failed HARD (perm/IO/EROFS
  *    etc). Maps to HTTP 503.
  *  - `internal_error` — anything else; collapses to HTTP 500.

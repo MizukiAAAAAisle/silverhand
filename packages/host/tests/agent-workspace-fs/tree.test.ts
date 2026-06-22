@@ -14,6 +14,11 @@ import {
   listAgentWorkspaceTree,
   validateVirtualPathShape,
 } from '../../src/daemon/agent-workspace-fs/index.js';
+import {
+  WorkspaceRegistry,
+  type RegistryBinding,
+} from '../../src/daemon/workspace-registry/index.js';
+import { agentHomeWorkspaceId } from '@silverhand/shared';
 
 /**
  * Integration tests for the new `agent_workspace_tree` daemon handler
@@ -31,19 +36,37 @@ import {
  */
 
 const AGENT_ID = 'aid-tree';
+const BINDING: RegistryBinding = {
+  server_origin: 'test://agent-workspace-tree',
+  host_id: 'host_tree',
+};
 
 let homeDir = '';
+let stateDir = '';
 function agentDir(): string {
   return join(homeDir, '.silverhand', 'agents', AGENT_ID);
+}
+function makeRegistry(): WorkspaceRegistry {
+  return new WorkspaceRegistry({
+    stateDir,
+    binding: BINDING,
+    now: () => 1_700_000_000_000,
+  });
+}
+function l2AgentDir(registry: WorkspaceRegistry, workspaceId = 'ws_1'): string {
+  const workspaceDir = registry.provision(workspaceId).path;
+  return join(workspaceDir, '.silverhand', 'agents', AGENT_ID);
 }
 
 describe('listAgentWorkspaceTree', () => {
   beforeEach(() => {
     homeDir = mkdtempSync(join(tmpdir(), 'shtree-home-'));
+    stateDir = mkdtempSync(join(tmpdir(), 'shtree-state-'));
   });
   afterEach(() => {
     try {
       rmSync(homeDir, { recursive: true, force: true });
+      rmSync(stateDir, { recursive: true, force: true });
     } catch {
       /* best-effort */
     }
@@ -80,6 +103,69 @@ describe('listAgentWorkspaceTree', () => {
       'file:MEMORY.md',
       'file:system_prompt.md',
     ]);
+  });
+
+  it('walks a scoped regular workspace L2 dir instead of the agent home', async () => {
+    const home = agentDir();
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, 'system_prompt.md'), 'l1');
+
+    const registry = makeRegistry();
+    const scoped = l2AgentDir(registry);
+    mkdirSync(join(scoped, 'notes'), { recursive: true });
+    writeFileSync(join(scoped, 'MEMORY.md'), 'l2');
+    writeFileSync(join(scoped, 'notes', 'work.md'), 'work');
+
+    const r = await listAgentWorkspaceTree(
+      { agent_id: AGENT_ID, workspace_id: 'ws_1' },
+      { homeDir, registry },
+    );
+    const paths = r.tree.nodes.map(n => `${n.kind}:${n.path}`);
+    expect(paths).toEqual([
+      'directory:notes',
+      'file:notes/work.md',
+      'file:MEMORY.md',
+    ]);
+    expect(paths).not.toContain('file:system_prompt.md');
+  });
+
+  it('resolves an agent-home workspace id back to home without consulting the registry', async () => {
+    const dir = agentDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'system_prompt.md'), 'l1');
+    writeFileSync(join(dir, 'MEMORY.md'), 'home');
+
+    const r = await listAgentWorkspaceTree(
+      {
+        agent_id: AGENT_ID,
+        workspace_id: agentHomeWorkspaceId(AGENT_ID),
+      },
+      { homeDir },
+    );
+    const paths = r.tree.nodes.map(n => n.path);
+    expect(paths).toEqual(['MEMORY.md', 'system_prompt.md']);
+  });
+
+  it('fails closed for a regular workspace id when no registry is available', async () => {
+    await expect(
+      listAgentWorkspaceTree(
+        { agent_id: AGENT_ID, workspace_id: 'ws_1' },
+        { homeDir },
+      ),
+    ).rejects.toMatchObject({
+      code: 'registry_unavailable',
+    });
+  });
+
+  it('fails closed for a never-provisioned regular workspace id', async () => {
+    await expect(
+      listAgentWorkspaceTree(
+        { agent_id: AGENT_ID, workspace_id: 'ws_missing' },
+        { homeDir, registry: makeRegistry() },
+      ),
+    ).rejects.toMatchObject({
+      code: 'workspace_not_provisioned',
+    });
   });
 
   it('emits preorder across multi-level nesting (root: dirA, fileR; dirA: dirB, fileA; dirB: fileB)', async () => {

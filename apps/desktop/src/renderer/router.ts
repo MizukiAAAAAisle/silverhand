@@ -114,6 +114,15 @@ export interface RouteState {
    *  `agentId` (the patterns are disjoint by segment count). The
    *  members section's right-pane branches on whichever is non-null. */
   userId: string | null;
+  /** Agent side-panel pointer (`?agent=<agentId>`). Opens that agent's
+   *  compact panel in the chat section's right pane so a channel and an
+   *  agent's Activity can be read side-by-side (#task:1189). It is NOT a
+   *  conversation — it is an agent id rendered by `AgentView variant="side"`
+   *  — and it is mutually exclusive with the conversation-based secondary
+   *  panes (`?side` / `?thread` / `?threads`) at the nav layer (opening any
+   *  one clears the others). Distinct from `agentId`, which is the
+   *  `/members/:agentId` *full-page* route segment. */
+  agentPanelId: string | null;
 }
 
 /**
@@ -153,6 +162,12 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   // carried — the flag alone is enough to switch the right pane to the
   // index view.
   const threadsListOpen = searchParams.get('threads') === '1';
+  // Agent side-panel pane (`?agent=<agentId>`). Empty string treated as
+  // unset (mirrors `?side`). Carries an agent id, not a conversation id —
+  // the chat-section right pane renders it as `AgentView variant="side"`.
+  const rawAgentPanel = searchParams.get('agent');
+  const agentPanelId =
+    rawAgentPanel && rawAgentPanel.length > 0 ? rawAgentPanel : null;
   const rawTask = searchParams.get('task');
   // Defensive: positive-integer-string only — no leading zeros, no
   // decimals, no trailing garbage. `parseInt` would silently accept
@@ -190,6 +205,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
     fullscreen,
     agentId: mAgent?.params.agentId ?? null,
     userId: mUser?.params.userId ?? null,
+    agentPanelId,
   };
 }
 
@@ -336,6 +352,30 @@ export function buildChannelPathPreservingSide(
 }
 
 /**
+ * Build a channel-switch URL that preserves the open agent side panel
+ * (`?agent=<id>`, #task:1189). This is what makes A (Activity follows the
+ * current channel) actually close the loop: switching the *left* channel keeps
+ * the *right* agent panel mounted, and its locked Activity context re-points at
+ * the new channel — instead of `buildChannelLayoutUrl` writing a bare path (or
+ * restoring a remembered thread/side) and dropping `?agent`, which silently
+ * closes the panel.
+ *
+ * No remembered secondary layout is restored here: while an agent panel is
+ * docked it owns the right pane, so a channel switch must not resurrect that
+ * channel's old thread/side. `?fullscreen` is not carried (same reasoning as
+ * `buildChannelPathPreservingSide`).
+ */
+export function buildChannelPathPreservingAgent(
+  workspaceId: string,
+  channelId: string,
+  agentId: string,
+): string {
+  const params = new URLSearchParams();
+  params.set('agent', agentId);
+  return `${routes.chatChannel(workspaceId, channelId)}?${params.toString()}`;
+}
+
+/**
  * Build a URL with `?task` written or cleared. Pure helper so the nav
  * hook can stay tiny and tests can assert URL shape without React.
  *
@@ -406,6 +446,9 @@ export function buildSideOpenUrl(
   params.delete('thread');
   // Same exclusion for the channel Threads-list pane (#task:1073).
   params.delete('threads');
+  // …and the agent side-panel pane (#task:1189) — the right pane holds one
+  // secondary at a time.
+  params.delete('agent');
   const qs = params.toString();
   return qs ? `${pathname}?${qs}` : pathname;
 }
@@ -438,6 +481,7 @@ export function withThreadQuery(
     params.set('thread', rootMessageId);
     params.delete('side');
     params.delete('threads');
+    params.delete('agent');
     params.delete('fullscreen');
   }
   const next = params.toString();
@@ -483,10 +527,55 @@ export function withThreadsQuery(
     params.set('threads', '1');
     params.delete('side');
     params.delete('thread');
+    params.delete('agent');
     params.delete('fullscreen');
   }
   const next = params.toString();
   return next ? `${pathname}?${next}` : pathname;
+}
+
+/**
+ * Build a URL with `?agent` written or cleared (#task:1189). Mirrors
+ * `withSideQuery` for the agent side-panel pane.
+ *
+ * Rules:
+ *  - `agentId == null` → strip `?agent` AND `?fullscreen` (closing the panel
+ *    removes the secondary pane).
+ *  - `agentId !== null` → set `?agent=<id>`, strip `?side`, `?thread`,
+ *    `?threads` and `?fullscreen` (the panel is a fresh secondary, mutually
+ *    exclusive with every conversation-based pane).
+ *  - Other query params (`task`, …) are preserved verbatim.
+ */
+export function withAgentQuery(
+  pathname: string,
+  search: string,
+  agentId: string | null,
+): string {
+  const params = new URLSearchParams(search);
+  if (agentId == null) {
+    params.delete('agent');
+    params.delete('fullscreen');
+  } else {
+    params.set('agent', agentId);
+    params.delete('side');
+    params.delete('thread');
+    params.delete('threads');
+    params.delete('fullscreen');
+  }
+  const next = params.toString();
+  return next ? `${pathname}?${next}` : pathname;
+}
+
+/**
+ * Build the URL written by `openAgentPanel(agentId)`. Thin wrapper over
+ * `withAgentQuery` for call-site symmetry with `buildSideOpenUrl`.
+ */
+export function buildAgentPanelOpenUrl(
+  pathname: string,
+  search: string,
+  agentId: string,
+): string {
+  return withAgentQuery(pathname, search, agentId);
 }
 
 /**
@@ -547,6 +636,13 @@ export function useNav(): {
    *  its own React state — closing the URL focus is independent of
    *  open/close. */
   closeTask: () => void;
+  /** Open agent `agentId` as the chat-section right-pane panel
+   *  (`?agent=<id>`, #task:1189) so a channel + the agent's Activity show
+   *  side-by-side. Clears any conversation-based secondary; `replace` so it
+   *  doesn't pile history entries. The base channel path is preserved. */
+  openAgentPanel: (agentId: string) => void;
+  /** Close the agent side panel. Strips `?agent` (and `?fullscreen`). */
+  closeAgentPanel: () => void;
 } {
   const navigate = useNavigate();
   const location = useLocation();
@@ -613,6 +709,21 @@ export function useNav(): {
     const next = withTaskQuery(location.pathname, location.search, null);
     navigate(next, { replace: true });
   }, [navigate, location.pathname, location.search]);
+  const openAgentPanel = useCallback(
+    (agentId: string) => {
+      const next = buildAgentPanelOpenUrl(
+        location.pathname,
+        location.search,
+        agentId,
+      );
+      navigate(next, { replace: true });
+    },
+    [navigate, location.pathname, location.search],
+  );
+  const closeAgentPanel = useCallback(() => {
+    const next = withAgentQuery(location.pathname, location.search, null);
+    navigate(next, { replace: true });
+  }, [navigate, location.pathname, location.search]);
   const toChat = useCallback(() => go(routes.chat()), [go]);
   const toChatSearch = useCallback(() => go(routes.chatSearch()), [go]);
   const toChatSaved = useCallback(() => go(routes.chatSaved()), [go]);
@@ -657,6 +768,8 @@ export function useNav(): {
     toggleThreadsList,
     openTask,
     closeTask,
+    openAgentPanel,
+    closeAgentPanel,
   }), [
     go,
     toChat,
@@ -679,5 +792,7 @@ export function useNav(): {
     toggleThreadsList,
     openTask,
     closeTask,
+    openAgentPanel,
+    closeAgentPanel,
   ]);
 }

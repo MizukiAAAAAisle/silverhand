@@ -569,6 +569,60 @@ describe('GET /api/agents/:id/workspace/tree', () => {
     expect(calls[0]!.params).toEqual({ agent_id: created.agent.id });
   });
 
+  it('workspace_id scopes tree to the agent L2 dir and forwards only semantic ids', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    const ws = await (
+      await http(t).post('/api/workspaces', {
+        name: 'scoped-memory',
+        member_agent_ids: [created.agent.id],
+      })
+    ).json() as any;
+    t.fakeHostWs!.calls.length = 0;
+    const res = await http(t).get(
+      `/api/agents/${created.agent.id}/workspace/tree?workspace_id=${encodeURIComponent(
+        ws.workspace.id,
+      )}`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    const paths = body.tree.nodes.map((n: any) => `${n.kind}:${n.path}`);
+    expect(paths).toContain('file:MEMORY.md');
+    expect(paths).not.toContain('file:system_prompt.md');
+    const calls = t.fakeHostWs!.calls.filter(
+      c => c.kind === 'agent_workspace_tree',
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.params).toEqual({
+      agent_id: created.agent.id,
+      workspace_id: ws.workspace.id,
+    });
+  });
+
+  it('workspace_id still gates membership when an agent_home id resolves to home', async () => {
+    t = buildTestApp();
+    const first = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    const second = await (
+      await http(t).post('/api/agents', { name: 'bob', runtime: 'claude' })
+    ).json() as any;
+    t.fakeHostWs!.calls.length = 0;
+    const res = await http(t).get(
+      `/api/agents/${first.agent.id}/workspace/tree?workspace_id=${encodeURIComponent(
+        second.agent_home_workspace_id,
+      )}`,
+    );
+    expect(res.status).toBe(404);
+    const body = await res.json() as any;
+    expect(body.code).toBe('workspace_agent_not_member');
+    expect(
+      t.fakeHostWs!.calls.some(c => c.kind === 'agent_workspace_tree'),
+    ).toBe(false);
+  });
+
   it('404 for an unknown agent', async () => {
     t = buildTestApp();
     const res = await http(t).get('/api/agents/aid_missing/workspace/tree');
@@ -657,6 +711,38 @@ describe('GET /api/agents/:id/workspace/file', () => {
     expect(calls[0]!.params).toEqual({
       agent_id: created.agent.id,
       path: '../etc/passwd',
+    });
+  });
+
+  it('workspace_id scopes file reads to the agent L2 dir', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    const ws = await (
+      await http(t).post('/api/workspaces', {
+        name: 'scoped-file',
+        member_agent_ids: [created.agent.id],
+      })
+    ).json() as any;
+    t.fakeHostWs!.calls.length = 0;
+    const res = await http(t).get(
+      `/api/agents/${created.agent.id}/workspace/file?workspace_id=${encodeURIComponent(
+        ws.workspace.id,
+      )}&path=${encodeURIComponent('MEMORY.md')}`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.file.path).toBe('MEMORY.md');
+    expect(body.file.content).toContain('# Memory');
+    const calls = t.fakeHostWs!.calls.filter(
+      c => c.kind === 'agent_workspace_file_read',
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.params).toEqual({
+      agent_id: created.agent.id,
+      workspace_id: ws.workspace.id,
+      path: 'MEMORY.md',
     });
   });
 

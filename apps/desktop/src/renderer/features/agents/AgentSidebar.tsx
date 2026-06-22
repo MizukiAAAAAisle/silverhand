@@ -2,7 +2,7 @@ import { type ComponentType, type SVGProps } from 'react';
 import { Activity, CalendarClock, FolderTree, Plug, User } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
-export type AgentSection = 'profile' | 'workspace' | 'mcp' | 'runtime' | 'schedules';
+export type AgentSection = 'profile' | 'workspace' | 'mcp' | 'activity' | 'schedules';
 
 interface SectionItem {
   id: AgentSection;
@@ -37,10 +37,10 @@ export const AGENT_SECTIONS: ReadonlyArray<SectionItem> = [
     hint: 'Profile MCP servers — raw config + summary.',
   },
   {
-    id: 'runtime',
-    label: 'Runtime',
+    id: 'activity',
+    label: 'Activity',
     icon: Activity,
-    hint: 'Per-conversation status.',
+    hint: 'Per-channel execution trace.',
   },
 ];
 

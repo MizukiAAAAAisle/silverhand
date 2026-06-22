@@ -3,9 +3,12 @@ import type {
   AgentWorkspaceFileReadParams,
   AgentWorkspaceFileReadResult,
 } from '../../protocol.js';
-import { resolveAgentDir } from '../agent-materialize/index.js';
 import { AgentWorkspaceFsError } from './error.js';
 import { parseAndResolveVirtualPath } from './parse-virtual-path.js';
+import {
+  resolveAgentWorkspaceBaseDir,
+  type ResolveAgentWorkspaceBaseDeps,
+} from './source.js';
 
 /**
  * Daemon handler for `agent_workspace_file_read` (#task:811).
@@ -36,12 +39,8 @@ import { parseAndResolveVirtualPath } from './parse-virtual-path.js';
  *  - `fs_unavailable` — hard fs failure (perm/IO/EROFS); 503.
  *  - `internal_error` — anything else; 500.
  */
-export interface ReadAgentWorkspaceFileDeps {
-  /** Parent dir for agent-home resolution. Default: daemon's homedir. */
-  homeDir?: string;
-  /** Exact root for agent-home resolution. Takes precedence over homeDir. */
-  agentHomeRootDir?: string;
-}
+export interface ReadAgentWorkspaceFileDeps
+  extends ResolveAgentWorkspaceBaseDeps {}
 
 const MAX_PREVIEW_BYTES = 64 * 1024;
 const TRUNCATED_SUFFIX = '\n\n… (truncated; open in Finder for full content)';
@@ -50,7 +49,7 @@ export async function readAgentWorkspaceFile(
   params: AgentWorkspaceFileReadParams,
   deps: ReadAgentWorkspaceFileDeps = {},
 ): Promise<AgentWorkspaceFileReadResult> {
-  const baseDir = resolveAgentDir(params.agent_id, deps);
+  const baseDir = resolveAgentWorkspaceBaseDir(params, deps);
   let resolved;
   try {
     resolved = await parseAndResolveVirtualPath(params.path, baseDir);

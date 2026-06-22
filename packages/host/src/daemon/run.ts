@@ -631,26 +631,47 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         agentHomeRootDir,
       });
     },
-    // #task:811 — agent_workspace_tree: flat tree of every visible
-    // file/directory under the agent home dir. Resolves the agent-home
-    // dir from the daemon's homedir (test override via
-    // `agentMaterializeHomeDir`); no registry binding needed because
-    // agent-home is homedir-derived, never registry-backed.
-    agentWorkspaceTreeHandler: async params =>
-      listAgentWorkspaceTree(params, {
+    // #task:811/#1190 — agent_workspace_tree: flat tree of every visible
+    // file/directory under the selected agent memory root. No `workspace_id`
+    // means agent-home/L1 (homedir-derived); `workspace_id` means the daemon
+    // resolves the regular workspace via its registry, or agent_home/DM back
+    // to the same L1 dir. No server-derived path crosses the wire.
+    agentWorkspaceTreeHandler: async params => {
+      const binding = params.workspace_id ? resolveRegistryBinding() : null;
+      const registry = binding
+        ? new WorkspaceRegistry({
+            stateDir: workspaceRegistryStateDir,
+            binding,
+            silverhandStateRoot,
+            legacyWorkspacesRoot,
+          })
+        : undefined;
+      return listAgentWorkspaceTree(params, {
+        registry,
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
         agentHomeRootDir,
-      }),
-    // #task:811 — agent_workspace_file_read: read one file from the
-    // agent home dir by virtual path. The helper enforces the
-    // segment-shape rules + per-segment lstat-walk + realpath boundary
-    // check so the daemon never follows a symlink or reads outside
-    // the agent home base.
-    agentWorkspaceFileReadHandler: async params =>
-      readAgentWorkspaceFile(params, {
+      });
+    },
+    // #task:811/#1190 — agent_workspace_file_read: read one file from the
+    // selected agent memory root by virtual path. The helper enforces the
+    // segment-shape rules + per-segment lstat-walk + realpath boundary check
+    // so the daemon never follows a symlink or reads outside the resolved base.
+    agentWorkspaceFileReadHandler: async params => {
+      const binding = params.workspace_id ? resolveRegistryBinding() : null;
+      const registry = binding
+        ? new WorkspaceRegistry({
+            stateDir: workspaceRegistryStateDir,
+            binding,
+            silverhandStateRoot,
+            legacyWorkspacesRoot,
+          })
+        : undefined;
+      return readAgentWorkspaceFile(params, {
+        registry,
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
         agentHomeRootDir,
-      }),
+      });
+    },
     // D4.e-3 — agent_l2_seed: seed a member agent's L2 (per-workspace)
     // memory dir on the owning host. Resolves the regular workspace's path
     // from the registry (fail-closed `workspace_not_provisioned` when
