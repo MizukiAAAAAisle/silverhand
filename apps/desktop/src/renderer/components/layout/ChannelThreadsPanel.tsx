@@ -113,6 +113,7 @@ export function ChannelThreadsPanel({
           aria-label="Close"
           title="Close"
           onClick={onClose}
+          data-sticker-close
           className="flex size-8 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
         >
           <X className="size-4" />

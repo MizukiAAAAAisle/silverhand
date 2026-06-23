@@ -1008,6 +1008,39 @@
    for follow, the Bell → BellOff icon swap. (Earlier #1109 painted an
    inverted-ink fill here; intentionally dropped.) */
 
+/* ── Close-icon poster sticker (#task:1199) ──────────────────────────
+   shiki: give the X close button a forza6 poster sticker across modals
+   (channel/workspace settings, new workspace, new agent — all via the
+   generic DialogContent close), the conversation side panel (AgentView),
+   the Image Preview / Lightbox modals, and the Tasks drawer. Same
+   sticker-button family as `[data-channel-actions] button` above: white
+   paper body + 2px ink border + 0 radius + hard ink drop shadow that
+   grows on the hover lift. The hook paints identity only — each consumer
+   keeps its own size / position (`p-1` / `size-6/7/8` / absolute corner).
+   The X glyph drops to full ink so it reads as the sticker's stamp, and
+   `opacity:1` overrides the dialog close's resting `opacity-70`. Focus is
+   an `outline` (not box-shadow) so it never collides with the drop
+   shadow. Other themes keep the JSX icon-button defaults. */
+[data-theme='forza6'] [data-sticker-close] {
+  background-color: var(--bg-floating);
+  border: 2px solid var(--forza6-ink);
+  border-radius: 0;
+  color: var(--forza6-ink);
+  opacity: 1;
+  box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
+  transition: transform 150ms var(--ease, ease), box-shadow 150ms ease;
+}
+[data-theme='forza6'] [data-sticker-close]:hover:not(:disabled) {
+  background-color: var(--bg-floating);
+  color: var(--forza6-ink);
+  transform: translateY(-1px);
+  box-shadow: 2.5px 2.5px 0 var(--forza6-ink);
+}
+[data-theme='forza6'] [data-sticker-close]:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
 /* ── #v5.6 — Task panel (drawer + TasksSection) poster polish ────────
    shiki `kx1DNk-PwdkIcQ_Y` "先做核心 4 个". WorkspaceTasksDrawer.tsx
    and TasksSection.tsx render the same kanban surface (4-column

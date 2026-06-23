@@ -287,6 +287,7 @@ function SidePanelShell({
             onClick={onClose}
             title="关闭"
             aria-label="关闭"
+            data-sticker-close
             className="grid place-items-center p-1 text-text-muted transition-colors hover:text-text-primary"
           >
             <X className="size-4" />
@@ -393,6 +394,7 @@ function AgentSidePanel({
             onClick={onClose}
             title="关闭"
             aria-label="关闭"
+            data-sticker-close
             className="grid shrink-0 place-items-center p-1 text-text-muted transition-colors hover:text-text-primary"
           >
             <X className="size-4" />

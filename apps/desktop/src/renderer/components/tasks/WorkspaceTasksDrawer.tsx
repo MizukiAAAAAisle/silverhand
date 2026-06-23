@@ -458,6 +458,7 @@ export function WorkspaceTasksDrawer({
               onPointerDown={closeDrawer}
               onClick={closeDrawer}
               aria-label="关闭 Tasks"
+              data-sticker-close
               className="ml-auto flex size-6 shrink-0 cursor-pointer items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
               <X className="size-4" />

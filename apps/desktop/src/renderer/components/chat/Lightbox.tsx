@@ -67,6 +67,7 @@ export function Lightbox({ open, onOpenChange, src, alt }: LightboxProps): JSX.E
             </DialogPrimitive.Title>
             <DialogPrimitive.Close
               aria-label="Close"
+              data-sticker-close
               className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
             >
               <X className="size-4" />

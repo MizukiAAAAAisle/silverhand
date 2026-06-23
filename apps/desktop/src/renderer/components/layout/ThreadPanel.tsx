@@ -433,6 +433,7 @@ export function ThreadPanel({
             aria-label="Close"
             title="Close"
             onClick={onClose}
+            data-sticker-close
             className="flex size-8 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
           >
             <X className="size-4" />
@@ -497,7 +498,7 @@ export function ThreadPanel({
               </div>
             ) : replyMessages.length === 0 ? (
               <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-text-muted">
-                还没有回复
+                No replies yet
               </div>
             ) : (
               items.map(item => {
