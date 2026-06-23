@@ -136,8 +136,10 @@ export interface RuntimeHandle {
   /** Same default inference for deliveries written mid-turn but not yet
    *  admitted as precedent. `undefined` means no pending turn delivery has
    *  contributed a default; `null` means pending deliveries are main/mixed
-   *  and therefore intentionally have no thread default. Promoted at the
-   *  next turn boundary alongside `pendingAdmissionSeqByStream`. */
+   *  and therefore intentionally have no thread default. An unambiguous
+   *  thread value may be used by a same-turn bare send as its target, but
+   *  seq admission still waits until either that send anchors the target
+   *  stream or the next turn boundary promotes it. */
   pendingDefaultReplyTarget: DefaultReplyTarget | null | undefined;
   /** True once an admitted input batch is expected to be driving the
    *  current model action. Cleared on turn_end/runtime resolution.

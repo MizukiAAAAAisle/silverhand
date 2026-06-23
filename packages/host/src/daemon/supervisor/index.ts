@@ -263,7 +263,11 @@ const REPLY_TARGET_STREAM_CACHE_CAP = 4096;
 
 type EffectiveMessageTarget =
   | { kind: 'channel' }
-  | { kind: 'thread'; messageId: string }
+  | {
+      kind: 'thread';
+      messageId: string;
+      source?: 'current_default' | 'pending_default';
+    }
   | { kind: 'legacy'; target: AgentMessageSendParams['target'] };
 
 /** The stream a message LIVES in — what its arrival/our own send
@@ -561,8 +565,19 @@ export class Supervisor implements SupervisorContract {
         : { kind: 'channel' };
     }
     if (target !== undefined) return { kind: 'legacy', target };
+    if (handle.pendingDefaultReplyTarget) {
+      return {
+        kind: 'thread',
+        messageId: handle.pendingDefaultReplyTarget.messageId,
+        source: 'pending_default',
+      };
+    }
     return handle.defaultReplyTarget
-      ? { kind: 'thread', messageId: handle.defaultReplyTarget.messageId }
+      ? {
+          kind: 'thread',
+          messageId: handle.defaultReplyTarget.messageId,
+          source: 'current_default',
+        }
       : { kind: 'channel' };
   }
 
@@ -708,8 +723,9 @@ export class Supervisor implements SupervisorContract {
     // (reply-cluster §6.4):
     //  - explicit target        → explicit stream (`channel` or
     //    `thread:<messageId>`; legacy target shapes remain adapter-only).
-    //  - no explicit target     → default to the stream that admitted this
-    //    turn when unambiguous, otherwise main.
+    //  - no explicit target     → default to an unambiguous thread delivery
+    //    written mid-turn, or otherwise the stream admitted for this turn;
+    //    fall back to main when neither gives a thread.
     //  - reply target we saw    → that cluster's stream (known).
     //  - reply target we did NOT see → unknown (Case A loose, Q1=A): omit
     //    seen+stream_key so the backend skips freshness for this first-touch
@@ -721,6 +737,17 @@ export class Supervisor implements SupervisorContract {
       ? handle.replyTargetStreamByMessageId.get(threadTargetMessageId)
       : MAIN_STREAM_KEY;
     const targetKnown = targetStreamKey !== undefined;
+    const seenUpToSeq =
+      targetKnown
+      && effectiveTarget.kind === 'thread'
+      && effectiveTarget.source === 'pending_default'
+        ? Math.max(
+            handle.observedSeqByStream.get(targetStreamKey) ?? 0,
+            handle.pendingAdmissionSeqByStream.get(targetStreamKey) ?? 0,
+          )
+        : targetKnown
+          ? (handle.observedSeqByStream.get(targetStreamKey) ?? 0)
+          : undefined;
     if (threadTargetMessageId && !targetKnown) {
       this.logger.info(
         {
@@ -747,7 +774,7 @@ export class Supervisor implements SupervisorContract {
         ? { freshness_bypass: true }
         : targetKnown
           ? {
-              seen_up_to_seq: handle.observedSeqByStream.get(targetStreamKey) ?? 0,
+              seen_up_to_seq: seenUpToSeq,
               stream_key: targetStreamKey,
             }
           : {}),

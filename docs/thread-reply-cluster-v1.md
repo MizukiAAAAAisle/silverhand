@@ -267,6 +267,37 @@ push、泄露 thread 内容**。
 > 首插、**并发首插(`seen=0` 第二条 → 0 changes → stale)**、CAS 成功、CAS stale、**`seen>0` 且 head 缺失 →
 > UPDATE 0 行 → stale(不误插)**;并断言 `conversations.latest_message_seq` 在 CAS miss 后已 rollback(无 burned seq)。
 
+### 6.5 默认 reply target(bare send 落哪条 stream;#task:1201 修复定档)
+
+`silverhand message send` **无显式 `--target` / `--reply-to`** 时,默认落到**当前 turn 正在响应的那条 stream**——这是产品契约(对齐 platform prompt「reply in the stream the message arrived on」),不是实现细节。daemon 按以下顺序解析(`Supervisor.effectiveMessageTarget`):
+
+1. **unambiguous pending thread default**(优先):`pendingDefaultReplyTarget`——见下。
+2. 否则 **admitted 当前 turn thread default**:`defaultReplyTarget`。
+3. 都没有 → **main**。
+
+**default 的来源 = `inferDefaultReplyTarget(deliveries)`:** 仅看 `delivery_kind==='turn'` 的投递(`observe`
+不参与默认);**当且仅当**全部 turn 投递落在**同一个** thread(都带 `thread_root_id` 且一致)→ 该 thread 为默认;
+**任何一条 main-line(`thread_root_id=null`)turn 投递、或跨多 stream → 无 thread 默认 → main**(这就是
+"unambiguous" 的含义)。
+
+**为何 pending 必须优先于 admitted(#task:1201 根因,load-bearing):** 一条 thread `turn` wake 若在 agent
+**已有 turn active** 时送达,会被 `wake_delivery_deferred`——只进 `pendingDefaultReplyTarget`,**不**在本 turn 内
+promote 成 `defaultReplyTarget`(promote 等到下个 turn 边界 `admitPendingSeqForNewTurn`)。旧实现 bare send 只读
+admitted default → 默认回 main(实测 bug:Judy 在 thread 里被回复,第一次 bare send 却落主线)。修复:读路径**先取**
+unambiguous pending、再退 admitted——pending 代表"本 turn 正在处理的触发消息",必须压过上一轮遗留的 admitted 默认
+(**不是** "admitted 空才退 pending",否则上一轮在别 thread admitted 的旧默认会盖掉当前 deferred trigger)。
+
+**与 freshness 的耦合(否则次生 false-stale):** 默认落到一条 **pending(尚未 admitted)** thread stream 时,该
+stream 的 observed 还没推进到触发消息,直接用 `observedSeqByStream` 当 `seen_up_to_seq` 会被 §6.4 的 per-stream CAS
+误判 stale。故 `source==='pending_default'` 时 `seen_up_to_seq = max(observedSeq, pendingAdmissionSeq)`,把被
+deferred 的触发消息算作已见。**这只是 send 时多读一眼 pending admission;observed-seq 的 turn-boundary promote
+时序不变**——default-target 与 freshness 两个关注点保持解耦,绝不提前 promote pending。
+
+**override:** 显式 `--target channel|thread:<id>` 或 `--reply-to <id>` 永远覆盖默认。
+
+**测试钉死(`packages/host/tests/supervisor.test.ts`):** main turn active → thread wake deferred → bare send 默认回
+pending thread,且 `seen_up_to_seq` 用 pending seq;另一组钉 pending thread 压过 admitted 的另一个 thread;另一组钉显式 main-line target 覆盖当前 thread 默认。
+
 ---
 
 ## 7. Push / Pull 二分(核心红线)
