@@ -63,7 +63,7 @@ export function ManageMembersPopover({
           sideOffset={6}
           collisionPadding={8}
           data-popover-frame="info"
-          className="z-50 w-[280px] rounded-md border border-border bg-bg-floating p-3 shadow-lg outline-none"
+          className="z-50 w-[280px] rounded-md border border-border bg-bg-floating p-3 shadow-popover outline-none"
         >
           <PopoverBody workspaceId={workspaceId} />
         </Popover.Content>
@@ -216,7 +216,7 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
             <Select.Content
               position="popper"
               sideOffset={4}
-              className="z-[60] max-h-[40vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-lg"
+              className="z-[60] max-h-[40vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-popover"
             >
               <Select.Viewport className="p-1">
                 {candidates.length === 0 ? (

@@ -322,7 +322,6 @@
   --md-prose-size: 14px;
   --md-code-size: 14px;
   --system-message-size: 12px;
-  --inline-code-size: 0.88em;
 
   /* ── Motion ── */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
@@ -364,4 +363,17 @@
   color: var(--bg-base);
   border-radius: 0;
   font-size: 11px;
+}
+
+/* ── #task:1195 · MessageItem bottom task chip — drop border (slack-only) ──
+   The message's own task tag (`[data-message-task-tag]`, the bottom-edge
+   `<status-icon> #n · assignee` button) inherits `border: var(--task-status-
+   X-border)` from the global `[data-task-status]` contract. shiki wants this
+   one surface borderless in slack-dark (the fill carries the status; the border
+   is noise on the message stream). Scoped to the message tag only — kanban /
+   drawer / inline `#task` chip / activity pill keep their border. Selector
+   specificity (theme + tag attr = 0,2,0) beats the global
+   `[data-task-status='…']` (0,1,0), so `border: none` wins. forza6 untouched. */
+[data-theme='slack-dark'] [data-message-task-tag] {
+  border: none;
 }

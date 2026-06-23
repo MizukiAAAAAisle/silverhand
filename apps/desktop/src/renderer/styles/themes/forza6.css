@@ -590,18 +590,6 @@
      drift system size without dragging markdown along. shiki spec
      msg `cN9u0jopk9w5nafo`. */
   --system-message-size: 12px;
-  /* Inline code chip (`.markdown-body :not(pre) > code`) lives in the
-     prose flow as *emphasis*, not as a standalone block. Same logic as
-     the TaskRef chip (v7): inline chrome wants to sit subordinate to
-     the surrounding prose, so chip cap-height ≈ body x-height. `0.88em`
-     (~12.3px at 14px body) hits that ratio without crushing the
-     readable weight of a function name or variable. `em` not `px` so
-     the chip tracks the user's Appearance slider proportionally.
-
-     Independent of `--md-code-size` (which still drives fenced code
-     blocks) — inline and fenced code are two different surfaces and
-     shouldn't share one size. shiki accepted msg `H7DHYMS5mu1xNiJ3`. */
-  --inline-code-size: 0.88em;
 
   /* ── Motion ── */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);

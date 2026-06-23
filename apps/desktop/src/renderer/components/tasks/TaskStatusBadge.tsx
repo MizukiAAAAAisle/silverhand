@@ -5,8 +5,8 @@ import {
   ArrowRight,
   CheckCircle2,
   Circle,
-  CircleDashed,
-  CircleEllipsis,
+  createLucideIcon,
+  Eye,
   type LucideIcon,
 } from 'lucide-react';
 import type { TaskStatus } from '@silverhand/shared';
@@ -65,6 +65,32 @@ export function taskStatusLabel(status: TaskStatus): string {
 }
 
 /**
+ * `in_progress` glyph — a 75%-filled progress ring. lucide ships no
+ * partial-fill circle, so we author one in its spec (viewBox 24,
+ * stroke-width 2, round caps via `createLucideIcon`) to land the
+ * DevOps/issue-tracker convention (Linear, GitHub Projects): empty ring
+ * (todo) → filling ring (in progress) → ✓ (done), one "ring filling up"
+ * progress story. 75% reads as "almost there" and is unmistakably
+ * mid-progress rather than a loading spinner (shiki picked 75% over the
+ * 50%/25% variants). The wedge sweeps clockwise from 12 o'clock 270° to
+ * 9 o'clock; `fill="currentColor" stroke="none"` paints the pie while the
+ * ring keeps the inherited stroke. Inset r=6 leaves a gap to the r=10
+ * ring so the fill reads as a distinct pie, not a thick arc.
+ */
+const CircleProgress = createLucideIcon('CircleProgress', [
+  ['circle', { cx: '12', cy: '12', r: '10', key: 'ring' }],
+  [
+    'path',
+    {
+      d: 'M12 12 L12 6 A6 6 0 1 1 6 12 Z',
+      fill: 'currentColor',
+      stroke: 'none',
+      key: 'fill',
+    },
+  ],
+]);
+
+/**
  * Canonical per-status icon. The SINGLE source for the status glyph vocabulary
  * (shiki #task:1185: "icon 引用同一个 source，到时候更改 icon 可以一起更新") —
  * the kanban board (`TasksSection`), the drawer (`WorkspaceTasksDrawer`) and the
@@ -74,8 +100,8 @@ export function taskStatusLabel(status: TaskStatus): string {
  */
 export const TASK_STATUS_ICON: Record<TaskStatus, LucideIcon> = {
   todo: Circle,
-  in_progress: CircleDashed,
-  in_review: CircleEllipsis,
+  in_progress: CircleProgress,
+  in_review: Eye,
   done: CheckCircle2,
   closed: Archive,
 };
@@ -192,7 +218,7 @@ export function StatusPicker({
           // HoverPopover) so the picker isn't trapped behind its own
           // host; stays under the modal layer (z-[90]+). Harmless in the
           // task-card context where nothing floats this high. #task:923
-          className="z-[85] min-w-[136px] bg-bg-floating p-1 shadow-lg outline-none"
+          className="z-[85] min-w-[136px] bg-bg-floating p-1 shadow-popover outline-none"
         >
           <div className="px-1.5 pb-1 pt-0.5 text-[9px] font-medium uppercase tracking-wider text-text-muted">
             Move to

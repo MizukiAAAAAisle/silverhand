@@ -202,7 +202,7 @@ export function EventsApp(): JSX.Element {
             <Select.Content
               position="popper"
               sideOffset={4}
-              className="z-50 max-h-[60vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-lg"
+              className="z-50 max-h-[60vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-popover"
             >
               <Select.Viewport className="p-1">
                 {groups.length === 0 ? (

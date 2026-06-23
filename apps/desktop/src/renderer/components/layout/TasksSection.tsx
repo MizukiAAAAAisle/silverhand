@@ -195,31 +195,31 @@ const COLUMNS: ReadonlyArray<ColumnSpec> = [
     status: 'todo',
     label: 'Todo',
     icon: TASK_STATUS_ICON.todo,
-    iconClass: 'text-[color:var(--task-status-todo-text)]',
+    iconClass: 'text-[color:var(--task-status-todo-solid)]',
   },
   {
     status: 'in_progress',
     label: 'In progress',
     icon: TASK_STATUS_ICON.in_progress,
-    iconClass: 'text-[color:var(--task-status-in-progress-text)]',
+    iconClass: 'text-[color:var(--task-status-in-progress-solid)]',
   },
   {
     status: 'in_review',
     label: 'In review',
     icon: TASK_STATUS_ICON.in_review,
-    iconClass: 'text-[color:var(--task-status-in-review-text)]',
+    iconClass: 'text-[color:var(--task-status-in-review-solid)]',
   },
   {
     status: 'done',
     label: 'Done',
     icon: TASK_STATUS_ICON.done,
-    iconClass: 'text-[color:var(--task-status-done-text)]',
+    iconClass: 'text-[color:var(--task-status-done-solid)]',
   },
   {
     status: 'closed',
     label: 'Closed',
     icon: TASK_STATUS_ICON.closed,
-    iconClass: 'text-[color:var(--task-status-closed-text)]',
+    iconClass: 'text-[color:var(--task-status-closed-solid)]',
   },
 ];
 

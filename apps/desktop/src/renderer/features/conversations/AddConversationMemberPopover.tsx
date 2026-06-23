@@ -69,7 +69,7 @@ export function AddConversationMemberPopover({
           sideOffset={6}
           collisionPadding={8}
           data-popover-frame="info"
-          className="z-50 w-[280px] rounded-md border border-border bg-bg-floating p-3 shadow-lg outline-none"
+          className="z-50 w-[280px] rounded-md border border-border bg-bg-floating p-3 shadow-popover outline-none"
         >
           <PopoverBody
             workspaceId={workspaceId}

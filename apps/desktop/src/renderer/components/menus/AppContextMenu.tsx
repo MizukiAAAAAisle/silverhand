@@ -4,7 +4,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { cn } from '@/lib/cn';
 
 const MENU_CONTENT_CLASS =
-  'z-[80] min-w-[180px] rounded-md border border-border bg-bg-floating p-1 text-xs text-text-primary shadow-lg outline-none';
+  'z-[80] min-w-[180px] rounded-md border border-border bg-bg-floating p-1 text-xs text-text-primary shadow-popover outline-none';
 
 const MENU_ITEM_CLASS = cn(
   // `cursor-pointer` on hover so the menu reads as actionable; Radix's

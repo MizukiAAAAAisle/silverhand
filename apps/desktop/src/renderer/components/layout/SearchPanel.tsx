@@ -15,6 +15,7 @@ import {
 import type { AgentDto, SearchResultDto, UserDto } from '@silverhand/shared';
 import { Input, Label } from '@/components/ui/input';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
@@ -60,7 +61,7 @@ const SELECT_TRIGGER_CLASS =
   'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus data-[placeholder]:text-text-muted';
 
 const SELECT_CONTENT_CLASS =
-  'z-[60] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-lg';
+  'z-[60] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-popover';
 
 const SELECT_ITEM_CLASS =
   'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 pr-7 text-xs text-text-primary outline-none data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary';
@@ -243,10 +244,12 @@ export function SearchPanel({
           <div className="space-y-5">
             {resultGroups.map(group => (
               <section key={group.key}>
-                <header className="mb-2 flex items-center gap-2 px-1 text-[11px] font-medium uppercase tracking-wider text-text-muted">
+                <header className="mb-2 flex items-center gap-2 px-1 text-[11px] font-medium uppercase leading-none tracking-wider text-text-muted">
                   {group.icon}
-                  <span>{group.label}</span>
-                  <span className="text-text-muted/70">{group.results.length}</span>
+                  <span className="leading-none">{group.label}</span>
+                  <span className="leading-none text-text-muted/70">
+                    {group.results.length}
+                  </span>
                 </header>
                 <ul className="space-y-2">
                   {group.results.map(result => (
@@ -360,7 +363,14 @@ function WorkspaceFilterSelect({
                   <SelectItem
                     key={workspace.id}
                     value={`workspace:${workspace.id}`}
-                    icon={dmWorkspaceIcon(workspace, agentsById, agentAvatarUrls)}
+                    icon={
+                      <WorkspaceIcon
+                        kind="dm"
+                        dmAgentId={workspace.dm_agent_id}
+                        agentsById={agentsById}
+                        dmAgentAvatarUrls={agentAvatarUrls}
+                      />
+                    }
                   >
                     {workspaceDisplayName(workspace)}
                   </SelectItem>
@@ -376,7 +386,13 @@ function WorkspaceFilterSelect({
                   <SelectItem
                     key={workspace.id}
                     value={`workspace:${workspace.id}`}
-                    icon={<WorkspaceGlyph />}
+                    icon={
+                      <WorkspaceIcon
+                        kind="regular"
+                        dmAgentId={null}
+                        dmAgentAvatarUrls={agentAvatarUrls}
+                      />
+                    }
                   >
                     {workspaceDisplayName(workspace)}
                   </SelectItem>
@@ -619,8 +635,8 @@ function SearchResultRow({
         </span>
         <span className="min-w-0 flex-1">
           <span className="mb-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
-            {meta.map(item => (
-              <span key={item} className="min-w-0 truncate">
+            {meta.map((item, index) => (
+              <span key={`${index}:${item}`} className="min-w-0 truncate">
                 {item}
               </span>
             ))}
@@ -696,10 +712,15 @@ function groupResults(results: SearchResultDto[]): ResultGroup[] {
 
 function resultIcon(result: SearchResultDto): JSX.Element {
   if (result.type === 'workspace') {
+    // Regular-workspace result rows wear the same `data-workspace-icon` badge
+    // as the sidebar rail and the filter dropdown (one canonical workspace
+    // glyph everywhere). DM workspaces keep the neutral person glyph here — the
+    // result row has no agent-avatar context wired and DM-as-result is rare
+    // (#task:1192).
     return result.workspace.kind === 'dm' ? (
       <User className="size-4" />
     ) : (
-      <WorkspaceGlyph size={4} />
+      <WorkspaceIcon kind="regular" dmAgentId={null} />
     );
   }
   if (result.type === 'conversation') {
@@ -822,25 +843,6 @@ function parseSenderFilter(value: SenderFilter): {
  *  DM group reads as "talking to @x" instead of a row of identical person
  *  glyphs. Falls back to the neutral person glyph when the agent can't be
  *  resolved (workspace not yet provisioned / agent list still loading). */
-function dmWorkspaceIcon(
-  workspace: WorkspaceListItem,
-  agentsById: Map<string, AgentDto>,
-  agentAvatarUrls: Map<string, string | null>,
-): JSX.Element {
-  const agent = workspace.dm_agent_id
-    ? agentsById.get(workspace.dm_agent_id)
-    : undefined;
-  if (!agent) return <User className="size-3.5" />;
-  return (
-    <AgentAvatar
-      runtime={agent.runtime}
-      size={16}
-      avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
-      alt={agent.display_name?.trim() || agent.name}
-    />
-  );
-}
-
 function workspaceFilterLabel(
   value: WorkspaceFilter,
   workspaces: WorkspaceListItem[],
@@ -855,9 +857,18 @@ function workspaceFilterLabel(
         label: workspaceDisplayName(workspace),
         icon:
           workspace.kind === 'dm' ? (
-            dmWorkspaceIcon(workspace, agentsById, agentAvatarUrls)
+            <WorkspaceIcon
+              kind="dm"
+              dmAgentId={workspace.dm_agent_id}
+              agentsById={agentsById}
+              dmAgentAvatarUrls={agentAvatarUrls}
+            />
           ) : (
-            <WorkspaceGlyph />
+            <WorkspaceIcon
+              kind="regular"
+              dmAgentId={null}
+              dmAgentAvatarUrls={agentAvatarUrls}
+            />
           ),
       };
     }

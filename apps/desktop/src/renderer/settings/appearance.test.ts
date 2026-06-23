@@ -146,14 +146,21 @@ describe('theme markdown token cascade contract', () => {
     }
   });
 
-  it('defaults inline-code chip size to 0.88em in every theme', () => {
+  it('sizes the inline-code chip via the shared integer reference calc, not a per-theme em', () => {
     // Inline code is emphasis in prose, not a standalone block — the
     // chip wants cap-height ≈ surrounding body x-height (same rule as
-    // [data-task-ref] in v7). Independent of `--md-code-size` (which
-    // drives fenced code blocks) — two surfaces, two sizes.
-    // shiki accepted msg `H7DHYMS5mu1xNiJ3`.
+    // [data-task-ref]). Previously a per-theme `--inline-code-size:
+    // 0.88em` (= 12.32px at 14px body — fractional, shiki #task:1192
+    // "凑整"). Unified to a single global rule that subtracts 2px off the
+    // same Appearance token .markdown-body reads → whole 12px, scales
+    // with the slider, no per-theme drift. Independent of
+    // `--md-code-size` (which drives fenced code blocks).
+    expect(globalCss).toContain(
+      'font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 2px);',
+    );
+    // The per-theme em token is gone — no theme should re-introduce it.
     for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      expect(css).toContain('--inline-code-size: 0.88em;');
+      expect(css).not.toContain('--inline-code-size');
     }
   });
 

@@ -262,7 +262,7 @@ function FilterPanel({ children }: { children: ReactNode }): JSX.Element {
         role="listbox"
         data-task-filter-panel
         data-dropdown-frame
-        className="z-[70] max-h-[50vh] min-w-[180px] overflow-y-auto rounded-[var(--select-content-radius)] bg-bg-floating p-1 shadow-lg outline-none"
+        className="z-[70] max-h-[50vh] min-w-[180px] overflow-y-auto rounded-[var(--select-content-radius)] bg-bg-floating p-1 shadow-popover outline-none"
       >
         {children}
       </Popover.Content>
@@ -415,7 +415,7 @@ function ChannelFilter({
           sideOffset={4}
           data-task-filter-panel
           data-dropdown-frame
-          className="z-[70] flex max-h-[50vh] w-[240px] flex-col rounded-[var(--select-content-radius)] bg-bg-floating p-1 shadow-lg outline-none"
+          className="z-[70] flex max-h-[50vh] w-[240px] flex-col rounded-[var(--select-content-radius)] bg-bg-floating p-1 shadow-popover outline-none"
         >
           <div className="flex items-center gap-1.5 border-b border-border-subtle px-2 pb-1.5 pt-1">
             <Search className="size-3.5 shrink-0 text-text-muted" />

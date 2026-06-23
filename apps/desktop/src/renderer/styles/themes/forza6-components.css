@@ -328,10 +328,9 @@
    Appearance prose font (`--appearance-prose-font`, falling back to
    `var(--font-sans)`) — same rule as the task-event status pill.
 
-   Size: `0.85em` so chip caps height ≈ surrounding body x-height (the
-   classical inline-caps-in-prose ratio). `em` not `px` so the chip
-   tracks the user's Appearance font-size slider proportionally; at the
-   14px default body that resolves to ~12px chip.
+   Size: now the shared global `[data-task-ref]` base (`body − 2px`, whole
+   pixels — global.css), no longer a per-theme `0.85em`. forza6 only keeps
+   the prose-font TYPEFACE here; size + line-height come from the base.
 
    No `text-transform: uppercase` / `letter-spacing: 0.10em` — the
    previous spec carried both as poster-chip identity, but in 14px body
@@ -347,7 +346,6 @@
    removed). */
 [data-theme='forza6'] [data-task-ref] {
   font-family: var(--appearance-prose-font, var(--font-sans));
-  font-size: 0.85em;
 }
 
 /* ── Markdown inline code ─────────────────────────────────────────

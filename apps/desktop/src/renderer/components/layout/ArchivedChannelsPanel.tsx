@@ -8,7 +8,6 @@ import {
   ChevronDown,
   Clock,
   Hash,
-  User,
 } from 'lucide-react';
 import type { AgentDto, ArchivedChannelListItemDto } from '@silverhand/shared';
 import {
@@ -16,7 +15,7 @@ import {
   useArchivedChannelsIndex,
   type WorkspaceListItem,
 } from '@/features/workspaces/hooks';
-import { AgentAvatar } from '@/components/AgentAvatar';
+import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { cn } from '@/lib/cn';
@@ -34,7 +33,7 @@ const SELECT_TRIGGER_CLASS =
   'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus data-[placeholder]:text-text-muted';
 
 const SELECT_CONTENT_CLASS =
-  'z-[60] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-lg';
+  'z-[60] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-popover';
 
 const SELECT_ITEM_CLASS =
   'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 pr-7 text-xs text-text-primary outline-none data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary';
@@ -227,7 +226,14 @@ function WorkspaceArchiveSelect({
                   <SelectItem
                     key={workspace.id}
                     value={`workspace:${workspace.id}`}
-                    icon={dmWorkspaceIcon(workspace, agentsById, agentAvatarUrls)}
+                    icon={
+                      <WorkspaceIcon
+                        kind="dm"
+                        dmAgentId={workspace.dm_agent_id}
+                        agentsById={agentsById}
+                        dmAgentAvatarUrls={agentAvatarUrls}
+                      />
+                    }
                     suffix={
                       workspace.archived_at !== null ? 'archived workspace' : undefined
                     }
@@ -246,7 +252,13 @@ function WorkspaceArchiveSelect({
                   <SelectItem
                     key={workspace.id}
                     value={`workspace:${workspace.id}`}
-                    icon={<WorkspaceGlyph />}
+                    icon={
+                      <WorkspaceIcon
+                        kind="regular"
+                        dmAgentId={null}
+                        dmAgentAvatarUrls={agentAvatarUrls}
+                      />
+                    }
                     suffix={
                       workspace.archived_at !== null ? 'archived workspace' : undefined
                     }
@@ -419,14 +431,6 @@ function EmptyState({ text }: { text: string }): JSX.Element {
   );
 }
 
-function WorkspaceGlyph(): JSX.Element {
-  return (
-    <span className="inline-flex size-3.5 shrink-0 items-center justify-center font-serif text-[14px] font-semibold leading-none">
-      W
-    </span>
-  );
-}
-
 /**
  * Workspace label for an archived row's context (#task:1145, label converged
  * #task:1156). A regular `channel` row shows its bare workspace name; a
@@ -459,32 +463,6 @@ export function archivedRowOpenTarget(item: ArchivedChannelListItemDto): {
   return { workspaceId: item.workspace.id, channelId: item.channel.id };
 }
 
-/** DM workspaces are 1:1 with an agent — show that agent's avatar so the DM
- *  group reads as "talking to @x" instead of a row of identical glyphs.
- *  Falls back to the neutral person glyph when the agent can't be resolved
- *  (workspace not yet provisioned / agent list still loading). Mirrors
- *  SearchPanel's `dmWorkspaceIcon` (#task:1145). NOTE: this is the dropdown
- *  *scope* icon only — archived rows themselves keep the uniform `#` channel
- *  glyph (DM is channel-like, per shiki). */
-function dmWorkspaceIcon(
-  workspace: WorkspaceListItem,
-  agentsById: Map<string, AgentDto>,
-  agentAvatarUrls: Map<string, string | null>,
-): JSX.Element {
-  const agent = workspace.dm_agent_id
-    ? agentsById.get(workspace.dm_agent_id)
-    : undefined;
-  if (!agent) return <User className="size-3.5" />;
-  return (
-    <AgentAvatar
-      runtime={agent.runtime}
-      size={16}
-      avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
-      alt={agent.display_name?.trim() || agent.name}
-    />
-  );
-}
-
 function workspaceFilterLabel(
   value: WorkspaceFilter,
   workspaces: WorkspaceListItem[],
@@ -497,14 +475,39 @@ function workspaceFilterLabel(
   const id = value.slice('workspace:'.length);
   const workspace = workspaces.find(w => w.id === id);
   if (!workspace) {
-    return { label: 'Workspace', icon: <WorkspaceGlyph /> };
+    return {
+      label: 'Workspace',
+      icon: (
+        <WorkspaceIcon
+          kind="regular"
+          dmAgentId={null}
+          dmAgentAvatarUrls={agentAvatarUrls}
+        />
+      ),
+    };
   }
   return workspace.kind === 'dm'
     ? {
         label: workspaceDisplayName(workspace),
-        icon: dmWorkspaceIcon(workspace, agentsById, agentAvatarUrls),
+        icon: (
+          <WorkspaceIcon
+            kind="dm"
+            dmAgentId={workspace.dm_agent_id}
+            agentsById={agentsById}
+            dmAgentAvatarUrls={agentAvatarUrls}
+          />
+        ),
       }
-    : { label: workspace.name, icon: <WorkspaceGlyph /> };
+    : {
+        label: workspace.name,
+        icon: (
+          <WorkspaceIcon
+            kind="regular"
+            dmAgentId={null}
+            dmAgentAvatarUrls={agentAvatarUrls}
+          />
+        ),
+      };
 }
 
 function archiveDateSince(value: ArchiveDateFilter): number | null {

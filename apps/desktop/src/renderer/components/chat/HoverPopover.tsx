@@ -85,7 +85,7 @@ export function HoverPopover({
           sideOffset={6}
           collisionPadding={8}
           data-popover-frame="info"
-          className="z-[80] w-[260px] max-w-[calc(100vw-32px)] bg-bg-floating p-3 text-xs text-text-primary shadow-lg outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
+          className="z-[80] w-[260px] max-w-[calc(100vw-32px)] bg-bg-floating p-3 text-xs text-text-primary shadow-popover outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
           {isContentReady ? content : skeleton ?? <DefaultSkeleton />}
         </HoverCard.Content>

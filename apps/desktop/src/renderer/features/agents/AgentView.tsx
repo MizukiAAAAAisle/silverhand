@@ -274,7 +274,7 @@ function SidePanelShell({
 }): JSX.Element {
   return (
     <section
-      className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-bg-base"
+      className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-bg-chat"
       style={{
         borderRadius: 'var(--card-radius, 0)',
         boxShadow: 'var(--card-shadow, none)',
@@ -349,7 +349,7 @@ function AgentSidePanel({
 
   return (
     <section
-      className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-bg-base"
+      className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-bg-chat"
       style={{
         borderRadius: 'var(--card-radius, 0)',
         boxShadow: 'var(--card-shadow, none)',

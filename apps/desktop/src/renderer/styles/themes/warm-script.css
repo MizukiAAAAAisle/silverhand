@@ -42,14 +42,17 @@
   --text-nav-rail-hover: #1F1B14;
   --bg-nav-rail-hover: color-mix(in oklab, var(--brand-primary) 72%, var(--bg-floating));
 
-  /* Sidebar row state — selected borrows the brand yellow so the chosen
-     workspace/channel reads as "this is where you are" with brand-level
-     salience. Hover is a soft yellow veil mixed with the sidebar
-     background so scanning a list doesn't strobe — clearly in the same
-     colour family, obviously a hint rather than a commit. Dark text on
-     the yellow holds ≈14:1 contrast. */
+  /* Sidebar row state (#task:1192 P1) — selected was a FULL brand-yellow
+     fill + 2px ink frame, which made the "which channel am I in" row the
+     single loudest element on the whole screen, out-shouting message
+     content. Demote it: a soft brand veil (stronger than hover so it still
+     out-ranks a scan-hint) + a solid brand left-bar carries the "committed"
+     signal (see the scoped rule at the bottom of this file); the ink frame
+     drops to transparent. Full-saturation brand is reserved for the real
+     brand moment — the nav rail. Hover stays a softer veil so scanning a
+     list doesn't strobe. Dark text on both veils holds high contrast. */
   --sidebar-row-border-width: 2px;
-  --bg-row-selected: var(--brand-primary);
+  --bg-row-selected: color-mix(in oklab, var(--brand-primary) 40%, var(--bg-channels-sidebar));
   --bg-row-hover: color-mix(in oklab, var(--brand-primary) 22%, var(--bg-channels-sidebar));
 
   /* ── Nav rail / sidebar ──
@@ -87,19 +90,35 @@
      framing + docs/tasks-design.md): todo = neutral; in_progress =
      warning/HUD-live ("actively in motion"); in_review = accent/loud
      beacon ("needs human attention"); done = success/passed.
-     Warm-script badges are borderless soft chips. */
-  --task-status-todo-bg: var(--bg-elevated);
+
+     #task:1192 P0 — fix the loudness inversion. warm's `--accent` is a
+     near-black ink, so the old `accent-soft` tint + ink text made
+     in_review the QUIETEST chip even though it's the "needs you" beacon,
+     while in_progress's amber tint read loudest — the priority curve
+     peaked on the wrong status. Fix WITHOUT a second saturated hue (warm
+     is single-accent by design): express loudness by WEIGHT, not colour.
+     The ladder now climbs monotonically — todo (transparent + hairline)
+     < in_progress (amber tint + soft amber edge) < in_review (SOLID ink
+     fill, paper text — heaviest) — with done a calm green tint to close.
+     The activity-cluster demoted pill mirrors this (in_review breaks the
+     transparent-outline demotion to a solid fill); see bottom of file. */
+  --task-status-todo-bg: transparent;
   --task-status-todo-text: var(--text-muted);
-  --task-status-todo-border: none;
+  --task-status-todo-border: 1px solid var(--border);
   --task-status-in-progress-bg: var(--warning-soft);
   --task-status-in-progress-text: var(--warning);
-  --task-status-in-progress-border: none;
-  --task-status-in-review-bg: var(--accent-soft);
-  --task-status-in-review-text: var(--accent);
+  --task-status-in-progress-border: 1px solid color-mix(in oklab, var(--warning) 55%, transparent);
+  --task-status-in-review-bg: var(--accent);
+  --task-status-in-review-text: var(--text-on-accent);
   --task-status-in-review-border: none;
-  --task-status-done-bg: var(--success-soft);
+  /* done fill deepened from `--success-soft` (~8% green, too pale on cream —
+     surfaced once #task:1195 removed the message chip's border, leaving the
+     wash as the sole delineator) to ~14%, the same soft-reference strength warm
+     uses for inline-code / task-ref chips. Done-scoped color-mix so the global
+     `--success-soft` (activity pill etc.) stays put. shiki #task:1196. */
+  --task-status-done-bg: color-mix(in oklab, var(--success) 14%, transparent);
   --task-status-done-text: var(--success);
-  --task-status-done-border: none;
+  --task-status-done-border: 1px solid color-mix(in oklab, var(--success) 45%, transparent);
 
   /* Solid status signal colour (#task:1018) — see forza6.css for the
      cross-theme rationale. Warm-script chips are soft tints; their hue
@@ -108,7 +127,11 @@
      muted, matching their chips. */
   --task-status-todo-solid: var(--task-status-todo-text);
   --task-status-in-progress-solid: var(--task-status-in-progress-text);
-  --task-status-in-review-solid: var(--task-status-in-review-text);
+  /* in_review's `-text` is now paper (on-fill foreground), so `-solid`
+     (dot + activity-pill outline hue) must point at the ink hue directly,
+     not at `-text` — otherwise the dot/outline would render paper-on-paper
+     and vanish. #task:1192 P0. */
+  --task-status-in-review-solid: var(--accent);
   --task-status-done-solid: var(--task-status-done-text);
   --task-status-closed-solid: var(--task-status-closed-text);
 
@@ -146,14 +169,18 @@
   --chrome-label-tracking: 0.05em;
   --chrome-label-transform: uppercase;
 
-  /* ── Row radius (review round 2 #task:912) ──
+  /* ── Row radius (review round 2 #task:912; #task:1192 follow-up) ──
      Single token for the 5 row-style surfaces (sidebar rows / NavRail /
-     Saved / Schedule card / MessageItem hover). warm-script keeps `0`
-     to preserve current "scan-line" reading texture — the暖纸底色 +
-     soft accent border doesn't strobe at 0 radius. slack-dark sets 6px
-     for Slack-style rounded list rows. See slack-dark.css for the full
-     consumer list. */
-  --row-radius: 0;
+     Saved / Schedule card / MessageItem hover). Originally `0` for a
+     "scan-line" texture, but once the selected row dropped its loud
+     full-yellow fill for a soft veil (#task:1192 P1) the square corners
+     read as unfinished chrome (shiki review) — round the whole row
+     vocabulary onto the theme's `--radius-sm` so selection / hover /
+     NavRail tiles / cards all speak the theme's rounded language. The
+     selected-row brand left-bar follows the corner radius. slack-dark
+     already uses 6px; this brings warm in line. See slack-dark.css for
+     the consumer list. */
+  --row-radius: var(--radius-sm);
 
   /* ── Profile section radius (review fix #task:912) ──
      `[data-panel-card="profile-section"]` (Identity / Capabilities /
@@ -218,11 +245,13 @@
   --select-content-radius: 6px;
   --select-item-radius: 4px;
 
-  /* ── Tab segment radius (#task:912 review round 3) ──
-     `[data-panel-tabs] button` 的 active 段圆角。warm 保留 `0` 跟外框
-     6px 形成"硬楔在括号内"的传统 segment 词汇 (跟 forza6 海报感一致)。
-     slack-dark 才转 4px 让 active 段也圆。 */
-  --tab-segment-radius: 0;
+  /* ── Tab segment radius (#task:912 review round 3 / #task:1198) ──
+     `[data-panel-tabs] button` 的 active 段圆角。warm 原保留 `0` 想跟
+     forza6 海报硬楔同节拍，但 shiki (#task:1198) 报 warm 的 active 段直角
+     跟 warm 整体软圆角语言断裂（warm 外框已 6px）→ 转 4px，让 active 段
+     "嵌在 6px 括号内"且自身也圆，跟 slack-dark 同款 embedded segment。
+     forza6 保留 `0`（海报硬楔=正确，shiki 确认）。 */
+  --tab-segment-radius: 4px;
 
   /* ── Primary control surface (§3.2.3, PR-10 token promotion) ──
      `Button` default variant (CTA — 各 dialog 的 Create / Save 主按钮)
@@ -254,7 +283,15 @@
   --error-soft: #9A443415;
 
   /* ── Borders ── */
-  --border: #00000010;
+  /* Warm ink, not cold pure-black. forza6 (`rgba(15,31,29,.14)`) and slack
+     (`rgba(255,255,255,.10)`) both tone their border to the theme palette;
+     warm was the only one on cold `#000` — which read as a cold hairline on
+     the cream canvas, most visibly around white popovers (shiki #task:1192:
+     keep the popover border, but warm it to match the warm shadow). Derived
+     from `--shadow-base` (58,44,28) at 12% so border + `--shadow-popover`
+     share one colour temperature. Paints every `border-border` surface
+     (inputs / cards / dividers / floating frames). */
+  --border: rgba(58, 44, 28, 0.12);
   --border-subtle: #0000001a;
   --border-island: #6B5A4026;
   --border-focus: #2D231640;
@@ -309,11 +346,6 @@
      not content. Independent of `--md-*-size` so themes can drift the
      two without coupling. See forza6.css for the rationale. */
   --system-message-size: 12px;
-  /* Inline code chip size — `em` so it tracks Appearance size, `0.88`
-     so the chip sits subordinate to surrounding prose (chip cap-height
-     ≈ body x-height). Independent of `--md-code-size` (fenced code).
-     See forza6.css for the full rationale. */
-  --inline-code-size: 0.88em;
 
   /* ── Motion ── */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
@@ -349,4 +381,171 @@
   color: var(--text-on-structure);
   border-radius: 0;
   font-size: 11px;
+}
+
+/* ── #task:1192 P0 · activity-cluster in_review beacon ──
+   The activity feed demotes every status pill to transparent + 1px
+   current-colour outline (`global.css` `.system-activity-cluster
+   [data-task-event-status]`) to keep the feed low-density. in_review is the
+   one status that must break through — it's the "needs a human" beacon — so
+   warm fills it solid ink (paper text), matching its board chip's loud-by-
+   weight treatment. The other three keep the demoted outline so the feed
+   doesn't revert to a wall of fills. The cluster pill carries BOTH
+   `data-task-event-status` and `data-task-status`; using both bumps this past
+   the (0,3,0) global cluster rule (warm-script.css is @imported BEFORE the
+   global body rules, so a tie would lose to the later global rule). */
+[data-theme='warm-script'] .system-activity-cluster [data-task-event-status='in_review'][data-task-status='in_review'] {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+/* The global cluster demotion fades every pill to opacity 0.85; on warm's
+   cream canvas that washes the thin outline out. Keep warm's feed pills
+   crisp at full opacity. Warm-only (other themes keep the 0.85 demotion) —
+   theme polish stays in-theme. #task:1192. */
+[data-theme='warm-script'] .system-activity-cluster [data-task-event-status] {
+  opacity: 1;
+}
+
+/* ── #task:1192 follow-up · feed pills must not drown on cream ──
+   The global cluster demotion strips every pill to a faint 1px outline;
+   on warm's #FFFAEF canvas the muted/amber/green outlines read as
+   washed-out floating text (shiki: "不太显眼，淹没在消息流中"). Give
+   in_progress + done the same soft-tint ground as their board chips so
+   they read as present status tokens. todo keeps the quiet neutral
+   outline (lowest attention) and in_review keeps its solid-ink beacon
+   (above), so the presence ladder still climbs monotonically to
+   in_review. The tints are ~8% alpha — the feed stays low-noise and
+   in_review remains loudest by a wide margin. Colour (text) still comes
+   from the global `-solid` cluster rule; these only add bg + a soft
+   matching edge. */
+[data-theme='warm-script'] .system-activity-cluster [data-task-event-status='in_progress'] {
+  background: var(--warning-soft);
+  border-color: color-mix(in oklab, var(--warning) 55%, transparent);
+}
+[data-theme='warm-script'] .system-activity-cluster [data-task-event-status='done'] {
+  background: var(--success-soft);
+  border-color: color-mix(in oklab, var(--success) 45%, transparent);
+}
+
+/* ── #task:1192 P1 · committed sidebar/channel row ──
+   Drop the ink frame and stamp a solid brand left-bar as the "committed"
+   marker; the soft brand veil bg comes from `--bg-row-selected`. Two
+   selectors cover both row sources: aside-hosted rows (PINNED / DM /
+   workspaces) must out-specify `global.css`'s `aside[data-sidebar] …` (0,3,1)
+   selected-border rule → (0,4,1); ChannelsSidebar rows set their border via a
+   Tailwind `border-accent` utility (0,1,0) and key off `data-row-selected`.
+   `--border-row-selected` itself is left untouched so the NavRail active
+   button (white tile + ink border on the yellow rail) keeps its outline.
+   border-left (not box-shadow) keeps the bar flush to the row edge; selection
+   commits instantly here (no `transition-colors` on these rows). */
+[data-theme='warm-script'] aside[data-sidebar] .sidebar-row-border.text-text-on-selected,
+[data-theme='warm-script'] [data-row-selected].sidebar-row-border.text-text-on-selected {
+  border-color: transparent;
+  border-left: 3px solid var(--brand-primary);
+}
+
+/* ── #task:1192 follow-up · row hover speaks selected's language ──
+   P1 (above) gave the SELECTED row a brand veil + brand left-bar and
+   dropped its ink frame, but HOVER still painted a 2px --accent (near-
+   black) box via `hover:border-accent` / `--border-row-hover`. So a hover
+   read harder + louder than a commit, and the hover→selected move jumped
+   from an ink box to a brand bar — two different vocabularies for one
+   continuum (shiki). Drop the ink hover box: hover is now just the lighter
+   brand veil (`--bg-row-hover`), selected the stronger veil + the committed
+   left-bar. Pure brand-family, veil-intensity progression — idle →
+   hover(light veil) → selected(strong veil + bar) — no ink box, no
+   hover→selected colour jump. The 2px border width stays reserved
+   (transparent) so nothing shifts on hover. Scoped to `.sidebar-row-border`
+   only: the NavRail tiles keep a self-consistent ink hover+active border on
+   the yellow rail (their hover and active already match, so they're left
+   alone). Two selectors mirror P1: aside-hosted rows out-specify global's
+   `aside[data-sidebar] …:hover` (0,4,1) → (0,5,1); ChannelsSidebar rows
+   out-specify the Tailwind `hover:border-accent` (0,2,0) → (0,4,0) and key
+   off the absence of `data-row-selected`. */
+[data-theme='warm-script'] aside[data-sidebar] .sidebar-row-border:not(.text-text-on-selected):hover,
+[data-theme='warm-script'] .sidebar-row-border:not([data-row-selected]):hover {
+  border-color: transparent;
+}
+
+/* ── #task:1192 follow-up · system-row task chip/pill height (warm-only) ──
+   At a 14px markdown font the cross-theme `--system-message-control-height`
+   (1.5× factor) makes the activity-feed/system-row chip + pill 21px, which
+   read too tall on warm's airy cream rows. Override the token locally to a
+   1.3 factor → ~18px at 14px font, 18px floor keeps 12px default put. Kept
+   in-theme (the global default stays 1.5) per shiki's "theme polish doesn't
+   leak across themes". `[data-theme] .system-message-row` (0,2,0) out-ranks
+   global `.system-message-row` (0,1,0), so it wins regardless of @import
+   order. */
+[data-theme='warm-script'] .system-message-row {
+  --system-message-control-height: max(18px, calc(var(--appearance-markdown-font-size, var(--system-message-size, 12px)) * 1.3));
+}
+
+/* ── #task:1192 follow-up · in-prose task chip legibility (warm-only) ──
+   The chip's default `bg-accent-soft` is `--accent` (warm near-black) at
+   ~8% alpha — on the cream canvas that wash is barely distinct from the
+   bubble, so the pill drowns (shiki). Warm's inline code already solved the
+   same "inline reference on cream" problem with a 14% ink wash
+   (`--bg-inline-code`); reuse it so the two inline reference chips read at
+   the same strength and the `#task` pill is clearly delineated. Text stays
+   `text-accent` (near-black) for high contrast. Resting bg only — hover is
+   re-stated because this plain override would otherwise beat the
+   `hover:bg-accent` utility (the activity-cluster chip re-states its hover
+   for the same reason). Scoped to `.markdown-body` so it only reshapes the
+   message-stream chip, not the system-row / activity-cluster variants. */
+[data-theme='warm-script'] .markdown-body [data-task-ref] {
+  background: var(--bg-inline-code);
+}
+[data-theme='warm-script'] .markdown-body [data-task-ref]:hover {
+  background: var(--accent);
+}
+
+/* ── #task:1193 · in-prose @mention legibility (warm-only, color-only) ──
+   warm's `--accent` (#2D2316) is all but identical to the body ink
+   (`--text-primary` #1F1B14), so a mention painted with `text-accent` reads as
+   plain prose. The first cut used the "reference amber" `--text-inline-code`
+   (#7A5C30), but that brown still sits too close to the warm cream/ink palette
+   to pop (shiki). Switch to the theme's signature yellow instead — but NOT raw
+   `--brand-primary` (#FFD440): bright yellow as TEXT on the cream canvas is
+   ~1.1:1 contrast, illegible. Deepen the brand yellow toward ink (62/38) into a
+   readable gold that's still unmistakably the brand-yellow hue — far more
+   distinct from the brown/ink prose than the amber was, while clearing the
+   UI-accent contrast floor. Colour-only, no background pill (shiki: bg 太重);
+   the shared component's subtle `hover:bg-accent-soft` stays. Other themes keep
+   their coloured-text mentions (forza6 magenta / slack blue) — warm-scoped
+   (shiki: "不应该变成全局样式"). Unscoped within the theme so every warm mention
+   (stream + system row) gets the colour, not just `.markdown-body`. */
+[data-theme='warm-script'] [data-mention-kind] {
+  color: color-mix(in oklab, var(--brand-primary) 62%, var(--text-primary));
+}
+
+/* ── #task:1194 · modal shell frame (warm-only) ──
+   The image-export preview (`ImagePreviewModal`) and the click-to-zoom
+   `Lightbox` both frame their shell with
+   `border-[color:var(--border-row-selected)]`. In warm that token resolves to
+   `--accent` (#2D2316, near-black ink), so the modal gets a hard ink outline
+   on the cream surface — reads as a stray dark frame next to the modal's own
+   `shadow-xl` (shiki: 边框很奇怪). Warm modals otherwise carry no border (the
+   generic DialogContent uses shadow only), so drop the frame here; the shadow
+   already delineates the modal. Targets `[data-modal-shell]`: the generic
+   dialog also has the hook but no border utility, so this is a no-op there —
+   it only strips the two image modals' ink frame. forza6 keeps its poster
+   `data-modal-shell` sticker chrome (its own rule), slack keeps its border. */
+[data-theme='warm-script'] [data-modal-shell] {
+  border-width: 0;
+}
+
+/* ── #task:1195 · MessageItem bottom task chip — drop border (warm-only) ──
+   The message's own task tag (`[data-message-task-tag]`, the bottom-edge
+   `<status-icon> #n · assignee` button) inherits `border: var(--task-status-
+   X-border)` from the global `[data-task-status]` contract. shiki wants this
+   one surface borderless in warm (the soft fill alone carries the status; the
+   border reads as noise on the message stream). Scoped to the message tag only
+   — the kanban / drawer / inline `#task` chip / activity pill keep their
+   border. Selector specificity (theme + tag attr = 0,2,0) beats the global
+   `[data-task-status='…']` (0,1,0), so `border: none` wins. forza6 untouched. */
+[data-theme='warm-script'] [data-message-task-tag] {
+  border: none;
 }

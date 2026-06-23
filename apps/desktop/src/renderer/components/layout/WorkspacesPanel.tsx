@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode } from 'react';
-import { Copy, FolderOpen, Pin, PinOff, User } from 'lucide-react';
+import { Copy, FolderOpen, Pin, PinOff } from 'lucide-react';
 import { toast } from 'sonner';
 import type { AgentDto, SortGroup } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
@@ -8,7 +8,7 @@ import {
   AppContextMenuItem,
   AppContextMenuSeparator,
 } from '@/components/menus/AppContextMenu';
-import { AgentAvatar } from '@/components/AgentAvatar';
+import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import {
   SortableGroup,
   animateLayoutChanges,
@@ -94,23 +94,6 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
   sort?: WorkspaceSortConfig<GroupKey>;
 }
 
-const ICON_BY_KIND: Record<WorkspaceUiKind, JSX.Element> = {
-  regular: (
-    // `data-workspace-icon`: theme-neutral identity hook. Base themes render
-    // the bare serif glyph; forza6 paints it as a filled ink poster badge so a
-    // workspace row carries the same visual weight as a DM row's avatar
-    // (#task:1160 — shiki: the muted `W` blended into the list next to DM
-    // avatars). Layout/size stays here; identity painting lives in the theme.
-    <span
-      data-workspace-icon
-      className="inline-flex size-4 items-center justify-center font-serif text-[16px] font-semibold leading-none"
-    >
-      W
-    </span>
-  ),
-  dm: <User className="size-4" />,
-};
-
 /** Per-row context shared by the sortable + flat render paths so a row is the
  *  SAME component regardless of entry point (one entity, one shape). */
 interface RailRowContext {
@@ -123,22 +106,18 @@ interface RailRowContext {
 }
 
 function rowIconFor(workspace: WorkspaceItem, ctx: RailRowContext): JSX.Element {
-  // DM rows: render the agent's avatar (or runtime icon fallback) instead of
-  // the generic `User` glyph. Falls back to `ICON_BY_KIND.dm` when the agent
-  // lookup is missing or the agent is no longer in the list. #task:919
-  const dmAgent =
-    workspace.kind === 'dm' && workspace.dm_agent_id
-      ? ctx.agentsById?.get(workspace.dm_agent_id) ?? null
-      : null;
-  return dmAgent ? (
-    <AgentAvatar
-      runtime={dmAgent.runtime}
-      size={16}
-      avatarObjectUrl={ctx.dmAgentAvatarUrls.get(dmAgent.id) ?? null}
-      alt={dmAgent.display_name || dmAgent.name}
+  // One canonical workspace glyph for every surface (sidebar + filter
+  // dropdowns). DM rows resolve to the bound agent's avatar; regular rows to
+  // the themed `data-workspace-icon` badge — all handled inside `WorkspaceIcon`
+  // so this stays identical to the workspace-filter dropdowns (#task:1192 /
+  // #task:919 / #task:1160).
+  return (
+    <WorkspaceIcon
+      kind={workspace.kind}
+      dmAgentId={workspace.dm_agent_id}
+      agentsById={ctx.agentsById}
+      dmAgentAvatarUrls={ctx.dmAgentAvatarUrls}
     />
-  ) : (
-    ICON_BY_KIND[workspace.kind]
   );
 }
 

@@ -94,7 +94,7 @@ function PillPicker({
           align="start"
           sideOffset={4}
           data-popover-frame="info"
-          className="z-50 min-w-[140px] bg-bg-floating p-1 shadow-lg outline-none"
+          className="z-50 min-w-[140px] bg-bg-floating p-1 shadow-popover outline-none"
         >
           {ALL_STATUSES.filter(s => s !== current).map(s => (
             <button

@@ -222,7 +222,18 @@ button:disabled { cursor: not-allowed; }
 /* ── Markdown body — applied to .markdown-body wrapper around <ReactMarkdown> ── */
 .markdown-body {
   min-width: 0;
-  line-height: 1.55;
+  /* Prose leading as `body + 8px` rather than a unitless `1.55`: 1.55 × 14px
+     = 21.7px, a fractional line box that propagates decimals through every
+     prose line (shiki #task:1192 "很多小数"). Subtracting/adding px off the
+     same Appearance token resolves to a whole 22px at the 14px default and
+     stays integer at any integer slider value, where a unitless ratio only
+     lands clean at select sizes. A px line-height is safe here because the
+     elements that would normally need a *proportional* (unitless) leading —
+     headings — set their own `line-height: 1.3`, and every inline child
+     (inline code, `[data-task-ref]`) is ≤ the body size, so a fixed line box
+     never crushes them; the payoff is a uniform, jitter-free line rhythm
+     (stable > adaptive). The +8px ≈ the prior 21.7px, just rounded. */
+  line-height: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) + 8px);
   overflow-wrap: anywhere;
   font-family: var(--appearance-prose-font, var(--font-sans));
   font-size: var(--appearance-markdown-font-size, var(--md-prose-size, 14px));
@@ -250,12 +261,14 @@ button:disabled { cursor: not-allowed; }
 .system-message-row {
   /* Theme-aware control height for inline chrome inside system audit
      rows (TaskRef chip + TaskStatusPill on `task_status` rows).
-     `max(18px, …)` keeps the default 12px prose sizing on the existing
-     18px baseline; once the user picks a larger theme prose size,
-     chip + pill grow together (1.5× the prose size, matching the row's
-     line-height) so neither crops its contents and the two stay
-     pixel-aligned. The `1.5` factor matches `line-height: 1.5` below
-     so the chrome's height tracks the row's actual text leading.
+     `max(18px, …)` keeps the default 12px prose sizing on the 18px
+     baseline; at larger markdown font sizes chip + pill grow together
+     (1.5× the prose size, matching the row's line-height) so neither
+     crops its contents and the two stay pixel-aligned.
+     #task:1192: warm-script wanted these shorter at large fonts but the
+     fix must stay in-theme (shiki: theme polish doesn't leak across
+     themes) — warm overrides this token to a 1.3 factor locally (see
+     warm-script.css); the cross-theme default stays 1.5.
      Cindy PR-8 follow-up #3 (msg `VOGiR_K30xhSOswD`). */
   --system-message-control-height: max(18px, calc(var(--appearance-markdown-font-size, var(--system-message-size, 12px)) * 1.5));
   font-family: var(--appearance-prose-font, var(--font-sans));
@@ -683,28 +696,53 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    forza6 paints a hard lime poster sticker — all via tokens, no
    per-theme override of this rule needed.
 
-   Size: `--inline-code-size` (theme-defined `0.88em`) — inline code
-   sits in the prose flow as emphasis, so the chip wants cap-height ≈
-   surrounding body x-height (same reference-vs-announcement rule we
-   applied to `[data-task-ref]` in v7). `em` keeps the chip
-   proportional to the user's Appearance font-size slider; it does NOT
-   read `--appearance-markdown-font-size` directly because the slider
-   already scales `.markdown-body`'s font-size and `em` inherits from
-   that — so going through the appearance token would double-apply.
-   Padding tightened (`0.06em 0.30em`) so the chip-area shrinks with
-   the type. Independent of `--md-code-size` (fenced code) — two
-   surfaces, two sizes. shiki accepted msg `H7DHYMS5mu1xNiJ3`. */
+   Size: `calc(body − 2px)` — the SAME shared inline-reference sizing as
+   `[data-task-ref]` (above). Inline code sits in the prose flow as
+   emphasis, so the chip wants cap-height ≈ surrounding body x-height. Was
+   a theme-defined `0.88em`, but `0.88em × 14px = 12.32px` is fractional
+   (shiki #task:1192 "凑整") — px-subtraction off the same Appearance token
+   `.markdown-body` reads resolves to a whole 12px at the 14px default and
+   stays integer at any integer slider value. This is absolute arithmetic
+   on the token, so unlike an `em` chained onto the already-scaled
+   `.markdown-body` it does NOT double-apply. Padding stays em
+   (`0.06em 0.30em`) so the chip-area keeps shrinking with the type.
+   Identity (bg / border / radius / colour) is still fully theme-driven
+   through `--bg-inline-code` etc. Independent of `--md-code-size` (fenced
+   code) — two surfaces, two sizes. */
 .markdown-body :not(pre) > code {
   display: inline;
   padding: 0.06em 0.30em;
   margin-inline: 0.15em;
   font-family: var(--appearance-code-font, var(--font-mono));
-  font-size: var(--inline-code-size, 0.88em);
+  font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 2px);
   color: var(--text-inline-code);
   background: var(--bg-inline-code);
   border: var(--border-inline-code);
   border-radius: var(--radius-inline-code);
   overflow-wrap: anywhere;
+}
+
+/* Inline `#task:N` chip — `[data-task-ref]` (TaskRef.tsx). Shared base for
+   every theme: the chip sits inline in the message stream as a *reference*,
+   so its glyph stays one notch below the surrounding prose — `body − 2px`
+   off the same Appearance token `.markdown-body` reads (NOT an `em` factor:
+   `0.85em × 14px = 11.9px` was fractional, shiki #task:1192 "很多小数";
+   px-subtraction resolves to a whole 12px at the 14px default and stays
+   integer at any integer slider value, and it does NOT double-apply the way
+   an `em` chained onto the already-scaled `.markdown-body` would).
+
+   line-height is intentionally NOT set — the chip inherits `.markdown-body`'s
+   line-height, matching inline code so the two reference chips share one line
+   rhythm in prose (shiki). Note this chip is `inline-flex`, so the inherited
+   line-height sizes its flex box (it grows to fill the prose line); inline
+   code is `display:inline`, whose bg tracks font + padding and ignores
+   line-height — same CSS source, different box model, by design.
+
+   Themes layer identity (fill / border / radius / colour / `font-family`) on
+   top; they no longer set the size. The `.system-message-row` variant keeps
+   its own explicit `height`, unaffected by this. */
+[data-task-ref] {
+  font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 2px);
 }
 
 /* Code blocks — `pre` is wrapped by CodeBlock for the header chrome

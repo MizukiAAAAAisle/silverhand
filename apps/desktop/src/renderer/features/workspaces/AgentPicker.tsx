@@ -214,7 +214,7 @@ export function MemberPicker({
           <Select.Content
             position="popper"
             sideOffset={4}
-            className="z-[60] max-h-[40vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-lg"
+            className="z-[60] max-h-[40vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-popover"
           >
             <Select.Viewport className="p-1">
               {candidates.length === 0 ? (

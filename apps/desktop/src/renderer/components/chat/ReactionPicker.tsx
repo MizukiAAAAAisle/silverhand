@@ -52,7 +52,7 @@ export function ReactionPicker({
           collisionPadding={8}
           data-popover-frame="info"
           // z-[85]: above the reactor hover-card (z-[80]), below modals.
-          className="z-[85] rounded-[var(--floating-radius)] border border-border bg-bg-floating p-1.5 shadow-lg outline-none"
+          className="z-[85] rounded-[var(--floating-radius)] border border-border bg-bg-floating p-1.5 shadow-popover outline-none"
         >
           <div className="grid grid-cols-8 gap-0.5">
             {QUICK_REACTIONS.map(emoji => (

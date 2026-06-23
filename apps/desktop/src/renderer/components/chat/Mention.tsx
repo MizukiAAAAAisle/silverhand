@@ -92,6 +92,8 @@ function AgentMention({
         }}
         className="rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
         aria-label={`@${agent.name}`}
+        data-mention-kind="agent"
+        data-mention-id={agent.id}
       >
         @{label}
       </button>
