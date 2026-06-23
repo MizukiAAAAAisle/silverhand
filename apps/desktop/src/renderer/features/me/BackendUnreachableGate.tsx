@@ -128,7 +128,7 @@ export function BackendUnreachableGate({
             <AlertTriangle className="size-4" />
           </span>
           <h1 className="text-base font-semibold leading-tight">
-            Can&apos;t reach this Silverhand backend
+            Can&apos;t reach this server
           </h1>
         </header>
         <p className="mb-3 text-xs leading-relaxed text-text-muted">
@@ -237,7 +237,7 @@ export function BackendUnreachableGate({
         <p className="mb-2 text-xs leading-relaxed text-text-muted">
           The connection failed before signup or login could be
           attempted. The server may be down, the network may be
-          unreachable, or TLS may be misconfigured.
+          unreachable.
         </p>
         {message ? (
           <pre className="mb-4 overflow-x-auto rounded-sm border border-border-subtle bg-bg-row-hover px-2 py-1.5 font-mono text-[11px] leading-snug text-text-muted">
@@ -248,15 +248,6 @@ export function BackendUnreachableGate({
           <RefreshCw className="size-3.5" />
           Retry connection
         </Button>
-        <p className="mt-4 text-[11px] leading-snug text-text-muted">
-          To boot with the embedded backend instead, relaunch
-          Silverhand with{' '}
-          <code className="rounded-sm border border-border-subtle bg-bg-row-hover px-1 font-mono">
-            SILVERHAND_FORCE_EMBEDDED=1
-          </code>
-          . This skips the saved remote profile for that launch
-          only; the profile is preserved.
-        </p>
       </div>
     </main>
   );

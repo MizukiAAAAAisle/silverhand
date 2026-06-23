@@ -22,21 +22,22 @@
  * the actual `App` component through `renderToStaticMarkup` with
  * priming of the React Query cache.
  *
+ * **Discriminate gates by STRUCTURE, never by copy.** Earlier this
+ * pin keyed each gate off its distinctive user-facing copy, which
+ * made a pure wording edit (e.g. "Silverhand backend" → "server")
+ * trip the assertions even though gate routing was unchanged. We now
+ * identify each gate by stable, copy-free signals — the warning icon
+ * unique to the unreachable gate, the email/password form fields and
+ * `autocomplete` mode unique to the registration gate, and the
+ * server-url / message DATA the unreachable gate echoes from its
+ * props. Copy is free to change without touching this file.
+ *
  * **Authenticated arm is intentionally out of scope.** The
  * authenticated branch renders `RegisteredAppShell`, which is a
  * 1500-line tree of dozens of `useQuery` / `useEffect` hooks, WS
  * clients, and DOM-only APIs. SSR-rendering it would either crash
  * on missing globals or require so much mocking that the test
- * stops being a gate-order pin and becomes a shell smoke test. The
- * authenticated arm is covered indirectly: we assert each of the
- * three gate arms renders its **distinctive** copy, so a regression
- * that routed the authenticated state into the wrong gate would
- * surface as the wrong copy showing up here.
- *
- * **HTML-entity caveat.** `renderToStaticMarkup` encodes apostrophes
- * as `&#x27;` and ellipsis as `&hellip;`. Distinctive copy constants
- * below are chosen to avoid those characters so they match the
- * rendered output unmodified.
+ * stops being a gate-order pin and becomes a shell smoke test.
  */
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -49,19 +50,23 @@ import type {
   ViewerState,
 } from './hooks';
 
-// Distinctive copy strings per gate — chosen to avoid the apostrophe
-// + ellipsis HTML-entity transform that `renderToStaticMarkup`
-// applies. Two strings per gate so a partial copy edit still trips
-// the assertion.
-const COPY_BACKEND_UNREACHABLE = 'reach this Silverhand backend';
-const COPY_BACKEND_UNREACHABLE_BLURB =
-  'The connection failed before signup or login';
-const COPY_REG_SIGNUP_HEADING = 'Create your account';
-const COPY_REG_SIGNUP_BLURB = 'Use an email and password';
-const COPY_REG_LOGIN_BLURB = 'Sign in to continue';
-// Negative-pin substrings — when one gate renders, none of the
-// OTHER gates' distinctive copy should appear.
-const COPY_LOADING = 'Loading';
+// Copy-free gate discriminators. Each is a structural or data signal
+// that does NOT depend on user-facing wording, so copy edits never
+// break this pin (the whole point of the rewrite).
+//
+//   - Unreachable gate: the warning icon (lucide-triangle-alert) is
+//     unique to it among the gates, and it echoes the server_url /
+//     message it is handed as props.
+//   - Registration gate: the email + password form fields, with the
+//     `autocomplete` mode distinguishing signup (new-password) from
+//     login (current-password).
+const SIG_UNREACHABLE_ICON = 'lucide-triangle-alert';
+const SIG_REG_EMAIL_FIELD = 'type="email"';
+const SIG_REG_PASSWORD_FIELD = 'type="password"';
+// NB: react-dom/server emits the `autoComplete` prop in camelCase
+// (verified against rendered output), not the lowercased HTML form.
+const SIG_REG_SIGNUP_AUTOCOMPLETE = 'autoComplete="new-password"';
+const SIG_REG_LOGIN_AUTOCOMPLETE = 'autoComplete="current-password"';
 
 // Minimal agentHub stub. App.tsx pulls in many components that
 // reference `window.agentHub.*` at module-evaluation time
@@ -151,12 +156,11 @@ afterEach(() => {
 });
 
 describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {
-  it('loading branch: viewer.data is undefined → renders the Loading placeholder, no gate copy', async () => {
+  it('loading branch: viewer.data is undefined → no gate renders', async () => {
     const html = await renderApp(undefined);
-    expect(html).toContain(COPY_LOADING);
-    expect(html).not.toContain(COPY_BACKEND_UNREACHABLE);
-    expect(html).not.toContain(COPY_REG_SIGNUP_HEADING);
-    expect(html).not.toContain(COPY_REG_LOGIN_BLURB);
+    // Neither gate's structural signal should be present while loading.
+    expect(html).not.toContain(SIG_UNREACHABLE_ICON);
+    expect(html).not.toContain(SIG_REG_EMAIL_FIELD);
   });
 
   it('backend_unreachable branch: BackendUnreachableGate renders with serverUrl + message', async () => {
@@ -166,41 +170,45 @@ describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {
       message: 'connect ECONNREFUSED 127.0.0.1:443',
     };
     const html = await renderApp(viewer);
-    expect(html).toContain(COPY_BACKEND_UNREACHABLE);
-    expect(html).toContain(COPY_BACKEND_UNREACHABLE_BLURB);
+    // Gate identity: the warning icon unique to this gate.
+    expect(html).toContain(SIG_UNREACHABLE_ICON);
+    // Data echo: the gate surfaces the server_url + message it is handed.
     expect(html).toContain('https://down.example.test');
     expect(html).toContain('ECONNREFUSED');
     // The registration gate must NOT appear when backend is
     // unreachable — that's the P1-2 load-bearing pin.
-    expect(html).not.toContain(COPY_REG_SIGNUP_HEADING);
-    expect(html).not.toContain(COPY_REG_LOGIN_BLURB);
+    expect(html).not.toContain(SIG_REG_EMAIL_FIELD);
   });
 
-  it('registration_required (signup enabled) branch: RegistrationGate renders signup-by-default copy', async () => {
+  it('registration_required (signup enabled) branch: RegistrationGate renders the signup form', async () => {
     const viewer: SetupRequired = {
       registration_required: true,
       suggested_name: '',
       signup_enabled: true,
     };
     const html = await renderApp(viewer);
-    expect(html).toContain(COPY_REG_SIGNUP_HEADING);
-    expect(html).toContain(COPY_REG_SIGNUP_BLURB);
+    expect(html).toContain(SIG_REG_EMAIL_FIELD);
+    expect(html).toContain(SIG_REG_PASSWORD_FIELD);
+    // Signup mode wires the password field(s) to the new-password
+    // autocomplete; login mode would use current-password.
+    expect(html).toContain(SIG_REG_SIGNUP_AUTOCOMPLETE);
     // The unreachable gate must NOT appear when registration is the
     // intended branch.
-    expect(html).not.toContain(COPY_BACKEND_UNREACHABLE);
+    expect(html).not.toContain(SIG_UNREACHABLE_ICON);
   });
 
-  it('registration_required (signup disabled) branch: RegistrationGate renders login-only copy (no signup blurb)', async () => {
+  it('registration_required (signup disabled) branch: RegistrationGate renders the login form (current-password, no new-password)', async () => {
     const viewer: SetupRequired = {
       registration_required: true,
       suggested_name: '',
       signup_enabled: false,
     };
     const html = await renderApp(viewer);
-    expect(html).toContain(COPY_REG_LOGIN_BLURB);
-    // Signup-mode blurb is suppressed when signup_enabled === false.
-    expect(html).not.toContain(COPY_REG_SIGNUP_BLURB);
-    expect(html).not.toContain(COPY_BACKEND_UNREACHABLE);
+    expect(html).toContain(SIG_REG_EMAIL_FIELD);
+    expect(html).toContain(SIG_REG_LOGIN_AUTOCOMPLETE);
+    // Login mode suppresses the new-password (signup/confirm) wiring.
+    expect(html).not.toContain(SIG_REG_SIGNUP_AUTOCOMPLETE);
+    expect(html).not.toContain(SIG_UNREACHABLE_ICON);
   });
 
   it('GATE ORDER (Cindy P1-2): synthetic ViewerState satisfying BOTH backend_unreachable AND registration_required renders the UNREACHABLE gate, not the registration gate', async () => {
@@ -219,10 +227,9 @@ describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {
       signup_enabled: true,
     } as unknown as ViewerState;
     const html = await renderApp(synthetic);
-    expect(html).toContain(COPY_BACKEND_UNREACHABLE);
+    expect(html).toContain(SIG_UNREACHABLE_ICON);
     expect(html).toContain('https://down.example.test');
     // The registration form must NOT appear — order proven.
-    expect(html).not.toContain(COPY_REG_SIGNUP_HEADING);
-    expect(html).not.toContain(COPY_REG_LOGIN_BLURB);
+    expect(html).not.toContain(SIG_REG_EMAIL_FIELD);
   });
 });
