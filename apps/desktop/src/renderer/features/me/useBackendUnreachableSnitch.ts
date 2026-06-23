@@ -123,17 +123,25 @@ export function useBackendUnreachableSnitch(
   useEffect(() => {
     const queryCache = client.getQueryCache();
     const mutationCache = client.getMutationCache();
+    let cancelled = false;
 
     const apply = (event: SnitchCacheEvent): void => {
       const next = decideNextVisible(event);
       if (next === null) return;
-      // Direct setState — React bails out when next === prev
-      // internally, so we don't need a separate ref guard. This
-      // is the Cindy P1 fix: the prior version's `visibleRef.current`
-      // guard could be stale after a `retry()` setVisible(false)
-      // that hadn't committed yet, swallowing a follow-up
-      // backend_unreachable error.
-      setVisible(next);
+      // Defer out of the synchronous cache-notification path. React Query
+      // notifies cache subscribers SYNCHRONOUSLY, including when a new query
+      // observer mounts during another component's render — e.g. a
+      // <HumanMention> calling useUsersById() whose query is already cached
+      // emits a 'success' event mid-render. Calling setVisible inline there is
+      // a render-phase update of THIS component while that other component
+      // renders → React's "Cannot update a component while rendering a
+      // different component" warning. A microtask runs once the render stack
+      // unwinds, so the flip becomes an ordinary post-render update. React
+      // still bails out internally when next === prev (the Cindy P1 fix), so
+      // no ref guard is needed.
+      queueMicrotask(() => {
+        if (!cancelled) setVisible(next);
+      });
     };
 
     const onQueryEvent = (event: { query?: unknown }): void => {
@@ -151,6 +159,7 @@ export function useBackendUnreachableSnitch(
     const unsubQ = queryCache.subscribe(onQueryEvent);
     const unsubM = mutationCache.subscribe(onMutationEvent);
     return () => {
+      cancelled = true;
       unsubQ();
       unsubM();
     };
