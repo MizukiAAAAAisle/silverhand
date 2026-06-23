@@ -156,9 +156,10 @@ export interface MessageItemProps {
  *
  * - **Frame-corner action controls** (Save + Thread) — absolutely
  *   pinned to the top-right of the OUTER hover frame (mirrored to
- *   top-left in user-right mode), each rendered as a small icon +
- *   label pair using `ActionButton`. They sit on the framed card,
- *   NOT over the markdown body. Default hidden via
+ *   top-left in user-right mode), each rendered as an icon-only
+ *   button using `ActionButton` (the label survives as `title` +
+ *   `aria-label` for tooltip / screen readers). They sit on the
+ *   framed card, NOT over the markdown body. Default hidden via
  *   `pointer-events-none opacity-0`; revealed on row hover OR
  *   `focus-within`, so a keyboard user can tab to them. They do not
  *   reserve vertical space, so two consecutive messages now sit
@@ -547,9 +548,9 @@ export function MessageItem({
           specificity as the base `opacity-0` and loses to it in the
           compiled CSS, so we drive the class directly from a
           `focusWithin` state instead. The controls re-use
-          ActionButton so they match the inline "{N} Reply" badge's
-          visual language — icon + small label, color-only hover, no
-          container chrome.
+          ActionButton so they share its visual language — icon-only,
+          color-only hover, no container chrome (the text label lives
+          in `title` / `aria-label`).
 
           The Thread button is suppressed when `threadReplyCount` is
           already set — the inline "{N} Reply" badge is the discovery
@@ -583,10 +584,9 @@ export function MessageItem({
                 type="button"
                 title="React"
                 aria-label="React"
-                className="flex items-center gap-1 rounded-sm text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+                className="flex items-center rounded-sm text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
               >
                 <SmilePlus className="size-3.5" />
-                <span>React</span>
               </button>
             }
           />
@@ -949,7 +949,7 @@ function ActionButton({
       title={label}
       aria-label={label}
       className={
-        'flex items-center gap-1 rounded-sm transition-colors transition-opacity focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus ' +
+        'flex items-center rounded-sm transition-colors transition-opacity focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus ' +
         (visible ? 'opacity-100' : 'pointer-events-none opacity-0') +
         ' ' +
         (active
@@ -958,7 +958,6 @@ function ActionButton({
       }
     >
       {icon}
-      <span>{label}</span>
     </button>
   );
 }
