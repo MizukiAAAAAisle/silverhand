@@ -432,18 +432,18 @@ export function MessageItem({
         onClick={() => onStartThread(message)}
         title={replyBadgeTitle}
         aria-label={replyBadgeTitle}
-        className="inline-flex h-[22px] items-center gap-1.5 border border-border-subtle px-2 text-xs text-text-muted transition-colors hover:border-[color:var(--border-control-hover)] hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+        className="inline-flex h-[18px] items-center gap-1.5 border border-border-subtle px-2 text-xs text-text-muted transition-colors hover:border-[color:var(--border-control-hover)] hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
       >
         {enrichedReply ? (
           <>
             <span className="flex items-center gap-[3px]">
               {enrichedReply.repliers.map(r => (
                 <span key={`${r.kind}:${r.id}`} className="shrink-0">
-                  {renderReplierAvatar(r, 16)}
+                  {renderReplierAvatar(r, 14)}
                 </span>
               ))}
               {enrichedReply.replier_total > enrichedReply.repliers.length ? (
-                <span className="flex size-[16px] shrink-0 items-center justify-center rounded-none bg-bg-muted text-[9px] font-medium text-text-muted">
+                <span className="flex size-[14px] shrink-0 items-center justify-center rounded-none bg-bg-muted text-[9px] font-medium text-text-muted">
                   +{enrichedReply.replier_total - enrichedReply.repliers.length}
                 </span>
               ) : null}
@@ -689,7 +689,7 @@ function MessageTaskTag({
         aria-label={`Task #${message.task_number}（${label}）— 点击更改状态`}
         // Stop the click from reaching the row's selection/jump capture.
         onClick={e => e.stopPropagation()}
-        className="inline-flex h-[22px] max-w-[220px] cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-[var(--chip-radius)] px-2 text-[11px] font-medium leading-none transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+        className="inline-flex h-[18px] max-w-[220px] cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-[var(--chip-radius)] px-2 text-[11px] font-medium leading-none transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
       >
         {/* Status glyph from the shared TASK_STATUS_ICON source (kanban /
             drawer use the same), so a future icon swap updates everywhere. */}

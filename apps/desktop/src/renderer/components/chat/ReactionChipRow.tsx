@@ -42,7 +42,7 @@ export function reactionChipClass(
   interactive: boolean,
 ): string {
   return (
-    'flex h-[22px] items-center gap-1 rounded-[var(--chip-radius)] px-2 text-xs tabular-nums text-text-primary transition-colors ' +
+    'flex h-[18px] items-center gap-1 rounded-[var(--chip-radius)] px-2 text-xs tabular-nums text-text-primary transition-colors ' +
     (agg.viewer_reacted
       ? 'bg-[var(--accent-soft)]'
       : interactive
