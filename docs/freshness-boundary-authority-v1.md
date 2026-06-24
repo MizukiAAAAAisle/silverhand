@@ -71,8 +71,8 @@ Two repair shapes were considered (chat decision 2026-06-08, shiki: *"长期正�
 
 1. **Freshness semantic ceiling.** A's boundary is a scalar high-water seq —
    structurally it can express **only** the *widest* freshness scope ("any new
-   seq in target", `multi-agent-collaboration-notes.md §5.3`, the crudest /
-   highest-false-positive band). B owns the boundary internally and can evolve
+   seq in target" — the crudest / highest-false-positive band of the
+   freshness-scope spectrum). B owns the boundary internally and can evolve
    it to a `message-id` seen-set / pending-unread set / per-target boundary,
    which is the prerequisite for **relevance-scoped** freshness later. A welds us
    to the crudest band permanently.
@@ -265,8 +265,6 @@ send path derives freshness from the file.
 
 ## 8. References
 
-- `docs/multi-agent-collaboration-notes.md` — shared vocabulary (freshness CAS,
-  held-draft, freshness-scope spectrum §5.3, three-tier read primitive).
 - `#task:940` — send-side CAS + v42 allocator (server backstop).
 - `#task:941` — stale-resolution reason enum (telemetry).
 - `#task:943` — gaming counting repro + root cause.

@@ -16,7 +16,7 @@
 **Predecessor docs to read first**:
 - `docs/remote-server-target-architecture.md` — target topology
 - `docs/auth-and-host-model.md` §7-§10 — host identity / token model
-- `docs/remote-backend-roadmap.md` — V1 prep stage map (esp. D2.0 / D2 / D3)
+- `docs/remote-backend-architecture-notes.md` — V1 prep stage map / status (D2.0 / D2 / D3)
 - `docs/multi-daemon-registry.md` v5 status note — V1 vs future placement model
 - `docs/silverhand-daemon.md` + `docs/remote-backend-architecture-notes.md` §5 — current daemon intent surface
 
@@ -82,7 +82,7 @@ hard prerequisite" to "triggered by sandbox host or multi-device memory
 sync requirement". V1 single-desktop topology never needs it because the
 agent process and the prompt/memory/consensus files always coexist on
 the same daemon-host (§1.1). **Without D2.0 locked, D2/D3 become moving
-targets.** Stage names match `docs/remote-backend-roadmap.md`.
+targets.** Stage names match `docs/remote-backend-architecture-notes.md`.
 
 ## 3. Two-sided contract
 
@@ -778,7 +778,7 @@ framing, backpressure rules, retry / durability — those are D2
 wired to outbound). D2.0 is the *what lives where* contract; D2 is
 *how the daemon talks outbound*; D3 is *how desktop wires the daemon
 lifecycle into that transport*. Stage names match
-`docs/remote-backend-roadmap.md`.
+`docs/remote-backend-architecture-notes.md`.
 
 ## 8. Decisions taken (was: open questions)
 

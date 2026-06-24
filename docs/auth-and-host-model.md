@@ -385,7 +385,7 @@ This flow runs in the Electron **main** process; the renderer only sees
          the daemon ↔ server channel uses (see transport note below)
 ```
 
-**Transport note**: V1 (Stage B in `remote-backend-roadmap.md`) keeps
+**Transport note**: V1 (Stage B; stages now in `remote-backend-architecture-notes.md`) keeps
 the existing pre-outbound transport — backend / Electron main dials the
 daemon's Unix socket via `HostClient`. The daemon does NOT initiate
 HTTP/WS calls to the backend in V1. Adding `host_token` to the request
@@ -912,7 +912,7 @@ This doc deliberately leaves the following undecided:
     headless daemon binary into Phase 4 / V1.5 so we don't expose
     bootstrap-exchange surface ahead of its caller.
 - 2026-05-25 — Round 4 transport-truth fix (Alice). Addresses the
-  cross-doc finding from Cindy on `remote-backend-roadmap.md` round 2:
+  cross-doc finding from Cindy during remote-backend roadmap round 2:
   - §6.1 last diagram line previously read "[daemon] outbound-connects
     with host_token; server marks (user_id, host_id) online". This
     overstated V1's transport — V1 keeps the pre-outbound model where

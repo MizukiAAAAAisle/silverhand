@@ -1,6 +1,6 @@
 # Agent Run State 与 Activity Strip 设计
 
-> 配套文档：`core-design.md`（§3 进程编排）、`electron-agent-hub-compaction.md`（compaction 总论）、`cli-system.md`。
+> 配套文档：`core-design.md`（§3 进程编排）、`cli-system.md`。compaction 总论已并入本文（§ compaction-as-state）。
 > 本文聚焦"agent 在某个 channel/thread 里正在做什么"这一**临时运行态**的端到端模型——driver 输出 → ConversationManager 聚合 → WS scope 分发 → 前端 cache → Activity Strip 渲染——以及 2026-05-08 task #159 / #169 的修复点。
 
 ---

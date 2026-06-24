@@ -1,6 +1,6 @@
 # Incident 2026-05-08 — Claude `--input-format stream-json` 空 stdin 启动死锁（误诊为「大 jsonl resume 慢」）
 
-跟同一天的 [incident-2026-05-08-codex-init-watchdog](./incident-2026-05-08-codex-init-watchdog.md) **同根异源**：
+跟同一天的 codex init-watchdog incident **同根异源**（那份 codex 复盘已作为过程文档清理，结论留在下方对照与 git 历史）：
 
 - 那次（codex）：npm wrapper 冷启动 10–22s + `thread/start` 往返撞 30s 线，确实是「冷启动慢」。
 - 本 incident（claude）：**与启动慢、jsonl 体量、--resume 流程通通无关**。根因是 `claude --input-format stream-json` **必须**收到第一条真实 user message 才会发 `system.init`；silverhand 在 inbox 为空时 spawn 了 claude，于是 claude 永远不发 init，30s init watchdog 必然杀掉。

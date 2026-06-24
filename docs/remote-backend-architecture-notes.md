@@ -11,13 +11,16 @@
 > read superseded rationale.
 >
 > Companion live docs (NOT absorbed, still authoritative on their own axis):
-> `remote-backend-roadmap.md` (stages + current status),
 > `orchestration-boundary-v1.md` (D2.0 server/daemon boundary contract),
 > `auth-and-host-model.md` (auth/identity spec),
 > `daemon-outbound-protocol.md` (WS transport),
-> `protocol-purity-checklist.md` (drift tripwire),
 > and the architecture diagrams `daemon-server-link-flow.html` /
-> `auth-comms-chain.html` / `remote-backend-progress.html`.
+> `auth-comms-chain.html`.
+>
+> (The `remote-backend-roadmap.md` stage map, `protocol-purity-checklist.md`
+> drift tripwire, and `remote-backend-progress.html` status view were process
+> artifacts for remote V1; V1 landed and they were removed — this file is now
+> the standing remote-backend entry point. History in git.)
 
 ---
 
