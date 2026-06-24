@@ -7,9 +7,9 @@ import {
   BASELINE_SCHEMA_VERSION,
   CURRENT_SCHEMA_VERSION,
   MIN_SUPPORTED_SCHEMA_VERSION,
-  type Migration,
   migrations,
 } from '@silverhand/shared';
+import { runMigrations } from '../src/db.js';
 
 /**
  * Continuous drift guard for the #task:1213 baseline compaction
@@ -32,42 +32,17 @@ import {
  * The one-time "old chain v1..v44 == baseline" proof is NOT here; it ran in the
  * compaction PR (migration-baseline-gen.test.ts) against the still-present chain
  * and is preserved in git history. All DBs are `:memory:` (shiki gate §6).
+ *
+ * Both stages drive the REAL migration runner (runMigrations, the production
+ * path in packages/backend/src/db.ts) — not a bespoke replay — so the guard
+ * exercises the exact ledger / version-skip semantics that ship: `_migrations`
+ * rows written, plan filtered against applied versions, floor guard honored.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FX = join(here, 'migration-baseline');
 const V44_ORACLE = join(FX, 'schema-baseline-v44.normalized.txt');
 const CURRENT_ORACLE = join(FX, 'schema-current.normalized.txt');
-
-function freshDb(): Database.Database {
-  const db = new Database(':memory:');
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  return db;
-}
-
-/** Faithful replay of a migration list (escape/precondition aware), matching
- *  runMigrations semantics, without writing the `_migrations` ledger. */
-function applyPlan(db: Database.Database, plan: Migration[]): void {
-  for (const m of plan) {
-    const apply = () => {
-      if (m.precondition) m.precondition(db);
-      db.exec(m.up);
-    };
-    if (m.foreignKeyEscape) {
-      db.pragma('foreign_keys = OFF');
-      db.pragma('legacy_alter_table = ON');
-      try {
-        db.transaction(apply)();
-      } finally {
-        db.pragma('legacy_alter_table = OFF');
-        db.pragma('foreign_keys = ON');
-      }
-    } else {
-      db.transaction(apply)();
-    }
-  }
-}
 
 /** Order-independent, whitespace-collapsed schema fingerprint. Must match the
  *  generator's normalizeSchema (migration-baseline-gen.test.ts) byte-for-byte. */
@@ -97,19 +72,39 @@ describe('baseline compaction drift guard (#task:1213)', () => {
   });
 
   it('(a) applying only the baseline reproduces the frozen v44 schema', () => {
-    const db = freshDb();
-    applyPlan(db, [migrations[0]!]);
-    expect(normalizeSchema(db)).toBe(readFileSync(V44_ORACLE, 'utf8'));
+    const db = new Database(':memory:');
+    try {
+      // Run JUST the baseline through the real runner on a fresh DB (isEmpty
+      // bypass → applies; writes the _migrations row at 44).
+      const result = runMigrations(db, {
+        migrations: [migrations[0]!],
+        expectedVersion: BASELINE_SCHEMA_VERSION,
+        minimumSupportedVersion: BASELINE_SCHEMA_VERSION,
+      });
+      expect(result.appliedVersions).toEqual([BASELINE_SCHEMA_VERSION]);
+      expect(normalizeSchema(db)).toBe(readFileSync(V44_ORACLE, 'utf8'));
+    } finally {
+      db.close();
+    }
   });
 
   it('(b) applying baseline + retained increments reproduces current schema', () => {
-    const db = freshDb();
-    applyPlan(db, migrations);
-    const got = normalizeSchema(db);
-    if (process.env.UPDATE_SCHEMA_SNAPSHOT === '1') {
-      writeFileSync(CURRENT_ORACLE, got);
+    const db = new Database(':memory:');
+    try {
+      // The default plan (baseline + v45..) through the real runner.
+      const result = runMigrations(db, {
+        expectedVersion: CURRENT_SCHEMA_VERSION,
+        minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+      });
+      expect(result.appliedVersions).toEqual(migrations.map(m => m.version));
+      const got = normalizeSchema(db);
+      if (process.env.UPDATE_SCHEMA_SNAPSHOT === '1') {
+        writeFileSync(CURRENT_ORACLE, got);
+      }
+      expect(got).toBe(readFileSync(CURRENT_ORACLE, 'utf8'));
+      expect(CURRENT_SCHEMA_VERSION).toBe(migrations[migrations.length - 1]!.version);
+    } finally {
+      db.close();
     }
-    expect(got).toBe(readFileSync(CURRENT_ORACLE, 'utf8'));
-    expect(CURRENT_SCHEMA_VERSION).toBe(migrations[migrations.length - 1]!.version);
   });
 });

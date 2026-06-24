@@ -33,7 +33,7 @@ import { type Migration, migrations } from '@silverhand/shared';
  *
  * After compaction the chain is gone, so this generator can no longer run
  * (it asserts the chain is present and skips otherwise). The frozen
- * artifacts + the continuous two-stage guard in db-migrations.test.ts take
+ * artifacts + the continuous two-stage guard in migration-baseline.test.ts take
  * over. ALL DBs here are `:memory:` — never touch a live DB (shiki gate §6).
  */
 
@@ -143,16 +143,23 @@ describe('migration baseline generator (#task:1213, one-shot)', () => {
     }
     expect(normalizeSchema(recombined)).toBe(currentNorm);
 
-    // Emit artifacts.
+    // Emit artifacts. BASELINE_SCHEMA_SQL is written as a multiline template
+    // literal (not a JSON string) so the committed schema stays reviewable in a
+    // diff. Safe because the dumped DDL contains no backtick / backslash / ${
+    // (asserted below before we trust the template form).
+    expect(
+      /[`\\]|\$\{/.test(baselineSql),
+      'baseline DDL contains a template-literal-unsafe char; emit needs escaping',
+    ).toBe(false);
     const tsBody =
       `// AUTO-GENERATED — DO NOT HAND-EDIT (#task:1213 baseline compaction).\n` +
       `// Source of truth: a one-shot replay of historical migrations v1..v${BASELINE_VERSION}\n` +
       `// (deleted from the live plan; preserved in this commit's git history).\n` +
       `// Regeneration is impossible post-compaction (the chain is gone); the\n` +
-      `// two-stage drift guard in db-migrations.test.ts pins this artifact.\n` +
+      `// two-stage drift guard in migration-baseline.test.ts pins this artifact.\n` +
       `// See docs/db-migration-baseline-compaction-v1.md §5.2.\n\n` +
       `export const BASELINE_SCHEMA_VERSION = ${BASELINE_VERSION};\n\n` +
-      `export const BASELINE_SCHEMA_SQL = ${JSON.stringify(baselineSql)};\n`;
+      `export const BASELINE_SCHEMA_SQL = \`\n${baselineSql}\`;\n`;
     writeFileSync(join(here, '..', '..', 'shared', 'src', 'db', 'baseline-schema.ts'), tsBody);
 
     const fxDir = join(here, 'migration-baseline');

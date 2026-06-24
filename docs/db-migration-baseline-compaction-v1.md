@@ -1,8 +1,24 @@
-# DB Migration Baseline Compaction — v1 设计稿
+# DB Migration Baseline Compaction — v1
 
-> 状态:设计评审中(#task:1213)。设计=@Alice,实现=@Cindy。
+> 状态:**已实现(as-built),#task:1213**。设计 + 实现=@Alice(shiki 把实现也
+> 交给了 Alice:"可以,Alice 你来做");review=@Cindy。本文档是 **as-built 契约**
+> ——下方文件名 / 落点反映实际落地,设计 rationale(§1–§5)仍是活契约。
 > 前置:#task:1211 已查实 migration runner **不是 runtime hot-path**(ledger 门控
 > 纯增量),所以本工作 **不是性能修复**;动机见 §1。
+>
+> **落地产物(权威清单):**
+> - `packages/shared/src/db/baseline-schema.ts` — `BASELINE_SCHEMA_VERSION=44` +
+>   `BASELINE_SCHEMA_SQL`(机器生成的 v44 全量快照,multiline 模板字符串,单一
+>   权威源)。
+> - `packages/shared/src/db/migrations.ts` — 2970→204 行:baseline@44 import 上面
+>   的常量当 `up`,保留 v45..v50;`MIN_SUPPORTED_SCHEMA_VERSION=44`。
+> - `packages/backend/tests/migration-baseline-gen.test.ts` — 一次性生成器
+>   (`GEN_MIGRATION_BASELINE=1` 才跑,链删后自锁;**不是** `scripts/` 脚本)。
+> - `packages/backend/tests/migration-baseline.test.ts` — 持续两段 drift guard,
+>   **走真实 `runMigrations`**(非自写 replay)。
+> - `packages/backend/tests/migration-baseline/schema-{baseline-v44,current}.normalized.txt`
+>   — 两个冻结 oracle。
+> - commit:`a4a8476`(主体)+ 本轮 review fixup(见 §10)。
 
 ---
 
@@ -140,8 +156,9 @@ baseline 是 v1..v44 的 **派生产物**。DDD 纪律:**绝不手维护第二�
 
 ### 5.2 方案 1 —— 派生留在 git history(**已选定;Alice 推荐 + Cindy ratify**)
 
-把 §5.1 的 dump 落成一份冻结文件 `schema-v44.sql`(规范化 DDL)作为 baseline 的
-**唯一权威 artifact**。**不保留 v1..v44 链。** 派生过程的可审计性 **由压缩 PR 的
+把 §5.1 的 dump 落成一份冻结的 TS 常量 `BASELINE_SCHEMA_SQL`(in
+`packages/shared/src/db/baseline-schema.ts`,机器生成、规范化 DDL)作为 baseline
+的 **唯一权威 artifact**。**不保留 v1..v44 链。** 派生过程的可审计性 **由压缩 PR 的
 diff 永久保存在 git**(那个 PR 同时含被删的链与生成的快照)。
 
 - 形态对齐既有先例 `api-barrel-export-snapshot.json` /
@@ -158,20 +175,23 @@ diff 永久保存在 git**(那个 PR 同时含被删的链与生成的快照)。
 
 方案 1 落地时 **必须** 满足下面两条,否则会退化成两份真相源或 tautology:
 
-1. **baseline SQL 只能有一个权威 artifact。** 禁止同时手维护 `schema-v44.sql`
-   **和** `migrations.ts` 里一份复制粘贴的 `up` 字符串。实现取其一:生成脚本把
-   `schema-v44.sql` 编译/内联成 TS 常量,或 migration 从同一生成产物 import。
-   review 必须看到 **一个源 → migration 使用它 → test 守它** 的单链路。
-2. **持续 guard 不得是 tautology。** 若 `baseline.up` 逐字节 == `schema-v44.sql`,
-   那么"apply baseline == schema-v44.sql"近乎自证。最低要求是 **两段** 比较:
+1. **baseline SQL 只能有一个权威 artifact。** 禁止同时手维护 `baseline-schema.ts`
+   **和** `migrations.ts` 里一份复制粘贴的 `up` 字符串。**as-built:** `baseline.up`
+   直接 `import { BASELINE_SCHEMA_SQL }`,migrations.ts 不持有任何 DDL 副本——
+   单链路 `baseline-schema.ts(源)→ migrations.ts import 使用 → migration-baseline.test.ts 守`。
+2. **持续 guard 不得是 tautology。** 若 `baseline.up` 逐字节 == artifact,
+   那么"apply baseline == artifact"近乎自证。最低要求是 **两段** 比较:
    - **(a) baseline 段:** fresh `:memory:` apply baseline → dump normalized →
      与 committed normalized baseline artifact(或其 hash)比较。抓:artifact
      被误改、SQL 不可执行。
    - **(b) 终态段:** 在上面基础上继续 apply v45..current → dump normalized →
      与 committed **current expected** dump/hash 比较。抓:v45+ 后续链 + current
      终态漂移。
-   - 一次性"旧链 v1..v44 == baseline"的证明 **不进持续 CI**,只在压缩 PR 的
-     §5.1 生成脚本输出里完成并在 git 留痕。
+   - **as-built:** 两段都用真实 `runMigrations`(baseline-only plan / 默认全量
+     plan)在 `:memory:` 上跑,而非自写 replay——guard 因此连 ledger / 版本
+     skip / floor 语义一并验证(Cindy review 第 1 条)。
+   - 一次性"旧链 v1..v44 == baseline"的证明 **不进持续 CI**,只在 `migration-baseline-gen.test.ts`
+     的 §5.1 生成器输出里完成并在 git 留痕。
 
 ### 5.3 方案 2 —— 冻结整条历史链 fixture(paranoid,高保障)
 
@@ -216,11 +236,12 @@ live 路径**。`docs/testing.md` 的"全新 in-memory DB 跑完所有 migration
 
 ## 7. 迁移步骤(压缩 PR)
 
-1. 写生成脚本(§5.1):重放 v1..v44 → 规范化 dump → `schema-v44.sql`(baseline
-   的唯一权威 artifact,§5.2.1-1);并跑 ②baseline==链、③v1..v50 end-state 回归
-   两项一次性验证(留痕 git,不进持续 CI)。
+1. 写生成器(§5.1,as-built = `migration-baseline-gen.test.ts`,`GEN_MIGRATION_BASELINE=1`
+   gated):重放 v1..v44 → 规范化 dump → 写 `baseline-schema.ts`(baseline 的唯一
+   权威 artifact,§5.2.1-1);并跑 ②baseline==链、③v1..v50 end-state 回归两项
+   一次性验证(留痕 git,不进持续 CI)。
 2. `migrations` 数组:删 v1..v44,插入 `{version:44, name:'baseline', up}`,`up`
-   **从 `schema-v44.sql` 同一产物生成/import**(禁手抄第二份,§5.2.1-1);保留
+   **`import` 自 `baseline-schema.ts` 同一产物**(禁手抄第二份,§5.2.1-1);保留
    v45..v50 原样。
 3. `MIN_SUPPORTED_SCHEMA_VERSION` 28 → 44。
 4. 加持续 drift-guard 测试(§5.2.1-2 **两段、非 tautology**):(a)apply baseline
@@ -249,21 +270,29 @@ live 路径**。`docs/testing.md` 的"全新 in-memory DB 跑完所有 migration
 
 ---
 
-## 8. 改动清单(blast radius,已 grep 现读核实)
+## 8. 改动清单(blast radius,as-built)
 
-- **`packages/shared/src/db/migrations.ts`** — 删 v1..v44、插 baseline@44;
-  `MIN_SUPPORTED_SCHEMA_VERSION` 28→44。`CURRENT_SCHEMA_VERSION` 派生,不改。
-- **`packages/shared/src/db/baseline/schema-v44.sql`**(新)— 冻结快照(方案 1)。
+- **`packages/shared/src/db/migrations.ts`** — 删 v1..v44(2970→204 行)、插
+  baseline@44(`up` import 自 baseline-schema.ts);`MIN_SUPPORTED_SCHEMA_VERSION`
+  28→44。`CURRENT_SCHEMA_VERSION` 派生,不改(=50)。
+- **`packages/shared/src/db/baseline-schema.ts`**(新)— 冻结快照(方案 1):
+  `BASELINE_SCHEMA_VERSION` + `BASELINE_SCHEMA_SQL`(multiline 模板字符串)。
+- **`packages/shared/src/db/index.ts`** — `export * from './baseline-schema.js'`。
 - **`packages/backend/src/db.ts`** — **runner 零逻辑改动**;仅透传新常量值
   (import 已在 L14-16)。
 - **`packages/backend/src/index.ts`**(L751-752)— 常量 re-export,值变、签名不变。
-- **`packages/backend/tests/db-migrations.test.ts`** — 加 drift-guard +
-  upgrade-path;审计删版本引用(§7.6)。
-- **生成脚本**(新,如 `scripts/gen-migration-baseline.ts`)— 一次性派生 +
-  ②③验证。
+- **`packages/backend/tests/migration-baseline-gen.test.ts`**(新)— 一次性派生
+  生成器(env-gated)+ ②③验证。
+- **`packages/backend/tests/migration-baseline.test.ts`**(新)— 持续两段
+  drift-guard(走真实 `runMigrations`)。
+- **`packages/backend/tests/migration-baseline/schema-{baseline-v44,current}.normalized.txt`**(新)
+  — 两个冻结 oracle。
+- **`packages/backend/tests/db-migrations.test.ts`** — 删 39 个 `openDbAt(N<44)`
+  历史 per-migration 测试 + 死 helper(3517→~1368 行);加 v44→current upgrade-path
+  测试;3 个 describe 重命名为 current-schema-invariant(§7.6)。
 - `smoke.test.ts` / `materialize-reconciler.test.ts` 用全链建 in-memory DB →
-  end-state 不变,预期无需改(回归覆盖)。
-- 文档:本稿 + `docs/testing.md` 若提及 migration helper 需对齐。
+  end-state 不变,无需改(回归覆盖,已绿)。
+- 文档:本稿。`docs/testing.md` 的 in-memory helper 同理保持 `:memory:`,无需改。
 
 ---
 
@@ -282,13 +311,17 @@ live 路径**。`docs/testing.md` 的"全新 in-memory DB 跑完所有 migration
 
 ---
 
-## 10. 评审状态
+## 10. 评审状态(as-built)
 
-- **drift guard**(§5.2/§5.4)—— **已定方案 1 + §5.2.1 两条硬约束**(Alice 推荐
-  + Cindy ratify)。
-- **floor=44**(§3)—— Alice + Cindy 收敛;待 shiki 终拍(产品策略若想连 v44 也
-  拒需显式声明)。
-- **测试隔离**(§6)—— shiki 硬 gate,Cindy review 强制检查。
-- **实现归属** —— @Cindy 接 runner/脚本/test 落地;Alice 设计 + review。
-- 生成脚本/快照落点命名(`scripts/` vs `packages/shared/`)—— 实现细节,归
-  @Cindy。
+- **drift guard**(§5.2/§5.4)—— 方案 1 + §5.2.1 两条硬约束已落地。Cindy review
+  第 1 条(guard 须走真实 runner 语义、不能是自写 replay)**已采纳**:
+  `migration-baseline.test.ts` 两段都驱动 `runMigrations`。
+- **floor=44**(§3)—— Alice + Cindy 收敛,shiki 拍板压缩 + "Alice 你来做";已落地。
+- **测试隔离**(§6)—— shiki 硬 gate;所有 baseline/gen/upgrade 测试均 `:memory:`,
+  Cindy review 确认未触 live DB。
+- **实现归属** —— shiki 把实现交给 @Alice("可以,Alice 你来做");@Cindy review。
+- **gate** —— shared/backend/server/host/cli typecheck + test 全绿。
+- **commit** —— `a4a8476`(主体)+ 本轮 review fixup(drift-guard runner 语义 +
+  baseline-schema.ts multiline + 本稿/注释 as-built 同步);**未 push**(等 shiki)。
+- **非 blocker(已采纳)** —— `BASELINE_SCHEMA_SQL` 由单行 JSON string 改为 multiline
+  模板字符串,committed schema 在 diff 中可读(Cindy 建议)。
