@@ -202,6 +202,7 @@ per-stream 后,`conversation_reads` 每个 (user, conversation) **不再只有�
 6. **所有 `conversation_reads` 访问必须限定 `thread_root_id`(IS NULL 或 = ?),roll-up 聚合除外**(§4.1)。
 7. **`conversation_reads` thread 行受 root-invariant trigger 守护**(同一 conversation + root 存在 + 非 reply,§3.1.1)。
 8. **open-time snapshot 的唯一来源 = 打开流的窗口响应 `stream_head_seq`**,与窗口同一次 read 捕获(head-before-window);客户端回传它当 `snapshot_seq`,不在 mark 时另查 head、不从 loaded messages 推断、不放行级 head。
+9. **客户端消费 freshness(client-side,review round-3 Cindy blocker):snapshot 必须来自「本次打开」的窗口 read,不能是上次打开遗留的缓存值。** React Query 重开同一 thread 会先同步吐旧 cache 的 `stream_head_seq`、再后台 refetch;若 effect 见到非 null head 即 mark 并用「per-root 永久 once-guard」锁死,新响应的更高 head 会被 ref-gate 吞掉 → cursor 停在上次快照、且 snapshot 源自上次 read,破契约。要求:①打开时保证一次 refetch(`refetchOnMount: 'always'` 或 open 时 invalidate);②mark 仅当该页来自本次打开(`dataUpdatedAt >= openedAt`);③once-guard **per-open 重新 arm**(keyed by open / openedAt,非永久 per-root)。**后端无法兜底**——stale `S` 是合法 seq ≤ head,后端区分不了「本次/上次打开」,故 freshness 是 client 消费纪律。
 
 ## 9. 迁移安全 / 验证
 
