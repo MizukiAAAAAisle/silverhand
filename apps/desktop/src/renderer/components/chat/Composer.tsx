@@ -335,8 +335,8 @@ export function Composer({
     [draft, caret, composing],
   );
 
-  const items = useMemo<PickerItem[]>(() => {
-    if (!trigger) return [];
+  const { items, hiddenCount } = useMemo<PickerResult>(() => {
+    if (!trigger) return { items: [], hiddenCount: 0 };
     if (trigger.kind === '@') {
       return filterMentionPeople(
         agents,
@@ -629,6 +629,7 @@ export function Composer({
         {menuOpen && !dismissed ? (
           <PickerMenu
             items={items}
+            hiddenCount={hiddenCount}
             active={active}
             onPick={insertPick}
             onHover={setActive}
@@ -925,6 +926,14 @@ export type PickerItem =
   | { kind: 'human'; human: HumanMentionCandidate; inConversation: boolean }
   | { kind: 'channel'; channel: ChannelConversationDto };
 
+/** A filtered picker page: the visible (capped) items plus how many matched
+ *  candidates the cap dropped, so the menu can surface a "+N more" hint
+ *  instead of truncating silently. */
+export interface PickerResult {
+  items: PickerItem[];
+  hiddenCount: number;
+}
+
 /**
  * Filter and group the mention picker candidate set.
  *
@@ -937,10 +946,12 @@ export type PickerItem =
  * have to skip section headers — `PickerMenu` inserts the divider
  * before the first `!inConversation` row at render time.
  *
- * Caps: each section is capped at 5 (total max 10). When the IN
- * section has fewer than 5 rows the NOT IN cap is unchanged — we
- * don't expand it to backfill, because a too-tall picker hides the
- * textarea behind the floating menu.
+ * Caps: each section is capped at 5 (total max 10). The cap keeps the
+ * picker short and scannable — it rewards narrowing by typing over
+ * scrolling a long list (the menu scrolls, so this is a UX choice, not a
+ * height constraint). Whatever the cap drops is counted into
+ * `hiddenCount` so `PickerMenu` can surface a "+N more" footer rather
+ * than truncating silently.
  */
 export function filterMentionPeople(
   agents: AgentDto[],
@@ -948,7 +959,7 @@ export function filterMentionPeople(
   agentMemberIds: ReadonlySet<string>,
   humanMemberIds: ReadonlySet<string>,
   query: string,
-): PickerItem[] {
+): PickerResult {
   const q = query.toLowerCase();
   const matchedAgents = q
     ? agents.filter(a =>
@@ -978,10 +989,16 @@ export function filterMentionPeople(
     .filter(a => !agentMemberIds.has(a.id))
     .map(agent => ({ kind: 'agent', agent, inConversation: false }));
   const PER_SECTION_CAP = 5;
-  return [
-    ...[...inHumans, ...inAgents].slice(0, PER_SECTION_CAP),
-    ...[...outHumans, ...outAgents].slice(0, PER_SECTION_CAP),
+  const inItems = [...inHumans, ...inAgents];
+  const outItems = [...outHumans, ...outAgents];
+  const items = [
+    ...inItems.slice(0, PER_SECTION_CAP),
+    ...outItems.slice(0, PER_SECTION_CAP),
   ];
+  return {
+    items,
+    hiddenCount: inItems.length + outItems.length - items.length,
+  };
 }
 
 /**
@@ -996,10 +1013,10 @@ export function filterMentionPeople(
  *   `dim` class), so offering them in the picker would invite dead
  *   refs and inflate the menu with rows the user almost never wants.
  */
-function filterChannels(
+export function filterChannels(
   channels: ChannelListItem[],
   query: string,
-): PickerItem[] {
+): PickerResult {
   const q = query.toLowerCase();
   const onlyLive = channels.filter(
     (c): c is ChannelConversationDto =>
@@ -1008,13 +1025,17 @@ function filterChannels(
   const matched = q
     ? onlyLive.filter(c => c.title.toLowerCase().includes(q))
     : onlyLive;
-  return matched.slice(0, 8).map(channel => ({ kind: 'channel', channel }));
+  const items: PickerItem[] = matched
+    .slice(0, 8)
+    .map(channel => ({ kind: 'channel', channel }));
+  return { items, hiddenCount: matched.length - items.length };
 }
 
 // ── menu ──────────────────────────────────────────────────────────
 
 function PickerMenu({
   items,
+  hiddenCount,
   active,
   onPick,
   onHover,
@@ -1022,6 +1043,7 @@ function PickerMenu({
   humanAvatarUrls,
 }: {
   items: PickerItem[];
+  hiddenCount: number;
   active: number;
   onPick: (item: PickerItem) => void;
   onHover: (index: number) => void;
@@ -1042,12 +1064,12 @@ function PickerMenu({
   );
   return (
     <div
-      className="scrollbar-hide absolute bottom-full left-0 mb-1.5 w-64 max-h-64 overflow-y-auto bg-bg-floating p-1 shadow-popover"
+      className="absolute bottom-full left-0 mb-1.5 w-64 overflow-hidden bg-bg-floating shadow-popover"
       data-composer-picker=""
       data-dropdown-frame
-      role="listbox"
       onMouseDown={e => e.preventDefault()}
     >
+      <div className="scrollbar-hide max-h-64 overflow-y-auto p-1" role="listbox">
       {items.map((item, i) => (
         <Fragment key={rowKey(item)}>
           {/* Section header — render BEFORE the row so the boundary
@@ -1078,6 +1100,24 @@ function PickerMenu({
           />
         </Fragment>
       ))}
+      </div>
+      {/* Truncation footer (#task:1206). When the display cap dropped
+          matched candidates, name the count so truncation isn't silent.
+          It sits OUTSIDE the scroll area (sibling under the listbox), so
+          it stays visible at any scroll position — the whole point is the
+          user with a short query learns more exist. Purely informational:
+          not a `role="option"`, not in the keyboard active-index space, no
+          hover/click; `aria-hidden` since it's a visual nudge, not a
+          selectable result. Muted ink (utility tone), divider only — no
+          fill. */}
+      {hiddenCount > 0 ? (
+        <div
+          aria-hidden
+          className="border-t border-border-subtle px-3 py-1.5 text-[11px] text-text-muted"
+        >
+          +{hiddenCount} more
+        </div>
+      ) : null}
     </div>
   );
 }

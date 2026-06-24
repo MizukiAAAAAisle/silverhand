@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentDto, ChannelConversationDto } from '@silverhand/shared';
 import {
+  filterChannels,
   filterMentionPeople,
   formatPickInsertion,
   type HumanMentionCandidate,
@@ -141,7 +142,7 @@ describe('formatPickInsertion', () => {
 
 describe('filterMentionPeople', () => {
   it('tags conversation-member humans with inConversation:true', () => {
-    const items = filterMentionPeople(
+    const { items } = filterMentionPeople(
       [agent({ id: 'a-1', name: 'alice', display_name: 'Alice' })],
       [human({ id: 'u-1', name: 'shiki', display_name: 'Shiki' })],
       new Set(),
@@ -159,7 +160,7 @@ describe('filterMentionPeople', () => {
   });
 
   it('tags non-member humans with inConversation:false', () => {
-    const items = filterMentionPeople(
+    const { items } = filterMentionPeople(
       [],
       [human({ id: 'u-2', name: 'muou', display_name: 'Muou' })],
       new Set(),
@@ -183,7 +184,7 @@ describe('filterMentionPeople', () => {
     const outAgent = agent({ id: 'a-out', name: 'outagent', display_name: 'OutAgent' });
     const inHuman = human({ id: 'u-in', name: 'inhuman', display_name: 'InHuman' });
     const outHuman = human({ id: 'u-out', name: 'outhuman', display_name: 'OutHuman' });
-    const items = filterMentionPeople(
+    const { items } = filterMentionPeople(
       [inAgent, outAgent],
       [inHuman, outHuman],
       new Set(['a-in']),
@@ -210,7 +211,7 @@ describe('filterMentionPeople', () => {
     const mkAgent = (n: number) => agent({ id: `a-${n}`, name: `a${n}`, display_name: `A${n}` });
     const inAgents = Array.from({ length: 8 }, (_, i) => mkAgent(i));
     const outAgents = Array.from({ length: 8 }, (_, i) => mkAgent(100 + i));
-    const items = filterMentionPeople(
+    const { items, hiddenCount } = filterMentionPeople(
       [...inAgents, ...outAgents],
       [],
       new Set(inAgents.map(a => a.id)),
@@ -220,10 +221,43 @@ describe('filterMentionPeople', () => {
     expect(items).toHaveLength(10);
     expect(items.slice(0, 5).every(item => item.kind === 'agent' && item.inConversation)).toBe(true);
     expect(items.slice(5).every(item => item.kind === 'agent' && !item.inConversation)).toBe(true);
+    // 16 matched (8 IN + 8 OUT), 10 shown → 6 dropped, surfaced as the
+    // "+N more" footer count (#task:1206).
+    expect(hiddenCount).toBe(6);
+  });
+
+  it('reports hiddenCount = 0 when nothing is truncated', () => {
+    const { items, hiddenCount } = filterMentionPeople(
+      [agent({ id: 'a-1', name: 'alice', display_name: 'Alice' })],
+      [human({ id: 'u-1', name: 'shiki', display_name: 'Shiki' })],
+      new Set(['a-1']),
+      new Set(['u-1']),
+      '',
+    );
+    expect(items).toHaveLength(2);
+    expect(hiddenCount).toBe(0);
+  });
+
+  it('counts truncation per section, not just overall (IN under cap, OUT over)', () => {
+    // 2 IN (under the 5 cap → 0 dropped there) + 9 OUT (over → 4 dropped).
+    // hiddenCount must reflect only the OUT overflow, proving the count is
+    // computed per-section then summed, not from a single global slice.
+    const mkAgent = (n: number) => agent({ id: `a-${n}`, name: `a${n}`, display_name: `A${n}` });
+    const inAgents = [mkAgent(1), mkAgent(2)];
+    const outAgents = Array.from({ length: 9 }, (_, i) => mkAgent(100 + i));
+    const { items, hiddenCount } = filterMentionPeople(
+      [...inAgents, ...outAgents],
+      [],
+      new Set(inAgents.map(a => a.id)),
+      new Set(),
+      '',
+    );
+    expect(items).toHaveLength(7); // 2 IN + 5 OUT (OUT capped at 5)
+    expect(hiddenCount).toBe(4); // 9 OUT − 5 shown
   });
 
   it('honors the search query across both IN and NOT IN sections', () => {
-    const items = filterMentionPeople(
+    const { items } = filterMentionPeople(
       [
         agent({ id: 'a-in-bob', name: 'bob', display_name: 'Bob' }),
         agent({ id: 'a-out-bobby', name: 'bobby', display_name: 'Bobby' }),
@@ -239,5 +273,33 @@ describe('filterMentionPeople', () => {
       'a-in-bob',
       'a-out-bobby',
     ]);
+  });
+});
+
+describe('filterChannels', () => {
+  it('caps at 8 channels and reports the truncated remainder', () => {
+    const channels = Array.from({ length: 11 }, (_, i) =>
+      channel({ id: `c-${i}`, title: `chan-${i}` }),
+    );
+    const { items, hiddenCount } = filterChannels(channels, '');
+    expect(items).toHaveLength(8);
+    // 11 live matched − 8 shown → 3 surfaced as the "+N more" footer count.
+    expect(hiddenCount).toBe(3);
+    expect(items.every(item => item.kind === 'channel')).toBe(true);
+  });
+  it('excludes archived/closed channels from both the list AND the count', () => {
+    // The hidden count must reflect only *offerable* candidates: an
+    // archived/closed channel is never a mentionable row, so it must not
+    // inflate "+N more" into promising candidates the user can't reach.
+    const channels = [
+      channel({ id: 'live', title: 'general' }),
+      channel({ id: 'arch', title: 'archived-thing', archived_at: 1 }),
+      channel({ id: 'closed', title: 'closed-thing', closed_at: 1 }),
+    ];
+    const { items, hiddenCount } = filterChannels(channels, '');
+    expect(items.map(i => (i.kind === 'channel' ? i.channel.id : null))).toEqual([
+      'live',
+    ]);
+    expect(hiddenCount).toBe(0);
   });
 });
