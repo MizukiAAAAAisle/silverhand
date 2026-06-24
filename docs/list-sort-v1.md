@@ -182,7 +182,7 @@ CREATE TABLE user_sort_entry (
   entity_id        TEXT NOT NULL,   -- soft ref to workspaces|conversations by list_key (no FK, polymorphic)
   rank             INTEGER,         -- NULL = not manually arranged
   last_accessed_at INTEGER,         -- NULL = never opened
-  starred_at       INTEGER,         -- v50: NULL = not starred; non-null = personal ⭐ (orders the `starred` group)
+  starred_at       INTEGER,         -- v50: NULL = not starred; non-null = personal ⭐ (PRESENCE marker, not a sort key)
   PRIMARY KEY (user_id, list_key, entity_id)  -- NOT keyed by scope: rank/star are one value per entity, group is a live partition
 );
 ```
@@ -204,6 +204,16 @@ boundary). **No seed:** the old global `workspaces.pinned_at` /
 `conversations.pinned_at` columns are NOT migrated into per-user stars — they go
 vestigial (still present, append-only; no longer read or written; stripped from
 every DTO so they never reach the wire).
+
+**`starred_at` is presence, not a sort key (#task:1209).** Non-null marks the
+entity as starred (which hard group it partitions into); it does **not** order
+the `starred` group. Within-group order is governed by that group's mode like
+every other hard group — `recent` → `last_accessed_at`, `manual` → `rank` — and
+the `starred` rail section carries its own mode toggle. Letting `starred_at`
+silently drive order would make that sort menu a lie and add a third axis with
+undefined precedence vs recent/manual. The timestamp is retained only for
+future/debug use (e.g. a possible explicit "recently starred" mode later), never
+as an implicit override.
 
 Orphan `user_sort_entry` rows after a delete / membership-removal / archive are
 kept in storage but **filtered out of every wire response**: `getState` takes the

@@ -40,10 +40,13 @@ export const SortListKeySchema = z
   });
 
 /** Per-entity viewer state. rank/last_accessed_at/starred_at are null until set.
- *  `starred_at` is the personal ⭐ favorite (#task:1209): non-null = starred, and
- *  the timestamp drives "most-recently-starred first" within the `starred` group.
- *  It REPLACES the former shared `pinned_at` aggregate field — star is per-viewer
- *  view state, so it lives here in the sort entry, never on the entity DTO. */
+ *  `starred_at` is the personal ⭐ favorite (#task:1209): non-null = starred. It is
+ *  a PRESENCE marker (+ timestamp for future/debug), NOT a sort key — within-group
+ *  order is governed solely by that group's mode (recent → last_accessed_at /
+ *  manual → rank), exactly like every other hard group, so the STARRED section's
+ *  sort menu stays truthful. It REPLACES the former shared `pinned_at` aggregate
+ *  field — star is per-viewer view state, so it lives here in the sort entry,
+ *  never on the entity DTO. */
 export const ViewerSortEntryDtoSchema = z.object({
   entity_id: z.string(),
   rank: z.number().nullable(),

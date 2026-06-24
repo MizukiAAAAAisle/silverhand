@@ -2946,8 +2946,10 @@ export const migrations: Migration[] = [
       -- field on the workspace / conversation (admin-gated, one value for
       -- everyone). It becomes per-VIEWER personal view state: which entities THIS
       -- viewer has starred, living alongside their rank / recent-opened in the
-      -- per-(user, list, entity) sort entry. Non-null = starred; the timestamp
-      -- orders the starred hard group "most-recently-starred first".
+      -- per-(user, list, entity) sort entry. Non-null = starred. It is a PRESENCE
+      -- marker (+ timestamp for future/debug), NOT a sort key: within-group order
+      -- stays governed by the group's mode (recent → last_accessed_at / manual →
+      -- rank), so the STARRED section's sort menu is not silently overridden.
       --
       -- No seed: the old global workspaces.pinned_at / conversations.pinned_at
       -- columns are deliberately NOT migrated into per-user stars (decided by
