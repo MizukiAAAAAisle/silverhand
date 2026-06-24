@@ -37,7 +37,6 @@ export type WorkspaceListItem = {
   workspace_host_id: string;
   dm_agent_id: string | null;
   dm_channel_ids: string[];
-  pinned_at: number | null;
   archived_at: number | null;
   created_at: number;
   updated_at: number;
@@ -90,7 +89,6 @@ function workspaceToListItem(workspace: WorkspaceDto): WorkspaceListItem {
     dm_agent_id: workspace.owner_agent_id,
     dm_channel_ids:
       workspace.dm_channel_ids ?? (workspace.dm_channel_id ? [workspace.dm_channel_id] : []),
-    pinned_at: workspace.pinned_at,
     archived_at: workspace.archived_at,
     created_at: workspace.created_at,
     updated_at: workspace.updated_at,
@@ -103,15 +101,14 @@ export function sortConversationList(items: ChannelListItem[]): ChannelListItem[
     item.kind === 'thread' && item.parent_conversation_id
       ? byId.get(item.parent_conversation_id) ?? item
       : item;
-  const compareTop = (a: ChannelListItem, b: ChannelListItem): number => {
-    const aPinned = a.pinned_at !== null;
-    const bPinned = b.pinned_at !== null;
-    if (aPinned !== bPinned) return aPinned ? -1 : 1;
-    if (a.pinned_at !== null && b.pinned_at !== null && a.pinned_at !== b.pinned_at) {
-      return b.pinned_at - a.pinned_at;
-    }
-    return a.created_at - b.created_at;
-  };
+  // Base order is creation time only. Star (the personal ⭐ favorite) is no
+  // longer a shared `pinned_at` field on the conversation — it lives in the
+  // viewer's `viewer_sort.entries[].starred_at`, so the starred-first
+  // partition + within-group ordering is composed in ChannelsSidebar against
+  // that viewer state, not here (#task:1209). This base sort just nests
+  // threads under their parent and otherwise orders by created_at.
+  const compareTop = (a: ChannelListItem, b: ChannelListItem): number =>
+    a.created_at - b.created_at;
 
   return [...items].sort((a, b) => {
     const aTop = topFor(a);
@@ -349,18 +346,64 @@ export function useArchiveWorkspace() {
   });
 }
 
-export function usePinWorkspace() {
+/** Optimistically flip one entity's `starred_at` in a viewer-sort cache:
+ *  star → stamp now (so the row sorts into the STARRED group on this frame),
+ *  unstar → null. It ALSO clears that entity's manual `rank`, mirroring the
+ *  backend `SortRepo.setStarred` (star/unstar crosses a hard group, so the old
+ *  group's rank is invalid — keeping it would let a ranked row land by its
+ *  stale rank for one frame, then snap to the manual tail when the server's
+ *  full `viewer_sort` reconciles → a double jump). Creates a rank-null entry if
+ *  the viewer had no prior state for it. Pure. (#task:1209, Cindy review) */
+export function setStarredOptimistic(
+  viewerSort: ViewerSortStateDto,
+  entityId: string,
+  starred: boolean,
+): ViewerSortStateDto {
+  const starredAt = starred ? Date.now() : null;
+  const entries = viewerSort.entries.some(e => e.entity_id === entityId)
+    ? viewerSort.entries.map(e =>
+        e.entity_id === entityId ? { ...e, starred_at: starredAt, rank: null } : e,
+      )
+    : [
+        ...viewerSort.entries,
+        { entity_id: entityId, rank: null, last_accessed_at: null, starred_at: starredAt },
+      ];
+  return { ...viewerSort, entries };
+}
+
+/** Star / unstar a workspace for the current viewer (#task:1209). Star is a
+ *  PERSONAL favorite, exposed only via `viewer_sort.entries[].starred_at`
+ *  (never a shared aggregate), so this mutation reconciles the rail's inline
+ *  `viewerSort` cache — NOT an entity DTO. Optimistic (instant group jump),
+ *  rolled back on error, reconciled from the server's full `viewer_sort`. */
+export function useStarWorkspace() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, pinned }: { id: string; pinned: boolean }) => {
-      const res = await api<{ workspace: WorkspaceDto }>(
-        apiPaths.workspacePin(id),
-        { method: pinned ? 'POST' : 'DELETE' },
+    mutationFn: async ({ id, starred }: { id: string; starred: boolean }) => {
+      const res = await api<{ viewer_sort: ViewerSortStateDto }>(
+        apiPaths.workspaceStar(id),
+        { method: starred ? 'POST' : 'DELETE' },
       );
-      return workspaceToListItem(res.workspace);
+      return res.viewer_sort;
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: workspacesKey });
+    onMutate: async ({ id, starred }) => {
+      await qc.cancelQueries({ queryKey: workspacesKey });
+      const prev = qc.getQueryData<WorkspaceListPayload>(workspacesKey);
+      if (prev) {
+        qc.setQueryData<WorkspaceListPayload>(workspacesKey, {
+          ...prev,
+          viewerSort: setStarredOptimistic(prev.viewerSort, id, starred),
+        });
+      }
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(workspacesKey, ctx.prev);
+    },
+    onSuccess: viewerSort => {
+      qc.setQueryData<WorkspaceListPayload>(workspacesKey, prev =>
+        prev ? { ...prev, viewerSort } : prev,
+      );
     },
   });
 }
@@ -504,7 +547,7 @@ function sortListQueryKey(listKey: string): readonly unknown[] | null {
 }
 
 /** Toggle one SCOPE's sort mode (recent|manual). The scope is selected by
- *  `group`: `'workspaces'` requires a rail group (`pinned|dm|regular`),
+ *  `group`: `'workspaces'` requires a rail group (`starred|dm|regular`),
  *  `'channels:<id>'` omits it (list-wide scope `''`). Optimistic on the list
  *  cache's inline `viewerSort.modes`, reconciled with the authoritative server
  *  state. The optimistic scope key MUST match what the backend derives from
@@ -564,7 +607,7 @@ function applyOrderToPayload(
   const byId = new Map(prev.viewerSort.entries.map(e => [e.entity_id, e] as const));
   orderedIds.forEach((id, rank) => {
     const e = byId.get(id);
-    byId.set(id, e ? { ...e, rank } : { entity_id: id, rank, last_accessed_at: null });
+    byId.set(id, e ? { ...e, rank } : { entity_id: id, rank, last_accessed_at: null, starred_at: null });
   });
   const scopeKey = scope ?? '';
   return {
@@ -723,18 +766,41 @@ export function useCreateChannel(workspaceId: string | null) {
   });
 }
 
-export function usePinChannel(workspaceId: string | null) {
+/** Star / unstar a channel for the current viewer (#task:1209). Personal
+ *  favorite, mirrored on the channel sidebar's inline `viewerSort` cache only.
+ *  Optimistic + reconciled from the server's full `viewer_sort`. No-op when no
+ *  workspace is selected (no cache key to reconcile). */
+export function useStarChannel(workspaceId: string | null) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ channelId, pinned }: { channelId: string; pinned: boolean }) => {
-      const res = await api<{ channel: ChannelConversationDto | DmChannelDto }>(
-        `/api/channels/${channelId}/pin`,
-        { method: pinned ? 'POST' : 'DELETE' },
+    mutationFn: async ({ channelId, starred }: { channelId: string; starred: boolean }) => {
+      const res = await api<{ viewer_sort: ViewerSortStateDto }>(
+        apiPaths.channelStar(channelId),
+        { method: starred ? 'POST' : 'DELETE' },
       );
-      return res.channel;
+      return res.viewer_sort;
     },
-    onSuccess: () => {
-      if (workspaceId) qc.invalidateQueries({ queryKey: channelsKey(workspaceId) });
+    onMutate: async ({ channelId, starred }) => {
+      if (!workspaceId) return { prev: undefined };
+      const key = channelsKey(workspaceId);
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<ChannelListPayload>(key);
+      if (prev) {
+        qc.setQueryData<ChannelListPayload>(key, {
+          ...prev,
+          viewerSort: setStarredOptimistic(prev.viewerSort, channelId, starred),
+        });
+      }
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (workspaceId && ctx?.prev) qc.setQueryData(channelsKey(workspaceId), ctx.prev);
+    },
+    onSuccess: viewerSort => {
+      if (!workspaceId) return;
+      qc.setQueryData<ChannelListPayload>(channelsKey(workspaceId), prev =>
+        prev ? { ...prev, viewerSort } : prev,
+      );
     },
   });
 }

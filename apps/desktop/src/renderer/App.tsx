@@ -56,8 +56,10 @@ import {
   useViewerWorkspacesSync,
   useChannelsForWorkspace,
   useArchivedChannelsForWorkspace,
-  usePinWorkspace,
-  usePinChannel,
+  useWorkspaceSortState,
+  useChannelSortState,
+  useStarWorkspace,
+  useStarChannel,
   useArchiveChannel,
   useRenameChannel,
   useTouchSort,
@@ -353,6 +355,30 @@ function RegisteredAppShell(): JSX.Element {
     selectedWorkspaceId,
     selectedWorkspace?.kind ?? null,
   );
+  // Star (the personal ⭐ favorite) lives only in the viewer's sort state, not
+  // on the workspace/channel DTOs (#task:1209). Join `starred_at` by id here —
+  // the composition root has both the list items and the viewer sort — so the
+  // sidebars keep reading a per-item `starred_at` and re-group instantly when a
+  // star toggle reconciles the inline `viewerSort` cache.
+  const { data: workspaceSort } = useWorkspaceSortState();
+  const { data: channelSort } = useChannelSortState(
+    selectedWorkspaceId,
+    selectedWorkspace?.kind ?? null,
+  );
+  const workspaceStarredAt = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of workspaceSort?.entries ?? []) {
+      if (e.starred_at !== null) m.set(e.entity_id, e.starred_at);
+    }
+    return m;
+  }, [workspaceSort]);
+  const channelStarredAt = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of channelSort?.entries ?? []) {
+      if (e.starred_at !== null) m.set(e.entity_id, e.starred_at);
+    }
+    return m;
+  }, [channelSort]);
   const { data: archivedChannels = [] as ChannelListItem[] } = useArchivedChannelsForWorkspace(
     selectedWorkspaceId,
     selectedWorkspace?.kind ?? null,
@@ -367,8 +393,8 @@ function RegisteredAppShell(): JSX.Element {
     () => [...activeChannels, ...archivedChannels],
     [activeChannels, archivedChannels],
   );
-  const pinWorkspace = usePinWorkspace();
-  const pinChannel = usePinChannel(selectedWorkspaceId ?? null);
+  const starWorkspace = useStarWorkspace();
+  const starChannel = useStarChannel(selectedWorkspaceId ?? null);
   const archiveChannel = useArchiveChannel(selectedWorkspaceId ?? null);
   const touchSort = useTouchSort();
   const renameChannel = useRenameChannel(selectedWorkspaceId ?? null);
@@ -1716,15 +1742,15 @@ function RegisteredAppShell(): JSX.Element {
                       workspace_host_id: w.workspace_host_id,
                       dm_agent_id: w.dm_agent_id,
                       unread: messageUnreadSummary?.by_workspace?.[w.id] ?? 0,
-                      pinned_at: w.pinned_at,
+                      starred_at: workspaceStarredAt.get(w.id) ?? null,
                       archived: w.archived_at !== null,
                       created_at: w.created_at,
                     }))}
                     agentsById={agentsById}
                     selectedWorkspaceId={selectedWorkspaceId}
                     onSelectWorkspace={handleSelectWorkspace}
-                    onPinWorkspace={(workspaceId, pinned) =>
-                      pinWorkspace.mutate({ id: workspaceId, pinned })
+                    onStarWorkspace={(workspaceId, starred) =>
+                      starWorkspace.mutate({ id: workspaceId, starred })
                     }
                     onCreateWorkspace={() => setCreateWorkspaceOpen(true)}
                     savedActive={view === 'saved'}
@@ -1812,7 +1838,7 @@ function RegisteredAppShell(): JSX.Element {
                             s.status === 'active' || s.status === 'crashed' ? s.status : 'idle',
                           parent_channel_id: s.kind === 'thread' ? s.parent_conversation_id : null,
                           closed_at: s.closed_at,
-                          pinned_at: s.pinned_at,
+                          starred_at: channelStarredAt.get(s.id) ?? null,
                           archived_at: s.archived_at,
                           created_at: s.created_at,
                         }))}
@@ -1833,8 +1859,8 @@ function RegisteredAppShell(): JSX.Element {
                             : selectedChannelId
                         }
                         onSelectChannel={handleSelectChannel}
-                        onPinChannel={(channelId, pinned) =>
-                          pinChannel.mutate({ channelId, pinned })
+                        onStarChannel={(channelId, starred) =>
+                          starChannel.mutate({ channelId, starred })
                         }
                         onArchiveChannel={(channelId, archived) => {
                           archiveChannel.mutate({

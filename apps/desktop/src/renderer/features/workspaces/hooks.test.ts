@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type {
   ChannelConversationDto,
   ThreadDto,
+  ViewerSortStateDto,
   WorkspaceHumanMemberDto,
   WorkspaceMembersResponse,
 } from '@silverhand/shared';
@@ -10,6 +11,7 @@ import {
   isViewerWorkspacesChangedPayload,
   patchHumanMemberRole,
   removeHumanMemberFromList,
+  setStarredOptimistic,
   sortConversationList,
   type ChannelListItem,
   type ViewerSyncFrame,
@@ -18,7 +20,6 @@ import {
 function channel(
   id: string,
   createdAt: number,
-  pinnedAt: number | null,
 ): ChannelConversationDto {
   return {
     id,
@@ -31,7 +32,6 @@ function channel(
     spawned_by_agent_id: null,
     closed_at: null,
     close_summary: null,
-    pinned_at: pinnedAt,
     archived_at: null,
     created_at: createdAt,
     updated_at: createdAt,
@@ -56,7 +56,6 @@ function thread(
     spawned_by_agent_id: null,
     closed_at: null,
     close_summary: null,
-    pinned_at: null,
     archived_at: null,
     created_at: createdAt,
     updated_at: createdAt,
@@ -64,10 +63,13 @@ function thread(
 }
 
 describe('sortConversationList', () => {
-  it('puts later pinned top-level channels first and keeps threads under parents', () => {
-    const first = channel('first', 1, 10);
-    const second = channel('second', 2, 20);
-    const third = channel('third', 3, null);
+  it('orders top-level channels by created_at and keeps threads under parents', () => {
+    // Star is no longer a shared field on the conversation (#task:1209), so the
+    // base sort is creation-time only; starred grouping is composed in
+    // ChannelsSidebar against the viewer's sort state, not here.
+    const first = channel('first', 1);
+    const second = channel('second', 2);
+    const third = channel('third', 3);
     const child = thread('second-thread', second.id, 4);
 
     const sorted = sortConversationList([
@@ -78,11 +80,79 @@ describe('sortConversationList', () => {
     ] satisfies ChannelListItem[]);
 
     expect(sorted.map(item => item.id)).toEqual([
+      first.id,
       second.id,
       child.id,
-      first.id,
       third.id,
     ]);
+  });
+});
+
+describe('setStarredOptimistic', () => {
+  const vs = (entries: ViewerSortStateDto['entries']): ViewerSortStateDto => ({
+    list_key: 'workspaces',
+    modes: {},
+    entries,
+  });
+
+  it('stars an entity and clears its manual rank (mirrors backend setStarred)', () => {
+    // A ranked row that gets starred must drop its old-group rank in the SAME
+    // optimistic write, or it would land by its stale rank for one frame then
+    // snap to the manual tail when the server reconciles (the double jump Cindy
+    // flagged). starred_at becomes non-null; rank → null; last_accessed_at kept.
+    const next = setStarredOptimistic(
+      vs([{ entity_id: 'a', rank: 3, last_accessed_at: 100, starred_at: null }]),
+      'a',
+      true,
+    );
+    expect(next.entries[0]).toMatchObject({
+      entity_id: 'a',
+      rank: null,
+      last_accessed_at: 100,
+    });
+    expect(next.entries[0]?.starred_at).not.toBeNull();
+  });
+
+  it('unstars an entity and also clears its manual rank', () => {
+    const next = setStarredOptimistic(
+      vs([{ entity_id: 'a', rank: 2, last_accessed_at: null, starred_at: 999 }]),
+      'a',
+      false,
+    );
+    expect(next.entries[0]).toEqual({
+      entity_id: 'a',
+      rank: null,
+      last_accessed_at: null,
+      starred_at: null,
+    });
+  });
+
+  it('creates a rank-null entry when the viewer had no prior state', () => {
+    const next = setStarredOptimistic(vs([]), 'b', true);
+    expect(next.entries).toHaveLength(1);
+    expect(next.entries[0]).toMatchObject({
+      entity_id: 'b',
+      rank: null,
+      last_accessed_at: null,
+    });
+    expect(next.entries[0]?.starred_at).not.toBeNull();
+  });
+
+  it('leaves other entries untouched', () => {
+    const next = setStarredOptimistic(
+      vs([
+        { entity_id: 'a', rank: 1, last_accessed_at: null, starred_at: null },
+        { entity_id: 'b', rank: 2, last_accessed_at: null, starred_at: null },
+      ]),
+      'a',
+      true,
+    );
+    expect(next.entries[1]).toEqual({
+      entity_id: 'b',
+      rank: 2,
+      last_accessed_at: null,
+      starred_at: null,
+    });
   });
 });
 

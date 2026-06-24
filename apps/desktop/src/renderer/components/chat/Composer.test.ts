@@ -55,7 +55,6 @@ function channel(overrides: Partial<ChannelConversationDto> = {}): ChannelConver
     spawned_by_agent_id: null,
     closed_at: null,
     close_summary: null,
-    pinned_at: null,
     archived_at: null,
     created_at: 0,
     updated_at: 0,

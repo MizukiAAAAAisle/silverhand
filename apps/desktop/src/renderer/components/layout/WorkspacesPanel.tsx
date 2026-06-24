@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode } from 'react';
-import { Copy, FolderOpen, Pin, PinOff } from 'lucide-react';
+import { Copy, FolderOpen, Star } from 'lucide-react';
 import { toast } from 'sonner';
 import type { AgentDto, SortGroup } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
@@ -26,7 +26,7 @@ export interface WorkspaceItem {
   workspace_path: string;
   workspace_host_id: string;
   dm_agent_id: string | null;
-  pinned_at?: number | null;
+  starred_at?: number | null;
   active?: boolean;
   /** Unread mention notifications scoped to this workspace. Falsy / 0
    *  hides the badge. */
@@ -47,9 +47,9 @@ export interface WorkspaceItem {
  *  (owned by `Sidebar`); this just carries the per-row callbacks down. */
 export interface WorkspaceSortConfig<GroupKey extends SortGroup = SortGroup> {
   /** Sub-group render order. Each rail section now drives a single group:
-   *  `['pinned']`, `['dm']`, or `['regular']`. */
+   *  `['starred']`, `['dm']`, or `['regular']`. */
   order: GroupKey[];
-  /** The hard group a workspace lives in (live pin/kind). */
+  /** The hard group a workspace lives in (live star/kind). */
   groupKeyOf: (workspace: WorkspaceItem) => GroupKey;
   /** Commit a group's new full order. */
   onReorder: (group: GroupKey, orderedIds: string[]) => void;
@@ -64,7 +64,7 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
   workspaces: WorkspaceItem[];
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
-  onPinWorkspace?: (id: string, pinned: boolean) => void;
+  onStarWorkspace?: (id: string, starred: boolean) => void;
   canRevealWorkspace?: (workspace: WorkspaceItem) => boolean;
   /** Optional `+` button. DM groups omit this — DM workspaces are
    *  auto-created when an agent is provisioned. Ignored when `headerAction`
@@ -81,13 +81,13 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
   /** Lookup of all workspace agents, keyed by id. DM workspace rows resolve
    *  their `dm_agent_id` here for the agent's runtime + display name. The
    *  avatar object URLs themselves come via `dmAgentAvatarUrls` (resolved ONCE
-   *  at the rail level, not per-section) so pin/unpin moving a DM between
+   *  at the rail level, not per-section) so star/unstar moving a DM between
    *  sections doesn't churn every avatar. Optional so callers without agent
    *  context still get a sane fallback. #task:919 / #task:1146 */
   agentsById?: ReadonlyMap<string, AgentDto>;
   /** Resolved DM-agent avatar object URLs, keyed by agent id. Owned by the
    *  parent (`Sidebar`) over the STABLE union of all rail DM agents, so this
-   *  map is identical across pin/unpin/reorder — no per-section refetch flash
+   *  map is identical across star/unstar/reorder — no per-section refetch flash
    *  (#task:1146). */
   dmAgentAvatarUrls: ReadonlyMap<string, string | null>;
   /** When set, the group is drag-sortable (#task:1146). */
@@ -99,7 +99,7 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
 interface RailRowContext {
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
-  onPinWorkspace?: (id: string, pinned: boolean) => void;
+  onStarWorkspace?: (id: string, starred: boolean) => void;
   canRevealWorkspace?: (workspace: WorkspaceItem) => boolean;
   agentsById?: ReadonlyMap<string, AgentDto>;
   dmAgentAvatarUrls: ReadonlyMap<string, string | null>;
@@ -121,14 +121,14 @@ function rowIconFor(workspace: WorkspaceItem, ctx: RailRowContext): JSX.Element 
   );
 }
 
-function canPinWorkspace(workspace: WorkspaceItem, ctx: RailRowContext): boolean {
-  // Both regular workspaces and DMs are pinnable into the cross-kind PINNED
-  // group (#task:1146 pin redesign). Archived rows never pin. The backend pin
-  // route accepts regular | agent_home; the gate here just mirrors that.
+function canStarWorkspace(workspace: WorkspaceItem, ctx: RailRowContext): boolean {
+  // Both regular workspaces and DMs can be starred into the cross-kind STARRED
+  // group (#task:1209). Archived rows never star. The backend star route
+  // accepts regular | agent_home; the gate here just mirrors that.
   return (
     (workspace.kind === 'regular' || workspace.kind === 'dm') &&
     !workspace.archived &&
-    !!ctx.onPinWorkspace
+    !!ctx.onStarWorkspace
   );
 }
 
@@ -137,7 +137,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   workspaces,
   selectedWorkspaceId,
   onSelectWorkspace,
-  onPinWorkspace,
+  onStarWorkspace,
   canRevealWorkspace,
   onAdd,
   headerAction,
@@ -150,7 +150,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   const ctx: RailRowContext = {
     selectedWorkspaceId,
     onSelectWorkspace,
-    onPinWorkspace,
+    onStarWorkspace,
     canRevealWorkspace,
     agentsById,
     dmAgentAvatarUrls,
@@ -256,10 +256,10 @@ function WorkspaceRow({
 }): JSX.Element {
   const title = workspace.kind === 'dm' ? dmWorkspaceLabel(workspace.name) : workspace.name;
   const icon = rowIconFor(workspace, ctx);
-  const canPin = canPinWorkspace(workspace, ctx);
+  const canStar = canStarWorkspace(workspace, ctx);
   const canReveal = ctx.canRevealWorkspace?.(workspace) ?? false;
   const selected = workspace.id === ctx.selectedWorkspaceId;
-  const isPinned = isWorkspacePinned(workspace);
+  const isStarred = isWorkspaceStarred(workspace);
   const unread = workspace.unread;
 
   const rowBg = selected
@@ -312,15 +312,15 @@ function WorkspaceRow({
 
   return (
     <AppContextMenu trigger={row}>
-      {canPin ? (
+      {canStar ? (
         <AppContextMenuItem
-          icon={isPinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
-          onSelect={() => ctx.onPinWorkspace?.(workspace.id, !isPinned)}
+          icon={<Star className={'size-3.5' + (isStarred ? ' fill-current' : '')} />}
+          onSelect={() => ctx.onStarWorkspace?.(workspace.id, !isStarred)}
         >
-          {isPinned ? 'Unpin' : 'Pin'}
+          {isStarred ? 'Unstar' : 'Star'}
         </AppContextMenuItem>
       ) : null}
-      {canPin ? <AppContextMenuSeparator /> : null}
+      {canStar ? <AppContextMenuSeparator /> : null}
       {canReveal ? (
         <AppContextMenuItem
           icon={<FolderOpen className="size-3.5" />}
@@ -343,8 +343,8 @@ function WorkspaceRow({
   );
 }
 
-export function isWorkspacePinned(workspace: WorkspaceItem): boolean {
-  return workspace.pinned_at !== null && workspace.pinned_at !== undefined;
+export function isWorkspaceStarred(workspace: WorkspaceItem): boolean {
+  return workspace.starred_at !== null && workspace.starred_at !== undefined;
 }
 
 async function copyWorkspacePath(path: string): Promise<void> {

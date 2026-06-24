@@ -1,10 +1,10 @@
 /**
  * Pure within-group sort for the user-selectable list ordering feature
  * (#task:1146). The renderer partitions a list into its live hard groups
- * (channel sidebar: `pinned` / `unpinned`; workspace rail: `pinned` (cross-kind)
+ * (channel sidebar: `starred` / `unstarred`; workspace rail: `starred` (cross-kind)
  * / `dm` / `regular`) and applies this helper to EACH
  * group independently, then concatenates the groups in their fixed order.
- * Pin / group membership is therefore NOT this helper's concern — it only
+ * Star / group membership is therefore NOT this helper's concern — it only
  * orders the items handed to it, by the viewer's chosen sort mode.
  *
  * Two modes (server-persisted per viewer + list, see Alice's #task:1147):

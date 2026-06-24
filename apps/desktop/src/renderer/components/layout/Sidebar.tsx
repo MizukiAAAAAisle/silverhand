@@ -17,7 +17,7 @@ import { useListDragSort } from './list-drag-sort';
 import { SortModeMenu } from './SortModeMenu';
 import {
   WorkspaceGroup,
-  isWorkspacePinned,
+  isWorkspaceStarred,
   type WorkspaceItem,
   type WorkspaceSortConfig,
 } from './WorkspacesPanel';
@@ -32,7 +32,7 @@ interface SidebarProps {
   agentsById?: ReadonlyMap<string, AgentDto>;
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
-  onPinWorkspace: (workspaceId: string, pinned: boolean) => void;
+  onStarWorkspace: (workspaceId: string, starred: boolean) => void;
   onCreateWorkspace: () => void;
   /** When true, the Saved view is the active main view — channel rows
    *  appear unselected and the Saved entry highlights instead. */
@@ -51,40 +51,40 @@ interface SidebarProps {
 }
 
 /** The rail is one sortable list (`list_key='workspaces'`) with three live hard
- *  groups; a workspace's group is partitioned from its pin state first (PINNED
+ *  groups; a workspace's group is partitioned from its star state first (STARRED
  *  is cross-kind), then its kind. Never stored. Each group is its own mode scope
  *  (#task:1146). See docs/list-sort-v1.md. */
-type RailGroup = 'pinned' | 'dm' | 'regular';
+type RailGroup = 'starred' | 'dm' | 'regular';
 
 function railGroupKeyOf(workspace: WorkspaceItem): RailGroup {
-  if (isWorkspacePinned(workspace)) return 'pinned';
+  if (isWorkspaceStarred(workspace)) return 'starred';
   return workspace.kind === 'dm' ? 'dm' : 'regular';
 }
 
 export function Sidebar(props: SidebarProps): JSX.Element {
   const hostProvenance = useHostProvenanceGate();
-  // Live partition: PINNED is the cross-kind top group (any pinned workspace OR
-  // pinned DM); DM / WORKSPACES hold only the UNPINNED tail of each kind. So a
-  // pinned DM leaves the DM section and joins PINNED (#task:1146 pin redesign).
-  const { pinned, dms, regular, archived } = useMemo(() => {
-    const pinned: WorkspaceItem[] = [];
+  // Live partition: STARRED is the cross-kind top group (any starred workspace OR
+  // starred DM); DM / WORKSPACES hold only the UNSTARRED tail of each kind. So a
+  // starred DM leaves the DM section and joins STARRED (#task:1209 star redesign).
+  const { starred, dms, regular, archived } = useMemo(() => {
+    const starred: WorkspaceItem[] = [];
     const dms: WorkspaceItem[] = [];
     const regular: WorkspaceItem[] = [];
     const archived: WorkspaceItem[] = [];
     for (const w of props.workspaces) {
       if (w.archived) archived.push(w);
-      else if (isWorkspacePinned(w)) pinned.push(w);
+      else if (isWorkspaceStarred(w)) starred.push(w);
       else if (w.kind === 'dm') dms.push(w);
       else regular.push(w);
     }
-    return { pinned, dms, regular, archived };
+    return { starred, dms, regular, archived };
   }, [props.workspaces]);
 
   // Resolve DM-agent avatar object URLs ONCE for the whole rail, over the
-  // STABLE union of every DM agent (across pinned / dm / archived). Pin/unpin
+  // STABLE union of every DM agent (across starred / dm / archived). Star/unstar
   // only moves a DM between sections — the set of (agent, avatar_url) pairs is
   // unchanged — so this map stays identical and no avatar tears down + refetches
-  // (the flash shiki saw came from per-section resolution churning on pin).
+  // (the flash shiki saw came from per-section resolution churning on star).
   // #task:1146
   const dmAvatarSources = useMemo<AgentAvatarSource[]>(() => {
     const agentsById = props.agentsById;
@@ -112,13 +112,13 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     WorkspaceItem
   >({
     listKey: 'workspaces',
-    groups: { pinned, dm: dms, regular },
+    groups: { starred, dm: dms, regular },
     viewerSort,
     getId: w => w.id,
     getCreatedAt: w => w.created_at,
     modeScopeOf: g => g,
   });
-  const orderedPinned = orderedGroups.pinned;
+  const orderedStarred = orderedGroups.starred;
   const orderedDms = orderedGroups.dm;
   const orderedRegular = orderedGroups.regular;
 
@@ -224,21 +224,21 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           </button>
         </div>
 
-        {orderedPinned.length > 0 ? (
+        {orderedStarred.length > 0 ? (
           <WorkspaceGroup
-            label="PINNED"
+            label="STARRED"
             kind="regular"
-            workspaces={orderedPinned}
+            workspaces={orderedStarred}
             selectedWorkspaceId={workspaceHighlight}
             onSelectWorkspace={props.onSelectWorkspace}
-            onPinWorkspace={props.onPinWorkspace}
+            onStarWorkspace={props.onStarWorkspace}
             canRevealWorkspace={workspace =>
               hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
             }
-            headerAction={sortMenuFor('pinned')}
+            headerAction={sortMenuFor('starred')}
             agentsById={props.agentsById}
             dmAgentAvatarUrls={dmAgentAvatarUrls}
-            sort={sortConfigFor('pinned')}
+            sort={sortConfigFor('starred')}
           />
         ) : null}
         <WorkspaceGroup
@@ -247,7 +247,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           workspaces={orderedDms}
           selectedWorkspaceId={workspaceHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
-          onPinWorkspace={props.onPinWorkspace}
+          onStarWorkspace={props.onStarWorkspace}
           canRevealWorkspace={workspace =>
             hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
           }
@@ -263,7 +263,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           workspaces={orderedRegular}
           selectedWorkspaceId={workspaceHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
-          onPinWorkspace={props.onPinWorkspace}
+          onStarWorkspace={props.onStarWorkspace}
           canRevealWorkspace={workspace =>
             hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
           }

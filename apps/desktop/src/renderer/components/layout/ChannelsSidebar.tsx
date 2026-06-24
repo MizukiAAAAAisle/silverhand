@@ -4,9 +4,8 @@ import {
   ArchiveRestore,
   Copy,
   Hash,
-  Pin,
-  PinOff,
   Plus,
+  Star,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSortable } from '@dnd-kit/sortable';
@@ -36,7 +35,7 @@ interface ChannelNode {
   status: 'active' | 'idle' | 'crashed';
   parent_channel_id: string | null;
   closed_at: number | null;
-  pinned_at: number | null;
+  starred_at: number | null;
   archived_at: number | null;
   /** Creation time — stable fallback/tiebreak for sort modes (#task:1146). */
   created_at: number;
@@ -61,7 +60,7 @@ interface ChannelsSidebarProps {
   workspaceKind: WorkspaceUiKind | null;
   selectedChannelId: string | null;
   onSelectChannel: (id: string) => void;
-  onPinChannel: (channelId: string, pinned: boolean) => void;
+  onStarChannel: (channelId: string, starred: boolean) => void;
   onArchiveChannel: (channelId: string, archived: boolean) => void;
   /** Create a channel — moved here from the titlebar (#task:1146). Absent
    *  when creation isn't applicable (no workspace selected / not in channel
@@ -80,7 +79,7 @@ export function ChannelsSidebar({
   workspaceKind,
   selectedChannelId,
   onSelectChannel,
-  onPinChannel,
+  onStarChannel,
   onArchiveChannel,
   onCreateChannel,
   archivePending = false,
@@ -93,34 +92,36 @@ export function ChannelsSidebar({
   const mode = sortModeOf(viewerSort);
 
   // The sidebar renders top-level channels only (threads are reply clusters
-  // now, never conversation nodes). Pinned channels are a hard top group;
+  // now, never conversation nodes). Starred channels are a hard top group;
   // within each group the viewer's sort mode orders the rows — recent-opened
-  // (last_accessed_at) or manual drag (rank). See docs/list-sort-v1.md. The
-  // drag state machine (synchronous drop override, settle guard) lives in
-  // useListDragSort — shared with the workspace rail so the CDP-tuned drop
-  // invariants can't drift between the two surfaces. Partition stays here
-  // (consumer owns pin/kind grouping).
+  // (last_accessed_at) or manual drag (rank). See docs/list-sort-v1.md. Star is
+  // the personal ⭐ favorite, read off the viewer's `viewer_sort.entries[].
+  // starred_at` (joined onto each node's `starred_at` upstream), never a shared
+  // field (#task:1209). The drag state machine (synchronous drop override,
+  // settle guard) lives in useListDragSort — shared with the workspace rail so
+  // the CDP-tuned drop invariants can't drift between the two surfaces.
+  // Partition stays here (consumer owns star/kind grouping).
   const topLevel = channels.filter(s => s.parent_channel_id === null);
   const { orderedGroups, onReorder } = useListDragSort<
-    'pinned' | 'unpinned',
+    'starred' | 'unstarred',
     ChannelNode
   >({
     listKey,
     groups: {
-      pinned: topLevel.filter(s => s.pinned_at !== null),
-      unpinned: topLevel.filter(s => s.pinned_at === null),
+      starred: topLevel.filter(s => s.starred_at !== null),
+      unstarred: topLevel.filter(s => s.starred_at === null),
     },
     viewerSort,
     getId: c => c.id,
     getCreatedAt: c => c.created_at,
   });
-  const pinnedTop = orderedGroups.pinned;
-  const unpinnedTop = orderedGroups.unpinned;
+  const starredTop = orderedGroups.starred;
+  const unstarredTop = orderedGroups.unstarred;
 
   const rowProps = {
     selectedChannelId,
     onSelect: onSelectChannel,
-    onPin: onPinChannel,
+    onStar: onStarChannel,
     onArchive: onArchiveChannel,
     archivePending,
     workspaceKind,
@@ -129,7 +130,7 @@ export function ChannelsSidebar({
 
   const renderGroup = (
     group: ChannelNode[],
-    groupKey: 'pinned' | 'unpinned',
+    groupKey: 'starred' | 'unstarred',
   ): ReactNode => {
     if (listKey) {
       const ids = group.map(c => c.id);
@@ -194,13 +195,13 @@ export function ChannelsSidebar({
           <EmptyHint message="还没有 Channel。点 + 开始" />
         ) : (
           <ul className="space-y-0.5">
-            {renderGroup(pinnedTop, 'pinned')}
-            {pinnedTop.length > 0 && unpinnedTop.length > 0 ? (
+            {renderGroup(starredTop, 'starred')}
+            {starredTop.length > 0 && unstarredTop.length > 0 ? (
               <li>
                 <div className="mx-2 my-1 border-t border-border-subtle" />
               </li>
             ) : null}
-            {renderGroup(unpinnedTop, 'unpinned')}
+            {renderGroup(unstarredTop, 'unstarred')}
           </ul>
         )}
       </div>
@@ -217,7 +218,7 @@ function EmptyHint({ message }: { message: string }): JSX.Element {
 interface RowChildProps {
   selectedChannelId: string | null;
   onSelect: (id: string) => void;
-  onPin: (channelId: string, pinned: boolean) => void;
+  onStar: (channelId: string, starred: boolean) => void;
   onArchive: (channelId: string, archived: boolean) => void;
   archivePending: boolean;
   workspaceKind: WorkspaceUiKind | null;
@@ -228,7 +229,7 @@ function ChannelTreeItem({
   channel,
   selectedChannelId,
   onSelect,
-  onPin,
+  onStar,
   onArchive,
   archivePending,
   workspaceKind,
@@ -240,7 +241,7 @@ function ChannelTreeItem({
         channel={channel}
         selected={channel.id === selectedChannelId}
         onClick={() => onSelect(channel.id)}
-        onPin={onPin}
+        onStar={onStar}
         onArchive={onArchive}
         archivePending={archivePending}
         workspaceKind={workspaceKind}
@@ -266,7 +267,7 @@ function SortableChannelItem({
   channel,
   selectedChannelId,
   onSelect,
-  onPin,
+  onStar,
   onArchive,
   archivePending,
   workspaceKind,
@@ -286,7 +287,7 @@ function SortableChannelItem({
         channel={channel}
         selected={channel.id === selectedChannelId}
         onClick={() => onSelect(channel.id)}
-        onPin={onPin}
+        onStar={onStar}
         onArchive={onArchive}
         archivePending={archivePending}
         workspaceKind={workspaceKind}
@@ -301,7 +302,7 @@ function ChannelRow({
   channel,
   selected,
   onClick,
-  onPin,
+  onStar,
   onArchive,
   archivePending,
   workspaceKind,
@@ -311,7 +312,7 @@ function ChannelRow({
   channel: ChannelNode;
   selected: boolean;
   onClick: () => void;
-  onPin: (channelId: string, pinned: boolean) => void;
+  onStar: (channelId: string, starred: boolean) => void;
   onArchive: (channelId: string, archived: boolean) => void;
   archivePending: boolean;
   workspaceKind: WorkspaceUiKind | null;
@@ -321,7 +322,7 @@ function ChannelRow({
   draggable?: boolean;
 }): JSX.Element {
   const isClosed = channel.closed_at !== null;
-  const isPinned = channel.pinned_at !== null;
+  const isStarred = channel.starred_at !== null;
   const isArchived = channel.archived_at !== null;
   // Archive/Restore is a channel-like organization action (#task:1145):
   // it applies to any top-level channel-like row — `channel` in a regular
@@ -385,16 +386,10 @@ function ChannelRow({
   return (
     <AppContextMenu trigger={row}>
       <AppContextMenuItem
-        icon={
-          isPinned ? (
-            <PinOff className="size-3.5" />
-          ) : (
-            <Pin className="size-3.5" />
-          )
-        }
-        onSelect={() => onPin(channel.id, !isPinned)}
+        icon={<Star className={'size-3.5' + (isStarred ? ' fill-current' : '')} />}
+        onSelect={() => onStar(channel.id, !isStarred)}
       >
-        {isPinned ? 'Unpin' : 'Pin'}
+        {isStarred ? 'Unstar' : 'Star'}
       </AppContextMenuItem>
       {showArchiveMenu ? (
         <AppContextMenuItem

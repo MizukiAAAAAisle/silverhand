@@ -41,7 +41,7 @@ import { recentKeyForAndAdmit, recentSnapshotToken, useRecentKeySnapshot } from 
  *
  * Scope boundary (Cindy's review contract): this hook owns ONLY the state
  * machine — it is list-agnostic over a generic `GroupKey` + item type. The
- * consumer keeps everything visual: the live partition (pin/kind → groups),
+ * consumer keeps everything visual: the live partition (star/kind → groups),
  * the per-row `SortableXxxItem` shell (calls `useSortable` + `sortableItemStyle`),
  * the row component (ChannelRow / WorkspaceRow), and the
  * header chrome (SortModeMenu, add button). Row-shape differences and 2-vs-3
@@ -74,7 +74,7 @@ export interface ListDragSort<GroupKey extends SortGroup, T> {
 export function useListDragSort<GroupKey extends SortGroup, T>(params: {
   /** null disables sorting (no workspace selected) — `onReorder` no-ops. */
   listKey: string | null;
-  /** Live groups, already partitioned by the consumer (pin/kind). The key set
+  /** Live groups, already partitioned by the consumer (star/kind). The key set
    *  defines the sortable groups; values are the unsorted live members. */
   groups: Record<GroupKey, T[]>;
   viewerSort: ViewerSortStateDto | undefined;
@@ -129,7 +129,7 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
   });
 
   // `byGroup` is keyed by the GroupKey union — zero hard-coded group literals,
-  // so the same state covers channel (pinned/unpinned) and rail (pinned / dm /
+  // so the same state covers channel (starred/unstarred) and rail (starred / dm /
   // regular).
   const [pendingDrop, setPendingDrop] = useState<{
     listKey: string;
