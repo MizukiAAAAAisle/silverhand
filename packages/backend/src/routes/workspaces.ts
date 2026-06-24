@@ -235,56 +235,6 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     return c.json({ workspace: updated });
   });
 
-  app.post(apiPaths.workspacePin(':id'), c => {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'workspace id required' }, 400);
-    const workspace = workspaces.get(id);
-    // Pin is cross-kind (#task:1146): both regular workspaces and DM
-    // (agent_home) workspaces can be pinned into the rail's unified `pinned`
-    // group. This is only a kind filter — the real gate is the admin
-    // governance check below, which resolves correctly for the DM owner.
-    if (
-      !workspace ||
-      (workspace.workspace_kind !== 'regular' &&
-        workspace.workspace_kind !== 'agent_home') ||
-      workspace.archived_at !== null
-    ) {
-      return c.json({ error: 'workspace not found' }, 404);
-    }
-    if (!canGovernWorkspace(ctx, getUserPrincipal(c), workspace.id, 'admin')) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    const updated = workspaces.setPinned(workspace.id, true);
-    if (!updated) return c.json({ error: 'workspace pin failed' }, 500);
-    // Crossing the pin boundary abandons the manual rank in the old group
-    // (it falls to the new group's manual tail until re-dragged).
-    sort.clearEntityRank('workspaces', workspace.id);
-    return c.json({ workspace: updated });
-  });
-
-  app.delete(apiPaths.workspacePin(':id'), c => {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'workspace id required' }, 400);
-    const workspace = workspaces.get(id);
-    // Cross-kind unpin (#task:1146) — mirror the pin guard. Kind filter only;
-    // governance is enforced below.
-    if (
-      !workspace ||
-      (workspace.workspace_kind !== 'regular' &&
-        workspace.workspace_kind !== 'agent_home') ||
-      workspace.archived_at !== null
-    ) {
-      return c.json({ error: 'workspace not found' }, 404);
-    }
-    if (!canGovernWorkspace(ctx, getUserPrincipal(c), workspace.id, 'admin')) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    const updated = workspaces.setPinned(workspace.id, false);
-    if (!updated) return c.json({ error: 'workspace unpin failed' }, 500);
-    sort.clearEntityRank('workspaces', workspace.id);
-    return c.json({ workspace: updated });
-  });
-
   app.delete(apiPaths.workspace(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'workspace id required' }, 400);

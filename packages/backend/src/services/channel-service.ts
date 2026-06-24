@@ -38,7 +38,7 @@ import type { AgentPrincipal, UserPrincipal } from '../auth/principal.js';
  *   conversation before calling the service. From a thread, that means thread
  *   members, not parent-channel members.
  * - Seed messages are agent-only.
- * - Channel create/pin/unpin publish `workspace_channels_changed` after the
+ * - Channel create / archive publish `workspace_channels_changed` after the
  *   DB mutation commits.
  */
 
@@ -61,11 +61,6 @@ export interface CreateChannelInput {
 
 export interface CreateChannelResult {
   channel: ChannelConversationDto;
-}
-
-export interface SetPinnedInput {
-  channelId: string;
-  pinned: boolean;
 }
 
 export interface SetArchivedInput {
@@ -439,27 +434,6 @@ export class ChannelService {
     })();
 
     this.publishWorkspaceChannelsChanged(workspace.id, channel.id);
-    return { channel };
-  }
-
-  async setPinned(
-    input: SetPinnedInput,
-  ): Promise<{ channel: ChannelConversationDto | DmChannelDto }> {
-    const existing = this.conversations.get(input.channelId);
-    if (!existing) {
-      throw repoError('not_found', 'channel not found');
-    }
-    if (existing.kind === 'thread') {
-      throw repoError('thread', 'threads cannot be pinned');
-    }
-
-    const channel = input.pinned
-      ? this.conversations.pin(input.channelId)
-      : this.conversations.unpin(input.channelId);
-    if (!channel) {
-      throw repoError('not_found', 'channel not found');
-    }
-    this.publishWorkspaceChannelsChanged(channel.workspace_id, channel.id);
     return { channel };
   }
 

@@ -68,9 +68,6 @@ export const HUMAN_GOVERNANCE_ROUTES: readonly GovernanceRouteDecl[] = [
   // Existential: archive / delete the workspace — owner only.
   { method: 'PATCH', path: '/api/workspaces/:id/archive', minRole: 'owner', roleScope: 'workspace' },
   { method: 'DELETE', path: '/api/workspaces/:id', minRole: 'owner', roleScope: 'workspace' },
-  // Workspace pin/unpin — a workspace-level setting, not existential.
-  { method: 'POST', path: '/api/workspaces/:id/pin', minRole: 'admin', roleScope: 'workspace' },
-  { method: 'DELETE', path: '/api/workspaces/:id/pin', minRole: 'admin', roleScope: 'workspace' },
   // Create a channel in the workspace.
   { method: 'POST', path: '/api/workspaces/:id/channels', minRole: 'admin', roleScope: 'workspace' },
   // Member management. Adding either an agent or a human workspace member is
@@ -103,9 +100,8 @@ export const HUMAN_GOVERNANCE_ROUTES: readonly GovernanceRouteDecl[] = [
   // the orthogonal agent axis. GET is a non-mutating viewer read (not
   // listed; coverage only scans mutating routes).
   { method: 'PUT', path: '/api/workspaces/:id/agents/:agentId/capabilities', minRole: 'admin', roleScope: 'workspace' },
-  // Channel pin/unpin/archive — day-to-day governance on a channel.
-  { method: 'POST', path: '/api/channels/:id/pin', minRole: 'admin', roleScope: 'workspace' },
-  { method: 'DELETE', path: '/api/channels/:id/pin', minRole: 'admin', roleScope: 'workspace' },
+  // Channel archive — day-to-day governance on a channel. (Star is personal
+  // view state, not governance — see NON_GOVERNANCE_MUTATING_ROUTES.)
   { method: 'PATCH', path: '/api/channels/:id/archive', minRole: 'admin', roleScope: 'workspace' },
   // Channel rename (title edit) — same governance class as archive.
   { method: 'PATCH', path: '/api/channels/:id', minRole: 'admin', roleScope: 'workspace' },
@@ -205,6 +201,29 @@ export const NON_GOVERNANCE_MUTATING_ROUTES: readonly NonGovernanceRouteDecl[] =
     method: 'POST',
     path: '/api/conversations/:id/log-debug',
     reason: 'toggle temporary conversation debug logging — view gate (canViewConversation), member-level, not governance',
+  },
+  // Personal ⭐ star (#task:1209) — per-viewer sort state, NOT shared
+  // governance. Replaced the old admin-gated `/pin` routes; the gate is
+  // can-view of the entity, the write is scoped to the calling viewer.
+  {
+    method: 'POST',
+    path: '/api/workspaces/:id/star',
+    reason: 'personal star — current-viewer sort state (user_sort_entry.starred_at), can-view gate, not governance',
+  },
+  {
+    method: 'DELETE',
+    path: '/api/workspaces/:id/star',
+    reason: 'personal unstar — current-viewer sort state, can-view gate, not governance',
+  },
+  {
+    method: 'POST',
+    path: '/api/channels/:id/star',
+    reason: 'personal star — current-viewer sort state (user_sort_entry.starred_at), can-view gate, not governance',
+  },
+  {
+    method: 'DELETE',
+    path: '/api/channels/:id/star',
+    reason: 'personal unstar — current-viewer sort state, can-view gate, not governance',
   },
 ];
 

@@ -113,7 +113,7 @@ describe('PUT /api/sort/mode', () => {
     const wsId = await makeWorkspace(t, 'eng', agentId);
     const res = await http(t).put('/api/sort/mode', {
       list_key: `channels:${wsId}`,
-      group: 'pinned',
+      group: 'starred',
       mode: 'manual',
     });
     expect(res.status).toBe(400);
@@ -205,7 +205,7 @@ describe('PUT /api/sort/order', () => {
     const ordered = [c2, c1, ...allIds.filter((id: string) => id !== c1 && id !== c2)];
     const res = await http(t).put('/api/sort/order', {
       list_key: listKey,
-      group: 'unpinned',
+      group: 'unstarred',
       ordered_ids: ordered,
     });
     expect(res.status).toBe(200);
@@ -221,12 +221,12 @@ describe('PUT /api/sort/order', () => {
     const wsId = await makeWorkspace(t, 'eng', agentId);
     const c1 = await makeChannel(t, wsId, 'one', agentId);
 
-    // Pin c1 → it leaves the 'unpinned' group.
-    expect((await http(t).post(`/api/channels/${c1}/pin`, undefined)).status).toBe(200);
+    // Star c1 → it leaves the 'unstarred' group.
+    expect((await http(t).post(`/api/channels/${c1}/star`, undefined)).status).toBe(200);
 
     const res = await http(t).put('/api/sort/order', {
       list_key: `channels:${wsId}`,
-      group: 'unpinned',
+      group: 'unstarred',
       ordered_ids: [c1],
     });
     expect(res.status).toBe(400);
@@ -238,7 +238,7 @@ describe('PUT /api/sort/order', () => {
     const wsId = await makeWorkspace(t, 'eng', agentId);
     const res = await http(t).put('/api/sort/order', {
       list_key: `channels:${wsId}`,
-      group: 'unpinned',
+      group: 'unstarred',
       ordered_ids: ['ghost'],
     });
     expect(res.status).toBe(400);
@@ -258,7 +258,7 @@ describe('PUT /api/sort/order', () => {
     expect(allIds.length).toBe(3);
     const full = await http(t).put('/api/sort/order', {
       list_key: listKey,
-      group: 'unpinned',
+      group: 'unstarred',
       ordered_ids: allIds,
     });
     expect(full.status).toBe(200);
@@ -267,7 +267,7 @@ describe('PUT /api/sort/order', () => {
     // Send only two of the three → 400 (partial / would collide), ranks unchanged.
     const partial = await http(t).put('/api/sort/order', {
       list_key: listKey,
-      group: 'unpinned',
+      group: 'unstarred',
       ordered_ids: allIds.slice(0, 2),
     });
     expect(partial.status).toBe(400);
@@ -287,7 +287,7 @@ describe('PUT /api/sort/order', () => {
     const c1 = await makeChannel(t, wsId, 'one', agentId);
     const res = await http(t).put('/api/sort/order', {
       list_key: `channels:${wsId}`,
-      group: 'unpinned',
+      group: 'unstarred',
       ordered_ids: [c1, c1],
     });
     expect(res.status).toBe(400);
@@ -297,11 +297,11 @@ describe('PUT /api/sort/order', () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     await makeWorkspace(t, 'eng', agentId);
-    // 'unpinned' is a channel-sidebar group, not a workspace-rail group
+    // 'unstarred' is a channel-sidebar group, not a workspace-rail group
     // (the rail uses pinned / dm / regular).
     const res = await http(t).put('/api/sort/order', {
       list_key: 'workspaces',
-      group: 'unpinned',
+      group: 'unstarred',
       ordered_ids: [],
     });
     expect(res.status).toBe(400);
@@ -323,7 +323,7 @@ describe('PUT /api/sort/order', () => {
     const allIds: string[] = chList.channels.map((c: any) => c.id);
     const res = await http(t).put('/api/sort/order', {
       list_key: listKey,
-      group: 'unpinned',
+      group: 'unstarred',
       ordered_ids: [...allIds].reverse(),
     });
     expect(res.status).toBe(200);
@@ -401,14 +401,14 @@ describe('viewer_sort does not leak non-live entities', () => {
   });
 });
 
-describe('pin/unpin clears manual rank (cross-group boundary)', () => {
+describe('star/unstar clears manual rank (cross-group boundary)', () => {
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
     t = null;
   });
 
-  it('clears an entity rank when it is pinned', async () => {
+  it('clears an entity rank when it is starred', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
@@ -417,22 +417,22 @@ describe('pin/unpin clears manual rank (cross-group boundary)', () => {
     const listKey = `channels:${wsId}`;
 
     const chList = (await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json()) as any;
-    const allUnpinned = chList.channels.map((c: any) => c.id);
+    const allUnstarred = chList.channels.map((c: any) => c.id);
     await http(t).put('/api/sort/order', {
       list_key: listKey,
-      group: 'unpinned',
-      ordered_ids: [c1, c2, ...allUnpinned.filter((id: string) => id !== c1 && id !== c2)],
+      group: 'unstarred',
+      ordered_ids: [c1, c2, ...allUnstarred.filter((id: string) => id !== c1 && id !== c2)],
     });
 
-    // c1 had a rank; pinning it must drop the rank to null (it moves groups).
-    expect((await http(t).post(`/api/channels/${c1}/pin`, undefined)).status).toBe(200);
+    // c1 had a rank; starring it must drop the rank to null (it moves groups).
+    expect((await http(t).post(`/api/channels/${c1}/star`, undefined)).status).toBe(200);
     const after = (await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json()) as any;
     const c1Entry = after.viewer_sort.entries.find((e: any) => e.entity_id === c1);
     // Either no rank row, or rank cleared to null.
     expect(c1Entry?.rank ?? null).toBeNull();
   });
 
-  it('a DM workspace can be pinned and joins the cross-kind `pinned` rail group', async () => {
+  it('a DM workspace can be starred and joins the cross-kind `starred` rail group', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const regularWs = await makeWorkspace(t, 'eng', agentId);
@@ -443,35 +443,41 @@ describe('pin/unpin clears manual rank (cross-group boundary)', () => {
       (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === agentId,
     );
     expect(dmWs).toBeTruthy();
-    expect(dmWs.pinned_at).toBeNull();
+    // Star is per-viewer sort state, not an entity field: unstarred ⇒ no entry.
+    expect(
+      before.viewer_sort.entries.find((e: any) => e.entity_id === dmWs.id)?.starred_at ?? null,
+    ).toBeNull();
 
-    // Pin the DM — previously rejected (regular-only); now cross-kind.
-    expect((await http(t).post(`/api/workspaces/${dmWs.id}/pin`, undefined)).status).toBe(200);
-    // Pin the regular workspace too — both now live in the unified `pinned` group.
-    expect((await http(t).post(`/api/workspaces/${regularWs}/pin`, undefined)).status).toBe(200);
+    // Star the DM (cross-kind) and the regular workspace — both land in `starred`.
+    expect((await http(t).post(`/api/workspaces/${dmWs.id}/star`, undefined)).status).toBe(200);
+    expect((await http(t).post(`/api/workspaces/${regularWs}/star`, undefined)).status).toBe(200);
 
-    // A cross-kind reorder of the `pinned` group (DM + regular together) is
+    // A cross-kind reorder of the `starred` group (DM + regular together) is
     // accepted — proof both resolve to the same live group.
     const res = await http(t).put('/api/sort/order', {
       list_key: 'workspaces',
-      group: 'pinned',
+      group: 'starred',
       ordered_ids: [dmWs.id, regularWs],
     });
     expect(res.status).toBe(200);
     const after = (await (await http(t).get('/api/workspaces')).json()) as any;
-    expect(after.workspaces.find((w: any) => w.id === dmWs.id).pinned_at).not.toBeNull();
+    expect(
+      after.viewer_sort.entries.find((e: any) => e.entity_id === dmWs.id)?.starred_at,
+    ).not.toBeNull();
   });
 
-  it('a DM workspace can be unpinned (cross-kind unpin)', async () => {
+  it('a DM workspace can be unstarred (cross-kind unstar)', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const list = (await (await http(t).get('/api/workspaces')).json()) as any;
     const dmWs = list.workspaces.find(
       (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === agentId,
     );
-    expect((await http(t).post(`/api/workspaces/${dmWs.id}/pin`, undefined)).status).toBe(200);
-    expect((await http(t).del(`/api/workspaces/${dmWs.id}/pin`)).status).toBe(200);
+    expect((await http(t).post(`/api/workspaces/${dmWs.id}/star`, undefined)).status).toBe(200);
+    expect((await http(t).del(`/api/workspaces/${dmWs.id}/star`)).status).toBe(200);
     const after = (await (await http(t).get('/api/workspaces')).json()) as any;
-    expect(after.workspaces.find((w: any) => w.id === dmWs.id).pinned_at).toBeNull();
+    expect(
+      after.viewer_sort.entries.find((e: any) => e.entity_id === dmWs.id)?.starred_at ?? null,
+    ).toBeNull();
   });
 });

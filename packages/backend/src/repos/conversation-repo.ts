@@ -18,8 +18,13 @@ function newId(): string {
   return randomBytes(12).toString('base64url');
 }
 
+// `pinned_at` is a vestigial column (#task:1209): pin/star became per-viewer
+// state in `user_sort_entry`, so the shared column is no longer read or written
+// and must never reach the wire. These mappers strip it from the row before it
+// becomes a DTO — the type drops it too, but stripping kills the runtime leak.
 function rowToDto(row: ConversationRow): ConversationDto {
-  return { ...row };
+  const { pinned_at: _pinnedAt, ...dto } = row;
+  return { ...dto };
 }
 
 function assertChannelLike(row: ConversationRow): ChannelConversationDto | DmChannelDto {
@@ -31,14 +36,16 @@ function rowToChannel(row: ConversationRow): ChannelConversationDto {
   if (row.kind !== 'channel' || row.parent_conversation_id !== null) {
     throw new Error('conversation is not a channel');
   }
-  return { ...row, kind: 'channel', parent_conversation_id: null };
+  const { pinned_at: _pinnedAt, ...rest } = row;
+  return { ...rest, kind: 'channel', parent_conversation_id: null };
 }
 
 function rowToDmChannel(row: ConversationRow): DmChannelDto {
   if (row.kind !== 'dm_channel' || row.parent_conversation_id !== null) {
     throw new Error('conversation is not a dm_channel');
   }
-  return { ...row, kind: 'dm_channel', parent_conversation_id: null };
+  const { pinned_at: _pinnedAt, ...rest } = row;
+  return { ...rest, kind: 'dm_channel', parent_conversation_id: null };
 }
 
 function rowToThread(
@@ -48,8 +55,9 @@ function rowToThread(
   if (row.kind !== 'thread' || row.parent_conversation_id === null) {
     throw new Error('conversation is not a thread');
   }
+  const { pinned_at: _pinnedAt, ...rest } = row;
   return {
-    ...row,
+    ...rest,
     kind: 'thread',
     channel_id: row.parent_conversation_id,
     anchor_message_id: anchorMessageId,
@@ -143,9 +151,7 @@ export class ConversationRepo {
         `SELECT * FROM conversations
          WHERE workspace_id = ? AND kind = 'channel' AND archived_at IS NULL
            ${userJoin}
-         ORDER BY (pinned_at IS NOT NULL) DESC,
-                  pinned_at DESC,
-                  created_at ASC`,
+         ORDER BY created_at ASC`,
       )
       .all(...args);
     return rows.map(rowToChannel);
@@ -524,30 +530,6 @@ export class ConversationRepo {
     return rowToThread(row);
   }
 
-  pin(id: string): ChannelConversationDto | DmChannelDto | null {
-    const conversation = this.get(id);
-    if (!conversation) return null;
-    if (conversation.kind === 'thread') {
-      throw repoError('thread', 'only top-level channels can be pinned');
-    }
-    const now = Date.now();
-    this.db
-      .prepare(`UPDATE conversations SET pinned_at = ?, updated_at = ? WHERE id = ?`)
-      .run(now, now, id);
-    const row = this.getRaw(id);
-    return row ? assertChannelLike(row) : null;
-  }
-
-  unpin(id: string): ChannelConversationDto | DmChannelDto | null {
-    const now = Date.now();
-    this.db
-      .prepare(`UPDATE conversations SET pinned_at = NULL, updated_at = ? WHERE id = ?`)
-      .run(now, id);
-    const row = this.getRaw(id);
-    if (!row || row.kind === 'thread') return null;
-    return assertChannelLike(row);
-  }
-
   setArchived(
     id: string,
     archived: boolean,
@@ -814,8 +796,8 @@ export class ConversationRepo {
         `INSERT INTO conversations
          (id, workspace_id, workspace_path, kind, parent_conversation_id,
           title, status, spawned_by_agent_id, closed_at, close_summary,
-          pinned_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'idle', ?, NULL, NULL, NULL, ?, ?)`,
+          created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'idle', ?, NULL, NULL, ?, ?)`,
       )
       .run(
         id,

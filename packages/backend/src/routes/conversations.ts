@@ -555,45 +555,6 @@ export function createConversationMessagingApp(
     return c.json({ agents: channelAgents });
   });
 
-  app.post('/api/channels/:id/pin', async c => {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'channel id required' }, 400);
-    const channel = conversations.getChannelLike(id);
-    if (!channel) return c.json({ error: 'channel not found' }, 404);
-    if (!canGovernWorkspace(ctx, getUserPrincipal(c), channel.workspace_id, 'admin')) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    try {
-      const result = await ctx.channelService.setPinned({ channelId: id, pinned: true });
-      // Crossing the pin boundary abandons the manual rank in the old group.
-      sort.clearEntityRank(`channels:${channel.workspace_id}`, id);
-      return c.json({ channel: result.channel });
-    } catch (err) {
-      const mapped = channelServiceErrorResponse(c, err);
-      if (mapped) return mapped;
-      throw err;
-    }
-  });
-
-  app.delete('/api/channels/:id/pin', async c => {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'channel id required' }, 400);
-    const channel = conversations.getChannelLike(id);
-    if (!channel) return c.json({ error: 'channel not found' }, 404);
-    if (!canGovernWorkspace(ctx, getUserPrincipal(c), channel.workspace_id, 'admin')) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    try {
-      const result = await ctx.channelService.setPinned({ channelId: id, pinned: false });
-      sort.clearEntityRank(`channels:${channel.workspace_id}`, id);
-      return c.json({ channel: result.channel });
-    } catch (err) {
-      const mapped = channelServiceErrorResponse(c, err);
-      if (mapped) return mapped;
-      throw err;
-    }
-  });
-
   app.patch(apiPaths.channelArchive(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);

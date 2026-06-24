@@ -613,8 +613,6 @@ export function listAgentVisibleChannels(
         WHERE c.workspace_id = ?
           AND c.kind IN ('channel', 'dm_channel')
         ORDER BY (c.archived_at IS NOT NULL) ASC,
-                 (c.pinned_at IS NOT NULL) DESC,
-                 c.pinned_at DESC,
                  c.updated_at DESC`,
     )
     .all(agentId, workspaceId);

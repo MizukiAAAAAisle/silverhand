@@ -100,44 +100,6 @@ describe('ConversationRepo canonical schema', () => {
     }
   });
 
-  it('lists later pinned channels before earlier pinned channels', () => {
-    const t = bootstrap();
-    try {
-      const workspacePath = join(t.tmp.workspacesRoot, 'eng');
-      const workspace = t.workspaces.insert({
-        name: 'eng',
-        description: 'Engineering',
-        workspacePath,
-        workspaceHostId: t.localHostId,
-      });
-      const first = t.conversations.insertChannel({
-        workspaceId: workspace.id,
-        workspacePath,
-        title: 'first',
-      });
-      const second = t.conversations.insertChannel({
-        workspaceId: workspace.id,
-        workspacePath,
-        title: 'second',
-      });
-
-      const now = vi.spyOn(Date, 'now');
-      now.mockReturnValueOnce(1_000).mockReturnValueOnce(2_000);
-      try {
-        expect(t.conversations.pin(first.id)?.pinned_at).toBe(1_000);
-        expect(t.conversations.pin(second.id)?.pinned_at).toBe(2_000);
-      } finally {
-        now.mockRestore();
-      }
-
-      expect(
-        t.conversations.listActiveChannelsForWorkspace(workspace.id).map(c => c.id),
-      ).toEqual([second.id, first.id]);
-    } finally {
-      t.cleanup();
-    }
-  });
-
   it('keeps DM channels under the agent_home workspace with agent L1 path snapshots', () => {
     const t = bootstrap();
     try {

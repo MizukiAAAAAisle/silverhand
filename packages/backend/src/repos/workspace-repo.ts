@@ -39,6 +39,10 @@ function rowToDto(
     dm_channel_ids_json: _dmChannelIdsJson,
     sort_group: _sortGroup,
     sort_name: _sortName,
+    // `pinned_at` is a vestigial column (#task:1209): pin/star is per-viewer
+    // sort state now (user_sort_entry.starred_at), so the shared column is no
+    // longer read/written and must never reach the wire. Strip it here.
+    pinned_at: _pinnedAt,
     ...workspace
   } = row;
   const dmChannelIds =
@@ -105,8 +109,6 @@ export class WorkspaceRepo {
         `${WORKSPACE_SELECT}
          WHERE w.workspace_kind IN ('regular', 'agent_home')
          ORDER BY CASE w.workspace_kind WHEN 'regular' THEN 0 ELSE 1 END,
-                  (w.pinned_at IS NOT NULL) DESC,
-                  w.pinned_at DESC,
                   w.updated_at DESC`,
       )
       .all();
@@ -208,8 +210,6 @@ export class WorkspaceRepo {
                AND w.workspace_kind = 'agent_home'
            )
           ORDER BY sort_group ASC,
-                   (pinned_at IS NOT NULL) DESC,
-                   pinned_at DESC,
                    sort_name COLLATE NOCASE ASC`,
       )
       .all(agentId, agentId)
@@ -357,21 +357,6 @@ export class WorkspaceRepo {
          WHERE id = ? AND workspace_kind = 'regular'`,
       )
       .run(archived ? now : null, now, id);
-    return this.get(id);
-  }
-
-  setPinned(id: string, pinned: boolean): WorkspaceDto | null {
-    const now = Date.now();
-    // Pin is cross-kind (#task:1146): regular AND DM (agent_home) workspaces
-    // can be pinned into the rail's unified `pinned` group. (Archived ones are
-    // gated out at the route.)
-    this.db
-      .prepare(
-        `UPDATE workspaces
-         SET pinned_at = ?, updated_at = ?
-         WHERE id = ? AND workspace_kind IN ('regular', 'agent_home')`,
-      )
-      .run(pinned ? now : null, now, id);
     return this.get(id);
   }
 

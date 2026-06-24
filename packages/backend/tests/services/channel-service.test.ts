@@ -413,44 +413,6 @@ describe('ChannelService.createChannel', () => {
   });
 });
 
-describe('ChannelService.setPinned', () => {
-  it('pins and unpins channel-like conversations with workspace publish', async () => {
-    const t = bootstrap();
-    try {
-      const events: string[] = [];
-      const unsub = t.events.subscribeScope(`workspace:${t.workspace.id}`, e => {
-        events.push(e.kind);
-      });
-      await t.service.setPinned({ channelId: t.source.id, pinned: true });
-      expect(t.conversations.get(t.source.id)?.pinned_at).not.toBeNull();
-      await t.service.setPinned({ channelId: t.source.id, pinned: false });
-      unsub();
-      expect(t.conversations.get(t.source.id)?.pinned_at).toBeNull();
-      expect(events).toEqual(['workspace_channels_changed', 'workspace_channels_changed']);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('normalizes missing and thread ids to RepoError codes', async () => {
-    const t = bootstrap();
-    try {
-      await expect(
-        t.service.setPinned({ channelId: 'missing', pinned: true }),
-      ).rejects.toMatchObject({ code: 'not_found' });
-      const thread = t.conversations.insertThread({
-        channelId: t.source.id,
-        title: 'thread',
-      });
-      await expect(
-        t.service.setPinned({ channelId: thread.id, pinned: false }),
-      ).rejects.toMatchObject({ code: 'thread' });
-    } finally {
-      t.cleanup();
-    }
-  });
-});
-
 describe('ChannelService.setArchived', () => {
   it('archives and unarchives top-level channels with workspace publish', async () => {
     const t = bootstrap();

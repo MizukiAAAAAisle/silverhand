@@ -37,8 +37,8 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
   /** The legal hard groups for a list kind — rail vs channel sidebar. */
   function legalGroups(listKey: string): SortGroup[] {
     return listKey === 'workspaces'
-      ? ['pinned', 'dm', 'regular']
-      : ['pinned', 'unpinned'];
+      ? ['starred', 'dm', 'regular']
+      : ['starred', 'unstarred'];
   }
 
   /**
@@ -66,14 +66,17 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
   ): { ok: true; groups: Map<string, SortGroup> } | { ok: false; status: 404 | 403 } {
     const principal = getUserPrincipal(c);
     const groups = new Map<string, SortGroup>();
+    // Star is per-VIEWER (#task:1209): the `starred` hard group is partitioned
+    // from THIS viewer's own star set, never a shared entity field.
+    const starred = new Set(sort.listStarredEntityIds(principal.userId, listKey));
     if (listKey === 'workspaces') {
       for (const ws of workspaces.list()) {
         if (ws.archived_at != null) continue;
         if (!canViewWorkspace(ctx, principal, ws.id)) continue;
-        // Pin is the PRIMARY axis: a pinned workspace OR pinned DM lands in the
-        // cross-kind `pinned` group; only the unpinned tail is split by kind.
-        if (ws.pinned_at != null) {
-          groups.set(ws.id, 'pinned');
+        // Star is the PRIMARY axis: a starred workspace OR starred DM lands in
+        // the cross-kind `starred` group; only the unstarred tail splits by kind.
+        if (starred.has(ws.id)) {
+          groups.set(ws.id, 'starred');
         } else if (ws.workspace_kind === 'agent_home') {
           groups.set(ws.id, 'dm');
         } else if (ws.workspace_kind === 'regular') {
@@ -95,7 +98,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
         ? conversations.listActiveChannelsForWorkspace(workspace.id, { forUserId })
         : conversations.listActiveDmChannelsForWorkspace(workspace.id, { forUserId });
     for (const ch of channels) {
-      groups.set(ch.id, ch.pinned_at != null ? 'pinned' : 'unpinned');
+      groups.set(ch.id, starred.has(ch.id) ? 'starred' : 'unstarred');
     }
     return { ok: true, groups };
   }
@@ -228,6 +231,60 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     sort.touch(principal.userId, listKey, entityId);
     return c.json({ ok: true });
   });
+
+  /**
+   * Personal ⭐ star toggle (#task:1209). Star is per-viewer sort state, so it
+   * lives in the sort bounded context (not on the entity aggregate). The gate
+   * is can-view of the entity — reused from `resolveListGroups`, whose live
+   * visible set IS the can-view + non-archived + sortable check: a target not
+   * in the set is 404 / 403. The response is the FULL `viewer_sort` for the
+   * list (same shape mode/order return) so the renderer reconciles star
+   * alongside rank/mode in one state — never a single entry.
+   */
+  function starResponse(
+    c: AppContext,
+    listKey: string,
+    entityId: string,
+    starred: boolean,
+  ) {
+    const principal = getUserPrincipal(c);
+    const resolved = resolveListGroups(c, listKey);
+    if (!resolved.ok) {
+      return c.json(
+        { error: resolved.status === 404 ? 'not found' : 'forbidden' },
+        resolved.status,
+      );
+    }
+    if (!resolved.groups.has(entityId)) {
+      // Not a live, viewer-visible, non-archived entity of this list.
+      return c.json({ error: 'not found' }, 404);
+    }
+    sort.setStarred(principal.userId, listKey, entityId, starred);
+    return c.json({
+      viewer_sort: sort.getState(principal.userId, listKey, resolved.groups.keys()),
+    });
+  }
+
+  function workspaceStar(c: AppContext, starred: boolean) {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'workspace id required' }, 400);
+    return starResponse(c, 'workspaces', id, starred);
+  }
+
+  function channelStar(c: AppContext, starred: boolean) {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'channel id required' }, 400);
+    // Resolve the channel's workspace to build its sidebar list_key; the
+    // can-view gate then runs through resolveListGroups on that list.
+    const channel = conversations.getChannelLike(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    return starResponse(c, `channels:${channel.workspace_id}`, id, starred);
+  }
+
+  app.post(apiPaths.workspaceStar(':id'), c => workspaceStar(c, true));
+  app.delete(apiPaths.workspaceStar(':id'), c => workspaceStar(c, false));
+  app.post(apiPaths.channelStar(':id'), c => channelStar(c, true));
+  app.delete(apiPaths.channelStar(':id'), c => channelStar(c, false));
 
   return app;
 }

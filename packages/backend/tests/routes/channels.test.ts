@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -152,58 +152,43 @@ describe('workspace metadata and membership routes', () => {
     expect(res.status).toBe(400);
   });
 
-  it('pins and unpins regular workspaces', async () => {
+  it('stars and unstars regular workspaces (per-viewer sort state)', async () => {
     t = buildTestApp();
     const first = await (
-      await http(t).post('/api/workspaces', { name: 'pin-first' })
+      await http(t).post('/api/workspaces', { name: 'star-first' })
     ).json() as any;
     const second = await (
-      await http(t).post('/api/workspaces', { name: 'pin-second' })
+      await http(t).post('/api/workspaces', { name: 'star-second' })
     ).json() as any;
 
-    const firstPinnedAt = Date.now();
-    const secondPinnedAt = firstPinnedAt + 1_000;
-    const now = vi.spyOn(Date, 'now');
-    now
-      .mockReturnValueOnce(firstPinnedAt)
-      .mockReturnValueOnce(firstPinnedAt)
-      .mockReturnValueOnce(firstPinnedAt)
-      .mockReturnValueOnce(secondPinnedAt)
-      .mockReturnValueOnce(secondPinnedAt)
-      .mockReturnValueOnce(secondPinnedAt);
-    try {
-      const pin = await http(t).post(
-        `/api/workspaces/${first.workspace.id}/pin`,
-      );
-      expect(pin.status).toBe(200);
-      const pinned = await pin.json() as any;
-      expect(pinned.workspace.pinned_at).toBe(firstPinnedAt);
-      const secondPin = await http(t).post(
-        `/api/workspaces/${second.workspace.id}/pin`,
-      );
-      expect(secondPin.status).toBe(200);
-    } finally {
-      now.mockRestore();
-    }
+    // Star returns the FULL viewer_sort for the list (not a single entry, not
+    // the workspace DTO) — star is per-viewer view state, not an entity field.
+    const star = await http(t).post(`/api/workspaces/${first.workspace.id}/star`);
+    expect(star.status).toBe(200);
+    const starred = await star.json() as any;
+    expect(starred.viewer_sort.list_key).toBe('workspaces');
+    expect(
+      starred.viewer_sort.entries.find((e: any) => e.entity_id === first.workspace.id)?.starred_at,
+    ).toBeTruthy();
 
-    const listed = await (await http(t).get('/api/workspaces')).json() as any;
-    expect(listed.workspaces.map((w: any) => w.id).slice(0, 2)).toEqual([
-      second.workspace.id,
-      first.workspace.id,
-    ]);
+    expect(
+      (await http(t).post(`/api/workspaces/${second.workspace.id}/star`)).status,
+    ).toBe(200);
 
-    const unpin = await http(t).del(
-      `/api/workspaces/${first.workspace.id}/pin`,
-    );
-    expect(unpin.status).toBe(200);
-    const unpinned = await unpin.json() as any;
-    expect(unpinned.workspace.pinned_at).toBeNull();
+    const unstar = await http(t).del(`/api/workspaces/${first.workspace.id}/star`);
+    expect(unstar.status).toBe(200);
+    const unstarred = await unstar.json() as any;
+    expect(
+      unstarred.viewer_sort.entries.find(
+        (e: any) => e.entity_id === first.workspace.id,
+      )?.starred_at ?? null,
+    ).toBeNull();
   });
 
-  it('rejects pinning archived workspaces', async () => {
+  it('rejects starring archived workspaces', async () => {
     t = buildTestApp();
     const created = await (
-      await http(t).post('/api/workspaces', { name: 'archived-pin' })
+      await http(t).post('/api/workspaces', { name: 'archived-star' })
     ).json() as any;
     const archive = await http(t).patch(
       `/api/workspaces/${created.workspace.id}/archive`,
@@ -211,11 +196,12 @@ describe('workspace metadata and membership routes', () => {
     );
     expect(archive.status).toBe(200);
 
+    // Archived workspaces are out of the sorting scope → not in the live set.
     expect(
-      (await http(t).post(`/api/workspaces/${created.workspace.id}/pin`)).status,
+      (await http(t).post(`/api/workspaces/${created.workspace.id}/star`)).status,
     ).toBe(404);
     expect(
-      (await http(t).del(`/api/workspaces/${created.workspace.id}/pin`)).status,
+      (await http(t).del(`/api/workspaces/${created.workspace.id}/star`)).status,
     ).toBe(404);
   });
 

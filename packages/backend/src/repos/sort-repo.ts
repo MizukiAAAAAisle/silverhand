@@ -43,7 +43,7 @@ export class SortRepo {
     for (const row of modeRows) modes[row.scope] = row.mode;
     const rows = this.db
       .prepare<[string, string], ViewerSortEntryDto>(
-        `SELECT entity_id, rank, last_accessed_at FROM user_sort_entry
+        `SELECT entity_id, rank, last_accessed_at, starred_at FROM user_sort_entry
          WHERE user_id = ? AND list_key = ?`,
       )
       .all(viewerUserId, listKey);
@@ -139,17 +139,56 @@ export class SortRepo {
   }
 
   /**
-   * Clear the manual rank of an entity for ALL viewers in a list. Called when
-   * an entity crosses a hard-group boundary (pin/unpin): it abandons its
-   * arranged position in the old group and falls to the new group's manual
-   * tail (NULL rank) until re-dragged. Recent-opened is preserved.
+   * Toggle THIS viewer's personal ⭐ star on an entity (#task:1209) and abandon
+   * their manual rank for it in the same write. Starring / unstarring crosses a
+   * hard-group boundary (starred ↔ the entity's kind group), so its arranged
+   * position is dropped and it falls to the new group's manual tail until
+   * re-dragged. This is the per-viewer analogue of the old global pin-boundary
+   * rank clear — star is personal view state now, so the clear is scoped to
+   * this viewer, never global. Recent-opened (last_accessed_at) is preserved.
    */
-  clearEntityRank(listKey: string, entityId: string): void {
-    this.db
-      .prepare<[string, string]>(
-        `UPDATE user_sort_entry SET rank = NULL
-         WHERE list_key = ? AND entity_id = ?`,
+  setStarred(
+    viewerUserId: string,
+    listKey: string,
+    entityId: string,
+    starred: boolean,
+  ): void {
+    if (starred) {
+      const now = Date.now();
+      this.db
+        .prepare<[string, string, string, number]>(
+          `INSERT INTO user_sort_entry
+             (user_id, list_key, entity_id, rank, last_accessed_at, starred_at)
+           VALUES (?, ?, ?, NULL, NULL, ?)
+           ON CONFLICT(user_id, list_key, entity_id) DO UPDATE SET
+             starred_at = excluded.starred_at,
+             rank = NULL`,
+        )
+        .run(viewerUserId, listKey, entityId, now);
+    } else {
+      // Unstar: only touch an existing row (no row ⇒ already unstarred — a
+      // no-op, so we never write a junk all-NULL entry).
+      this.db
+        .prepare<[string, string, string]>(
+          `UPDATE user_sort_entry SET starred_at = NULL, rank = NULL
+           WHERE user_id = ? AND list_key = ? AND entity_id = ?`,
+        )
+        .run(viewerUserId, listKey, entityId);
+    }
+  }
+
+  /**
+   * The entity ids THIS viewer has starred in a list. Backs the live
+   * `starred` hard-group partition for reorder validation (the renderer reads
+   * `starred_at` straight off the inline `viewer_sort` entries).
+   */
+  listStarredEntityIds(viewerUserId: string, listKey: string): string[] {
+    return this.db
+      .prepare<[string, string], { entity_id: string }>(
+        `SELECT entity_id FROM user_sort_entry
+         WHERE user_id = ? AND list_key = ? AND starred_at IS NOT NULL`,
       )
-      .run(listKey, entityId);
+      .all(viewerUserId, listKey)
+      .map(r => r.entity_id);
   }
 }

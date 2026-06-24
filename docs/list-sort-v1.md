@@ -4,6 +4,22 @@ Status: backend landed (#task:1147); renderer (#task:1146, Norman) consumes this
 contract. Design converged with @Cindy (review) + @Norman (renderer) and
 approved by shiki 2026-06-16.
 
+**Revision — pin → personal star (#task:1209, 2026-06-24, shiki-approved).** The
+hard-top group flipped from a SHARED admin-gated **pin** to a per-viewer
+personal **star**. This is a deliberate model revision, not a typo fix: pin was a
+shared aggregate field on the workspace / conversation (`pinned_at`, admin-gated,
+one value for everyone — documented as such in the original L57); it is now
+per-viewer view state (`user_sort_entry.starred_at`), gated by **can-view**, in
+the same viewer-scoped read model as rank / recent. The old global `pinned_at`
+columns become **vestigial** (no data seed — decided by shiki: few users, a
+one-time re-star is cheaper than carrying migration dirty-code as debt; the
+columns physically remain because migrations are append-only, but are never
+read/written). Ubiquitous language: **Star / Starred ⭐** = the personal axis;
+**Pin / Pinned 📌** is reserved for a future SHARED concept, kept distinct so the
+two never alias. Group keys flipped `pinned→starred` / `unpinned→unstarred`. The
+sections below are updated in place to describe the as-built star model; "pin"
+survives only where this note explains the migration.
+
 ## Model
 
 Ordering is **personal view state**, not an aggregate field — "how THIS viewer
@@ -19,8 +35,8 @@ Two concerns, two scopes:
   viewer). A manual reorder (drag) also switches that scope to `manual`
   atomically (`order ⟹ manual`, see API), so drag works from any mode. How many
   scopes a list has depends on the list kind (see hard groups below):
-  - **workspace rail** — mode is **per hard-group**: the `pinned`, `dm`, and
-    `regular` sections each carry their own toggle ("the PIN group has its own
+  - **workspace rail** — mode is **per hard-group**: the `starred`, `dm`, and
+    `regular` sections each carry their own toggle ("the STARRED group has its own
     sort"). Scope = the group key.
   - **channel sidebar** — mode is **list-wide** (one toggle for the whole list),
     unchanged. Scope = the sentinel `''`.
@@ -44,30 +60,33 @@ archive restore.
 ### Single-value rank, live hard-grouping
 
 `rank` is a **single value** per `(user, list, entity)`. Hard groups are
-partitioned **live at sort time** from the entity's own pin/kind state — never
-baked into a storage bucket key. This keeps pin/unpin from having to migrate
+partitioned **live at sort time** from the viewer's own star state — never
+baked into a storage bucket key. This keeps star/unstar from having to migrate
 ranks across buckets.
 
 Hard groups (sort-time partition; manual drag is within a group, never across):
 
-- workspace rail: `pinned` (cross-kind) / `dm` / `regular`. **Pin is the primary
-  axis** (#task:1146): a pinned regular workspace OR a pinned DM both land in the
-  unified `pinned` group; `dm` / `regular` hold only the **unpinned** tail of
-  that kind. DM (agent_home) workspaces are pinnable (`canPin = (regular ||
-  agent_home) && !archived`) — pinning is a shared aggregate field (admin-gated),
-  ordering is per-viewer. Archived workspaces are out of sorting scope entirely.
-- channel sidebar: `pinned` / `unpinned`. Threads are out of sorting scope.
+- workspace rail: `starred` (cross-kind) / `dm` / `regular`. **Star is the
+  primary axis** (#task:1209): a starred regular workspace OR a starred DM both
+  land in the unified `starred` group; `dm` / `regular` hold only the
+  **unstarred** tail of that kind. DM (agent_home) workspaces are starrable
+  (`canStar = (regular || agent_home) && !archived`) — star is per-viewer view
+  state (`user_sort_entry.starred_at`), gated by can-view, never a shared
+  aggregate field. Archived workspaces are out of sorting scope entirely.
+- channel sidebar: `starred` / `unstarred`. Threads are out of sorting scope.
 
-Crossing a pin boundary (pin/unpin) **clears the entity's manual rank** for all
-viewers (`SortRepo.clearEntityRank`), so it falls to the new group's manual tail
-until re-dragged — this also prevents the groups' dense rank numbering from
-colliding. A DM pinned/unpinned crosses `dm ↔ pinned`; a regular workspace
-crosses `regular ↔ pinned`.
+Crossing a star boundary (star/unstar) **clears THIS viewer's manual rank** for
+the entity (`SortRepo.setStarred` does it in the same write), so it falls to the
+new group's manual tail until re-dragged — this also prevents the groups' dense
+rank numbering from colliding. Star is personal, so the clear is **scoped to the
+acting viewer** (the old global pin cleared all viewers' ranks via the now-removed
+`clearEntityRank`). A DM starred/unstarred crosses `dm ↔ starred`; a regular
+workspace crosses `regular ↔ starred`.
 
 ### Renderer composition (pure helper)
 
-`live partition (rail: pinned?→pinned, else agent_home→dm / regular→regular;
-channel→pin tier)` → within each group by **that scope's** mode
+`live partition (rail: starred?→starred, else agent_home→dm / regular→regular;
+channel→star tier)` → within each group by **that scope's** mode
 (`sortModeOf(state, group?)` — group omitted ⇒ scope `''`):
 
 - `recent` → `last_accessed_at DESC` (NULLs last).
@@ -143,7 +162,7 @@ So the visible recent order is composed as a **read model**, single-sourced in
 - Captured synchronously in render via a ref compare (not an effect), so the first
   painted frame is already frozen — no live-then-freeze flash.
 
-## Storage (migrations v47, v48)
+## Storage (migrations v47, v48, v50)
 
 ```sql
 -- v47 created this table keyed (user_id, list_key); v48 adds `scope` to the key
@@ -151,7 +170,7 @@ So the visible recent order is composed as a **read model**, single-sourced in
 CREATE TABLE user_list_sort_mode (
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   list_key   TEXT NOT NULL,
-  scope      TEXT NOT NULL DEFAULT '',  -- '' = list-wide (channels); 'pinned'|'dm'|'regular' = a rail section
+  scope      TEXT NOT NULL DEFAULT '',  -- '' = list-wide (channels); 'starred'|'dm'|'regular' = a rail section
   mode       TEXT NOT NULL CHECK (mode IN ('recent', 'manual')),
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (user_id, list_key, scope)
@@ -163,7 +182,8 @@ CREATE TABLE user_sort_entry (
   entity_id        TEXT NOT NULL,   -- soft ref to workspaces|conversations by list_key (no FK, polymorphic)
   rank             INTEGER,         -- NULL = not manually arranged
   last_accessed_at INTEGER,         -- NULL = never opened
-  PRIMARY KEY (user_id, list_key, entity_id)  -- NOT keyed by scope: rank is one value per entity, group is a live partition
+  starred_at       INTEGER,         -- v50: NULL = not starred; non-null = personal ⭐ (orders the `starred` group)
+  PRIMARY KEY (user_id, list_key, entity_id)  -- NOT keyed by scope: rank/star are one value per entity, group is a live partition
 );
 ```
 
@@ -171,7 +191,19 @@ The v48 rebuild folds every pre-existing mode row into `scope = ''`. Channel row
 were already list-wide (correct); any pre-existing `workspaces` row becomes a
 harmless orphan at `''` (the rail now reads its modes at the group scopes, so it
 falls back to the default `recent` — an accepted reset, since the rail's group
-taxonomy changed in the same change).
+taxonomy changed in the same change). The v48 note still holds verbatim under the
+#task:1209 rename: the rail's old `pinned` mode-scope rows become orphans at the
+new `starred` scope and fall back to `recent` (another accepted reset).
+
+**v50 — `user_sort_entry.starred_at` (#task:1209).** Star is per-(user, list,
+entity) view state, the same grain as `rank` / `last_accessed_at`, so it joins
+this table rather than a new one (one cohesive "viewer's list view state"
+aggregate). `SortRepo.setStarred` upserts it and clears the acting viewer's
+`rank` for that entity in the same write (star/unstar crosses a hard-group
+boundary). **No seed:** the old global `workspaces.pinned_at` /
+`conversations.pinned_at` columns are NOT migrated into per-user stars — they go
+vestigial (still present, append-only; no longer read or written; stripped from
+every DTO so they never reach the wire).
 
 Orphan `user_sort_entry` rows after a delete / membership-removal / archive are
 kept in storage but **filtered out of every wire response**: `getState` takes the
@@ -191,30 +223,36 @@ Read state is carried **inline** on the list responses — no separate GET:
 
 `viewer_sort.modes` is a **per-scope map** (`Record<scope, 'recent'|'manual'>`,
 sparse — an absent scope means `recent`). Channel lists carry the single scope
-`''`; the rail carries up to `pinned` / `dm` / `regular`. Read with the renderer
+`''`; the rail carries up to `starred` / `dm` / `regular`. Read with the renderer
 helper `sortModeOf(state, group?)` — group omitted ⇒ scope `''` (so channel call
 sites are unchanged), rail passes its section group.
+
+`viewer_sort.entries[]` carries the per-entity state `{ entity_id, rank,
+last_accessed_at, starred_at }` (#task:1209). `starred_at` is the **only** source
+of an entity's starred state — the entity DTOs no longer carry `pinned_at`, so the
+renderer partitions the `starred` group straight off these entries (no fallback
+to any aggregate field).
 
 Mutations return the authoritative `{ viewer_sort }` for optimistic reconcile
 (touch excepted):
 
 - `PUT /api/sort/mode { list_key, group?, mode }` → `{ viewer_sort }`. Validates
   list scope (existence + visibility) like order/touch. `group` selects the mode
-  scope: `list_key 'workspaces'` **requires** a legal rail group (`pinned|dm|
+  scope: `list_key 'workspaces'` **requires** a legal rail group (`starred|dm|
   regular`); `channels:<ws>` **forbids** `group` (list-wide, scope `''`). A
   mismatch is a 400 (don't guess).
 - `PUT /api/sort/order { list_key, group, ordered_ids }` → `{ viewer_sort }`.
   `ordered_ids` must be **exactly** the live members of `group` (any order, no
   missing / extra / duplicate / cross-group id). `group` must be a legal hard
-  group for the list kind (rail: `pinned|dm|regular`; channel:
-  `pinned|unpinned`) — an illegal group is rejected even with empty
-  `ordered_ids`. The backend validates against live pin/kind state and rejects
+  group for the list kind (rail: `starred|dm|regular`; channel:
+  `starred|unstarred`) — an illegal group is rejected even with empty
+  `ordered_ids`. The backend validates against live star/kind state and rejects
   otherwise (400) — a partial submission would leave other members' ranks stale
   and collide within the group, so it is not a patch. On success it rewrites
   dense ranks (0..n) for the group **and sets the relevant scope's mode to
   `manual` in the same transaction** — `order ⟹ manual` is an invariant. The
   scope a drag flips is derived from `list_key + group` exactly as `mode` is
-  (rail: the dragged group; channel: `''`), so dragging the rail's `pinned`
+  (rail: the dragged group; channel: `''`), so dragging the rail's `starred`
   section leaves `dm` / `regular` modes untouched, and a channel drag flips its
   one list-wide mode. The response's `viewer_sort.modes[scope]` comes back
   `manual`.
@@ -224,7 +262,20 @@ Mutations return the authoritative `{ viewer_sort }` for optimistic reconcile
   the upsert is idempotent as a backstop. **Persistence only** — it never reorders
   the visible recent list (see *Recent visible order is a frozen read model*).
 
-`ViewerSortStateDto = { list_key, modes: Record<scope, 'recent'|'manual'>, entries: { entity_id, rank, last_accessed_at }[] }`
+Personal ⭐ star (#task:1209) — entity-scoped, can-view gated, viewer-scoped
+write. Star is sort-context state, so these routes live in the sort app (not the
+entity files), reusing `resolveListGroups` as the can-view + non-archived +
+sortable gate. The old admin-gated `/pin` routes were **deleted** (no alias):
+
+- `POST  /api/workspaces/:id/star` / `DELETE /api/workspaces/:id/star`
+- `POST  /api/channels/:id/star`   / `DELETE /api/channels/:id/star`
+  → all return the FULL `{ viewer_sort }` for the affected list (same shape
+  mode/order return, never a single entry) so the renderer reconciles star
+  alongside rank/mode in one state. `setStarred` also clears the acting viewer's
+  rank for the entity (crosses a hard-group boundary). A target not in the live
+  visible set ⇒ 404 (not found / archived); a list the viewer can't see ⇒ 403.
+
+`ViewerSortStateDto = { list_key, modes: Record<scope, 'recent'|'manual'>, entries: { entity_id, rank, last_accessed_at, starred_at }[] }`
 (exported from `@silverhand/shared`; `modes` is the per-scope map — sparse, absent
 scope ⇒ default `recent`; channel lists use the single sentinel scope `''`).
 
@@ -234,6 +285,7 @@ scope ⇒ default `recent`; channel lists use the single sentinel scope `''`).
   multi-surface (desktop + web + standalone), same human across surfaces; local
   storage would split per surface. localStorage v0 and recent-**active** were
   considered and rejected as fallbacks only.
-- Pin stays a hard top group; sort mode only orders *within* a group. Cross-group
-  drag is not an implicit pin change.
+- Star is a personal hard top group (#task:1209); sort mode only orders *within*
+  a group. Cross-group drag is not an implicit star change. "Pin/Pinned 📌" is
+  reserved for a future SHARED axis and must not reuse the star storage/routes.
 - Threads and the archived recovery index are out of the sorting model.
