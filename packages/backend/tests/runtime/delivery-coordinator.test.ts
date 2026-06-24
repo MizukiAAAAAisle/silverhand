@@ -39,6 +39,7 @@ import {
   type CoordinatorInboxSink,
   type DriverDeliveryView,
   type LiveDeliveryRequest,
+  type RuntimeDelivery,
 } from '../../src/runtime/delivery-coordinator.js';
 import type { RuntimePhase } from '../../src/runtime/run-state-cache.js';
 
@@ -66,6 +67,7 @@ function makeBridge(
         conversationId: params.conversation_id,
         agentId: params.agent_id,
         deliveryIds: [...params.delivery_ids],
+        deliveries: params.deliveries?.map((delivery: RuntimeDelivery) => ({ ...delivery })),
         kind: params.kind,
         text: params.text,
       };
@@ -88,6 +90,7 @@ interface CoordinatorBridgeCall {
   conversationId: string;
   agentId: string;
   deliveryIds: number[];
+  deliveries?: RuntimeDelivery[];
   kind: 'message' | 'schedule_fire';
   text: string;
 }
@@ -377,6 +380,42 @@ describe('case 5: phase=ready + driver=gated + busy mid-turn', () => {
     expect(calls[0]).toMatchObject({ deliveryIds: [7] });
     expect(delivered).toEqual([[7]]);
     expect(c.pendingCount('c1', 'a1')).toBe(0);
+  });
+
+  it('preserves per-delivery stream metadata through gated queue flush', async () => {
+    const { bridge, calls } = makeBridge({
+      delivered: true,
+      delivery_ids: [17],
+    });
+    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
+    const { sink } = makeInboxSink();
+    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
+    const deliveries: RuntimeDelivery[] = [
+      {
+        delivery_id: 17,
+        message_id: 'reply-17',
+        seq: 2453,
+        thread_root_id: 'root-1',
+        delivery_kind: 'turn',
+      },
+    ];
+
+    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
+    await c.submitLiveDelivery('c1', 'a1', req({
+      inboxId: 17,
+      deliveredUpToSeq: 2453,
+      deliveries,
+      driver: DRIVER_GATED,
+    }));
+
+    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      deliveryIds: [17],
+      deliveries,
+    });
   });
 
   it('compaction blocks flush even when outstandingToolUses=0', async () => {

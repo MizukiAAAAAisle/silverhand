@@ -362,6 +362,10 @@ interface PendingDelivery {
    *  enqueued requests; multi for caller pre-combined groups. */
   deliveryIds: readonly number[];
   deliveredUpToSeq?: number;
+  /** Per-delivery stream metadata must survive gated mid-turn queueing;
+   *  otherwise the safe-boundary flush falls back to scalar high-water
+   *  and can write a thread seq into the main observed boundary. */
+  deliveries?: readonly RuntimeDelivery[];
   dedupKey: string;
   /** Un-encoded human-readable text. Combined with sibling pendings at
    *  flush time via `combineGated` (when length > 1); daemon encodes. */
@@ -884,6 +888,7 @@ export class RuntimeDeliveryCoordinator {
     st.pending.push({
       deliveryIds: req.deliveryIds,
       deliveredUpToSeq: req.deliveredUpToSeq,
+      deliveries: req.deliveries,
       dedupKey: req.dedupKey,
       text: req.text,
       driver: req.driver,
@@ -921,11 +926,13 @@ export class RuntimeDeliveryCoordinator {
         throw err;
       }
       const deliveryIds = batch.flatMap(item => [...item.deliveryIds]);
+      const deliveries = batch.flatMap(item => [...(item.deliveries ?? [])]);
       const result = await this.bridge.runtimeWake({
         conversation_id: conversationId,
         agent_id: agentId,
         delivery_ids: deliveryIds,
         delivered_up_to_seq: maxDeliveredUpToSeq(batch),
+        ...(deliveries.length > 0 ? { deliveries } : {}),
         kind: 'message',
         text,
       });

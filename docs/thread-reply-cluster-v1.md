@@ -294,10 +294,20 @@ stream 的 observed 还没推进到触发消息,直接用 `observedSeqByStream` 
 deferred 的触发消息算作已见。**这只是 send 时多读一眼 pending admission;observed-seq 的 turn-boundary promote
 时序不变**——default-target 与 freshness 两个关注点保持解耦,绝不提前 promote pending。
 
-**override:** 显式 `--target channel|thread:<id>` 或 `--reply-to <id>` 永远覆盖默认。
+**delivery metadata 必须穿透中途 queue(#task:1218 根因,load-bearing):** backend → daemon 的
+`deliveries[]` 是 observed boundary 的唯一 per-stream 权威;scalar `delivered_up_to_seq` 只是 legacy/diagnostic
+high-water,不能用来推进任意 stream。若 gated mid-turn queue 丢掉 `deliveries[]`,safe-boundary flush 会退回 scalar
+fallback,把 thread seq 写进 main observed boundary,随后 bare main send 会拿 `seen_up_to_seq > main head` 做 CAS,
+表现为 `current_seq` 倒退且 `newer_messages=[]` 的假 stale。因此 `RuntimeDeliveryCoordinator` 的 enqueue/flush
+路径必须原样保留每条 delivery 的 `thread_root_id`/`delivery_kind`。
+
+**override:** 显式 `--target channel|thread:<id>` 或 `--reply-to <id>` 永远覆盖默认,但只作用于**当前这次
+send**;它绝不能改写本 turn 的 bare-send 默认流(否则"先显式回 thread A,再裸发本 turn 的 thread B"会被 re-home
+到 A)。
 
 **测试钉死(`packages/host/tests/supervisor.test.ts`):** main turn active → thread wake deferred → bare send 默认回
-pending thread,且 `seen_up_to_seq` 用 pending seq;另一组钉 pending thread 压过 admitted 的另一个 thread;另一组钉显式 main-line target 覆盖当前 thread 默认。
+pending thread,且 `seen_up_to_seq` 用 pending seq;另一组钉 pending thread 压过 admitted 的另一个 thread;另一组钉显式
+target 只覆盖当前 send、不改写后续 bare-send default;另一组钉显式 main-line target 覆盖当前 thread 默认。
 
 ---
 

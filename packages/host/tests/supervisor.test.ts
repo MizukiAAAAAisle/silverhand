@@ -3516,6 +3516,106 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     }
   });
 
+  it('keeps a pending default stable across an explicit send to another thread', async () => {
+    const { supervisor } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const parsedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        postedBodies.push(parsedBody);
+        const target = parsedBody['target'];
+        const targetMessageId =
+          target
+          && typeof target === 'object'
+          && 'kind' in target
+          && target.kind === 'thread'
+          && 'message_id' in target
+          && typeof target.message_id === 'string'
+            ? target.message_id
+            : null;
+        const threadRootId =
+          targetMessageId === 'mA'
+            ? 'rootA'
+            : targetMessageId === 'mB'
+              ? 'rootB'
+              : null;
+        return new Response(
+          JSON.stringify({
+            message_id: `reply-${postedBodies.length}`,
+            message_seq: 80 + postedBodies.length,
+            thread_root_id: threadRootId,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      await supervisor.wake({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [70],
+        kind: 'message',
+        text: 'first thread admitted for this turn',
+        delivered_up_to_seq: 70,
+        deliveries: [
+          {
+            delivery_id: 70,
+            message_id: 'mA',
+            seq: 70,
+            thread_root_id: 'rootA',
+            delivery_kind: 'turn',
+          },
+        ],
+      });
+      await supervisor.wake({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [75],
+        kind: 'message',
+        text: 'second thread delivered mid-turn',
+        delivered_up_to_seq: 75,
+        deliveries: [
+          {
+            delivery_id: 75,
+            message_id: 'mB',
+            seq: 75,
+            thread_root_id: 'rootB',
+            delivery_kind: 'turn',
+          },
+        ],
+      });
+
+      await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'explicit reply to the first thread',
+        target: { kind: 'thread', message_id: 'mA' },
+      });
+
+      await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'bare reply should still target the pending thread',
+      });
+
+      expect(postedBodies[0]?.['target']).toEqual({ kind: 'thread', message_id: 'mA' });
+      expect(postedBodies[0]?.['stream_key']).toBe('thread:rootA');
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(70);
+      expect(postedBodies[1]?.['target']).toEqual({ kind: 'thread', message_id: 'mB' });
+      expect(postedBodies[1]?.['stream_key']).toBe('thread:rootB');
+      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(75);
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
   it('lets an explicit main-line target override the current thread default', async () => {
     const { supervisor } = makeSupervisor();
     const postedBodies: Record<string, unknown>[] = [];
