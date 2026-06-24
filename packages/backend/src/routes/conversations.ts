@@ -231,13 +231,17 @@ export function createConversationReadApp(
         () => {
           const opts = { limit, beforeSeq, afterSeq, aroundMessageId };
           // Open-time snapshot (#task:1226). Capture the opened stream's head
-          // BEFORE reading the window so it can never exceed what the window
-          // renders: the backend is the single synchronous writer, so no insert
-          // interleaves between these reads (head and window share one logical
-          // snapshot); and even defensively, head-before-window means head <=
-          // rendered tail, so `mark-read` to this snapshot can never swallow an
-          // un-rendered message. Must be captured here, in the same read — not
-          // re-queried at mark-time, which is exactly the swallow bug.
+          // as of THIS read: the backend is the single synchronous writer, so no
+          // insert interleaves between the head read and the window read (they
+          // share one logical snapshot), and capturing head BEFORE the window
+          // means the snapshot is the open-time head — a CONCURRENT reply landing
+          // after this capture gets seq > snapshot and is therefore not swallowed
+          // by a later `mark-read` to this value. (stream_head_seq is
+          // window-independent; under v1 read-to-clear-whole-opened-thread the
+          // guarantee is "no concurrent-tail swallow", NOT "covers the rendered
+          // window tail" — an around-first-unread window may render less than the
+          // head. See docs/thread-unread-v1.md §6/§8.) Must be captured here, in
+          // the same read — not re-queried at mark-time, which is the swallow bug.
           const streamHeadSeq = messages.streamHeadLatestSeq(
             channel.id,
             threadRootId,

@@ -103,8 +103,12 @@ export const ConversationMessagesDtoSchema = z.object({
    *  when no `thread_root_id`, else that reply-cluster), captured in the SAME
    *  read as this window — never a later/separate query, so a concurrent tail
    *  arriving after the window can't slip into the snapshot. The client echoes
-   *  this as `snapshot_seq` to `mark-read` so the cursor advances only to what
-   *  was actually rendered, not to "current latest". 0 for an empty stream. */
+   *  this as `snapshot_seq` to `mark-read` so the cursor advances to the
+   *  open-time head, not to "current latest" — under v1 read-to-clear, opening a
+   *  thread marks it read up to this head (the window, latest or
+   *  around-first-unread, is a locate view, not a coverage guarantee); the
+   *  invariant is only that a concurrent tail (seq > this value) is not
+   *  swallowed. Window-independent. 0 for an empty stream. */
   stream_head_seq: z.number().int().nonnegative(),
   /** True when at least one message exists with seq > max(messages.seq).
    *  For the default "latest" window this is always false; for an

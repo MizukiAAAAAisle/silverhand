@@ -126,7 +126,7 @@ markRead(user, C, threadRootId, snapshotSeq):
 
 **省略 `snapshot_seq` 的 fallback 必须迁移 + 按 stream 非对称(correctness,review #2 + review round-2):** 现有 `markRead` 用 `targetSeq = seq ?? latestSeq(conversationId)`,而 `latestSeq` = `MAX(messages.seq)` 跨**整个 conversation**(`conversation-read-repo.ts:25,270`);shared `MarkConversationReadInputSchema` 注释也写「Omitted = backend uses MAX(messages.seq)」(`message.ts:146`)。per-stream 后这会**用含 thread reply 的 conversation max seq 推进主线 cursor,破坏 stream 语义**。
 
-omitted-fallback 必须**按 stream 非对称**——主线有 legacy caller 要兼容,thread 没有 legacy caller,给它 fallback 等于自废 §3.4 的 open-time snapshot 纪律(打开 thread 后并发新 reply、客户端漏传 snapshot → 服务端按当前 thread head fallback,仍吞未渲染尾部):
+omitted-fallback 必须**按 stream 非对称**——主线有 legacy caller 要兼容,thread 没有 legacy caller,给它 fallback 等于自废 §3.4 的 open-time snapshot 纪律(打开 thread 后并发新 reply、客户端漏传 snapshot → 服务端按当前 thread head fallback,会吞掉 open 后到达的并发尾部):
 
 - **主线(`thread_root_id IS NULL`):允许省略 `snapshot_seq`**,fallback = **mainline stream head**(`conversation_stream_heads` thread_root_id IS NULL 那行的 `latest_seq`),**绝不再用 `latestSeq(conversationId)`**。这是现有 channel mark-read 的唯一兼容路径。
 - **thread(`thread_root_id IS NOT NULL`):`snapshot_seq` 必传**。缺失 → **400**(thread 无 legacy caller,不需要、也不能 fallback);或走「读 thread + mark read」同一服务端用例、用同一次读拿到的 snapshot,绝不在独立 mark-read 请求里 fallback。
@@ -163,7 +163,7 @@ firstUnread(S) = messages m (同 §3.3 过滤) ORDER BY m.seq ASC LIMIT 1
 - `ConversationReadRepo` 全部方法 thread-aware:`markRead(.., threadRootId?, snapshotSeq?)`(fallback 见 §3.4);新增 per-stream `unreadCountForStream` / `firstUnreadForStream`;`unreadCountForConversation` 改为 §3.5 的 roll-up。
 - **first-unread DTO 固定输出两个字段(review #4):`first_unread_message_id` + `first_unread_seq`**(§3.6),不要只给 seq——UI 跳转要可靠定位到具体 message,半截 contract 会让前后端各猜一套。`ThreadSummary` 填 `unread_count`(= `thread_unread(R)`)+ 这两个字段。`listChannelThreads`(`message-repo.ts`)带 viewer 计算。
 - **reply chip 同源(review round-3,Finding 1):`ReplyBadgeSummary`(`message.ts`,主线窗口 `reply_summaries_by_root` 的 per-root sidecar)也带 `unread_count` + `first_unread_message_id`(+seq)**,由 `replyBadgeSummariesByRoot(conv, rootIds, viewerUserId)` 复用**同一个 `threadUnreadByRoots`**(follow-agnostic、按 rootIds 批量)算出——chip(主线 root 行内联)与 Threads list 读**同一套真相**,不各算一份。
-- **open-time snapshot 必须由 read 暴露(review round-3,Finding 2):消息窗口响应 `ConversationMessagesDto` 加 `stream_head_seq`**,= 被打开的那条流(无 thread_root_id=主线 / 否则该 cluster)的 `conversation_stream_heads.latest_seq`,**与窗口在同一次 read 捕获**(`routes/conversations.ts` 窗口 callback:head **先于** `listWindow` 取——backend 单写者同步执行,两次读同一逻辑快照;且 head-before-window ⇒ head ≤ 渲染尾部,防 mark-read 吞未渲染消息)。客户端把它原样回传 `mark-read` 的 `snapshot_seq`,**绝不在 mark 时再查 head、也不从已加载 messages `max(seq)` 推断**(Cindy round-3 实现不变量)。**不在 `ThreadSummary`/`ReplyBadgeSummary` 行级放 head**:mark 永远发生在打开 thread 窗口、渲染之后(§6),那一刻窗口响应的 `stream_head_seq` 即唯一权威快照;行级 head 会诱导渲染前标读(违 §6)且制造第二个会分叉的快照源。
+- **open-time snapshot 必须由 read 暴露(review round-3,Finding 2):消息窗口响应 `ConversationMessagesDto` 加 `stream_head_seq`**,= 被打开的那条流(无 thread_root_id=主线 / 否则该 cluster)的 `conversation_stream_heads.latest_seq`,**与窗口在同一次 read 捕获**(`routes/conversations.ts` 窗口 callback:head **先于** `listWindow` 取——backend 单写者同步执行,两次读同一逻辑快照;head-before-window ⇒ snapshot = **open-time head**,故 open 后到达、`seq > snapshot` 的**并发**reply 不会被标读)。**`stream_head_seq` 窗口无关**(按 stream 捕获,与 latest/around/before/after 无关),配合 v1 **read-to-clear whole opened thread**(§6):打开 thread 即标到 open-time stream head 全区间,window 只是定位视图、不要求覆盖 first-unread→tail——故唯一保证是「并发尾部不吞」,**不**声称「覆盖窗口内可见尾部」。客户端把它原样回传 `mark-read` 的 `snapshot_seq`,**绝不在 mark 时再查 head、也不从已加载 messages `max(seq)` 推断**(Cindy round-3 实现不变量)。**不在 `ThreadSummary`/`ReplyBadgeSummary` 行级放 head**:mark 永远发生在打开 thread 之后(§6),那一刻窗口响应的 `stream_head_seq` 即唯一权威快照;行级 head 会诱导打开前标读(违 §6)且制造第二个会分叉的快照源。
 - mark-read 路由(`markConversationRead`,`routes/conversations.ts:462`)入参迁为 `{ thread_root_id?, snapshot_seq? }`(§3.4 命名)。**主线(无 thread_root_id):snapshot_seq 可省、fallback mainline head(兼容);thread:snapshot_seq 必传,缺失 → 400;显式 snapshot_seq > 目标 stream head → 400**(§3.4)。`markRead(viewerUserId, conversationId, threadRootId?, snapshotSeq?)`。
 - WS `unread_updated`(viewer-scoped)沿用;thread 未读变化复用同一失效信号。
 
@@ -185,7 +185,7 @@ per-stream 后,`conversation_reads` 每个 (user, conversation) **不再只有�
 
 ## 6. mark-read 触发纪律
 
-只有 thread 实际被打开并渲染到未读区,才推进该 thread 的 cursor(到 open-time snapshot,§3.4)。**root message 出现在主线 viewport 不算读 thread**——主线游标推进只标主线流,不碰任何 thread 流的 cursor。
+只有 thread 实际被**打开**(渲染——无论窗口落在 latest 还是跳到 first-unread),才推进该 thread 的 cursor;推进目标 = **open-time stream head**(§3.4)。**v1 语义 = read-to-clear whole opened thread**:打开即视为读到 open-time head 全区间,first-unread jump 只是定位入口,不要求渲染窗口覆盖 first-unread→tail 全区间(严格「只标已渲染区间」需改 snapshot 语义、范围大,不在 #1226 做)。唯一保证 = **并发尾部不吞**(open 后到达、`seq > snapshot` 的 reply 留到下次打开再标)。**root message 出现在主线 viewport 不算打开 thread**——主线游标推进只标主线流,不碰任何 thread 流的 cursor。
 
 ## 7. Out of scope(本 doc 不做)
 
@@ -196,12 +196,12 @@ per-stream 后,`conversation_reads` 每个 (user, conversation) **不再只有�
 
 1. **per-stream cursor 单调推进**(`max()`),永不回退。
 2. **缺省 thread cursor 不动态 COALESCE 主线**(§3.2 硬边界)。
-3. **mark-read 推到 open-time snapshot,不到「当下最新」**(§3.4)。**thread mark-read `snapshot_seq` 必传(缺失 400),主线可省、fallback mainline head;显式 snapshot_seq 校验 `<= 目标 stream head`(否则 400)**(§3.4)。
+3. **mark-read 推到 open-time snapshot,不到「当下最新」**(§3.4)。**thread mark-read `snapshot_seq` 必传(缺失 400),主线可省、fallback mainline head;显式 snapshot_seq 校验 `<= 目标 stream head`(否则 400)**(§3.4)。**v1 = read-to-clear whole opened thread**(§6):打开 thread 即标到 open-time stream head 全区间,窗口(latest/around)只是定位视图、不要求覆盖 first-unread→tail;唯一保证 = 并发尾部(`seq > snapshot`)不被吞。
 4. **`thread_followers` 是 delivery/agent-wake 契约,本改动只读它做 followed/all 区分,不写、不改其语义**(为 Activity 阶段的 delivery⊥attention 不变量预留干净边界)。
 5. 迁移 append-only,v51,不改已发布迁移;table rebuild 在单条迁移内原子完成。
 6. **所有 `conversation_reads` 访问必须限定 `thread_root_id`(IS NULL 或 = ?),roll-up 聚合除外**(§4.1)。
 7. **`conversation_reads` thread 行受 root-invariant trigger 守护**(同一 conversation + root 存在 + 非 reply,§3.1.1)。
-8. **open-time snapshot 的唯一来源 = 打开流的窗口响应 `stream_head_seq`**,与窗口同一次 read 捕获(head-before-window);客户端回传它当 `snapshot_seq`,不在 mark 时另查 head、不从 loaded messages 推断、不放行级 head。
+8. **open-time snapshot 的唯一来源 = 打开流的窗口响应 `stream_head_seq`**,与窗口同一次 read 捕获(head-before-window);客户端回传它当 `snapshot_seq`,不在 mark 时另查 head、不从 loaded messages 推断、不放行级 head。`stream_head_seq` 窗口无关,配合 §8.3 read-to-clear:其保证是「并发尾部不吞」,非「覆盖窗口内可见尾部」。
 9. **客户端消费 freshness(client-side,review round-3 Cindy blocker):snapshot 必须来自「本次打开」的窗口 read,不能是上次打开遗留的缓存值。** React Query 重开同一 thread 会先同步吐旧 cache 的 `stream_head_seq`、再后台 refetch;若 effect 见到非 null head 即 mark 并用「per-root 永久 once-guard」锁死,新响应的更高 head 会被 ref-gate 吞掉 → cursor 停在上次快照、且 snapshot 源自上次 read,破契约。要求:①打开时保证一次 window refetch(`refetchOnMount: 'always'` 或 open 时 invalidate);②mark 仅当**本次 open 触发的 window fetch 已成功完成**;③once-guard **仅在通过②的成功门控后、per-open 重新 arm**(keyed by open/epoch,非永久 per-root;等待/失败态不得提前锁死)。
    - **门控信号必须是「本次 window fetch 成功」本身,不能裸用 `dataUpdatedAt`(review round-3 Cindy 收紧):** `dataUpdatedAt` 只是「数据更新时刻」代理,`setQueryData`(乐观 `patchReplySummary` / live-append)同样会 bump 它,会在真正 window refetch 完成前把门提前打开 → 用非窗口成功响应当 snapshot 源。优先吃一个 current-open fetch epoch / fetch promise success / `lastWindowFetchSucceededAt`(只在 window fetch 成功路径写,不被 `setQueryData` 触达)。若最终仍用 `dataUpdatedAt`,测试必须覆盖两类负例:(a) 旧 cache 先返回 → 不 mark;(b) 本次 open 的 refetch 成功完成前、即便 `setQueryData` 更新了 query data → 仍不 mark。
    - **后端无法兜底**——stale `S` 是合法 seq ≤ head,后端区分不了「本次/上次打开」,故 freshness 是 client 消费纪律。
