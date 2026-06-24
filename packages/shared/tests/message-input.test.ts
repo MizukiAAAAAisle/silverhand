@@ -52,6 +52,7 @@ describe('message send input schemas', () => {
         reply_counts_by_root: { root_message_id: 2 },
         has_more_before: false,
         has_more_after: false,
+        stream_head_seq: 0,
       }).success,
     ).toBe(true);
   });

@@ -1164,6 +1164,149 @@ describe('database migrations', () => {
   // pin the upgrade: old (user_id, list_key) rows fold into scope '', the new
   // PK is (user_id, list_key, scope), and the same (user, list) can now hold
   // distinct per-scope modes.
+  describe('v51 conversation_reads_per_stream', () => {
+    it('migrates the old per-conversation cursor to a mainline row, eager-seeds existing threads, and enforces the per-stream uniqueness + root invariants', () => {
+      const db = openDbAt(50);
+      try {
+        const now = 1_700_000_000_000;
+        db.exec(`
+          INSERT INTO hosts (id, name, kind, created_at)
+          VALUES ('host_local', 'local', 'local', ${now});
+          INSERT INTO users (id, name, display_name, created_at, updated_at)
+          VALUES ('u1', 'one', 'One', ${now}, ${now}),
+                 ('u2', 'two', 'Two', ${now}, ${now});
+          INSERT INTO workspaces
+            (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+             owner_agent_id, archived_at, pinned_at, created_at, updated_at)
+          VALUES
+            ('ws_main', 'Main', NULL, 'regular', '/tmp/ws_main', 'host_local',
+             NULL, NULL, NULL, ${now}, ${now});
+          INSERT INTO conversations
+            (id, workspace_id, workspace_path, kind, parent_conversation_id, title,
+             status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+             archived_at, created_at, updated_at)
+          VALUES
+            ('conv_main', 'ws_main', '/tmp/ws_main', 'channel', NULL, 'general',
+             'idle', NULL, NULL, NULL, NULL, NULL, ${now}, ${now}),
+            ('conv_other', 'ws_main', '/tmp/ws_main', 'channel', NULL, 'other',
+             'idle', NULL, NULL, NULL, NULL, NULL, ${now}, ${now});
+          -- root1 (mainline) + reply1 (thread under root1) in conv_main; rootOther
+          -- is a mainline message belonging to conv_other.
+          INSERT INTO messages
+            (id, conversation_id, from_kind, from_user_id, content, seq, created_at, thread_root_id)
+          VALUES
+            ('root1', 'conv_main', 'user', 'u1', 'root', 1, ${now}, NULL),
+            ('reply1', 'conv_main', 'user', 'u1', 'r1', 2, ${now}, 'root1'),
+            ('rootOther', 'conv_other', 'user', 'u1', 'o', 1, ${now}, NULL);
+          -- per-stream freshness heads: mainline + the one thread in conv_main.
+          INSERT INTO conversation_stream_heads (conversation_id, thread_root_id, latest_seq)
+          VALUES ('conv_main', NULL, 10),
+                 ('conv_main', 'root1', 20),
+                 ('conv_other', NULL, 3);
+          -- OLD per-conversation cursors (v50 shape: PK user_id, conversation_id).
+          INSERT INTO conversation_reads (user_id, conversation_id, last_read_seq, read_at)
+          VALUES ('u1', 'conv_main', 5, ${now}),
+                 ('u2', 'conv_main', 3, ${now});
+        `);
+
+        applyMigrationsThrough(db, 51);
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 51`).get(),
+        ).toBeDefined();
+
+        // New per-stream column.
+        const cols = (
+          db.pragma('table_info(conversation_reads)') as Array<{ name: string }>
+        ).map(c => c.name);
+        expect(cols).toContain('thread_root_id');
+
+        // Old rows became MAINLINE cursors (thread_root_id NULL), value preserved.
+        const mainline = db
+          .prepare(
+            `SELECT user_id, last_read_seq FROM conversation_reads
+              WHERE conversation_id = 'conv_main' AND thread_root_id IS NULL
+              ORDER BY user_id`,
+          )
+          .all();
+        expect(mainline).toEqual([
+          { user_id: 'u1', last_read_seq: 5 },
+          { user_id: 'u2', last_read_seq: 3 },
+        ]);
+
+        // Eager seed: every existing thread stream gets a per-(user,thread) row
+        // frozen at that user's old mainline value — so an upgrade produces no
+        // historical unread flood, and the steady-state model needs no fallback.
+        const seeded = db
+          .prepare(
+            `SELECT user_id, last_read_seq FROM conversation_reads
+              WHERE conversation_id = 'conv_main' AND thread_root_id = 'root1'
+              ORDER BY user_id`,
+          )
+          .all();
+        expect(seeded).toEqual([
+          { user_id: 'u1', last_read_seq: 5 },
+          { user_id: 'u2', last_read_seq: 3 },
+        ]);
+
+        // conv_other had no cursor → nothing seeded there.
+        expect(
+          db
+            .prepare(
+              `SELECT COUNT(*) AS c FROM conversation_reads WHERE conversation_id = 'conv_other'`,
+            )
+            .get(),
+        ).toEqual({ c: 0 });
+
+        // Partial-unique indexes: one mainline row + one row per thread.
+        expect(() =>
+          db
+            .prepare(
+              `INSERT INTO conversation_reads (user_id, conversation_id, thread_root_id, last_read_seq, read_at)
+               VALUES ('u1', 'conv_main', NULL, 0, ${now})`,
+            )
+            .run(),
+        ).toThrow(/UNIQUE/i);
+        expect(() =>
+          db
+            .prepare(
+              `INSERT INTO conversation_reads (user_id, conversation_id, thread_root_id, last_read_seq, read_at)
+               VALUES ('u1', 'conv_main', 'root1', 0, ${now})`,
+            )
+            .run(),
+        ).toThrow(/UNIQUE/i);
+
+        // Root-invariant trigger: a thread_root_id that is itself a reply,
+        // that lives in another conversation, or that doesn't exist — all reject.
+        expect(() =>
+          db
+            .prepare(
+              `INSERT INTO conversation_reads (user_id, conversation_id, thread_root_id, last_read_seq, read_at)
+               VALUES ('u2', 'conv_main', 'reply1', 0, ${now})`,
+            )
+            .run(),
+        ).toThrow(/must not itself be a reply/);
+        expect(() =>
+          db
+            .prepare(
+              `INSERT INTO conversation_reads (user_id, conversation_id, thread_root_id, last_read_seq, read_at)
+               VALUES ('u2', 'conv_main', 'rootOther', 0, ${now})`,
+            )
+            .run(),
+        ).toThrow(/same conversation/);
+        expect(() =>
+          db
+            .prepare(
+              `INSERT INTO conversation_reads (user_id, conversation_id, thread_root_id, last_read_seq, read_at)
+               VALUES ('u2', 'conv_main', 'ghost', 0, ${now})`,
+            )
+            .run(),
+        ).toThrow();
+      } finally {
+        db.close();
+      }
+    });
+  });
+
   describe('v48 user_list_sort_mode_per_scope', () => {
     it('folds existing v47 rows into scope "" and re-keys on (user_id, list_key, scope)', () => {
       const db = openDbAt(47);

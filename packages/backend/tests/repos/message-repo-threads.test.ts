@@ -288,7 +288,7 @@ describe('MessageRepo.replyBadgeSummariesByRoot (P1)', () => {
     });
 
     // Replies to A: human alice, agent, plus a system message (excluded).
-    repo.insertForConversation({
+    const a1 = repo.insertForConversation({
       conversationId: channel.id,
       fromKind: 'user',
       fromUserId: 'alice',
@@ -319,7 +319,7 @@ describe('MessageRepo.replyBadgeSummariesByRoot (P1)', () => {
 
     const rootIds = [rootA.id, rootB.id, lonely.id];
     const counts = repo.replyCountsByRoot(channel.id, rootIds);
-    const sums = repo.replyBadgeSummariesByRoot(channel.id, rootIds);
+    const sums = repo.replyBadgeSummariesByRoot(channel.id, rootIds, 'local');
 
     // Only roots with >= 1 non-system reply appear (lonely excluded).
     expect(Object.keys(sums).sort()).toEqual([rootA.id, rootB.id].sort());
@@ -333,10 +333,17 @@ describe('MessageRepo.replyBadgeSummariesByRoot (P1)', () => {
     ]);
     expect(sums[rootA.id]!.replier_total).toBe(2);
     expect(sums[rootB.id]!.repliers).toEqual([{ kind: 'human', id: 'bob' }]);
+
+    // Per-viewer unread sidecar (#task:1226): viewer 'local' has no cursor, so
+    // every non-system, non-own reply is unread. Same source as the Threads
+    // list — first-unread is the lowest-seq unread reply in each cluster.
+    expect(sums[rootA.id]!.unread_count).toBe(2); // a1, a2
+    expect(sums[rootA.id]!.first_unread_message_id).toBe(a1.id);
+    expect(sums[rootB.id]!.unread_count).toBe(1); // b1
   });
 
   it('returns an empty record for no roots', () => {
     const { channel, repo } = bootstrap();
-    expect(repo.replyBadgeSummariesByRoot(channel.id, [])).toEqual({});
+    expect(repo.replyBadgeSummariesByRoot(channel.id, [], 'local')).toEqual({});
   });
 });

@@ -191,7 +191,7 @@ describe('GET /api/channels/:id/messages — reply_summaries_by_root (P1)', () =
       fromUserId: 'local',
       content: 'has a thread',
     });
-    messages.insertForConversation({
+    const reply = messages.insertForConversation({
       conversationId: channelId,
       fromKind: 'agent',
       fromAgentId: agentIds.alice!,
@@ -222,6 +222,16 @@ describe('GET /api/channels/:id/messages — reply_summaries_by_root (P1)', () =
     ]);
     expect(summaries[root.id].replier_total).toBe(1);
     expect(typeof summaries[root.id].last_reply_at).toBe('number');
+    // Per-viewer unread sidecar (#task:1226): the agent reply is unread for the
+    // default viewer 'local', and the chip jumps to it. Same source as the
+    // Threads list.
+    expect(summaries[root.id].unread_count).toBe(1);
+    expect(summaries[root.id].first_unread_message_id).toBe(reply.id);
+    expect(summaries[root.id].first_unread_seq).toBe(reply.seq);
+    // Open-time snapshot of the opened (mainline) stream, captured in the same
+    // read as the window — drives `mark-read` without swallowing a tail.
+    expect(typeof body.stream_head_seq).toBe('number');
+    expect(body.stream_head_seq).toBeGreaterThan(0);
     // Every summary key is a count key (never widens the root set).
     for (const k of Object.keys(summaries)) {
       expect(body.reply_counts_by_root).toHaveProperty(k);

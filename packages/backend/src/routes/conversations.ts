@@ -230,6 +230,18 @@ export function createConversationReadApp(
         },
         () => {
           const opts = { limit, beforeSeq, afterSeq, aroundMessageId };
+          // Open-time snapshot (#task:1226). Capture the opened stream's head
+          // BEFORE reading the window so it can never exceed what the window
+          // renders: the backend is the single synchronous writer, so no insert
+          // interleaves between these reads (head and window share one logical
+          // snapshot); and even defensively, head-before-window means head <=
+          // rendered tail, so `mark-read` to this snapshot can never swallow an
+          // un-rendered message. Must be captured here, in the same read — not
+          // re-queried at mark-time, which is exactly the swallow bug.
+          const streamHeadSeq = messages.streamHeadLatestSeq(
+            channel.id,
+            threadRootId,
+          );
           const window = threadRootId
             ? messages.listWindowForThreadCluster(channel.id, threadRootId, opts)
             : messages.listWindowForMainStream(channel.id, opts);
@@ -255,11 +267,13 @@ export function createConversationReadApp(
             .map(message => message.id);
           return {
             ...window,
+            stream_head_seq: streamHeadSeq,
             messages: messagesWithReactions,
             reply_counts_by_root: messages.replyCountsByRoot(channel.id, rootIds),
             reply_summaries_by_root: messages.replyBadgeSummariesByRoot(
               channel.id,
               rootIds,
+              viewerUserId,
             ),
           };
         },

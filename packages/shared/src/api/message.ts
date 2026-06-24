@@ -71,6 +71,17 @@ export const ReplyBadgeSummarySchema = z.object({
   ),
   /** Full distinct replier count (drives a "+N" overflow past the 3 shown). */
   replier_total: z.number().int().nonnegative(),
+  /** Per-viewer unread count for this reply-cluster (#task:1226), scored
+   *  against the viewer's own per-thread `conversation_reads` cursor — the
+   *  SAME source as the Threads list (`ThreadSummary.unread_count`), so the
+   *  inline reply chip ("3 replies · 2 new") and the Threads list never
+   *  diverge. Follow-agnostic: a thread's unread is independent of whether the
+   *  viewer follows it. 0 when the viewer is caught up. */
+  unread_count: z.number().int().nonnegative(),
+  /** First unread message id / seq in this cluster for the viewer, so the chip
+   *  can jump straight to it. Both null when `unread_count` is 0. */
+  first_unread_message_id: z.string().nullable(),
+  first_unread_seq: z.number().int().nonnegative().nullable(),
 });
 export type ReplyBadgeSummary = z.infer<typeof ReplyBadgeSummarySchema>;
 
@@ -87,6 +98,14 @@ export const ConversationMessagesDtoSchema = z.object({
     .record(z.string(), ReplyBadgeSummarySchema)
     .optional(),
   has_more_before: z.boolean(),
+  /** Open-time snapshot of the opened stream's head (#task:1226): the
+   *  `conversation_stream_heads.latest_seq` for the requested stream (mainline
+   *  when no `thread_root_id`, else that reply-cluster), captured in the SAME
+   *  read as this window — never a later/separate query, so a concurrent tail
+   *  arriving after the window can't slip into the snapshot. The client echoes
+   *  this as `snapshot_seq` to `mark-read` so the cursor advances only to what
+   *  was actually rendered, not to "current latest". 0 for an empty stream. */
+  stream_head_seq: z.number().int().nonnegative(),
   /** True when at least one message exists with seq > max(messages.seq).
    *  For the default "latest" window this is always false; for an
    *  anchored window (`before_seq` / `after_seq` / `around_message_id`)

@@ -162,6 +162,8 @@ firstUnread(S) = messages m (同 §3.3 过滤) ORDER BY m.seq ASC LIMIT 1
 - `ConversationReadRow`(`schema.ts:428`)**加 `thread_root_id: string | null` 字段**。
 - `ConversationReadRepo` 全部方法 thread-aware:`markRead(.., threadRootId?, snapshotSeq?)`(fallback 见 §3.4);新增 per-stream `unreadCountForStream` / `firstUnreadForStream`;`unreadCountForConversation` 改为 §3.5 的 roll-up。
 - **first-unread DTO 固定输出两个字段(review #4):`first_unread_message_id` + `first_unread_seq`**(§3.6),不要只给 seq——UI 跳转要可靠定位到具体 message,半截 contract 会让前后端各猜一套。`ThreadSummary` 填 `unread_count`(= `thread_unread(R)`)+ 这两个字段。`listChannelThreads`(`message-repo.ts`)带 viewer 计算。
+- **reply chip 同源(review round-3,Finding 1):`ReplyBadgeSummary`(`message.ts`,主线窗口 `reply_summaries_by_root` 的 per-root sidecar)也带 `unread_count` + `first_unread_message_id`(+seq)**,由 `replyBadgeSummariesByRoot(conv, rootIds, viewerUserId)` 复用**同一个 `threadUnreadByRoots`**(follow-agnostic、按 rootIds 批量)算出——chip(主线 root 行内联)与 Threads list 读**同一套真相**,不各算一份。
+- **open-time snapshot 必须由 read 暴露(review round-3,Finding 2):消息窗口响应 `ConversationMessagesDto` 加 `stream_head_seq`**,= 被打开的那条流(无 thread_root_id=主线 / 否则该 cluster)的 `conversation_stream_heads.latest_seq`,**与窗口在同一次 read 捕获**(`routes/conversations.ts` 窗口 callback:head **先于** `listWindow` 取——backend 单写者同步执行,两次读同一逻辑快照;且 head-before-window ⇒ head ≤ 渲染尾部,防 mark-read 吞未渲染消息)。客户端把它原样回传 `mark-read` 的 `snapshot_seq`,**绝不在 mark 时再查 head、也不从已加载 messages `max(seq)` 推断**(Cindy round-3 实现不变量)。**不在 `ThreadSummary`/`ReplyBadgeSummary` 行级放 head**:mark 永远发生在打开 thread 窗口、渲染之后(§6),那一刻窗口响应的 `stream_head_seq` 即唯一权威快照;行级 head 会诱导渲染前标读(违 §6)且制造第二个会分叉的快照源。
 - mark-read 路由(`markConversationRead`,`routes/conversations.ts:462`)入参迁为 `{ thread_root_id?, snapshot_seq? }`(§3.4 命名)。**主线(无 thread_root_id):snapshot_seq 可省、fallback mainline head(兼容);thread:snapshot_seq 必传,缺失 → 400;显式 snapshot_seq > 目标 stream head → 400**(§3.4)。`markRead(viewerUserId, conversationId, threadRootId?, snapshotSeq?)`。
 - WS `unread_updated`(viewer-scoped)沿用;thread 未读变化复用同一失效信号。
 
@@ -179,7 +181,7 @@ per-stream 后,`conversation_reads` 每个 (user, conversation) **不再只有�
 
 1. **Sidebar**:**单一** channel count = §3.5 的 `channel_unread`(主线 + followed thread)。**不放第二个 dot/数字。**
 2. **Threads list**:followed thread 未读带数字;**非 followed 有新 reply → 弱 dot(降透明度)**。followed/all 区分只在这一层。
-3. **Reply chip(root 行 inline)**:未读态 `3 replies · 2 new`,点击跳 §3.6 的 first-unread。
+3. **Reply chip(root 行 inline)**:未读态 `3 replies · 2 new`,点击跳 §3.6 的 first-unread。数据源 = 主线窗口 `reply_summaries_by_root[rootId]` 的 `unread_count` + `first_unread_message_id`(§4 reply chip 同源)。点击=打开该 thread 窗口→用窗口响应 `stream_head_seq` 做 mark-read snapshot(§3.4),不在行级或 mark 时另取 head。
 
 ## 6. mark-read 触发纪律
 
@@ -199,6 +201,7 @@ per-stream 后,`conversation_reads` 每个 (user, conversation) **不再只有�
 5. 迁移 append-only,v51,不改已发布迁移;table rebuild 在单条迁移内原子完成。
 6. **所有 `conversation_reads` 访问必须限定 `thread_root_id`(IS NULL 或 = ?),roll-up 聚合除外**(§4.1)。
 7. **`conversation_reads` thread 行受 root-invariant trigger 守护**(同一 conversation + root 存在 + 非 reply,§3.1.1)。
+8. **open-time snapshot 的唯一来源 = 打开流的窗口响应 `stream_head_seq`**,与窗口同一次 read 捕获(head-before-window);客户端回传它当 `snapshot_seq`,不在 mark 时另查 head、不从 loaded messages 推断、不放行级 head。
 
 ## 9. 迁移安全 / 验证
 

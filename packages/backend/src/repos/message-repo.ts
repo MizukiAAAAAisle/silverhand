@@ -458,10 +458,17 @@ export class MessageRepo {
    *  `reply_count` is identical to `replyCountsByRoot` by construction (same
    *  `from_kind != 'system'` rule), so the two never visibly diverge.
    *  `last_reply_at` is the max-`seq` non-system reply's `created_at` (seq is
-   *  the recency authority — see `listChannelThreads`), shared with P2. */
+   *  the recency authority — see `listChannelThreads`), shared with P2.
+   *
+   *  Also carries the viewer's per-thread unread sidecar (#task:1226:
+   *  `unread_count` + first-unread id/seq), computed by the SAME
+   *  `threadUnreadByRoots` the Threads list uses, so the inline reply chip
+   *  ("3 replies · 2 new" + jump-to-first-unread) and the Threads list are one
+   *  source of truth. Follow-agnostic. */
   replyBadgeSummariesByRoot(
     conversationId: string,
     rootMessageIds: readonly string[],
+    viewerUserId: string,
   ): Record<string, ReplyBadgeSummary> {
     const result: Record<string, ReplyBadgeSummary> = {};
     const uniqueRootIds = [...new Set(rootMessageIds)];
@@ -493,17 +500,29 @@ export class MessageRepo {
       .all(conversationId, ...uniqueRootIds, conversationId);
 
     const repliersByRoot = this.repliersForRoots(conversationId, uniqueRootIds);
+    // Same per-thread unread sidecar the Threads list uses (#task:1226), so the
+    // inline reply chip and the Threads list read ONE source of truth. Batched,
+    // follow-agnostic (a thread's unread doesn't depend on follow state).
+    const unreadByRoot = this.threadUnreadByRoots(
+      conversationId,
+      uniqueRootIds,
+      viewerUserId,
+    );
 
     for (const row of rows) {
       const rep = repliersByRoot.get(row.root_id) ?? {
         repliers: [],
         total: 0,
       };
+      const unread = unreadByRoot.get(row.root_id);
       result[row.root_id] = {
         reply_count: row.reply_count,
         last_reply_at: row.last_reply_at,
         repliers: rep.repliers,
         replier_total: rep.total,
+        unread_count: unread?.unread_count ?? 0,
+        first_unread_message_id: unread?.first_unread_message_id ?? null,
+        first_unread_seq: unread?.first_unread_seq ?? null,
       };
     }
     return result;
