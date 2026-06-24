@@ -320,6 +320,34 @@ export function canEditAgent(
 }
 
 /**
+ * #task:1219 — owner gate for reading an agent's workspace files
+ * (`GET /api/agents/:id/workspace/tree` + `/workspace/file`), covering
+ * BOTH the no-param L1/home view (system_prompt / MEMORY / notes) and
+ * the `workspace_id` L2 view. An agent's files are its private
+ * cognition; co-membership grants collaboration, not access to a
+ * member's brain (architecture-principles.md §1, Human/Agent
+ * isomorphism). So file reads are owner-only — the same posture as the
+ * sibling owner-gated surfaces on the agent page (raw MCP config,
+ * schedules).
+ *
+ * It is a named alias of `canEditAgent` (owner / creator / self) ON
+ * PURPOSE: it is the SINGLE cut point for the agreed future relaxation
+ * — letting an owner explicitly opt L2 into being visible to that
+ * workspace's members via a per-(agent, workspace) share grant
+ * (decided 2026-06-24 with shiki/Cindy/Norman). When that lands, the
+ * L2 branch widens HERE (parameterized by workspace_id) and nowhere
+ * else; L1/home stays owner-only regardless. Until then both collapse
+ * to plain owner.
+ */
+export function canViewAgentFiles(
+  ctx: BackendContext,
+  principal: Principal,
+  agentId: string,
+): boolean {
+  return canEditAgent(ctx, principal, agentId);
+}
+
+/**
  * D4.d D5 fixup (Cindy `vB9vzUo4y_vgSZf8` P1) — options surface for
  * `canViewAgent`'s `materialization_status` widener. Default-active
  * is the load-bearing contract:

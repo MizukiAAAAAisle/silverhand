@@ -23,6 +23,7 @@ import type { BackendContext } from '../context.js';
 import {
   canEditAgent,
   canViewAgent,
+  canViewAgentFiles,
   canViewWorkspace,
 } from '../permissions.js';
 import {
@@ -566,6 +567,16 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     if (!canViewAgent(ctx, principal, agent.id)) {
       return c.json({ error: 'agent not found' }, 404);
     }
+    // #task:1219 — agent files (L1/home + L2) are owner-private. The
+    // `canViewAgent` gate above is the anti-enumeration outer door (a
+    // total stranger gets 404 and can't tell the agent exists); a
+    // co-workspace member who is NOT the owner clears it but must still
+    // be refused here. Mirrors the sibling owner-gated surfaces (raw
+    // MCP config, schedules). 403 is the honest "you're not the owner"
+    // surface the renderer renders as a neutral private empty state.
+    if (!canViewAgentFiles(ctx, principal, agent.id)) {
+      return c.json({ error: 'forbidden', code: 'forbidden' }, 403);
+    }
     const scope = resolveAgentWorkspaceScope({
       ctx,
       principal,
@@ -606,6 +617,16 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     const principal = getUserPrincipal(c);
     if (!canViewAgent(ctx, principal, agent.id)) {
       return c.json({ error: 'agent not found' }, 404);
+    }
+    // #task:1219 — agent files (L1/home + L2) are owner-private. The
+    // `canViewAgent` gate above is the anti-enumeration outer door (a
+    // total stranger gets 404 and can't tell the agent exists); a
+    // co-workspace member who is NOT the owner clears it but must still
+    // be refused here. Mirrors the sibling owner-gated surfaces (raw
+    // MCP config, schedules). 403 is the honest "you're not the owner"
+    // surface the renderer renders as a neutral private empty state.
+    if (!canViewAgentFiles(ctx, principal, agent.id)) {
+      return c.json({ error: 'forbidden', code: 'forbidden' }, 403);
     }
     const scope = resolveAgentWorkspaceScope({
       ctx,

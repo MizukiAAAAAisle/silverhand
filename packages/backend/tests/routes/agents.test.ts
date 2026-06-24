@@ -706,6 +706,56 @@ describe('GET /api/agents/:id/workspace/tree', () => {
     const body = await res.json() as any;
     expect(body.code).toBe('fs_unavailable');
   });
+
+  // #task:1219 — agent files (L1/home) are owner-private. A co-workspace
+  // member who is NOT the creator clears the anti-enumeration
+  // `canViewAgent` door but must be refused by the owner gate. Before
+  // the fix this returned 200 and leaked the agent's system_prompt /
+  // MEMORY / notes to every co-member.
+  it('403 for a non-owner co-member reading the L1/home tree, and no daemon dispatch (#task:1219)', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    t.fakeHostWs!.calls.length = 0;
+    const res = await http(t).get(
+      `/api/agents/${created.agent.id}/workspace/tree`,
+      { headers: { [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate') } },
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json() as any).code).toBe('forbidden');
+    // Owner-gate refusal must short-circuit BEFORE the data plane: a
+    // doomed read never reaches the daemon.
+    expect(
+      t.fakeHostWs!.calls.some(c => c.kind === 'agent_workspace_tree'),
+    ).toBe(false);
+  });
+
+  // #task:1219 — same owner gate covers the L2 (`workspace_id`) view.
+  it('403 for a non-owner co-member reading the L2 tree (#task:1219)', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    const ws = await (
+      await http(t).post('/api/workspaces', {
+        name: 'scoped-memory',
+        member_agent_ids: [created.agent.id],
+      })
+    ).json() as any;
+    t.fakeHostWs!.calls.length = 0;
+    const res = await http(t).get(
+      `/api/agents/${created.agent.id}/workspace/tree?workspace_id=${encodeURIComponent(
+        ws.workspace.id,
+      )}`,
+      { headers: { [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate') } },
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json() as any).code).toBe('forbidden');
+    expect(
+      t.fakeHostWs!.calls.some(c => c.kind === 'agent_workspace_tree'),
+    ).toBe(false);
+  });
 });
 
 describe('GET /api/agents/:id/workspace/file', () => {
@@ -892,6 +942,27 @@ describe('GET /api/agents/:id/workspace/file', () => {
     const body = await res.json() as any;
     expect(body.file.truncated).toBe(true);
     expect(body.file.size).toBe(64 * 1024 + 500);
+  });
+
+  // #task:1219 — file reads are owner-private too (same gate as the
+  // tree). A non-owner co-member is refused before the daemon read.
+  it('403 for a non-owner co-member reading a file, and no daemon dispatch (#task:1219)', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    t.fakeHostWs!.calls.length = 0;
+    const res = await http(t).get(
+      `/api/agents/${created.agent.id}/workspace/file?path=${encodeURIComponent(
+        'system_prompt.md',
+      )}`,
+      { headers: { [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate') } },
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json() as any).code).toBe('forbidden');
+    expect(
+      t.fakeHostWs!.calls.some(c => c.kind === 'agent_workspace_file_read'),
+    ).toBe(false);
   });
 });
 
