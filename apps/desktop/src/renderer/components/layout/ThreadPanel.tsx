@@ -8,7 +8,7 @@ import { Composer } from '@/components/chat/Composer';
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import { useMessageActionSurface } from '@/components/chat/useMessageActionSurface';
 import { MessageActionChrome } from '@/components/chat/MessageActionChrome';
-import { threadMarkReadSnapshot } from './threadMarkRead';
+import { threadMarkReadSnapshot, threadOpenNeedsLatestRefetch } from './threadMarkRead';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import {
@@ -291,25 +291,49 @@ export function ThreadPanel({
     setSelectionResetKey(v => v + 1);
   }, [rootMessageId]);
 
-  // Mark this reply-cluster read once per open (#task:1226 surface 4, §9).
-  // Opening a thread IS reading it (read-to-clear), so we advance the viewer's
-  // per-thread `conversation_reads` cursor to the OPEN-TIME stream head. The
-  // snapshot MUST come from THIS open's window response — not the previous
-  // open's cache React Query serves synchronously on reopen, and not a
-  // `setQueryData` update. `threadMarkReadSnapshot` enforces that via the
-  // `windowFetchSucceededAt >= openedAt` gate; `refetchOnMount: 'always'`
-  // guarantees a fetch on every open so the gate eventually passes.
+  // Mark this reply-cluster read once per open (#task:1226 surface 4, §9/§9.10).
+  // Opening a thread IS reading it (read-to-clear whole opened thread), so we
+  // advance the viewer's per-thread `conversation_reads` cursor to the
+  // OPEN-TIME stream head. The snapshot must come from THIS open's window fetch
+  // — not the previous open's cache React Query serves synchronously on reopen,
+  // and not a `setQueryData` update. `threadMarkReadSnapshot` enforces that via
+  // `windowFetchSucceededAt >= openedAt`.
   //
-  // The once-guard (`markedForOpenRef`) is re-armed per open in the arming
-  // effect below — keyed by (channelId, rootMessageId), NEVER a permanent
-  // per-root lock — so a stale cache can't lock it before the fresh fetch.
+  // `openedAt` / the once-guard / "was this a jump open" are captured at
+  // RENDER time (the earliest point — before effects, before a fast localhost
+  // `primeAround` could resolve), keyed by (channelId, rootMessageId). The
+  // once-guard is therefore re-armed per open, never a permanent per-root lock,
+  // so a stale cache can't lock it before the fresh fetch.
   // Human-attention only — writes the read cursor, never delivery/wake.
+  const openKeyRef = useRef('');
   const openedAtRef = useRef(0);
   const markedForOpenRef = useRef(false);
-  useEffect(() => {
+  const isJumpOpenRef = useRef(false);
+  const openKey = `${channelId} ${rootMessageId}`;
+  if (openKeyRef.current !== openKey) {
+    openKeyRef.current = openKey;
     openedAtRef.current = Date.now();
     markedForOpenRef.current = false;
+    // Whether THIS open began as a first-unread jump. Captured once at open so
+    // a later `clearJump` (which nulls `jumpMessageId`) can't flip it and
+    // trigger a latest refetch that clobbers the around-window mid-read.
+    isJumpOpenRef.current = jumpMessageId != null;
+  }
+
+  // §9.10: drive this open's window fetch explicitly (the query itself has
+  // `refetchOnMount: false`). A NORMAL open forces a fresh latest window so its
+  // mark snapshot is from this open and the gate opens. A JUMP open does NOT
+  // refetch — `primeAround` already fetched the authoritative around-first-unread
+  // window (and stamped the freshness epoch); a target-less latest refetch here
+  // would clobber it. Keyed on (channelId, rootMessageId) so it runs once per
+  // open, NOT on `jumpMessageId` (which clears after locate).
+  useEffect(() => {
+    if (threadOpenNeedsLatestRefetch({ isJumpOpen: isJumpOpenRef.current })) {
+      void cluster.refetch();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelId, rootMessageId]);
+
   useEffect(() => {
     const snapshot = threadMarkReadSnapshot({
       alreadyMarkedForOpen: markedForOpenRef.current,

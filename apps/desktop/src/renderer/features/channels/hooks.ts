@@ -50,6 +50,14 @@ export const messagesKey = (cid: string) =>
  *  from the main-stream window (`messagesKey`) which excludes replies. */
 export const clusterMessagesKey = (cid: string, rootId: string) =>
   ['channels', cid, 'cluster', rootId, 'messages'] as const;
+/** Cache key carrying the "this-open window fetch succeeded" epoch (ms) for a
+ *  reply cluster (#task:1226 §9/§9.10). Written on the success path by both
+ *  `useThreadCluster`'s queryFn AND `primeAround`'s around-target fetch, so a
+ *  jump open arms the mark-read freshness gate the same way a normal open does.
+ *  Deliberately separate from `clusterMessagesKey` so `setQueryData` appends to
+ *  the window (live reply / optimistic patch) never advance it. */
+export const clusterFetchEpochKey = (cid: string, rootId: string) =>
+  ['channels', cid, 'cluster', rootId, 'fetch-epoch'] as const;
 /** Cache key for the thread pane's root row. The root message lives in the
  *  main stream, but ThreadPanel loads it through its own single-row window
  *  query so the pane can mount independently of the channel list. */
@@ -829,16 +837,18 @@ export function useThreadCluster(
 
   const [hasNewerLiveGap, setHasNewerLiveGap] = useState(false);
 
-  // Epoch (ms) of the last SUCCESSFUL window fetch for this cluster, stamped
-  // ONLY inside queryFn's success path (#task:1226 §9). Crucially this is NOT
-  // `dataUpdatedAt`: React Query bumps `dataUpdatedAt` on `setQueryData` too
-  // (optimistic `patchReplySummary` / live-append), which would open the
-  // mark-read freshness gate before THIS open's real window response landed —
-  // marking with a non-window snapshot source. A queryFn-only stamp is
-  // unreachable by `setQueryData`, so it proves "this open's window fetch
-  // succeeded". Read reactively via the return value (re-rendered when the
-  // fetch resolves and updates the cache).
-  const windowFetchSucceededAtRef = useRef(0);
+  // "This open's window fetch succeeded" signal (#task:1226 §9/§9.10), carried
+  // in a dedicated cache key so BOTH writers reach it: this hook's queryFn AND
+  // `primeAround` (the jump-open's around-target fetch). It is NOT
+  // `dataUpdatedAt` — React Query bumps that on `setQueryData` too (optimistic
+  // `patchReplySummary` / live-append), which would open the mark-read gate
+  // before a real window response landed. Only a successful window FETCH writes
+  // this epoch, so it proves the loaded window is from this open. Read
+  // reactively below via `useQuery`.
+  const epochKey = clusterFetchEpochKey(
+    channelId ?? 'none',
+    rootMessageId ?? 'none',
+  );
 
   // Reset the gap when the consumer switches channel or thread — a stale
   // "newer replies below" hint from the previous cluster would be wrong.
@@ -855,12 +865,14 @@ export function useThreadCluster(
   >({
     queryKey: key,
     enabled,
-    // #task:1226 §9: opening a thread MUST trigger a fresh window read so the
-    // mark-read snapshot comes from THIS open, never the previous open's
-    // synchronously-served cache. Without this, a reopen within gcTime serves
-    // the stale `stream_head_seq` and the freshness gate (dataUpdatedAt >=
-    // openedAt) would never pass → the thread never marks read on reopen.
-    refetchOnMount: 'always',
+    // #task:1226 §9.10: do NOT auto-refetch on mount. A target-less latest
+    // refetch would CLOBBER a jump-open's around-first-unread window that
+    // `primeAround` wrote (the authoritative this-open window for a jump). The
+    // open's fetch is driven explicitly by the consumer instead: a normal open
+    // calls `refetch()` (fresh latest → marks read); a jump-open relies on
+    // primeAround's around-fetch (which also stamps the epoch below). Initial
+    // load on an empty cache still fetches regardless of this flag.
+    refetchOnMount: false,
     initialPageParam: undefined as MessagesPageParam,
     queryFn: async ({ pageParam, signal }) => {
       const dto = await fetchMessagesWindow({
@@ -871,8 +883,8 @@ export function useThreadCluster(
         signal,
       });
       // Success path only — reached on a real window response, never via
-      // `setQueryData`. This is the mark-read freshness signal (§9).
-      windowFetchSucceededAtRef.current = Date.now();
+      // `setQueryData`. Stamp the shared freshness epoch (§9/§9.10).
+      qc.setQueryData(epochKey, Date.now());
       return dto;
     },
     getPreviousPageParam: firstPage => {
@@ -967,14 +979,27 @@ export function useThreadCluster(
   );
   useConversationStream(enabled ? channelId : null, onEvent);
 
-  // Head of the loaded cluster window: the FIRST page's `stream_head_seq`
-  // (captured in the same read as the window) — the mark-read snapshot VALUE
-  // for surface 4, never max(seq) of loaded rows. The cached value may belong
-  // to a PREVIOUS open (React Query serves cache synchronously on reopen), so
-  // a consumer MUST gate consumption on `windowFetchSucceededAt >= openedAt`
-  // (this open's window fetch succeeded), NOT on `dataUpdatedAt` (#task:1226
-  // §9). null until first data.
+  // Head of the loaded cluster window: the FIRST page's `stream_head_seq`.
+  // Per §9.10 `stream_head_seq` is window-INDEPENDENT (the route captures the
+  // stream head before slicing the window), so this is a correct mark VALUE for
+  // ANY window — latest OR a jump's around-first-unread window — never max(seq)
+  // of loaded rows. v1 is read-to-clear: opening/jumping marks to this
+  // open-time head; the jump window is a locate view, not a coverage promise.
+  // null until first data.
   const streamHeadSeq = query.data?.pages[0]?.stream_head_seq ?? null;
+
+  // Reactive read of the shared freshness epoch (written by queryFn above and
+  // by `primeAround` on a jump open). `initialData: 0` + `staleTime: Infinity`
+  // means the placeholder queryFn never runs — the value only moves via the
+  // `setQueryData` writes, observed reactively here.
+  const epochQuery = useQuery({
+    queryKey: epochKey,
+    queryFn: () => 0,
+    enabled,
+    initialData: 0,
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
 
   return {
     ...query,
@@ -983,7 +1008,7 @@ export function useThreadCluster(
     hasNewerLiveGap,
     resetToLatest,
     streamHeadSeq,
-    windowFetchSucceededAt: windowFetchSucceededAtRef.current,
+    windowFetchSucceededAt: epochQuery.data ?? 0,
   };
 }
 
@@ -1280,6 +1305,17 @@ export function usePrimeConversationMessages() {
           cacheKey,
           makeMessagesCache(page, undefined),
         );
+        // §9.10: a jump-open's around-target fetch IS this open's authoritative
+        // window fetch. Stamp the shared freshness epoch so `useThreadCluster`'s
+        // mark-read gate opens with THIS around-window (not a clobbering latest
+        // refetch). Only for the cluster path — main-stream primes don't gate a
+        // thread mark-read.
+        if (opts?.threadRootId) {
+          qc.setQueryData(
+            clusterFetchEpochKey(conversationId, opts.threadRootId),
+            Date.now(),
+          );
+        }
         return { committed: true };
       } catch (err) {
         // Aborted fetches surface as DOMException 'AbortError'; treat

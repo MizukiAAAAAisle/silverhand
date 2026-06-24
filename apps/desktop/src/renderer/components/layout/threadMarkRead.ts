@@ -47,3 +47,20 @@ export function threadMarkReadSnapshot(
   if (input.windowFetchSucceededAt < input.openedAt) return null;
   return input.headSeq;
 }
+
+/**
+ * Whether a thread open must trigger a fresh latest-window refetch (#task:1226
+ * §9.10). A NORMAL open does: it forces a fresh latest window so its mark
+ * snapshot comes from this open. A JUMP open does NOT: `primeAround` already
+ * fetched the authoritative around-first-unread window (and stamped the
+ * freshness epoch), so a target-less latest refetch here would CLOBBER it —
+ * breaking the "click chip → land on first unread" surface-3 contract.
+ *
+ * Pure so the clobber-prevention decision is locked by a unit test instead of
+ * only living in component wiring.
+ */
+export function threadOpenNeedsLatestRefetch(input: {
+  isJumpOpen: boolean;
+}): boolean {
+  return !input.isJumpOpen;
+}
