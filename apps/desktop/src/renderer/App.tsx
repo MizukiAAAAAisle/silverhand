@@ -125,7 +125,7 @@ import {
   pickDefaultChannel,
   pickFallbackAfterArchive,
 } from '@/lib/archive-fallback';
-
+import { pickWorkspaceToRestore } from '@/lib/workspace-restore';
 export function App(): JSX.Element {
   useAppearance();
   // Hydrate the viewer profile from the main-process auth session so
@@ -320,6 +320,11 @@ function RegisteredAppShell(): JSX.Element {
   // below writes through to storage on every mutation; the restore
   // effect reads from it when hydrating from a workspaceId-only URL.
   const lastSelectedAgentId = useRef<string | null>(null);
+  // Same as `lastSelectedAgentId` but for the chat section: clicking the
+  // "Chat" navrail item routes to bare `/chat` (no workspaceId), so on the
+  // way back the auto-pick below must restore the workspace the user last had
+  // open instead of snapping to `workspaces[0]` (#task:1222).
+  const lastSelectedWorkspaceId = useRef<string | null>(null);
   const lastSelectedMessageReadKey = useRef<string | null>(null);
   const lastThreadMessageReadKey = useRef<string | null>(null);
   const lastNotificationReadId = useRef<string | null>(null);
@@ -538,13 +543,20 @@ function RegisteredAppShell(): JSX.Element {
     return dmWorkspace?.id ?? workspaceId;
   };
 
-  // Auto-select first workspace when chat is open without a workspace id.
+  // Auto-select a workspace when chat is open without a workspace id.
+  // Restore the one the user last had open (clicking the "Chat" navrail item
+  // routes to bare `/chat`, dropping the workspaceId), falling back to the
+  // first workspace only on a cold start (#task:1222).
   // Replace so the bare /chat URL doesn't pile up in history.
   useEffect(() => {
     if (appSection !== 'chat' || view !== 'channel') return;
     if (selectedWorkspaceId) return;
     if (workspaces.length === 0) return;
-    nav.go(`/chat/w/${workspaces[0]!.id}`, { replace: true });
+    const target = pickWorkspaceToRestore(
+      workspaces,
+      lastSelectedWorkspaceId.current,
+    );
+    if (target) nav.go(`/chat/w/${target}`, { replace: true });
   }, [appSection, view, selectedWorkspaceId, workspaces, nav.go]);
 
   // If the URL's workspaceId no longer exists (deleted in another window,
@@ -746,6 +758,15 @@ function RegisteredAppShell(): JSX.Element {
     if (!agents.some(a => a.id === selectedAgentId)) return;
     lastSelectedAgentId.current = selectedAgentId;
   }, [agents, selectedAgentId]);
+
+  // Remember the workspace the user is actively viewing so returning to the
+  // chat section (via bare `/chat`) restores it rather than `workspaces[0]`
+  // (#task:1222). Mirrors `lastSelectedAgentId` for the members section.
+  useEffect(() => {
+    if (!selectedWorkspaceId) return;
+    if (!workspaces.some(w => w.id === selectedWorkspaceId)) return;
+    lastSelectedWorkspaceId.current = selectedWorkspaceId;
+  }, [workspaces, selectedWorkspaceId]);
 
   useEffect(() => {
     if (appSection !== 'members') return;
