@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentDto, RegistrationRequired, UserDto } from '@silverhand/shared';
-import { canEditAgentProfile, canRemoveAgentFromChannel } from './permissions';
+import {
+  canEditAgentProfile,
+  canManageAgentSchedules,
+  canRemoveAgentFromChannel,
+} from './permissions';
 
 const agent = (overrides: Partial<AgentDto> = {}): AgentDto =>
   ({
@@ -70,6 +74,28 @@ describe('canEditAgentProfile', () => {
     expect(
       canEditAgentProfile(viewer({ id: 'a-1' }), agent({ id: 'a-1', created_by_user_id: 'u-creator' })),
     ).toBe(false);
+  });
+});
+
+describe('canManageAgentSchedules', () => {
+  it('mirrors the owner-only backend canEditAgent gate for the human schedules surface', () => {
+    expect(
+      canManageAgentSchedules(
+        viewer({ id: 'u-creator' }),
+        agent({ created_by_user_id: 'u-creator' }),
+      ),
+    ).toBe(true);
+    expect(
+      canManageAgentSchedules(
+        viewer({ id: 'u-other' }),
+        agent({ created_by_user_id: 'u-creator' }),
+      ),
+    ).toBe(false);
+  });
+
+  it('defaults closed before the viewer resolves or while pre-registration is active', () => {
+    expect(canManageAgentSchedules(undefined, agent())).toBe(false);
+    expect(canManageAgentSchedules(registrationRequired, agent())).toBe(false);
   });
 });
 

@@ -52,6 +52,20 @@ export function canEditAgentProfile(
 }
 
 /**
+ * Human-facing schedule management for `/api/agents/:id/schedules` is gated
+ * by the same backend `canEditAgent` predicate as profile editing. Keep this
+ * as a named alias so schedules don't accidentally look like a profile-only
+ * policy, and so a future read-only schedule surface has a single call site to
+ * split from the owner-only management gate.
+ */
+export function canManageAgentSchedules(
+  viewer: MeResponse | undefined,
+  agent: Pick<AgentDto, 'created_by_user_id'>,
+): boolean {
+  return canEditAgentProfile(viewer, agent);
+}
+
+/**
  * Renderer-side mirror of the backend remove-from-conversation gate
  * (#task:957). The canonical authority is the backend route
  * `DELETE /api/conversations/:id/members/agents/:agentId`, which enforces

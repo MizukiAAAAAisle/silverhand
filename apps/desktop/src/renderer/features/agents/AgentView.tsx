@@ -3,6 +3,7 @@ import {
   Activity,
   CalendarClock,
   FolderTree,
+  Lock,
   User,
   X,
 } from 'lucide-react';
@@ -25,8 +26,10 @@ import {
   useAgent,
   useAgentRuntimeState,
 } from './hooks';
+import { canManageAgentSchedules } from './permissions';
 import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { useHostProvenanceGate } from '@/features/hosts/hooks';
+import { isBackendUnreachable, useViewerUser } from '@/features/me/hooks';
 
 const SECTION_STORAGE_KEY = 'silverhand:layout.agent-section';
 const VALID_SECTIONS: ReadonlyArray<AgentSection> = [
@@ -88,12 +91,23 @@ export function AgentView({
 }: AgentViewProps): JSX.Element {
   const agentQuery = useAgent(agentId);
   const runtimeQuery = useAgentRuntimeState(agentId);
+  const viewerQuery = useViewerUser();
   const hostProvenance = useHostProvenanceGate();
 
   // Selected section persists globally (not per-agent) so the user
   // doesn't have to re-pick after switching agents — the more common
   // case is repeatedly viewing the same section across different agents.
   const [section, setSection] = useState<AgentSection>(() => readSection());
+  const agentForPermissions = agentQuery.data;
+  const viewerForPermissions =
+    viewerQuery.data && !isBackendUnreachable(viewerQuery.data)
+      ? viewerQuery.data
+      : undefined;
+  const scheduleAccessKnown = Boolean(agentForPermissions && viewerForPermissions);
+  const canManageSchedules = agentForPermissions && viewerForPermissions
+    ? canManageAgentSchedules(viewerForPermissions, agentForPermissions)
+    : false;
+
   useEffect(() => {
     try {
       localStorage.setItem(SECTION_STORAGE_KEY, section);
@@ -150,6 +164,8 @@ export function AgentView({
       <AgentSidePanel
         agent={agent}
         runtimeState={runtimeQuery.data}
+        canManageSchedules={canManageSchedules}
+        scheduleAccessKnown={scheduleAccessKnown}
         contextConversationId={contextConversationId}
         contextWorkspaceId={contextWorkspaceId}
         onClose={onClose}
@@ -210,7 +226,13 @@ export function AgentView({
                   <AgentMcpPane agentId={agent.id} runtime={agent.runtime} />
                 ) : null}
                 {section === 'schedules' ? (
-                  <AgentSchedulesCard agentId={agent.id} />
+                  canManageSchedules ? (
+                    <AgentSchedulesCard agentId={agent.id} />
+                  ) : (
+                    <AgentSchedulesPermissionState
+                      loading={!scheduleAccessKnown}
+                    />
+                  )
                 ) : null}
               </div>
             </div>
@@ -311,12 +333,16 @@ function SidePanelShell({
 function AgentSidePanel({
   agent,
   runtimeState,
+  canManageSchedules,
+  scheduleAccessKnown,
   contextConversationId,
   contextWorkspaceId,
   onClose,
 }: {
   agent: AgentDto;
   runtimeState: AgentRuntimeStateDto | undefined;
+  canManageSchedules: boolean;
+  scheduleAccessKnown: boolean;
   contextConversationId: string | null;
   contextWorkspaceId: string | null;
   onClose?: () => void;
@@ -485,12 +511,42 @@ function AgentSidePanel({
           <div className="flex-1 overflow-y-auto px-4 py-4">
             <AgentProfileCard agent={agent} runtimeState={runtimeState} />
           </div>
-        ) : (
+        ) : canManageSchedules ? (
           <div className="flex-1 overflow-y-auto px-4 py-4">
             <AgentSchedulesCard agentId={agent.id} />
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto px-4 py-4">
+            <AgentSchedulesPermissionState loading={!scheduleAccessKnown} />
           </div>
         )}
       </div>
     </section>
+  );
+}
+
+function AgentSchedulesPermissionState({
+  loading,
+}: {
+  loading: boolean;
+}): JSX.Element {
+  if (loading) {
+    return (
+      <div className="py-10 text-center text-sm text-text-muted">
+        Loading schedule permissions…
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-panel-card="placeholder"
+      className="flex flex-col items-center gap-2 border border-border-subtle bg-bg-floating/50 px-4 py-10 text-center"
+    >
+      <Lock className="size-6 text-text-muted" />
+      <p className="max-w-md text-sm text-text-primary">
+        Schedules are private to this agent's owner.
+      </p>
+    </div>
   );
 }
