@@ -197,6 +197,16 @@ afterEach(() => h.cleanup());
 
 ---
 
+## Daemon driver-oracle 回归门
+
+执行面（spawn/IO/解析）的行为契约由 driver-oracle 回归固定下来：任何要替换当前 TypeScript daemon 的实现（含未来的 Rust daemon）**必须先通过 driver-oracle 回归**才算 parity。
+
+- 契约本体：`packages/host/tests/_fixtures/driver-oracles.ts`（raw-frame 夹具）由 `packages/host/tests/driver-oracle-regression.test.ts` 回放，覆盖 `line -> ParsedEvent[]` 投影（Claude api_error 脱敏 / assistant·tool·result 生命周期 / compaction 边界、Cursor one-shot error、Codex turn·tool·dedupe·pending-cleanup·fileChange·stale-resume）。
+- 状态机与投递态不在此：supervisor 转移看 `packages/host/tests/supervisor.test.ts`，backend 投递/watchdog 看 `packages/backend/tests/runtime/delivery-coordinator.test.ts`、`status-projector.test.ts`；backpressure/reclaim/日志脱敏各有专测（`output-backpressure` / `reclaim` / `runtime-pidfiles` / `daemon-logging`）。
+- 维护约定：**新的 daemon incident 落地时，先加能复现它的最小 raw-frame 夹具**，再去拓宽各 driver 的单测。schema 权威仍是 `packages/host/src/protocol.ts`（zod），不切二进制 framing。
+
+---
+
 ## 端到端：headless 后端
 
 如果想在不开 Electron 窗口的情况下跑真实后端（curl 调试 / 手动验证 SSE），用：

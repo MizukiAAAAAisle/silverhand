@@ -743,6 +743,7 @@ shiki 决定先保留胶囊（forza6 用饱和填色表达状态语义，不需�
 - `apps/desktop/src/renderer/styles/themes/warm-script.css`（默认主题，`:root` baseline）
 - `apps/desktop/src/renderer/styles/themes/forza6.css` + `forza6-components.css`（loud-festival 范式）
 - §12 = forza6 component-skin 特化清单；v6.x follow-up 的 sticker 配方 / modal chrome / 焦点契约 / presence dot 见 **§12.7**。canonical hook 清单以 `forza6-components.css` 为准（`rg -o "data-[a-z-]+"`）。
+- `token-clusters.md` —— 按"消费场景"分簇的 token 审计入口表（退化关系 + 是否值得合并）；dark 主题落地后回头做合并扫描的起点。
 
 ---
 
