@@ -360,7 +360,12 @@ export class TaskService {
       clauses.push('m.task_assignee_agent_id = ?');
       args.push(filters.assigneeAgentId);
     }
-    let sql = `${SELECT_TASK_JOINED} WHERE ${clauses.join(' AND ')} ORDER BY m.task_number ASC`;
+    // Newest-first: task_number is a monotonic per-workspace sequence, so
+    // DESC surfaces the most recently created tasks at the top — the useful
+    // default for both the desktop kanban columns and the CLI `task list`
+    // (a `limit` then caps to the newest N). Routes that need a specific task
+    // filter by number, so the ordering is purely a list-presentation choice.
+    let sql = `${SELECT_TASK_JOINED} WHERE ${clauses.join(' AND ')} ORDER BY m.task_number DESC`;
     if (filters.limit && filters.limit > 0) {
       sql += ' LIMIT ?';
       args.push(filters.limit);

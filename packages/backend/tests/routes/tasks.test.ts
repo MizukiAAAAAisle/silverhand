@@ -68,7 +68,8 @@ describe('Tasks (PR-T1)', () => {
     expect(all.tasks[0].conversation.id).toBe(conversationId);
     expect(all.tasks[0].status).toBe('todo');
     expect(all.tasks[0].assignee).toBeNull();
-    expect(all.tasks[0].title).toBe('fix login');
+    // Newest-first (task_number DESC): #2 'add logout' leads, #1 'fix login' follows.
+    expect(all.tasks.map((x: any) => x.title)).toEqual(['add logout', 'fix login']);
   });
 
   it('claim_tasks wins the race once + second claimer fails', async () => {
@@ -560,9 +561,10 @@ describe('Tasks (PR-T1)', () => {
       4,
     ]);
 
-    // limit caps the row count without changing the ORDER (task_number ASC).
+    // limit caps the row count without changing the ORDER (task_number DESC,
+    // newest-first), so it returns the two highest-numbered tasks.
     const limited = (await (await h.get(`${listPath}?limit=2`)).json()) as any;
-    expect(limited.tasks.map((x: any) => x.task_number)).toEqual([1, 2]);
+    expect(limited.tasks.map((x: any) => x.task_number)).toEqual([5, 4]);
 
     // Legacy single-value status query continues to work.
     const onlyDone = (await (

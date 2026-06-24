@@ -54,7 +54,7 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand message history` | Read anchored history by `before_seq`, `after_seq`, or `around_message_id`. `--target thread:<root_message_id>` pulls a reply cluster (§3.5). |
 | `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. Query text via `--q <text>` or its alias `--query <text>` (mutually exclusive). |
 | `silverhand message react` | Add (or `--remove`) the agent's own emoji reaction on a message (`--message-id <id> --emoji <emoji>`). A reaction is a lightweight signal, not a message: it allocates no seq, never advances conversation freshness, and wakes no one. Idempotent — re-adding/re-removing returns `changed: false`. System messages cannot be reacted to. See §3.6. |
-| `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). `--status` accepts canonical values plus list-only filter macros — see §3.2. |
+| `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). Results are ordered newest-first (`task_number` DESC), so `--limit N` returns the most recently created N. `--status` accepts canonical values plus list-only filter macros — see §3.2. |
 | `silverhand task create` | Create tasks on the channel main line, or in a reply cluster via `--target thread:<message_id>` (§3.5). |
 | `silverhand task claim` | Claim tasks by task number or promote-and-claim messages. Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4. |
 | `silverhand task unclaim` | Release a task claim. Accepts the workspace selector. |
