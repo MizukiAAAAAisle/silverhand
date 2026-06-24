@@ -110,6 +110,51 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
     expect(body.workspace.workspace_host_id).toBe(ownedLocal!.id);
   });
 
+  it('POST /api/workspaces — omitted workspace_host_id fails closed when the creator has ≥2 active local hosts (#task:1221)', async () => {
+    t = buildTestApp({ deploymentMode: 'standalone' });
+    new HostRepo(t.ctx.db).claimOrCreateLocal({
+      userId: t.viewerUserId,
+      installationId: 'second-desktop',
+    });
+
+    const res = await http(t).post('/api/workspaces', {
+      name: 'workspace-host-ambiguous',
+      member_agent_ids: [],
+    });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: 'local_host_ambiguous' });
+    expect(
+      t.fakeHostWs!.calls.filter(c => c.kind === 'workspace_provision'),
+    ).toHaveLength(0);
+  });
+
+  it('POST /api/workspaces — explicit owned+active workspace_host_id disambiguates placement (#task:1221)', async () => {
+    t = buildTestApp({ deploymentMode: 'standalone' });
+    const hosts = new HostRepo(t.ctx.db);
+    const target = hosts.getOwnedLocalForUser(t.viewerUserId);
+    expect(target).not.toBeNull();
+    hosts.claimOrCreateLocal({
+      userId: t.viewerUserId,
+      installationId: 'second-desktop',
+    });
+
+    const res = await http(t).post('/api/workspaces', {
+      name: 'workspace-explicit-host',
+      workspace_host_id: target!.id,
+      member_agent_ids: [],
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as any;
+    expect(body.workspace.workspace_host_id).toBe(target!.id);
+    const provisionCalls = t.fakeHostWs!.calls.filter(
+      c => c.kind === 'workspace_provision',
+    );
+    expect(provisionCalls).toHaveLength(1);
+    expect(provisionCalls[0]!.hostId).toBe(target!.id);
+  });
+
   it('POST /api/workspaces (standalone) — cross-host `member_agent_ids` → 409 `host_mismatch`, no workspace row created', async () => {
     t = buildTestApp({ deploymentMode: 'standalone' });
     // Direct DB insert: in standalone, POST /api/agents is still

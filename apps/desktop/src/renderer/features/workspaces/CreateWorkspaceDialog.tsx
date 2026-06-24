@@ -1,6 +1,6 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { FolderOpen } from 'lucide-react';
-import type { AgentDto, UserDto } from '@silverhand/shared';
+import type { AgentDto, CreateWorkspaceInput, UserDto } from '@silverhand/shared';
 import {
   Dialog,
   DialogContent,
@@ -11,7 +11,8 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { useHostProvenanceGate } from '@/features/hosts/hooks';
+import { ApiError } from '@/lib/api';
+import { useHostProvenanceGate, useHostsQuery } from '@/features/hosts/hooks';
 import { useAgents } from '@/features/agents/hooks';
 import {
   isBackendUnreachable,
@@ -28,6 +29,18 @@ interface CreateWorkspaceDialogProps {
   onCreated?: (created: { workspaceId: string; channelId: string }) => void;
 }
 
+const CHIP_BASE =
+  'rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs transition-colors ';
+
+function chipClass(isSelected: boolean): string {
+  return (
+    CHIP_BASE +
+    (isSelected
+      ? 'border-text-primary bg-[var(--bg-row-selected)] text-text-primary'
+      : 'border-border-subtle text-text-primary hover:border-border')
+  );
+}
+
 export function CreateWorkspaceDialog({
   open,
   onOpenChange,
@@ -36,9 +49,11 @@ export function CreateWorkspaceDialog({
   const [name, setName] = useState('');
   const [workspacePath, setWorkspacePath] = useState('');
   const [showAdvancedPath, setShowAdvancedPath] = useState(false);
+  const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [selectedHumans, setSelectedHumans] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const previousHostIdRef = useRef<string | null | undefined>(undefined);
 
   const { data: agents = [] } = useAgents();
   const { data: users = [] } = useUsers();
@@ -51,25 +66,92 @@ export function CreateWorkspaceDialog({
       : null;
   const createWorkspace = useCreateWorkspace();
   const hostProvenance = useHostProvenanceGate();
+  const hostsQuery = useHostsQuery();
+
+  // Active local hosts are the only valid workspace storage targets. The
+  // backend's fallback uses the same 0/1/N set; when N>=2 it fails with
+  // `local_host_ambiguous`, so the UI must carry the chosen host explicitly.
+  const activeLocalHosts = useMemo(
+    () =>
+      (hostsQuery.data?.hosts ?? []).filter(
+        host => host.kind === 'local' && host.revoked_at === null,
+      ),
+    [hostsQuery.data],
+  );
+  const showHostPicker = activeLocalHosts.length >= 2;
+  const defaultHostId =
+    hostProvenance.currentLocalHost &&
+    hostProvenance.currentLocalHost.kind === 'local' &&
+    hostProvenance.currentLocalHost.revoked_at === null
+      ? hostProvenance.currentLocalHost.id
+      : null;
+
+  // Decoupled from picker visibility: send the chosen host when the picker is
+  // shown, else the current desktop host's id (when known). Omitted only for a
+  // pure-remote client with no bound local host, where the backend's 0/1/N
+  // fallback remains the source of truth.
+  const effectiveHostId = showHostPicker ? selectedHostId : defaultHostId;
+
   // Local desktop host → the user can pick a real folder on this machine.
-  // Remote / sandbox host → no native picker (the folder lives on another
-  // machine); default to the daemon-managed path, with an advanced typed
-  // override that the OWNING daemon validates (the server never interprets
-  // the path — D4.e-1).
-  const canPickLocalFolder = hostProvenance.canUseCurrentLocalHostPath;
+  // Another host → no native picker; default to that daemon's managed path,
+  // with an advanced typed override that the OWNING daemon validates.
+  const canPickLocalFolder = hostProvenance.canUseLocalHostPathFor(effectiveHostId);
+
+  useEffect(() => {
+    if (!open) {
+      setSelectedHostId(null);
+      previousHostIdRef.current = undefined;
+      return;
+    }
+    setSelectedHostId(prev => prev ?? defaultHostId);
+  }, [open, defaultHostId]);
+
+  useEffect(() => {
+    if (!open) return;
+    const previousHostId = previousHostIdRef.current;
+    previousHostIdRef.current = effectiveHostId;
+    if (previousHostId === undefined || previousHostId === effectiveHostId) {
+      return;
+    }
+    setWorkspacePath('');
+    setShowAdvancedPath(false);
+  }, [open, effectiveHostId]);
 
   const reset = () => {
     setName('');
     setWorkspacePath('');
     setShowAdvancedPath(false);
+    setSelectedHostId(null);
     setSelectedAgents([]);
     setSelectedHumans([]);
     setError(null);
   };
 
+  const eligibleAgents = useMemo(
+    () =>
+      effectiveHostId
+        ? agents.filter(agent => agent.host_id === effectiveHostId)
+        : [],
+    [agents, effectiveHostId],
+  );
+
+  // Agent membership must match the workspace host. If the user changes the
+  // storage host after selecting agents, prune now instead of letting the
+  // backend reject with `host_mismatch`.
+  useEffect(() => {
+    const eligibleIds = new Set(eligibleAgents.map(agent => agent.id));
+    setSelectedAgents(prev => {
+      const next = prev.filter(id => eligibleIds.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [eligibleAgents]);
+
   const memberCandidates = useMemo<MemberPickerCandidate[]>(
     () => [
-      ...agents.map((agent: AgentDto) => ({ kind: 'agent' as const, agent })),
+      ...eligibleAgents.map((agent: AgentDto) => ({
+        kind: 'agent' as const,
+        agent,
+      })),
       // The viewer is auto-added as a workspace member by the backend
       // (`routes.ts: workspaces.addUserMember(workspace.id, viewerUserId)`
       // runs before the explicit `member_user_ids`); listing them as a
@@ -81,7 +163,7 @@ export function CreateWorkspaceDialog({
         .filter((user: UserDto) => user.id !== viewerUserId)
         .map((user: UserDto) => ({ kind: 'human' as const, user })),
     ],
-    [agents, users, viewerUserId],
+    [eligibleAgents, users, viewerUserId],
   );
 
   const selectedMembers = useMemo(
@@ -114,13 +196,19 @@ export function CreateWorkspaceDialog({
       setError('Please enter a Workspace name');
       return;
     }
+    if (showHostPicker && !selectedHostId) {
+      setError('Please choose which computer stores this workspace');
+      return;
+    }
     try {
-      const res = await createWorkspace.mutateAsync({
+      const input: CreateWorkspaceInput = {
         name: name.trim(),
         workspace_path: workspacePath.trim() || undefined,
         member_agent_ids: selectedAgents,
         member_user_ids: selectedHumans,
-      });
+      };
+      if (effectiveHostId) input.workspace_host_id = effectiveHostId;
+      const res = await createWorkspace.mutateAsync(input);
       onCreated?.({
         workspaceId: res.workspace.id,
         channelId: res.onboarding_channel_id,
@@ -128,7 +216,7 @@ export function CreateWorkspaceDialog({
       reset();
       onOpenChange(false);
     } catch (err) {
-      setError(String(err));
+      setError(friendlyCreateWorkspaceError(err));
     }
   };
 
@@ -158,6 +246,30 @@ export function CreateWorkspaceDialog({
               autoFocus
             />
           </div>
+
+          {showHostPicker ? (
+            <div className="flex flex-col gap-1.5">
+              <Label>Stored on</Label>
+              <div className="flex flex-wrap gap-2">
+                {activeLocalHosts.map(host => {
+                  const isSelected = selectedHostId === host.id;
+                  return (
+                    <button
+                      key={host.id}
+                      type="button"
+                      onClick={() => setSelectedHostId(host.id)}
+                      className={chipClass(isSelected)}
+                    >
+                      {host.display_label ?? host.name}
+                    </button>
+                  );
+                })}
+              </div>
+              <span className="text-xs text-text-muted">
+                Initial agents must live on the same computer as the workspace.
+              </span>
+            </div>
+          ) : null}
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="ch-path">Working directory (optional)</Label>
@@ -256,7 +368,14 @@ export function CreateWorkspaceDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={createWorkspace.isPending}>
+            <Button
+              type="submit"
+              disabled={
+                createWorkspace.isPending
+                || hostsQuery.isLoading
+                || hostProvenance.isLoading
+              }
+            >
               {createWorkspace.isPending ? 'Creating…' : 'Create'}
             </Button>
           </DialogFooter>
@@ -264,4 +383,36 @@ export function CreateWorkspaceDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function friendlyCreateWorkspaceError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.kind === 'backend_unreachable') {
+      return "Can't reach the backend. Check your connection and try again.";
+    }
+    switch (parseErrorCode(err.body)) {
+      case 'local_host_ambiguous':
+        return 'Choose which computer should store this workspace.';
+      case 'local_host_unbound':
+        return 'No connected computer can store this workspace. Connect one and try again.';
+      case 'host_revoked':
+      case 'host_not_owned':
+      case 'host_missing':
+        return "That computer isn't available anymore. Pick another and try again.";
+      case 'host_mismatch':
+        return 'Initial agents must live on the selected computer.';
+      case 'host_attach_pending':
+        return 'That computer is not connected yet. Try again in a moment.';
+    }
+  }
+  return "Couldn't create the workspace. Please try again.";
+}
+
+function parseErrorCode(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body) as { code?: unknown };
+    return typeof parsed.code === 'string' ? parsed.code : null;
+  } catch {
+    return null;
+  }
 }

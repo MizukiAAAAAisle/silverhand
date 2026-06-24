@@ -170,6 +170,7 @@ PR / 设计稿 review 时按以下顺序检查：
 2. **backend 记 `(conversation, agent)` runtime intent / state；不记 OS process handle**。handle 永远归 host。
 3. **host 是真正的安全边界**：进程在哪个 host 上跑、能访问哪些 fs / API key，host 是 truth source。`host_id` membership precondition（`agent.host_id == workspace.host_id`）已经把 host 建模成一等公民，PR-2+ 会把它从 ACL 字段提升为 runtime 协议端点。
 4. **CLI 不是秘密边界，backend token + ACL 才是**。任何"防止 agent 看见 X"的需求，应该走 backend authz，**不要**走"agent 看不见这个命令"的路径——agent 是有自主性的 actor，藏命令并不等同于授权拒绝。
+5. **创建 host-placed 资源时,origin surface 必须显式带 host。** `POST /api/agents` 的 `host_id`、`POST /api/workspaces` 的 `workspace_host_id` 以及未来任何 optional `*_host_id` 都不能让 desktop UI 依赖 backend 的 0/1/N fallback。即使 picker 因为当前只有一个 host 而隐藏,desktop 也要发送当前 bound host id；backend fallback 只保留给无 origin-host 上下文的 API/remote caller,并在多 host 时 fail closed (`local_host_ambiguous`)。
 
 ### 9.4 当前实现 vs 目标实现
 
