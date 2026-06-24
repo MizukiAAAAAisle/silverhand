@@ -374,7 +374,7 @@ function ChannelRow({
         >
           {channel.title}
         </span>
-        {unreadCount > 0 && !selected ? (
+        {unreadCount > 0 ? (
           <span data-sidebar-unread className="ml-auto shrink-0 min-w-[16px] rounded-full bg-accent px-1 text-center text-[9px] font-semibold leading-[16px] text-text-on-accent">
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>

@@ -111,7 +111,7 @@ interface ChannelViewProps {
    *  message — opens that message's thread (reply cluster) in the right
    *  pane. Receives the root message id. When undefined the Thread action
    *  is hidden (secondary panes can't open nested threads). */
-  onOpenThread?: (rootMessageId: string) => void;
+  onOpenThread?: (rootMessageId: string, jumpToMessageId?: string) => void;
   /** Toggle the channel Threads-list pane (#task:1073) — opens when
    *  closed, closes when open (#task:1126 follow-up). When set, the header
    *  renders a Threads toggle. Only the primary channel pane passes this —
@@ -835,7 +835,14 @@ function HumanMemberChip({
         aria-label={`@${human.name}`}
         data-member-chip="human"
         data-member-id={human.user_id}
-        className="relative inline-flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-none border border-border-subtle bg-bg-elevated p-0 text-xs font-medium text-text-muted transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+        // No `overflow-hidden` here (unlike a naive avatar box): the status
+        // dot below is positioned half-outside the bottom-right corner
+        // (translate-x/y-1/2), and clipping the button would cut it off — the
+        // exact bug where the human online badge was occluded but the agent's
+        // (whose button never clipped) showed fine. The square `rounded-none`
+        // img already fills the box exactly via object-cover, so nothing needs
+        // clipping. Mirrors the agent chip above.
+        className="relative inline-flex size-6 shrink-0 items-center justify-center rounded-none border border-border-subtle bg-bg-elevated p-0 text-xs font-medium text-text-muted transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
       >
         {avatarObjectUrl ? (
           // eslint-disable-next-line jsx-a11y/img-redundant-alt
@@ -989,7 +996,7 @@ function MessageList({
   /** Opens a main-line message's thread (reply cluster) in the right
    *  pane. Receives the root message id. Undefined on secondary panes
    *  (no nested threads), which hides the reply affordance. */
-  onOpenThread?: (rootMessageId: string) => void;
+  onOpenThread?: (rootMessageId: string, jumpToMessageId?: string) => void;
   /** Per-root reply counts from the message window's cut3-6 sidecar
    *  (`reply_counts_by_root`). Drives the inline "{count} Reply" badge.
    *  A root with 0 (or absent) shows the hover "Thread" action instead. */
@@ -1027,8 +1034,8 @@ function MessageList({
     liveChannels,
     archivedChannels,
   } = useMessageRenderContext(workspaceId, channelId);
-  const handleOpenThread = (msg: MessageDto): void => {
-    onOpenThread?.(msg.id);
+  const handleOpenThread = (msg: MessageDto, jumpToMessageId?: string): void => {
+    onOpenThread?.(msg.id, jumpToMessageId);
   };
 
   // Auto-scroll to bottom on new messages or when a new activity bubble

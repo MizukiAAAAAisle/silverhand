@@ -23,7 +23,7 @@ export type { ThreadSummary } from '@silverhand/shared';
  * `ListChannelThreadsResponse` from `@silverhand/shared`.
  */
 
-const channelThreadsKey = (channelId: string) =>
+export const channelThreadsKey = (channelId: string) =>
   ['channels', channelId, 'threads-list'] as const;
 
 /**

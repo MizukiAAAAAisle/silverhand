@@ -8,10 +8,12 @@ import { Composer } from '@/components/chat/Composer';
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import { useMessageActionSurface } from '@/components/chat/useMessageActionSurface';
 import { MessageActionChrome } from '@/components/chat/MessageActionChrome';
+import { threadMarkReadSnapshot } from './threadMarkRead';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import {
   useFollowThread,
+  useMarkThreadRead,
   useThreadCluster,
   useThreadFollowers,
   useThreadRoot,
@@ -116,6 +118,7 @@ export function ThreadPanel({
   const followerAgentIds = followers.data?.follower_agent_ids ?? [];
   const followThread = useFollowThread(channelId, rootMessageId);
   const unfollowThread = useUnfollowThread(channelId, rootMessageId);
+  const markThreadRead = useMarkThreadRead();
   const followPending = followThread.isPending || unfollowThread.isPending;
   const toggleFollow = (): void => {
     if (followPending) return;
@@ -287,6 +290,49 @@ export function ThreadPanel({
     setShowScrollBottom(false);
     setSelectionResetKey(v => v + 1);
   }, [rootMessageId]);
+
+  // Mark this reply-cluster read once per open (#task:1226 surface 4, §9).
+  // Opening a thread IS reading it (read-to-clear), so we advance the viewer's
+  // per-thread `conversation_reads` cursor to the OPEN-TIME stream head. The
+  // snapshot MUST come from THIS open's window response — not the previous
+  // open's cache React Query serves synchronously on reopen, and not a
+  // `setQueryData` update. `threadMarkReadSnapshot` enforces that via the
+  // `windowFetchSucceededAt >= openedAt` gate; `refetchOnMount: 'always'`
+  // guarantees a fetch on every open so the gate eventually passes.
+  //
+  // The once-guard (`markedForOpenRef`) is re-armed per open in the arming
+  // effect below — keyed by (channelId, rootMessageId), NEVER a permanent
+  // per-root lock — so a stale cache can't lock it before the fresh fetch.
+  // Human-attention only — writes the read cursor, never delivery/wake.
+  const openedAtRef = useRef(0);
+  const markedForOpenRef = useRef(false);
+  useEffect(() => {
+    openedAtRef.current = Date.now();
+    markedForOpenRef.current = false;
+  }, [channelId, rootMessageId]);
+  useEffect(() => {
+    const snapshot = threadMarkReadSnapshot({
+      alreadyMarkedForOpen: markedForOpenRef.current,
+      isFetching: cluster.isFetching,
+      headSeq: cluster.streamHeadSeq,
+      windowFetchSucceededAt: cluster.windowFetchSucceededAt,
+      openedAt: openedAtRef.current,
+    });
+    if (snapshot === null) return;
+    markedForOpenRef.current = true;
+    markThreadRead.mutate({
+      channelId,
+      threadRootId: rootMessageId,
+      snapshotSeq: snapshot,
+    });
+  }, [
+    channelId,
+    rootMessageId,
+    cluster.isFetching,
+    cluster.streamHeadSeq,
+    cluster.windowFetchSucceededAt,
+    markThreadRead,
+  ]);
 
   // While pinned (initial open, or the user sitting at the tail), keep the
   // newest reply in view as the root loads / replies arrive. Instant jump

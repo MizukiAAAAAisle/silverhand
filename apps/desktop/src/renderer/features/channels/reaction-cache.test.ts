@@ -230,6 +230,9 @@ function windowDto(messages: MessageDto[]): ConversationMessagesDto {
     reply_counts_by_root: {},
     has_more_before: false,
     has_more_after: false,
+    // Tail window: the head is the latest message's seq (0 when empty). An
+    // explicit, legit value — not a placeholder — per the snapshot contract.
+    stream_head_seq: messages.reduce((max, m) => Math.max(max, m.seq), 0),
   };
 }
 

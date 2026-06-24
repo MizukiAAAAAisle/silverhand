@@ -223,11 +223,28 @@ function ThreadRow({
               {replyLabel}
             </span>
             {hasUnread ? (
-              <span
-                className="size-1.5 shrink-0 rounded-full bg-accent"
-                title={`${summary.unread_count} unread`}
-                aria-label={`${summary.unread_count} unread`}
-              />
+              summary.viewer_following ? (
+                // Followed thread → strong signal: filled count sticker.
+                // forza6 squares it (data-thread-unread="sticker").
+                <span
+                  data-thread-unread="sticker"
+                  className="shrink-0 min-w-[16px] rounded-full bg-accent px-1 text-center text-[9px] font-semibold leading-[16px] text-text-on-accent"
+                  title={`${summary.unread_count} new`}
+                  aria-label={`${summary.unread_count} new`}
+                >
+                  {summary.unread_count > 99 ? '99+' : summary.unread_count} new
+                </span>
+              ) : (
+                // Non-followed thread → weak ambient hint: a soft dot, no
+                // number. Distinguished from the strong sticker by shape +
+                // absence of a count, not by a second hue. forza6 squares it.
+                <span
+                  data-thread-unread="dot"
+                  className="size-1.5 shrink-0 rounded-full bg-accent"
+                  title={`${summary.unread_count} unread`}
+                  aria-label={`${summary.unread_count} unread`}
+                />
+              )
             ) : null}
           </span>
         </span>

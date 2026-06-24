@@ -69,7 +69,7 @@ export interface MessageItemProps {
   /** Lookup by conversation id for inline `#conv:<id>` references. */
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
-  onStartThread?: (msg: MessageDto) => void;
+  onStartThread?: (msg: MessageDto, jumpToMessageId?: string) => void;
   /** When this message has an open thread anchored to it, the count of
    *  non-system replies in that thread. Drives the button label
    *  `{count} Reply` (clicking opens the existing thread instead of
@@ -322,8 +322,19 @@ export function MessageItem({
   const replyRelativeTime = enrichedReply
     ? dayjs(enrichedReply.last_reply_at).fromNow()
     : '';
+  // Surface 3 (#task:1226): per-viewer unread for this reply-cluster. When > 0
+  // the chip's trailing segment swaps the last-reply time for a filled "N new"
+  // sticker (the SAME single unread hue + square sticker as the Threads list;
+  // forza6 squares it via data-thread-unread). The chip click then jumps to the
+  // first unread reply instead of the thread tail. Follow-agnostic — unread is
+  // independent of whether the viewer follows the thread.
+  const threadUnreadCount = threadReplySummary?.unread_count ?? 0;
+  const threadFirstUnreadId =
+    threadReplySummary?.first_unread_message_id ?? null;
   const replyBadgeTitle = enrichedReply
-    ? `${replyBadgeLabel} · last reply ${replyRelativeTime}`
+    ? threadUnreadCount > 0
+      ? `${replyBadgeLabel} · ${threadUnreadCount} new — jump to first unread`
+      : `${replyBadgeLabel} · last reply ${replyRelativeTime}`
     : replyBadgeLabel;
   const renderReplierAvatar = (
     replier: { kind: 'agent' | 'human'; id: string },
@@ -430,7 +441,7 @@ export function MessageItem({
       <button
         type="button"
         data-panel-pill="thread"
-        onClick={() => onStartThread(message)}
+        onClick={() => onStartThread(message, threadFirstUnreadId ?? undefined)}
         title={replyBadgeTitle}
         aria-label={replyBadgeTitle}
         className="inline-flex h-[18px] items-center gap-1.5 border border-border-subtle px-2 text-xs text-text-muted transition-colors hover:border-[color:var(--border-control-hover)] hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
@@ -451,7 +462,18 @@ export function MessageItem({
             </span>
             <span className="font-medium">{replyBadgeLabel}</span>
             <span className="text-text-muted">·</span>
-            <span className="text-text-muted">{replyRelativeTime}</span>
+            {threadUnreadCount > 0 ? (
+              // Strong unread signal: filled count sticker (same recipe as the
+              // Threads list followed-row). forza6 squares it.
+              <span
+                data-thread-unread="sticker"
+                className="shrink-0 min-w-[16px] rounded-full bg-accent px-1 text-center text-[9px] font-semibold leading-[16px] text-text-on-accent"
+              >
+                {threadUnreadCount > 99 ? '99+' : threadUnreadCount} new
+              </span>
+            ) : (
+              <span className="text-text-muted">{replyRelativeTime}</span>
+            )}
           </>
         ) : (
           <>

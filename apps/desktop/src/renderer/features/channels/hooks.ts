@@ -28,6 +28,7 @@ import type {
 import { apiPaths, MESSAGE_REACTION_CHANGED_EVENT } from '@silverhand/shared';
 import { api, ApiError } from '@/lib/api';
 import { messageReactorsKey } from '@/features/channels/reaction-hooks';
+import { channelThreadsKey } from '@/features/channels/useChannelThreads';
 import { getCurrentUserId } from '@/lib/current-user';
 import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
 import {
@@ -228,6 +229,13 @@ function appendMessageToCache(
       reply_counts_by_root: {},
       has_more_before: false,
       has_more_after: false,
+      // Optimistic/live-append bootstrap with no prior server window. For a
+      // real live-append `msg.seq` IS the new stream head; for an optimistic
+      // send the whole page is provisional (replaced on server ack / refetch).
+      // This mainline cache's head is never consumed as a thread mark-read
+      // snapshot — that comes only from the thread window response
+      // (`useThreadCluster` → stream_head_seq) — so it cannot swallow a tail.
+      stream_head_seq: msg.seq,
     });
   }
   if (cacheHasMessage(data, msg.id)) return data;
@@ -241,6 +249,10 @@ function appendMessageToCache(
           reply_counts_by_root: {},
           has_more_before: false,
           has_more_after: false,
+          // No prior window to inherit a head from; this appended message is
+          // the live head. Mainline cache head is never a thread mark-read
+          // snapshot source (those come from the thread window response).
+          stream_head_seq: msg.seq,
         },
       ],
       pageParams: [undefined as MessagesPageParam],
@@ -524,6 +536,13 @@ function patchReplySummary(
     last_reply_at: Math.max(summary.last_reply_at, reply.created_at),
     repliers,
     replier_total: already ? summary.replier_total : summary.replier_total + 1,
+    // Unread is per-viewer and scored server-side against the viewer's thread
+    // cursor; we never fabricate a delta optimistically (a live reply may be
+    // the viewer's own, or one already covered). Preserve the last known values
+    // and let the WS `unread_updated` invalidation reconcile.
+    unread_count: summary.unread_count,
+    first_unread_message_id: summary.first_unread_message_id,
+    first_unread_seq: summary.first_unread_seq,
   };
 }
 
@@ -810,6 +829,17 @@ export function useThreadCluster(
 
   const [hasNewerLiveGap, setHasNewerLiveGap] = useState(false);
 
+  // Epoch (ms) of the last SUCCESSFUL window fetch for this cluster, stamped
+  // ONLY inside queryFn's success path (#task:1226 §9). Crucially this is NOT
+  // `dataUpdatedAt`: React Query bumps `dataUpdatedAt` on `setQueryData` too
+  // (optimistic `patchReplySummary` / live-append), which would open the
+  // mark-read freshness gate before THIS open's real window response landed —
+  // marking with a non-window snapshot source. A queryFn-only stamp is
+  // unreachable by `setQueryData`, so it proves "this open's window fetch
+  // succeeded". Read reactively via the return value (re-rendered when the
+  // fetch resolves and updates the cache).
+  const windowFetchSucceededAtRef = useRef(0);
+
   // Reset the gap when the consumer switches channel or thread — a stale
   // "newer replies below" hint from the previous cluster would be wrong.
   useEffect(() => {
@@ -825,15 +855,26 @@ export function useThreadCluster(
   >({
     queryKey: key,
     enabled,
+    // #task:1226 §9: opening a thread MUST trigger a fresh window read so the
+    // mark-read snapshot comes from THIS open, never the previous open's
+    // synchronously-served cache. Without this, a reopen within gcTime serves
+    // the stale `stream_head_seq` and the freshness gate (dataUpdatedAt >=
+    // openedAt) would never pass → the thread never marks read on reopen.
+    refetchOnMount: 'always',
     initialPageParam: undefined as MessagesPageParam,
-    queryFn: async ({ pageParam, signal }) =>
-      fetchMessagesWindow({
+    queryFn: async ({ pageParam, signal }) => {
+      const dto = await fetchMessagesWindow({
         conversationId: channelId!,
         threadRootId: rootMessageId!,
         pageParam,
         limit: MESSAGE_PAGE_LIMIT,
         signal,
-      }),
+      });
+      // Success path only — reached on a real window response, never via
+      // `setQueryData`. This is the mark-read freshness signal (§9).
+      windowFetchSucceededAtRef.current = Date.now();
+      return dto;
+    },
     getPreviousPageParam: firstPage => {
       if (!firstPage.has_more_before) return undefined;
       const firstReal = firstPage.messages.find(
@@ -926,7 +967,24 @@ export function useThreadCluster(
   );
   useConversationStream(enabled ? channelId : null, onEvent);
 
-  return { ...query, data: messages, isAtTail, hasNewerLiveGap, resetToLatest };
+  // Head of the loaded cluster window: the FIRST page's `stream_head_seq`
+  // (captured in the same read as the window) — the mark-read snapshot VALUE
+  // for surface 4, never max(seq) of loaded rows. The cached value may belong
+  // to a PREVIOUS open (React Query serves cache synchronously on reopen), so
+  // a consumer MUST gate consumption on `windowFetchSucceededAt >= openedAt`
+  // (this open's window fetch succeeded), NOT on `dataUpdatedAt` (#task:1226
+  // §9). null until first data.
+  const streamHeadSeq = query.data?.pages[0]?.stream_head_seq ?? null;
+
+  return {
+    ...query,
+    data: messages,
+    isAtTail,
+    hasNewerLiveGap,
+    resetToLatest,
+    streamHeadSeq,
+    windowFetchSucceededAt: windowFetchSucceededAtRef.current,
+  };
 }
 
 /** Pinned-root context for a thread (reply cluster). The root message is
@@ -1394,6 +1452,12 @@ export function useSendMessage(
               reply_counts_by_root: {},
               has_more_before: true,
               has_more_after: false,
+              // Carry the real head forward from the discarded window — don't
+              // fabricate one. `prev` is non-empty here (lastPageIsTail false
+              // implies at least one page), so its last page's head is the
+              // freshest server-observed value.
+              stream_head_seq:
+                prev.pages[prev.pages.length - 1]!.stream_head_seq,
             },
           ],
           pageParams: [undefined as MessagesPageParam],
@@ -1753,6 +1817,44 @@ export function useMarkMessageChannelRead() {
       // read. Invalidating ['workspaces'] also refetches the channel/tree
       // data, which makes every channel click redo the sidebar thread load.
       invalidateMessageUnreadQueries(qc);
+    },
+  });
+}
+
+/**
+ * Advance the viewer's read cursor for ONE reply-cluster (thread) to the
+ * snapshot the viewer actually saw (#task:1226, surface 4). This is the
+ * thread analogue of useMarkMessageChannelRead, but a thread MUST send
+ * `snapshot_seq` (the open-time `stream_head_seq` from `useThreadCluster`) —
+ * the backend 400s on a thread mark-read without it. The cursor advances only
+ * to what was rendered, so a reply that landed after open stays unread.
+ *
+ * Human-attention only: this writes the viewer's `conversation_reads` cursor
+ * and nothing else. It does NOT touch thread_followers / delivery / wake.
+ */
+export function useMarkThreadRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      channelId: string;
+      threadRootId: string;
+      snapshotSeq: number;
+    }) => {
+      await api(apiPaths.channelMarkRead(params.channelId), {
+        method: 'POST',
+        body: JSON.stringify({
+          thread_root_id: params.threadRootId,
+          snapshot_seq: params.snapshotSeq,
+        }),
+      });
+    },
+    onSuccess: (_d, params) => {
+      // Sidebar/global unread roll-up includes followed-thread unread, and the
+      // Threads list shows the per-thread sticker/dot — both must refresh.
+      // The threads-list query only invalidates on stream message / connected,
+      // never on `unread_updated`, so we invalidate it explicitly here.
+      invalidateMessageUnreadQueries(qc);
+      qc.invalidateQueries({ queryKey: channelThreadsKey(params.channelId) });
     },
   });
 }

@@ -1355,6 +1355,26 @@ function RegisteredAppShell(): JSX.Element {
   // (channel-typed sides aren't anchored to a parent message). Side
   // threads from PR-3 sigil clicks will fire `onThreadAnchorResolved`
   // with their own anchor, so the highlight follows them too.
+  // Reply-chip open: with a first-unread target (#task:1226 surface 3) route
+  // through `handleJumpToMessage` so the cluster opens AND scroll-locates the
+  // first unread reply; without one (plain "open thread") keep the lightweight
+  // `nav.openThread`. `selectedChannelId` is the channel the chip lives in.
+  const handleOpenThreadFromChannel = (
+    rootMessageId: string,
+    jumpToMessageId?: string,
+  ): void => {
+    if (jumpToMessageId && selectedChannelId) {
+      handleJumpToMessage({
+        workspaceId: selectedWorkspaceId ?? undefined,
+        channelId: selectedChannelId,
+        threadRootId: rootMessageId,
+        messageId: jumpToMessageId,
+      });
+      return;
+    }
+    nav.openThread(rootMessageId);
+  };
+
   const parentView = (
     <ChannelView
       channelKind={channelKindForView}
@@ -1363,7 +1383,7 @@ function RegisteredAppShell(): JSX.Element {
       jumpTarget={parentJumpTarget}
       jumpPrimePending={parentJumpPrimePending}
       onJumped={handleJumped}
-      onOpenThread={nav.openThread}
+      onOpenThread={handleOpenThreadFromChannel}
       // Threads-list pane toggle (#task:1073). The primary pane gets it for
       // any top-level channel-like conversation — both `channel` and
       // `dm_channel` carry a channel-scoped thread index (the backend's

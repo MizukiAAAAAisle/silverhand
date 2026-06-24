@@ -678,6 +678,29 @@
   box-shadow: 1px 1px 0 var(--forza6-ink);
 }
 
+/* ── Threads-list per-thread unread — forza6 square vocabulary (#task:1226) ──
+   ChannelThreadsPanel's ThreadRow maps thread unread to one of two weights
+   off `viewer_following`, on a single locked hue (pink `bg-accent`); shape +
+   presence-of-count carry the weight, never a second colour:
+     - followed (strong, actionable) → `data-thread-unread="sticker"`: a
+       filled count sticker. Same square-poster treatment as the sidebar
+       unread badge above (0 radius + ink border + 1px ink投影), so the two
+       "counted" beacons read as one family.
+     - non-followed (weak, ambient) → `data-thread-unread="dot"`: a tiny
+       hint dot, no count. Squared to forza6 vocabulary but NO border/shadow
+       — at 6px a border would dominate and lift it to sticker weight; the
+       bare square keeps it the low-key end of the ladder.
+   `!important` on radius for the same Tailwind `.rounded-full` /
+   `.rounded-none` build-order reason documented on [data-sidebar-unread]. */
+[data-theme='forza6'] [data-thread-unread='sticker'] {
+  border-radius: 0 !important;
+  border: 1px solid var(--forza6-ink);
+  box-shadow: 1px 1px 0 var(--forza6-ink);
+}
+[data-theme='forza6'] [data-thread-unread='dot'] {
+  border-radius: 0 !important;
+}
+
 /* ── List row — poster hard-cut + structural hover (v6.5j, #task:917) ─
    Shared rule for every "result/record card" list surface. Currently:
      - SearchPanel.tsx — search hit button (CSS `:hover` driven)
