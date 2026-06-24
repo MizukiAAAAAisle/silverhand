@@ -1,6 +1,6 @@
 # Silverhand — Tasks 设计
 
-> **Status**: Spec（2026-05-03 起草）。未实现；落地前如果与现实偏离，回这里改，不要让代码和文档分叉。
+> **Status**: shipped — task domain model 的 current canonical（2026-05-03 起草，已落地）。代码（shared task schema / migration / hooks / UI）以本 doc 为准;与现实偏离时回这里改,不要让代码和文档分叉。
 >
 > 与 [`core-design.md`](./core-design.md) §6.2 对齐——该表原本把"Task board"标成 v2 不做；本 doc 是把它从 v2 提前到 v1.5 的提案。提案通过后 §6.2 相应行改标 "收编到 `tasks-design.md`"。
 >

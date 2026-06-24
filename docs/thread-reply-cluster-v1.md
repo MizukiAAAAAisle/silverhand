@@ -1,8 +1,9 @@
 # Thread = Reply Cluster v1 — 共享上下文的线程重设计
 
-Status: **review PASS (Cindy 2026-06-11) — design frozen, implementation pending shiki greenlight**
-(Architect = @Alice, #task:1022). Reviewer = @Cindy(runtime/inbox/schema feasibility,已 PASS,
-含 better-sqlite3 实测复核 CAS 分支)。
+Status: **shipped — current canonical for the reply-cluster thread model**
+(Architect = @Alice, #task:1022; review PASS Cindy 2026-06-11, runtime/inbox/schema
+feasibility 含 better-sqlite3 实测复核 CAS 分支)。代码以本 doc 为准;§6.5 随
+#task:1201 deferred-thread 修复同步。
 
 本 doc 把 2026-06-11 三方(shiki / Alice / Cindy)在 #conv:cF9iMuc5ojXgb2Bs 收敛的
 线程重设计固化为单一权威。它**取代**现有"thread = 独立 agent session 的隔离子频道"模型。

@@ -1,7 +1,8 @@
 # Viewer-Visibility Sync v1 — live refresh when a human's cross-workspace membership/role changes
 
-Status: **draft for review** (Alice, #task:995). Reviewer: Cindy (event contract +
-backend feasibility). Implementation gated on shiki.
+Status: **shipped — current canonical for viewer-scope visibility refresh**
+(Alice, #task:995; review Cindy — event contract + backend feasibility). 代码以本
+doc 为准:membership route + App.tsx + workspace hooks 已接线。
 
 ## 0. Problem
 
