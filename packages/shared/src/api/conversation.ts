@@ -20,7 +20,6 @@ export const ConversationDtoSchema = z.object({
   spawned_by_agent_id: z.string().nullable(),
   closed_at: z.number().nullable(),
   close_summary: z.string().nullable(),
-  pinned_at: z.number().nullable(),
   archived_at: z.number().nullable(),
   created_at: z.number(),
   updated_at: z.number(),

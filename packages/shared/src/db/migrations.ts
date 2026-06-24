@@ -2938,6 +2938,25 @@ export const migrations: Migration[] = [
         ON conversation_events(conversation_id, agent_id, id);
     `,
   },
+  {
+    version: 50,
+    name: 'user_sort_entry_starred',
+    up: `
+      -- Personal ⭐ star (#task:1209). Pin/Star was previously a SHARED aggregate
+      -- field on the workspace / conversation (admin-gated, one value for
+      -- everyone). It becomes per-VIEWER personal view state: which entities THIS
+      -- viewer has starred, living alongside their rank / recent-opened in the
+      -- per-(user, list, entity) sort entry. Non-null = starred; the timestamp
+      -- orders the starred hard group "most-recently-starred first".
+      --
+      -- No seed: the old global workspaces.pinned_at / conversations.pinned_at
+      -- columns are deliberately NOT migrated into per-user stars (decided by
+      -- shiki — few users, a one-time re-star is cheaper than carrying migration
+      -- dirty-code as debt). Those columns become vestigial (migrations are
+      -- append-only, so they physically remain) and stop being read/written.
+      ALTER TABLE user_sort_entry ADD COLUMN starred_at INTEGER;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

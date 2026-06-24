@@ -17,13 +17,15 @@ export type SortMode = z.infer<typeof SortModeSchema>;
 
 /**
  * Hard-group descriptor for a manual reorder. Groups are partitioned LIVE
- * from an entity's pin/kind state — NOT stored. Pin is the PRIMARY axis on the
- * rail: a pinned workspace OR pinned DM both land in the cross-kind `pinned`
- * group; `dm` / `regular` hold only the UNPINNED tail of that kind (#task:1146).
- *   workspace rail : 'pinned' (cross-kind) | 'dm' | 'regular'
- *   channel sidebar: 'pinned' | 'unpinned'
+ * from the VIEWER's own star state — NOT stored on the entity. Star is the
+ * PRIMARY axis on the rail: a starred workspace OR starred DM both land in the
+ * cross-kind `starred` group; `dm` / `regular` hold only the UNSTARRED tail of
+ * that kind (#task:1209). Star is per-viewer personal state — it lives in the
+ * viewer's sort entries (`starred_at`), never as a shared aggregate field.
+ *   workspace rail : 'starred' (cross-kind) | 'dm' | 'regular'
+ *   channel sidebar: 'starred' | 'unstarred'
  */
-export const SortGroupSchema = z.enum(['pinned', 'dm', 'regular', 'unpinned']);
+export const SortGroupSchema = z.enum(['starred', 'dm', 'regular', 'unstarred']);
 export type SortGroup = z.infer<typeof SortGroupSchema>;
 
 /**
@@ -37,11 +39,16 @@ export const SortListKeySchema = z
     message: "list_key must be 'workspaces' or 'channels:<ws_id>'",
   });
 
-/** Per-entity viewer state. rank/last_accessed_at are null until set. */
+/** Per-entity viewer state. rank/last_accessed_at/starred_at are null until set.
+ *  `starred_at` is the personal ⭐ favorite (#task:1209): non-null = starred, and
+ *  the timestamp drives "most-recently-starred first" within the `starred` group.
+ *  It REPLACES the former shared `pinned_at` aggregate field — star is per-viewer
+ *  view state, so it lives here in the sort entry, never on the entity DTO. */
 export const ViewerSortEntryDtoSchema = z.object({
   entity_id: z.string(),
   rank: z.number().nullable(),
   last_accessed_at: z.number().nullable(),
+  starred_at: z.number().nullable(),
 });
 export type ViewerSortEntryDto = z.infer<typeof ViewerSortEntryDtoSchema>;
 
@@ -52,7 +59,7 @@ export type ViewerSortEntryDto = z.infer<typeof ViewerSortEntryDtoSchema>;
  *
  * `modes` is the per-SCOPE mode map (#task:1146). A scope is one independently
  * toggleable [recent|manual] axis within the list:
- *   - workspace rail : scope = the hard group ('pinned' | 'dm' | 'regular') —
+ *   - workspace rail : scope = the hard group ('starred' | 'dm' | 'regular') —
  *     each rail section has its own mode.
  *   - channel sidebar: scope = '' (the sentinel "list-wide" scope) — one mode
  *     for the whole list, exactly as before.

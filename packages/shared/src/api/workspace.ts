@@ -24,7 +24,6 @@ export const WorkspaceDtoSchema = z.object({
   owner_user_id: z.string().nullable(),
   dm_channel_id: z.string().nullable(),
   dm_channel_ids: z.array(z.string()),
-  pinned_at: z.number().nullable(),
   archived_at: z.number().nullable(),
   created_at: z.number(),
   updated_at: z.number(),

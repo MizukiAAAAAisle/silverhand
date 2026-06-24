@@ -95,7 +95,11 @@ export const apiPaths = {
   // workspaces / conversations (new workspace -> channel -> thread model)
   workspaces: '/api/workspaces',
   workspace: (id: string) => `/api/workspaces/${id}`,
-  workspacePin: (id: string) => `/api/workspaces/${id}/pin`,
+  /** Personal ⭐ star toggle for the workspace rail (#task:1209). POST = star,
+   *  DELETE = unstar. Viewer-scoped (writes the caller's sort state), gated by
+   *  can-view — NOT shared/admin governance. Replaced the old admin-gated
+   *  shared `/pin` route. */
+  workspaceStar: (id: string) => `/api/workspaces/${id}/star`,
   workspaceMembers: (id: string) => `/api/workspaces/${id}/members`,
   workspaceMember: (id: string, agentId: string) =>
     `/api/workspaces/${id}/members/${agentId}`,
@@ -122,6 +126,10 @@ export const apiPaths = {
   sortMode: '/api/sort/mode',
   sortOrder: '/api/sort/order',
   sortTouch: '/api/sort/touch',
+  /** Personal ⭐ star toggle for a channel in the sidebar (#task:1209). POST =
+   *  star, DELETE = unstar. Viewer-scoped, can-view gated — replaced the old
+   *  admin-gated shared `/pin` route. */
+  channelStar: (id: string) => `/api/channels/${id}/star`,
   channelMessages: (id: string) => `/api/channels/${id}/messages`,
   channelThreadFollowers: (id: string, rootMessageId: string) =>
     `/api/channels/${id}/threads/${rootMessageId}/followers`,
