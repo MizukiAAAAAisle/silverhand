@@ -66,6 +66,27 @@ export function canManageAgentSchedules(
 }
 
 /**
+ * Agent workspace files (L1 agent-home `system_prompt.md` / `MEMORY.md` /
+ * `notes/`, and L2 workspace-scoped memory) are owner-private (shiki
+ * 2026-06-24): the agent's persistent identity + memory are at least as
+ * sensitive as its raw MCP config / schedules, which are already owner-gated.
+ *
+ * The canonical authority is the backend owner gate (`canViewAgentFiles` =
+ * `canEditAgent`) on `/api/agents/:id/workspace/{tree,file}` — it returns
+ * 403/404 for non-owners (#task:1219). This renderer mirror exists so a
+ * non-owner is shown a neutral private state and the doomed tree/file requests
+ * are never fired (mirror-the-gate). A named alias rather than an inline
+ * `canEditAgentProfile` call so a future explicit per-(agent, workspace) L2
+ * share grant has a single call site to widen.
+ */
+export function canViewAgentFiles(
+  viewer: MeResponse | undefined,
+  agent: Pick<AgentDto, 'created_by_user_id'>,
+): boolean {
+  return canEditAgentProfile(viewer, agent);
+}
+
+/**
  * Renderer-side mirror of the backend remove-from-conversation gate
  * (#task:957). The canonical authority is the backend route
  * `DELETE /api/conversations/:id/members/agents/:agentId`, which enforces

@@ -514,10 +514,8 @@ function WorkspaceFilePreview({
   if (fileQuery.isError) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center text-xs text-error">
-        <span className="font-medium">Failed to read {leafName(path)}.</span>
-        <span className="text-text-muted">
-          {(fileQuery.error as Error)?.message ?? 'unknown error'}
-        </span>
+        <span className="font-medium">Couldn't read {leafName(path)}.</span>
+        <span className="text-text-muted">It may be unavailable right now.</span>
       </div>
     );
   }

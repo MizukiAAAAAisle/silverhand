@@ -3,6 +3,7 @@ import type { AgentDto, RegistrationRequired, UserDto } from '@silverhand/shared
 import {
   canEditAgentProfile,
   canManageAgentSchedules,
+  canViewAgentFiles,
   canRemoveAgentFromChannel,
 } from './permissions';
 
@@ -96,6 +97,28 @@ describe('canManageAgentSchedules', () => {
   it('defaults closed before the viewer resolves or while pre-registration is active', () => {
     expect(canManageAgentSchedules(undefined, agent())).toBe(false);
     expect(canManageAgentSchedules(registrationRequired, agent())).toBe(false);
+  });
+});
+
+describe('canViewAgentFiles', () => {
+  it('mirrors the owner-only backend gate for L1/L2 agent workspace files', () => {
+    expect(
+      canViewAgentFiles(
+        viewer({ id: 'u-creator' }),
+        agent({ created_by_user_id: 'u-creator' }),
+      ),
+    ).toBe(true);
+    expect(
+      canViewAgentFiles(
+        viewer({ id: 'u-other' }),
+        agent({ created_by_user_id: 'u-creator' }),
+      ),
+    ).toBe(false);
+  });
+
+  it('defaults closed before the viewer resolves or while pre-registration is active', () => {
+    expect(canViewAgentFiles(undefined, agent())).toBe(false);
+    expect(canViewAgentFiles(registrationRequired, agent())).toBe(false);
   });
 });
 

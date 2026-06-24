@@ -26,7 +26,7 @@ import {
   useAgent,
   useAgentRuntimeState,
 } from './hooks';
-import { canManageAgentSchedules } from './permissions';
+import { canManageAgentSchedules, canViewAgentFiles } from './permissions';
 import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { useHostProvenanceGate } from '@/features/hosts/hooks';
 import { isBackendUnreachable, useViewerUser } from '@/features/me/hooks';
@@ -107,6 +107,13 @@ export function AgentView({
   const canManageSchedules = agentForPermissions && viewerForPermissions
     ? canManageAgentSchedules(viewerForPermissions, agentForPermissions)
     : false;
+  // Agent workspace files (L1 home + L2 workspace memory) are owner-private —
+  // mirror the backend owner gate so non-owners get a neutral private state and
+  // we never fire the doomed tree/file requests (#task:1220 / #task:1219).
+  const fileAccessKnown = Boolean(agentForPermissions && viewerForPermissions);
+  const canViewFiles = agentForPermissions && viewerForPermissions
+    ? canViewAgentFiles(viewerForPermissions, agentForPermissions)
+    : false;
 
   useEffect(() => {
     try {
@@ -166,6 +173,8 @@ export function AgentView({
         runtimeState={runtimeQuery.data}
         canManageSchedules={canManageSchedules}
         scheduleAccessKnown={scheduleAccessKnown}
+        canViewFiles={canViewFiles}
+        fileAccessKnown={fileAccessKnown}
         contextConversationId={contextConversationId}
         contextWorkspaceId={contextWorkspaceId}
         onClose={onClose}
@@ -198,11 +207,15 @@ export function AgentView({
             // two-internal-scroll design and chop the pane off below
             // the fold). #task:812.
             <div className="flex min-h-0 flex-1 flex-col px-8 py-6">
-              <AgentWorkspacePane
-                agentId={agent.id}
-                hostId={agent.host_id}
-                canRevealPath={hostProvenance.canUseLocalHostPathFor(agent.host_id)}
-              />
+              {canViewFiles ? (
+                <AgentWorkspacePane
+                  agentId={agent.id}
+                  hostId={agent.host_id}
+                  canRevealPath={hostProvenance.canUseLocalHostPathFor(agent.host_id)}
+                />
+              ) : (
+                <AgentWorkspaceFilesPermissionState loading={!fileAccessKnown} />
+              )}
             </div>
           ) : section === 'activity' ? (
             // Activity is a master-detail surface (conversation rail +
@@ -335,6 +348,8 @@ function AgentSidePanel({
   runtimeState,
   canManageSchedules,
   scheduleAccessKnown,
+  canViewFiles,
+  fileAccessKnown,
   contextConversationId,
   contextWorkspaceId,
   onClose,
@@ -343,6 +358,8 @@ function AgentSidePanel({
   runtimeState: AgentRuntimeStateDto | undefined;
   canManageSchedules: boolean;
   scheduleAccessKnown: boolean;
+  canViewFiles: boolean;
+  fileAccessKnown: boolean;
   contextConversationId: string | null;
   contextWorkspaceId: string | null;
   onClose?: () => void;
@@ -491,22 +508,30 @@ function AgentSidePanel({
           // DM/agent-home context resolves to the agent home dir on the backend
           // (expected overlap) — no frontend branch, and the copy stays neutral
           // about which files appear (it may include system_prompt.md in a DM).
-          <div className="flex min-h-0 flex-1 flex-col">
-            <AgentWorkspaceContainer
-              // Key by source so switching workspace remounts with fresh
-              // selection — a path picked under workspace A never transiently
-              // fetches under B (Cindy #task:1191 P1).
-              key={contextWorkspaceId ?? 'home'}
-              agentId={agent.id}
-              source={
-                contextWorkspaceId
-                  ? { kind: 'workspace', workspaceId: contextWorkspaceId }
-                  : { kind: 'home' }
-              }
-              layout="compact"
-              header={null}
-            />
-          </div>
+          // Owner-private: non-owners get the neutral state, no requests fire
+          // (#task:1220).
+          canViewFiles ? (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <AgentWorkspaceContainer
+                // Key by source so switching workspace remounts with fresh
+                // selection — a path picked under workspace A never transiently
+                // fetches under B (Cindy #task:1191 P1).
+                key={contextWorkspaceId ?? 'home'}
+                agentId={agent.id}
+                source={
+                  contextWorkspaceId
+                    ? { kind: 'workspace', workspaceId: contextWorkspaceId }
+                    : { kind: 'home' }
+                }
+                layout="compact"
+                header={null}
+              />
+            </div>
+          ) : (
+            <div className="flex-1 overflow-y-auto px-4 py-4">
+              <AgentWorkspaceFilesPermissionState loading={!fileAccessKnown} />
+            </div>
+          )
         ) : section === 'profile' ? (
           <div className="flex-1 overflow-y-auto px-4 py-4">
             <AgentProfileCard agent={agent} runtimeState={runtimeState} />
@@ -546,6 +571,32 @@ function AgentSchedulesPermissionState({
       <Lock className="size-6 text-text-muted" />
       <p className="max-w-md text-sm text-text-primary">
         Schedules are private to this agent's owner.
+      </p>
+    </div>
+  );
+}
+
+function AgentWorkspaceFilesPermissionState({
+  loading,
+}: {
+  loading: boolean;
+}): JSX.Element {
+  if (loading) {
+    return (
+      <div className="py-10 text-center text-sm text-text-muted">
+        Loading file permissions…
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-panel-card="placeholder"
+      className="flex flex-col items-center gap-2 border border-border-subtle bg-bg-floating/50 px-4 py-10 text-center"
+    >
+      <Lock className="size-6 text-text-muted" />
+      <p className="max-w-md text-sm text-text-primary">
+        Agent workspace files are private to this agent's owner.
       </p>
     </div>
   );
