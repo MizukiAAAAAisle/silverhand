@@ -54,7 +54,7 @@ export type MessageDto = z.infer<typeof MessageDtoSchema>;
  *  badge needs beyond a bare count: the most-recent replier identities (for
  *  a stacked-avatar cluster) and the last-reply time. Absent until the
  *  backend populates it — the badge falls back to count-only. Keyed by root
- *  message id. See docs/thread-discovery-p2-requirements.md §P1. */
+ *  message id. This schema is the canonical reply-badge sidecar contract. */
 export const ReplyBadgeSummarySchema = z.object({
   /** Total non-system replies. Mirrors `reply_counts_by_root` for self-
    *  containment; the count shown still reads `reply_counts_by_root` so the

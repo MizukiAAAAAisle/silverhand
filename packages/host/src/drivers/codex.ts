@@ -53,9 +53,7 @@ export class CodexDriver implements Driver {
   // window absorbs proxy half-up flakes (e.g. `socks5://127.0.0.1:7897`
   // momentarily refusing connections) where codex still emits its first
   // protocol frame promptly but stalls on `thread/start` while the MCP
-  // chat client retries connecting back to silverhand. See
-  // docs/incident-2026-05-08-codex-init-watchdog.md and
-  // docs/incident-2026-05-08-codex-startup-proxy-flake.md.
+  // chat client retries connecting back to silverhand.
   readonly initPostProtocolMs = 60 * 1000;
 
   private io: DriverIO | null = null;

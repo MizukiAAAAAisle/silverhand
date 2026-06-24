@@ -17,8 +17,7 @@ const DETECT_BINARIES: Record<RuntimeKind, string> = {
  * `@openai/codex-darwin-arm64` binary after a fresh dyld + Node startup.
  * Cold-start latency for the wrapper is empirically 10–22s, which used
  * to push our 30s init watchdog past the line and SIGTERM Codex before
- * it could emit `session_init` (see
- * `docs/incident-2026-05-08-codex-init-watchdog.md` §5 P2). Slock-ai
+ * it could emit `session_init`. Slock-ai
  * resolves codex by preferring the native bundle binary inside
  * `Codex.app` on macOS, which skips the wrapper entirely and typically
  * cuts cold start in half.
@@ -85,7 +84,8 @@ async function resolveBinary(kind: RuntimeKind, bin: string): Promise<string | n
  * version even when the runtime was perfectly installed and would have
  * answered eventually. 30s leaves headroom for the slowest observed
  * wrapper start while still bounding the hang if a binary is genuinely
- * stuck. Same incident: `docs/incident-2026-05-08-codex-init-watchdog.md`.
+ * stuck. The codex cold-start incident that motivated this budget is
+ * inlined above; full postmortem in git history.
  */
 async function probeVersion(bin: string): Promise<string | null> {
   return new Promise(resolve => {

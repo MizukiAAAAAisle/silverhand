@@ -6,7 +6,7 @@
 // This is the contract for `GET /api/conversations/:id/threads` — the
 // per-channel "Threads" list (every reply-cluster in one channel, newest
 // activity first). The path takes a conversation id but only resolves
-// channel / dm_channel. See docs/thread-discovery-p2-requirements.md.
+// channel / dm_channel. This file is the canonical contract for that endpoint.
 import { z } from 'zod';
 
 /** Author identity kind for a thread row. 'human' mirrors the

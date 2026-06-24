@@ -48,7 +48,6 @@ export class ClaudeDriver implements Driver {
   // window measures time from first well-formed JSON frame to `system.init`,
   // and we want all runtimes to share a single recovery budget so PR-A
   // failure-mode triage (`reason=post_protocol`) doesn't depend on driver.
-  // See docs/incident-2026-05-08-codex-init-watchdog.md.
   readonly initPostProtocolMs = 60 * 1000;
 
   buildArgs(ctx: DriverSpawnContext): string[] {
