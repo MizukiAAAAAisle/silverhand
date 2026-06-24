@@ -41,6 +41,7 @@ import {
   type ConversationStreamEvent,
 } from '@/hooks/useConversationStream';
 import { applyTaskChangedToTaskByNumberCache } from '@/features/tasks/useTaskByNumber';
+import { clusterInitialFetchEnabled } from '@/components/layout/threadMarkRead';
 
 export const messagesKey = (cid: string) =>
   ['channels', cid, 'messages'] as const;
@@ -830,9 +831,27 @@ export function useChannelMessages(
 export function useThreadCluster(
   channelId: string | null,
   rootMessageId: string | null,
+  opts?: {
+    /** True while THIS open is a first-unread jump whose `primeAround`
+     *  around-window fetch has not yet resolved (#task:1226 §9.10). While set,
+     *  the infinite query is held DISABLED so its empty-cache initial LATEST
+     *  fetch cannot race / clobber primeAround's around-window. See
+     *  `clusterInitialFetchEnabled`. Omit / false for a normal open — it then
+     *  keeps its mount-time latest initial fetch unchanged. */
+    jumpPrimePending?: boolean;
+  },
 ) {
   const qc = useQueryClient();
-  const enabled = !!channelId && !!rootMessageId;
+  const enabledBase = !!channelId && !!rootMessageId;
+  // The infinite query is enabled (and so allowed to auto-fire its initial
+  // latest fetch on an empty cache) only when NOT waiting on a jump's
+  // primeAround. The stream subscription + epoch carrier below stay on
+  // `enabledBase` so live replies and the freshness epoch are still observed
+  // while the initial fetch is suppressed.
+  const enabled = clusterInitialFetchEnabled({
+    hasChannelAndRoot: enabledBase,
+    jumpPrimePending: opts?.jumpPrimePending ?? false,
+  });
   const key = clusterMessagesKey(channelId ?? 'none', rootMessageId ?? 'none');
 
   const [hasNewerLiveGap, setHasNewerLiveGap] = useState(false);
@@ -870,8 +889,13 @@ export function useThreadCluster(
     // `primeAround` wrote (the authoritative this-open window for a jump). The
     // open's fetch is driven explicitly by the consumer instead: a normal open
     // calls `refetch()` (fresh latest → marks read); a jump-open relies on
-    // primeAround's around-fetch (which also stamps the epoch below). Initial
-    // load on an empty cache still fetches regardless of this flag.
+    // primeAround's around-fetch (which also stamps the epoch below).
+    //
+    // `refetchOnMount` only governs refetch when a cache ALREADY exists, NOT
+    // the initial fetch on an EMPTY cache (that fires whenever `enabled`). So on
+    // a jump-open the empty-cache initial latest fetch is suppressed a layer up,
+    // via `enabled` (gated on `jumpPrimePending`), so primeAround is the sole
+    // writer of this open's window and no latest can pre-empt it.
     refetchOnMount: false,
     initialPageParam: undefined as MessagesPageParam,
     queryFn: async ({ pageParam, signal }) => {
@@ -977,7 +1001,7 @@ export function useThreadCluster(
     },
     [qc, channelId, rootMessageId, key],
   );
-  useConversationStream(enabled ? channelId : null, onEvent);
+  useConversationStream(enabledBase ? channelId : null, onEvent);
 
   // Head of the loaded cluster window: the FIRST page's `stream_head_seq`.
   // Per §9.10 `stream_head_seq` is window-INDEPENDENT (the route captures the
@@ -995,7 +1019,7 @@ export function useThreadCluster(
   const epochQuery = useQuery({
     queryKey: epochKey,
     queryFn: () => 0,
-    enabled,
+    enabled: enabledBase,
     initialData: 0,
     staleTime: Infinity,
     gcTime: Infinity,

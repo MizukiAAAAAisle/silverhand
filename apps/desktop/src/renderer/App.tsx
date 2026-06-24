@@ -1351,6 +1351,18 @@ function RegisteredAppShell(): JSX.Element {
     [isPrimePendingFor, parentJumpTarget],
   );
 
+  // Same derivation for the thread pane (#task:1226 §9.10): true while a
+  // first-unread jump into the open thread is still priming its around-window.
+  // ThreadPanel holds the cluster query disabled meanwhile so its empty-cache
+  // initial latest fetch can't pre-empt/clobber primeAround's around-window.
+  const threadJumpPrimePending = useMemo(
+    () =>
+      threadJumpMessageId !== null &&
+      selectedChannelId !== null &&
+      isPrimePendingFor(selectedChannelId, threadJumpMessageId),
+    [isPrimePendingFor, threadJumpMessageId, selectedChannelId],
+  );
+
   // Parent-message highlight only renders alongside an open thread
   // (channel-typed sides aren't anchored to a parent message). Side
   // threads from PR-3 sigil clicks will fire `onThreadAnchorResolved`
@@ -1523,6 +1535,7 @@ function RegisteredAppShell(): JSX.Element {
         onOpenChannelRef={handleOpenChannelByName}
         onOpenTask={handleOpenTask}
         jumpMessageId={threadJumpMessageId}
+        jumpPrimePending={threadJumpPrimePending}
         onJumped={handleJumped}
       />
     );

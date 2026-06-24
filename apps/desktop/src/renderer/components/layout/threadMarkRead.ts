@@ -64,3 +64,34 @@ export function threadOpenNeedsLatestRefetch(input: {
 }): boolean {
   return !input.isJumpOpen;
 }
+
+/**
+ * Whether `useThreadCluster`'s underlying infinite query may auto-fire its
+ * initial fetch (#task:1226 §9.10 — the empty-cache race Cindy caught). React
+ * Query fires the initial fetch on an EMPTY cache whenever the query is
+ * `enabled`, REGARDLESS of `refetchOnMount` (the flag only governs refetch when
+ * a cache already exists). On a jump-open that initial fetch is a target-less
+ * LATEST window, and it races `primeAround`'s around-first-unread fetch —
+ * whichever lands first writes `clusterMessagesKey` + the freshness epoch and
+ * wins, so a latest could clobber the locate window and open the mark-read gate
+ * before the around-window arrives.
+ *
+ * So while a jump-open's prime is still PENDING we keep the query DISABLED:
+ * `primeAround` becomes the sole writer of this open's window — no latest can
+ * pre-empt it. Once the prime resolves the query re-enables (NOT a mount, so
+ * `refetchOnMount:false` still suppresses a refetch): cache present (prime
+ * committed) → the around-window is read with no fetch; cache empty (prime
+ * failed/aborted) → a latest initial fetch fires as a graceful fallback so the
+ * pane is never left blank. A normal open never gates (no prime pending), so it
+ * keeps its mount-time latest initial fetch exactly as before.
+ *
+ * Pure so the "jump-open does not mount as a latest-initial-fetch-enabled
+ * query" invariant is locked by a unit test instead of only living in hook
+ * wiring (no RTL/jsdom mount harness in this env).
+ */
+export function clusterInitialFetchEnabled(input: {
+  hasChannelAndRoot: boolean;
+  jumpPrimePending: boolean;
+}): boolean {
+  return input.hasChannelAndRoot && !input.jumpPrimePending;
+}

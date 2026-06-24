@@ -57,6 +57,12 @@ interface ThreadPanelProps {
    *  `thread_root_id === rootMessageId`. App gates this to this cluster, so
    *  the panel just locates. Null = no pending jump. */
   jumpMessageId?: string | null;
+  /** True while a first-unread jump into THIS thread is still priming its
+   *  around-window (#task:1226 §9.10). App derives it from the jump
+   *  controller's `isPrimePendingFor`. While set, the cluster query is held
+   *  disabled so its empty-cache initial latest fetch can't race / clobber
+   *  `primeAround`'s around-window; the pane shows a loader meanwhile. */
+  jumpPrimePending?: boolean;
   /** Called once the jump completes (flashed) or is given up (target not in
    *  the loaded window). App clears the jump target on this. */
   onJumped?: () => void;
@@ -91,10 +97,13 @@ export function ThreadPanel({
   onOpenChannelRef,
   onOpenTask,
   jumpMessageId,
+  jumpPrimePending = false,
   onJumped,
 }: ThreadPanelProps): JSX.Element {
   const rootCtx = useThreadRoot(channelId, rootMessageId);
-  const cluster = useThreadCluster(channelId, rootMessageId);
+  const cluster = useThreadCluster(channelId, rootMessageId, {
+    jumpPrimePending,
+  });
   const messages = cluster.data;
   // Window-position signals (mirrors the channel pane). A cluster can be
   // mid-history after an around-reply jump (saved/search/task/notification
@@ -562,7 +571,11 @@ export function ThreadPanel({
                 item 1) so replies get the panel's full height. */}
             {rootCtx.root ? renderMessage(rootCtx.root) : null}
 
-            {cluster.isLoading ? (
+            {cluster.isLoading || jumpPrimePending ? (
+              // `jumpPrimePending`: the cluster query is intentionally disabled
+              // while primeAround fetches this jump's around-window (§9.10), so
+              // `isLoading` is false even though no window has landed yet —
+              // show the loader, not the empty state, until it commits.
               <div className="flex flex-1 items-center justify-center text-text-muted">
                 <Loader2 className="size-4 animate-spin" />
               </div>

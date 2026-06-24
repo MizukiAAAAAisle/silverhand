@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import {
+  clusterInitialFetchEnabled,
   threadMarkReadSnapshot,
   threadOpenNeedsLatestRefetch,
   type ThreadMarkReadGateInput,
@@ -98,6 +99,54 @@ describe('threadOpenNeedsLatestRefetch — jump-window clobber prevention (§9.1
     // around-first-unread window primeAround wrote, breaking "click chip → land
     // on first unread". A jump open must rely on primeAround instead.
     expect(threadOpenNeedsLatestRefetch({ isJumpOpen: true })).toBe(false);
+  });
+});
+
+describe('clusterInitialFetchEnabled — empty-cache jump race (§9.10, Cindy)', () => {
+  it('enables the initial fetch on a NORMAL open (no prime pending)', () => {
+    // A normal open keeps its mount-time latest initial fetch — that fetch IS
+    // this open's window and what arms the mark-read gate.
+    expect(
+      clusterInitialFetchEnabled({
+        hasChannelAndRoot: true,
+        jumpPrimePending: false,
+      }),
+    ).toBe(true);
+  });
+
+  it('DISABLES the query while a jump-open is still priming (no latest may pre-empt primeAround)', () => {
+    // The blocker: enabled + empty cache → React Query fires a target-less
+    // LATEST initial fetch regardless of refetchOnMount, racing primeAround's
+    // around-window. Holding the query disabled while the prime is pending
+    // makes primeAround the sole writer of this open's window.
+    expect(
+      clusterInitialFetchEnabled({
+        hasChannelAndRoot: true,
+        jumpPrimePending: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('re-enables once the jump prime resolves (commit → reads around; fail → latest fallback)', () => {
+    // When primeAround resolves, `jumpPrimePending` flips false and the query
+    // re-enables. On commit the cache is present → refetchOnMount:false → it
+    // reads the around-window with no fetch. On failure the cache is empty → a
+    // latest initial fetch fires as a graceful fallback (pane never blank).
+    expect(
+      clusterInitialFetchEnabled({
+        hasChannelAndRoot: true,
+        jumpPrimePending: false,
+      }),
+    ).toBe(true);
+  });
+
+  it('stays disabled without a channel/root regardless of prime state', () => {
+    expect(
+      clusterInitialFetchEnabled({
+        hasChannelAndRoot: false,
+        jumpPrimePending: false,
+      }),
+    ).toBe(false);
   });
 });
 
