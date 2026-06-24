@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from 'react';
-import type { RuntimeKind } from '@silverhand/shared';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import type { CreateAgentInput, RuntimeKind } from '@silverhand/shared';
 import {
   Dialog,
   DialogContent,
@@ -10,6 +10,8 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { ApiError } from '@/lib/api';
+import { useHostProvenanceGate, useHostsQuery } from '@/features/hosts/hooks';
 import { useCreateAgent } from './hooks';
 
 // Runtime catalog for the create dialog. `disabled` runtimes appear in
@@ -29,6 +31,28 @@ const RUNTIMES: RuntimeChoice[] = [
   { value: 'qoder', label: 'Qoder', disabled: true },
 ];
 
+// Shared chip styling for the Runtime + "Runs on" pickers: ink border +
+// the theme's own selection fill (`--bg-row-selected`), border WIDTH /
+// radius via the per-theme control tokens (forza6 2px poster, warm/slack
+// 1px). Text held constant at text-primary across states. Kept identical
+// across both rows so the dialog reads as one control family (#task:1214).
+const CHIP_BASE =
+  'rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs transition-colors ';
+
+function chipClass(isSelected: boolean, isDisabled = false): string {
+  if (isDisabled) {
+    return (
+      CHIP_BASE + 'cursor-not-allowed border-border-subtle text-text-muted opacity-50'
+    );
+  }
+  return (
+    CHIP_BASE +
+    (isSelected
+      ? 'border-text-primary bg-[var(--bg-row-selected)] text-text-primary'
+      : 'border-border-subtle text-text-primary hover:border-border')
+  );
+}
+
 interface CreateAgentDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -42,8 +66,69 @@ export function CreateAgentDialog({
 }: CreateAgentDialogProps): JSX.Element {
   const [name, setName] = useState('');
   const [runtime, setRuntime] = useState<RuntimeKind>('claude');
+  const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const createAgent = useCreateAgent();
+
+  const { currentLocalHost } = useHostProvenanceGate();
+  const hostsQuery = useHostsQuery();
+
+  // Active local hosts are the only valid New-Agent runtime targets: an agent
+  // runs on a local daemon, and the backend's default placement only resolves
+  // among `kind === 'local' && revoked_at === null` (host-placement.ts).
+  const activeLocalHosts = useMemo(
+    () =>
+      (hostsQuery.data?.hosts ?? []).filter(
+        host => host.kind === 'local' && host.revoked_at === null,
+      ),
+    [hostsQuery.data],
+  );
+
+  // The picker only earns its place when the backend genuinely cannot resolve a
+  // single host on its own (≥2 active local hosts → `local_host_ambiguous`).
+  // With 0/1 host there is no UI — but we still send the current host's id below
+  // so the backend never has to guess.
+  const showPicker = activeLocalHosts.length >= 2;
+
+  // The current client's bound local host, when it is an active local one. This
+  // is the zero-friction default AND the id we send even when the picker is
+  // hidden — so a desktop submit always carries an explicit `host_id` and
+  // `local_host_ambiguous` becomes structurally impossible (Alice's race: a 2nd
+  // daemon attaching while the dialog is open must not flip a hidden-picker
+  // submit back to ambiguous). We test active-local placement directly rather
+  // than borrowing `canUseCurrentLocalHostPath` — that gate carries local-path
+  // affordance semantics (Reveal/Finder) that could tighten and silently shift
+  // placement (Cindy #task:1214). `null` only for a pure-remote client with no
+  // bound local host → fall back to the backend's own resolution.
+  const defaultHostId =
+    currentLocalHost &&
+    currentLocalHost.kind === 'local' &&
+    currentLocalHost.revoked_at === null
+      ? currentLocalHost.id
+      : null;
+
+  // Preselect the current host when the picker opens; clear on close. `prev ??`
+  // preserves an explicit user choice and still fills the default once the hosts
+  // list resolves after the dialog is already open.
+  useEffect(() => {
+    if (!open) {
+      setSelectedHostId(null);
+      return;
+    }
+    setSelectedHostId(prev => prev ?? defaultHostId);
+  }, [open, defaultHostId]);
+
+  // Decoupled from picker visibility: send the chosen host when the picker is
+  // shown, else the current host's id (when known). Omitted only when neither
+  // is available (pure-remote client) → backend fallback resolves the lone host.
+  const effectiveHostId = showPicker ? selectedHostId : defaultHostId;
+
+  // A muted one-liner that only appears once the user points the agent at a host
+  // other than the one they're on (or any host, when they have no current one).
+  // The current-host default stays caption-free — picking your own machine needs
+  // no explanation (shiki). Copy locked with Cindy (#task:1214).
+  const showHostNote =
+    showPicker && selectedHostId !== null && selectedHostId !== defaultHostId;
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -52,17 +137,21 @@ export function CreateAgentDialog({
       setError('Please enter an agent name');
       return;
     }
+    if (showPicker && !selectedHostId) {
+      setError('Please choose which computer runs this agent');
+      return;
+    }
     try {
-      const res = await createAgent.mutateAsync({
-        name: name.trim(),
-        runtime,
-      });
+      const input: CreateAgentInput = { name: name.trim(), runtime };
+      if (effectiveHostId) input.host_id = effectiveHostId;
+      const res = await createAgent.mutateAsync(input);
       onCreated?.(res.agent.id);
       setName('');
       setRuntime('claude');
+      setSelectedHostId(null);
       onOpenChange(false);
     } catch (err) {
-      setError(String(err));
+      setError(friendlyCreateError(err));
     }
   };
 
@@ -108,26 +197,7 @@ export function CreateAgentDialog({
                       if (isDisabled) return;
                       setRuntime(rt.value as RuntimeKind);
                     }}
-                    className={
-                      // Selected = the theme's own selection colour as the fill
-                      // (`--bg-row-selected`: forza6 acid lime / warm yellow /
-                      // slack blue) — NOT gray and NOT accent-pink (both
-                      // rejected), the native "selected" semantic that's loud
-                      // enough to read at a glance. Ink border + lime fill is
-                      // forza6's poster pairing (same as inline-code). Text is
-                      // held CONSTANT at text-primary across states (shiki) and
-                      // stays legible on every theme's fill. Border WIDTH follows
-                      // the per-theme `--control-border-width` token (forza6 2px,
-                      // warm/slack 1px). Real cross-theme tokens — the old
-                      // `accent-base`/`border-default`/`border-strong` classes
-                      // were undefined no-ops (#task:1176).
-                      'rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs transition-colors ' +
-                      (isDisabled
-                        ? 'cursor-not-allowed border-border-subtle text-text-muted opacity-50'
-                        : isSelected
-                        ? 'border-text-primary bg-[var(--bg-row-selected)] text-text-primary'
-                        : 'border-border-subtle text-text-primary hover:border-border')
-                    }
+                    className={chipClass(isSelected, isDisabled)}
                   >
                     {rt.label}
                   </button>
@@ -135,6 +205,32 @@ export function CreateAgentDialog({
               })}
             </div>
           </div>
+
+          {showPicker ? (
+            <div className="flex flex-col gap-1.5">
+              <Label>Runs on</Label>
+              <div className="flex flex-wrap gap-2">
+                {activeLocalHosts.map(host => {
+                  const isSelected = selectedHostId === host.id;
+                  return (
+                    <button
+                      key={host.id}
+                      type="button"
+                      onClick={() => setSelectedHostId(host.id)}
+                      className={chipClass(isSelected)}
+                    >
+                      {host.display_label ?? host.name}
+                    </button>
+                  );
+                })}
+              </div>
+              {showHostNote ? (
+                <span className="text-xs text-text-muted">
+                  Agent runs on the selected computer.
+                </span>
+              ) : null}
+            </div>
+          ) : null}
 
           {error ? <div className="text-xs text-error">{error}</div> : null}
 
@@ -146,7 +242,10 @@ export function CreateAgentDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={createAgent.isPending}>
+            <Button
+              type="submit"
+              disabled={createAgent.isPending || hostsQuery.isLoading}
+            >
               {createAgent.isPending ? 'Creating…' : 'Create'}
             </Button>
           </DialogFooter>
@@ -154,4 +253,37 @@ export function CreateAgentDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** Map a create-agent failure to a calm, user-facing line. The host-placement
+ *  codes are defensive: a desktop submit always carries an explicit `host_id`,
+ *  so `local_host_ambiguous` shouldn't surface from here — but a host revoked
+ *  or detached between load and submit still can. Anything unrecognised falls
+ *  back to a generic retry message rather than leaking a raw `ApiError`. */
+function friendlyCreateError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.kind === 'backend_unreachable') {
+      return "Can't reach the backend. Check your connection and try again.";
+    }
+    switch (parseErrorCode(err.body)) {
+      case 'local_host_ambiguous':
+        return 'Choose which computer should run this agent.';
+      case 'local_host_unbound':
+        return 'No connected computer can run this agent. Connect one and try again.';
+      case 'host_revoked':
+      case 'host_not_owned':
+      case 'host_missing':
+        return "That computer isn't available anymore. Pick another and try again.";
+    }
+  }
+  return "Couldn't create the agent. Please try again.";
+}
+
+function parseErrorCode(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body) as { code?: unknown };
+    return typeof parsed.code === 'string' ? parsed.code : null;
+  } catch {
+    return null;
+  }
 }
