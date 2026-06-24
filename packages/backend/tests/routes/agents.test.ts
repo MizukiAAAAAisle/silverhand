@@ -102,6 +102,47 @@ describe('POST /api/agents', () => {
     expect(await res.json()).toMatchObject({ code: 'host_not_owned' });
   });
 
+  it('fails closed with local_host_ambiguous when the creator has ≥2 active local hosts and omits host_id (#task:1212)', async () => {
+    // The exact New Agent bug: a user with two active local hosts (e.g. two
+    // desktops attached to the same remote backend) creating without an
+    // explicit host_id. The backend cannot know "which machine am I on" — that
+    // is originating-surface knowledge — so it must fail closed and force the
+    // caller to pick, never silently guess. Resolver-layer tests cover the 0/1/N
+    // branch; this locks it at the create-agent ROUTE boundary.
+    t = buildTestApp();
+    new HostRepo(t.ctx.db).claimOrCreateLocal({
+      userId: t.viewerUserId,
+      installationId: 'second-desktop',
+    });
+
+    const res = await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: 'local_host_ambiguous' });
+  });
+
+  it('places the agent on an explicit owned+active host_id even when placement would otherwise be ambiguous (#task:1212)', async () => {
+    // The renderer fix always sends the current host_id, so the explicit path
+    // is the common case. Adding a second host makes the default resolve
+    // ambiguous; an explicit owned+active host_id must disambiguate → 201 on
+    // exactly that host (not the other one, not a 409).
+    t = buildTestApp();
+    const hosts = new HostRepo(t.ctx.db);
+    const target = hosts.getOwnedLocalForUser(t.viewerUserId);
+    expect(target).not.toBeNull();
+    // Second active local host → default (no host_id) would be ambiguous.
+    hosts.claimOrCreateLocal({ userId: t.viewerUserId, installationId: 'second-desktop' });
+
+    const res = await http(t).post('/api/agents', {
+      name: 'alice',
+      runtime: 'claude',
+      host_id: target!.id,
+    });
+
+    expect(res.status).toBe(201);
+    expect((await res.json() as any).agent.host_id).toBe(target!.id);
+  });
+
   it('returns 409 on duplicate name', async () => {
     t = buildTestApp();
     await http(t).post('/api/agents', { name: 'bob', runtime: 'claude' });
