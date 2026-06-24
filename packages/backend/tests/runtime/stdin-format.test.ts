@@ -73,7 +73,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     );
 
     expect(header).toMatch(
-      /^msg_id=m-main sender=@shiki type=human target=channel time=/,
+      /^\[msg_id=m-main sender=@shiki type=human target=channel time=/,
     );
     expect(header).not.toContain('thread:');
   });
@@ -95,7 +95,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     );
 
     expect(header).toMatch(
-      /^msg_id=m-reply sender=@Alice type=agent target=thread:m-root time=/,
+      /^\[msg_id=m-reply sender=@Alice type=agent target=thread:m-root time=/,
     );
   });
 
@@ -118,7 +118,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     );
 
     expect(header).toMatch(
-      /^msg_id=m-task sender=@shiki type=human target=channel time=\S+ task=#123 status=todo$/,
+      /^\[msg_id=m-task sender=@shiki type=human target=channel time=\S+ task=#123 status=todo\]$/,
     );
   });
 

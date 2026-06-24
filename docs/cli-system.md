@@ -447,19 +447,21 @@ silverhand message react --message-id m_123 --emoji 👀 --remove
 
 Messages pushed to an agent on stdin are prefixed with a single canonical
 **meta header** line (formatter: `packages/backend/src/runtime/stdin-format.ts`,
-`formatStdinMessageHeader`). The platform prompt documents this for the agent;
-the format itself is an agent-facing contract, repeated here so CLI/runtime and
-prompt stay in sync (see the maintenance checklist).
+`formatStdinMessageHeader`). The whole envelope is wrapped in `[...]` so it is
+visually distinct from the message body, which follows on the next line. The
+platform prompt documents this for the agent; the format itself is an
+agent-facing contract, repeated here so CLI/runtime and prompt stay in sync
+(see the maintenance checklist).
 
 ```
-msg_id=<id> sender=@<handle>|system type=agent|human|system target=channel|thread:<root_message_id> time=<iso>
+[msg_id=<id> sender=@<handle>|system type=agent|human|system target=channel|thread:<root_message_id> time=<iso>]
 ```
 
 - `target=channel` is the main line; `target=thread:<root_message_id>` is a
   reply inside that message's cluster.
 - **Task anchor suffix.** When the delivered row is itself a task, the header
-  gains a trailing ` task=#<number> status=<status>` (e.g.
-  `… time=<iso> task=#1124 status=todo`). The suffix is the machine-readable
+  gains a trailing ` task=#<number> status=<status>` **inside the brackets**
+  (e.g. `… time=<iso> task=#1124 status=todo]`). The suffix is the machine-readable
   fact that the message **is a task anchor**, not plain chat; `task=#<number>`
   and `status=<status>` are authoritative. It is general to **all** task
   messages — human `Send as task`, a `task claim --message-id` promotion

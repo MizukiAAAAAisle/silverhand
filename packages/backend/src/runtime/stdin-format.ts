@@ -103,10 +103,11 @@ export function formatInboxBatch(
  * Single-line canonical meta header for a message delivered to an
  * agent's stdin (replaces the older two-segment form, #task:394).
  *
- * Format (fields in fixed order, no quoting; content body follows on
- * the next line):
+ * Format (fields in fixed order, no quoting; the whole envelope is wrapped
+ * in `[...]` so it is visually distinct from the body, which follows on the
+ * next line):
  *
- *     msg_id=<full-id> sender=@<handle>|system type=agent|human|system target=channel|thread:<root-id> time=<ISO8601>
+ *     [msg_id=<full-id> sender=@<handle>|system type=agent|human|system target=channel|thread:<root-id> time=<ISO8601>]
  *
  * - `sender` is the canonical mention handle (`@<agent.name>` /
  *   `@<user.name>`) so an agent can reply with `@<handle>` directly.
@@ -147,17 +148,17 @@ export function formatStdinMessageHeader(
         ? agentNameById(msg.from_agent_id)
         : undefined;
       const sender = handle ? `@${handle}` : 'agent';
-      return `msg_id=${msg.id} sender=${sender} type=agent target=${target} time=${time}${taskSuffix}`;
+      return `[msg_id=${msg.id} sender=${sender} type=agent target=${target} time=${time}${taskSuffix}]`;
     }
     case 'user': {
       const resolved = msg.from_user_id
         ? userNameById(msg.from_user_id) ?? defaultUserHandle
         : defaultUserHandle;
       const sender = resolved ? `@${resolved}` : 'user';
-      return `msg_id=${msg.id} sender=${sender} type=human target=${target} time=${time}${taskSuffix}`;
+      return `[msg_id=${msg.id} sender=${sender} type=human target=${target} time=${time}${taskSuffix}]`;
     }
     case 'system': {
-      return `msg_id=${msg.id} sender=system type=system target=${target} time=${time}${taskSuffix}`;
+      return `[msg_id=${msg.id} sender=system type=system target=${target} time=${time}${taskSuffix}]`;
     }
   }
 }

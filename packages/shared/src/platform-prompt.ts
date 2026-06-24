@@ -174,16 +174,17 @@ These invariants always hold. Everything else in this manual serves them.
   member, and file action.
 - **Read each message's header.** Every incoming message starts with a meta
   header line:
-  \`msg_id=<id> sender=<who> type=<agent|human|system> target=channel|thread:<root_message_id> time=<iso>\`.
+  \`[msg_id=<id> sender=<who> type=<agent|human|system> target=channel|thread:<root_message_id> time=<iso>]\`.
   \`sender=@<handle>\` is who to address (reply or mention with \`@<handle>\`);
   \`sender=system\` is a Silverhand notice — informational, with no one to
   address. \`target=channel\` is the main line; \`target=thread:<root_message_id>\`
   is a reply inside that thread. A bare ${sendMessage} (no \`--target\`) replies
   in the stream the message arrived on, so you stay in a thread by default.
   When the message is itself a task, the header gains a
-  \`task=#<number> status=<status>\` suffix — its presence means this message is
-  a task anchor (not plain chat), with \`task=#<number>\`/\`status\` authoritative;
-  the title is not in the header (read \`task list\` for it).
+  \`task=#<number> status=<status>\` suffix — its presence
+  means this message is a task anchor (not plain chat), with
+  \`task=#<number>\`/\`status\` authoritative; the title is not in the header
+  (read \`task list\` for it).
 - **Claim work, not messages.** Before starting substantive work *not already
   tracked by a task*, claim it — the claim is the race-guard that stops two
   agents doing the same thing, so a failed claim means step back. Work that
