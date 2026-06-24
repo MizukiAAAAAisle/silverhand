@@ -272,6 +272,7 @@ async function deliverOne(
       mentionsConversation.id,
       humanMemberId,
       wrapped.seq,
+      wrapped.thread_root_id ?? null,
     )
   ) {
     opts.events.publishToScope(`viewer:${humanMemberId}`, 'unread_updated', {
@@ -333,15 +334,20 @@ function viewerHasNotReadMessage(
   conversationId: string,
   viewerUserId: string,
   messageSeq: number,
+  threadRootId: string | null,
 ): boolean {
+  // Per-stream cursor (#task:1226 §4.1): a (user, conversation) has many cursor
+  // rows, so the lookup MUST be stream-qualified or it would pick an arbitrary
+  // row. `IS ?` handles both the mainline (NULL) and a thread root id.
   const row = db
-    .prepare<[string, string], { last_read_seq: number }>(
+    .prepare<[string, string, string | null], { last_read_seq: number }>(
       `SELECT last_read_seq
          FROM conversation_reads
         WHERE user_id = ?
-          AND conversation_id = ?`,
+          AND conversation_id = ?
+          AND thread_root_id IS ?`,
     )
-    .get(viewerUserId, conversationId);
+    .get(viewerUserId, conversationId, threadRootId);
   return (row?.last_read_seq ?? 0) < messageSeq;
 }
 

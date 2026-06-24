@@ -54,11 +54,25 @@ export const ThreadSummarySchema = z.object({
   repliers: z.array(ThreadReplierSchema),
   replier_total: z.number().int().nonnegative(),
 
-  /** OPTIONAL (P2.1). Omitted in P2: the only read marker today
-   *  (`conversation_reads.last_read_seq`) is per-conversation, not
-   *  per-thread-stream, so it cannot express per-cluster unread without
-   *  lying. Lands once a per-stream read primitive exists. */
-  unread_count: z.number().int().nonnegative().optional(),
+  /** Per-stream unread for THIS reply-cluster, for the requesting viewer
+   *  (#task:1226). Computed from the per-thread read cursor — NOT roll-up and
+   *  NOT follow-gated: it is this thread's own unread regardless of whether the
+   *  viewer follows it. The UI maps it per §5 — followed → "N new" sticker,
+   *  non-followed with unread → weak dot. 0 when the viewer is caught up. */
+  unread_count: z.number().int().nonnegative(),
+
+  /** First (lowest-seq) unread message in this cluster, for "jump to first
+   *  unread". BOTH id and seq are emitted so the client scrolls to a concrete
+   *  message id deterministically (no seq→id reverse lookup). Null when there
+   *  is no unread. */
+  first_unread_message_id: z.string().nullable(),
+  first_unread_seq: z.number().int().nonnegative().nullable(),
+
+  /** Whether the requesting viewer follows this cluster (`thread_followers`,
+   *  principal_kind='human'). Drives the followed→sticker / non-followed→dot
+   *  split (§5) and mirrors the sidebar roll-up's "followed" set. Read-only
+   *  projection of the delivery-subscription table — never written here. */
+  viewer_following: z.boolean(),
 });
 export type ThreadSummary = z.infer<typeof ThreadSummarySchema>;
 

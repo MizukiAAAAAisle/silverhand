@@ -428,6 +428,10 @@ export interface ConversationStreamHeadRow {
 export interface ConversationReadRow {
   user_id: string;
   conversation_id: string;
+  /** Per-stream read cursor (#task:1226): NULL = mainline, non-NULL = that
+   *  reply-cluster. Uniqueness enforced by two partial-unique indexes
+   *  (main / thread), mirroring conversation_stream_heads. */
+  thread_root_id: string | null;
   last_read_seq: number;
   read_at: number;
 }

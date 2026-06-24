@@ -193,6 +193,104 @@ export const migrations: Migration[] = [
       ALTER TABLE user_sort_entry ADD COLUMN starred_at INTEGER;
     `,
   },
+  {
+    version: 51,
+    name: 'conversation_reads_per_stream',
+    // Per-stream read cursor (#task:1226). The read boundary was per-CONVERSATION
+    // (one cursor for the mainline + every thread together), so thread-level
+    // unread could not be expressed (ThreadSummary.unread_count stayed optional
+    // and unfilled). This generalizes `conversation_reads` to per-STREAM, exactly
+    // mirroring the per-stream `conversation_stream_heads` freshness model: one
+    // concept (stream) at one grain on both the read and write sides.
+    //
+    // thread_root_id NULL = mainline; non-NULL = that reply-cluster. Uniqueness
+    // uses the SAME two partial-unique indexes as conversation_stream_heads —
+    // SQLite composite PK with a nullable column does not dedupe NULLs reliably,
+    // so a PK is wrong here.
+    //
+    // Table rebuild (SQLite can't drop the old PRIMARY KEY) → foreignKeyEscape so
+    // the runner toggles foreign_keys OFF + legacy_alter_table ON and runs
+    // foreign_key_check afterward.
+    foreignKeyEscape: true,
+    up: `
+      CREATE TABLE conversation_reads_new (
+        user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        thread_root_id   TEXT REFERENCES messages(id) ON DELETE CASCADE,
+        last_read_seq    INTEGER NOT NULL DEFAULT 0,
+        read_at          INTEGER NOT NULL
+      );
+
+      -- Old per-conversation rows become the MAINLINE cursor (thread_root_id NULL),
+      -- value carried over verbatim.
+      INSERT INTO conversation_reads_new (user_id, conversation_id, thread_root_id, last_read_seq, read_at)
+        SELECT user_id, conversation_id, NULL, last_read_seq, read_at FROM conversation_reads;
+
+      DROP TABLE conversation_reads;
+      ALTER TABLE conversation_reads_new RENAME TO conversation_reads;
+
+      CREATE UNIQUE INDEX uniq_conversation_reads_main
+        ON conversation_reads(user_id, conversation_id) WHERE thread_root_id IS NULL;
+      CREATE UNIQUE INDEX uniq_conversation_reads_thread
+        ON conversation_reads(user_id, conversation_id, thread_root_id) WHERE thread_root_id IS NOT NULL;
+      CREATE INDEX idx_conversation_reads_conversation
+        ON conversation_reads(conversation_id);
+
+      -- Root-invariant guard (mirrors conversation_stream_heads / thread_followers):
+      -- thread_root_id REFERENCES messages only proves the message exists, NOT that
+      -- it belongs to this conversation or is itself a root (non-reply). Without this
+      -- a bad client cursor would silently corrupt unread/first-unread. DB-level
+      -- fail-loud backstop; the route layer also pre-validates with friendly 400s.
+      CREATE TRIGGER conversation_reads_root_insert
+        BEFORE INSERT ON conversation_reads
+        WHEN NEW.thread_root_id IS NOT NULL
+        BEGIN
+          SELECT CASE
+            WHEN NOT EXISTS (SELECT 1 FROM messages WHERE id = NEW.thread_root_id)
+            THEN RAISE(ABORT, 'conversation_reads.thread_root_id must reference an existing message')
+          END;
+          SELECT CASE
+            WHEN COALESCE((SELECT conversation_id FROM messages WHERE id = NEW.thread_root_id), '') != NEW.conversation_id
+            THEN RAISE(ABORT, 'conversation_reads root must be in the same conversation')
+          END;
+          SELECT CASE
+            WHEN (SELECT thread_root_id FROM messages WHERE id = NEW.thread_root_id) IS NOT NULL
+            THEN RAISE(ABORT, 'conversation_reads root must not itself be a reply')
+          END;
+        END;
+
+      CREATE TRIGGER conversation_reads_root_update
+        BEFORE UPDATE OF thread_root_id, conversation_id ON conversation_reads
+        WHEN NEW.thread_root_id IS NOT NULL
+        BEGIN
+          SELECT CASE
+            WHEN NOT EXISTS (SELECT 1 FROM messages WHERE id = NEW.thread_root_id)
+            THEN RAISE(ABORT, 'conversation_reads.thread_root_id must reference an existing message')
+          END;
+          SELECT CASE
+            WHEN COALESCE((SELECT conversation_id FROM messages WHERE id = NEW.thread_root_id), '') != NEW.conversation_id
+            THEN RAISE(ABORT, 'conversation_reads root must be in the same conversation')
+          END;
+          SELECT CASE
+            WHEN (SELECT thread_root_id FROM messages WHERE id = NEW.thread_root_id) IS NOT NULL
+            THEN RAISE(ABORT, 'conversation_reads root must not itself be a reply')
+          END;
+        END;
+
+      -- Eager seed (#task:1226 key decision): every EXISTING thread gets its own
+      -- cursor frozen at the user's old mainline value, so the upgrade does not
+      -- flood users with historical thread unread, AND the steady-state read model
+      -- has ZERO fallback branch (no vestigial baseline column, no dynamic COALESCE
+      -- back to the advancing mainline cursor). Bounded one-time INSERT...SELECT.
+      INSERT INTO conversation_reads (user_id, conversation_id, thread_root_id, last_read_seq, read_at)
+        SELECT cr.user_id, cr.conversation_id, sh.thread_root_id, cr.last_read_seq, cr.read_at
+          FROM conversation_reads cr
+          JOIN conversation_stream_heads sh
+            ON sh.conversation_id = cr.conversation_id
+         WHERE cr.thread_root_id IS NULL
+           AND sh.thread_root_id IS NOT NULL;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

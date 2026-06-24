@@ -1,0 +1,206 @@
+# Thread Unread — per-stream read cursor (v1)
+
+Status: **implemented (backend), in_review**（#task:1226；shiki go 2026-06-25；Cindy spec review PASS 三轮）。Owner: backend=Alice / UI=Norman / review=Cindy。
+本 doc 是 #1226 的 canonical 规范；与代码冲突时以本 doc 为准直至代码修正。**Activity/Inbox 是独立后续(`notes`/单独 task),不在本 doc 范围**——本 doc 只交付 per-stream read cursor 底座 + thread 未读三表面。
+
+## 1. 问题
+
+Thread(reply-cluster)的未读不可发现。今天已读边界 `conversation_reads.last_read_seq` 是 **per-conversation**(主线 + 该 conversation 下所有 thread 共用一个游标),无法表达「某条 thread 有未读」。证据:`ThreadSummary.unread_count` 因此长期是 optional 且不填(`packages/shared/src/api/thread-summary.ts`,注释自陈「Lands once a per-stream read primitive exists」)。
+
+而「每条流的最新位置」其实已是 per-stream:`conversation_stream_heads(conversation_id, thread_root_id, latest_seq)`(`baseline-schema.ts:608`)。**缺的只是 per-stream 的「已读边界」。**
+
+## 2. 现状(grounded)
+
+- `conversation_reads`(`baseline-schema.ts:278`):`PRIMARY KEY (user_id, conversation_id)`,`last_read_seq`,`read_at`。
+- `conversation_stream_heads`(`baseline-schema.ts:608`):`(conversation_id, thread_root_id NULL=主线, latest_seq)`,唯一性靠**两条 partial unique index**(`uniq_stream_head_main WHERE thread_root_id IS NULL` / `uniq_stream_head_thread WHERE thread_root_id IS NOT NULL`,`:614-618`)。
+- `thread_followers`(`baseline-schema.ts:561`):`PK (thread_root_id, principal_kind, principal_id)`,`principal_kind ∈ {human, agent}`。**注意:这是 delivery/agent-wake 契约,不是 attention 偏好**(见 §8 不变量)。
+- `messages` 有 `thread_root_id` 列(主线消息=NULL,reply=其 root id)。
+- 读模型在 `packages/backend/src/repos/conversation-read-repo.ts`:`markRead`(upsert ON CONFLICT (user_id,conversation_id))、`unreadCountForConversation`、`unreadCountsByConversationForWorkspace`、`latestUnreadForConversation`、`unreadCountsByWorkspaceSidebar`——**全部基于单一 per-conversation 游标**。
+- 迁移现状:baseline@44,最新 migration = **v50**,`MIN_SUPPORTED_SCHEMA_VERSION = 44`(`packages/backend/src/db.ts`)。本改动 = **新增 v51**(append-only,绝不改已发布迁移)。
+
+## 3. 核心设计:已读边界 per-stream 化
+
+把 `conversation_reads` 从 per-conversation 升级成 **per-stream**,与已有的 per-stream freshness(`conversation_stream_heads`)对齐。一个概念一个名:stream 在读、写两侧都是同一粒度。
+
+### 3.1 Schema(新增 v51)
+
+`conversation_reads` 增加 `thread_root_id TEXT`(NULL=主线),唯一性**照搬 `conversation_stream_heads` 的两条 partial unique index**(SQLite 复合 PK 含可空列对 NULL 去重不可靠,故不用 PK):
+
+```sql
+-- v51。SQLite 不能 ALTER 掉旧 PRIMARY KEY,需 table rebuild。
+CREATE TABLE conversation_reads_new (
+  user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  thread_root_id   TEXT REFERENCES messages(id) ON DELETE CASCADE,   -- NULL = 主线
+  last_read_seq    INTEGER NOT NULL DEFAULT 0,
+  read_at          INTEGER NOT NULL
+);
+
+-- 旧行(per-conversation)→ 主线游标:thread_root_id 取 NULL,值原样继承。
+INSERT INTO conversation_reads_new (user_id, conversation_id, thread_root_id, last_read_seq, read_at)
+  SELECT user_id, conversation_id, NULL, last_read_seq, read_at FROM conversation_reads;
+
+DROP TABLE conversation_reads;
+ALTER TABLE conversation_reads_new RENAME TO conversation_reads;
+
+CREATE UNIQUE INDEX uniq_conversation_reads_main
+  ON conversation_reads(user_id, conversation_id) WHERE thread_root_id IS NULL;
+CREATE UNIQUE INDEX uniq_conversation_reads_thread
+  ON conversation_reads(user_id, conversation_id, thread_root_id) WHERE thread_root_id IS NOT NULL;
+CREATE INDEX idx_conversation_reads_conversation
+  ON conversation_reads(conversation_id);
+```
+
+#### 3.1.1 root-invariant trigger(correctness,review #1)
+
+`thread_root_id REFERENCES messages(id)` 只保证 message 存在,**不保证它属于同一 `conversation_id`、也不保证它不是 reply**。`conversation_stream_heads`(`baseline-schema.ts:620-636`)与 `thread_followers`(`baseline-schema.ts:574-607`)都用 trigger 守这个 invariant;`conversation_reads` 必须**复制同类 trigger**,否则客户端传错 `thread_root_id` 会写出跨 conversation / 指向 reply 的 cursor,后续 unread/first-unread **静默错**。insert + update 各一条(镜像 stream_heads):
+
+```sql
+CREATE TRIGGER conversation_reads_root_insert
+  BEFORE INSERT ON conversation_reads
+  WHEN NEW.thread_root_id IS NOT NULL
+  BEGIN
+    SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM messages WHERE id = NEW.thread_root_id)
+      THEN RAISE(ABORT, 'conversation_reads.thread_root_id must reference an existing message') END;
+    SELECT CASE WHEN COALESCE((SELECT conversation_id FROM messages WHERE id = NEW.thread_root_id), '') != NEW.conversation_id
+      THEN RAISE(ABORT, 'conversation_reads root must be in the same conversation') END;
+    SELECT CASE WHEN (SELECT thread_root_id FROM messages WHERE id = NEW.thread_root_id) IS NOT NULL
+      THEN RAISE(ABORT, 'conversation_reads root must not itself be a reply') END;
+  END;
+-- conversation_reads_root_update: 同上,BEFORE UPDATE OF thread_root_id, conversation_id。
+```
+
+route 层亦应预校验给出友好错误,但 **DB 层 trigger 是 fail-loud 兜底**,不可省。
+
+### 3.2 迁移 = eager seed(关键决策)
+
+旧 per-conversation 游标语义 = 覆盖主线 + 所有 thread 的「粗读」。迁移要**不制造升级后历史未读洪水**,且**稳态模型零 fallback 分支**。
+
+**做法:存量每条 thread 一次性 seed 成旧 `last_read_seq`**(承接同一条 v51 迁移,在上面建索引之后):
+
+```sql
+-- 每个 (user, conversation) 的每条已存在 thread,seed 成该 user 的旧主线游标值。
+INSERT INTO conversation_reads (user_id, conversation_id, thread_root_id, last_read_seq, read_at)
+  SELECT cr.user_id, cr.conversation_id, sh.thread_root_id, cr.last_read_seq, cr.read_at
+    FROM conversation_reads cr
+    JOIN conversation_stream_heads sh
+      ON sh.conversation_id = cr.conversation_id
+   WHERE cr.thread_root_id IS NULL          -- 只从主线行派生
+     AND sh.thread_root_id IS NOT NULL;     -- 只 seed thread 流
+```
+
+**为何 eager 而非 lazy + frozen-baseline:** eager 后稳态读模型只有 `latest_seq > thread_cursor` 一条、**零 fallback 分支**;lazy+baseline 要在模型里永久留一个只缩不灭的 baseline 列(vestigial),按 DDD 该删不该留。backfill 是有界一次性 `INSERT...SELECT`,SQLite 无压力。**硬边界(不可违反):缺省 thread cursor 绝不动态 `COALESCE` 回退到会推进的主线游标**——否则用户只读主线推进主线游标,会把未打开 thread 的新 reply 误判已读,打穿「只有打开 thread 才 mark read」。eager seed 天然满足此边界(每条 thread 有自己的冻结起点)。
+
+### 3.3 未读判定(逐流)
+
+对流 S(主线 = thread_root_id IS NULL;thread = thread_root_id = R):
+
+```
+unread(S) = count(messages m
+  WHERE m.conversation_id = C
+    AND m.thread_root_id IS [NULL | = R]
+    AND m.seq > cursor(user, C, S)            -- cursor 缺省 0
+    AND m.from_kind != 'system'
+    AND NOT (m.from_kind = 'user' AND (m.from_user_id = user OR m.from_user_id IS NULL)))
+```
+
+`cursor(user,C,S)` = `conversation_reads` 对应行的 `last_read_seq`(主线查 thread_root_id IS NULL 行,thread 查 = R 行;缺省 0)。排除 system / 自己消息的规则原样保留(对齐现有 `unreadCountForConversation`)。
+
+### 3.4 mark-read 推到 snapshot(关键)
+
+打开一条流时:
+1. 读取该流的 `conversation_stream_heads.latest_seq` 作为 **open-time snapshot**。
+2. mark-read **只推进到这个 snapshot**,不是「当下最新」:
+
+```
+markRead(user, C, threadRootId, snapshotSeq):
+  upsert conversation_reads(user, C, threadRootId) set
+    last_read_seq = max(last_read_seq, snapshotSeq), read_at = now
+  -- ON CONFLICT 目标按 threadRootId 是否 NULL 选对应 partial-unique
+  --   主线: ON CONFLICT(user_id, conversation_id) WHERE thread_root_id IS NULL
+  --   thread: ON CONFLICT(user_id, conversation_id, thread_root_id) WHERE thread_root_id IS NOT NULL
+  -- 沿用 max() 单调推进,与现有 markRead 一致;不回退。
+```
+
+**为何 snapshot 而非「当下最新」:** 用户打开 thread 渲染到 snapshot 那一刻为止;若期间并发进来新 reply(seq > snapshot),不该被顺手标读。这与 `message-repo` 已有的 `casStreamHead` 快照纪律一脉(`:1184`)。snapshot 由打开流的读请求返回,客户端用它回写 mark-read(或同一请求内完成)。
+
+**省略 `snapshot_seq` 的 fallback 必须迁移 + 按 stream 非对称(correctness,review #2 + review round-2):** 现有 `markRead` 用 `targetSeq = seq ?? latestSeq(conversationId)`,而 `latestSeq` = `MAX(messages.seq)` 跨**整个 conversation**(`conversation-read-repo.ts:25,270`);shared `MarkConversationReadInputSchema` 注释也写「Omitted = backend uses MAX(messages.seq)」(`message.ts:146`)。per-stream 后这会**用含 thread reply 的 conversation max seq 推进主线 cursor,破坏 stream 语义**。
+
+omitted-fallback 必须**按 stream 非对称**——主线有 legacy caller 要兼容,thread 没有 legacy caller,给它 fallback 等于自废 §3.4 的 open-time snapshot 纪律(打开 thread 后并发新 reply、客户端漏传 snapshot → 服务端按当前 thread head fallback,仍吞未渲染尾部):
+
+- **主线(`thread_root_id IS NULL`):允许省略 `snapshot_seq`**,fallback = **mainline stream head**(`conversation_stream_heads` thread_root_id IS NULL 那行的 `latest_seq`),**绝不再用 `latestSeq(conversationId)`**。这是现有 channel mark-read 的唯一兼容路径。
+- **thread(`thread_root_id IS NOT NULL`):`snapshot_seq` 必传**。缺失 → **400**(thread 无 legacy caller,不需要、也不能 fallback);或走「读 thread + mark read」同一服务端用例、用同一次读拿到的 snapshot,绝不在独立 mark-read 请求里 fallback。
+- **显式 `snapshot_seq` 必须校验 `snapshot_seq <= 目标 stream 当前 head`**:stream head 单调只增,故 `> head` 只可能是坏客户端把 cursor 推向未来、预先吞掉后续消息 → **400 fail-loud**(与 §3.1.1 trigger 的 fail-loud 纪律一致;不静默 clamp,以暴露客户端 bug)。
+- `latestSeq(conversationId)` 这个 helper 在 mark-read 路径上停用(改成 per-stream `streamHeadLatestSeq(conversationId, threadRootId)`)。
+
+**字段命名(compatibility,review round-2):清迁 `seq` → `snapshot_seq`,不留 alias。** `MarkConversationReadInputSchema` 当前只有 optional `seq`(`message.ts:145-148`),**不经 agent CLI 暴露**(`packages/cli` 无 mark-read 命令),仅 renderer→backend 内部 API(`App.tsx` / `ChannelView.tsx` / `useMessageJumpController.ts` + backend tests),**无对外/agent 具名契约**。按「兼容代码是债,无真实契约就删」:schema 正式迁到 `{ thread_root_id?: string, snapshot_seq?: number }`,注释从「MAX(messages.seq)」改为「target stream head; required when thread_root_id is set」,renderer 3 处 + tests 同 change 改完,**spec 与代码里只保留 `snapshot_seq` 一个名,不并存两套**。
+
+### 3.5 channel 未读 roll-up(sidebar 单一 count,shiki 拍)
+
+sidebar 每个 channel **只显示一个未读 count,不分叉**。显式 contract:
+
+```
+channel_unread(C, user) = mainline_unread(C, user)
+                        + Σ over R in followed_threads(C, user) of thread_unread(R, user)
+```
+
+- `followed_threads(C, user)` = `thread_followers` WHERE `principal_kind='human' AND principal_id=user AND conversation_id=C`(取 thread_root_id 集)。
+- **非 followed 的 thread 未读不计入 channel_unread**(降噪),只在 Threads list 出弱 dot(§5)。
+- **行为变更(显式声明):** 旧 `unreadCountForConversation` 计「主线 + 所有 thread」(单游标);新语义 = 「主线 + followed thread」。非 followed thread 的未读因此**退出** channel/sidebar count。这是有意的降噪,不是回归。
+- workspace 级 / sidebar 聚合(`unreadCountsByConversationForWorkspace`、`unreadCountsByWorkspaceSidebar`、`unreadCountsByWorkspace`)按同一 roll-up 重算。
+
+### 3.6 first-unread(供「跳 first unread」)
+
+```
+firstUnread(S) = messages m (同 §3.3 过滤) ORDER BY m.seq ASC LIMIT 1
+```
+
+每条流可取其 first unread message id + seq,供 UI 打开后定位。
+
+## 4. 读模型 / API 面(backend)
+
+- `ConversationReadRow`(`schema.ts:428`)**加 `thread_root_id: string | null` 字段**。
+- `ConversationReadRepo` 全部方法 thread-aware:`markRead(.., threadRootId?, snapshotSeq?)`(fallback 见 §3.4);新增 per-stream `unreadCountForStream` / `firstUnreadForStream`;`unreadCountForConversation` 改为 §3.5 的 roll-up。
+- **first-unread DTO 固定输出两个字段(review #4):`first_unread_message_id` + `first_unread_seq`**(§3.6),不要只给 seq——UI 跳转要可靠定位到具体 message,半截 contract 会让前后端各猜一套。`ThreadSummary` 填 `unread_count`(= `thread_unread(R)`)+ 这两个字段。`listChannelThreads`(`message-repo.ts`)带 viewer 计算。
+- mark-read 路由(`markConversationRead`,`routes/conversations.ts:462`)入参迁为 `{ thread_root_id?, snapshot_seq? }`(§3.4 命名)。**主线(无 thread_root_id):snapshot_seq 可省、fallback mainline head(兼容);thread:snapshot_seq 必传,缺失 → 400;显式 snapshot_seq > 目标 stream head → 400**(§3.4)。`markRead(viewerUserId, conversationId, threadRootId?, snapshotSeq?)`。
+- WS `unread_updated`(viewer-scoped)沿用;thread 未读变化复用同一失效信号。
+
+### 4.1 实现不变量:所有 `conversation_reads` 访问必须限定 stream(correctness,review #3)
+
+per-stream 后,`conversation_reads` 每个 (user, conversation) **不再只有一行**。因此**除 §3.5 的 roll-up 聚合外,所有 read/write 都必须显式限定 `thread_root_id IS NULL` 或 `= ?`**,否则会取到主线或任意 thread 行、结果不确定。
+
+**非 repo callsite 必须一并审计(已知)**:
+- `mention-cc.ts:337` `viewerHasNotReadMessage` —— 现在 `SELECT last_read_seq ... WHERE user_id=? AND conversation_id=?` 无 stream 条件。必须改成:先取该 message 的 `thread_root_id`(主线消息=NULL),再查**对应 stream 的 cursor**(`thread_root_id IS NULL` 或 `= 该 root`)做比较。否则被检查的消息是 thread reply 时,会错误地拿主线/任意 cursor 判断。
+- 实现期 grep `conversation_reads` 全仓,逐一确认每处都带 stream 限定;新增的 callsite 同此纪律。
+
+## 5. UI 三表面(Norman owns,本节为契约,形态留 mockup)
+
+一把 unread 色 + 权重阶梯,不引第二 hue。
+
+1. **Sidebar**:**单一** channel count = §3.5 的 `channel_unread`(主线 + followed thread)。**不放第二个 dot/数字。**
+2. **Threads list**:followed thread 未读带数字;**非 followed 有新 reply → 弱 dot(降透明度)**。followed/all 区分只在这一层。
+3. **Reply chip(root 行 inline)**:未读态 `3 replies · 2 new`,点击跳 §3.6 的 first-unread。
+
+## 6. mark-read 触发纪律
+
+只有 thread 实际被打开并渲染到未读区,才推进该 thread 的 cursor(到 open-time snapshot,§3.4)。**root message 出现在主线 viewport 不算读 thread**——主线游标推进只标主线流,不碰任何 thread 流的 cursor。
+
+## 7. Out of scope(本 doc 不做)
+
+- **Activity/Inbox** 全局入口、channel 两档 attention 偏好(所有消息/仅提及)、DM 作为 personal stream 的 eligibility——都属 Activity task,复用本 doc 的 cursor 但单独交付,**绝不并进 #1226**。
+- 「从 Inbox 隐藏」「snooze/done/archive」等 triage / attention 控件。
+
+## 8. 不变量
+
+1. **per-stream cursor 单调推进**(`max()`),永不回退。
+2. **缺省 thread cursor 不动态 COALESCE 主线**(§3.2 硬边界)。
+3. **mark-read 推到 open-time snapshot,不到「当下最新」**(§3.4)。**thread mark-read `snapshot_seq` 必传(缺失 400),主线可省、fallback mainline head;显式 snapshot_seq 校验 `<= 目标 stream head`(否则 400)**(§3.4)。
+4. **`thread_followers` 是 delivery/agent-wake 契约,本改动只读它做 followed/all 区分,不写、不改其语义**(为 Activity 阶段的 delivery⊥attention 不变量预留干净边界)。
+5. 迁移 append-only,v51,不改已发布迁移;table rebuild 在单条迁移内原子完成。
+6. **所有 `conversation_reads` 访问必须限定 `thread_root_id`(IS NULL 或 = ?),roll-up 聚合除外**(§4.1)。
+7. **`conversation_reads` thread 行受 root-invariant trigger 守护**(同一 conversation + root 存在 + 非 reply,§3.1.1)。
+
+## 9. 迁移安全 / 验证
+
+- v51 在 `MIN_SUPPORTED=44` 之上,空库/新库走 baseline 后顺序应用至 v51。
+- 验证点(Cindy review 重点):① table rebuild 后两条 partial-unique 正确(主线每 (user,conv) 仅一行、thread 每 (user,conv,root) 仅一行);② eager seed 后升级无历史未读洪水(thread cursor = 旧主线值);③ mark-read snapshot 不吞并发尾部:thread 省略 snapshot_seq → 400(不 fallback)、主线省略 → fallback mainline head(非 conversation MAX)、显式 snapshot_seq > stream head → 400;④ roll-up 行为变更(非 followed thread 退出 channel count)符合预期;⑤ 外键 `thread_root_id REFERENCES messages` 在 message 删除时级联正确;⑥ root-invariant trigger 拒绝跨 conversation / 指向 reply 的 `thread_root_id`(§3.1.1);⑦ 全仓 `conversation_reads` callsite(含 `mention-cc.ts`)均 stream-qualified(§4.1)。

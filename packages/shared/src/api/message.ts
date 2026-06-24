@@ -143,8 +143,15 @@ export const SendMessageInputSchema = z.object({
 export type SendMessageInput = z.infer<typeof SendMessageInputSchema>;
 
 export const MarkConversationReadInputSchema = z.object({
-  /** Optional explicit target cursor. Omitted = backend uses MAX(messages.seq). */
-  seq: z.number().int().nonnegative().optional(),
+  /** Which stream's cursor to advance (#task:1226). Omitted / null = mainline;
+   *  a root message id = that reply-cluster. */
+  thread_root_id: z.string().min(1).optional(),
+  /** Open-time snapshot the cursor advances to (the stream head observed when
+   *  the stream was opened — NOT "current latest", so concurrent tail isn't
+   *  swallowed). REQUIRED for a thread (thread_root_id set); omitting it 400s.
+   *  For the mainline it may be omitted, in which case the backend falls back
+   *  to the mainline stream head (the legacy channel mark-read path). */
+  snapshot_seq: z.number().int().nonnegative().optional(),
 });
 export type MarkConversationReadInput = z.infer<
   typeof MarkConversationReadInputSchema

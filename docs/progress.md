@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-06-25 — Thread 未读 per-stream read cursor（#task:1226，backend）
+
+Thread（reply-cluster）未读不可发现：已读边界 `conversation_reads.last_read_seq` 是 per-conversation（主线 + 该 channel 下所有 thread 共用一个游标），算不出 thread 级未读。终局：read cursor per-stream 化，与已有的 per-stream freshness（`conversation_stream_heads`）对齐。canonical `docs/thread-unread-v1.md`（Cindy 三轮 spec review PASS）。
+
+- **migration v51（`conversation_reads_per_stream`，foreignKeyEscape）** — `conversation_reads` 加 `thread_root_id`（NULL=主线），唯一性照搬 `conversation_stream_heads` 两条 partial-unique（SQLite 复合 PK 含可空列对 NULL 去重不可靠）+ root-invariant trigger（insert/update，镜像 stream_heads，防跨 conversation / 指向 reply 的坏游标）。**迁移 = eager seed**：存量每条 thread 一次性 seed 成旧主线游标值 → 升级无历史未读洪水，且稳态读模型零 fallback 分支（非 lazy+frozen-baseline，避 vestigial）。
+- **`ConversationReadRepo` per-stream 化** — `markRead(threadRootId, seq)` 单调推进、两 partial-unique 对应两 ON CONFLICT target；新增 `unreadCountForStream` / `firstUnreadForStream`；channel/sidebar 聚合改 §3.5 roll-up `channel_unread = mainline_unread + Σ(followed-thread unread)`（非 followed thread 退出 channel count，弱 dot 兜底）。roll-up 谓词**只读 `thread_followers` 的 `principal_kind='human'` 行**做 followed 判定，绝不写——human attention ⊥ agent delivery（shiki 明令边界）。
+- **mark-read snapshot（route `markConversationRead`）** — 推到 open-time snapshot 不到「当下最新」。非对称：thread 必传 `snapshot_seq`（缺失 400），主线可省（fallback mainline stream head，兼容旧 channel mark-read）；显式 `snapshot_seq > stream head` → 400 fail-loud。route 先做友好 400/404（thread_root 不属本 channel / 指向 reply），DB trigger 仅末端兜底、不漏成 500。schema `seq` 清迁为 `snapshot_seq`（无 agent CLI / 对外契约，不留 alias）。
+- **`ThreadSummary`** 落 `unread_count`（per-thread，非 roll-up、非 follow-gated）+ `first_unread_message_id`/`first_unread_seq`（确定性跳转）+ `viewer_following`（followed→sticker / 非→dot），`listChannelThreads` 带 viewer 批量算。
+- **`mention-cc.ts` `viewerHasNotReadMessage`** stream-qualify（per-stream 后每 (user,conv) 多行，必须限定 thread_root_id）。
+- 测试：repo per-stream 独立游标 / 跨流不串、threads 填字段 + viewer_following、roll-up followed-gating；migration drift oracle 重生成。全 gate 绿（backend 1621 + shared/cli/host/server/desktop）。**UI 三表面（sidebar 单一 count / Threads list dot·sticker / reply chip）= Norman lane，等接前端。**
+
+---
+
 ## 2026-06-18 — task-rail / chat-return 切换性能（#task:1168/1169/1170）
 
 NavRail 顶层 section 切换卡顿三连。CDP 实测驱动（probe 见 `/tmp/cdp-taskrail.mjs` 进入 / `/tmp/cdp-tasktochat.mjs` 离开）。

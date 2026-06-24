@@ -522,6 +522,7 @@ export class MessageRepo {
    *  so the timestamp and the message id always agree. */
   listChannelThreads(
     conversationId: string,
+    viewerUserId: string,
     opts: { limit?: number; cursor?: string | null } = {},
   ): ChannelThreadsPage {
     const limit = Math.min(50, Math.max(1, opts.limit ?? 30));
@@ -589,11 +590,20 @@ export class MessageRepo {
       pageRows.map(r => r.root_message_id),
     );
 
+    // Per-viewer read state (#task:1226). Both READ-ONLY w.r.t. delivery:
+    // unread comes from the human per-thread `conversation_reads` cursor, and
+    // `viewer_following` only READS human `thread_followers` rows — neither
+    // writes follow / wake / delivery state.
+    const rootIds = pageRows.map(r => r.root_message_id);
+    const unreadByRoot = this.threadUnreadByRoots(conversationId, rootIds, viewerUserId);
+    const followedRoots = this.followedRootsForViewer(conversationId, rootIds, viewerUserId);
+
     const threads: ThreadSummary[] = pageRows.map(r => {
       const rep = repliersByRoot.get(r.root_message_id) ?? {
         repliers: [],
         total: 0,
       };
+      const unread = unreadByRoot.get(r.root_message_id);
       return {
         root_message_id: r.root_message_id,
         root_author: {
@@ -607,6 +617,10 @@ export class MessageRepo {
         last_reply_message_id: r.last_reply_message_id,
         repliers: rep.repliers,
         replier_total: rep.total,
+        unread_count: unread?.unread_count ?? 0,
+        first_unread_message_id: unread?.first_unread_message_id ?? null,
+        first_unread_seq: unread?.first_unread_seq ?? null,
+        viewer_following: followedRoots.has(r.root_message_id),
       };
     });
 
@@ -679,6 +693,95 @@ export class MessageRepo {
       }
     }
     return result;
+  }
+
+  /** Per-thread unread + first-unread for a set of roots, for one viewer
+   *  (#task:1226). Each thread is scored against ITS OWN per-thread cursor
+   *  (`conversation_reads` row with thread_root_id = root) — NOT roll-up, NOT
+   *  follow-gated: a thread's unread is the same whether or not the viewer
+   *  follows it (follow only changes presentation). Roots with zero unread are
+   *  absent from the map (caller defaults to 0 / null). */
+  private threadUnreadByRoots(
+    conversationId: string,
+    rootIds: readonly string[],
+    viewerUserId: string,
+  ): Map<
+    string,
+    { unread_count: number; first_unread_message_id: string; first_unread_seq: number }
+  > {
+    const result = new Map<
+      string,
+      { unread_count: number; first_unread_message_id: string; first_unread_seq: number }
+    >();
+    if (rootIds.length === 0) return result;
+    const placeholders = rootIds.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare<
+        [string, ...string[]],
+        {
+          root_id: string;
+          first_unread_message_id: string;
+          first_unread_seq: number;
+          unread_count: number;
+        }
+      >(
+        `SELECT root_id, message_id AS first_unread_message_id, seq AS first_unread_seq, unread_count
+           FROM (
+             SELECT m.thread_root_id AS root_id,
+                    m.id  AS message_id,
+                    m.seq AS seq,
+                    ROW_NUMBER() OVER (PARTITION BY m.thread_root_id ORDER BY m.seq ASC) AS rn,
+                    COUNT(*)     OVER (PARTITION BY m.thread_root_id) AS unread_count
+               FROM messages m
+              WHERE m.conversation_id = ?
+                AND m.thread_root_id IN (${placeholders})
+                AND m.seq > COALESCE(
+                  (SELECT cr.last_read_seq FROM conversation_reads cr
+                    WHERE cr.user_id = ?
+                      AND cr.conversation_id = ?
+                      AND cr.thread_root_id = m.thread_root_id),
+                  0
+                )
+                AND m.from_kind != 'system'
+                AND NOT (m.from_kind = 'user' AND (m.from_user_id = ? OR m.from_user_id IS NULL))
+           )
+          WHERE rn = 1`,
+      )
+      .all(conversationId, ...rootIds, viewerUserId, conversationId, viewerUserId);
+
+    for (const row of rows) {
+      result.set(row.root_id, {
+        unread_count: row.unread_count,
+        first_unread_message_id: row.first_unread_message_id,
+        first_unread_seq: row.first_unread_seq,
+      });
+    }
+    return result;
+  }
+
+  /** Subset of `rootIds` the viewer FOLLOWS (`thread_followers`,
+   *  principal_kind='human'). READ-ONLY: this never writes follow / delivery
+   *  state (#task:1226 invariant 4). */
+  private followedRootsForViewer(
+    conversationId: string,
+    rootIds: readonly string[],
+    viewerUserId: string,
+  ): Set<string> {
+    const followed = new Set<string>();
+    if (rootIds.length === 0) return followed;
+    const placeholders = rootIds.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare<[string, string, ...string[]], { thread_root_id: string }>(
+        `SELECT thread_root_id
+           FROM thread_followers
+          WHERE conversation_id = ?
+            AND principal_kind = 'human'
+            AND principal_id = ?
+            AND thread_root_id IN (${placeholders})`,
+      )
+      .all(conversationId, viewerUserId, ...rootIds);
+    for (const row of rows) followed.add(row.thread_root_id);
+    return followed;
   }
 
   /** Fetch up to `limit` rows with `seq < beforeSeq` (or the tail

@@ -116,7 +116,7 @@ describe('MessageRepo.listChannelThreads', () => {
     setCreatedAt(db, a2.id, 5000);
     setCreatedAt(db, b1.id, 3000);
 
-    const page = repo.listChannelThreads(channel.id, {});
+    const page = repo.listChannelThreads(channel.id, 'local', {});
     expect(page.threads.map(t => t.root_message_id)).toEqual([
       rootA.id,
       rootB.id,
@@ -142,23 +142,40 @@ describe('MessageRepo.listChannelThreads', () => {
     expect(tB.repliers).toEqual([{ kind: 'human', id: 'bob' }]);
   });
 
-  it('omits unread_count (no per-thread read marker in P2)', () => {
-    const { channel, agentId, repo } = bootstrap();
+  it('fills per-stream unread_count + first-unread + viewer_following (#task:1226)', () => {
+    const { db, channel, agentId, repo } = bootstrap();
     const root = repo.insertForConversation({
       conversationId: channel.id,
       fromKind: 'user',
       fromUserId: 'local',
       content: 'root',
     });
-    repo.insertForConversation({
+    const reply = repo.insertForConversation({
       conversationId: channel.id,
       fromKind: 'agent',
       fromAgentId: agentId,
       content: 'reply',
       threadRootId: root.id,
     });
-    const page = repo.listChannelThreads(channel.id, {});
-    expect(page.threads[0]!).not.toHaveProperty('unread_count');
+
+    // No read cursor yet → the agent reply is unread for the viewer; first-unread
+    // points at it (id + seq). Not followed → viewer_following false.
+    const t = repo.listChannelThreads(channel.id, 'local', {}).threads[0]!;
+    expect(t.unread_count).toBe(1);
+    expect(t.first_unread_message_id).toBe(reply.id);
+    expect(t.first_unread_seq).toBe(reply.seq);
+    expect(t.viewer_following).toBe(false);
+
+    // Following the cluster flips viewer_following (read-only projection of the
+    // human follow contract — the list never writes it).
+    db.prepare(
+      `INSERT INTO thread_followers
+         (thread_root_id, conversation_id, principal_kind, principal_id, followed_at, source)
+       VALUES (?, ?, 'human', ?, ?, 'manual')`,
+    ).run(root.id, channel.id, 'local', Date.now());
+    const t2 = repo.listChannelThreads(channel.id, 'local', {}).threads[0]!;
+    expect(t2.viewer_following).toBe(true);
+    expect(t2.unread_count).toBe(1);
   });
 
   it('keyset-paginates without dropping same-timestamp clusters', () => {
@@ -185,14 +202,14 @@ describe('MessageRepo.listChannelThreads', () => {
       setCreatedAt(db, re.id, 1000);
     }
 
-    const p1 = repo.listChannelThreads(channel.id, { limit: 2 });
+    const p1 = repo.listChannelThreads(channel.id, 'local', { limit: 2 });
     expect(p1.threads.map(t => t.root_message_id)).toEqual([
       roots[2]!.id,
       roots[1]!.id,
     ]);
     expect(p1.next_cursor).not.toBeNull();
 
-    const p2 = repo.listChannelThreads(channel.id, {
+    const p2 = repo.listChannelThreads(channel.id, 'local', {
       limit: 2,
       cursor: p1.next_cursor,
     });
@@ -217,7 +234,7 @@ describe('MessageRepo.listChannelThreads', () => {
         threadRootId: root.id,
       });
     }
-    const tr = repo.listChannelThreads(channel.id, {}).threads[0]!;
+    const tr = repo.listChannelThreads(channel.id, 'local', {}).threads[0]!;
     expect(tr.replier_total).toBe(4); // u1..u4 distinct
     expect(tr.repliers).toHaveLength(3);
     // u1's most-recent reply was last → u1 first, then u4, u3.
@@ -226,7 +243,7 @@ describe('MessageRepo.listChannelThreads', () => {
 
   it('returns an empty page for a channel with no threads', () => {
     const { channel, repo } = bootstrap();
-    expect(repo.listChannelThreads(channel.id, {})).toEqual({
+    expect(repo.listChannelThreads(channel.id, 'local', {})).toEqual({
       threads: [],
       next_cursor: null,
     });
@@ -235,12 +252,12 @@ describe('MessageRepo.listChannelThreads', () => {
   it('rejects a malformed cursor', () => {
     const { channel, repo } = bootstrap();
     expect(() =>
-      repo.listChannelThreads(channel.id, { cursor: '!!!not-base64-json' }),
+      repo.listChannelThreads(channel.id, 'local', { cursor: '!!!not-base64-json' }),
     ).toThrow(InvalidThreadsCursorError);
     // Valid base64url but wrong JSON shape.
     const badShape = Buffer.from('{"x":1}', 'utf8').toString('base64url');
     expect(() =>
-      repo.listChannelThreads(channel.id, { cursor: badShape }),
+      repo.listChannelThreads(channel.id, 'local', { cursor: badShape }),
     ).toThrow(InvalidThreadsCursorError);
   });
 });

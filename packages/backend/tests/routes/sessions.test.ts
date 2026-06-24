@@ -631,6 +631,16 @@ describe('canonical channel/thread routes', () => {
       content: 'thread reply',
     });
 
+    // The channel-level roll-up only counts FOLLOWED threads (#task:1226 §3.5);
+    // the viewer follows this cluster so its reply surfaces in the count + pointer.
+    t.ctx.db
+      .prepare(
+        `INSERT INTO thread_followers
+           (thread_root_id, conversation_id, principal_kind, principal_id, followed_at, source)
+         VALUES (?, ?, 'human', ?, ?, 'manual')`,
+      )
+      .run(root.id, channelId, 'local', Date.now());
+
     const res = await http(t).get(`/api/channels/${channelId}/message-unread`);
     expect(res.status).toBe(200);
     const body = await res.json() as any;

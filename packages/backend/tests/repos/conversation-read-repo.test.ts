@@ -104,7 +104,7 @@ describe('ConversationReadRepo', () => {
   });
 
   it('returns latest unread pointers with thread root and seq', () => {
-    const { workspace, messages, reads, channel } = bootstrap();
+    const { workspace, db, messages, reads, channel } = bootstrap();
 
     const root = messages.insertForConversation({
       conversationId: channel.id,
@@ -129,6 +129,15 @@ describe('ConversationReadRepo', () => {
       fromUserId: 'local',
       content: 'mine',
     });
+
+    // Roll-up only counts FOLLOWED threads (#task:1226 §3.5). The viewer must
+    // follow this cluster for its reply to appear in the conversation-level
+    // unread pointer; thread_followers is the (human) follow contract.
+    db.prepare(
+      `INSERT INTO thread_followers
+         (thread_root_id, conversation_id, principal_kind, principal_id, followed_at, source)
+       VALUES (?, ?, 'human', ?, ?, 'manual')`,
+    ).run(root.id, channel.id, 'local', Date.now());
 
     const byConversation = reads.unreadCountsByConversationForWorkspace(
       workspace.id,
@@ -181,7 +190,7 @@ describe('ConversationReadRepo', () => {
     });
   });
 
-  it('advances the cursor to latest seq and never moves it backward', () => {
+  it('advances the mainline cursor monotonically and never moves it backward', () => {
     const { messages, reads, channel } = bootstrap();
     const m1 = messages.insertForConversation({
       conversationId: channel.id,
@@ -199,8 +208,16 @@ describe('ConversationReadRepo', () => {
       content: '3',
     });
 
-    expect(reads.markRead({ viewerUserId: 'local', conversationId: channel.id }).last_read_seq)
-      .toBe(latest.seq);
+    // The repo persists an already-resolved per-stream seq (the route resolves
+    // the open-time snapshot / fallback); threadRootId NULL = mainline.
+    expect(
+      reads.markRead({
+        viewerUserId: 'local',
+        conversationId: channel.id,
+        threadRootId: null,
+        seq: latest.seq,
+      }).last_read_seq,
+    ).toBe(latest.seq);
     expect(reads.unreadCountForConversation(channel.id, 'local')).toBe(0);
 
     const next = messages.insertForConversation({
@@ -208,18 +225,96 @@ describe('ConversationReadRepo', () => {
       fromKind: 'agent',
       content: '4',
     });
-    expect(reads.markRead({
-      viewerUserId: 'local',
-      conversationId: channel.id,
-      seq: m1.seq,
-    }).last_read_seq).toBe(latest.seq);
+    expect(
+      reads.markRead({
+        viewerUserId: 'local',
+        conversationId: channel.id,
+        threadRootId: null,
+        seq: m1.seq,
+      }).last_read_seq,
+    ).toBe(latest.seq);
     expect(reads.unreadCountForConversation(channel.id, 'local')).toBe(1);
 
-    expect(reads.markRead({
+    expect(
+      reads.markRead({
+        viewerUserId: 'local',
+        conversationId: channel.id,
+        threadRootId: null,
+        seq: next.seq,
+      }).last_read_seq,
+    ).toBe(next.seq);
+    expect(reads.unreadCountForConversation(channel.id, 'local')).toBe(0);
+  });
+
+  it('tracks per-stream cursors independently (mainline vs thread)', () => {
+    const { db, messages, reads, channel } = bootstrap();
+
+    const mainline = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      content: 'mainline',
+    });
+    const root = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      content: 'root',
+    });
+    const reply1 = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      threadRootId: root.id,
+      content: 'r1',
+    });
+    const reply2 = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      threadRootId: root.id,
+      content: 'r2',
+    });
+
+    // Per-stream unread is independent and follow-agnostic at the stream grain.
+    expect(reads.unreadCountForStream(channel.id, null, 'local')).toBe(2); // mainline + root
+    expect(reads.unreadCountForStream(channel.id, root.id, 'local')).toBe(2); // r1, r2
+
+    // Reading the mainline must NOT touch the thread cursor.
+    reads.markRead({
       viewerUserId: 'local',
       conversationId: channel.id,
-      seq: next.seq,
-    }).last_read_seq).toBe(next.seq);
+      threadRootId: null,
+      seq: root.seq,
+    });
+    expect(reads.unreadCountForStream(channel.id, null, 'local')).toBe(0);
+    expect(reads.unreadCountForStream(channel.id, root.id, 'local')).toBe(2);
+
+    // First-unread for the thread points at the earliest unread reply (id + seq).
+    expect(reads.firstUnreadForStream(channel.id, root.id, 'local')).toEqual({
+      message_id: reply1.id,
+      seq: reply1.seq,
+    });
+
+    // Reading the thread to a snapshot advances only the thread cursor.
+    reads.markRead({
+      viewerUserId: 'local',
+      conversationId: channel.id,
+      threadRootId: root.id,
+      seq: reply1.seq,
+    });
+    expect(reads.unreadCountForStream(channel.id, root.id, 'local')).toBe(1);
+    expect(reads.firstUnreadForStream(channel.id, root.id, 'local')).toEqual({
+      message_id: reply2.id,
+      seq: reply2.seq,
+    });
+
+    // Roll-up excludes the non-followed thread; only mainline counts (now 0).
     expect(reads.unreadCountForConversation(channel.id, 'local')).toBe(0);
+
+    // Following the thread brings its remaining unread into the roll-up.
+    db.prepare(
+      `INSERT INTO thread_followers
+         (thread_root_id, conversation_id, principal_kind, principal_id, followed_at, source)
+       VALUES (?, ?, 'human', ?, ?, 'manual')`,
+    ).run(root.id, channel.id, 'local', Date.now());
+    expect(reads.unreadCountForConversation(channel.id, 'local')).toBe(1);
+    void mainline;
   });
 });

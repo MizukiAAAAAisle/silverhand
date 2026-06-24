@@ -472,6 +472,58 @@ export function createConversationMessagingApp(
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
+
+    // Resolve which stream's cursor to advance, with friendly 400/404s. The DB
+    // root-invariant trigger is the last-resort fail-loud backstop (#task:1226
+    // §3.1.1) — we validate here so callers get a stable error, not a raw
+    // SQLite abort leaking as a 500.
+    let threadRootId: string | null = null;
+    const requestedRoot = parsed.data.thread_root_id;
+    if (requestedRoot !== undefined) {
+      const rootMessage = messages.getById(requestedRoot);
+      if (!rootMessage || rootMessage.conversation_id !== conversationId) {
+        return c.json(
+          { error: 'thread root message not found in this channel', code: 'thread_root_not_found' },
+          404,
+        );
+      }
+      if (rootMessage.thread_root_id !== null) {
+        return c.json(
+          { error: 'thread_root_id must be a root message, not a reply', code: 'thread_root_is_reply' },
+          400,
+        );
+      }
+      threadRootId = requestedRoot;
+    }
+
+    // Resolve the target seq per stream (#task:1226 §3.4). mark-read advances to
+    // an OPEN-TIME SNAPSHOT, never "current latest", so a concurrent tail is not
+    // swallowed. Asymmetric by stream:
+    //   - thread (no legacy caller): snapshot_seq REQUIRED; omitting it would
+    //     re-introduce the tail-swallow bug via a head fallback → 400.
+    //   - mainline (legacy channel mark-read): snapshot_seq may be omitted, then
+    //     falls back to the mainline stream head.
+    // A provided snapshot_seq beyond the current stream head can only be a buggy
+    // client pushing the cursor into the future → 400.
+    const streamHead = messages.streamHeadLatestSeq(conversationId, threadRootId);
+    let targetSeq: number;
+    if (parsed.data.snapshot_seq !== undefined) {
+      if (parsed.data.snapshot_seq > streamHead) {
+        return c.json(
+          { error: 'snapshot_seq is beyond the current stream head', code: 'snapshot_seq_future' },
+          400,
+        );
+      }
+      targetSeq = parsed.data.snapshot_seq;
+    } else if (threadRootId !== null) {
+      return c.json(
+        { error: 'snapshot_seq is required when marking a thread read', code: 'snapshot_seq_required' },
+        400,
+      );
+    } else {
+      targetSeq = streamHead;
+    }
+
     const unreadBefore = conversationReads.unreadCountForConversation(
       conversationId,
       viewerUserId,
@@ -479,7 +531,8 @@ export function createConversationMessagingApp(
     const row = conversationReads.markRead({
       viewerUserId,
       conversationId,
-      seq: parsed.data.seq,
+      threadRootId,
+      seq: targetSeq,
     });
     const unreadAfter =
       unreadBefore > 0
@@ -505,6 +558,9 @@ export function createConversationMessagingApp(
     if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    // Per-viewer unread / first-unread / follow state (#task:1226). This route is
+    // already user-only (getUserPrincipal above), so a viewer user id is present.
+    const viewerUserId = requireViewerUserId(c);
 
     let limit = 30;
     const limitRaw = c.req.query('limit');
@@ -522,7 +578,7 @@ export function createConversationMessagingApp(
         ctx,
         'conversation.threads.list',
         { conversationId: channel.id, kind: channel.kind, limit },
-        () => messages.listChannelThreads(channel.id, { limit, cursor }),
+        () => messages.listChannelThreads(channel.id, viewerUserId, { limit, cursor }),
         result => ({
           threadCount: result.threads.length,
           hasMore: result.next_cursor != null,
