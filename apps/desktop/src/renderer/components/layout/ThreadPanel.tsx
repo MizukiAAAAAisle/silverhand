@@ -8,7 +8,7 @@ import { Composer } from '@/components/chat/Composer';
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import { useMessageActionSurface } from '@/components/chat/useMessageActionSurface';
 import { MessageActionChrome } from '@/components/chat/MessageActionChrome';
-import { threadMarkReadSnapshot, threadOpenNeedsLatestRefetch } from './threadMarkRead';
+import { threadClusterShowsLoader, threadMarkReadSnapshot, threadOpenNeedsLatestRefetch } from './threadMarkRead';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import {
@@ -571,11 +571,20 @@ export function ThreadPanel({
                 item 1) so replies get the panel's full height. */}
             {rootCtx.root ? renderMessage(rootCtx.root) : null}
 
-            {cluster.isLoading || jumpPrimePending ? (
-              // `jumpPrimePending`: the cluster query is intentionally disabled
-              // while primeAround fetches this jump's around-window (§9.10), so
-              // `isLoading` is false even though no window has landed yet —
-              // show the loader, not the empty state, until it commits.
+            {threadClusterShowsLoader({
+              isLoading: cluster.isLoading,
+              jumpPrimePending,
+              hasWindow: messages.length > 0,
+            }) ? (
+              // Loader only while there is genuinely nothing to render yet: a
+              // real in-flight fetch, OR a still-priming jump whose around-window
+              // has not committed. Once primeAround commits, the (disabled)
+              // query's cache carries the window (`messages.length > 0`) and we
+              // MUST render it even though `jumpPrimePending` is still true — the
+              // controller keeps prime pending until the VISUAL locate/flash
+              // finishes, and hiding the messages would starve that locate of its
+              // DOM node, timing the jump out with first-unread locate failed
+              // (§9.10, Cindy). `threadClusterShowsLoader` encodes this.
               <div className="flex flex-1 items-center justify-center text-text-muted">
                 <Loader2 className="size-4 animate-spin" />
               </div>

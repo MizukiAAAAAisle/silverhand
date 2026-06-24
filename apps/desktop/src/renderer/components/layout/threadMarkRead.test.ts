@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import {
   clusterInitialFetchEnabled,
+  threadClusterShowsLoader,
   threadMarkReadSnapshot,
   threadOpenNeedsLatestRefetch,
   type ThreadMarkReadGateInput,
@@ -145,6 +146,54 @@ describe('clusterInitialFetchEnabled — empty-cache jump race (§9.10, Cindy)',
       clusterInitialFetchEnabled({
         hasChannelAndRoot: false,
         jumpPrimePending: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('threadClusterShowsLoader — locate-deadlock prevention (§9.10, Cindy)', () => {
+  it('shows the loader on a real in-flight fetch', () => {
+    expect(
+      threadClusterShowsLoader({
+        isLoading: true,
+        jumpPrimePending: false,
+        hasWindow: false,
+      }),
+    ).toBe(true);
+  });
+
+  it('shows the loader while a jump primes with no window yet (avoids "No replies yet" flash)', () => {
+    // Pre-commit: query disabled (isLoading false), no around-window in cache.
+    expect(
+      threadClusterShowsLoader({
+        isLoading: false,
+        jumpPrimePending: true,
+        hasWindow: false,
+      }),
+    ).toBe(true);
+  });
+
+  it('RENDERS the window once primeAround commits, even though prime is still pending', () => {
+    // The deadlock Cindy caught: primeAround success does NOT clear
+    // `jumpPrimePending` (the controller waits for the visual locate/flash). The
+    // around-window is now in the disabled query's cache (hasWindow true), so we
+    // must render it — keeping the loader up would starve the locate effect of
+    // its `#msg-<id>` DOM node and time the jump out.
+    expect(
+      threadClusterShowsLoader({
+        isLoading: false,
+        jumpPrimePending: true,
+        hasWindow: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('does not show the loader once settled', () => {
+    expect(
+      threadClusterShowsLoader({
+        isLoading: false,
+        jumpPrimePending: false,
+        hasWindow: true,
       }),
     ).toBe(false);
   });

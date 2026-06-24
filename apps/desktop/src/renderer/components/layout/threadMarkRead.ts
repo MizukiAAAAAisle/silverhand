@@ -95,3 +95,29 @@ export function clusterInitialFetchEnabled(input: {
 }): boolean {
   return input.hasChannelAndRoot && !input.jumpPrimePending;
 }
+
+/**
+ * Whether ThreadPanel's reply area shows the loader vs. its content (#task:1226
+ * §9.10, Cindy's locate-deadlock catch). On a jump-open the cluster query is
+ * held disabled while priming (`clusterInitialFetchEnabled`), so `isLoading` is
+ * false even though no window has landed yet — without a loader the pane would
+ * flash "No replies yet". BUT `primeAround` success does NOT clear the prime
+ * pending flag: by the controller's existing contract it stays set until the
+ * VISUAL locate/flash completes and calls `onJumped → clearJump`. So once the
+ * around-window commits into the cache the disabled query's `data` already
+ * carries it (`hasWindow` true) and we MUST render it — keeping the loader up on
+ * `jumpPrimePending` alone would hide the messages, the locate effect could
+ * never find `#msg-<id>` in the DOM, and the jump would time out with the
+ * first-unread locate/flash failed.
+ *
+ * So the loader shows only while there is genuinely nothing to render yet: a
+ * real in-flight fetch, OR a still-priming jump whose window has not committed.
+ * Pure so the "window present → render, not loader" invariant is unit-tested.
+ */
+export function threadClusterShowsLoader(input: {
+  isLoading: boolean;
+  jumpPrimePending: boolean;
+  hasWindow: boolean;
+}): boolean {
+  return input.isLoading || (input.jumpPrimePending && !input.hasWindow);
+}
