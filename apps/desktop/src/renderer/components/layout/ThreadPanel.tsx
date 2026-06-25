@@ -321,7 +321,7 @@ export function ThreadPanel({
   const lastMarkedSeqRef = useRef(0);
   const liveMarkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isJumpOpenRef = useRef(false);
-  const openKey = `${channelId} ${rootMessageId}`;
+  const openKey = `${channelId}::${rootMessageId}`;
   if (openKeyRef.current !== openKey) {
     openKeyRef.current = openKey;
     openedAtRef.current = Date.now();
@@ -342,7 +342,7 @@ export function ThreadPanel({
   // viewer's read cursor, never delivery/wake.
   const markThreadReadMutate = markThreadRead.mutate;
   const issueMarkRead = useCallback(
-    (seq: number) => {
+    (seq: number, onMarked?: () => void) => {
       if (seq <= lastMarkedSeqRef.current) return;
       if (seq <= markInflightSeqRef.current) return;
       markInflightSeqRef.current = seq;
@@ -351,6 +351,7 @@ export function ThreadPanel({
         {
           onSuccess: () => {
             if (seq > lastMarkedSeqRef.current) lastMarkedSeqRef.current = seq;
+            onMarked?.();
           },
           onSettled: () => {
             if (markInflightSeqRef.current === seq) markInflightSeqRef.current = 0;
@@ -377,9 +378,15 @@ export function ThreadPanel({
 
   // OPEN-TIME mark (read-to-clear the whole opened thread): advance to the
   // open-time stream head, gated by `threadMarkReadSnapshot` to THIS open's
-  // fresh window fetch. Once per open via `markedForOpenRef`; the actual write +
-  // success/forward-only bookkeeping goes through `issueMarkRead`.
+  // fresh window fetch. The once-guard `markedForOpenRef` is armed on mutation
+  // SUCCESS only (Cindy review) — NOT optimistically — so a failed open-time
+  // mark stays retryable: `issueMarkRead` is forward-only + in-flight-guarded,
+  // so re-running this effect while the mark is pending is a no-op, and on
+  // failure the guard is never armed, so the next dep change (a new reply bumps
+  // `streamHeadSeq`, a refetch bumps `windowFetchSucceededAt`) retries. The
+  // visible-live effect below independently covers the pinned-tail case.
   useEffect(() => {
+    if (markedForOpenRef.current) return;
     const snapshot = threadMarkReadSnapshot({
       alreadyMarkedForOpen: markedForOpenRef.current,
       isFetching: cluster.isFetching,
@@ -388,8 +395,9 @@ export function ThreadPanel({
       openedAt: openedAtRef.current,
     });
     if (snapshot === null) return;
-    markedForOpenRef.current = true;
-    issueMarkRead(snapshot);
+    issueMarkRead(snapshot, () => {
+      markedForOpenRef.current = true;
+    });
   }, [
     channelId,
     rootMessageId,
@@ -399,6 +407,24 @@ export function ThreadPanel({
     issueMarkRead,
   ]);
 
+  // Document visibility as REACTIVE state (#task:1226, Cindy review). The
+  // live-mark gate reads visibility, but `document.hidden` read inline isn't
+  // reactive — `visibilitychange` fires no React render. Without this, a reply
+  // that arrives while the app is backgrounded correctly stays unread, but when
+  // the user returns to the foreground (pinned at the tail, reply now on
+  // screen) nothing re-runs the gate, so it lingers unread until the next
+  // message/scroll/reopen. Mirroring visibility into state makes the return-to-
+  // visible transition a dependency that re-fires the live-mark effect.
+  const [documentVisible, setDocumentVisible] = useState(
+    () => !document.hidden,
+  );
+  useEffect(() => {
+    const onVisibility = (): void => setDocumentVisible(!document.hidden);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () =>
+      document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
+
   // VISIBLE-LIVE mark (#task:1226 — shiki dogfood): a reply arriving while the
   // panel is open + watched should clear unread without a close/reopen. Follow
   // the read cursor to the newest reply ONLY while pinned at the tail (it's on
@@ -407,6 +433,7 @@ export function ThreadPanel({
   // gate; debounced so a burst of replies collapses to one mark at the latest
   // visible seq (max-VISIBLE, not latest-known — `messages` is the loaded
   // window). `lastMarkedSeqRef` (advanced on success) keeps it forward-only.
+  // `documentVisible` is a dep so returning to the foreground re-runs the gate.
   const maxLoadedSeq = messages.length
     ? messages[messages.length - 1]!.seq
     : null;
@@ -414,7 +441,7 @@ export function ThreadPanel({
   useEffect(() => {
     const seq = threadLiveMarkReadSeq({
       pinnedAtTail,
-      documentVisible: !document.hidden,
+      documentVisible,
       maxVisibleSeq: maxLoadedSeq,
       lastMarkedSeq: lastMarkedSeqRef.current,
     });
@@ -433,7 +460,7 @@ export function ThreadPanel({
         liveMarkTimerRef.current = null;
       }
     };
-  }, [pinnedAtTail, maxLoadedSeq, isAtTail, issueMarkRead]);
+  }, [pinnedAtTail, documentVisible, maxLoadedSeq, isAtTail, issueMarkRead]);
 
   // While pinned (initial open, or the user sitting at the tail), keep the
   // newest reply in view as the root loads / replies arrive. Instant jump

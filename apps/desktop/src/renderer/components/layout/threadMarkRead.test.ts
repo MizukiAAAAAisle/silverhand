@@ -290,4 +290,17 @@ describe('threadLiveMarkReadSeq (#task:1226 visible-live mark-read)', () => {
       threadLiveMarkReadSeq({ ...base, maxVisibleSeq: 42, lastMarkedSeq: 10 }),
     ).toBe(42);
   });
+
+  it('visibility transition: a reply received while hidden marks only after returning to foreground (Cindy review)', () => {
+    // A reply arrives while the app is backgrounded and the panel is pinned at
+    // the tail. While hidden the gate holds it unread (no swallow of an unseen
+    // reply)…
+    const reply = { ...base, pinnedAtTail: true, maxVisibleSeq: 42, lastMarkedSeq: 10 };
+    expect(threadLiveMarkReadSeq({ ...reply, documentVisible: false })).toBeNull();
+    // …and the moment the user returns to the foreground (visibilitychange →
+    // documentVisible true, same pinned tail) the SAME seq becomes markable.
+    // The component wires `documentVisible` as a state/effect dependency so this
+    // transition actually re-runs the gate.
+    expect(threadLiveMarkReadSeq({ ...reply, documentVisible: true })).toBe(42);
+  });
 });
