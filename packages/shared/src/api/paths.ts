@@ -163,6 +163,13 @@ export const apiPaths = {
    *  Takes a conversation id but only resolves channel / dm_channel; a
    *  legacy `kind='thread'` conversation is not channel-like → 404. */
   conversationThreads: (id: string) => `/api/conversations/${id}/threads`,
+  /** Per-conversation per-viewer stream-unread read-model (#task:1226). The
+   *  SINGLE client source of truth for thread / mainline "N new" + first-unread:
+   *  the reply chip and the Threads list both read it, so the same fact never
+   *  lives in two caches. Sparse (only threads with unread > 0). Refreshed
+   *  ONLY by the viewer-scoped `unread_updated` WS signal — never inferred from
+   *  message events (unread is server-scored). Human viewer-scoped. */
+  conversationUnread: (id: string) => `/api/conversations/${id}/unread`,
   conversationLogDebug: (id: string) => `/api/conversations/${id}/log-debug`,
   conversationAgentActivity: (id: string, agentId: string) =>
     `/api/conversations/${id}/agents/${agentId}/activity`,

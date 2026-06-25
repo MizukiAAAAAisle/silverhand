@@ -185,6 +185,37 @@ export const MarkConversationReadDtoSchema = z.object({
 });
 export type MarkConversationReadDto = z.infer<typeof MarkConversationReadDtoSchema>;
 
+/** Per-stream unread for one stream (mainline or a single reply-cluster),
+ *  scored server-side against the viewer's own per-stream `conversation_reads`
+ *  cursor (#task:1226). `unread_count` 0 ⟺ both first-unread fields null. */
+export const StreamUnreadDtoSchema = z.object({
+  unread_count: z.number().int().nonnegative(),
+  /** First (lowest-seq) unread message in this stream — drives "jump to first
+   *  unread". Both null when caught up (`unread_count === 0`). */
+  first_unread_message_id: z.string().nullable(),
+  first_unread_seq: z.number().int().nonnegative().nullable(),
+});
+export type StreamUnreadDto = z.infer<typeof StreamUnreadDtoSchema>;
+
+/** Per-conversation per-viewer stream-unread read-model (#task:1226) — the
+ *  SINGLE source of truth for thread / mainline "N new" + first-unread on the
+ *  client. The reply chip and the Threads list both read this (keyed by root),
+ *  so the same server-scored fact never lives in two caches that drift. Unread
+ *  is server-scored (the client can't optimistically derive it), so this lives
+ *  OUTSIDE the optimistically-patched message-window cache and is refreshed
+ *  ONLY by the viewer-scoped `unread_updated` WS signal. `threads` is sparse:
+ *  it carries ONLY roots with unread > 0 (a missing root means 0). */
+export const ConversationStreamUnreadDtoSchema = z.object({
+  /** Mainline (non-thread) unread for the viewer. */
+  mainline: StreamUnreadDtoSchema,
+  /** Per-reply-cluster unread keyed by root message id. Sparse — only roots
+   *  with unread > 0 appear; absent root ⇒ 0 unread. */
+  threads: z.record(z.string(), StreamUnreadDtoSchema),
+});
+export type ConversationStreamUnreadDto = z.infer<
+  typeof ConversationStreamUnreadDtoSchema
+>;
+
 export const MessageUnreadPointerDtoSchema = z.object({
   conversation_id: z.string(),
   message_id: z.string(),

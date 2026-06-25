@@ -51,6 +51,7 @@
   "POST /api/conversations/:id/members",
   "DELETE /api/conversations/:id/members/agents/:agentId",
   "GET /api/conversations/:id/threads",
+  "GET /api/conversations/:id/unread",
   "GET /api/channels/:id/agents",
   "PATCH /api/channels/:id/archive",
   "PATCH /api/channels/:id",

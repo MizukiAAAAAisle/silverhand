@@ -1,5 +1,9 @@
 import type { Database as Db } from 'better-sqlite3';
-import type { ConversationReadRow } from '@silverhand/shared';
+import type {
+  ConversationReadRow,
+  ConversationStreamUnreadDto,
+  StreamUnreadDto,
+} from '@silverhand/shared';
 
 export interface MessageUnreadByConversation {
   by_conversation: Record<string, number>;
@@ -152,6 +156,83 @@ export class ConversationReadRepo {
       )
       .get({ conv: conversationId, root: threadRootId, viewer: viewerUserId });
     return row ?? null;
+  }
+
+  /** Per-conversation per-viewer stream-unread (#task:1226) — the SINGLE
+   *  read-model source for the reply chip + Threads list "N new" / first-unread,
+   *  so the same server-scored fact never lives in two client caches that drift.
+   *  ONE query computes, per stream (mainline = thread_root_id NULL, each thread
+   *  = its root id), the unread count + the first (lowest-seq) unread message,
+   *  each scored against THAT stream's own cursor — identical WHERE to
+   *  `unreadCountForStream` / `firstUnreadForStream`, just batched across every
+   *  stream via window functions (PARTITION BY thread_root_id; SQLite groups the
+   *  NULL = mainline partition on its own). Follow-AGNOSTIC: a thread's unread is
+   *  independent of whether the viewer follows it (follow only gates the sidebar
+   *  roll-up / Activity, never per-thread display). `threads` is sparse — a root
+   *  appears only if it has >= 1 unread message; an absent root means 0. */
+  streamUnreadForConversation(
+    conversationId: string,
+    viewerUserId: string,
+  ): ConversationStreamUnreadDto {
+    const rows = this.db
+      .prepare<
+        { conv: string; viewer: string },
+        {
+          root: string | null;
+          first_unread_message_id: string;
+          first_unread_seq: number;
+          unread_count: number;
+        }
+      >(
+        `WITH unread AS (
+           SELECT m.id   AS message_id,
+                  m.seq  AS seq,
+                  m.thread_root_id AS root,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY m.thread_root_id ORDER BY m.seq ASC
+                  ) AS rn,
+                  COUNT(*) OVER (PARTITION BY m.thread_root_id) AS cnt
+             FROM messages m
+            WHERE m.conversation_id = @conv
+              AND m.from_kind != 'system'
+              AND NOT (m.from_kind = 'user'
+                       AND (m.from_user_id = @viewer OR m.from_user_id IS NULL))
+              AND m.seq > COALESCE(
+                (SELECT cr.last_read_seq FROM conversation_reads cr
+                  WHERE cr.user_id = @viewer
+                    AND cr.conversation_id = @conv
+                    AND cr.thread_root_id IS m.thread_root_id),
+                0
+              )
+         )
+         SELECT root,
+                message_id AS first_unread_message_id,
+                seq        AS first_unread_seq,
+                cnt        AS unread_count
+           FROM unread
+          WHERE rn = 1`,
+      )
+      .all({ conv: conversationId, viewer: viewerUserId });
+
+    let mainline: StreamUnreadDto = {
+      unread_count: 0,
+      first_unread_message_id: null,
+      first_unread_seq: null,
+    };
+    const threads: Record<string, StreamUnreadDto> = {};
+    for (const row of rows) {
+      const entry: StreamUnreadDto = {
+        unread_count: row.unread_count,
+        first_unread_message_id: row.first_unread_message_id,
+        first_unread_seq: row.first_unread_seq,
+      };
+      if (row.root === null) {
+        mainline = entry;
+      } else {
+        threads[row.root] = entry;
+      }
+    }
+    return { mainline, threads };
   }
 
   unreadCountsByConversationForWorkspace(

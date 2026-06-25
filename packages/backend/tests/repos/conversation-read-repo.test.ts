@@ -317,4 +317,88 @@ describe('ConversationReadRepo', () => {
     expect(reads.unreadCountForConversation(channel.id, 'local')).toBe(1);
     void mainline;
   });
+
+  it('streamUnreadForConversation returns mainline + sparse per-thread unread, follow-agnostic', () => {
+    const { messages, reads, channel } = bootstrap();
+
+    const root = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      content: 'root',
+    });
+    const reply1 = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      threadRootId: root.id,
+      content: 'r1',
+    });
+    messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      threadRootId: root.id,
+      content: 'r2',
+    });
+    // System + own messages never count (same WHERE as the per-stream helpers).
+    messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'system',
+      threadRootId: root.id,
+      content: 'system in thread',
+    });
+    messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'mine on mainline',
+    });
+    const mainlineUnread = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      content: 'mainline unread',
+    });
+
+    // A second, never-replied root is not a stream with unread → absent.
+    const quietRoot = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      content: 'quiet root',
+    });
+
+    const unread = reads.streamUnreadForConversation(channel.id, 'local');
+    // Mainline: the root message + the explicit mainline-unread agent message
+    // (own + system excluded); quietRoot is itself a mainline message too.
+    expect(unread.mainline.unread_count).toBe(3); // root + quietRoot + mainlineUnread
+    expect(unread.mainline.first_unread_message_id).toBe(root.id);
+    // Thread is follow-AGNOSTIC: it appears though the viewer doesn't follow it.
+    expect(unread.threads[root.id]).toEqual({
+      unread_count: 2,
+      first_unread_message_id: reply1.id,
+      first_unread_seq: reply1.seq,
+    });
+    // Sparse: a root with no replies has no thread stream entry.
+    expect(unread.threads[quietRoot.id]).toBeUndefined();
+    void mainlineUnread;
+
+    // Reading the thread to r1 drops its count to 1 and advances first-unread;
+    // reading the mainline to head removes it from the map entirely.
+    reads.markRead({
+      viewerUserId: 'local',
+      conversationId: channel.id,
+      threadRootId: root.id,
+      seq: reply1.seq,
+    });
+    reads.markRead({
+      viewerUserId: 'local',
+      conversationId: channel.id,
+      threadRootId: null,
+      seq: quietRoot.seq, // mainline head (latest mainline message)
+    });
+    const after = reads.streamUnreadForConversation(channel.id, 'local');
+    expect(after.mainline).toEqual({
+      unread_count: 0,
+      first_unread_message_id: null,
+      first_unread_seq: null,
+    });
+    expect(after.threads[root.id]?.unread_count).toBe(1);
+  });
 });

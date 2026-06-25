@@ -611,6 +611,36 @@ export function createConversationMessagingApp(
     }
   });
 
+  // Per-conversation per-viewer stream-unread read-model (#task:1226). The
+  // SINGLE client source of truth for the reply chip + Threads list "N new" /
+  // first-unread — both read this (keyed by root), so the same server-scored
+  // fact never lives in two caches that drift. Unread can't be optimistically
+  // derived on the client, so it lives OUTSIDE the message-window cache and is
+  // refreshed ONLY by the viewer-scoped `unread_updated` WS signal. Human
+  // viewer-scoped; reads `thread_followers` for nothing here (display is
+  // follow-agnostic) and never writes follow/delivery (attention ⊥ delivery).
+  app.get(apiPaths.conversationUnread(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'channel id required' }, 400);
+    const channel = conversations.getChannelLike(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const viewerUserId = requireViewerUserId(c);
+    const unread = timedRouteSpan(
+      ctx,
+      'conversation.stream_unread',
+      { conversationId: channel.id, kind: channel.kind },
+      () => conversationReads.streamUnreadForConversation(channel.id, viewerUserId),
+      result => ({
+        mainlineUnread: result.mainline.unread_count,
+        threadCount: Object.keys(result.threads).length,
+      }),
+    );
+    return c.json(unread);
+  });
+
   app.get(apiPaths.conversationChannelAgents(':id'), c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
