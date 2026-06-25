@@ -6,10 +6,20 @@ import {
 } from '../db/schema.js';
 
 //
-// v1 only emits `mention_external`: a user @-mentioned an agent who
-// wasn't a member of the originating conversation. The mention was CC'd
-// into that agent's DM channel (a dedicated `Mentions` conversation); a
-// notification points the user at it.
+// Emitted kinds (v1):
+//   - mention_external: a user @-mentioned an agent who wasn't a member of the
+//     originating conversation. The mention was CC'd into that agent's DM
+//     channel (a dedicated `Mentions` conversation); a notification points the
+//     user at it.
+//   - mention_self: a registered human viewer was @-mentioned in a conversation
+//     they belong to — channel mainline OR a reply-cluster (thread). Emitted by
+//     `notifyViewerMentionBestEffort` on every send (read-state = `read_at`).
+//     This IS the canonical directed "@me" source the Attention/Activity read
+//     model consumes (#task:1227, docs/activity-lifecycle-v1.md §5.1); #1227
+//     does NOT add a second human-mention emission — that would be a second name
+//     for one lifecycle.
+//   - agent_start_failed: an agent failed to start before its process was even
+//     spawned (e.g. runtime binary not on PATH).
 //
 // `payload` is open-ended JSON for kind-specific extras. For
 // mention_external we stash:

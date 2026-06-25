@@ -293,6 +293,62 @@ describe('ConversationMessageService.sendMessage', () => {
     }
   });
 
+  it('notifies the viewer for a thread-reply mention, carrying the thread root (#task:1227 §5.1)', async () => {
+    // The directed "@me" source for the Attention/Activity read model is this
+    // existing `mention_self` notification — including inside a reply-cluster.
+    // A thread reply lives in the parent CHANNEL conversation (conversation_id =
+    // channel, not a separate thread conversation); the notification's
+    // thread_root_id is derived from the message via the repo's LEFT JOIN, so
+    // the source ref still points at the correct thread. #1227 consumes this
+    // contract; it does NOT add a second emission.
+    const t = bootstrap();
+    try {
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'root question',
+      });
+      const viewerEvents: Array<{ kind: string; payload: any }> = [];
+      const unsubViewer = t.events.subscribeScope('viewer:local', e => {
+        viewerEvents.push({ kind: e.kind, payload: e.payload });
+      });
+
+      const reply = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'in the thread: @local-test can you take this?',
+        target: { kind: 'thread', message_id: root.id },
+      });
+      unsubViewer();
+
+      expect(reply.message.thread_root_id).toBe(root.id);
+      const notifications = t.notifications.list({ userId: 'local', unread: true });
+      expect(notifications).toEqual([
+        expect.objectContaining({
+          kind: 'mention_self',
+          user_id: 'local',
+          conversation_id: t.channel.id,
+          message_id: reply.message.id,
+          // Derived from the replied message — routes Activity to the thread.
+          thread_root_id: root.id,
+          source_conversation_id: t.channel.id,
+          source_message_id: reply.message.id,
+          read_at: null,
+        }),
+      ]);
+      expect(viewerEvents).toContainEqual({
+        kind: 'notification',
+        payload: {
+          kind: 'mention_self',
+          conversation_id: t.channel.id,
+          message_id: reply.message.id,
+        },
+      });
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('does not notify when the viewer mentions their own user handle', async () => {
     const t = bootstrap();
     try {

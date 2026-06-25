@@ -101,8 +101,8 @@ shiki 提问:Activity 是不是一个独立 DDD 领域事件,有自己的读和�
 | task needs-my-action | directed | `messages.task_status` / `task_assignee_user_id` 投影 | **永远进** |
 | agent_start_failed(我的 agent) | directed | `notifications.read_at` | **永远进** |
 
-> **canonical TARGET = (a) notification-backed directed claim(Cindy contract review 锁,2026-06-25):** human **@我** 的 directed claim,read-state = `notifications.read_at`,由 **Notification context 记录 human-mention 行**(今天 `NotificationKind = {mention_external, mention_self, agent_start_failed}`、emission 偏 agent 向、v1 only emits `mention_external`,故须**扩 emission 到 human-mention**)。这是 **Notification context 的工作、计入 #1227 scope,不是 Attention 拥有状态**。
-> **不选 (b)`extractMentions` 投影作 canonical:** 它会把 directed 退化成 positional-with-mention-salience,与 §7 overlap / directed 消除谓词不是同一模型;**(b) 最多作迁移期 fallback,绝不写成 target**。directed 与 positional 解耦更干净、salience 天生高 —— (a) 是第一性选择。
+> **canonical TARGET = (a) notification-backed directed claim(Cindy contract review 锁,2026-06-25;emission 前提经现读源码修正 2026-06-25):** human **@我** 的 directed claim,read-state = `notifications.read_at`,源 = **既有的 `mention_self` notification**。**修正:** `mention_self` 今天已**无条件**为「会话成员被 @」而发(`conversation-message-service.ts` `notifyViewerMentionBestEffort`,每次 send 调用;含 reply-cluster——thread reply 落父 channel 会话,notification 的 `thread_root_id` 由 repo `LEFT JOIN messages` 派生,故 source ref 仍指向正确 thread)。所以原「v1 only emits `mention_external`、须扩 emission」是**过期前提**:#1227 **不新增 emission,只消费并锁定** `mention_self` 这个契约(characterization test 守 thread-reply @我 → `mention_self`、`conversation_id/message_id/source_*/thread_root_id` 正确、`read_at` NULL)。这是 **Attention 读侧消费 Notification context 既有事实,不是 Attention 拥有状态**。
+> **不选 (b)`extractMentions` 投影作 canonical:** 它会把 directed 退化成 positional-with-mention-salience,与 §7 overlap / directed 消除谓词不是同一模型;**(b) 最多作迁移期 fallback / 防御,绝不写成 target**。directed 与 positional 解耦更干净、salience 天生高 —— (a) 是第一性选择。
 
 ### 5.2 分级 / 呈现 —— delivery ⊥ attention
 
@@ -210,7 +210,7 @@ enter(item, me) = directed(item, me)  OR  ( ambient(item) AND ambientPref(stream
 ## 12. 时序 / 迁移(与 #1226 的桥)
 
 1. **doc 定 target(本 doc)→ Cindy review 过。**
-2. **additive 实现(可在 doc 过后即起,不碰 `#1226`):** `ChannelAttentionPreference` 表(migration)+ **Notification context 补 human-mention emission(§5.1 (a),directed @我 背书)** + `listActivity` 读模型 + `setChannelAttentionPref` + endpoint。镜像 `#1226` step-1 的纯加性模式,各步 tree-green。
+2. **additive 实现(可在 doc 过后即起,不碰 `#1226`):** `ChannelAttentionPreference` 表(migration)+ **锁定既有 `mention_self` 为 directed @我 源(§5.1 (a)——不新增 emission,补 characterization test)** + `listActivity` 读模型 + `setChannelAttentionPref` + endpoint。镜像 `#1226` step-1 的纯加性模式,各步 tree-green。
 3. **`observe()` 坍缩(硬时序约束):** 把现有两条 mark-read 写路径(open-time snapshot + visible-live,在 Norman 的 `ThreadPanel.tsx`)收敛成单一 `observe()`。这一步**动 `#1226` 的 mark-read**,故 **必须等 `#1226` dogfood 过 + 关 task 才做**(in_review 期绝不碰)。届时 `snapshot_seq` 客户端回传大概率冗余可删(visible-live 已上报真实 observed seq);涉 DTO/CLI 同步 `docs/cli-system.md`。**这一步即 `#1226 → #1227` 的桥。**
 
 ---
@@ -277,7 +277,7 @@ Cindy 的 5 条硬标准 = 本 doc 的逐条验收:
 4. `observe()` 必须 source-routed,不写 `activity.read_at`(§5.3)。
 5. sidebar 与 Activity 同源同 `enter()`,projection-specific 聚合(§8)。
 
-**已拍(Cindy contract review,2026-06-25):** human **@我** directed claim = **(a) notification-backed,canonical TARGET** —— Notification context 补 human-mention 行(read-state=`notifications.read_at`),新增 emission **计入 #1227 scope**(§5.1、§12 step-2);(b) `extractMentions` 投影仅迁移期 fallback、非 canonical。
+**已拍(Cindy contract review,2026-06-25;emission 前提现读源码修正 2026-06-25):** human **@我** directed claim = **(a) notification-backed,canonical TARGET** —— 源 = **既有 `mention_self`**(read-state=`notifications.read_at`),它今天已无条件为会话成员被 @ 而发(含 thread,`thread_root_id` 由 repo join 派生)。**#1227 不新增 emission**,只消费 + 加 characterization test 锁契约(§5.1、§12 step-2);(b) `extractMentions` 投影仅迁移期 fallback、非 canonical。
 
 ---
 
