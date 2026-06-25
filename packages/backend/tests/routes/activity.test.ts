@@ -48,6 +48,23 @@ async function sendAsAgent(
   return result.message.id;
 }
 
+/** Send an agent reply into a thread (reply-cluster) under `rootMsgId`. */
+async function sendThreadReply(
+  t: TestApp,
+  channelId: string,
+  agentId: string,
+  rootMsgId: string,
+  content: string,
+): Promise<string> {
+  const result = await t.ctx.conversationMessageService.sendMessage({
+    conversationId: channelId,
+    actor: { kind: 'agent', agentId, conversationId: channelId },
+    content,
+    target: { kind: 'thread', message_id: rootMsgId },
+  });
+  return result.message.id;
+}
+
 async function getActivity(t: TestApp): Promise<any[]> {
   const res = await http(t).get('/api/activity');
   expect(res.status).toBe(200);
@@ -454,6 +471,89 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     for (const i of items.filter(x => x.kind === 'unread' || x.kind === 'task')) {
       expect(i.notification_id).toBeNull();
     }
+  });
+
+  // ── source-first layout fields (shiki dogfood: row-1 where / row-2/3 content) ──
+
+  it('a task item uses the conversation title as `title` and carries task_title separately', async () => {
+    t = buildTestApp();
+    const { workspaceId, channelId } = await createWorkspaceChannel(t);
+    const sender = (await firstChannelAgent(t, channelId))!;
+    const msgId = await sendAsAgent(t, channelId, sender, 'seed');
+    t.ctx.db
+      .prepare(
+        `UPDATE messages SET task_number = 30, task_status = 'in_progress',
+            task_assignee_user_id = 'local', task_workspace_id = ?,
+            task_title = 'Refactor the widget' WHERE id = ?`,
+      )
+      .run(workspaceId, msgId);
+
+    const convTitle = (
+      t.ctx.db
+        .prepare(`SELECT title FROM conversations WHERE id = ?`)
+        .get(channelId) as { title: string }
+    ).title;
+
+    const task = (await getActivity(t)).find(i => i.kind === 'task');
+    expect(task).toBeTruthy();
+    // `title` is the location (conversation), NOT the task subject (the §layout
+    // fix: task items previously overloaded `title` with task_title).
+    expect(task.title).toBe(convTitle);
+    expect(task.task_title).toBe('Refactor the widget');
+    expect(task.conversation_kind).toBe('channel');
+    expect(task.thread_root_preview).toBeNull();
+    expect(task.preview).toBeNull();
+  });
+
+  it('a channel mention carries conversation_kind and a null thread_root_preview (mainline)', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t);
+    const sender = (await firstChannelAgent(t, channelId))!;
+    await sendAsAgent(t, channelId, sender, 'look @local-test');
+
+    const mention = (await getActivity(t)).find(i => i.kind === 'mention');
+    expect(mention).toBeTruthy();
+    expect(mention.conversation_kind).toBe('channel');
+    expect(mention.thread_root_preview).toBeNull(); // mainline → no root row
+    expect(mention.task_title).toBeNull();
+  });
+
+  it('a thread unread carries the root preview (row-2) and the reply preview (row-3)', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t);
+    const sender = (await firstChannelAgent(t, channelId))!;
+    const rootMsg = await sendAsAgent(t, channelId, sender, 'ROOT topic message');
+    const replyMsg = await sendThreadReply(
+      t,
+      channelId,
+      sender,
+      rootMsg,
+      'REPLY inside the thread',
+    );
+    // The viewer follows the thread (human follower) so its ambient unread enters
+    // (§6: thread ambient is follow-driven). Channel pref stays default 'mentions'
+    // so the root mainline message contributes no separate ambient item.
+    t.ctx.db
+      .prepare(
+        `INSERT INTO thread_followers
+           (thread_root_id, conversation_id, principal_kind, principal_id,
+            followed_at, source)
+         VALUES (?, ?, 'human', 'local', ?, 'manual')`,
+      )
+      .run(rootMsg, channelId, Date.now());
+
+    const thread = (await getActivity(t)).filter(
+      i => i.kind === 'unread' && i.thread_root_id === rootMsg,
+    );
+    expect(thread).toHaveLength(1);
+    expect(thread[0]).toMatchObject({
+      conversation_kind: 'channel',
+      thread_root_id: rootMsg,
+      message_id: replyMsg, // anchored at the first unread reply
+    });
+    // row-2 = the thread's root; row-3 = the reply that triggered the unread.
+    expect(thread[0].thread_root_preview).toContain('ROOT topic');
+    expect(thread[0].preview).toContain('REPLY inside the thread');
   });
 });
 

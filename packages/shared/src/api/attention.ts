@@ -121,9 +121,27 @@ export const ActivityItemDtoSchema = z.object({
    *  notification-backed claims — the renderer marks read BY this id, never by
    *  parsing `id`. */
   notification_id: z.string().nullable(),
-  /** 来源标识: the conversation (channel/DM) title. */
+  /** The kind of the anchoring conversation (channel vs DM). `thread`-ness is NOT
+   *  a conversation kind here — a thread item carries the PARENT channel/DM kind
+   *  and signals its thread-ness via `thread_root_id != null`. Drives the row-1
+   *  "where" label (Channel / DM). */
+  conversation_kind: z.enum(['channel', 'dm_channel']),
+  /** Row-1 location title: ALWAYS the conversation (channel/DM) title — never the
+   *  task subject (see `task_title`) or a message excerpt. Stable across kinds so
+   *  the renderer's "where" line has one meaning. */
   title: z.string(),
-  /** Short preview of the anchor (message excerpt / failure summary). */
+  /** `task` items only — the task subject, rendered on its own row. NULL for all
+   *  other kinds (whose subject line is `preview` / `thread_root_preview`). Kept
+   *  separate from `title` so `title` stays the location, not the task. */
+  task_title: z.string().nullable(),
+  /** For a thread item (`thread_root_id != null`): a one-line excerpt of the
+   *  thread's ROOT message, rendered above the reply `preview` so the row reads
+   *  root → reply. NULL for non-thread items (mainline unread, channel mention,
+   *  agent_failed, task) — there is no distinct root to show. */
+  thread_root_preview: z.string().nullable(),
+  /** Short preview of the anchor (message excerpt / failure summary). For a
+   *  thread item this is the REPLY content (paired with `thread_root_preview`).
+   *  NULL for `task` (its subject is `task_title`). */
   preview: z.string().nullable(),
   /** Recency used for the within-tier sort (epoch ms). */
   timestamp: z.number(),

@@ -57,8 +57,10 @@ interface DirectedNotificationRow {
   id: string;
   kind: 'mention_self' | 'agent_start_failed';
   conversation_id: string | null;
+  conversation_kind: 'channel' | 'dm_channel' | null;
   message_id: string | null;
   thread_root_id: string | null;
+  root_content: string | null;
   message_seq: number | null;
   message_content: string | null;
   stream_cursor: number;
@@ -70,8 +72,11 @@ interface DirectedNotificationRow {
 
 interface TaskRow {
   conversation_id: string;
+  conversation_kind: 'channel' | 'dm_channel';
+  conversation_title: string | null;
   message_id: string;
   thread_root_id: string | null;
+  root_content: string | null;
   task_number: number;
   task_status: string;
   task_title: string | null;
@@ -82,6 +87,7 @@ interface TaskRow {
 interface PositionalStreamRow {
   conversation_id: string;
   root: string | null;
+  root_content: string | null;
   conversation_kind: 'channel' | 'dm_channel';
   conversation_title: string;
   workspace_id: string;
@@ -112,8 +118,10 @@ export function listActivity(
           n.id                AS id,
           n.kind              AS kind,
           n.conversation_id   AS conversation_id,
+          c.kind              AS conversation_kind,
           n.message_id        AS message_id,
           m.thread_root_id    AS thread_root_id,
+          root.content        AS root_content,
           m.seq               AS message_seq,
           m.content           AS message_content,
           COALESCE((
@@ -128,6 +136,7 @@ export function listActivity(
           n.created_at        AS created_at
         FROM notifications n
         LEFT JOIN messages m ON m.id = n.message_id
+        LEFT JOIN messages root ON root.id = m.thread_root_id
         LEFT JOIN conversations c ON c.id = n.conversation_id
        WHERE n.user_id = @viewer
          AND n.read_at IS NULL
@@ -149,8 +158,11 @@ export function listActivity(
     .prepare<{ viewer: string; ws: string | null }, TaskRow>(
       `SELECT
           m.conversation_id   AS conversation_id,
+          conv.kind           AS conversation_kind,
+          conv.title          AS conversation_title,
           m.id                AS message_id,
           m.thread_root_id    AS thread_root_id,
+          root.content        AS root_content,
           m.task_number       AS task_number,
           m.task_status       AS task_status,
           m.task_title        AS task_title,
@@ -158,6 +170,7 @@ export function listActivity(
           m.created_at        AS created_at
         FROM messages m
         JOIN conversations conv ON conv.id = m.conversation_id
+        LEFT JOIN messages root ON root.id = m.thread_root_id
        WHERE m.task_number IS NOT NULL
          AND (@ws IS NULL OR COALESCE(m.task_workspace_id, conv.workspace_id) = @ws)
          AND EXISTS (
@@ -187,10 +200,13 @@ export function listActivity(
       salience: 'directed',
       workspace_id: t.workspace_id,
       conversation_id: t.conversation_id,
+      conversation_kind: t.conversation_kind,
       thread_root_id: t.thread_root_id,
       message_id: t.message_id,
       notification_id: null,
-      title: t.task_title ?? '',
+      title: t.conversation_title ?? '',
+      task_title: t.task_title,
+      thread_root_preview: preview(t.root_content),
       preview: null,
       timestamp: t.created_at,
       unread_count: null,
@@ -213,10 +229,13 @@ export function listActivity(
         salience: 'directed',
         workspace_id: n.workspace_id ?? '',
         conversation_id: n.conversation_id,
+        conversation_kind: n.conversation_kind ?? 'channel',
         thread_root_id: n.thread_root_id,
         message_id: n.message_id,
         notification_id: n.id,
         title: n.conversation_title ?? '',
+        task_title: null,
+        thread_root_preview: preview(n.root_content),
         preview: preview(n.message_content),
         timestamp: n.created_at,
         unread_count: null,
@@ -242,10 +261,13 @@ export function listActivity(
         salience: 'directed',
         workspace_id: n.workspace_id ?? '',
         conversation_id: n.conversation_id ?? '',
+        conversation_kind: n.conversation_kind ?? 'channel',
         thread_root_id: null,
         message_id: null,
         notification_id: n.id,
         title: n.conversation_title ?? '',
+        task_title: null,
+        thread_root_preview: null,
         preview: agentPreview,
         timestamp: n.created_at,
         unread_count: null,
@@ -305,6 +327,7 @@ export function listActivity(
        SELECT
          vu.conversation_id              AS conversation_id,
          vu.root                         AS root,
+         root.content                    AS root_content,
          c.kind                          AS conversation_kind,
          c.title                         AS conversation_title,
          c.workspace_id                  AS workspace_id,
@@ -315,6 +338,7 @@ export function listActivity(
          vu.cnt                          AS unread_count
        FROM viewer_unread vu
        JOIN conversations c ON c.id = vu.conversation_id
+       LEFT JOIN messages root ON root.id = vu.root
       WHERE vu.rn = 1
         AND (
           -- DM mainline: directed-grade, always enters (§5.1).
@@ -353,10 +377,13 @@ export function listActivity(
       salience,
       workspace_id: s.workspace_id,
       conversation_id: s.conversation_id,
+      conversation_kind: s.conversation_kind,
       thread_root_id: s.root,
       message_id: s.first_unread_message_id,
       notification_id: null,
       title: s.conversation_title,
+      task_title: null,
+      thread_root_preview: preview(s.root_content),
       preview: preview(s.first_unread_content),
       timestamp: s.first_unread_created_at,
       unread_count: s.unread_count,
