@@ -87,6 +87,28 @@ export const ACTIVITY_ITEM_KINDS = [
 ] as const;
 export type ActivityItemKind = (typeof ACTIVITY_ITEM_KINDS)[number];
 
+/**
+ * Display-only identity of the author of an item's `preview` message
+ * (#task:1227, shiki 2026-06-26 — row 3 `<sender avatar> <display_name>: …`).
+ * Server-resolved from the anchor message in `listActivity` so the GLOBAL
+ * cross-workspace list never client-stitches a sender from a per-workspace
+ * member cache (which it does not have). `avatar_url` is the same relative,
+ * cache-busted path baked into `UserDto`/`AgentDto` — the renderer resolves it
+ * by URL via the existing avatar hooks, not by workspace membership.
+ *
+ * This is additive display data ONLY: it carries NO source_ref and is NOT part
+ * of the eliminate route (§5.3). `kind` picks the avatar component
+ * (UserAvatar vs AgentAvatar). NULL when `preview` has no message author
+ * (`agent_failed`, whose preview comes from the notification payload).
+ */
+export const ActivityPreviewSenderSchema = z.object({
+  kind: z.enum(['user', 'agent']),
+  id: z.string(),
+  display_name: z.string(),
+  avatar_url: z.string().nullable(),
+});
+export type ActivityPreviewSender = z.infer<typeof ActivityPreviewSenderSchema>;
+
 /** One row in the Activity list. Heterogeneous by `kind`: directed
  *  single-event items (`mention` / `agent_failed`) anchor on one message; an
  *  `unread` item is a per-STREAM aggregate (§7.3) carrying a count and anchored
@@ -137,6 +159,10 @@ export const ActivityItemDtoSchema = z.object({
   /** Short preview of the anchor (message excerpt / failure summary). For a
    *  thread item this is the REPLY content (paired with `thread_root_preview`). */
   preview: z.string().nullable(),
+  /** Display-only author of `preview` (§row-3 `<sender>: <content>`), server-
+   *  resolved from the anchor message. NULL when `preview` has no message
+   *  author (`agent_failed`). Carries no source_ref — purely for rendering. */
+  preview_sender: ActivityPreviewSenderSchema.nullable(),
   /** Recency used for the within-tier sort (epoch ms). */
   timestamp: z.number(),
   /** `unread` items: count of ambient unread in the stream, already net of any

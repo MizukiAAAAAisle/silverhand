@@ -402,6 +402,36 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     // row-2 = the thread's root; row-3 = the reply that triggered the unread.
     expect(thread[0].thread_root_preview).toContain('ROOT topic');
     expect(thread[0].preview).toContain('REPLY inside the thread');
+    // row-3 sender = the reply's author, server-resolved (the global list can't
+    // client-stitch a cross-workspace sender). Anchor = first unread reply.
+    expect(thread[0].preview_sender).toMatchObject({
+      kind: 'agent',
+      id: sender,
+    });
+    expect(thread[0].preview_sender!.display_name).toBeTruthy();
+  });
+
+  it('preview_sender is null for agent_failed (no message anchor)', async () => {
+    t = buildTestApp();
+    const { workspaceId, channelId } = await createWorkspaceChannel(t);
+    t.ctx.db
+      .prepare(
+        `INSERT INTO notifications
+           (id, kind, user_id, agent_id, workspace_id, conversation_id,
+            message_id, payload, read_at, created_at)
+         VALUES (@id, 'agent_start_failed', 'local', NULL, @ws, @conv,
+            NULL, @payload, NULL, @now)`,
+      )
+      .run({
+        id: 'notif-af-sender',
+        ws: workspaceId,
+        conv: channelId,
+        payload: JSON.stringify({ agent_name: 'beth', error: 'spawn EACCES' }),
+        now: Date.now(),
+      });
+    const failed = (await getActivity(t)).find(i => i.kind === 'agent_failed');
+    expect(failed).toBeTruthy();
+    expect(failed!.preview_sender).toBeNull();
   });
 });
 

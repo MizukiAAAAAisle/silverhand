@@ -35,10 +35,12 @@
 // Then salience is derived (DM = directed-grade) and the list sorted §13.2:
 // directed tier first, most-recent-first within a tier.
 import type { BackendContext } from '../context.js';
-import type {
-  ActivityItemDto,
-  ActivitySalience,
-  ListActivityDto,
+import {
+  apiPaths,
+  type ActivityItemDto,
+  type ActivityPreviewSender,
+  type ActivitySalience,
+  type ListActivityDto,
 } from '@silverhand/shared';
 
 export interface ListActivityParams {
@@ -61,7 +63,54 @@ function preview(text: string | null | undefined): string | null {
     : compact;
 }
 
-interface DirectedNotificationRow {
+/** Row fields carrying the anchor message's author, server-resolved so the
+ *  global list never client-stitches a cross-workspace sender. Both queries
+ *  resolve `sender_*` via CASE on the message `from_kind` (a `system` author or
+ *  a missing anchor leaves `sender_kind` outside user/agent → NULL sender). */
+interface SenderColumns {
+  sender_kind: string | null;
+  sender_id: string | null;
+  sender_display_name: string | null;
+  sender_avatar_key: string | null;
+  sender_updated_at: number | null;
+}
+
+/** Build the display-only `preview_sender` from the resolved author columns.
+ *  `avatar_url` mirrors `UserDto`/`AgentDto`: the relative avatar path with the
+ *  `?v=updated_at` cache-buster, or NULL when the author has no avatar. */
+function buildPreviewSender(row: SenderColumns): ActivityPreviewSender | null {
+  if (row.sender_kind !== 'user' && row.sender_kind !== 'agent') return null;
+  if (!row.sender_id) return null;
+  const avatar_url = row.sender_avatar_key
+    ? `${
+        row.sender_kind === 'user'
+          ? apiPaths.userAvatar(row.sender_id)
+          : apiPaths.agentAvatar(row.sender_id)
+      }?v=${row.sender_updated_at ?? 0}`
+    : null;
+  return {
+    kind: row.sender_kind,
+    id: row.sender_id,
+    display_name: row.sender_display_name ?? '',
+    avatar_url,
+  };
+}
+
+/** SQL fragment resolving an anchor message `m`'s author into `sender_*`
+ *  columns. Requires `LEFT JOIN users su ON su.id = m.from_user_id` and
+ *  `LEFT JOIN agents sa ON sa.id = m.from_agent_id` in the same query. */
+const SENDER_SELECT = `
+          m.from_kind                                                  AS sender_kind,
+          CASE m.from_kind WHEN 'user' THEN m.from_user_id
+                           WHEN 'agent' THEN m.from_agent_id END        AS sender_id,
+          CASE m.from_kind WHEN 'user' THEN su.display_name
+                           WHEN 'agent' THEN sa.display_name END        AS sender_display_name,
+          CASE m.from_kind WHEN 'user' THEN su.avatar_storage_key
+                           WHEN 'agent' THEN sa.avatar_storage_key END  AS sender_avatar_key,
+          CASE m.from_kind WHEN 'user' THEN su.updated_at
+                           WHEN 'agent' THEN sa.updated_at END          AS sender_updated_at`;
+
+interface DirectedNotificationRow extends SenderColumns {
   id: string;
   kind: 'mention_self' | 'agent_start_failed';
   conversation_id: string | null;
@@ -78,7 +127,7 @@ interface DirectedNotificationRow {
   created_at: number;
 }
 
-interface PositionalStreamRow {
+interface PositionalStreamRow extends SenderColumns {
   conversation_id: string;
   root: string | null;
   root_content: string | null;
@@ -127,11 +176,13 @@ export function listActivity(
           c.title             AS conversation_title,
           COALESCE(n.workspace_id, c.workspace_id) AS workspace_id,
           n.payload           AS payload,
-          n.created_at        AS created_at
+          n.created_at        AS created_at,${SENDER_SELECT}
         FROM notifications n
         LEFT JOIN messages m ON m.id = n.message_id
         LEFT JOIN messages root ON root.id = m.thread_root_id
         LEFT JOIN conversations c ON c.id = n.conversation_id
+        LEFT JOIN users su ON su.id = m.from_user_id
+        LEFT JOIN agents sa ON sa.id = m.from_agent_id
        WHERE n.user_id = @viewer
          AND n.read_at IS NULL
          AND n.kind IN ('mention_self', 'agent_start_failed')
@@ -168,6 +219,7 @@ export function listActivity(
         title: n.conversation_title ?? '',
         thread_root_preview: preview(n.root_content),
         preview: preview(n.message_content),
+        preview_sender: buildPreviewSender(n),
         timestamp: n.created_at,
         unread_count: null,
       });
@@ -197,6 +249,7 @@ export function listActivity(
         title: n.conversation_title ?? '',
         thread_root_preview: null,
         preview: agentPreview,
+        preview_sender: null,
         timestamp: n.created_at,
         unread_count: null,
       });
@@ -225,6 +278,9 @@ export function listActivity(
            m.seq             AS seq,
            m.content         AS content,
            m.created_at      AS created_at,
+           m.from_kind       AS from_kind,
+           m.from_user_id    AS from_user_id,
+           m.from_agent_id   AS from_agent_id,
            ROW_NUMBER() OVER (
              PARTITION BY m.conversation_id, m.thread_root_id ORDER BY m.seq ASC
            ) AS rn,
@@ -261,10 +317,21 @@ export function listActivity(
          vu.seq                          AS first_unread_seq,
          vu.content                      AS first_unread_content,
          vu.created_at                   AS first_unread_created_at,
-         vu.cnt                          AS unread_count
+         vu.cnt                          AS unread_count,
+         vu.from_kind                                                  AS sender_kind,
+         CASE vu.from_kind WHEN 'user' THEN vu.from_user_id
+                           WHEN 'agent' THEN vu.from_agent_id END       AS sender_id,
+         CASE vu.from_kind WHEN 'user' THEN su.display_name
+                           WHEN 'agent' THEN sa.display_name END        AS sender_display_name,
+         CASE vu.from_kind WHEN 'user' THEN su.avatar_storage_key
+                           WHEN 'agent' THEN sa.avatar_storage_key END  AS sender_avatar_key,
+         CASE vu.from_kind WHEN 'user' THEN su.updated_at
+                           WHEN 'agent' THEN sa.updated_at END          AS sender_updated_at
        FROM viewer_unread vu
        JOIN conversations c ON c.id = vu.conversation_id
        LEFT JOIN messages root ON root.id = vu.root
+       LEFT JOIN users su ON su.id = vu.from_user_id
+       LEFT JOIN agents sa ON sa.id = vu.from_agent_id
       WHERE vu.rn = 1
         AND (
           -- DM mainline: directed-grade, always enters (§5.1).
@@ -310,6 +377,7 @@ export function listActivity(
       title: s.conversation_title,
       thread_root_preview: preview(s.root_content),
       preview: preview(s.first_unread_content),
+      preview_sender: buildPreviewSender(s),
       timestamp: s.first_unread_created_at,
       unread_count: s.unread_count,
     });

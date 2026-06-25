@@ -5,6 +5,7 @@
   "AVATAR_MAX_BYTES",
   "AVATAR_MAX_SIZE_LABEL",
   "ActivityItemDtoSchema",
+  "ActivityPreviewSenderSchema",
   "AddConversationMemberByHandleInputSchema",
   "AddConversationMemberByIdInputSchema",
   "AddConversationMemberInputSchema",
