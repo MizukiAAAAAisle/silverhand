@@ -37,8 +37,10 @@ import type {
 
 export interface ListActivityParams {
   viewerUserId: string;
-  /** Optional workspace filter. The data model is global; v1 UI scopes to one
-   *  workspace. Absent = every workspace the viewer can see. */
+  /** Optional workspace filter. The data model is global and so is the v1
+   *  Activity UI (shiki 2026-06-25: "用户所有要关注的入口") — it calls with NO
+   *  filter. This param stays as an opt-in scope for callers that want one
+   *  workspace; absent = every workspace the viewer can see. */
   workspaceId?: string;
 }
 
