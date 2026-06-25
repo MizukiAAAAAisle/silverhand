@@ -142,7 +142,7 @@ describe('MessageRepo.listChannelThreads', () => {
     expect(tB.repliers).toEqual([{ kind: 'human', id: 'bob' }]);
   });
 
-  it('fills per-stream unread_count + first-unread + viewer_following (#task:1226)', () => {
+  it('fills viewer_following (read-only follow projection) (#task:1226)', () => {
     const { db, channel, agentId, repo } = bootstrap();
     const root = repo.insertForConversation({
       conversationId: channel.id,
@@ -150,7 +150,7 @@ describe('MessageRepo.listChannelThreads', () => {
       fromUserId: 'local',
       content: 'root',
     });
-    const reply = repo.insertForConversation({
+    repo.insertForConversation({
       conversationId: channel.id,
       fromKind: 'agent',
       fromAgentId: agentId,
@@ -158,12 +158,11 @@ describe('MessageRepo.listChannelThreads', () => {
       threadRootId: root.id,
     });
 
-    // No read cursor yet → the agent reply is unread for the viewer; first-unread
-    // points at it (id + seq). Not followed → viewer_following false.
+    // Per-thread unread no longer rides on ThreadSummary — it's served by the
+    // dedicated conversation-unread read-model (see conversation-read-repo /
+    // conversation-unread route tests). The Threads list only projects follow
+    // state here: not followed → false.
     const t = repo.listChannelThreads(channel.id, 'local', {}).threads[0]!;
-    expect(t.unread_count).toBe(1);
-    expect(t.first_unread_message_id).toBe(reply.id);
-    expect(t.first_unread_seq).toBe(reply.seq);
     expect(t.viewer_following).toBe(false);
 
     // Following the cluster flips viewer_following (read-only projection of the
@@ -175,7 +174,6 @@ describe('MessageRepo.listChannelThreads', () => {
     ).run(root.id, channel.id, 'local', Date.now());
     const t2 = repo.listChannelThreads(channel.id, 'local', {}).threads[0]!;
     expect(t2.viewer_following).toBe(true);
-    expect(t2.unread_count).toBe(1);
   });
 
   it('keyset-paginates without dropping same-timestamp clusters', () => {
@@ -288,7 +286,7 @@ describe('MessageRepo.replyBadgeSummariesByRoot (P1)', () => {
     });
 
     // Replies to A: human alice, agent, plus a system message (excluded).
-    const a1 = repo.insertForConversation({
+    repo.insertForConversation({
       conversationId: channel.id,
       fromKind: 'user',
       fromUserId: 'alice',
@@ -319,7 +317,7 @@ describe('MessageRepo.replyBadgeSummariesByRoot (P1)', () => {
 
     const rootIds = [rootA.id, rootB.id, lonely.id];
     const counts = repo.replyCountsByRoot(channel.id, rootIds);
-    const sums = repo.replyBadgeSummariesByRoot(channel.id, rootIds, 'local');
+    const sums = repo.replyBadgeSummariesByRoot(channel.id, rootIds);
 
     // Only roots with >= 1 non-system reply appear (lonely excluded).
     expect(Object.keys(sums).sort()).toEqual([rootA.id, rootB.id].sort());
@@ -333,17 +331,10 @@ describe('MessageRepo.replyBadgeSummariesByRoot (P1)', () => {
     ]);
     expect(sums[rootA.id]!.replier_total).toBe(2);
     expect(sums[rootB.id]!.repliers).toEqual([{ kind: 'human', id: 'bob' }]);
-
-    // Per-viewer unread sidecar (#task:1226): viewer 'local' has no cursor, so
-    // every non-system, non-own reply is unread. Same source as the Threads
-    // list — first-unread is the lowest-seq unread reply in each cluster.
-    expect(sums[rootA.id]!.unread_count).toBe(2); // a1, a2
-    expect(sums[rootA.id]!.first_unread_message_id).toBe(a1.id);
-    expect(sums[rootB.id]!.unread_count).toBe(1); // b1
   });
 
   it('returns an empty record for no roots', () => {
     const { channel, repo } = bootstrap();
-    expect(repo.replyBadgeSummariesByRoot(channel.id, [], 'local')).toEqual({});
+    expect(repo.replyBadgeSummariesByRoot(channel.id, [])).toEqual({});
   });
 });

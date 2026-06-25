@@ -546,14 +546,6 @@ function patchReplySummary(
     last_reply_at: Math.max(summary.last_reply_at, reply.created_at),
     repliers,
     replier_total: already ? summary.replier_total : summary.replier_total + 1,
-    // Unread/first-unread are server-scored and NO LONGER consumed off this
-    // summary — the chip reads them from `useConversationUnread` (#task:1226).
-    // These lines only carry the prior values forward to satisfy the type until
-    // step-3 removes the fields from `ReplyBadgeSummary` (alongside the backend
-    // builder). They drive nothing on screen.
-    unread_count: summary.unread_count,
-    first_unread_message_id: summary.first_unread_message_id,
-    first_unread_seq: summary.first_unread_seq,
   };
 }
 

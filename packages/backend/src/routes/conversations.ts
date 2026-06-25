@@ -277,7 +277,6 @@ export function createConversationReadApp(
             reply_summaries_by_root: messages.replyBadgeSummariesByRoot(
               channel.id,
               rootIds,
-              viewerUserId,
             ),
           };
         },

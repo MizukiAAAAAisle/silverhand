@@ -877,7 +877,8 @@ describe('canonical channel/thread routes', () => {
     expect(reads.unreadCountForStream(channelId, null, 'local')).toBe(1);
 
     // A concurrent tail arriving AFTER the snapshot is not swallowed: the thread
-    // shows unread again, pointing at the new reply.
+    // shows unread again, pointing at the new reply. Unread now lives in the
+    // dedicated conversation-unread read-model, not on the Threads list row.
     const reply2 = messages.insertForConversation({
       conversationId: channelId,
       fromKind: 'agent',
@@ -885,12 +886,11 @@ describe('canonical channel/thread routes', () => {
       content: 'r2',
       threadRootId: root.id,
     });
-    const threads = (await (
-      await viewer.get(`/api/conversations/${channelId}/threads`)
+    const unread = (await (
+      await viewer.get(`/api/conversations/${channelId}/unread`)
     ).json()) as any;
-    const row = threads.threads.find((x: any) => x.root_message_id === root.id);
-    expect(row.unread_count).toBe(1);
-    expect(row.first_unread_message_id).toBe(reply2.id);
+    expect(unread.threads[root.id].unread_count).toBe(1);
+    expect(unread.threads[root.id].first_unread_message_id).toBe(reply2.id);
   });
 
   it('mainline mark-read still falls back to the mainline head when snapshot_seq is omitted (#task:1226)', async () => {

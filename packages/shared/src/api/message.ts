@@ -54,7 +54,13 @@ export type MessageDto = z.infer<typeof MessageDtoSchema>;
  *  badge needs beyond a bare count: the most-recent replier identities (for
  *  a stacked-avatar cluster) and the last-reply time. Absent until the
  *  backend populates it — the badge falls back to count-only. Keyed by root
- *  message id. This schema is the canonical reply-badge sidecar contract. */
+ *  message id. This schema is the canonical reply-badge sidecar contract.
+ *
+ *  Carries ONLY optimistically-maintainable reply metadata — NOT per-viewer
+ *  unread. Unread / first-unread is server-scored and lives in the dedicated
+ *  conversation-unread read-model (`ConversationStreamUnreadDto`, `GET
+ *  /api/conversations/:id/unread`); the chip reads "N new" from there, never
+ *  from this window sidecar (#task:1226). */
 export const ReplyBadgeSummarySchema = z.object({
   /** Total non-system replies. Mirrors `reply_counts_by_root` for self-
    *  containment; the count shown still reads `reply_counts_by_root` so the
@@ -71,17 +77,6 @@ export const ReplyBadgeSummarySchema = z.object({
   ),
   /** Full distinct replier count (drives a "+N" overflow past the 3 shown). */
   replier_total: z.number().int().nonnegative(),
-  /** Per-viewer unread count for this reply-cluster (#task:1226), scored
-   *  against the viewer's own per-thread `conversation_reads` cursor — the
-   *  SAME source as the Threads list (`ThreadSummary.unread_count`), so the
-   *  inline reply chip ("3 replies · 2 new") and the Threads list never
-   *  diverge. Follow-agnostic: a thread's unread is independent of whether the
-   *  viewer follows it. 0 when the viewer is caught up. */
-  unread_count: z.number().int().nonnegative(),
-  /** First unread message id / seq in this cluster for the viewer, so the chip
-   *  can jump straight to it. Both null when `unread_count` is 0. */
-  first_unread_message_id: z.string().nullable(),
-  first_unread_seq: z.number().int().nonnegative().nullable(),
 });
 export type ReplyBadgeSummary = z.infer<typeof ReplyBadgeSummarySchema>;
 

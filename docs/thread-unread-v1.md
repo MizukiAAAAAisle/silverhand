@@ -1,7 +1,9 @@
 # Thread Unread — per-stream read cursor (v1)
 
-Status: **implemented (backend), in_review**（#task:1226；shiki go 2026-06-25；Cindy spec review PASS 三轮）。Owner: backend=Alice / UI=Norman / review=Cindy。
+Status: **implemented (backend), in_review**（#task:1226；shiki go 2026-06-25；Cindy spec review PASS 三轮；**dogfood 2026-06-25 触发 unread 读模型重构,见 §4.2**）。Owner: backend=Alice / UI=Norman / review=Cindy。
 本 doc 是 #1226 的 canonical 规范；与代码冲突时以本 doc 为准直至代码修正。**Activity/Inbox 是独立后续(`notes`/单独 task),不在本 doc 范围**——本 doc 只交付 per-stream read cursor 底座 + thread 未读三表面。
+
+> **重构提要(2026-06-25,§4.2 为权威):** dogfood 暴露两个 bug——(a) reply chip「N new」在 has-summary 活跃 thread 收 reply 后不刷新;(b) 打开中的 thread panel 收新 reply 不清未读、要关闭重开才清。根因 = **per-viewer 未读是服务端计分的事实,却被塞进乐观补丁的消息窗口缓存里**(`reply_summaries_by_root` / `ThreadSummary` 行级 unread 字段),两处缓存各自漂移。修正 = 把未读抽成**单一 per-conversation per-viewer 未读读模型**(`GET /api/conversations/:id/unread`),chip + Threads list 都读它、只由 `unread_updated` WS 刷新;并把 mark-read 改成 **visible-gated**(打开快照 + panel 打开且 pinned-at-tail 时推进到可见 reply seq)。**§4 中「ReplyBadgeSummary/ThreadSummary 行级带 unread」的旧描述已被 §4.2 取代。**
 
 ## 1. 问题
 
@@ -161,8 +163,8 @@ firstUnread(S) = messages m (同 §3.3 过滤) ORDER BY m.seq ASC LIMIT 1
 
 - `ConversationReadRow`(`schema.ts:428`)**加 `thread_root_id: string | null` 字段**。
 - `ConversationReadRepo` 全部方法 thread-aware:`markRead(.., threadRootId?, snapshotSeq?)`(fallback 见 §3.4);新增 per-stream `unreadCountForStream` / `firstUnreadForStream`;`unreadCountForConversation` 改为 §3.5 的 roll-up。
-- **first-unread DTO 固定输出两个字段(review #4):`first_unread_message_id` + `first_unread_seq`**(§3.6),不要只给 seq——UI 跳转要可靠定位到具体 message,半截 contract 会让前后端各猜一套。`ThreadSummary` 填 `unread_count`(= `thread_unread(R)`)+ 这两个字段。`listChannelThreads`(`message-repo.ts`)带 viewer 计算。
-- **reply chip 同源(review round-3,Finding 1):`ReplyBadgeSummary`(`message.ts`,主线窗口 `reply_summaries_by_root` 的 per-root sidecar)也带 `unread_count` + `first_unread_message_id`(+seq)**,由 `replyBadgeSummariesByRoot(conv, rootIds, viewerUserId)` 复用**同一个 `threadUnreadByRoots`**(follow-agnostic、按 rootIds 批量)算出——chip(主线 root 行内联)与 Threads list 读**同一套真相**,不各算一份。
+- **first-unread DTO 固定输出两个字段(review #4):`first_unread_message_id` + `first_unread_seq`**(§3.6),不要只给 seq——UI 跳转要可靠定位到具体 message,半截 contract 会让前后端各猜一套。**未读不再挂在 `ThreadSummary` / `ReplyBadgeSummary` 行级**(§4.2 重构);per-stream 未读由专用读模型 `streamUnreadForConversation` 统一计算、`unreadCountForStream` / `firstUnreadForStream` 仍是底层原语。
+- ~~reply chip 同源(review round-3,Finding 1):`ReplyBadgeSummary` 也带 `unread_count` + `first_unread_message_id`~~ **作废,见 §4.2。** chip 与 Threads list 现读同一个 conversation-unread 读模型(`GET /api/conversations/:id/unread`,按 root keyed),未读不再随消息窗口或 Threads 列表行下发。`ReplyBadgeSummary` 只保留乐观可维护的 reply 元数据(reply_count / last_reply / repliers);`ThreadSummary` 只保留 `viewer_following` 这一只读 follow 投影。
 - **open-time snapshot 必须由 read 暴露(review round-3,Finding 2):消息窗口响应 `ConversationMessagesDto` 加 `stream_head_seq`**,= 被打开的那条流(无 thread_root_id=主线 / 否则该 cluster)的 `conversation_stream_heads.latest_seq`,**与窗口在同一次 read 捕获**(`routes/conversations.ts` 窗口 callback:head **先于** `listWindow` 取——backend 单写者同步执行,两次读同一逻辑快照;head-before-window ⇒ snapshot = **open-time head**,故 open 后到达、`seq > snapshot` 的**并发**reply 不会被标读)。**`stream_head_seq` 窗口无关**(按 stream 捕获,与 latest/around/before/after 无关),配合 v1 **read-to-clear whole opened thread**(§6):打开 thread 即标到 open-time stream head 全区间,window 只是定位视图、不要求覆盖 first-unread→tail——故唯一保证是「并发尾部不吞」,**不**声称「覆盖窗口内可见尾部」。客户端把它原样回传 `mark-read` 的 `snapshot_seq`,**绝不在 mark 时再查 head、也不从已加载 messages `max(seq)` 推断**(Cindy round-3 实现不变量)。**不在 `ThreadSummary`/`ReplyBadgeSummary` 行级放 head**:mark 永远发生在打开 thread 之后(§6),那一刻窗口响应的 `stream_head_seq` 即唯一权威快照;行级 head 会诱导打开前标读(违 §6)且制造第二个会分叉的快照源。
 - mark-read 路由(`markConversationRead`,`routes/conversations.ts:462`)入参迁为 `{ thread_root_id?, snapshot_seq? }`(§3.4 命名)。**主线(无 thread_root_id):snapshot_seq 可省、fallback mainline head(兼容);thread:snapshot_seq 必传,缺失 → 400;显式 snapshot_seq > 目标 stream head → 400**(§3.4)。`markRead(viewerUserId, conversationId, threadRootId?, snapshotSeq?)`。
 - WS `unread_updated`(viewer-scoped)沿用;thread 未读变化复用同一失效信号。
@@ -175,13 +177,27 @@ per-stream 后,`conversation_reads` 每个 (user, conversation) **不再只有�
 - `mention-cc.ts:337` `viewerHasNotReadMessage` —— 现在 `SELECT last_read_seq ... WHERE user_id=? AND conversation_id=?` 无 stream 条件。必须改成:先取该 message 的 `thread_root_id`(主线消息=NULL),再查**对应 stream 的 cursor**(`thread_root_id IS NULL` 或 `= 该 root`)做比较。否则被检查的消息是 thread reply 时,会错误地拿主线/任意 cursor 判断。
 - 实现期 grep `conversation_reads` 全仓,逐一确认每处都带 stream 限定;新增的 callsite 同此纪律。
 
+### 4.2 单一未读读模型(重构,dogfood 2026-06-25 — 权威)
+
+**问题(根因,非表象):** per-viewer 未读是**服务端计分**的事实——客户端无法乐观推导(它依赖 viewer 的服务端游标 + 全量消息)。最初实现把它内联进**消息窗口缓存**(`reply_summaries_by_root[root].unread_count`)和 **Threads 列表行**(`ThreadSummary.unread_count`),而这两个缓存都被乐观补丁(新 reply 抬 reply_count / repliers)就地改写。结果:① reply chip 的「N new」跟着乐观补丁漂移、不随真实游标刷新;② 打开中的 thread panel 收到新 reply 时,窗口缓存被补丁覆盖但未读不重算,要关闭重开才清。**一个服务端事实坐在两个会各自漂移的乐观缓存里 = 边界错误。**
+
+**修正:把未读从乐观缓存里抽出来,做成单一读模型。**
+
+- **DTO:** `StreamUnreadDto { unread_count, first_unread_message_id, first_unread_seq }` + `ConversationStreamUnreadDto { mainline: StreamUnreadDto, threads: Record<rootId, StreamUnreadDto> }`(`message.ts`)。`threads` **稀疏**——只含 unread>0 的 root(缺失 = 0)。
+- **端点:** `GET /api/conversations/:id/unread`(`canViewConversation` gate,`requireViewerUserId`)→ `ConversationReadRepo.streamUnreadForConversation(conversationId, viewerUserId)`,单条 CTE window-function 查询(同 §3.3 过滤 + per-stream 游标),一次返回主线 + 全部有未读的 thread。
+- **唯一真相,两个消费者:** reply chip(主线 root 行内联)与 Threads list 都从这个读模型按 root 取未读,**同一服务端事实只下发一次**,不再随消息窗口 / Threads 列表行漂移。
+- **客户端缓存边界:** 未读读模型 key = `['conversation', id, 'unread']`,**只由 viewer-scoped `unread_updated` WS 信号失效**,**绝不**进乐观补丁路径。`ReplyBadgeSummary` / `ThreadSummary` 退回只携带乐观可维护的事实(reply_count / last_reply / repliers / viewer_following)。
+- **mark-read visible-gated(配套):** open-time snapshot 仍是权威快照(§3.4);此外 panel 打开且 pinned-at-tail 时,可见 reply 到达即推进 cursor 到该可见 seq(forward-only、inflight 去重、success 后才 arm guard、回前台 `visibilitychange` 重跑 gate)——故「打开中的 thread 收新可见 reply」当场清未读,不必关闭重开。no-swallow 不变量保留(`seq > snapshot` 的非可见尾部不吞)。
+
+§4 中早于本节的「行级 unread 字段」描述均以本节为准。
+
 ## 5. UI 三表面(Norman owns,本节为契约,形态留 mockup)
 
 一把 unread 色 + 权重阶梯,不引第二 hue。
 
 1. **Sidebar**:**单一** channel count = §3.5 的 `channel_unread`(主线 + followed thread)。**不放第二个 dot/数字。**
-2. **Threads list**:followed thread 未读带数字;**非 followed 有新 reply → 弱 dot(降透明度)**。followed/all 区分只在这一层。
-3. **Reply chip(root 行 inline)**:未读态 `3 replies · 2 new`,点击跳 §3.6 的 first-unread。数据源 = 主线窗口 `reply_summaries_by_root[rootId]` 的 `unread_count` + `first_unread_message_id`(§4 reply chip 同源)。点击=打开该 thread 窗口→用窗口响应 `stream_head_seq` 做 mark-read snapshot(§3.4),不在行级或 mark 时另取 head。
+2. **Threads list**:followed thread 未读带数字;**非 followed 有新 reply → 弱 dot(降透明度)**。followed/all 区分只在这一层。未读数来自 §4.2 conversation-unread 读模型(按 root),**不**来自 `ThreadSummary` 行。
+3. **Reply chip(root 行 inline)**:未读态 `3 replies · 2 new`,点击跳 §3.6 的 first-unread。数据源 = §4.2 conversation-unread 读模型 `threads[rootId]` 的 `unread_count` + `first_unread_message_id`(**不再**读 `reply_summaries_by_root[rootId]`)。点击=打开该 thread 窗口→用窗口响应 `stream_head_seq` 做 mark-read snapshot(§3.4),不在行级或 mark 时另取 head。
 
 ## 6. mark-read 触发纪律
 
