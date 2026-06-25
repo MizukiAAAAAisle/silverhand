@@ -154,11 +154,12 @@ export function listActivity(
           m.task_number       AS task_number,
           m.task_status       AS task_status,
           m.task_title        AS task_title,
-          m.task_workspace_id AS workspace_id,
+          COALESCE(m.task_workspace_id, conv.workspace_id) AS workspace_id,
           m.created_at        AS created_at
         FROM messages m
+        JOIN conversations conv ON conv.id = m.conversation_id
        WHERE m.task_number IS NOT NULL
-         AND (@ws IS NULL OR m.task_workspace_id = @ws)
+         AND (@ws IS NULL OR COALESCE(m.task_workspace_id, conv.workspace_id) = @ws)
          AND EXISTS (
            SELECT 1 FROM conversation_users cu
             WHERE cu.conversation_id = m.conversation_id
@@ -188,6 +189,7 @@ export function listActivity(
       conversation_id: t.conversation_id,
       thread_root_id: t.thread_root_id,
       message_id: t.message_id,
+      notification_id: null,
       title: t.task_title ?? '',
       preview: null,
       timestamp: t.created_at,
@@ -213,6 +215,7 @@ export function listActivity(
         conversation_id: n.conversation_id,
         thread_root_id: n.thread_root_id,
         message_id: n.message_id,
+        notification_id: n.id,
         title: n.conversation_title ?? '',
         preview: preview(n.message_content),
         timestamp: n.created_at,
@@ -241,6 +244,7 @@ export function listActivity(
         conversation_id: n.conversation_id ?? '',
         thread_root_id: null,
         message_id: null,
+        notification_id: n.id,
         title: n.conversation_title ?? '',
         preview: agentPreview,
         timestamp: n.created_at,
@@ -351,6 +355,7 @@ export function listActivity(
       conversation_id: s.conversation_id,
       thread_root_id: s.root,
       message_id: s.first_unread_message_id,
+      notification_id: null,
       title: s.conversation_title,
       preview: preview(s.first_unread_content),
       timestamp: s.first_unread_created_at,

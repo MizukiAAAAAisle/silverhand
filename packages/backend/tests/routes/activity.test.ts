@@ -373,6 +373,88 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     expect(ambient[0].message_id).toBe(plainMsg);
     expect(ambient[0].unread_count).toBe(1);
   });
+
+  it('a mention item carries its notification_id as the source_ref-out (§5.3)', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t);
+    const sender = (await firstChannelAgent(t, channelId))!;
+    const msgId = await sendAsAgent(t, channelId, sender, 'look @local-test');
+
+    const notif = t.ctx.db
+      .prepare(
+        `SELECT id FROM notifications
+          WHERE user_id = 'local' AND kind = 'mention_self' AND message_id = ?`,
+      )
+      .get(msgId) as { id: string } | undefined;
+    expect(notif?.id).toBeTruthy();
+
+    const items = await getActivity(t);
+    const mention = items.find(i => i.kind === 'mention');
+    // The renderer marks read BY this id — never by parsing the list key.
+    expect(mention?.notification_id).toBe(notif!.id);
+    expect(mention?.id).not.toBe(mention?.notification_id);
+  });
+
+  it('an agent_start_failed notification enters as a directed agent_failed item with notification_id', async () => {
+    t = buildTestApp();
+    const { workspaceId, channelId } = await createWorkspaceChannel(t);
+    // Seed the notification the production path would emit (a real spawn failure
+    // is awkward to force here; the read-model reads notifications by kind).
+    t.ctx.db
+      .prepare(
+        `INSERT INTO notifications
+           (id, kind, user_id, agent_id, workspace_id, conversation_id,
+            message_id, payload, read_at, created_at)
+         VALUES (@id, 'agent_start_failed', 'local', NULL, @ws, @conv,
+            NULL, @payload, NULL, @now)`,
+      )
+      .run({
+        id: 'notif-af-1',
+        ws: workspaceId,
+        conv: channelId,
+        payload: JSON.stringify({
+          reason: 'runtime_start_failed',
+          error: 'spawn ENOENT',
+          agent_name: 'beth',
+        }),
+        now: Date.now(),
+      });
+
+    const items = await getActivity(t);
+    const failed = items.find(i => i.kind === 'agent_failed');
+    expect(failed).toBeTruthy();
+    expect(failed).toMatchObject({
+      kind: 'agent_failed',
+      salience: 'directed',
+      notification_id: 'notif-af-1',
+      message_id: null,
+    });
+    // Preview surfaces the failure summary from the payload.
+    expect(failed!.preview).toContain('beth');
+  });
+
+  it('unread and task items have a null notification_id (cleared via cursor / task_status)', async () => {
+    t = buildTestApp();
+    const { workspaceId, channelId } = await createWorkspaceChannel(t);
+    const sender = (await firstChannelAgent(t, channelId))!;
+    const taskMsg = await sendAsAgent(t, channelId, sender, 'task seed');
+    t.ctx.db
+      .prepare(
+        `UPDATE messages SET task_number = 20, task_status = 'in_review',
+            task_assignee_user_id = 'someone-else', task_workspace_id = ?,
+            task_title = 't20' WHERE id = ?`,
+      )
+      .run(workspaceId, taskMsg);
+    await sendAsAgent(t, channelId, sender, 'plain ambient');
+    await http(t).put(`/api/conversations/${channelId}/attention-preference`, {
+      mode: 'all',
+    });
+
+    const items = await getActivity(t);
+    for (const i of items.filter(x => x.kind === 'unread' || x.kind === 'task')) {
+      expect(i.notification_id).toBeNull();
+    }
+  });
 });
 
 /** Resolve the first agent member of a channel (the workspace snapshot), so

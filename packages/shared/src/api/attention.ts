@@ -86,9 +86,20 @@ export type ActivityItemKind = (typeof ACTIVITY_ITEM_KINDS)[number];
 /** One row in the Activity list. Heterogeneous by `kind`: directed
  *  single-event items (`mention` / `agent_failed` / `task`) anchor on one
  *  message/task; an `unread` item is a per-STREAM aggregate (§7.3) carrying a
- *  count and anchored at its first-unread message. */
+ *  count and anchored at its first-unread message.
+ *
+ *  §5.3 answerability — every item's eliminate route (source_ref-out) is
+ *  reconstructable from EXPLICIT fields here; `id` is a render list key ONLY and
+ *  MUST NOT be parsed for source routing:
+ *    - `mention` / `agent_failed` → set `notifications.read_at` by
+ *      `notification_id`.
+ *    - `unread`                   → advance the stream cursor (`observe`) keyed
+ *      by `conversation_id` + `thread_root_id`.
+ *    - `task`                     → resolve-cleared via `task_status` migration
+ *      (keyed by `workspace_id` + `task_number`); NO mark-read. */
 export const ActivityItemDtoSchema = z.object({
-  /** Stable synthesized id for client list keys (not a stored row id). */
+  /** Stable synthesized list key for the client (NOT a stored row id, and NOT a
+   *  source_ref — never parse it; use the explicit source fields below). */
   id: z.string(),
   kind: z.enum(ACTIVITY_ITEM_KINDS),
   salience: z.enum(ACTIVITY_SALIENCES),
@@ -104,6 +115,12 @@ export const ActivityItemDtoSchema = z.object({
    *  that is both task-anchor and unread yields ONE item, the task), and
    *  `task_number` is the resolve-cleared handle. */
   message_id: z.string().nullable(),
+  /** The notification this item eliminates through (`notifications.read_at`).
+   *  Set for `mention` / `agent_failed`; NULL for `unread` / `task` (which clear
+   *  via cursor / `task_status`). This is the source_ref-out for directed
+   *  notification-backed claims — the renderer marks read BY this id, never by
+   *  parsing `id`. */
+  notification_id: z.string().nullable(),
   /** 来源标识: the conversation (channel/DM) title. */
   title: z.string(),
   /** Short preview of the anchor (message excerpt / failure summary). */
