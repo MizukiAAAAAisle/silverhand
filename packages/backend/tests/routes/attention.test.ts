@@ -96,21 +96,62 @@ describe('channel attention preference routes (#task:1227 ②a)', () => {
     expect(res.status).toBe(400);
   });
 
-  it('404s for a thread id (channel-like only — a thread ambient is follow-driven)', async () => {
+  it('404s for non-regular-channel conversations (dm_channel + thread)', async () => {
     t = buildTestApp();
-    const { channelId } = await createWorkspaceChannel(t);
+    const { workspaceId, channelId } = await createWorkspaceChannel(t);
     const conversations = new ConversationRepo(t.ctx.db);
+    const workspacePath = (
+      t.ctx.db
+        .prepare(`SELECT workspace_path FROM conversations WHERE id = ?`)
+        .get(channelId) as any
+    ).workspace_path as string;
     const thread = conversations.insertThread({ channelId, title: 'child' });
+    const dm = conversations.insertDmChannel({
+      workspaceId,
+      workspacePath,
+      title: 'dm',
+    });
 
-    const get = await http(t).get(
-      `/api/conversations/${thread.id}/attention-preference`,
+    // A DM's unread is directed-grade (always enters, §5.1) and a thread's
+    // ambient is follow-driven — neither has a channel ambient preference.
+    for (const id of [thread.id, dm.id]) {
+      const get = await http(t).get(
+        `/api/conversations/${id}/attention-preference`,
+      );
+      expect(get.status).toBe(404);
+      const put = await http(t).put(
+        `/api/conversations/${id}/attention-preference`,
+        { mode: 'all' },
+      );
+      expect(put.status).toBe(404);
+    }
+  });
+
+  it('DB trigger rejects a pref on a dm_channel / thread (fail-loud backstop)', async () => {
+    t = buildTestApp();
+    const { workspaceId, channelId } = await createWorkspaceChannel(t);
+    const conversations = new ConversationRepo(t.ctx.db);
+    const workspacePath = (
+      t.ctx.db
+        .prepare(`SELECT workspace_path FROM conversations WHERE id = ?`)
+        .get(channelId) as any
+    ).workspace_path as string;
+    const thread = conversations.insertThread({ channelId, title: 'child' });
+    const dm = conversations.insertDmChannel({
+      workspaceId,
+      workspacePath,
+      title: 'dm',
+    });
+
+    const insert = t.ctx.db.prepare(
+      `INSERT INTO channel_attention_preferences
+         (user_id, conversation_id, mode, updated_at)
+       VALUES (?, ?, 'all', 1)`,
     );
-    expect(get.status).toBe(404);
-    const put = await http(t).put(
-      `/api/conversations/${thread.id}/attention-preference`,
-      { mode: 'all' },
-    );
-    expect(put.status).toBe(404);
+    // A regular channel is accepted; the non-channel kinds abort.
+    expect(() => insert.run('local', channelId)).not.toThrow();
+    expect(() => insert.run('local', thread.id)).toThrow(/regular channel/);
+    expect(() => insert.run('local', dm.id)).toThrow(/regular channel/);
   });
 
   it('404s for an unknown conversation id', async () => {

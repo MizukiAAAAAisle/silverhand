@@ -12,9 +12,10 @@ import {
  * `所有消息 / 仅提及` control), the policy input to `enter()` (§6). Everything
  * else Attention surfaces is a projection, never stored.
  *
- * The table stores only an explicit deviation; absence of a row resolves to the
- * default (`DEFAULT_CHANNEL_ATTENTION_MODE` = ambient off). `getEffectiveMode`
- * applies that default server-side so callers never branch on "unset".
+ * The table stores the viewer's explicit choice (which MAY equal the default —
+ * we do not delete-on-default); absence of a row resolves to the default
+ * (`DEFAULT_CHANNEL_ATTENTION_MODE` = ambient off). `getEffectiveMode` applies
+ * that default server-side so callers never branch on "unset".
  *
  * INVARIANT (§5.2 delivery ⊥ attention): this module never reads or writes
  * `thread_followers` / wake / delivery. It is pure attention-decision storage.

@@ -35,9 +35,12 @@ export function createAttentionApp(deps: AttentionRouteDeps): Hono<AppEnv> {
   app.get(apiPaths.conversationAttentionPreference(':id'), c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
-    // Channel-like only — a thread's ambient default is follow-driven delivery,
-    // not a channel preference; getChannelLike returns null (→ 404) for threads.
-    const channel = conversations.getChannelLike(id);
+    // Regular channel only. A DM's unread is directed-grade (always enters
+    // Activity, §5.1) and a thread's ambient default is follow-driven delivery
+    // — neither has a channel ambient preference. getChannel returns null
+    // (→ 404) for dm_channel and thread alike; a DB trigger is the fail-loud
+    // backstop against any non-route writer.
+    const channel = conversations.getChannel(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
     if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
       return c.json({ error: 'forbidden' }, 403);
@@ -63,7 +66,7 @@ export function createAttentionApp(deps: AttentionRouteDeps): Hono<AppEnv> {
   app.put(apiPaths.conversationAttentionPreference(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
-    const channel = conversations.getChannelLike(id);
+    const channel = conversations.getChannel(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
     if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
       return c.json({ error: 'forbidden' }, 403);

@@ -307,9 +307,14 @@ export const migrations: Migration[] = [
     //   'mentions' = ambient off → ambient unread stays as in-place hint only;
     //                directed (@me / task / DM) still enters, unconditionally (§6).
     // Absence of a row = the default (`'mentions'`, ambient off — §6 channel
-    // default); the table stores only the viewer's explicit deviation. Scope is
-    // channel-like (the route's getChannelLike rejects threads — a thread's
-    // ambient default is follow-driven delivery, not a channel pref).
+    // default). The table stores the viewer's explicit choice (which MAY equal
+    // the default — we do not delete-on-default); reads resolve absence to the
+    // default. Scope is REGULAR channel only: a DM's unread is directed-grade
+    // (always enters, §5.1) and a thread's ambient is follow-driven delivery, so
+    // neither carries this preference. The route gates with getChannel (kind =
+    // 'channel'); the triggers below are the DB fail-loud backstop so no
+    // repo/test can write a pref for a dm_channel or thread out from under the
+    // route.
     //
     // delivery ⊥ attention (§5.2): this never touches thread_followers/wake.
     up: `
@@ -323,6 +328,31 @@ export const migrations: Migration[] = [
 
       CREATE INDEX idx_channel_attention_prefs_conversation
         ON channel_attention_preferences(conversation_id);
+
+      -- Regular-channel-only invariant (DB backstop; route pre-validates with a
+      -- friendly 404). A pref on a dm_channel/thread is meaningless dead state
+      -- and would leave ②c's enter() ambiguous — fail loud instead.
+      CREATE TRIGGER channel_attention_prefs_channel_only_insert
+        BEFORE INSERT ON channel_attention_preferences
+        BEGIN
+          SELECT CASE
+            WHEN COALESCE(
+              (SELECT kind FROM conversations WHERE id = NEW.conversation_id), ''
+            ) != 'channel'
+            THEN RAISE(ABORT, 'channel_attention_preferences.conversation_id must reference a regular channel')
+          END;
+        END;
+
+      CREATE TRIGGER channel_attention_prefs_channel_only_update
+        BEFORE UPDATE OF conversation_id ON channel_attention_preferences
+        BEGIN
+          SELECT CASE
+            WHEN COALESCE(
+              (SELECT kind FROM conversations WHERE id = NEW.conversation_id), ''
+            ) != 'channel'
+            THEN RAISE(ABORT, 'channel_attention_preferences.conversation_id must reference a regular channel')
+          END;
+        END;
     `,
   },
 ];
