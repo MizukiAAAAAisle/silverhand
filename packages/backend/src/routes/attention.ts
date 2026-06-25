@@ -1,0 +1,90 @@
+// Attention bounded context (#task:1227, docs/activity-lifecycle-v1.md). The
+// read-side context that projects the human's "queue waiting on me"; the
+// user-facing surface is called Activity. v1 (②a) exposes the ONE write-side
+// aggregate Attention owns: the per-(viewer, channel) ambient preference (the
+// channel `所有消息 / 仅提及` control). The Activity list query (`listActivity`,
+// ②c) will mount here too, once #1226's per-stream cursor is dogfood-stable.
+//
+// Auth/principal is inherited from the parent api app middleware.
+import { Hono } from 'hono';
+import {
+  apiPaths,
+  SetChannelAttentionPreferenceInputSchema,
+  type ChannelAttentionPreferenceDto,
+} from '@silverhand/shared';
+import type { AppEnv } from '../auth/principal.js';
+import type { BackendContext } from '../context.js';
+import type { ConversationRepo } from '../repos/conversation-repo.js';
+import type { ChannelAttentionPreferenceRepo } from '../repos/channel-attention-preference-repo.js';
+import { getUserPrincipal, requireViewerUserId } from '../auth/principal.js';
+import { canViewConversation } from '../permissions.js';
+
+export interface AttentionRouteDeps {
+  ctx: BackendContext;
+  conversations: ConversationRepo;
+  channelAttentionPrefs: ChannelAttentionPreferenceRepo;
+}
+
+export function createAttentionApp(deps: AttentionRouteDeps): Hono<AppEnv> {
+  const app = new Hono<AppEnv>();
+  const { ctx, conversations, channelAttentionPrefs } = deps;
+
+  // GET the viewer's effective ambient preference for one channel. The default
+  // is applied server-side (§6 channel default = ambient off), so the response
+  // `mode` is always resolved — the client never branches on "unset".
+  app.get(apiPaths.conversationAttentionPreference(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'channel id required' }, 400);
+    // Channel-like only — a thread's ambient default is follow-driven delivery,
+    // not a channel preference; getChannelLike returns null (→ 404) for threads.
+    const channel = conversations.getChannelLike(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const viewerUserId = requireViewerUserId(c);
+    const mode = channelAttentionPrefs.getEffectiveMode(viewerUserId, channel.id);
+    const dto: ChannelAttentionPreferenceDto = {
+      conversation_id: channel.id,
+      mode,
+    };
+    return c.json(dto);
+  });
+
+  // PUT the viewer's ambient preference for one channel. This is the ONLY
+  // surface that writes attention state (§5.2); it never touches
+  // delivery/follow. Personal state for a channel the viewer can view, so
+  // membership (canViewConversation) is the gate — no owner/admin role needed.
+  //
+  // No invalidation event is published yet: nothing reads this preference until
+  // `listActivity` (②c) lands. When it does, a viewer-scoped Activity
+  // invalidation belongs here (the channel unread roll-up / sidebar badge is
+  // pref-INDEPENDENT — §8 — so `unread_updated` is deliberately NOT emitted).
+  app.put(apiPaths.conversationAttentionPreference(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'channel id required' }, 400);
+    const channel = conversations.getChannelLike(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const viewerUserId = requireViewerUserId(c);
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = SetChannelAttentionPreferenceInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const row = channelAttentionPrefs.upsert({
+      viewerUserId,
+      conversationId: channel.id,
+      mode: parsed.data.mode,
+    });
+    const dto: ChannelAttentionPreferenceDto = {
+      conversation_id: row.conversation_id,
+      mode: row.mode,
+    };
+    return c.json(dto);
+  });
+
+  return app;
+}

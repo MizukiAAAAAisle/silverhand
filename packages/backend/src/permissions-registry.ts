@@ -168,6 +168,11 @@ export const NON_GOVERNANCE_MUTATING_ROUTES: readonly NonGovernanceRouteDecl[] =
     reason: 'per-user read state — view gate, not governance',
   },
   {
+    method: 'PUT',
+    path: '/api/conversations/:id/attention-preference',
+    reason: 'per-viewer ambient attention preference (#task:1227) — personal view state, conversation membership gate (canViewConversation), not governance',
+  },
+  {
     method: 'POST',
     path: '/api/channels/:id/threads/:rootMessageId/follow',
     reason: 'thread follow subscription — current-viewer delivery state, view gate, not governance',

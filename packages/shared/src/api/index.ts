@@ -10,6 +10,7 @@ export * from './attachment.js';
 export * from './reactions.js';
 export * from './message.js';
 export * from './thread-summary.js';
+export * from './attention.js';
 export * from './task.js';
 export * from './internal-agent.js';
 export * from './notification.js';

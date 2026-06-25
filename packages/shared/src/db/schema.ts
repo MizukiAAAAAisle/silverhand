@@ -436,6 +436,18 @@ export interface ConversationReadRow {
   read_at: number;
 }
 
+/** Per-(viewer, channel) ambient attention preference (#task:1227,
+ *  docs/activity-lifecycle-v1.md §9.1). The Attention bounded context's ONLY
+ *  owned write-side aggregate. `mode` 'all' = ambient on, 'mentions' = ambient
+ *  off; absence of a row = default `'mentions'`. Channel-scoped (channel-like);
+ *  never written for threads (their ambient default is follow-driven). */
+export interface ChannelAttentionPreferenceRow {
+  user_id: string;
+  conversation_id: string;
+  mode: 'all' | 'mentions';
+  updated_at: number;
+}
+
 export interface AgentInboxRow {
   id: number;
   conversation_id: string;

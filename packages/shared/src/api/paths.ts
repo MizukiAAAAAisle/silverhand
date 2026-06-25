@@ -170,6 +170,13 @@ export const apiPaths = {
    *  ONLY by the viewer-scoped `unread_updated` WS signal — never inferred from
    *  message events (unread is server-scored). Human viewer-scoped. */
   conversationUnread: (id: string) => `/api/conversations/${id}/unread`,
+  /** Per-(viewer, channel) ambient attention preference (#task:1227,
+   *  docs/activity-lifecycle-v1.md §9.3). GET resolves the effective mode
+   *  (default applied when unset); PUT is the ONLY surface that writes attention
+   *  state (the channel `所有消息 / 仅提及` control) — it never touches
+   *  delivery/follow. Channel-like only (threads 404). Human viewer-scoped. */
+  conversationAttentionPreference: (id: string) =>
+    `/api/conversations/${id}/attention-preference`,
   conversationLogDebug: (id: string) => `/api/conversations/${id}/log-debug`,
   conversationAgentActivity: (id: string, agentId: string) =>
     `/api/conversations/${id}/agents/${agentId}/activity`,

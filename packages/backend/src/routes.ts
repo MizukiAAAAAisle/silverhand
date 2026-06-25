@@ -14,6 +14,7 @@ import { NotificationRepo } from './repos/notification-repo.js';
 import { SavedMessageRepo } from './repos/saved-message-repo.js';
 import { SearchRepo } from './repos/search-repo.js';
 import { ConversationReadRepo } from './repos/conversation-read-repo.js';
+import { ChannelAttentionPreferenceRepo } from './repos/channel-attention-preference-repo.js';
 import { ConversationInboxRepo } from './repos/conversation-inbox-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
@@ -36,6 +37,7 @@ import {
   createConversationMessagingApp,
   createConversationRuntimeApp,
 } from './routes/conversations.js';
+import { createAttentionApp } from './routes/attention.js';
 import { MembershipService } from './services/membership-service.js';
 import { UserRepo } from './repos/user-repo.js';
 import { hostRuntimeDisabledResponse } from './routes/responses.js';
@@ -299,6 +301,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   const conversationInboxes = new ConversationInboxRepo(ctx.db);
   const notifications = new NotificationRepo(ctx.db);
   const conversationReads = new ConversationReadRepo(ctx.db);
+  const channelAttentionPrefs = new ChannelAttentionPreferenceRepo(ctx.db);
   const conversationEvents = new ConversationEventRepo(ctx.db);
   const sort = new SortRepo(ctx.db);
   const users = new UserRepo(ctx.db);
@@ -445,6 +448,13 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   app.route(
     '/',
     createConversationReadApp({ ctx, conversations, workspaces, messages, conversationReads }),
+  );
+
+  // Attention bounded context (#task:1227): per-(viewer, channel) ambient
+  // preference (GET/PUT). The Activity list query mounts here once ②c lands.
+  app.route(
+    '/',
+    createAttentionApp({ ctx, conversations, channelAttentionPrefs }),
   );
 
   // Conversation membership routes.

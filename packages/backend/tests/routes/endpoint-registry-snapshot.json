@@ -47,6 +47,8 @@
   "GET /api/conversations/:id/ref",
   "GET /api/conversations/:id/log-debug",
   "POST /api/conversations/:id/log-debug",
+  "GET /api/conversations/:id/attention-preference",
+  "PUT /api/conversations/:id/attention-preference",
   "GET /api/conversations/:id/members",
   "POST /api/conversations/:id/members",
   "DELETE /api/conversations/:id/members/agents/:agentId",

@@ -291,6 +291,40 @@ export const migrations: Migration[] = [
            AND sh.thread_root_id IS NOT NULL;
     `,
   },
+  {
+    version: 52,
+    name: 'channel_attention_preferences',
+    // Activity / Attention bounded context (#task:1227, docs/activity-lifecycle-v1.md
+    // §9.1). The ONLY new write-side aggregate Attention owns: a per-(viewer,
+    // channel) ambient preference — the policy input to `enter()` (§6). It is a
+    // user DECISION (the channel `所有消息 / 仅提及` control), not a derived fact,
+    // so it legitimately gets its own table (建表准入测试, §4.2). Everything else
+    // Attention surfaces is a projection (cursor read-model / notifications /
+    // tasks), never stored.
+    //
+    // `mode`:
+    //   'all'      = ambient on  → channel mainline ambient unread enters Activity
+    //   'mentions' = ambient off → ambient unread stays as in-place hint only;
+    //                directed (@me / task / DM) still enters, unconditionally (§6).
+    // Absence of a row = the default (`'mentions'`, ambient off — §6 channel
+    // default); the table stores only the viewer's explicit deviation. Scope is
+    // channel-like (the route's getChannelLike rejects threads — a thread's
+    // ambient default is follow-driven delivery, not a channel pref).
+    //
+    // delivery ⊥ attention (§5.2): this never touches thread_followers/wake.
+    up: `
+      CREATE TABLE channel_attention_preferences (
+        user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        mode             TEXT NOT NULL CHECK (mode IN ('all', 'mentions')),
+        updated_at       INTEGER NOT NULL,
+        PRIMARY KEY (user_id, conversation_id)
+      );
+
+      CREATE INDEX idx_channel_attention_prefs_conversation
+        ON channel_attention_preferences(conversation_id);
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =
