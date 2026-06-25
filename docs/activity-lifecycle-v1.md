@@ -255,7 +255,7 @@ Activity 是 **viewer-scoped read-model**,所以它的三源失效信号统一�
 
 ### 13.3 控件表面(write controls — 在哪设置)
 
-- **channel `所有消息 / 仅提及`** = **v1 唯一会写 attention state 的表面** → 只写 `ChannelAttentionPreference`(§9.1)。`所有消息` = ambient on、`仅提及` = ambient off(但 @我 · task 经 directed **永远进**、不受此开关管,§6)。内部模型 = 一个 ambient on/off,用户措辞 = 所有消息 / 仅提及(弃用内部词)。位置:channel header 菜单 / 设置。**`静音` / Mute = v2**(§15)。
+- **channel `所有消息 / 仅提及`** = **v1 唯一会写 attention state 的表面** → 只写 `ChannelAttentionPreference`(§9.1)。`所有消息` = ambient on、`仅提及` = ambient off(但 @我 · task 经 directed **永远进**、不受此开关管,§6)。内部模型 = 一个 ambient on/off,用户措辞 = 所有消息 / 仅提及(弃用内部词)。**位置:sidebar channel context menu only(仅 `kind==='channel'`,DM/thread 不显示;v1 不再常占 header,也不进 channel settings modal)** —— 它是 **per-viewer 个人 view-state**,不是 channel 级共享配置,放进 settings modal 会被误读成对所有成员生效(shiki/Cindy/Alice 2026-06-26 收敛);settings/gear 仍只承载 rename/archive 等共享配置。**`静音` / Mute = v2**(§15)。
 - **thread `Follow / Unfollow`** = 写 **delivery**(§5.2),**非 attention**;进不进 Activity 由 follow 派生。v1 二态(镜像 Slack)。**不做**「从 Activity 隐藏」第二控件(attention-only override = v2)。
 - **边界**:attention-write 表面 = channel pref only;follow = delivery-write;**互不写对方**(§5.2 硬不变量)。
 
