@@ -179,6 +179,12 @@ export const apiPaths = {
    *  viewer-scoped. */
   conversationAttentionPreference: (id: string) =>
     `/api/conversations/${id}/attention-preference`,
+  /** The viewer's Activity list (#task:1227, docs/activity-lifecycle-v1.md §9.3)
+   *  — the `listActivity` projection (directed mentions/tasks ∪ positional
+   *  unread ∩ `enter()`), already deduped + salience-sorted. Read-only,
+   *  human viewer-scoped. Optional `?workspace_id=` filters to one workspace
+   *  (the data model is global; v1 UI is per-workspace). */
+  activity: '/api/activity',
   conversationLogDebug: (id: string) => `/api/conversations/${id}/log-debug`,
   conversationAgentActivity: (id: string, agentId: string) =>
     `/api/conversations/${id}/agents/${agentId}/activity`,

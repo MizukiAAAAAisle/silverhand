@@ -47,3 +47,79 @@ export const SetChannelAttentionPreferenceInputSchema = z.object({
 export type SetChannelAttentionPreferenceInput = z.infer<
   typeof SetChannelAttentionPreferenceInputSchema
 >;
+
+// ───────────────────────────── Activity list (②c) ─────────────────────────────
+//
+// `GET /api/activity` returns the viewer's Activity list — the projection of
+// `listActivity(viewer, scope)` (§9.2). Pure read side: every item is computed
+// from an existing source (per-stream cursor read-model / `notifications` /
+// `messages.task_*`), NEVER from an Attention-owned copy. The server returns the
+// list already `enter()`-filtered (§6), per-(viewer, message) de-duplicated (§7),
+// and salience-sorted (§13.2: directed tier first, most-recent-first within tier).
+
+/**
+ * Salience tier (§5.2) — derived, never stored. `directed` items are visually
+ * stronger and sort above `ambient`. DM unread is positional by mechanism but
+ * `directed`-grade by salience (§5.1: "永远进, directed-grade").
+ */
+export const ACTIVITY_SALIENCES = ['directed', 'ambient'] as const;
+export type ActivitySalience = (typeof ACTIVITY_SALIENCES)[number];
+
+/**
+ * The claim class of an Activity item — drives the icon and the eliminate route
+ * (§5.3). `mention` / `agent_failed` clear via `notifications.read_at`; `unread`
+ * clears via the stream cursor (`observe`); `task` is resolve-cleared (no
+ * `Mark as read`, its disappearance is anchored on `task_status`).
+ *   - `mention`      = a `mention_self` notification (directed @me).
+ *   - `agent_failed` = an `agent_start_failed` notification (the viewer's agent).
+ *   - `task`         = a task assigned to the viewer that needs action.
+ *   - `unread`       = a positional stream's ambient/DM unread aggregate.
+ */
+export const ACTIVITY_ITEM_KINDS = [
+  'mention',
+  'agent_failed',
+  'task',
+  'unread',
+] as const;
+export type ActivityItemKind = (typeof ACTIVITY_ITEM_KINDS)[number];
+
+/** One row in the Activity list. Heterogeneous by `kind`: directed
+ *  single-event items (`mention` / `agent_failed` / `task`) anchor on one
+ *  message/task; an `unread` item is a per-STREAM aggregate (§7.3) carrying a
+ *  count and anchored at its first-unread message. */
+export const ActivityItemDtoSchema = z.object({
+  /** Stable synthesized id for client list keys (not a stored row id). */
+  id: z.string(),
+  kind: z.enum(ACTIVITY_ITEM_KINDS),
+  salience: z.enum(ACTIVITY_SALIENCES),
+  /** Source routing (the §5.3 source_ref). */
+  workspace_id: z.string(),
+  conversation_id: z.string(),
+  /** Which stream: NULL = mainline / channel-level; non-NULL = that reply
+   *  cluster. Carried for `mention` items too, so routing reaches the thread. */
+  thread_root_id: z.string().nullable(),
+  /** The anchor message the item points at. NULL for `agent_failed` (no message)
+   *  and `task` (anchored on the task, see `task_number`). */
+  message_id: z.string().nullable(),
+  /** 来源标识: the conversation (channel/DM) title. */
+  title: z.string(),
+  /** Short preview of the anchor (message excerpt / failure summary). */
+  preview: z.string().nullable(),
+  /** Recency used for the within-tier sort (epoch ms). */
+  timestamp: z.number(),
+  /** `unread` items: count of ambient unread in the stream, already net of any
+   *  directed claims in it (§8 `positional \ directed`). NULL for directed
+   *  single-event items. */
+  unread_count: z.number().int().nonnegative().nullable(),
+  /** `task` items only. */
+  task_number: z.number().int().nullable(),
+  task_status: z.string().nullable(),
+});
+export type ActivityItemDto = z.infer<typeof ActivityItemDtoSchema>;
+
+/** `GET /api/activity` response. `items` is the fully-resolved list (filtered,
+ *  deduped, sorted) — the client renders it as-is and never re-scores. */
+export const ListActivityDtoSchema = z.object({
+  items: z.array(ActivityItemDtoSchema),
+});
+export type ListActivityDto = z.infer<typeof ListActivityDtoSchema>;

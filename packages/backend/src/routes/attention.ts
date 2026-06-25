@@ -11,13 +11,15 @@ import {
   apiPaths,
   SetChannelAttentionPreferenceInputSchema,
   type ChannelAttentionPreferenceDto,
+  type ListActivityDto,
 } from '@silverhand/shared';
 import type { AppEnv } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { ChannelAttentionPreferenceRepo } from '../repos/channel-attention-preference-repo.js';
 import { getUserPrincipal, requireViewerUserId } from '../auth/principal.js';
-import { canViewConversation } from '../permissions.js';
+import { canViewConversation, canViewOwnedState } from '../permissions.js';
+import { listActivity } from '../read-model/activity.js';
 
 export interface AttentionRouteDeps {
   ctx: BackendContext;
@@ -86,6 +88,22 @@ export function createAttentionApp(deps: AttentionRouteDeps): Hono<AppEnv> {
       conversation_id: row.conversation_id,
       mode: row.mode,
     };
+    return c.json(dto);
+  });
+
+  // GET the viewer's Activity list (②c, §9.2 `listActivity`). Pure read-side
+  // projection — directed mentions/tasks ∪ positional unread ∩ `enter()`, already
+  // deduped (§7) + salience-sorted (§13.2). The Activity list is the viewer's
+  // own state (like the message-unread summary), so the gate is owned-state
+  // (canViewOwnedState), not a conversation membership check — the read-model
+  // already scopes every row to conversations the viewer belongs to.
+  app.get(apiPaths.activity, c => {
+    const viewerUserId = requireViewerUserId(c);
+    if (!canViewOwnedState(ctx, getUserPrincipal(c), viewerUserId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const workspaceId = c.req.query('workspace_id') || undefined;
+    const dto: ListActivityDto = listActivity(ctx, { viewerUserId, workspaceId });
     return c.json(dto);
   });
 

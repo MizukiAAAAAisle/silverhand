@@ -1,7 +1,10 @@
 [
+  "ACTIVITY_ITEM_KINDS",
+  "ACTIVITY_SALIENCES",
   "AVATAR_ALLOWED_CONTENT_TYPES",
   "AVATAR_MAX_BYTES",
   "AVATAR_MAX_SIZE_LABEL",
+  "ActivityItemDtoSchema",
   "AddConversationMemberByHandleInputSchema",
   "AddConversationMemberByIdInputSchema",
   "AddConversationMemberInputSchema",
@@ -117,6 +120,7 @@
   "HumanUpdateTaskStatusInputSchema",
   "INVALID_REACTION_CODE",
   "LegacySendMessageTargetSchema",
+  "ListActivityDtoSchema",
   "ListChannelThreadsResponseSchema",
   "ListTasksQuerySchema",
   "MAX_REACTION_EMOJI_LENGTH",
