@@ -468,6 +468,29 @@ export function applyReactionChangedToThreadRootCache(
   );
 }
 
+/** Whether a live reply to `rootId` is SEEDING a reply summary the optimistic
+ *  bump can't produce (#task:1226 surface 3). True when the root is in a loaded
+ *  page, the backend ships the `reply_summaries_by_root` sidecar (object
+ *  present), but this root has no entry yet — it had zero replies at fetch time.
+ *  In that case `patchReplySummary` can't fabricate a summary (unread is
+ *  per-viewer / server-scored), so the chip would be stuck count-only with no
+ *  "N new"; the caller refetches the window to get the server summary incl.
+ *  `unread_count`. False when a summary already exists (keep the optimistic
+ *  patch + WS reconcile) or the sidecar isn't shipped (count-only by design).
+ *  Pure so the seeding transition is unit-tested without realtime wiring. */
+export function replyClusterNeedsSummarySeed(
+  cache: MessagesCache | undefined,
+  rootId: string,
+): boolean {
+  if (!cache) return false;
+  return cache.pages.some(
+    p =>
+      p.messages.some(m => m.id === rootId) &&
+      p.reply_summaries_by_root !== undefined &&
+      p.reply_summaries_by_root[rootId] === undefined,
+  );
+}
+
 /** Adjust a root's reply-count badge in the main-stream cache by `delta`.
  *
  *  The main window (cut3-6) excludes reply rows but carries a
@@ -764,9 +787,33 @@ export function useChannelMessages(
           // system) and `useThreadRoot`'s live bump. Either way the row
           // never appends to the main stream.
           if (msg.from_kind !== 'system') {
-            qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
-              bumpReplyCountInCache(prev, msg.thread_root_id!, 1, msg),
+            // A reply SEEDING a root that has no enriched summary yet (the root
+            // is in a loaded page, the backend ships the `reply_summaries_by_root`
+            // sidecar, but this root has no entry — it had zero replies at fetch
+            // time) can't get its summary from the optimistic bump:
+            // `patchReplySummary` never fabricates one (unread is per-viewer,
+            // server-scored), so the reply chip would be stuck count-only with no
+            // "N new" (#task:1226 surface 3 dogfood bug). Detect that transition
+            // and refetch the window so the server returns the populated summary
+            // incl. `unread_count`. When a summary already exists we keep the
+            // optimistic patch below + the `unread_updated` WS reconcile (no
+            // refetch). `invalidateMessageUnreadQueries` only touches the sidebar
+            // roll-up, not this window — which is why sidebar/Threads list were
+            // already correct while the chip wasn't.
+            const rootId = msg.thread_root_id!;
+            const prevCache = qc.getQueryData<MessagesCache>(
+              messagesKey(channelId),
             );
+            const needsSummarySeed = replyClusterNeedsSummarySeed(
+              prevCache,
+              rootId,
+            );
+            qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
+              bumpReplyCountInCache(prev, rootId, 1, msg),
+            );
+            if (needsSummarySeed) {
+              void qc.invalidateQueries({ queryKey: messagesKey(channelId) });
+            }
           }
           return;
         }
