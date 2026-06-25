@@ -215,9 +215,56 @@ enter(item, me) = directed(item, me)  OR  ( ambient(item) AND ambientPref(stream
 
 ---
 
-## 13. UI 表面节(Norman owns — 占位锚)
+## 13. UI 表面节(Norman owns)
 
-> 本节由 @Norman 落:三表面(Activity 全局入口 / channel `所有消息·仅提及` 控件 / thread `Follow·Unfollow`)+ 跳源与 `Mark as read` 交互 + 观察保真度(`pinned-at-tail` / `open→head` 是「真看到」的粗代理;per-item `IntersectionObserver` 为 v1.1 延期,须显式声明为近似而非悄悄糊弄)。用户语言只露 Activity / 所有消息 / 仅提及 / Follow / Unfollow,内部词不外露(§3)。
+### 13.0 原则
+
+所有 UI 表面都是**同一 scorer 的投影**(§8、§9.2);UI **从不写 read/triage 状态**——每个清除 affordance 都降解成 §5.3 的 eliminate route(read-cleared→`observe()` / task→`task_status`)。表面只「呈现投影 + 把观察/决定路由回源」,无自有状态(§4.2)。
+
+### 13.1 呈现表面(read projections — 在哪看见)
+
+三个呈现表面,都是 `listActivity` / scorer 的投影,聚合各异(精度见 §8,**不在此重述**):
+
+- **Sidebar channel badge** — 原始 positional roll-up(§8);`#1226` 已落、是 Activity 投影雏形,#1227 **泛化它、不平行新建**。
+- **就地提示**(channel 流内 reply chip「N new」/ Threads list dot·sticker + 跳首未读)— `#1226` 已落。承接**不进 Activity 的 ambient**(§6:非 followed thread / `仅提及` channel),留原地、不进全局列表(firehose 防线)。
+- **全局 Activity 列表** — v1 新表面(13.2)。
+
+### 13.2 全局 Activity 列表(v1)
+
+- **入口**:sidebar、Search 之上(shiki)。v1 UI per-workspace(数据模型全局、`workspace_id` 作 filter)。
+- **收**:`enter() == true`(§6)= DM · @我(notification-backed directed,§5.1a)· task-needs-action · followed-thread ambient · `所有消息` channel 的 ambient。
+- **每条 item**:源 icon + 来源标识(哪个 channel/thread)+ 预览 + 相对时间;**salience 分级**(§5.2)directed 视觉强于 ambient;**per-(viewer, message) 去重、取最高 salience**(§7)→ @我显示成 mention + 上下文、**不再**显示成 ambient 未读。
+- **排序(v1 从简)**:directed 档置顶、档内 most-recent-first。
+- **清除 = read-driven,降解为 §5.3 eliminate route**:
+  - **read-cleared item(message / @我 mention)**:打开 / 跳源 → `observe`(推 cursor / 置 `notifications.read_at`);**`Mark as read`** = **hover 才显的 check icon、非常驻「Done」按钮**(常驻 + 「Done」字样会把 triage 心智带回)→ 同一 `observe`;**扫一眼 / hover ≠ 读**(不推 cursor,解「扫一眼就没」)。
+  - **resolve-cleared task item(§5.3 carve-out)**:**不给 `Mark as read`**(无 read 语义、给了也 no-op);**打开 = 跳到 task 源但不清**;离开 Activity 锚在 `task_status` resolve。UI 主操作 = 「去处理 / 认领」,不是「标已读」。
+  - **firehose 兜底**:列表顶「全部标已读」**只作用 read-cleared items**(task 不受影响)。
+  - 列表**绝不直接写 read/triage 状态**——answerability 在 UI 侧的兑现(§5.3 / §14)。
+- **空态**:caught-up。**v1 无 Done / Snooze / Archive**(triage = v2,§11)。
+
+### 13.3 控件表面(write controls — 在哪设置)
+
+- **channel `所有消息 / 仅提及`** = **v1 唯一会写 attention state 的表面** → 只写 `ChannelAttentionPreference`(§9.1)。`所有消息` = ambient on、`仅提及` = ambient off(但 @我 · task 经 directed **永远进**、不受此开关管,§6)。内部模型 = 一个 ambient on/off,用户措辞 = 所有消息 / 仅提及(弃用内部词)。位置:channel header 菜单 / 设置。**`静音` / Mute = v2**(§15)。
+- **thread `Follow / Unfollow`** = 写 **delivery**(§5.2),**非 attention**;进不进 Activity 由 follow 派生。v1 二态(镜像 Slack)。**不做**「从 Activity 隐藏」第二控件(attention-only override = v2)。
+- **边界**:attention-write 表面 = channel pref only;follow = delivery-write;**互不写对方**(§5.2 硬不变量)。
+
+### 13.4 观察保真度(read-cleared 的「真看到了」)
+
+第一性清除信号 = 人真看到 = per-item 可见。v1 用代理、且**显式声明为近似**(非悄悄糊弄):
+
+- thread 开窗 → open-time stream head(粗:开 = 读了整条打开的 thread);pinned-at-tail + document 可见 → live 标 max-visible(细)。(`#1226` 已落)
+- **v1.1**:per-item `IntersectionObserver` 精确标真正进入视口的 max-visible,替换 pinned-tail 代理。
+
+代理只影响「标到哪个 seq」的精度,不影响正确性(forward-only + success-gated,§5.3)。task 不涉(resolve-cleared 与可见无关)。
+
+### 13.5 命名 / 对外用词(§3)
+
+- **对外只露**:**Activity** · **所有消息 / 仅提及** · **Follow / Unfollow** · **Mark as read**(read-driven,**不叫 Done**)。
+- **内部、绝不上界面**:Attention · eligibility / `enter()` · salience · claim · `observe` / source_ref · `ChannelAttentionPreference`。
+
+### 13.6 实现序(见 §12)
+
+不重述时序:additive(列表读 `listActivity` + channel pref 控件)doc 过后可起;客户端 **`observe()` 坍缩 `ThreadPanel.tsx` 两条 mark-read = 我 lane**,**必须等 `#1226` dogfood 过 + 关 task**(§12 step-3)。
 
 ---
 
