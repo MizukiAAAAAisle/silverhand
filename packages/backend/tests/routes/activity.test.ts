@@ -433,6 +433,76 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     expect(failed).toBeTruthy();
     expect(failed!.preview_sender).toBeNull();
   });
+
+  it('preview_sender.display_name falls back to the agent handle when display_name is empty', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t);
+    const sender = (await firstChannelAgent(t, channelId))!;
+    const agentName = (
+      t.ctx.db.prepare(`SELECT name FROM agents WHERE id = ?`).get(sender) as {
+        name: string;
+      }
+    ).name;
+    // agents.display_name is NOT NULL DEFAULT '' — an empty label is a real
+    // schema state. The server must still return a non-empty label (renderer is
+    // barred from re-deriving it).
+    t.ctx.db.prepare(`UPDATE agents SET display_name = '' WHERE id = ?`).run(sender);
+
+    const rootMsg = await sendAsAgent(t, channelId, sender, 'ROOT for empty-name');
+    const replyMsg = await sendThreadReply(t, channelId, sender, rootMsg, 'reply body');
+    t.ctx.db
+      .prepare(
+        `INSERT INTO thread_followers
+           (thread_root_id, conversation_id, principal_kind, principal_id,
+            followed_at, source)
+         VALUES (?, ?, 'human', 'local', ?, 'manual')`,
+      )
+      .run(rootMsg, channelId, Date.now());
+
+    const thread = (await getActivity(t)).find(
+      i => i.kind === 'unread' && i.message_id === replyMsg,
+    );
+    expect(thread).toBeTruthy();
+    expect(thread!.preview_sender).toMatchObject({ kind: 'agent', id: sender });
+    expect(thread!.preview_sender.display_name).toBe(agentName);
+    expect(thread!.preview_sender.display_name).not.toBe('');
+  });
+
+  it('preview_sender.display_name falls back to the user name when display_name is empty', async () => {
+    t = buildTestApp();
+    const { workspaceId, channelId } = await createWorkspaceChannel(t);
+    const now = Date.now();
+    // A second human with an empty display_name authoring the mentioned message.
+    t.ctx.db
+      .prepare(
+        `INSERT INTO users (id, name, display_name, created_at, updated_at)
+         VALUES ('u-bob', 'bob', '', @now, @now)`,
+      )
+      .run({ now });
+    t.ctx.db
+      .prepare(
+        `INSERT INTO messages
+           (id, conversation_id, from_kind, from_user_id, content, seq, created_at)
+         VALUES ('m-bob', @conv, 'user', 'u-bob', '@local hi', 999, @now)`,
+      )
+      .run({ conv: channelId, now });
+    t.ctx.db
+      .prepare(
+        `INSERT INTO notifications
+           (id, kind, user_id, agent_id, workspace_id, conversation_id,
+            message_id, payload, read_at, created_at)
+         VALUES ('notif-bob', 'mention_self', 'local', NULL, @ws, @conv,
+            'm-bob', NULL, NULL, @now)`,
+      )
+      .run({ ws: workspaceId, conv: channelId, now });
+
+    const mention = (await getActivity(t)).find(
+      i => i.kind === 'mention' && i.message_id === 'm-bob',
+    );
+    expect(mention).toBeTruthy();
+    expect(mention!.preview_sender).toMatchObject({ kind: 'user', id: 'u-bob' });
+    expect(mention!.preview_sender.display_name).toBe('bob');
+  });
 });
 
 /** Resolve the first agent member of a channel (the workspace snapshot), so

@@ -91,20 +91,28 @@ function buildPreviewSender(row: SenderColumns): ActivityPreviewSender | null {
   return {
     kind: row.sender_kind,
     id: row.sender_id,
-    display_name: row.sender_display_name ?? '',
+    // SQL already resolved display_name → name (both NOT NULL); the final → id
+    // fallback only triggers on a join miss, so the label is never empty.
+    display_name: row.sender_display_name?.trim()
+      ? row.sender_display_name
+      : row.sender_id,
     avatar_url,
   };
 }
 
 /** SQL fragment resolving an anchor message `m`'s author into `sender_*`
  *  columns. Requires `LEFT JOIN users su ON su.id = m.from_user_id` and
- *  `LEFT JOIN agents sa ON sa.id = m.from_agent_id` in the same query. */
+ *  `LEFT JOIN agents sa ON sa.id = m.from_agent_id` in the same query.
+ *  `sender_display_name` falls back display_name → name (both NOT NULL) so it is
+ *  never an empty label — `agents.display_name` is `NOT NULL DEFAULT ''` and the
+ *  renderer is barred from re-deriving the name; `buildPreviewSender` adds the
+ *  final → id fallback for a join miss. */
 const SENDER_SELECT = `
           m.from_kind                                                  AS sender_kind,
           CASE m.from_kind WHEN 'user' THEN m.from_user_id
                            WHEN 'agent' THEN m.from_agent_id END        AS sender_id,
-          CASE m.from_kind WHEN 'user' THEN su.display_name
-                           WHEN 'agent' THEN sa.display_name END        AS sender_display_name,
+          CASE m.from_kind WHEN 'user' THEN COALESCE(NULLIF(su.display_name, ''), su.name)
+                           WHEN 'agent' THEN COALESCE(NULLIF(sa.display_name, ''), sa.name) END AS sender_display_name,
           CASE m.from_kind WHEN 'user' THEN su.avatar_storage_key
                            WHEN 'agent' THEN sa.avatar_storage_key END  AS sender_avatar_key,
           CASE m.from_kind WHEN 'user' THEN su.updated_at
@@ -321,8 +329,8 @@ export function listActivity(
          vu.from_kind                                                  AS sender_kind,
          CASE vu.from_kind WHEN 'user' THEN vu.from_user_id
                            WHEN 'agent' THEN vu.from_agent_id END       AS sender_id,
-         CASE vu.from_kind WHEN 'user' THEN su.display_name
-                           WHEN 'agent' THEN sa.display_name END        AS sender_display_name,
+         CASE vu.from_kind WHEN 'user' THEN COALESCE(NULLIF(su.display_name, ''), su.name)
+                           WHEN 'agent' THEN COALESCE(NULLIF(sa.display_name, ''), sa.name) END AS sender_display_name,
          CASE vu.from_kind WHEN 'user' THEN su.avatar_storage_key
                            WHEN 'agent' THEN sa.avatar_storage_key END  AS sender_avatar_key,
          CASE vu.from_kind WHEN 'user' THEN su.updated_at
