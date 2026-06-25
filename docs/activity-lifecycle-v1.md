@@ -226,7 +226,7 @@ enter(item, me) = directed(item, me)  OR  ( ambient(item) AND ambientPref(stream
 三个呈现表面,都是 `listActivity` / scorer 的投影,聚合各异(精度见 §8,**不在此重述**):
 
 - **Sidebar channel badge** — 原始 positional roll-up(§8);`#1226` 已落、是 Activity 投影雏形,#1227 **泛化它、不平行新建**。
-- **就地提示**(channel 流内 reply chip「N new」/ Threads list dot·sticker + 跳首未读)— `#1226` 已落。承接**不进 Activity 的 ambient**(§6:非 followed thread / `仅提及` channel),留原地、不进全局列表(firehose 防线)。
+- **就地提示**(channel 流内 reply chip「N new」/ Threads list dot·sticker + 跳首未读)— `#1226` 已落。它是 **source-local locator,对所有 thread unread 都提供源内定位**(含会进 Activity 的 followed-thread unread);**对不进 Activity 的 ambient(§6:非 followed thread / `仅提及` channel)它是唯一提示面**——留原地、不进全局列表(firehose 防线)。
 - **全局 Activity 列表** — v1 新表面(13.2)。
 
 ### 13.2 全局 Activity 列表(v1)
@@ -238,7 +238,7 @@ enter(item, me) = directed(item, me)  OR  ( ambient(item) AND ambientPref(stream
 - **清除 = read-driven,降解为 §5.3 eliminate route**:
   - **read-cleared item(message / @我 mention)**:打开 / 跳源 → `observe`(推 cursor / 置 `notifications.read_at`);**`Mark as read`** = **hover 才显的 check icon、非常驻「Done」按钮**(常驻 + 「Done」字样会把 triage 心智带回)→ 同一 `observe`;**扫一眼 / hover ≠ 读**(不推 cursor,解「扫一眼就没」)。
   - **resolve-cleared task item(§5.3 carve-out)**:**不给 `Mark as read`**(无 read 语义、给了也 no-op);**打开 = 跳到 task 源但不清**;离开 Activity 锚在 `task_status` resolve。UI 主操作 = 「去处理 / 认领」,不是「标已读」。
-  - **firehose 兜底**:列表顶「全部标已读」**只作用 read-cleared items**(task 不受影响)。
+  - **firehose 兜底**:列表顶「全部标已读」**= 对 read-cleared items 的批量 source-routed `observe(source_ref, position)`**(逐个/批量等价),**绝不新增 `activity.bulk_read_at` 或任何 Activity 自有状态**;task item 继续排除(无 read 语义)。
   - 列表**绝不直接写 read/triage 状态**——answerability 在 UI 侧的兑现(§5.3 / §14)。
 - **空态**:caught-up。**v1 无 Done / Snooze / Archive**(triage = v2,§11)。
 
