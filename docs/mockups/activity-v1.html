@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="forza6">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Activity v1 — forza6 mockup (#task:1227)</title>
+<style>
+  /* ────────────────────────────────────────────────────────────────
+     forza6 token subset — copied 1:1 from
+     apps/desktop/src/renderer/styles/themes/forza6.css so this mockup
+     reads in the real theme language (hue lock / radius / borders).
+     This is a VISUAL proposal only — no cursor / no backend wiring.
+     ──────────────────────────────────────────────────────────────── */
+  :root {
+    --forza6-pink: #FF2C7A;       /* channel# / unread / brand — exclusive */
+    --forza6-pink-deep: #B3186A;
+    --forza6-lime: #D4F523;       /* selection identity */
+    --forza6-lime-deep: #3F7A1B; /* done */
+    --forza6-cyan: #22B7E0;       /* in_progress / link */
+    --forza6-yellow: #FFEB00;     /* tasks identity (on dark) */
+    --forza6-orange: #FF7A1A;     /* in_review / caution */
+    --forza6-indigo: #2D2AB8;     /* closed / deep slab */
+    --forza6-ink: #0A0A0A;
+
+    --bg-app: #329E86;            /* poster teal frame */
+    --bg-base: #F7F8F6;
+    --bg-primary: #ECEEEB;
+    --bg-elevated: #E5E8E4;
+    --bg-surface: #DDE0DC;
+    --bg-hover: #DAE0DA;
+    --bg-floating: #FFFFFF;
+    --bg-channels-sidebar: #F4E7ED;       /* ≈ pink 8% over bg-base */
+    --bg-row-selected: var(--forza6-lime);
+    --bg-row-hover: #F3DCE6;               /* ≈ pink 22% wash */
+
+    --text-primary: #0F1F1D;
+    --text-secondary: #4A5C58;
+    --text-muted: #5A6B67;
+    --text-on-brand: var(--forza6-ink);
+
+    --border: rgba(15, 31, 29, 0.14);
+    --border-subtle: rgba(15, 31, 29, 0.10);
+    --border-avatar: var(--forza6-ink);
+
+    --card-radius: 6px;
+    --control-radius: 0;
+    --floating-radius: 0;
+
+    --font-display: 'Rajdhani', 'Impact', 'Helvetica Neue Condensed', 'Arial Narrow', system-ui, sans-serif;
+    --font-sans: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html { font-size: 16px; }           /* root 16px (#task:1148) */
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    font-size: 14px;                   /* reading body held at 14px */
+    color: var(--text-primary);
+    background: var(--bg-app);
+    -webkit-font-smoothing: antialiased;
+    padding: 28px;
+    line-height: 1.45;
+  }
+
+  .stage { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+
+  /* chrome label — Rajdhani caps, matches --font-chrome-label */
+  .chrome-label {
+    font-family: var(--font-display);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+  }
+
+  /* ── App frame: NavRail + sidebar + Activity column ─────────────── */
+  .app {
+    display: flex;
+    background: var(--bg-app);
+    border-radius: var(--card-radius);
+    overflow: hidden;
+    box-shadow: 0 10px 30px -8px rgba(8,30,27,0.45);
+  }
+  .navrail {
+    width: 52px;
+    background: #FAFBF6;
+    border-right: 2px solid var(--forza6-ink);
+    display: flex; flex-direction: column; align-items: center;
+    padding: 12px 0; gap: 8px;
+  }
+  .navrail .tile {
+    width: 32px; height: 32px; display: grid; place-items: center;
+    color: var(--forza6-ink); font-family: var(--font-display); font-weight: 700;
+  }
+  .navrail .tile.current {
+    background: var(--forza6-pink); border: 2px solid var(--forza6-ink);
+  }
+
+  /* sidebar (channels) with the Activity entry above Search */
+  .sidebar {
+    width: 184px;
+    background: var(--bg-channels-sidebar);
+    border-right: 2px solid var(--forza6-ink);
+    padding: 10px 8px;
+  }
+  .side-group-label {
+    font-size: 10px; color: var(--text-muted);
+    padding: 6px 8px 4px;
+  }
+  .side-entry {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 8px; cursor: pointer;
+    border: 2px solid transparent;       /* row-radius 0 */
+    color: var(--text-secondary);
+    position: relative;
+  }
+  .side-entry .ico { width: 16px; height: 16px; flex: none; }
+  .side-entry:hover { background: var(--bg-row-hover); border-color: var(--forza6-ink); }
+  .side-entry.current {
+    background: var(--bg-row-selected); color: var(--forza6-ink);
+    border-color: var(--forza6-ink); font-weight: 600;
+  }
+  /* Activity count badge in the rail entry — pink sticker (square, ink border) */
+  .side-count {
+    margin-left: auto;
+    background: var(--forza6-pink); color: var(--forza6-ink);
+    border: 1.5px solid var(--forza6-ink);
+    font-family: var(--font-display); font-weight: 700;
+    font-size: 11px; line-height: 1; padding: 2px 5px;
+    letter-spacing: 0.02em;
+  }
+
+  /* ── Activity panel (the centrepiece) ───────────────────────────── */
+  .activity {
+    width: 408px;
+    background: var(--bg-base);
+    display: flex; flex-direction: column;
+    max-height: 660px;
+  }
+  .activity-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 14px 10px;
+    border-bottom: 2px solid var(--forza6-ink);
+    background: var(--bg-base);
+  }
+  .activity-head h2 {
+    margin: 0; font-size: 13px; letter-spacing: 0.08em;
+  }
+  .activity-head .count {
+    font-family: var(--font-display); font-weight: 700; font-size: 12px;
+    color: var(--text-muted);
+  }
+  .mark-all {
+    margin-left: auto;
+    font-size: 12px; color: var(--text-secondary);
+    background: transparent; border: 2px solid var(--border);
+    padding: 4px 9px; cursor: pointer;
+    border-radius: var(--control-radius);
+  }
+  .mark-all:hover { border-color: var(--forza6-ink); color: var(--forza6-ink); }
+
+  /* ── type filter row (single-select; client-side slice over listActivity) ──
+     Decodes shiki's "All, task, thread": one coherent single-select axis.
+     The chip is a UTILITY control — its selected state is lime (= selection
+     identity, the only place lime is allowed), and the chip itself NEVER takes
+     a semantic hue (任务 is not yellow / 回复 is not pink) so it doesn't steal
+     the items' volume budget. Counts are muted ink, not hue stickers. */
+  .filters {
+    display: flex; gap: 6px;
+    padding: 8px 14px 9px;
+    border-bottom: 2px solid var(--border-subtle);
+    background: var(--bg-base);
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12px; font-weight: 600;
+    padding: 4px 10px; cursor: pointer;
+    background: var(--bg-floating);
+    border: 2px solid var(--border);
+    border-radius: var(--control-radius);   /* 0 — forza6 */
+    color: var(--text-secondary);
+  }
+  .chip:hover { border-color: var(--forza6-ink); color: var(--text-primary); }
+  .chip.on {
+    background: var(--forza6-lime);          /* lime = selection */
+    border-color: var(--forza6-ink);
+    color: var(--forza6-ink);
+  }
+  .chip .n {
+    font-family: var(--font-display); font-weight: 700;
+    font-size: 11px; opacity: 0.65;
+  }
+  .chip.on .n { opacity: 1; }
+
+  .activity-scroll { overflow-y: auto; }
+
+  /* section label between salience tiers (user-facing, no internal terms) */
+  .tier-label {
+    font-size: 10px; color: var(--text-muted);
+    padding: 12px 14px 4px;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .tier-label::after { content: ''; flex: 1; height: 2px; background: var(--border-subtle); }
+
+  /* ── Activity item ──────────────────────────────────────────────── */
+  .item {
+    display: flex; gap: 10px; align-items: flex-start;
+    padding: 10px 14px;
+    border-left: 4px solid transparent;     /* salience rail */
+    cursor: pointer; position: relative;
+  }
+  .item:hover { background: var(--bg-hover); }
+  /* directed (mention / DM / task / agent-fail) carry an ink salience rail */
+  .item.directed { border-left-color: var(--forza6-ink); }
+  /* ambient (followed-thread / 所有消息 channel unread) — no rail, lighter */
+  .item.ambient { opacity: 0.96; }
+
+  .avatar {
+    width: 34px; height: 34px; flex: none;
+    border: 2px solid var(--border-avatar);
+    display: grid; place-items: center;
+    font-family: var(--font-display); font-weight: 700; font-size: 14px;
+    color: #fff;
+  }
+  .avatar.a { background: #3B6FB5; }
+  .avatar.b { background: #B5573B; }
+  .avatar.c { background: #6B3BB5; }
+  .avatar.d { background: #3BB58A; }
+  /* task / system glyph avatars use semantic identity fill */
+  .avatar.task { background: var(--forza6-ink); color: var(--forza6-yellow); }
+  .avatar.fail { background: var(--forza6-ink); color: var(--forza6-orange); }
+
+  .body { min-width: 0; flex: 1; }
+  .line1 { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .who { font-weight: 600; color: var(--text-primary); }
+  .verb { color: var(--text-muted); }
+
+  /* source locator chips (square, theme hues) */
+  .loc {
+    display: inline-flex; align-items: center; gap: 3px;
+    font-size: 12px; padding: 1px 5px;
+    border: 1.5px solid var(--forza6-ink); border-radius: 0;
+    font-weight: 600;
+  }
+  .loc.channel { background: var(--forza6-pink); color: var(--forza6-ink); }
+  .loc.thread  { background: #fff; color: var(--text-primary); }
+  .loc.task    { background: var(--forza6-yellow); color: var(--forza6-ink); }
+  .loc.dm      { background: var(--forza6-ink); color: #fff; }
+
+  .preview {
+    color: var(--text-secondary); font-size: 13px;
+    margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  /* @me mention marker — pink, never doubles as ambient (per-(viewer,message) dedup) */
+  .at {
+    font-family: var(--font-display); font-weight: 700;
+    color: var(--forza6-pink-deep);
+  }
+
+  /* unread count sticker — mirrors data-thread-unread="sticker" */
+  .new-sticker {
+    background: var(--forza6-pink); color: var(--forza6-ink);
+    border: 1.5px solid var(--forza6-ink); border-radius: 0;
+    font-family: var(--font-display); font-weight: 700;
+    font-size: 11px; padding: 1px 5px; letter-spacing: 0.02em;
+  }
+
+  /* task status chip — forza6 poster fill, square, no border */
+  .status {
+    font-family: var(--font-display); font-weight: 700;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+    padding: 2px 6px; border-radius: 0;
+  }
+  .status.in_review { background: var(--forza6-orange); color: var(--forza6-ink); }
+  .status.in_progress { background: var(--forza6-cyan); color: var(--forza6-ink); }
+
+  .right { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .time { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+
+  /* Mark as read — hover-only check icon, NOT a persistent Done button.
+     Read-cleared items only. Scan / hover ≠ read; only a click clears. */
+  .mark {
+    width: 22px; height: 22px; display: grid; place-items: center;
+    border: 2px solid var(--border); background: var(--bg-floating);
+    color: var(--text-secondary); cursor: pointer;
+    opacity: 0; transition: opacity 120ms;
+    border-radius: 0;
+  }
+  .item:hover .mark { opacity: 1; }
+  .mark:hover { border-color: var(--forza6-ink); color: var(--forza6-ink); }
+
+  /* task primary action — "去处理", NOT "mark as read" (resolve-cleared) */
+  .act {
+    font-size: 12px; font-weight: 600;
+    background: var(--forza6-ink); color: #fff;
+    border: 2px solid var(--forza6-ink); border-radius: 0;
+    padding: 3px 9px; cursor: pointer; white-space: nowrap;
+  }
+  .act:hover { background: #000; }
+
+  /* caught-up / empty state */
+  .empty {
+    padding: 40px 20px; text-align: center; color: var(--text-muted);
+  }
+  .empty .big { font-family: var(--font-display); font-size: 18px; color: var(--text-secondary); letter-spacing: 0.04em; }
+
+  /* ── channel 所有消息 / 仅提及 control (write surface) ───────────── */
+  .panel {
+    background: var(--bg-floating);
+    border: 2px solid var(--forza6-ink);
+    border-radius: var(--floating-radius);
+    width: 300px; padding: 14px;
+    box-shadow: 0 10px 30px -8px rgba(8,30,27,0.28);
+  }
+  .panel h3 { margin: 0 0 2px; font-size: 13px; }
+  .panel p.sub { margin: 0 0 12px; font-size: 12px; color: var(--text-muted); }
+  .seg {
+    display: flex; border: 2px solid var(--forza6-ink); border-radius: 0;
+    overflow: hidden;
+  }
+  .seg button {
+    flex: 1; padding: 8px 10px; border: 0; cursor: pointer;
+    background: var(--bg-floating); color: var(--text-secondary);
+    font-family: inherit; font-size: 13px; font-weight: 600;
+  }
+  .seg button + button { border-left: 2px solid var(--forza6-ink); }
+  .seg button.on { background: var(--forza6-lime); color: var(--forza6-ink); }
+  .panel .note { margin-top: 10px; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+
+  /* annotation column (NOT product chrome — explains intent for review) */
+  .legend {
+    width: 320px; color: #eafff8; font-size: 13px; line-height: 1.6;
+  }
+  .legend h1 { font-family: var(--font-display); font-size: 22px; margin: 0 0 4px; letter-spacing: 0.04em; }
+  .legend .tag { font-size: 12px; opacity: 0.85; margin-bottom: 14px; }
+  .legend h4 { margin: 16px 0 4px; font-size: 13px; color: #fff; }
+  .legend ul { margin: 4px 0; padding-left: 18px; }
+  .legend code { background: rgba(0,0,0,0.28); padding: 1px 4px; font-family: var(--font-mono, monospace); font-size: 12px; }
+  .legend .swatch { display: inline-block; width: 10px; height: 10px; border: 1px solid rgba(0,0,0,0.4); vertical-align: middle; margin-right: 4px; }
+
+  .col { display: flex; flex-direction: column; gap: 20px; }
+</style>
+</head>
+<body>
+
+<div class="stage">
+
+  <!-- ════ Annotation (review only) ════ -->
+  <div class="legend">
+    <h1>ACTIVITY v1</h1>
+    <div class="tag">#task:1227 · forza6 · 纯视觉 mockup（不接 cursor / 不进 dogfood 包）</div>
+
+    <p>给 human 一个对称的「有一个队列在等我」入口（Human/Agent 同构）。所有行都是 <code>listActivity</code> 投影，UI 从不写 read 状态。</p>
+
+    <h4>分级（salience，内部词不上界面）</h4>
+    <ul>
+      <li><b>directed</b>（@我 / DM / task / agent 启动失败）→ 左侧墨色 rail，永远进，置顶。</li>
+      <li><b>ambient</b>（关注的 thread / 「所有消息」channel 的未读）→ 无 rail、稍弱。</li>
+    </ul>
+
+    <h4>清除（read-driven，降解为 observe）</h4>
+    <ul>
+      <li>打开 / 跳源 → 推 cursor / 置 notification read。</li>
+      <li><b>Mark as read</b> = hover 才显的 ✓ icon，<u>不是常驻 Done</u>；扫一眼 / hover ≠ 读。</li>
+      <li><b>task 行</b> 无 Mark as read：主操作「去处理」，离开 Activity 锚在 task 状态（resolve-cleared）。</li>
+      <li>顶部「全部标已读」= 批量 observe（task 除外）。</li>
+    </ul>
+
+    <h4>去重</h4>
+    <ul>
+      <li>per-(viewer, message)：@我那条只显示成 mention，<u>不再</u>作 ambient 未读重复出现。</li>
+    </ul>
+
+    <h4>类型筛选（shiki）</h4>
+    <ul>
+      <li>单选一排 chip，默认 <code>All</code>；纯客户端切片 <code>listActivity</code>，不发新请求。</li>
+      <li>四个固定 chip：<code>All</code> / <code>Mentions</code>=mention · <code>Tasks</code>=task · <code>Threads</code>=在 thread 里。不逐 kind 铺开（shiki：避免噪音）。</li>
+      <li>chip 是 utility：选中走 <span class="swatch" style="background:#D4F523"></span>lime（选中色），chip 本身<u>不</u>染语义 hue（Tasks≠黄、Threads≠粉），不偷 item 的响度。</li>
+    </ul>
+
+    <h4>hue 锁（forza6）</h4>
+    <ul>
+      <li><span class="swatch" style="background:#FF2C7A"></span>粉 = channel# / unread</li>
+      <li><span class="swatch" style="background:#FFEB00"></span>黄 = task 身份</li>
+      <li><span class="swatch" style="background:#FF7A1A"></span>橙 = in_review</li>
+      <li><span class="swatch" style="background:#D4F523"></span>lime = 选中</li>
+      <li>utility（hover / mark icon / 分隔）一律走墨 / 中性。</li>
+    </ul>
+  </div>
+
+  <!-- ════ App frame ════ -->
+  <div class="app">
+    <!-- NavRail -->
+    <div class="navrail">
+      <div class="tile current">S</div>
+      <div class="tile">W</div>
+      <div class="tile">D</div>
+    </div>
+
+    <!-- Sidebar: Activity entry sits ABOVE Search (shiki) -->
+    <div class="sidebar">
+      <div class="side-group-label chrome-label">工具</div>
+      <div class="side-entry current">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h8l-1 8 10-12h-8z"/></svg>
+        <span>Activity</span>
+        <span class="side-count">6</span>
+      </div>
+      <div class="side-entry">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <span>Search</span>
+      </div>
+      <div class="side-entry">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+        <span>Saved</span>
+      </div>
+      <div class="side-entry">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="4"/><path d="M5 8v12h14V8M10 12h4"/></svg>
+        <span>Archived</span>
+      </div>
+    </div>
+
+    <!-- Activity panel -->
+    <div class="activity">
+      <div class="activity-head">
+        <h2 class="chrome-label">Activity</h2>
+        <span class="count">6</span>
+        <button class="mark-all">Mark all read</button>
+      </div>
+
+      <!-- type filter row: single-select, default 全部. Maps to listActivity:
+           @我=kind mention · 任务=kind task · 回复=thread_root_id!=null.
+           channel-unread / 启动失败 live under 全部 (kept to 4 high-value
+           slices; exhaustive-per-kind is the open question for shiki). -->
+      <div class="filters">
+        <button class="chip on">All <span class="n">6</span></button>
+        <button class="chip">Mentions <span class="n">1</span></button>
+        <button class="chip">Tasks <span class="n">1</span></button>
+        <button class="chip">Threads <span class="n">1</span></button>
+      </div>
+
+      <div class="activity-scroll">
+
+        <!-- ── directed tier ── -->
+        <div class="tier-label chrome-label">Needs you</div>
+
+        <!-- DM (directed, read-cleared) -->
+        <div class="item directed">
+          <div class="avatar a">SH</div>
+          <div class="body">
+            <div class="line1">
+              <span class="who">shiki</span>
+              <span class="loc dm">DM</span>
+            </div>
+            <div class="preview">dogfood 包我装上了，你那个 Activity 列表先出个 mockup 我看看</div>
+          </div>
+          <div class="right">
+            <span class="time">2 分钟</span>
+            <div class="mark" title="Mark as read">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- @me mention in a channel (directed; deduped — shows as mention, not ambient) -->
+        <div class="item directed">
+          <div class="avatar c">AL</div>
+          <div class="body">
+            <div class="line1">
+              <span class="who">Alice</span>
+              <span class="verb">mentioned you</span>
+              <span class="at">@Norman</span>
+              <span class="loc channel">#design</span>
+            </div>
+            <div class="preview">@Norman renderer：channel 控件依赖 ②a 的 pref DTO，我先落</div>
+          </div>
+          <div class="right">
+            <span class="time">8 分钟</span>
+            <div class="mark" title="Mark as read">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- task needs-my-action (directed; NO mark-as-read; resolve-cleared) -->
+        <div class="item directed">
+          <div class="avatar task">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>
+          </div>
+          <div class="body">
+            <div class="line1">
+              <span class="who">#1227 Activity lifecycle</span>
+              <span class="status in_review">in_review</span>
+            </div>
+            <div class="preview">Waiting for your review · assigned to you</div>
+          </div>
+          <div class="right">
+            <span class="time">12 分钟</span>
+            <button class="act">Review</button>
+          </div>
+        </div>
+
+        <!-- agent_start_failed (directed, read-cleared) -->
+        <div class="item directed">
+          <div class="avatar fail">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+          </div>
+          <div class="body">
+            <div class="line1">
+              <span class="who">Cindy</span>
+              <span class="verb">failed to start</span>
+              <span class="loc channel">#design</span>
+            </div>
+            <div class="preview">Agent failed to start — click for details</div>
+          </div>
+          <div class="right">
+            <span class="time">20 分钟</span>
+            <div class="mark" title="Mark as read">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── ambient tier ── -->
+        <div class="tier-label chrome-label">Your streams</div>
+
+        <!-- followed thread unread (ambient, read-cleared) -->
+        <div class="item ambient">
+          <div class="avatar d">CY</div>
+          <div class="body">
+            <div class="line1">
+              <span class="who">Cindy</span>
+              <span class="verb">replied</span>
+              <span class="loc thread">↳ #1226 复验点</span>
+              <span class="new-sticker">3 new</span>
+            </div>
+            <div class="preview">我这边 review gate 保持两层，可以开始 additive…</div>
+          </div>
+          <div class="right">
+            <span class="time">15 分钟</span>
+            <div class="mark" title="Mark as read">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- 所有消息 channel ambient unread -->
+        <div class="item ambient">
+          <div class="avatar b">RN</div>
+          <div class="body">
+            <div class="line1">
+              <span class="who">Ren</span>
+              <span class="verb">in</span>
+              <span class="loc channel">#general</span>
+              <span class="new-sticker">2 new</span>
+            </div>
+            <div class="preview">周会挪到周四下午，日历我更新了</div>
+          </div>
+          <div class="right">
+            <span class="time">1 小时</span>
+            <div class="mark" title="Mark as read">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- caught-up state (shown side-by-side for review) -->
+    <div class="activity" style="width:260px; border-left:2px solid var(--forza6-ink);">
+      <div class="activity-head">
+        <h2 class="chrome-label">Activity</h2>
+        <span class="count">0</span>
+      </div>
+      <div class="empty">
+        <div class="big">All caught up</div>
+        <div style="margin-top:6px;">Nothing needs you right now</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════ channel write control ════ -->
+  <div class="col">
+    <div class="panel">
+      <h3>#design · Notifications</h3>
+      <p class="sub">Which messages from this channel enter Activity</p>
+      <div class="seg">
+        <button class="on">All messages</button>
+        <button>Mentions only</button>
+      </div>
+      <div class="note">
+        <b>All messages</b> = this channel's unread enters Activity.<br/>
+        <b>Mentions only</b> = it doesn't, but <b>@you · tasks always enter</b>, regardless of this switch.
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Thread · Follow</h3>
+      <p class="sub">Writes delivery (who gets it), not attention</p>
+      <div class="seg">
+        <button class="on">Following</button>
+        <button>Follow</button>
+      </div>
+      <div class="note">
+        A followed thread → its unread enters Activity by default.<br/>
+        Independent from the channel switch (delivery ⊥ attention).
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

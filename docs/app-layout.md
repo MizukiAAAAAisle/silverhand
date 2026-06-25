@@ -406,6 +406,7 @@ PR3 / 4 / 5 / 6 / 7 之间互相不阻塞，可以并行 review；按 PR# 顺序
 - **每条 message 必须有稳定 DOM id**（`msg-<id>`），用于 saved view 跳转 + 未来 anchor 复制
 - **thread 永远只有一层**（schema + UI 双重保险）；UI 在 Thread button 上根据 `parent_conversation_id != null` 隐藏
 - **dev-only feature 的入口** 只在 macOS 应用菜单 → Developer 子菜单下；不出现在用户视野中其他地方
+- **Header variant 只能"显隐 / 重排" chrome，绝不替换或新造主题化 identity 原语。** 同一个组件用 mode/variant prop 渲染不同密度的 header（如 `ChannelView.sourceViewer` 的 Activity docked 源面板）时,凡带 `data-*` theme hook 的 identity/control 原语（channel `#` = `data-conversation-hash`、列表频道图标 = `data-channel-icon` 等）**必须复用 canonical header 的同一个 primitive**；variant 只决定「是否展示 / 布局 / action 集合」,**不替换、不新造**那段 DOM。理由:「同组件不同 mode」只保护两个 mode *共享的那段 markup*——某个 mode 自己新增/替换的元素逃出共享路径,就会绕过主题 hook，在带 sticker 配方的主题（forza6）下画成通用 glyph、像换了一套图标语言（#task:1227 dogfood 实例:`sourceViewer` 初版用裸 lucide `Hash` 替掉 `#`,只在 forza6 暴露）。mode 应是**减法**(gate 掉控件)或复用现有 themed 原语,不在分支里发明新视觉原语。data-hook 侧细则见 `design-new-theme.md`。
 - **每个 PR 完成后追加 `docs/progress.md`** 一段，记下：动机、关键决策、踩坑、验证（typecheck / test / 手测）
 
 ---

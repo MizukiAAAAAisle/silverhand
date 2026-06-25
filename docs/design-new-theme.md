@@ -738,6 +738,7 @@ shiki 决定先保留胶囊（forza6 用饱和填色表达状态语义，不需�
 - **inline code 用了 `var(--accent)`** —— 长 token（路径 / 文件名）会比真小标题还跳；遵守 §7 三选色原则。
 - **忘了在 `THEMES` 数组里加一项** —— Settings 里看不到新主题选项，但 `data-theme='your-theme'` 还是能手工设到 `<html>` 上工作（用作调试入口）。
 - **改完没重启 dev server** —— Vite HMR 对 `@import` 链路偶尔失效，新主题文件不重新打包；切主题没反应时优先重启。
+- **一个组件的 mode/variant 分支替换了带 `data-*` hook 的 identity/control 原语** —— 凡主题靠 `data-*` hook 识别并 painting 的原语（channel `#` = `data-conversation-hash`、列表频道图标 = `data-channel-icon`、§3.6.1/§3.6.3 各 frame hook 等），任何 variant 都**必须复用同一段挂 hook 的 primitive**，只能控「是否展示 / 布局」，**不许**在分支里替换成裸 lucide / 新 DOM 形状或新造原语。换掉 primitive ⇒ 主题 selector 匹配不到 ⇒ 在有 sticker 配方的主题（forza6）画成通用 glyph，像换了一套图标语言，且**只在那个主题暴露**（baseline 主题白拿默认看不出）。这是「同组件不同 mode」最隐蔽的翻车点:同组件只保护共享 markup,管不了某 mode 自己新增/替换的元素（#task:1227 dogfood 实例:Activity docked header 的 `sourceViewer` 初版用裸 `Hash` 替掉 `#`）。组件侧 header-variant 纪律见 `app-layout.md` §10。
 
 ## 8. 已有参考
 - `apps/desktop/src/renderer/styles/themes/warm-script.css`（默认主题，`:root` baseline）

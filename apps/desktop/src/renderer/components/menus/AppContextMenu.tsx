@@ -1,6 +1,7 @@
 import type { ReactElement, ReactNode } from 'react';
 import * as ContextMenu from '@radix-ui/react-context-menu';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import { ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
 const MENU_CONTENT_CLASS =
@@ -86,6 +87,42 @@ export function AppContextMenuItem({
 
 export function AppContextMenuSeparator(): JSX.Element {
   return <ContextMenu.Separator className="my-1 h-px bg-border-subtle/60" />;
+}
+
+/**
+ * Nested context submenu — a `▸` trigger row whose children mount only while
+ * the submenu is open (Radix `SubContent` is not force-mounted). Put any
+ * lazily-fetched child (e.g. a per-channel preference query) inside it so it
+ * fires on hover, not on every parent-row render.
+ */
+export function AppContextMenuSub({
+  icon,
+  label,
+  children,
+}: {
+  icon: ReactNode;
+  label: ReactNode;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <ContextMenu.Sub>
+      <ContextMenu.SubTrigger
+        className={cn(MENU_ITEM_CLASS, 'data-[state=open]:bg-bg-hover')}
+      >
+        <AppMenuItemContent
+          icon={icon}
+          trailing={<ChevronRight className="size-3.5" />}
+        >
+          {label}
+        </AppMenuItemContent>
+      </ContextMenu.SubTrigger>
+      <ContextMenu.Portal>
+        <ContextMenu.SubContent className={MENU_CONTENT_CLASS} sideOffset={2}>
+          {children}
+        </ContextMenu.SubContent>
+      </ContextMenu.Portal>
+    </ContextMenu.Sub>
+  );
 }
 
 export function AppDropdownMenu({

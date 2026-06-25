@@ -2,6 +2,7 @@ import { type ReactNode } from 'react';
 import {
   Archive,
   ArchiveRestore,
+  Bell,
   Copy,
   Hash,
   Plus,
@@ -13,7 +14,9 @@ import {
   AppContextMenu,
   AppContextMenuItem,
   AppContextMenuSeparator,
+  AppContextMenuSub,
 } from '@/components/menus/AppContextMenu';
+import { ChannelAttentionMenuItems } from '@/components/layout/ChannelAttentionSurfaces';
 import { SidebarSectionHeader } from '@/components/layout/sidebar-shared';
 import { SortModeMenu } from '@/components/layout/SortModeMenu';
 import {
@@ -332,7 +335,9 @@ function ChannelRow({
   const showArchiveMenu =
     workspaceKind !== null &&
     (channel.kind === 'channel' || channel.kind === 'dm_channel');
-  const hasManagementMenu = showArchiveMenu;
+  // Star + attention + archive form the management group; the separator below
+  // fences them off from "Copy name" whenever any of them is present.
+  const hasManagementMenu = showArchiveMenu || channel.kind === 'channel';
 
   const rowBg = selected
     ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
@@ -391,6 +396,14 @@ function ChannelRow({
       >
         {isStarred ? 'Unstar' : 'Star'}
       </AppContextMenuItem>
+      {/* Per-viewer attention preference — regular channels only (the backend
+          404s dm_channel / thread). Children mount lazily on submenu open, so
+          no GET fires per channel row (#task:1227). */}
+      {channel.kind === 'channel' ? (
+        <AppContextMenuSub icon={<Bell className="size-3.5" />} label="Show in Activity">
+          <ChannelAttentionMenuItems channelId={channel.id} />
+        </AppContextMenuSub>
+      ) : null}
       {showArchiveMenu ? (
         <AppContextMenuItem
           icon={

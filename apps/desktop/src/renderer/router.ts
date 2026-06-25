@@ -33,6 +33,7 @@ export const routes = {
   chatSearch: () => '/chat/search',
   chatSaved: () => '/chat/saved',
   chatArchived: () => '/chat/archived',
+  chatActivity: () => '/chat/activity',
   chatWorkspace: (workspaceId: string) => `/chat/w/${workspaceId}`,
   chatChannel: (workspaceId: string, channelId: string) =>
     `/chat/w/${workspaceId}/c/${channelId}`,
@@ -55,6 +56,7 @@ export const routePatterns = {
   chatArchived: '/chat/archived',
   chatSearch: '/chat/search',
   chatSaved: '/chat/saved',
+  chatActivity: '/chat/activity',
   chat: '/chat',
   membersAgent: '/members/:agentId',
   membersUser: '/members/u/:userId',
@@ -64,7 +66,7 @@ export const routePatterns = {
   settings: '/settings',
 } as const;
 
-export type ChatView = 'channel' | 'saved' | 'search' | 'archived';
+export type ChatView = 'channel' | 'saved' | 'search' | 'archived' | 'activity';
 
 /**
  * Resolved view of the current URL. Components read this instead of
@@ -191,7 +193,9 @@ export function parseRouteState(pathname: string, search: string): RouteState {
       ? 'search'
       : pathname.startsWith('/chat/archived')
         ? 'archived'
-        : 'channel';
+        : pathname.startsWith('/chat/activity')
+          ? 'activity'
+          : 'channel';
 
   return {
     section,
@@ -589,6 +593,7 @@ export function useNav(): {
   toChatSearch: () => void;
   toChatSaved: () => void;
   toChatArchived: () => void;
+  toChatActivity: () => void;
   toWorkspace: (workspaceId: string) => void;
   toChannel: (workspaceId: string, channelId: string) => void;
   toMembers: (agentId?: string) => void;
@@ -728,6 +733,7 @@ export function useNav(): {
   const toChatSearch = useCallback(() => go(routes.chatSearch()), [go]);
   const toChatSaved = useCallback(() => go(routes.chatSaved()), [go]);
   const toChatArchived = useCallback(() => go(routes.chatArchived()), [go]);
+  const toChatActivity = useCallback(() => go(routes.chatActivity()), [go]);
   const toWorkspace = useCallback((id: string) => go(routes.chatWorkspace(id)), [go]);
   const toChannel = useCallback(
     (wid: string, cid: string) => go(routes.chatChannel(wid, cid)),
@@ -752,6 +758,7 @@ export function useNav(): {
     toChatSearch,
     toChatSaved,
     toChatArchived,
+    toChatActivity,
     toWorkspace,
     toChannel,
     toMembers,
@@ -776,6 +783,7 @@ export function useNav(): {
     toChatSearch,
     toChatSaved,
     toChatArchived,
+    toChatActivity,
     toWorkspace,
     toChannel,
     toMembers,

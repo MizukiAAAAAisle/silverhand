@@ -21,6 +21,7 @@ import { ChannelThreadsPanel } from '@/components/layout/ChannelThreadsPanel';
 import { SavedListView } from '@/components/layout/SavedListView';
 import { SearchPanel } from '@/components/layout/SearchPanel';
 import { ArchivedChannelsPanel } from '@/components/layout/ArchivedChannelsPanel';
+import { ActivityView } from '@/components/layout/ActivityView';
 import { SplitPane } from '@/components/layout/SplitPane';
 import { TasksSection } from '@/components/layout/TasksSection';
 import { Titlebar } from '@/components/layout/Titlebar';
@@ -356,6 +357,29 @@ function RegisteredAppShell(): JSX.Element {
     [agents],
   );
   const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId) ?? null;
+  // Activity is a GLOBAL list — it shows rows from every workspace, so it needs
+  // workspace_id → identity (name + icon inputs), so a GLOBAL list (Activity)
+  // can show each row's workspace icon and disambiguate same-named channels
+  // across workspaces. `kind` / `dmAgentId` feed the canonical `WorkspaceIcon`
+  // (regular → themed `W`, DM → bound agent avatar) — same primitive the rail
+  // uses, never a hand-rolled glyph.
+  const workspaceRefById = useMemo(
+    () =>
+      new Map(
+        workspaces.map(
+          w =>
+            [
+              w.id,
+              {
+                name: w.name,
+                kind: w.kind === 'dm' ? ('dm' as const) : ('regular' as const),
+                dmAgentId: w.dm_agent_id,
+              },
+            ] as const,
+        ),
+      ),
+    [workspaces],
+  );
   const { data: activeChannels = [] as ChannelListItem[] } = useChannelsForWorkspace(
     selectedWorkspaceId,
     selectedWorkspace?.kind ?? null,
@@ -1363,6 +1387,137 @@ function RegisteredAppShell(): JSX.Element {
     [isPrimePendingFor, threadJumpMessageId, selectedChannelId],
   );
 
+  // ── Activity source pane (#task:1227 point 2) ─────────────────────────
+  // Clicking an Activity row opens the row's REAL conversation/thread source
+  // as a working side panel INSIDE the Activity view (shiki: "side panel 是真实
+  // 可以工作的地方，就跟 thread side panel 一样，并不是 previewer"). It reuses the
+  // live ChannelView / ThreadPanel, so reading happens through the source's own
+  // path — the Attention layer writes NO clearing state of its own. Resolved
+  // independently of the global `?side`/`?thread` nav so opening a source here
+  // never perturbs the channel view's selection. Cross-workspace is automatic:
+  // ChannelView is descriptor-driven and ThreadPanel takes explicit props, and
+  // neither assumes the session-current workspace.
+  // The Activity source pane target. Distinct from `MessageJumpTarget`: a source
+  // opened from a ROW carries a message anchor, but a `#conv` ref opened in-panel
+  // has NONE — so `messageId` is optional here (no `''` sentinel). The optionality
+  // is load-bearing: only an anchored source primes a jump / message-jumps on
+  // "Open in conversation" (Cindy review blocker 3).
+  type ActivitySourceTarget = {
+    workspaceId?: string;
+    channelId: string;
+    threadRootId?: string | null;
+    messageId?: string | null;
+  };
+  const [activitySource, setActivitySource] =
+    useState<ActivitySourceTarget | null>(null);
+  const openActivitySource = useCallback(
+    (target: MessageJumpTarget) => {
+      setActivitySource(target);
+      // Row items always carry a message anchor — prime the around-window so the
+      // source pane scroll-locates the triggering message.
+      if (target.messageId) requestJump(target);
+    },
+    [requestJump],
+  );
+  const closeActivitySource = useCallback(() => setActivitySource(null), []);
+  // A #conv ref clicked INSIDE the docked source swaps the right pane to that
+  // conversation (the panel is a real working viewer), instead of writing a
+  // hidden global `?side` the Activity branch never renders (Cindy review
+  // blocker 2). No message anchor → no scroll-jump, no mark-read until resolved.
+  const openActivitySourceConversation = useCallback((conversationId: string) => {
+    setActivitySource({ channelId: conversationId });
+  }, []);
+  // A source's identity (workspace, kind, parent title, closed/archived) comes
+  // from the same ref hook the secondary pane uses — for a thread item the id is
+  // the PARENT channel, so this resolves the channel either way.
+  const activitySourceRef = useConversationById(
+    activitySource?.channelId ?? null,
+  );
+  const activitySourceDescriptor = useMemo<SecondaryDescriptor | null>(
+    () =>
+      activitySource
+        ? selectSecondaryDescriptor(
+            { sideConversationId: activitySource.channelId },
+            activitySourceRef,
+          )
+        : null,
+    [activitySource, activitySourceRef],
+  );
+  const activitySourceViewInputs = useMemo(
+    () =>
+      selectSecondaryViewInputs({
+        secondary: activitySourceDescriptor,
+        primaryChannelKind: null,
+        primaryWorkspaceId: activitySource?.workspaceId ?? null,
+      }),
+    [activitySourceDescriptor, activitySource],
+  );
+  // Per-pane jump targets, mirroring the secondary/thread derivations above.
+  const activityChannelJumpTarget = useMemo(
+    () =>
+      activitySource && !activitySource.threadRootId && activitySource.messageId
+        ? {
+            channelId: activitySource.channelId,
+            messageId: activitySource.messageId,
+          }
+        : null,
+    [activitySource],
+  );
+  const activityChannelJumpPrimePending = useMemo(
+    () =>
+      activityChannelJumpTarget !== null &&
+      isPrimePendingFor(
+        activityChannelJumpTarget.channelId,
+        activityChannelJumpTarget.messageId,
+      ),
+    [isPrimePendingFor, activityChannelJumpTarget],
+  );
+  const activityThreadJumpMessageId =
+    activitySource?.threadRootId && activitySource.messageId
+      ? activitySource.messageId
+      : null;
+  const activityThreadJumpPrimePending = useMemo(
+    () =>
+      activityThreadJumpMessageId !== null &&
+      activitySource !== null &&
+      isPrimePendingFor(activitySource.channelId, activityThreadJumpMessageId),
+    [isPrimePendingFor, activityThreadJumpMessageId, activitySource],
+  );
+  // Opening a channel/DM source in the Activity side panel counts as reading
+  // that stream (shiki "打开 side panel 算已读"), exactly like a route pane
+  // becoming visible (the `visiblePrimary`/`visibleSecondary` effects above).
+  // Route it through the SAME source cursor mutation — Activity owns no read
+  // state of its own (Cindy review blocker 1). Keyed by a dedicated guard so it
+  // never races the route panes' refs.
+  //
+  // Gate on a RESOLVED channel/DM (Cindy review blocker 3): `conversationDescriptor`
+  // is non-null exactly for a resolved channel/dm, so a `#conv` pointing at a
+  // legacy thread / not_found / unauthorized id never gets a cursor write before
+  // we know it is a real mainline stream. Thread sources carry `threadRootId`
+  // and are excluded — ThreadPanel advances its own snapshot-gated reply cursor.
+  const activitySourceReadChannelId =
+    activitySource &&
+    !activitySource.threadRootId &&
+    activitySourceViewInputs.conversationDescriptor
+      ? activitySource.channelId
+      : null;
+  const lastActivitySourceReadKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activitySourceReadChannelId) {
+      lastActivitySourceReadKey.current = null;
+      return;
+    }
+    if (lastActivitySourceReadKey.current === activitySourceReadChannelId) return;
+    lastActivitySourceReadKey.current = activitySourceReadChannelId;
+    markMessageChannelRead.mutate(activitySourceReadChannelId);
+    // Also clear the notification-backed badge for this source, mirroring the
+    // route focused pane (which fires `markChannelRead` via `focusedConversation`,
+    // L962). The anchored row path's `requestJump` already does this; firing here
+    // covers the anchorless `#conv` open and is idempotent (Cindy review blocker).
+    markChannelRead.mutate(activitySourceReadChannelId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activitySourceReadChannelId]);
+
   // Parent-message highlight only renders alongside an open thread
   // (channel-typed sides aren't anchored to a parent message). Side
   // threads from PR-3 sigil clicks will fire `onThreadAnchorResolved`
@@ -1556,6 +1711,116 @@ function RegisteredAppShell(): JSX.Element {
         onOpenThread={nav.openThread}
       />
     );
+  }
+
+  // Activity source pane (#task:1227 point 2). Mirrors the secondary / thread
+  // render shapes, but driven by `activitySource` state instead of the
+  // `?side`/`?thread` route, so it composes into the Activity view's own
+  // SplitPane without touching channel-view selection. A thread item
+  // (thread_root_id != null) renders the live ThreadPanel; everything else
+  // renders the live ChannelView. Reading clears through the source's own path;
+  // the Activity layer writes nothing.
+  let activitySourcePane: JSX.Element | null = null;
+  if (activitySource) {
+    if (activitySource.threadRootId) {
+      const sourceWorkspaceId =
+        activitySource.workspaceId ?? activitySourceRef.ref?.workspace_id ?? null;
+      if (sourceWorkspaceId) {
+        const threadChannelId = activitySource.channelId;
+        const threadRoot = activitySource.threadRootId;
+        const threadWorkspaceId = sourceWorkspaceId;
+        activitySourcePane = (
+          <ThreadPanel
+            channelId={threadChannelId}
+            workspaceId={threadWorkspaceId}
+            rootMessageId={threadRoot}
+            parentTitle={activitySourceRef.ref?.title ?? null}
+            closed={activitySourceRef.ref?.closed_at != null}
+            archived={activitySourceRef.ref?.archived_at != null}
+            onClose={closeActivitySource}
+            onViewInChannel={() => {
+              // "Go back to the original conversation": full-nav to the
+              // channel + reply cluster, then drop the in-Activity pane.
+              handleJumpToMessage({
+                workspaceId: threadWorkspaceId,
+                channelId: threadChannelId,
+                threadRootId: threadRoot,
+                messageId: activityThreadJumpMessageId ?? threadRoot,
+              });
+              closeActivitySource();
+            }}
+            conversationRefsById={conversationRefsById}
+            onOpenConversationRef={openActivitySourceConversation}
+            onOpenChannelRef={handleOpenChannelByName}
+            onOpenTask={handleOpenTask}
+            jumpMessageId={activityThreadJumpMessageId}
+            jumpPrimePending={activityThreadJumpPrimePending}
+            onJumped={handleJumped}
+            sourceViewer
+          />
+        );
+      }
+    } else if (
+      activitySourceDescriptor?.source === 'side' &&
+      activitySourceDescriptor.status !== 'resolved'
+    ) {
+      activitySourcePane = (
+        <SideUnresolvedPlaceholder
+          conversationId={activitySourceDescriptor.id}
+          status={activitySourceDescriptor.status}
+          onClose={closeActivitySource}
+        />
+      );
+    } else if (activitySourceViewInputs.conversationDescriptor) {
+      activitySourcePane = (
+        <ChannelView
+          channelKind={activitySourceViewInputs.channelKind}
+          conversation={activitySourceViewInputs.conversationDescriptor}
+          parentTitle={activitySourceViewInputs.parentTitle}
+          jumpTarget={activityChannelJumpTarget}
+          jumpPrimePending={activityChannelJumpPrimePending}
+          onJumped={handleJumped}
+          onCloseChild={closeActivitySource}
+          closeLabel="关闭侧栏"
+          // Activity docked source = convenience viewer, not full conversation
+          // chrome: header collapses to identity + exit, all management controls
+          // (settings/archive-rename, attention pref, threads toggle, fullscreen,
+          // agent control, add-member) are suppressed — those live in the
+          // original conversation (shiki + Cindy + Alice, 2026-06-25). The
+          // archive/rename cross-ws callbacks are deleted, not hidden.
+          sourceViewer
+          // "Go back to the original conversation" — leaves Activity for the
+          // full channel. Anchored source → message-jump; anchorless (`#conv`
+          // opened in-panel) → plain channel nav, NO empty-messageId jump-prime
+          // (Cindy review blocker 3). Pure nav, no clearing (the live source
+          // already marked read while docked).
+          onOpenInConversation={() => {
+            if (activitySource.messageId) {
+              handleJumpToMessage({
+                workspaceId: activitySource.workspaceId,
+                channelId: activitySource.channelId,
+                threadRootId: activitySource.threadRootId,
+                messageId: activitySource.messageId,
+              });
+            } else {
+              const wid =
+                activitySource.workspaceId ??
+                activitySourceViewInputs.archiveWorkspaceId ??
+                activitySourceRef.ref?.workspace_id ??
+                undefined;
+              if (wid) nav.toChannel(wid, activitySource.channelId);
+            }
+            closeActivitySource();
+          }}
+          isFullscreen={false}
+          conversationRefsById={conversationRefsById}
+          onOpenConversationRef={openActivitySourceConversation}
+          onOpenChannelRef={handleOpenChannelByName}
+          onOpenTask={handleOpenTask}
+          onOpenThread={undefined}
+        />
+      );
+    }
   }
 
   return (
@@ -1813,6 +2078,8 @@ function RegisteredAppShell(): JSX.Element {
                     onSelectArchived={() => nav.toChatArchived()}
                     searchActive={view === 'search'}
                     onSelectSearch={() => nav.toChatSearch()}
+                    activityActive={view === 'activity'}
+                    onSelectActivity={() => nav.toChatActivity()}
                     savedCount={savedItems?.length}
                   />
                 </div>
@@ -1831,7 +2098,27 @@ function RegisteredAppShell(): JSX.Element {
                 active={sidebar.isDragging}
               />
             ) : null}
-            {view === 'saved' ? (
+            {view === 'activity' ? (
+              activitySourcePane ? (
+                <SplitPane
+                  left={
+                    <ActivityView
+                      workspaceRefById={workspaceRefById}
+                      agentsById={agentsById}
+                      onJump={params => openActivitySource(params)}
+                    />
+                  }
+                  right={activitySourcePane}
+                  storageKey="silverhand.layout.activity-split-ratio"
+                />
+              ) : (
+                <ActivityView
+                  workspaceRefById={workspaceRefById}
+                  agentsById={agentsById}
+                  onJump={params => openActivitySource(params)}
+                />
+              )
+            ) : view === 'saved' ? (
               <SavedListView onJump={params => handleJumpToMessage(params)} />
             ) : view === 'search' ? (
               <SearchPanel

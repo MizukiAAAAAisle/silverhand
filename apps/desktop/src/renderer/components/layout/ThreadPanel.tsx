@@ -66,6 +66,11 @@ interface ThreadPanelProps {
   /** Called once the jump completes (flashed) or is given up (target not in
    *  the loaded window). App clears the jump target on this. */
   onJumped?: () => void;
+  /** Render as an Activity DOCKED SOURCE VIEWER (#task:1227): identity + exit
+   *  header only. The Follow/Unfollow control (a delivery/attention management
+   *  op) is suppressed — the user manages following from the original thread.
+   *  Keeps `Open in conversation` + close. See `ChannelView.sourceViewer`. */
+  sourceViewer?: boolean;
 }
 
 /**
@@ -99,6 +104,7 @@ export function ThreadPanel({
   jumpMessageId,
   jumpPrimePending = false,
   onJumped,
+  sourceViewer,
 }: ThreadPanelProps): JSX.Element {
   const rootCtx = useThreadRoot(channelId, rootMessageId);
   const cluster = useThreadCluster(channelId, rootMessageId, {
@@ -569,7 +575,7 @@ export function ThreadPanel({
           data-channel-actions
           className="ml-auto flex shrink-0 items-center gap-1"
         >
-          {followers.data ? (
+          {!sourceViewer && followers.data ? (
             <button
               type="button"
               aria-label={viewerFollowing ? 'Unfollow thread' : 'Follow thread'}
