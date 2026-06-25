@@ -334,10 +334,11 @@ export function MessageItem({
   // the `useConversationUnread` read-model (threaded in as `threadUnread`) — the
   // SINGLE source of truth, NOT the message-window summary (which can't score
   // per-viewer unread). When > 0 the chip's trailing segment swaps the
-  // last-reply time for a filled "N new" sticker (the SAME single unread hue +
-  // square sticker as the Threads list; forza6 squares it via data-thread-unread)
-  // and the chip click jumps to the first unread reply instead of the thread
-  // tail. Follow-agnostic — unread is independent of whether the viewer follows.
+  // last-reply time for a text-form "N new" modifier in the unread hue (ink,
+  // not a filled sticker — see the trailing-node comment for the volume-budget
+  // rationale) and the chip click jumps to the first unread reply instead of
+  // the thread tail. Follow-agnostic — unread is independent of whether the
+  // viewer follows.
   const threadUnreadCount = threadUnread?.unread_count ?? 0;
   const threadFirstUnreadId = threadUnread?.first_unread_message_id ?? null;
   const replyBadgeTitle = enrichedReply
@@ -472,12 +473,16 @@ export function MessageItem({
             <span className="font-medium">{replyBadgeLabel}</span>
             <span className="text-text-muted">·</span>
             {threadUnreadCount > 0 ? (
-              // Strong unread signal: filled count sticker (same recipe as the
-              // Threads list followed-row). forza6 squares it.
-              <span
-                data-thread-unread="sticker"
-                className="shrink-0 min-w-[16px] rounded-full bg-accent px-1 text-center text-[9px] font-semibold leading-[16px] text-text-on-accent"
-              >
+              // Unread signal as a TEXT modifier, not a filled sticker. The
+              // chip is a LOCAL affordance (already a full click target); the
+              // loud filled square belongs to the GLOBAL pressure signals
+              // (sidebar badge / Threads list followed-row), so borrowing it
+              // here overspends the volume budget and crowds the `N replies`
+              // subject (shiki dogfood `dSjdBvz4` — sticker filled the 18px
+              // chip). Keep the single unread hue as INK (`text-accent` deep
+              // magenta, AA on light) + medium weight: pink identity preserved,
+              // chip height unchanged. Click still jumps to first unread.
+              <span className="shrink-0 font-medium text-accent">
                 {threadUnreadCount > 99 ? '99+' : threadUnreadCount} new
               </span>
             ) : (
