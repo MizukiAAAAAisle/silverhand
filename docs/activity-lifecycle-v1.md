@@ -183,7 +183,7 @@ enter(item, me) = directed(item, me)  OR  ( ambient(item) AND ambientPref(stream
 沿用 `docs/use-case-layer-p0-spec.md` 三层。Attention 零自有 read 存储,只投影 + 编排:
 
 - **`listActivity(viewer, scope)`** — query use case。union(positional unread via cursor read-model ∩ `enter()`)+(directed via notifications 投影:mention_self / agent_start_failed),per-(viewer,message) 去重(§7),salience 排序(§5.2)。返回纯 DTO。**task 不在 union 内(v1 移除,§5.1)。**
-- **`observe(viewer, source_ref, position)`** — 消除 use case。source-routed(§5.3):stream→advance cursor、mention/agent_fail→置 `notifications.read_at`。（task v2 才回归，resolve-cleared，不走它。）
+- **`observe(viewer, source_ref, position)`** — 消除 use case。source-routed(§5.3):stream→advance cursor、mention/agent_fail→置 `notifications.read_at`。（v2 若 task 回归 = notification-backed `task_needs_review`,同样 read-cleared、走 `notifications.read_at` —— 即也经此原语,不是 resolve-cleared、不走 `task_status`。）
 - **`setChannelAttentionPref(viewer, channel, mode)`** — 写 `ChannelAttentionPreference`,**只此一处**写 attention state。
 
 ### 9.3 endpoint(具名,实现期定路径)
@@ -198,11 +198,12 @@ enter(item, me) = directed(item, me)  OR  ( ambient(item) AND ambientPref(stream
 
 ## 10. 失效 / 对账信号
 
-Activity 是 **viewer-scoped read-model**,所以它的三源失效信号统一收敛到 **`viewer:<userId>`** scope —— renderer 只订阅一条 viewer scope,听到任一源变化即失效 `['activity']` query、重取投影(no-poll,同 `#1226` 模型)。三源:
+Activity 是 **viewer-scoped read-model**,所以它的失效信号统一收敛到 **`viewer:<userId>`** scope —— renderer 只订阅一条 viewer scope,听到任一源变化即失效 `['activity']` query、重取投影(no-poll,同 `#1226` 模型)。**v1 两源**(positional + directed-notification):
 
 - **positional**:viewer-scoped **`unread_updated`** 失效(复用 `#1226`,已在 `viewer:<id>` 上发)。
 - **directed(notification)**:viewer-scoped **`notification`** 失效(`mention_self` / `agent_start_failed` 已在 `viewer:<id>` 上发)。
-- **directed(task) —— v1 移除(见 §5.1）：** `task_changed` 不再 fan 到 `viewer:<id>` scope。task 不是 v1 Activity 源,故无 viewer-scoped 消费者;`publishTaskChanged` 只发 conversation + `workspace:<wid>` scope(任务板)。**曾经的 viewer-fan(为 global Activity task 行而设)已删**——v2 task 经 notification 路径(本就 fan viewer scope)回归,不复活 `task_changed` 的 viewer-fan。regression lock 见 `backend/tests/routes/tasks.test.ts`(`task_changed` 不到 viewer scope)。
+
+> **不再有第三源(task) ——** `task_changed` 的 viewer-fan(220b3af 为 global Activity task 行而设)已随 v1 砍 kind=task 一并删除(§5.1)。task 不是 v1 Activity 源,故无 viewer-scoped 消费者;`publishTaskChanged` 只发 conversation + `workspace:<wid>` scope(任务板)。v2 task 若回归走 notification 路径(本就 fan viewer scope,即上面第二源),**不**复活 `task_changed` 的 viewer-fan。regression lock 见 `backend/tests/routes/tasks.test.ts`(`task_changed` 不到 viewer scope)。
 
 - **message event** 可更新 reply_count / repliers 这类**可乐观维护**的事实,**绝不直接改 Activity unread**(§1 铁律)。
 - 客户端**不靠 message event 猜 unread**、不扫一堆 conversation cache 拼全局 Activity:读 `listActivity` 这一处 server-scored 投影。
@@ -242,13 +243,13 @@ Activity 是 **viewer-scoped read-model**,所以它的三源失效信号统一�
 
 ### 13.2 全局 Activity 列表(v1)
 
-- **入口**:sidebar、Search 之上(shiki)。**v1 UI = global**(shiki 拍 2026-06-25「这里是用户所有要关注的入口」):一个 human 跨所有可见 workspace 的「等我处理」总队列,`GET /api/activity` 不带 `workspace_id`。`workspace_id` 仍是**可选** filter(数据模型本就全局,UI 日后若要 per-workspace 视图直接传)。global 的完整性三件套:①失效全 viewer-scoped(§10;v1 三源 = `unread_updated` / `notification` —— task_changed viewer-fan 已删,§5.1/§10);②列表行显示 workspace context(DTO 已带 `workspace_id`,renderer 用 workspace map 补 name,跨 ws 同名 channel 可区分,纯展示不放宽可见性);③跳源跨 workspace 稳定(DTO `workspace_id` + onJump 已支持)。
+- **入口**:sidebar、Search 之上(shiki)。**v1 UI = global**(shiki 拍 2026-06-25「这里是用户所有要关注的入口」):一个 human 跨所有可见 workspace 的「等我处理」总队列,`GET /api/activity` 不带 `workspace_id`。`workspace_id` 仍是**可选** filter(数据模型本就全局,UI 日后若要 per-workspace 视图直接传)。global 的完整性三件套:①失效全 viewer-scoped(§10;v1 两源 = `unread_updated` / `notification` —— task_changed viewer-fan 已删,§5.1/§10);②列表行显示 workspace context(DTO 已带 `workspace_id`,renderer 用 workspace map 补 name,跨 ws 同名 channel 可区分,纯展示不放宽可见性);③跳源跨 workspace 稳定(DTO `workspace_id` + onJump 已支持)。
 - **收**:`enter() == true`(§6)= DM · @我(notification-backed directed,§5.1a)· followed-thread ambient · `所有消息` channel 的 ambient。（task-needs-action = v2,§5.1，v1 不进。）
 - **每条 item**:源 icon + 来源标识(哪个 channel/thread)+ 预览 + 相对时间;**salience 分级**(§5.2)directed 视觉强于 ambient;**per-(viewer, message) 去重、取最高 salience**(§7)→ @我显示成 mention + 上下文、**不再**显示成 ambient 未读。
 - **排序(v1 从简)**:directed 档置顶、档内 most-recent-first。
 - **清除 = read-driven,降解为 §5.3 eliminate route**:
   - **read-cleared item(message / @我 mention)**:打开 / 跳源 → `observe`(推 cursor / 置 `notifications.read_at`);**`Mark as read`** = **hover 才显的 check icon、非常驻「Done」按钮**(常驻 + 「Done」字样会把 triage 心智带回)→ 同一 `observe`;**扫一眼 / hover ≠ 读**(不推 cursor,解「扫一眼就没」)。
-  - **~~resolve-cleared task item~~ = v2(§5.1,v1 不进 Activity)**:task 库存在 task panel;若 v2 以 notification-backed `task_needs_review` 回归,它将是 read-cleared 事件(走 `Mark as read` / `observe`),而非给库存 item 强加无语义的标已读。
+  - **(v2) `task_needs_review` notification(§5.1,v1 不进 Activity)**:v1 task 库存只在 task panel;v2 若回归,它是一条 **notification-backed、read-cleared** 事件(走 `Mark as read` / `observe` → `notifications.read_at`,与 mention 同路),**不是**给 task 库存 item 强加无语义的标已读。
   - **firehose 兜底**:列表顶「全部标已读」**= 对 read-cleared items 的批量 source-routed `observe(source_ref, position)`**(逐个/批量等价),**绝不新增 `activity.bulk_read_at` 或任何 Activity 自有状态**。（v1 列表内全是 read-cleared item,无 task 例外要排除。）
   - 列表**绝不直接写 read/triage 状态**——answerability 在 UI 侧的兑现(§5.3 / §14)。
 - **空态**:caught-up。**v1 无 Done / Snooze / Archive**(triage = v2,§11)。
