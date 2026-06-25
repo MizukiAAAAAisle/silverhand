@@ -175,7 +175,7 @@ enter(item, me) = directed(item, me)  OR  ( ambient(item) AND ambientPref(stream
 
 ### 9.1 写侧聚合
 
-- **不变**:`conversation_reads`(per-stream cursor,`#1226` v51)· `conversation_stream_heads` · `notifications`(`read_at`)· `messages`(task_*)。
+- **不变**:`conversation_reads`(per-stream cursor,`#1226` v51)· `conversation_stream_heads` · `notifications`(`read_at`)。（`messages.task_*` 不再是 Attention 源 —— task 不进 v1 Activity,§5.1。）
 - **唯一新增写侧聚合 = `ChannelAttentionPreference`**(per viewer × channel 的 ambient 档:`所有消息 / 仅提及`)。它是 `enter()` 的 policy 输入,**不是 activity item、不被消除**。是「决定」→ 合法自有表(§4.2)。新增 migration(append-only)。
 
 ### 9.2 读侧:Attention context(`application/` + read-model)
@@ -212,7 +212,7 @@ Activity 是 **viewer-scoped read-model**,所以它的三源失效信号统一�
 
 ## 11. v1 / v2 边界
 
-- **v1 = read,全程 source-routed**(§5.3)。清除模型 = **读了即出**(仅 read-cleared 来源;task 例外 = resolve-cleared)。两条清除路径都只写已有两套状态(stream cursor / `notifications.read_at`),**不引第三套**:① 跳源读到 → observe 推进;② 轻量 `Mark as read`(check icon)→ 同一 observe。
+- **v1 = read,全程 source-routed**(§5.3)。清除模型 = **读了即出**(v1 Activity item 全是 read-cleared,无 task 例外——task 库存属 task panel、不在 Activity)。两条清除路径都只写已有两套状态(stream cursor / `notifications.read_at`),**不引第三套**:① 跳源读到 → observe 推进;② 轻量 `Mark as read`(check icon)→ 同一 observe。
 - **`Done / Snooze / Archive` = triage**,是另一根轴:**triage ⊥ read** —— triage 答「我处理完了吗」、read 答「我看过了吗」。正因正交,引入 triage 不替代、不影射 read state,read 侧 answerability 照样成立。**triage 是 Activity 唯一能拥有的 durable state,且仅 v2**,引入时明确命名 triage 不叫 read。
 - **v1/v2 边界标记(防回退):** v2 做 triage 时,绝不能顺手实现成「activity 自己的 `read_at`」—— 那会把派生事实当决定存,直接打回 `#1226`。
 
@@ -266,7 +266,7 @@ Activity 是 **viewer-scoped read-model**,所以它的三源失效信号统一�
 - thread 开窗 → open-time stream head(粗:开 = 读了整条打开的 thread);pinned-at-tail + document 可见 → live 标 max-visible(细)。(`#1226` 已落)
 - **v1.1**:per-item `IntersectionObserver` 精确标真正进入视口的 max-visible,替换 pinned-tail 代理。
 
-代理只影响「标到哪个 seq」的精度,不影响正确性(forward-only + success-gated,§5.3)。task 不涉(resolve-cleared 与可见无关)。
+代理只影响「标到哪个 seq」的精度,不影响正确性(forward-only + success-gated,§5.3)。task 不在 v1 Activity(§5.1);v2 若回归是 notification-backed read-cleared,届时同走可见性代理。
 
 ### 13.5 命名 / 对外用词(§3)
 
