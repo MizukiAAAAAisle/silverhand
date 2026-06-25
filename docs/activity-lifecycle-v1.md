@@ -28,7 +28,7 @@ Owner: 脊柱(数据模型/生命周期/领域分层)=Alice · UI 表面节=Norm
 6. **overlap 去重 = per-(viewer, message)**(§7):一条 message 对一 viewer 至多一个 claim,按最高 salience 呈现,一致消除。
 7. **sidebar 与 Activity 同源同 `enter()`,projection-specific 聚合**(§8):sidebar 不减 directed、Activity ambient 减 directed。
 8. **建表准入测试:「它是用户的决定,还是派生事实?」**(§4.2)决定→可落自有聚合;派生→只能投影。
-9. **answerability 测试**(§5.3):每个 item 必须答出 source_ref-in(产生)= source_ref-out(消除);答不上 = 凭空状态。
+9. **answerability 测试**(§5.3):每个 item 必须有一条 **eliminate route**,且 source_ref-in(产生)= source_ref-out(消除);**out 不一定叫 observe**(read-cleared→`observe`、task→状态迁移)。答不上 = 凭空状态。
 10. **read ⊥ triage**(§11):v1 只 read(source-routed);triage(done/snooze/archive)是唯一可被 Activity 拥有的 durable state,**仅 v2**,且命名为 triage 不叫 read。
 
 ---
@@ -101,7 +101,8 @@ shiki 提问:Activity 是不是一个独立 DDD 领域事件,有自己的读和�
 | task needs-my-action | directed | `messages.task_status` / `task_assignee_user_id` 投影 | **永远进** |
 | agent_start_failed(我的 agent) | directed | `notifications.read_at` | **永远进** |
 
-> **实现期需 Notification context 核实/补齐:** 今天 `NotificationKind = {mention_external, mention_self, agent_start_failed}`,emission 偏 agent 向(`notification.ts` 注:v1 only emits `mention_external`)。human **@我** 的 directed claim 需要 Notification context 记录 human-mention 行(扩 kind / emission)——这是 **Notification context 的工作,不是 Attention 拥有状态**。若 v1 选择从消息体 `extractMentions` 投影而不落 notification 行,则该 claim 退化为 positional-with-mention-salience(read-state 走 stream cursor),**二选一须在 doc 定稿前拍**(见 §14 待决)。
+> **canonical TARGET = (a) notification-backed directed claim(Cindy contract review 锁,2026-06-25):** human **@我** 的 directed claim,read-state = `notifications.read_at`,由 **Notification context 记录 human-mention 行**(今天 `NotificationKind = {mention_external, mention_self, agent_start_failed}`、emission 偏 agent 向、v1 only emits `mention_external`,故须**扩 emission 到 human-mention**)。这是 **Notification context 的工作、计入 #1227 scope,不是 Attention 拥有状态**。
+> **不选 (b)`extractMentions` 投影作 canonical:** 它会把 directed 退化成 positional-with-mention-salience,与 §7 overlap / directed 消除谓词不是同一模型;**(b) 最多作迁移期 fallback,绝不写成 target**。directed 与 positional 解耦更干净、salience 天生高 —— (a) 是第一性选择。
 
 ### 5.2 分级 / 呈现 —— delivery ⊥ attention
 
@@ -123,7 +124,7 @@ shiki 提问:Activity 是不是一个独立 DDD 领域事件,有自己的读和�
 
 **关键carve-out(schema 推出的正确性点):task 不是「读了即出」。** 读一眼没认领的 task 绝不该清它;它的消除谓词 = `task_status` 不再 needs-my-action(resolve-to-clear)。所以 v1「读了即出」**只对 read-cleared 来源成立**;task item **不给 `Mark as read` 语义**(给了也是 no-op),它的消失锚在 tasks 状态。
 
-**answerability 测试(机械可证,Cindy gate):** 每个 Activity item 必须能说出 **source_ref-in**(由哪个源产生)= **source_ref-out**(observe/resolve 时写回哪个源)。答不上 = 不是投影 = 凭空状态。原语保证 source-out 自动对、answerability 强制 source-in 必填,两头一夹,**孤儿 read-state 不可能存在**。
+**answerability 测试(机械可证,Cindy gate):** 每个 Activity item 必须有一条 **eliminate route**,且能说出 **source_ref-in**(由哪个源产生)= **source_ref-out**(消除时写回哪个源)。**out 不一定叫 `observe`**:read-cleared item 走 `observe(source_ref, position)`;resolve-cleared task item 走 **task 源聚合的状态迁移**(`task_status`)。答不上 source-in=source-out = 不是投影 = 凭空状态。两头一夹(out 自动对、in 强制必填),**孤儿 read/triage-state 不可能存在**。
 
 ---
 
@@ -209,7 +210,7 @@ enter(item, me) = directed(item, me)  OR  ( ambient(item) AND ambientPref(stream
 ## 12. 时序 / 迁移(与 #1226 的桥)
 
 1. **doc 定 target(本 doc)→ Cindy review 过。**
-2. **additive 实现(可在 doc 过后即起,不碰 `#1226`):** `ChannelAttentionPreference` 表(migration)+ `listActivity` 读模型 + `setChannelAttentionPref` + endpoint。镜像 `#1226` step-1 的纯加性模式,各步 tree-green。
+2. **additive 实现(可在 doc 过后即起,不碰 `#1226`):** `ChannelAttentionPreference` 表(migration)+ **Notification context 补 human-mention emission(§5.1 (a),directed @我 背书)** + `listActivity` 读模型 + `setChannelAttentionPref` + endpoint。镜像 `#1226` step-1 的纯加性模式,各步 tree-green。
 3. **`observe()` 坍缩(硬时序约束):** 把现有两条 mark-read 写路径(open-time snapshot + visible-live,在 Norman 的 `ThreadPanel.tsx`)收敛成单一 `observe()`。这一步**动 `#1226` 的 mark-read**,故 **必须等 `#1226` dogfood 过 + 关 task 才做**(in_review 期绝不碰)。届时 `snapshot_seq` 客户端回传大概率冗余可删(visible-live 已上报真实 observed seq);涉 DTO/CLI 同步 `docs/cli-system.md`。**这一步即 `#1226 → #1227` 的桥。**
 
 ---
@@ -225,11 +226,11 @@ enter(item, me) = directed(item, me)  OR  ( ambient(item) AND ambientPref(stream
 Cindy 的 5 条硬标准 = 本 doc 的逐条验收:
 1. Attention 是读侧 bounded context / projection,不拥有 read/unread/claim/salience(§4)。
 2. Attention 只拥有 attention 决定:v1 `ChannelAttentionPreference`;follow 仍是 delivery 决定,只读不写(§4.2、§5.2)。
-3. 每个 item 通过 answerability:source_ref-in、observe 写回 source_ref-out;overlap 按 per-(viewer,message) 去重(§5.3、§7)。
+3. 每个 item 通过 answerability:有一条 eliminate route,source_ref-in = source_ref-out;**out 不一定叫 observe**(read-cleared→`observe(source_ref,position)` / task→`task_status` 状态迁移);overlap 按 per-(viewer,message) 去重(§5.3、§7)。
 4. `observe()` 必须 source-routed,不写 `activity.read_at`(§5.3)。
 5. sidebar 与 Activity 同源同 `enter()`,projection-specific 聚合(§8)。
 
-**doc 定稿前待拍(§5.1):** human **@我** directed claim 的背书 —— (a) Notification context 补 human-mention 行(directed,read-state=`notifications.read_at`)还是 (b) 从 `extractMentions` 投影(退化 positional-with-mention-salience,read-state=stream cursor)。影响 §5.1 源映射与 §7 overlap 派生谓词。
+**已拍(Cindy contract review,2026-06-25):** human **@我** directed claim = **(a) notification-backed,canonical TARGET** —— Notification context 补 human-mention 行(read-state=`notifications.read_at`),新增 emission **计入 #1227 scope**(§5.1、§12 step-2);(b) `extractMentions` 投影仅迁移期 fallback、非 canonical。
 
 ---
 
