@@ -4,7 +4,7 @@ import type {
   MessageDto,
   ReplyBadgeSummary,
 } from '@silverhand/shared';
-import { replyClusterNeedsSummarySeed } from './hooks';
+import { replyClusterNeedsSummarySeed, replyClusterNeedsSummaryReconcile } from './hooks';
 
 // #task:1226 surface 3 dogfood bug: a reply chip never shows "N new" when the
 // root had ZERO replies at fetch time, because the optimistic live-reply bump
@@ -122,5 +122,64 @@ describe('replyClusterNeedsSummarySeed (#task:1226 surface 3)', () => {
       pageParams: [undefined, { kind: 'before' as const, seq: 5 }],
     };
     expect(replyClusterNeedsSummarySeed(c, 'root1')).toBe(true);
+  });
+});
+
+describe('replyClusterNeedsSummaryReconcile (#task:1226 surface 3 has-summary path)', () => {
+  it('false when the cache is undefined', () => {
+    expect(replyClusterNeedsSummaryReconcile(undefined, 'root1')).toBe(false);
+  });
+
+  it('false when the root is not in any loaded page', () => {
+    expect(
+      replyClusterNeedsSummaryReconcile(
+        cache(page({ reply_summaries_by_root: { root1: summary() } })),
+        'absent-root',
+      ),
+    ).toBe(false);
+  });
+
+  it('false on the SEED state (sidecar shipped but this root has no entry)', () => {
+    // Seed is the other helper's job; reconcile only fires once a summary exists.
+    expect(
+      replyClusterNeedsSummaryReconcile(
+        cache(page({ reply_summaries_by_root: {} })),
+        'root1',
+      ),
+    ).toBe(false);
+  });
+
+  it('false when the sidecar was never shipped (count-only by design)', () => {
+    expect(replyClusterNeedsSummaryReconcile(cache(page()), 'root1')).toBe(
+      false,
+    );
+  });
+
+  it('TRUE when the root already has a summary (the back-and-forth bug)', () => {
+    // 2nd reply onward: patchReplySummary keeps the prior server-scored unread,
+    // so the chip would freeze at the old "N new" — the caller must refetch.
+    expect(
+      replyClusterNeedsSummaryReconcile(
+        cache(page({ reply_summaries_by_root: { root1: summary() } })),
+        'root1',
+      ),
+    ).toBe(true);
+  });
+
+  it('TRUE when the summary lives on a later page than page one', () => {
+    const c = {
+      pages: [
+        page({
+          messages: [message({ id: 'other', seq: 5 })],
+          reply_summaries_by_root: { other: summary() },
+        }),
+        page({
+          messages: [message({ id: 'root1', seq: 1 })],
+          reply_summaries_by_root: { root1: summary({ unread_count: 3 }) },
+        }),
+      ],
+      pageParams: [undefined, { kind: 'before' as const, seq: 5 }],
+    };
+    expect(replyClusterNeedsSummaryReconcile(c, 'root1')).toBe(true);
   });
 });
