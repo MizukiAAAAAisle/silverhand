@@ -163,62 +163,44 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     expect(items[items.length - 1].salience).toBe('ambient');
   });
 
-  it('a task assigned to the viewer enters as a resolve-cleared task item', async () => {
+  it('task-bearing messages produce NO kind=task item in v1 (tasks live in the panel)', async () => {
     t = buildTestApp();
     const { workspaceId, channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
-    const msgId = await sendAsAgent(t, channelId, sender, 'work item seed');
-    // Project a task assigned to the viewer onto that message (the read-model
-    // reads messages.task_* — seeding the source directly is a valid
-    // characterization of the projection).
+    // (a) a task assigned to the viewer, and (b) an in_review task by someone
+    // else — both used to project a kind=task item. v1 drops the task projection
+    // entirely (shiki 2026-06-26): tasks are tracked in the task panel; only
+    // message/unread/mention attention events enter Activity.
+    const mineMsg = await sendAsAgent(t, channelId, sender, 'assigned to me');
     t.ctx.db
       .prepare(
-        `UPDATE messages
-            SET task_number = 7, task_status = 'in_progress',
-                task_assignee_user_id = 'local', task_workspace_id = ?,
-                task_title = 'fix the thing'
-          WHERE id = ?`,
+        `UPDATE messages SET task_number = 7, task_status = 'in_progress',
+            task_assignee_user_id = 'local', task_workspace_id = ?,
+            task_title = 'mine' WHERE id = ?`,
       )
-      .run(workspaceId, msgId);
+      .run(workspaceId, mineMsg);
+    const reviewMsg = await sendAsAgent(t, channelId, sender, 'please review');
+    t.ctx.db
+      .prepare(
+        `UPDATE messages SET task_number = 8, task_status = 'in_review',
+            task_assignee_user_id = 'someone-else', task_workspace_id = ?,
+            task_title = 'awaiting validation' WHERE id = ?`,
+      )
+      .run(workspaceId, reviewMsg);
 
-    const items = await getActivity(t);
-    const tasks = items.filter(i => i.kind === 'task');
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0]).toMatchObject({
-      kind: 'task',
-      salience: 'directed',
-      task_number: 7,
-      task_status: 'in_progress',
-      conversation_id: channelId,
-      message_id: msgId,
-    });
-    // The task's own message is no longer double-counted as ambient (§7).
+    // No task items at all — neither the assigned-to-me nor the in_review branch.
+    expect((await getActivity(t)).some(i => i.kind === 'task')).toBe(false);
+
+    // The task-bearing messages are still reachable via the ordinary unread path
+    // (they are plain messages from another member) once ambient is on.
     await http(t).put(`/api/conversations/${channelId}/attention-preference`, {
       mode: 'all',
     });
-    const after = await getActivity(t);
-    expect(after.some(i => i.kind === 'unread' && i.conversation_id === channelId)).toBe(
-      false,
+    const ambient = (await getActivity(t)).filter(
+      i => i.kind === 'unread' && i.conversation_id === channelId,
     );
-  });
-
-  it('done/closed tasks do not enter (needs-action only)', async () => {
-    t = buildTestApp();
-    const { workspaceId, channelId } = await createWorkspaceChannel(t);
-    const sender = (await firstChannelAgent(t, channelId))!;
-    const msgId = await sendAsAgent(t, channelId, sender, 'finished work');
-    t.ctx.db
-      .prepare(
-        `UPDATE messages
-            SET task_number = 8, task_status = 'done',
-                task_assignee_user_id = 'local', task_workspace_id = ?,
-                task_title = 'already done'
-          WHERE id = ?`,
-      )
-      .run(workspaceId, msgId);
-
-    const items = await getActivity(t);
-    expect(items.some(i => i.kind === 'task')).toBe(false);
+    expect(ambient).toHaveLength(1);
+    expect(ambient[0].unread_count).toBe(2); // both task messages count, non-directed
   });
 
   it('scopes to a workspace when ?workspace_id is given', async () => {
@@ -252,63 +234,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     expect(all.some(i => i.conversation_id === bChannel)).toBe(true);
   });
 
-  it('an in_review task enters for a conversation member who is not the assignee', async () => {
-    t = buildTestApp();
-    const { workspaceId, channelId } = await createWorkspaceChannel(t);
-    const sender = (await firstChannelAgent(t, channelId))!;
-    const msgId = await sendAsAgent(t, channelId, sender, 'please review my work');
-    // Assigned to a DIFFERENT principal, status in_review — the viewer ('local')
-    // is a channel member but not the assignee. Per shiki 2026-06-25, in_review
-    // tasks awaiting validation are first-class Activity events for members.
-    t.ctx.db
-      .prepare(
-        `UPDATE messages
-            SET task_number = 11, task_status = 'in_review',
-                task_assignee_user_id = 'someone-else', task_workspace_id = ?,
-                task_title = 'awaiting validation'
-          WHERE id = ?`,
-      )
-      .run(workspaceId, msgId);
-
-    const items = await getActivity(t);
-    const tasks = items.filter(i => i.kind === 'task');
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0]).toMatchObject({
-      task_number: 11,
-      task_status: 'in_review',
-      conversation_id: channelId,
-    });
-  });
-
-  it('a task does not leak to a non-member of its conversation (visibility gate)', async () => {
-    t = buildTestApp();
-    const { workspaceId, channelId } = await createWorkspaceChannel(t);
-    const sender = (await firstChannelAgent(t, channelId))!;
-    const msgId = await sendAsAgent(t, channelId, sender, 'work needing review');
-    t.ctx.db
-      .prepare(
-        `UPDATE messages
-            SET task_number = 12, task_status = 'in_review',
-                task_assignee_user_id = 'someone-else', task_workspace_id = ?,
-                task_title = 'visible to members only'
-          WHERE id = ?`,
-      )
-      .run(workspaceId, msgId);
-
-    // Member sees it…
-    expect((await getActivity(t)).some(i => i.kind === 'task')).toBe(true);
-
-    // …drop the viewer's membership of that conversation → it must disappear
-    // (both task branches are membership-gated, no info leak).
-    t.ctx.db
-      .prepare(
-        `DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = 'local'`,
-      )
-      .run(channelId);
-    expect((await getActivity(t)).some(i => i.kind === 'task')).toBe(false);
-  });
-
-  it('a mention and a task on the SAME message yield one item (task wins, §7)', async () => {
+  it('a mention on a task-bearing message still enters as a mention (no kind=task in v1)', async () => {
     t = buildTestApp();
     const { workspaceId, channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
@@ -325,49 +251,10 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
 
     const items = await getActivity(t);
     const onThatMessage = items.filter(i => i.message_id === msgId);
+    // Task projection is gone → the message's only directed claim is the mention.
     expect(onThatMessage).toHaveLength(1);
-    expect(onThatMessage[0].kind).toBe('task');
-    expect(items.some(i => i.kind === 'mention' && i.message_id === msgId)).toBe(false);
-  });
-
-  it('task ids are globally unique across workspaces with the same task_number', async () => {
-    t = buildTestApp();
-    const a = await createWorkspaceChannel(t);
-    const aSender = (await firstChannelAgent(t, a.channelId))!;
-    const aMsg = await sendAsAgent(t, a.channelId, aSender, 'task in ws A');
-    t.ctx.db
-      .prepare(
-        `UPDATE messages SET task_number = 7, task_status = 'in_review',
-            task_assignee_user_id = 'someone-else', task_workspace_id = ?,
-            task_title = 'A7' WHERE id = ?`,
-      )
-      .run(a.workspaceId, aMsg);
-
-    const bAlice = await makeAgent(t, 'beth');
-    const wsB = (await (
-      await http(t).post('/api/workspaces', {
-        name: 'ws-activity-b',
-        member_agent_ids: [bAlice],
-      })
-    ).json()) as any;
-    const bChannel = wsB.onboarding_channel_id as string;
-    const bWorkspace = wsB.workspace.id as string;
-    const bSender = (await firstChannelAgent(t, bChannel))!;
-    const bMsg = await sendAsAgent(t, bChannel, bSender, 'task in ws B');
-    t.ctx.db
-      .prepare(
-        `UPDATE messages SET task_number = 7, task_status = 'in_review',
-            task_assignee_user_id = 'someone-else', task_workspace_id = ?,
-            task_title = 'B7' WHERE id = ?`,
-      )
-      .run(bWorkspace, bMsg);
-
-    const tasks = (await getActivity(t)).filter(i => i.kind === 'task');
-    expect(tasks).toHaveLength(2);
-    const ids = new Set(tasks.map(i => i.id));
-    expect(ids.size).toBe(2); // both task_number=7 but distinct ids
-    expect(ids.has(`task:${a.workspaceId}:7`)).toBe(true);
-    expect(ids.has(`task:${bWorkspace}:7`)).toBe(true);
+    expect(onThatMessage[0].kind).toBe('mention');
+    expect(items.some(i => i.kind === 'task')).toBe(false);
   });
 
   it('ambient anchor is the first NON-directed unread when a mention is first (§8)', async () => {
@@ -450,60 +337,22 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     expect(failed!.preview).toContain('beth');
   });
 
-  it('unread and task items have a null notification_id (cleared via cursor / task_status)', async () => {
+  it('unread items have a null notification_id (cleared via cursor, not read_at)', async () => {
     t = buildTestApp();
-    const { workspaceId, channelId } = await createWorkspaceChannel(t);
+    const { channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
-    const taskMsg = await sendAsAgent(t, channelId, sender, 'task seed');
-    t.ctx.db
-      .prepare(
-        `UPDATE messages SET task_number = 20, task_status = 'in_review',
-            task_assignee_user_id = 'someone-else', task_workspace_id = ?,
-            task_title = 't20' WHERE id = ?`,
-      )
-      .run(workspaceId, taskMsg);
     await sendAsAgent(t, channelId, sender, 'plain ambient');
     await http(t).put(`/api/conversations/${channelId}/attention-preference`, {
       mode: 'all',
     });
 
     const items = await getActivity(t);
-    for (const i of items.filter(x => x.kind === 'unread' || x.kind === 'task')) {
-      expect(i.notification_id).toBeNull();
-    }
+    const unread = items.filter(x => x.kind === 'unread');
+    expect(unread.length).toBeGreaterThan(0);
+    for (const i of unread) expect(i.notification_id).toBeNull();
   });
 
   // ── source-first layout fields (shiki dogfood: row-1 where / row-2/3 content) ──
-
-  it('a task item uses the conversation title as `title` and carries task_title separately', async () => {
-    t = buildTestApp();
-    const { workspaceId, channelId } = await createWorkspaceChannel(t);
-    const sender = (await firstChannelAgent(t, channelId))!;
-    const msgId = await sendAsAgent(t, channelId, sender, 'seed');
-    t.ctx.db
-      .prepare(
-        `UPDATE messages SET task_number = 30, task_status = 'in_progress',
-            task_assignee_user_id = 'local', task_workspace_id = ?,
-            task_title = 'Refactor the widget' WHERE id = ?`,
-      )
-      .run(workspaceId, msgId);
-
-    const convTitle = (
-      t.ctx.db
-        .prepare(`SELECT title FROM conversations WHERE id = ?`)
-        .get(channelId) as { title: string }
-    ).title;
-
-    const task = (await getActivity(t)).find(i => i.kind === 'task');
-    expect(task).toBeTruthy();
-    // `title` is the location (conversation), NOT the task subject (the §layout
-    // fix: task items previously overloaded `title` with task_title).
-    expect(task.title).toBe(convTitle);
-    expect(task.task_title).toBe('Refactor the widget');
-    expect(task.conversation_kind).toBe('channel');
-    expect(task.thread_root_preview).toBeNull();
-    expect(task.preview).toBeNull();
-  });
 
   it('a channel mention carries conversation_kind and a null thread_root_preview (mainline)', async () => {
     t = buildTestApp();
@@ -515,7 +364,6 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     expect(mention).toBeTruthy();
     expect(mention.conversation_kind).toBe('channel');
     expect(mention.thread_root_preview).toBeNull(); // mainline → no root row
-    expect(mention.task_title).toBeNull();
   });
 
   it('a thread unread carries the root preview (row-2) and the reply preview (row-3)', async () => {

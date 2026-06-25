@@ -286,7 +286,7 @@ describe('Tasks (PR-T1)', () => {
     expect(ev.task_number).toBe(1);
   });
 
-  it('fans task_changed to the conversation members\' viewer scope (global Activity), not non-members (#task:1227)', async () => {
+  it('does NOT fan task_changed to viewer scope — task is not an Activity source in v1 (#task:1227)', async () => {
     t = buildTestApp();
     const { sessionId, workspaceId, agentIds } = await setup(t);
     const h = http(t);
@@ -294,7 +294,6 @@ describe('Tasks (PR-T1)', () => {
     const convScope: string[] = [];
     const wsScope: string[] = [];
     const memberViewer: string[] = []; // 'local' is a member (created the ws)
-    const strangerViewer: string[] = []; // not a member of the conversation
     const unsubConv = t.ctx.events.subscribe(sessionId, e => convScope.push(e.kind));
     const unsubWs = t.ctx.events.subscribeScope(
       `workspace:${workspaceId}`,
@@ -304,14 +303,10 @@ describe('Tasks (PR-T1)', () => {
       `viewer:${t.viewerUserId}`,
       e => memberViewer.push(e.kind),
     );
-    const unsubStranger = t.ctx.events.subscribeScope(
-      'viewer:stranger',
-      e => strangerViewer.push(e.kind),
-    );
 
     await h.post(
       `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-      { tasks: [{ title: 'global activity task' }] },
+      { tasks: [{ title: 'task board task' }] },
     );
     await h.post(
       `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
@@ -321,15 +316,14 @@ describe('Tasks (PR-T1)', () => {
     unsubConv();
     unsubWs();
     unsubMember();
-    unsubStranger();
 
-    // Existing task-board paths must NOT regress (bar #1).
+    // Task-board paths are unchanged: conversation + workspace scope.
     expect(convScope.filter(k => k === 'task_changed')).toHaveLength(2);
     expect(wsScope.filter(k => k === 'task_changed')).toHaveLength(2);
-    // The conversation member's viewer scope now also gets it (global Activity).
-    expect(memberViewer.filter(k => k === 'task_changed')).toHaveLength(2);
-    // A non-member's viewer scope gets nothing — membership gate (bar #2).
-    expect(strangerViewer.filter(k => k === 'task_changed')).toHaveLength(0);
+    // …but task_changed is NOT fanned to viewer scope: Activity dropped kind=task
+    // in v1 (shiki 2026-06-26), so there is no viewer-scoped consumer. A v2
+    // task_needs_review source would arrive via the notification path, not here.
+    expect(memberViewer.filter(k => k === 'task_changed')).toHaveLength(0);
   });
 
   it('system messages fan out to every session member\'s inbox', async () => {

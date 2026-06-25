@@ -68,25 +68,29 @@ export type ActivitySalience = (typeof ACTIVITY_SALIENCES)[number];
 /**
  * The claim class of an Activity item — drives the icon and the eliminate route
  * (§5.3). `mention` / `agent_failed` clear via `notifications.read_at`; `unread`
- * clears via the stream cursor (`observe`); `task` is resolve-cleared (no
- * `Mark as read`, its disappearance is anchored on `task_status`).
+ * clears via the stream cursor (`observe`).
  *   - `mention`      = a `mention_self` notification (directed @me).
  *   - `agent_failed` = an `agent_start_failed` notification (the viewer's agent).
- *   - `task`         = a task assigned to the viewer that needs action.
  *   - `unread`       = a positional stream's ambient/DM unread aggregate.
+ *
+ * NOTE — there is no `task` kind in v1 (shiki 2026-06-26). A standing
+ * `in_review && member` projection of task state mirrored the task panel as a
+ * permanent, non-eliminable item; tasks belong in the task panel. A task source
+ * re-enters Activity only when it is event-shaped & notification-backed
+ * (`task_needs_review`), read-cleared like a mention — see
+ * docs/activity-lifecycle-v1.md §5.1 (v2).
  */
 export const ACTIVITY_ITEM_KINDS = [
   'mention',
   'agent_failed',
-  'task',
   'unread',
 ] as const;
 export type ActivityItemKind = (typeof ACTIVITY_ITEM_KINDS)[number];
 
 /** One row in the Activity list. Heterogeneous by `kind`: directed
- *  single-event items (`mention` / `agent_failed` / `task`) anchor on one
- *  message/task; an `unread` item is a per-STREAM aggregate (§7.3) carrying a
- *  count and anchored at its first-unread message.
+ *  single-event items (`mention` / `agent_failed`) anchor on one message; an
+ *  `unread` item is a per-STREAM aggregate (§7.3) carrying a count and anchored
+ *  at its first-unread message.
  *
  *  §5.3 answerability — every item's eliminate route (source_ref-out) is
  *  reconstructable from EXPLICIT fields here; `id` is a render list key ONLY and
@@ -94,9 +98,7 @@ export type ActivityItemKind = (typeof ACTIVITY_ITEM_KINDS)[number];
  *    - `mention` / `agent_failed` → set `notifications.read_at` by
  *      `notification_id`.
  *    - `unread`                   → advance the stream cursor (`observe`) keyed
- *      by `conversation_id` + `thread_root_id`.
- *    - `task`                     → resolve-cleared via `task_status` migration
- *      (keyed by `workspace_id` + `task_number`); NO mark-read. */
+ *      by `conversation_id` + `thread_root_id`. */
 export const ActivityItemDtoSchema = z.object({
   /** Stable synthesized list key for the client (NOT a stored row id, and NOT a
    *  source_ref — never parse it; use the explicit source fields below). */
@@ -110,38 +112,30 @@ export const ActivityItemDtoSchema = z.object({
    *  cluster. Carried for `mention` items too, so routing reaches the thread. */
   thread_root_id: z.string().nullable(),
   /** The anchor message the item points at. NULL only for `agent_failed` (no
-   *  anchor message — pure `read_at` clearing). `task` DOES carry its
-   *  task-bearing message id (it is the §7 per-message de-dupe key: a message
-   *  that is both task-anchor and unread yields ONE item, the task), and
-   *  `task_number` is the resolve-cleared handle. */
+   *  anchor message — pure `read_at` clearing). `mention` / `unread` carry the
+   *  anchor message id. */
   message_id: z.string().nullable(),
   /** The notification this item eliminates through (`notifications.read_at`).
-   *  Set for `mention` / `agent_failed`; NULL for `unread` / `task` (which clear
-   *  via cursor / `task_status`). This is the source_ref-out for directed
-   *  notification-backed claims — the renderer marks read BY this id, never by
-   *  parsing `id`. */
+   *  Set for `mention` / `agent_failed`; NULL for `unread` (which clears via the
+   *  stream cursor). This is the source_ref-out for directed notification-backed
+   *  claims — the renderer marks read BY this id, never by parsing `id`. */
   notification_id: z.string().nullable(),
   /** The kind of the anchoring conversation (channel vs DM). `thread`-ness is NOT
    *  a conversation kind here — a thread item carries the PARENT channel/DM kind
    *  and signals its thread-ness via `thread_root_id != null`. Drives the row-1
    *  "where" label (Channel / DM). */
   conversation_kind: z.enum(['channel', 'dm_channel']),
-  /** Row-1 location title: ALWAYS the conversation (channel/DM) title — never the
-   *  task subject (see `task_title`) or a message excerpt. Stable across kinds so
-   *  the renderer's "where" line has one meaning. */
+  /** Row-1 location title: ALWAYS the conversation (channel/DM) title — never a
+   *  message excerpt. Stable across kinds so the renderer's "where" line has one
+   *  meaning. */
   title: z.string(),
-  /** `task` items only — the task subject, rendered on its own row. NULL for all
-   *  other kinds (whose subject line is `preview` / `thread_root_preview`). Kept
-   *  separate from `title` so `title` stays the location, not the task. */
-  task_title: z.string().nullable(),
   /** For a thread item (`thread_root_id != null`): a one-line excerpt of the
    *  thread's ROOT message, rendered above the reply `preview` so the row reads
    *  root → reply. NULL for non-thread items (mainline unread, channel mention,
-   *  agent_failed, task) — there is no distinct root to show. */
+   *  agent_failed) — there is no distinct root to show. */
   thread_root_preview: z.string().nullable(),
   /** Short preview of the anchor (message excerpt / failure summary). For a
-   *  thread item this is the REPLY content (paired with `thread_root_preview`).
-   *  NULL for `task` (its subject is `task_title`). */
+   *  thread item this is the REPLY content (paired with `thread_root_preview`). */
   preview: z.string().nullable(),
   /** Recency used for the within-tier sort (epoch ms). */
   timestamp: z.number(),
@@ -149,9 +143,6 @@ export const ActivityItemDtoSchema = z.object({
    *  directed claims in it (§8 `positional \ directed`). NULL for directed
    *  single-event items. */
   unread_count: z.number().int().nonnegative().nullable(),
-  /** `task` items only. */
-  task_number: z.number().int().nullable(),
-  task_status: z.string().nullable(),
 });
 export type ActivityItemDto = z.infer<typeof ActivityItemDtoSchema>;
 

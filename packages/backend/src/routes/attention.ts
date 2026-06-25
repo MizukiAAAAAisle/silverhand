@@ -96,7 +96,7 @@ export function createAttentionApp(deps: AttentionRouteDeps): Hono<AppEnv> {
   });
 
   // GET the viewer's Activity list (②c, §9.2 `listActivity`). Pure read-side
-  // projection — directed mentions/tasks ∪ positional unread ∩ `enter()`, already
+  // projection — directed mentions ∪ positional unread ∩ `enter()`, already
   // deduped (§7) + salience-sorted (§13.2). The Activity list is the viewer's
   // own state (like the message-unread summary), so the gate is owned-state
   // (canViewOwnedState), not a conversation membership check — the read-model
