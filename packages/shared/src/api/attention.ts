@@ -98,8 +98,11 @@ export const ActivityItemDtoSchema = z.object({
   /** Which stream: NULL = mainline / channel-level; non-NULL = that reply
    *  cluster. Carried for `mention` items too, so routing reaches the thread. */
   thread_root_id: z.string().nullable(),
-  /** The anchor message the item points at. NULL for `agent_failed` (no message)
-   *  and `task` (anchored on the task, see `task_number`). */
+  /** The anchor message the item points at. NULL only for `agent_failed` (no
+   *  anchor message — pure `read_at` clearing). `task` DOES carry its
+   *  task-bearing message id (it is the §7 per-message de-dupe key: a message
+   *  that is both task-anchor and unread yields ONE item, the task), and
+   *  `task_number` is the resolve-cleared handle. */
   message_id: z.string().nullable(),
   /** 来源标识: the conversation (channel/DM) title. */
   title: z.string(),

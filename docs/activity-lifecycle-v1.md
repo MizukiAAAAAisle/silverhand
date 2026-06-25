@@ -98,11 +98,17 @@ shiki 提问:Activity 是不是一个独立 DDD 领域事件,有自己的读和�
 | followed thread 未读 | positional | thread stream cursor | ambientPref=on(follow→默认 on) |
 | channel 主线未读 | positional | mainline stream cursor | 仅 channel ambientPref=`所有消息` |
 | @我(human @-mention) | directed | `notifications.read_at` | **永远进** |
-| task needs-my-action | directed | `messages.task_status` / `task_assignee_user_id` 投影 | **永远进** |
+| task needs-my-action | directed | `messages.task_status` / `task_assignee_user_id` 投影 | **永远进**(v1 谓词见下) |
 | agent_start_failed(我的 agent) | directed | `notifications.read_at` | **永远进** |
 
 > **canonical TARGET = (a) notification-backed directed claim(Cindy contract review 锁,2026-06-25;emission 前提经现读源码修正 2026-06-25):** human **@我** 的 directed claim,read-state = `notifications.read_at`,源 = **既有的 `mention_self` notification**。**修正:** `mention_self` 今天已**无条件**为「会话成员被 @」而发(`conversation-message-service.ts` `notifyViewerMentionBestEffort`,每次 send 调用;含 reply-cluster——thread reply 落父 channel 会话,notification 的 `thread_root_id` 由 repo `LEFT JOIN messages` 派生,故 source ref 仍指向正确 thread)。所以原「v1 only emits `mention_external`、须扩 emission」是**过期前提**:#1227 **不新增 emission,只消费并锁定** `mention_self` 这个契约(characterization test 守 thread-reply @我 → `mention_self`、`conversation_id/message_id/source_*/thread_root_id` 正确、`read_at` NULL)。这是 **Attention 读侧消费 Notification context 既有事实,不是 Attention 拥有状态**。
 > **不选 (b)`extractMentions` 投影作 canonical:** 它会把 directed 退化成 positional-with-mention-salience,与 §7 overlap / directed 消除谓词不是同一模型;**(b) 最多作迁移期 fallback / 防御,绝不写成 target**。directed 与 positional 解耦更干净、salience 天生高 —— (a) 是第一性选择。
+>
+> **task needs-my-action v1 谓词(近似,shiki 拍 2026-06-25「in_review 也是需要我反应的事件」):** Activity 收进一个 task,当且仅当 **viewer 是该 task 所在会话的成员(membership-gated,两支都加,防 visibility 泄漏)** 且满足以下任一:
+> - **(i) 我的开放工作:** `task_assignee_user_id = viewer AND task_status IN ('todo','in_progress')`;
+> - **(ii) 等我验证:** `task_status = 'in_review'`(任一成员可见的「待复验」队列)。
+>
+> 排 `done` / `closed`(已消解,resolve-cleared 自然不含)。**近似点(写进 doc 是因为它不是终态):** (ii) 用「会话成员」逼近「该 task 的 reviewer」——v1 没有建模 reviewer 关系,单人 dogfood 下成员集≈reviewer 集,故 in_review task 对所有会话成员都进 Activity。**精确的 per-reviewer in_review 源 = v2**(建模 reviewer 关系后,(ii) 收窄到真正的 reviewer)。注意 `task_assignee_user_id` 对 human 当前恒空(task 由 agent 认领),所以 (i) 实际服务 agent-as-viewer,human reviewer 走 (ii)——这正是把 in_review 立为一等 directed 事件的动因。守此谓词的 characterization test 见 `backend/tests/routes/activity.test.ts`(in_review 成员进 / 非成员不泄漏 / done 不进)。
 
 ### 5.2 分级 / 呈现 —— delivery ⊥ attention
 

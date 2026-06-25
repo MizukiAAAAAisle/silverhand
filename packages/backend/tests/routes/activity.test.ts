@@ -235,18 +235,143 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     expect(all.some(i => i.conversation_id === bChannel)).toBe(true);
   });
 
-  it('forbids a non-self viewer and is read-only owned state', async () => {
+  it('an in_review task enters for a conversation member who is not the assignee', async () => {
     t = buildTestApp();
-    await createWorkspaceChannel(t);
-    // A different user's token cannot read the viewer's activity… but the route
-    // is self-scoped: each caller only ever sees their OWN list, so a foreign
-    // token simply returns that foreign user's (empty) list. Assert isolation:
-    const otherRes = await http(t).get('/api/activity', {
-      headers: { 'x-silverhand-legacy-user-id': 'someone-else' },
+    const { workspaceId, channelId } = await createWorkspaceChannel(t);
+    const sender = (await firstChannelAgent(t, channelId))!;
+    const msgId = await sendAsAgent(t, channelId, sender, 'please review my work');
+    // Assigned to a DIFFERENT principal, status in_review — the viewer ('local')
+    // is a channel member but not the assignee. Per shiki 2026-06-25, in_review
+    // tasks awaiting validation are first-class Activity events for members.
+    t.ctx.db
+      .prepare(
+        `UPDATE messages
+            SET task_number = 11, task_status = 'in_review',
+                task_assignee_user_id = 'someone-else', task_workspace_id = ?,
+                task_title = 'awaiting validation'
+          WHERE id = ?`,
+      )
+      .run(workspaceId, msgId);
+
+    const items = await getActivity(t);
+    const tasks = items.filter(i => i.kind === 'task');
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({
+      task_number: 11,
+      task_status: 'in_review',
+      conversation_id: channelId,
     });
-    expect(otherRes.status).toBe(200);
-    const dto = (await otherRes.json()) as any;
-    expect(Array.isArray(dto.items)).toBe(true);
+  });
+
+  it('a task does not leak to a non-member of its conversation (visibility gate)', async () => {
+    t = buildTestApp();
+    const { workspaceId, channelId } = await createWorkspaceChannel(t);
+    const sender = (await firstChannelAgent(t, channelId))!;
+    const msgId = await sendAsAgent(t, channelId, sender, 'work needing review');
+    t.ctx.db
+      .prepare(
+        `UPDATE messages
+            SET task_number = 12, task_status = 'in_review',
+                task_assignee_user_id = 'someone-else', task_workspace_id = ?,
+                task_title = 'visible to members only'
+          WHERE id = ?`,
+      )
+      .run(workspaceId, msgId);
+
+    // Member sees it…
+    expect((await getActivity(t)).some(i => i.kind === 'task')).toBe(true);
+
+    // …drop the viewer's membership of that conversation → it must disappear
+    // (both task branches are membership-gated, no info leak).
+    t.ctx.db
+      .prepare(
+        `DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = 'local'`,
+      )
+      .run(channelId);
+    expect((await getActivity(t)).some(i => i.kind === 'task')).toBe(false);
+  });
+
+  it('a mention and a task on the SAME message yield one item (task wins, §7)', async () => {
+    t = buildTestApp();
+    const { workspaceId, channelId } = await createWorkspaceChannel(t);
+    const sender = (await firstChannelAgent(t, channelId))!;
+    const msgId = await sendAsAgent(t, channelId, sender, 'ping @local-test review this');
+    t.ctx.db
+      .prepare(
+        `UPDATE messages
+            SET task_number = 13, task_status = 'in_progress',
+                task_assignee_user_id = 'local', task_workspace_id = ?,
+                task_title = 'mention + task'
+          WHERE id = ?`,
+      )
+      .run(workspaceId, msgId);
+
+    const items = await getActivity(t);
+    const onThatMessage = items.filter(i => i.message_id === msgId);
+    expect(onThatMessage).toHaveLength(1);
+    expect(onThatMessage[0].kind).toBe('task');
+    expect(items.some(i => i.kind === 'mention' && i.message_id === msgId)).toBe(false);
+  });
+
+  it('task ids are globally unique across workspaces with the same task_number', async () => {
+    t = buildTestApp();
+    const a = await createWorkspaceChannel(t);
+    const aSender = (await firstChannelAgent(t, a.channelId))!;
+    const aMsg = await sendAsAgent(t, a.channelId, aSender, 'task in ws A');
+    t.ctx.db
+      .prepare(
+        `UPDATE messages SET task_number = 7, task_status = 'in_review',
+            task_assignee_user_id = 'someone-else', task_workspace_id = ?,
+            task_title = 'A7' WHERE id = ?`,
+      )
+      .run(a.workspaceId, aMsg);
+
+    const bAlice = await makeAgent(t, 'beth');
+    const wsB = (await (
+      await http(t).post('/api/workspaces', {
+        name: 'ws-activity-b',
+        member_agent_ids: [bAlice],
+      })
+    ).json()) as any;
+    const bChannel = wsB.onboarding_channel_id as string;
+    const bWorkspace = wsB.workspace.id as string;
+    const bSender = (await firstChannelAgent(t, bChannel))!;
+    const bMsg = await sendAsAgent(t, bChannel, bSender, 'task in ws B');
+    t.ctx.db
+      .prepare(
+        `UPDATE messages SET task_number = 7, task_status = 'in_review',
+            task_assignee_user_id = 'someone-else', task_workspace_id = ?,
+            task_title = 'B7' WHERE id = ?`,
+      )
+      .run(bWorkspace, bMsg);
+
+    const tasks = (await getActivity(t)).filter(i => i.kind === 'task');
+    expect(tasks).toHaveLength(2);
+    const ids = new Set(tasks.map(i => i.id));
+    expect(ids.size).toBe(2); // both task_number=7 but distinct ids
+    expect(ids.has(`task:${a.workspaceId}:7`)).toBe(true);
+    expect(ids.has(`task:${bWorkspace}:7`)).toBe(true);
+  });
+
+  it('ambient anchor is the first NON-directed unread when a mention is first (§8)', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t);
+    const sender = (await firstChannelAgent(t, channelId))!;
+    // mention is the LOWEST-seq unread; a plain message follows it.
+    await sendAsAgent(t, channelId, sender, 'ping @local-test');
+    const plainMsg = await sendAsAgent(t, channelId, sender, 'plain follow-up');
+
+    await http(t).put(`/api/conversations/${channelId}/attention-preference`, {
+      mode: 'all',
+    });
+
+    const items = await getActivity(t);
+    const ambient = items.filter(i => i.kind === 'unread');
+    expect(ambient).toHaveLength(1);
+    // Anchor must skip the mention (already a directed item) and point at the
+    // first non-directed unread — count net of the mention too.
+    expect(ambient[0].message_id).toBe(plainMsg);
+    expect(ambient[0].unread_count).toBe(1);
   });
 });
 

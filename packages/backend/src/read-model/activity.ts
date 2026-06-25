@@ -6,18 +6,28 @@
 // `messages.task_*` — and recomputed on each read. Dependency direction is
 // one-way: routes → read-model. Nothing in this file writes.
 //
-// The list is assembled in three reads + a small TS merge so the §6/§7/§8 rules
-// stay legible:
-//   1. directed notifications  — `mention_self` + `agent_start_failed` (read_at
-//      NULL), the directed @me / agent-failure claims (always enter, §6).
-//   2. directed tasks          — tasks assigned to the viewer that need action.
-//   3. positional streams      — per-(conversation, stream) ambient/DM unread,
-//      already `enter()`-filtered in SQL (DM always; channel mainline iff the
-//      viewer's ChannelAttentionPreference = 'all'; threads iff followed).
-// Then TS: drop a `mention_self` whose stream cursor has already passed it (§7
-// consistency — cursor-passed ⇒ directed cleared); subtract directed messages
-// from each stream's ambient count (§8 `positional \ directed`); derive salience
-// and sort (§13.2 directed tier first, most-recent-first within tier).
+// Assembly (§6/§7/§8):
+//   1. directed notifications — `mention_self` + `agent_start_failed` (read_at
+//      NULL); a mention whose stream cursor already passed it is treated as
+//      cleared (§7: cursor-passed ⇒ directed cleared), no stored state.
+//   2. directed tasks — `todo`/`in_progress` assigned to the viewer, OR any
+//      `in_review` task in a conversation the viewer belongs to (the implicit
+//      "等你验证" queue). BOTH branches are membership-gated so a task never
+//      leaks a conversation the viewer can't see.
+//   3. The §7 per-(viewer, message) de-dupe runs in TS: at most one directed
+//      claim per message (task wins over mention). The DISTINCT set of directed
+//      message ids is then excluded from the positional query, so §8
+//      (`positional \ directed`) is computed in SQL — the ambient row's count
+//      AND its first-unread anchor/preview/timestamp are the first NON-directed
+//      unread message, never a message already shown as a mention/task. Because
+//      the positional base already drops system / the viewer's own messages, a
+//      directed message that wouldn't be ambient is simply absent (no spurious
+//      subtraction).
+//   4. positional streams — per-(conversation, stream) ambient/DM unread,
+//      `enter()`-filtered in SQL (DM always; channel mainline iff the viewer's
+//      ChannelAttentionPreference = 'all'; threads iff followed).
+// Then salience is derived (DM = directed-grade) and the list sorted §13.2:
+// directed tier first, most-recent-first within a tier.
 import type { BackendContext } from '../context.js';
 import type {
   ActivityItemDto,
@@ -34,11 +44,6 @@ export interface ListActivityParams {
 
 const PREVIEW_MAX = 140;
 
-/** Task statuses that count as "needs my action" for the assignee (§5.1 row
- *  "task needs-my-action"). `in_review` waits on a reviewer, `done`/`closed`
- *  are terminal — neither is the assignee's action, so both are excluded. */
-const TASK_NEEDS_ACTION_STATUSES = ['todo', 'in_progress'] as const;
-
 function preview(text: string | null | undefined): string | null {
   if (!text) return null;
   const compact = text.replace(/\s+/g, ' ').trim();
@@ -46,10 +51,6 @@ function preview(text: string | null | undefined): string | null {
   return compact.length > PREVIEW_MAX
     ? `${compact.slice(0, PREVIEW_MAX - 1)}…`
     : compact;
-}
-
-function streamKey(conversationId: string, threadRootId: string | null): string {
-  return `${conversationId}::${threadRootId ?? ''}`;
 }
 
 interface DirectedNotificationRow {
@@ -71,8 +72,6 @@ interface TaskRow {
   conversation_id: string;
   message_id: string;
   thread_root_id: string | null;
-  message_seq: number;
-  stream_cursor: number;
   task_number: number;
   task_status: string;
   task_title: string | null;
@@ -139,20 +138,19 @@ export function listActivity(
     .all({ viewer: viewerUserId, ws: wsFilter });
 
   // ── 2. directed tasks needing the viewer's action ─────────────────────────
-  const statusPlaceholders = TASK_NEEDS_ACTION_STATUSES.map(() => '?').join(',');
+  // Membership-gated (mirrors TaskService.list for humans) so a task never
+  // leaks a conversation the viewer can't see. Two branches (§5.1 row
+  // "task needs-my-action", refined per shiki 2026-06-25): the viewer's own
+  // open work, OR an `in_review` task awaiting human validation. A precise
+  // per-reviewer in_review source needs a modeled reviewer relation → v2; in
+  // single-human dogfood this membership-scoped in_review IS the validation
+  // queue (the #1226-style "等你复验").
   const taskRows = ctx.db
-    .prepare<unknown[], TaskRow>(
+    .prepare<{ viewer: string; ws: string | null }, TaskRow>(
       `SELECT
           m.conversation_id   AS conversation_id,
           m.id                AS message_id,
           m.thread_root_id    AS thread_root_id,
-          m.seq               AS message_seq,
-          COALESCE((
-            SELECT cr.last_read_seq FROM conversation_reads cr
-             WHERE cr.user_id = ?
-               AND cr.conversation_id = m.conversation_id
-               AND cr.thread_root_id IS m.thread_root_id
-          ), 0)               AS stream_cursor,
           m.task_number       AS task_number,
           m.task_status       AS task_status,
           m.task_title        AS task_title,
@@ -160,18 +158,113 @@ export function listActivity(
           m.created_at        AS created_at
         FROM messages m
        WHERE m.task_number IS NOT NULL
-         AND m.task_assignee_user_id = ?
-         AND m.task_status IN (${statusPlaceholders})
-         AND (? IS NULL OR m.task_workspace_id = ?)
+         AND (@ws IS NULL OR m.task_workspace_id = @ws)
+         AND EXISTS (
+           SELECT 1 FROM conversation_users cu
+            WHERE cu.conversation_id = m.conversation_id
+              AND cu.user_id = @viewer
+         )
+         AND (
+           (m.task_assignee_user_id = @viewer
+            AND m.task_status IN ('todo', 'in_progress'))
+           OR m.task_status = 'in_review'
+         )
        ORDER BY m.task_number DESC`,
     )
-    .all(viewerUserId, viewerUserId, ...TASK_NEEDS_ACTION_STATUSES, wsFilter, wsFilter);
+    .all({ viewer: viewerUserId, ws: wsFilter });
+
+  // ── §7 de-dupe directed claims: at most one item per message (task > mention).
+  // agent_start_failed has no anchor message, so it never participates in the
+  // per-message map (and never excludes an ambient message).
+  const directedByMessage = new Map<string, ActivityItemDto>();
+  const agentFailedItems: ActivityItemDto[] = [];
+
+  for (const t of taskRows) {
+    directedByMessage.set(t.message_id, {
+      id: `task:${t.workspace_id}:${t.task_number}`,
+      kind: 'task',
+      salience: 'directed',
+      workspace_id: t.workspace_id,
+      conversation_id: t.conversation_id,
+      thread_root_id: t.thread_root_id,
+      message_id: t.message_id,
+      title: t.task_title ?? '',
+      preview: null,
+      timestamp: t.created_at,
+      unread_count: null,
+      task_number: t.task_number,
+      task_status: t.task_status,
+    });
+  }
+
+  for (const n of notifRows) {
+    if (n.kind === 'mention_self') {
+      if (!n.conversation_id || !n.message_id) continue;
+      // §7: cursor already past it ⇒ the directed claim is cleared (read_at may
+      // still be NULL pre-observe-collapse — the predicate is the derivation).
+      if (n.message_seq !== null && n.message_seq <= n.stream_cursor) continue;
+      // task wins on the same message (already claimed).
+      if (directedByMessage.has(n.message_id)) continue;
+      directedByMessage.set(n.message_id, {
+        id: `mention:${n.id}`,
+        kind: 'mention',
+        salience: 'directed',
+        workspace_id: n.workspace_id ?? '',
+        conversation_id: n.conversation_id,
+        thread_root_id: n.thread_root_id,
+        message_id: n.message_id,
+        title: n.conversation_title ?? '',
+        preview: preview(n.message_content),
+        timestamp: n.created_at,
+        unread_count: null,
+        task_number: null,
+        task_status: null,
+      });
+    } else {
+      // agent_start_failed: no anchor message; preview from the payload.
+      let agentPreview: string | null = null;
+      if (n.payload) {
+        try {
+          const p = JSON.parse(n.payload) as { agent_name?: string; error?: string };
+          agentPreview = preview(
+            [p.agent_name, p.error].filter(Boolean).join(' — ') || null,
+          );
+        } catch {
+          agentPreview = null;
+        }
+      }
+      agentFailedItems.push({
+        id: `agent_failed:${n.id}`,
+        kind: 'agent_failed',
+        salience: 'directed',
+        workspace_id: n.workspace_id ?? '',
+        conversation_id: n.conversation_id ?? '',
+        thread_root_id: null,
+        message_id: null,
+        title: n.conversation_title ?? '',
+        preview: agentPreview,
+        timestamp: n.created_at,
+        unread_count: null,
+        task_number: null,
+        task_status: null,
+      });
+    }
+  }
 
   // ── 3. positional streams (ambient/DM unread), enter()-filtered in SQL ─────
   // Mirrors the #1226 per-stream scorer (window functions, first-unread + count
-  // per (conversation, thread_root_id)); adds the enter() gate as a WHERE.
+  // per (conversation, thread_root_id)). §8 `positional \ directed` is done IN
+  // this query by excluding the distinct directed message ids, so both the count
+  // and the first-unread anchor are over NON-directed messages (no anchoring an
+  // ambient row to a message already shown as a mention/task). The positional
+  // base already drops system / the viewer's own messages, so excluding a
+  // directed message that wouldn't be ambient is a harmless no-op.
+  const excludedJson = JSON.stringify([...directedByMessage.keys()]);
   const positionalRows = ctx.db
-    .prepare<{ viewer: string; ws: string | null }, PositionalStreamRow>(
+    .prepare<
+      { viewer: string; ws: string | null; excluded: string },
+      PositionalStreamRow
+    >(
       `WITH viewer_unread AS (
          SELECT
            m.conversation_id AS conversation_id,
@@ -196,6 +289,7 @@ export function listActivity(
           AND m.from_kind != 'system'
           AND NOT (m.from_kind = 'user'
                    AND (m.from_user_id = @viewer OR m.from_user_id IS NULL))
+          AND m.id NOT IN (SELECT value FROM json_each(@excluded))
           AND m.seq > COALESCE(
             (SELECT cr.last_read_seq FROM conversation_reads cr
               WHERE cr.user_id = @viewer
@@ -237,109 +331,20 @@ export function listActivity(
               ))
         )`,
     )
-    .all({ viewer: viewerUserId, ws: wsFilter });
+    .all({ viewer: viewerUserId, ws: wsFilter, excluded: excludedJson });
 
-  // ── merge ─────────────────────────────────────────────────────────────────
-  const items: ActivityItemDto[] = [];
-  // Count of live directed-claimed messages per stream, for §8 subtraction.
-  const directedInStream = new Map<string, number>();
-
-  for (const n of notifRows) {
-    if (n.kind === 'mention_self') {
-      if (!n.conversation_id || !n.message_id) continue;
-      // §7: if the viewer already read past this message in its stream, the
-      // directed claim is cleared even though read_at is still NULL.
-      if (n.message_seq !== null && n.message_seq <= n.stream_cursor) continue;
-      directedInStream.set(
-        streamKey(n.conversation_id, n.thread_root_id),
-        (directedInStream.get(streamKey(n.conversation_id, n.thread_root_id)) ?? 0) + 1,
-      );
-      items.push({
-        id: `mention:${n.id}`,
-        kind: 'mention',
-        salience: 'directed',
-        workspace_id: n.workspace_id ?? '',
-        conversation_id: n.conversation_id,
-        thread_root_id: n.thread_root_id,
-        message_id: n.message_id,
-        title: n.conversation_title ?? '',
-        preview: preview(n.message_content),
-        timestamp: n.created_at,
-        unread_count: null,
-        task_number: null,
-        task_status: null,
-      });
-    } else {
-      // agent_start_failed: no anchor message; preview from the payload.
-      let agentPreview: string | null = null;
-      if (n.payload) {
-        try {
-          const p = JSON.parse(n.payload) as { agent_name?: string; error?: string };
-          agentPreview = preview(
-            [p.agent_name, p.error].filter(Boolean).join(' — ') || null,
-          );
-        } catch {
-          agentPreview = null;
-        }
-      }
-      items.push({
-        id: `agent_failed:${n.id}`,
-        kind: 'agent_failed',
-        salience: 'directed',
-        workspace_id: n.workspace_id ?? '',
-        conversation_id: n.conversation_id ?? '',
-        thread_root_id: null,
-        message_id: null,
-        title: n.conversation_title ?? '',
-        preview: agentPreview,
-        timestamp: n.created_at,
-        unread_count: null,
-        task_number: null,
-        task_status: null,
-      });
-    }
-  }
-
-  for (const t of taskRows) {
-    // §7: a task-anchor message that is also positionally unread must not also
-    // be counted as ambient — the task claim wins (directed). Subtract it from
-    // its stream ONLY when it is actually unread (cursor not yet past it); a
-    // task whose message was already read still shows as a task item
-    // (resolve-cleared, §5.3) but is no longer in the ambient count.
-    if (t.message_seq > t.stream_cursor) {
-      directedInStream.set(
-        streamKey(t.conversation_id, t.thread_root_id),
-        (directedInStream.get(streamKey(t.conversation_id, t.thread_root_id)) ?? 0) + 1,
-      );
-    }
-    items.push({
-      id: `task:${t.task_number}`,
-      kind: 'task',
-      salience: 'directed',
-      workspace_id: t.workspace_id,
-      conversation_id: t.conversation_id,
-      thread_root_id: t.thread_root_id,
-      message_id: t.message_id,
-      title: t.task_title ?? '',
-      preview: null,
-      timestamp: t.created_at,
-      unread_count: null,
-      task_number: t.task_number,
-      task_status: t.task_status,
-    });
-  }
+  // ── assemble ────────────────────────────────────────────────────────────
+  const items: ActivityItemDto[] = [
+    ...directedByMessage.values(),
+    ...agentFailedItems,
+  ];
 
   for (const s of positionalRows) {
-    // §8: ambient count is net of directed claims already shown for this stream
-    // (avoids the same message counting as both a mention and ambient unread).
-    const directed = directedInStream.get(streamKey(s.conversation_id, s.root)) ?? 0;
-    const adjusted = s.unread_count - directed;
-    if (adjusted <= 0) continue; // worked edge §8: only-unread-was-the-mention.
     // DM unread is positional by mechanism but directed-grade by salience.
     const salience: ActivitySalience =
       s.conversation_kind === 'dm_channel' ? 'directed' : 'ambient';
     items.push({
-      id: `unread:${streamKey(s.conversation_id, s.root)}`,
+      id: `unread:${s.conversation_id}::${s.root ?? ''}`,
       kind: 'unread',
       salience,
       workspace_id: s.workspace_id,
@@ -349,7 +354,7 @@ export function listActivity(
       title: s.conversation_title,
       preview: preview(s.first_unread_content),
       timestamp: s.first_unread_created_at,
-      unread_count: adjusted,
+      unread_count: s.unread_count,
       task_number: null,
       task_status: null,
     });

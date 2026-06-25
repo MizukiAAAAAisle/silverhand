@@ -61,10 +61,14 @@ export function createAttentionApp(deps: AttentionRouteDeps): Hono<AppEnv> {
   // delivery/follow. Personal state for a channel the viewer can view, so
   // membership (canViewConversation) is the gate — no owner/admin role needed.
   //
-  // No invalidation event is published yet: nothing reads this preference until
-  // `listActivity` (②c) lands. When it does, a viewer-scoped Activity
-  // invalidation belongs here (the channel unread roll-up / sidebar badge is
-  // pref-INDEPENDENT — §8 — so `unread_updated` is deliberately NOT emitted).
+  // `listActivity` (②c) now reads this preference, but no server event is
+  // emitted here: a pref flip only changes the CALLING viewer's own Activity
+  // list, so the renderer invalidates its own `['activity']` query on mutation
+  // success (client-driven, like the rest of the personal view-state writes) —
+  // no broadcast to other viewers is meaningful. `unread_updated` is
+  // deliberately NOT emitted either: the channel unread roll-up / sidebar badge
+  // is pref-INDEPENDENT (§8 — sidebar = raw positional, ambient pref only gates
+  // the Activity projection).
   app.put(apiPaths.conversationAttentionPreference(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
