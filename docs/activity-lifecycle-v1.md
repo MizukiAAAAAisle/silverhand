@@ -198,10 +198,15 @@ enter(item, me) = directed(item, me)  OR  ( ambient(item) AND ambientPref(stream
 
 ## 10. 失效 / 对账信号
 
-- **positional**:只由 viewer-scoped **`unread_updated`** 失效(复用 `#1226`)。
-- **directed**:由 notification / task 相关事件失效。
+Activity 是 **viewer-scoped read-model**,所以它的三源失效信号统一收敛到 **`viewer:<userId>`** scope —— renderer 只订阅一条 viewer scope,听到任一源变化即失效 `['activity']` query、重取投影(no-poll,同 `#1226` 模型)。三源:
+
+- **positional**:viewer-scoped **`unread_updated`** 失效(复用 `#1226`,已在 `viewer:<id>` 上发)。
+- **directed(notification)**:viewer-scoped **`notification`** 失效(`mention_self` / `agent_start_failed` 已在 `viewer:<id>` 上发)。
+- **directed(task)**:viewer-scoped **`task_changed`** 失效。task 的主消费者是 workspace-scoped 任务板,故 `task_changed` 原本发在 conversation + `workspace:<wid>` scope;**为 global Activity,`publishTaskChanged`(单一 publish seam)额外把同一个 `task_changed` fan 给 source conversation 的 human 成员的 `viewer:<id>` scope**(复用 `publishToConversationViewers`)。**不造新 event kind**;**membership-scoped**——只发给该 task 所在 conversation 的成员,与 `listActivity` 的 task visibility gate 一致,绝不放宽可见性。renderer 因此**不枚举 `workspace:<id>` scope**(那会把任务板广播拓扑泄漏进 Attention,且漏 mid-session 加入的 workspace)。
+
 - **message event** 可更新 reply_count / repliers 这类**可乐观维护**的事实,**绝不直接改 Activity unread**(§1 铁律)。
 - 客户端**不靠 message event 猜 unread**、不扫一堆 conversation cache 拼全局 Activity:读 `listActivity` 这一处 server-scored 投影。
+- **channel attention pref(`所有消息 / 仅提及`)写入后** client-driven 失效 `['activity']`(pref 是 `enter()` 的输入,切换即影响该 channel 的 ambient item 进/出);PUT route **不发** `unread_updated`(sidebar roll-up pref-independent,§8)。
 
 ---
 
@@ -237,7 +242,7 @@ enter(item, me) = directed(item, me)  OR  ( ambient(item) AND ambientPref(stream
 
 ### 13.2 全局 Activity 列表(v1)
 
-- **入口**:sidebar、Search 之上(shiki)。v1 UI per-workspace(数据模型全局、`workspace_id` 作 filter)。
+- **入口**:sidebar、Search 之上(shiki)。**v1 UI = global**(shiki 拍 2026-06-25「这里是用户所有要关注的入口」):一个 human 跨所有可见 workspace 的「等我处理」总队列,`GET /api/activity` 不带 `workspace_id`。`workspace_id` 仍是**可选** filter(数据模型本就全局,UI 日后若要 per-workspace 视图直接传)。global 的完整性三件套:①失效全 viewer-scoped(§10,含 task_changed viewer fan,免 renderer 枚举 workspace scope);②列表行显示 workspace context(DTO 已带 `workspace_id`,renderer 用 workspace map 补 name,跨 ws 同名 channel/task 可区分,纯展示不放宽可见性);③跳源跨 workspace 稳定(DTO `workspace_id` + onJump 已支持)。
 - **收**:`enter() == true`(§6)= DM · @我(notification-backed directed,§5.1a)· task-needs-action · followed-thread ambient · `所有消息` channel 的 ambient。
 - **每条 item**:源 icon + 来源标识(哪个 channel/thread)+ 预览 + 相对时间;**salience 分级**(§5.2)directed 视觉强于 ambient;**per-(viewer, message) 去重、取最高 salience**(§7)→ @我显示成 mention + 上下文、**不再**显示成 ambient 未读。
 - **排序(v1 从简)**:directed 档置顶、档内 most-recent-first。

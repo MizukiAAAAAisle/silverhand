@@ -25,6 +25,7 @@ import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
+import { publishToConversationViewers } from '../viewer-scope.js';
 import {
   assertActorConversationMatch,
   type AgentPrincipal,
@@ -1993,6 +1994,22 @@ export class TaskService {
     };
     this.events.publish(conversationId, { kind: 'task_changed', payload: event });
     this.events.publishToScope(`workspace:${workspaceId}`, 'task_changed', event);
+    // #task:1227 — the global Activity is a viewer-scoped read-model whose other
+    // two sources (`unread_updated` / `notification`) already arrive on
+    // `viewer:<id>`. Fan the SAME `task_changed` event out to the source
+    // conversation's human members' viewer scope too, so a global Activity stays
+    // fresh from ONE viewer subscription — the renderer never enumerates
+    // `workspace:<id>` scopes (which would leak the task-board broadcast topology
+    // into Attention and miss mid-session workspace joins). Membership-scoped on
+    // purpose: only members of the task's conversation receive it, matching the
+    // `listActivity` task visibility gate — no task leaks to a non-member.
+    publishToConversationViewers(
+      this.events,
+      this.conversations,
+      conversationId,
+      'task_changed',
+      event,
+    );
   }
 }
 

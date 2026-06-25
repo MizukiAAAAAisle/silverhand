@@ -286,6 +286,52 @@ describe('Tasks (PR-T1)', () => {
     expect(ev.task_number).toBe(1);
   });
 
+  it('fans task_changed to the conversation members\' viewer scope (global Activity), not non-members (#task:1227)', async () => {
+    t = buildTestApp();
+    const { sessionId, workspaceId, agentIds } = await setup(t);
+    const h = http(t);
+
+    const convScope: string[] = [];
+    const wsScope: string[] = [];
+    const memberViewer: string[] = []; // 'local' is a member (created the ws)
+    const strangerViewer: string[] = []; // not a member of the conversation
+    const unsubConv = t.ctx.events.subscribe(sessionId, e => convScope.push(e.kind));
+    const unsubWs = t.ctx.events.subscribeScope(
+      `workspace:${workspaceId}`,
+      e => wsScope.push(e.kind),
+    );
+    const unsubMember = t.ctx.events.subscribeScope(
+      `viewer:${t.viewerUserId}`,
+      e => memberViewer.push(e.kind),
+    );
+    const unsubStranger = t.ctx.events.subscribeScope(
+      'viewer:stranger',
+      e => strangerViewer.push(e.kind),
+    );
+
+    await h.post(
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+      { tasks: [{ title: 'global activity task' }] },
+    );
+    await h.post(
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+      { task_numbers: [1] },
+    );
+
+    unsubConv();
+    unsubWs();
+    unsubMember();
+    unsubStranger();
+
+    // Existing task-board paths must NOT regress (bar #1).
+    expect(convScope.filter(k => k === 'task_changed')).toHaveLength(2);
+    expect(wsScope.filter(k => k === 'task_changed')).toHaveLength(2);
+    // The conversation member's viewer scope now also gets it (global Activity).
+    expect(memberViewer.filter(k => k === 'task_changed')).toHaveLength(2);
+    // A non-member's viewer scope gets nothing — membership gate (bar #2).
+    expect(strangerViewer.filter(k => k === 'task_changed')).toHaveLength(0);
+  });
+
   it('system messages fan out to every session member\'s inbox', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
