@@ -16,6 +16,7 @@ import type {
   ConversationAgentDto,
   ConversationMembersResponse,
   ConversationMessagesDto,
+  ConversationStreamUnreadDto,
   MessageDto,
   MessageReactionChangedEvent,
   MessageUnreadByConversationDto,
@@ -167,33 +168,6 @@ function invalidateMessageUnreadQueries(qc: QueryClient): void {
 const messageUnreadInvalidationTimers = new WeakMap<
   QueryClient,
   ReturnType<typeof setTimeout>
->();
-
-/** Debounce-invalidate one channel's main message window. Used to reconcile a
- *  reply chip's server-scored `unread_count` after a live reply lands on a root
- *  that already has a summary — a burst of replies collapses to one refetch.
- *  Keyed per (qc, channelId) so concurrent channels don't share a timer. */
-function invalidateChannelWindowDebounced(
-  qc: QueryClient,
-  channelId: string,
-): void {
-  let perChannel = channelWindowInvalidationTimers.get(qc);
-  if (!perChannel) {
-    perChannel = new Map();
-    channelWindowInvalidationTimers.set(qc, perChannel);
-  }
-  const existing = perChannel.get(channelId);
-  if (existing) clearTimeout(existing);
-  const timer = setTimeout(() => {
-    perChannel!.delete(channelId);
-    void qc.invalidateQueries({ queryKey: messagesKey(channelId) });
-  }, 100);
-  perChannel.set(channelId, timer);
-}
-
-const channelWindowInvalidationTimers = new WeakMap<
-  QueryClient,
-  Map<string, ReturnType<typeof setTimeout>>
 >();
 
 function isMessageUnreadUpdatedPayload(payload: unknown): boolean {
@@ -495,62 +469,6 @@ export function applyReactionChangedToThreadRootCache(
   );
 }
 
-/** Whether a live reply to `rootId` is SEEDING a reply summary the optimistic
- *  bump can't produce (#task:1226 surface 3). True when the root is in a loaded
- *  page, the backend ships the `reply_summaries_by_root` sidecar (object
- *  present), but this root has no entry yet — it had zero replies at fetch time.
- *  In that case `patchReplySummary` can't fabricate a summary (unread is
- *  per-viewer / server-scored), so the chip would be stuck count-only with no
- *  "N new"; the caller refetches the window to get the server summary incl.
- *  `unread_count`. False when a summary already exists (keep the optimistic
- *  patch + WS reconcile) or the sidecar isn't shipped (count-only by design).
- *  Pure so the seeding transition is unit-tested without realtime wiring. */
-export function replyClusterNeedsSummarySeed(
-  cache: MessagesCache | undefined,
-  rootId: string,
-): boolean {
-  if (!cache) return false;
-  return cache.pages.some(
-    p =>
-      p.messages.some(m => m.id === rootId) &&
-      p.reply_summaries_by_root !== undefined &&
-      p.reply_summaries_by_root[rootId] === undefined,
-  );
-}
-
-/** True when a root in a loaded page ALREADY carries an enriched summary —
- *  the has-summary path (the second reply onward in a back-and-forth).
- *
- *  `patchReplySummary` deliberately preserves the prior `unread_count` /
- *  `first_unread_*` (unread is per-viewer, server-scored) and assumes the WS
- *  `unread_updated` reconcile will refresh them. But that reconcile runs
- *  `invalidateMessageUnreadQueries`, which only touches the sidebar roll-up +
- *  `message-unread/summary` — it NEVER invalidates the main window
- *  `messagesKey`, where the chip reads `reply_summaries_by_root`. So a chip's
- *  "N new" would freeze at the stale unread while sidebar / Threads list move
- *  (Threads list has its own `channelThreadsKey` invalidation per reply). The
- *  caller debounce-invalidates the window so the server rescoring reaches the
- *  chip. Pure so both transitions are unit-tested without realtime wiring.
- *  (#task:1226 surface 3 — has-summary path; mirrors `useChannelThreads`.) */
-export function replyClusterNeedsSummaryReconcile(
-  cache: MessagesCache | undefined,
-  rootId: string,
-): boolean {
-  if (!cache) return false;
-  return cache.pages.some(
-    p =>
-      p.messages.some(m => m.id === rootId) &&
-      p.reply_summaries_by_root?.[rootId] !== undefined,
-  );
-}
-
-/** A reply authored by the current human viewer never raises their own unread,
- *  so the has-summary reconcile refetch can skip it. Agents never run this
- *  renderer, so an agent reply is never "self". */
-function isReplyFromSelf(reply: MessageDto): boolean {
-  return reply.from_kind === 'user' && reply.from_user_id === getCurrentUserId();
-}
-
 /** Adjust a root's reply-count badge in the main-stream cache by `delta`.
  *
  *  The main window (cut3-6) excludes reply rows but carries a
@@ -628,10 +546,11 @@ function patchReplySummary(
     last_reply_at: Math.max(summary.last_reply_at, reply.created_at),
     repliers,
     replier_total: already ? summary.replier_total : summary.replier_total + 1,
-    // Unread is per-viewer and scored server-side against the viewer's thread
-    // cursor; we never fabricate a delta optimistically (a live reply may be
-    // the viewer's own, or one already covered). Preserve the last known values
-    // and let the WS `unread_updated` invalidation reconcile.
+    // Unread/first-unread are server-scored and NO LONGER consumed off this
+    // summary — the chip reads them from `useConversationUnread` (#task:1226).
+    // These lines only carry the prior values forward to satisfy the type until
+    // step-3 removes the fields from `ReplyBadgeSummary` (alongside the backend
+    // builder). They drive nothing on screen.
     unread_count: summary.unread_count,
     first_unread_message_id: summary.first_unread_message_id,
     first_unread_seq: summary.first_unread_seq,
@@ -847,46 +766,16 @@ export function useChannelMessages(
           // system) and `useThreadRoot`'s live bump. Either way the row
           // never appends to the main stream.
           if (msg.from_kind !== 'system') {
-            // The chip reads `reply_summaries_by_root` from THIS window's cache,
-            // and `invalidateMessageUnreadQueries` (the WS `unread_updated`
-            // path) only touches the sidebar roll-up + `message-unread/summary`,
-            // never `messagesKey` — which is why sidebar / Threads list moved
-            // while the chip's "N new" stayed stale (#task:1226 surface 3). Both
-            // reply transitions need a window refetch, because the optimistic
-            // bump can't score per-viewer unread:
-            //  • SEED (zero→one): the root has no enriched summary yet (sidecar
-            //    shipped, no entry — zero replies at fetch time).
-            //    `patchReplySummary` never fabricates one, so the chip would be
-            //    stuck count-only. Refetch immediately to populate it.
-            //  • RECONCILE (has-summary, 2nd reply onward): the summary exists;
-            //    `patchReplySummary` preserves the prior server-scored unread,
-            //    so a fresh reply from someone else leaves the chip frozen at
-            //    the old "N new". Debounce-refetch so the server rescoring lands.
+            // Optimistically bump the root's reply badge: count / last_reply /
+            // repliers — the facts the client CAN derive from the event. Unread
+            // ("N new" / first-unread) is server-scored and NO LONGER lives in
+            // this window cache; the chip reads it from the per-conversation
+            // `useConversationUnread` read-model, refreshed only by the
+            // `unread_updated` WS signal (#task:1226 — one fact, one cache).
             const rootId = msg.thread_root_id!;
-            const prevCache = qc.getQueryData<MessagesCache>(
-              messagesKey(channelId),
-            );
-            const needsSummarySeed = replyClusterNeedsSummarySeed(
-              prevCache,
-              rootId,
-            );
-            // The has-summary path (2nd reply onward): the optimistic patch
-            // below keeps the prior server-scored unread; refetch so the chip's
-            // "N new" reconciles. Gated to replies NOT from the viewer — the
-            // viewer's own reply never raises their own unread, so a refetch
-            // would be wasted. Debounced so a burst collapses to one fetch.
-            const needsSummaryReconcile =
-              !needsSummarySeed &&
-              !isReplyFromSelf(msg) &&
-              replyClusterNeedsSummaryReconcile(prevCache, rootId);
             qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
               bumpReplyCountInCache(prev, rootId, 1, msg),
             );
-            if (needsSummarySeed) {
-              void qc.invalidateQueries({ queryKey: messagesKey(channelId) });
-            } else if (needsSummaryReconcile) {
-              invalidateChannelWindowDebounced(qc, channelId);
-            }
           }
           return;
         }
@@ -2070,5 +1959,63 @@ export function useMessageUnreadSummary() {
     queryKey,
     queryFn: () =>
       api<{ by_workspace: Record<string, number> }>(apiPaths.messageUnreadSummary),
+  });
+}
+
+export const conversationUnreadKey = (conversationId: string) =>
+  ['conversation', conversationId, 'unread'] as const;
+
+/**
+ * Per-conversation per-viewer stream-unread read-model (#task:1226) — the
+ * SINGLE client source of truth for thread / mainline "N new" + first-unread.
+ * The reply chip (`MessageItem`) and the Threads list (`ChannelThreadsPanel`)
+ * both read this (keyed by root), so the same server-scored fact never lives in
+ * two caches that drift. `threads` is sparse: only roots with unread > 0 appear
+ * (absent root ⇒ 0).
+ *
+ * Unread is server-scored — the client can't optimistically derive it — so this
+ * is refreshed ONLY by the viewer-scoped `unread_updated` WS signal, NEVER
+ * inferred from message events. Scoped to THIS conversation so an unrelated
+ * conversation's unread change doesn't refetch it. Human-attention read path
+ * only; it never reads or writes `thread_followers` / delivery / wake.
+ */
+export function useConversationUnread(conversationId: string | null) {
+  const qc = useQueryClient();
+  const enabled = !!conversationId;
+  const queryKey = conversationUnreadKey(conversationId ?? 'none');
+
+  useEffect(() => {
+    if (!conversationId) return;
+    const sub = subscribeViewerScope();
+    const unsub = onWsFrame(frame => {
+      if (frame.type === 'snapshot_required') {
+        if (!isCurrentViewerScope(frame.scope)) return;
+        void qc.invalidateQueries({ queryKey });
+        return;
+      }
+      if (frame.type !== 'event') return;
+      if (!isCurrentViewerScope(frame.scope)) return;
+      if (frame.kind !== 'unread_updated') return;
+      if (!isMessageUnreadUpdatedPayload(frame.payload)) return;
+      // Per-stream unread for a thread reply carries the parent CHANNEL's
+      // conversation_id (threads share the channel conversation), so this match
+      // covers both mainline and thread unread of this conversation.
+      const payload = frame.payload as { conversation_id?: unknown };
+      if (payload.conversation_id !== conversationId) return;
+      void qc.invalidateQueries({ queryKey });
+    });
+    return () => {
+      sub.unsubscribe();
+      unsub();
+    };
+  }, [qc, conversationId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return useQuery<ConversationStreamUnreadDto>({
+    queryKey,
+    enabled,
+    queryFn: ({ signal }) =>
+      api<ConversationStreamUnreadDto>(apiPaths.conversationUnread(conversationId!), {
+        signal,
+      }),
   });
 }

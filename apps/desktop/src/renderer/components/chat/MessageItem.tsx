@@ -7,6 +7,7 @@ import type {
   AttachmentSnapshot,
   MessageDto,
   ReplyBadgeSummary,
+  StreamUnreadDto,
   UserDto,
 } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
@@ -81,6 +82,12 @@ export interface MessageItemProps {
    *  stacked replier avatars + count + last-reply time. Absent → count-only
    *  fallback (driven by `threadReplyCount`). */
   threadReplySummary?: ReplyBadgeSummary;
+  /** Per-viewer server-scored unread for this root's reply-cluster, from the
+   *  `useConversationUnread` read-model (#task:1226). The SINGLE source of the
+   *  chip's "N new" + jump-to-first-unread — unread is server-scored and no
+   *  longer lives in `threadReplySummary` (which keeps only the optimistically
+   *  patchable count / last-reply / repliers). Absent / sparse-missing ⇒ 0. */
+  threadUnread?: StreamUnreadDto;
   onSave?: (msg: MessageDto) => void;
   saved?: boolean;
   /** Whether the viewer may add/remove reactions here. False in a closed or
@@ -190,6 +197,7 @@ export function MessageItem({
   onStartThread,
   threadReplyCount,
   threadReplySummary,
+  threadUnread,
   onSave,
   saved = false,
   canReact = true,
@@ -322,15 +330,16 @@ export function MessageItem({
   const replyRelativeTime = enrichedReply
     ? dayjs(enrichedReply.last_reply_at).fromNow()
     : '';
-  // Surface 3 (#task:1226): per-viewer unread for this reply-cluster. When > 0
-  // the chip's trailing segment swaps the last-reply time for a filled "N new"
-  // sticker (the SAME single unread hue + square sticker as the Threads list;
-  // forza6 squares it via data-thread-unread). The chip click then jumps to the
-  // first unread reply instead of the thread tail. Follow-agnostic — unread is
-  // independent of whether the viewer follows the thread.
-  const threadUnreadCount = threadReplySummary?.unread_count ?? 0;
-  const threadFirstUnreadId =
-    threadReplySummary?.first_unread_message_id ?? null;
+  // Surface 3 (#task:1226): per-viewer unread for this reply-cluster, read from
+  // the `useConversationUnread` read-model (threaded in as `threadUnread`) — the
+  // SINGLE source of truth, NOT the message-window summary (which can't score
+  // per-viewer unread). When > 0 the chip's trailing segment swaps the
+  // last-reply time for a filled "N new" sticker (the SAME single unread hue +
+  // square sticker as the Threads list; forza6 squares it via data-thread-unread)
+  // and the chip click jumps to the first unread reply instead of the thread
+  // tail. Follow-agnostic — unread is independent of whether the viewer follows.
+  const threadUnreadCount = threadUnread?.unread_count ?? 0;
+  const threadFirstUnreadId = threadUnread?.first_unread_message_id ?? null;
   const replyBadgeTitle = enrichedReply
     ? threadUnreadCount > 0
       ? `${replyBadgeLabel} · ${threadUnreadCount} new — jump to first unread`

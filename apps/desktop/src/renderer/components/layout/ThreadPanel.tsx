@@ -8,7 +8,7 @@ import { Composer } from '@/components/chat/Composer';
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import { useMessageActionSurface } from '@/components/chat/useMessageActionSurface';
 import { MessageActionChrome } from '@/components/chat/MessageActionChrome';
-import { threadClusterShowsLoader, threadMarkReadSnapshot, threadOpenNeedsLatestRefetch } from './threadMarkRead';
+import { threadClusterShowsLoader, threadLiveMarkReadSeq, threadMarkReadSnapshot, threadOpenNeedsLatestRefetch } from './threadMarkRead';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import {
@@ -317,17 +317,49 @@ export function ThreadPanel({
   const openKeyRef = useRef('');
   const openedAtRef = useRef(0);
   const markedForOpenRef = useRef(false);
+  const markInflightSeqRef = useRef(0);
+  const lastMarkedSeqRef = useRef(0);
+  const liveMarkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isJumpOpenRef = useRef(false);
   const openKey = `${channelId} ${rootMessageId}`;
   if (openKeyRef.current !== openKey) {
     openKeyRef.current = openKey;
     openedAtRef.current = Date.now();
     markedForOpenRef.current = false;
+    markInflightSeqRef.current = 0;
+    lastMarkedSeqRef.current = 0;
     // Whether THIS open began as a first-unread jump. Captured once at open so
     // a later `clearJump` (which nulls `jumpMessageId`) can't flip it and
     // trigger a latest refetch that clobbers the around-window mid-read.
     isJumpOpenRef.current = jumpMessageId != null;
   }
+
+  // Issue a mark-read to `seq`: forward-only, once per seq. `lastMarkedSeqRef`
+  // advances on mutation SUCCESS only (Cindy bar #2 — a pending/failed mark must
+  // not look cleared locally while the server cursor hasn't moved); the
+  // in-flight guard collapses re-fires while one is pending; on error the cursor
+  // is untouched so the next trigger retries. Human-attention only — writes the
+  // viewer's read cursor, never delivery/wake.
+  const markThreadReadMutate = markThreadRead.mutate;
+  const issueMarkRead = useCallback(
+    (seq: number) => {
+      if (seq <= lastMarkedSeqRef.current) return;
+      if (seq <= markInflightSeqRef.current) return;
+      markInflightSeqRef.current = seq;
+      markThreadReadMutate(
+        { channelId, threadRootId: rootMessageId, snapshotSeq: seq },
+        {
+          onSuccess: () => {
+            if (seq > lastMarkedSeqRef.current) lastMarkedSeqRef.current = seq;
+          },
+          onSettled: () => {
+            if (markInflightSeqRef.current === seq) markInflightSeqRef.current = 0;
+          },
+        },
+      );
+    },
+    [channelId, rootMessageId, markThreadReadMutate],
+  );
 
   // §9.10: drive this open's window fetch explicitly (the query itself has
   // `refetchOnMount: false`). A NORMAL open forces a fresh latest window so its
@@ -343,6 +375,10 @@ export function ThreadPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelId, rootMessageId]);
 
+  // OPEN-TIME mark (read-to-clear the whole opened thread): advance to the
+  // open-time stream head, gated by `threadMarkReadSnapshot` to THIS open's
+  // fresh window fetch. Once per open via `markedForOpenRef`; the actual write +
+  // success/forward-only bookkeeping goes through `issueMarkRead`.
   useEffect(() => {
     const snapshot = threadMarkReadSnapshot({
       alreadyMarkedForOpen: markedForOpenRef.current,
@@ -353,19 +389,51 @@ export function ThreadPanel({
     });
     if (snapshot === null) return;
     markedForOpenRef.current = true;
-    markThreadRead.mutate({
-      channelId,
-      threadRootId: rootMessageId,
-      snapshotSeq: snapshot,
-    });
+    issueMarkRead(snapshot);
   }, [
     channelId,
     rootMessageId,
     cluster.isFetching,
     cluster.streamHeadSeq,
     cluster.windowFetchSucceededAt,
-    markThreadRead,
+    issueMarkRead,
   ]);
+
+  // VISIBLE-LIVE mark (#task:1226 — shiki dogfood): a reply arriving while the
+  // panel is open + watched should clear unread without a close/reopen. Follow
+  // the read cursor to the newest reply ONLY while pinned at the tail (it's on
+  // screen) AND the window is visible — never swallowing an unrendered tail
+  // (scrolled up) or a backgrounded panel. `threadLiveMarkReadSeq` is the pure
+  // gate; debounced so a burst of replies collapses to one mark at the latest
+  // visible seq (max-VISIBLE, not latest-known — `messages` is the loaded
+  // window). `lastMarkedSeqRef` (advanced on success) keeps it forward-only.
+  const maxLoadedSeq = messages.length
+    ? messages[messages.length - 1]!.seq
+    : null;
+  const pinnedAtTail = isAtTail && pinBottomRef.current;
+  useEffect(() => {
+    const seq = threadLiveMarkReadSeq({
+      pinnedAtTail,
+      documentVisible: !document.hidden,
+      maxVisibleSeq: maxLoadedSeq,
+      lastMarkedSeq: lastMarkedSeqRef.current,
+    });
+    if (seq === null) return;
+    if (liveMarkTimerRef.current) clearTimeout(liveMarkTimerRef.current);
+    liveMarkTimerRef.current = setTimeout(() => {
+      liveMarkTimerRef.current = null;
+      // Re-check at fire time: the user may have scrolled up or backgrounded
+      // the app during the debounce window.
+      if (!(isAtTail && pinBottomRef.current) || document.hidden) return;
+      issueMarkRead(seq);
+    }, 300);
+    return () => {
+      if (liveMarkTimerRef.current) {
+        clearTimeout(liveMarkTimerRef.current);
+        liveMarkTimerRef.current = null;
+      }
+    };
+  }, [pinnedAtTail, maxLoadedSeq, isAtTail, issueMarkRead]);
 
   // While pinned (initial open, or the user sitting at the tail), keep the
   // newest reply in view as the root loads / replies arrive. Instant jump

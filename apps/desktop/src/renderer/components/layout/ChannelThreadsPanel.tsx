@@ -1,10 +1,12 @@
 import { CornerUpLeft, Loader2, X } from 'lucide-react';
+import type { StreamUnreadDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useRelativeTime } from '@/components/chat/useRelativeTime';
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+import { useConversationUnread } from '@/features/channels/hooks';
 import {
   useChannelThreads,
   type ThreadSummary,
@@ -42,6 +44,10 @@ export function ChannelThreadsPanel({
   onOpenThread,
 }: ChannelThreadsPanelProps): JSX.Element {
   const { threads, isLoading, isError } = useChannelThreads(channelId);
+  // Per-viewer server-scored unread, read from the SAME read-model the reply
+  // chip reads (#task:1226) — one source of truth, no second unread fact on
+  // `ThreadSummary`. Sparse: only roots with unread > 0 appear (absent ⇒ 0).
+  const unreadByRoot = useConversationUnread(channelId).data?.threads;
   // Same author-resolution maps the message panes use, so an author renders
   // identically here and in the stream.
   const { agentsById, humansById, humanAvatarUrls } = useMessageRenderContext(
@@ -146,6 +152,7 @@ export function ChannelThreadsPanel({
               <ThreadRow
                 key={t.root_message_id}
                 summary={t}
+                unread={unreadByRoot?.[t.root_message_id]}
                 authorName={authorName}
                 renderAvatar={renderAvatar}
                 onOpen={() => onOpenThread(t.root_message_id)}
@@ -160,6 +167,9 @@ export function ChannelThreadsPanel({
 
 interface ThreadRowProps {
   summary: ThreadSummary;
+  /** Per-viewer unread for this root, from `useConversationUnread` (#task:1226).
+   *  The single source of "N new" — NOT `summary.unread_count`. Absent ⇒ 0. */
+  unread?: StreamUnreadDto;
   authorName: (author: Author) => string;
   renderAvatar: (author: Author, size: number) => JSX.Element;
   onOpen: () => void;
@@ -167,6 +177,7 @@ interface ThreadRowProps {
 
 function ThreadRow({
   summary,
+  unread,
   authorName,
   renderAvatar,
   onOpen,
@@ -176,7 +187,8 @@ function ThreadRow({
     summary.reply_count === 1 ? 'reply' : 'replies'
   }`;
   const overflow = summary.replier_total - summary.repliers.length;
-  const hasUnread = (summary.unread_count ?? 0) > 0;
+  const unreadCount = unread?.unread_count ?? 0;
+  const hasUnread = unreadCount > 0;
 
   return (
     <li>
@@ -229,10 +241,10 @@ function ThreadRow({
                 <span
                   data-thread-unread="sticker"
                   className="shrink-0 min-w-[16px] rounded-full bg-accent px-1 text-center text-[9px] font-semibold leading-[16px] text-text-on-accent"
-                  title={`${summary.unread_count} new`}
-                  aria-label={`${summary.unread_count} new`}
+                  title={`${unreadCount} new`}
+                  aria-label={`${unreadCount} new`}
                 >
-                  {summary.unread_count > 99 ? '99+' : summary.unread_count} new
+                  {unreadCount > 99 ? '99+' : unreadCount} new
                 </span>
               ) : (
                 // Non-followed thread → weak ambient hint: a soft dot, no
@@ -241,8 +253,8 @@ function ThreadRow({
                 <span
                   data-thread-unread="dot"
                   className="size-1.5 shrink-0 rounded-full bg-accent"
-                  title={`${summary.unread_count} unread`}
-                  aria-label={`${summary.unread_count} unread`}
+                  title={`${unreadCount} unread`}
+                  aria-label={`${unreadCount} unread`}
                 />
               )
             ) : null}

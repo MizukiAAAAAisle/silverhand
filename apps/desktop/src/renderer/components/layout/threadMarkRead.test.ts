@@ -3,6 +3,7 @@ import { QueryClient } from '@tanstack/react-query';
 import {
   clusterInitialFetchEnabled,
   threadClusterShowsLoader,
+  threadLiveMarkReadSeq,
   threadMarkReadSnapshot,
   threadOpenNeedsLatestRefetch,
   type ThreadMarkReadGateInput,
@@ -246,5 +247,47 @@ describe('cluster freshness epoch carrier (primeAround → gate, §9.10)', () =>
         openedAt,
       }),
     ).toBe(headSeq);
+  });
+});
+
+describe('threadLiveMarkReadSeq (#task:1226 visible-live mark-read)', () => {
+  const base = {
+    pinnedAtTail: true,
+    documentVisible: true,
+    maxVisibleSeq: 42,
+    lastMarkedSeq: 10,
+  };
+
+  it('tail pinned + visible + newer reply → marks to the visible tail seq', () => {
+    expect(threadLiveMarkReadSeq(base)).toBe(42);
+  });
+
+  it('not pinned at tail (scrolled up) → null (no swallow of unrendered tail)', () => {
+    expect(threadLiveMarkReadSeq({ ...base, pinnedAtTail: false })).toBeNull();
+  });
+
+  it('document hidden / backgrounded → null even when pinned at tail', () => {
+    expect(threadLiveMarkReadSeq({ ...base, documentVisible: false })).toBeNull();
+  });
+
+  it('empty window (no visible seq) → null', () => {
+    expect(threadLiveMarkReadSeq({ ...base, maxVisibleSeq: null })).toBeNull();
+  });
+
+  it('already marked at/after the visible tail → null (forward-only)', () => {
+    expect(
+      threadLiveMarkReadSeq({ ...base, maxVisibleSeq: 42, lastMarkedSeq: 42 }),
+    ).toBeNull();
+    expect(
+      threadLiveMarkReadSeq({ ...base, maxVisibleSeq: 41, lastMarkedSeq: 42 }),
+    ).toBeNull();
+  });
+
+  it('retriable: a stalled mark leaves lastMarkedSeq low, so the same seq is still returned next trigger', () => {
+    // onSuccess is what advances lastMarkedSeq; a failed mutation leaves it
+    // unchanged, so re-evaluating with the same window re-proposes the seq.
+    expect(
+      threadLiveMarkReadSeq({ ...base, maxVisibleSeq: 42, lastMarkedSeq: 10 }),
+    ).toBe(42);
   });
 });

@@ -121,3 +121,49 @@ export function threadClusterShowsLoader(input: {
 }): boolean {
   return input.isLoading || (input.jumpPrimePending && !input.hasWindow);
 }
+
+export interface ThreadLiveMarkReadInput {
+  /** The viewer is pinned at the tail — the newest reply is on screen. When
+   *  false (scrolled up into history) the newest reply isn't seen, so we must
+   *  NOT advance: no-swallow means the cursor only follows what was visible. */
+  pinnedAtTail: boolean;
+  /** The app window / document is visible. A panel that is "open" but
+   *  backgrounded hasn't actually been seen, so a live append must not mark it
+   *  read (Cindy bar #4). */
+  documentVisible: boolean;
+  /** Highest seq the viewer has actually seen — at-tail this is the loaded
+   *  window's max (tail) reply seq. Deliberately NOT `stream_head_seq` and NOT
+   *  the max of every cached reply: the semantic is max-VISIBLE, not
+   *  latest-known (Cindy bar #3). Null when the window is empty. */
+  maxVisibleSeq: number | null;
+  /** Highest seq already SUCCESSFULLY marked read this open. */
+  lastMarkedSeq: number;
+}
+
+/**
+ * Visible-live mark-read decision (#task:1226 — shiki dogfood: a reply that
+ * arrives while the panel is open + watched should clear unread without a
+ * close/reopen). Initial open still marks the open-time snapshot
+ * (`threadMarkReadSnapshot`); THIS governs subsequent live appends.
+ *
+ * Returns the seq to advance the read cursor to, or null to hold unread. We
+ * advance ONLY when the newest reply is genuinely on screen (pinned at tail AND
+ * the window visible) and it is newer than what we've marked — so a reply that
+ * lands while the user is scrolled up, or the app is backgrounded, stays unread
+ * until they actually see it. This preserves the no-swallow invariant: the
+ * cursor never jumps past an unrendered tail.
+ *
+ * The caller owns the side-effecting concerns this purposely excludes: advance
+ * `lastMarkedSeq` only on mutation SUCCESS (Cindy bar #2), debounce bursts, and
+ * skip while a mark is in flight. Pure so the gate is unit-tested without React
+ * render/scroll timing.
+ */
+export function threadLiveMarkReadSeq(
+  input: ThreadLiveMarkReadInput,
+): number | null {
+  if (!input.pinnedAtTail) return null;
+  if (!input.documentVisible) return null;
+  if (input.maxVisibleSeq === null) return null;
+  if (input.maxVisibleSeq <= input.lastMarkedSeq) return null;
+  return input.maxVisibleSeq;
+}

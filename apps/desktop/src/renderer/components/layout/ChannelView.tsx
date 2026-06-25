@@ -28,6 +28,7 @@ import type {
   MemberDto,
   MessageDto,
   ReplyBadgeSummary,
+  StreamUnreadDto,
 } from '@silverhand/shared';
 import { Composer } from '@/components/chat/Composer';
 import { ChannelMessageItem } from '@/components/chat/ChannelMessageItem';
@@ -61,6 +62,7 @@ import { canEditAgentProfile } from '@/features/agents/permissions';
 import {
   useChannelAgents,
   useChannelMessages,
+  useConversationUnread,
   useMarkMessageChannelRead,
   useStartAgent,
   useStopAgent,
@@ -243,6 +245,12 @@ function ActiveChannelView({
     replyCountsByRoot,
     replySummariesByRoot,
   } = useChannelMessages(conversation.id);
+
+  // Per-viewer server-scored unread for this conversation's reply-clusters
+  // (#task:1226). The SINGLE source of the chip's "N new" + first-unread —
+  // sparse (only roots with unread > 0). Refreshed only by `unread_updated`;
+  // the message-window summary no longer carries unread.
+  const threadUnreadByRoot = useConversationUnread(conversation.id).data?.threads;
 
   // Advance the message read cursor in real-time as new messages arrive.
   // ChannelView is only rendered when the channel is visible, so any
@@ -639,6 +647,7 @@ function ActiveChannelView({
             onOpenThread={onOpenThread}
             replyCountsByRoot={replyCountsByRoot}
             replySummariesByRoot={replySummariesByRoot}
+            threadUnreadByRoot={threadUnreadByRoot}
             conversationRefsById={conversationRefsById}
             onOpenConversationRef={onOpenConversationRef}
             onOpenChannelRef={onOpenChannelRef ? handleOpenChannelRef : undefined}
@@ -958,6 +967,7 @@ function MessageList({
   onOpenThread,
   replyCountsByRoot,
   replySummariesByRoot,
+  threadUnreadByRoot,
   conversationRefsById,
   onOpenConversationRef,
   onOpenChannelRef,
@@ -1005,6 +1015,12 @@ function MessageList({
    *  when a root has an entry the badge upgrades to avatars + last-reply
    *  time; absent → count-only fallback. */
   replySummariesByRoot?: Record<string, ReplyBadgeSummary>;
+  /** Per-root per-viewer server-scored unread (#task:1226), from
+   *  `useConversationUnread`. The SINGLE source of the chip's "N new" +
+   *  first-unread — sparse (absent root ⇒ 0). Kept separate from the
+   *  optimistically-patched `replySummariesByRoot` so the server-scored fact
+   *  never lives in the message-window cache. */
+  threadUnreadByRoot?: Record<string, StreamUnreadDto>;
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
   /** Pre-bound (workspace already resolved) click handler for inline
@@ -1387,6 +1403,7 @@ function MessageList({
               : undefined
           }
           threadReplySummary={replySummariesByRoot?.[m.id]}
+          threadUnread={threadUnreadByRoot?.[m.id]}
           viewerAvatarObjectUrl={viewerAvatarObjectUrl}
           viewer={viewer}
           humanAvatarUrls={humanAvatarUrls}
@@ -1414,6 +1431,7 @@ function MessageList({
       handleOpenThread,
       replyCountsByRoot,
       replySummariesByRoot,
+      threadUnreadByRoot,
       viewerAvatarObjectUrl,
       viewer,
       agentAvatarUrls,
