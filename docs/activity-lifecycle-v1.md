@@ -28,7 +28,7 @@ Owner: 脊柱(数据模型/生命周期/领域分层)=Alice · UI 表面节=Norm
 6. **overlap 去重 = per-(viewer, message)**(§7):一条 message 对一 viewer 至多一个 claim,按最高 salience 呈现,一致消除。
 7. **sidebar 与 Activity 同源同 `enter()`,projection-specific 聚合**(§8):sidebar 不减 directed、Activity ambient 减 directed。
 8. **建表准入测试:「它是用户的决定,还是派生事实?」**(§4.2)决定→可落自有聚合;派生→只能投影。
-9. **answerability 测试**(§5.3):每个 item 必须有一条 **eliminate route**,且 source_ref-in(产生)= source_ref-out(消除);**out 不一定叫 observe**(read-cleared→`observe`、task→状态迁移)。答不上 = 凭空状态。
+9. **answerability 测试**(§5.3):每个 item 必须有一条 **eliminate route**,且 source_ref-in(产生)= source_ref-out(消除);v1 所有 item 都 read-cleared → 统一走 `observe()`(委派 cursor / `notifications.read_at`)。答不上 = 凭空状态。
 10. **read ⊥ triage**(§11):v1 只 read(source-routed);triage(done/snooze/archive)是唯一可被 Activity 拥有的 durable state,**仅 v2**,且命名为 triage 不叫 read。
 
 ---
@@ -126,11 +126,11 @@ shiki 提问:Activity 是不是一个独立 DDD 领域事件,有自己的读和�
 |---|---|---|
 | positional(stream unread) | **read-cleared**(observe) | advance 对应 stream cursor |
 | directed mention / agent_fail | **read-cleared**(observe) | 置 `notifications.read_at` |
-| directed task-needs-action (**v2**) | **resolve-cleared**(act,**非** read) | **不适用 observe** —— task 离开 Activity 由 `task_status` 状态迁移驱动 |
+| (v2) `task_needs_review` notification | **read-cleared**(observe,like mention) | 置 `notifications.read_at`;task 离开 in_review 仅作**派生消失**条件、**非** eliminate route |
 
 **关键carve-out(schema 推出的正确性点;也是 v1 砍掉 task 的根据):task 不是「读了即出」。** 读一眼没认领的 task 绝不该清它;它的消除谓词 = `task_status` 不再 needs-my-action(resolve-to-clear)。这正是把 task 当 *库存镜像* 投进 Activity 会变成**永久常驻**的原因(Activity 其它 kind 都 read-cleared、它独是 resolve-cleared)——**故 v1 把 task 整个移出 Activity**(§5.1 carve-out),库存交回 task panel。**v2 若要回归,必须改成 read-cleared 的事件**(notification-backed `task_needs_review`,§5.1),而非给库存 item 强加 `Mark as read`(那是 no-op)。
 
-**answerability 测试(机械可证,Cindy gate):** 每个 Activity item 必须有一条 **eliminate route**,且能说出 **source_ref-in**(由哪个源产生)= **source_ref-out**(消除时写回哪个源)。**out 不一定叫 `observe`**:read-cleared item 走 `observe(source_ref, position)`;resolve-cleared task item 走 **task 源聚合的状态迁移**(`task_status`)。答不上 source-in=source-out = 不是投影 = 凭空状态。两头一夹(out 自动对、in 强制必填),**孤儿 read/triage-state 不可能存在**。
+**answerability 测试(机械可证,Cindy gate):** 每个 Activity item 必须有一条 **eliminate route**,且能说出 **source_ref-in**(由哪个源产生)= **source_ref-out**(消除时写回哪个源)。**v1(及 planned v2)所有 Activity item 都 read-cleared → 统一走单一原语 `observe(source_ref, position)`**(它委派到 stream cursor 或 `notifications.read_at`)。**没有 resolve-cleared 的 Activity item** —— resolve-cleared 属 task **库存**(在 task panel,不是 Activity item);v2 的 `task_needs_review` 是 read-cleared 事件,走 `notifications.read_at`,`task_status` 只作派生消失条件、非 eliminate route。答不上 source-in=source-out = 不是投影 = 凭空状态。两头一夹(out 自动对、in 强制必填),**孤儿 read/triage-state 不可能存在**。
 
 ---
 
@@ -230,7 +230,7 @@ Activity 是 **viewer-scoped read-model**,所以它的三源失效信号统一�
 
 ### 13.0 原则
 
-所有 UI 表面都是**同一 scorer 的投影**(§8、§9.2);UI **从不写 read/triage 状态**——每个清除 affordance 都降解成 §5.3 的 eliminate route(read-cleared→`observe()` / task→`task_status`)。表面只「呈现投影 + 把观察/决定路由回源」,无自有状态(§4.2)。
+所有 UI 表面都是**同一 scorer 的投影**(§8、§9.2);UI **从不写 read/triage 状态**——每个清除 affordance 都降解成 §5.3 的单一 eliminate route `observe()`(委派 cursor / `notifications.read_at`)。表面只「呈现投影 + 把观察路由回源」,无自有状态(§4.2)。
 
 ### 13.1 呈现表面(read projections — 在哪看见)
 
@@ -284,7 +284,7 @@ Activity 是 **viewer-scoped read-model**,所以它的三源失效信号统一�
 Cindy 的 5 条硬标准 = 本 doc 的逐条验收:
 1. Attention 是读侧 bounded context / projection,不拥有 read/unread/claim/salience(§4)。
 2. Attention 只拥有 attention 决定:v1 `ChannelAttentionPreference`;follow 仍是 delivery 决定,只读不写(§4.2、§5.2)。
-3. 每个 item 通过 answerability:有一条 eliminate route,source_ref-in = source_ref-out;**out 不一定叫 observe**(read-cleared→`observe(source_ref,position)` / task→`task_status` 状态迁移);overlap 按 per-(viewer,message) 去重(§5.3、§7)。
+3. 每个 item 通过 answerability:有一条 eliminate route,source_ref-in = source_ref-out;v1 所有 item read-cleared → 统一 `observe(source_ref,position)`(委派 cursor / `notifications.read_at`);overlap 按 per-(viewer,message) 去重(§5.3、§7)。
 4. `observe()` 必须 source-routed,不写 `activity.read_at`(§5.3)。
 5. sidebar 与 Activity 同源同 `enter()`,projection-specific 聚合(§8)。
 

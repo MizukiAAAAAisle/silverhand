@@ -52,8 +52,8 @@ export type SetChannelAttentionPreferenceInput = z.infer<
 //
 // `GET /api/activity` returns the viewer's Activity list — the projection of
 // `listActivity(viewer, scope)` (§9.2). Pure read side: every item is computed
-// from an existing source (per-stream cursor read-model / `notifications` /
-// `messages.task_*`), NEVER from an Attention-owned copy. The server returns the
+// from an existing source (per-stream cursor read-model / `notifications`),
+// NEVER from an Attention-owned copy. The server returns the
 // list already `enter()`-filtered (§6), per-(viewer, message) de-duplicated (§7),
 // and salience-sorted (§13.2: directed tier first, most-recent-first within tier).
 
