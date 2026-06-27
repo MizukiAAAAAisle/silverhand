@@ -83,8 +83,11 @@ type ResolvedSource = ResolvedStream | ResolvedNotification;
  *   - channel-like visibility (`canViewConversation`);
  *   - root message exists / belongs to this conversation / is a root not a
  *     reply (`thread_root_not_found` / `thread_root_is_reply`);
- *   - position → seq, with `stream_head` forbidden on a thread and an `at_seq`
- *     past the stream head rejected (`position_future`).
+ *   - position → seq: `stream_head` resolves the current head of ANY stream
+ *     (mainline or thread); an `at_seq` past the stream head is rejected
+ *     (`position_future`). The AUTO-caller guard (open/live must pin `at_seq`)
+ *     lives at the caller / legacy mark-read route, NOT here (§9.10 is on the
+ *     caller-intent axis, not the stream shape).
  */
 function resolveSource(
   deps: ObserveDeps,
