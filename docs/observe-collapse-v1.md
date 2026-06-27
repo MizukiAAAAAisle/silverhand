@@ -1,5 +1,11 @@
 # observe() 坍缩 — 单一 eliminate 原语收口(#task:1231)
 
+> **状态(2026-06-27,#task:1232 已 ship):** R1 退役完成 —— 旧 `/api/channels/:id/mark-read`
+> route 已**删除**(commit `be8b092`)。**现存 public cursor-write API 唯一 = `POST /api/attention/observe`。**
+> 本文原以「先委派后退役」的阶段口径写就;下文 §2/§6/§7 已改成完成态:legacy route 不再存在、
+> 不再是任何校验/§9.10 的 enforcement point(该守卫现纯由 renderer typed builder + observe 旧语义测试承载)。
+> 历史的「委派过渡」阶段(step-2,commit `16c4e3f`)仅留作迁移记录,不是当前形态。
+>
 > 接口稿 v1(@Alice 出形状 → @Cindy review answerability/委派边界 → @Norman 接线 step-3)。
 > 模型权威在 `docs/activity-lifecycle-v1.md §5.3`(消除 = source-routed `observe()`)与
 > `docs/thread-unread-v1.md §3.4/§9.10`(open-time snapshot、两 position、按 stream 非对称)。
@@ -52,7 +58,7 @@ type ObserveSource =
   | { kind: 'notification'; notificationId: string };
 
 type ObserveInput = {
-  principal: Principal;          // viewer(canViewOwnedState 同 mark-read 路由)
+  principal: Principal;          // viewer(canViewOwnedState 底座校验)
   sources: ObserveSource[];      // 单条 = 一次清除;多条 = Mark all read 批量(逐条等价)
 };
 
@@ -62,9 +68,10 @@ type ObserveResult = { ok: true; changed: boolean } | { ok: false; error: Observ
 **端点(Cindy blocker #4 — 不用裸 `/api/observe`):** 新 bounded 端点 `POST /api/attention/observe`(body = `{ sources }`)——
 挂 Attention 限界上下文(它**拥有**消除原语;serves 不止 Activity surface,thread/channel open-time 读也调它,故用
 context 名而非 surface 名 `activity`;API path 非用户界面,不破「Attention 不上界面」的 UI-label 规)。**`observe` 一词的
-thread-delivery 歧义**靠 `attention/` 前缀消解。**委派边界(Cindy review-2 收窄,避免自相矛盾):仅
-`/api/channels/:id/mark-read` 内部委派 `observe(stream)`**(cursor 路径);**`/api/notifications/read` 不委派 observe、
-保留为 notification surface 的 read_at-only 路由**(§7 R2)。renderer 迁完后再议退役 channel route(R1)。
+thread-delivery 歧义**靠 `attention/` 前缀消解。**委派边界(Cindy review-2 收窄):`/api/notifications/read`
+不委派 observe、保留为 notification surface 的 read_at-only 路由**(§7 R2)。**(历史:#1231 step-2 阶段旧
+`/api/channels/:id/mark-read` 曾内部委派 `observe(stream)` 作迁移过渡;#1232 已删该 route —— 现 cursor 写
+唯一入口 = `/api/attention/observe`。)**
 
 **关键澄清(Cindy review-2 blocker):单一原语口径 =「cursor 单写者 = observe()」,不是「read_at 单写者」。**
 `notifications.read_at` 合法有**两个**写者且不冲突(都写真实源、无 shadow 态):① observe()——清 Activity directed item
@@ -86,8 +93,11 @@ position 解析(保 §3.4 路由契约):
 - **不变量(§9.10,Cindy/Norman review-2 收窄):tail-swallow 防的是「caller 意图」轴、不是「stream 形状」轴。**
   AUTO 路径(ThreadPanel open-time / visible-live)**必须** `at_seq`;EXPLICIT clear(含 thread 的 hover-✓/Mark-all)**可**
   `stream_head`。**endpoint 不再 blanket 400 thread+stream_head**(否则 Activity 的 followed-thread `unread` item 清不掉)——
-  §9.10 由 **renderer 类型化构造层**结构性守住(Norman:auto builder 只产 `at_seq`,head builder 物理隔离、ThreadPanel import 不到),
-  + legacy `/api/channels/:id/mark-read` 自身仍「thread 缺 snapshot_seq → 400」(它是 auto caller)。后端只看到一个请求、分不出 caller,故守卫必须在 caller 层。
+  §9.10 自 #1232 起**不再由任何后端 public route 兜底,唯一 enforcement = renderer 类型化构造层**
+  (`apps/desktop/src/renderer/features/attention/observe.ts`):AUTO builders(`streamSourceAtSeq` /
+  `mainlineStreamSourceHead`)在类型上发不出 thread+`stream_head`;`explicitStreamClearHead` 是唯一能发的、仅供
+  显式清读(hover-✓/Mark-all);由 `observe.test.ts` 锁(AUTO 不能发 thread+stream_head、explicit 能、DM-unread
+  仍走 stream)。后端只看到一个请求、分不出 caller,故守卫必须在 caller 层 —— 收口到这一可证层是有意为之,不是 guard 变弱。
 
 **统一规则(Norman R3 细化):`stream_head` = 「显式·当前 head」语义** —— channel open/jump + bulk/✓(Mark-all、ambient hover-✓),
 **thread explicit clear 同样适用**。**auto observe(thread open-time / visible-live)永远 `at_seq`**(client snapshot/visible seq,renderer 结构性保证)。
@@ -132,7 +142,7 @@ observe() 末尾按**实际变更**发(post-commit、commit 后才发):
   `conversation_id`)刷徽标。
 
 即「coalesced」的真实契约 = **每 changed-conversation 恰一条 message 变体 + 至多一条 badge 变体**,而非字面单条。
-单 source(最常见)= 一条,与现 `mark-read` / `notifications/read` 各自行为一致;Mark-all 跨 N conversation = N(+1)条、按 conversation 去重(不按 message 刷屏)。**仅当真有变化才发;不新增 event kind。**
+单 source(最常见)= 一条,与退役前 `mark-read` / 现 `notifications/read` 各自行为一致;Mark-all 跨 N conversation = N(+1)条、按 conversation 去重(不按 message 刷屏)。**仅当真有变化才发;不新增 event kind。**
 
 ## 5. caller 迁移表(step-3,Norman)
 
@@ -154,8 +164,8 @@ DTO 侧:Activity item 已带 `notification_id`(directed)/ `conversation_id`+`thr
 ## 6. 校验不变量(保现路由契约,回归测试守)
 
 ### 6.1 per-source 授权 + root 校验(Cindy blocker #1 —— 端点收任意 conversationId,必须逐 source 校验)
-新端点比旧 `/api/channels/:id/mark-read`(id 在路径、已 gated)宽:`conversationId` 来自 body。故**每个 `stream` source**
-必须复用旧 mark-read 路由的全套校验:
+端点 `conversationId` 来自 body(比退役的 path-gated `/api/channels/:id/mark-read` 宽)。故**每个 `stream` source**
+必须做退役前 mark-read 路由的全套校验(现已收进 observe `resolveSource`):
 - `canViewConversation`(channel-like 可读;非成员/不可见 → 拒);
 - `threadRootId !== null` 时:该 root message 存在、`conversation_id === source.conversationId`、且 `thread_root_id IS NULL`
   (是 root 不是 reply)—— 等价现路由 §3.1.1 的 `thread_root_not_found` / `thread_root_is_reply`。
@@ -172,15 +182,17 @@ DTO 侧:Activity item 已带 `notification_id`(directed)/ `conversation_id`+`thr
 ### 6.3 其它不变量
 1. `stream_head` 对**任何 stream(含 thread)合法** = 显式 clear 当前 head(§2;§9.10 由 caller 层守、非 endpoint blanket 400)。
 2. `at_seq > streamHead` → 400(§3.4:防推未来)。
-3. mainline 省略 position(legacy `/mark-read`)/`stream_head` → server 解析该 stream head。
+3. mainline 用 `stream_head` position → server 解析该 stream head(退役前 legacy `/mark-read` 省略 position 的 fallback 等价物,现由 caller 显式给出)。
 4. overlap 的 notification 清除限 `seq <= 解析seq` 且 `mention_self`(有 anchor);`agent_start_failed` 不参与。
 5. observe() 全程不写任何 `activity.*` 表(answerability:source_ref-out ∈ {cursor, notifications.read_at})。
 
 ## 7. R 决策(Cindy review-1 拍定;R2 经 review-2 收窄)
-- **R1(定):** 新 use case + 新 bounded 端点 `/api/attention/observe`;旧 `/api/channels/:id/mark-read` **先内部委派**
-  新 use case 保持迁移安全,renderer 迁完**再议**是否退役 route——**不在同一轮为「干净」删可能仍有测试/旧调用方的路径**。
-  (Norman 核:`packages/cli` 无任何 mark-read 命令、grep 命中的 `observe` 全是无关的 thread-delivery `agent_stream_observed`
-  → 最终退役 route **零 agent/CLI 契约**要破,迁移安全;同时实锤 `observe` 一词已被 delivery 侧占用 = §1 用 `attention/` 前缀的根据。)
+- **R1(完成,#task:1232):** 新 use case + 新 bounded 端点 `/api/attention/observe` 已落地;旧
+  `/api/channels/:id/mark-read` 经 #1231 step-2 内部委派过渡(commit `16c4e3f`)、renderer 迁完后于 #1232
+  **删除**(commit `be8b092`)——**现存 public cursor-write API 唯一 = `/api/attention/observe`**,
+  退役零 agent/CLI 契约破坏(`packages/cli` 从无 mark-read 命令;grep 命中的 `observe` 全是无关的
+  thread-delivery `agent_stream_observed` —— 这也实锤 `observe` 一词已被 delivery 侧占用 = §1 用 `attention/`
+  前缀的根据)。`conversationReads.markRead` 现仅 observe() 一个 caller(结构性单写者)。
 - **R2(定,Cindy review-2 收窄):** `/api/notifications/read`(markRead/markConversationRead/markWorkspaceRead/markAllRead)
   **暂留且不进 observe 委派列表**——它只写 source-owned `notifications.read_at`、不写 cursor,**不是第二个 cursor writer**;
   日后想统一可做,但**不塞进 #1231**。本任务硬守:**cursor 写口径唯一 = observe()**(read_at 仍有两个合法 writer,见 §1/§3:
@@ -188,8 +200,9 @@ DTO 侧:Activity item 已带 `notification_id`(directed)/ `conversation_id`+`thr
   **迁移后边界(Cindy/Norman 实锤,比 review-1 更窄):`/api/notifications/read` 承载两个合法 surface ——**
   ① 通知面板 bulk;② **focused-conversation 的 conversation-级徽标清理**(`App.tsx:994` 进会话 effect),它清该会话**全部**
   notification 徽标、**含 anchorless `agent_start_failed`**——这类无 message anchor / 无 seq,positional observe 的 overlap(限 `seq<=N`
-  的 `mention_self`)**覆盖不到**,只能由这条 by-conversation read_at 路径清。**只有 `/api/channels/:id/mark-read` 委派
-  `observe(stream)`**;Activity 的 directed dismiss 走 `observe(notification)`,但 conversation-级 badge 清理留在本路径——
+  的 `mention_self`)**覆盖不到**,只能由这条 by-conversation read_at 路径清。**cursor 推进现统一走 renderer
+  直调 `observe(stream)`**(退役前由 `/api/channels/:id/mark-read` 委派,#1232 后 route 已删、renderer 直接打
+  `/api/attention/observe`);Activity 的 directed dismiss 走 `observe(notification)`,但 conversation-级 badge 清理留在本路径——
   两者职责不同,不再都看着像「清通知」。对应 renderer:`useMarkChannelRead` **改名不退役** → `useMarkConversationNotificationsRead`
   (§5);唯一真 bug = `useMessageJumpController` 误把它当「推 cursor」用,改走 observe(stream)。
 - **R3(定):** `stream_head` 用于 explicit bulk(Mark-all)+ ambient per-stream hover-✓,**并发吞尾写成有意识产品语义**

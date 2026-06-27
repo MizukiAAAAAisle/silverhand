@@ -5,6 +5,17 @@ Status: **implemented (backend), in_review**（#task:1226；shiki go 2026-06-25�
 
 > **重构提要(2026-06-25,§4.2 为权威):** dogfood 暴露两个 bug——(a) reply chip「N new」在 has-summary 活跃 thread 收 reply 后不刷新;(b) 打开中的 thread panel 收新 reply 不清未读、要关闭重开才清。根因 = **per-viewer 未读是服务端计分的事实,却被塞进乐观补丁的消息窗口缓存里**(`reply_summaries_by_root` / `ThreadSummary` 行级 unread 字段),两处缓存各自漂移。修正 = 把未读抽成**单一 per-conversation per-viewer 未读读模型**(`GET /api/conversations/:id/unread`),chip + Threads list 都读它、只由 `unread_updated` WS 刷新;并把 mark-read 改成 **visible-gated**(打开快照 + panel 打开且 pinned-at-tail 时推进到可见 reply seq)。**§4 中「ReplyBadgeSummary/ThreadSummary 行级带 unread」的旧描述已被 §4.2 取代。**
 
+> **退役提要(2026-06-27,#task:1231/#1232):cursor 写口径已收口到 `observe()`。** 本 doc §3.4 / §5 / §6 原以专用
+> mark-read route(`/api/channels/:id/mark-read`,handler `markConversationRead`)+ schema `MarkConversationReadInputSchema`
+> (字段 `snapshot_seq`)描述「推进 per-stream cursor」这一动作。该 route + schema 已**删除**(#1232,commit `be8b092`);
+> cursor 推进现统一经**单一 eliminate 原语 `observe()`**:`POST /api/attention/observe`,source `{kind:'stream',
+> conversation_id, thread_root_id, position}`,其中 `position = {kind:'at_seq', seq}`(原 `snapshot_seq`)或
+> `{kind:'stream_head'}`(server 解析当前 head)。**下文的快照 / no-swallow / 按 stream 非对称 / fail-loud 校验语义
+> 全部原样保留**,只是承载从「专用 route + `snapshot_seq` 字段」迁到「observe `stream` source + `at_seq` position」;
+> 凡读到 `MarkConversationReadInputSchema` / route `markConversationRead` / `snapshot_seq` **字段名**处,按此对应阅读。
+> §9.10 的 AUTO tail-swallow 守卫现纯由 renderer typed builder + observe 旧语义测试承载(后端 route 不再兜底),
+> canonical 见 `docs/observe-collapse-v1.md`。
+
 ## 1. 问题
 
 Thread(reply-cluster)的未读不可发现。今天已读边界 `conversation_reads.last_read_seq` 是 **per-conversation**(主线 + 该 conversation 下所有 thread 共用一个游标),无法表达「某条 thread 有未读」。证据:`ThreadSummary.unread_count` 因此长期是 optional 且不填(`packages/shared/src/api/thread-summary.ts`,注释自陈「Lands once a per-stream read primitive exists」)。
@@ -110,6 +121,11 @@ unread(S) = count(messages m
 
 ### 3.4 mark-read 推到 snapshot(关键)
 
+> **承载已迁 observe()(#1231/#1232,见顶部退役提要):** 下文 `markRead(…, snapshotSeq)` / `snapshot_seq` 字段 /
+> 「省略 fallback」均为退役前专用 route 的形态。现等价 = `observe({stream, conversation_id, thread_root_id,
+> position})`:显式 snapshot → `position:{at_seq: snapshotSeq}`;主线「省略=取当前 head」→ caller 显式给
+> `position:{stream_head}`。快照 / no-swallow / `at_seq <= head` fail-loud 语义**原样保留**,resolveSource 复刻同一套校验。
+
 打开一条流时:
 1. 读取该流的 `conversation_stream_heads.latest_seq` 作为 **open-time snapshot**。
 2. mark-read **只推进到这个 snapshot**,不是「当下最新」:
@@ -135,7 +151,9 @@ omitted-fallback 必须**按 stream 非对称**——主线有 legacy caller 要
 - **显式 `snapshot_seq` 必须校验 `snapshot_seq <= 目标 stream 当前 head`**:stream head 单调只增,故 `> head` 只可能是坏客户端把 cursor 推向未来、预先吞掉后续消息 → **400 fail-loud**(与 §3.1.1 trigger 的 fail-loud 纪律一致;不静默 clamp,以暴露客户端 bug)。
 - `latestSeq(conversationId)` 这个 helper 在 mark-read 路径上停用(改成 per-stream `streamHeadLatestSeq(conversationId, threadRootId)`)。
 
-**字段命名(compatibility,review round-2):清迁 `seq` → `snapshot_seq`,不留 alias。** `MarkConversationReadInputSchema` 当前只有 optional `seq`(`message.ts:145-148`),**不经 agent CLI 暴露**(`packages/cli` 无 mark-read 命令),仅 renderer→backend 内部 API(`App.tsx` / `ChannelView.tsx` / `useMessageJumpController.ts` + backend tests),**无对外/agent 具名契约**。按「兼容代码是债,无真实契约就删」:schema 正式迁到 `{ thread_root_id?: string, snapshot_seq?: number }`,注释从「MAX(messages.seq)」改为「target stream head; required when thread_root_id is set」,renderer 3 处 + tests 同 change 改完,**spec 与代码里只保留 `snapshot_seq` 一个名,不并存两套**。
+**字段命名(compatibility,review round-2 —— 已被 #1232 取代):** 此段记录 #1226 当时把 `MarkConversationReadInputSchema`
+的 `seq` 清迁为 `snapshot_seq` 的决定。**该 schema 已于 #1232 整体删除**(无 agent CLI / 对外契约,`packages/cli` 从无
+mark-read 命令),输入形态收口到 `ObserveInputSchema` 的 `stream` source + `at_seq` position。**本段仅留作 #1226 历史,不再是当前契约。**
 
 ### 3.5 channel 未读 roll-up(sidebar 单一 count,shiki 拍)
 
@@ -166,7 +184,7 @@ firstUnread(S) = messages m (同 §3.3 过滤) ORDER BY m.seq ASC LIMIT 1
 - **first-unread DTO 固定输出两个字段(review #4):`first_unread_message_id` + `first_unread_seq`**(§3.6),不要只给 seq——UI 跳转要可靠定位到具体 message,半截 contract 会让前后端各猜一套。**未读不再挂在 `ThreadSummary` / `ReplyBadgeSummary` 行级**(§4.2 重构);per-stream 未读由专用读模型 `streamUnreadForConversation` 统一计算、`unreadCountForStream` / `firstUnreadForStream` 仍是底层原语。
 - ~~reply chip 同源(review round-3,Finding 1):`ReplyBadgeSummary` 也带 `unread_count` + `first_unread_message_id`~~ **作废,见 §4.2。** chip 与 Threads list 现读同一个 conversation-unread 读模型(`GET /api/conversations/:id/unread`,按 root keyed),未读不再随消息窗口或 Threads 列表行下发。`ReplyBadgeSummary` 只保留乐观可维护的 reply 元数据(reply_count / last_reply / repliers);`ThreadSummary` 只保留 `viewer_following` 这一只读 follow 投影。
 - **open-time snapshot 必须由 read 暴露(review round-3,Finding 2):消息窗口响应 `ConversationMessagesDto` 加 `stream_head_seq`**,= 被打开的那条流(无 thread_root_id=主线 / 否则该 cluster)的 `conversation_stream_heads.latest_seq`,**与窗口在同一次 read 捕获**(`routes/conversations.ts` 窗口 callback:head **先于** `listWindow` 取——backend 单写者同步执行,两次读同一逻辑快照;head-before-window ⇒ snapshot = **open-time head**,故 open 后到达、`seq > snapshot` 的**并发**reply 不会被标读)。**`stream_head_seq` 窗口无关**(按 stream 捕获,与 latest/around/before/after 无关),配合 v1 **read-to-clear whole opened thread**(§6):打开 thread 即标到 open-time stream head 全区间,window 只是定位视图、不要求覆盖 first-unread→tail——故唯一保证是「并发尾部不吞」,**不**声称「覆盖窗口内可见尾部」。客户端把它原样回传 `mark-read` 的 `snapshot_seq`,**绝不在 mark 时再查 head、也不从已加载 messages `max(seq)` 推断**(Cindy round-3 实现不变量)。**不在 `ThreadSummary`/`ReplyBadgeSummary` 行级放 head**:mark 永远发生在打开 thread 之后(§6),那一刻窗口响应的 `stream_head_seq` 即唯一权威快照;行级 head 会诱导打开前标读(违 §6)且制造第二个会分叉的快照源。
-- mark-read 路由(`markConversationRead`,`routes/conversations.ts:462`)入参迁为 `{ thread_root_id?, snapshot_seq? }`(§3.4 命名)。**主线(无 thread_root_id):snapshot_seq 可省、fallback mainline head(兼容);thread:snapshot_seq 必传,缺失 → 400;显式 snapshot_seq > 目标 stream head → 400**(§3.4)。`markRead(viewerUserId, conversationId, threadRootId?, snapshotSeq?)`。
+- cursor 推进经 `observe({stream})`(#1231/#1232;退役前为专用 `markConversationRead` route,见顶部退役提要)。**主线(无 thread_root_id):position 用 `stream_head`、server 解析 mainline head;thread:position 必为 `at_seq`,缺失 → 400;`at_seq > 目标 stream head` → 400**(§3.4)。底层 `markRead(viewerUserId, conversationId, threadRootId?, seq)` 现仅 observe() 一个 caller。
 - WS `unread_updated`(viewer-scoped)沿用;thread 未读变化复用同一失效信号。
 
 ### 4.1 实现不变量:所有 `conversation_reads` 访问必须限定 stream(correctness,review #3)

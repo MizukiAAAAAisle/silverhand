@@ -4,13 +4,22 @@
 
 ---
 
+## 2026-06-27 — observe() 坍缩 + 退役 legacy mark-read route（#task:1231/#1232，in_review）
+
+「清除一条 read-cleared 注意力」原散落成多条 caller 各写各（cursor / notification.read_at），其中 channel jump 还误用 badge-only hook 冒充 cursor。终局：单一 eliminate 原语 `observe(source_ref[])`，Attention 零自有 read 态、写**委派回源聚合**。canonical `docs/observe-collapse-v1.md`（Cindy 全 PASS）。
+
+- **#1231 observe()（in_review，未 push）** — 新 bounded 端点 `POST /api/attention/observe`，source = `{stream, conversation_id, thread_root_id, position}`（position = `at_seq` 钉客户端观测 seq / `stream_head` server 解析当前 head）∪ `{notification, notification_id}`。**cursor 单写者 = observe()**（`conversationReads.markRead`）;§3 overlap 同事务把 positional clear 折进 directed（`seq<=N` 的 `mention_self` read_at，不碰 anchorless `agent_start_failed`）;**§9.10 tail-swallow 守在 caller-intent 轴非 stream 形状**（AUTO 必 `at_seq` / explicit 可 `stream_head` 含 thread），由 renderer typed builder + observe 旧语义测试承载;`unread_updated` 双变体（per-conv `{conversation_id}` 刷 cursor 读模型 / `{}` 刷 notification 徽标）。
+- **#1232 退役 legacy route（commit `be8b092`，in_review）** — #1231 step-2 曾让旧 `/api/channels/:id/mark-read` 内部委派 observe 作迁移过渡;renderer 迁完后本轮**删除**该 route + handler `markConversationRead` + `apiPaths.channelMarkRead` + permissions-registry 条目 + schema `MarkConversationReadInputSchema`（`snapshot_seq` 字段）+ 4 route 测试 + 重生成 endpoint snapshot。**现存 public cursor-write API 唯一 = `/api/attention/observe`**。保留：thread 404 fossil lock + 无关的 `NotificationRepo.markConversationRead`（按 conversation 标 notification 已读，notifications route 在用）。typecheck 全绿 / backend 1662 + shared 218 pass。
+
+---
+
 ## 2026-06-25 — Thread 未读 per-stream read cursor（#task:1226，backend）
 
 Thread（reply-cluster）未读不可发现：已读边界 `conversation_reads.last_read_seq` 是 per-conversation（主线 + 该 channel 下所有 thread 共用一个游标），算不出 thread 级未读。终局：read cursor per-stream 化，与已有的 per-stream freshness（`conversation_stream_heads`）对齐。canonical `docs/thread-unread-v1.md`（Cindy 三轮 spec review PASS）。
 
 - **migration v51（`conversation_reads_per_stream`，foreignKeyEscape）** — `conversation_reads` 加 `thread_root_id`（NULL=主线），唯一性照搬 `conversation_stream_heads` 两条 partial-unique（SQLite 复合 PK 含可空列对 NULL 去重不可靠）+ root-invariant trigger（insert/update，镜像 stream_heads，防跨 conversation / 指向 reply 的坏游标）。**迁移 = eager seed**：存量每条 thread 一次性 seed 成旧主线游标值 → 升级无历史未读洪水，且稳态读模型零 fallback 分支（非 lazy+frozen-baseline，避 vestigial）。
 - **`ConversationReadRepo` per-stream 化** — `markRead(threadRootId, seq)` 单调推进、两 partial-unique 对应两 ON CONFLICT target；新增 `unreadCountForStream` / `firstUnreadForStream`；channel/sidebar 聚合改 §3.5 roll-up `channel_unread = mainline_unread + Σ(followed-thread unread)`（非 followed thread 退出 channel count，弱 dot 兜底）。roll-up 谓词**只读 `thread_followers` 的 `principal_kind='human'` 行**做 followed 判定，绝不写——human attention ⊥ agent delivery（shiki 明令边界）。
-- **mark-read snapshot（route `markConversationRead`）** — 推到 open-time snapshot 不到「当下最新」。非对称：thread 必传 `snapshot_seq`（缺失 400），主线可省（fallback mainline stream head，兼容旧 channel mark-read）；显式 `snapshot_seq > stream head` → 400 fail-loud。route 先做友好 400/404（thread_root 不属本 channel / 指向 reply），DB trigger 仅末端兜底、不漏成 500。schema `seq` 清迁为 `snapshot_seq`（无 agent CLI / 对外契约，不留 alias）。
+- **mark-read snapshot（route `markConversationRead`）** — 推到 open-time snapshot 不到「当下最新」。非对称：thread 必传 `snapshot_seq`（缺失 400），主线可省（fallback mainline stream head，兼容旧 channel mark-read）；显式 `snapshot_seq > stream head` → 400 fail-loud。route 先做友好 400/404（thread_root 不属本 channel / 指向 reply），DB trigger 仅末端兜底、不漏成 500。schema `seq` 清迁为 `snapshot_seq`（无 agent CLI / 对外契约，不留 alias）。**（注:该 route/schema 已于 2026-06-27 #1232 退役并入 `observe()`,见上方该日条目;此处为 #1226 当时形态的历史记录。）**
 - **`ThreadSummary`** 落 `unread_count`（per-thread，非 roll-up、非 follow-gated）+ `first_unread_message_id`/`first_unread_seq`（确定性跳转）+ `viewer_following`（followed→sticker / 非→dot），`listChannelThreads` 带 viewer 批量算。
 - **`mention-cc.ts` `viewerHasNotReadMessage`** stream-qualify（per-stream 后每 (user,conv) 多行，必须限定 thread_root_id）。
 - 测试：repo per-stream 独立游标 / 跨流不串、threads 填字段 + viewer_following、roll-up followed-gating；migration drift oracle 重生成。全 gate 绿（backend 1621 + shared/cli/host/server/desktop）。**UI 三表面（sidebar 单一 count / Threads list dot·sticker / reply chip）= Norman lane，等接前端。**
