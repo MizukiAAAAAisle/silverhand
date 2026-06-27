@@ -10,10 +10,11 @@ import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
 
 /**
  * observe() — the SINGLE eliminate primitive (#task:1231,
- * docs/observe-collapse-v1.md). Every read-cleared Activity item and every
- * legacy mark-read collapses here; the write is delegated back to the source
- * aggregate (the per-stream cursor `conversation_reads`, or
- * `notifications.read_at`). Attention owns NO read state of its own.
+ * docs/observe-collapse-v1.md). Every read-cleared Activity item (and, before
+ * its retirement in #task:1232, the legacy channel mark-read route) collapses
+ * here; the write is delegated back to the source aggregate (the per-stream
+ * cursor `conversation_reads`, or `notifications.read_at`). Attention owns NO
+ * read state of its own.
  *
  * The load-bearing invariants live in what this use case does and does NOT do:
  *   - CURSOR is written through exactly ONE path: `observe(stream)` → this
@@ -24,7 +25,9 @@ import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
  *     §9.10 tail-swallow guard is on the CALLER-INTENT axis (an AUTO open/live
  *     path must pin `at_seq`), NOT the stream shape — so `stream_head` is legal
  *     for an explicit clear of ANY stream, thread included. That discipline
- *     lives at the auto callers + the legacy mark-read route, not here.
+ *     lives at the AUTO callers (the renderer's typed source builders, which
+ *     structurally cannot emit `thread + stream_head`), not here — the backend
+ *     sees only one request and cannot tell caller intent apart.
  *   - overlap (§3): a positional clear folds in the directed clear — advancing
  *     a stream cursor to N also marks `seq <= N` `mention_self` notifications in
  *     that stream read, IN THE SAME TRANSACTION, so the non-derived `/n/unread`
@@ -77,16 +80,16 @@ type ResolvedNotification = { kind: 'notification'; notificationId: string };
 type ResolvedSource = ResolvedStream | ResolvedNotification;
 
 /**
- * Validate + resolve ONE source (no writes). Mirrors the legacy
- * `/api/channels/:id/mark-read` resolution so the new endpoint inherits the
- * same friendly errors:
+ * Validate + resolve ONE source (no writes). Carries the per-stream read
+ * resolution with the same friendly errors the retired channel mark-read route
+ * (#task:1232) used to return:
  *   - channel-like visibility (`canViewConversation`);
  *   - root message exists / belongs to this conversation / is a root not a
  *     reply (`thread_root_not_found` / `thread_root_is_reply`);
  *   - position → seq: `stream_head` resolves the current head of ANY stream
  *     (mainline or thread); an `at_seq` past the stream head is rejected
  *     (`position_future`). The AUTO-caller guard (open/live must pin `at_seq`)
- *     lives at the caller / legacy mark-read route, NOT here (§9.10 is on the
+ *     lives at the caller (renderer typed builders), NOT here (§9.10 is on the
  *     caller-intent axis, not the stream shape).
  */
 function resolveSource(
@@ -166,8 +169,8 @@ function resolveSource(
     // ambient hover-✓), which knowingly swallows the concurrent tail. The
     // §9.10 tail-swallow guard is on the CALLER-INTENT axis, not the stream
     // shape: an AUTO path (ThreadPanel open-time / visible-live) must pin an
-    // `at_seq`, and that discipline is enforced at those callers + the legacy
-    // mark-read route (which keeps requiring snapshot_seq for a thread) — NOT
+    // `at_seq`, and that discipline is enforced at those callers — the renderer's
+    // typed source builders structurally cannot emit `thread + stream_head` — NOT
     // by banning thread + stream_head here, which would make an Activity
     // followed-thread unread item impossible to hover-✓ / Mark-all.
     targetSeq = streamHead;

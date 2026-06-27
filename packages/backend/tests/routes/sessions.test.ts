@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
-import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
@@ -787,17 +786,10 @@ describe('canonical channel/thread routes', () => {
     });
   });
 
-  it('marks channel read cursors and retires public thread mark-read', async () => {
+  it('retires the public legacy thread mark-read route (thread-fossil compat lock)', async () => {
     t = buildTestApp();
     const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
-    await viewer.post(`/api/channels/${channelId}/messages`, {
-      content: 'from user',
-    });
-    const markChannel = await viewer.post(`/api/channels/${channelId}/mark-read`);
-    expect(markChannel.status).toBe(200);
-    expect(await markChannel.json()).toEqual({ last_read_seq: 2 });
-
     const msg = await (
       await viewer.post(`/api/channels/${channelId}/messages`, {
         content: 'topic',
@@ -812,182 +804,17 @@ describe('canonical channel/thread routes', () => {
       fromUserId: 'local',
       content: 'existing fossil reply',
     });
+    // A thread is a reply-cluster, never its own conversation: the legacy
+    // thread-as-conversation write/read routes stay retired (404). Reads advance
+    // the parent channel's per-stream cursor via observe(), not a thread route.
+    // (The channel mark-read route was itself retired in #task:1232 — all cursor
+    // writes now go through POST /api/attention/observe.)
     const writeThread = await viewer.post(`/api/threads/${thread.id}/messages`, {
       content: 'thread msg',
     });
     expect(writeThread.status).toBe(404);
     const markThread = await viewer.post(`/api/threads/${thread.id}/mark-read`);
     expect(markThread.status).toBe(404);
-  });
-
-  it('thread mark-read: requires snapshot_seq, rejects future, advances only that stream without swallowing the tail (#task:1226)', async () => {
-    t = buildTestApp();
-    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
-    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
-    const messages = new MessageRepo(t.ctx.db);
-    const reads = new ConversationReadRepo(t.ctx.db);
-
-    // Agent root (mainline) + reply (thread) → both unread for 'local'.
-    const root = messages.insertForConversation({
-      conversationId: channelId,
-      fromKind: 'agent',
-      fromAgentId: agentIds.alice,
-      content: 'root',
-    });
-    const reply1 = messages.insertForConversation({
-      conversationId: channelId,
-      fromKind: 'agent',
-      fromAgentId: agentIds.alice,
-      content: 'r1',
-      threadRootId: root.id,
-    });
-
-    // Open-time snapshot comes from the thread window, captured in that read.
-    const win = (await (
-      await viewer.get(`/api/channels/${channelId}/messages?thread_root_id=${root.id}`)
-    ).json()) as any;
-    expect(win.stream_head_seq).toBe(reply1.seq);
-
-    // Missing snapshot_seq on a thread → 400 (no fallback for threads).
-    const missing = await viewer.post(`/api/channels/${channelId}/mark-read`, {
-      thread_root_id: root.id,
-    });
-    expect(missing.status).toBe(400);
-    expect(((await missing.json()) as any).code).toBe('snapshot_seq_required');
-
-    // snapshot_seq beyond the thread head → 400 (buggy client pushing forward).
-    const future = await viewer.post(`/api/channels/${channelId}/mark-read`, {
-      thread_root_id: root.id,
-      snapshot_seq: win.stream_head_seq + 1,
-    });
-    expect(future.status).toBe(400);
-    expect(((await future.json()) as any).code).toBe('snapshot_seq_future');
-
-    // Valid mark to the open-time snapshot → 200, advances the THREAD cursor.
-    const ok = await viewer.post(`/api/channels/${channelId}/mark-read`, {
-      thread_root_id: root.id,
-      snapshot_seq: win.stream_head_seq,
-    });
-    expect(ok.status).toBe(200);
-    expect(((await ok.json()) as any).last_read_seq).toBe(reply1.seq);
-
-    // Only the thread stream advanced — the mainline cursor is untouched, so the
-    // mainline root is still unread (marking a thread never touches the main line).
-    expect(reads.unreadCountForStream(channelId, root.id, 'local')).toBe(0);
-    expect(reads.unreadCountForStream(channelId, null, 'local')).toBe(1);
-
-    // A concurrent tail arriving AFTER the snapshot is not swallowed: the thread
-    // shows unread again, pointing at the new reply. Unread now lives in the
-    // dedicated conversation-unread read-model, not on the Threads list row.
-    const reply2 = messages.insertForConversation({
-      conversationId: channelId,
-      fromKind: 'agent',
-      fromAgentId: agentIds.alice,
-      content: 'r2',
-      threadRootId: root.id,
-    });
-    const unread = (await (
-      await viewer.get(`/api/conversations/${channelId}/unread`)
-    ).json()) as any;
-    expect(unread.threads[root.id].unread_count).toBe(1);
-    expect(unread.threads[root.id].first_unread_message_id).toBe(reply2.id);
-  });
-
-  it('mainline mark-read still falls back to the mainline head when snapshot_seq is omitted (#task:1226)', async () => {
-    t = buildTestApp();
-    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
-    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
-    const messages = new MessageRepo(t.ctx.db);
-    const reads = new ConversationReadRepo(t.ctx.db);
-
-    const root = messages.insertForConversation({
-      conversationId: channelId,
-      fromKind: 'agent',
-      fromAgentId: agentIds.alice,
-      content: 'root',
-    });
-    // A thread reply that must NOT be swept by a mainline mark-read: the legacy
-    // fallback is the MAINLINE stream head, never the conversation MAX(seq).
-    messages.insertForConversation({
-      conversationId: channelId,
-      fromKind: 'agent',
-      fromAgentId: agentIds.alice,
-      content: 'r1',
-      threadRootId: root.id,
-    });
-
-    const ok = await viewer.post(`/api/channels/${channelId}/mark-read`);
-    expect(ok.status).toBe(200);
-    // Mainline caught up to the root; the thread reply stays unread.
-    expect(reads.unreadCountForStream(channelId, null, 'local')).toBe(0);
-    expect(reads.unreadCountForStream(channelId, root.id, 'local')).toBe(1);
-  });
-
-  it('publishes message unread updates only when unread counts change', async () => {
-    t = buildTestApp();
-    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
-    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
-    const messages = new MessageRepo(t.ctx.db);
-    messages.insertForConversation({
-      conversationId: channelId,
-      fromKind: 'agent',
-      fromAgentId: agentIds.alice,
-      content: 'needs reading',
-    });
-
-    const events: Array<{ kind: string; payload: unknown }> = [];
-    const unsub = t.ctx.events.subscribeScope('viewer:local', e => {
-      events.push({ kind: e.kind, payload: e.payload });
-    });
-    const first = await viewer.post(`/api/channels/${channelId}/mark-read`);
-    expect(first.status).toBe(200);
-    expect(events).toEqual([
-      { kind: 'unread_updated', payload: { conversation_id: channelId } },
-    ]);
-
-    events.length = 0;
-    const second = await viewer.post(`/api/channels/${channelId}/mark-read`);
-    unsub();
-    expect(second.status).toBe(200);
-    expect(events).toEqual([]);
-  });
-
-  it('delegates to observe(): channel mark-read folds the §3 overlap, clearing seq<=cursor mention_self (#task:1231 step-2)', async () => {
-    // Proves the legacy route now routes the cursor write through observe() —
-    // advancing the mainline cursor also marks the overlapping mention read, a
-    // fold the pre-delegation route lacked (it left the /n/unread badge as a
-    // second truth). Anchorless agent_start_failed has no seq and must survive.
-    t = buildTestApp();
-    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
-    const { workspace, channelId, agentIds } = await createWorkspaceChannel(t, [
-      'alice',
-    ]);
-    const messages = new MessageRepo(t.ctx.db);
-    const notifications = new NotificationRepo(t.ctx.db);
-    const msg = messages.insertForConversation({
-      conversationId: channelId,
-      fromKind: 'agent',
-      fromAgentId: agentIds.alice,
-      content: '@local on mainline',
-    });
-    const mention = notifications.insert({
-      kind: 'mention_self',
-      userId: 'local',
-      workspaceId: workspace.id,
-      conversationId: channelId,
-      messageId: msg.id,
-    });
-    const anchorless = notifications.insert({
-      kind: 'agent_start_failed',
-      userId: 'local',
-      workspaceId: workspace.id,
-      conversationId: channelId,
-    });
-
-    const res = await viewer.post(`/api/channels/${channelId}/mark-read`);
-    expect(res.status).toBe(200);
-    expect(notifications.get(mention.id)?.read_at).not.toBeNull(); // folded
-    expect(notifications.get(anchorless.id)?.read_at).toBeNull(); // anchorless
   });
 
   it('publishes notification unread updates only when rows are marked', async () => {

@@ -266,7 +266,7 @@ function isChannelSwitchDiagnosticPath(path: string): boolean {
     return true;
   }
   if (/^\/api\/workspaces\/[^/]+\/channels(\/archived)?$/.test(path)) return true;
-  return /^\/api\/channels\/[^/]+\/(messages|agents|agent-run-states|threads|mark-read|message-unread)$/.test(
+  return /^\/api\/channels\/[^/]+\/(messages|agents|agent-run-states|threads|message-unread)$/.test(
     path,
   );
 }
@@ -476,7 +476,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       messages,
       conversationReads,
       conversationEvents,
-      notifications,
       saved,
       sort,
     }),

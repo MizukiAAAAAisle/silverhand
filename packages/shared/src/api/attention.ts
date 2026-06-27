@@ -182,10 +182,11 @@ export type ListActivityDto = z.infer<typeof ListActivityDtoSchema>;
 // ───────────────────────────── observe() (#task:1231) ─────────────────────────────
 //
 // `POST /api/attention/observe` — the SINGLE eliminate primitive. Every
-// read-cleared Activity item (and every legacy mark-read) collapses into one
-// use case `observe(source_ref[])` that delegates the write back to the source
-// aggregate (per-stream cursor / `notifications.read_at`); Attention owns NO
-// read state of its own. Canonical: docs/observe-collapse-v1.md.
+// read-cleared Activity item collapses into one use case `observe(source_ref[])`
+// that delegates the write back to the source aggregate (per-stream cursor /
+// `notifications.read_at`); Attention owns NO read state of its own. The legacy
+// channel mark-read route was retired into this primitive (#task:1232).
+// Canonical: docs/observe-collapse-v1.md.
 //
 // Disambiguation: this `observe` (attention eliminate) is UNRELATED to the
 // thread-delivery `observe` kind (backfill / non-waking). The `/api/attention/`

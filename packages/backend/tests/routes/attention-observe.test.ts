@@ -6,8 +6,10 @@ import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 // observe() — the single eliminate primitive (#task:1231,
-// docs/observe-collapse-v1.md). These cover the contract the renderer (step-3)
-// and the legacy mark-read delegation both rely on.
+// docs/observe-collapse-v1.md). These cover the contract the renderer read-side
+// collapse relies on — and, since the legacy channel mark-read route was retired
+// into observe() (#task:1232), the sole backend home for per-stream cursor
+// advance + §3 overlap.
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const created = (await (
@@ -335,7 +337,8 @@ describe('POST /api/attention/observe (#task:1231)', () => {
 
   // ── per-source root validation (Cindy review-2 gap 1) ──────────────────────
   // The new endpoint takes conversationId from the body, so it must run the
-  // full root validation itself — not lean on the legacy mark-read tests.
+  // full root validation itself — and, now that the legacy mark-read route is
+  // retired (#task:1232), this is the only place that validation is exercised.
 
   it('400s thread_root_is_reply when thread_root_id is a reply, not a root', async () => {
     t = buildTestApp();

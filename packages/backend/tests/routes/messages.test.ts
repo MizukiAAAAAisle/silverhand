@@ -228,7 +228,8 @@ describe('GET /api/channels/:id/messages — reply_summaries_by_root (P1)', () =
     // read the same fact and the sidecar carries only optimistic reply metadata.
     expect(summaries[root.id]).not.toHaveProperty('unread_count');
     // Open-time snapshot of the opened (mainline) stream, captured in the same
-    // read as the window — drives `mark-read` without swallowing a tail.
+    // read as the window — drives the `observe()` at_seq clear without
+    // swallowing a tail.
     expect(typeof body.stream_head_seq).toBe('number');
     expect(body.stream_head_seq).toBeGreaterThan(0);
     // Every summary key is a count key (never widens the root set).

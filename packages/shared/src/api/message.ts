@@ -98,7 +98,7 @@ export const ConversationMessagesDtoSchema = z.object({
    *  when no `thread_root_id`, else that reply-cluster), captured in the SAME
    *  read as this window — never a later/separate query, so a concurrent tail
    *  arriving after the window can't slip into the snapshot. The client echoes
-   *  this as `snapshot_seq` to `mark-read` so the cursor advances to the
+   *  this as an `at_seq` position to `observe()` so the cursor advances to the
    *  open-time head, not to "current latest" — under v1 read-to-clear, opening a
    *  thread marks it read up to this head (the window, latest or
    *  around-first-unread, is a locate view, not a coverage guarantee); the
@@ -159,26 +159,6 @@ export const SendMessageInputSchema = z.object({
   path: ['content'],
 });
 export type SendMessageInput = z.infer<typeof SendMessageInputSchema>;
-
-export const MarkConversationReadInputSchema = z.object({
-  /** Which stream's cursor to advance (#task:1226). Omitted / null = mainline;
-   *  a root message id = that reply-cluster. */
-  thread_root_id: z.string().min(1).optional(),
-  /** Open-time snapshot the cursor advances to (the stream head observed when
-   *  the stream was opened — NOT "current latest", so concurrent tail isn't
-   *  swallowed). REQUIRED for a thread (thread_root_id set); omitting it 400s.
-   *  For the mainline it may be omitted, in which case the backend falls back
-   *  to the mainline stream head (the legacy channel mark-read path). */
-  snapshot_seq: z.number().int().nonnegative().optional(),
-});
-export type MarkConversationReadInput = z.infer<
-  typeof MarkConversationReadInputSchema
->;
-
-export const MarkConversationReadDtoSchema = z.object({
-  last_read_seq: z.number(),
-});
-export type MarkConversationReadDto = z.infer<typeof MarkConversationReadDtoSchema>;
 
 /** Per-stream unread for one stream (mainline or a single reply-cluster),
  *  scored server-side against the viewer's own per-stream `conversation_reads`

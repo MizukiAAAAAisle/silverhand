@@ -146,7 +146,6 @@ export const apiPaths = {
   channelClose: (id: string) => `/api/channels/${id}/close`,
   channelStop: (id: string) => `/api/channels/${id}/stop`,
   channelResume: (id: string) => `/api/channels/${id}/resume`,
-  channelMarkRead: (id: string) => `/api/channels/${id}/mark-read`,
   channelArchive: (id: string) => `/api/channels/${id}/archive`,
   conversationChannel: (id: string) => `/api/channels/${id}`,
   conversationChannelMessages: (id: string) => `/api/channels/${id}/messages`,
@@ -186,10 +185,11 @@ export const apiPaths = {
    *  (the data model is global; v1 UI is per-workspace). */
   activity: '/api/activity',
   /** The single eliminate primitive (#task:1231, docs/observe-collapse-v1.md):
-   *  collapse every read-cleared Activity item + legacy mark-read into one
-   *  `observe(source_ref[])` use case that delegates the write back to the
-   *  source aggregate (per-stream cursor / `notifications.read_at`). Owned by
-   *  the Attention bounded context; human viewer-scoped. */
+   *  every read-cleared Activity item collapses into one `observe(source_ref[])`
+   *  use case that delegates the write back to the source aggregate (per-stream
+   *  cursor / `notifications.read_at`). The legacy channel mark-read route was
+   *  retired into this primitive (#task:1232). Owned by the Attention bounded
+   *  context; human viewer-scoped. */
   attentionObserve: '/api/attention/observe',
   conversationLogDebug: (id: string) => `/api/conversations/${id}/log-debug`,
   conversationAgentActivity: (id: string, agentId: string) =>

@@ -65,7 +65,6 @@
   "POST /api/channels/:id/threads/:rootMessageId/follow",
   "DELETE /api/channels/:id/threads/:rootMessageId/follow",
   "POST /api/channels/:id/messages",
-  "POST /api/channels/:id/mark-read",
   "GET /api/saved",
   "POST /api/channels/:id/attachments",
   "GET /api/attachments/:id",

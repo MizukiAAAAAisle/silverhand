@@ -126,8 +126,6 @@
   "ListTasksQuerySchema",
   "MAX_REACTION_EMOJI_LENGTH",
   "MESSAGE_REACTION_CHANGED_EVENT",
-  "MarkConversationReadDtoSchema",
-  "MarkConversationReadInputSchema",
   "MarkNotificationsReadInputSchema",
   "MeResponseSchema",
   "MemberDtoSchema",

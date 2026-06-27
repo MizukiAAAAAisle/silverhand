@@ -1,5 +1,5 @@
 // This file owns the broad conversation context: conversation lifecycle /
-// metadata, message send / read / window, mark-read / unread, saved / search,
+// metadata, message send / read / window, unread, saved / search,
 // threads, and per-conversation runtime control. MESSAGE is a co-located
 // sub-context here (a message belongs to a conversation; every handler shares
 // the same `conversations.get*` + ACL prelude) — kept visually separate by
@@ -14,7 +14,6 @@ import {
   apiPaths,
   ArchiveChannelInputSchema,
   ConversationLogDebugInputSchema,
-  MarkConversationReadInputSchema,
   ReactMessageInputSchema,
   SearchQueryInputSchema,
   UpdateChannelInputSchema,
@@ -33,7 +32,6 @@ import type { SearchRepo } from '../repos/search-repo.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { MessageReactionRepo } from '../repos/message-reaction-repo.js';
 import type { ConversationEventRepo } from '../repos/conversation-event-repo.js';
-import type { NotificationRepo } from '../repos/notification-repo.js';
 import { getUserPrincipal, requireViewerUserId } from '../auth/principal.js';
 import {
   canEditAgent,
@@ -46,7 +44,6 @@ import {
 import { timedRouteSpan } from '../observability/route-span.js';
 import { AnchorMessageNotInConversationError, InvalidThreadsCursorError } from '../repos/message-repo.js';
 import { addReaction, removeReaction } from '../application/react-message.js';
-import { observe } from '../application/observe.js';
 import { loadReactionAggregates, loadReactionDetail } from '../read-model/message-reactions.js';
 import {
   channelServiceErrorResponse,
@@ -235,7 +232,7 @@ export function createConversationReadApp(
           // share one logical snapshot), and capturing head BEFORE the window
           // means the snapshot is the open-time head — a CONCURRENT reply landing
           // after this capture gets seq > snapshot and is therefore not swallowed
-          // by a later `mark-read` to this value. (stream_head_seq is
+          // by a later `observe()` at_seq to this value. (stream_head_seq is
           // window-independent; under v1 read-to-clear-whole-opened-thread the
           // guarantee is "no concurrent-tail swallow", NOT "covers the rendered
           // window tail" — an around-first-unread window may render less than the
@@ -448,7 +445,7 @@ export function createConversationReadApp(
 
 // ── Mount-run B: conversation messaging / threads / saved-list ─────────────
 // thread message window, channel/thread agents + run-states, pin / archive,
-// channel/thread message send, mark-read (channel + thread), channel threads
+// channel/thread message send, channel threads
 // summary, saved list. Mounted between the conversation-membership sub-app and
 // the attachment sub-app.
 export interface ConversationMessagingRouteDeps {
@@ -457,7 +454,6 @@ export interface ConversationMessagingRouteDeps {
   messages: MessageRepo;
   conversationReads: ConversationReadRepo;
   conversationEvents: ConversationEventRepo;
-  notifications: NotificationRepo;
   saved: SavedMessageRepo;
   sort: SortRepo;
 }
@@ -472,114 +468,9 @@ export function createConversationMessagingApp(
     messages,
     conversationReads,
     conversationEvents,
-    notifications,
     saved,
     sort,
   } = deps;
-
-  async function markConversationRead(
-    conversationId: string,
-    c: Context,
-  ): Promise<Response> {
-    const viewerUserId = requireViewerUserId(c);
-    if (!canViewOwnedState(ctx, getUserPrincipal(c), viewerUserId)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    const body = await c.req.json().catch(() => ({}));
-    const parsed = MarkConversationReadInputSchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
-    }
-
-    // Resolve which stream's cursor to advance, with friendly 400/404s. The DB
-    // root-invariant trigger is the last-resort fail-loud backstop (#task:1226
-    // §3.1.1) — we validate here so callers get a stable error, not a raw
-    // SQLite abort leaking as a 500.
-    let threadRootId: string | null = null;
-    const requestedRoot = parsed.data.thread_root_id;
-    if (requestedRoot !== undefined) {
-      const rootMessage = messages.getById(requestedRoot);
-      if (!rootMessage || rootMessage.conversation_id !== conversationId) {
-        return c.json(
-          { error: 'thread root message not found in this channel', code: 'thread_root_not_found' },
-          404,
-        );
-      }
-      if (rootMessage.thread_root_id !== null) {
-        return c.json(
-          { error: 'thread_root_id must be a root message, not a reply', code: 'thread_root_is_reply' },
-          400,
-        );
-      }
-      threadRootId = requestedRoot;
-    }
-
-    // Resolve the target seq per stream (#task:1226 §3.4). mark-read advances to
-    // an OPEN-TIME SNAPSHOT, never "current latest", so a concurrent tail is not
-    // swallowed. Asymmetric by stream:
-    //   - thread (no legacy caller): snapshot_seq REQUIRED; omitting it would
-    //     re-introduce the tail-swallow bug via a head fallback → 400.
-    //   - mainline (legacy channel mark-read): snapshot_seq may be omitted, then
-    //     falls back to the mainline stream head.
-    // A provided snapshot_seq beyond the current stream head can only be a buggy
-    // client pushing the cursor into the future → 400.
-    const streamHead = messages.streamHeadLatestSeq(conversationId, threadRootId);
-    let targetSeq: number;
-    if (parsed.data.snapshot_seq !== undefined) {
-      if (parsed.data.snapshot_seq > streamHead) {
-        return c.json(
-          { error: 'snapshot_seq is beyond the current stream head', code: 'snapshot_seq_future' },
-          400,
-        );
-      }
-      targetSeq = parsed.data.snapshot_seq;
-    } else if (threadRootId !== null) {
-      return c.json(
-        { error: 'snapshot_seq is required when marking a thread read', code: 'snapshot_seq_required' },
-        400,
-      );
-    } else {
-      targetSeq = streamHead;
-    }
-
-    // Delegate the cursor write to the single eliminate primitive (#task:1231,
-    // step-2). The route owns its validation + error codes + the §9.10 AUTO
-    // guard above (a thread requires an explicit snapshot_seq, never a head
-    // fallback); having resolved `targetSeq` it hands observe an `at_seq`
-    // position — this legacy route is an AUTO caller and never emits a
-    // `stream_head`. observe() is now the SOLE writer of the cursor
-    // (`conversation_reads`), folds the §3 overlap (clearing `seq <= targetSeq`
-    // `mention_self` notifications the legacy path used to leave dangling), and
-    // emits the coalesced `unread_updated` itself — so this route no longer
-    // publishes its own event (that would double-fire).
-    const result = await observe(
-      { ctx, conversations, messages, conversationReads, notifications },
-      {
-        principal: getUserPrincipal(c),
-        viewerUserId,
-        sources: [
-          {
-            kind: 'stream',
-            conversation_id: conversationId,
-            thread_root_id: threadRootId,
-            position: { kind: 'at_seq', seq: targetSeq },
-          },
-        ],
-      },
-    );
-    if (!result.ok) {
-      // The route already ran the same validations observe re-checks, so a
-      // failure here is unexpected — surface the code rather than fake success.
-      return c.json({ error: result.error.message, code: result.error.code }, 400);
-    }
-    return c.json({
-      last_read_seq: conversationReads.getLastReadSeq(
-        viewerUserId,
-        conversationId,
-        threadRootId,
-      ),
-    });
-  }
 
   app.get(apiPaths.conversationThreads(':id'), c => {
     const id = c.req.param('id');
@@ -959,17 +850,6 @@ export function createConversationMessagingApp(
       if (mapped) return mapped;
       throw err;
     }
-  });
-
-  app.post(apiPaths.channelMarkRead(':id'), async c => {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'channel id required' }, 400);
-    const channel = conversations.getChannelLike(id);
-    if (!channel) return c.json({ error: 'channel not found' }, 404);
-    if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    return markConversationRead(channel.id, c);
   });
 
   app.get(apiPaths.saved, c => {
