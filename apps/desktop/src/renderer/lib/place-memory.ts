@@ -12,14 +12,13 @@
  * channel. {@link clearPlaceMemory} wipes both the disk value AND the
  * in-process Map so App.tsx's restore effect sees an empty slate.
  *
- * Besides the last channel per workspace, we also remember the last
- * **secondary-pane layout per channel** ({@link lastLayoutByChannel}) so
- * switching away from a channel and back restores its threads-list /
- * thread / side overlay instead of dropping to a bare channel, plus a
- * per-channel **explicit-close watermark** ({@link closeWatermarkByChannel})
- * that lets an unread thread auto-surface without immediately re-surfacing
- * a batch the user just closed. All three maps are wiped together on
- * logout.
+ * Besides the last workspace and last channel per workspace, we also remember
+ * the last **secondary-pane layout per channel** ({@link lastLayoutByChannel})
+ * so switching away from a channel and back restores its threads-list / thread
+ * / side overlay instead of dropping to a bare channel, plus a per-channel
+ * **explicit-close watermark** ({@link closeWatermarkByChannel}) that lets an
+ * unread thread auto-surface without immediately re-surfacing a batch the user
+ * just closed. All place-memory state is wiped together on logout.
  *
  * Lives in `lib/` (not `App.tsx`) so `useLogout` in
  * `features/me/hooks.ts` can import it without taking a circular
@@ -29,8 +28,26 @@
 import type { ChannelLayout } from '@/router';
 
 export const LAST_CHANNEL_KEY = 'silverhand:layout.last-channel-by-workspace';
+export const LAST_WORKSPACE_KEY = 'silverhand:layout.last-workspace';
 export const LAST_LAYOUT_KEY = 'silverhand:layout.last-layout-by-channel';
 export const CLOSE_WATERMARK_KEY = 'silverhand:layout.close-watermark-by-channel';
+
+function loadStringValue(key: string): string | null {
+  try {
+    const value = localStorage.getItem(key);
+    return typeof value === 'string' && value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStringValue(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Quota / disabled storage — fall back to in-memory only.
+  }
+}
 
 function loadStringMap(key: string): Map<string, string> {
   try {
@@ -82,6 +99,17 @@ function saveNumberMap(key: string, map: Map<string, number>): void {
 }
 
 export const lastChannelByWorkspace = loadStringMap(LAST_CHANNEL_KEY);
+let lastWorkspaceId = loadStringValue(LAST_WORKSPACE_KEY);
+
+export function getLastWorkspaceId(): string | null {
+  return lastWorkspaceId;
+}
+
+export function recordLastWorkspace(workspaceId: string): void {
+  if (lastWorkspaceId === workspaceId) return;
+  lastWorkspaceId = workspaceId;
+  saveStringValue(LAST_WORKSPACE_KEY, workspaceId);
+}
 
 export function persistLastChannel(): void {
   saveStringMap(LAST_CHANNEL_KEY, lastChannelByWorkspace);
@@ -201,10 +229,12 @@ export function recordCloseWatermark(channelId: string, seq: number): void {
  * memory.
  */
 export function clearPlaceMemory(): void {
+  lastWorkspaceId = null;
   lastChannelByWorkspace.clear();
   lastLayoutByChannel.clear();
   closeWatermarkByChannel.clear();
   try {
+    localStorage.removeItem(LAST_WORKSPACE_KEY);
     localStorage.removeItem(LAST_CHANNEL_KEY);
     localStorage.removeItem(LAST_LAYOUT_KEY);
     localStorage.removeItem(CLOSE_WATERMARK_KEY);

@@ -28,15 +28,18 @@ const polyfill = {
 
 const {
   LAST_CHANNEL_KEY,
+  LAST_WORKSPACE_KEY,
   LAST_LAYOUT_KEY,
   CLOSE_WATERMARK_KEY,
   clearPlaceMemory,
   closeWatermarkByChannel,
   getChannelLayout,
   getCloseWatermark,
+  getLastWorkspaceId,
   lastChannelByWorkspace,
   lastLayoutByChannel,
   persistLastChannel,
+  recordLastWorkspace,
   recordChannelLayout,
   recordCloseWatermark,
 } = await import('./place-memory');
@@ -48,16 +51,12 @@ const {
 describe('place-memory', () => {
   beforeEach(() => {
     memoryStore.clear();
-    lastChannelByWorkspace.clear();
-    lastLayoutByChannel.clear();
-    closeWatermarkByChannel.clear();
+    clearPlaceMemory();
   });
 
   afterEach(() => {
+    clearPlaceMemory();
     memoryStore.clear();
-    lastChannelByWorkspace.clear();
-    lastLayoutByChannel.clear();
-    closeWatermarkByChannel.clear();
   });
 
   it('persistLastChannel writes the in-memory map to localStorage', () => {
@@ -78,6 +77,42 @@ describe('place-memory', () => {
 
     expect(lastChannelByWorkspace.size).toBe(0);
     expect(localStorage.getItem(LAST_CHANNEL_KEY)).toBeNull();
+  });
+
+  describe('last workspace memory', () => {
+    it('recordLastWorkspace persists and getLastWorkspaceId reads it back', () => {
+      recordLastWorkspace('ws-starred');
+
+      expect(getLastWorkspaceId()).toBe('ws-starred');
+      expect(localStorage.getItem(LAST_WORKSPACE_KEY)).toBe('ws-starred');
+    });
+
+    it('recordLastWorkspace overwrites with the newest selected workspace', () => {
+      recordLastWorkspace('ws-a');
+      recordLastWorkspace('ws-b');
+
+      expect(getLastWorkspaceId()).toBe('ws-b');
+      expect(localStorage.getItem(LAST_WORKSPACE_KEY)).toBe('ws-b');
+    });
+
+    it('clearPlaceMemory wipes the last workspace value + localStorage key', () => {
+      recordLastWorkspace('ws-starred');
+      expect(localStorage.getItem(LAST_WORKSPACE_KEY)).not.toBeNull();
+
+      clearPlaceMemory();
+
+      expect(getLastWorkspaceId()).toBeNull();
+      expect(localStorage.getItem(LAST_WORKSPACE_KEY)).toBeNull();
+    });
+
+    it('hydrates the last workspace from localStorage on module load', async () => {
+      memoryStore.set(LAST_WORKSPACE_KEY, 'ws-persisted');
+      vi.resetModules();
+      const fresh = await import('./place-memory');
+
+      expect(fresh.getLastWorkspaceId()).toBe('ws-persisted');
+      vi.resetModules();
+    });
   });
 
   describe('per-channel layout memory', () => {

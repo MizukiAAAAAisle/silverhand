@@ -18,7 +18,8 @@
  * Pure so the precedence is unit-tested independent of React/nav wiring; the
  * effect only performs the nav side-effect with the result.
  *
- * `rememberedId` is null on a cold start (the ref hasn't been written yet).
+ * `rememberedId` can come from persisted place memory; it is null only when the
+ * viewer has no valid workspace memory yet.
  */
 export function pickWorkspaceToRestore(
   workspaces: readonly { id: string }[],

@@ -112,8 +112,10 @@ import {
   clearPlaceMemory,
   getChannelLayout,
   getCloseWatermark,
+  getLastWorkspaceId,
   lastChannelByWorkspace,
   persistLastChannel,
+  recordLastWorkspace,
   recordChannelLayout,
   recordCloseWatermark,
 } from '@/lib/place-memory';
@@ -324,8 +326,10 @@ function RegisteredAppShell(): JSX.Element {
   // Same as `lastSelectedAgentId` but for the chat section: clicking the
   // "Chat" navrail item routes to bare `/chat` (no workspaceId), so on the
   // way back the auto-pick below must restore the workspace the user last had
-  // open instead of snapping to `workspaces[0]` (#task:1222).
-  const lastSelectedWorkspaceId = useRef<string | null>(null);
+  // open instead of snapping to `workspaces[0]`. This one is persisted so an
+  // app restart can land back on a starred workspace that does not sort first
+  // (#task:1222/#task:1229).
+  const lastSelectedWorkspaceId = useRef<string | null>(getLastWorkspaceId());
   const lastSelectedMessageReadKey = useRef<string | null>(null);
   const lastThreadMessageReadKey = useRef<string | null>(null);
   const lastNotificationReadId = useRef<string | null>(null);
@@ -784,12 +788,15 @@ function RegisteredAppShell(): JSX.Element {
   }, [agents, selectedAgentId]);
 
   // Remember the workspace the user is actively viewing so returning to the
-  // chat section (via bare `/chat`) restores it rather than `workspaces[0]`
-  // (#task:1222). Mirrors `lastSelectedAgentId` for the members section.
+  // chat section (via bare `/chat`) restores it rather than `workspaces[0]`.
+  // Persist this through app restarts; ref-only memory regressed to the first
+  // STARRED row after quitting and reopening (#task:1222/#task:1229).
   useEffect(() => {
     if (!selectedWorkspaceId) return;
     if (!workspaces.some(w => w.id === selectedWorkspaceId)) return;
+    if (lastSelectedWorkspaceId.current === selectedWorkspaceId) return;
     lastSelectedWorkspaceId.current = selectedWorkspaceId;
+    recordLastWorkspace(selectedWorkspaceId);
   }, [workspaces, selectedWorkspaceId]);
 
   useEffect(() => {
