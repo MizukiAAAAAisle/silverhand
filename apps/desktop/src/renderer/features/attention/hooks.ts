@@ -15,7 +15,7 @@ import type {
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
-import { explicitStreamClearHead, notificationSource, postObserve } from './observe';
+import { activityItemSource, postObserve } from './observe';
 import {
   onWsFrame,
   subscribeViewerScope,
@@ -161,42 +161,12 @@ export function useActivity() {
 }
 
 /**
- * Map ONE Activity item to its eliminate `source_ref` — the single routing
- * chokepoint for §5.3 source_ref-out (#task:1231 phase B). Every clear path
- * (per-row hover-✓ and Mark all read) funnels through here, so the
- * directed-vs-ambient rule lives in exactly one place (Cindy phase-B contract):
- *
- *   - directed (`mention` / `agent_failed`, salience `directed`) → clear BY the
- *     explicit `notification_id`, NEVER a stream clear. A directed dismiss sets
- *     that one notification's `read_at`; it never reverse-advances a cursor
- *     (closing a mention ≠ reading the whole stream, §3). We branch on
- *     `salience`, then require the handle — never the render `id`.
- *   - ambient (`unread`) → an EXPLICIT stream clear to head
- *     (`explicitStreamClearHead`). The user is clearing without opening, so there
- *     is no seen-seq to pin; `stream_head` marks to now and knowingly tail-swallows
- *     (§2, R3). MAY carry a thread root — explicit thread clears are legal (§9.10
- *     caller-intent axis), unlike the AUTO `at_seq`-only thread path.
- *
- * Returns null only for a malformed item (directed with no `notification_id`) —
- * callers skip a null source rather than emitting a bad clear.
- */
-export function activityItemSource(item: ActivityItemDto): ObserveSource | null {
-  if (item.salience === 'directed') {
-    return item.notification_id != null
-      ? notificationSource(item.notification_id)
-      : null;
-  }
-  // ambient — never carries a notification_id; clear via the stream cursor.
-  return explicitStreamClearHead(item.conversation_id, item.thread_root_id);
-}
-
-/**
  * Clear ONE Activity item through the single eliminate primitive (#task:1231).
  * The caller resolves the item to a `source_ref` via {@link activityItemSource}
- * (the directed/ambient routing chokepoint), so this hook is source-shape
- * agnostic — it just posts and refreshes. Used by the per-row hover-✓ and the
- * directed on-click dismiss. Invalidates both the activity list and the
- * notification caches so the row and any badge drop together.
+ * (the kind-based routing chokepoint in `observe.ts`), so this hook is
+ * source-shape agnostic — it just posts and refreshes. Used by the per-row
+ * hover-✓ and the on-open directed dismiss. Invalidates both the activity list
+ * and the notification caches so the row and any badge drop together.
  */
 export function useClearActivityItem() {
   const qc = useQueryClient();

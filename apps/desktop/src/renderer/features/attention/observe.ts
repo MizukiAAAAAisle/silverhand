@@ -5,7 +5,7 @@
 // renderer never owns any read/eliminate state of its own (answerability,
 // §5.3). Lives in the Attention bounded context because eliminate is an
 // Attention concern; messaging hooks (channel/thread mark-read) delegate here.
-import type { ObserveSource, ObserveDto } from '@silverhand/shared';
+import type { ActivityItemDto, ObserveSource, ObserveDto } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
 
@@ -88,4 +88,38 @@ export function explicitStreamClearHead(
     thread_root_id: threadRootId,
     position: { kind: 'stream_head' },
   };
+}
+
+/**
+ * Map ONE Activity item to its eliminate `source_ref` — the single routing
+ * chokepoint for §5.3 source_ref-out (#task:1231 phase B). Every clear path
+ * (per-row hover-✓, on-open dismiss, Mark all read) funnels through here, so the
+ * route lives in exactly one place.
+ *
+ * Routed by `kind` (the source_ref MECHANISM), NOT `salience` (the DISPLAY
+ * tier) — these are DIFFERENT axes. A DM positional unread is `kind:'unread'` but
+ * `salience:'directed'` (directed-grade importance, positional mechanism); it
+ * still eliminates via the STREAM CURSOR, never a notification. Branching on
+ * salience would route DM unread to the notification path, find no
+ * `notification_id`, and silently drop the most attention-worthy unread from both
+ * hover-✓ and Mark-all (Cindy phase-B blocker). So:
+ *   - `mention` / `agent_failed` → by `notification_id` (a directed dismiss sets
+ *     that one notification's `read_at`; it never reverse-advances a cursor, §3).
+ *   - `unread` (mainline, thread, OR DM) → an EXPLICIT stream clear to head
+ *     (`explicitStreamClearHead`): clearing without opening has no seen-seq to
+ *     pin, so `stream_head` marks to now and knowingly tail-swallows (§2, R3).
+ *     MAY carry a thread root — explicit thread clears are legal on the §9.10
+ *     caller-intent axis, unlike the AUTO `at_seq`-only path.
+ *
+ * Returns null only for a malformed notification-backed item with no
+ * `notification_id` — callers skip a null source rather than emit a bad clear.
+ */
+export function activityItemSource(item: ActivityItemDto): ObserveSource | null {
+  if (item.kind === 'mention' || item.kind === 'agent_failed') {
+    return item.notification_id != null
+      ? notificationSource(item.notification_id)
+      : null;
+  }
+  // kind === 'unread' — mainline / thread / DM positional, all stream-backed.
+  return explicitStreamClearHead(item.conversation_id, item.thread_root_id);
 }

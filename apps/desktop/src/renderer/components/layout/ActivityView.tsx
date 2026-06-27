@@ -14,11 +14,11 @@ import { UserAvatar } from '@/components/UserAvatar';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import type { AgentAvatarSource } from '@/features/agents/avatar-hooks';
 import {
-  activityItemSource,
   useActivity,
   useClearActivityItem,
   useMarkActivityAllRead,
 } from '@/features/attention/hooks';
+import { activityItemSource } from '@/features/attention/observe';
 import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
 
 /**
@@ -300,6 +300,15 @@ export function ActivityView({
   const directed = filtered.filter(it => it.salience === 'directed');
   const ambient = filtered.filter(it => it.salience === 'ambient');
 
+  // "Mark all read" clears the VISIBLE (filtered) list, so the label names that
+  // scope to stay honest under a filter: "Mark all read" only when nothing is
+  // filtered out, else "Mark mentions/threads read". Behavior is unchanged — the
+  // label just tells the truth about what the click clears.
+  const markAllLabel =
+    filter === 'all'
+      ? 'Mark all read'
+      : `Mark ${FILTERS.find(f => f.key === filter)?.label.toLowerCase()} read`;
+
   return (
     <main
       className="flex h-full flex-1 flex-col bg-bg-chat"
@@ -316,9 +325,10 @@ export function ActivityView({
         </span>
         <span className="text-xs text-text-muted">{counts.all}</span>
         {/* Mark all read — clears what's CURRENTLY VISIBLE (the filtered list),
-            so it never silently clears a hidden, filtered-out item. Routes each
-            item through `activityItemSource` (directed by notification_id,
-            ambient by explicit stream-head); the list empties as its own
+            so it never silently clears a hidden, filtered-out item. The label
+            names the scope (`markAllLabel`) so it stays honest under a filter.
+            Routes each item through `activityItemSource` (mention/agent_failed by
+            notification_id, unread by stream-head); the list empties as its own
             feedback, so no success toast. Utility control → ink border, never a
             semantic hue. */}
         {filtered.length > 0 ? (
@@ -329,7 +339,7 @@ export function ActivityView({
             className="ml-auto inline-flex items-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary disabled:opacity-50"
           >
             <Check className="size-3" />
-            Mark all read
+            {markAllLabel}
           </button>
         ) : null}
       </header>
@@ -503,9 +513,11 @@ function ActivityRow({
     ? senderAvatarUrls.get(senderKey(sender)) ?? null
     : null;
   // The §5.3 source_ref-out for this item, resolved through the single routing
-  // chokepoint: directed (mention / agent_failed) → by `notification_id`; ambient
-  // (unread) → an explicit stream-head clear (may carry a thread root). null only
-  // for a malformed item — then the row offers no ✓.
+  // chokepoint (`activityItemSource`, keyed on KIND not salience):
+  //   - mention / agent_failed → by `notification_id`
+  //   - unread (incl DM positional, which is salience:'directed') → stream-head
+  //     clear (may carry a thread root)
+  // null only for a malformed item — then the row offers no ✓.
   const clearSource = activityItemSource(item);
 
   // Dense row-1 count metadata: grouped but quiet. Neutral ink + hairline
@@ -520,11 +532,13 @@ function ActivityRow({
 
   const handleRowClick = () => {
     if (!canJump) return;
-    // A directed item is BOTH navigated-to and cleared — opening the source
-    // doesn't auto-read its notification, so clear it explicitly on click.
-    // Ambient items are NOT cleared here: navigating advances the stream cursor
-    // (open-time mark-read), so a second clear would be redundant.
-    if (item.salience === 'directed' && clearSource) {
+    // Only a notification-backed item is cleared on open: opening the source
+    // doesn't auto-read its notification, so clear it explicitly. A stream-backed
+    // item (any `unread`, INCLUDING DM positional) is cleared by navigation's
+    // open-time mark-read, so clearing again here would be a redundant second
+    // path. Deriving this from `clearSource.kind` (not the item's kind/salience)
+    // keeps the decision in lockstep with the routing chokepoint.
+    if (clearSource?.kind === 'notification') {
       clearItem.mutate(clearSource);
     }
     jump();

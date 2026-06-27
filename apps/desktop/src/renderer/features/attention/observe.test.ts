@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import type { ActivityItemDto } from '@silverhand/shared';
 import { ObserveSourceSchema } from '@silverhand/shared';
 import {
+  activityItemSource,
   explicitStreamClearHead,
   mainlineStreamSourceHead,
   notificationSource,
@@ -82,5 +84,101 @@ describe('observe explicit-path source builder', () => {
       position: { kind: 'stream_head' },
     });
     expect(() => ObserveSourceSchema.parse(src)).not.toThrow();
+  });
+});
+
+// `activityItemSource` is the single eliminate-route chokepoint. The load-bearing
+// rule it must lock: the route is keyed on `kind` (the source_ref MECHANISM), NOT
+// `salience` (the display tier) — these are different axes. The DM-unread case is
+// the regression point: it is `kind:'unread'` + `salience:'directed'` and MUST
+// still resolve to a stream clear, not a notification (or it silently drops from
+// hover-✓ / Mark-all).
+function activityItem(overrides: Partial<ActivityItemDto>): ActivityItemDto {
+  return {
+    id: 'render-key',
+    kind: 'unread',
+    salience: 'ambient',
+    workspace_id: 'ws-1',
+    conversation_id: 'conv-1',
+    thread_root_id: null,
+    message_id: 'msg-1',
+    notification_id: null,
+    conversation_kind: 'channel',
+    title: 'general',
+    thread_root_preview: null,
+    preview: null,
+    preview_sender: null,
+    timestamp: 0,
+    unread_count: 1,
+    ...overrides,
+  };
+}
+
+describe('activityItemSource (eliminate-route chokepoint)', () => {
+  it('routes a mention to its notification_id (never a stream clear)', () => {
+    const src = activityItemSource(
+      activityItem({ kind: 'mention', salience: 'directed', notification_id: 'notif-7' }),
+    );
+    expect(src).toEqual({ kind: 'notification', notification_id: 'notif-7' });
+  });
+
+  it('routes an agent_failed to its notification_id', () => {
+    const src = activityItemSource(
+      activityItem({
+        kind: 'agent_failed',
+        salience: 'directed',
+        notification_id: 'notif-9',
+        message_id: null,
+      }),
+    );
+    expect(src).toEqual({ kind: 'notification', notification_id: 'notif-9' });
+  });
+
+  it('routes a mainline unread to a stream-head clear', () => {
+    const src = activityItemSource(activityItem({ kind: 'unread', salience: 'ambient' }));
+    expect(src).toMatchObject({
+      kind: 'stream',
+      conversation_id: 'conv-1',
+      thread_root_id: null,
+      position: { kind: 'stream_head' },
+    });
+  });
+
+  it('routes a thread unread to a stream-head clear that carries the root', () => {
+    const src = activityItemSource(
+      activityItem({ kind: 'unread', salience: 'ambient', thread_root_id: 'root-2' }),
+    );
+    expect(src).toMatchObject({
+      kind: 'stream',
+      thread_root_id: 'root-2',
+      position: { kind: 'stream_head' },
+    });
+  });
+
+  it('REGRESSION: DM unread (kind:unread + salience:directed) still routes to a stream clear', () => {
+    // The exact axis bug: salience is directed-grade, but the eliminate route is
+    // the stream cursor (notification_id is null). Routing on salience would
+    // return null here and silently drop the item from hover-✓ and Mark-all.
+    const src = activityItemSource(
+      activityItem({
+        kind: 'unread',
+        salience: 'directed',
+        conversation_kind: 'dm_channel',
+        notification_id: null,
+      }),
+    );
+    expect(src).not.toBeNull();
+    expect(src).toMatchObject({
+      kind: 'stream',
+      conversation_id: 'conv-1',
+      position: { kind: 'stream_head' },
+    });
+  });
+
+  it('returns null for a malformed notification-backed item with no id', () => {
+    const src = activityItemSource(
+      activityItem({ kind: 'mention', salience: 'directed', notification_id: null }),
+    );
+    expect(src).toBeNull();
   });
 });
