@@ -66,3 +66,26 @@ export function mainlineStreamSourceHead(conversationId: string): ObserveSource 
 export function notificationSource(notificationId: string): ObserveSource {
   return { kind: 'notification', notification_id: notificationId };
 }
+
+/** EXPLICIT-path stream clear to the stream's current head — the phase-B
+ *  counterpart to the AUTO builders above. The user is clearing a source WITHOUT
+ *  opening it (Activity hover-✓ / Mark all read), so there is no seen-seq to pin:
+ *  `stream_head` marks the stream read to now and KNOWINGLY tail-swallows a
+ *  message landing in the same instant — honest bulk semantics (§2, R3).
+ *
+ *  UNLIKE `streamSourceAtSeq` / `mainlineStreamSourceHead`, this MAY carry a
+ *  thread root: §9.10 guards the caller-INTENT axis (auto pins at_seq), not the
+ *  stream-shape axis, so an EXPLICIT thread clear is legal (shiki 2026-06-27;
+ *  backend permits it since `9c8c9aa`). Reserved for explicit user clears ONLY —
+ *  an AUTO path must never reach this builder. */
+export function explicitStreamClearHead(
+  conversationId: string,
+  threadRootId: string | null,
+): ObserveSource {
+  return {
+    kind: 'stream',
+    conversation_id: conversationId,
+    thread_root_id: threadRootId,
+    position: { kind: 'stream_head' },
+  };
+}

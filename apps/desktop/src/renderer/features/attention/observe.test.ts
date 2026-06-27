@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ObserveSourceSchema } from '@silverhand/shared';
 import {
+  explicitStreamClearHead,
   mainlineStreamSourceHead,
   notificationSource,
   streamSourceAtSeq,
@@ -52,6 +53,34 @@ describe('observe auto-path source builders', () => {
   it('builds a directed notification source by id', () => {
     const src = notificationSource('notif-3');
     expect(src).toEqual({ kind: 'notification', notification_id: 'notif-3' });
+    expect(() => ObserveSourceSchema.parse(src)).not.toThrow();
+  });
+});
+
+// The EXPLICIT phase-B builder is the deliberate counterpart: an explicit user
+// clear (hover-✓ / Mark all) MAY tail-swallow, so it CAN emit `stream_head` on a
+// thread — exactly what the AUTO builders above forbid. The split is intent, not
+// stream shape (§9.10); these tests lock that the explicit builder carries the
+// thread root through and stays wire-valid.
+describe('observe explicit-path source builder', () => {
+  it('builds a thread stream clear to head (the AUTO builders cannot)', () => {
+    const src = explicitStreamClearHead('conv-1', 'root-9');
+    expect(src).toEqual({
+      kind: 'stream',
+      conversation_id: 'conv-1',
+      thread_root_id: 'root-9',
+      position: { kind: 'stream_head' },
+    });
+    expect(() => ObserveSourceSchema.parse(src)).not.toThrow();
+  });
+
+  it('builds a mainline stream clear to head when root is null', () => {
+    const src = explicitStreamClearHead('conv-1', null);
+    expect(src).toMatchObject({
+      kind: 'stream',
+      thread_root_id: null,
+      position: { kind: 'stream_head' },
+    });
     expect(() => ObserveSourceSchema.parse(src)).not.toThrow();
   });
 });

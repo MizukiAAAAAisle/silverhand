@@ -13,7 +13,12 @@ import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import type { AgentAvatarSource } from '@/features/agents/avatar-hooks';
-import { useActivity, useClearActivityNotification } from '@/features/attention/hooks';
+import {
+  activityItemSource,
+  useActivity,
+  useClearActivityItem,
+  useMarkActivityAllRead,
+} from '@/features/attention/hooks';
 import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
 
 /**
@@ -48,12 +53,16 @@ import type { MessageJumpTarget } from '@/features/channels/useMessageJumpContro
  *     display_name) lands here once the backend resolves `preview_sender` on the
  *     anchor message (additive DTO field, #task:1227 — Cindy contract).
  *
- * Clearing (§5.3 source_ref-out) — by EXPLICIT fields, never by parsing `id`:
- *   - mention / agent_failed → mark the `notification_id` read (hover ✓).
- *   - unread (ambient)       → advance the stream cursor (`observe`). v1 clears
- *     it by navigating to the source (open-time mark-read); the standalone
- *     hover-✓ "clear without navigating" lands with the `observe()` collapse
- *     step, which hard-waits #task:1226 close — so ambient items get NO ✓ yet.
+ * Clearing (§5.3 source_ref-out) — by EXPLICIT fields, never by parsing `id`,
+ * and routed through one chokepoint (`activityItemSource`):
+ *   - mention / agent_failed (directed) → mark the `notification_id` read.
+ *   - unread (ambient)                  → advance the stream cursor via an
+ *     EXPLICIT stream-head clear (#task:1231 phase B; knowingly tail-swallows, §2).
+ *   Each row exposes a hover-✓ that clears WITHOUT navigating, and the header
+ *   "Mark all read" batches the currently-visible list in one `observe()` call
+ *   (directed by id, ambient by stream-head — a batch never converts a directed
+ *   dismiss into a stream clear). Navigating to a source still clears it too
+ *   (directed on click; ambient via open-time mark-read).
  *
  * `kind=task` is intentionally NOT in Activity v1 (#task:1227, shiki 2026-06-26):
  * an `in_review && member` projection is a standing mirror of the task panel's
@@ -232,6 +241,7 @@ export function ActivityView({
 }: ActivityViewProps): JSX.Element {
   const { data, isLoading, isError } = useActivity();
   const [filter, setFilter] = useState<FilterKey>('all');
+  const markAllRead = useMarkActivityAllRead();
 
   const items = data?.items ?? [];
 
@@ -305,6 +315,23 @@ export function ActivityView({
           Activity
         </span>
         <span className="text-xs text-text-muted">{counts.all}</span>
+        {/* Mark all read — clears what's CURRENTLY VISIBLE (the filtered list),
+            so it never silently clears a hidden, filtered-out item. Routes each
+            item through `activityItemSource` (directed by notification_id,
+            ambient by explicit stream-head); the list empties as its own
+            feedback, so no success toast. Utility control → ink border, never a
+            semantic hue. */}
+        {filtered.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => markAllRead.mutate(filtered)}
+            disabled={markAllRead.isPending}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary disabled:opacity-50"
+          >
+            <Check className="size-3" />
+            Mark all read
+          </button>
+        ) : null}
       </header>
 
       {/* Type filter — single-select, client-side slice. The chip is a utility
@@ -447,7 +474,7 @@ function ActivityRow({
   senderAvatarUrls: ReadonlyMap<string, string | null>;
   onJump: (target: MessageJumpTarget) => void;
 }): JSX.Element {
-  const clearNotification = useClearActivityNotification();
+  const clearItem = useClearActivityItem();
 
   // Navigation needs a message anchor; agent_failed has none (pure read_at).
   const canJump = item.message_id != null;
@@ -475,9 +502,11 @@ function ActivityRow({
   const senderObjectUrl = sender
     ? senderAvatarUrls.get(senderKey(sender)) ?? null
     : null;
-  // Notification-backed items (mention / agent_failed) clear by marking the
-  // notification read; unread (ambient) items clear via the stream cursor.
-  const notificationId = item.notification_id;
+  // The §5.3 source_ref-out for this item, resolved through the single routing
+  // chokepoint: directed (mention / agent_failed) → by `notification_id`; ambient
+  // (unread) → an explicit stream-head clear (may carry a thread root). null only
+  // for a malformed item — then the row offers no ✓.
+  const clearSource = activityItemSource(item);
 
   // Dense row-1 count metadata: grouped but quiet. Neutral ink + hairline
   // outline (never the sidebar unread badge's accent fill); purely
@@ -491,10 +520,12 @@ function ActivityRow({
 
   const handleRowClick = () => {
     if (!canJump) return;
-    // A directed mention is BOTH navigated-to and cleared — opening the source
-    // doesn't auto-read the notification, so clear it explicitly on click.
-    if (item.kind === 'mention' && notificationId) {
-      clearNotification.mutate(notificationId);
+    // A directed item is BOTH navigated-to and cleared — opening the source
+    // doesn't auto-read its notification, so clear it explicitly on click.
+    // Ambient items are NOT cleared here: navigating advances the stream cursor
+    // (open-time mark-read), so a second clear would be redundant.
+    if (item.salience === 'directed' && clearSource) {
+      clearItem.mutate(clearSource);
     }
     jump();
   };
@@ -593,16 +624,17 @@ function ActivityRow({
 
         <div className="flex shrink-0 flex-col items-end gap-1.5">
           <span className="text-[11px] text-text-muted">{relTime(item.timestamp)}</span>
-          {notificationId ? (
-            // Hover-only ✓ — read-cleared directed item. Scan / hover ≠ read;
-            // only a click clears (source-routed by notification_id).
+          {clearSource ? (
+            // Hover-only ✓ — clears WITHOUT navigating. Scan / hover ≠ read; only
+            // a click clears, source-routed via `clearSource` (directed → by
+            // notification_id; ambient → explicit stream-head clear, §9.10).
             <button
               type="button"
               title="Mark as read"
               aria-label="Mark as read"
               onClick={e => {
                 e.stopPropagation();
-                clearNotification.mutate(notificationId);
+                clearItem.mutate(clearSource);
               }}
               className="grid size-5 place-items-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating text-text-secondary opacity-0 transition-opacity hover:border-[color:var(--border-control-hover)] hover:text-text-primary group-hover:opacity-100"
             >
