@@ -33,6 +33,7 @@ import type { SearchRepo } from '../repos/search-repo.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { MessageReactionRepo } from '../repos/message-reaction-repo.js';
 import type { ConversationEventRepo } from '../repos/conversation-event-repo.js';
+import type { NotificationRepo } from '../repos/notification-repo.js';
 import { getUserPrincipal, requireViewerUserId } from '../auth/principal.js';
 import {
   canEditAgent,
@@ -44,10 +45,8 @@ import {
 } from '../permissions.js';
 import { timedRouteSpan } from '../observability/route-span.js';
 import { AnchorMessageNotInConversationError, InvalidThreadsCursorError } from '../repos/message-repo.js';
-import {
-  addReaction,
-  removeReaction,
-} from '../application/react-message.js';
+import { addReaction, removeReaction } from '../application/react-message.js';
+import { observe } from '../application/observe.js';
 import { loadReactionAggregates, loadReactionDetail } from '../read-model/message-reactions.js';
 import {
   channelServiceErrorResponse,
@@ -458,6 +457,7 @@ export interface ConversationMessagingRouteDeps {
   messages: MessageRepo;
   conversationReads: ConversationReadRepo;
   conversationEvents: ConversationEventRepo;
+  notifications: NotificationRepo;
   saved: SavedMessageRepo;
   sort: SortRepo;
 }
@@ -472,6 +472,7 @@ export function createConversationMessagingApp(
     messages,
     conversationReads,
     conversationEvents,
+    notifications,
     saved,
     sort,
   } = deps;
@@ -541,26 +542,43 @@ export function createConversationMessagingApp(
       targetSeq = streamHead;
     }
 
-    const unreadBefore = conversationReads.unreadCountForConversation(
-      conversationId,
-      viewerUserId,
+    // Delegate the cursor write to the single eliminate primitive (#task:1231,
+    // step-2). The route owns its validation + error codes + the §9.10 AUTO
+    // guard above (a thread requires an explicit snapshot_seq, never a head
+    // fallback); having resolved `targetSeq` it hands observe an `at_seq`
+    // position — this legacy route is an AUTO caller and never emits a
+    // `stream_head`. observe() is now the SOLE writer of the cursor
+    // (`conversation_reads`), folds the §3 overlap (clearing `seq <= targetSeq`
+    // `mention_self` notifications the legacy path used to leave dangling), and
+    // emits the coalesced `unread_updated` itself — so this route no longer
+    // publishes its own event (that would double-fire).
+    const result = await observe(
+      { ctx, conversations, messages, conversationReads, notifications },
+      {
+        principal: getUserPrincipal(c),
+        viewerUserId,
+        sources: [
+          {
+            kind: 'stream',
+            conversation_id: conversationId,
+            thread_root_id: threadRootId,
+            position: { kind: 'at_seq', seq: targetSeq },
+          },
+        ],
+      },
     );
-    const row = conversationReads.markRead({
-      viewerUserId,
-      conversationId,
-      threadRootId,
-      seq: targetSeq,
-    });
-    const unreadAfter =
-      unreadBefore > 0
-        ? conversationReads.unreadCountForConversation(conversationId, viewerUserId)
-        : unreadBefore;
-    // Notify viewer scope only when unread counters changed. Repeated
-    // mark-read calls happen during focus/channel effects and should be no-ops.
-    if (unreadAfter !== unreadBefore) {
-      publishUnreadUpdated(ctx, conversationId, viewerUserId);
+    if (!result.ok) {
+      // The route already ran the same validations observe re-checks, so a
+      // failure here is unexpected — surface the code rather than fake success.
+      return c.json({ error: result.error.message, code: result.error.code }, 400);
     }
-    return c.json({ last_read_seq: row.last_read_seq });
+    return c.json({
+      last_read_seq: conversationReads.getLastReadSeq(
+        viewerUserId,
+        conversationId,
+        threadRootId,
+      ),
+    });
   }
 
   app.get(apiPaths.conversationThreads(':id'), c => {
@@ -960,19 +978,6 @@ export function createConversationMessagingApp(
   });
 
   return app;
-}
-
-// Notify a viewer's private scope that a conversation's unread counter
-// changed. Module-level private to routes/conversations.ts — the sole caller
-// is `markConversationRead`. Event scope / name / body are unchanged.
-function publishUnreadUpdated(
-  ctx: BackendContext,
-  conversationId: string,
-  viewerUserId: string,
-): void {
-  ctx.events.publishToScope(`viewer:${viewerUserId}`, 'unread_updated', {
-    conversation_id: conversationId,
-  });
 }
 
 // ── Mount-run C: conversation runtime control ──────────────────────────────

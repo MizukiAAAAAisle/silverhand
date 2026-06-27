@@ -952,6 +952,44 @@ describe('canonical channel/thread routes', () => {
     expect(events).toEqual([]);
   });
 
+  it('delegates to observe(): channel mark-read folds the §3 overlap, clearing seq<=cursor mention_self (#task:1231 step-2)', async () => {
+    // Proves the legacy route now routes the cursor write through observe() —
+    // advancing the mainline cursor also marks the overlapping mention read, a
+    // fold the pre-delegation route lacked (it left the /n/unread badge as a
+    // second truth). Anchorless agent_start_failed has no seq and must survive.
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { workspace, channelId, agentIds } = await createWorkspaceChannel(t, [
+      'alice',
+    ]);
+    const messages = new MessageRepo(t.ctx.db);
+    const notifications = new NotificationRepo(t.ctx.db);
+    const msg = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: agentIds.alice,
+      content: '@local on mainline',
+    });
+    const mention = notifications.insert({
+      kind: 'mention_self',
+      userId: 'local',
+      workspaceId: workspace.id,
+      conversationId: channelId,
+      messageId: msg.id,
+    });
+    const anchorless = notifications.insert({
+      kind: 'agent_start_failed',
+      userId: 'local',
+      workspaceId: workspace.id,
+      conversationId: channelId,
+    });
+
+    const res = await viewer.post(`/api/channels/${channelId}/mark-read`);
+    expect(res.status).toBe(200);
+    expect(notifications.get(mention.id)?.read_at).not.toBeNull(); // folded
+    expect(notifications.get(anchorless.id)?.read_at).toBeNull(); // anchorless
+  });
+
   it('publishes notification unread updates only when rows are marked', async () => {
     t = buildTestApp();
     const { workspace, channelId } = await createWorkspaceChannel(t, ['alice']);
