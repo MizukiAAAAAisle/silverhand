@@ -113,13 +113,25 @@ export function explicitStreamClearHead(
  *
  * Returns null only for a malformed notification-backed item with no
  * `notification_id` — callers skip a null source rather than emit a bad clear.
+ *
+ * Written as an EXHAUSTIVE switch on `kind`: a future `ActivityItemKind` (e.g. a
+ * v2 notification-backed `task_needs_review`) must declare its eliminate route
+ * here. The `never` guard makes TS fail to compile until it does, so a new kind
+ * can never silently fall through to a stream clear.
  */
 export function activityItemSource(item: ActivityItemDto): ObserveSource | null {
-  if (item.kind === 'mention' || item.kind === 'agent_failed') {
-    return item.notification_id != null
-      ? notificationSource(item.notification_id)
-      : null;
+  switch (item.kind) {
+    case 'mention':
+    case 'agent_failed':
+      // Directed: by notification_id; a directed dismiss never moves a cursor.
+      return item.notification_id != null
+        ? notificationSource(item.notification_id)
+        : null;
+    case 'unread':
+      // Stream-backed (mainline / thread / DM positional — keyed on kind, not
+      // salience: a DM unread is salience:'directed' but still clears here).
+      return explicitStreamClearHead(item.conversation_id, item.thread_root_id);
   }
-  // kind === 'unread' — mainline / thread / DM positional, all stream-backed.
-  return explicitStreamClearHead(item.conversation_id, item.thread_root_id);
+  const _exhaustive: never = item.kind;
+  return _exhaustive;
 }
