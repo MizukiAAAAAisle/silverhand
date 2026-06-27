@@ -112,11 +112,26 @@ position 解析(保 §3.4 路由契约):
 overlap 的 notification 清除是 **by-(conv, root, seq-range) 精确**(只清 cursor 够得到的那些),**非** conversation-level
 bulk(守 Cindy gate #2:item-level answerability,不 over-clear cursor 之外的 notification)。
 
-## 4. 事件
+## 4. 事件(实现修正 —— renderer 双变体 discrimination)
 
-observe() 末尾**仅一次** `publishToScope('viewer:<id>', 'unread_updated', …)`,且仅当真有变化
-(cursor 移动 **或** 任一 read_at 置位);批量(Mark all)跨全部 source 合并成一发。沿用现两路由各自的
-「仅 counter 变才发」纪律,合并去重。**不新增 event kind。**
+> **接口稿 v1 原写「仅发一条 coalesced `unread_updated`」;实现时现读 renderer 推翻了它。**
+> renderer **按 payload 形状区分** `unread_updated` 两变体(`apps/desktop/src/renderer/features/{channels,notifications}/hooks.ts`
+> 的 `isMessageUnreadUpdatedPayload` = 「payload 含 `conversation_id` 字符串」):
+> - **message 变体(payload 带 `conversation_id`)** → 刷 cursor 读模型(`useMessageUnreadCounts` 侧栏消息未读 / `conversationUnread` reply-chip)。
+> - **badge 变体(payload 不带 `conversation_id`)** → 刷通知徽标(`useUnreadCounts` `/api/notifications/unread`、deprecated `useChannelUnreadCounts`)。
+>
+> 故一条空 payload coalesced event **只会**刷徽标、**漏刷** cursor 读模型——会让 observe 推了 cursor 但侧栏/chip 不更新。
+> 这是后端无感、必须由 renderer 契约反向定的事件形状(现读实证,非凭印象)。
+
+observe() 末尾按**实际变更**发(post-commit、commit 后才发):
+- **每个发生变更的 conversation 各发一条 message 变体** `publishToScope('viewer:<id>', 'unread_updated', { conversation_id })`
+  ——「变更」= 该 conversation 有 cursor 推进 **或** overlap 清了 mention。**同 conversation 的 mainline + thread 去重成一条**
+  (payload 只带 `conversation_id`、不带 `thread_root_id`;chip consumer 按 conversation 失效整个 `conversationUnread` 含全 thread)。
+- **任一 `read_at` 置位(overlap mention 或 notification source)→ 额外发一条 badge 变体** `unread_updated`(payload **不带**
+  `conversation_id`)刷徽标。
+
+即「coalesced」的真实契约 = **每 changed-conversation 恰一条 message 变体 + 至多一条 badge 变体**,而非字面单条。
+单 source(最常见)= 一条,与现 `mark-read` / `notifications/read` 各自行为一致;Mark-all 跨 N conversation = N(+1)条、按 conversation 去重(不按 message 刷屏)。**仅当真有变化才发;不新增 event kind。**
 
 ## 5. caller 迁移表(step-3,Norman)
 

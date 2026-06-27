@@ -189,10 +189,16 @@ export async function observe(
     resolved.push(r.resolved);
   }
 
-  // Phase 2 — one transaction over the whole batch (§6.2). `changed` is true if
-  // any cursor advanced or any `read_at` was set; it gates the single event.
-  const changed = deps.ctx.db.transaction(() => {
-    let any = false;
+  // Phase 2 — one transaction over the whole batch (§6.2). We track WHAT
+  // changed, not just whether: the renderer discriminates `unread_updated` by
+  // payload shape — a body WITH `conversation_id` refreshes the cursor / chip /
+  // message-unread read-models, a body WITHOUT it refreshes the notification
+  // badge. So a stream change must emit a per-conversation message-variant, and
+  // any `read_at` change must emit a badge-variant; an empty coalesced event
+  // would leave the cursor read-models stale.
+  const outcome = deps.ctx.db.transaction(() => {
+    const changedConversations = new Set<string>();
+    let notificationChanged = false;
     for (const r of resolved) {
       if (r.kind === 'stream') {
         const current = deps.conversationReads.getLastReadSeq(
@@ -207,40 +213,62 @@ export async function observe(
             threadRootId: r.threadRootId,
             seq: r.targetSeq,
           });
-          any = true;
+          changedConversations.add(r.conversationId);
         }
         // overlap (§3): fold the directed clear into the positional one, even
-        // when the cursor did not move (a later mention can still be unread
-        // below an already-advanced cursor only if seq <= cursor — markRead is
-        // monotonic, so clear up to the resolved target regardless).
+        // when the cursor did not move (a lingering mention at/below the cursor
+        // is still a real change). `markStreamMentionsRead` is monotonic /
+        // idempotent — already-read mentions are skipped.
         const cleared = deps.notifications.markStreamMentionsRead({
           userId: input.viewerUserId,
           conversationId: r.conversationId,
           threadRootId: r.threadRootId,
           uptoSeq: r.targetSeq,
         });
-        if (cleared > 0) any = true;
+        if (cleared > 0) {
+          changedConversations.add(r.conversationId);
+          notificationChanged = true;
+        }
       } else {
         if (deps.notifications.markRead(r.notificationId, input.viewerUserId)) {
-          any = true;
+          notificationChanged = true;
         }
       }
     }
-    return any;
+    return { changedConversations, notificationChanged };
   })();
 
+  const changed =
+    outcome.changedConversations.size > 0 || outcome.notificationChanged;
+
   if (changed) {
-    const effects: PostCommitEffect[] = [
-      () =>
+    // Coalesced (§4): exactly ONE message-variant per changed conversation
+    // (deduped — a mainline + thread of the same channel collapse to one), and
+    // AT MOST ONE badge-variant when any notification `read_at` changed. Both
+    // ride the viewer scope. This is the faithful "coalesced" contract under the
+    // renderer's two-variant discrimination — not a single literal event.
+    const effects: PostCommitEffect[] = [];
+    for (const conversationId of outcome.changedConversations) {
+      effects.push(() =>
         deps.ctx.events.publishToScope(
           `viewer:${input.viewerUserId}`,
           'unread_updated',
-          // Coalesced across the whole batch (which may span conversations), so
-          // the body carries no single conversation id — the viewer-scoped
-          // signal invalidates the viewer's unread/activity queries wholesale.
+          { conversation_id: conversationId },
+        ),
+      );
+    }
+    if (outcome.notificationChanged) {
+      effects.push(() =>
+        deps.ctx.events.publishToScope(
+          `viewer:${input.viewerUserId}`,
+          'unread_updated',
+          // Badge variant: NO conversation_id (the predicate keys on its
+          // absence) → routes to the notification-badge consumers, not the
+          // cursor read-models.
           {},
         ),
-    ];
+      );
+    }
     await runPostCommitEffects(effects, deps.ctx.logger);
   }
 
