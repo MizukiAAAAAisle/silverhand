@@ -27,9 +27,10 @@ import type { MessageJumpTarget } from '@/features/channels/useMessageJumpContro
  * Each row is a LIST CARD in the Saved-item visual language (shiki dogfood
  * 2026-06-25 `VJMoYpK3`) — NOT an alert feed: no left icon box, no left
  * salience rail, items spaced apart, themed border, forza6 poster hover via the
- * shared `data-list-row` hook. Salience is carried by the two sections (Needs
- * you / Your streams), not by a per-row border. Location reads through real
- * identity icons on the where-line (workspace + channel), not a left icon box.
+ * shared `data-list-row` hook. Salience is carried by the two sections
+ * (Requires attention / Subscribed), not by a per-row border. Location reads
+ * through real identity icons on the where-line (workspace + channel), not a
+ * left icon box.
  *
  * Row structure is SOURCE-FIRST (server-resolved fields only, #task:1227
  * `c86bb89` — never a client-stitched message cache), now ICON-LED so location
@@ -351,7 +352,6 @@ export function ActivityView({
               <span className="font-serif text-base font-semibold text-text-secondary">
                 All caught up
               </span>
-              <span className="text-sm text-text-muted">Nothing needs you right now</span>
             </div>
           ) : (
             // Items exist but the active filter excludes them — say so rather
@@ -360,16 +360,13 @@ export function ActivityView({
               <span className="font-serif text-base font-semibold text-text-secondary">
                 No {FILTERS.find(f => f.key === filter)?.label.toLowerCase()}
               </span>
-              <span className="text-sm text-text-muted">
-                Nothing of this kind needs you right now
-              </span>
             </div>
           )
         ) : (
           <div className="flex flex-col gap-5">
             {directed.length > 0 ? (
               <ActivitySection
-                label="Needs you"
+                label="Requires attention"
                 items={directed}
                 workspaceRefById={workspaceRefById}
                 agentsById={agentsById}
@@ -380,7 +377,7 @@ export function ActivityView({
             ) : null}
             {ambient.length > 0 ? (
               <ActivitySection
-                label="Your streams"
+                label="Subscribed"
                 items={ambient}
                 workspaceRefById={workspaceRefById}
                 agentsById={agentsById}
@@ -482,9 +479,12 @@ function ActivityRow({
   // notification read; unread (ambient) items clear via the stream cursor.
   const notificationId = item.notification_id;
 
+  // Dense row-1 count metadata: grouped but quiet. Neutral ink + hairline
+  // outline (never the sidebar unread badge's accent fill); purely
+  // presentational — the row stays the only hit target.
   const countEl =
     item.unread_count != null && item.unread_count > 0 ? (
-      <span className="shrink-0 text-xs font-medium text-accent">
+      <span className="shrink-0 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border-subtle px-1.5 py-px text-xs leading-tight tabular-nums text-text-secondary">
         {item.unread_count > 99 ? '99+' : item.unread_count} new
       </span>
     ) : null;
