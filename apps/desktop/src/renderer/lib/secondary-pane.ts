@@ -352,7 +352,7 @@ export interface FocusSelectionInputs {
  * Compute the *single* "focused" conversation. Drives:
  *   - `useNotificationToasts(focused.id)` — suppress in-app toasts for
  *     it (user can already see them).
- *   - `markChannelRead.mutate(focused.id)` — clear notification badges.
+ *   - `markConversationNotificationsRead.mutate(focused.id)` — clear notification badges.
  *   - `window.agentHub.setActiveConversation({workspaceId, conversationId})`
  *     — IPC contract is single-id; main process uses it for tray /
  *     dock badging and the events window. PR-2: workspaceId now flows

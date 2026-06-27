@@ -13,6 +13,7 @@ import type {
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
+import { notificationSource, postObserve } from './observe';
 import {
   onWsFrame,
   subscribeViewerScope,
@@ -159,24 +160,23 @@ export function useActivity() {
 
 /**
  * Clear a notification-backed Activity item (`mention` / `agent_failed`) by its
- * `notification_id` — the §5.3 source_ref-out for directed claims. We mark read
- * BY the explicit `notification_id`, NEVER by parsing the item's render `id`.
+ * `notification_id` — the §5.3 source_ref-out for directed claims, now routed
+ * through the single eliminate primitive `observe({notification})` (#task:1231).
+ * We clear BY the explicit `notification_id`, NEVER by parsing the item's render
+ * `id`. A directed dismiss only sets that one notification's `read_at`; it never
+ * reverse-advances a cursor (closing a mention ≠ reading the whole stream, §3).
  * Invalidates both the activity list and the notification caches so the item and
  * its badges drop together.
  *
  * NOTE: this is ONLY for notification-backed items. `unread` (ambient) items
- * clear via the stream cursor (`observe`), which collapses onto a single
- * primitive in a later step (hard-waits #task:1226 close) — until then ambient
- * items clear by navigating to the source, not by a standalone mark-read here.
+ * clear via the stream cursor (`observe({stream})`), reached by navigating to
+ * the source today; a standalone ambient hover-✓ lands in renderer phase B.
  */
 export function useClearActivityNotification() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (notificationId: string) =>
-      api<{ marked: number }>(apiPaths.notificationsRead, {
-        method: 'POST',
-        body: JSON.stringify({ id: notificationId }),
-      }),
+      postObserve([notificationSource(notificationId)]),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['activity'] });
       void qc.invalidateQueries({ queryKey: ['notifications'] });

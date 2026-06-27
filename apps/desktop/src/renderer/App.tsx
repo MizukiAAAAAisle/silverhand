@@ -72,7 +72,7 @@ import {
   useUnreadCounts,
 } from '@/features/notifications/hooks';
 import {
-  useMarkChannelRead,
+  useMarkConversationNotificationsRead,
   useMarkMessageChannelRead,
   useMessageUnreadCounts,
   useMessageUnreadSummary,
@@ -518,8 +518,9 @@ function RegisteredAppShell(): JSX.Element {
       }),
     [primaryPointer, selectedWorkspaceId, secondaryDescriptor, routeFullscreen],
   );
-  // Notification-based read marker (mention/agent-failure alerts).
-  const markChannelRead = useMarkChannelRead();
+  // Conversation notification-badge cleanup (mention/agent-failure alerts) —
+  // read_at-only, includes anchorless `agent_start_failed`. NOT a read cursor.
+  const markConversationNotificationsRead = useMarkConversationNotificationsRead();
   // Message-unread read cursor — advances conversation_reads on navigation.
   const markMessageChannelRead = useMarkMessageChannelRead();
   // In-app + system notifications for new mentions and agent failures.
@@ -991,7 +992,7 @@ function RegisteredAppShell(): JSX.Element {
     }
     if (lastNotificationReadId.current === focusedId) return;
     lastNotificationReadId.current = focusedId;
-    markChannelRead.mutate(focusedId);
+    markConversationNotificationsRead.mutate(focusedId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedConversation?.id]);
 
@@ -1517,11 +1518,13 @@ function RegisteredAppShell(): JSX.Element {
     if (lastActivitySourceReadKey.current === activitySourceReadChannelId) return;
     lastActivitySourceReadKey.current = activitySourceReadChannelId;
     markMessageChannelRead.mutate(activitySourceReadChannelId);
-    // Also clear the notification-backed badge for this source, mirroring the
-    // route focused pane (which fires `markChannelRead` via `focusedConversation`,
-    // L962). The anchored row path's `requestJump` already does this; firing here
-    // covers the anchorless `#conv` open and is idempotent (Cindy review blocker).
-    markChannelRead.mutate(activitySourceReadChannelId);
+    // Also clear this conversation's notification badges for the activity-source
+    // open. The focused-conversation effect (L994) covers the focused case; this
+    // covers the anchorless `#conv` open and is idempotent. (`requestJump` no
+    // longer clears badges — it was decoupled to push the cursor via stream
+    // observe; conversation-badge cleanup is this notification surface's job.
+    // Dedup of this vs L994 deferred to phase B — needs focus-coverage check.)
+    markConversationNotificationsRead.mutate(activitySourceReadChannelId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activitySourceReadChannelId]);
 

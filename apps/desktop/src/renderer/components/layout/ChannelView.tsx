@@ -1228,7 +1228,7 @@ function MessageList({
   //
   // Also handles the data-shrink case: when a query refetch evicts old
   // pages (e.g. saved-jump on the same channel re-clicks
-  // markChannelRead → invalidate → first page only), `prevTopKey` is no
+  // markMessageChannelRead → invalidate → first page only), `prevTopKey` is no
   // longer in items. We can't compute a delta, so reset the baseline
   // from scratch — without this, Virtuoso's size cache stays anchored
   // to the long-gone 788-item layout and any subsequent scrollToIndex

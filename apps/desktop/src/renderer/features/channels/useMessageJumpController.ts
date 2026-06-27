@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { useMarkChannelRead, usePrimeConversationMessages } from './hooks';
+import { useMarkMessageChannelRead, usePrimeConversationMessages } from './hooks';
 
 export interface MessageJumpTarget {
   workspaceId?: string;
@@ -23,7 +23,11 @@ export function useMessageJumpController() {
   const [primePending, setPrimePending] = useState<PrimePending | null>(null);
   const attemptIdRef = useRef(0);
   const { primeAround } = usePrimeConversationMessages();
-  const { mutate: markRead } = useMarkChannelRead();
+  // A jump advances the channel read CURSOR (stream observe), NOT the
+  // notification badge — fixing the latent bug where jump fired the badge-only
+  // path and left the message cursor stale. Badge cleanup for the jumped-to
+  // conversation rides the focused-conversation effect once it focuses.
+  const { mutate: markRead } = useMarkMessageChannelRead();
 
   const requestJump = useCallback(
     (target: MessageJumpTarget) => {

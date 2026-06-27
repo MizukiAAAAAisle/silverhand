@@ -43,6 +43,11 @@ import {
 } from '@/hooks/useConversationStream';
 import { applyTaskChangedToTaskByNumberCache } from '@/features/tasks/useTaskByNumber';
 import { clusterInitialFetchEnabled } from '@/components/layout/threadMarkRead';
+import {
+  mainlineStreamSourceHead,
+  postObserve,
+  streamSourceAtSeq,
+} from '@/features/attention/observe';
 
 export const messagesKey = (cid: string) =>
   ['channels', cid, 'messages'] as const;
@@ -1843,13 +1848,18 @@ export function useMessageUnreadCounts(
 }
 
 /**
- * Mark all unread notifications for a channel as read.
- * Called whenever the user navigates to a channel so the badge clears.
- *
- * @deprecated Clears notification-based badges only. Use
- * useMarkMessageChannelRead for the conversation_reads cursor system.
+ * Clear a CONVERSATION's notification badges (read_at-only) — the
+ * notification-surface / focused-conversation cleanup path (#task:1231). Renamed
+ * from `useMarkChannelRead`: it does NOT advance the read cursor (that is
+ * `observe(stream)` via `useMarkMessageChannelRead`), it clears the conversation's
+ * notification badges, INCLUDING anchorless ones (`agent_start_failed`) that the
+ * stream-cursor overlap can't reach (overlap only covers `mention_self` with a
+ * seq). This stays the single owner of conversation-level notification bulk;
+ * `read_at` legitimately has two writers (this surface + `observe`'s overlap),
+ * but the cursor has exactly one (`observe`). Name == behavior: notification
+ * badges, never a cursor.
  */
-export function useMarkChannelRead() {
+export function useMarkConversationNotificationsRead() {
   return useMutation({
     mutationFn: async (channelId: string) => {
       await api('/api/notifications/read', {
@@ -1861,17 +1871,18 @@ export function useMarkChannelRead() {
 }
 
  /**
-  * Advance the viewer's read cursor for a channel to its latest message.
-  * Backed by the conversation_reads cursor — clears message unread badges.
- * The backend resolves the viewer principal from the main-held desktop
- * session bearer, so no body is required.
+  * Advance the viewer's read cursor for a channel (mainline) to its latest
+  * message — the §5 `observe(stream)` mainline path (#task:1231). `stream_head`
+  * is server-resolved (channel open / jump knowingly accept concurrent
+  * tail-swallow, §2); a channel carries no thread root. Backed by the
+  * conversation_reads cursor — clears message unread badges.
   */
 export function useMarkMessageChannelRead() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (params: string | { id: string }) => {
       const channelId = typeof params === 'string' ? params : params.id;
-      await api(apiPaths.channelMarkRead(channelId), { method: 'POST' });
+      await postObserve([mainlineStreamSourceHead(channelId)]);
     },
     onSuccess: () => {
       // Only unread counters need to refresh after marking a conversation
@@ -1884,11 +1895,12 @@ export function useMarkMessageChannelRead() {
 
 /**
  * Advance the viewer's read cursor for ONE reply-cluster (thread) to the
- * snapshot the viewer actually saw (#task:1226, surface 4). This is the
- * thread analogue of useMarkMessageChannelRead, but a thread MUST send
- * `snapshot_seq` (the open-time `stream_head_seq` from `useThreadCluster`) —
- * the backend 400s on a thread mark-read without it. The cursor advances only
- * to what was rendered, so a reply that landed after open stays unread.
+ * snapshot the viewer actually saw (#task:1226, surface 4) — the §5
+ * `observe(stream)` thread path (#task:1231). A thread MUST use `at_seq` (the
+ * open-time `stream_head_seq` from `useThreadCluster`): the backend 400s
+ * `thread_position_required` on a thread + `stream_head`, and `streamSourceAtSeq`
+ * makes a thread `stream_head` unrepresentable here (§9.10). The cursor advances
+ * only to what was rendered, so a reply that landed after open stays unread.
  *
  * Human-attention only: this writes the viewer's `conversation_reads` cursor
  * and nothing else. It does NOT touch thread_followers / delivery / wake.
@@ -1901,13 +1913,9 @@ export function useMarkThreadRead() {
       threadRootId: string;
       snapshotSeq: number;
     }) => {
-      await api(apiPaths.channelMarkRead(params.channelId), {
-        method: 'POST',
-        body: JSON.stringify({
-          thread_root_id: params.threadRootId,
-          snapshot_seq: params.snapshotSeq,
-        }),
-      });
+      await postObserve([
+        streamSourceAtSeq(params.channelId, params.threadRootId, params.snapshotSeq),
+      ]);
     },
     onSuccess: (_d, params) => {
       // Sidebar/global unread roll-up includes followed-thread unread, and the
