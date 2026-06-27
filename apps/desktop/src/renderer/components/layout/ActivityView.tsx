@@ -324,31 +324,14 @@ export function ActivityView({
           Activity
         </span>
         <span className="text-xs text-text-muted">{counts.all}</span>
-        {/* Mark all read — clears what's CURRENTLY VISIBLE (the filtered list),
-            so it never silently clears a hidden, filtered-out item. The label
-            names the scope (`markAllLabel`) so it stays honest under a filter.
-            Routes each item through `activityItemSource` (mention/agent_failed by
-            notification_id, unread by stream-head); the list empties as its own
-            feedback, so no success toast. Utility control → ink border, never a
-            semantic hue. */}
-        {filtered.length > 0 ? (
-          <button
-            type="button"
-            onClick={() => markAllRead.mutate(filtered)}
-            disabled={markAllRead.isPending}
-            className="ml-auto inline-flex items-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary disabled:opacity-50"
-          >
-            <Check className="size-3" />
-            {markAllLabel}
-          </button>
-        ) : null}
       </header>
 
-      {/* Type filter — single-select, client-side slice. The chip is a utility
-          control: its selected state uses the theme selection token, and the
-          chip itself never takes a semantic hue (Threads≠unread-pink) so it
-          doesn't steal the items' volume budget. */}
-      <div className="flex shrink-0 items-center gap-1.5 border-b border-border-subtle px-4 py-2">
+      {/* Filter chips + Mark-all share one toolbar: Mark-all's scope follows the
+          active filter, so co-location keeps that coupling legible. No bottom
+          divider — chip spacing + section labels carry the hierarchy. Selected
+          chips use the theme selection token, never a semantic hue (they must not
+          steal the items' volume budget). */}
+      <div className="flex shrink-0 items-center gap-1.5 px-4 py-2">
         {FILTERS.map(f => {
           const on = f.key === filter;
           return (
@@ -368,6 +351,22 @@ export function ActivityView({
             </button>
           );
         })}
+        {/* Mark all read — clears the visible filtered list only (never a hidden
+            item; `markAllLabel` names the scope). Routes each item via
+            `activityItemSource`; the list empties as its own feedback (no toast).
+            Quiet utility action (ink border, not a primary fill) so it doesn't
+            compete with the chips beside it. */}
+        {filtered.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => markAllRead.mutate(filtered)}
+            disabled={markAllRead.isPending}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2 py-1 text-xs font-medium text-text-muted transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary disabled:opacity-50"
+          >
+            <Check className="size-3" />
+            {markAllLabel}
+          </button>
+        ) : null}
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
@@ -636,26 +635,31 @@ function ActivityRow({
           ) : null}
         </div>
 
-        <div className="flex shrink-0 flex-col items-end gap-1.5">
-          <span className="text-[11px] text-text-muted">{relTime(item.timestamp)}</span>
-          {clearSource ? (
-            // Hover-only ✓ — clears WITHOUT navigating. Scan / hover ≠ read; only
-            // a click clears, source-routed via `clearSource` (directed → by
-            // notification_id; ambient → explicit stream-head clear, §9.10).
-            <button
-              type="button"
-              title="Mark as read"
-              aria-label="Mark as read"
-              onClick={e => {
-                e.stopPropagation();
-                clearItem.mutate(clearSource);
-              }}
-              className="grid size-5 place-items-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating text-text-secondary opacity-0 transition-opacity hover:border-[color:var(--border-control-hover)] hover:text-text-primary group-hover:opacity-100"
-            >
-              <Check className="size-3" />
-            </button>
-          ) : null}
-        </div>
+        {/* Timestamp pairs with the where-line, so it stays TOP-right (the row is
+            items-start). */}
+        <span className="shrink-0 text-[11px] text-text-muted">
+          {relTime(item.timestamp)}
+        </span>
+        {clearSource ? (
+          // Hover-only source-routed clear (via `clearSource`: directed → by
+          // notification_id; ambient → explicit stream-head clear, §9.10) — clears
+          // WITHOUT navigating (hover ≠ read). A row-level action: `self-center`
+          // floats it to the whole item's vertical center regardless of text-row
+          // count; width is always reserved (opacity, not display) so hover-reveal
+          // never reflows the row.
+          <button
+            type="button"
+            title="Mark as read"
+            aria-label="Mark as read"
+            onClick={e => {
+              e.stopPropagation();
+              clearItem.mutate(clearSource);
+            }}
+            className="grid size-7 shrink-0 self-center place-items-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating text-text-secondary opacity-0 transition-opacity hover:border-[color:var(--border-control-hover)] hover:text-text-primary group-hover:opacity-100"
+          >
+            <Check className="size-4" />
+          </button>
+        ) : null}
       </div>
     </li>
   );
