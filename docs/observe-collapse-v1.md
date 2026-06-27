@@ -36,14 +36,14 @@ cursor 的 bug。**zero activity 自有 read 态**——observe() 只把写**委
 ```ts
 // packages/backend/src/application/observe.ts
 
-/** 流位置 —— typed variant，绝不塌缩成「后端取 current head」(§9.10 回归源)。 */
+/** 流位置 —— typed variant，区分「client 钉住的 seq」vs「server 取 current head」。 */
 type StreamPosition =
   // client-supplied 已解析 seq:thread open-time snapshot head / visible-live seq。
-  // thread 唯一合法形态;channel 也可用(若 client 持有 snapshot)。
+  // **AUTO 路径(ThreadPanel open/live)必用**——钉住已观测 seq = §9.10 防 tail-swallow。
   | { kind: 'at_seq'; seq: number }
-  // server-resolved 当前 stream head。仅 **mainline explicit stream clear**(channel open / jump /
-  // ambient hover-✓ / Mark all read)可用——这些都是显式「把这条流标到当前 head」语义,接受并发吞尾(§2);
-  // **thread 自动路径(open-time / visible-live)绝不可用**(必 `at_seq`,§9.10 回归源)。
+  // server-resolved 当前 stream head。**EXPLICIT clear**(channel open/jump + ambient hover-✓ +
+  // Mark all read)用——显式「把这条流标到当前 head」、接受并发吞尾(§2)。**mainline 与 thread 皆可**
+  // (auto-vs-explicit 是 caller 属性、非 thread 形状禁令;§9.10 由 renderer 构造层守,见 §2)。
   | { kind: 'stream_head' };
 
 /** 一条消除目标 = 一个 source_ref(answerability:source_ref-in = source_ref-out)。 */
@@ -80,18 +80,19 @@ thread-delivery 歧义**靠 `attention/` 前缀消解。**委派边界(Cindy rev
 
 position 解析(保 §3.4 路由契约):
 - `at_seq`:`seq` 直接用;校验 `seq <= streamHeadLatestSeq(conv, root)`,`> head` → 400(坏客户端推未来,§3.4 fail-loud)。
-- `stream_head`:`seq = streamHeadLatestSeq(conv, root)`(server 解析)。**并发吞尾是有意识产品语义**(Cindy blocker #3):
-  用 `stream_head` 的两个 caller —— **Activity Mark-all** 与 **ambient item 的 hover-✓** —— 都会吞「列表渲染后→操作前到达的尾部」。
-  这是接受的:ambient item = stream aggregate,显式 ✓ / Mark-all = 「把这条流标到当前 head」。两者必须并列写明,
-  别让实现以为只有 Mark-all 有此取舍。
-- **不变量(§9.10):** `threadRootId !== null` 时 position 必须是 `at_seq`;`stream_head` 对 thread → 400
-  (= 现路由「thread 缺 snapshot_seq 即 400」的等价,Norman 核 `channelMarkRead`)。channel(mainline)两者皆可。
+- `stream_head`:`seq = streamHeadLatestSeq(conv, root)`(server 解析,**mainline OR thread 皆可**)。**并发吞尾是有意识产品语义**(Cindy blocker #3):
+  用 `stream_head` 的 caller —— **channel open** + **Activity Mark-all** + **ambient item hover-✓** —— 都会吞「列表渲染后→操作前到达的尾部」。
+  这是接受的:显式 ✓ / Mark-all / 进会话 = 「把这条流标到当前 head」。
+- **不变量(§9.10,Cindy/Norman review-2 收窄):tail-swallow 防的是「caller 意图」轴、不是「stream 形状」轴。**
+  AUTO 路径(ThreadPanel open-time / visible-live)**必须** `at_seq`;EXPLICIT clear(含 thread 的 hover-✓/Mark-all)**可**
+  `stream_head`。**endpoint 不再 blanket 400 thread+stream_head**(否则 Activity 的 followed-thread `unread` item 清不掉)——
+  §9.10 由 **renderer 类型化构造层**结构性守住(Norman:auto builder 只产 `at_seq`,head builder 物理隔离、ThreadPanel import 不到),
+  + legacy `/api/channels/:id/mark-read` 自身仍「thread 缺 snapshot_seq → 400」(它是 auto caller)。后端只看到一个请求、分不出 caller,故守卫必须在 caller 层。
 
-**统一规则(Norman R3 细化,非特例):`stream_head` 只出现在「显式·非自动」路径** —— mainline 兼容
-(channel open/jump)+ bulk/✓(Mark-all、ambient hover-✓)。**auto observe(thread open-time / visible-live)永远 `at_seq`**
-(client snapshot/visible seq)。**且 directed / mention item 在任何路径(含 Mark-all 批量)永远按 `notificationId` by-id 精确清,
-绝不走 `stream_head`** → **没有任何一条 @我会被并发吞掉**;只有 ambient「所有消息」未读吃 `stream_head`,而「把这条噪音流标到
-当前 head」正是 ✓ / Mark-all 的诚实语义。这条把 §6.3 的吞尾取舍收束成一句安全保证。
+**统一规则(Norman R3 细化):`stream_head` = 「显式·当前 head」语义** —— channel open/jump + bulk/✓(Mark-all、ambient hover-✓),
+**thread explicit clear 同样适用**。**auto observe(thread open-time / visible-live)永远 `at_seq`**(client snapshot/visible seq,renderer 结构性保证)。
+**且 directed / mention item 在任何路径(含 Mark-all 批量)永远按 `notificationId` by-id 精确清,绝不走 `stream_head`** →
+**没有任何一条 @我会被并发吞掉**;只有 ambient「所有消息」未读吃 `stream_head`,而「把这条噪音流标到当前 head」正是 ✓ / Mark-all 的诚实语义。
 
 ## 3. overlap 规则(显式 —— Cindy gate #3)
 
@@ -165,13 +166,13 @@ DTO 侧:Activity item 已带 `notification_id`(directed)/ `conversation_id`+`thr
 ### 6.2 事务边界(Cindy blocker #2)
 - 单个 `stream` source 的 **cursor advance + overlap `mention_self.read_at`** 必须**同一 DB transaction**(否则中途失败 =
   「cursor 清了、徽标残留」半状态,正是要消的)。
-- **整个 batch(全部 sources)在一个 application transaction 内**完成;**commit 后**才 `unread_updated`,且**只发一次**(§4)。
+- **整个 batch(全部 sources)在一个 application transaction 内**完成;**commit 后**才 `unread_updated`(coalesced:每变更 conversation 一条 message 变体 + 至多一条 badge 变体,§4)。
 - 校验(§6.1)在事务**之前**全跑完(fail-fast,非法 source 不进事务)。
 
 ### 6.3 其它不变量
-1. thread + `stream_head` → 400(§9.10:thread 必带 client position)。
+1. `stream_head` 对**任何 stream(含 thread)合法** = 显式 clear 当前 head(§2;§9.10 由 caller 层守、非 endpoint blanket 400)。
 2. `at_seq > streamHead` → 400(§3.4:防推未来)。
-3. mainline 省略/`stream_head` → server 解析 mainline head(legacy channel 唯一兼容路径)。
+3. mainline 省略 position(legacy `/mark-read`)/`stream_head` → server 解析该 stream head。
 4. overlap 的 notification 清除限 `seq <= 解析seq` 且 `mention_self`(有 anchor);`agent_start_failed` 不参与。
 5. observe() 全程不写任何 `activity.*` 表(answerability:source_ref-out ∈ {cursor, notifications.read_at})。
 

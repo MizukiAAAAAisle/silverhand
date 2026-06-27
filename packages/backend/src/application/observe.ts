@@ -19,10 +19,12 @@ import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
  *   - CURSOR is written through exactly ONE path: `observe(stream)` → this
  *     use case (read_at still has two legit writers: the overlap below + the
  *     notification surface). There is no second cursor writer.
- *   - A `stream` position is a TYPED variant — a thread auto path supplies an
- *     `at_seq`; only a mainline explicit clear may use `stream_head`. A thread
- *     + `stream_head` is a contract violation (§9.10 tail-swallow regression)
- *     and 400s.
+ *   - A `stream` position is a TYPED variant — an `at_seq` pins a client-
+ *     observed seq; `stream_head` resolves the current head server-side. The
+ *     §9.10 tail-swallow guard is on the CALLER-INTENT axis (an AUTO open/live
+ *     path must pin `at_seq`), NOT the stream shape — so `stream_head` is legal
+ *     for an explicit clear of ANY stream, thread included. That discipline
+ *     lives at the auto callers + the legacy mark-read route, not here.
  *   - overlap (§3): a positional clear folds in the directed clear — advancing
  *     a stream cursor to N also marks `seq <= N` `mention_self` notifications in
  *     that stream read, IN THE SAME TRANSACTION, so the non-derived `/n/unread`
@@ -31,15 +33,15 @@ import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
  *   - per-source auth (§6.1): the endpoint accepts arbitrary conversation ids,
  *     so every `stream` source is gated by `canViewConversation` + root
  *     validation. Any illegal source fails the WHOLE batch — never partial.
- *   - one transaction (§6.2) over the whole batch; a single coalesced
- *     `unread_updated` post-commit, only when something actually changed.
+ *   - one transaction (§6.2) over the whole batch; coalesced `unread_updated`
+ *     post-commit (per-conversation message-variant + at-most-one badge-variant,
+ *     §4), only when something actually changed.
  */
 export type ObserveErrorCode =
   | 'forbidden'
   | 'conversation_not_found'
   | 'thread_root_not_found'
   | 'thread_root_is_reply'
-  | 'thread_position_required'
   | 'position_future';
 
 export type ObserveError = { code: ObserveErrorCode; message: string };
@@ -156,17 +158,15 @@ function resolveSource(
     }
     targetSeq = source.position.seq;
   } else {
-    // stream_head: a thread auto path must NEVER resolve to the server head
-    // (§9.10 tail-swallow); only a mainline explicit clear may.
-    if (threadRootId !== null) {
-      return {
-        ok: false,
-        error: {
-          code: 'thread_position_required',
-          message: 'a thread observe must supply an at_seq position',
-        },
-      };
-    }
+    // stream_head: server-resolved current head of THIS stream — mainline OR
+    // thread. Legit only for an EXPLICIT clear (channel/thread open + Mark-all +
+    // ambient hover-✓), which knowingly swallows the concurrent tail. The
+    // §9.10 tail-swallow guard is on the CALLER-INTENT axis, not the stream
+    // shape: an AUTO path (ThreadPanel open-time / visible-live) must pin an
+    // `at_seq`, and that discipline is enforced at those callers + the legacy
+    // mark-read route (which keeps requiring snapshot_seq for a thread) — NOT
+    // by banning thread + stream_head here, which would make an Activity
+    // followed-thread unread item impossible to hover-✓ / Mark-all.
     targetSeq = streamHead;
   }
 

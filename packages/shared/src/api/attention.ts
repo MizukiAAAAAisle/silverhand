@@ -193,13 +193,17 @@ export type ListActivityDto = z.infer<typeof ListActivityDtoSchema>;
 
 /**
  * Where to advance a stream's cursor to — a TYPED variant, never collapsed to
- * "server takes current head" (§9.10 regression source).
+ * "server takes current head" implicitly.
  *   - `at_seq`      = a client-supplied, already-resolved seq (thread open-time
- *     snapshot head / visible-live seq). REQUIRED for a thread auto path.
- *   - `stream_head` = server-resolved current stream head. Allowed ONLY for a
- *     mainline explicit stream clear (channel open / jump / ambient hover-✓ /
- *     Mark all read), which knowingly accepts concurrent tail-swallow (§2). A
- *     thread auto path (open-time / visible-live) must NEVER use it.
+ *     snapshot head / visible-live seq). An AUTO path (ThreadPanel open-time /
+ *     visible-live) MUST use this — pinning the observed seq is what stops the
+ *     §9.10 tail-swallow.
+ *   - `stream_head` = server-resolved current head of the stream. For an
+ *     EXPLICIT user clear (channel/thread open + ambient hover-✓ + Mark all
+ *     read), which knowingly accepts swallowing the concurrent tail. Legal for
+ *     ANY stream, thread included — the auto-vs-explicit discipline is a CALLER
+ *     property, not a thread-shape ban (a followed-thread `unread` Activity item
+ *     must be hover-✓ / Mark-all clearable).
  */
 export const StreamPositionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('at_seq'), seq: z.number().int().nonnegative() }),

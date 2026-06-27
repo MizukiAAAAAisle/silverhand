@@ -142,15 +142,26 @@ describe('POST /api/attention/observe (#task:1231)', () => {
     expect(reads.getLastReadSeq('local', channelId, root.id)).toBe(reply.seq);
   });
 
-  it('rejects a thread + stream_head with 400 (§9.10 tail-swallow guard)', async () => {
+  it('allows thread + stream_head for an EXPLICIT clear (Activity hover-✓ / Mark-all), advancing the thread cursor to its head', async () => {
+    // §9.10 tail-swallow is a caller-intent guard (auto open/live pin at_seq),
+    // NOT a thread-shape ban: a followed-thread `unread` Activity item must be
+    // hover-✓ / Mark-all clearable, which uses stream_head.
     t = buildTestApp();
     const { channelId, agentId } = await createChannel(t);
     const messages = new MessageRepo(t.ctx.db);
+    const reads = new ConversationReadRepo(t.ctx.db);
     const root = messages.insertForConversation({
       conversationId: channelId,
       fromKind: 'agent',
       fromAgentId: agentId,
       content: 'root',
+    });
+    const reply = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: agentId,
+      threadRootId: root.id,
+      content: 'reply',
     });
 
     const res = await http(t).post(observePath, {
@@ -163,8 +174,9 @@ describe('POST /api/attention/observe (#task:1231)', () => {
         },
       ],
     });
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as any).code).toBe('thread_position_required');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ changed: true });
+    expect(reads.getLastReadSeq('local', channelId, root.id)).toBe(reply.seq);
   });
 
   it('rejects an at_seq beyond the stream head with 400', async () => {
