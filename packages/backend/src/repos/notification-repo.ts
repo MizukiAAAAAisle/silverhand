@@ -233,6 +233,54 @@ export class NotificationRepo {
     return r.changes;
   }
 
+  /**
+   * Overlap double-clear (#task:1231 §3): when a positional `observe(stream)`
+   * advances a stream's cursor to `uptoSeq`, mark the viewer's unread
+   * `mention_self` notifications in THAT SAME stream (conversation + thread)
+   * read, up to and including `uptoSeq` — in the same transaction as the cursor
+   * advance. Without this, the cursor-derived Activity dedup would drop the
+   * mention but the non-derived `/n/unread` badge (which reads `read_at IS NULL`
+   * directly) would linger as a second source of truth.
+   *
+   * Anchored by the notification's message seq (a `mention_self` always carries
+   * a `message_id`), so anchorless kinds (`agent_start_failed`) are NEVER
+   * touched — they clear only via their own by-id notification observe or the
+   * conversation-level notification surface. The stream is matched by the anchor
+   * message's `thread_root_id` (NULL = mainline), keeping the clear precise to
+   * `(conversation, stream, seq <= uptoSeq)` — not a conversation-level bulk.
+   */
+  markStreamMentionsRead(params: {
+    userId: string;
+    conversationId: string;
+    threadRootId: string | null;
+    uptoSeq: number;
+  }): number {
+    const now = Date.now();
+    const r = this.db
+      .prepare(
+        `UPDATE notifications
+            SET read_at = @now
+          WHERE user_id = @viewer
+            AND kind = 'mention_self'
+            AND read_at IS NULL
+            AND conversation_id = @conv
+            AND message_id IN (
+              SELECT m.id FROM messages m
+               WHERE m.conversation_id = @conv
+                 AND m.thread_root_id IS @root
+                 AND m.seq <= @upto
+            )`,
+      )
+      .run({
+        now,
+        viewer: params.userId,
+        conv: params.conversationId,
+        root: params.threadRootId,
+        upto: params.uptoSeq,
+      });
+    return r.changes;
+  }
+
   unreadCount(userId?: string | null): number {
     const userPredicate =
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';

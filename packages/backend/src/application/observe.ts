@@ -1,0 +1,248 @@
+import type { ObserveSource } from '@silverhand/shared';
+import type { BackendContext } from '../context.js';
+import type { Principal } from '../auth/principal.js';
+import type { ConversationRepo } from '../repos/conversation-repo.js';
+import type { MessageRepo } from '../repos/message-repo.js';
+import type { ConversationReadRepo } from '../repos/conversation-read-repo.js';
+import type { NotificationRepo } from '../repos/notification-repo.js';
+import { canViewConversation } from '../permissions.js';
+import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
+
+/**
+ * observe() — the SINGLE eliminate primitive (#task:1231,
+ * docs/observe-collapse-v1.md). Every read-cleared Activity item and every
+ * legacy mark-read collapses here; the write is delegated back to the source
+ * aggregate (the per-stream cursor `conversation_reads`, or
+ * `notifications.read_at`). Attention owns NO read state of its own.
+ *
+ * The load-bearing invariants live in what this use case does and does NOT do:
+ *   - CURSOR is written through exactly ONE path: `observe(stream)` → this
+ *     use case (read_at still has two legit writers: the overlap below + the
+ *     notification surface). There is no second cursor writer.
+ *   - A `stream` position is a TYPED variant — a thread auto path supplies an
+ *     `at_seq`; only a mainline explicit clear may use `stream_head`. A thread
+ *     + `stream_head` is a contract violation (§9.10 tail-swallow regression)
+ *     and 400s.
+ *   - overlap (§3): a positional clear folds in the directed clear — advancing
+ *     a stream cursor to N also marks `seq <= N` `mention_self` notifications in
+ *     that stream read, IN THE SAME TRANSACTION, so the non-derived `/n/unread`
+ *     badge never lingers as a second truth. The reverse is NOT symmetric: a
+ *     `notification` clear never reverse-advances a cursor.
+ *   - per-source auth (§6.1): the endpoint accepts arbitrary conversation ids,
+ *     so every `stream` source is gated by `canViewConversation` + root
+ *     validation. Any illegal source fails the WHOLE batch — never partial.
+ *   - one transaction (§6.2) over the whole batch; a single coalesced
+ *     `unread_updated` post-commit, only when something actually changed.
+ */
+export type ObserveErrorCode =
+  | 'forbidden'
+  | 'conversation_not_found'
+  | 'thread_root_not_found'
+  | 'thread_root_is_reply'
+  | 'thread_position_required'
+  | 'position_future';
+
+export type ObserveError = { code: ObserveErrorCode; message: string };
+
+export type ObserveResult =
+  | { ok: true; changed: boolean }
+  | { ok: false; error: ObserveError };
+
+export type ObserveDeps = {
+  ctx: BackendContext;
+  conversations: ConversationRepo;
+  messages: MessageRepo;
+  conversationReads: ConversationReadRepo;
+  notifications: NotificationRepo;
+};
+
+export type ObserveInput = {
+  principal: Principal;
+  /** The resolved viewer (cursor / notification rows are keyed by this). */
+  viewerUserId: string;
+  sources: ObserveSource[];
+};
+
+/** A `stream` source after validation: the cursor target seq is resolved and
+ *  the root/visibility checks have passed. */
+type ResolvedStream = {
+  kind: 'stream';
+  conversationId: string;
+  threadRootId: string | null;
+  targetSeq: number;
+};
+type ResolvedNotification = { kind: 'notification'; notificationId: string };
+type ResolvedSource = ResolvedStream | ResolvedNotification;
+
+/**
+ * Validate + resolve ONE source (no writes). Mirrors the legacy
+ * `/api/channels/:id/mark-read` resolution so the new endpoint inherits the
+ * same friendly errors:
+ *   - channel-like visibility (`canViewConversation`);
+ *   - root message exists / belongs to this conversation / is a root not a
+ *     reply (`thread_root_not_found` / `thread_root_is_reply`);
+ *   - position → seq, with `stream_head` forbidden on a thread and an `at_seq`
+ *     past the stream head rejected (`position_future`).
+ */
+function resolveSource(
+  deps: ObserveDeps,
+  input: ObserveInput,
+  source: ObserveSource,
+): { ok: true; resolved: ResolvedNotification }
+  | { ok: true; resolved: ResolvedStream }
+  | { ok: false; error: ObserveError } {
+  if (source.kind === 'notification') {
+    // By-id, user-scoped at write time (`markRead(id, viewer)`). A missing /
+    // already-read / not-yours notification is an idempotent no-op, not an
+    // error, so there is nothing to pre-validate here.
+    return {
+      ok: true,
+      resolved: { kind: 'notification', notificationId: source.notification_id },
+    };
+  }
+
+  const { conversation_id: conversationId, thread_root_id: threadRootId } = source;
+
+  // Channel-like only: a `stream` source's conversation id is always the
+  // channel/dm_channel; a legacy `kind='thread'` conversation is not a stream
+  // root here (the reply-cluster is addressed via `thread_root_id`).
+  const channel = deps.conversations.getChannelLike(conversationId);
+  if (!channel) {
+    return {
+      ok: false,
+      error: { code: 'conversation_not_found', message: 'conversation not found' },
+    };
+  }
+  if (!canViewConversation(deps.ctx, input.principal, channel.id)) {
+    return {
+      ok: false,
+      error: { code: 'forbidden', message: 'cannot observe this conversation' },
+    };
+  }
+
+  if (threadRootId !== null) {
+    const rootMessage = deps.messages.getById(threadRootId);
+    if (!rootMessage || rootMessage.conversation_id !== conversationId) {
+      return {
+        ok: false,
+        error: {
+          code: 'thread_root_not_found',
+          message: 'thread root message not found in this channel',
+        },
+      };
+    }
+    if (rootMessage.thread_root_id !== null) {
+      return {
+        ok: false,
+        error: {
+          code: 'thread_root_is_reply',
+          message: 'thread_root_id must be a root message, not a reply',
+        },
+      };
+    }
+  }
+
+  const streamHead = deps.messages.streamHeadLatestSeq(conversationId, threadRootId);
+  let targetSeq: number;
+  if (source.position.kind === 'at_seq') {
+    if (source.position.seq > streamHead) {
+      return {
+        ok: false,
+        error: {
+          code: 'position_future',
+          message: 'position seq is beyond the current stream head',
+        },
+      };
+    }
+    targetSeq = source.position.seq;
+  } else {
+    // stream_head: a thread auto path must NEVER resolve to the server head
+    // (§9.10 tail-swallow); only a mainline explicit clear may.
+    if (threadRootId !== null) {
+      return {
+        ok: false,
+        error: {
+          code: 'thread_position_required',
+          message: 'a thread observe must supply an at_seq position',
+        },
+      };
+    }
+    targetSeq = streamHead;
+  }
+
+  return {
+    ok: true,
+    resolved: { kind: 'stream', conversationId, threadRootId, targetSeq },
+  };
+}
+
+export async function observe(
+  deps: ObserveDeps,
+  input: ObserveInput,
+): Promise<ObserveResult> {
+  // Phase 1 — validate + resolve EVERY source before any write (fail-fast). An
+  // illegal source aborts the whole request; no partial clear (§6.1).
+  const resolved: ResolvedSource[] = [];
+  for (const source of input.sources) {
+    const r = resolveSource(deps, input, source);
+    if (!r.ok) return r;
+    resolved.push(r.resolved);
+  }
+
+  // Phase 2 — one transaction over the whole batch (§6.2). `changed` is true if
+  // any cursor advanced or any `read_at` was set; it gates the single event.
+  const changed = deps.ctx.db.transaction(() => {
+    let any = false;
+    for (const r of resolved) {
+      if (r.kind === 'stream') {
+        const current = deps.conversationReads.getLastReadSeq(
+          input.viewerUserId,
+          r.conversationId,
+          r.threadRootId,
+        );
+        if (r.targetSeq > current) {
+          deps.conversationReads.markRead({
+            viewerUserId: input.viewerUserId,
+            conversationId: r.conversationId,
+            threadRootId: r.threadRootId,
+            seq: r.targetSeq,
+          });
+          any = true;
+        }
+        // overlap (§3): fold the directed clear into the positional one, even
+        // when the cursor did not move (a later mention can still be unread
+        // below an already-advanced cursor only if seq <= cursor — markRead is
+        // monotonic, so clear up to the resolved target regardless).
+        const cleared = deps.notifications.markStreamMentionsRead({
+          userId: input.viewerUserId,
+          conversationId: r.conversationId,
+          threadRootId: r.threadRootId,
+          uptoSeq: r.targetSeq,
+        });
+        if (cleared > 0) any = true;
+      } else {
+        if (deps.notifications.markRead(r.notificationId, input.viewerUserId)) {
+          any = true;
+        }
+      }
+    }
+    return any;
+  })();
+
+  if (changed) {
+    const effects: PostCommitEffect[] = [
+      () =>
+        deps.ctx.events.publishToScope(
+          `viewer:${input.viewerUserId}`,
+          'unread_updated',
+          // Coalesced across the whole batch (which may span conversations), so
+          // the body carries no single conversation id — the viewer-scoped
+          // signal invalidates the viewer's unread/activity queries wholesale.
+          {},
+        ),
+    ];
+    await runPostCommitEffects(effects, deps.ctx.logger);
+  }
+
+  return { ok: true, changed };
+}

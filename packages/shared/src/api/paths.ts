@@ -185,6 +185,12 @@ export const apiPaths = {
    *  human viewer-scoped. Optional `?workspace_id=` filters to one workspace
    *  (the data model is global; v1 UI is per-workspace). */
   activity: '/api/activity',
+  /** The single eliminate primitive (#task:1231, docs/observe-collapse-v1.md):
+   *  collapse every read-cleared Activity item + legacy mark-read into one
+   *  `observe(source_ref[])` use case that delegates the write back to the
+   *  source aggregate (per-stream cursor / `notifications.read_at`). Owned by
+   *  the Attention bounded context; human viewer-scoped. */
+  attentionObserve: '/api/attention/observe',
   conversationLogDebug: (id: string) => `/api/conversations/${id}/log-debug`,
   conversationAgentActivity: (id: string, agentId: string) =>
     `/api/conversations/${id}/agents/${agentId}/activity`,

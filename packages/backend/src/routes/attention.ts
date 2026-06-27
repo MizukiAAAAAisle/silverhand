@@ -9,22 +9,45 @@
 import { Hono } from 'hono';
 import {
   apiPaths,
+  ObserveInputSchema,
   SetChannelAttentionPreferenceInputSchema,
   type ChannelAttentionPreferenceDto,
   type ListActivityDto,
+  type ObserveDto,
 } from '@silverhand/shared';
 import type { AppEnv } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
+import type { MessageRepo } from '../repos/message-repo.js';
+import type { ConversationReadRepo } from '../repos/conversation-read-repo.js';
+import type { NotificationRepo } from '../repos/notification-repo.js';
 import type { ChannelAttentionPreferenceRepo } from '../repos/channel-attention-preference-repo.js';
 import { getUserPrincipal, requireViewerUserId } from '../auth/principal.js';
 import { canViewConversation, canViewOwnedState } from '../permissions.js';
 import { listActivity } from '../read-model/activity.js';
+import { observe, type ObserveErrorCode } from '../application/observe.js';
 
 export interface AttentionRouteDeps {
   ctx: BackendContext;
   conversations: ConversationRepo;
+  messages: MessageRepo;
+  conversationReads: ConversationReadRepo;
+  notifications: NotificationRepo;
   channelAttentionPrefs: ChannelAttentionPreferenceRepo;
+}
+
+/** Map a typed observe() error to an HTTP status. not-found → 404, auth → 403,
+ *  contract violations (bad position / reply-as-root) → 400. */
+function observeErrorStatus(code: ObserveErrorCode): 400 | 403 | 404 {
+  switch (code) {
+    case 'forbidden':
+      return 403;
+    case 'conversation_not_found':
+    case 'thread_root_not_found':
+      return 404;
+    default:
+      return 400;
+  }
 }
 
 export function createAttentionApp(deps: AttentionRouteDeps): Hono<AppEnv> {
@@ -108,6 +131,37 @@ export function createAttentionApp(deps: AttentionRouteDeps): Hono<AppEnv> {
     }
     const workspaceId = c.req.query('workspace_id') || undefined;
     const dto: ListActivityDto = listActivity(ctx, { viewerUserId, workspaceId });
+    return c.json(dto);
+  });
+
+  // POST the single eliminate primitive (#task:1231, docs/observe-collapse-v1.md).
+  // Base gate = owned-state (the viewer only observes their OWN read state);
+  // per-source `canViewConversation` + root validation lives in the use case
+  // (the endpoint accepts arbitrary conversation ids in the body, so each stream
+  // source is gated individually — any illegal source fails the whole batch).
+  app.post(apiPaths.attentionObserve, async c => {
+    const viewerUserId = requireViewerUserId(c);
+    const principal = getUserPrincipal(c);
+    if (!canViewOwnedState(ctx, principal, viewerUserId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = ObserveInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const result = await observe(deps, {
+      principal,
+      viewerUserId,
+      sources: parsed.data.sources,
+    });
+    if (!result.ok) {
+      return c.json(
+        { error: result.error.message, code: result.error.code },
+        observeErrorStatus(result.error.code),
+      );
+    }
+    const dto: ObserveDto = { changed: result.changed };
     return c.json(dto);
   });
 

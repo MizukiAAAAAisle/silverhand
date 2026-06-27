@@ -454,7 +454,14 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   // preference (GET/PUT). The Activity list query mounts here once ②c lands.
   app.route(
     '/',
-    createAttentionApp({ ctx, conversations, channelAttentionPrefs }),
+    createAttentionApp({
+      ctx,
+      conversations,
+      messages,
+      conversationReads,
+      notifications,
+      channelAttentionPrefs,
+    }),
   );
 
   // Conversation membership routes.

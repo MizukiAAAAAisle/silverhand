@@ -100,6 +100,20 @@ export class ConversationReadRepo {
       .get(viewerUserId, conversationId, threadRootId);
   }
 
+  /** Current cursor seq for ONE stream (0 if no cursor row yet). The observe()
+   *  use case (#task:1231) reads this to decide whether a `markRead` would
+   *  actually advance the cursor (it is monotonic `max()`, so re-marking an
+   *  already-read stream is a no-op) — driving the single coalesced
+   *  `unread_updated` event without a heavier unread recount. */
+  getLastReadSeq(
+    viewerUserId: string,
+    conversationId: string,
+    threadRootId: string | null,
+  ): number {
+    return this.getCursorRow(viewerUserId, conversationId, threadRootId)
+      ?.last_read_seq ?? 0;
+  }
+
   /** Unread count for ONE stream (mainline or a single thread). `@root` NULL =
    *  mainline; the `IS @root` comparison handles both NULL and a value. */
   unreadCountForStream(

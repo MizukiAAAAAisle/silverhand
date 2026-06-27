@@ -178,3 +178,71 @@ export const ListActivityDtoSchema = z.object({
   items: z.array(ActivityItemDtoSchema),
 });
 export type ListActivityDto = z.infer<typeof ListActivityDtoSchema>;
+
+// ───────────────────────────── observe() (#task:1231) ─────────────────────────────
+//
+// `POST /api/attention/observe` — the SINGLE eliminate primitive. Every
+// read-cleared Activity item (and every legacy mark-read) collapses into one
+// use case `observe(source_ref[])` that delegates the write back to the source
+// aggregate (per-stream cursor / `notifications.read_at`); Attention owns NO
+// read state of its own. Canonical: docs/observe-collapse-v1.md.
+//
+// Disambiguation: this `observe` (attention eliminate) is UNRELATED to the
+// thread-delivery `observe` kind (backfill / non-waking). The `/api/attention/`
+// prefix + this bounded context disambiguate the two.
+
+/**
+ * Where to advance a stream's cursor to — a TYPED variant, never collapsed to
+ * "server takes current head" (§9.10 regression source).
+ *   - `at_seq`      = a client-supplied, already-resolved seq (thread open-time
+ *     snapshot head / visible-live seq). REQUIRED for a thread auto path.
+ *   - `stream_head` = server-resolved current stream head. Allowed ONLY for a
+ *     mainline explicit stream clear (channel open / jump / ambient hover-✓ /
+ *     Mark all read), which knowingly accepts concurrent tail-swallow (§2). A
+ *     thread auto path (open-time / visible-live) must NEVER use it.
+ */
+export const StreamPositionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('at_seq'), seq: z.number().int().nonnegative() }),
+  z.object({ kind: z.literal('stream_head') }),
+]);
+export type StreamPosition = z.infer<typeof StreamPositionSchema>;
+
+/**
+ * One eliminate target = one source_ref (answerability: source_ref-in =
+ * source_ref-out). A `stream` source advances the per-stream cursor (and folds
+ * in the overlap double-clear, §3); a `notification` source clears that one
+ * notification's `read_at` by id (directed dismiss — never reverse-advances a
+ * cursor). Field names are snake_case so the renderer builds a source_ref
+ * straight from the `ActivityItemDto` fields it already holds.
+ */
+export const ObserveSourceSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('stream'),
+    conversation_id: z.string().min(1),
+    /** NULL = mainline; a root message id = that reply-cluster. */
+    thread_root_id: z.string().min(1).nullable(),
+    position: StreamPositionSchema,
+  }),
+  z.object({
+    kind: z.literal('notification'),
+    notification_id: z.string().min(1),
+  }),
+]);
+export type ObserveSource = z.infer<typeof ObserveSourceSchema>;
+
+/** `POST /api/attention/observe` body. One source = a single eliminate; many =
+ *  a Mark-all batch (each source resolved/written independently, but the whole
+ *  batch is one transaction — any illegal source fails the WHOLE request, no
+ *  partial clear). The cap is a runaway guard, not a product limit. */
+export const ObserveInputSchema = z.object({
+  sources: z.array(ObserveSourceSchema).min(1).max(1000),
+});
+export type ObserveInput = z.infer<typeof ObserveInputSchema>;
+
+/** `POST /api/attention/observe` response. `changed` = at least one cursor
+ *  advanced or one `read_at` was set (drives whether a single coalesced
+ *  `unread_updated` fired). */
+export const ObserveDtoSchema = z.object({
+  changed: z.boolean(),
+});
+export type ObserveDto = z.infer<typeof ObserveDtoSchema>;
