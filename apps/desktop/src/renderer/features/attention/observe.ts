@@ -20,16 +20,21 @@ export function postObserve(sources: ObserveSource[]): Promise<ObserveDto> {
 }
 
 // ── Pure source_ref builders ────────────────────────────────────────────────
-// The §9.10 position rule is enforced STRUCTURALLY at construction, not by
-// convention: a thread (root != null) can only ever be built `at_seq`, and the
-// only builder that emits `stream_head` hardcodes `thread_root_id: null`. So a
-// thread auto path can NOT accidentally emit `stream_head` from the renderer —
-// the type system + these constructors make the regression unrepresentable.
+// §9.10 guards the caller-INTENT axis, not the stream-shape axis: an AUTO path
+// (open / visible-live / thread mark-read) MUST pin `at_seq` and never knowingly
+// tail-swallow. The builders here are the AUTO-path builders, and they enforce
+// that STRUCTURALLY — a thread (root != null) is only ever built `at_seq`, and
+// the only `stream_head` builder here hardcodes `thread_root_id: null`. So no
+// AUTO caller can emit thread+`stream_head`. (Phase B adds an EXPLICIT builder,
+// `explicitStreamClearHead(conv, root|null)`, that knowingly tail-swallows and
+// MAY carry a thread root; the backend already permits it (`9c8c9aa`). The guard
+// is per-builder intent, never a blanket renderer-wide ban on thread+stream_head.)
 
-/** A client-supplied resolved position (thread open-time snapshot head /
- *  visible-live seq; or a channel with a held snapshot). REQUIRED for a thread
- *  auto path — `threadRootId` non-null + `at_seq` is the only legal thread shape
- *  (the backend 400s `thread_position_required` on a thread + `stream_head`). */
+/** Build an AUTO-path stream clear pinned to a resolved position (thread
+ *  open-time snapshot head / visible-live seq; or a channel with a held
+ *  snapshot). The AUTO / thread mark-read path only ever emits `at_seq` — this
+ *  builder is how that caller intent is enforced, independent of any endpoint
+ *  rule (the backend no longer rejects thread + `stream_head`, `9c8c9aa`). */
 export function streamSourceAtSeq(
   conversationId: string,
   threadRootId: string | null,

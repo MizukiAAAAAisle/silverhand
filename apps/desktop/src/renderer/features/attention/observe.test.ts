@@ -6,12 +6,15 @@ import {
   streamSourceAtSeq,
 } from './observe';
 
-// The renderer constructs source_refs by hand, so these builders are the client
-// edge of the §9.10 contract. The tests lock two things: (1) every built source
-// is wire-valid against the shared schema, and (2) a thread can NEVER emit
-// `stream_head` from the renderer (the regression these typed builders exist to
-// make unrepresentable).
-describe('observe source builders', () => {
+// The renderer constructs source_refs by hand, so these AUTO-path builders are
+// the client edge of the §9.10 caller-intent contract. The tests lock two
+// things: (1) every built source is wire-valid against the shared schema, and
+// (2) the AUTO builders can NEVER emit thread + `stream_head` (the regression
+// these typed builders exist to make unrepresentable). This is scoped to the
+// AUTO builders ONLY — phase B's explicit `explicitStreamClearHead(conv, root|null)`
+// will knowingly emit thread + `stream_head`; that is an explicit path, not a
+// regression, so it gets its own builder and its own test.
+describe('observe auto-path source builders', () => {
   it('builds a thread source as at_seq (never stream_head)', () => {
     const src = streamSourceAtSeq('conv-1', 'root-9', 42);
     expect(src).toEqual({
@@ -38,8 +41,9 @@ describe('observe source builders', () => {
       thread_root_id: null,
       position: { kind: 'stream_head' },
     });
-    // §9.10: stream_head only ever pairs with a null thread_root_id — the only
-    // builder that emits stream_head structurally cannot carry a thread root.
+    // §9.10: the AUTO `stream_head` builder pairs `stream_head` with a null
+    // thread_root_id — the only AUTO builder that emits stream_head structurally
+    // cannot carry a thread root. (Phase B's explicit builder may; not this one.)
     if (src.kind !== 'stream') throw new Error('expected a stream source');
     expect(src.thread_root_id).toBeNull();
     expect(() => ObserveSourceSchema.parse(src)).not.toThrow();
