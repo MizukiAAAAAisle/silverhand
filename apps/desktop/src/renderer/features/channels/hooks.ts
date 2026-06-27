@@ -1897,10 +1897,14 @@ export function useMarkMessageChannelRead() {
  * Advance the viewer's read cursor for ONE reply-cluster (thread) to the
  * snapshot the viewer actually saw (#task:1226, surface 4) — the §5
  * `observe(stream)` thread path (#task:1231). A thread MUST use `at_seq` (the
- * open-time `stream_head_seq` from `useThreadCluster`): the backend 400s
- * `thread_position_required` on a thread + `stream_head`, and `streamSourceAtSeq`
- * makes a thread `stream_head` unrepresentable here (§9.10). The cursor advances
- * only to what was rendered, so a reply that landed after open stays unread.
+ * open-time `stream_head_seq` from `useThreadCluster`): `streamSourceAtSeq` makes
+ * a thread `stream_head` unrepresentable here, so the §9.10 invariant — AUTO
+ * paths (open / live) pin `at_seq` and never knowingly tail-swallow — is enforced
+ * STRUCTURALLY at the caller layer. §9.10 guards the caller-intent axis, not the
+ * stream-shape axis: the backend can't tell intent from a single request (it no
+ * longer rejects thread + `stream_head`, `9c8c9aa`), so the guard lives here. The
+ * cursor advances only to what was rendered, so a reply that landed after open
+ * stays unread.
  *
  * Human-attention only: this writes the viewer's `conversation_reads` cursor
  * and nothing else. It does NOT touch thread_followers / delivery / wake.
