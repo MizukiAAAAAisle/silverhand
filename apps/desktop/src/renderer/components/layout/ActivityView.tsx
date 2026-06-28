@@ -501,8 +501,7 @@ function ActivityRow({
   //     its sender.
   //   - otherwise (mainline / mention / thread missing a root preview) → the
   //     `preview` line IS the last row and carries the sender; no separate row 3.
-  // Server-resolved fields only (#task:1227 `c86bb89`), never a client-stitched
-  // message cache.
+  // Server-resolved fields only, never a client-stitched message cache.
   const hasRootLine = isThread && item.thread_root_preview != null;
   const sender = item.preview_sender;
   const senderObjectUrl = sender

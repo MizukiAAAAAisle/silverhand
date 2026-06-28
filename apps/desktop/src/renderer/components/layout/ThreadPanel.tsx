@@ -127,9 +127,9 @@ export function ThreadPanel({
   // (channel-scoped) activity bubble to an EMPTY allow-list so it shows
   // nothing — never fall back to unrestricted, which would leak main-line /
   // other-cluster agents into this thread. Showing full activity under
-  // unknown state is wrong info, not a graceful fallback (Cindy #1047 cut B
-  // review). `useThreadFollowers` keeps this snapshot fresh against the
-  // thread message stream (auto-follow side effects).
+  // unknown state is wrong info, not a graceful fallback. `useThreadFollowers`
+  // keeps this snapshot fresh against the thread message stream (auto-follow
+  // side effects).
   const followerAgentIds = followers.data?.follower_agent_ids ?? [];
   const followThread = useFollowThread(channelId, rootMessageId);
   const unfollowThread = useUnfollowThread(channelId, rootMessageId);
@@ -205,11 +205,11 @@ export function ThreadPanel({
   // invalidate, or an around-reply jump — leaves `selection.selected`
   // holding rows that are no longer in view. ChannelView gets this for free
   // from `useMessageSelection`'s `windowResetVersion`; the cluster needs the
-  // same signal (Cindy `0f9d2ba` re-review blocker). Detect replacement by
-  // the window's top-row identity vanishing from the new window. We
-  // deliberately do NOT update the ref across a transient empty window
-  // (`resetToLatest` clears the cache to [] before the tail refetch lands),
-  // so the pre-reset top is still remembered when the fresh window arrives.
+  // same signal. Detect replacement by the window's top-row identity vanishing
+  // from the new window. We deliberately do NOT update the ref across a
+  // transient empty window (`resetToLatest` clears the cache to [] before the
+  // tail refetch lands), so the pre-reset top is still remembered when the
+  // fresh window arrives.
   const prevTopIdRef = useRef<string | null>(null);
   useEffect(() => {
     const topId = messages[0]?.id ?? null;
@@ -341,11 +341,11 @@ export function ThreadPanel({
   }
 
   // Issue a mark-read to `seq`: forward-only, once per seq. `lastMarkedSeqRef`
-  // advances on mutation SUCCESS only (Cindy bar #2 — a pending/failed mark must
-  // not look cleared locally while the server cursor hasn't moved); the
-  // in-flight guard collapses re-fires while one is pending; on error the cursor
-  // is untouched so the next trigger retries. Human-attention only — writes the
-  // viewer's read cursor, never delivery/wake.
+  // advances on mutation SUCCESS only — a pending/failed mark must not look
+  // cleared locally while the server cursor hasn't moved. The in-flight guard
+  // collapses re-fires while one is pending; on error the cursor is untouched so
+  // the next trigger retries. Human-attention only — writes the viewer's read
+  // cursor, never delivery/wake.
   const markThreadReadMutate = markThreadRead.mutate;
   const issueMarkRead = useCallback(
     (seq: number, onMarked?: () => void) => {
@@ -684,8 +684,8 @@ export function ThreadPanel({
               // MUST render it even though `jumpPrimePending` is still true — the
               // controller keeps prime pending until the VISUAL locate/flash
               // finishes, and hiding the messages would starve that locate of its
-              // DOM node, timing the jump out with first-unread locate failed
-              // (§9.10, Cindy). `threadClusterShowsLoader` encodes this.
+              // DOM node, timing the jump out with first-unread locate failed.
+              // `threadClusterShowsLoader` encodes this.
               <div className="flex flex-1 items-center justify-center text-text-muted">
                 <Loader2 className="size-4 animate-spin" />
               </div>

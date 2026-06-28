@@ -1,9 +1,9 @@
 # Thread Unread — per-stream read cursor (v1)
 
-Status: **implemented (backend)**（#task:1226；**dogfood 暴露的 unread 读模型重构见 §4.2,为权威**）。
+Status: **implemented (backend)**（#task:1226；**unread 读模型重构见 §4.2,为权威**）。
 本 doc 是 #1226 的 canonical 规范；与代码冲突时以本 doc 为准直至代码修正。**Activity/Inbox 是独立后续(`notes`/单独 task),不在本 doc 范围**——本 doc 只交付 per-stream read cursor 底座 + thread 未读三表面。
 
-> **重构提要(§4.2 为权威):** dogfood 暴露两个 bug——(a) reply chip「N new」在 has-summary 活跃 thread 收 reply 后不刷新;(b) 打开中的 thread panel 收新 reply 不清未读、要关闭重开才清。根因 = **per-viewer 未读是服务端计分的事实,却被塞进乐观补丁的消息窗口缓存里**(`reply_summaries_by_root` / `ThreadSummary` 行级 unread 字段),两处缓存各自漂移。修正 = 把未读抽成**单一 per-conversation per-viewer 未读读模型**(`GET /api/conversations/:id/unread`),chip + Threads list 都读它、只由 `unread_updated` WS 刷新;并把 mark-read 改成 **visible-gated**(打开快照 + panel 打开且 pinned-at-tail 时推进到可见 reply seq)。**§4 中「ReplyBadgeSummary/ThreadSummary 行级带 unread」的旧描述已被 §4.2 取代。**
+> **重构提要(§4.2 为权威):** 两个 bug 暴露了错误边界——(a) reply chip「N new」在 has-summary 活跃 thread 收 reply 后不刷新;(b) 打开中的 thread panel 收新 reply 不清未读、要关闭重开才清。根因 = **per-viewer 未读是服务端计分的事实,却被塞进乐观补丁的消息窗口缓存里**(`reply_summaries_by_root` / `ThreadSummary` 行级 unread 字段),两处缓存各自漂移。修正 = 把未读抽成**单一 per-conversation per-viewer 未读读模型**(`GET /api/conversations/:id/unread`),chip + Threads list 都读它、只由 `unread_updated` WS 刷新;并把 mark-read 改成 **visible-gated**(打开快照 + panel 打开且 pinned-at-tail 时推进到可见 reply seq)。**§4 中「ReplyBadgeSummary/ThreadSummary 行级带 unread」的旧描述已被 §4.2 取代。**
 
 > **退役提要(#task:1231/#1232):cursor 写口径已收口到 `observe()`。** 本 doc §3.4 / §5 / §6 原以专用
 > mark-read route(`/api/channels/:id/mark-read`,handler `markConversationRead`)+ schema `MarkConversationReadInputSchema`
