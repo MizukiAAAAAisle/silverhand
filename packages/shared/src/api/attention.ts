@@ -73,10 +73,10 @@ export type ActivitySalience = (typeof ACTIVITY_SALIENCES)[number];
  *   - `agent_failed` = an `agent_start_failed` notification (the viewer's agent).
  *   - `unread`       = a positional stream's ambient/DM unread aggregate.
  *
- * NOTE — there is no `task` kind in v1 (shiki 2026-06-26). A standing
- * `in_review && member` projection of task state mirrored the task panel as a
- * permanent, non-eliminable item; tasks belong in the task panel. A task source
- * re-enters Activity only when it is event-shaped & notification-backed
+ * NOTE — there is no `task` kind in v1. A standing `in_review && member`
+ * projection of task state mirrored the task panel as a permanent,
+ * non-eliminable item; tasks belong in the task panel. A task source re-enters
+ * Activity only when it is event-shaped & notification-backed
  * (`task_needs_review`), read-cleared like a mention — see
  * docs/activity-lifecycle-v1.md §5.1 (v2).
  */
@@ -88,9 +88,8 @@ export const ACTIVITY_ITEM_KINDS = [
 export type ActivityItemKind = (typeof ACTIVITY_ITEM_KINDS)[number];
 
 /**
- * Display-only identity of the author of an item's `preview` message
- * (#task:1227, shiki 2026-06-26 — row 3 `<sender avatar> <display_name>: …`).
- * Server-resolved from the anchor message in `listActivity` so the GLOBAL
+ * Display-only identity of the author of an item's `preview` message. The
+ * server resolves it from the anchor message in `listActivity` so the GLOBAL
  * cross-workspace list never client-stitches a sender from a per-workspace
  * member cache (which it does not have). `avatar_url` is the same relative,
  * cache-busted path baked into `UserDto`/`AgentDto` — the renderer resolves it

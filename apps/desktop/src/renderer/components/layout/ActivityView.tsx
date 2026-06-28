@@ -28,18 +28,15 @@ import type { MessageJumpTarget } from '@/features/channels/useMessageJumpContro
  * renderer renders it AS-IS and never re-scores; the three filter chips slice it
  * purely client-side.
  *
- * v1 UI scope = GLOBAL (shiki 2026-06-25): one list spanning every workspace.
- * Each row is a LIST CARD in the Saved-item visual language (shiki dogfood
- * 2026-06-25 `VJMoYpK3`) — NOT an alert feed: no left icon box, no left
- * salience rail, items spaced apart, themed border, forza6 poster hover via the
- * shared `data-list-row` hook. Salience is carried by the two sections
+ * v1 UI scope = GLOBAL: one list spanning every workspace. Each row is a LIST
+ * CARD in the Saved-item visual language — NOT an alert feed: no left icon box,
+ * no left salience rail, items spaced apart, themed border, forza6 poster hover
+ * via the shared `data-list-row` hook. Salience is carried by the two sections
  * (Requires attention / Subscribed), not by a per-row border. Location reads
- * through real identity icons on the where-line (workspace + channel), not a
- * left icon box.
+ * through real identity icons on the where-line (workspace + channel).
  *
- * Row structure is SOURCE-FIRST (server-resolved fields only, #task:1227
- * `c86bb89` — never a client-stitched message cache), now ICON-LED so location
- * reads at a glance (shiki 2026-06-26):
+ * Row structure is SOURCE-FIRST (server-resolved fields only; never a
+ * client-stitched message cache), now ICON-LED so location reads at a glance:
  *   - row 1 = WHERE: workspace icon + name · channel icon + conversation `title`.
  *     The icons are the canonical identity primitives (`WorkspaceIcon`; `Hash`
  *     with the `data-channel-icon` theme hook), NOT raw glyphs — so forza6 paints
@@ -51,7 +48,7 @@ import type { MessageJumpTarget } from '@/features/channels/useMessageJumpContro
  *   - row 3 = THREAD reply: `preview` (the triggering reply), shown only when
  *     row 2 already carries the thread root summary. The sender (avatar +
  *     display_name) lands here once the backend resolves `preview_sender` on the
- *     anchor message (additive DTO field, #task:1227 — Cindy contract).
+ *     anchor message (additive DTO field).
  *
  * Clearing (§5.3 source_ref-out) — by EXPLICIT fields, never by parsing `id`,
  * and routed through one chokepoint (`activityItemSource`):
@@ -64,7 +61,7 @@ import type { MessageJumpTarget } from '@/features/channels/useMessageJumpContro
  *   dismiss into a stream clear). Navigating to a source still clears it too
  *   (directed on click; ambient via open-time mark-read).
  *
- * `kind=task` is intentionally NOT in Activity v1 (#task:1227, shiki 2026-06-26):
+ * `kind=task` is intentionally NOT in Activity v1:
  * an `in_review && member` projection is a standing mirror of the task panel's
  * In-review column, not a transient attention event — it has no other home only
  * mentions/unread do, so tasks stay in the task panel. Task re-enters Activity in
@@ -82,8 +79,8 @@ const FILTERS: { key: FilterKey; label: string }[] = [
 
 /** Namespaced key for a sender's avatar object-url map. `preview_sender`'s
  *  identity is `{kind, id}` — users and agents are separate tables, so a bare
- *  `id` could collide and cross-wire two avatars (Cindy review). Runtime lookup
- *  in `agentsById` still uses the raw agent id (that map is agent-only). */
+ *  `id` could collide and cross-wire two avatars. Runtime lookup in
+ *  `agentsById` still uses the raw agent id (that map is agent-only). */
 function senderKey(s: { kind: 'user' | 'agent'; id: string }): string {
   return `${s.kind}:${s.id}`;
 }
@@ -124,7 +121,7 @@ function ChannelGlyph({ item }: { item: ActivityItemDto }): JSX.Element {
 
 /** The sender's avatar for a message line. The DTO gives a resolved
  *  `{kind, id, display_name, avatar_url}`; the renderer only picks the avatar
- *  component by `kind` and never re-infers identity (Cindy contract):
+ *  component by `kind` and never re-infers identity:
  *    - an uploaded avatar (`avatar_url` → resolved object URL) renders as the
  *      image in either component (both are square, object-cover).
  *    - no image → user falls back to the neutral person glyph; an agent falls
@@ -159,11 +156,11 @@ function SenderAvatar({
   );
 }
 
-/** A message line in the shape shiki asked for (2026-06-26):
- *  `<avatar> <display_name>: <content>`. The sender prefix is shown only when
- *  `sender` is present (NULL for `agent_failed` / system) — then the line is
- *  just the content. The name is body-scale + muted (a subordinate label, never
- *  a heading) so it doesn't steal the content's role as subject (shiki 2026-06-26). */
+/** A source message line: `<avatar> <display_name>: <content>`. The sender
+ *  prefix is shown only when `sender` is present (NULL for `agent_failed` /
+ *  system) — then the line is just the content. The name is body-scale + muted
+ *  (a subordinate label, never a heading) so it doesn't steal the content's role
+ *  as subject. */
 function SenderMessageLine({
   sender,
   objectUrl,
@@ -249,15 +246,15 @@ export function ActivityView({
   // avatar components never fetch — PR-2). Keyed off the FULL list so a filter
   // switch doesn't tear down + refetch; the hook is generic over
   // {id, avatar_url} and serves both user and agent senders. display_name is
-  // server-guaranteed non-empty (#task:1227, Alice `2a83974`), so the fallback
-  // glyph path only ever lacks an IMAGE, never a label.
+  // server-guaranteed non-empty, so the fallback glyph path only ever lacks an
+  // IMAGE, never a label.
   const senderSources = useMemo(
     () =>
       items
         .map(it => it.preview_sender)
         .filter((s): s is ActivityPreviewSender => s != null)
         // Namespace the key by {kind, id} so a user/agent id collision can't
-        // cross-wire avatars (Cindy review). The hook keys its result map by the
+        // cross-wire avatars. The hook keys its result map by the
         // `id` we pass, so we pass the namespaced key here AND look up by it.
         .map(s => ({ id: senderKey(s), avatar_url: s.avatar_url })),
     [items],
@@ -267,8 +264,8 @@ export function ActivityView({
   // DM workspace icons resolve through the SAME canonical `WorkspaceIcon` as the
   // rail / search / archived surfaces — so their uploaded agent avatars must be
   // resolved too, else the DM branch silently degrades to the runtime brand and
-  // Activity becomes the only half-canonical surface (Cindy review). Batched
-  // over the stable DM-agent set, mirroring `Sidebar`'s `dmAvatarSources`.
+  // Activity becomes the only half-canonical surface. Batched over the stable
+  // DM-agent set, mirroring `Sidebar`'s `dmAvatarSources`.
   const dmAvatarSources = useMemo<AgentAvatarSource[]>(() => {
     const out: AgentAvatarSource[] = [];
     for (const ref of workspaceRefById.values()) {
@@ -373,8 +370,8 @@ export function ActivityView({
         {isLoading ? (
           <div className="text-sm text-text-muted">Loading…</div>
         ) : isError ? (
-          // Distinct from the empty state — a failed load must not read as
-          // "nothing needs you" (Cindy review).
+          // Distinct from the empty state — a failed load must not read as an
+          // empty queue.
           <div className="flex flex-col items-center gap-1.5 py-16 text-center">
             <span className="font-serif text-base font-semibold text-text-secondary">
               Couldn't load Activity
@@ -390,8 +387,8 @@ export function ActivityView({
               </span>
             </div>
           ) : (
-            // Items exist but the active filter excludes them — say so rather
-            // than implying the queue is empty (Cindy review).
+            // Items exist but the active filter excludes them; don't imply the
+            // whole queue is empty.
             <div className="flex flex-col items-center gap-1.5 py-16 text-center">
               <span className="font-serif text-base font-semibold text-text-secondary">
                 No {FILTERS.find(f => f.key === filter)?.label.toLowerCase()}
@@ -568,10 +565,9 @@ function ActivityRow({
       >
         <div className="min-w-0 flex-1">
           {/* row 1 — WHERE: workspace icon + name · channel icon + title.
-              Icon-led location (shiki 2026-06-26): the canonical identity
-              primitives (themed `WorkspaceIcon` + `data-channel-icon` `#`)
-              replace the old type text label — real icons read at a glance and
-              forza6 repaints them as its posters. */}
+              Canonical identity primitives (themed `WorkspaceIcon` +
+              `data-channel-icon` `#`) replace the old type text label; forza6
+              repaints them as its posters. */}
           <div className="flex min-w-0 items-center gap-1.5 text-xs text-text-muted">
             {workspace ? (
               <>
@@ -594,14 +590,14 @@ function ActivityRow({
               {item.title}
             </span>
             {/* "N new" is item-level aggregate META about the stream, not body
-                content — it rides the header line (shiki 2026-06-26), so the
-                message line below only ever carries content. */}
+                content, so it rides the header line and leaves the message line
+                below for content only. */}
             {countEl}
           </div>
 
           {/* row 2 — thread root summary (thread glyph marks it as the root
-              message, shiki 2026-06-26), OR the triggering message line with its
-              sender when there is no separate root. */}
+              message), OR the triggering message line with its sender when
+              there is no separate root. */}
           {hasRootLine ? (
             <div className="mt-1 flex items-center gap-2">
               <MessagesSquare
@@ -621,9 +617,8 @@ function ActivityRow({
             />
           )}
 
-          {/* row 3 — the thread REPLY (`preview`) with its sender, shown only
-              when row 2 already carries the thread root summary (shiki's
-              `<sender>: <msg_content>` line). */}
+          {/* row 3 — the thread reply (`preview`) with its sender, shown only
+              when row 2 already carries the thread root summary. */}
           {hasRootLine ? (
             <SenderMessageLine
               sender={sender}

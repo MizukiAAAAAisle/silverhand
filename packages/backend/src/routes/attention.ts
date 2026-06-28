@@ -2,8 +2,8 @@
 // read-side context that projects the human's "queue waiting on me"; the
 // user-facing surface is called Activity. v1 (②a) exposes the ONE write-side
 // aggregate Attention owns: the per-(viewer, channel) ambient preference (the
-// channel `所有消息 / 仅提及` control). The Activity list query (`listActivity`,
-// ②c) will mount here too, once #1226's per-stream cursor is dogfood-stable.
+// channel `所有消息 / 仅提及` control). The Activity list query (`listActivity`)
+// and the source-routed read elimination endpoint (`observe`) also mount here.
 //
 // Auth/principal is inherited from the parent api app middleware.
 import { Hono } from 'hono';

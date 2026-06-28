@@ -95,8 +95,8 @@ export function useSetChannelAttentionPreference(channelId: string | null) {
       // adds/removes this channel's ambient items from the Activity list —
       // invalidate the (global) activity query so the list reflects the new
       // eligibility immediately, not on the next unrelated unread/notification/
-      // task event (Cindy review). Backend treats this as client-driven
-      // invalidation (no `unread_updated` is emitted for a pref change).
+      // task event. Backend treats this as client-driven invalidation (no
+      // `unread_updated` is emitted for a pref change).
       void qc.invalidateQueries({ queryKey: ['activity'] });
     },
   });
@@ -112,7 +112,7 @@ export const activityKey = () => ['activity', 'all'] as const;
 /**
  * The viewer's GLOBAL Activity list (`GET /api/activity` with NO `workspace_id`,
  * #task:1227 §9.2). v1 UI scope = global (the user's single attention inbox
- * across all workspaces — shiki 2026-06-25). The server returns it fully
+ * across all workspaces). The server returns it fully
  * `enter()`-filtered (§6), per-(viewer,message) de-duped (§7) and salience-sorted
  * (§13.2) — the renderer renders it as-is and NEVER re-scores. The three filter
  * chips slice this purely client-side on `kind` / `thread_root_id`.
@@ -123,10 +123,10 @@ export const activityKey = () => ['activity', 'all'] as const;
  *   - positional unread (cursor read-model) → viewer-scoped `unread_updated`
  *   - directed notifications (@me / agent-fail) → viewer-scoped `notification`
  *
- * `kind=task` is intentionally OUT of Activity v1 (#task:1227, shiki 2026-06-26 —
- * a status mirror, not an event), so there is NO `task_changed` subscription: one
- * `viewer:<id>` subscription covers both live sources. Task re-enters in v2 only
- * via a notification-backed `task_needs_review`, which already rides the
+ * `kind=task` is intentionally OUT of Activity v1 (#task:1227: a status mirror,
+ * not an event), so there is NO `task_changed` subscription: one `viewer:<id>`
+ * subscription covers both live sources. Task re-enters in v2 only via a
+ * notification-backed `task_needs_review`, which already rides the
  * `notification` source above.
  */
 export function useActivity() {
@@ -187,8 +187,8 @@ export function useClearActivityItem() {
  * "Mark all read"). Each item is routed through {@link activityItemSource}, so
  * directed items clear by `notification_id` and ambient items by an explicit
  * stream-head clear — a Mark-all NEVER converts a directed dismiss into a stream
- * clear (Cindy phase-B contract). The whole batch is one `observe()` call (one
- * server transaction); an empty batch is a no-op.
+ * clear. The whole batch is one `observe()` call (one server transaction); an
+ * empty batch is a no-op.
  *
  * The caller passes the items to clear (today: the currently-visible/filtered
  * list, so "Mark all read" clears what the user is looking at and never a hidden,

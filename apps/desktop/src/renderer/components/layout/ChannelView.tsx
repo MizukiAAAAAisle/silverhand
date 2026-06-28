@@ -145,10 +145,9 @@ interface ChannelViewProps {
    *  icon language), title, member strip, and on the right `Open in conversation`
    *  + close. All management/structural controls (settings/archive-rename,
    *  channel attention pref, threads-list toggle, fullscreen, agent restart/stop,
-   *  add-member) are suppressed: those belong in the original conversation (shiki
-   *  + Cindy + Alice, 2026-06-25). The message stream below is the same live,
-   *  working surface — only the chrome changes, so this is a header variant, not
-   *  a forked component. */
+   *  add-member) are suppressed: those belong in the original conversation. The
+   *  message stream below is the same live, working surface — only the chrome
+   *  changes, so this is a header variant, not a forked component. */
   sourceViewer?: boolean;
   /** "View in channel" handler — for thread panes, jumps the parent
    *  pane to the original anchor message. Receives the original
@@ -746,11 +745,10 @@ function MemberStrip({
     });
   }, [membersResult, viewerUserId]);
 
-  // Resolve avatars for the human members so HumanMemberChip can render
-  // real images instead of letter placeholders (multi-human audit
-  // 2026-06-03 #task:857 P0.8). Prefer the conversation member's
-  // denormalized avatar URL, and fall back to the global users directory
-  // for older responses while mixed builds are still possible.
+  // Resolve avatars for the human members so HumanMemberChip can render real
+  // images instead of letter placeholders. Prefer the conversation member's
+  // denormalized avatar URL, and fall back to the global users directory for
+  // older responses while mixed builds are still possible.
   const usersById = useUsersById();
   const humanAvatarSources = useMemo(
     () =>
@@ -845,11 +843,10 @@ function MemberStrip({
 
 /**
  * Human chip — same footprint as the agent chip (24px square). Renders
- * the human's actual avatar when the parent has resolved one (multi-human
- * audit 2026-06-03 #task:857 P0.8) and falls back to the display-name
- * initial when no avatar is available yet. Hover popover mirrors
- * `HumanMention`'s content so inline `@handle` mentions and header chips
- * read the same.
+ * the human's actual avatar when the parent has resolved one and falls back to
+ * the display-name initial when no avatar is available yet. Hover popover
+ * mirrors `HumanMention`'s content so inline `@handle` mentions and header
+ * chips read the same.
  */
 function HumanMemberChip({
   human,
@@ -1060,7 +1057,7 @@ function MessageList({
   onOpenChannelRef?: (channelId: string) => void;
   /** Whether the viewer may react in this channel — false when closed or
    *  archived. Threaded down to each MessageItem so the reaction write
-   *  affordances hide in a read-only channel (#task:1122 dogfood). */
+   *  affordances hide in a read-only channel. */
   canReact: boolean;
 }): JSX.Element {
   // Render context (lookup maps + sigil resolution + resolved viewer)

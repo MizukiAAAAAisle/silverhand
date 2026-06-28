@@ -385,12 +385,12 @@ export function ThreadPanel({
   // OPEN-TIME mark (read-to-clear the whole opened thread): advance to the
   // open-time stream head, gated by `threadMarkReadSnapshot` to THIS open's
   // fresh window fetch. The once-guard `markedForOpenRef` is armed on mutation
-  // SUCCESS only (Cindy review) — NOT optimistically — so a failed open-time
-  // mark stays retryable: `issueMarkRead` is forward-only + in-flight-guarded,
-  // so re-running this effect while the mark is pending is a no-op, and on
-  // failure the guard is never armed, so the next dep change (a new reply bumps
-  // `streamHeadSeq`, a refetch bumps `windowFetchSucceededAt`) retries. The
-  // visible-live effect below independently covers the pinned-tail case.
+  // SUCCESS only — NOT optimistically — so a failed open-time mark stays
+  // retryable: `issueMarkRead` is forward-only + in-flight-guarded, so re-running
+  // this effect while the mark is pending is a no-op, and on failure the guard
+  // is never armed, so the next dep change (a new reply bumps `streamHeadSeq`, a
+  // refetch bumps `windowFetchSucceededAt`) retries. The visible-live effect
+  // below independently covers the pinned-tail case.
   useEffect(() => {
     if (markedForOpenRef.current) return;
     const snapshot = threadMarkReadSnapshot({
@@ -413,14 +413,14 @@ export function ThreadPanel({
     issueMarkRead,
   ]);
 
-  // Document visibility as REACTIVE state (#task:1226, Cindy review). The
-  // live-mark gate reads visibility, but `document.hidden` read inline isn't
-  // reactive — `visibilitychange` fires no React render. Without this, a reply
-  // that arrives while the app is backgrounded correctly stays unread, but when
-  // the user returns to the foreground (pinned at the tail, reply now on
-  // screen) nothing re-runs the gate, so it lingers unread until the next
-  // message/scroll/reopen. Mirroring visibility into state makes the return-to-
-  // visible transition a dependency that re-fires the live-mark effect.
+  // Document visibility as REACTIVE state. The live-mark gate reads visibility,
+  // but `document.hidden` read inline isn't reactive — `visibilitychange` fires
+  // no React render. Without this, a reply that arrives while the app is
+  // backgrounded correctly stays unread, but when the user returns to the
+  // foreground (pinned at the tail, reply now on screen) nothing re-runs the
+  // gate, so it lingers unread until the next message/scroll/reopen. Mirroring
+  // visibility into state makes the return-to-visible transition a dependency
+  // that re-fires the live-mark effect.
   const [documentVisible, setDocumentVisible] = useState(
     () => !document.hidden,
   );
@@ -431,13 +431,13 @@ export function ThreadPanel({
       document.removeEventListener('visibilitychange', onVisibility);
   }, []);
 
-  // VISIBLE-LIVE mark (#task:1226 — shiki dogfood): a reply arriving while the
-  // panel is open + watched should clear unread without a close/reopen. Follow
-  // the read cursor to the newest reply ONLY while pinned at the tail (it's on
-  // screen) AND the window is visible — never swallowing an unrendered tail
-  // (scrolled up) or a backgrounded panel. `threadLiveMarkReadSeq` is the pure
-  // gate; debounced so a burst of replies collapses to one mark at the latest
-  // visible seq (max-VISIBLE, not latest-known — `messages` is the loaded
+  // VISIBLE-LIVE mark: a reply arriving while the panel is open + watched should
+  // clear unread without a close/reopen. Follow the read cursor to the newest
+  // reply ONLY while pinned at the tail (it's on screen) AND the window is
+  // visible — never swallowing an unrendered tail (scrolled up) or a
+  // backgrounded panel. `threadLiveMarkReadSeq` is the pure gate; debounced so a
+  // burst of replies collapses to one mark at the latest visible seq
+  // (max-VISIBLE, not latest-known — `messages` is the loaded
   // window). `lastMarkedSeqRef` (advanced on success) keeps it forward-only.
   // `documentVisible` is a dep so returning to the foreground re-runs the gate.
   const maxLoadedSeq = messages.length

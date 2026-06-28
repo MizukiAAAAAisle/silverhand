@@ -6,8 +6,8 @@
 // on each read. Dependency direction is one-way: routes → read-model. Nothing
 // in this file writes.
 //
-// NOTE — `kind=task` is intentionally NOT projected in v1 (shiki 2026-06-26).
-// An `in_review && member` projection of `messages.task_*` mirrored the task
+// NOTE — `kind=task` is intentionally NOT projected in v1. An
+// `in_review && member` projection of `messages.task_*` mirrored the task
 // panel's In-review column as a permanent, non-eliminable Activity item (its
 // only clearance was `task_status`, never observation) — a standing duplicate
 // of another bounded context's inventory, the one Activity kind that wasn't a
@@ -45,10 +45,10 @@ import {
 
 export interface ListActivityParams {
   viewerUserId: string;
-  /** Optional workspace filter. The data model is global and so is the v1
-   *  Activity UI (shiki 2026-06-25: "用户所有要关注的入口") — it calls with NO
-   *  filter. This param stays as an opt-in scope for callers that want one
-   *  workspace; absent = every workspace the viewer can see. */
+  /** Optional workspace filter. The data model and v1 Activity UI are global,
+   *  so the normal caller omits this filter. This param stays as an opt-in
+   *  scope for callers that want one workspace; absent = every workspace the
+   *  viewer can see. */
   workspaceId?: string;
 }
 

@@ -27,14 +27,14 @@ export function postObserve(sources: ObserveSource[]): Promise<ObserveDto> {
 // the only `stream_head` builder here hardcodes `thread_root_id: null`. So no
 // AUTO caller can emit thread+`stream_head`. (Phase B adds an EXPLICIT builder,
 // `explicitStreamClearHead(conv, root|null)`, that knowingly tail-swallows and
-// MAY carry a thread root; the backend already permits it (`9c8c9aa`). The guard
-// is per-builder intent, never a blanket renderer-wide ban on thread+stream_head.)
+// MAY carry a thread root; the backend permits it. The guard is per-builder
+// intent, never a blanket renderer-wide ban on thread+stream_head.)
 
 /** Build an AUTO-path stream clear pinned to a resolved position (thread
  *  open-time snapshot head / visible-live seq; or a channel with a held
  *  snapshot). The AUTO / thread mark-read path only ever emits `at_seq` — this
  *  builder is how that caller intent is enforced, independent of any endpoint
- *  rule (the backend no longer rejects thread + `stream_head`, `9c8c9aa`). */
+ *  rule (the backend no longer rejects thread + `stream_head`). */
 export function streamSourceAtSeq(
   conversationId: string,
   threadRootId: string | null,
@@ -75,9 +75,8 @@ export function notificationSource(notificationId: string): ObserveSource {
  *
  *  UNLIKE `streamSourceAtSeq` / `mainlineStreamSourceHead`, this MAY carry a
  *  thread root: §9.10 guards the caller-INTENT axis (auto pins at_seq), not the
- *  stream-shape axis, so an EXPLICIT thread clear is legal (shiki 2026-06-27;
- *  backend permits it since `9c8c9aa`). Reserved for explicit user clears ONLY —
- *  an AUTO path must never reach this builder. */
+ *  stream-shape axis, so an EXPLICIT thread clear is legal. Reserved for
+ *  explicit user clears ONLY — an AUTO path must never reach this builder. */
 export function explicitStreamClearHead(
   conversationId: string,
   threadRootId: string | null,
@@ -102,7 +101,7 @@ export function explicitStreamClearHead(
  * still eliminates via the STREAM CURSOR, never a notification. Branching on
  * salience would route DM unread to the notification path, find no
  * `notification_id`, and silently drop the most attention-worthy unread from both
- * hover-✓ and Mark-all (Cindy phase-B blocker). So:
+ * hover-✓ and Mark-all. So:
  *   - `mention` / `agent_failed` → by `notification_id` (a directed dismiss sets
  *     that one notification's `read_at`; it never reverse-advances a cursor, §3).
  *   - `unread` (mainline, thread, OR DM) → an EXPLICIT stream clear to head
