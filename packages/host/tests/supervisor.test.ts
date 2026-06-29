@@ -3676,7 +3676,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     }
   });
 
-  it('does not infer a thread default from mixed or observe-only deliveries', async () => {
+  it('bare send resolver uses the same delivery stream as the rendered target header', async () => {
     const { supervisor } = makeSupervisor();
     const postedBodies: Record<string, unknown>[] = [];
     vi.stubGlobal(
@@ -3684,11 +3684,18 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       vi.fn(async (_url: string, init?: RequestInit) => {
         const parsedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
         postedBodies.push(parsedBody);
+        const target = parsedBody['target'];
         return new Response(
           JSON.stringify({
             message_id: `m${60 + postedBodies.length}`,
             message_seq: 60 + postedBodies.length,
-            thread_root_id: null,
+            thread_root_id:
+              target &&
+              typeof target === 'object' &&
+              'kind' in target &&
+              target.kind === 'thread'
+                ? 'mRoot'
+                : null,
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
@@ -3724,11 +3731,12 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       await supervisor.agentMessageSend({
         conversation_id: 'c1',
         agent_id: 'a1',
-        content: 'mixed batch defaults to main',
+        content: 'mixed batch uses the single thread header target',
       });
       expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
-      expect(postedBodies[0]?.['target']).toEqual({ kind: 'channel' });
-      expect(postedBodies[0]?.['stream_key']).toBe('main');
+      expect(postedBodies[0]?.['target']).toEqual({ kind: 'thread', message_id: 'm51' });
+      expect(postedBodies[0]?.['stream_key']).toBe('thread:mRoot');
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(51);
 
       await supervisor.stop({
         conversation_id: 'c1',
@@ -3764,6 +3772,95 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
       expect(postedBodies[0]?.['target']).toEqual({ kind: 'channel' });
       expect(postedBodies[0]?.['stream_key']).toBe('main');
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('fails loud for a bare send when one turn receives two thread streams', async () => {
+    const { supervisor } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(
+          JSON.stringify({ message_id: 'unexpected', message_seq: 90 }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      await supervisor.wake({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [80, 81, 82],
+        kind: 'message',
+        text: 'two thread streams plus main',
+        delivered_up_to_seq: 82,
+        deliveries: [
+          {
+            delivery_id: 80,
+            message_id: 'mMain',
+            seq: 80,
+            thread_root_id: null,
+            delivery_kind: 'turn',
+          },
+          {
+            delivery_id: 81,
+            message_id: 'mA',
+            seq: 81,
+            thread_root_id: 'rootA',
+            delivery_kind: 'turn',
+          },
+          {
+            delivery_id: 82,
+            message_id: 'mB',
+            seq: 82,
+            thread_root_id: 'rootB',
+            delivery_kind: 'turn',
+          },
+        ],
+      });
+
+      const result = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'bare reply needs an explicit target',
+      });
+
+      expect(result).toMatchObject({ ok: false, status: 422 });
+      expect(postedBodies).toHaveLength(0);
+      if (!result.ok) {
+        const parsed = JSON.parse(result.body_text) as {
+          error?: { code?: string; message?: string; details?: Record<string, unknown> };
+        };
+        expect(parsed.error?.code).toBe('validation_error');
+        expect(parsed.error?.message).toContain('ambiguous default target');
+        expect(parsed.error?.details?.['subkind']).toBe('ambiguous_default_target');
+        expect(parsed.error?.details?.['candidate_targets']).toEqual([
+          'thread:rootA',
+          'thread:rootB',
+          'channel',
+        ]);
+      }
+
+      await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'explicit main-line escape hatch',
+        target: { kind: 'channel' },
+      });
+      expect(postedBodies).toHaveLength(1);
+      expect(postedBodies[0]?.['target']).toEqual({ kind: 'channel' });
+      expect(postedBodies[0]?.['stream_key']).toBe('main');
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(80);
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({

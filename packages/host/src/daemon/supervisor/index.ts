@@ -268,7 +268,54 @@ type EffectiveMessageTarget =
       messageId: string;
       source?: 'current_default' | 'pending_default';
     }
+  | { kind: 'ambiguous'; streamKeys: readonly string[] }
   | { kind: 'legacy'; target: AgentMessageSendParams['target'] };
+
+const CHANNEL_DEFAULT_REPLY_TARGET: DefaultReplyTarget = { kind: 'channel' };
+
+function uniqueSortedStreamKeys(streamKeys: readonly string[]): string[] {
+  return [...new Set(streamKeys)].sort();
+}
+
+function streamKeyToThreadRootId(streamKey: string): string | null {
+  return streamKey.startsWith('thread:') ? streamKey.slice('thread:'.length) : null;
+}
+
+function defaultReplyTargetStreamKeys(target: DefaultReplyTarget): string[] {
+  switch (target.kind) {
+    case 'thread':
+      return [target.streamKey];
+    case 'ambiguous':
+      return [...target.streamKeys];
+    case 'channel':
+      return [];
+  }
+}
+
+function ambiguousDefaultTargetErrorBody(
+  streamKeys: readonly string[],
+): string {
+  const candidateTargets = [
+    ...uniqueSortedStreamKeys(streamKeys).flatMap(streamKey => {
+      const root = streamKeyToThreadRootId(streamKey);
+      return root ? [`thread:${root}`] : [];
+    }),
+    'channel',
+  ];
+  return JSON.stringify({
+    error: {
+      code: 'validation_error',
+      message:
+        'bare message send has an ambiguous default target; rerun with an explicit --target',
+      details: {
+        subkind: 'ambiguous_default_target',
+        candidate_targets: candidateTargets,
+        hint:
+          'Use --target thread:<id> for one listed thread, or --target channel for the main line.',
+      },
+    },
+  });
+}
 
 /** The stream a message LIVES in — what its arrival/our own send
  *  advances as the observed boundary. `thread_root_id === null` ⇒ main
@@ -517,25 +564,37 @@ export class Supervisor implements SupervisorContract {
 
   private inferDefaultReplyTarget(
     deliveries: readonly RuntimeDelivery[] | undefined,
-  ): DefaultReplyTarget | null | undefined {
+  ): DefaultReplyTarget | undefined {
     if (!deliveries || deliveries.length === 0) return undefined;
-    let streamKey: string | null = null;
-    let latest: RuntimeDelivery | null = null;
+    const latestByThreadStream = new Map<string, RuntimeDelivery>();
+    let sawTurnDelivery = false;
     for (const delivery of deliveries) {
       if (delivery.delivery_kind !== 'turn') continue;
-      if (!delivery.thread_root_id) return null;
+      sawTurnDelivery = true;
+      if (!delivery.thread_root_id) continue;
       const deliveryStream = streamKeyForMessage(delivery.thread_root_id);
-      if (streamKey !== null && streamKey !== deliveryStream) return null;
-      streamKey = deliveryStream;
-      if (!latest || delivery.seq >= latest.seq) latest = delivery;
+      const current = latestByThreadStream.get(deliveryStream);
+      if (!current || delivery.seq >= current.seq) {
+        latestByThreadStream.set(deliveryStream, delivery);
+      }
     }
-    if (!latest || streamKey === null) return undefined;
-    return { messageId: latest.message_id, streamKey };
+    if (!sawTurnDelivery) return undefined;
+    if (latestByThreadStream.size === 0) return CHANNEL_DEFAULT_REPLY_TARGET;
+    if (latestByThreadStream.size > 1) {
+      return {
+        kind: 'ambiguous',
+        streamKeys: [...latestByThreadStream.keys()].sort(),
+      };
+    }
+    const first = latestByThreadStream.entries().next().value;
+    if (!first) return undefined;
+    const [streamKey, latest] = first;
+    return { kind: 'thread', messageId: latest.message_id, streamKey };
   }
 
   private mergePendingDefaultReplyTarget(
     handle: RuntimeHandle,
-    inferred: DefaultReplyTarget | null | undefined,
+    inferred: DefaultReplyTarget | undefined,
   ): void {
     if (inferred === undefined) return;
     const pending = handle.pendingDefaultReplyTarget;
@@ -543,12 +602,32 @@ export class Supervisor implements SupervisorContract {
       handle.pendingDefaultReplyTarget = inferred;
       return;
     }
-    if (pending === null || inferred === null) {
-      handle.pendingDefaultReplyTarget = null;
+    if (pending.kind === 'ambiguous' || inferred.kind === 'ambiguous') {
+      const streamKeys = [
+        ...defaultReplyTargetStreamKeys(pending),
+        ...defaultReplyTargetStreamKeys(inferred),
+      ];
+      handle.pendingDefaultReplyTarget =
+        streamKeys.length === 0
+          ? { kind: 'ambiguous', streamKeys: [] }
+          : { kind: 'ambiguous', streamKeys: uniqueSortedStreamKeys(streamKeys) };
+      return;
+    }
+    if (pending.kind === 'channel') {
+      handle.pendingDefaultReplyTarget = inferred;
+      return;
+    }
+    if (inferred.kind === 'channel') {
+      handle.pendingDefaultReplyTarget = pending;
       return;
     }
     handle.pendingDefaultReplyTarget =
-      pending.streamKey === inferred.streamKey ? inferred : null;
+      pending.streamKey === inferred.streamKey
+        ? inferred
+        : {
+            kind: 'ambiguous',
+            streamKeys: uniqueSortedStreamKeys([pending.streamKey, inferred.streamKey]),
+          };
   }
 
   private effectiveMessageTarget(
@@ -566,19 +645,32 @@ export class Supervisor implements SupervisorContract {
     }
     if (target !== undefined) return { kind: 'legacy', target };
     if (handle.pendingDefaultReplyTarget) {
+      if (handle.pendingDefaultReplyTarget.kind === 'ambiguous') {
+        return {
+          kind: 'ambiguous',
+          streamKeys: handle.pendingDefaultReplyTarget.streamKeys,
+        };
+      }
+      if (handle.pendingDefaultReplyTarget.kind === 'channel') {
+        return { kind: 'channel' };
+      }
       return {
         kind: 'thread',
         messageId: handle.pendingDefaultReplyTarget.messageId,
         source: 'pending_default',
       };
     }
-    return handle.defaultReplyTarget
-      ? {
-          kind: 'thread',
-          messageId: handle.defaultReplyTarget.messageId,
-          source: 'current_default',
-        }
-      : { kind: 'channel' };
+    if (handle.defaultReplyTarget.kind === 'ambiguous') {
+      return { kind: 'ambiguous', streamKeys: handle.defaultReplyTarget.streamKeys };
+    }
+    if (handle.defaultReplyTarget.kind === 'thread') {
+      return {
+        kind: 'thread',
+        messageId: handle.defaultReplyTarget.messageId,
+        source: 'current_default',
+      };
+    }
+    return { kind: 'channel' };
   }
 
   /**
@@ -599,7 +691,7 @@ export class Supervisor implements SupervisorContract {
   ): void {
     const inferredDefault = this.inferDefaultReplyTarget(deliveries);
     if (admitNow) {
-      handle.defaultReplyTarget = inferredDefault ?? null;
+      handle.defaultReplyTarget = inferredDefault ?? CHANNEL_DEFAULT_REPLY_TARGET;
       handle.pendingDefaultReplyTarget = undefined;
     } else {
       this.mergePendingDefaultReplyTarget(handle, inferredDefault);
@@ -731,6 +823,13 @@ export class Supervisor implements SupervisorContract {
     //    seen+stream_key so the backend skips freshness for this first-touch
     //    send instead of falsely stale-ing it.
     const effectiveTarget = this.effectiveMessageTarget(handle, params);
+    if (effectiveTarget.kind === 'ambiguous') {
+      return {
+        ok: false,
+        status: 422,
+        body_text: ambiguousDefaultTargetErrorBody(effectiveTarget.streamKeys),
+      };
+    }
     const threadTargetMessageId =
       effectiveTarget.kind === 'thread' ? effectiveTarget.messageId : undefined;
     const targetStreamKey = threadTargetMessageId
@@ -1182,7 +1281,7 @@ export class Supervisor implements SupervisorContract {
       observedSeqByStream: new Map(),
       pendingAdmissionSeqByStream: new Map(),
       replyTargetStreamByMessageId: new Map(),
-      defaultReplyTarget: null,
+      defaultReplyTarget: CHANNEL_DEFAULT_REPLY_TARGET,
       pendingDefaultReplyTarget: undefined,
       inputTurnActive: driver.oneShot && !!params.startup_delivery,
       pendingStaleEvent: null,
@@ -2777,7 +2876,7 @@ export class Supervisor implements SupervisorContract {
     handle.busy.outstandingToolUses = 0;
     handle.busy.compacting = false;
     handle.inputTurnActive = false;
-    handle.defaultReplyTarget = null;
+    handle.defaultReplyTarget = CHANNEL_DEFAULT_REPLY_TARGET;
     handle.pendingDefaultReplyTarget = undefined;
   }
 

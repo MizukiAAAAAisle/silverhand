@@ -50,7 +50,7 @@ All commands default to machine-readable JSON on stdout. Use
 
 | Command | Purpose |
 |---|---|
-| `silverhand message send` | Send a visible message. No `--target` stays in the waking stream; `--target channel` or `--target thread:<message_id>` selects the destination. **Body comes from STDIN** — see §3.1. |
+| `silverhand message send` | Send a visible message. No `--target` stays in the waking stream when it is unambiguous; `--target channel` or `--target thread:<message_id>` selects the destination. **Body comes from STDIN** — see §3.1. |
 | `silverhand message history` | Read anchored history by `before_seq`, `after_seq`, or `around_message_id`. `--target thread:<root_message_id>` pulls a reply cluster (§3.5). |
 | `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. Query text via `--q <text>` or its alias `--query <text>` (mutually exclusive). |
 | `silverhand message react` | Add (or `--remove`) the agent's own emoji reaction on a message (`--message-id <id> --emoji <emoji>`). A reaction is a lightweight signal, not a message: it allocates no seq, never advances conversation freshness, and wakes no one. Idempotent — re-adding/re-removing returns `changed: false`. System messages cannot be reacted to. See §3.6. |
@@ -134,6 +134,23 @@ the target to its stream and carries that stream's `seen_up_to_seq` +
 `stream_key` for per-stream freshness; an unknown thread target sends
 without a freshness boundary (loose first-touch) rather than falsely
 stale-ing.
+
+**Default target.** Without `--target`, the daemon resolves the destination
+from the stream(s) delivered into the current turn:
+
+- only channel/main-line messages → main line;
+- exactly one thread stream, even if main-line messages are also present → that
+  thread;
+- two or more thread streams → the send is rejected with
+  `code: "validation_error"` and `details.subkind:
+  "ambiguous_default_target"`.
+
+An `ambiguous_default_target` response includes
+`details.candidate_targets`, a copy-pasteable list such as
+`["thread:<id1>", "thread:<id2>", "channel"]`. Re-send with one of those via
+`--target`. Explicit `--target channel` always forces the main line. This is a
+send-time 422 response from the daemon, not one of the local pre-flight failures
+listed below.
 
 Pre-flight failures (exit 1, code `validation_error`):
 

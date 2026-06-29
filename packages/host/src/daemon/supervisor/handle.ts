@@ -89,10 +89,14 @@ export interface PendingStaleEvent {
   currentSeq: number;
 }
 
-export interface DefaultReplyTarget {
-  readonly messageId: string;
-  readonly streamKey: string;
-}
+export type DefaultReplyTarget =
+  | { readonly kind: 'channel' }
+  | {
+      readonly kind: 'thread';
+      readonly messageId: string;
+      readonly streamKey: string;
+    }
+  | { readonly kind: 'ambiguous'; readonly streamKeys: readonly string[] };
 
 export interface RuntimeHandle {
   readonly conversationId: string;
@@ -129,18 +133,16 @@ export interface RuntimeHandle {
    *  "unknown" — the send omits seen+stream_key (Case A loose). */
   replyTargetStreamByMessageId: Map<string, string>;
   /** Default stream for a bare `message send` in the CURRENT model turn.
-   *  `null` means main line / no thread default. Set only from admitted
-   *  turn deliveries whose stream is unambiguous; explicit CLI targets
-   *  still override it. */
-  defaultReplyTarget: DefaultReplyTarget | null;
+   *  Main line, one thread, and ambiguous multi-thread state are distinct:
+   *  `null` must never carry both "main" and "ambiguous" because ambiguous
+   *  bare sends must fail loud instead of silently falling back to main. */
+  defaultReplyTarget: DefaultReplyTarget;
   /** Same default inference for deliveries written mid-turn but not yet
    *  admitted as precedent. `undefined` means no pending turn delivery has
-   *  contributed a default; `null` means pending deliveries are main/mixed
-   *  and therefore intentionally have no thread default. An unambiguous
-   *  thread value may be used by a same-turn bare send as its target, but
-   *  seq admission still waits until either that send anchors the target
-   *  stream or the next turn boundary promotes it. */
-  pendingDefaultReplyTarget: DefaultReplyTarget | null | undefined;
+   *  contributed a default. A pending thread may be used by a same-turn bare
+   *  send as its target, but seq admission still waits until either that send
+   *  anchors the target stream or the next turn boundary promotes it. */
+  pendingDefaultReplyTarget: DefaultReplyTarget | undefined;
   /** True once an admitted input batch is expected to be driving the
    *  current model action. Cleared on turn_end/runtime resolution.
    *  This covers the pre-first-output window where runState is still

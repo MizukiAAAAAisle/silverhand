@@ -268,25 +268,33 @@ push、泄露 thread 内容**。
 > 首插、**并发首插(`seen=0` 第二条 → 0 changes → stale)**、CAS 成功、CAS stale、**`seen>0` 且 head 缺失 →
 > UPDATE 0 行 → stale(不误插)**;并断言 `conversations.latest_message_seq` 在 CAS miss 后已 rollback(无 burned seq)。
 
-### 6.5 默认 reply target(bare send 落哪条 stream;#task:1201 修复定档)
+### 6.5 默认 reply target(bare send 落哪条 stream;#task:1236 floor 定档)
 
-`silverhand message send` **无显式 `--target` / `--reply-to`** 时,默认落到**当前 turn 正在响应的那条 stream**——这是产品契约(对齐 platform prompt「reply in the stream the message arrived on」),不是实现细节。daemon 按以下顺序解析(`Supervisor.effectiveMessageTarget`):
+`silverhand message send` **无显式 `--target` / `--reply-to`** 时,默认落到当前 turn 正在响应的 stream。这个
+default 不是可变游标,而是从本 turn 的 `deliveries[]` 派生出来的三态:
 
-1. **unambiguous pending thread default**(优先):`pendingDefaultReplyTarget`——见下。
-2. 否则 **admitted 当前 turn thread default**:`defaultReplyTarget`。
-3. 都没有 → **main**。
+1. **0 个 thread turn delivery** → `channel`(main line)。
+2. **恰好 1 个 thread stream**(即使同批还有 main-line turn delivery) → 该 thread。main 是 ambient floor,
+   不与 thread 平级竞争。
+3. **2+ 个 thread streams** → `ambiguous`,bare send fail-loud,要求显式 `--target`。
 
-**default 的来源 = `inferDefaultReplyTarget(deliveries)`:** 仅看 `delivery_kind==='turn'` 的投递(`observe`
-不参与默认);**当且仅当**全部 turn 投递落在**同一个** thread(都带 `thread_root_id` 且一致)→ 该 thread 为默认;
-**任何一条 main-line(`thread_root_id=null`)turn 投递、或跨多 stream → 无 thread 默认 → main**(这就是
-"unambiguous" 的含义)。
+`observe` delivery 不参与 default 推断;它只推进 read/observed 边界。显式 `--target channel|thread:<id>` 或
+`--reply-to <id>` 永远覆盖 default,但只作用于**当前这次 send**,绝不能改写本 turn 的 bare-send default。
 
-**为何 pending 必须优先于 admitted(#task:1201 根因,load-bearing):** 一条 thread `turn` wake 若在 agent
+**同源不变量(header ≡ resolver ≡ candidate_targets):** backend 渲染给 agent 的 header `target=` 与 host
+default resolver 必须读同一个 delivery `thread_root_id` 来源。若 resolver 判定 ambiguous,错误里的
+`details.candidate_targets` 也必须由同一个 distinct thread stream 集生成,并追加 `channel` 逃生口。agent 从
+header 看到的流、daemon 会默认回复的流、以及 fail-loud 时可 copy 的候选必须永远一致。
+
+**ambiguous fail-loud 形状:** bare send 若命中 2+ thread streams,daemon 本地返回 HTTP-shaped result:
+`status=422`, `code="validation_error"`, `details.subkind="ambiguous_default_target"`,
+`details.candidate_targets=["thread:<id1>","thread:<id2>","channel"]`,并提示用显式 `--target` 重发。
+不可执行的 fail-loud 是 bug:候选必须能直接 copy 到 CLI。
+
+**pending 必须优先于 admitted(#task:1201 根因,load-bearing):** 一条 thread `turn` wake 若在 agent
 **已有 turn active** 时送达,会被 `wake_delivery_deferred`——只进 `pendingDefaultReplyTarget`,**不**在本 turn 内
-promote 成 `defaultReplyTarget`(promote 等到下个 turn 边界 `admitPendingSeqForNewTurn`)。旧实现 bare send 只读
-admitted default → 默认回 main(实测 bug:Judy 在 thread 里被回复,第一次 bare send 却落主线)。修复:读路径**先取**
-unambiguous pending、再退 admitted——pending 代表"本 turn 正在处理的触发消息",必须压过上一轮遗留的 admitted 默认
-(**不是** "admitted 空才退 pending",否则上一轮在别 thread admitted 的旧默认会盖掉当前 deferred trigger)。
+promote 成 `defaultReplyTarget`(promote 等到下个 turn 边界 `admitPendingSeqForNewTurn`)。读路径先取 pending,
+再退 admitted;pending 代表本 turn 的新触发流,必须压过上一轮遗留的 admitted default。
 
 **与 freshness 的耦合(否则次生 false-stale):** 默认落到一条 **pending(尚未 admitted)** thread stream 时,该
 stream 的 observed 还没推进到触发消息,直接用 `observedSeqByStream` 当 `seen_up_to_seq` 会被 §6.4 的 per-stream CAS
@@ -295,19 +303,21 @@ deferred 的触发消息算作已见。**这只是 send 时多读一眼 pending 
 时序不变**——default-target 与 freshness 两个关注点保持解耦,绝不提前 promote pending。
 
 **delivery metadata 必须穿透中途 queue(#task:1218 根因,load-bearing):** backend → daemon 的
-`deliveries[]` 是 observed boundary 的唯一 per-stream 权威;scalar `delivered_up_to_seq` 只是 legacy/diagnostic
-high-water,不能用来推进任意 stream。若 gated mid-turn queue 丢掉 `deliveries[]`,safe-boundary flush 会退回 scalar
-fallback,把 thread seq 写进 main observed boundary,随后 bare main send 会拿 `seen_up_to_seq > main head` 做 CAS,
-表现为 `current_seq` 倒退且 `newer_messages=[]` 的假 stale。因此 `RuntimeDeliveryCoordinator` 的 enqueue/flush
-路径必须原样保留每条 delivery 的 `thread_root_id`/`delivery_kind`。
+`deliveries[]` 是 observed boundary 与 default resolver 的唯一 per-stream 权威;scalar `delivered_up_to_seq` 只是
+legacy/diagnostic high-water,不能用来推进或推断任意 stream。若 gated mid-turn queue 丢掉 `deliveries[]`,
+safe-boundary flush 会退回 scalar fallback,把 thread seq 写进 main observed boundary,随后 bare main send 会拿
+`seen_up_to_seq > main head` 做 CAS,表现为 `current_seq` 倒退且 `newer_messages=[]` 的假 stale。因此
+`RuntimeDeliveryCoordinator` 的 enqueue/flush 路径必须原样保留每条 delivery 的
+`thread_root_id`/`delivery_kind`。
 
-**override:** 显式 `--target channel|thread:<id>` 或 `--reply-to <id>` 永远覆盖默认,但只作用于**当前这次
-send**;它绝不能改写本 turn 的 bare-send 默认流(否则"先显式回 thread A,再裸发本 turn 的 thread B"会被 re-home
-到 A)。
+**跨回合 sticky:** 若当前 turn 没有新的 turn delivery 贡献 default,daemon 可沿用 admitted default。任何时候要跳出
+thread default 回主线,用显式 `--target channel`。
 
-**测试钉死(`packages/host/tests/supervisor.test.ts`):** main turn active → thread wake deferred → bare send 默认回
-pending thread,且 `seen_up_to_seq` 用 pending seq;另一组钉 pending thread 压过 admitted 的另一个 thread;另一组钉显式
-target 只覆盖当前 send、不改写后续 bare-send default;另一组钉显式 main-line target 覆盖当前 thread 默认。
+**测试钉死(`packages/host/tests/supervisor.test.ts`):** `bare send resolver uses the same delivery stream as the
+rendered target header` 钉住 main+单 thread floor 与 header/resolver 同源;`fails loud for a bare send when one
+turn receives two thread streams` 钉住 `ambiguous_default_target` 与 `candidate_targets`;另有测试钉 pending thread
+优先、pending thread 压过 admitted 旧 thread、显式 target 只覆盖当前 send、不改写后续 bare-send default、显式
+main-line target 覆盖当前 thread default。
 
 ---
 
