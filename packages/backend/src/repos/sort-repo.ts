@@ -143,15 +143,19 @@ export class SortRepo {
    * the acting viewer (never global — the old pin cleared all viewers' ranks).
    * Recent-opened (last_accessed_at) is always preserved.
    *
-   * Manual `rank` is cleared ONLY when the star crosses a hard-group boundary,
-   * which depends on the list (#task:1252):
-   *   - channel sidebar (`channels:<ws>`) hard-partitions by star
-   *     (`unstarred ↔ starred`), so star/unstar moves the entity between groups
-   *     → its arranged position is dropped (falls to the new group's manual tail).
-   *   - the workspace rail (`workspaces`) partitions by KIND only; star is the
-   *     global Favorites overlay, NOT a rail group, so a starred workspace/DM
-   *     stays in its `dm`/`regular` group → rank is PRESERVED (clearing it would
-   *     silently corrupt the viewer's manual order of that kind group).
+   * HOME `rank` is ALWAYS preserved (#task:1252 exclusive). Star is now a MOVE:
+   * a starred entity LEAVES its home list (it surfaces only in the global
+   * Favorites/STARRED list) and re-enters on unstar. No home list hard-partitions
+   * by star anymore — the channel sidebar's old `unstarred ↔ starred` partition
+   * is gone (starred channels move to the global STARRED). So star never crosses a
+   * home hard group; the home rank is a harmless orphan while starred and is
+   * RESTORED to its arranged position when the entity returns home on unstar.
+   *
+   * The principle: `rank` is the viewer's deliberate placement in THAT list. Star
+   * is an involuntary home-hide (the intent is "add to favorites", not "drop my
+   * home order), so home placement stays the viewer's intent → preserved. The
+   * Favorites placement is the converse — see `clearFavoriteRank` (unstar is a
+   * voluntary favorites-removal, so its favorites rank is discarded).
    */
   setStarred(
     viewerUserId: string,
@@ -159,9 +163,6 @@ export class SortRepo {
     entityId: string,
     starred: boolean,
   ): void {
-    // Star crosses a hard group only where the list partitions by star — i.e.
-    // the channel sidebar, never the kind-partitioned workspace rail.
-    const crossesGroup = listKey.startsWith('channels:');
     if (starred) {
       const now = Date.now();
       this.db
@@ -170,19 +171,38 @@ export class SortRepo {
              (user_id, list_key, entity_id, rank, last_accessed_at, starred_at)
            VALUES (?, ?, ?, NULL, NULL, ?)
            ON CONFLICT(user_id, list_key, entity_id) DO UPDATE SET
-             starred_at = excluded.starred_at${crossesGroup ? ',\n             rank = NULL' : ''}`,
+             starred_at = excluded.starred_at`,
         )
         .run(viewerUserId, listKey, entityId, now);
     } else {
       // Unstar: only touch an existing row (no row ⇒ already unstarred — a
-      // no-op, so we never write a junk all-NULL entry).
+      // no-op, so we never write a junk all-NULL entry). Home `rank` is left
+      // intact so the entity restores to its arranged home position.
       this.db
         .prepare<[string, string, string]>(
-          `UPDATE user_sort_entry SET starred_at = NULL${crossesGroup ? ', rank = NULL' : ''}
+          `UPDATE user_sort_entry SET starred_at = NULL
            WHERE user_id = ? AND list_key = ? AND entity_id = ?`,
         )
         .run(viewerUserId, listKey, entityId);
     }
+  }
+
+  /**
+   * Drop THIS viewer's Favorites manual-rank orphan for a `favorite_key` on
+   * unstar (#task:1252 exclusive). Leaving the Favorites list is a VOLUNTARY
+   * removal, so its arranged position is discarded — a later re-star re-enters
+   * fresh (recent/tail), never silently jumping to a months-old favorites slot.
+   * This is the deliberate asymmetry with HOME rank (which `setStarred`
+   * preserves): home is an involuntary hide, favorites removal is the intent.
+   * No-op when no favorites rank row exists.
+   */
+  clearFavoriteRank(viewerUserId: string, favoriteKey: string): void {
+    this.db
+      .prepare<[string, string]>(
+        `DELETE FROM user_sort_entry
+         WHERE user_id = ? AND list_key = 'favorites' AND entity_id = ?`,
+      )
+      .run(viewerUserId, favoriteKey);
   }
 
   /**

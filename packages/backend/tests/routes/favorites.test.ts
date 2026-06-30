@@ -383,6 +383,58 @@ describe('Favorites ordering (list_key=favorites)', () => {
     expect(homeRank?.rank).toBe(5);
   });
 
+  it('unstar DROPS the favorite_key rank orphan (re-star re-enters fresh; HOME rank kept) — #task:1252 exclusive', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const wsId = await makeWorkspace(t, 'eng', agentId);
+    const chId = await makeChannel(t, wsId, 'general', agentId);
+    await http(t).post(`/api/workspaces/${wsId}/star`);
+    await http(t).post(`/api/channels/${chId}/star`);
+    const wsKey = `workspace:${wsId}`;
+    const chKey = `channel:${chId}`;
+
+    // Manually arrange favorites → both get a rank under list_key='favorites'.
+    expect(
+      (await http(t).put('/api/sort/order', {
+        list_key: 'favorites',
+        group: 'favorites',
+        ordered_ids: [chKey, wsKey],
+      })).status,
+    ).toBe(200);
+    // Give the workspace a HOME rail rank too, to prove it is NOT touched.
+    t.ctx.db
+      .prepare(
+        `UPDATE user_sort_entry SET rank = 9 WHERE user_id = 'local' AND list_key = 'workspaces' AND entity_id = ?`,
+      )
+      .run(wsId);
+
+    const db = t.ctx.db;
+    const favRank = (key: string) =>
+      db
+        .prepare<[string], { rank: number | null }>(
+          `SELECT rank FROM user_sort_entry WHERE user_id = 'local' AND list_key = 'favorites' AND entity_id = ?`,
+        )
+        .get(key);
+    expect(favRank(wsKey)?.rank).toBe(1);
+    expect(favRank(chKey)?.rank).toBe(0);
+
+    // Unstar the workspace → its FAVORITES rank orphan is deleted (voluntary
+    // removal), but the channel's favorites rank and the ws's HOME rank survive.
+    expect((await http(t).del(`/api/workspaces/${wsId}/star`)).status).toBe(200);
+    expect(favRank(wsKey)).toBeUndefined();
+    expect(favRank(chKey)?.rank).toBe(0);
+    const homeRank = t.ctx.db
+      .prepare<[string], { rank: number | null }>(
+        `SELECT rank FROM user_sort_entry WHERE user_id = 'local' AND list_key = 'workspaces' AND entity_id = ?`,
+      )
+      .get(wsId);
+    expect(homeRank?.rank).toBe(9);
+
+    // Re-star → re-enters FRESH (no rank), never jumping to the old slot 1.
+    expect((await http(t).post(`/api/workspaces/${wsId}/star`)).status).toBe(200);
+    expect(favRank(wsKey)?.rank ?? null).toBeNull();
+  });
+
   it('mode toggle on favorites is persisted list-wide (scope "")', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');

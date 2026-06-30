@@ -401,14 +401,14 @@ describe('viewer_sort does not leak non-live entities', () => {
   });
 });
 
-describe('star/unstar rank handling — channel clears (cross-group), rail preserves', () => {
+describe('star/unstar rank handling — home rank preserved (exclusive move), starred excluded from home reorder', () => {
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
     t = null;
   });
 
-  it('clears an entity rank when it is starred', async () => {
+  it('PRESERVES a channel home rank when starred, and restores it on unstar (#task:1252 exclusive)', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
@@ -424,18 +424,27 @@ describe('star/unstar rank handling — channel clears (cross-group), rail prese
       ordered_ids: [c1, c2, ...allUnstarred.filter((id: string) => id !== c1 && id !== c2)],
     });
 
-    // c1 had a rank; starring it must drop the rank to null (it moves groups).
+    // c1 had rank 0; starring MOVES it to the global STARRED list but its home
+    // rank is PRESERVED as an orphan — exclusive star is an involuntary home-hide.
     expect((await http(t).post(`/api/channels/${c1}/star`, undefined)).status).toBe(200);
     const after = (await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json()) as any;
     const c1Entry = after.viewer_sort.entries.find((e: any) => e.entity_id === c1);
-    // Either no rank row, or rank cleared to null.
-    expect(c1Entry?.rank ?? null).toBeNull();
+    expect(c1Entry?.rank).toBe(0); // preserved, not cleared
+    expect(c1Entry?.starred_at).not.toBeNull(); // carried so the sidebar hides it
+
+    // Unstar restores it to its home position at rank 0.
+    expect((await http(t).del(`/api/channels/${c1}/star`)).status).toBe(200);
+    const restored = (await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json()) as any;
+    const c1Restored = restored.viewer_sort.entries.find((e: any) => e.entity_id === c1);
+    expect(c1Restored?.rank).toBe(0);
+    expect(c1Restored?.starred_at ?? null).toBeNull();
   });
 
-  it('star keeps a workspace/DM in its KIND rail group, not a `starred` group (additive overlay, #task:1252)', async () => {
+  it('a starred workspace is EXCLUDED from its home kind-group reorder (moved to global STARRED, #task:1252 exclusive)', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const regularWs = await makeWorkspace(t, 'eng', agentId);
+    const regularWs2 = await makeWorkspace(t, 'eng2', agentId);
 
     // The agent's auto-provisioned DM (agent_home) workspace.
     const before = (await (await http(t).get('/api/workspaces')).json()) as any;
@@ -444,11 +453,11 @@ describe('star/unstar rank handling — channel clears (cross-group), rail prese
     );
     expect(dmWs).toBeTruthy();
 
-    // Star both — but on the rail star is the Favorites overlay, not a group.
+    // Star one regular ws + the DM — both MOVE to the global STARRED list.
     expect((await http(t).post(`/api/workspaces/${dmWs.id}/star`, undefined)).status).toBe(200);
     expect((await http(t).post(`/api/workspaces/${regularWs}/star`, undefined)).status).toBe(200);
 
-    // `starred` is no longer a legal workspaces rail group → reorder rejected.
+    // `starred` is not a legal workspaces rail group → reorder rejected.
     const starredReorder = await http(t).put('/api/sort/order', {
       list_key: 'workspaces',
       group: 'starred',
@@ -456,29 +465,33 @@ describe('star/unstar rank handling — channel clears (cross-group), rail prese
     });
     expect(starredReorder.status).toBe(400);
 
-    // The starred entities are reorderable in their KIND groups instead.
+    // The starred entity is still returned in the rail payload (so the renderer
+    // can hide it via its `starred_at`)…
     const list = (await (await http(t).get('/api/workspaces')).json()) as any;
     const regularIds = list.workspaces
       .filter((w: any) => w.workspace_kind === 'regular' && w.archived_at == null)
       .map((w: any) => w.id);
-    const dmIds = list.workspaces
-      .filter((w: any) => w.workspace_kind === 'agent_home' && w.archived_at == null)
-      .map((w: any) => w.id);
     expect(regularIds).toContain(regularWs);
-    expect(dmIds).toContain(dmWs.id);
+    expect(
+      list.viewer_sort.entries.find((e: any) => e.entity_id === regularWs)?.starred_at,
+    ).not.toBeNull();
 
+    // …but a home-group reorder whose ordered_ids INCLUDE the starred entity is
+    // rejected — it is no longer a home-group member.
     expect(
       (await http(t).put('/api/sort/order', {
         list_key: 'workspaces',
         group: 'regular',
-        ordered_ids: regularIds,
+        ordered_ids: regularIds, // contains the starred regularWs
       })).status,
-    ).toBe(200);
+    ).toBe(400);
+
+    // The correct reorder — only the unstarred member(s) — succeeds.
     expect(
       (await http(t).put('/api/sort/order', {
         list_key: 'workspaces',
-        group: 'dm',
-        ordered_ids: dmIds,
+        group: 'regular',
+        ordered_ids: regularIds.filter((id: string) => id !== regularWs),
       })).status,
     ).toBe(200);
   });

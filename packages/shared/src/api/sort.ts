@@ -17,22 +17,28 @@ export type SortMode = z.infer<typeof SortModeSchema>;
 
 /**
  * Hard-group descriptor for a manual reorder. Groups are partitioned LIVE at
- * sort time, never stored on the entity. The lists partition on DIFFERENT
- * axes:
- *   workspace rail : 'dm' | 'regular' — by KIND only. Star is NOT a rail group;
- *     it is the global Favorites overlay (#task:1252), so a starred workspace/DM
- *     stays in its kind group and is reorderable there.
- *   channel sidebar: 'starred' | 'unstarred' — still hard-partitions by THIS
- *     viewer's star (#task:1209); a star crosses `unstarred ↔ starred`.
+ * sort time, never stored on the entity. Star is **exclusive** (#task:1252): a
+ * starred entity MOVES to the global Favorites/STARRED list and is removed from
+ * its home list, so star is NOT a hard group in ANY home list. The lists
+ * partition on these axes:
+ *   workspace rail : 'dm' | 'regular' — by KIND only. Starred workspaces/DMs are
+ *     excluded (they live in the global Favorites list).
+ *   channel sidebar: a single 'unstarred' group. Starred channels are excluded
+ *     (moved to Favorites). The old `starred ↔ unstarred` partition is gone.
  *   favorites list : 'favorites' — a single FLAT group (#task:1252 C). The global
  *     Favorites list is sortable on its own axis (recent/manual + drag) but is not
  *     sub-partitioned: every member sits in the one `favorites` group.
- * `starred` is a legal group for the channel sidebar only; `favorites` for the
- * favorites list only. Star is per-viewer personal state — it lives in the
- * viewer's sort entries (`starred_at`), never as a shared aggregate field.
+ * Star is per-viewer personal state — it lives in the viewer's sort entries
+ * (`starred_at`), never as a shared aggregate field.
+ *
+ * NOTE: 'starred' is VESTIGIAL under the exclusive model — no list accepts it as
+ * a legal reorder group anymore (`legalGroups` never returns it). It is retained
+ * in the enum only until the renderer's last `starred`-group reference
+ * (ChannelsSidebar) is removed in the joint #task:1252/#task:1253 final step,
+ * then it should be dropped from this enum.
  */
 export const SortGroupSchema = z.enum([
-  'starred',
+  'starred', // vestigial (#task:1252) — see note above; pending renderer cleanup
   'dm',
   'regular',
   'unstarred',
@@ -61,13 +67,15 @@ export const SortListKeySchema = z
   );
 
 /** Per-entity viewer state. rank/last_accessed_at/starred_at are null until set.
- *  `starred_at` is the personal ⭐ favorite (#task:1209): non-null = starred. It is
- *  a PRESENCE marker (+ timestamp for future/debug), NOT a sort key — within-group
- *  order is governed solely by that group's mode (recent → last_accessed_at /
- *  manual → rank), exactly like every other hard group, so the STARRED section's
- *  sort menu stays truthful. It REPLACES the former shared `pinned_at` aggregate
- *  field — star is per-viewer view state, so it lives here in the sort entry,
- *  never on the entity DTO. */
+ *  `starred_at` is the personal ⭐ favorite (#task:1209): non-null = starred. Under
+ *  the exclusive model (#task:1252) it is the home-EXCLUSION signal — a starred
+ *  entity has MOVED to the global Favorites list, so its home list (rail/sidebar)
+ *  hides it by reading this off its OWN inline `viewer_sort`. It is a PRESENCE
+ *  marker (+ timestamp for the favorites projection / debug), NOT a sort key —
+ *  within-group order is governed solely by that group's mode (recent →
+ *  last_accessed_at / manual → rank). It REPLACES the former shared `pinned_at`
+ *  aggregate field — star is per-viewer view state, so it lives here in the sort
+ *  entry, never on the entity DTO. */
 export const ViewerSortEntryDtoSchema = z.object({
   entity_id: z.string(),
   rank: z.number().nullable(),
@@ -84,7 +92,8 @@ export type ViewerSortEntryDto = z.infer<typeof ViewerSortEntryDtoSchema>;
  * `modes` is the per-SCOPE mode map (#task:1146). A scope is one independently
  * toggleable [recent|manual] axis within the list:
  *   - workspace rail : scope = the hard group ('dm' | 'regular') — each rail
- *     section has its own mode (star is the Favorites overlay, not a rail group).
+ *     section has its own mode (star is exclusive — starred items move to the
+ *     global Favorites list, so star is not a rail group).
  *   - channel sidebar: scope = '' (the sentinel "list-wide" scope) — one mode
  *     for the whole list, exactly as before.
  * Sparse: an absent scope means the default, 'recent'. Read with the renderer

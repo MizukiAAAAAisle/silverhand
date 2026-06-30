@@ -14,13 +14,14 @@
 // workspace/agent-cache join — a starred channel whose parent workspace is not
 // currently loaded still renders with a name and never a blank subtitle.
 //
-// Favorites is an ADDITIVE OVERLAY, not a hard partition: a starred entity
-// appears here AND still appears in its home list (the WORKSPACES/DMS rail
-// groups, the channel sidebar). STARRED is an entry/shortcut layer, not a move —
-// it must NOT be implemented by filtering starred entities out of their home
-// list (the pre-Favorites rail did that; this supersedes it). The backend is
-// orthogonal to that composition: it serves this projection alongside the
-// unchanged list endpoints.
+// Favorites is EXCLUSIVE, not an additive overlay (#task:1252): a starred entity
+// appears here AND is REMOVED from its home list (the WORKSPACES/DMS rail group,
+// the channel sidebar) — Slack-style move, no duplication. The home list excludes
+// it by reading `starred_at` off its OWN inline `viewer_sort` (single-source —
+// never by joining this endpoint), so display and the backend's reorder validation
+// (same `starred_at` fact) cannot drift. The backend serves this projection
+// alongside the unchanged list endpoints; those still return the FULL visible set
+// (other consumers need it), and the rail/sidebar derive the home exclusion.
 import { z } from 'zod';
 import { RuntimeKindSchema } from '../db/schema.js';
 import { ViewerSortStateDtoSchema } from './sort.js';
@@ -140,9 +141,10 @@ export type FavoriteRowDto = z.infer<typeof FavoriteRowDtoSchema>;
  * `conversation_users` member, the conversation and its parent workspace are
  * both non-archived. A starred entity that becomes inaccessible or archived is
  * HIDDEN, not deleted: its `user_sort_entry.starred_at` row persists, so the
- * favorite reappears if the entity is restored / re-shared. A leftover
- * `favorites` ordering row for an unstarred entity is a harmless orphan —
- * unprojected while not a member, its rank restored if re-starred.
+ * favorite reappears if the entity is restored / re-shared. On UNSTAR the
+ * `favorites` ordering row is actively deleted (`clearFavoriteRank`), so a re-star
+ * re-enters fresh — there is no stale favorites rank to revive. (The entity's HOME
+ * rank is the opposite: preserved as an orphan, restored when it returns home.)
  */
 export const ListFavoritesDtoSchema = z.object({
   items: z.array(FavoriteRowDtoSchema),
