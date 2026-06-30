@@ -107,6 +107,44 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     );
   });
 
+  it('REGRESSION #1243: default-mentions channels still show cursor-unread @me in Activity', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t);
+    const sender = (await firstChannelAgent(t, channelId))!;
+
+    const mentionMsg = await sendAsAgent(t, channelId, sender, 'needs you @local-test');
+    await sendAsAgent(t, channelId, sender, 'plain follow-up');
+
+    const cursor = t.ctx.db
+      .prepare(
+        `SELECT COALESCE(last_read_seq, 0) AS last_read_seq
+           FROM conversation_reads
+          WHERE user_id = 'local'
+            AND conversation_id = ?
+            AND thread_root_id IS NULL`,
+      )
+      .get(channelId) as { last_read_seq: number } | undefined;
+    const mentionSeq = t.ctx.db
+      .prepare(`SELECT seq FROM messages WHERE id = ?`)
+      .get(mentionMsg) as { seq: number };
+    expect(cursor?.last_read_seq ?? 0).toBeLessThan(mentionSeq.seq);
+
+    // Default channel attention preference is 'mentions': ambient channel unread
+    // stays out, but the directed mention must remain as the durable backstop
+    // until an active eliminate intent writes read_at.
+    const items = await getActivity(t);
+    expect(items.some(i => i.kind === 'unread' && i.conversation_id === channelId)).toBe(
+      false,
+    );
+    const mention = items.find(i => i.kind === 'mention' && i.message_id === mentionMsg);
+    expect(mention).toMatchObject({
+      kind: 'mention',
+      salience: 'directed',
+      conversation_id: channelId,
+      message_id: mentionMsg,
+    });
+  });
+
   it('ambient channel unread is gated by the attention preference (enter())', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t);
@@ -335,6 +373,44 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     });
     // Preview surfaces the failure summary from the payload.
     expect(failed!.preview).toContain('beth');
+  });
+
+  it('anchorless agent_start_failed exits Activity via explicit observe(notification)', async () => {
+    t = buildTestApp();
+    const { workspaceId, channelId } = await createWorkspaceChannel(t);
+    t.ctx.db
+      .prepare(
+        `INSERT INTO notifications
+           (id, kind, user_id, agent_id, workspace_id, conversation_id,
+            message_id, payload, read_at, created_at)
+         VALUES (@id, 'agent_start_failed', 'local', NULL, @ws, @conv,
+            NULL, @payload, NULL, @now)`,
+      )
+      .run({
+        id: 'notif-af-clear',
+        ws: workspaceId,
+        conv: channelId,
+        payload: JSON.stringify({
+          reason: 'runtime_start_failed',
+          error: 'spawn ENOENT',
+          agent_name: 'beth',
+        }),
+        now: Date.now(),
+      });
+
+    expect((await getActivity(t)).some(i => i.kind === 'agent_failed')).toBe(true);
+
+    const res = await http(t).post('/api/attention/observe', {
+      sources: [{ kind: 'notification', notification_id: 'notif-af-clear' }],
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ changed: true });
+
+    const row = t.ctx.db
+      .prepare(`SELECT read_at FROM notifications WHERE id = 'notif-af-clear'`)
+      .get() as { read_at: number | null };
+    expect(row.read_at).not.toBeNull();
+    expect((await getActivity(t)).some(i => i.kind === 'agent_failed')).toBe(false);
   });
 
   it('unread items have a null notification_id (cleared via cursor, not read_at)', async () => {
