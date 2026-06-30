@@ -204,8 +204,6 @@ export function useNotificationToasts(
       return;
     }
 
-    const toastIds: string[] = [];
-
     for (const n of notifications) {
       if (seenIds.current.has(n.id)) continue;
       seenIds.current.add(n.id);
@@ -246,8 +244,6 @@ export function useNotificationToasts(
         toast(label, toastOptions);
       }
 
-      toastIds.push(n.id);
-
       // System notification — main process suppresses ordinary alerts when an
       // Electron window is focused; direct human mentions opt out via `force`.
       void window.agentHub.showSystemNotification({
@@ -258,17 +254,14 @@ export function useNotificationToasts(
       });
     }
 
-    // Mark toasted notifications as read so they don't accumulate in the
-    // unread list. Fire-and-forget; failure only means a stale badge, not
-    // a broken UI. One call per notification avoids a batch endpoint.
-    for (const id of toastIds) {
-      void api('/api/notifications/read', {
-        method: 'POST',
-        body: JSON.stringify({ id }),
-      }).then(() => {
-        qc.invalidateQueries({ queryKey: unreadKey });
-      });
-    }
+    // A toast is a transient SURFACING event, never an eliminate intent — so it
+    // must not write `notifications.read_at`. Under Activity v1 that column is the
+    // load-bearing directed-claim signal, so auto-reading on toast would silently
+    // evict an unread @me from Activity before the user acted on it (surfaced ≠
+    // eliminated). Re-toast dedup is owned by `seenIds` above, independent of
+    // read-state, so the notification correctly stays unread until an ACTIVE
+    // eliminate path clears it: visible read advancing the cursor, clicking the
+    // toast/notification to jump to source, or the Activity Mark-as-read ✓.
   }, [data, activeChannelId, qc, handleClickById]);
 }
 

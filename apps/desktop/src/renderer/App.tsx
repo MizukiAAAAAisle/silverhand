@@ -332,7 +332,6 @@ function RegisteredAppShell(): JSX.Element {
   const lastSelectedWorkspaceId = useRef<string | null>(getLastWorkspaceId());
   const lastSelectedMessageReadKey = useRef<string | null>(null);
   const lastThreadMessageReadKey = useRef<string | null>(null);
-  const lastNotificationReadId = useRef<string | null>(null);
   // Dedup guard for the recent-opened touch ping (#task:1146): the last
   // `<workspaceId>:<channelId>` we stamped, so re-renders that don't change
   // the selection don't re-POST /api/sort/touch.
@@ -982,19 +981,16 @@ function RegisteredAppShell(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleSecondary?.id, visibleSecondary?.kind]);
 
-  // Keep notification badges (mention_external / agent_start_failed) cleared
-  // for whichever channel the user is actively focused on.
-  useEffect(() => {
-    const focusedId = focusedConversation?.id ?? null;
-    if (!focusedId) {
-      lastNotificationReadId.current = null;
-      return;
-    }
-    if (lastNotificationReadId.current === focusedId) return;
-    lastNotificationReadId.current = focusedId;
-    markConversationNotificationsRead.mutate(focusedId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedConversation?.id]);
+  // NOTE: conversation FOCUS no longer drains notification badges. Focus is a
+  // passive surface (the user is merely looking at a channel, not acting on a
+  // specific message), so per the surfaced≠eliminated invariant it must not
+  // write `notifications.read_at` for ANY directed kind — doing so silently
+  // evicted cursor-unread @me mentions from Activity. Anchored `mention_self`
+  // clears via visible-read observe (cursor crossing its seq); anchorless
+  // `agent_start_failed` clears only via its explicit paths (Activity ✓ /
+  // clicking the notification). The active activity-source-open effect below
+  // still clears, because it is paired with a cursor→head advance (self-
+  // consistent), and opening a source IS an eliminate intent.
 
   const handleSelectWorkspace = (id: string): void => {
     // If the workspace has unread mentions, jump straight to the latest
@@ -1518,12 +1514,13 @@ function RegisteredAppShell(): JSX.Element {
     if (lastActivitySourceReadKey.current === activitySourceReadChannelId) return;
     lastActivitySourceReadKey.current = activitySourceReadChannelId;
     markMessageChannelRead.mutate(activitySourceReadChannelId);
-    // Also clear this conversation's notification badges for the activity-source
-    // open. The focused-conversation effect (L994) covers the focused case; this
-    // covers the anchorless `#conv` open and is idempotent. (`requestJump` no
-    // longer clears badges — it was decoupled to push the cursor via stream
-    // observe; conversation-badge cleanup is this notification surface's job.
-    // Dedup of this vs L994 deferred to phase B — needs focus-coverage check.)
+    // Opening an Activity item's source IS an active eliminate intent, and the
+    // line above advances the cursor to stream head — so clearing this
+    // conversation's notification badges here is self-consistent (read_at and
+    // cursor move together, no divergence). This is the legitimate active
+    // counterpart to the removed passive focus-drain: it also reaches anchorless
+    // `agent_start_failed` that the cursor overlap can't. (`requestJump` no
+    // longer clears badges — it pushes the cursor via stream observe instead.)
     markConversationNotificationsRead.mutate(activitySourceReadChannelId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activitySourceReadChannelId]);
