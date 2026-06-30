@@ -248,6 +248,17 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     const { list_key: listKey, entity_id: entityId } = parsed.data;
+    // The favorites list has NO recent-opened state of its own: recent reads each
+    // entity's HOME-list `last_accessed_at` (recently-OPENED from anywhere), and
+    // `favorites` stores ONLY ordering (rank + mode). A touch here would write a
+    // dead `user_sort_entry(list_key='favorites').last_accessed_at` the read-model
+    // never reads — looking semantic but inert. Reject it; touch the home entity.
+    if (listKey === 'favorites') {
+      return c.json(
+        { error: 'favorites does not support touch; touch the home entity' },
+        400,
+      );
+    }
     const resolved = resolveListGroups(c, listKey);
     if (!resolved.ok) {
       return c.json(

@@ -404,5 +404,26 @@ describe('Favorites ordering (list_key=favorites)', () => {
     });
     expect(bad.status).toBe(400);
   });
+
+  it('rejects touch on list_key=favorites (no own recent state — touch the home entity)', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const wsId = await makeWorkspace(t, 'eng', agentId);
+    await http(t).post(`/api/workspaces/${wsId}/star`);
+
+    const r = await http(t).post('/api/sort/touch', {
+      list_key: 'favorites',
+      entity_id: `workspace:${wsId}`,
+    });
+    expect(r.status).toBe(400);
+    // No dead last_accessed_at row written under list_key='favorites' — recent
+    // reads the HOME list's last_accessed_at, so favorites stores no recency.
+    const row = t.ctx.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM user_sort_entry WHERE user_id = 'local' AND list_key = 'favorites' AND last_accessed_at IS NOT NULL`,
+      )
+      .get() as any;
+    expect(row.n).toBe(0);
+  });
 });
 

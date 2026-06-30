@@ -92,9 +92,10 @@ export const FavoriteRowDtoSchema = z.object({
    *  AgentAvatar fallback badge when `icon_url` is null. */
   runtime: RuntimeKindSchema.nullable(),
   /** The star timestamp (home list's `starred_at`). Display/debug only — the
-   *  flat-list ORDER now comes from `viewer_sort` (recent → `last_accessed_at`,
-   *  manual → `rank`), not from this field. Also mirrored into
-   *  `viewer_sort.entries[].starred_at` as the recent-mode NULL tiebreak. */
+   *  flat-list ORDER comes from `viewer_sort` (recent → `last_accessed_at`,
+   *  manual → `rank`), NOT from this field, and recent's tiebreak is
+   *  `created_at` → `favorite_key`, never `starred_at`. Also mirrored into
+   *  `viewer_sort.entries[].starred_at` as a home membership/display mirror. */
   starred_at: z.number(),
   /** The entity's creation time (`workspaces.created_at` / `conversations.created_at`).
    *  The renderer's `getCreatedAt` — the final STABLE tiebreak for recent mode
@@ -124,9 +125,10 @@ export type FavoriteRowDto = z.infer<typeof FavoriteRowDtoSchema>;
  *     in each entity's HOME list. The `favorites` list_key stores ONLY ordering
  *     (rank + the list-wide mode), never membership.
  *   - `viewer_sort.entries[]` is keyed by `favorite_key` and carries the sort
- *     triple the renderer's `sortEntryLookup` needs: `rank` (from the `favorites`
+ *     fields the renderer's `sortEntryLookup` reads: `rank` (from the `favorites`
  *     list_key) + `last_accessed_at` (from the entity's HOME list — recent =
- *     recently-OPENED, never "recently starred") + `starred_at` (home, tiebreak).
+ *     recently-OPENED, never "recently starred"). `starred_at` (home) rides along
+ *     as a membership/display mirror — NOT a sort key.
  *   - `recent` orders by `last_accessed_at` DESC (NULLs last → `created_at` →
  *     `favorite_key`); `manual` orders by `rank`.
  *

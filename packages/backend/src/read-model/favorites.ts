@@ -16,7 +16,8 @@
 //     from a same-id regular workspace);
 //   - each entry carries rank (from the `favorites` list_key) + last_accessed_at
 //     (from the entity's HOME list — recent = recently-OPENED, never "recently
-//     starred") + starred_at (home, the recent-mode NULL tiebreak).
+//     starred") + starred_at (home — a membership/display mirror, NOT a sort key;
+//     recent's tiebreak is the row's created_at → favorite_key).
 // The backend does NOT pre-sort `items`; the renderer composes order from
 // `viewer_sort` with the shared list-sort helper, exactly like the rail / sidebar.
 //
