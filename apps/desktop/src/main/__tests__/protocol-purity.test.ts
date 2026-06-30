@@ -54,6 +54,7 @@ const cataloguedIpcHandlers = [
   'backend:upload',
   'badge:setCount',
   'dialog:pickDirectory',
+  'eventWs:diagnostic',
   'export:copyPng',
   'export:savePng',
   'hosts:revoke',
