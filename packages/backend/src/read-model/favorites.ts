@@ -126,6 +126,14 @@ export function listFavorites(
          ON wu.workspace_id = pw.id AND wu.user_id = @viewer
        WHERE use.user_id = @viewer
          AND use.list_key LIKE 'channels:%'
+         -- Bind the row's list_key to the channel's ACTUAL parent workspace.
+         -- A malformed/orphan row (list_key 'channels:<wsA>' but the channel
+         -- really lives in wsB) is dropped: projecting it would emit an identity
+         -- (workspace_id = the real wsB) that the unstar route -- which clears
+         -- 'channels:<real ws>' -- could never reconcile with the stored
+         -- 'channels:<wsA>' row, leaving an undeletable favorite. This keeps
+         -- Favorites row identity closed with the per-entity unstar route.
+         AND use.list_key = 'channels:' || c.workspace_id
          AND use.starred_at IS NOT NULL
          AND c.kind = 'channel'
          AND pw.workspace_kind = 'regular'
@@ -177,8 +185,14 @@ export function listFavorites(
     });
   }
 
-  // Canonical flat order: most-recently-starred first.
-  items.sort((a, b) => b.starred_at - a.starred_at);
+  // Canonical flat order: most-recently-starred first, with a deterministic
+  // entity_id tiebreak so entities starred in the same millisecond keep a stable
+  // order across reads / restarts (never falling back to SQL/insertion order).
+  items.sort(
+    (a, b) =>
+      b.starred_at - a.starred_at ||
+      (a.entity_id < b.entity_id ? -1 : a.entity_id > b.entity_id ? 1 : 0),
+  );
 
   return { items };
 }

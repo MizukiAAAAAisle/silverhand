@@ -212,6 +212,31 @@ describe('GET /api/favorites', () => {
     expect(await favorites(t)).toEqual([]);
   });
 
+  it('drops a channel star whose list_key ws ≠ the channel parent ws (orphan/malformed)', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const wsA = await makeWorkspace(t, 'enga', agentId);
+    const wsB = await makeWorkspace(t, 'engb', agentId);
+    const chA = await makeChannel(t, wsA, 'general', agentId);
+
+    // Correctly-stored star (list_key = the channel's real parent ws).
+    expect((await http(t).post(`/api/channels/${chA}/star`)).status).toBe(200);
+    // Malformed/orphan row: same channel, but filed under wsB's namespace —
+    // an identity the per-entity unstar route (`channels:<real ws>`) can't reach.
+    t.ctx.db
+      .prepare(
+        `INSERT INTO user_sort_entry (user_id, list_key, entity_id, rank, last_accessed_at, starred_at)
+         VALUES ('local', ?, ?, NULL, NULL, 9000)`,
+      )
+      .run(`channels:${wsB}`, chA);
+
+    const items = await favorites(t);
+    const chRows = items.filter(i => i.entity_id === chA);
+    // Exactly one row — the correctly-filed one; the malformed row is dropped.
+    expect(chRows).toHaveLength(1);
+    expect(chRows[0]).toMatchObject({ kind: 'channel', workspace_id: wsA, workspace_name: 'enga' });
+  });
+
   it('returns empty for a viewer with no stars', async () => {
     t = buildTestApp();
     await makeAgent(t, 'alice');
