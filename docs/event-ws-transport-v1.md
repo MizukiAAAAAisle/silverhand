@@ -11,21 +11,36 @@ cursors are tracked, and how missed frames are recovered. Frame shapes live in
 
 ## 1. The one invariant
 
-**The per-scope transport cursor is client-authoritative. The server never
-silently advances the client past frames it has not observed.**
+**The per-scope transport cursor is the client's "applied-to-an-active-scope
+high-water mark" — not its "received-on-the-socket" mark. The server never
+silently advances the client past frames it has not applied.**
 
-Everything below is a corollary. Two distinct bugs (#1241, #1249/#1251) were the
-same violation of this invariant at different points in the connection
-lifecycle; both fixes restore it.
+Everything below is a corollary. Three bugs (#1241, #1249/#1251, and the #1251
+round-2 orphan-frame drop) were the same violation at different points in the
+connection lifecycle; the fixes restore it.
 
 - A scope's cursor is `{ epoch, lastSeq }` = the highest seq the client has
-  *contiguously observed and dispatched* for that scope (see
-  `EventWsClient.positions`).
+  *contiguously observed and dispatched to an active (desired) consumer* for
+  that scope (see `EventWsClient.positions`). It must NOT advance on a frame the
+  socket merely received while no consumer was interested (see §4.1).
 - Per-scope `seq` is strictly monotonic `+1` within an epoch (server
-  `scope-event-bus.nextSeq`). So an observed jump is a real gap, never normal
-  flow.
+  `scope-event-bus.nextSeq`), across **all** event kinds for the scope — not
+  just messages. (The `event_ws.publish` log only records `kind === 'message'`,
+  so message seqs look sparse; the cursor/resume space counts every kind, so it
+  is dense and contiguous. The two are the **same** seq space — `EventFrame.seq`
+  ≡ publish-log `seq` ≡ resume `lastSeq`/`currentSeq` — just filtered
+  differently in the log.) An observed jump within the dense space is a real gap.
 - `epoch` is the backend's process-start UUID. An epoch change means the seq
   space reset; the old cursor is moot and the client baselines fresh.
+
+> **Target form (Stage 2, not yet built).** The clean end-state is a single
+> long-lived **event ingestor / store** that owns `WS frame → apply → advance`
+> atomically; components only *read* the store, so mount/unmount never decides
+> whether a frame was "seen", and scope subscribe/unsubscribe degrades to pure
+> bandwidth optimization rather than a correctness boundary. The orphan-frame
+> gate (§4.1) is the same invariant enforced inside today's lifecycle-coupled
+> model; it is forward-compatible (the store cursor is also applied-high-water),
+> so it is a step toward the target, not a throwaway patch.
 
 ## 2. Three independent cursors — never conflated
 
@@ -94,6 +109,38 @@ baseline. (That path is cheap on the renderer — `channels/hooks.ts` already
 maps `snapshot_required` → `invalidateQueries` — but it is out of scope until a
 real memory pressure point exists.)
 
+### 4.1 Orphan-frame gate — cursor advances only for desired scopes
+
+Retaining the cursor across unsubscribe is necessary but not sufficient. There is
+a race: when a view unmounts, the client-side `unsubscribe()` removes the scope
+from `desiredScopes` and detaches the bridge listener **immediately**, but the
+socket stays OPEN and the server keeps fanning out events for that scope until it
+processes the unsubscribe (tens of ms later). A frame landing in that window has
+**no consumer to apply it**. If the client let such a frame advance the cursor
+(or let a late `subscribed` ack re-baseline, or a late `snapshot_required`
+refetch), the cursor would move past a frame that was never applied — and the
+eventual resubscribe would resume *after* it, losing it until a manual refetch.
+
+This was the #1251 round-2 drop: R2-C1 was a **live message** published ~2s
+*before* the user switched away (`listenerCount:1` server-side), but it reached
+the client after the local listener had already detached. `acceptEventFrame`
+advanced the cursor for it (and the non-message frames behind it) with nothing to
+apply them to; the switch-back resume started above C1's seq, so it never came
+back. Note the no-listener batch published *after* the server stopped fanning out
+replayed fine — only the one frame caught in the local-unmount-vs-server-stop
+gap was lost.
+
+The fix: `handleFrame` ignores any scope-bearing frame (`event` / `subscribed` /
+`snapshot_required`) whose scope is not in `desiredScopes` — no cursor advance,
+no `confirmedScopes`/baseline mutation, no `positions` delete, no dispatch (it
+emits an `orphan_frame` diagnostic and returns). The retained cursor therefore
+stays frozen at the last seq that was applied **while the scope was desired**, so
+the resubscribe's resume replays the orphaned frame. This is the invariant from
+§1 stated operationally: **the cursor tracks applied-to-active-scope, not
+socket-received.** (In the Stage-2 store model this gate is subsumed — the
+ingestor advances the cursor atomically with the store apply, so an
+unconsumed frame structurally cannot move it.)
+
 ## 5. Live forward-gap recovery (#1241)
 
 While the socket stays OPEN (so reconnect/resume never fires), a dropped frame
@@ -137,3 +184,7 @@ at once.
   resubscribe; `subscribed` ack does not clobber a retained same-epoch cursor;
   stale-epoch ack does re-baseline; detached cursors retained for the whole
   session (no lossy eviction — the oldest still resumes after heavy churn).
+- orphan-frame gate (#1251 round-2, §4.1): an `event` arriving after unsubscribe
+  does not advance the retained cursor (frozen at last applied seq, resume
+  replays it); a late `subscribed` ack for a no-longer-desired scope does not
+  re-baseline; a late `snapshot_required` for it does not delete the cursor.

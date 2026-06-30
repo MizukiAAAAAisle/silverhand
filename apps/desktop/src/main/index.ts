@@ -2519,6 +2519,7 @@ const EVENT_WS_DIAGNOSTIC_KINDS: ReadonlySet<string> = new Set([
   'live_gap',
   'resume_sent',
   'snapshot_required',
+  'orphan_frame',
 ] as const);
 
 interface RendererEventWsDiagnostic {

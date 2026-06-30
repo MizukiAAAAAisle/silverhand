@@ -38,7 +38,8 @@ type EventWsDiagnosticKind =
   | 'message_event'
   | 'live_gap'
   | 'resume_sent'
-  | 'snapshot_required';
+  | 'snapshot_required'
+  | 'orphan_frame';
 
 interface EventWsDiagnostic {
   kind: EventWsDiagnosticKind;
@@ -296,6 +297,34 @@ export class EventWsClient {
   }
 
   private handleFrame(frame: ServerFrame): void {
+    // Orphan-scope gate (#task:1251). The transport cursor must mean
+    // "applied to an active (desired) scope's consumers", NOT "received on
+    // the socket". When a view unmounts, `unsubscribe()` drops the scope
+    // from `desiredScopes` (cursor retained for resume) and removes the
+    // bridge listener — but the socket stays OPEN and the server keeps
+    // fanning out until it processes our unsubscribe. A frame landing in
+    // that race window has no consumer to apply it; if we let it advance the
+    // cursor (or a late `subscribed` ack re-baseline, or a late
+    // `snapshot_required` refetch), the cursor moves past a frame that was
+    // never applied, and the eventual resubscribe resumes *after* it — the
+    // frame is lost until a manual refetch. So any scope-bearing frame for a
+    // scope we no longer desire is an orphan: ignore it entirely (no cursor
+    // move, no state mutation, no dispatch). The retained cursor stays frozen
+    // at the last applied seq, so the resubscribe's resume replays the gap.
+    if (
+      (frame.type === 'event' ||
+        frame.type === 'subscribed' ||
+        frame.type === 'snapshot_required') &&
+      !this.desiredScopes.has(frame.scope)
+    ) {
+      recordEventWsDiagnostic({
+        kind: 'orphan_frame',
+        scope: frame.scope,
+        eventKind: frame.type === 'event' ? frame.kind : frame.type,
+        seq: frame.type === 'snapshot_required' ? undefined : frame.seq,
+      });
+      return;
+    }
     if (frame.type === 'authenticated') {
       this.reconnectAttempt = 0;
       this.confirmedScopes.clear();

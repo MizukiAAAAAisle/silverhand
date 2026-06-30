@@ -620,4 +620,81 @@ describe('EventWsClient — no-listener gap recovery (#1251)', () => {
       { type: 'resume', scopes: { 'conv:oldest': { epoch: 'epoch-1', lastSeq: 7 } } },
     ]);
   });
+
+  // ── Orphan-scope gate (#1251 round-2 dogfood) ──────────────────────────
+  //
+  // The cursor must be the "applied-to-active-scope high-water", NOT the
+  // "socket-received high-water". When a view unmounts, the scope leaves
+  // `desiredScopes` (cursor retained) and the bridge listener detaches, but
+  // the socket stays OPEN and the server keeps fanning out until it processes
+  // the unsubscribe. A frame landing in that race window has no consumer; if
+  // it advanced the cursor (or a late ack re-baselined / late snapshot
+  // refetched), the cursor would move past a never-applied frame and the
+  // resubscribe would resume *after* it — losing it until a manual refetch.
+  // This was the dropped R2-C1 (a live message published ~2s before the
+  // client switched away). Orphan frames for non-desired scopes must be
+  // ignored entirely.
+
+  it('ignores an orphan event after unsubscribe — cursor frozen at last applied seq', async () => {
+    const { client, ws, sub, dispatched } = await connectedAt('conv:room', 5);
+    fireEvent(ws, 'conv:room', 6); // applied while desired → cursor 6
+    expect(eventSeqs(dispatched)).toEqual([6]);
+
+    // View unmounts: scope leaves desiredScopes, cursor retained at 6.
+    sub.unsubscribe();
+    ws.sent.length = 0;
+
+    // Race-window frame: server hasn't processed the unsubscribe yet, so seq
+    // 7 still arrives. No consumer → it must NOT dispatch and must NOT
+    // advance the cursor.
+    fireEvent(ws, 'conv:room', 7);
+    expect(eventSeqs(dispatched)).toEqual([6]); // 7 swallowed, not dispatched
+
+    // Resubscribe: resume from the frozen cursor (6, not 7) so the server
+    // replays seq 7. If the orphan had advanced the cursor to 7, this resume
+    // would read lastSeq:7 and 7 would be lost — exactly the R2-C1 bug.
+    client.subscribe('conv:room');
+    expect(ws.sent.filter(f => f.type === 'resume')).toEqual([
+      { type: 'resume', scopes: { 'conv:room': { epoch: 'epoch-1', lastSeq: 6 } } },
+    ]);
+  });
+
+  it('ignores a late subscribed ack for a no-longer-desired scope (no re-baseline)', async () => {
+    const { client, ws, sub } = await connectedAt('conv:room', 5);
+    fireEvent(ws, 'conv:room', 6); // cursor 6
+    sub.unsubscribe();
+    ws.sent.length = 0;
+
+    // A subscribed ack from the just-cancelled subscription lands late, at
+    // server head (50). Scope is no longer desired → it must not
+    // confirm/baseline; the retained cursor stays 6.
+    ws.fireMessage({ type: 'subscribed', scope: 'conv:room', epoch: 'epoch-1', seq: 50 });
+
+    client.subscribe('conv:room');
+    expect(ws.sent.filter(f => f.type === 'resume')).toEqual([
+      { type: 'resume', scopes: { 'conv:room': { epoch: 'epoch-1', lastSeq: 6 } } },
+    ]);
+  });
+
+  it('ignores a late snapshot_required for a no-longer-desired scope (cursor kept)', async () => {
+    const { client, ws, sub } = await connectedAt('conv:room', 5);
+    fireEvent(ws, 'conv:room', 6); // cursor 6
+    sub.unsubscribe();
+    ws.sent.length = 0;
+
+    // A snapshot_required for the cancelled scope must not delete the
+    // retained cursor (no consumer to refetch); the cursor survives so the
+    // next subscribe still resumes.
+    ws.fireMessage({
+      type: 'snapshot_required',
+      scope: 'conv:room',
+      epoch: 'epoch-1',
+      reason: 'gap_too_large',
+    });
+
+    client.subscribe('conv:room');
+    expect(ws.sent.filter(f => f.type === 'resume')).toEqual([
+      { type: 'resume', scopes: { 'conv:room': { epoch: 'epoch-1', lastSeq: 6 } } },
+    ]);
+  });
 });

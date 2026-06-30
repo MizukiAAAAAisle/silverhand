@@ -442,7 +442,8 @@ export type DesktopEventWsDiagnosticKind =
   | 'message_event'
   | 'live_gap'
   | 'resume_sent'
-  | 'snapshot_required';
+  | 'snapshot_required'
+  | 'orphan_frame';
 
 export interface DesktopEventWsDiagnostic {
   kind: DesktopEventWsDiagnosticKind;
