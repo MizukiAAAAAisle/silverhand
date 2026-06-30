@@ -97,7 +97,7 @@ shiki 提问:Activity 是不是一个独立 DDD 领域事件,有自己的读和�
 |---|---|---|---|
 | DM 未读 | positional | DM stream cursor | **永远进**(directed-grade) |
 | followed thread 未读 | positional | thread stream cursor | ambientPref=on(follow→默认 on) |
-| channel 主线未读 | positional | mainline stream cursor | 仅 channel ambientPref=`所有消息` |
+| channel 主线未读 | positional | mainline stream cursor | channel ambientPref=`所有消息`(默认即 `所有消息`,#task:1248) |
 | @我(human @-mention) | directed | `notifications.read_at` | **永远进** |
 | ~~task needs-my-action~~ | directed | — | **v2 — NOT a v1 Activity source**(见下) |
 | agent_start_failed(我的 agent) | directed | `notifications.read_at` | **永远进** |
@@ -163,7 +163,7 @@ enter(item, me) = directed(item, me)  OR  ( ambient(item) AND ambientPref(stream
 
 - **`directed`**(DM / @我 / agent_start_failed;task-needs-my-action = **v2**,§5.1)→ **永远进**,压过一切(不受 channel 开关管)。
 - **`ambient`**(我订阅的流里、没直接点我的未读)→ **仅当该流 `ambientPref == on` 才进**。
-- **`ambientPref` 默认**:followed thread → on(由 follow=delivery 读作 default-strong);channel → off(只有设成 `所有消息` 才 on);非 followed thread / `仅提及` channel → off → 不进 Activity,留就地提示(Threads list 弱 dot / channel 内)。
+- **`ambientPref` 默认**:followed thread → on(由 follow=delivery 读作 default-strong);channel → **on(默认 `所有消息`;#task:1248 起。旧默认是 `仅提及`/off)**,用户显式设 `仅提及` 才 off;非 followed thread → off(无 channel pref 介入)→ 不进 Activity,留就地提示(Threads list 弱 dot / channel 内)。**默认值在读时算、不落库**:无显式 `ChannelAttentionPreference` row 的 channel 一律取 `所有消息`,无需 migration、无需给存量用户写 row。
 
 每加一个表面只填参数,不加特例。
 
