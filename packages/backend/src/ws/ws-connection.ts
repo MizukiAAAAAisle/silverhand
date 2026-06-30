@@ -116,11 +116,24 @@ export class EventWsConnection {
       this.subscriptions.set(scope.scope, unsubscribe);
     }
 
+    const seq = this.ctx.events.currentSeq(scope.scope);
+    this.ctx.logger.info(
+      {
+        category: 'event_ws.subscribe',
+        viewerUserId: this.viewerUserId,
+        scope: scope.scope,
+        conversationId: conversationIdFromScope(scope.scope),
+        seq,
+        epoch: this.ctx.events.epoch,
+        subscriptionCount: this.subscriptions.size,
+      },
+      'event ws subscribed',
+    );
     this.send({
       type: 'subscribed',
       scope: scope.scope,
       epoch: this.ctx.events.epoch,
-      seq: this.ctx.events.currentSeq(scope.scope),
+      seq,
     });
   }
 
@@ -131,6 +144,16 @@ export class EventWsConnection {
     if (!unsubscribe) return;
     unsubscribe();
     this.subscriptions.delete(scope.scope);
+    this.ctx.logger.info(
+      {
+        category: 'event_ws.unsubscribe',
+        viewerUserId: this.viewerUserId,
+        scope: scope.scope,
+        conversationId: conversationIdFromScope(scope.scope),
+        subscriptionCount: this.subscriptions.size,
+      },
+      'event ws unsubscribed',
+    );
   }
 
   private handleResume(rawScopes: unknown): void {
@@ -153,7 +176,29 @@ export class EventWsConnection {
         continue;
       }
 
+      const currentSeq = this.ctx.events.currentSeq(scope.scope);
+      const replayBuffer = this.ctx.events.getReplayBuffer(scope.scope);
+      this.ctx.logger.info(
+        {
+          category: 'event_ws.resume',
+          viewerUserId: this.viewerUserId,
+          scope: scope.scope,
+          conversationId: conversationIdFromScope(scope.scope),
+          lastSeq,
+          currentSeq,
+          epoch,
+          serverEpoch: this.ctx.events.epoch,
+          replayBufferSize: replayBuffer.size,
+        },
+        'event ws resume requested',
+      );
+
       if (epoch !== this.ctx.events.epoch) {
+        this.logSnapshotRequired(scope.scope, 'epoch_mismatch', {
+          lastSeq,
+          currentSeq,
+          epoch,
+        });
         this.send({
           type: 'snapshot_required',
           scope: scope.scope,
@@ -162,9 +207,13 @@ export class EventWsConnection {
         continue;
       }
 
-      const currentSeq = this.ctx.events.currentSeq(scope.scope);
-      const replayBuffer = this.ctx.events.getReplayBuffer(scope.scope);
       if (currentSeq > 0 && lastSeq < currentSeq - replayBuffer.size) {
+        this.logSnapshotRequired(scope.scope, 'gap_too_large', {
+          lastSeq,
+          currentSeq,
+          epoch,
+          replayBufferSize: replayBuffer.size,
+        });
         this.send({
           type: 'snapshot_required',
           scope: scope.scope,
@@ -173,7 +222,21 @@ export class EventWsConnection {
         continue;
       }
 
-      for (const entry of replayBuffer.replay(lastSeq, epoch)) {
+      const replayEntries = replayBuffer.replay(lastSeq, epoch);
+      this.ctx.logger.info(
+        {
+          category: 'event_ws.resume',
+          viewerUserId: this.viewerUserId,
+          scope: scope.scope,
+          conversationId: conversationIdFromScope(scope.scope),
+          lastSeq,
+          currentSeq,
+          epoch,
+          replayCount: replayEntries.length,
+        },
+        'event ws resume replay',
+      );
+      for (const entry of replayEntries) {
         this.send({
           type: 'event',
           scope: scope.scope,
@@ -225,11 +288,27 @@ export class EventWsConnection {
   }
 
   private send(frame: ServerFrame): void {
-    if (this.ws.readyState !== WebSocket.OPEN) return;
+    if (this.ws.readyState !== WebSocket.OPEN) {
+      if (shouldLogSkippedSend(frame)) {
+        this.ctx.logger.warn(
+          {
+            category: 'event_ws.send_skipped_non_open',
+            viewerUserId: this.viewerUserId,
+            readyState: this.ws.readyState,
+            ...serverFrameLogFields(frame),
+          },
+          'event ws send skipped: socket not open',
+        );
+      }
+      return;
+    }
     try {
       this.ws.send(JSON.stringify(frame));
     } catch (err) {
-      this.ctx.logger.warn({ err }, 'ws: send failed');
+      this.ctx.logger.warn(
+        { err, ...serverFrameLogFields(frame) },
+        'ws: send failed',
+      );
     }
   }
 
@@ -263,6 +342,69 @@ export class EventWsConnection {
     if (!this.pongTimer) return;
     clearTimeout(this.pongTimer);
     this.pongTimer = null;
+  }
+
+  private logSnapshotRequired(
+    scope: string,
+    reason: 'epoch_mismatch' | 'gap_too_large',
+    fields: Record<string, unknown>,
+  ): void {
+    this.ctx.logger.info(
+      {
+        category: 'event_ws.snapshot_required',
+        viewerUserId: this.viewerUserId,
+        scope,
+        conversationId: conversationIdFromScope(scope),
+        reason,
+        ...fields,
+      },
+      'event ws snapshot required',
+    );
+  }
+}
+
+function conversationIdFromScope(scope: string): string | undefined {
+  return scope.startsWith('conversation:') ? scope.slice('conversation:'.length) : undefined;
+}
+
+function shouldLogSkippedSend(frame: ServerFrame): boolean {
+  return (
+    frame.type === 'event' ||
+    frame.type === 'snapshot_required' ||
+    frame.type === 'subscribed'
+  );
+}
+
+function serverFrameLogFields(frame: ServerFrame): Record<string, unknown> {
+  switch (frame.type) {
+    case 'event':
+      return {
+        frameType: frame.type,
+        scope: frame.scope,
+        conversationId: conversationIdFromScope(frame.scope),
+        seq: frame.seq,
+        epoch: frame.epoch,
+        eventKind: frame.kind,
+      };
+    case 'subscribed':
+      return {
+        frameType: frame.type,
+        scope: frame.scope,
+        conversationId: conversationIdFromScope(frame.scope),
+        seq: frame.seq,
+        epoch: frame.epoch,
+      };
+    case 'snapshot_required':
+      return {
+        frameType: frame.type,
+        scope: frame.scope,
+        conversationId: conversationIdFromScope(frame.scope),
+        reason: frame.reason,
+      };
+    case 'authenticated':
+      return { frameType: frame.type, epoch: frame.epoch };
+    default:
+      return { frameType: frame.type };
   }
 }
 

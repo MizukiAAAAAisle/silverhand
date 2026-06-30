@@ -122,6 +122,28 @@ describe('ScopeEventBus', () => {
       bus.publishToScope('workspace:w1', 'channel_created', {});
       expect(conversationEvents).toHaveLength(0);
     });
+
+    it('logs conversation message fanout metadata without payload', () => {
+      const info = vi.fn();
+      const bus = new ScopeEventBus('ep', { info });
+      bus.subscribeScope('conversation:c1', () => {});
+
+      bus.publishToScope('conversation:c1', 'message', { secret: 'not logged' });
+
+      expect(info).toHaveBeenCalledWith(
+        {
+          category: 'event_ws.publish',
+          scope: 'conversation:c1',
+          conversationId: 'c1',
+          eventKind: 'message',
+          seq: 1,
+          epoch: 'ep',
+          listenerCount: 1,
+        },
+        'event ws publish',
+      );
+      expect(JSON.stringify(info.mock.calls)).not.toContain('not logged');
+    });
   });
 
   describe('replay buffer integration', () => {

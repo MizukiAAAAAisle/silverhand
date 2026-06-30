@@ -120,7 +120,12 @@ export function createCategorizedLoggers(
 ): CategorizedLoggers {
   const logControl = opts.logControl ?? createLogLevelControl();
   return {
-    system: createFileLogger({ ...opts, filenamePrefix: 'backend', logControl }),
+    system: createFileLogger({
+      ...opts,
+      filenamePrefix: 'backend',
+      logControl,
+      alwaysWriteCategories: EVENT_WS_DIAGNOSTIC_CATEGORIES,
+    }),
     agent: createFileLogger({ ...opts, filenamePrefix: 'agent', logControl }),
     cli: createFileLogger({
       ...opts,
@@ -133,6 +138,15 @@ export function createCategorizedLoggers(
 }
 
 const CLI_AUDIT_CATEGORIES = ['cli.invoke', 'cli.preflight_failure'] as const;
+const EVENT_WS_DIAGNOSTIC_CATEGORIES = [
+  'event_ws.publish',
+  'event_ws.subscribe',
+  'event_ws.unsubscribe',
+  'event_ws.resume',
+  'event_ws.snapshot_required',
+  'event_ws.send_skipped_non_open',
+  'event_ws.renderer',
+] as const;
 
 export function createLogLevelControl(
   initialLevel: SilverhandLogLevel = parseSilverhandLogLevel(

@@ -434,6 +434,29 @@ export interface DesktopBuildConfig {
   default_server_url: string;
 }
 
+export type DesktopEventWsDiagnosticKind =
+  | 'socket_open'
+  | 'socket_close'
+  | 'authenticated'
+  | 'subscribed'
+  | 'message_event'
+  | 'live_gap'
+  | 'resume_sent'
+  | 'snapshot_required';
+
+export interface DesktopEventWsDiagnostic {
+  kind: DesktopEventWsDiagnosticKind;
+  scope?: string;
+  eventKind?: string;
+  seq?: number;
+  lastSeq?: number;
+  expectedSeq?: number;
+  epoch?: string;
+  reason?: string;
+  code?: number;
+  wasClean?: boolean;
+}
+
 declare global {
   interface Window {
     agentHub: {
@@ -445,6 +468,7 @@ declare global {
       logout(): Promise<{ ok: true }>;
       backendRequest(input: BackendProxyRequest): Promise<BackendProxyResponse>;
       backendUpload(input: BackendUploadRequest): Promise<BackendProxyResponse>;
+      recordEventWsDiagnostic(input: DesktopEventWsDiagnostic): Promise<void>;
       rotateHostToken(input: { hostId: string }): Promise<DesktopHostMutationResult>;
       revokeHost(input: { hostId: string }): Promise<DesktopHostMutationResult>;
       getHostProxyConfig(input: {

@@ -1,6 +1,10 @@
 import { EventEmitter } from 'node:events';
 import { ReplayBuffer, type ReplayEntry } from './replay-buffer.js';
 
+interface ScopeEventLogger {
+  info(obj: unknown, msg?: string): void;
+}
+
 /**
  * ScopeEventBus — the single in-process pub/sub hub for all real-time events.
  *
@@ -60,7 +64,7 @@ export class ScopeEventBus {
   /** Per-scope replay buffers. */
   private readonly buffers = new Map<string, ReplayBuffer>();
 
-  constructor(epochOverride?: string) {
+  constructor(epochOverride?: string, private readonly logger?: ScopeEventLogger) {
     this.epoch = epochOverride ?? crypto.randomUUID();
     // Allow unlimited listeners — ConversationManager + many WS subscribers.
     this.conversationEmitter.setMaxListeners(0);
@@ -109,6 +113,21 @@ export class ScopeEventBus {
 
     // Fanout to WS scope subscribers.
     const event: ScopedEvent = { scope, seq, epoch, kind, payload };
+    const listenerCount = this.scopeEmitter.listenerCount(scope);
+    if (shouldLogPublish(scope, kind)) {
+      this.logger?.info(
+        {
+          category: 'event_ws.publish',
+          scope,
+          conversationId: conversationIdFromScope(scope),
+          eventKind: kind,
+          seq,
+          epoch,
+          listenerCount,
+        },
+        'event ws publish',
+      );
+    }
     this.scopeEmitter.emit(scope, event);
   }
 
@@ -170,4 +189,12 @@ export class ScopeEventBus {
 
 function conversationKey(conversationId: string): string {
   return `conversation:${conversationId}`;
+}
+
+function conversationIdFromScope(scope: string): string | undefined {
+  return scope.startsWith('conversation:') ? scope.slice('conversation:'.length) : undefined;
+}
+
+function shouldLogPublish(scope: string, kind: string): boolean {
+  return scope.startsWith('conversation:') && kind === 'message';
 }

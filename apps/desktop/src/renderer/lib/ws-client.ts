@@ -30,6 +30,29 @@ interface ResumePosition {
   lastSeq: number;
 }
 
+type EventWsDiagnosticKind =
+  | 'socket_open'
+  | 'socket_close'
+  | 'authenticated'
+  | 'subscribed'
+  | 'message_event'
+  | 'live_gap'
+  | 'resume_sent'
+  | 'snapshot_required';
+
+interface EventWsDiagnostic {
+  kind: EventWsDiagnosticKind;
+  scope?: string;
+  eventKind?: string;
+  seq?: number;
+  lastSeq?: number;
+  expectedSeq?: number;
+  epoch?: string;
+  reason?: string;
+  code?: number;
+  wasClean?: boolean;
+}
+
 /**
  * @internal — exported for unit tests so they can construct a fresh
  * client without sharing state with the module-level `eventWsClient`
@@ -214,6 +237,7 @@ export class EventWsClient {
 
     ws.addEventListener('open', () => {
       if (this.ws !== ws) return;
+      recordEventWsDiagnostic({ kind: 'socket_open' });
       this.setStatus('authenticating');
     });
 
@@ -224,8 +248,13 @@ export class EventWsClient {
       this.handleFrame(frame);
     });
 
-    ws.addEventListener('close', () => {
+    ws.addEventListener('close', ev => {
       if (this.ws !== ws) return;
+      recordEventWsDiagnostic({
+        kind: 'socket_close',
+        code: ev.code,
+        wasClean: ev.wasClean,
+      });
       this.ws = null;
       this.confirmedScopes.clear();
       this.recovering.clear();
@@ -244,6 +273,7 @@ export class EventWsClient {
       this.confirmedScopes.clear();
       this.recovering.clear();
       this.resolvedViewerId = frame.viewerId;
+      recordEventWsDiagnostic({ kind: 'authenticated', epoch: frame.epoch });
       // Attach viewer wrappers BEFORE status flips to 'connected'.
       // `subscribe()` is then refcount-only (sendIfConnected gated on
       // status==='connected' returns early), so the canonical viewer
@@ -263,11 +293,26 @@ export class EventWsClient {
       // in-flight gap recovery for it is moot.
       this.recovering.delete(frame.scope);
       this.recordPosition(frame);
+      recordEventWsDiagnostic({
+        kind: 'subscribed',
+        scope: frame.scope,
+        seq: frame.seq,
+        epoch: frame.epoch,
+      });
     } else if (frame.type === 'event') {
       if (!this.acceptEventFrame(frame)) {
         // Gap detected (or a frame still beyond the cursor while recovery is
         // in flight): swallow it. The server's in-order replay redelivers it.
         return;
+      }
+      if (frame.kind === 'message') {
+        recordEventWsDiagnostic({
+          kind: 'message_event',
+          scope: frame.scope,
+          eventKind: frame.kind,
+          seq: frame.seq,
+          epoch: frame.epoch,
+        });
       }
     } else if (frame.type === 'snapshot_required') {
       this.positions.delete(frame.scope);
@@ -275,6 +320,11 @@ export class EventWsClient {
       // mismatch). Recovery is over — drop the latch and let the dispatched
       // frame drive a full refetch via the conversation hooks.
       this.recovering.delete(frame.scope);
+      recordEventWsDiagnostic({
+        kind: 'snapshot_required',
+        scope: frame.scope,
+        reason: frame.reason,
+      });
     }
 
     for (const listener of Array.from(this.frameListeners)) {
@@ -331,6 +381,15 @@ export class EventWsClient {
     if (frame.seq > previous.lastSeq + 1) {
       if (!this.recovering.has(frame.scope)) {
         this.recovering.add(frame.scope);
+        recordEventWsDiagnostic({
+          kind: 'live_gap',
+          scope: frame.scope,
+          eventKind: frame.kind,
+          seq: frame.seq,
+          lastSeq: previous.lastSeq,
+          expectedSeq: previous.lastSeq + 1,
+          epoch: frame.epoch,
+        });
         this.sendResume({ [frame.scope]: previous });
       }
       return false;
@@ -365,18 +424,27 @@ export class EventWsClient {
 
   private sendResume(scopes: ResumeFrame['scopes']): void {
     if (Object.keys(scopes).length === 0) return;
-    this.sendIfConnected({ type: 'resume', scopes });
+    if (!this.sendIfConnected({ type: 'resume', scopes })) return;
+    for (const [scope, position] of Object.entries(scopes)) {
+      recordEventWsDiagnostic({
+        kind: 'resume_sent',
+        scope,
+        epoch: position.epoch,
+        lastSeq: position.lastSeq,
+      });
+    }
   }
 
-  private sendIfConnected(frame: ClientFrame): void {
+  private sendIfConnected(frame: ClientFrame): boolean {
     if (
       this.status !== 'connected' ||
       !this.ws ||
       this.ws.readyState !== WebSocket.OPEN
     ) {
-      return;
+      return false;
     }
     this.send(frame);
+    return true;
   }
 
   private send(frame: ClientFrame): void {
@@ -504,6 +572,15 @@ export function onWsFrame(listener: WsClientListener): () => void {
 
 export function onWsStatus(listener: WsStatusListener): () => void {
   return eventWsClient.onStatus(listener);
+}
+
+function recordEventWsDiagnostic(input: EventWsDiagnostic): void {
+  if (typeof window === 'undefined') return;
+  const recorder = window.agentHub?.recordEventWsDiagnostic;
+  if (!recorder) return;
+  void recorder(input).catch(() => {
+    // Diagnostics must never affect the live WS delivery path.
+  });
 }
 
 function eventWsUrl(baseUrl: string): string {

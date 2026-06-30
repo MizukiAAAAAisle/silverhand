@@ -341,6 +341,29 @@ export type DesktopClearProfileResult =
   | { ok: true; cleared: boolean }
   | { ok: false; reason: 'unlink_failed'; detail: string };
 
+export type DesktopEventWsDiagnosticKind =
+  | 'socket_open'
+  | 'socket_close'
+  | 'authenticated'
+  | 'subscribed'
+  | 'message_event'
+  | 'live_gap'
+  | 'resume_sent'
+  | 'snapshot_required';
+
+export interface DesktopEventWsDiagnostic {
+  kind: DesktopEventWsDiagnosticKind;
+  scope?: string;
+  eventKind?: string;
+  seq?: number;
+  lastSeq?: number;
+  expectedSeq?: number;
+  epoch?: string;
+  reason?: string;
+  code?: number;
+  wasClean?: boolean;
+}
+
 const api = {
   getDesktopBuildConfig: async (): Promise<DesktopBuildConfig> =>
     desktopBuildConfig(),
@@ -355,6 +378,8 @@ const api = {
     ipcRenderer.invoke('backend:request', input),
   backendUpload: (input: BackendUploadRequest): Promise<BackendProxyResponse> =>
     ipcRenderer.invoke('backend:upload', input),
+  recordEventWsDiagnostic: (input: DesktopEventWsDiagnostic): Promise<void> =>
+    ipcRenderer.invoke('eventWs:diagnostic', input),
   /** Stage B.4 host management. Both calls are routed through
    *  dedicated main IPCs (NOT the generic backend proxy) because:
    *  rotate's HTTP response carries a cleartext `host_token` that

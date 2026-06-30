@@ -282,7 +282,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     blobStorage,
   });
 
-  const events = new ScopeEventBus();
+  const events = new ScopeEventBus(undefined, logger);
   const agentService = new AgentService({
     agents: new AgentRepo(db),
     blobStorage,
