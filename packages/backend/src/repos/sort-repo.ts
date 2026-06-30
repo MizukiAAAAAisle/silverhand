@@ -139,13 +139,19 @@ export class SortRepo {
   }
 
   /**
-   * Toggle THIS viewer's personal ⭐ star on an entity (#task:1209) and abandon
-   * their manual rank for it in the same write. Starring / unstarring crosses a
-   * hard-group boundary (starred ↔ the entity's kind group), so its arranged
-   * position is dropped and it falls to the new group's manual tail until
-   * re-dragged. This is the per-viewer analogue of the old global pin-boundary
-   * rank clear — star is personal view state now, so the clear is scoped to
-   * this viewer, never global. Recent-opened (last_accessed_at) is preserved.
+   * Toggle THIS viewer's personal ⭐ star on an entity (#task:1209), scoped to
+   * the acting viewer (never global — the old pin cleared all viewers' ranks).
+   * Recent-opened (last_accessed_at) is always preserved.
+   *
+   * Manual `rank` is cleared ONLY when the star crosses a hard-group boundary,
+   * which depends on the list (#task:1252):
+   *   - channel sidebar (`channels:<ws>`) hard-partitions by star
+   *     (`unstarred ↔ starred`), so star/unstar moves the entity between groups
+   *     → its arranged position is dropped (falls to the new group's manual tail).
+   *   - the workspace rail (`workspaces`) partitions by KIND only; star is the
+   *     global Favorites overlay, NOT a rail group, so a starred workspace/DM
+   *     stays in its `dm`/`regular` group → rank is PRESERVED (clearing it would
+   *     silently corrupt the viewer's manual order of that kind group).
    */
   setStarred(
     viewerUserId: string,
@@ -153,6 +159,9 @@ export class SortRepo {
     entityId: string,
     starred: boolean,
   ): void {
+    // Star crosses a hard group only where the list partitions by star — i.e.
+    // the channel sidebar, never the kind-partitioned workspace rail.
+    const crossesGroup = listKey.startsWith('channels:');
     if (starred) {
       const now = Date.now();
       this.db
@@ -161,8 +170,7 @@ export class SortRepo {
              (user_id, list_key, entity_id, rank, last_accessed_at, starred_at)
            VALUES (?, ?, ?, NULL, NULL, ?)
            ON CONFLICT(user_id, list_key, entity_id) DO UPDATE SET
-             starred_at = excluded.starred_at,
-             rank = NULL`,
+             starred_at = excluded.starred_at${crossesGroup ? ',\n             rank = NULL' : ''}`,
         )
         .run(viewerUserId, listKey, entityId, now);
     } else {
@@ -170,7 +178,7 @@ export class SortRepo {
       // no-op, so we never write a junk all-NULL entry).
       this.db
         .prepare<[string, string, string]>(
-          `UPDATE user_sort_entry SET starred_at = NULL, rank = NULL
+          `UPDATE user_sort_entry SET starred_at = NULL${crossesGroup ? ', rank = NULL' : ''}
            WHERE user_id = ? AND list_key = ? AND entity_id = ?`,
         )
         .run(viewerUserId, listKey, entityId);

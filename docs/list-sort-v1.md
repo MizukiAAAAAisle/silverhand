@@ -64,24 +64,28 @@ partitioned **live at sort time** from the viewer's own star state — never
 baked into a storage bucket key. This keeps star/unstar from having to migrate
 ranks across buckets.
 
-Hard groups (sort-time partition; manual drag is within a group, never across):
+Hard groups (sort-time partition; manual drag is within a group, never across).
+The two lists partition on **different axes**:
 
-- workspace rail: `starred` (cross-kind) / `dm` / `regular`. **Star is the
-  primary axis** (#task:1209): a starred regular workspace OR a starred DM both
-  land in the unified `starred` group; `dm` / `regular` hold only the
-  **unstarred** tail of that kind. DM (agent_home) workspaces are starrable
-  (`canStar = (regular || agent_home) && !archived`) — star is per-viewer view
-  state (`user_sort_entry.starred_at`), gated by can-view, never a shared
-  aggregate field. Archived workspaces are out of sorting scope entirely.
-- channel sidebar: `starred` / `unstarred`. Threads are out of sorting scope.
+- workspace rail: `dm` / `regular` — by **kind** only. **Star is NOT a rail
+  group** (#task:1252): it is the global Favorites overlay (see *Favorites*), so
+  a starred workspace OR DM stays in its kind group and is reorderable there. DM
+  (agent_home) workspaces are starrable (`canStar = (regular || agent_home) &&
+  !archived`) — star is per-viewer view state (`user_sort_entry.starred_at`),
+  gated by can-view, never a shared aggregate field. Archived workspaces are out
+  of sorting scope entirely.
+- channel sidebar: `starred` / `unstarred`. Still hard-partitions by THIS
+  viewer's star. Threads are out of sorting scope.
 
-Crossing a star boundary (star/unstar) **clears THIS viewer's manual rank** for
-the entity (`SortRepo.setStarred` does it in the same write), so it falls to the
-new group's manual tail until re-dragged — this also prevents the groups' dense
-rank numbering from colliding. Star is personal, so the clear is **scoped to the
-acting viewer** (the old global pin cleared all viewers' ranks via the now-removed
-`clearEntityRank`). A DM starred/unstarred crosses `dm ↔ starred`; a regular
-workspace crosses `regular ↔ starred`.
+Crossing a star boundary **clears THIS viewer's manual rank** for the entity
+(`SortRepo.setStarred`, same write) **only where the list partitions by star** —
+the channel sidebar (`unstarred ↔ starred`), so the entity falls to the new
+group's manual tail and the groups' dense rank numbering can't collide. The
+**workspace rail does NOT partition by star**, so star/unstar there **preserves**
+the entity's `dm`/`regular` rank — clearing it would silently corrupt the viewer's
+manual order of that kind group (#task:1252). Star is personal, so any clear is
+**scoped to the acting viewer** (the old global pin cleared all viewers' ranks via
+the now-removed `clearEntityRank`).
 
 ### Renderer composition (pure helper)
 
@@ -198,9 +202,11 @@ new `starred` scope and fall back to `recent` (another accepted reset).
 **v50 — `user_sort_entry.starred_at` (#task:1209).** Star is per-(user, list,
 entity) view state, the same grain as `rank` / `last_accessed_at`, so it joins
 this table rather than a new one (one cohesive "viewer's list view state"
-aggregate). `SortRepo.setStarred` upserts it and clears the acting viewer's
-`rank` for that entity in the same write (star/unstar crosses a hard-group
-boundary). **No seed:** the old global `workspaces.pinned_at` /
+aggregate). `SortRepo.setStarred` upserts it; in the same write it clears the
+acting viewer's `rank` for that entity **only on the channel sidebar**
+(`channels:<ws>`), where star crosses the `unstarred ↔ starred` boundary — on the
+workspace rail (kind-partitioned; star = Favorites overlay, #task:1252) the rank
+is **preserved**. **No seed:** the old global `workspaces.pinned_at` /
 `conversations.pinned_at` columns are NOT migrated into per-user stars — they go
 vestigial (still present, append-only; no longer read or written; stripped from
 every DTO so they never reach the wire).
@@ -233,9 +239,10 @@ Read state is carried **inline** on the list responses — no separate GET:
 
 `viewer_sort.modes` is a **per-scope map** (`Record<scope, 'recent'|'manual'>`,
 sparse — an absent scope means `recent`). Channel lists carry the single scope
-`''`; the rail carries up to `starred` / `dm` / `regular`. Read with the renderer
-helper `sortModeOf(state, group?)` — group omitted ⇒ scope `''` (so channel call
-sites are unchanged), rail passes its section group.
+`''`; the rail carries up to `dm` / `regular` (star is the Favorites overlay, not
+a rail scope). Read with the renderer helper `sortModeOf(state, group?)` — group
+omitted ⇒ scope `''` (so channel call sites are unchanged), rail passes its
+section group.
 
 `viewer_sort.entries[]` carries the per-entity state `{ entity_id, rank,
 last_accessed_at, starred_at }` (#task:1209). `starred_at` is the **only** source
@@ -248,13 +255,13 @@ Mutations return the authoritative `{ viewer_sort }` for optimistic reconcile
 
 - `PUT /api/sort/mode { list_key, group?, mode }` → `{ viewer_sort }`. Validates
   list scope (existence + visibility) like order/touch. `group` selects the mode
-  scope: `list_key 'workspaces'` **requires** a legal rail group (`starred|dm|
-  regular`); `channels:<ws>` **forbids** `group` (list-wide, scope `''`). A
+  scope: `list_key 'workspaces'` **requires** a legal rail group (`dm|regular`);
+  `channels:<ws>` **forbids** `group` (list-wide, scope `''`). A
   mismatch is a 400 (don't guess).
 - `PUT /api/sort/order { list_key, group, ordered_ids }` → `{ viewer_sort }`.
   `ordered_ids` must be **exactly** the live members of `group` (any order, no
   missing / extra / duplicate / cross-group id). `group` must be a legal hard
-  group for the list kind (rail: `starred|dm|regular`; channel:
+  group for the list kind (rail: `dm|regular`; channel:
   `starred|unstarred`) — an illegal group is rejected even with empty
   `ordered_ids`. The backend validates against live star/kind state and rejects
   otherwise (400) — a partial submission would leave other members' ranks stale
@@ -350,7 +357,9 @@ UNIONs it across every `list_key`.
   multi-surface (desktop + web + standalone), same human across surfaces; local
   storage would split per surface. localStorage v0 and recent-**active** were
   considered and rejected as fallbacks only.
-- Star is a personal hard top group (#task:1209); sort mode only orders *within*
-  a group. Cross-group drag is not an implicit star change. "Pin/Pinned 📌" is
-  reserved for a future SHARED axis and must not reuse the star storage/routes.
+- Star is a personal hard top group **on the channel sidebar** (#task:1209); on
+  the workspace rail star is the global Favorites overlay, not a group (#task:1252).
+  Sort mode only orders *within* a group. Cross-group drag is not an implicit star
+  change. "Pin/Pinned 📌" is reserved for a future SHARED axis and must not reuse
+  the star storage/routes.
 - Threads and the archived recovery index are out of the sorting model.

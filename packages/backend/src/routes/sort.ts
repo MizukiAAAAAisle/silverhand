@@ -34,10 +34,14 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { ctx, workspaces, conversations, sort } = deps;
 
-  /** The legal hard groups for a list kind — rail vs channel sidebar. */
+  /** The legal hard groups for a list kind — rail vs channel sidebar. The
+   *  workspace rail partitions by KIND only (`dm` / `regular`); star is NOT a
+   *  rail group — it is the global Favorites overlay (#task:1252,
+   *  docs/list-sort-v1.md), so a starred workspace/DM stays in its kind group.
+   *  The channel sidebar still hard-partitions by star (`starred` / `unstarred`). */
   function legalGroups(listKey: string): SortGroup[] {
     return listKey === 'workspaces'
-      ? ['starred', 'dm', 'regular']
+      ? ['dm', 'regular']
       : ['starred', 'unstarred'];
   }
 
@@ -66,18 +70,14 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
   ): { ok: true; groups: Map<string, SortGroup> } | { ok: false; status: 404 | 403 } {
     const principal = getUserPrincipal(c);
     const groups = new Map<string, SortGroup>();
-    // Star is per-VIEWER (#task:1209): the `starred` hard group is partitioned
-    // from THIS viewer's own star set, never a shared entity field.
-    const starred = new Set(sort.listStarredEntityIds(principal.userId, listKey));
     if (listKey === 'workspaces') {
+      // Workspace rail partitions by KIND only (#task:1252): star is the global
+      // Favorites overlay, not a rail group, so a starred workspace/DM stays in
+      // its kind group (`dm` / `regular`) and is reorderable there.
       for (const ws of workspaces.list()) {
         if (ws.archived_at != null) continue;
         if (!canViewWorkspace(ctx, principal, ws.id)) continue;
-        // Star is the PRIMARY axis: a starred workspace OR starred DM lands in
-        // the cross-kind `starred` group; only the unstarred tail splits by kind.
-        if (starred.has(ws.id)) {
-          groups.set(ws.id, 'starred');
-        } else if (ws.workspace_kind === 'agent_home') {
+        if (ws.workspace_kind === 'agent_home') {
           groups.set(ws.id, 'dm');
         } else if (ws.workspace_kind === 'regular') {
           groups.set(ws.id, 'regular');
@@ -85,7 +85,9 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
       }
       return { ok: true, groups };
     }
-    // 'channels:<ws_id>'
+    // 'channels:<ws_id>' — the channel sidebar still hard-partitions by THIS
+    // viewer's star set (#task:1209): a star crosses `unstarred ↔ starred`.
+    const starred = new Set(sort.listStarredEntityIds(principal.userId, listKey));
     const wsId = listKey.slice('channels:'.length);
     const workspace = workspaces.get(wsId);
     if (!workspace) return { ok: false, status: 404 };

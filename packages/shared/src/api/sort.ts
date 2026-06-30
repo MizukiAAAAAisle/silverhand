@@ -16,14 +16,17 @@ export const SortModeSchema = z.enum(['recent', 'manual']);
 export type SortMode = z.infer<typeof SortModeSchema>;
 
 /**
- * Hard-group descriptor for a manual reorder. Groups are partitioned LIVE
- * from the VIEWER's own star state — NOT stored on the entity. Star is the
- * PRIMARY axis on the rail: a starred workspace OR starred DM both land in the
- * cross-kind `starred` group; `dm` / `regular` hold only the UNSTARRED tail of
- * that kind (#task:1209). Star is per-viewer personal state — it lives in the
- * viewer's sort entries (`starred_at`), never as a shared aggregate field.
- *   workspace rail : 'starred' (cross-kind) | 'dm' | 'regular'
- *   channel sidebar: 'starred' | 'unstarred'
+ * Hard-group descriptor for a manual reorder. Groups are partitioned LIVE at
+ * sort time, never stored on the entity. The two lists partition on DIFFERENT
+ * axes:
+ *   workspace rail : 'dm' | 'regular' — by KIND only. Star is NOT a rail group;
+ *     it is the global Favorites overlay (#task:1252), so a starred workspace/DM
+ *     stays in its kind group and is reorderable there.
+ *   channel sidebar: 'starred' | 'unstarred' — still hard-partitions by THIS
+ *     viewer's star (#task:1209); a star crosses `unstarred ↔ starred`.
+ * `starred` therefore remains a legal group for the channel sidebar only. Star
+ * is per-viewer personal state — it lives in the viewer's sort entries
+ * (`starred_at`), never as a shared aggregate field.
  */
 export const SortGroupSchema = z.enum(['starred', 'dm', 'regular', 'unstarred']);
 export type SortGroup = z.infer<typeof SortGroupSchema>;
@@ -62,8 +65,8 @@ export type ViewerSortEntryDto = z.infer<typeof ViewerSortEntryDtoSchema>;
  *
  * `modes` is the per-SCOPE mode map (#task:1146). A scope is one independently
  * toggleable [recent|manual] axis within the list:
- *   - workspace rail : scope = the hard group ('starred' | 'dm' | 'regular') —
- *     each rail section has its own mode.
+ *   - workspace rail : scope = the hard group ('dm' | 'regular') — each rail
+ *     section has its own mode (star is the Favorites overlay, not a rail group).
  *   - channel sidebar: scope = '' (the sentinel "list-wide" scope) — one mode
  *     for the whole list, exactly as before.
  * Sparse: an absent scope means the default, 'recent'. Read with the renderer
