@@ -772,7 +772,7 @@ function TaskStatusPill({ status }: { status: TaskStatus }): JSX.Element {
     <span
       data-task-event-status={status}
       data-task-status={status}
-      className="inline-flex items-center rounded-full px-1.5 text-[10px] font-semibold uppercase leading-none tracking-wider"
+      className="inline-flex items-center whitespace-nowrap rounded-full px-1.5 text-[10px] font-semibold uppercase leading-none tracking-wider"
     >
       {labels[status]}
     </span>
