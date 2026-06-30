@@ -243,3 +243,166 @@ describe('GET /api/favorites', () => {
     expect(await favorites(t)).toEqual([]);
   });
 });
+
+// ── Favorites ordering (#task:1252 C) ──────────────────────────────────────
+// Favorites is a first-class sortable list (list_key='favorites'): a flat single
+// group, list-wide recent/manual + manual drag, reusing the `sort` context. The
+// read-model synthesizes `viewer_sort` keyed by `<kind>:<entity_id>` favorite
+// keys; recent reads the entity's HOME `last_accessed_at` (recently-OPENED), not
+// `starred_at`. Membership stays single-source in each home list's `starred_at`.
+
+async function favoritesFull(t: TestApp): Promise<{ items: any[]; viewer_sort: any }> {
+  const r = await http(t).get('/api/favorites');
+  expect(r.status).toBe(200);
+  return (await r.json()) as any;
+}
+
+function setHomeAccessed(t: TestApp, listKey: string, entityId: string, at: number): void {
+  const n = t.ctx.db
+    .prepare(
+      `UPDATE user_sort_entry SET last_accessed_at = ? WHERE user_id = 'local' AND list_key = ? AND entity_id = ?`,
+    )
+    .run(at, listKey, entityId).changes;
+  expect(n).toBe(1);
+}
+
+describe('Favorites ordering (list_key=favorites)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('emits viewer_sort keyed by kind-qualified favorite_key with the sort triple', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const wsId = await makeWorkspace(t, 'eng', agentId);
+    const chId = await makeChannel(t, wsId, 'general', agentId);
+    await http(t).post(`/api/workspaces/${wsId}/star`);
+    await http(t).post(`/api/channels/${chId}/star`);
+    setStarredAt(t, 'workspaces', wsId, 1000);
+    setStarredAt(t, `channels:${wsId}`, chId, 2000);
+    setHomeAccessed(t, 'workspaces', wsId, 7000);
+    setHomeAccessed(t, `channels:${wsId}`, chId, 8000);
+
+    const { items, viewer_sort } = await favoritesFull(t);
+    expect(viewer_sort.list_key).toBe('favorites');
+
+    // Rows carry the favorite_key (kind-qualified) + created_at.
+    const wsRow = items.find(i => i.entity_id === wsId);
+    const chRow = items.find(i => i.entity_id === chId);
+    expect(wsRow.favorite_key).toBe(`workspace:${wsId}`);
+    expect(chRow.favorite_key).toBe(`channel:${chId}`);
+    expect(typeof wsRow.created_at).toBe('number');
+
+    // Entries are keyed by favorite_key and carry rank + HOME last_accessed_at +
+    // starred_at — never the favorites row's own (null) last_accessed.
+    const byKey = Object.fromEntries(
+      viewer_sort.entries.map((e: any) => [e.entity_id, e]),
+    );
+    expect(byKey[`workspace:${wsId}`]).toMatchObject({
+      rank: null,
+      last_accessed_at: 7000,
+      starred_at: 1000,
+    });
+    expect(byKey[`channel:${chId}`]).toMatchObject({
+      rank: null,
+      last_accessed_at: 8000,
+      starred_at: 2000,
+    });
+  });
+
+  it('reorder via list_key=favorites writes per-favorite_key ranks (manual mode)', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const wsId = await makeWorkspace(t, 'eng', agentId);
+    const chId = await makeChannel(t, wsId, 'general', agentId);
+    await http(t).post(`/api/workspaces/${wsId}/star`);
+    await http(t).post(`/api/channels/${chId}/star`);
+
+    const wsKey = `workspace:${wsId}`;
+    const chKey = `channel:${chId}`;
+    const r = await http(t).put('/api/sort/order', {
+      list_key: 'favorites',
+      group: 'favorites',
+      ordered_ids: [chKey, wsKey],
+    });
+    expect(r.status).toBe(200);
+    const vs = ((await r.json()) as any).viewer_sort;
+    expect(vs.list_key).toBe('favorites');
+    expect(vs.modes['']).toBe('manual'); // order ⟹ manual on the list-wide scope
+    const byKey = Object.fromEntries(vs.entries.map((e: any) => [e.entity_id, e]));
+    expect(byKey[chKey].rank).toBe(0);
+    expect(byKey[wsKey].rank).toBe(1);
+  });
+
+  it('rejects a reorder id that is not a kind-qualified favorite_key', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const wsId = await makeWorkspace(t, 'eng', agentId);
+    await http(t).post(`/api/workspaces/${wsId}/star`);
+
+    // Bare entity_id (not `workspace:<id>`) is not a member of the favorites group.
+    const r = await http(t).put('/api/sort/order', {
+      list_key: 'favorites',
+      group: 'favorites',
+      ordered_ids: [wsId],
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('favorites reorder does NOT disturb the home-list (workspaces rail) ranks', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const wsId = await makeWorkspace(t, 'eng', agentId);
+    const chId = await makeChannel(t, wsId, 'general', agentId);
+    await http(t).post(`/api/workspaces/${wsId}/star`);
+    await http(t).post(`/api/channels/${chId}/star`);
+
+    // Give the workspace a manual rail rank in its HOME list.
+    t.ctx.db
+      .prepare(
+        `UPDATE user_sort_entry SET rank = 5 WHERE user_id = 'local' AND list_key = 'workspaces' AND entity_id = ?`,
+      )
+      .run(wsId);
+
+    // Reorder the FAVORITES list.
+    const r = await http(t).put('/api/sort/order', {
+      list_key: 'favorites',
+      group: 'favorites',
+      ordered_ids: [`channel:${chId}`, `workspace:${wsId}`],
+    });
+    expect(r.status).toBe(200);
+
+    // The home rail rank is untouched — favorites ordering is its own axis.
+    const homeRank = t.ctx.db
+      .prepare<[string], { rank: number | null }>(
+        `SELECT rank FROM user_sort_entry WHERE user_id = 'local' AND list_key = 'workspaces' AND entity_id = ?`,
+      )
+      .get(wsId);
+    expect(homeRank?.rank).toBe(5);
+  });
+
+  it('mode toggle on favorites is persisted list-wide (scope "")', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const wsId = await makeWorkspace(t, 'eng', agentId);
+    await http(t).post(`/api/workspaces/${wsId}/star`);
+
+    const r = await http(t).put('/api/sort/mode', {
+      list_key: 'favorites',
+      mode: 'manual',
+    });
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as any).viewer_sort.modes['']).toBe('manual');
+
+    // A group is list-wide here — passing one is rejected (don't guess).
+    const bad = await http(t).put('/api/sort/mode', {
+      list_key: 'favorites',
+      group: 'favorites',
+      mode: 'recent',
+    });
+    expect(bad.status).toBe(400);
+  });
+});
+

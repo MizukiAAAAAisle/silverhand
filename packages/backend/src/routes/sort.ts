@@ -13,6 +13,7 @@ import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { SortRepo } from '../repos/sort-repo.js';
 import { type AppContext, getUserPrincipal } from '../auth/principal.js';
 import { canViewWorkspace } from '../permissions.js';
+import { listFavorites } from '../read-model/favorites.js';
 
 export interface SortRouteDeps {
   ctx: BackendContext;
@@ -34,28 +35,48 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { ctx, workspaces, conversations, sort } = deps;
 
-  /** The legal hard groups for a list kind — rail vs channel sidebar. The
-   *  workspace rail partitions by KIND only (`dm` / `regular`); star is NOT a
-   *  rail group — it is the global Favorites overlay (#task:1252,
-   *  docs/list-sort-v1.md), so a starred workspace/DM stays in its kind group.
-   *  The channel sidebar still hard-partitions by star (`starred` / `unstarred`). */
+  /** The legal hard groups for a list kind. The workspace rail partitions by
+   *  KIND only (`dm` / `regular`); star is NOT a rail group — it is the global
+   *  Favorites overlay (#task:1252, docs/list-sort-v1.md), so a starred
+   *  workspace/DM stays in its kind group. The channel sidebar still
+   *  hard-partitions by star (`starred` / `unstarred`). The global Favorites list
+   *  is a single FLAT group (`favorites`) — sortable but not sub-partitioned. */
   function legalGroups(listKey: string): SortGroup[] {
-    return listKey === 'workspaces'
-      ? ['dm', 'regular']
-      : ['starred', 'unstarred'];
+    if (listKey === 'workspaces') return ['dm', 'regular'];
+    if (listKey === 'favorites') return ['favorites'];
+    return ['starred', 'unstarred'];
   }
 
   /**
    * The mode SCOPE a (list, group) pair toggles. The rail's mode is per
-   * section, so each hard group is its own scope; the channel sidebar is
-   * list-wide, so every group resolves to the sentinel scope ''. This is the
-   * single source for both `setMode` and `reorder` (order ⟹ manual) so the
-   * mode a drag flips matches the mode a menu sets — and it mirrors the
-   * renderer's `modeScopeOf`, so optimistic write and server agree. Pass a
-   * group already validated as legal for the list.
+   * section, so each hard group is its own scope; the channel sidebar and the
+   * favorites list are list-wide, so every group resolves to the sentinel scope
+   * ''. This is the single source for both `setMode` and `reorder` (order ⟹
+   * manual) so the mode a drag flips matches the mode a menu sets — and it
+   * mirrors the renderer's `modeScopeOf`, so optimistic write and server agree.
+   * Pass a group already validated as legal for the list.
    */
   function modeScopeOf(listKey: string, group: SortGroup): string {
     return listKey === 'workspaces' ? group : '';
+  }
+
+  /**
+   * The authoritative `viewer_sort` to echo after a mode/order mutation. For the
+   * favorites list it is the SYNTHESIZED state (rank from `favorites` + home
+   * last_accessed_at/starred_at, keyed by favorite_key) — never raw `getState`,
+   * whose `favorites` rows carry rank only. Every other list reads straight from
+   * the sort repo, filtered to the live visible set.
+   */
+  function viewerSortFor(
+    c: AppContext,
+    listKey: string,
+    visibleEntityIds: Iterable<string>,
+  ) {
+    const principal = getUserPrincipal(c);
+    if (listKey === 'favorites') {
+      return listFavorites(ctx, { viewerUserId: principal.userId }).viewer_sort;
+    }
+    return sort.getState(principal.userId, listKey, visibleEntityIds);
   }
 
   /**
@@ -82,6 +103,18 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
         } else if (ws.workspace_kind === 'regular') {
           groups.set(ws.id, 'regular');
         }
+      }
+      return { ok: true, groups };
+    }
+    if (listKey === 'favorites') {
+      // The global Favorites list — a single flat group keyed by favorite_key
+      // (`<kind>:<entity_id>`). Membership is exactly the read-model's projected
+      // set (starred ∧ viewer-visible ∧ non-archived), so reorder validation and
+      // the GET response can never diverge. Always the viewer's own state — no
+      // 404/403 (the route gate is canViewOwnedState).
+      for (const item of listFavorites(ctx, { viewerUserId: principal.userId })
+        .items) {
+        groups.set(item.favorite_key, 'favorites');
       }
       return { ok: true, groups };
     }
@@ -141,11 +174,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     const scope = group !== undefined ? modeScopeOf(listKey, group) : '';
     sort.setMode(principal.userId, listKey, scope, mode);
     return c.json({
-      viewer_sort: sort.getState(
-        principal.userId,
-        listKey,
-        resolved.groups.keys(),
-      ),
+      viewer_sort: viewerSortFor(c, listKey, resolved.groups.keys()),
     });
   });
 
@@ -207,7 +236,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
       orderedIds,
     );
     return c.json({
-      viewer_sort: sort.getState(principal.userId, listKey, resolved.groups.keys()),
+      viewer_sort: viewerSortFor(c, listKey, resolved.groups.keys()),
     });
   });
 

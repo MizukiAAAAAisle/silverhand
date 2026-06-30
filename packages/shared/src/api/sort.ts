@@ -17,30 +17,48 @@ export type SortMode = z.infer<typeof SortModeSchema>;
 
 /**
  * Hard-group descriptor for a manual reorder. Groups are partitioned LIVE at
- * sort time, never stored on the entity. The two lists partition on DIFFERENT
+ * sort time, never stored on the entity. The lists partition on DIFFERENT
  * axes:
  *   workspace rail : 'dm' | 'regular' — by KIND only. Star is NOT a rail group;
  *     it is the global Favorites overlay (#task:1252), so a starred workspace/DM
  *     stays in its kind group and is reorderable there.
  *   channel sidebar: 'starred' | 'unstarred' — still hard-partitions by THIS
  *     viewer's star (#task:1209); a star crosses `unstarred ↔ starred`.
- * `starred` therefore remains a legal group for the channel sidebar only. Star
- * is per-viewer personal state — it lives in the viewer's sort entries
- * (`starred_at`), never as a shared aggregate field.
+ *   favorites list : 'favorites' — a single FLAT group (#task:1252 C). The global
+ *     Favorites list is sortable on its own axis (recent/manual + drag) but is not
+ *     sub-partitioned: every member sits in the one `favorites` group.
+ * `starred` is a legal group for the channel sidebar only; `favorites` for the
+ * favorites list only. Star is per-viewer personal state — it lives in the
+ * viewer's sort entries (`starred_at`), never as a shared aggregate field.
  */
-export const SortGroupSchema = z.enum(['starred', 'dm', 'regular', 'unstarred']);
+export const SortGroupSchema = z.enum([
+  'starred',
+  'dm',
+  'regular',
+  'unstarred',
+  'favorites',
+]);
 export type SortGroup = z.infer<typeof SortGroupSchema>;
 
 /**
  * `list_key` namespaces a list:
  *   'workspaces'        — the workspace rail (one per viewer)
  *   'channels:<ws_id>'  — one workspace's channel sidebar
+ *   'favorites'         — the global Favorites list's ordering state (#task:1252 C):
+ *                         rank + the list-wide mode only, keyed by `<kind>:<entity_id>`
+ *                         favorite keys. Membership stays single-source in each
+ *                         entity's HOME list (`starred_at`); `favorites` never
+ *                         stores what is starred, only how the list is arranged.
  */
 export const SortListKeySchema = z
   .string()
-  .refine(v => v === 'workspaces' || v.startsWith('channels:'), {
-    message: "list_key must be 'workspaces' or 'channels:<ws_id>'",
-  });
+  .refine(
+    v => v === 'workspaces' || v === 'favorites' || v.startsWith('channels:'),
+    {
+      message:
+        "list_key must be 'workspaces', 'favorites', or 'channels:<ws_id>'",
+    },
+  );
 
 /** Per-entity viewer state. rank/last_accessed_at/starred_at are null until set.
  *  `starred_at` is the personal ⭐ favorite (#task:1209): non-null = starred. It is

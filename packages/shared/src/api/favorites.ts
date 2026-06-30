@@ -23,6 +23,7 @@
 // unchanged list endpoints.
 import { z } from 'zod';
 import { RuntimeKindSchema } from '../db/schema.js';
+import { ViewerSortStateDtoSchema } from './sort.js';
 
 /**
  * Which rail-row recipe a favorite uses. Maps the heterogeneous starred
@@ -53,8 +54,18 @@ export type FavoriteKind = z.infer<typeof FavoriteKindSchema>;
  */
 export const FavoriteRowDtoSchema = z.object({
   kind: FavoriteKindSchema,
-  /** The starred entity's id — `user_sort_entry.entity_id`. React key AND the
-   *  unstar path param: workspace/dm → workspace id; channel → conversation id. */
+  /** The favorites list's stable sort identity: `<kind>:<entity_id>` (e.g.
+   *  `workspace:ws_…`, `dm:ws_…`, `channel:cv_…`). This is the renderer's row key
+   *  / drag key AND the `entity_id` under which the favorites ordering state lives
+   *  (`user_sort_entry.list_key='favorites'`, and the matching
+   *  `viewer_sort.entries[].entity_id`). KIND-qualified — never a bare id — so the
+   *  cross-kind flat list cannot collide a workspace and a channel that happen to
+   *  share an id, and a DM (kind 'dm') is distinct from a same-id regular
+   *  workspace (kind 'workspace'). */
+  favorite_key: z.string(),
+  /** The starred entity's id — `user_sort_entry.entity_id` in its HOME list. The
+   *  unstar path param: workspace/dm → workspace id; channel → conversation id.
+   *  NOT the favorites sort key (that is `favorite_key`). */
   entity_id: z.string(),
   /** Deep-link workspace. workspace/dm: === `entity_id`. channel: the PARENT
    *  workspace id (target of `toChannel(workspace_id, channel_id)`). */
@@ -80,10 +91,16 @@ export const FavoriteRowDtoSchema = z.object({
   /** dm rows only (else null): the bound agent's runtime, used by the renderer's
    *  AgentAvatar fallback badge when `icon_url` is null. */
   runtime: RuntimeKindSchema.nullable(),
-  /** The star timestamp. The canonical flat-list order is `starred_at` DESC and
-   *  the read-model returns rows already in that order; exposed so the renderer
-   *  can re-derive or tiebreak. */
+  /** The star timestamp (home list's `starred_at`). Display/debug only — the
+   *  flat-list ORDER now comes from `viewer_sort` (recent → `last_accessed_at`,
+   *  manual → `rank`), not from this field. Also mirrored into
+   *  `viewer_sort.entries[].starred_at` as the recent-mode NULL tiebreak. */
   starred_at: z.number(),
+  /** The entity's creation time (`workspaces.created_at` / `conversations.created_at`).
+   *  The renderer's `getCreatedAt` — the final STABLE tiebreak for recent mode
+   *  when `last_accessed_at` is null/equal, so order never falls back to
+   *  insertion/SQL order. */
+  created_at: z.number(),
   /** Reserved for a future per-favorite unread badge. v1 always null — Favorites
    *  is a pure navigation list. Nullable so adding it later is non-breaking. */
   unread_count: z.number().nullable(),
@@ -91,9 +108,27 @@ export const FavoriteRowDtoSchema = z.object({
 export type FavoriteRowDto = z.infer<typeof FavoriteRowDtoSchema>;
 
 /**
- * `GET /api/favorites` response — the viewer's flat favorites, pre-sorted
- * `starred_at` DESC. GLOBAL scope (no workspace filter), mirroring the Activity
- * list: a favorite can point anywhere the viewer has access.
+ * `GET /api/favorites` response — the viewer's flat favorites plus their
+ * favorites ordering state. GLOBAL scope (no workspace filter), mirroring the
+ * Activity list: a favorite can point anywhere the viewer has access.
+ *
+ * SORT MODEL (#task:1252 C). Favorites is a first-class sortable list with its
+ * OWN viewer-scoped ordering state under `list_key='favorites'` — a flat, single
+ * group, list-wide [recent|manual] toggle + manual drag, reusing the entire
+ * `sort` bounded context. It does NOT reuse the rail's old `workspaces`/`starred`
+ * scope (that one only ordered workspaces/DMs and made star a rail hard group).
+ * The backend does NOT pre-sort `items`; the renderer composes the order with the
+ * shared list-sort helper from `viewer_sort`, exactly like the rail / channel
+ * sidebar:
+ *   - membership / star truth stays single-source: `user_sort_entry.starred_at`
+ *     in each entity's HOME list. The `favorites` list_key stores ONLY ordering
+ *     (rank + the list-wide mode), never membership.
+ *   - `viewer_sort.entries[]` is keyed by `favorite_key` and carries the sort
+ *     triple the renderer's `sortEntryLookup` needs: `rank` (from the `favorites`
+ *     list_key) + `last_accessed_at` (from the entity's HOME list — recent =
+ *     recently-OPENED, never "recently starred") + `starred_at` (home, tiebreak).
+ *   - `recent` orders by `last_accessed_at` DESC (NULLs last → `created_at` →
+ *     `favorite_key`); `manual` orders by `rank`.
  *
  * Membership contract (the read-model enforces; written here so it is not
  * hidden in SQL): a row appears IFF the viewer can still access the entity AND
@@ -103,9 +138,16 @@ export type FavoriteRowDto = z.infer<typeof FavoriteRowDtoSchema>;
  * `conversation_users` member, the conversation and its parent workspace are
  * both non-archived. A starred entity that becomes inaccessible or archived is
  * HIDDEN, not deleted: its `user_sort_entry.starred_at` row persists, so the
- * favorite reappears if the entity is restored / re-shared.
+ * favorite reappears if the entity is restored / re-shared. A leftover
+ * `favorites` ordering row for an unstarred entity is a harmless orphan —
+ * unprojected while not a member, its rank restored if re-starred.
  */
 export const ListFavoritesDtoSchema = z.object({
   items: z.array(FavoriteRowDtoSchema),
+  /** The viewer's favorites ordering state (`list_key='favorites'`): the
+   *  list-wide mode (`modes['']`) + per-`favorite_key` entries (rank +
+   *  home-derived last_accessed_at/starred_at). Mutated via
+   *  `PUT /api/sort/order|mode` with `list_key='favorites'`. */
+  viewer_sort: ViewerSortStateDtoSchema,
 });
 export type ListFavoritesDto = z.infer<typeof ListFavoritesDtoSchema>;

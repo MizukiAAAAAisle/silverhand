@@ -1,10 +1,24 @@
 // Read-model for the global Favorites list (#task:1252, docs/list-sort-v1.md).
-// Favorites is a read-side projection over the `sort` bounded context: it owns
-// NO storage. Every row is projected from the single `user_sort_entry.starred_at`
-// fact, UNIONed across every list_key — the workspace rail
-// (`list_key = 'workspaces'`) and every channel sidebar
+// Favorites is a read-side projection over the `sort` bounded context. Its
+// MEMBERSHIP owns NO storage: every row is projected from the single
+// `user_sort_entry.starred_at` fact, UNIONed across every HOME list_key — the
+// workspace rail (`list_key = 'workspaces'`) and every channel sidebar
 // (`list_key = 'channels:<ws_id>'`). Dependency direction is one-way:
 // routes → read-model. Nothing here writes.
+//
+// ORDERING (#task:1252 C) is the one thing Favorites stores for itself: a
+// first-class viewer-scoped sort state under `list_key='favorites'` — a flat,
+// single-group, list-wide [recent|manual] toggle + manual drag, reusing the
+// `sort` context. It does NOT reuse the rail's old `workspaces`/`starred` scope.
+// This read-model SYNTHESIZES the `viewer_sort` the renderer composes from:
+//   - keyed by `<kind>:<entity_id>` favorite keys (cross-kind flat list — a bare
+//     id could collide a workspace and a channel, and would not distinguish a DM
+//     from a same-id regular workspace);
+//   - each entry carries rank (from the `favorites` list_key) + last_accessed_at
+//     (from the entity's HOME list — recent = recently-OPENED, never "recently
+//     starred") + starred_at (home, the recent-mode NULL tiebreak).
+// The backend does NOT pre-sort `items`; the renderer composes order from
+// `viewer_sort` with the shared list-sort helper, exactly like the rail / sidebar.
 //
 // MEMBERSHIP CONTRACT (enforced below; stated in prose so it is not hidden in
 // SQL). A starred entity appears IFF the viewer can still access it AND it is
@@ -19,7 +33,9 @@
 //       AND  c.archived_at IS NULL  AND  parent.archived_at IS NULL.
 // An inaccessible / archived favorite is HIDDEN, not deleted: its
 // `user_sort_entry.starred_at` row persists, so the favorite reappears if the
-// entity is restored / re-shared. This mirrors the sort read-model's orphan-hide.
+// entity is restored / re-shared. A leftover `favorites` ordering row for an
+// unstarred entity is likewise a harmless orphan — unprojected while not a
+// member, its rank restored if re-starred. This mirrors orphan-hide elsewhere.
 //
 // Favorites is human viewer-scoped — the only principal kind that stars — so the
 // visibility predicate is the canViewWorkspace/canViewConversation USER branch
@@ -30,6 +46,8 @@ import {
   type FavoriteRowDto,
   type ListFavoritesDto,
   type RuntimeKind,
+  type SortMode,
+  type ViewerSortEntryDto,
 } from '@silverhand/shared';
 
 export interface ListFavoritesParams {
@@ -41,6 +59,8 @@ export interface ListFavoritesParams {
 interface WorkspaceFavoriteRow {
   entity_id: string;
   starred_at: number;
+  last_accessed_at: number | null;
+  created_at: number;
   workspace_kind: 'regular' | 'agent_home';
   workspace_name: string;
   owner_agent_id: string | null;
@@ -56,14 +76,24 @@ interface WorkspaceFavoriteRow {
 interface ChannelFavoriteRow {
   entity_id: string;
   starred_at: number;
+  last_accessed_at: number | null;
+  created_at: number;
   workspace_id: string;
   title: string;
   parent_workspace_name: string;
 }
 
+/** The kind-qualified favorites sort key — the renderer row/drag key AND the
+ *  `entity_id` under `user_sort_entry.list_key='favorites'`. */
+export function favoriteKey(kind: FavoriteRowDto['kind'], entityId: string): string {
+  return `${kind}:${entityId}`;
+}
+
 /**
- * Project the viewer's flat Favorites list. Pure read; returns a DTO the client
- * renders as-is, pre-sorted `starred_at` DESC.
+ * Project the viewer's flat Favorites list plus its ordering state. Pure read.
+ * `items` carry display identity + the favorite_key/created_at the renderer
+ * needs; `viewer_sort` (list_key='favorites') carries the per-favorite_key sort
+ * triple the renderer composes order from. The backend does not pre-sort.
  */
 export function listFavorites(
   ctx: BackendContext,
@@ -73,11 +103,15 @@ export function listFavorites(
 
   // ── workspace + dm favorites (list_key='workspaces') ──────────────────────
   // Visibility = workspace_users membership; archived workspaces are excluded.
+  // `last_accessed_at` is the HOME-list recent-opened stamp — recent mode reads
+  // it so "recent" means recently-OPENED (from anywhere), not recently-starred.
   const workspaceRows = ctx.db
     .prepare<{ viewer: string }, WorkspaceFavoriteRow>(
       `SELECT
          use.entity_id        AS entity_id,
          use.starred_at       AS starred_at,
+         use.last_accessed_at AS last_accessed_at,
+         w.created_at         AS created_at,
          w.workspace_kind     AS workspace_kind,
          w.name               AS workspace_name,
          w.owner_agent_id     AS owner_agent_id,
@@ -112,11 +146,13 @@ export function listFavorites(
   const channelRows = ctx.db
     .prepare<{ viewer: string }, ChannelFavoriteRow>(
       `SELECT
-         use.entity_id  AS entity_id,
-         use.starred_at AS starred_at,
-         c.workspace_id AS workspace_id,
-         c.title        AS title,
-         pw.name        AS parent_workspace_name
+         use.entity_id        AS entity_id,
+         use.starred_at       AS starred_at,
+         use.last_accessed_at AS last_accessed_at,
+         c.created_at         AS created_at,
+         c.workspace_id       AS workspace_id,
+         c.title              AS title,
+         pw.name              AS parent_workspace_name
        FROM user_sort_entry use
        JOIN conversations c ON c.id = use.entity_id
        JOIN conversation_users cu
@@ -142,10 +178,47 @@ export function listFavorites(
     )
     .all({ viewer: viewerUserId });
 
+  // ── favorites ordering state (list_key='favorites') ───────────────────────
+  // Manual rank per favorite_key + the list-wide mode. These are the ONLY thing
+  // Favorites stores for itself; membership above is the single source of truth.
+  const rankByKey = new Map<string, number>();
+  for (const r of ctx.db
+    .prepare<{ viewer: string }, { entity_id: string; rank: number }>(
+      `SELECT entity_id, rank FROM user_sort_entry
+       WHERE user_id = @viewer AND list_key = 'favorites' AND rank IS NOT NULL`,
+    )
+    .all({ viewer: viewerUserId })) {
+    rankByKey.set(r.entity_id, r.rank);
+  }
+  const modes: Record<string, SortMode> = {};
+  for (const r of ctx.db
+    .prepare<{ viewer: string }, { scope: string; mode: SortMode }>(
+      `SELECT scope, mode FROM user_list_sort_mode
+       WHERE user_id = @viewer AND list_key = 'favorites'`,
+    )
+    .all({ viewer: viewerUserId })) {
+    modes[r.scope] = r.mode;
+  }
+
   const items: FavoriteRowDto[] = [];
+  const entries: ViewerSortEntryDto[] = [];
+  const pushEntry = (
+    key: string,
+    starredAt: number,
+    lastAccessedAt: number | null,
+  ) => {
+    entries.push({
+      entity_id: key,
+      rank: rankByKey.get(key) ?? null,
+      last_accessed_at: lastAccessedAt,
+      starred_at: starredAt,
+    });
+  };
 
   for (const r of workspaceRows) {
     const isDm = r.workspace_kind === 'agent_home';
+    const kind = isDm ? 'dm' : 'workspace';
+    const key = favoriteKey(kind, r.entity_id);
     // DM identity comes from the bound agent; a regular workspace uses its name
     // and has no icon storage (icon_url stays null → renderer monogram/W glyph).
     const avatarUrl =
@@ -153,7 +226,8 @@ export function listFavorites(
         ? `${apiPaths.agentAvatar(r.owner_agent_id)}?v=${r.agent_updated_at ?? 0}`
         : null;
     items.push({
-      kind: isDm ? 'dm' : 'workspace',
+      kind,
+      favorite_key: key,
       entity_id: r.entity_id,
       workspace_id: r.entity_id,
       channel_id: null,
@@ -166,13 +240,17 @@ export function listFavorites(
       icon_url: avatarUrl,
       runtime: isDm ? r.agent_runtime : null,
       starred_at: r.starred_at,
+      created_at: r.created_at,
       unread_count: null,
     });
+    pushEntry(key, r.starred_at, r.last_accessed_at);
   }
 
   for (const r of channelRows) {
+    const key = favoriteKey('channel', r.entity_id);
     items.push({
       kind: 'channel',
+      favorite_key: key,
       entity_id: r.entity_id,
       workspace_id: r.workspace_id,
       channel_id: r.entity_id,
@@ -181,18 +259,26 @@ export function listFavorites(
       icon_url: null,
       runtime: null,
       starred_at: r.starred_at,
+      created_at: r.created_at,
       unread_count: null,
     });
+    pushEntry(key, r.starred_at, r.last_accessed_at);
   }
 
-  // Canonical flat order: most-recently-starred first, with a deterministic
-  // entity_id tiebreak so entities starred in the same millisecond keep a stable
-  // order across reads / restarts (never falling back to SQL/insertion order).
+  // Stable default array order (most-recently-starred first, entity_id tiebreak)
+  // so an unsorted client / a test reading items raw sees a deterministic order.
+  // The authoritative display order is composed by the renderer from viewer_sort
+  // (recent → last_accessed_at / manual → rank); this is only the fallback.
   items.sort(
     (a, b) =>
       b.starred_at - a.starred_at ||
-      (a.entity_id < b.entity_id ? -1 : a.entity_id > b.entity_id ? 1 : 0),
+      (a.favorite_key < b.favorite_key
+        ? -1
+        : a.favorite_key > b.favorite_key
+          ? 1
+          : 0),
   );
 
-  return { items };
+  return { items, viewer_sort: { list_key: 'favorites', modes, entries } };
 }
+

@@ -14,6 +14,16 @@
 - **additive overlay 非 hard-partition**（契约写进 DTO 头 + doc）：starred 实体留主组 + Favorites 叠加，**禁**用「从主组过滤掉」实现（旧 `isWorkspaceStarred` hard group 即此，本轮 supersede）。shiki 拍板（独占会让用户找不到原可见的 ws/channel）。
 - 验证：`pnpm -r typecheck` 全绿；backend favorites.test.ts 8 例 + sort/channels/endpoint-registry 回归 69 例全过；endpoint snapshot 重生成（仅 +`GET /api/favorites`）。**renderer（#1253）= Norman lane，并行中**（`useFavorites` hook + 新 `FavoritesGroup`/`FavoriteRow` + Sidebar 去 starred 抽离）。
 
+### 追加（#task:1252 C，shiki 拍）：Favorites 可排序（recent/manual + 拖拽）
+
+shiki 要 STARRED overlay 自己能排序（跟旧 rail STARRED 一致）。**「零存储」前提反转**——Favorites 新增**自己的 ordering state**（`list_key='favorites'`，复用整个 `sort` 限界上下文，无新表），但 **membership 仍单源** `starred_at`：`favorites` 只存「怎么排」，不存「什么被收藏」。
+
+- **扁平单组** `'favorites'`、**list-wide [recent|manual]**（scope `''`，同频道侧栏）+ 拖拽，走 `PUT /api/sort/order|mode` 放行 `list_key='favorites'`。后端不再 pre-sort，renderer 用 `useListDragSort` 纯组合。
+- **`favorite_key = <kind>:<entity_id>`**（kind 限定，防跨表 id 撞）= renderer row/drag key = reorder `ordered_ids` 元素 = `user_sort_entry.list_key='favorites'` 的 `entity_id` = `viewer_sort.entries[].entity_id`。
+- **`recent` = 主组 `last_accessed_at`**（最近**打开**，非 `starred_at`），NULL 兜底 → `created_at` → `favorite_key`；**`manual` = favorites `rank`**。read-model **synthesize** `viewer_sort`（favorites-rank ⋈ home-last_accessed），renderer 零特判。
+- DTO 补 `favorite_key` + `created_at`，`ListFavoritesDto` 加 `viewer_sort`。unstar 后的 favorites rank 行 = 无害孤儿（不投影、re-star 复现）。
+- 验证：`pnpm --filter {shared,backend} typecheck` 绿；backend 全量 **1680 pass/1 skip**（favorites +5 新例钉 viewer_sort/favorite_key/recent 源/reorder 不串主组/mode list-wide）。renderer = Norman #1254。
+
 ---
 
 ## 2026-06-27 — observe() 坍缩 + 退役 legacy mark-read route（#task:1231/#1232，in_review）
