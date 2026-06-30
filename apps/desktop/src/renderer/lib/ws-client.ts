@@ -125,8 +125,10 @@ export class EventWsClient {
     this.confirmedScopes.clear();
     this.recovering.clear();
     this.resolvedViewerId = null;
-    // Detach viewer wrappers so desiredScopes/positions for the canonical
-    // `viewer:<id>` are released. They'll re-attach on the next connect()
+    // Detach viewer wrappers so the canonical `viewer:<id>` subscription
+    // state — desiredScopes refcount + confirmed — is released. The
+    // transport cursor (`positions[scope]`) is deliberately retained so a
+    // later resume can replay; wrappers re-attach on the next connect()
     // → authenticated cycle if the wrapper handle is still live.
     for (const sub of Array.from(this.viewerSubscribers)) {
       sub.detach();
@@ -315,8 +317,10 @@ export class EventWsClient {
       this.send({ type: 'pong' });
     } else if (frame.type === 'subscribed') {
       this.confirmedScopes.add(frame.scope);
-      // A subscription confirmation re-baselines the scope's cursor, so any
-      // in-flight gap recovery for it is moot.
+      // The ack confirms the listener is registered; any in-flight gap
+      // recovery for the scope is moot. Whether the cursor baselines from
+      // the ack depends on the retained position (see below) — it is NOT an
+      // unconditional re-baseline.
       this.recovering.delete(frame.scope);
       // Baseline from the ack ONLY when there's no usable retained cursor.
       // A same-epoch retained cursor is client-authoritative: `sendSubscribe`
