@@ -30,10 +30,12 @@
  *     cursor — placeholder pane has no real conversation to mark
  *     read.
  *   - `focusedConversation` — the *one* conversation the user is
- *     considered to be focused on. Drives toast suppression,
- *     notification badge clearing, and the IPC `setActiveConversation`
- *     payload (which only accepts a single id). Rule: resolved
- *     secondary > primary; non-resolved secondary doesn't take focus.
+ *     considered to be focused on. Drives toast suppression and the IPC
+ *     `setActiveConversation` payload (which only accepts a single id).
+ *     Focus is a PASSIVE surface — it does NOT clear notification badges
+ *     / write `read_at` (surfaced ≠ eliminated, #task:1244). Rule:
+ *     resolved secondary > primary; non-resolved secondary doesn't take
+ *     focus.
  */
 
 import type { ConversationByIdResult } from '@/features/conversations/useConversationById';
@@ -352,13 +354,16 @@ export interface FocusSelectionInputs {
  * Compute the *single* "focused" conversation. Drives:
  *   - `useNotificationToasts(focused.id)` — suppress in-app toasts for
  *     it (user can already see them).
- *   - `markConversationNotificationsRead.mutate(focused.id)` — clear notification badges.
  *   - `window.agentHub.setActiveConversation({workspaceId, conversationId})`
  *     — IPC contract is single-id; main process uses it for tray /
  *     dock badging and the events window. PR-2: workspaceId now flows
  *     from the secondary descriptor when secondary is focused, so
  *     cross-workspace focus emits the *target* workspace id, not the
  *     primary's.
+ *
+ * Focus drives the above ONLY; it does NOT clear notification badges /
+ * write `read_at` — focus is a passive surface (surfaced ≠ eliminated,
+ * #task:1244). Directed claims clear only via active eliminate intent.
  *
  * Rule (preserves the legacy `openThreadId ?? selectedChannelId` semantic):
  *   - Resolved secondary (split or fullscreen) wins.
@@ -403,8 +408,9 @@ export function selectFocusedConversation(
  * non-resolved (a placeholder has no conversation to mark read or
  * silence toasts for). Without this gate, fullscreen + non-resolved
  * would hide primary in the DOM while still advancing primary's read
- * cursor and clearing primary's notification badge — Cindy review of
- * commit `e9278a7` flagged this as a state/render fork.
+ * cursor — Cindy review of commit `e9278a7` flagged this as a
+ * state/render fork. (Focus no longer touches notification badges at
+ * all — #task:1244 — so only the read-cursor fork remains.)
  *
  * Pure helper so the render-time decision can be unit-tested without
  * mounting React.
