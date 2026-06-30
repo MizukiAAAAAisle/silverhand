@@ -209,11 +209,14 @@ describe('EventWsClient — viewer scope canonicalisation', () => {
     });
 
     // Server confirms the canonical subscription and pushes an event.
+    // Seqs are per-scope contiguous (see scope-event-bus `nextSeq`), so the
+    // event after a `subscribed` at seq 9 is seq 10 — the client now treats
+    // a non-contiguous jump as a dropped-frame gap (#1241), not normal flow.
     ws1.fireMessage({
       type: 'subscribed',
       scope: 'viewer:u-alice',
       epoch: 'epoch-1',
-      seq: 7,
+      seq: 9,
     });
     ws1.fireMessage({
       type: 'event',
@@ -307,5 +310,137 @@ describe('EventWsClient — viewer scope canonicalisation', () => {
       JSON.stringify(frame).includes('viewer:self'),
     );
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * #1241 — live forward-gap recovery. A frame dropped while the socket
+ * stays OPEN (so reconnect/resume never fires) used to advance the
+ * cursor silently, stranding the UI behind until a manual refresh. The
+ * client now detects the seq discontinuity and resumes in place.
+ */
+describe('EventWsClient — live forward-gap recovery', () => {
+  /** Seqs of `event` frames that actually reached `onFrame` listeners. */
+  function eventSeqs(frames: Array<Record<string, unknown>>): number[] {
+    return frames
+      .filter(f => f.type === 'event')
+      .map(f => f.seq as number);
+  }
+
+  function fireEvent(
+    ws: FakeWebSocket,
+    scope: string,
+    seq: number,
+    epoch = 'epoch-1',
+  ): void {
+    ws.fireMessage({ type: 'event', scope, epoch, seq, kind: 'message', payload: {} });
+  }
+
+  /**
+   * Bring a client to `connected`, subscribed to `scope`, with the
+   * resume cursor baselined at `seq` (via a `subscribed` frame). Returns
+   * the captured dispatch log and the socket with its outbound buffer
+   * cleared, so later `resume`/dispatch assertions only see gap traffic.
+   */
+  async function connectedAt(
+    scope: string,
+    seq: number,
+  ): Promise<{
+    client: EventWsClient;
+    ws: FakeWebSocket;
+    dispatched: Array<Record<string, unknown>>;
+  }> {
+    const client = makeClient();
+    const dispatched: Array<Record<string, unknown>> = [];
+    client.onFrame(f => dispatched.push(f as unknown as Record<string, unknown>));
+    client.subscribe(scope);
+    await flushMicrotasks();
+    const ws = createdSockets[0]!;
+    ws.fireOpen();
+    ws.fireMessage({ type: 'authenticated', viewerId: 'u', epoch: 'epoch-1' });
+    ws.fireMessage({ type: 'subscribed', scope, epoch: 'epoch-1', seq });
+    ws.sent.length = 0;
+    return { client, ws, dispatched };
+  }
+
+  it('dispatches contiguous events and advances without resuming', async () => {
+    const { ws, dispatched } = await connectedAt('conv:room', 5);
+
+    fireEvent(ws, 'conv:room', 6);
+    fireEvent(ws, 'conv:room', 7);
+    fireEvent(ws, 'conv:room', 8);
+
+    expect(eventSeqs(dispatched)).toEqual([6, 7, 8]);
+    expect(ws.sent.filter(f => f.type === 'resume')).toHaveLength(0);
+  });
+
+  it('swallows a gapped frame and resumes from the held cursor', async () => {
+    const { ws, dispatched } = await connectedAt('conv:room', 5);
+
+    // seq 9 with cursor at 5 → 6/7/8 were dropped on the open socket.
+    fireEvent(ws, 'conv:room', 9);
+
+    // The gapped frame must NOT be dispatched ahead of the missing ones…
+    expect(eventSeqs(dispatched)).toEqual([]);
+    // …and a resume from the held cursor (5, not 9) must be sent.
+    expect(ws.sent.filter(f => f.type === 'resume')).toEqual([
+      { type: 'resume', scopes: { 'conv:room': { epoch: 'epoch-1', lastSeq: 5 } } },
+    ]);
+
+    // Server replays the hole in order; everything dispatches once, in order.
+    for (const seq of [6, 7, 8, 9]) fireEvent(ws, 'conv:room', seq);
+    expect(eventSeqs(dispatched)).toEqual([6, 7, 8, 9]);
+
+    // Recovery latch dropped: a later contiguous live frame flows normally.
+    fireEvent(ws, 'conv:room', 10);
+    expect(eventSeqs(dispatched)).toEqual([6, 7, 8, 9, 10]);
+  });
+
+  it('clears recovery on snapshot_required and re-baselines from it', async () => {
+    const { ws, dispatched } = await connectedAt('conv:room', 5);
+
+    fireEvent(ws, 'conv:room', 9); // gap → resume + recovering latch
+    expect(ws.sent.filter(f => f.type === 'resume')).toHaveLength(1);
+
+    // Replay buffer too small → server gives up on the gap.
+    ws.fireMessage({
+      type: 'snapshot_required',
+      scope: 'conv:room',
+      epoch: 'epoch-1',
+      reason: 'gap_too_large',
+    });
+
+    // The frame reaches listeners so conversation hooks can refetch.
+    expect(
+      dispatched.some(f => f.type === 'snapshot_required' && f.scope === 'conv:room'),
+    ).toBe(true);
+
+    // Cursor wiped + latch cleared: the next event re-baselines (no stale
+    // gap detection against the deleted cursor, no leftover suppression).
+    ws.sent.length = 0;
+    fireEvent(ws, 'conv:room', 20);
+    expect(eventSeqs(dispatched)).toContain(20);
+    expect(ws.sent.filter(f => f.type === 'resume')).toHaveLength(0);
+  });
+
+  it('coalesces concurrent gapped frames into a single in-flight resume', async () => {
+    const { ws, dispatched } = await connectedAt('conv:room', 5);
+
+    // Three live frames land while the gap is open, before any replay.
+    fireEvent(ws, 'conv:room', 9);
+    fireEvent(ws, 'conv:room', 10);
+    fireEvent(ws, 'conv:room', 11);
+
+    // Exactly one resume — the latch suppressed the redundant two.
+    expect(ws.sent.filter(f => f.type === 'resume')).toHaveLength(1);
+    expect(eventSeqs(dispatched)).toEqual([]);
+
+    // Replay fills the hole in order; a fresh live frame follows.
+    for (const seq of [6, 7, 8, 9, 10, 11]) fireEvent(ws, 'conv:room', seq);
+    fireEvent(ws, 'conv:room', 12);
+
+    expect(eventSeqs(dispatched)).toEqual([6, 7, 8, 9, 10, 11, 12]);
+    // Still only ever one resume across the whole episode.
+    expect(ws.sent.filter(f => f.type === 'resume')).toHaveLength(1);
   });
 });

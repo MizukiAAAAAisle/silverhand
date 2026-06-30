@@ -48,6 +48,15 @@ export class EventWsClient {
   private readonly positions = new Map<string, ResumePosition>();
   private readonly confirmedScopes = new Set<string>();
   /**
+   * Scopes with a forward-gap recovery in flight. When a live `event`
+   * frame arrives beyond the next expected seq we hold the cursor, ask
+   * the server to replay from it, and latch the scope here so every
+   * further gapped frame coalesces into the one in-flight resume instead
+   * of firing a redundant one. The latch drops as soon as the in-order
+   * replay delivers the next contiguous seq (see `acceptEventFrame`).
+   */
+  private readonly recovering = new Set<string>();
+  /**
    * Live `subscribeViewerScope()` handles. Each holds a deferred inner
    * subscription that materialises against the canonical
    * `viewer:{resolvedViewerId}` scope once the server's `authenticated`
@@ -91,6 +100,7 @@ export class EventWsClient {
     const ws = this.ws;
     this.ws = null;
     this.confirmedScopes.clear();
+    this.recovering.clear();
     this.resolvedViewerId = null;
     // Detach viewer wrappers so desiredScopes/positions for the canonical
     // `viewer:<id>` are released. They'll re-attach on the next connect()
@@ -122,6 +132,7 @@ export class EventWsClient {
           this.desiredScopes.delete(scope);
           this.positions.delete(scope);
           this.confirmedScopes.delete(scope);
+          this.recovering.delete(scope);
           this.sendIfConnected({ type: 'unsubscribe', scope });
         } else {
           this.desiredScopes.set(scope, count - 1);
@@ -154,6 +165,7 @@ export class EventWsClient {
   }
 
   resume(scope: string, position: ResumePosition): void {
+    this.recovering.delete(scope);
     this.positions.set(scope, position);
     this.sendResume({ [scope]: position });
   }
@@ -198,6 +210,7 @@ export class EventWsClient {
     const ws = new WebSocket(url);
     this.ws = ws;
     this.confirmedScopes.clear();
+    this.recovering.clear();
 
     ws.addEventListener('open', () => {
       if (this.ws !== ws) return;
@@ -215,6 +228,7 @@ export class EventWsClient {
       if (this.ws !== ws) return;
       this.ws = null;
       this.confirmedScopes.clear();
+      this.recovering.clear();
       this.setStatus('disconnected');
       if (this.shouldReconnect) this.scheduleReconnect();
     });
@@ -228,6 +242,7 @@ export class EventWsClient {
     if (frame.type === 'authenticated') {
       this.reconnectAttempt = 0;
       this.confirmedScopes.clear();
+      this.recovering.clear();
       this.resolvedViewerId = frame.viewerId;
       // Attach viewer wrappers BEFORE status flips to 'connected'.
       // `subscribe()` is then refcount-only (sendIfConnected gated on
@@ -244,11 +259,22 @@ export class EventWsClient {
       this.send({ type: 'pong' });
     } else if (frame.type === 'subscribed') {
       this.confirmedScopes.add(frame.scope);
+      // A subscription confirmation re-baselines the scope's cursor, so any
+      // in-flight gap recovery for it is moot.
+      this.recovering.delete(frame.scope);
       this.recordPosition(frame);
     } else if (frame.type === 'event') {
-      this.recordPosition(frame);
+      if (!this.acceptEventFrame(frame)) {
+        // Gap detected (or a frame still beyond the cursor while recovery is
+        // in flight): swallow it. The server's in-order replay redelivers it.
+        return;
+      }
     } else if (frame.type === 'snapshot_required') {
       this.positions.delete(frame.scope);
+      // The server couldn't replay the gap (buffer too small / epoch
+      // mismatch). Recovery is over — drop the latch and let the dispatched
+      // frame drive a full refetch via the conversation hooks.
+      this.recovering.delete(frame.scope);
     }
 
     for (const listener of Array.from(this.frameListeners)) {
@@ -268,6 +294,57 @@ export class EventWsClient {
     if (Object.keys(resumeScopes).length > 0) {
       this.sendResume(resumeScopes);
     }
+  }
+
+  /**
+   * Gate a live `event` frame on seq continuity and keep the scope's
+   * resume cursor honest. Returns whether the frame should be dispatched.
+   *
+   * The bug this guards against: a frame dropped while the socket stays
+   * OPEN (so resume-on-reconnect never fires) used to advance the cursor
+   * silently, stranding the UI one-or-more events behind until a manual
+   * refresh. We now detect the forward gap and trigger a resume so the
+   * server replays the hole in order.
+   *
+   * Cases (same epoch as the cursor):
+   * - `seq === lastSeq + 1` — contiguous. Advance, drop any recovery
+   *   latch (the in-order stream has caught up), dispatch.
+   * - `seq > lastSeq + 1` — forward gap. Hold the cursor, send a resume
+   *   from it, latch `recovering` so subsequent gapped frames coalesce
+   *   into this one resume, and swallow the frame (replay redelivers it).
+   * - `seq <= lastSeq` — duplicate/stale. Dispatch (the message cache is
+   *   idempotent) but don't move the cursor or disturb recovery.
+   *
+   * A missing baseline or an epoch change is taken as a fresh baseline
+   * rather than a gap — epoch transitions arrive via `subscribed` /
+   * `snapshot_required` in normal flow.
+   */
+  private acceptEventFrame(frame: EventFrame): boolean {
+    const previous = this.positions.get(frame.scope);
+
+    if (!previous || previous.epoch !== frame.epoch) {
+      this.recovering.delete(frame.scope);
+      this.recordPosition(frame);
+      return true;
+    }
+
+    if (frame.seq > previous.lastSeq + 1) {
+      if (!this.recovering.has(frame.scope)) {
+        this.recovering.add(frame.scope);
+        this.sendResume({ [frame.scope]: previous });
+      }
+      return false;
+    }
+
+    if (frame.seq === previous.lastSeq + 1) {
+      this.recovering.delete(frame.scope);
+      this.recordPosition(frame);
+      return true;
+    }
+
+    // Duplicate / stale: dispatch without advancing the cursor or
+    // disturbing an in-flight recovery.
+    return true;
   }
 
   private recordPosition(frame: EventFrame | SubscribedFrame): void {
