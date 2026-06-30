@@ -31,12 +31,13 @@
 //      that wouldn't be ambient is simply absent (no spurious subtraction).
 //   3. positional streams — per-(conversation, stream) ambient/DM unread,
 //      `enter()`-filtered in SQL (DM always; channel mainline iff the viewer's
-//      ChannelAttentionPreference = 'all'; threads iff followed).
+//      effective ChannelAttentionPreference = 'all'; threads iff followed).
 // Then salience is derived (DM = directed-grade) and the list sorted §13.2:
 // directed tier first, most-recent-first within a tier.
 import type { BackendContext } from '../context.js';
 import {
   apiPaths,
+  DEFAULT_CHANNEL_ATTENTION_MODE,
   type ActivityItemDto,
   type ActivityPreviewSender,
   type ActivitySalience,
@@ -275,7 +276,12 @@ export function listActivity(
   const excludedJson = JSON.stringify([...directedByMessage.keys()]);
   const positionalRows = ctx.db
     .prepare<
-      { viewer: string; ws: string | null; excluded: string },
+      {
+        viewer: string;
+        ws: string | null;
+        excluded: string;
+        channelDefaultMode: string;
+      },
       PositionalStreamRow
     >(
       `WITH viewer_unread AS (
@@ -344,13 +350,13 @@ export function listActivity(
         AND (
           -- DM mainline: directed-grade, always enters (§5.1).
           (vu.root IS NULL AND c.kind = 'dm_channel')
-          -- Channel mainline: only when ambient pref = 'all' (§6 default off).
+          -- Channel mainline: enters when effective ambient pref = 'all'.
           OR (vu.root IS NULL AND c.kind = 'channel'
               AND COALESCE((
                 SELECT cap.mode FROM channel_attention_preferences cap
                  WHERE cap.user_id = @viewer
                    AND cap.conversation_id = vu.conversation_id
-              ), 'mentions') = 'all')
+              ), @channelDefaultMode) = 'all')
           -- Thread: ambient is follow-driven (§6 followed → on).
           OR (vu.root IS NOT NULL AND EXISTS (
                 SELECT 1 FROM thread_followers tf
@@ -360,7 +366,12 @@ export function listActivity(
               ))
         )`,
     )
-    .all({ viewer: viewerUserId, ws: wsFilter, excluded: excludedJson });
+    .all({
+      viewer: viewerUserId,
+      ws: wsFilter,
+      excluded: excludedJson,
+      channelDefaultMode: DEFAULT_CHANNEL_ATTENTION_MODE,
+    });
 
   // ── assemble ────────────────────────────────────────────────────────────
   const items: ActivityItemDto[] = [

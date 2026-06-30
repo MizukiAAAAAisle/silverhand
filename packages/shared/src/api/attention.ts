@@ -21,10 +21,10 @@ import { z } from 'zod';
 export const CHANNEL_ATTENTION_MODES = ['all', 'mentions'] as const;
 export type ChannelAttentionMode = (typeof CHANNEL_ATTENTION_MODES)[number];
 
-/** Channel default = ambient OFF (§6: channel → off unless set to 所有消息).
+/** Channel default = ambient ON (§6: channel → All messages unless opted down).
  *  Absence of a stored preference resolves to this. Single source so the read
  *  path and `enter()` (②c) never disagree on the default. */
-export const DEFAULT_CHANNEL_ATTENTION_MODE: ChannelAttentionMode = 'mentions';
+export const DEFAULT_CHANNEL_ATTENTION_MODE: ChannelAttentionMode = 'all';
 
 /** The viewer's effective ambient preference for one channel (GET / PUT
  *  `/api/conversations/:id/attention-preference`). `mode` is always resolved —

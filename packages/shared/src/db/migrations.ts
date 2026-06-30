@@ -306,7 +306,7 @@ export const migrations: Migration[] = [
     //   'all'      = ambient on  → channel mainline ambient unread enters Activity
     //   'mentions' = ambient off → ambient unread stays as in-place hint only;
     //                directed (@me / task / DM) still enters, unconditionally (§6).
-    // Absence of a row = the default (`'mentions'`, ambient off — §6 channel
+    // Absence of a row = the default (`'all'`, ambient on — §6 channel
     // default). The table stores the viewer's explicit choice (which MAY equal
     // the default — we do not delete-on-default); reads resolve absence to the
     // default. Scope is REGULAR channel only: a DM's unread is directed-grade

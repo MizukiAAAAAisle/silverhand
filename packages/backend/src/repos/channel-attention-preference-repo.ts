@@ -14,7 +14,7 @@ import {
  *
  * The table stores the viewer's explicit choice (which MAY equal the default —
  * we do not delete-on-default); absence of a row resolves to the default
- * (`DEFAULT_CHANNEL_ATTENTION_MODE` = ambient off). `getEffectiveMode` applies
+ * (`DEFAULT_CHANNEL_ATTENTION_MODE` = ambient on). `getEffectiveMode` applies
  * that default server-side so callers never branch on "unset".
  *
  * INVARIANT (§5.2 delivery ⊥ attention): this module never reads or writes

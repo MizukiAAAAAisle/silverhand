@@ -55,7 +55,7 @@ export function createAttentionApp(deps: AttentionRouteDeps): Hono<AppEnv> {
   const { ctx, conversations, channelAttentionPrefs } = deps;
 
   // GET the viewer's effective ambient preference for one channel. The default
-  // is applied server-side (§6 channel default = ambient off), so the response
+  // is applied server-side (§6 channel default = ambient on), so the response
   // `mode` is always resolved — the client never branches on "unset".
   app.get(apiPaths.conversationAttentionPreference(':id'), c => {
     const id = c.req.param('id');

@@ -32,7 +32,7 @@ describe('channel attention preference routes (#task:1227 ②a)', () => {
     t = null;
   });
 
-  it('GET resolves the channel default (ambient off = mentions) when unset', async () => {
+  it('GET resolves the channel default (ambient on = all) when unset', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t);
 
@@ -41,7 +41,7 @@ describe('channel attention preference routes (#task:1227 ②a)', () => {
     );
     expect(res.status).toBe(200);
     const dto = (await res.json()) as any;
-    expect(dto).toEqual({ conversation_id: channelId, mode: 'mentions' });
+    expect(dto).toEqual({ conversation_id: channelId, mode: 'all' });
   });
 
   it('PUT upserts the mode and GET reads it back (round-trip)', async () => {

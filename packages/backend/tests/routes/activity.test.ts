@@ -107,7 +107,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     );
   });
 
-  it('REGRESSION #1243: default-mentions channels still show cursor-unread @me in Activity', async () => {
+  it('REGRESSION #1243: default-all channels still show cursor-unread @me in Activity', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
@@ -129,13 +129,14 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
       .get(mentionMsg) as { seq: number };
     expect(cursor?.last_read_seq ?? 0).toBeLessThan(mentionSeq.seq);
 
-    // Default channel attention preference is 'mentions': ambient channel unread
-    // stays out, but the directed mention must remain as the durable backstop
+    // Default channel attention preference is 'all': ambient channel unread
+    // enters too, but the directed mention must remain as the durable backstop
     // until an active eliminate intent writes read_at.
     const items = await getActivity(t);
-    expect(items.some(i => i.kind === 'unread' && i.conversation_id === channelId)).toBe(
-      false,
+    const ambient = items.find(
+      i => i.kind === 'unread' && i.conversation_id === channelId,
     );
+    expect(ambient?.unread_count).toBe(1); // plain follow-up; the mention is netted out
     const mention = items.find(i => i.kind === 'mention' && i.message_id === mentionMsg);
     expect(mention).toMatchObject({
       kind: 'mention',
@@ -145,26 +146,16 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     });
   });
 
-  it('ambient channel unread is gated by the attention preference (enter())', async () => {
+  it('ambient channel unread is on by default and can be opted down to mentions only', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
     // A plain (non-mention) message → ambient unread for the viewer.
     await sendAsAgent(t, channelId, sender, 'just chatting, no mention here');
 
-    // Default pref = 'mentions' (ambient off) → NOT in Activity.
+    // Default pref = 'all' (ambient on) → the channel mainline unread enters.
     let items = await getActivity(t);
-    expect(items.some(i => i.kind === 'unread')).toBe(false);
-
-    // Flip to 'all' (ambient on) → the channel mainline unread enters.
-    const put = await http(t).put(
-      `/api/conversations/${channelId}/attention-preference`,
-      { mode: 'all' },
-    );
-    expect(put.status).toBe(200);
-
-    items = await getActivity(t);
-    const ambient = items.filter(i => i.kind === 'unread');
+    let ambient = items.filter(i => i.kind === 'unread');
     expect(ambient).toHaveLength(1);
     expect(ambient[0]).toMatchObject({
       kind: 'unread',
@@ -173,6 +164,18 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
       thread_root_id: null,
       unread_count: 1,
     });
+
+    // Flip to 'mentions' (ambient off) → ordinary ambient channel unread stays
+    // out of Activity while normal sidebar unread remains pref-independent.
+    const put = await http(t).put(
+      `/api/conversations/${channelId}/attention-preference`,
+      { mode: 'mentions' },
+    );
+    expect(put.status).toBe(200);
+
+    items = await getActivity(t);
+    ambient = items.filter(i => i.kind === 'unread');
+    expect(ambient).toHaveLength(0);
   });
 
   it('nets directed claims out of the ambient count (§8) and sorts directed first', async () => {
@@ -230,10 +233,8 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     expect((await getActivity(t)).some(i => i.kind === 'task')).toBe(false);
 
     // The task-bearing messages are still reachable via the ordinary unread path
-    // (they are plain messages from another member) once ambient is on.
-    await http(t).put(`/api/conversations/${channelId}/attention-preference`, {
-      mode: 'all',
-    });
+    // (they are plain messages from another member) through the default ambient
+    // channel path.
     const ambient = (await getActivity(t)).filter(
       i => i.kind === 'unread' && i.conversation_id === channelId,
     );
@@ -455,8 +456,8 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
       'REPLY inside the thread',
     );
     // The viewer follows the thread (human follower) so its ambient unread enters
-    // (§6: thread ambient is follow-driven). Channel pref stays default 'mentions'
-    // so the root mainline message contributes no separate ambient item.
+    // (§6: thread ambient is follow-driven). The default channel ambient pref
+    // may also surface the root mainline, so assert the thread row by root id.
     t.ctx.db
       .prepare(
         `INSERT INTO thread_followers

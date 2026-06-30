@@ -439,7 +439,7 @@ export interface ConversationReadRow {
 /** Per-(viewer, channel) ambient attention preference (#task:1227,
  *  docs/activity-lifecycle-v1.md §9.1). The Attention bounded context's ONLY
  *  owned write-side aggregate. `mode` 'all' = ambient on, 'mentions' = ambient
- *  off; absence of a row = default `'mentions'`. Regular channel only (a DM's
+ *  off; absence of a row = default `'all'`. Regular channel only (a DM's
  *  unread is directed-grade and a thread's ambient is follow-driven, so neither
  *  carries this preference). */
 export interface ChannelAttentionPreferenceRow {
