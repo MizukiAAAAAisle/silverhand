@@ -184,6 +184,12 @@ export const apiPaths = {
    *  human viewer-scoped. Optional `?workspace_id=` filters to one workspace
    *  (the data model is global; v1 UI is per-workspace). */
   activity: '/api/activity',
+  /** The viewer's flat global Favorites — the rail STARRED section promoted to a
+   *  cross-list_key favorites entry (#task:1252, docs/list-sort-v1.md). A read
+   *  projection of `user_sort_entry.starred_at` UNIONed across the workspace
+   *  rail + every channel sidebar, pre-sorted `starred_at` DESC. Read-only,
+   *  human viewer-scoped, global (no workspace filter). */
+  favorites: '/api/favorites',
   /** The single eliminate primitive (#task:1231, docs/observe-collapse-v1.md):
    *  every read-cleared Activity item collapses into one `observe(source_ref[])`
    *  use case that delegates the write back to the source aggregate (per-stream

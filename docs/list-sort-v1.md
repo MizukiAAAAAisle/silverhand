@@ -289,6 +289,61 @@ sortable gate. The old admin-gated `/pin` routes were **deleted** (no alias):
 (exported from `@silverhand/shared`; `modes` is the per-scope map — sparse, absent
 scope ⇒ default `recent`; channel lists use the single sentinel scope `''`).
 
+## Favorites — the rail STARRED section as a global entry (#task:1252)
+
+The left rail's `STARRED` section is the viewer's **global Favorites**: a flat
+list that surfaces everything they have starred, regardless of which list the
+star was set in. It is a **read-side projection over the sort context** — it owns
+no storage, and there is no new "favorites" write path. The single
+`user_sort_entry.starred_at` fact is the one source of star truth; Favorites just
+UNIONs it across every `list_key`.
+
+- `GET /api/favorites` → `ListFavoritesDto { items: FavoriteRowDto[] }`. Read-only,
+  human viewer-scoped, **global** (no workspace filter, mirroring Activity). Rows
+  are pre-sorted `starred_at` **DESC** (most-recently-starred first). v1 has **no**
+  drag-reorder and **no** sort menu — a manual order would need a cross-`list_key`
+  rank axis, i.e. new storage, which violates "Favorites owns no storage".
+- Each row is **id-keyed** (`entity_id`) and carries **server-resolved** display
+  identity (Activity `preview_sender` precedent) so the renderer does **zero**
+  local workspace/agent-cache join — a starred channel whose parent workspace is
+  not loaded still renders a name + subtitle. Fields:
+  `{ kind: 'workspace'|'dm'|'channel', entity_id, workspace_id, channel_id|null,
+  title, workspace_name|null, icon_url|null, runtime|null, starred_at,
+  unread_count|null }` (`unread_count` reserved, always `null` in v1).
+- **kind ⇒ source + unstar endpoint** (renderer never builds a `list_key`):
+  - `workspace` — a starred `workspace_kind='regular'` workspace (`list_key='workspaces'`).
+    Regular workspaces have no icon storage ⇒ `icon_url` always null ⇒ renderer
+    monogram/`W`. Unstar: `DELETE /api/workspaces/:entity_id/star`.
+  - `dm` — a starred `workspace_kind='agent_home'` workspace; `title`/`icon_url`/
+    `runtime` resolved from the bound `owner_agent_id`. Unstar:
+    `DELETE /api/workspaces/:entity_id/star`.
+  - `channel` — a starred `conversations.kind='channel'` under a
+    `workspace_kind='regular'` parent (`list_key='channels:<ws>'`); `workspace_name`
+    = parent name (muted subtitle + same-name disambiguator). Unstar:
+    `DELETE /api/channels/:entity_id/star`. **v1 narrows out `dm_channel` stars**:
+    a DM surfaces only as a `dm` row, never twice; a `channels:<agent_home>` /
+    `dm_channel` star is hidden (storage preserved), and mapping a DM *conversation*
+    to a favorite is a separate future decision.
+- **Membership contract** (read-model enforces; written here, not hidden in SQL):
+  a row appears **iff the viewer can still access the entity AND it is not
+  archived** — exactly the set the per-entity star endpoints accept, so Favorites
+  membership ≡ the viewer's star-toggleable set (one source of truth). workspace/dm
+  → `workspace_users` member ∧ `workspaces.archived_at IS NULL`; channel →
+  `conversation_users` member ∧ both the conversation and parent workspace
+  non-archived. An inaccessible/archived favorite is **hidden, not deleted**: the
+  `starred_at` row persists, so the favorite reappears on restore/re-share (same
+  orphan-hide philosophy as `getState(visibleEntityIds)`). **Why hide archived
+  rather than keep+flag:** the star routes already 404 archived entities, so a
+  retained archived row's unstar button would 404 — keeping it would be a false
+  affordance unless the star routes were also loosened (out of v1 scope).
+- **Additive overlay, NOT a hard partition.** A starred entity appears in
+  Favorites **and** still appears in its home list (the WORKSPACES/DMS rail groups,
+  the channel sidebar). STARRED is an entry/shortcut layer, not a move — it must
+  **not** be implemented by filtering starred entities out of their home list (the
+  pre-Favorites rail's `isWorkspaceStarred` hard group did that; this supersedes
+  it). The backend is orthogonal: `/api/favorites` is independent of the unchanged
+  list endpoints.
+
 ## Decisions / non-goals
 
 - Server-side per-user (viewer-scope), not localStorage — Silverhand is

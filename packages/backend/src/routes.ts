@@ -24,6 +24,7 @@ import { detectRuntimes } from '@silverhand/host/runtimes';
 import { createHostApp } from './routes/hosts.js';
 import { createWorkspacesApp } from './routes/workspaces.js';
 import { createSortApp } from './routes/sort.js';
+import { createFavoritesApp } from './routes/favorites.js';
 import { createTasksApp } from './routes/tasks.js';
 import { createNotificationsApp } from './routes/notifications.js';
 import { createPresenceApp } from './routes/presence.js';
@@ -437,6 +438,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
 
   // Per-user list sort mutations (rail + channel sidebar ordering).
   app.route('/', createSortApp({ ctx, workspaces, conversations, sort }));
+
+  // Favorites: the viewer's flat global STARRED list (read projection over the
+  // sort context's starred_at, UNIONed across every list_key). Read-only.
+  app.route('/', createFavoritesApp({ ctx }));
 
   // Workspace membership routes.
   app.route('/', createWorkspaceMembershipApp(membershipDeps));

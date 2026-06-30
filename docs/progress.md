@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-07-01 — Favorites：rail STARRED 升为全局收藏入口（#task:1252 backend，未 push）
+
+左 rail 的 `STARRED` 从「只装 starred workspace」升成**全局 Favorites**：viewer-scoped 的扁平列表，跨所有 `list_key` UNION 同一 `user_sort_entry.starred_at` 事实（workspace / DM / channel）。**纯读侧投影、零新存储**，star 仍走原 per-entity 端点。canonical `docs/list-sort-v1.md`（三方 review PASS：Alice=契约/后端、Cindy=终审+`dm_channel` 收窄、Norman=consumer 字段）。
+
+- **shared DTO（`api/favorites.ts`）** — `ListFavoritesDto { items: FavoriteRowDto[] }`，row 扁平（沿用 Activity item 风格）+ `kind` 判别配方：`{ kind:'workspace'|'dm'|'channel', entity_id, workspace_id, channel_id|null, title, workspace_name|null, icon_url|null, runtime|null, starred_at, unread_count|null }`。身份 **server-resolved**（renderer 零本地 join，Activity `preview_sender` 先例）；`entity_id` 稳定键 + unstar path 参；DTO **不带 list_key**（unstar 按 kind 选 `/workspaces/:id/star` 或 `/channels/:id/star`，list_key 服务端派生）。
+- **read-model（`read-model/favorites.ts`）** — 两段查询(workspaces / channels:%) UNION，按 `starred_at` DESC 排序。**成员契约写进 header（不隐式）**：行出现 ⟺ viewer 仍可访问且未 archived = 与 star 端点接受集同一真相；workspace/dm→`workspace_users` 成员∧未 archived，channel→`conversation_users` 成员∧conv+父 ws 均未 archived。**v1 收窄**：channel 仅投影 regular 父 ws 下的 `kind='channel'`；`dm_channel` star 隐藏（DM 只走 `kind='dm'`，不一物两现）。**archived = 隐藏不删**（`starred_at` 行留存、restore 重现；选 hide 而非 keep+flag 因 star 路由对 archived 404、保留会成假 affordance）。
+- **route（`routes/favorites.ts`，wired in `routes.ts`）** — `GET /api/favorites`，`canViewOwnedState` 门控（viewer 自有态，同 Activity），全局无 ws 过滤。
+- **additive overlay 非 hard-partition**（契约写进 DTO 头 + doc）：starred 实体留主组 + Favorites 叠加，**禁**用「从主组过滤掉」实现（旧 `isWorkspaceStarred` hard group 即此，本轮 supersede）。shiki 拍板（独占会让用户找不到原可见的 ws/channel）。
+- 验证：`pnpm -r typecheck` 全绿；backend favorites.test.ts 8 例 + sort/channels/endpoint-registry 回归 69 例全过；endpoint snapshot 重生成（仅 +`GET /api/favorites`）。**renderer（#1253）= Norman lane，并行中**（`useFavorites` hook + 新 `FavoritesGroup`/`FavoriteRow` + Sidebar 去 starred 抽离）。
+
+---
+
 ## 2026-06-27 — observe() 坍缩 + 退役 legacy mark-read route（#task:1231/#1232，in_review）
 
 「清除一条 read-cleared 注意力」原散落成多条 caller 各写各（cursor / notification.read_at），其中 channel jump 还误用 badge-only hook 冒充 cursor。终局：单一 eliminate 原语 `observe(source_ref[])`，Attention 零自有 read 态、写**委派回源聚合**。canonical `docs/observe-collapse-v1.md`（Cindy 全 PASS）。
