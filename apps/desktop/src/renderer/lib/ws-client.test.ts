@@ -19,7 +19,7 @@ vi.mock('./api', () => ({
   }),
 }));
 
-import { EventWsClient } from './ws-client';
+import { EventWsClient, type WsScopeSubscription } from './ws-client';
 
 /**
  * Minimal WebSocket double: records outbound frames in `sent`, exposes
@@ -348,19 +348,20 @@ describe('EventWsClient — live forward-gap recovery', () => {
   ): Promise<{
     client: EventWsClient;
     ws: FakeWebSocket;
+    sub: WsScopeSubscription;
     dispatched: Array<Record<string, unknown>>;
   }> {
     const client = makeClient();
     const dispatched: Array<Record<string, unknown>> = [];
     client.onFrame(f => dispatched.push(f as unknown as Record<string, unknown>));
-    client.subscribe(scope);
+    const sub = client.subscribe(scope);
     await flushMicrotasks();
     const ws = createdSockets[0]!;
     ws.fireOpen();
     ws.fireMessage({ type: 'authenticated', viewerId: 'u', epoch: 'epoch-1' });
     ws.fireMessage({ type: 'subscribed', scope, epoch: 'epoch-1', seq });
     ws.sent.length = 0;
-    return { client, ws, dispatched };
+    return { client, ws, sub, dispatched };
   }
 
   it('dispatches contiguous events and advances without resuming', async () => {
@@ -442,5 +443,184 @@ describe('EventWsClient — live forward-gap recovery', () => {
     expect(eventSeqs(dispatched)).toEqual([6, 7, 8, 9, 10, 11, 12]);
     // Still only ever one resume across the whole episode.
     expect(ws.sent.filter(f => f.type === 'resume')).toHaveLength(1);
+  });
+});
+
+/**
+ * #1251 — no-listener gap. When a scope's last subscriber goes away
+ * (component unmount) and resubscribes (remount), events published in the
+ * gap used to be lost: `unsubscribe()` dropped the per-scope cursor, so the
+ * next `subscribe()` re-baselined to server head off the `subscribed` ack,
+ * silently skipping anything published while no listener was attached. The
+ * pre-existing transport bug (`646d223`) was exposed/amplified by the
+ * inbox/Activity churn that mounts and unmounts conversation views far more
+ * often.
+ *
+ * The fix: the transport cursor is client-authoritative. `unsubscribe()`
+ * retains `positions[scope]`; `subscribe()` pairs a `resume` from it so the
+ * server replays the gap; the `subscribed` ack does NOT re-baseline a
+ * retained same-epoch cursor. Retained-but-detached cursors are bounded by
+ * an LRU so they can't grow without limit — eviction degrades to a fresh
+ * ack baseline, never a silent skip.
+ *
+ * Three-axis discipline (the #1244 "surfaced ≠ eliminated" failure class,
+ * re-asserted at the transport layer): replay only touches the transport
+ * frame cursor. It NEVER writes the read cursor or directed `read_at` — a
+ * replayed frame is byte-identical to a live one and read-inert by
+ * construction. "补帧『可得』≠『已读』".
+ */
+describe('EventWsClient — no-listener gap recovery (#1251)', () => {
+  function eventSeqs(frames: Array<Record<string, unknown>>): number[] {
+    return frames.filter(f => f.type === 'event').map(f => f.seq as number);
+  }
+
+  function fireEvent(
+    ws: FakeWebSocket,
+    scope: string,
+    seq: number,
+    epoch = 'epoch-1',
+  ): void {
+    ws.fireMessage({ type: 'event', scope, epoch, seq, kind: 'message', payload: {} });
+  }
+
+  async function connectedAt(
+    scope: string,
+    seq: number,
+  ): Promise<{
+    client: EventWsClient;
+    ws: FakeWebSocket;
+    sub: WsScopeSubscription;
+    dispatched: Array<Record<string, unknown>>;
+  }> {
+    const client = makeClient();
+    const dispatched: Array<Record<string, unknown>> = [];
+    client.onFrame(f => dispatched.push(f as unknown as Record<string, unknown>));
+    const sub = client.subscribe(scope);
+    await flushMicrotasks();
+    const ws = createdSockets[0]!;
+    ws.fireOpen();
+    ws.fireMessage({ type: 'authenticated', viewerId: 'u', epoch: 'epoch-1' });
+    ws.fireMessage({ type: 'subscribed', scope, epoch: 'epoch-1', seq });
+    ws.sent.length = 0;
+    return { client, ws, sub, dispatched };
+  }
+
+  it('retains the cursor across unsubscribe and replays the gap on resubscribe', async () => {
+    const { client, ws, sub, dispatched } = await connectedAt('conv:room', 5);
+
+    // A live event advances the cursor to 6.
+    fireEvent(ws, 'conv:room', 6);
+    expect(eventSeqs(dispatched)).toEqual([6]);
+
+    // Last subscriber goes away (unmount). The unsubscribe frame goes out
+    // but the cursor must be RETAINED for the eventual remount.
+    sub.unsubscribe();
+    expect(ws.sent.filter(f => f.type === 'unsubscribe')).toEqual([
+      { type: 'unsubscribe', scope: 'conv:room' },
+    ]);
+    ws.sent.length = 0;
+
+    // [server publishes seq 7, 8 here — no listener attached: the gap.]
+
+    // Remount. The resubscribe must re-subscribe AND resume from the
+    // retained cursor (6) so the server replays the gap — not re-baseline
+    // to head and skip it.
+    client.subscribe('conv:room');
+    expect(ws.sent.filter(f => f.type === 'subscribe')).toEqual([
+      { type: 'subscribe', scope: 'conv:room' },
+    ]);
+    expect(ws.sent.filter(f => f.type === 'resume')).toEqual([
+      { type: 'resume', scopes: { 'conv:room': { epoch: 'epoch-1', lastSeq: 6 } } },
+    ]);
+
+    // Server replays the hole in order; every gap event dispatches once.
+    for (const seq of [7, 8]) fireEvent(ws, 'conv:room', seq);
+    expect(eventSeqs(dispatched)).toEqual([6, 7, 8]);
+  });
+
+  it('does not let the subscribed ack re-baseline a retained same-epoch cursor', async () => {
+    const { client, ws, sub } = await connectedAt('conv:room', 5);
+    fireEvent(ws, 'conv:room', 6); // cursor → {epoch-1, 6}
+    sub.unsubscribe();
+    ws.sent.length = 0;
+
+    client.subscribe('conv:room'); // subscribe + resume{6}
+
+    // Server acks the resubscription at its current head (8) before the
+    // replay lands. The ack must NOT advance the retained cursor to 8.
+    ws.fireMessage({ type: 'subscribed', scope: 'conv:room', epoch: 'epoch-1', seq: 8 });
+    ws.sent.length = 0;
+
+    // A forward-gapped live frame reveals where the cursor actually sits:
+    // if the ack had clobbered it to 8, seq 9 would be contiguous (no
+    // resume). Because the cursor is still the client-authoritative 6, seq 9
+    // is a forward gap and resumes from 6.
+    fireEvent(ws, 'conv:room', 9);
+    expect(ws.sent.filter(f => f.type === 'resume')).toEqual([
+      { type: 'resume', scopes: { 'conv:room': { epoch: 'epoch-1', lastSeq: 6 } } },
+    ]);
+  });
+
+  it('re-baselines from the ack when the retained cursor is from a stale epoch', async () => {
+    const { client, ws, sub } = await connectedAt('conv:room', 5);
+    fireEvent(ws, 'conv:room', 6); // cursor → {epoch-1, 6}
+    sub.unsubscribe();
+    ws.sent.length = 0;
+
+    client.subscribe('conv:room');
+    // New epoch (server buffer rotated) — the retained epoch-1 cursor is
+    // moot; baseline fresh from the new-epoch ack. (The resume{epoch-1,6}
+    // we optimistically sent self-heals server-side via snapshot_required.)
+    ws.fireMessage({ type: 'subscribed', scope: 'conv:room', epoch: 'epoch-2', seq: 50 });
+    ws.sent.length = 0;
+
+    // Contiguous in the new epoch from 50 → dispatch, no gap/resume.
+    fireEvent(ws, 'conv:room', 51, 'epoch-2');
+    expect(ws.sent.filter(f => f.type === 'resume')).toHaveLength(0);
+  });
+
+  it('drops the oldest detached cursor past the LRU bound, degrading resubscribe to a fresh baseline', async () => {
+    const MAX = 64; // EventWsClient.MAX_DETACHED_POSITIONS
+
+    const client = makeClient();
+    client.subscribe('conv:keep'); // a live scope, just to drive connect()
+    await flushMicrotasks();
+    const ws = createdSockets[0]!;
+    ws.fireOpen();
+    ws.fireMessage({ type: 'authenticated', viewerId: 'u', epoch: 'epoch-1' });
+
+    // The victim: subscribe, give it a cursor, unsubscribe → detached first
+    // (so it's the oldest, the eviction target).
+    const victim = 'conv:victim';
+    const vsub = client.subscribe(victim);
+    ws.fireMessage({ type: 'subscribed', scope: victim, epoch: 'epoch-1', seq: 7 });
+    vsub.unsubscribe();
+
+    // Detach MAX more scopes. The MAX-th push makes the detached set exceed
+    // the bound and evicts the oldest entry (the victim).
+    for (let i = 0; i < MAX; i++) {
+      const scope = `conv:pad${i}`;
+      const sub = client.subscribe(scope);
+      ws.fireMessage({ type: 'subscribed', scope, epoch: 'epoch-1', seq: 1 });
+      sub.unsubscribe();
+    }
+    ws.sent.length = 0;
+
+    // The victim's cursor was evicted → resubscribe sends NO resume; it
+    // degrades to a fresh ack baseline (safe: a deliberate re-baseline of
+    // its own scope, never a silent skip past observed frames).
+    client.subscribe(victim);
+    expect(ws.sent.filter(f => f.type === 'subscribe')).toEqual([
+      { type: 'subscribe', scope: victim },
+    ]);
+    expect(ws.sent.filter(f => f.type === 'resume')).toHaveLength(0);
+
+    // A scope detached AFTER the victim is still within the bound → its
+    // cursor is retained and resubscribe resumes from it.
+    ws.sent.length = 0;
+    client.subscribe('conv:pad63');
+    expect(ws.sent.filter(f => f.type === 'resume')).toEqual([
+      { type: 'resume', scopes: { 'conv:pad63': { epoch: 'epoch-1', lastSeq: 1 } } },
+    ]);
   });
 });

@@ -71,6 +71,21 @@ export class EventWsClient {
   private readonly positions = new Map<string, ResumePosition>();
   private readonly confirmedScopes = new Set<string>();
   /**
+   * Scopes whose transport cursor we retain *without* a live subscriber —
+   * i.e. unsubscribed scopes whose `positions` entry is kept so a later
+   * resubscribe can resume from it and replay the no-listener gap
+   * (#task:1251). `unsubscribe()` must NOT drop the cursor: doing so made
+   * the next `subscribe` re-baseline to server head via the `subscribed`
+   * ack, silently skipping any event published while no listener was
+   * attached. Insertion-ordered so it doubles as the LRU eviction queue;
+   * bounded by `MAX_DETACHED_POSITIONS` so retained-but-unused cursors
+   * can't grow without limit. Eviction is *safe*: a dropped cursor just
+   * sends the next resubscribe down the fresh-baseline / `snapshot_required`
+   * path — never a silent skip.
+   */
+  private readonly detachedScopes = new Set<string>();
+  private static readonly MAX_DETACHED_POSITIONS = 64;
+  /**
    * Scopes with a forward-gap recovery in flight. When a live `event`
    * frame arrives beyond the next expected seq we hold the cursor, ask
    * the server to replay from it, and latch the scope here so every
@@ -140,12 +155,15 @@ export class EventWsClient {
   subscribe(scope: string): WsScopeSubscription {
     const previousCount = this.desiredScopes.get(scope) ?? 0;
     this.desiredScopes.set(scope, previousCount + 1);
+    // This scope has a live subscriber again — it's no longer a detached,
+    // evictable cursor. (No-op for an already-subscribed scope.)
+    this.detachedScopes.delete(scope);
     this.connect();
     if (
       previousCount === 0 ||
       (this.status === 'connected' && !this.confirmedScopes.has(scope))
     ) {
-      this.sendIfConnected({ type: 'subscribe', scope });
+      this.sendSubscribe(scope);
     }
 
     return {
@@ -153,15 +171,52 @@ export class EventWsClient {
         const count = this.desiredScopes.get(scope) ?? 0;
         if (count <= 1) {
           this.desiredScopes.delete(scope);
-          this.positions.delete(scope);
           this.confirmedScopes.delete(scope);
           this.recovering.delete(scope);
+          // Retain `positions[scope]` (the transport cursor) so a later
+          // resubscribe resumes from it and replays the no-listener gap
+          // (#task:1251). Track it as detached for bounded LRU eviction.
+          if (this.positions.has(scope)) {
+            this.detachedScopes.delete(scope);
+            this.detachedScopes.add(scope);
+            this.evictDetachedPositions();
+          }
           this.sendIfConnected({ type: 'unsubscribe', scope });
         } else {
           this.desiredScopes.set(scope, count - 1);
         }
       },
     };
+  }
+
+  /**
+   * Send a `subscribe` for the scope and, when we hold a retained cursor
+   * for it, a paired `resume` from that cursor (#task:1251). The resume
+   * makes the server replay events published while no listener was
+   * attached; without it the `subscribed` ack would re-baseline to head
+   * and skip them. No-op until connected — a disconnected subscribe is
+   * (re)issued, cursor and all, by `resubscribeDesiredScopes()` on the
+   * next `authenticated` frame.
+   */
+  private sendSubscribe(scope: string): void {
+    if (!this.sendIfConnected({ type: 'subscribe', scope })) return;
+    const position = this.positions.get(scope);
+    if (position) this.sendResume({ [scope]: position });
+  }
+
+  /**
+   * Drop the oldest detached cursors once we exceed
+   * `MAX_DETACHED_POSITIONS`. Only scopes with no live subscriber are
+   * evictable; a dropped cursor degrades the next resubscribe to a fresh
+   * baseline (or `snapshot_required`), never a silent skip.
+   */
+  private evictDetachedPositions(): void {
+    while (this.detachedScopes.size > EventWsClient.MAX_DETACHED_POSITIONS) {
+      const oldest = this.detachedScopes.values().next().value;
+      if (oldest === undefined) break;
+      this.detachedScopes.delete(oldest);
+      this.positions.delete(oldest);
+    }
   }
 
   /**
@@ -292,7 +347,16 @@ export class EventWsClient {
       // A subscription confirmation re-baselines the scope's cursor, so any
       // in-flight gap recovery for it is moot.
       this.recovering.delete(frame.scope);
-      this.recordPosition(frame);
+      // Baseline from the ack ONLY when there's no usable retained cursor.
+      // A same-epoch retained cursor is client-authoritative: `sendSubscribe`
+      // paired a `resume` with it, so the server replays the gap and the
+      // ack must NOT re-baseline to server head (that's the no-listener-gap
+      // skip, #task:1251). A retained cursor from a stale epoch is moot —
+      // baseline fresh; a mismatched resume self-heals via snapshot_required.
+      const retained = this.positions.get(frame.scope);
+      if (!retained || retained.epoch !== frame.epoch) {
+        this.recordPosition(frame);
+      }
       recordEventWsDiagnostic({
         kind: 'subscribed',
         scope: frame.scope,

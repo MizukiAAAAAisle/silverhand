@@ -84,8 +84,13 @@ export interface AuthenticatedFrame {
 
 /**
  * Confirms a subscription was registered. The seq here is the high-watermark
- * at the moment of registration — client should use this seq when doing a
- * REST snapshot fetch, then resume from this seq to fill the gap.
+ * for this scope at the moment of registration.
+ *
+ * This seq is a baseline of LAST RESORT, not a re-baseline: the client adopts
+ * it only when it holds no usable same-epoch cursor for the scope. A retained
+ * client cursor is authoritative (the client pairs a `resume` from it on
+ * subscribe), so the ack must not advance the cursor to head — doing so would
+ * skip events replayed for the gap. See `docs/event-ws-transport-v1.md` §3.
  */
 export interface SubscribedFrame {
   type: 'subscribed';
