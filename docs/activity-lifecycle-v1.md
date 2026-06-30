@@ -30,6 +30,7 @@ Owner: 脊柱(数据模型/生命周期/领域分层)=Alice · UI 表面节=Norm
 8. **建表准入测试:「它是用户的决定,还是派生事实?」**(§4.2)决定→可落自有聚合;派生→只能投影。
 9. **answerability 测试**(§5.3):每个 item 必须有一条 **eliminate route**,且 source_ref-in(产生)= source_ref-out(消除);v1 所有 item 都 read-cleared → 统一走 `observe()`(委派 cursor / `notifications.read_at`)。答不上 = 凭空状态。
 10. **read ⊥ triage**(§11):v1 只 read(source-routed);triage(done/snooze/archive)是唯一可被 Activity 拥有的 durable state,**仅 v2**,且命名为 triage 不叫 read。
+11. **surfaced ≠ eliminated**(§5.3.1):anchored directed claim(`mention_self`)的 `read_at` 只能由 **active eliminate intent** 写,**绝不由 passive surface(toast render/auto-hide、conversation focus)写**。passive 写 = 凭空消除(#task:1243 根因)。
 
 ---
 
@@ -131,6 +132,26 @@ shiki 提问:Activity 是不是一个独立 DDD 领域事件,有自己的读和�
 **关键carve-out(schema 推出的正确性点;也是 v1 砍掉 task 的根据):task 不是「读了即出」。** 读一眼没认领的 task 绝不该清它;它的消除谓词 = `task_status` 不再 needs-my-action(resolve-to-clear)。这正是把 task 当 *库存镜像* 投进 Activity 会变成**永久常驻**的原因(Activity 其它 kind 都 read-cleared、它独是 resolve-cleared)——**故 v1 把 task 整个移出 Activity**(§5.1 carve-out),库存交回 task panel。**v2 若要回归,必须改成 read-cleared 的事件**(notification-backed `task_needs_review`,§5.1),而非给库存 item 强加 `Mark as read`(那是 no-op)。
 
 **answerability 测试(机械可证,Cindy gate):** 每个 Activity item 必须有一条 **eliminate route**,且能说出 **source_ref-in**(由哪个源产生)= **source_ref-out**(消除时写回哪个源)。**v1(及 planned v2)所有 Activity item 都 read-cleared → 统一走单一原语 `observe(source_ref, position)`**(它委派到 stream cursor 或 `notifications.read_at`)。**没有 resolve-cleared 的 Activity item** —— resolve-cleared 属 task **库存**(在 task panel,不是 Activity item);v2 的 `task_needs_review` 是 read-cleared 事件,走 `notifications.read_at`,`task_status` 只作派生消失条件、非 eliminate route。答不上 source-in=source-out = 不是投影 = 凭空状态。两头一夹(out 自动对、in 强制必填),**孤儿 read/triage-state 不可能存在**。
+
+### 5.3.1 surfaced ≠ eliminated(passive surface 禁写 directed `read_at`)
+
+§5.3 的「人真的看到了」必须细化成**可守的实现红线**,否则 directed item 会被 UI 层「弹出来 / 在看这个会话」当成「已处理」凭空清掉(#task:1243 根因:`mention_self` notification 创建后毫秒级被 toast auto-read by-id 写 `read_at`,cursor 还停在该 seq 之前 → Activity 空但 badge 仍亮)。
+
+**判别线 = 对「那条 directed claim」有显式 ack 或对其 source 真 visible-read,而非 app 层「弹了 / 正打开这个会话」。** 据此 anchored directed claim(`mention_self`)的 `read_at` 写者分两类:
+
+- **active eliminate intent(允许写):**
+  1. 可见读源 —— `observe(stream→N)` 的 positional 越过该 message seq(§7 overlap 同事务清 `seq<=N` 的 `mention_self`);
+  2. 点 notification / Activity chip 跳到源并读到;
+  3. Activity 行 hover-✓ by notification id;
+  4. `Mark all as read`;
+  5. 通知面板里对该条显式「标已读」。
+- **passive surface(禁止写):** toast render、toast auto-hide/dismiss、conversation focus（仅打开/聚焦会话本身）。这些是「让你看见」的载体,不是「你已处理」的证据 —— 它们**一律不得**触碰 directed `read_at`。
+
+**carve-out(勿过度收窄成「只有 observe 能写 read_at」):** `read_at` 合法有**两个**写者 —— observe overlap(positional 派生)与 notification surface 的**显式** mark-read(active intent #2/#3/#4/#5);锁的对象是 **passive caller**,不是后端路由本身。故 backend `POST /api/notifications/read{conversation_id}` **不变**(它服务「显式标整会话已读」= active,合法);要拆的是 renderer 里那些 passive 触发点对它的调用。
+
+**anchorless 特例:** `agent_start_failed` 无 seq、observe 的 positional overlap 永远碰不到它(§7),故它的唯一 active eliminate 口 = Activity hover-✓ by id / 显式点击。摘掉 passive 写者后必须确认这条仍有覆盖路径(进回归),否则它会变成不可消除的常驻项。
+
+**guard(Cindy 回归,4 条):** ①toast render 不发任何 read POST;②conversation focus 不写「cursor 尚未越过的 anchored mention」的 `read_at`(focus = passive,对 anchored mention 与 anchorless `agent_start_failed` 一视同仁都不写);③该 `mention_self` 在仅被 surface(弹过 toast / focus 过会话)后仍在 Activity;④`agent_start_failed` 经 hover-✓ / 显式点击确实被清除。
 
 ---
 
