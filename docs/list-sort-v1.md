@@ -35,9 +35,10 @@ Two concerns, two scopes:
   viewer). A manual reorder (drag) also switches that scope to `manual`
   atomically (`order ⟹ manual`, see API), so drag works from any mode. How many
   scopes a list has depends on the list kind (see hard groups below):
-  - **workspace rail** — mode is **per hard-group**: the `starred`, `dm`, and
-    `regular` sections each carry their own toggle ("the STARRED group has its own
-    sort"). Scope = the group key.
+  - **workspace rail** — mode is **per hard-group**: the `dm` and `regular`
+    sections each carry their own toggle. Scope = the group key. Star is NOT a
+    rail group (it is the global Favorites overlay, #task:1252), so it has no rail
+    mode scope.
   - **channel sidebar** — mode is **list-wide** (one toggle for the whole list),
     unchanged. Scope = the sentinel `''`.
 - **per-entity state** — `rank` (manual order) + `last_accessed_at`
@@ -89,9 +90,10 @@ the now-removed `clearEntityRank`).
 
 ### Renderer composition (pure helper)
 
-`live partition (rail: starred?→starred, else agent_home→dm / regular→regular;
-channel→star tier)` → within each group by **that scope's** mode
-(`sortModeOf(state, group?)` — group omitted ⇒ scope `''`):
+`live partition (rail: agent_home→dm / regular→regular — by KIND only, star is
+the Favorites overlay not a rail group; channel→star tier)` → within each group
+by **that scope's** mode (`sortModeOf(state, group?)` — group omitted ⇒ scope
+`''`):
 
 - `recent` → `last_accessed_at DESC` (NULLs last).
 - `manual` → `rank ASC` (NULLs last, then `created_at`, then id tiebreak).
@@ -174,7 +176,7 @@ So the visible recent order is composed as a **read model**, single-sourced in
 CREATE TABLE user_list_sort_mode (
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   list_key   TEXT NOT NULL,
-  scope      TEXT NOT NULL DEFAULT '',  -- '' = list-wide (channels); 'starred'|'dm'|'regular' = a rail section
+  scope      TEXT NOT NULL DEFAULT '',  -- '' = list-wide (channels); 'dm'|'regular' = a rail section
   mode       TEXT NOT NULL CHECK (mode IN ('recent', 'manual')),
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (user_id, list_key, scope)
@@ -196,8 +198,10 @@ were already list-wide (correct); any pre-existing `workspaces` row becomes a
 harmless orphan at `''` (the rail now reads its modes at the group scopes, so it
 falls back to the default `recent` — an accepted reset, since the rail's group
 taxonomy changed in the same change). The v48 note still holds verbatim under the
-#task:1209 rename: the rail's old `pinned` mode-scope rows become orphans at the
-new `starred` scope and fall back to `recent` (another accepted reset).
+#task:1209 rename: the rail's old `pinned` mode-scope rows become orphans and fall
+back to `recent` (another accepted reset). #task:1252 removed the rail's star
+mode-scope entirely — the rail's only scopes are now `dm` / `regular`, so any
+stray rail star-scope row is likewise an orphan that resets to `recent`.
 
 **v50 — `user_sort_entry.starred_at` (#task:1209).** Star is per-(user, list,
 entity) view state, the same grain as `rank` / `last_accessed_at`, so it joins
@@ -212,12 +216,13 @@ vestigial (still present, append-only; no longer read or written; stripped from
 every DTO so they never reach the wire).
 
 **`starred_at` is presence, not a sort key (#task:1209).** Non-null marks the
-entity as starred (which hard group it partitions into); it does **not** order
-the `starred` group. Within-group order is governed by that group's mode like
-every other hard group — `recent` → `last_accessed_at`, `manual` → `rank` — and
-the `starred` rail section carries its own mode toggle. Letting `starred_at`
-silently drive order would make that sort menu a lie and add a third axis with
-undefined precedence vs recent/manual. The timestamp is retained only for
+entity as starred (which hard group it partitions into, on the channel sidebar);
+it does **not** order the `starred` group. Within-group order is governed by that
+group's mode like every other hard group — `recent` → `last_accessed_at`,
+`manual` → `rank` — and each channel-sidebar group carries the list's one
+list-wide mode (the rail's `dm` / `regular` sections each carry their own). Letting
+`starred_at` silently drive order would make that sort menu a lie and add a third
+axis with undefined precedence vs recent/manual. The timestamp is retained only for
 future/debug use (e.g. a possible explicit "recently starred" mode later), never
 as an implicit override.
 
@@ -247,8 +252,10 @@ section group.
 `viewer_sort.entries[]` carries the per-entity state `{ entity_id, rank,
 last_accessed_at, starred_at }` (#task:1209). `starred_at` is the **only** source
 of an entity's starred state — the entity DTOs no longer carry `pinned_at`, so the
-renderer partitions the `starred` group straight off these entries (no fallback
-to any aggregate field).
+renderer reads star straight off these entries (no fallback to any aggregate
+field). On the **channel sidebar** `starred_at` drives the `starred|unstarred`
+hard partition; on the **workspace rail** it does NOT partition (rail is `dm|regular`
+by kind) — it only feeds the global Favorites overlay (#task:1252).
 
 Mutations return the authoritative `{ viewer_sort }` for optimistic reconcile
 (touch excepted):
@@ -269,8 +276,8 @@ Mutations return the authoritative `{ viewer_sort }` for optimistic reconcile
   dense ranks (0..n) for the group **and sets the relevant scope's mode to
   `manual` in the same transaction** — `order ⟹ manual` is an invariant. The
   scope a drag flips is derived from `list_key + group` exactly as `mode` is
-  (rail: the dragged group; channel: `''`), so dragging the rail's `starred`
-  section leaves `dm` / `regular` modes untouched, and a channel drag flips its
+  (rail: the dragged group; channel: `''`), so dragging the rail's `dm`
+  section leaves the `regular` mode untouched, and a channel drag flips its
   one list-wide mode. The response's `viewer_sort.modes[scope]` comes back
   `manual`.
 - `POST /api/sort/touch { list_key, entity_id }` → `{ ok: true }`. Idempotent
