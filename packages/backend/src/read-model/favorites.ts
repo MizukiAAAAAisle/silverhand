@@ -33,10 +33,13 @@
 //       viewer ∈ conversation_users(c)  AND  viewer ∈ workspace_users(parent)
 //       AND  c.archived_at IS NULL  AND  parent.archived_at IS NULL.
 // An inaccessible / archived favorite is HIDDEN, not deleted: its
-// `user_sort_entry.starred_at` row persists, so the favorite reappears if the
-// entity is restored / re-shared. A leftover `favorites` ordering row for an
-// unstarred entity is likewise a harmless orphan — unprojected while not a
-// member, its rank restored if re-starred. This mirrors orphan-hide elsewhere.
+// `user_sort_entry.starred_at` row (and any `favorites` ordering row) persists,
+// so the favorite reappears with its arranged position if the entity is restored
+// / re-shared. This mirrors orphan-hide elsewhere. A deliberate UNSTAR is the
+// opposite of an archive-hide: it actively DELETES the `favorites` ordering row
+// (`SortRepo.clearFavoriteRank`), so a re-star re-enters fresh — there is no
+// stale favorites rank to revive (the entity's HOME rank, by contrast, is
+// preserved and restored on unstar; see SortRepo).
 //
 // Favorites is human viewer-scoped — the only principal kind that stars — so the
 // visibility predicate is the canViewWorkspace/canViewConversation USER branch

@@ -206,9 +206,12 @@ export class SortRepo {
   }
 
   /**
-   * The entity ids THIS viewer has starred in a list. Backs the live
-   * `starred` hard-group partition for reorder validation (the renderer reads
-   * `starred_at` straight off the inline `viewer_sort` entries).
+   * The entity ids THIS viewer has starred in a list. Under the exclusive model
+   * (#task:1252) this backs the home-list EXCLUSION set: a starred entity has
+   * moved to the global Favorites/STARRED list, so the rail/sidebar hide it and
+   * reorder validation rejects it as a home-group member. (The renderer reads the
+   * same `starred_at` straight off the inline `viewer_sort` entries — same fact,
+   * so display and validation cannot drift.) It is no longer a hard-group key.
    */
   listStarredEntityIds(viewerUserId: string, listKey: string): string[] {
     return this.db

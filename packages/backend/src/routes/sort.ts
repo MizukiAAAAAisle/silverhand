@@ -25,8 +25,9 @@ export interface SortRouteDeps {
 /**
  * Per-user (viewer-scoped) list sort mutations (#task:1147). The backend
  * persists preferences only; the renderer composes the final order. Group
- * membership for a reorder is validated against LIVE pin/kind state — the
- * backend rejects cross-group / unknown ids rather than guessing.
+ * membership for a reorder is validated against LIVE kind/star state — the
+ * backend rejects cross-group / starred / unknown ids rather than guessing
+ * (a starred entity has moved to the global Favorites list, #task:1252 exclusive).
  *
  * Read state is carried inline on the list responses (see workspaces route),
  * so there is no GET here.
