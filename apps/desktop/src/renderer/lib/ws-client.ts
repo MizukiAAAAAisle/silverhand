@@ -71,21 +71,6 @@ export class EventWsClient {
   private readonly positions = new Map<string, ResumePosition>();
   private readonly confirmedScopes = new Set<string>();
   /**
-   * Scopes whose transport cursor we retain *without* a live subscriber —
-   * i.e. unsubscribed scopes whose `positions` entry is kept so a later
-   * resubscribe can resume from it and replay the no-listener gap
-   * (#task:1251). `unsubscribe()` must NOT drop the cursor: doing so made
-   * the next `subscribe` re-baseline to server head via the `subscribed`
-   * ack, silently skipping any event published while no listener was
-   * attached. Insertion-ordered so it doubles as the LRU eviction queue;
-   * bounded by `MAX_DETACHED_POSITIONS` so retained-but-unused cursors
-   * can't grow without limit. Eviction is *safe*: a dropped cursor just
-   * sends the next resubscribe down the fresh-baseline / `snapshot_required`
-   * path — never a silent skip.
-   */
-  private readonly detachedScopes = new Set<string>();
-  private static readonly MAX_DETACHED_POSITIONS = 64;
-  /**
    * Scopes with a forward-gap recovery in flight. When a live `event`
    * frame arrives beyond the next expected seq we hold the cursor, ask
    * the server to replay from it, and latch the scope here so every
@@ -155,9 +140,6 @@ export class EventWsClient {
   subscribe(scope: string): WsScopeSubscription {
     const previousCount = this.desiredScopes.get(scope) ?? 0;
     this.desiredScopes.set(scope, previousCount + 1);
-    // This scope has a live subscriber again — it's no longer a detached,
-    // evictable cursor. (No-op for an already-subscribed scope.)
-    this.detachedScopes.delete(scope);
     this.connect();
     if (
       previousCount === 0 ||
@@ -173,14 +155,18 @@ export class EventWsClient {
           this.desiredScopes.delete(scope);
           this.confirmedScopes.delete(scope);
           this.recovering.delete(scope);
-          // Retain `positions[scope]` (the transport cursor) so a later
-          // resubscribe resumes from it and replays the no-listener gap
-          // (#task:1251). Track it as detached for bounded LRU eviction.
-          if (this.positions.has(scope)) {
-            this.detachedScopes.delete(scope);
-            this.detachedScopes.add(scope);
-            this.evictDetachedPositions();
-          }
+          // Retain `positions[scope]` (the transport cursor) — do NOT delete
+          // it. The retained cursor is what lets the next resubscribe resume
+          // and replay the no-listener gap (#task:1251). It is the scope's
+          // only single source of truth; we keep it for the session. Cost is
+          // a scope string + two primitives, negligible even at 10× the
+          // conversations a session ever opens. A bounded LRU is deliberately
+          // NOT used here: a bare evict re-creates the no-listener gap (an
+          // evicted scope resubscribes with no `resume`, the server has no
+          // reason to emit `snapshot_required`, and the `subscribed` ack
+          // baselines to head — silently skipping gap traffic). If memory ever
+          // forces a bound it must carry a tombstone → forced snapshot, never
+          // a bare delete (see docs/event-ws-transport-v1.md §4).
           this.sendIfConnected({ type: 'unsubscribe', scope });
         } else {
           this.desiredScopes.set(scope, count - 1);
@@ -202,21 +188,6 @@ export class EventWsClient {
     if (!this.sendIfConnected({ type: 'subscribe', scope })) return;
     const position = this.positions.get(scope);
     if (position) this.sendResume({ [scope]: position });
-  }
-
-  /**
-   * Drop the oldest detached cursors once we exceed
-   * `MAX_DETACHED_POSITIONS`. Only scopes with no live subscriber are
-   * evictable; a dropped cursor degrades the next resubscribe to a fresh
-   * baseline (or `snapshot_required`), never a silent skip.
-   */
-  private evictDetachedPositions(): void {
-    while (this.detachedScopes.size > EventWsClient.MAX_DETACHED_POSITIONS) {
-      const oldest = this.detachedScopes.values().next().value;
-      if (oldest === undefined) break;
-      this.detachedScopes.delete(oldest);
-      this.positions.delete(oldest);
-    }
   }
 
   /**

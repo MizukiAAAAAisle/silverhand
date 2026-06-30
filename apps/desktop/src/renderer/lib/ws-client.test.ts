@@ -579,8 +579,14 @@ describe('EventWsClient — no-listener gap recovery (#1251)', () => {
     expect(ws.sent.filter(f => f.type === 'resume')).toHaveLength(0);
   });
 
-  it('drops the oldest detached cursor past the LRU bound, degrading resubscribe to a fresh baseline', async () => {
-    const MAX = 64; // EventWsClient.MAX_DETACHED_POSITIONS
+  it('retains detached cursors for the whole session (no lossy eviction)', async () => {
+    // A bounded LRU here would re-create the no-listener gap: an evicted
+    // scope resubscribes with no `resume`, the server never emits
+    // `snapshot_required`, and the `subscribed` ack baselines to head —
+    // silently skipping gap traffic. So cursors are retained for the
+    // session; this guards that the oldest detached scope still resumes
+    // even after far more detach/resubscribe churn than any past LRU bound.
+    const CHURN = 200; // well past the old cap of 64
 
     const client = makeClient();
     client.subscribe('conv:keep'); // a live scope, just to drive connect()
@@ -589,38 +595,29 @@ describe('EventWsClient — no-listener gap recovery (#1251)', () => {
     ws.fireOpen();
     ws.fireMessage({ type: 'authenticated', viewerId: 'u', epoch: 'epoch-1' });
 
-    // The victim: subscribe, give it a cursor, unsubscribe → detached first
-    // (so it's the oldest, the eviction target).
-    const victim = 'conv:victim';
-    const vsub = client.subscribe(victim);
-    ws.fireMessage({ type: 'subscribed', scope: victim, epoch: 'epoch-1', seq: 7 });
-    vsub.unsubscribe();
+    // The oldest detached scope: subscribe, give it a cursor, detach first.
+    const oldest = 'conv:oldest';
+    const osub = client.subscribe(oldest);
+    ws.fireMessage({ type: 'subscribed', scope: oldest, epoch: 'epoch-1', seq: 7 });
+    osub.unsubscribe();
 
-    // Detach MAX more scopes. The MAX-th push makes the detached set exceed
-    // the bound and evicts the oldest entry (the victim).
-    for (let i = 0; i < MAX; i++) {
-      const scope = `conv:pad${i}`;
+    // Churn far more scopes through detach than any LRU bound would hold.
+    for (let i = 0; i < CHURN; i++) {
+      const scope = `conv:churn${i}`;
       const sub = client.subscribe(scope);
       ws.fireMessage({ type: 'subscribed', scope, epoch: 'epoch-1', seq: 1 });
       sub.unsubscribe();
     }
     ws.sent.length = 0;
 
-    // The victim's cursor was evicted → resubscribe sends NO resume; it
-    // degrades to a fresh ack baseline (safe: a deliberate re-baseline of
-    // its own scope, never a silent skip past observed frames).
-    client.subscribe(victim);
+    // The oldest scope's cursor must still be retained → resubscribe resumes
+    // from it (7), never a silent baseline-to-head.
+    client.subscribe(oldest);
     expect(ws.sent.filter(f => f.type === 'subscribe')).toEqual([
-      { type: 'subscribe', scope: victim },
+      { type: 'subscribe', scope: oldest },
     ]);
-    expect(ws.sent.filter(f => f.type === 'resume')).toHaveLength(0);
-
-    // A scope detached AFTER the victim is still within the bound → its
-    // cursor is retained and resubscribe resumes from it.
-    ws.sent.length = 0;
-    client.subscribe('conv:pad63');
     expect(ws.sent.filter(f => f.type === 'resume')).toEqual([
-      { type: 'resume', scopes: { 'conv:pad63': { epoch: 'epoch-1', lastSeq: 1 } } },
+      { type: 'resume', scopes: { 'conv:oldest': { epoch: 'epoch-1', lastSeq: 7 } } },
     ]);
   });
 });

@@ -79,10 +79,20 @@ every frame published while no listener was attached (the **no-listener gap**,
 unmounts conversation views far more often, so the latent defect started firing
 in dogfood.
 
-Detached cursors are bounded by an LRU (`detachedScopes`, insertion-ordered,
-cap `MAX_DETACHED_POSITIONS = 64`). Eviction is **safe**: a dropped cursor sends
-the next resubscribe down the fresh-baseline / `snapshot_required` path — a
-deliberate re-baseline of that scope, never a silent skip past observed frames.
+Cursors are retained for the **whole session** — there is deliberately no
+eviction bound. The cost is a scope string + two primitives per scope, sub-MB
+even at 10× the conversations a session ever opens; a stale cursor self-heals on
+resubscribe (resume → replay, or `snapshot_required` if the gap exceeds the
+server buffer). A bounded LRU is **not admissible as a bare delete**: an evicted
+scope resubscribes with no `resume`, the server has no reason to emit
+`snapshot_required` (it never saw a stale position), and the `subscribed` ack
+baselines to head — which silently skips any traffic during detachment, i.e.
+the no-listener gap returning in LRU form. If memory ever forces a bound it
+**must** carry a tombstone → forced snapshot: an evicted scope's next
+subscribe must drive the `snapshot_required` refetch path rather than ack-
+baseline. (That path is cheap on the renderer — `channels/hooks.ts` already
+maps `snapshot_required` → `invalidateQueries` — but it is out of scope until a
+real memory pressure point exists.)
 
 ## 5. Live forward-gap recovery (#1241)
 
@@ -125,5 +135,5 @@ at once.
   snapshot_required re-baseline, concurrent-gap coalescing.
 - no-listener gap (#1251): cursor retained across unsubscribe and replayed on
   resubscribe; `subscribed` ack does not clobber a retained same-epoch cursor;
-  stale-epoch ack does re-baseline; detached-cursor LRU eviction degrades to a
-  fresh baseline.
+  stale-epoch ack does re-baseline; detached cursors retained for the whole
+  session (no lossy eviction — the oldest still resumes after heavy churn).
