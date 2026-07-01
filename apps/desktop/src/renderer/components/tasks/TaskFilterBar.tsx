@@ -1,8 +1,10 @@
 import {
   forwardRef,
+  useId,
   useMemo,
   useState,
   type ButtonHTMLAttributes,
+  type KeyboardEvent,
   type ReactNode,
 } from 'react';
 import * as Popover from '@radix-ui/react-popover';
@@ -16,6 +18,7 @@ import {
   User,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { useRovingList } from '@/features/tasks/taskFilterKeyboard';
 import {
   personFilterKey,
   taskFiltersEqual,
@@ -253,13 +256,26 @@ const FilterTrigger = forwardRef<
   );
 });
 
-function FilterPanel({ children }: { children: ReactNode }): JSX.Element {
+function FilterPanel({
+  id,
+  activeDescendant,
+  onKeyDown,
+  children,
+}: {
+  id?: string;
+  activeDescendant?: string;
+  onKeyDown?: (e: KeyboardEvent) => void;
+  children: ReactNode;
+}): JSX.Element {
   return (
     <Popover.Portal>
       <Popover.Content
         align="start"
         sideOffset={4}
         role="listbox"
+        id={id}
+        aria-activedescendant={activeDescendant}
+        onKeyDown={onKeyDown}
         data-task-filter-panel
         data-dropdown-frame
         className="z-[70] max-h-[50vh] min-w-[180px] overflow-y-auto rounded-[var(--select-content-radius)] bg-bg-floating p-1 shadow-popover outline-none"
@@ -273,6 +289,10 @@ function FilterPanel({ children }: { children: ReactNode }): JSX.Element {
 function OptionRow({
   selected,
   neutral = false,
+  active = false,
+  id,
+  optionRef,
+  onHover,
   onSelect,
   children,
 }: {
@@ -283,15 +303,26 @@ function OptionRow({
    *  contradict the plain (inactive) trigger for the ALL state (shiki +
    *  Cindy #task:790). */
   neutral?: boolean;
+  /** Keyboard roving highlight (#task:1257). Utility signal only, so it
+   *  reuses the neutral `--bg-option-hover` fill (same as mouse hover), never
+   *  the brand lime — that stays reserved for the applied-filter selection. */
+  active?: boolean;
+  id?: string;
+  optionRef?: (el: HTMLButtonElement | null) => void;
+  onHover?: () => void;
   onSelect: () => void;
   children: ReactNode;
 }): JSX.Element {
   const activeSelected = selected && !neutral;
   return (
     <button
+      ref={optionRef}
+      id={id}
       type="button"
       role="option"
       aria-selected={selected}
+      data-active-option={active || undefined}
+      onMouseMove={onHover}
       onClick={onSelect}
       className={cn(
         // Hover = pale-lime preview FILL only, no border. Routes through
@@ -307,9 +338,13 @@ function OptionRow({
         // vocabulary (festive lime fill + on-selected ink), NOT the magenta
         // `accent-soft` tint. The ALL/All-channels default row stays plain
         // text even when current (shiki #task:790: ALL was reading pink).
+        // Keyboard-highlighted (but not the current value) → neutral hover
+        // fill, so mouse and keyboard share one visual language.
         activeSelected
           ? 'bg-[var(--bg-row-selected)] text-[color:var(--text-on-selected)]'
-          : 'text-text-secondary',
+          : active
+            ? 'bg-[var(--bg-option-hover)] text-text-primary'
+            : 'text-text-secondary',
       )}
     >
       <span className="min-w-0 flex-1 truncate">{children}</span>
@@ -367,30 +402,62 @@ function ChannelFilter({
     [filtered],
   );
 
-  const renderOption = (o: ChannelOption): JSX.Element => (
-    <OptionRow
-      key={o.id}
-      selected={value === o.id}
-      onSelect={() => {
-        onChange(o.id);
-        setOpen(false);
-      }}
-    >
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className="shrink-0 text-text-muted">
-          <ChannelGlyph />
+  // Flat, in-render-order option list for roving keyboard nav (#task:1257):
+  // the ALL row at index 0, then every section's items (Workspaces then DMs),
+  // matching the visual order below so arrow keys walk the list as it reads.
+  const flatOptions = useMemo(() => sections.flatMap(s => s.items), [sections]);
+  const optionIndex = useMemo(() => {
+    const m = new Map<string, number>();
+    flatOptions.forEach((o, i) => m.set(o.id, i + 1)); // +1: ALL occupies 0
+    return m;
+  }, [flatOptions]);
+  const listId = useId();
+  const optionId = (index: number): string => `${listId}-opt-${index}`;
+  const roving = useRovingList({
+    count: flatOptions.length + 1,
+    open,
+    resetKey: query,
+    onSelect: index => {
+      if (index === 0) onChange(null);
+      else {
+        const o = flatOptions[index - 1];
+        if (o) onChange(o.id);
+      }
+      setOpen(false);
+    },
+  });
+
+  const renderOption = (o: ChannelOption): JSX.Element => {
+    const index = optionIndex.get(o.id) ?? -1;
+    return (
+      <OptionRow
+        key={o.id}
+        selected={value === o.id}
+        active={roving.activeIndex === index}
+        id={optionId(index)}
+        optionRef={el => roving.registerItem(index, el)}
+        onHover={() => roving.setActiveIndex(index)}
+        onSelect={() => {
+          onChange(o.id);
+          setOpen(false);
+        }}
+      >
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="shrink-0 text-text-muted">
+            <ChannelGlyph />
+          </span>
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate">{o.label}</span>
+            {o.sublabel ? (
+              <span className="truncate text-[10px] text-text-muted">
+                {o.sublabel}
+              </span>
+            ) : null}
+          </span>
         </span>
-        <span className="flex min-w-0 flex-col">
-          <span className="truncate">{o.label}</span>
-          {o.sublabel ? (
-            <span className="truncate text-[10px] text-text-muted">
-              {o.sublabel}
-            </span>
-          ) : null}
-        </span>
-      </span>
-    </OptionRow>
-  );
+      </OptionRow>
+    );
+  };
 
   return (
     <Popover.Root
@@ -423,14 +490,27 @@ function ChannelFilter({
               autoFocus
               value={query}
               onChange={e => setQuery(e.target.value)}
+              onKeyDown={roving.onKeyDown}
+              role="combobox"
+              aria-expanded={open}
+              aria-controls={listId}
+              aria-activedescendant={optionId(roving.activeIndex)}
               placeholder="Search channels…"
               className="w-full bg-transparent text-xs text-text-primary outline-none placeholder:text-text-muted"
             />
           </div>
-          <div role="listbox" className="mt-1 min-h-0 flex-1 overflow-y-auto">
+          <div
+            role="listbox"
+            id={listId}
+            className="mt-1 min-h-0 flex-1 overflow-y-auto"
+          >
             <OptionRow
               selected={value === null}
               neutral
+              active={roving.activeIndex === 0}
+              id={optionId(0)}
+              optionRef={el => roving.registerItem(0, el)}
+              onHover={() => roving.setActiveIndex(0)}
               onSelect={() => {
                 onChange(null);
                 setOpen(false);
@@ -502,6 +582,25 @@ function PersonFilterControl({
     setOpen(false);
   };
 
+  // Roving keyboard nav (#task:1257). The option order below is fixed —
+  // ALL, then optional No-assignee, then each person — so the row index is
+  // positional; `actions` mirrors that order 1:1 for Enter-to-commit.
+  const listId = useId();
+  const optionId = (index: number): string => `${listId}-opt-${index}`;
+  const anyIndex = 0;
+  const unassignedIndex = allowUnassigned ? 1 : -1;
+  const optionsBase = allowUnassigned ? 2 : 1;
+  const actions: (() => void)[] = [
+    () => choose({ kind: 'any' }),
+    ...(allowUnassigned ? [() => choose({ kind: 'unassigned' })] : []),
+    ...options.map(o => () => choose({ kind: 'person', person: o.person })),
+  ];
+  const roving = useRovingList({
+    count: actions.length,
+    open,
+    onSelect: index => actions[index]?.(),
+  });
+
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
@@ -509,10 +608,18 @@ function PersonFilterControl({
           {`${label}:${valuePart}`}
         </FilterTrigger>
       </Popover.Trigger>
-      <FilterPanel>
+      <FilterPanel
+        id={listId}
+        activeDescendant={optionId(roving.activeIndex)}
+        onKeyDown={roving.onKeyDown}
+      >
         <OptionRow
           selected={value.kind === 'any'}
           neutral
+          active={roving.activeIndex === anyIndex}
+          id={optionId(anyIndex)}
+          optionRef={el => roving.registerItem(anyIndex, el)}
+          onHover={() => roving.setActiveIndex(anyIndex)}
           onSelect={() => choose({ kind: 'any' })}
         >
           {anyLabel}
@@ -520,17 +627,26 @@ function PersonFilterControl({
         {allowUnassigned ? (
           <OptionRow
             selected={value.kind === 'unassigned'}
+            active={roving.activeIndex === unassignedIndex}
+            id={optionId(unassignedIndex)}
+            optionRef={el => roving.registerItem(unassignedIndex, el)}
+            onHover={() => roving.setActiveIndex(unassignedIndex)}
             onSelect={() => choose({ kind: 'unassigned' })}
           >
             No assignee
           </OptionRow>
         ) : null}
-        {options.map(o => {
+        {options.map((o, i) => {
           const key = personFilterKey({ kind: 'person', person: o.person });
+          const index = optionsBase + i;
           return (
             <OptionRow
               key={key}
               selected={value.kind === 'person' && personFilterKey(value) === key}
+              active={roving.activeIndex === index}
+              id={optionId(index)}
+              optionRef={el => roving.registerItem(index, el)}
+              onHover={() => roving.setActiveIndex(index)}
               onSelect={() => choose({ kind: 'person', person: o.person })}
             >
               {`@${o.name}`}
