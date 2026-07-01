@@ -45,6 +45,7 @@
 // visibility predicate is the canViewWorkspace/canViewConversation USER branch
 // (workspace_users / conversation_users membership), expressed as SQL joins.
 import type { BackendContext } from '../context.js';
+import { ConversationReadRepo } from '../repos/conversation-read-repo.js';
 import {
   apiPaths,
   type FavoriteRowDto,
@@ -206,6 +207,23 @@ export function listFavorites(
 
   const items: FavoriteRowDto[] = [];
   const entries: ViewerSortEntryDto[] = [];
+
+  // Unread badge (#task:1254 exclusive). Under the exclusive model the starred
+  // entity has MOVED out of its home list, so its unread signal lives ONLY here —
+  // the badge MUST be populated or a starred channel/workspace loses the unread
+  // visibility its home row used to carry. Source is the CANONICAL unread repo
+  // (same `ROLLUP_UNREAD` predicate the rail/sidebar badges use), so the STARRED
+  // badge equals what the home row would show — single source, no drift:
+  //   - workspace/dm row → the per-workspace rollup (`unreadCountsByWorkspace`),
+  //     exactly the rail workspace badge.
+  //   - channel row      → that conversation's channel-level rollup
+  //     (`unreadCountForConversation` = mainline + followed threads), exactly the
+  //     channel sidebar badge.
+  // A cross-workspace starred channel is why this is server-side: the renderer
+  // only has the CURRENT workspace's channel unread, never another workspace's.
+  const reads = new ConversationReadRepo(ctx.db);
+  const unreadByWorkspace = reads.unreadCountsByWorkspace(viewerUserId);
+
   const pushEntry = (
     key: string,
     starredAt: number,
@@ -245,7 +263,7 @@ export function listFavorites(
       runtime: isDm ? r.agent_runtime : null,
       starred_at: r.starred_at,
       created_at: r.created_at,
-      unread_count: null,
+      unread_count: unreadByWorkspace[r.entity_id] ?? 0,
     });
     pushEntry(key, r.starred_at, r.last_accessed_at);
   }
@@ -264,7 +282,7 @@ export function listFavorites(
       runtime: null,
       starred_at: r.starred_at,
       created_at: r.created_at,
-      unread_count: null,
+      unread_count: reads.unreadCountForConversation(r.entity_id, viewerUserId),
     });
     pushEntry(key, r.starred_at, r.last_accessed_at);
   }

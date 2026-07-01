@@ -89,7 +89,8 @@ describe('GET /api/favorites', () => {
       workspace_name: null,
       icon_url: null,
       runtime: null,
-      unread_count: null,
+      // No non-system messages yet → caught-up rollup is 0 (not null).
+      unread_count: 0,
     });
     expect(typeof ws.starred_at).toBe('number');
 
@@ -103,7 +104,7 @@ describe('GET /api/favorites', () => {
       workspace_name: 'eng',
       icon_url: null,
       runtime: null,
-      unread_count: null,
+      unread_count: 0,
     });
   });
 
@@ -241,6 +242,60 @@ describe('GET /api/favorites', () => {
     t = buildTestApp();
     await makeAgent(t, 'alice');
     expect(await favorites(t)).toEqual([]);
+  });
+
+  it('populates unread_count from the canonical rollup (#task:1254 exclusive)', async () => {
+    // Under the EXCLUSIVE model the starred entity has moved out of its home
+    // list, so the STARRED badge is the ONLY place its unread shows. It is
+    // filled server-side from the SAME ROLLUP_UNREAD predicate the rail/sidebar
+    // badges use: workspace/dm → per-workspace rollup; channel → the
+    // conversation's channel-level rollup. So STARRED ≡ home, no drift.
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const wsId = await makeWorkspace(t, 'eng', agentId);
+    const chId = await makeChannel(t, wsId, 'general', agentId);
+    await http(t).post(`/api/workspaces/${wsId}/star`);
+    await http(t).post(`/api/channels/${chId}/star`);
+
+    // Two unread agent mainline messages in the channel. The viewer 'local' has
+    // no conversation_reads cursor → any seq > 0 counts. A system message and
+    // the viewer's OWN message do NOT (ROLLUP_UNREAD excludes both).
+    const db = t.ctx.db;
+    const insertMsg = (
+      id: string,
+      convId: string,
+      fromKind: string,
+      seq: number,
+    ): void => {
+      db.prepare(
+        `INSERT INTO messages
+           (id, conversation_id, from_kind, from_agent_id, from_user_id,
+            content, metadata, seq, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+      ).run(
+        id,
+        convId,
+        fromKind,
+        fromKind === 'agent' ? agentId : null,
+        fromKind === 'user' ? 'local' : null,
+        'hi',
+        seq,
+        seq,
+      );
+    };
+    insertMsg('m1', chId, 'agent', 100);
+    insertMsg('m2', chId, 'agent', 101);
+    insertMsg('m3', chId, 'system', 102); // excluded
+    insertMsg('m4', chId, 'user', 103); // viewer's own → excluded
+
+    const items = await favorites(t);
+    const ws = items.find(i => i.entity_id === wsId);
+    const ch = items.find(i => i.entity_id === chId);
+    // Channel row = that conversation's channel-level rollup.
+    expect(ch.unread_count).toBe(2);
+    // Workspace row = the per-workspace rollup (sums its conversations = the
+    // channel's 2), exactly what the rail workspace badge would show.
+    expect(ws.unread_count).toBe(2);
   });
 });
 

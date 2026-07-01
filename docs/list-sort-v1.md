@@ -379,7 +379,11 @@ see *Sortable* below).
   subtitle. Fields:
   `{ kind, favorite_key, entity_id, workspace_id, channel_id|null, title,
   workspace_name|null, icon_url|null, runtime|null, starred_at, created_at,
-  unread_count|null }` (`unread_count` reserved, always `null` in v1; `entity_id`
+  unread_count|null }` (`unread_count` = the entity's unread rollup, #task:1254 —
+  workspace/dm → per-workspace rollup, channel → channel-level rollup, from the
+  SAME canonical `ConversationReadRepo` source as the home badge so STARRED ≡ home;
+  0 when caught up, renderer badges `> 0`. Exclusive makes this REQUIRED: the
+  entity left its home list, so this is the only place its unread shows. `entity_id`
   is the HOME id / unstar path param, distinct from the sort key `favorite_key`).
 - **kind ⇒ source + unstar endpoint** (renderer never builds a `list_key`):
   - `workspace` — a starred `workspace_kind='regular'` workspace (`list_key='workspaces'`).

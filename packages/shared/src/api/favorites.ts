@@ -103,8 +103,13 @@ export const FavoriteRowDtoSchema = z.object({
    *  when `last_accessed_at` is null/equal, so order never falls back to
    *  insertion/SQL order. */
   created_at: z.number(),
-  /** Reserved for a future per-favorite unread badge. v1 always null — Favorites
-   *  is a pure navigation list. Nullable so adding it later is non-breaking. */
+  /** The entity's unread rollup (#task:1254). Under the EXCLUSIVE model the
+   *  starred entity has moved out of its home list, so this badge is the only
+   *  place its unread shows — it is populated server-side from the SAME canonical
+   *  source as the home badge (workspace/dm → per-workspace rollup; channel →
+   *  channel-level rollup = mainline + followed threads), so STARRED ≡ home, no
+   *  drift. 0 when caught up; the renderer shows a badge only for `> 0`. Nullable
+   *  is retained for wire back-compat (a client may still guard `!= null`). */
   unread_count: z.number().nullable(),
 });
 export type FavoriteRowDto = z.infer<typeof FavoriteRowDtoSchema>;
