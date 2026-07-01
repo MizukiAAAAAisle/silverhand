@@ -27,18 +27,21 @@ interface ScopeEventLogger {
  *   conversation:{conversationId}      — per-conversation MESSAGE-STREAM events
  *                                        (message / reaction / task_changed) —
  *                                        resume-governed, feeds the message cursor.
- *   conversation-side:{conversationId} — per-conversation SIDE-CHANNEL events
- *                                        (agent_status / agent_activity /
- *                                        conversation_activity / members_changed /
- *                                        thread_updated) — a distinct recovery class:
- *                                        cursor-inert, self-healing via own REST /
- *                                        invalidate. Published via publishSide().
+ *   conversation-side:{conversationId} — per-conversation SIDE-CHANNEL events —
+ *                                        a distinct recovery class: cursor-inert,
+ *                                        self-healing via own REST / invalidate.
+ *                                        Published via publishSide(). The
+ *                                        authoritative message-stream vs
+ *                                        side-channel kind partition lives in the
+ *                                        recovery-class matrix (§2), not here —
+ *                                        do not re-enumerate it in this file.
  *   viewer:{userId}                    — viewer-private events (notifications, unread)
  *
  * The message-stream and side-channel scopes are disjoint prefixes, own
  * independent seq/replay spaces, and are routed only through the shared
  * `parseConversationScope` / `parseConversationSideScope` parsers — never a
- * fuzzy `startsWith('conversation')`. See docs/event-ws-recovery-class-scope-v1.md.
+ * fuzzy `startsWith('conversation')`. See docs/event-ws-recovery-class-scope-v1.md
+ * (§2 = the canonical per-kind classification).
  *
  * WS handlers subscribe to a scope key via subscribeScope() and receive
  * ScopedEvent objects. The replay buffer per scope keeps the last 200 events.
@@ -97,9 +100,10 @@ export class ScopeEventBus {
    * level compat subscribers and WS subscribers on the `conversation:{id}`
    * scope (the resume-governed message cursor).
    *
-   * Side-channel kinds (agent_status / activity / members_changed /
-   * thread_updated) must NOT use this — they go through `publishSide`, a
-   * distinct recovery class on the `conversation-side:{id}` scope.
+   * Only message-stream kinds belong here (message / reaction / task_changed).
+   * Side-channel kinds must go through `publishSide` — see the recovery-class
+   * matrix (docs/event-ws-recovery-class-scope-v1.md §2) for the authoritative
+   * classification; do not re-list it inline.
    */
   publish(conversationId: string, event: ConversationBusEvent): void {
     // 1. Notify conversation-level subscribers.

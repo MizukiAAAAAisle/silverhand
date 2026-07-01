@@ -22,12 +22,15 @@ describe('ScopeEventBus', () => {
       const received: unknown[] = [];
       const unsub = bus.subscribe('conv-1', e => received.push(e));
 
+      // Two message-stream kinds — the compat emitter is what `publish()`
+      // (message-stream) feeds. Side kinds go through `publishSide` and never
+      // touch this path (asserted in the side-channel describe below).
       bus.publish('conv-1', { kind: 'message', payload: { id: 1 } });
-      bus.publish('conv-1', { kind: 'agent_status', payload: 'idle' });
+      bus.publish('conv-1', { kind: 'task_changed', payload: { id: 1 } });
 
       expect(received).toEqual([
         { kind: 'message', payload: { id: 1 } },
-        { kind: 'agent_status', payload: 'idle' },
+        { kind: 'task_changed', payload: { id: 1 } },
       ]);
 
       unsub();
