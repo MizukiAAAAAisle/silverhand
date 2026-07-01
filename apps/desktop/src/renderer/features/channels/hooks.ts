@@ -1574,11 +1574,12 @@ export function useThreadFollowers(
   // (a reply to this root, or a reconnect snapshot_required, refetches the
   // follower set), gated on this followers reader being mounted. This hook only
   // declares INTEREST in the channel scope.
-  useEffect(() => {
-    if (!enabled || !channelId) return;
-    const sub = subscribeWsScope(wsConversationScope(channelId));
-    return () => sub.unsubscribe();
-  }, [enabled, channelId]);
+  // #task:1260 P2: interest routes through the registry (`useInterest`) instead
+  // of a direct subscribeWsScope useEffect — identical lifecycle, single
+  // authority. The compound `enabled` gate (channelId && rootMessageId) maps to
+  // the null-scope form; not a correctness boundary (transport retains floor on
+  // unsubscribe, resume-replays on re-enable, #1251).
+  useInterest(enabled && channelId ? wsConversationScope(channelId) : null);
 
   return query;
 }

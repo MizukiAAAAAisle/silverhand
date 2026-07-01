@@ -198,7 +198,6 @@ describe('thread view hooks — pure reader / gate-(b) fence (#task:1255 P1b)', 
   );
   const HOOKS = [
     'export function useThreadCluster(',
-    'export function useThreadFollowers(',
   ];
   // Call-form, not the bare word — these hooks' comments mention onWsFrame /
   // useConversationStream to explain what moved out.
@@ -226,42 +225,49 @@ describe('thread view hooks — pure reader / gate-(b) fence (#task:1255 P1b)', 
   }
 });
 
-// #task:1260 P2 slice 3 — useThreadRoot is the FIRST hook migrated inside the
-// shared channels/hooks.ts. Its deny-list entry (`subscribeWsScope(` forbidden)
-// is scoped to THIS hook's sliced body only — the sibling thread hooks
-// (useThreadCluster / useThreadFollowers) stay in the P1b loop above still
-// REQUIRING `subscribeWsScope` and go green precisely because the deny is
-// body-scoped, never file-scoped. That co-existence is the proof that migrating
-// one hook in a shared file cannot open a fence back-door for its neighbours
-// (Alice's slice-3 transport-gate requirement). The file as a whole still
-// contains `subscribeWsScope` (the un-migrated hooks call it) — asserted below.
-describe('useThreadRoot — pure reader / registry-migrated (#task:1260 P2 slice 3)', () => {
+// #task:1260 P2 — hooks migrated to the InterestRegistry INSIDE the shared
+// channels/hooks.ts, one per slice (slice 3: useThreadRoot, slice 4:
+// useThreadFollowers, …). Each entry's deny (`subscribeWsScope(` forbidden) is
+// scoped to THAT hook's sliced body only. The still-un-migrated hooks stay in
+// the #1255 P1b/P1c loops above still REQUIRING `subscribeWsScope`, and the
+// file-level assertion below pins that the file still calls it — so a migrated
+// hook + its un-migrated neighbours go green simultaneously. That co-existence
+// is the proof that migrating one hook in a shared file cannot open a fence
+// back-door for its neighbours (Alice's slice-3 transport-gate requirement).
+describe('channels/hooks.ts — registry-migrated hooks / body-scoped deny (#task:1260 P2)', () => {
   const source = readFileSync(
     fileURLToPath(new URL('../features/channels/hooks.ts', import.meta.url)),
     'utf8',
   );
-  const body = sliceFunctionBody(source, 'export function useThreadRoot(');
+  const MIGRATED = [
+    'export function useThreadRoot(',      // slice 3 (b729155)
+    'export function useThreadFollowers(', // slice 4
+  ];
+  const FORBIDDEN = [
+    'onWsFrame(',
+    'useConversationStream(',
+    'appendMessageToCache(',
+    'bumpReplyCountInCache(',
+    'applyTaskChangedToCache(',
+    'applyReactionChangedToChannelCaches(',
+    'applyReactionChangedToThreadRootCache(',
+  ];
 
-  it('registers no frame consumer / cache mutator (gate-(b) preserved)', () => {
-    for (const sym of [
-      'onWsFrame(',
-      'useConversationStream(',
-      'appendMessageToCache(',
-      'bumpReplyCountInCache(',
-      'applyTaskChangedToCache(',
-      'applyReactionChangedToChannelCaches(',
-      'applyReactionChangedToThreadRootCache(',
-    ]) {
-      expect(body).not.toContain(sym);
-    }
-  });
+  for (const decl of MIGRATED) {
+    const name = decl.replace('export function ', '').replace('(', '');
+    const body = sliceFunctionBody(source, decl);
 
-  it('declares scope interest via the registry, not a direct subscribe (body-scoped deny)', () => {
-    // Call-form deny (prose naming subscribeWsScope must not trip it) on THIS
-    // hook's body only.
-    expect(body).toContain('useInterest(');
-    expect(body).not.toContain('subscribeWsScope(');
-  });
+    it(`${name} registers no frame consumer / cache mutator (gate-(b) preserved)`, () => {
+      for (const sym of FORBIDDEN) expect(body).not.toContain(sym);
+    });
+
+    it(`${name} declares scope interest via the registry, not a direct subscribe (body-scoped deny)`, () => {
+      // Call-form deny (prose naming subscribeWsScope must not trip it) on THIS
+      // hook's body only.
+      expect(body).toContain('useInterest(');
+      expect(body).not.toContain('subscribeWsScope(');
+    });
+  }
 
   it('the deny is body-scoped: the file still calls subscribeWsScope for un-migrated hooks', () => {
     // If this ever fails, every conversation hook in the file has migrated — at
