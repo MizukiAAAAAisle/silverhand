@@ -114,8 +114,8 @@ shiki 提问:Activity 是不是一个独立 DDD 领域事件,有自己的读和�
 ### 5.2 分级 / 呈现 —— delivery ⊥ attention
 
 - **salience(权重/排序)是派生,不落字段**:从 (来源 kind + event kind + recency) 算(DM/mention 天生高、follow 中)。
-- **delivery ⊥ attention(硬不变量)**:attention 可**读** `thread_followers` 当默认输入(followed→strong);**绝不回写** delivery/wake/drain。决定性反例:human 在 Activity 侧调偏好,绝不能改 agent wake。
-- v1 唯一会**写** attention state 的用户表面 = channel `所有消息 / 仅提及` → 只写 `ChannelAttentionPreference`,绝不碰 `thread_followers`。thread `Follow/Unfollow` 写的是 **delivery**,被 `enter()` 读作默认 strong。
+- **delivery ⊥ attention(硬不变量)**:attention 可**读** `thread_followers` 当 ambient 的 `subscribed` 预置(**necessary not sufficient**——followed 只是 thread ambient 进 Activity 的前置,ambient 还需父 channel pref==`all`,§6 aggregate-floor);**绝不回写** delivery/wake/drain。决定性反例:human 在 Activity 侧调偏好,绝不能改 agent wake。
+- v1 唯一会**写** attention state 的用户表面 = channel `所有消息 / 仅提及` → 只写 `ChannelAttentionPreference`,绝不碰 `thread_followers`。thread `Follow/Unfollow` 写的是 **delivery**,被 `enter()` 读作 ambient 的 `subscribed` 预置(necessary not sufficient;不单独决定 Activity)。
 
 ### 5.3 消除 —— source-routed `observe()`
 
@@ -266,7 +266,7 @@ Activity 是 **viewer-scoped read-model**,所以它的失效信号统一收敛�
 ### 13.2 全局 Activity 列表(v1)
 
 - **入口**:sidebar、Search 之上(shiki)。**v1 UI = global**(shiki 拍 2026-06-25「这里是用户所有要关注的入口」):一个 human 跨所有可见 workspace 的「等我处理」总队列,`GET /api/activity` 不带 `workspace_id`。`workspace_id` 仍是**可选** filter(数据模型本就全局,UI 日后若要 per-workspace 视图直接传)。global 的完整性三件套:①失效全 viewer-scoped(§10;v1 两源 = `unread_updated` / `notification` —— task_changed viewer-fan 已删,§5.1/§10);②列表行显示 workspace context(DTO 已带 `workspace_id`,renderer 用 workspace map 补 name,跨 ws 同名 channel 可区分,纯展示不放宽可见性);③跳源跨 workspace 稳定(DTO `workspace_id` + onJump 已支持)。
-- **收**:`enter() == true`(§6)= DM · @我(notification-backed directed,§5.1a)· followed-thread ambient · `所有消息` channel 的 ambient。（task-needs-action = v2,§5.1，v1 不进。）
+- **收**:`enter() == true`(§6)= DM · @我(notification-backed directed,§5.1a)· followed-thread ambient(**父 channel pref==`所有消息`**,§6 aggregate-floor)· `所有消息` channel 的 ambient。（task-needs-action = v2,§5.1，v1 不进。）
 - **每条 item(行结构,shiki 拍 2026-06-26)**:**row1 where** = 源 icon + 来源标识(workspace 名前 `WorkspaceIcon`、channel/DM 名前复用现有主题化 identity primitive,不另造裸 icon)+ 相对时间;**row2 subject** = thread item 在 `thread_root_preview` 前加低响度 thread glyph(标识这是 root message,不改 row1 source 语义),非 thread item 则是 `preview`;**row3 reply** = `<sender avatar> <display_name>: <preview>`,sender 由 `listActivity` 从触发 item 的 **anchor message** server-resolve 出 `preview_sender:{kind,id,display_name,avatar_url}`(global 跨 workspace 列表拿不到 per-workspace member cache,**不能**让 renderer 回 message cache 拼 sender;`avatar_url`=与 `UserDto`/`AgentDto` 同款相对 cache-busted 路径,renderer 按 URL 经现有 avatar hook 解析)。**`preview_sender` 是 additive display-only 字段:不带 source_ref、不参与 §5.3 清除语义;`agent_failed`(无 message anchor)= null。** v1 暂不加 root sender。**salience 分级**(§5.2)directed 视觉强于 ambient;**per-(viewer, message) 去重、取最高 salience**(§7)→ @我显示成 mention + 上下文、**不再**显示成 ambient 未读。
 - **`+N new` 未读计数 = quiet count token(row1 meta,shiki 拍 2026-06-26)**:某条流的 ambient 未读数。形态 = 中性墨色(`text-text-secondary`,**不开 accent tier**——否则 count 会比真 directed 信号还跳、偷 salience 预算)+ 极弱 hairline outline 成组(纯描边无 fill,与 sidebar 实心 unread badge 清晰区隔),**非裸散文字 / 非 badge / 非 button**。**纯展示**:不是独立 hit target(无 onClick/role/hover/tooltip),整行才是唯一点击区;不带 source_ref、不参与清除。与 §13.1 channel 流内 `#1226` reply chip 的 ink-text 呈现不同 = **同语义、不同宿主密度**:reply chip 在 inline 低密度行(已有 bordered 容器)、墨字足够;此处 row1 同时扛 workspace·channel·title·time,密度高 → 需 hairline 成组才扫得出是一个 count。
 - **排序(v1 从简)**:directed 档置顶、档内 most-recent-first。
@@ -280,7 +280,7 @@ Activity 是 **viewer-scoped read-model**,所以它的失效信号统一收敛�
 ### 13.3 控件表面(write controls — 在哪设置)
 
 - **channel `所有消息 / 仅提及`** = **v1 唯一会写 attention state 的表面** → 只写 `ChannelAttentionPreference`(§9.1)。`所有消息` = ambient on、`仅提及` = ambient off(但 @我 经 directed **永远进**、不受此开关管,§6)。内部模型 = 一个 ambient on/off,用户措辞 = 所有消息 / 仅提及(弃用内部词)。**位置:sidebar channel context menu only(仅 `kind==='channel'`,DM/thread 不显示;v1 不再常占 header,也不进 channel settings modal)** —— 它是 **per-viewer 个人 view-state**,不是 channel 级共享配置,放进 settings modal 会被误读成对所有成员生效(shiki/Cindy/Alice 2026-06-26 收敛);settings/gear 仍只承载 rename/archive 等共享配置。**`静音` / Mute = v2**(§15)。
-- **thread `Follow / Unfollow`** = 写 **delivery**(§5.2),**非 attention**;进不进 Activity 由 follow 派生。v1 二态(镜像 Slack)。**不做**「从 Activity 隐藏」第二控件(attention-only override = v2)。
+- **thread `Follow / Unfollow`** = 写 **delivery**(§5.2),**非 attention**;它是 ambient 进 Activity 的 `subscribed` 预置(**necessary not sufficient**——followed thread 的 ambient 还需父 channel pref==`所有消息`,§6 aggregate-floor),follow 本身不单独决定 Activity。v1 二态(镜像 Slack)。**不做**「从 Activity 隐藏」第二控件(attention-only override = v2)。
 - **边界**:attention-write 表面 = channel pref only;follow = delivery-write;**互不写对方**(§5.2 硬不变量)。
 
 ### 13.4 观察保真度(read-cleared 的「真看到了」)

@@ -31,7 +31,9 @@
 //      that wouldn't be ambient is simply absent (no spurious subtraction).
 //   3. positional streams — per-(conversation, stream) ambient/DM unread,
 //      `enter()`-filtered in SQL (DM always; channel mainline iff the viewer's
-//      effective ChannelAttentionPreference = 'all'; threads iff followed).
+//      effective ChannelAttentionPreference = 'all'; threads iff followed AND
+//      the parent channel's effective ChannelAttentionPreference = 'all' —
+//      follow is a delivery precondition, necessary not sufficient, #task:1268).
 // Then salience is derived (DM = directed-grade) and the list sorted §13.2:
 // directed tier first, most-recent-first within a tier.
 import type { BackendContext } from '../context.js';

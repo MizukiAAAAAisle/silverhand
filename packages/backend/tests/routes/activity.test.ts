@@ -510,9 +510,11 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
       rootMsg,
       'REPLY inside the thread',
     );
-    // The viewer follows the thread (human follower) so its ambient unread enters
-    // (§6: thread ambient is follow-driven). The default channel ambient pref
-    // may also surface the root mainline, so assert the thread row by root id.
+    // The viewer follows the thread (human follower); with the default channel
+    // ambient pref = 'all' its ambient unread enters (§6: thread ambient needs
+    // followed AND parent channel pref = 'all' — follow is necessary not
+    // sufficient, #task:1268). The default channel ambient pref may also surface
+    // the root mainline, so assert the thread row by root id.
     t.ctx.db
       .prepare(
         `INSERT INTO thread_followers
