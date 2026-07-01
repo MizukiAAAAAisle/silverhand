@@ -906,4 +906,127 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
       { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 21 } } },
     ]);
   });
+
+  // ── Provenance from replay context, not received-water (Blocker 1) ──────────
+  // `seq <= received` only catches DUPLICATE re-delivery. A replay-buffer drain
+  // also re-delivers frames the client NEVER received (a forward-gap fill, a
+  // new-during-disconnect frame) — those are `> received` yet must still be
+  // `backfill`, because a concurrent REST snapshot may already cover them so a
+  // blind `+1` would double-count. Provenance therefore comes from the armed
+  // replay window (`backfillThrough`), not the received-water alone.
+
+  it('tags a forward-gap replay fill as backfill even though it was never received (Blocker 1)', async () => {
+    const { client, ws, delivered } = await connectedGated(SCOPE, 5);
+
+    fireEvent(ws, SCOPE, 6);
+    client.markApplied(SCOPE, 6, 'epoch-1'); // floor 6, received 6
+    // Forward gap: 8 arrives before 7 → arm the replay window at 8, resume from
+    // the floor (6), swallow 8.
+    fireEvent(ws, SCOPE, 8);
+    // Server replays in order. 7 FILLS a seq the client never received → backfill
+    // (authoritative recovery, not +1). 8 (previously swallowed) → backfill too.
+    fireEvent(ws, SCOPE, 7);
+    fireEvent(ws, SCOPE, 8);
+    // The first frame PAST the window is fresh live fanout.
+    fireEvent(ws, SCOPE, 9);
+
+    const evs = delivered.filter(d => d.frame.type === 'event');
+    expect(evs.map(d => d.frame.seq)).toEqual([6, 7, 8, 9]);
+    expect(evs.map(d => d.meta?.provenance)).toEqual([
+      'live',
+      'backfill',
+      'backfill',
+      'live',
+    ]);
+  });
+
+  it('tags a no-listener resubscribe replay as backfill up to the ack head (Blocker 1)', async () => {
+    const { client, ws, sub, delivered } = await connectedGated(SCOPE, 5);
+
+    fireEvent(ws, SCOPE, 6);
+    client.markApplied(SCOPE, 6, 'epoch-1'); // floor 6, received 6
+    sub.unsubscribe(); // retains floor 6 + received-water 6
+    ws.sent.length = 0;
+
+    // [server publishes 7, 8 while no listener is attached — the no-listener gap.]
+    client.subscribe(SCOPE); // subscribe + resume{6}
+    // Ack at the current head (8): a retained SAME-epoch floor is present, so a
+    // resume was paired → arm the replay window up to 8. The ack does NOT
+    // re-baseline the retained floor.
+    ws.fireMessage({ type: 'subscribed', scope: SCOPE, epoch: 'epoch-1', seq: 8 });
+
+    // Replay of 7, 8 — frames the client NEVER received — are backfill.
+    fireEvent(ws, SCOPE, 7);
+    fireEvent(ws, SCOPE, 8);
+    // Past the window → fresh live.
+    fireEvent(ws, SCOPE, 9);
+
+    const evs = delivered.filter(d => d.frame.type === 'event');
+    expect(evs.map(d => d.frame.seq)).toEqual([6, 7, 8, 9]);
+    expect(evs.map(d => d.meta?.provenance)).toEqual([
+      'live',
+      'backfill',
+      'backfill',
+      'live',
+    ]);
+  });
+
+  it('does not treat a fresh cold-start ack head as a replay window (Cindy edge)', async () => {
+    // connectedGated cold-starts: a `subscribed` ack at 5 with NO retained floor.
+    // No resume was paired, so the ack head is only a BASELINE, not a replay
+    // window — subsequent contiguous live frames must stay `live`.
+    const { ws, delivered } = await connectedGated(SCOPE, 5);
+
+    fireEvent(ws, SCOPE, 6);
+    fireEvent(ws, SCOPE, 7);
+
+    const evs = delivered.filter(d => d.frame.type === 'event');
+    expect(evs.map(d => d.frame.seq)).toEqual([6, 7]);
+    expect(evs.map(d => d.meta?.provenance)).toEqual(['live', 'live']);
+  });
+
+  // ── markApplied is not a baseline authority (Safety blocker 2) ──────────────
+  // Only the `subscribed` ack and `commitSnapshotBaseline` may ESTABLISH a floor
+  // (they reflect the server head). markApplied establishing one from an
+  // arbitrary applied seq would let the next resume start there, skipping every
+  // un-received seq below it (the #1251 skip-unseen-frames hole).
+
+  it('markApplied is a no-op with no same-epoch floor (Safety blocker 2)', async () => {
+    const client = makeClient();
+    const sub = client.subscribe(SCOPE);
+    await flushMicrotasks();
+    const ws = createdSockets[0]!;
+    ws.fireOpen();
+    ws.fireMessage({ type: 'authenticated', viewerId: 'u', epoch: 'epoch-1' });
+    // NO `subscribed` ack yet → no baseline floor for SCOPE.
+
+    // A stray content-apply must NOT conjure a floor from thin air.
+    client.markApplied(SCOPE, 500, 'epoch-1');
+
+    // The ack now baselines the floor to the REAL head (5). A resubscribe must
+    // resume from 5, never the phantom 500.
+    ws.fireMessage({ type: 'subscribed', scope: SCOPE, epoch: 'epoch-1', seq: 5 });
+    sub.unsubscribe();
+    ws.sent.length = 0;
+    client.subscribe(SCOPE);
+    expect(resumes(ws)).toEqual([
+      { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 5 } } },
+    ]);
+  });
+
+  it('markApplied is a no-op when the floor is from a stale epoch (Safety blocker 2)', async () => {
+    const { client, ws, sub } = await connectedGated(SCOPE, 5); // floor {epoch-1, 5}
+
+    // A late apply tagged with a NEWER epoch than the current floor must not
+    // clobber the floor to an arbitrary seq.
+    client.markApplied(SCOPE, 500, 'epoch-2');
+
+    sub.unsubscribe();
+    ws.sent.length = 0;
+    client.subscribe(SCOPE);
+    // Floor unchanged at the epoch-1 baseline (5), not epoch-2/500.
+    expect(resumes(ws)).toEqual([
+      { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 5 } } },
+    ]);
+  });
 });

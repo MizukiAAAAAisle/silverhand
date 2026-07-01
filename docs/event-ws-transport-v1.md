@@ -575,16 +575,32 @@ correctness-first):
   with `received`** — the pre-P2 single-cursor behavior, preserved bit-for-bit.
   `conversation-side:` is cursor-inert / self-healing, so it correctly falls in
   the auto-advance set.
-- **Provenance is derived, not latched.** A frame extending the received-water is
-  `live`; a frame at-or-below it (`seq <= received`) is a `backfill` re-delivery.
-  This is exactly "live fanout vs replay-buffer drain" without a separate replay
-  flag: the received-water already *is* "what I have seen". Delivered as a second
+- **Provenance is derived from the REPLAY CONTEXT, not the received-water.**
+  (Corrects an earlier "derived from received-water" claim — retracted: it only
+  caught *duplicate* re-delivery.) A frame is `backfill` iff it is a duplicate
+  (`seq <= received`) **or** falls in an active replay window (`seq <=
+  backfillThrough`, same epoch); otherwise `live`. The window (`backfillThrough`)
+  is armed ONLY when a replay-buffer drain is genuinely in flight: a `subscribed`
+  ack for a scope with a retained SAME-epoch floor (a resume was paired →
+  server replays `floor+1..head`) → window = ack head; or a forward gap → window
+  = gap-trigger seq. A fresh cold-start ack (no floor) or a stale-epoch ack (→
+  `snapshot_required`, not a replay) does **not** arm it — an ack head is only a
+  baseline there. This matters because a replay drain re-delivers frames the
+  client **never received** (a forward-gap fill, a new-during-disconnect frame):
+  those are `> received` yet must be `backfill`, since a concurrent REST snapshot
+  may already cover them — a blind `+1` would double-count. Delivered as a second
   `onFrame(frame, meta)` arg (`EventDeliveryMeta`), undefined for non-event frames
   — no wire/payload change.
-- **`markApplied` advance is strict-contiguous (v1 = option 1).** Floor moves to
-  `seq` only when `seq === floor + 1`; any skipped seq (no-op / readerless /
-  pending backfill delta) pins the floor until the covering `snapshot_required`
-  commit. Set-max is forbidden (false-positive = #1251). Option 2's
+- **`markApplied` advance is strict-contiguous (v1 = option 1) AND not a baseline
+  authority.** Floor moves to `seq` only when `seq === floor + 1`; any skipped seq
+  (no-op / readerless / pending backfill delta) pins the floor until the covering
+  `snapshot_required` commit. Set-max is forbidden (false-positive = #1251). With
+  **no same-epoch floor** (missing / stale-epoch) `markApplied` is a **no-op +
+  `markApplied_no_floor` diagnostic** — it must NOT establish a floor from an
+  arbitrary applied seq (that would let the next resume start there, skipping every
+  un-received seq below it — the #1251 hole re-opened). Only the `subscribed` ack
+  and `commitSnapshotBaseline` may establish a floor (they reflect the server
+  head); the floor self-heals when the next ack / snapshot baselines it. Option 2's
   pending-satisfaction queue is deferred.
 - **`snapshot_required` re-cold-start is fully apply-gated** (pendingBaseline +
   buffer `> currentSeq` + `commitSnapshotBaseline(scope, epoch)`, epoch-checked,

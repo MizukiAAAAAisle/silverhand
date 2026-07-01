@@ -443,7 +443,8 @@ export type DesktopEventWsDiagnosticKind =
   | 'live_gap'
   | 'resume_sent'
   | 'snapshot_required'
-  | 'orphan_frame';
+  | 'orphan_frame'
+  | 'markApplied_no_floor';
 
 export interface DesktopEventWsDiagnostic {
   kind: DesktopEventWsDiagnosticKind;
