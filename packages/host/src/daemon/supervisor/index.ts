@@ -836,15 +836,25 @@ export class Supervisor implements SupervisorContract {
       ? handle.replyTargetStreamByMessageId.get(threadTargetMessageId)
       : MAIN_STREAM_KEY;
     const targetKnown = targetStreamKey !== undefined;
+    const targetObserved =
+      targetKnown && handle.observedSeqByStream.has(targetStreamKey);
+    // Thread targets become "known" through a root/message mapping even when
+    // the agent observed an empty cluster, so `seen=0` is load-bearing there.
+    // Main has no such mapping step: absence means the agent has never seen
+    // the main stream in this daemon session. Treat that as first-touch and
+    // omit per-stream freshness instead of manufacturing `seen=0`, which
+    // would stale against seq 1..N.
+    const useFreshnessBoundary =
+      targetKnown && (targetStreamKey !== MAIN_STREAM_KEY || targetObserved);
     const seenUpToSeq =
-      targetKnown
+      useFreshnessBoundary
       && effectiveTarget.kind === 'thread'
       && effectiveTarget.source === 'pending_default'
         ? Math.max(
             handle.observedSeqByStream.get(targetStreamKey) ?? 0,
             handle.pendingAdmissionSeqByStream.get(targetStreamKey) ?? 0,
           )
-        : targetKnown
+        : useFreshnessBoundary
           ? (handle.observedSeqByStream.get(targetStreamKey) ?? 0)
           : undefined;
     if (threadTargetMessageId && !targetKnown) {
@@ -871,7 +881,7 @@ export class Supervisor implements SupervisorContract {
       ...(params.attachment_ids ? { attachment_ids: params.attachment_ids } : {}),
       ...(params.freshness_bypass
         ? { freshness_bypass: true }
-        : targetKnown
+        : useFreshnessBoundary
           ? {
               seen_up_to_seq: seenUpToSeq,
               stream_key: targetStreamKey,
@@ -901,7 +911,7 @@ export class Supervisor implements SupervisorContract {
       const stale = res.status === 409 ? extractStaleConflict(bodyText) : null;
       if (stale) {
         handle.pendingStaleEvent = stale;
-        if (targetKnown) {
+        if (useFreshnessBoundary) {
           this.advanceObservedStream(
             handle,
             targetStreamKey,
@@ -938,7 +948,7 @@ export class Supervisor implements SupervisorContract {
     // message. An UNKNOWN-target send only records the mapping above;
     // advancing observed for a stream we have never read would defeat the
     // dumb-loop guard.
-    if (targetKnown && typeof messageSeq === 'number') {
+    if (useFreshnessBoundary && typeof messageSeq === 'number') {
       this.advanceObservedStream(
         handle,
         targetStreamKey,

@@ -3664,8 +3664,62 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       expect(result).toMatchObject({ ok: true, message_id: 'm54' });
       expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
       expect(postedBodies[0]?.['target']).toEqual({ kind: 'channel' });
-      expect(postedBodies[0]?.['stream_key']).toBe('main');
-      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(0);
+      // Main was never observed in this daemon session. Treat it as a
+      // first-touch send and omit per-stream freshness instead of turning the
+      // missing boundary into seen=0 (which would stale against seq 1..N).
+      expect(postedBodies[0]).not.toHaveProperty('stream_key');
+      expect(postedBodies[0]).not.toHaveProperty('seen_up_to_seq');
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('omits freshness for a bare main-line first-touch send', async () => {
+    const { supervisor } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    let nextSeq = 50;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(
+          JSON.stringify({
+            message_id: `m${nextSeq}`,
+            message_seq: nextSeq++,
+            thread_root_id: null,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+
+      const first = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'first main-line send without observed main',
+      });
+      const second = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'second main-line send still has not observed main',
+      });
+
+      expect(first).toMatchObject({ ok: true, message_id: 'm50' });
+      expect(second).toMatchObject({ ok: true, message_id: 'm51' });
+      expect(postedBodies).toHaveLength(2);
+      for (const body of postedBodies) {
+        expect(body['target']).toEqual({ kind: 'channel' });
+        expect(body).not.toHaveProperty('reply_to_message_id');
+        expect(body).not.toHaveProperty('stream_key');
+        expect(body).not.toHaveProperty('seen_up_to_seq');
+      }
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
@@ -3771,7 +3825,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       });
       expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
       expect(postedBodies[0]?.['target']).toEqual({ kind: 'channel' });
-      expect(postedBodies[0]?.['stream_key']).toBe('main');
+      expect(postedBodies[0]).not.toHaveProperty('stream_key');
+      expect(postedBodies[0]).not.toHaveProperty('seen_up_to_seq');
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
