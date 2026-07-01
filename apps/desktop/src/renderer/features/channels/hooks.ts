@@ -32,6 +32,7 @@ import { messageReactorsKey } from '@/features/channels/reaction-hooks';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
 import { getCurrentUserId } from '@/lib/current-user';
 import { onWsFrame, subscribeViewerScope, isCurrentViewerScope, subscribeWsScope } from '@/lib/ws-client';
+import { useInterest } from '@/features/realtime/interest-registry';
 import {
   AGENT_RUN_STATES_GC_MS,
   agentRunStatesKey,
@@ -1515,11 +1516,13 @@ export function useThreadRoot(
   // writes (root reaction merge + reply-count authoritative recovery/invalidate),
   // gated on this thread-root reader being mounted. This hook only declares
   // INTEREST in the channel scope.
-  useEffect(() => {
-    if (!enabled || !channelId) return;
-    const sub = subscribeWsScope(wsConversationScope(channelId));
-    return () => sub.unsubscribe();
-  }, [enabled, channelId]);
+  // #task:1260 P2: interest routes through the registry (`useInterest`) instead
+  // of a direct subscribeWsScope useEffect — identical lifecycle, single
+  // authority. The compound `enabled` gate (channelId && rootMessageId) maps to
+  // the null-scope form: not-enabled → no interest → transport unsubscribes
+  // (drops pending, RETAINS floor); re-enable fresh-subscribes + resume-replays
+  // (#1251), so `enabled` is not a correctness boundary.
+  useInterest(enabled && channelId ? wsConversationScope(channelId) : null);
 
   const root =
     query.data?.messages.find(m => m.id === rootMessageId) ?? null;
