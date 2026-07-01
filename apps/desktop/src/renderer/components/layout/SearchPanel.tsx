@@ -3,7 +3,6 @@ import * as Select from '@radix-ui/react-select';
 import dayjs from 'dayjs';
 import {
   Bot,
-  Check,
   ChevronDown,
   Clock,
   Hash,
@@ -13,7 +12,13 @@ import {
   X,
 } from 'lucide-react';
 import type { AgentDto, SearchResultDto, UserDto } from '@silverhand/shared';
-import { Input, Label } from '@/components/ui/input';
+import { Input } from '@/components/ui/input';
+import {
+  FilterBlock,
+  FilterSelectItem as SelectItem,
+  FILTER_SELECT_TRIGGER_CLASS as SELECT_TRIGGER_CLASS,
+  FILTER_SELECT_CONTENT_CLASS as SELECT_CONTENT_CLASS,
+} from '@/components/ui/filter-select';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import { UserAvatar } from '@/components/UserAvatar';
@@ -28,7 +33,6 @@ import {
   getCurrentUserId,
   type UserNameResolver,
 } from '@/lib/current-user';
-import { cn } from '@/lib/cn';
 import { workspaceDisplayName } from '@/lib/workspace-name';
 
 interface SearchPanelProps {
@@ -56,15 +60,6 @@ interface ResultGroup {
   icon: JSX.Element;
   results: SearchResultDto[];
 }
-
-const SELECT_TRIGGER_CLASS =
-  'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus data-[placeholder]:text-text-muted';
-
-const SELECT_CONTENT_CLASS =
-  'z-[60] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-popover';
-
-const SELECT_ITEM_CLASS =
-  'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 pr-7 text-xs text-text-primary outline-none data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary';
 
 /** Workspace glyph — a serif "W" matching the icon column width. Used
  *  wherever a workspace (regular kind) needs a marker; mirrors the
@@ -287,23 +282,6 @@ export function SearchPanel({
         )}
       </div>
     </main>
-  );
-}
-
-function FilterBlock({
-  label,
-  className,
-  children,
-}: {
-  label: string;
-  className?: string;
-  children: ReactNode;
-}): JSX.Element {
-  return (
-    <div className={cn('block min-w-0', className)}>
-      <Label className="mb-1 block">{label}</Label>
-      {children}
-    </div>
   );
 }
 
@@ -574,33 +552,6 @@ function TimeRangeSelect({
         </Select.Content>
       </Select.Portal>
     </Select.Root>
-  );
-}
-
-function SelectItem({
-  value,
-  icon,
-  suffix,
-  children,
-}: {
-  value: string;
-  icon: JSX.Element;
-  suffix?: string;
-  children: ReactNode;
-}): JSX.Element {
-  return (
-    <Select.Item value={value} className={SELECT_ITEM_CLASS}>
-      <span className="shrink-0 text-text-muted">{icon}</span>
-      <Select.ItemText>
-        <span className="truncate">{children}</span>
-      </Select.ItemText>
-      {suffix ? (
-        <span className="ml-auto text-[10px] text-text-muted">{suffix}</span>
-      ) : null}
-      <Select.ItemIndicator className="absolute right-2 inline-flex items-center">
-        <Check className="size-3.5 text-accent" />
-      </Select.ItemIndicator>
-    </Select.Item>
   );
 }
 

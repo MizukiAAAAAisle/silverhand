@@ -26,13 +26,27 @@ function invalidateSavedDebounced(qc: QueryClient): void {
 }
 
 /**
- * Returns the global flat saved-message list. The API ships everything
- * pre-joined (channel/conversation/agent names + full message body).
- * Invalidated by WS viewer-scoped `saved_changed` events so the list
- * stays in sync without polling.
+ * Returns the saved-message list. The API ships everything pre-joined
+ * (channel/conversation/agent names + full message body).
+ *
+ * Filtering is SERVER-SIDE (mirror archived-channels, #task:1258): pass
+ * `{ workspaceId, since }` and the backend applies `workspace_id` + `saved_at
+ * >= since` WHERE clauses BEFORE the `ORDER BY saved_at DESC LIMIT` — so a
+ * filter narrows the FULL set, never a client-side slice of the capped window
+ * (which would silently drop older history). The filter params are part of the
+ * query key so each variant caches independently; the `['saved']` prefix
+ * invalidation from save/unsave + the WS `saved_changed` effect covers every
+ * variant. Call with no args for the full list (used by `useSavedMessageIds`).
  */
-export function useSavedMessages() {
+export interface SavedMessagesQuery {
+  workspaceId?: string | null;
+  since?: number | null;
+}
+
+export function useSavedMessages(params?: SavedMessagesQuery) {
   const qc = useQueryClient();
+  const workspaceId = params?.workspaceId ?? null;
+  const since = params?.since ?? null;
 
   useEffect(() => {
     const sub = subscribeViewerScope();
@@ -47,9 +61,15 @@ export function useSavedMessages() {
   }, [qc]);
 
   return useQuery({
-    queryKey: savedKey,
+    queryKey: [...savedKey, { workspaceId, since }] as const,
     queryFn: async () => {
-      const res = await api<{ saved: SavedMessageDto[] }>('/api/saved');
+      const qs = new URLSearchParams();
+      if (workspaceId) qs.set('workspace_id', workspaceId);
+      if (since != null) qs.set('since', String(since));
+      const suffix = qs.toString();
+      const res = await api<{ saved: SavedMessageDto[] }>(
+        `/api/saved${suffix ? `?${suffix}` : ''}`,
+      );
       return res.saved;
     },
   });

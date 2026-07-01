@@ -18,7 +18,7 @@ import { ConversationViewSkeleton } from '@/components/layout/ConversationViewSk
 import { SectionLayer } from '@/components/layout/SectionLayer';
 import { ThreadPanel } from '@/components/layout/ThreadPanel';
 import { ChannelThreadsPanel } from '@/components/layout/ChannelThreadsPanel';
-import { SavedListView } from '@/components/layout/SavedListView';
+import { SavedListView, SAVED_FILTER_DEFAULT, type SavedFilterState } from '@/components/layout/SavedListView';
 import { SearchPanel } from '@/components/layout/SearchPanel';
 import { ArchivedChannelsPanel } from '@/components/layout/ArchivedChannelsPanel';
 import { ActivityView } from '@/components/layout/ActivityView';
@@ -443,6 +443,11 @@ function RegisteredAppShell(): JSX.Element {
   // Shared cache with SavedListView and useToggleSave — invalidations
   // from save/unsave mutations propagate the count update here too.
   const { data: savedItems } = useSavedMessages();
+  // Saved-view filter selection lives here (not inside SavedListView) so it
+  // survives switching to another pane and back for the app session
+  // (shiki #task:1258 follow-up). Deliberately not persisted — a restart
+  // resets to the default so a stale ad-hoc filter never lingers.
+  const [savedFilter, setSavedFilter] = useState<SavedFilterState>(SAVED_FILTER_DEFAULT);
   // Per-workspace notification unread count (mention / agent-failure alerts).
   const { data: unreadCounts } = useUnreadCounts();
   // Global message unread summary across all workspaces — drives workspace
@@ -2153,7 +2158,12 @@ function RegisteredAppShell(): JSX.Element {
                 />
               )
             ) : view === 'saved' ? (
-              <SavedListView onJump={params => handleJumpToMessage(params)} />
+              <SavedListView
+                workspaces={workspaces}
+                filter={savedFilter}
+                onFilterChange={setSavedFilter}
+                onJump={params => handleJumpToMessage(params)}
+              />
             ) : view === 'search' ? (
               <SearchPanel
                 workspaces={workspaces}

@@ -1,56 +1,37 @@
-import { useMemo, useState, type ReactNode } from 'react';
-import * as Select from '@radix-ui/react-select';
+import { useMemo, useState } from 'react';
 import dayjs from 'dayjs';
-import {
-  Archive,
-  ArchiveRestore,
-  Check,
-  ChevronDown,
-  Clock,
-  Hash,
-} from 'lucide-react';
-import type { AgentDto, ArchivedChannelListItemDto } from '@silverhand/shared';
+import { Archive, ArchiveRestore, Hash } from 'lucide-react';
+import type { ArchivedChannelListItemDto } from '@silverhand/shared';
 import {
   useArchiveChannel,
   useArchivedChannelsIndex,
   type WorkspaceListItem,
 } from '@/features/workspaces/hooks';
-import { WorkspaceIcon } from '@/components/WorkspaceIcon';
-import { useAgents } from '@/features/agents/hooks';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { cn } from '@/lib/cn';
-import { dmWorkspaceLabel, workspaceDisplayName } from '@/lib/workspace-name';
-
-type WorkspaceFilter = 'all' | `workspace:${string}`;
-type ArchiveDateFilter = 'all' | '30d' | '14d' | '7d';
+import { dmWorkspaceLabel } from '@/lib/workspace-name';
+import { FilterBlock } from '@/components/ui/filter-select';
+import {
+  WorkspaceFilterSelect,
+  workspaceFilterId,
+  type WorkspaceFilterValue,
+} from '@/components/ui/workspace-filter-select';
+import {
+  DateFilterSelect,
+  dateFilterSince,
+  type DateFilterValue,
+} from '@/components/ui/date-filter-select';
 
 interface ArchivedChannelsPanelProps {
   workspaces: WorkspaceListItem[];
   onOpenChannel: (workspaceId: string, channelId: string) => void;
 }
 
-const SELECT_TRIGGER_CLASS =
-  'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus data-[placeholder]:text-text-muted';
-
-const SELECT_CONTENT_CLASS =
-  'z-[60] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-popover';
-
-const SELECT_ITEM_CLASS =
-  'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 pr-7 text-xs text-text-primary outline-none data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary';
-
-const DATE_OPTIONS: Array<{ value: ArchiveDateFilter; label: string }> = [
-  { value: 'all', label: 'All time' },
-  { value: '30d', label: 'Last 30 days' },
-  { value: '14d', label: 'Last 2 weeks' },
-  { value: '7d', label: 'Last 1 week' },
-];
-
 export function ArchivedChannelsPanel({
   workspaces,
   onOpenChannel,
 }: ArchivedChannelsPanelProps): JSX.Element {
-  const [workspaceFilter, setWorkspaceFilter] = useState<WorkspaceFilter>('all');
-  const [dateFilter, setDateFilter] = useState<ArchiveDateFilter>('all');
+  const [workspaceFilter, setWorkspaceFilter] = useState<WorkspaceFilterValue>('all');
+  const [dateFilter, setDateFilter] = useState<DateFilterValue>('all');
   // Both collections feed this recovery index (#task:1145): regular
   // workspaces' archived channels AND agent_home (DM) workspaces' archived
   // dm_channels. The backend aggregate is channel-like, so the panel offers
@@ -68,10 +49,8 @@ export function ArchivedChannelsPanel({
     () => filterableWorkspaces.map(workspace => workspace.id),
     [filterableWorkspaces],
   );
-  const workspaceId = workspaceFilter.startsWith('workspace:')
-    ? workspaceFilter.slice('workspace:'.length)
-    : null;
-  const since = useMemo(() => archiveDateSince(dateFilter), [dateFilter]);
+  const workspaceId = workspaceFilterId(workspaceFilter);
+  const since = useMemo(() => dateFilterSince(dateFilter), [dateFilter]);
   const { data: channels = [], isFetching, isLoading } = useArchivedChannelsIndex({
     workspaceId,
     since,
@@ -103,14 +82,20 @@ export function ArchivedChannelsPanel({
       <section className="shrink-0 border-b border-border-subtle px-4 py-3">
         <div className="flex flex-wrap items-end gap-3">
           <FilterBlock label="Workspace" className="w-full sm:w-72">
-            <WorkspaceArchiveSelect
+            <WorkspaceFilterSelect
               value={workspaceFilter}
               workspaces={filterableWorkspaces}
               onChange={setWorkspaceFilter}
+              allIcon={<Archive className="size-3.5" />}
+              showArchivedSuffix
             />
           </FilterBlock>
           <FilterBlock label="Archived date" className="w-full sm:w-48">
-            <ArchiveDateSelect value={dateFilter} onChange={setDateFilter} />
+            <DateFilterSelect
+              value={dateFilter}
+              onChange={setDateFilter}
+              ariaLabel="Archived date filter"
+            />
           </FilterBlock>
         </div>
       </section>
@@ -150,198 +135,6 @@ export function ArchivedChannelsPanel({
         )}
       </div>
     </main>
-  );
-}
-
-function FilterBlock({
-  label,
-  className,
-  children,
-}: {
-  label: string;
-  className?: string;
-  children: ReactNode;
-}): JSX.Element {
-  return (
-    <label className={cn('block min-w-0', className)}>
-      <span className="mb-1 block text-xs font-medium text-text-secondary">{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function WorkspaceArchiveSelect({
-  value,
-  workspaces,
-  onChange,
-}: {
-  value: WorkspaceFilter;
-  workspaces: WorkspaceListItem[];
-  onChange: (value: WorkspaceFilter) => void;
-}): JSX.Element {
-  const { data: agents = [] } = useAgents();
-  const dms = workspaces.filter(workspace => workspace.kind === 'dm');
-  const regular = workspaces.filter(workspace => workspace.kind === 'regular');
-  const agentsById = useMemo(
-    () => new Map(agents.map(agent => [agent.id, agent])),
-    [agents],
-  );
-  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
-  const selected = workspaceFilterLabel(
-    value,
-    workspaces,
-    agentsById,
-    agentAvatarUrls,
-  );
-  return (
-    <Select.Root value={value} onValueChange={v => onChange(v as WorkspaceFilter)}>
-      <Select.Trigger aria-label="Workspace filter" className={SELECT_TRIGGER_CLASS}>
-        <span className="flex min-w-0 items-center gap-1.5">
-          {selected.icon}
-          <span className="truncate">{selected.label}</span>
-        </span>
-        <Select.Icon>
-          <ChevronDown className="size-3.5 text-text-muted" />
-        </Select.Icon>
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Content
-          position="popper"
-          sideOffset={4}
-          data-dropdown-frame
-          className={SELECT_CONTENT_CLASS}
-        >
-          <Select.Viewport className="p-1">
-            <SelectItem value="all" icon={<Archive className="size-3.5" />}>
-              All workspaces
-            </SelectItem>
-            {/* DMs group leads, mirroring SearchPanel's WorkspaceFilterSelect
-                order so the two workspace-filter dropdowns read the same. */}
-            {dms.length > 0 ? (
-              <Select.Group>
-                <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-                  DMs
-                </Select.Label>
-                {dms.map(workspace => (
-                  <SelectItem
-                    key={workspace.id}
-                    value={`workspace:${workspace.id}`}
-                    icon={
-                      <WorkspaceIcon
-                        kind="dm"
-                        dmAgentId={workspace.dm_agent_id}
-                        agentsById={agentsById}
-                        dmAgentAvatarUrls={agentAvatarUrls}
-                      />
-                    }
-                    suffix={
-                      workspace.archived_at !== null ? 'archived workspace' : undefined
-                    }
-                  >
-                    {workspaceDisplayName(workspace)}
-                  </SelectItem>
-                ))}
-              </Select.Group>
-            ) : null}
-            {regular.length > 0 ? (
-              <Select.Group>
-                <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-                  Workspaces
-                </Select.Label>
-                {regular.map(workspace => (
-                  <SelectItem
-                    key={workspace.id}
-                    value={`workspace:${workspace.id}`}
-                    icon={
-                      <WorkspaceIcon
-                        kind="regular"
-                        dmAgentId={null}
-                        dmAgentAvatarUrls={agentAvatarUrls}
-                      />
-                    }
-                    suffix={
-                      workspace.archived_at !== null ? 'archived workspace' : undefined
-                    }
-                  >
-                    {workspaceDisplayName(workspace)}
-                  </SelectItem>
-                ))}
-              </Select.Group>
-            ) : null}
-          </Select.Viewport>
-        </Select.Content>
-      </Select.Portal>
-    </Select.Root>
-  );
-}
-
-function ArchiveDateSelect({
-  value,
-  onChange,
-}: {
-  value: ArchiveDateFilter;
-  onChange: (value: ArchiveDateFilter) => void;
-}): JSX.Element {
-  const selected = DATE_OPTIONS.find(option => option.value === value)?.label ?? 'All time';
-  return (
-    <Select.Root value={value} onValueChange={v => onChange(v as ArchiveDateFilter)}>
-      <Select.Trigger aria-label="Archived date filter" className={SELECT_TRIGGER_CLASS}>
-        <span className="flex min-w-0 items-center gap-1.5">
-          <Clock className="size-3.5 text-text-muted" />
-          <span className="truncate">{selected}</span>
-        </span>
-        <Select.Icon>
-          <ChevronDown className="size-3.5 text-text-muted" />
-        </Select.Icon>
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Content
-          position="popper"
-          sideOffset={4}
-          data-dropdown-frame
-          className={SELECT_CONTENT_CLASS}
-        >
-          <Select.Viewport className="p-1">
-            {DATE_OPTIONS.map(option => (
-              <SelectItem
-                key={option.value}
-                value={option.value}
-                icon={<Clock className="size-3.5" />}
-              >
-                {option.label}
-              </SelectItem>
-            ))}
-          </Select.Viewport>
-        </Select.Content>
-      </Select.Portal>
-    </Select.Root>
-  );
-}
-
-function SelectItem({
-  value,
-  icon,
-  suffix,
-  children,
-}: {
-  value: string;
-  icon: JSX.Element;
-  suffix?: string;
-  children: ReactNode;
-}): JSX.Element {
-  return (
-    <Select.Item value={value} className={SELECT_ITEM_CLASS}>
-      <span className="shrink-0 text-text-muted">{icon}</span>
-      <Select.ItemText>
-        <span className="truncate">{children}</span>
-      </Select.ItemText>
-      {suffix ? (
-        <span className="ml-auto text-[10px] text-text-muted">{suffix}</span>
-      ) : null}
-      <Select.ItemIndicator className="absolute right-2 inline-flex items-center">
-        <Check className="size-3.5 text-accent" />
-      </Select.ItemIndicator>
-    </Select.Item>
   );
 }
 
@@ -461,58 +254,4 @@ export function archivedRowOpenTarget(item: ArchivedChannelListItemDto): {
   channelId: string;
 } {
   return { workspaceId: item.workspace.id, channelId: item.channel.id };
-}
-
-function workspaceFilterLabel(
-  value: WorkspaceFilter,
-  workspaces: WorkspaceListItem[],
-  agentsById: Map<string, AgentDto>,
-  agentAvatarUrls: Map<string, string | null>,
-): { label: string; icon: JSX.Element } {
-  if (value === 'all') {
-    return { label: 'All workspaces', icon: <Archive className="size-3.5" /> };
-  }
-  const id = value.slice('workspace:'.length);
-  const workspace = workspaces.find(w => w.id === id);
-  if (!workspace) {
-    return {
-      label: 'Workspace',
-      icon: (
-        <WorkspaceIcon
-          kind="regular"
-          dmAgentId={null}
-          dmAgentAvatarUrls={agentAvatarUrls}
-        />
-      ),
-    };
-  }
-  return workspace.kind === 'dm'
-    ? {
-        label: workspaceDisplayName(workspace),
-        icon: (
-          <WorkspaceIcon
-            kind="dm"
-            dmAgentId={workspace.dm_agent_id}
-            agentsById={agentsById}
-            dmAgentAvatarUrls={agentAvatarUrls}
-          />
-        ),
-      }
-    : {
-        label: workspace.name,
-        icon: (
-          <WorkspaceIcon
-            kind="regular"
-            dmAgentId={null}
-            dmAgentAvatarUrls={agentAvatarUrls}
-          />
-        ),
-      };
-}
-
-function archiveDateSince(value: ArchiveDateFilter): number | null {
-  if (value === '30d') return dayjs().subtract(30, 'day').valueOf();
-  if (value === '14d') return dayjs().subtract(14, 'day').valueOf();
-  if (value === '7d') return dayjs().subtract(7, 'day').valueOf();
-  return null;
 }
