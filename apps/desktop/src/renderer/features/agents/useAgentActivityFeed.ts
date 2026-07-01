@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import { apiPaths } from '@silverhand/shared';
@@ -7,8 +7,8 @@ import type {
   ConversationActivityListResponse,
 } from '@silverhand/shared';
 import { api } from '@/lib/api';
-import { subscribeWsScope } from '@/lib/ws-client';
 import { wsConversationSideScope } from '@/hooks/useConversationStream';
+import { useInterest } from '@/features/realtime/interest-registry';
 
 // #task:1255 Stage-2 P1c #2 — the agent activity feed (the `conversation_activity`
 // projection) moves off `AgentActivityTimeline`'s local `useState` into a React
@@ -185,11 +185,11 @@ export function useAgentActivityFeed(
   });
 
   // Keep the WS scope INTEREST alive while the timeline is open (source scope is
-  // an input-layer detail — see module header).
-  useEffect(() => {
-    const subscription = subscribeWsScope(wsConversationSideScope(conversationId));
-    return () => subscription.unsubscribe();
-  }, [conversationId]);
+  // an input-layer detail — see module header). #task:1260 P2: interest routes
+  // through the registry (`useInterest`) instead of a direct subscribeWsScope
+  // useEffect — identical lifecycle, single authority. `conversationId` is always
+  // concrete here (no enabled gate), so the scope is never null.
+  useInterest(wsConversationSideScope(conversationId));
 
   const nextBeforeId = query.data?.nextBeforeId ?? null;
 

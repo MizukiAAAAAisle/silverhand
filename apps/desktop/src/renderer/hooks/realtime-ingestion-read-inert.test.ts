@@ -364,8 +364,13 @@ describe('useAgentActivityFeed — read-inert content cache (#task:1255 P1c #2)'
     }
   });
 
-  it('keeps scope interest + does not bootstrap on append (positive)', () => {
-    expect(source).toContain('subscribeWsScope');
+  it('declares scope interest via the registry + does not bootstrap on append (positive)', () => {
+    // #task:1260 P2 slice 2: interest routes through the registry (`useInterest`),
+    // the direct transport subscribe is gone — call-form deny (prose naming
+    // `subscribeWsScope` must not trip it). This is the P2 deny-list entry for
+    // this reader file.
+    expect(source).toContain('useInterest(');
+    expect(source).not.toContain('subscribeWsScope(');
     // The live-append helper leaves an unloaded feed alone (no reader / no
     // snapshot behind it) — `prev ? … : prev`.
     const body = sliceFunctionBody(source, 'export function appendAgentActivityToCache(');
