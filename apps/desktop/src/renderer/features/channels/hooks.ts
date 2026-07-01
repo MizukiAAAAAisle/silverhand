@@ -1255,17 +1255,18 @@ export function useChannelMessages(
 
   // Pure reader (#task:1255 P1a): no `onWsFrame` here — the central conversation
   // ingestor is the sole consumer and owns all main-stream cache writes
-  // (message append / reply-badge bump / task_changed / reaction) plus the
-  // live-gap SET. This hook only declares INTEREST in the channel scope so it
+  // (message append / reply-count authoritative invalidate (#1263) / task_changed
+  // / reaction) plus the live-gap SET. This hook only declares INTEREST in the
   // stays subscribed while a reader is mounted; subscription is bandwidth,
   // decoupled from frame consumption / cache application. Holding zero
   // `onWsFrame` is what lets Stage-2 P2 drop the orphan gate (gate-(b)). See
   // docs/renderer-event-ingestion-v1.md §4.4.
-  useEffect(() => {
-    if (!channelId) return;
-    const sub = subscribeWsScope(wsConversationScope(channelId));
-    return () => sub.unsubscribe();
-  }, [channelId]);
+  // #task:1260 P2: interest routes through the registry (`useInterest`) instead
+  // of a direct subscribeWsScope useEffect — identical lifecycle, single
+  // authority. The `channelId` null gate maps to the null-scope form; not a
+  // correctness boundary (transport retains floor on unsubscribe, resume-replays
+  // on re-enable, #1251).
+  useInterest(channelId ? wsConversationScope(channelId) : null);
 
   return {
     ...query,

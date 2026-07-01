@@ -173,8 +173,13 @@ describe('useChannelMessages — pure reader / gate-(b) fence (#task:1255)', () 
     }
   });
 
-  it('keeps scope interest and reads the gap fact (positive)', () => {
-    expect(body).toContain('subscribeWsScope');
+  it('declares scope interest via the registry + reads the gap fact (positive)', () => {
+    // #task:1260 P2 slice 6: interest now routes through the registry
+    // (`useInterest`); the direct transport subscribe is gone (call-form deny so
+    // the hook's prose naming subscribeWsScope doesn't trip it). Body-scoped —
+    // the file still calls subscribeWsScope( for the un-migrated side hooks.
+    expect(body).toContain('useInterest(');
+    expect(body).not.toContain('subscribeWsScope(');
     expect(body).toContain('useMainlineLiveGap');
   });
 
