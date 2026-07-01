@@ -896,6 +896,38 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     ]);
   });
 
+  it('drops the pending backlog on last-unsubscribe; same-socket resubscribe rebuilds via replay (#1261, Cindy blocker)', async () => {
+    const { client, ws, sub } = await connectedGated(SCOPE, 5);
+
+    fireEvent(ws, SCOPE, 6); // received 6, floor 5 (off-window, not satisfied)
+    fireEvent(ws, SCOPE, 7); // received 7, floor 5
+    fireEvent(ws, SCOPE, 8); // received 8, floor 5
+    client.markSatisfied(SCOPE, 8, 'epoch-1'); // pending {8}, floor 5
+
+    // Last subscriber leaves. Floor (5) + received (8) are retained for the
+    // #1251 no-listener replay, but the pending backlog {8} — a temporary
+    // "cache/display satisfied" fact — MUST be dropped: no listener means the
+    // caches behind it may be gone before the resubscribe.
+    sub.unsubscribe();
+
+    // Same socket, resubscribe: resumes from the retained floor (5); the server
+    // replays 6,7,8 and the ingestor re-satisfies them in seq order.
+    const resub = client.subscribe(SCOPE);
+    ws.fireMessage({ type: 'subscribed', scope: SCOPE, epoch: 'epoch-1', seq: 8 });
+
+    // Re-satisfy ONLY 6 and 7 (8 not yet re-dispatched this round). Had the stale
+    // {8} survived last-unsubscribe, the floor would jump 5→8; it must stop at 7.
+    client.markSatisfied(SCOPE, 6, 'epoch-1');
+    client.markSatisfied(SCOPE, 7, 'epoch-1');
+
+    resub.unsubscribe();
+    ws.sent.length = 0;
+    client.subscribe(SCOPE);
+    expect(resumes(ws)).toEqual([
+      { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 7 } } },
+    ]);
+  });
+
   it("drains a floor pinned by a cursor-inert frame so the later reply won't replay (Cindy's #1263 falsifier, transport half) (#1261)", async () => {
     const { client, ws, sub } = await connectedGated(SCOPE, 9);
 

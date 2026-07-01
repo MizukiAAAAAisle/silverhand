@@ -279,6 +279,17 @@ export class EventWsClient {
           // A recovery in flight is abandoned (no consumer to reconcile).
           this.pendingBaselines.delete(scope);
           this.pendingBuffers.delete(scope);
+          // Drop the pending-satisfaction backlog too (#1261, Cindy's blocker):
+          // it is the temporary fact "these seqs' cache/display paths were
+          // satisfied", not a durable floor. With no listener the caches behind
+          // it may be GC'd / removeQueries'd / overwritten by a later
+          // authoritative fetch, so the fact cannot survive the no-listener
+          // window. A same-socket resubscribe resumes from the retained floor and
+          // re-satisfies from the replay — carrying a stale entry over would let
+          // the floor drain past a seq the replay has not re-satisfied this round
+          // (same hazard as reconnect, just the same-socket path). Floor +
+          // received are retained (below) for the #1251 replay.
+          this.satisfiedPending.delete(scope);
           // Retain the resume floor (`appliedPositions`) AND the received-water
           // — do NOT delete them. The retained floor is what lets the next
           // resubscribe resume and replay the no-listener gap (#task:1251); the
