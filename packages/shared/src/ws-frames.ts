@@ -13,7 +13,14 @@
  * Scope naming:
  *   app                           — global, no private data
  *   workspace:{workspaceId}       — workspace-level public facts
- *   conversation:{conversationId} — per-conversation events
+ *   conversation:{conversationId} — per-conversation MESSAGE-STREAM events
+ *                                   (message / reaction / task_changed) —
+ *                                   resume-governed, feeds the message cursor.
+ *   conversation-side:{conversationId} — per-conversation SIDE-CHANNEL events
+ *                                   (agent_status / agent_activity /
+ *                                   conversation_activity / members_changed) —
+ *                                   cursor-inert, self-healing via own REST /
+ *                                   invalidate (Stage-2, docs/event-ws-recovery-class-scope-v1.md).
  *   viewer:{userId}               — viewer-private (notifications, unread)
  */
 
@@ -121,11 +128,27 @@ export interface PingFrame {
 /**
  * Informs the client it must do a full REST snapshot for this scope.
  * Triggered when: epoch mismatch (backend restarted) or replay gap > buffer.
+ *
+ * `epoch` + `currentSeq` carry the server's current transport position for the
+ * scope at emit time — the **transport-seq baseline** the client re-cold-starts
+ * from once its REST reconcile commits (Stage-2 §6). This makes the frame
+ * isomorphic to `SubscribedFrame` / `EventFrame` (all three position-bearing
+ * server frames carry `epoch` + a transport seq). The baseline is a transport
+ * seq **only** — never `stream_head_seq` (a message seq; the §3.1 reboot proof
+ * forbids conflating the two spaces). See `docs/event-ws-transport-v1.md` §6.
  */
 export interface SnapshotRequiredFrame {
   type: 'snapshot_required';
   scope: string;
   reason: 'epoch_mismatch' | 'gap_too_large';
+  /** Server epoch for this scope at emit time (matches the post-snapshot fanout). */
+  epoch: string;
+  /**
+   * Server's current transport seq for this scope at emit time. The client
+   * commits its resume floor to this value **after** its REST reconcile settles
+   * (apply-gated, not on receipt). Transport-seq space only.
+   */
+  currentSeq: number;
 }
 
 /** Server-side error (auth failure, permission denied, invalid frame, etc.). */
@@ -147,3 +170,45 @@ export type ServerFrame =
   | PingFrame
   | SnapshotRequiredFrame
   | ErrorFrame;
+
+// ── Scope helpers ────────────────────────────────────────────────────────────
+//
+// One grammar for conversation transport scopes, shared by backend publish and
+// renderer subscribe so the two never drift (ubiquitous language). The two
+// prefixes are disjoint: `"conversation-side:x".startsWith("conversation:")` is
+// false (char 12 is `-` vs `:`), so a `conversation:` parser never captures a
+// side scope.
+
+/** Message-stream scope for a conversation (message / reaction / task_changed). */
+export function conversationScope(conversationId: string): string {
+  return `conversation:${conversationId}`;
+}
+
+/** Side-channel scope for a conversation (agent_status / activity / members). */
+export function conversationSideScope(conversationId: string): string {
+  return `conversation-side:${conversationId}`;
+}
+
+/** Extract the conversationId from a message-stream scope, or null. */
+export function parseConversationScope(scope: string): string | null {
+  return scope.startsWith('conversation:')
+    ? scope.slice('conversation:'.length)
+    : null;
+}
+
+/** Extract the conversationId from a side-channel scope, or null. */
+export function parseConversationSideScope(scope: string): string | null {
+  return scope.startsWith('conversation-side:')
+    ? scope.slice('conversation-side:'.length)
+    : null;
+}
+
+/**
+ * Delivery provenance for an event frame reaching the ingestor (Stage-2 §2/§4.1).
+ * This is **delivery metadata**, not a wire/payload field — the `event` frame and
+ * its `MessageDto` stay byte-identical. `live` = a real-time fanout frame;
+ * `backfill` = a frame drained from the replay buffer on resume. A non-idempotent
+ * delta (reply-count bump) applies optimistically on `live` but must force
+ * authoritative recovery on `backfill` (never a blind `+1`). Read-inert always.
+ */
+export type EventDeliveryProvenance = 'live' | 'backfill';

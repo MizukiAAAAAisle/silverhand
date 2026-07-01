@@ -203,6 +203,8 @@ export class EventWsConnection {
           type: 'snapshot_required',
           scope: scope.scope,
           reason: 'epoch_mismatch',
+          epoch: this.ctx.events.epoch,
+          currentSeq,
         });
         continue;
       }
@@ -218,6 +220,8 @@ export class EventWsConnection {
           type: 'snapshot_required',
           scope: scope.scope,
           reason: 'gap_too_large',
+          epoch: this.ctx.events.epoch,
+          currentSeq,
         });
         continue;
       }

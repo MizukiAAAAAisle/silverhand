@@ -330,6 +330,10 @@ describe('event WebSocket server', () => {
       type: 'snapshot_required',
       scope: 'app',
       reason: 'epoch_mismatch',
+      // Stage-2 §6: stamp the current server epoch + transport seq so the client
+      // can commit its resume floor after reconcile (never stream_head_seq).
+      epoch: t.ctx.events.epoch,
+      currentSeq: t.ctx.events.currentSeq('app'),
     });
   });
 
@@ -355,6 +359,10 @@ describe('event WebSocket server', () => {
       type: 'snapshot_required',
       scope: 'app',
       reason: 'gap_too_large',
+      // Stage-2 §6: transport seq baseline (the current transport counter, not
+      // stream_head_seq).
+      epoch: t.ctx.events.epoch,
+      currentSeq: t.ctx.events.currentSeq('app'),
     });
   });
 
