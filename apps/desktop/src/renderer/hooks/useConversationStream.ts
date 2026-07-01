@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
+import { onWsFrame } from '@/lib/ws-client';
+import { useInterest } from '@/features/realtime/interest-registry';
 import { conversationScope, conversationSideScope } from '@silverhand/shared';
 import type { ServerFrame } from '@silverhand/shared';
 
@@ -102,12 +103,20 @@ export function useConversationStream(
   const handlerRef = useRef(onEvent);
   handlerRef.current = onEvent;
 
+  // #task:1260 P2 (distinct slice): the WS scope INTEREST is migrated to the
+  // registry. The transport scope is wsConversationScope(conversationId),
+  // independent of the routeScope arg (which only shapes the forwarded events),
+  // so interest keys on conversationId alone. The onWsFrame LISTENER below is
+  // this bridge's OWN concern (read-inert, #task:1251/#1244) and is deliberately
+  // NOT moved — interest ⊥ listener: this hook stops being a direct transport
+  // subscriber but keeps its listener + synthetic-connected replay verbatim.
+  useInterest(conversationId ? wsConversationScope(conversationId) : null);
+
   useEffect(() => {
     if (!conversationId) return;
 
     let active = true;
     const wsScope = wsConversationScope(conversationId);
-    const subscription = subscribeWsScope(wsScope);
     const offFrame = onWsFrame(frame => {
       if (!active) return;
       const event = streamEventFromFrame(frame, wsScope, conversationId, scope);
@@ -128,7 +137,6 @@ export function useConversationStream(
     return () => {
       active = false;
       offFrame();
-      subscription.unsubscribe();
     };
   }, [conversationId, scope]);
 }

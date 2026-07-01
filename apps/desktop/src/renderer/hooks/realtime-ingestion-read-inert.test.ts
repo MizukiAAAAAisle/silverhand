@@ -79,9 +79,13 @@ describe('realtime ingestion bridge — read-inert (#task:1251)', () => {
   it('useConversationStream is the transport→business bridge (sanity)', () => {
     // Guard the fence itself: if this file stops being the single choke point
     // every realtime frame passes through, the read-inert assertion below is
-    // fencing the wrong thing.
+    // fencing the wrong thing. The bridge OWNS its onWsFrame listener (that is
+    // its role); #task:1260 P2 moved only its scope INTEREST to the registry, so
+    // it now declares interest via useInterest( and no longer calls the transport
+    // subscribe directly — interest ⊥ listener.
     expect(source).toContain('onWsFrame');
-    expect(source).toContain('subscribeWsScope');
+    expect(source).toContain('useInterest(');
+    expect(source).not.toContain('subscribeWsScope(');
   });
 
   it('the bridge never writes read state on frame arrival', () => {
