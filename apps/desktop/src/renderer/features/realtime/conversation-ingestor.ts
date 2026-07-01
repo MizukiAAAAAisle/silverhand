@@ -9,14 +9,12 @@ import {
 import type {
   AgentRunState,
   ConversationActivityEvent,
-  EventDeliveryProvenance,
   MessageDto,
   MessageReactionChangedEvent,
   ServerFrame,
   TaskChangedEvent,
 } from '@silverhand/shared';
 import { onWsFrame, eventWsClient } from '@/lib/ws-client';
-import type { EventDeliveryMeta } from '@/lib/ws-client';
 import { getCurrentUserId } from '@/lib/current-user';
 import {
   appendAgentActivityToCache,
@@ -318,13 +316,11 @@ function asSideKind(kind: string): SideKind | null {
  *  advancing the floor past it can't strand a warm cache — the #1251 hole needs a
  *  warm displayable cache, which cold-absent lacks). Unlike the snapshot handler's
  *  blanket sweep, a live frame touches only its OWN root, so the warm-cluster
- *  removal is SCOPED to that root. `provenance` is dead under (c) — threaded only
- *  until #1264 removes the wire plumbing. */
+ *  removal is SCOPED to that root. */
 function ingestMessage(
   qc: QueryClient,
   channelId: string,
   msg: MessageDto,
-  provenance: EventDeliveryProvenance,
 ): Promise<void>[] {
   const settles: Promise<void>[] = [];
   const push = (eff: Promise<void> | null): void => {
@@ -337,7 +333,7 @@ function ingestMessage(
   // remount → REMOVE it so the next open cold-starts (coarse, mirroring the
   // snapshot handler: any message frame can touch the window).
   if (hasActiveMainlineReader(qc, channelId)) {
-    push(applyMainlineMessageToChannelCaches(qc, channelId, msg, provenance));
+    push(applyMainlineMessageToChannelCaches(qc, channelId, msg));
   } else if (hasWarmInactiveMainline(qc, channelId)) {
     push(removeInactiveMainlineCache(qc, channelId));
   }
@@ -360,7 +356,7 @@ function ingestMessage(
   // warm-inactive thread-root row is NOT removed — mirrors the snapshot handler
   // (useThreadRoot refetches on mount, so a ≤staleTime stale count self-heals).
   for (const rootId of openThreadRootReaderRoots(qc, channelId)) {
-    push(applyThreadRootReplyBump(qc, channelId, rootId, msg, provenance));
+    push(applyThreadRootReplyBump(qc, channelId, rootId, msg));
   }
 
   // FOLLOWERS + THREADS-LIST — message-derived invalidations (cursor-inert): the
@@ -587,16 +583,10 @@ function ingestSideSnapshotRequired(qc: QueryClient, channelId: string): void {
  * The side scope has no content-apply seam — its floor auto-advances in the
  * transport (`acceptEventFrame`), so the ingestor never calls `markSatisfied` /
  * `commitSnapshotBaseline` for it (Alice's contract).
- *
- * `meta.provenance` is delivery metadata, not payload. It is DEAD under #1263 (c)
- * — a reply count now recovers authoritatively regardless of live/backfill — and
- * stays threaded only until #1264 removes the wire plumbing; it never mutates the
- * wire frame.
  */
 export function ingestConversationFrame(
   qc: QueryClient,
   frame: ServerFrame,
-  meta?: EventDeliveryMeta,
 ): void {
   if (frame.type !== 'event' && frame.type !== 'snapshot_required') return;
   const messageStreamId = parseConversationScope(frame.scope);
@@ -633,12 +623,11 @@ export function ingestConversationFrame(
   //    on idempotent replay). Their #1261 satisfaction-model unification is a
   //    possible fast-follow, out of #1263's reply-count scope.
   if (messageStreamId) {
-    const provenance = meta?.provenance ?? 'live';
     const kind = asMessageStreamKind(frame.kind);
     if (kind === 'message') {
       const msg = (frame.payload as { message?: MessageDto } | undefined)?.message;
       if (msg) {
-        const settles = ingestMessage(qc, messageStreamId, msg, provenance);
+        const settles = ingestMessage(qc, messageStreamId, msg);
         const { scope, seq, epoch } = frame;
         void Promise.allSettled(settles).then(results => {
           if (results.every(r => r.status === 'fulfilled')) {
@@ -679,8 +668,8 @@ export function ingestConversationFrame(
 export function useConversationIngestor(): void {
   const qc = useQueryClient();
   useEffect(() => {
-    return onWsFrame((frame: ServerFrame, meta?: EventDeliveryMeta) =>
-      ingestConversationFrame(qc, frame, meta),
+    return onWsFrame((frame: ServerFrame) =>
+      ingestConversationFrame(qc, frame),
     );
   }, [qc]);
 }

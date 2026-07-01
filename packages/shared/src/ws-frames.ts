@@ -202,13 +202,3 @@ export function parseConversationSideScope(scope: string): string | null {
     ? scope.slice('conversation-side:'.length)
     : null;
 }
-
-/**
- * Delivery provenance for an event frame reaching the ingestor (Stage-2 §2/§4.1).
- * This is **delivery metadata**, not a wire/payload field — the `event` frame and
- * its `MessageDto` stay byte-identical. `live` = a real-time fanout frame;
- * `backfill` = a frame drained from the replay buffer on resume. A non-idempotent
- * delta (reply-count bump) applies optimistically on `live` but must force
- * authoritative recovery on `backfill` (never a blind `+1`). Read-inert always.
- */
-export type EventDeliveryProvenance = 'live' | 'backfill';

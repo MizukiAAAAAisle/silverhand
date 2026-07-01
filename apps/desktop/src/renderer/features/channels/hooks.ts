@@ -17,7 +17,6 @@ import type {
   ConversationMembersResponse,
   ConversationMessagesDto,
   ConversationStreamUnreadDto,
-  EventDeliveryProvenance,
   MessageDto,
   MessageReactionChangedEvent,
   MessageUnreadByConversationDto,
@@ -698,9 +697,7 @@ export function hasActiveMainlineReader(
  *     page → the root's reply badge is a message-DERIVED projection, so recover it
  *     AUTHORITATIVELY (invalidate → refetch the count). #1263 (c): this replaces
  *     the old optimistic `+1`, which was non-idempotent and double-counted on
- *     replay (the Cindy #1263 falsifier). `live ≡ backfill` — `provenance` no
- *     longer selects behavior (the whole point of (c); the param stays dead until
- *     #1264 removes the wire plumbing). Cursor-inert: the invalidate INITIATES
+ *     replay (the Cindy #1263 falsifier). Cursor-inert: the invalidate INITIATES
  *     recovery; the floor advances only once it COMMITS (#1261 satisfaction).
  *     Returns the invalidate Promise.
  *   - a reply to an OFF-window root, or a system reply → `null` (the badge isn't
@@ -714,9 +711,6 @@ export function applyMainlineMessageToChannelCaches(
   qc: QueryClient,
   channelId: string,
   msg: MessageDto,
-  // Dead under (c) — reply-count is always authoritative-invalidate now; the
-  // param stays threaded until #1264 removes the provenance wire plumbing end-to-end.
-  provenance: EventDeliveryProvenance = 'live',
 ): Promise<void> | null {
   if (msg.thread_root_id !== null) {
     if (msg.from_kind === 'system') return null;
@@ -944,7 +938,7 @@ export function removeInactiveMainlineCache(
 
 /** Reconcile one OPEN thread-root row on `snapshot_required` — refetch its
  *  authoritative reply count. This is the covering recovery that releases a
- *  `backfill` reply bump that pinned the floor ({@link applyThreadRootReplyBump}
+ *  reply-count invalidate that pinned the floor ({@link applyThreadRootReplyBump}
  *  §4.1). Returns the invalidate Promise for the P2 commit join. */
 export function reconcileThreadRootOnSnapshotRequired(
   qc: QueryClient,
@@ -1021,8 +1015,7 @@ export function reconcileClusterOnSnapshotRequired(
  *   - a non-system reply to this loaded root → the count is a message-DERIVED
  *     projection, so recover it AUTHORITATIVELY (invalidate → refetch). #1263 (c)
  *     replaces the old optimistic `+1`, which was non-idempotent and double-counted
- *     on replay. `live ≡ backfill` — `provenance` no longer selects behavior (dead
- *     until #1264 removes the wire plumbing). Cursor-inert: the invalidate INITIATES
+ *     on replay. Cursor-inert: the invalidate INITIATES
  *     recovery; the floor advances only once it COMMITS (#1261). Returns the
  *     invalidate Promise.
  *   - a system reply, a row for another root, or a not-loaded root → `null`
@@ -1032,8 +1025,6 @@ export function applyThreadRootReplyBump(
   channelId: string,
   rootId: string,
   msg: MessageDto,
-  // Dead under (c) — see applyMainlineMessageToChannelCaches; #1264 removes it.
-  provenance: EventDeliveryProvenance = 'live',
 ): Promise<void> | null {
   if (msg.thread_root_id !== rootId || msg.from_kind === 'system') return null;
   const prev = qc.getQueryData<ConversationMessagesDto>(

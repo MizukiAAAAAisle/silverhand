@@ -642,7 +642,6 @@ describe('ingestConversationFrame — per-event satisfaction disposition (#task:
     ingestConversationFrame(
       qc,
       messageFrameSeq('c1', message({ id: 'm1', seq: 6 }), 6),
-      { provenance: 'live' },
     );
     await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
     expect(markSatisfied).toHaveBeenCalledWith(conversationScope('c1'), 6, 'epoch-1');
@@ -663,7 +662,6 @@ describe('ingestConversationFrame — per-event satisfaction disposition (#task:
     ingestConversationFrame(
       qc,
       messageFrameSeq('c1', message({ id: 'r1', seq: 6, thread_root_id: 'root1' }), 6),
-      { provenance: 'live' },
     );
     await flush();
     // Dispatch-gated would fire now; commit-gated must wait for the refetch.
@@ -683,7 +681,6 @@ describe('ingestConversationFrame — per-event satisfaction disposition (#task:
     ingestConversationFrame(
       qc,
       messageFrameSeq('c1', message({ id: 'r1', seq: 6, thread_root_id: 'root1' }), 6),
-      { provenance: 'live' },
     );
     await flush();
     expect(markSatisfied).not.toHaveBeenCalled();
@@ -697,7 +694,6 @@ describe('ingestConversationFrame — per-event satisfaction disposition (#task:
     ingestConversationFrame(
       qc,
       messageFrameSeq('c1', message({ id: 'm1', seq: 6 }), 6),
-      { provenance: 'live' },
     );
     // Warm-removed → next open cold-starts (never left to serve stale, B1)...
     expect(qc.getQueryData(messagesKey('c1'))).toBeUndefined();
@@ -711,7 +707,6 @@ describe('ingestConversationFrame — per-event satisfaction disposition (#task:
     ingestConversationFrame(
       qc,
       messageFrameSeq('c1', message({ id: 'm1', seq: 6 }), 6),
-      { provenance: 'live' },
     );
     // No cache bootstrapped (the reader gate governs cache-WRITES)...
     expect(qc.getQueryData(messagesKey('c1'))).toBeUndefined();
@@ -733,7 +728,6 @@ describe('ingestConversationFrame — per-event satisfaction disposition (#task:
     ingestConversationFrame(
       qc,
       messageFrameSeq('c1', message({ id: 'r1', seq: 6, thread_root_id: 'root1' }), 6),
-      { provenance: 'live' },
     );
     await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
     expect(markSatisfied).toHaveBeenCalledWith(conversationScope('c1'), 6, 'epoch-1');
@@ -754,8 +748,8 @@ describe('ingestConversationFrame — per-event satisfaction disposition (#task:
     // Deliver the SAME reply twice (live then replay). (c) recovers the count
     // authoritatively (invalidate), never a blind +1 → the count is never bumped
     // locally, so replay cannot double-count (the original bug's regression guard).
-    ingestConversationFrame(qc, frame, { provenance: 'live' });
-    ingestConversationFrame(qc, frame, { provenance: 'backfill' });
+    ingestConversationFrame(qc, frame);
+    ingestConversationFrame(qc, frame);
     await flush();
     expect(mainlineReplyCount(qc, 'c1', 'root1')).toBe(3); // never bumped locally
     unsub();
@@ -768,7 +762,6 @@ describe('ingestConversationFrame — per-event satisfaction disposition (#task:
     ingestConversationFrame(
       qc,
       messageFrameSeq('c1', message({ id: 'r1', seq: 6, thread_root_id: 'rootX' }), 6),
-      { provenance: 'live' },
     );
     // No effect (active mainline is authoritative; the count refetches when the
     // window paginates to rootX) → vacuous satisfy, floor advances.
@@ -794,7 +787,7 @@ describe('ingestConversationFrame — per-event satisfaction disposition (#task:
       ],
       pageParams: [undefined],
     });
-    ingestConversationFrame(qc, taskChangedFrame('c1', 't1', 6), { provenance: 'live' });
+    ingestConversationFrame(qc, taskChangedFrame('c1', 't1', 6));
     // Synchronous (no await) — task/reaction are pure idempotent patches, so they
     // keep the boolean content-apply gate rather than the message allSettled path.
     expect(markSatisfied).toHaveBeenCalledTimes(1);
@@ -805,9 +798,7 @@ describe('ingestConversationFrame — per-event satisfaction disposition (#task:
   it('side-scope frames never markSatisfied (side floor auto-advances)', async () => {
     const qc = new QueryClient();
     const unsub = mountReader(qc, agentRunStatesKey('c1'));
-    ingestConversationFrame(qc, agentActivityFrame('c1', runState('c1', 'a1')), {
-      provenance: 'live',
-    });
+    ingestConversationFrame(qc, agentActivityFrame('c1', runState('c1', 'a1')));
     await flush();
     expect(markSatisfied).not.toHaveBeenCalled();
     unsub();
@@ -829,7 +820,7 @@ describe('ingestConversationFrame — per-event satisfaction disposition (#task:
       ],
       pageParams: [undefined],
     });
-    ingestConversationFrame(qc, reactionFrame('c1', 'm1', 6), { provenance: 'live' });
+    ingestConversationFrame(qc, reactionFrame('c1', 'm1', 6));
     // Synchronous (no await): reaction stays on the boolean `reaction_message_patch`
     // gate despite its cursor-inert `reactors_list_refresh` sub-effect — that refresh
     // is NOT commit-gated into the message allSettled path.

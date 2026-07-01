@@ -19,38 +19,7 @@ export type WsClientStatus =
   | 'connected'
   | 'disconnected';
 
-/**
- * Delivery provenance of an `event` frame (Stage-2 #1255 §2/§4.1). NOT a wire
- * or payload field — it is transport delivery metadata the ws-client derives
- * from its own REPLAY CONTEXT: a frame delivered as fresh fanout is `live`; a
- * frame delivered by a replay-buffer drain (a resume after a forward gap, a
- * no-listener resubscribe, or a reconnect) is `backfill`.
- *
- * Provenance CANNOT be derived from the received-water alone — that only catches
- * *duplicate* re-delivery (`seq <= received`), not a replay frame FILLING a seq
- * the client never received (a forward-gap fill, a new-during-disconnect frame).
- * Such a frame must still be `backfill`: a concurrent REST snapshot may already
- * cover it, so a blind `+1` would double-count. So a frame is `backfill` iff it
- * is a duplicate (`seq <= received`) OR falls in the active replay window
- * (`seq <= backfillThrough`, same epoch); otherwise `live`. See
- * {@link EventWsClient.backfillThrough}.
- *
- * The ingestor branches non-idempotent deltas on it (reply-count bump: `+1` on
- * `live`, authoritative recovery on `backfill`), so the wire `event` frame and
- * `MessageDto` stay byte-identical. See docs/event-ws-transport-v1.md §2.
- */
-export type EventDeliveryProvenance = 'live' | 'backfill';
-
-/** Delivery metadata attached to a dispatched `event` frame (undefined for
- *  non-event frames). See {@link EventDeliveryProvenance}. */
-export interface EventDeliveryMeta {
-  provenance: EventDeliveryProvenance;
-}
-
-export type WsClientListener = (
-  frame: ServerFrame,
-  meta?: EventDeliveryMeta,
-) => void;
+export type WsClientListener = (frame: ServerFrame) => void;
 export type WsStatusListener = (status: WsClientStatus) => void;
 
 export interface WsScopeSubscription {
@@ -109,9 +78,8 @@ const SATISFIED_PENDING_CAP = 200;
  *
  * - `receivedPositions[scope]` — the highest seq contiguously RECEIVED on the
  *   socket. Advanced in `acceptEventFrame` on every in-order desired-scope
- *   frame. Serves wire-continuity / forward-gap detection ONLY, and derives
- *   delivery provenance (a frame at-or-below it is a `backfill` re-delivery). It
- *   is NOT a resume floor.
+ *   frame. Serves wire-continuity / forward-gap detection ONLY. It is NOT a
+ *   resume floor.
  * - `appliedPositions[scope]` — the resume FLOOR (what `resume` replays from).
  *   For a CONTENT-GATED scope (`conversation:<id>`, the message stream) it is
  *   advanced ONLY by `markSatisfied` (a resume-safe disposition) or `commitSnapshotBaseline`
@@ -157,26 +125,6 @@ export class EventWsClient {
     string,
     { epoch: string; seqs: Set<number> }
   >();
-  /**
-   * Per-scope upper bound of the current resume/replay delivery window — the
-   * replay CONTEXT that provenance is derived from (§4.1). Set ONLY when a
-   * replay-buffer drain is actually in flight:
-   * - a `subscribed` ack for a scope with a retained SAME-epoch floor (a resume
-   *   was paired by `sendSubscribe`/`resubscribeDesiredScopes`, so the server
-   *   replays `floor+1..head`) → bound = the ack head seq;
-   * - a forward gap → bound = the gap-trigger seq (the highest seq we now know
-   *   exists and are asking the server to replay up to).
-   *
-   * A fresh cold-start ack (no retained floor) or a stale-epoch ack (→
-   * snapshot_required, not a replay) does NOT set it — an ack-head is only a
-   * baseline there, not a replay window (Cindy's edge). A same-epoch frame
-   * at-or-below the bound is a replay-drain frame — `backfill` even if the client
-   * never received it — so a non-idempotent delta takes authoritative recovery,
-   * not a blind `+1` (a concurrent REST snapshot may already cover it). Epoch-
-   * checked on read; transient (cleared with the connection, re-armed by the
-   * resubscribe ack / next gap).
-   */
-  private readonly backfillThrough = new Map<string, ResumePosition>();
   /**
    * Server-stamped transport baseline for an in-flight `snapshot_required`
    * re-cold-start on a content-gated scope (§6). Recorded on receipt but NOT
@@ -462,11 +410,6 @@ export class EventWsClient {
     this.receivedPositions.set(scope, { epoch: pending.epoch, lastSeq: pending.lastSeq });
     this.pendingBaselines.delete(scope);
     this.recovering.delete(scope);
-    // The snapshot re-cold-started the scope: no replay drain is in flight past
-    // the baseline, so drop the replay window. The buffered frames below are all
-    // > baseline (post-snapshot, never applied) → the contiguous path tags them
-    // fresh `live`.
-    this.backfillThrough.delete(scope);
     // The baseline jumped the floor: any pending-satisfaction backlog is now at
     // or below it (subsumed) or from before the re-cold-start. Drop it; the
     // buffered frames drained below re-satisfy from the new baseline (#1261).
@@ -475,10 +418,9 @@ export class EventWsClient {
     this.pendingBuffers.delete(scope);
     // Drain buffered live frames (> baseline seq) in transport-seq order. They
     // are genuinely new (never applied) → the `acceptEventFrame` contiguous path
-    // tags them `live` and the ingestor applies + `markSatisfied`s each.
+    // accepts them and the ingestor applies + `markSatisfied`s each.
     for (const frame of buffered.sort((a, b) => a.seq - b.seq)) {
-      const outcome = this.acceptEventFrame(frame);
-      if (outcome.accept) this.dispatch(frame, { provenance: outcome.provenance });
+      if (this.acceptEventFrame(frame)) this.dispatch(frame);
     }
   }
 
@@ -566,15 +508,11 @@ export class EventWsClient {
     this.recovering.clear();
     this.pendingBaselines.clear();
     this.pendingBuffers.clear();
-    // The replay window is per-connection: no drain survives a reconnect. It is
-    // re-armed by the resubscribe ack (retained same-epoch floor) or the next
-    // forward gap. Received-water + resume floor are RETAINED (above) so the
-    // reconnect can resume/replay.
-    this.backfillThrough.clear();
-    // The pending-satisfaction queue (#1261) is likewise per-connection: a
-    // reconnect resumes from the (retained) floor and re-satisfies every replayed
-    // frame, so the backlog rebuilds itself; carrying it across would only risk
-    // stale-epoch seqs. The floor it drains into is retained above.
+    // The pending-satisfaction queue (#1261) is per-connection: a reconnect
+    // resumes from the (retained) floor and re-satisfies every replayed frame, so
+    // the backlog rebuilds itself; carrying it across would only risk stale-epoch
+    // seqs. Received-water + resume floor are RETAINED (above) so the reconnect
+    // can resume/replay.
     this.satisfiedPending.clear();
   }
 
@@ -602,8 +540,6 @@ export class EventWsClient {
       });
       return;
     }
-
-    let meta: EventDeliveryMeta | undefined;
 
     if (frame.type === 'authenticated') {
       this.reconnectAttempt = 0;
@@ -638,16 +574,12 @@ export class EventWsClient {
       if (!floor || floor.epoch !== frame.epoch) {
         this.recordReceived(frame);
         this.recordApplied(frame);
-      } else {
-        // Retained SAME-epoch floor: `sendSubscribe`/`resubscribeDesiredScopes`
-        // paired a `resume`, so the server will REPLAY `floor+1..head`. Arm the
-        // replay window up to the ack head so those replayed frames — including
-        // ones the client never received (no-listener gap, new-during-disconnect)
-        // — are tagged `backfill`, not `live`. A fresh cold-start (no floor) or a
-        // stale-epoch floor (→ snapshot_required, not a replay) deliberately does
-        // NOT arm it: an ack head is only a baseline there (Cindy's edge).
-        this.noteBackfillThrough(frame.scope, frame.epoch, frame.seq);
       }
+      // A retained SAME-epoch floor means `sendSubscribe`/`resubscribeDesiredScopes`
+      // paired a `resume`, so the server REPLAYS `floor+1..head`; we must NOT
+      // re-baseline the water marks to the ack head there (the no-listener-gap
+      // skip, #task:1251). The replayed frames flow through the normal event path
+      // and are accepted by `acceptEventFrame` in seq order.
       recordEventWsDiagnostic({
         kind: 'subscribed',
         scope: frame.scope,
@@ -674,14 +606,12 @@ export class EventWsClient {
         return;
       }
 
-      const outcome = this.acceptEventFrame(frame);
-      if (!outcome.accept) {
+      if (!this.acceptEventFrame(frame)) {
         // Gap detected (or a frame still beyond the received-water while
         // recovery is in flight): swallow it. The server's in-order replay
         // redelivers it.
         return;
       }
-      meta = { provenance: outcome.provenance };
       if (frame.kind === 'message') {
         recordEventWsDiagnostic({
           kind: 'message_event',
@@ -720,12 +650,12 @@ export class EventWsClient {
       });
     }
 
-    this.dispatch(frame, meta);
+    this.dispatch(frame);
   }
 
-  private dispatch(frame: ServerFrame, meta?: EventDeliveryMeta): void {
+  private dispatch(frame: ServerFrame): void {
     for (const listener of Array.from(this.frameListeners)) {
-      listener(frame, meta);
+      listener(frame);
     }
   }
 
@@ -744,10 +674,8 @@ export class EventWsClient {
   }
 
   /**
-   * Gate a live `event` frame on seq continuity (received-water space) and
-   * derive its delivery provenance from the REPLAY CONTEXT. Returns whether the
-   * frame should be dispatched, and — when it should — whether it is `live` or
-   * `backfill`.
+   * Gate a live `event` frame on seq continuity (received-water space). Returns
+   * whether the frame should be dispatched.
    *
    * The bug this guards against: a frame dropped while the socket stays OPEN
    * (so resume-on-reconnect never fires) used to advance the cursor silently,
@@ -758,52 +686,33 @@ export class EventWsClient {
    *
    * Cases (same epoch as the received-water):
    * - `seq === received + 1` — contiguous. Advance received (and, for a
-   *   non-content-gated scope, the auto floor), drop any recovery latch. Provenance
-   *   is `backfill` iff the frame falls in the active replay window
-   *   (`seq <= backfillThrough`, same epoch) — a replay-drain frame FILLING a seq
-   *   we never received (a forward-gap fill, a new-during-disconnect frame) — else
-   *   `live` (fresh fanout past the window).
-   * - `seq > received + 1` — forward gap. Hold received, RAISE the replay window
-   *   to this seq (every swallowed gapped frame extends it, so all of them tag
-   *   `backfill` on replay — not just the first), resume from the applied floor,
-   *   latch `recovering` so the resume + diagnostic coalesce, swallow the frame
-   *   (replay redelivers it).
+   *   non-content-gated scope, the auto floor), drop any recovery latch, accept.
+   * - `seq > received + 1` — forward gap. Hold received, resume from the applied
+   *   floor, latch `recovering` so the resume + diagnostic coalesce, swallow the
+   *   frame (replay redelivers it).
    * - `seq <= received` — a duplicate re-delivery by definition (already observed).
-   *   Dispatch as `backfill` without moving any water mark or disturbing recovery.
+   *   Accept without moving any water mark or disturbing recovery.
    *
-   * Provenance is NOT derived from the received-water alone — `seq <= received`
-   * only catches DUPLICATE re-delivery, never a replay frame filling a
-   * never-received seq (which is `> received`). Those need the replay window
-   * (`backfillThrough`, armed by the resubscribe ack / gap), so a non-idempotent
-   * delta takes authoritative recovery rather than a blind `+1` (a concurrent REST
-   * snapshot may already cover it). A missing received-water or an epoch change is
-   * a fresh baseline (`live`) rather than a gap.
+   * A missing received-water or an epoch change is a fresh baseline rather than a
+   * gap. The transport no longer classifies delivery provenance: idempotency of a
+   * replayed frame is the ingestor's responsibility (#1263 (c): reply counts
+   * recover authoritatively, rows dedupe by id), so a replay-drain frame and fresh
+   * fanout are dispatched identically.
    */
-  private acceptEventFrame(
-    frame: EventFrame,
-  ): { accept: boolean; provenance: EventDeliveryProvenance } {
+  private acceptEventFrame(frame: EventFrame): boolean {
     const gated = isContentGated(frame.scope);
     const received = this.receivedPositions.get(frame.scope);
 
     if (!received || received.epoch !== frame.epoch) {
       this.recovering.delete(frame.scope);
-      // Fresh baseline (new epoch / first frame): no replay drain is in flight,
-      // and an old-epoch window is moot.
-      this.backfillThrough.delete(frame.scope);
       this.recordReceived(frame);
       // Non-content-gated scopes auto-advance the floor with received (no
       // content-apply seam). Content-gated scopes leave the floor to markSatisfied.
       if (!gated) this.recordApplied(frame);
-      return { accept: true, provenance: 'live' };
+      return true;
     }
 
     if (frame.seq > received.lastSeq + 1) {
-      // Raise the replay window to cover EVERY swallowed gapped frame, not just
-      // the first. A later gapped live frame during recovery is ALSO replay-drain
-      // (the server redelivers it in order), so it must be `backfill` too — only
-      // the resume + diagnostic stay latch-coalesced to a single in-flight
-      // resume. `noteBackfillThrough` raises, never lowers (within an epoch).
-      this.noteBackfillThrough(frame.scope, frame.epoch, frame.seq);
       if (!this.recovering.has(frame.scope)) {
         this.recovering.add(frame.scope);
         recordEventWsDiagnostic({
@@ -820,35 +729,19 @@ export class EventWsClient {
         const floor = this.appliedPositions.get(frame.scope) ?? received;
         this.sendResume({ [frame.scope]: floor });
       }
-      return { accept: false, provenance: 'live' };
+      return false;
     }
 
     if (frame.seq === received.lastSeq + 1) {
       this.recovering.delete(frame.scope);
-      // A replay-drain frame filling a never-received seq (`seq > received` but
-      // within the armed window) is `backfill`; a frame past the window is fresh
-      // `live` fanout.
-      const window = this.backfillThrough.get(frame.scope);
-      const isReplay =
-        !!window && window.epoch === frame.epoch && frame.seq <= window.lastSeq;
       this.recordReceived(frame);
       if (!gated) this.recordApplied(frame);
-      return { accept: true, provenance: isReplay ? 'backfill' : 'live' };
+      return true;
     }
 
-    // seq <= received: a duplicate re-delivery (already observed). Dispatch as
-    // backfill, move no water mark, disturb no recovery.
-    return { accept: true, provenance: 'backfill' };
-  }
-
-  /**
-   * Raise a scope's replay-window upper bound (never lower it within an epoch;
-   * an epoch change replaces it). See {@link EventWsClient.backfillThrough}.
-   */
-  private noteBackfillThrough(scope: string, epoch: string, seq: number): void {
-    const prev = this.backfillThrough.get(scope);
-    if (prev && prev.epoch === epoch && prev.lastSeq >= seq) return;
-    this.backfillThrough.set(scope, { epoch, lastSeq: seq });
+    // seq <= received: a duplicate re-delivery (already observed). Accept, move no
+    // water mark, disturb no recovery.
+    return true;
   }
 
   private recordReceived(frame: EventFrame | SubscribedFrame): void {

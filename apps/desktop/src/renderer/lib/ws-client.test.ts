@@ -702,7 +702,7 @@ describe('EventWsClient — no-listener gap recovery (#1251)', () => {
 /**
  * #1255 P2 step-4 — the two-watermark cursor flip for CONTENT-GATED scopes
  * (`conversation:<id>`, the message stream). The single transport cursor splits
- * into `received` (wire continuity / gap detection / provenance) and `applied`
+ * into `received` (wire continuity / gap detection) and `applied`
  * (the resume floor, advanced ONLY by `markSatisfied` / `commitSnapshotBaseline`).
  * Every scope above uses non-content-gated keys (`conv:room`, `viewer:…`) whose
  * floor still auto-advances with received — those tests pin the unchanged
@@ -724,7 +724,6 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
 
   interface Delivered {
     frame: Record<string, unknown>;
-    meta: { provenance?: string } | undefined;
   }
 
   function eventSeqs(delivered: Delivered[]): number[] {
@@ -743,8 +742,8 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
   }> {
     const client = makeClient();
     const delivered: Delivered[] = [];
-    client.onFrame((f, meta) =>
-      delivered.push({ frame: f as unknown as Record<string, unknown>, meta }),
+    client.onFrame(f =>
+      delivered.push({ frame: f as unknown as Record<string, unknown> }),
     );
     const sub = client.subscribe(scope);
     await flushMicrotasks();
@@ -974,15 +973,14 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     ]);
   });
 
-  it('tags fresh frames live and re-deliveries backfill', async () => {
+  it('dispatches a duplicate re-delivery (seq <= received) without moving the water', async () => {
     const { ws, delivered } = await connectedGated(SCOPE, 5);
 
-    fireEvent(ws, SCOPE, 6); // extends received → live
-    fireEvent(ws, SCOPE, 6); // seq <= received → backfill re-delivery
+    fireEvent(ws, SCOPE, 6); // extends received
+    fireEvent(ws, SCOPE, 6); // seq <= received → duplicate re-delivery, still dispatched
 
     const evs = delivered.filter(d => d.frame.type === 'event');
     expect(evs.map(d => d.frame.seq)).toEqual([6, 6]);
-    expect(evs.map(d => d.meta?.provenance)).toEqual(['live', 'backfill']);
   });
 
   it('snapshot_required pins the floor until commit (apply-gated), buffering live frames', async () => {
@@ -1052,40 +1050,35 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     ]);
   });
 
-  // ── Provenance from replay context, not received-water (Blocker 1) ──────────
-  // `seq <= received` only catches DUPLICATE re-delivery. A replay-buffer drain
-  // also re-delivers frames the client NEVER received (a forward-gap fill, a
-  // new-during-disconnect frame) — those are `> received` yet must still be
-  // `backfill`, because a concurrent REST snapshot may already cover them so a
-  // blind `+1` would double-count. Provenance therefore comes from the armed
-  // replay window (`backfillThrough`), not the received-water alone.
+  // ── Replay dispatch: a resume redelivers frames the client never received ────
+  // `seq <= received` catches DUPLICATE re-delivery, but a replay-buffer drain
+  // also redelivers frames the client NEVER received (a forward-gap fill, a
+  // new-during-disconnect frame) — those are `> received`. The transport accepts
+  // and dispatches them all in order; idempotency of a replayed frame is the
+  // ingestor's job (#1263 (c): authoritative-invalidate, id-dedup), so the
+  // transport no longer classifies delivery provenance.
 
-  it('tags a forward-gap replay fill as backfill even though it was never received (Blocker 1)', async () => {
+  it('dispatches a forward-gap replay fill in order (resume from the floor)', async () => {
     const { client, ws, delivered } = await connectedGated(SCOPE, 5);
 
     fireEvent(ws, SCOPE, 6);
     client.markSatisfied(SCOPE, 6, 'epoch-1'); // floor 6, received 6
-    // Forward gap: 8 arrives before 7 → arm the replay window at 8, resume from
-    // the floor (6), swallow 8.
+    // Forward gap: 8 arrives before 7 → resume from the floor (6), swallow 8.
     fireEvent(ws, SCOPE, 8);
-    // Server replays in order. 7 FILLS a seq the client never received → backfill
-    // (authoritative recovery, not +1). 8 (previously swallowed) → backfill too.
+    // Server replays in order. 7 FILLS a seq the client never received; 8
+    // (previously swallowed) redelivered; 9 is fresh fanout — all dispatched.
     fireEvent(ws, SCOPE, 7);
     fireEvent(ws, SCOPE, 8);
-    // The first frame PAST the window is fresh live fanout.
     fireEvent(ws, SCOPE, 9);
 
     const evs = delivered.filter(d => d.frame.type === 'event');
     expect(evs.map(d => d.frame.seq)).toEqual([6, 7, 8, 9]);
-    expect(evs.map(d => d.meta?.provenance)).toEqual([
-      'live',
-      'backfill',
-      'backfill',
-      'live',
+    expect(resumes(ws)).toEqual([
+      { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 6 } } },
     ]);
   });
 
-  it('tags a no-listener resubscribe replay as backfill up to the ack head (Blocker 1)', async () => {
+  it('dispatches a no-listener resubscribe replay in order (ack does not re-baseline)', async () => {
     const { client, ws, sub, delivered } = await connectedGated(SCOPE, 5);
 
     fireEvent(ws, SCOPE, 6);
@@ -1096,76 +1089,41 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     // [server publishes 7, 8 while no listener is attached — the no-listener gap.]
     client.subscribe(SCOPE); // subscribe + resume{6}
     // Ack at the current head (8): a retained SAME-epoch floor is present, so a
-    // resume was paired → arm the replay window up to 8. The ack does NOT
-    // re-baseline the retained floor.
+    // resume was paired. The ack does NOT re-baseline the retained floor.
     ws.fireMessage({ type: 'subscribed', scope: SCOPE, epoch: 'epoch-1', seq: 8 });
 
-    // Replay of 7, 8 — frames the client NEVER received — are backfill.
+    // Replay of 7, 8 — frames the client NEVER received — plus fresh 9, all dispatched.
     fireEvent(ws, SCOPE, 7);
     fireEvent(ws, SCOPE, 8);
-    // Past the window → fresh live.
     fireEvent(ws, SCOPE, 9);
 
     const evs = delivered.filter(d => d.frame.type === 'event');
     expect(evs.map(d => d.frame.seq)).toEqual([6, 7, 8, 9]);
-    expect(evs.map(d => d.meta?.provenance)).toEqual([
-      'live',
-      'backfill',
-      'backfill',
-      'live',
-    ]);
   });
 
-  it('raises the replay window for gapped frames swallowed during recovery (Blocker 3)', async () => {
+  it('coalesces multiple gaps into a single resume and dispatches the replay in order', async () => {
     const { client, ws, delivered } = await connectedGated(SCOPE, 5);
 
     fireEvent(ws, SCOPE, 6);
     client.markSatisfied(SCOPE, 6, 'epoch-1'); // floor 6, received 6
 
-    // First gap: 9 → arm window at 9, resume from the floor (6), swallow.
+    // First gap: 9 → resume from the floor (6), swallow.
     fireEvent(ws, SCOPE, 9);
-    // While recovering, a LATER gapped live frame 12 is also swallowed — it too
-    // is replay-drain, so the window must RAISE to 12 (not stay at 9). The resume
-    // stays coalesced to the single in-flight one.
+    // While recovering, a LATER gapped live frame 12 is also swallowed. The resume
+    // stays coalesced to the single in-flight one (the `recovering` latch).
     fireEvent(ws, SCOPE, 12);
     expect(resumes(ws)).toEqual([
       { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 6 } } },
     ]);
 
-    // Server replays 7..12 in order — ALL backfill (incl. 10/11/12, which the old
-    // window-at-9 would have mis-tagged live → blind +1 on a reply bump). 13 is
-    // the first frame past the raised window → fresh live.
+    // Server replays 7..12 in order, then 13 is fresh fanout — all dispatched.
     for (const seq of [7, 8, 9, 10, 11, 12]) fireEvent(ws, SCOPE, seq);
     fireEvent(ws, SCOPE, 13);
 
     const evs = delivered.filter(d => d.frame.type === 'event');
     expect(evs.map(d => d.frame.seq)).toEqual([6, 7, 8, 9, 10, 11, 12, 13]);
-    expect(evs.map(d => d.meta?.provenance)).toEqual([
-      'live',
-      'backfill',
-      'backfill',
-      'backfill',
-      'backfill',
-      'backfill',
-      'backfill',
-      'live',
-    ]);
     // Still exactly one resume — the latch coalesced both gaps.
     expect(resumes(ws)).toHaveLength(1);
-  });
-
-  it('does not treat a fresh cold-start ack head as a replay window (Cindy edge)', async () => {
-    // connectedGated cold-starts: a `subscribed` ack at 5 with NO retained floor.
-    // No resume was paired, so the ack head is only a BASELINE, not a replay
-    // window — subsequent contiguous live frames must stay `live`.
-    const { ws, delivered } = await connectedGated(SCOPE, 5);
-
-    fireEvent(ws, SCOPE, 6);
-    fireEvent(ws, SCOPE, 7);
-
-    const evs = delivered.filter(d => d.frame.type === 'event');
-    expect(evs.map(d => d.frame.seq)).toEqual([6, 7]);
-    expect(evs.map(d => d.meta?.provenance)).toEqual(['live', 'live']);
   });
 
   // ── markSatisfied is not a baseline authority (Safety blocker 2) ──────────────
