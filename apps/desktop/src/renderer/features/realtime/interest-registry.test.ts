@@ -141,6 +141,22 @@ describe('InterestRegistry — churn / generation-safety (#task:1260 P1, Cindy Q
     a2.release();
     expect(t.unsubscribed).toEqual(['conversation:c1', 'conversation:c1']); // TWO unsubscribes
   });
+
+  it('enabled-toggle parity (null↔scope): false→true→false→true matches the raw useEffect', () => {
+    // useChannelThreads' `enabled` gate maps to useInterest(null↔scope): each
+    // enable retains (subscribe), each disable releases → n→0 → unsubscribe. The
+    // registry sequence is byte-identical to the direct `useEffect` it replaced,
+    // and every re-enable is a FRESH subscribe (transport resumes from the
+    // retained floor → frames missed while disabled replay, #1251 — unchanged).
+    // So `enabled` is a bandwidth gate, not a correctness boundary.
+    const t = recordingTransport();
+    const reg = createInterestRegistry(t.subscribe);
+    const token = 'threads-reader';
+    reg.retain('conversation:c1', token).release(); // enable → disable
+    reg.retain('conversation:c1', token).release(); // re-enable → disable
+    expect(t.subscribed).toEqual(['conversation:c1', 'conversation:c1']);
+    expect(t.unsubscribed).toEqual(['conversation:c1', 'conversation:c1']);
+  });
 });
 
 // Source fence (node env, no RTL — mirrors realtime-ingestion-read-inert.test.ts):
@@ -156,6 +172,15 @@ describe('InterestRegistry — source fence: subscription-lifetime only (#task:1
 
   it('is the caller of subscribeWsScope (sanity — fencing the live module)', () => {
     expect(source).toContain('subscribeWsScope');
+  });
+
+  it('useInterest treats a null scope as no interest (enabled-gate form, #1260 P2)', () => {
+    // A call site's `enabled`/conditional gate maps to `useInterest(null)`; the
+    // hook must declare NO interest for null (no retain) — so a disabled reader
+    // routes to release → the transport unsubscribe (drops pending, RETAINS
+    // floor), and re-enable fresh-subscribes + resume-replays (#1251). This is
+    // what makes `enabled` a bandwidth gate, not a correctness boundary.
+    expect(source).toContain('if (!scope) return');
   });
 
   it('never writes the resume floor / snapshot baseline', () => {

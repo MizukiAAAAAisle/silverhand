@@ -265,8 +265,16 @@ describe('useChannelThreads — pure reader / gate-(b) fence (#task:1255 P1c)', 
     expect(body).not.toContain('useConversationStream(');
   });
 
-  it('keeps scope interest (subscribeWsScope)', () => {
-    expect(body).toContain('subscribeWsScope');
+  it('declares scope interest via the registry, not a direct subscribe (#task:1260 P2)', () => {
+    // Migrated in #1260 P2: interest now routes through the InterestRegistry
+    // (`useInterest`), and the direct transport subscribe is gone. This is the
+    // P2 direct-subscribe deny-list entry for this reader file — the fence
+    // widens one reader per P2 slice (see docs/renderer-interest-registry-v1.md §6).
+    // Call-form assertion (like every fence here): the migration comment above
+    // still names `subscribeWsScope` in prose, which must not trip the guard —
+    // what's forbidden is the direct *call*.
+    expect(body).toContain('useInterest(');
+    expect(body).not.toContain('subscribeWsScope(');
   });
 });
 

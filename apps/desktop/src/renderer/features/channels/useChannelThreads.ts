@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import {
@@ -6,8 +5,8 @@ import {
   type ListChannelThreadsResponse,
 } from '@silverhand/shared';
 import { api } from '@/lib/api';
-import { subscribeWsScope } from '@/lib/ws-client';
 import { wsConversationScope } from '@/hooks/useConversationStream';
+import { useInterest } from '@/features/realtime/interest-registry';
 
 // Re-export so existing consumers (ChannelThreadsPanel) keep their import path
 // while the type now lives in the shared barrel (#task:1074 backend landing).
@@ -81,11 +80,13 @@ export function useChannelThreads(channelId: string | null) {
   // ingestor invalidates this list (gated on a mounted reader) when a reply
   // lands or a reconnect needs a fresh snapshot. We keep only the WS scope
   // INTEREST alive so the transport stays subscribed while the panel is open.
-  useEffect(() => {
-    if (!enabled || !channelId) return;
-    const subscription = subscribeWsScope(wsConversationScope(channelId));
-    return () => subscription.unsubscribe();
-  }, [enabled, channelId]);
+  // #task:1260 P2: interest is declared through the registry (was a direct
+  // subscribeWsScope useEffect) — identical lifecycle, single authority. The
+  // `enabled` gate maps to the null-scope form: disabled → no interest → the
+  // transport unsubscribes (drops pending, RETAINS floor); re-enable
+  // fresh-subscribes + resume-replays frames missed while disabled (#1251), so
+  // `enabled` is not a correctness boundary.
+  useInterest(channelId ? wsConversationScope(channelId) : null);
 
   return {
     threads: query.data?.threads ?? [],
