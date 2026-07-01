@@ -1,15 +1,19 @@
 import { useEffect, useRef } from 'react';
-import { applyAgentRunStateToCache } from '@/lib/agentRunStateCache';
 import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
-import type { AgentRunState, ServerFrame } from '@silverhand/shared';
+import { conversationScope, conversationSideScope } from '@silverhand/shared';
+import type { ServerFrame } from '@silverhand/shared';
 
 /**
  * Per-conversation realtime event payload. The transport is now the shared
  * WebSocket event bus, but callers keep the legacy event shape.
  */
 export interface ConversationStreamEvent {
-  /** Known values: `connected`, `ping`, `message`, `agent_status`, `agent_event`,
-   *  `agent_activity`, `compaction_stale`, `thread_updated`, `task_changed`. */
+  /** Message-stream kinds this legacy bridge still forwards: `connected`,
+   *  `ping`, `message`, `task_changed`. Side-channel kinds (`agent_status` /
+   *  `agent_activity` / `agent_event` / `conversation_activity` /
+   *  `compaction_stale` / members) no longer ride this bridge — they route
+   *  through the central ingestor / their own side-scope consumers, and the
+   *  dev EventStream observes the side scope separately (#task:1255 P2 step-3). */
   kind: string;
   /** Event payload from the backend, or local metadata for `connected`. */
   payload: any;
@@ -20,19 +24,16 @@ export type SessionStreamEvent = ConversationStreamEvent;
 type Handler = (event: ConversationStreamEvent) => void;
 type StreamScope = 'channel' | 'thread';
 
-function wsConversationScope(conversationId: string): string {
-  return `conversation:${conversationId}`;
+export function wsConversationScope(conversationId: string): string {
+  return conversationScope(conversationId);
 }
 
-function ingestConversationEvent(
-  conversationId: string,
-  event: ConversationStreamEvent,
-): void {
-  if (event.kind !== 'agent_activity') return;
-  applyAgentRunStateToCache(
-    conversationId,
-    event.payload as AgentRunState | undefined,
-  );
+/** Side-channel transport scope for a conversation (agent_status / activity /
+ *  members) — the recovery-class-partitioned sibling of {@link
+ *  wsConversationScope}. Delegates to the shared grammar so backend publish and
+ *  renderer subscribe never drift (#task:1255 P2 step-3). */
+export function wsConversationSideScope(conversationId: string): string {
+  return conversationSideScope(conversationId);
 }
 
 function connectedEvent(
@@ -111,7 +112,6 @@ export function useConversationStream(
       if (!active) return;
       const event = streamEventFromFrame(frame, wsScope, conversationId, scope);
       if (!event) return;
-      ingestConversationEvent(conversationId, event);
       handlerRef.current(event);
     });
 

@@ -68,7 +68,7 @@ import {
   useStartAgent,
   useStopAgent,
 } from '@/features/channels/hooks';
-import { useConversationStream } from '@/hooks/useConversationStream';
+import { nextTailReadMark, type TailReadMark } from '@/lib/channel-read';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import {
   FIRST_ITEM_INDEX_START,
@@ -272,20 +272,36 @@ function ActiveChannelView({
   // the message-window summary no longer carries unread.
   const threadUnreadByRoot = useConversationUnread(conversation.id).data?.threads;
 
-  // Advance the message read cursor in real-time as new messages arrive.
-  // ChannelView is only rendered when the channel is visible, so any
-  // live message that lands here should be marked read immediately — no need
-  // to wait for the 5 s polling window in App.tsx.
+  // Advance the message read cursor as the visible mainline tail advances
+  // (#task:1255 P1c). ChannelView is rendered only when the channel is visible,
+  // but read advancement is VISIBILITY-driven, not frame-ARRIVAL-driven
+  // (#task:1244 / #task:1251 read-inert axis) — so we mark read off the mainline
+  // CACHE, not an `onWsFrame`/`useConversationStream` handler (the hook is now a
+  // pure reader; gate-(b)). We mark only when the window is genuinely at the
+  // tail (`isAtTail && !hasNewerLiveGap`) and the newest mainline row actually
+  // advanced. By construction `useChannelMessages` keeps reply-only rows OUT of
+  // `messages` (they bump a badge, not the list) and does NOT append while the
+  // window is off-tail (it sets the gap instead) — so scrolled-in-history and
+  // reply-only frames never mark the mainline read. This is a deliberate read
+  // tightening over the old "any message frame → markRead" (which marked on
+  // arrival even off-tail / reply-only): see the dogfood handoff note.
   const markRead = useMarkMessageChannelRead();
-  const onStreamEvent = useCallback(
-    (e: { kind: string }) => {
-      if (e.kind === 'message') markRead.mutate(conversation.id);
-    },
-    // markRead.mutate is stable; conversation.id drives re-subscription.
+  const tailSeq = messages.length > 0 ? messages[messages.length - 1]!.seq : null;
+  const lastMarkedRef = useRef<TailReadMark | null>(null);
+  useEffect(() => {
+    const next = nextTailReadMark(
+      lastMarkedRef.current,
+      conversation.id,
+      tailSeq,
+      isAtTail,
+      hasNewerLiveGap,
+    );
+    if (!next) return;
+    lastMarkedRef.current = next;
+    markRead.mutate(conversation.id);
+    // markRead.mutate is stable; nextTailReadMark encodes the trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [conversation.id],
-  );
-  useConversationStream(conversation.id, onStreamEvent);
+  }, [conversation.id, tailSeq, isAtTail, hasNewerLiveGap]);
 
   const { data: agents = [] } = useAgents();
   // Single batch fetch for every agent avatar in this channel — threaded

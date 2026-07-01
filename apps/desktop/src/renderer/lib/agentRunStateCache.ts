@@ -8,6 +8,37 @@ const TERMINAL_RUN_TOMBSTONE_TTL_MS = 5 * 60_000;
 export const agentRunStatesKey = (conversationId: string) =>
   ['conversations', conversationId, 'agent-run-states'] as const;
 
+/** True when an agent-run-states reader (`useAgentRunStates`, or the Composer
+ *  activity header) is mounted — the exact key has at least one active observer.
+ *  Stage-2 P1c gate (#task:1255): the central ingestor took over the
+ *  `agent_activity` cache write + the `snapshot_required` invalidate that used
+ *  to ride the per-view conversation stream, so both happen ONLY while a reader
+ *  is alive. A non-terminal `agent_activity` bootstraps an incomplete one-row
+ *  list, so it must not write with no reader; on the next mount the reader's
+ *  `refetchOnMount: 'always'` reconciles the full snapshot regardless. */
+export function hasActiveAgentRunStatesReader(
+  qc: QueryClient,
+  conversationId: string,
+): boolean {
+  const entry = qc
+    .getQueryCache()
+    .find({ queryKey: agentRunStatesKey(conversationId), exact: true });
+  return (entry?.getObserversCount() ?? 0) > 0;
+}
+
+/** Reconcile agent-run-states on `snapshot_required` (#task:1255 P1c) — verbatim
+ *  move of `useAgentRunStates.onEvent`: a reconnect may have missed terminal /
+ *  start events, so refetch the snapshot (the queryFn merges any newer live
+ *  updates that arrived while the request was in flight). */
+export function invalidateAgentRunStates(
+  qc: QueryClient,
+  conversationId: string,
+): Promise<void> {
+  // Returns the invalidate Promise (reconcile-settle signal for the P2 snapshot
+  // join, #1255 P2); strategy unchanged.
+  return qc.invalidateQueries({ queryKey: agentRunStatesKey(conversationId) });
+}
+
 const terminalRunUpdatedAtByKey = new Map<string, number>();
 
 function isTerminalRunState(state: AgentRunState): boolean {

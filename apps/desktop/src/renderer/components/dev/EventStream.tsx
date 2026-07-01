@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentDto } from '@silverhand/shared';
+import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
 import {
   useConversationStream,
+  wsConversationSideScope,
   type ConversationStreamEvent,
 } from '@/hooks/useConversationStream';
 
@@ -54,6 +56,26 @@ export function EventStream({
     });
   }, []);
   useConversationStream(conversationId, onEvent, scope);
+
+  // After the #1255 P2 partition, the message-stream bridge above no longer
+  // carries side kinds (agent_status / agent_activity / agent_event /
+  // conversation_activity / compaction_stale / members) — they publish to the
+  // disjoint `conversation-side:<id>` scope. The dev log observes that scope too
+  // so it stays a complete picture. Observe-only: it registers INTEREST and
+  // reads frames, never writing any cache or cursor.
+  useEffect(() => {
+    if (!conversationId) return;
+    const sideScope = wsConversationSideScope(conversationId);
+    const sub = subscribeWsScope(sideScope);
+    const off = onWsFrame(frame => {
+      if (frame.type !== 'event' || frame.scope !== sideScope) return;
+      onEvent({ kind: frame.kind, payload: frame.payload });
+    });
+    return () => {
+      off();
+      sub.unsubscribe();
+    };
+  }, [conversationId, onEvent]);
 
   const visibleEvents = useMemo(() => [...events].reverse(), [events]);
 

@@ -11,6 +11,7 @@ import {
 } from '@silverhand/shared';
 import { ApiError, api } from '@/lib/api';
 import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
+import { wsConversationSideScope } from '@/hooks/useConversationStream';
 
 export type ConversationMembersStatus =
   | 'loading'
@@ -74,8 +75,10 @@ export function mapConversationMembersResult(
  * This hook does not filter — it returns the full list so other
  * surfaces (popovers, "+N more" overlays) can render every member.
  *
- * Realtime invalidation: subscribes to `conversation:{id}` and
- * invalidates the cache on `conversation_members_changed`. This means
+ * Realtime invalidation: subscribes to the side-channel scope
+ * `conversation-side:{id}` (#task:1255 P2 step-3 — `conversation_members_changed`
+ * is a side kind) and invalidates the cache on `conversation_members_changed`.
+ * This means
  * the renderer reseats the strip when a member is added by ANY route
  * — the local renderer mutation, an agent's `silverhand member add`,
  * or another window doing the same. `snapshot_required` for the same
@@ -103,7 +106,9 @@ export function useConversationMembers(
 
   useEffect(() => {
     if (!id) return;
-    const scope = `conversation:${id}`;
+    // `conversation_members_changed` is a side-channel kind (#task:1255 P2
+    // step-3) — subscribe + match on the side scope, not the message stream.
+    const scope = wsConversationSideScope(id);
     const sub = subscribeWsScope(scope);
     const unsub = onWsFrame(frame => {
       if (frame.type === 'event') {

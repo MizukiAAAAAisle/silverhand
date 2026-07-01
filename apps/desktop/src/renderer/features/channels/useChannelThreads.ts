@@ -1,14 +1,13 @@
-import { useCallback } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 import {
   apiPaths,
   type ListChannelThreadsResponse,
 } from '@silverhand/shared';
 import { api } from '@/lib/api';
-import {
-  useConversationStream,
-  type ConversationStreamEvent,
-} from '@/hooks/useConversationStream';
+import { subscribeWsScope } from '@/lib/ws-client';
+import { wsConversationScope } from '@/hooks/useConversationStream';
 
 // Re-export so existing consumers (ChannelThreadsPanel) keep their import path
 // while the type now lives in the shared barrel (#task:1074 backend landing).
@@ -26,6 +25,34 @@ export type { ThreadSummary } from '@silverhand/shared';
 export const channelThreadsKey = (channelId: string) =>
   ['channels', channelId, 'threads-list'] as const;
 
+/** True when a `useChannelThreads(channelId)` reader is mounted — the exact
+ *  threads-list key has at least one active observer. Stage-2 P1c gate
+ *  (#task:1255): the central ingestor took over `useChannelThreads.onEvent`,
+ *  which only ran while that hook was mounted, so the list is invalidated only
+ *  while a reader is alive (interest-only scope subscription must not). */
+export function hasActiveChannelThreadsReader(
+  qc: QueryClient,
+  channelId: string,
+): boolean {
+  const entry = qc
+    .getQueryCache()
+    .find({ queryKey: channelThreadsKey(channelId), exact: true });
+  return (entry?.getObserversCount() ?? 0) > 0;
+}
+
+/** Invalidate the channel Threads list (#task:1255 P1c) — verbatim move of
+ *  `useChannelThreads.onEvent`: any reply (or a reconnect needing a fresh
+ *  snapshot) can change the list's contents or order, so refetch. Both the
+ *  `message` and `snapshot_required` branches did exactly this. */
+export function invalidateChannelThreadsList(
+  qc: QueryClient,
+  channelId: string,
+): Promise<void> {
+  // Returns the invalidate Promise (reconcile-settle signal for the P2 snapshot
+  // join, #1255 P2); the message-path caller ignores it, strategy unchanged.
+  return qc.invalidateQueries({ queryKey: channelThreadsKey(channelId) });
+}
+
 /**
  * Reactive channel Threads list. Refetches when the channel message stream
  * advances (a new reply bumps a cluster's `last_reply_at` / `reply_count`,
@@ -38,7 +65,6 @@ export const channelThreadsKey = (channelId: string) =>
  * so the most useful rows are on page one.
  */
 export function useChannelThreads(channelId: string | null) {
-  const qc = useQueryClient();
   const enabled = !!channelId;
   const key = channelThreadsKey(channelId ?? 'none');
 
@@ -51,24 +77,15 @@ export function useChannelThreads(channelId: string | null) {
       }),
   });
 
-  // Any reply (or a reconnect needing a fresh snapshot) can change the list's
-  // contents or order. Mirror the cluster hooks' filter: invalidate on the
-  // synthetic connected-with-snapshot event and on any channel message.
-  const onEvent = useCallback(
-    (e: ConversationStreamEvent) => {
-      if (!channelId) return;
-      if (e.kind === 'connected' && e.payload?.snapshot_required) {
-        void qc.invalidateQueries({ queryKey: key });
-        return;
-      }
-      if (e.kind === 'message') {
-        void qc.invalidateQueries({ queryKey: key });
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [qc, channelId, key.join(':')],
-  );
-  useConversationStream(enabled ? channelId : null, onEvent, 'channel');
+  // Pure reader (#task:1255 P1c): no `onWsFrame` here — the central conversation
+  // ingestor invalidates this list (gated on a mounted reader) when a reply
+  // lands or a reconnect needs a fresh snapshot. We keep only the WS scope
+  // INTEREST alive so the transport stays subscribed while the panel is open.
+  useEffect(() => {
+    if (!enabled || !channelId) return;
+    const subscription = subscribeWsScope(wsConversationScope(channelId));
+    return () => subscription.unsubscribe();
+  }, [enabled, channelId]);
 
   return {
     threads: query.data?.threads ?? [],

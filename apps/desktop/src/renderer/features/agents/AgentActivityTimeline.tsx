@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   AlertTriangle,
   Ban,
@@ -15,13 +15,9 @@ import {
 import dayjs from 'dayjs';
 import type {
   ConversationActivityEvent,
-  ConversationActivityListResponse,
   ConversationEventKind,
 } from '@silverhand/shared';
-import { apiPaths } from '@silverhand/shared';
-import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
-import { useConversationStream } from '@/hooks/useConversationStream';
 import { Markdown } from '@/components/chat/Markdown';
 import {
   coalesceActivity,
@@ -29,57 +25,16 @@ import {
   type ActivityDisplayItem,
   type ToolDetail,
 } from './activityPresentation';
+import { mergeActivityById, useAgentActivityFeed } from './useAgentActivityFeed';
 
-const PAGE_SIZE = 100;
-
-/**
- * Merge two activity-event lists into one, sorted ascending by `id`,
- * de-duplicated on `id`. This is the single reconciliation path used by
- * BOTH backfill (prepend older pages) and live WS frames (append newest):
- *
- *  - ordering key is `id` (monotonic, INSERT-then-publish guarantees the
- *    live frame carries the same row id the DB persisted), NOT `created_at`
- *    which can tie across rows;
- *  - a live frame whose `id` already arrived via backfill is dropped, so
- *    the backfill/live race can't double-render a row.
- *
- * Exported for the reconcile contract test.
- */
-export function mergeActivityById(
-  existing: ReadonlyArray<ConversationActivityEvent>,
-  incoming: ReadonlyArray<ConversationActivityEvent>,
-): ConversationActivityEvent[] {
-  const byId = new Map<number, ConversationActivityEvent>();
-  for (const e of existing) byId.set(e.id, e);
-  for (const e of incoming) {
-    const prev = byId.get(e.id);
-    byId.set(e.id, prev ? pickRicher(prev, e) : e);
-  }
-  return [...byId.values()].sort((a, b) => a.id - b.id);
-}
+// Re-exported so the existing reconcile contract test keeps its import path.
+export { mergeActivityById };
 
 /**
- * Resolve a same-`id` collision. A backend that grows a `thinking`/`text`
- * block IN PLACE (update-in-place coalescer) re-publishes the same row id with
- * a longer `payload.text` each delta; if WS frames reorder, a late SHORTER
- * frame must NOT clobber the already-longer block (would flicker/regress).
- * So when either side carries text, keep the longer one (monotonic growth);
- * otherwise the later (incoming) wins, preserving plain replace semantics.
+ * Merge two activity-event lists — see `./useAgentActivityFeed`. (The merge
+ * logic + feed cache moved there in #task:1255 P1c #2 so the central ingestor
+ * can write live rows and this view is a pure reader.)
  */
-function pickRicher(
-  a: ConversationActivityEvent,
-  b: ConversationActivityEvent,
-): ConversationActivityEvent {
-  const al = textLen(a);
-  const bl = textLen(b);
-  if (al !== null || bl !== null) return (bl ?? -1) >= (al ?? -1) ? b : a;
-  return b;
-}
-
-function textLen(e: ConversationActivityEvent): number | null {
-  const v = (e.payload as Record<string, unknown> | null)?.['text'];
-  return typeof v === 'string' ? v.length : null;
-}
 
 interface AgentActivityTimelineProps {
   /** Parent channel / dm conversation id (never a thread — see pane). */
@@ -108,10 +63,11 @@ export function AgentActivityTimeline({
   conversationId,
   agentId,
 }: AgentActivityTimelineProps): JSX.Element {
-  const [events, setEvents] = useState<ConversationActivityEvent[]>([]);
-  const [nextBeforeId, setNextBeforeId] = useState<number | null>(null);
-  const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [loadingMore, setLoadingMore] = useState(false);
+  // Pure reader (#task:1255 P1c #2): the feed lives in a React Query cache the
+  // central ingestor writes live `conversation_activity` rows into; this view no
+  // longer registers `onWsFrame`/`useConversationStream`.
+  const { events, nextBeforeId, phase, isLoadingMore, loadEarlier } =
+    useAgentActivityFeed(conversationId, agentId);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // Track whether the user is pinned near the bottom so a live append
@@ -119,82 +75,24 @@ export function AgentActivityTimeline({
   // when they've scrolled up to read history.
   const atBottomRef = useRef(true);
 
-  // Reset + initial backfill whenever the selected (conversation, agent)
-  // changes. AbortController guards against a stale page resolving after
-  // the user has already switched conversations.
+  // Re-pin to the tail when the selected (conversation, agent) changes. The
+  // ResizeObserver tail-follow (setListRef) then keeps it pinned as the backfill
+  // rows paint and the list grows — no one-shot rAF needed here.
   useEffect(() => {
-    let cancelled = false;
-    setPhase('loading');
-    setEvents([]);
-    setNextBeforeId(null);
-    void (async () => {
-      try {
-        const res = await api<ConversationActivityListResponse>(
-          `${apiPaths.conversationAgentActivity(conversationId, agentId)}?limit=${PAGE_SIZE}`,
-        );
-        if (cancelled) return;
-        // Reconcile, don't overwrite: a live `conversation_activity` frame
-        // can land between mount and this resolve. Routing backfill through
-        // the same merge keeps that row (id-dedupe drops any overlap) — with
-        // no polling, a clobbered live row would otherwise be lost until reload.
-        setEvents(prev => mergeActivityById(prev, res.events));
-        setNextBeforeId(res.next_before_id);
-        setPhase('ready');
-        atBottomRef.current = true;
-        // Jump to the tail after the rows paint.
-        requestAnimationFrame(() => {
-          const el = scrollRef.current;
-          if (el) el.scrollTop = el.scrollHeight;
-        });
-      } catch {
-        if (!cancelled) setPhase('error');
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    atBottomRef.current = true;
   }, [conversationId, agentId]);
 
-  // Live tail. The WS scope is the whole conversation, so every agent's
-  // activity arrives here — filter to the selected agent before merging.
-  const onStreamEvent = useCallback(
-    (event: { kind: string; payload: unknown }) => {
-      if (event.kind !== 'conversation_activity') return;
-      const row = event.payload as ConversationActivityEvent | undefined;
-      if (!row || row.agent_id !== agentId) return;
-      setEvents(prev => mergeActivityById(prev, [row]));
-      // No manual scroll here: the ResizeObserver tail-follow (see setListRef)
-      // re-pins to the bottom whenever the list height grows while the user is
-      // pinned there — appending a row is just such a growth, so it's covered
-      // by the same height-driven path instead of a separate one-shot rAF.
-    },
-    [agentId],
-  );
-  useConversationStream(conversationId, onStreamEvent);
-
-  const loadEarlier = useCallback(async () => {
-    if (nextBeforeId === null || loadingMore) return;
-    setLoadingMore(true);
+  const onLoadEarlier = useCallback(async () => {
     const el = scrollRef.current;
     const prevHeight = el?.scrollHeight ?? 0;
-    try {
-      const res = await api<ConversationActivityListResponse>(
-        `${apiPaths.conversationAgentActivity(conversationId, agentId)}?limit=${PAGE_SIZE}&before_id=${nextBeforeId}`,
-      );
-      setEvents(prev => mergeActivityById(res.events, prev));
-      setNextBeforeId(res.next_before_id);
-      // Preserve the reading position: older rows are prepended, so shift
-      // scrollTop by the height delta to keep the same row under the eye.
-      requestAnimationFrame(() => {
-        const node = scrollRef.current;
-        if (node) node.scrollTop = node.scrollHeight - prevHeight;
-      });
-    } catch {
-      /* transient — the button stays, user can retry */
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [conversationId, agentId, nextBeforeId, loadingMore]);
+    await loadEarlier();
+    // Preserve the reading position: older rows are prepended, so shift
+    // scrollTop by the height delta to keep the same row under the eye.
+    requestAnimationFrame(() => {
+      const node = scrollRef.current;
+      if (node) node.scrollTop = node.scrollHeight - prevHeight;
+    });
+  }, [loadEarlier]);
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -256,12 +154,12 @@ export function AgentActivityTimeline({
             {nextBeforeId !== null ? (
               <button
                 type="button"
-                onClick={() => void loadEarlier()}
-                disabled={loadingMore}
+                onClick={() => void onLoadEarlier()}
+                disabled={isLoadingMore}
                 className="mx-auto mb-1 flex items-center gap-1 px-2 py-1.5 text-[11px] text-text-muted transition-colors hover:text-text-primary disabled:opacity-50"
               >
                 <ChevronUp className="size-3" />
-                {loadingMore ? 'Loading…' : 'Load earlier'}
+                {isLoadingMore ? 'Loading…' : 'Load earlier'}
               </button>
             ) : null}
             <ol ref={setListRef} className="flex flex-col">

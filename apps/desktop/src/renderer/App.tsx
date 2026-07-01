@@ -51,6 +51,7 @@ import type { ConversationReference } from '@/components/chat/ConversationRef';
 import { useConversationById } from '@/features/conversations/useConversationById';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentSync } from '@/features/agents/agent-sync';
+import { useConversationIngestor } from '@/features/realtime/conversation-ingestor';
 import { usePresenceSync } from '@/features/presence/hooks';
 import {
   useWorkspaces,
@@ -222,6 +223,15 @@ function RegisteredAppShell(): JSX.Element {
   // query tree regardless of who made the edit — this client's UI, another
   // window, or an agent's own `silverhand profile update`. See #task:1178.
   useAgentSync();
+
+  // Stage-2 central conversation ingestor (#task:1255). Mounted ONCE here
+  // (post-auth, independent of any view) so it is the single `onWsFrame`
+  // consumer for `conversation:<id>`-scope main-stream cache writes — message
+  // append / reply-badge bump / task_changed / reaction / snapshot_required.
+  // Views (`useChannelMessages` …) are pure readers of the caches it fills.
+  // P1a = main stream only; thread cluster/root/followers + agent_activity
+  // migrate in P1b/P1c. See docs/renderer-event-ingestion-v1.md.
+  useConversationIngestor();
 
   // Shutdown overlay — shown when the main process starts its graceful
   // quit sequence. Steps arrive via IPC; null means not shutting down.
