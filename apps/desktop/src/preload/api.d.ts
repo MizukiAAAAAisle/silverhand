@@ -444,7 +444,8 @@ export type DesktopEventWsDiagnosticKind =
   | 'resume_sent'
   | 'snapshot_required'
   | 'orphan_frame'
-  | 'markApplied_no_floor';
+  | 'markSatisfied_no_floor'
+  | 'satisfied_pending_overflow';
 
 export interface DesktopEventWsDiagnostic {
   kind: DesktopEventWsDiagnosticKind;

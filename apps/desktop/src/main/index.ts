@@ -2520,7 +2520,8 @@ const EVENT_WS_DIAGNOSTIC_KINDS: ReadonlySet<string> = new Set([
   'resume_sent',
   'snapshot_required',
   'orphan_frame',
-  'markApplied_no_floor',
+  'markSatisfied_no_floor',
+  'satisfied_pending_overflow',
 ] as const);
 
 interface RendererEventWsDiagnostic {

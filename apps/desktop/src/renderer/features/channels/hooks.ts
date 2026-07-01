@@ -756,7 +756,7 @@ export function setMainlineLiveGap(
  *  scope INTEREST keeps the WS scope subscribed but must not bootstrap or patch
  *  the mainline window (that would surface a live-frame-stitched, incomplete
  *  window with no REST snapshot behind it). P2 does NOT remove this gate — it
- *  makes `markApplied` honor it (a frame with no active reader is not applied
+ *  makes `markSatisfied` honor it (a frame with no active reader is not applied
  *  and must not advance the cursor); full decouple is P3
  *  (docs/renderer-event-ingestion-v1.md §3.1/§5).
  *  `messagesKey` is observed only by `useChannelMessages`; primers/jumps use
@@ -879,7 +879,7 @@ function useMainlineLiveGap(channelId: string | null): boolean {
 // matching reader being mounted. A channel can hold several open clusters at
 // once, so the ingestor enumerates the OPEN reader roots (those with a live
 // observer) and applies per-root — exactly mirroring "each mounted hook ran its
-// own onEvent". P2 does NOT lift these gates — `markApplied` honors them (a
+// own onEvent". P2 does NOT lift these gates — `markSatisfied` honors them (a
 // frame with no active reader is not applied and must not advance the cursor);
 // full decouple from view mount is P3.
 

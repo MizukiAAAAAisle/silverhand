@@ -242,9 +242,9 @@ function asSideKind(kind: string): SideKind | null {
  * so it must not advance the applied-water (floor frozen → resume/cold-start on
  * resubscribe) — bit-for-bit today's orphan gate. Truly "apply without a reader"
  * needs per-scope cold-start snapshot seeding decoupled from view mount, which is
- * P3 (interest-registry). The `markApplied` / `commitSnapshotBaseline` water-mark
+ * P3 (interest-registry). The `markSatisfied` / `commitSnapshotBaseline` water-mark
  * WRITERS live in Alice's transport seam (`ws-client.ts`, step-4); as of step-4
- * this ingestor is their sole content-driven CALLER — it fires `markApplied` on a
+ * this ingestor is their sole content-driven CALLER — it fires `markSatisfied` on a
  * real content apply and drives `commitSnapshotBaseline` off the snapshot-reconcile
  * settle join (see `ingestConversationFrame` below). See §3.1/§5.
  *
@@ -512,7 +512,7 @@ function ingestSideSnapshotRequired(qc: QueryClient, channelId: string): void {
  * this is the SOLE content-driven writer of the transport applied-water (resume
  * floor):
  *  - an `event` that produced ≥1 real content write (an ingest* helper returned
- *    `true`) → `markApplied(scope, seq, epoch)` exactly once; a no-op /
+ *    `true`) → `markSatisfied(scope, seq, epoch)` exactly once; a no-op /
  *    readerless / derived-invalidate-only frame does NOT (false-positive
  *    forbidden, §4.1);
  *  - `snapshot_required` → collect the reconcile settle Promises and, once the
@@ -520,7 +520,7 @@ function ingestSideSnapshotRequired(qc: QueryClient, channelId: string): void {
  *    epoch)` once (apply-gated commit, §6). A rejected settle leaves the floor
  *    pinned (the transport re-drives on the next resume / snapshot).
  * The side scope has no content-apply seam — its floor auto-advances in the
- * transport (`acceptEventFrame`), so the ingestor never calls `markApplied` /
+ * transport (`acceptEventFrame`), so the ingestor never calls `markSatisfied` /
  * `commitSnapshotBaseline` for it (Alice's contract).
  *
  * `meta.provenance` is delivery metadata, not payload: a non-idempotent delta
@@ -556,7 +556,7 @@ export function ingestConversationFrame(
   }
 
   // Message-stream kinds ride `conversation:<id>`. The applied-water advances
-  // only when a real content write landed (§4.1); markApplied is idempotent and
+  // only when a real content write landed (§4.1); markSatisfied is idempotent and
   // strict-contiguous transport-side, but we still gate the CALL on `applied` so
   // a no-op frame never even signals.
   if (messageStreamId) {
@@ -573,12 +573,12 @@ export function ingestConversationFrame(
       const ev = frame.payload as MessageReactionChangedEvent | undefined;
       if (ev?.message_id) applied = ingestReaction(qc, messageStreamId, ev);
     }
-    if (applied) eventWsClient.markApplied(frame.scope, frame.seq, frame.epoch);
+    if (applied) eventWsClient.markSatisfied(frame.scope, frame.seq, frame.epoch);
     return;
   }
 
   // Side-channel kinds ride `conversation-side:<id>`. No content-apply seam —
-  // the transport auto-advances the side floor; never call markApplied here.
+  // the transport auto-advances the side floor; never call markSatisfied here.
   if (!sideId) return;
   const sideKind = asSideKind(frame.kind);
   if (sideKind === 'agent_activity') {

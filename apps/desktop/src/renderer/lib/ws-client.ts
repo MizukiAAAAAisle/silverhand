@@ -72,7 +72,8 @@ type EventWsDiagnosticKind =
   | 'resume_sent'
   | 'snapshot_required'
   | 'orphan_frame'
-  | 'markApplied_no_floor';
+  | 'markSatisfied_no_floor'
+  | 'satisfied_pending_overflow';
 
 interface EventWsDiagnostic {
   kind: EventWsDiagnosticKind;
@@ -86,6 +87,15 @@ interface EventWsDiagnostic {
   code?: number;
   wasClean?: boolean;
 }
+
+/**
+ * Upper bound on a scope's pending-satisfaction backlog (#1261). A satisfied-
+ * but-non-contiguous set this deep means the gap-filling seq has (or will) age
+ * out of the server replay buffer (also 200 entries) — the scope can then only
+ * recover its floor via a `snapshot_required` re-cold-start. Crossing it emits a
+ * diagnostic; it is never a hard failure (the pin is safe, just inefficient).
+ */
+const SATISFIED_PENDING_CAP = 200;
 
 /**
  * @internal — exported for unit tests so they can construct a fresh
@@ -104,7 +114,7 @@ interface EventWsDiagnostic {
  *   is NOT a resume floor.
  * - `appliedPositions[scope]` — the resume FLOOR (what `resume` replays from).
  *   For a CONTENT-GATED scope (`conversation:<id>`, the message stream) it is
- *   advanced ONLY by `markApplied` (a real content write) or `commitSnapshotBaseline`
+ *   advanced ONLY by `markSatisfied` (a resume-safe disposition) or `commitSnapshotBaseline`
  *   (an apply-settled snapshot re-cold-start) — never by frame receipt. For every
  *   OTHER scope (viewer / workspace / app / `conversation-side:`) there is no
  *   content-apply seam, so the floor auto-advances with `received` (the pre-P2
@@ -130,6 +140,23 @@ export class EventWsClient {
   private readonly receivedPositions = new Map<string, ResumePosition>();
   /** Resume floor (see class docstring). The ONLY thing `resume` replays from. */
   private readonly appliedPositions = new Map<string, ResumePosition>();
+  /**
+   * Per-scope pending-SATISFACTION queue (#1261) — the option-2 queue the
+   * original strict-contiguous floor-advance note (see `markSatisfied` below)
+   * deferred. Holds satisfied seqs that are not yet contiguous with the resume
+   * floor, waiting for the gap below them to fill. Stamped with the epoch it
+   * belongs to (a newer server epoch resets it). `markSatisfied` drains it into
+   * `appliedPositions` contiguously, so a cursor-inert frame (an off-window
+   * vacuous-satisfy, or a derived-invalidate whose refetch settled) no longer
+   * PINS the floor behind it. It is per-connection: cleared in
+   * `clearConnectionState` (a reconnect replays from the floor and re-satisfies),
+   * and per-scope on a floor reposition (`commitSnapshotBaseline` / `resume`).
+   * Bounded-diagnostic on overflow.
+   */
+  private readonly satisfiedPending = new Map<
+    string,
+    { epoch: string; seqs: Set<number> }
+  >();
   /**
    * Per-scope upper bound of the current resume/replay delivery window — the
    * replay CONTEXT that provenance is derived from (§4.1). Set ONLY when a
@@ -314,48 +341,92 @@ export class EventWsClient {
     this.recovering.delete(scope);
     this.appliedPositions.set(scope, position);
     this.receivedPositions.set(scope, position);
+    // Floor forcibly repositioned: any pending-satisfaction backlog for the scope
+    // is relative to the old floor and no longer meaningful (#1261).
+    this.satisfiedPending.delete(scope);
     this.sendResume({ [scope]: position });
   }
 
   /**
-   * Advance a CONTENT-GATED scope's resume floor after the ingestor applied a
-   * frame to a resume-recoverable content cache (Stage-2 #1255 §4.1). This is
-   * the SOLE content-driven writer of `appliedPositions` — the ingestor calls
-   * it exactly once per frame that produced ≥1 real content write, never on a
-   * no-op / readerless / derived-invalidate frame.
+   * Advance a CONTENT-GATED scope's resume floor once the ingestor has driven a
+   * frame to a resume-safe DISPOSITION (Stage-2 #1255 §4.1 + #1261). "Satisfied"
+   * generalizes "content-applied": a frame is satisfied when EVERY path by which
+   * its content / message-derived projections could reach the screen has either
+   * committed the frame's effect OR been forced through an authoritative fetch
+   * (no warm displayable cache left). The ingestor computes that disposition
+   * (per-frame `Promise.allSettled` over all active effects, all-fulfilled) and
+   * calls this exactly once per satisfied frame. It MUST NOT call for a dispatch
+   * still in flight, only partially applied, or one that leaves a warm inactive
+   * cache displayable — that would re-open the #1251 / #1255 skip hole.
    *
-   * Advance is STRICT-CONTIGUOUS (v1 option-1, simple-safe): the floor moves to
-   * `seq` only when `seq === floor + 1`. A skipped seq — an un-applied no-op, a
-   * readerless frame, or a pending backfill delta awaiting authoritative
-   * recovery — PINS the floor; it releases only via the covering
-   * `snapshot_required` → `commitSnapshotBaseline` path (§6). We deliberately
-   * never set-max: jumping the floor past an un-applied seq would silently skip
-   * content on the next resume (a #1251 re-entry). A false positive is forbidden
-   * always; the conservative pin (bounded, idempotent redundant replay) is the
-   * accepted cost — correctness over efficiency. Option-2's pending-satisfaction
-   * queue (advance contiguously absorbing already-applied later frames) is
-   * deferred. Non-content-gated scopes have no content-apply seam and are ignored
-   * here (their floor auto-advances in `acceptEventFrame`).
+   * The advance is a PENDING-SATISFACTION QUEUE (#1261 — the option-2 this note
+   * previously deferred): the satisfied seq is recorded, then the floor drains
+   * contiguously from `floor+1` through every already-satisfied seq. An
+   * out-of-order satisfied seq (a later frame satisfied while an earlier seq is
+   * still pending) is remembered and absorbed the moment the gap fills — so a
+   * cursor-inert frame (an off-window vacuous-satisfy, or a derived-invalidate
+   * whose refetch settled) no longer PINS the floor behind it. That is what makes
+   * the (c) reply-count model healthy: every mainline-only reply is cursor-inert,
+   * and without the queue each would pin the floor until snapshot.
+   *
+   * Two invariants are load-bearing and MUST NOT be relaxed:
+   *  - NEVER ESTABLISHES a floor. A satisfied seq with no same-epoch floor
+   *    (missing / stale-epoch) is dropped with a diagnostic; only the
+   *    `subscribed` ack and `commitSnapshotBaseline` may establish one (they
+   *    reflect the server head). Establishing here from an arbitrary satisfied
+   *    seq would let the next resume start above un-received seqs, silently
+   *    skipping them (the #1251 skip-unseen hole). The floor self-heals when the
+   *    next ack / snapshot baselines it.
+   *  - COMMIT-GATED, not dispatch-gated (initiated ≠ committed). The caller must
+   *    have COMMITTED every effect before calling; this method trusts that and
+   *    only sequences the floor. A seq at-or-below the floor is an idempotent
+   *    no-op (a replay re-satisfy).
+   *
+   * Non-content-gated scopes have no content-apply seam and are ignored here
+   * (their floor auto-advances with received in `acceptEventFrame`).
    */
-  markApplied(scope: string, seq: number, epoch: string): void {
+  markSatisfied(scope: string, seq: number, epoch: string): void {
     if (!isContentGated(scope)) return;
     const floor = this.appliedPositions.get(scope);
     if (!floor || floor.epoch !== epoch) {
-      // markApplied is a content-apply SIGNAL, not a baseline AUTHORITY. Only the
-      // `subscribed` ack and `commitSnapshotBaseline` may ESTABLISH a floor —
-      // they reflect the server head. Establishing one here from an arbitrary
-      // applied seq would let the next resume start at that seq, silently
-      // skipping every un-received seq below it (the #1251 skip-unseen-frames
-      // hole re-opened). No same-epoch floor (missing / stale-epoch) → no-op +
-      // diagnostic; the floor self-heals when the next ack / snapshot baselines
-      // it (a resubscribe with no floor carries no `resume`, so the ack
-      // re-baselines to head; a stale-epoch resume draws a snapshot_required).
-      recordEventWsDiagnostic({ kind: 'markApplied_no_floor', scope, seq, epoch });
+      recordEventWsDiagnostic({ kind: 'markSatisfied_no_floor', scope, seq, epoch });
       return;
     }
-    if (seq === floor.lastSeq + 1) {
-      this.appliedPositions.set(scope, { epoch, lastSeq: seq });
+    // At-or-below the floor: already covered (a replay re-satisfy) → idempotent.
+    if (seq <= floor.lastSeq) return;
+
+    // Record into the per-scope+epoch satisfied set, then drain contiguously
+    // from the floor, absorbing any already-satisfied later seqs.
+    const pending = this.satisfiedPendingFor(scope, epoch);
+    pending.add(seq);
+    let next = floor.lastSeq + 1;
+    while (pending.delete(next)) next += 1;
+    const advancedTo = next - 1;
+    if (advancedTo > floor.lastSeq) {
+      this.appliedPositions.set(scope, { epoch, lastSeq: advancedTo });
     }
+    if (pending.size > SATISFIED_PENDING_CAP) {
+      recordEventWsDiagnostic({
+        kind: 'satisfied_pending_overflow',
+        scope,
+        seq,
+        lastSeq: advancedTo,
+        epoch,
+      });
+    }
+  }
+
+  /**
+   * Return the per-scope satisfied set for `epoch`, resetting it if the stored
+   * entry belongs to a superseded epoch (a fresh server epoch invalidates any
+   * carried-over pending seqs).
+   */
+  private satisfiedPendingFor(scope: string, epoch: string): Set<number> {
+    const existing = this.satisfiedPending.get(scope);
+    if (existing && existing.epoch === epoch) return existing.seqs;
+    const seqs = new Set<number>();
+    this.satisfiedPending.set(scope, { epoch, seqs });
+    return seqs;
   }
 
   /**
@@ -385,11 +456,15 @@ export class EventWsClient {
     // > baseline (post-snapshot, never applied) → the contiguous path tags them
     // fresh `live`.
     this.backfillThrough.delete(scope);
+    // The baseline jumped the floor: any pending-satisfaction backlog is now at
+    // or below it (subsumed) or from before the re-cold-start. Drop it; the
+    // buffered frames drained below re-satisfy from the new baseline (#1261).
+    this.satisfiedPending.delete(scope);
     const buffered = this.pendingBuffers.get(scope) ?? [];
     this.pendingBuffers.delete(scope);
     // Drain buffered live frames (> baseline seq) in transport-seq order. They
     // are genuinely new (never applied) → the `acceptEventFrame` contiguous path
-    // tags them `live` and the ingestor applies + `markApplied`s each.
+    // tags them `live` and the ingestor applies + `markSatisfied`s each.
     for (const frame of buffered.sort((a, b) => a.seq - b.seq)) {
       const outcome = this.acceptEventFrame(frame);
       if (outcome.accept) this.dispatch(frame, { provenance: outcome.provenance });
@@ -485,6 +560,11 @@ export class EventWsClient {
     // forward gap. Received-water + resume floor are RETAINED (above) so the
     // reconnect can resume/replay.
     this.backfillThrough.clear();
+    // The pending-satisfaction queue (#1261) is likewise per-connection: a
+    // reconnect resumes from the (retained) floor and re-satisfies every replayed
+    // frame, so the backlog rebuilds itself; carrying it across would only risk
+    // stale-epoch seqs. The floor it drains into is retained above.
+    this.satisfiedPending.clear();
   }
 
   private handleFrame(frame: ServerFrame): void {
@@ -609,7 +689,7 @@ export class EventWsClient {
         // `commitSnapshotBaseline`). Keep the retained floor pinned meanwhile;
         // buffer live frames > baseline. (Stage-1 deleted the cursor here and
         // let the next event re-baseline — impossible once the floor is
-        // markApplied-driven, hence the server-stamped baseline.)
+        // markSatisfied-driven, hence the server-stamped baseline.)
         this.pendingBaselines.set(frame.scope, {
           epoch: frame.epoch,
           lastSeq: frame.currentSeq,
@@ -701,7 +781,7 @@ export class EventWsClient {
       this.backfillThrough.delete(frame.scope);
       this.recordReceived(frame);
       // Non-content-gated scopes auto-advance the floor with received (no
-      // content-apply seam). Content-gated scopes leave the floor to markApplied.
+      // content-apply seam). Content-gated scopes leave the floor to markSatisfied.
       if (!gated) this.recordApplied(frame);
       return { accept: true, provenance: 'live' };
     }
@@ -853,7 +933,7 @@ export class EventWsClient {
 
 /**
  * A conversation scope is CONTENT-GATED — its resume floor advances only on a
- * real content apply (`markApplied`) / apply-settled snapshot commit, never on
+ * real content apply (`markSatisfied`) / apply-settled snapshot commit, never on
  * frame receipt (see EventWsClient docstring / docs/event-ws-transport-v1.md
  * §4.1). Only the message-stream scope `conversation:<id>` qualifies; the
  * side-channel `conversation-side:<id>` is cursor-inert (self-healing) and every

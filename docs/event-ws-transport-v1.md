@@ -591,17 +591,32 @@ correctness-first):
   may already cover them — a blind `+1` would double-count. Delivered as a second
   `onFrame(frame, meta)` arg (`EventDeliveryMeta`), undefined for non-event frames
   — no wire/payload change.
-- **`markApplied` advance is strict-contiguous (v1 = option 1) AND not a baseline
-  authority.** Floor moves to `seq` only when `seq === floor + 1`; any skipped seq
-  (no-op / readerless / pending backfill delta) pins the floor until the covering
-  `snapshot_required` commit. Set-max is forbidden (false-positive = #1251). With
-  **no same-epoch floor** (missing / stale-epoch) `markApplied` is a **no-op +
-  `markApplied_no_floor` diagnostic** — it must NOT establish a floor from an
-  arbitrary applied seq (that would let the next resume start there, skipping every
-  un-received seq below it — the #1251 hole re-opened). Only the `subscribed` ack
-  and `commitSnapshotBaseline` may establish a floor (they reflect the server
-  head); the floor self-heals when the next ack / snapshot baselines it. Option 2's
-  pending-satisfaction queue is deferred.
+- **`markSatisfied` advance is a pending-satisfaction queue (#1261, was v1 option 1)
+  AND not a baseline authority.** `markSatisfied` generalizes the former
+  `markApplied`: the ingestor calls it once a frame reaches a resume-safe
+  DISPOSITION (content committed OR cursor-inert and harmless to replay — see
+  §4.1). The satisfied seq is recorded, then the floor drains contiguously from
+  `floor+1` through every already-satisfied seq — so an out-of-order satisfy (a
+  later frame satisfied while an earlier seq is still pending) is remembered and
+  absorbed the moment the gap fills, and a cursor-inert frame no longer PINS the
+  floor behind it. A genuinely un-satisfied seq (a real gap) still pins the floor
+  until the covering `snapshot_required` commit or a replay re-satisfies it.
+  Set-max is still forbidden (false-positive = #1251). With **no same-epoch
+  floor** (missing / stale-epoch) `markSatisfied` is a **no-op +
+  `markSatisfied_no_floor` diagnostic** — it must NOT establish a floor from an
+  arbitrary satisfied seq (that would let the next resume start there, skipping
+  every un-received seq below it — the #1251 hole re-opened). Only the
+  `subscribed` ack and `commitSnapshotBaseline` may establish a floor (they
+  reflect the server head); the floor self-heals when the next ack / snapshot
+  baselines it. The pending set is per-scope+epoch, cleared on connection reset
+  (replay rebuilds it) and on any floor reposition, with a bounded
+  `satisfied_pending_overflow` diagnostic. **NOTE:** the CALLER-side disposition
+  contract (what counts as satisfied — vacuous only after warm-inactive
+  `removeQueries`, effect set = all active message-derived projections, all
+  `allSettled`-fulfilled) lands with the (c)+#1261 renderer half (#1263-redo);
+  this doc's §4.1 satisfaction-disposition write-up + the full
+  `markApplied`→`markSatisfied` prose rename across the ingestion docs are owed
+  when that half PASSes.
 - **`snapshot_required` re-cold-start is fully apply-gated** (pendingBaseline +
   buffer `> currentSeq` + `commitSnapshotBaseline(scope, epoch)`, epoch-checked,
   drains post-commit). **Cold-start (first subscribe) is NOT pendingBaseline-gated

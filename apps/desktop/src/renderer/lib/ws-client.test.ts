@@ -703,7 +703,7 @@ describe('EventWsClient — no-listener gap recovery (#1251)', () => {
  * #1255 P2 step-4 — the two-watermark cursor flip for CONTENT-GATED scopes
  * (`conversation:<id>`, the message stream). The single transport cursor splits
  * into `received` (wire continuity / gap detection / provenance) and `applied`
- * (the resume floor, advanced ONLY by `markApplied` / `commitSnapshotBaseline`).
+ * (the resume floor, advanced ONLY by `markSatisfied` / `commitSnapshotBaseline`).
  * Every scope above uses non-content-gated keys (`conv:room`, `viewer:…`) whose
  * floor still auto-advances with received — those tests pin the unchanged
  * pre-P2 behavior. These tests pin the NEW gated behavior. See
@@ -756,10 +756,10 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     return { client, ws, sub, delivered };
   }
 
-  it('advances received on events but pins the resume floor until markApplied', async () => {
+  it('advances received on events but pins the resume floor until markSatisfied', async () => {
     const { client, ws, sub } = await connectedGated(SCOPE, 5);
 
-    // received advances 6, 7 — but with no markApplied the floor stays at the
+    // received advances 6, 7 — but with no markSatisfied the floor stays at the
     // ack baseline (5). A non-content-gated scope would have advanced to 7.
     fireEvent(ws, SCOPE, 6);
     fireEvent(ws, SCOPE, 7);
@@ -772,13 +772,13 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     ]);
   });
 
-  it('resumes from the markApplied floor once content is applied', async () => {
+  it('resumes from the markSatisfied floor once content is applied', async () => {
     const { client, ws, sub } = await connectedGated(SCOPE, 5);
 
     fireEvent(ws, SCOPE, 6);
-    client.markApplied(SCOPE, 6, 'epoch-1');
+    client.markSatisfied(SCOPE, 6, 'epoch-1');
     fireEvent(ws, SCOPE, 7);
-    client.markApplied(SCOPE, 7, 'epoch-1');
+    client.markSatisfied(SCOPE, 7, 'epoch-1');
 
     sub.unsubscribe();
     ws.sent.length = 0;
@@ -792,10 +792,10 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     const { client, ws, sub } = await connectedGated(SCOPE, 5);
 
     fireEvent(ws, SCOPE, 6);
-    client.markApplied(SCOPE, 6, 'epoch-1'); // floor → 6
+    client.markSatisfied(SCOPE, 6, 'epoch-1'); // floor → 6
     fireEvent(ws, SCOPE, 7); // no-op: never applied (off-window / readerless)
     fireEvent(ws, SCOPE, 8);
-    client.markApplied(SCOPE, 8, 'epoch-1'); // 8 !== 6+1 → floor stays 6
+    client.markSatisfied(SCOPE, 8, 'epoch-1'); // 8 !== 6+1 → floor stays 6
 
     sub.unsubscribe();
     ws.sent.length = 0;
@@ -805,10 +805,123 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     ]);
   });
 
+  // ── pending-satisfaction queue (#1261) ───────────────────────────────────────
+  // The strict-contiguous pin above is preserved, but a satisfied-yet-non-
+  // contiguous seq is now REMEMBERED and the floor drains through it the moment
+  // the gap below fills — so a cursor-inert frame no longer pins the floor behind
+  // it. `markSatisfied` generalizes the old `markApplied`: content-apply is one
+  // satisfied disposition, a vacuous / derived-invalidate-settled frame another.
+
+  it('drains the pending backlog contiguously once the gap fills (#1261)', async () => {
+    const { client, ws, sub } = await connectedGated(SCOPE, 5);
+
+    fireEvent(ws, SCOPE, 6);
+    fireEvent(ws, SCOPE, 7);
+    fireEvent(ws, SCOPE, 8);
+    client.markSatisfied(SCOPE, 6, 'epoch-1'); // floor → 6
+    client.markSatisfied(SCOPE, 8, 'epoch-1'); // 8 !== 6+1 → pending {8}, floor 6
+    // The gap fills: 7 satisfied → floor drains through 7 AND the pending 8 → 8.
+    client.markSatisfied(SCOPE, 7, 'epoch-1');
+
+    sub.unsubscribe();
+    ws.sent.length = 0;
+    client.subscribe(SCOPE);
+    expect(resumes(ws)).toEqual([
+      { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 8 } } },
+    ]);
+  });
+
+  it('absorbs out-of-order satisfaction (later seqs satisfied first) (#1261)', async () => {
+    const { client, ws, sub } = await connectedGated(SCOPE, 5);
+
+    fireEvent(ws, SCOPE, 6);
+    fireEvent(ws, SCOPE, 7);
+    fireEvent(ws, SCOPE, 8);
+    // Satisfied newest-first: the floor only moves when 6 (floor+1) fills.
+    client.markSatisfied(SCOPE, 8, 'epoch-1'); // pending {8}, floor 5
+    client.markSatisfied(SCOPE, 7, 'epoch-1'); // pending {7,8}, floor 5
+    client.markSatisfied(SCOPE, 6, 'epoch-1'); // 6 === 5+1 → drain 6,7,8 → floor 8
+
+    sub.unsubscribe();
+    ws.sent.length = 0;
+    client.subscribe(SCOPE);
+    expect(resumes(ws)).toEqual([
+      { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 8 } } },
+    ]);
+  });
+
+  it('treats a re-satisfy at or below the floor as an idempotent no-op (#1261)', async () => {
+    const { client, ws, sub } = await connectedGated(SCOPE, 5);
+
+    fireEvent(ws, SCOPE, 6);
+    fireEvent(ws, SCOPE, 7);
+    client.markSatisfied(SCOPE, 6, 'epoch-1'); // floor 6
+    client.markSatisfied(SCOPE, 7, 'epoch-1'); // floor 7
+    // A resume re-delivers 6 and 7; re-satisfying them must not disturb the floor.
+    client.markSatisfied(SCOPE, 6, 'epoch-1');
+    client.markSatisfied(SCOPE, 7, 'epoch-1');
+
+    sub.unsubscribe();
+    ws.sent.length = 0;
+    client.subscribe(SCOPE);
+    expect(resumes(ws)).toEqual([
+      { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 7 } } },
+    ]);
+  });
+
+  it('clears the pending backlog on reconnect but retains the floor — no stale drain (#1261)', async () => {
+    const { client, ws, sub } = await connectedGated(SCOPE, 5);
+
+    fireEvent(ws, SCOPE, 6);
+    client.markSatisfied(SCOPE, 6, 'epoch-1'); // floor 6
+    fireEvent(ws, SCOPE, 8);
+    client.markSatisfied(SCOPE, 8, 'epoch-1'); // pending {8}, floor 6
+
+    // Reconnect on the socket: `authenticated` runs clearConnectionState (drops
+    // the pending backlog) but RETAINS the resume floor; the same-epoch ack
+    // re-arms the replay window without re-baselining.
+    ws.fireMessage({ type: 'authenticated', viewerId: 'u', epoch: 'epoch-1' });
+    ws.fireMessage({ type: 'subscribed', scope: SCOPE, epoch: 'epoch-1', seq: 8 });
+
+    // Only 7 is satisfied. Had the backlog leaked, the floor would jump 6→8
+    // (draining the stale 8); because it was cleared, it stops at 7 until 8 is
+    // re-satisfied from the replay.
+    client.markSatisfied(SCOPE, 7, 'epoch-1');
+
+    sub.unsubscribe();
+    ws.sent.length = 0;
+    client.subscribe(SCOPE);
+    expect(resumes(ws)).toEqual([
+      { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 7 } } },
+    ]);
+  });
+
+  it("drains a floor pinned by a cursor-inert frame so the later reply won't replay (Cindy's #1263 falsifier, transport half) (#1261)", async () => {
+    const { client, ws, sub } = await connectedGated(SCOPE, 9);
+
+    // seq10 = off-window reply (cursor-inert, not yet satisfiable — a warm
+    // inactive target still to be removed). seq11 = in-window reply r1.
+    fireEvent(ws, SCOPE, 10);
+    fireEvent(ws, SCOPE, 11);
+    client.markSatisfied(SCOPE, 11, 'epoch-1'); // pending {11}, floor pinned 9
+    // Under strict-contiguous this pins forever; the satisfaction queue lets the
+    // cursor-inert seq10 satisfy (vacuous, once removeQueries'd) and drain 10+11.
+    client.markSatisfied(SCOPE, 10, 'epoch-1'); // 10 === 9+1 → drain 10,11 → floor 11
+
+    sub.unsubscribe();
+    ws.sent.length = 0;
+    client.subscribe(SCOPE);
+    // Floor at 11 → a resume replays from 11, so seq11 (r1) is NOT re-delivered:
+    // no re-fold, no double-count even before the idempotent-invalidate backstop.
+    expect(resumes(ws)).toEqual([
+      { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 11 } } },
+    ]);
+  });
+
   it('detects gaps on received-water, not the lagging applied floor', async () => {
     const { ws } = await connectedGated(SCOPE, 5);
 
-    // received advances 6, 7 while the floor stays pinned at 5 (no markApplied).
+    // received advances 6, 7 while the floor stays pinned at 5 (no markSatisfied).
     fireEvent(ws, SCOPE, 6);
     fireEvent(ws, SCOPE, 7);
     // 8 is contiguous in received space (7+1) → no false gap despite floor at 5.
@@ -820,8 +933,8 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     const { client, ws } = await connectedGated(SCOPE, 5);
 
     fireEvent(ws, SCOPE, 6);
-    client.markApplied(SCOPE, 6, 'epoch-1'); // floor 6, received 6
-    fireEvent(ws, SCOPE, 7); // received 7, floor stays 6 (no markApplied)
+    client.markSatisfied(SCOPE, 6, 'epoch-1'); // floor 6, received 6
+    fireEvent(ws, SCOPE, 7); // received 7, floor stays 6 (no markSatisfied)
     fireEvent(ws, SCOPE, 9); // gap (9 > 7+1) → resume from the floor (6)
 
     expect(resumes(ws)).toEqual([
@@ -844,7 +957,7 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     const { client, ws, sub, delivered } = await connectedGated(SCOPE, 5);
 
     fireEvent(ws, SCOPE, 6);
-    client.markApplied(SCOPE, 6, 'epoch-1'); // floor 6
+    client.markSatisfied(SCOPE, 6, 'epoch-1'); // floor 6
 
     // Server can't cover the gap → re-cold-start with a server-stamped baseline.
     ws.fireMessage({
@@ -866,9 +979,9 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     client.commitSnapshotBaseline(SCOPE, 'epoch-1');
     expect(eventSeqs(delivered)).toEqual([6, 21]);
 
-    // The drained frame would be markApplied by the ingestor; that advance is
+    // The drained frame would be markSatisfied by the ingestor; that advance is
     // only legal because the commit set the floor to 20 (21 === 20 + 1).
-    client.markApplied(SCOPE, 21, 'epoch-1');
+    client.markSatisfied(SCOPE, 21, 'epoch-1');
     sub.unsubscribe();
     ws.sent.length = 0;
     client.subscribe(SCOPE);
@@ -881,7 +994,7 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     const { client, ws, sub } = await connectedGated(SCOPE, 5);
 
     fireEvent(ws, SCOPE, 6);
-    client.markApplied(SCOPE, 6, 'epoch-1'); // floor 6
+    client.markSatisfied(SCOPE, 6, 'epoch-1'); // floor 6
 
     // No pending baseline yet → the commit is a no-op.
     client.commitSnapshotBaseline(SCOPE, 'epoch-1');
@@ -897,7 +1010,7 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     client.commitSnapshotBaseline(SCOPE, 'epoch-2');
     // The correct-epoch commit still lands afterwards → floor 20.
     client.commitSnapshotBaseline(SCOPE, 'epoch-1');
-    client.markApplied(SCOPE, 21, 'epoch-1'); // 21 === 20 + 1 → floor 21
+    client.markSatisfied(SCOPE, 21, 'epoch-1'); // 21 === 20 + 1 → floor 21
 
     sub.unsubscribe();
     ws.sent.length = 0;
@@ -919,7 +1032,7 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     const { client, ws, delivered } = await connectedGated(SCOPE, 5);
 
     fireEvent(ws, SCOPE, 6);
-    client.markApplied(SCOPE, 6, 'epoch-1'); // floor 6, received 6
+    client.markSatisfied(SCOPE, 6, 'epoch-1'); // floor 6, received 6
     // Forward gap: 8 arrives before 7 → arm the replay window at 8, resume from
     // the floor (6), swallow 8.
     fireEvent(ws, SCOPE, 8);
@@ -944,7 +1057,7 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     const { client, ws, sub, delivered } = await connectedGated(SCOPE, 5);
 
     fireEvent(ws, SCOPE, 6);
-    client.markApplied(SCOPE, 6, 'epoch-1'); // floor 6, received 6
+    client.markSatisfied(SCOPE, 6, 'epoch-1'); // floor 6, received 6
     sub.unsubscribe(); // retains floor 6 + received-water 6
     ws.sent.length = 0;
 
@@ -975,7 +1088,7 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     const { client, ws, delivered } = await connectedGated(SCOPE, 5);
 
     fireEvent(ws, SCOPE, 6);
-    client.markApplied(SCOPE, 6, 'epoch-1'); // floor 6, received 6
+    client.markSatisfied(SCOPE, 6, 'epoch-1'); // floor 6, received 6
 
     // First gap: 9 → arm window at 9, resume from the floor (6), swallow.
     fireEvent(ws, SCOPE, 9);
@@ -1023,13 +1136,13 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     expect(evs.map(d => d.meta?.provenance)).toEqual(['live', 'live']);
   });
 
-  // ── markApplied is not a baseline authority (Safety blocker 2) ──────────────
+  // ── markSatisfied is not a baseline authority (Safety blocker 2) ──────────────
   // Only the `subscribed` ack and `commitSnapshotBaseline` may ESTABLISH a floor
-  // (they reflect the server head). markApplied establishing one from an
+  // (they reflect the server head). markSatisfied establishing one from an
   // arbitrary applied seq would let the next resume start there, skipping every
   // un-received seq below it (the #1251 skip-unseen-frames hole).
 
-  it('markApplied is a no-op with no same-epoch floor (Safety blocker 2)', async () => {
+  it('markSatisfied is a no-op with no same-epoch floor (Safety blocker 2)', async () => {
     const client = makeClient();
     const sub = client.subscribe(SCOPE);
     await flushMicrotasks();
@@ -1039,7 +1152,7 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     // NO `subscribed` ack yet → no baseline floor for SCOPE.
 
     // A stray content-apply must NOT conjure a floor from thin air.
-    client.markApplied(SCOPE, 500, 'epoch-1');
+    client.markSatisfied(SCOPE, 500, 'epoch-1');
 
     // The ack now baselines the floor to the REAL head (5). A resubscribe must
     // resume from 5, never the phantom 500.
@@ -1052,12 +1165,12 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     ]);
   });
 
-  it('markApplied is a no-op when the floor is from a stale epoch (Safety blocker 2)', async () => {
+  it('markSatisfied is a no-op when the floor is from a stale epoch (Safety blocker 2)', async () => {
     const { client, ws, sub } = await connectedGated(SCOPE, 5); // floor {epoch-1, 5}
 
     // A late apply tagged with a NEWER epoch than the current floor must not
     // clobber the floor to an arbitrary seq.
-    client.markApplied(SCOPE, 500, 'epoch-2');
+    client.markSatisfied(SCOPE, 500, 'epoch-2');
 
     sub.unsubscribe();
     ws.sent.length = 0;

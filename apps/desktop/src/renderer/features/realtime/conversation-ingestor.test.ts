@@ -526,7 +526,7 @@ describe('ingestConversationFrame — cross-scope routing is disjoint (#1255 P2 
 // #task:1255 P2 step-4 — DUAL-WATER FLOOR. The ingestor is the SOLE
 // content-driven writer of the transport applied-water for the content-gated
 // message-stream scope: a frame that produced ≥1 real content write → exactly one
-// `markApplied(scope, seq, epoch)`; a no-op / readerless / derived-invalidate-only
+// `markSatisfied(scope, seq, epoch)`; a no-op / readerless / derived-invalidate-only
 // frame → none (false-positive forbidden, §4.1). We spy the transport seam so the
 // unit test asserts the CALL without running transport state.
 function messageFrameSeq(
@@ -579,12 +579,12 @@ function mainlineReplyCount(
   return data?.pages[0]?.reply_counts_by_root[rootId];
 }
 
-describe('ingestConversationFrame — dual-water markApplied (#task:1255 P2 step-4)', () => {
-  let markApplied: ReturnType<typeof vi.spyOn>;
+describe('ingestConversationFrame — dual-water markSatisfied (#task:1255 P2 step-4)', () => {
+  let markSatisfied: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    markApplied = vi
-      .spyOn(eventWsClient, 'markApplied')
+    markSatisfied = vi
+      .spyOn(eventWsClient, 'markSatisfied')
       .mockImplementation(() => {});
     // Isolate: an event-path frame never commits, but guard against a real
     // commit if a future change routes one through here.
@@ -592,7 +592,7 @@ describe('ingestConversationFrame — dual-water markApplied (#task:1255 P2 step
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('a real mainline append advances applied floor (markApplied once, seq+epoch)', () => {
+  it('a real mainline append advances applied floor (markSatisfied once, seq+epoch)', () => {
     const qc = new QueryClient();
     const unsub = mountMainlineReader(qc, 'c1');
     ingestConversationFrame(
@@ -600,22 +600,22 @@ describe('ingestConversationFrame — dual-water markApplied (#task:1255 P2 step
       messageFrameSeq('c1', message({ id: 'm1', seq: 6 }), 6),
       { provenance: 'live' },
     );
-    expect(markApplied).toHaveBeenCalledTimes(1);
-    expect(markApplied).toHaveBeenCalledWith(conversationScope('c1'), 6, 'epoch-1');
+    expect(markSatisfied).toHaveBeenCalledTimes(1);
+    expect(markSatisfied).toHaveBeenCalledWith(conversationScope('c1'), 6, 'epoch-1');
     unsub();
   });
 
-  it('a readerless frame does NOT markApplied (cursor-inert)', () => {
+  it('a readerless frame does NOT markSatisfied (cursor-inert)', () => {
     const qc = new QueryClient();
     ingestConversationFrame(
       qc,
       messageFrameSeq('c1', message({ id: 'm1', seq: 6 }), 6),
       { provenance: 'live' },
     );
-    expect(markApplied).not.toHaveBeenCalled();
+    expect(markSatisfied).not.toHaveBeenCalled();
   });
 
-  it('a derived-invalidate-only frame (Threads-list reader, no content) does NOT markApplied', () => {
+  it('a derived-invalidate-only frame (Threads-list reader, no content) does NOT markSatisfied', () => {
     const qc = new QueryClient();
     const unsub = mountReader(qc, channelThreadsKey('c1'));
     // A reply frame with only a Threads-list reader → invalidate only, no
@@ -629,11 +629,11 @@ describe('ingestConversationFrame — dual-water markApplied (#task:1255 P2 step
       ),
       { provenance: 'live' },
     );
-    expect(markApplied).not.toHaveBeenCalled();
+    expect(markSatisfied).not.toHaveBeenCalled();
     unsub();
   });
 
-  it('an off-window reply no-op does NOT markApplied even with a mainline reader', () => {
+  it('an off-window reply no-op does NOT markSatisfied even with a mainline reader', () => {
     const qc = new QueryClient();
     const unsub = mountMainlineReader(qc, 'c1');
     seedMainline(qc, 'c1'); // no root key → the bump has nowhere to land
@@ -646,7 +646,7 @@ describe('ingestConversationFrame — dual-water markApplied (#task:1255 P2 step
       ),
       { provenance: 'live' },
     );
-    expect(markApplied).not.toHaveBeenCalled();
+    expect(markSatisfied).not.toHaveBeenCalled();
     unsub();
   });
 
@@ -664,11 +664,11 @@ describe('ingestConversationFrame — dual-water markApplied (#task:1255 P2 step
       { provenance: 'live' },
     );
     expect(mainlineReplyCount(qc, 'c1', 'root1')).toBe(1);
-    expect(markApplied).toHaveBeenCalledTimes(1);
+    expect(markSatisfied).toHaveBeenCalledTimes(1);
     unsub();
   });
 
-  it('backfill reply does NOT +1 — authoritative recovery (invalidate), no markApplied', () => {
+  it('backfill reply does NOT +1 — authoritative recovery (invalidate), no markSatisfied', () => {
     const qc = new QueryClient();
     const unsub = mountMainlineReader(qc, 'c1');
     seedMainline(qc, 'c1', { rootId: 'root1', replyCount: 0 });
@@ -685,7 +685,7 @@ describe('ingestConversationFrame — dual-water markApplied (#task:1255 P2 step
     // Count untouched (no blind +1) + authoritative refetch fired + floor pinned.
     expect(mainlineReplyCount(qc, 'c1', 'root1')).toBe(0);
     expect(spy).toHaveBeenCalledWith({ queryKey: messagesKey('c1') });
-    expect(markApplied).not.toHaveBeenCalled();
+    expect(markSatisfied).not.toHaveBeenCalled();
     unsub();
   });
 
@@ -704,13 +704,13 @@ describe('ingestConversationFrame — dual-water markApplied (#task:1255 P2 step
     unsub();
   });
 
-  it('side-scope frames never markApplied (side floor auto-advances)', () => {
+  it('side-scope frames never markSatisfied (side floor auto-advances)', () => {
     const qc = new QueryClient();
     const unsub = mountReader(qc, agentRunStatesKey('c1'));
     ingestConversationFrame(qc, agentActivityFrame('c1', runState('c1', 'a1')), {
       provenance: 'live',
     });
-    expect(markApplied).not.toHaveBeenCalled();
+    expect(markSatisfied).not.toHaveBeenCalled();
     unsub();
   });
 
