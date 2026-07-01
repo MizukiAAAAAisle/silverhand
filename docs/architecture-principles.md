@@ -186,8 +186,51 @@ PR / 设计稿 review 时按以下顺序检查：
 
 ---
 
-## 10. 历史
+## 10. 事件传输 / cursor 模型不变量 + 命名的非目标
+
+> Anchor for `docs/event-ws-transport-v1.md`（机制权威）。本节只锁**不变量与命名的非目标**；mechanism（received/applied 两水位、satisfaction disposition、recovery class、ingestor）在 transport doc 单一 canonical，本节不重述、体检/其它 doc 只引用不 co-state。
+
+### 10.1 单一 fanout seq 源 —— **命名的非目标：多节点**
+
+cursor 模型的命根是一条等式：
+
+> **`EventFrame.seq ≡ 该 scope 的 publish-log seq`**（per-scope 单调 +1、全序）。
+
+这个全序当前是 **single-writer WAL**（backend 单进程串行 append）**白送**的，没有额外协调。client-authoritative cursor（server 永不静默推过 client 未见帧）、中央 ingestor、进程内 fanout **三者都建立在「单一 seq 源」这个前提**上。
+
+**因此「单节点 / 无消息总线」是当前的显式非目标，而不是「性能上单节点够用」。** 失败模式必须写明才有牙：
+
+- 多节点一上，两个 backend 各自对同 scope 发 seq → **同 scope seq 不再全序**；
+- client 的 resume floor 指向的 seq 在另一节点是**别的帧** → 补帧 / 重放 / snapshot 全部错位；
+- 结果是 **client-authoritative cursor 从根上被打穿**（correctness 前提消失，不是延迟/吞吐问题)。
+
+**约束：** 任何引入第二个 seq writer 的方案（多 backend 节点、跨节点 fanout）**必须先**用共享有序 log 或 per-conversation sticky 把「单一 seq 源」这个前提还回来，再谈横向扩展。在那之前不允许按多节点假设设计传输/cursor 相关代码。
+
+### 10.2 seq / id-space 命名规则 —— 跨 space 类型不可混用
+
+系统里存在多条语义不同、**绝不可互相播种**的序号轴：
+
+| 轴 | 语义 | 谁推进 |
+|----|------|--------|
+| **transport seq** | 某 WS scope 的 publish-log 位置（wire 连续性 / gap / resume floor） | transport（received/satisfied 两水位） |
+| **message seq** | 某 conversation stream 里消息的持久顺序（history / freshness CAS / positional unread） | message repo（`messages.seq` / `conversation_stream_heads`） |
+| **read seq** | 某 viewer 的 read/observe cursor 位置 | read model（observe / `notifications.read_at`） |
+
+**约束：** 这三根轴**不允许**用一个裸 `number` 表达、不允许互相赋值播种。我们已经踩过 `stream_head_seq`（message 轴）被用去播种 transport cursor 的坑——那类 bug 的终态修法是**类型让它编译不过**，不是靠 review 眼力。S2（brand-typed `TransportSeq` / `MessageSeq` / `ReadSeq`）是这条规则的落地机制；在 S2 落地前，新代码至少要在命名 + 注释上显式标轴，禁止跨轴直传。
+
+### 10.3 capability bucket 新增判据
+
+agent 授权是 capability-based（见 `graded-permissions-v1.md`）。新增 capability 桶时的判据：
+
+> **桶映射到「协调相关的动作类别」，不是映射到 endpoint。**
+
+一个新 endpoint 默认落进**已有**的动作类别桶；只有当它代表一类**语义上独立、需要被单独授予/收回**的协调能力时才开新桶。否则 capability 模型会 rot 成 per-route flag（桶数 ≈ 路由数），失去「授权是粗粒度协调契约」的本意。加桶必须在设计稿里回答：这是哪一类协调能力、为什么现有桶盖不住、owner/admin 会不会真的想单独控制它。
+
+---
+
+## 11. 历史
 
 - 2026-05-04 ~ 05-05：mcp system 频道下 thread `bbUBIrwJO5ZNY1ww`（"统一 human/agent 共用业务到 application service 层"）通过 PR-1 ~ PR-6 完成首轮落地
 - 2026-05-07：`permissions.md` 锁版 Slice A'/B/C/D 计划，task #125 是 Slice A' 实施
 - 2026-05-09：本 doc 创建，把"同构"提升为后端设计期强制规则
+- 2026-07-01：IM-终态三方架构 review 后加 §10（transport/cursor 不变量 + 单一 fanout 源非目标 + seq id-space 命名规则 + capability 桶判据）
