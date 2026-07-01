@@ -22,10 +22,10 @@ export const FILTER_SELECT_TRIGGER_CLASS =
   'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus data-[placeholder]:text-text-muted';
 
 export const FILTER_SELECT_CONTENT_CLASS =
-  'z-[60] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-popover';
+  'z-[60] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-[var(--select-content-radius)] border border-border bg-bg-floating shadow-popover';
 
 export const FILTER_SELECT_ITEM_CLASS =
-  'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 pr-7 text-xs text-text-primary outline-none data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary';
+  'relative flex cursor-default select-none items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1.5 pr-7 text-xs text-text-primary outline-none data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary';
 
 /** Label-above-control layout for one filter dimension. */
 export function FilterBlock({

@@ -37,6 +37,12 @@ import { workspaceDisplayName } from '@/lib/workspace-name';
 
 interface SearchPanelProps {
   workspaces: WorkspaceListItem[];
+  /** Filter selection (workspace / sender / time), owned by App so it
+   *  survives pane switches for the app session (#task:1259). The free-text
+   *  query stays panel-local — it's per-keystroke, so lifting it to the App
+   *  root would re-render the whole tree on every character. */
+  filter: SearchFilterState;
+  onFilterChange: (next: SearchFilterState) => void;
   onJumpMessage: (params: {
     workspaceId?: string;
     channelId: string;
@@ -53,6 +59,21 @@ interface SearchPanelProps {
 type WorkspaceFilter = 'all' | `workspace:${string}`;
 type SenderFilter = 'all' | `user:${string}` | `agent:${string}`;
 type TimeRange = 'all' | 'today' | 'week1' | 'week2' | 'month';
+
+/** Search filter selection lifted to App-session state (#task:1259). Not
+ *  persisted — a restart resets to the default. The query text is deliberately
+ *  excluded (see SearchPanelProps). */
+export interface SearchFilterState {
+  workspace: WorkspaceFilter;
+  sender: SenderFilter;
+  time: TimeRange;
+}
+
+export const SEARCH_FILTER_DEFAULT: SearchFilterState = {
+  workspace: 'all',
+  sender: 'all',
+  time: 'all',
+};
 
 interface ResultGroup {
   key: string;
@@ -78,14 +99,22 @@ function WorkspaceGlyph({ size = 3.5 }: { size?: 3 | 3.5 | 4 }): JSX.Element {
 
 export function SearchPanel({
   workspaces,
+  filter,
+  onFilterChange,
   onJumpMessage,
   onOpenWorkspace,
   onOpenConversation,
 }: SearchPanelProps): JSX.Element {
   const [query, setQuery] = useState('');
-  const [workspaceFilter, setWorkspaceFilter] = useState<WorkspaceFilter>('all');
-  const [senderFilter, setSenderFilter] = useState<SenderFilter>('all');
-  const [timeRange, setTimeRange] = useState<TimeRange>('all');
+  // Filters are App-owned (controlled) so they persist across pane switches
+  // for the session (#task:1259). Query stays local (see SearchPanelProps).
+  const { workspace: workspaceFilter, sender: senderFilter, time: timeRange } = filter;
+  const setWorkspaceFilter = (next: WorkspaceFilter) =>
+    onFilterChange({ ...filter, workspace: next });
+  const setSenderFilter = (next: SenderFilter) =>
+    onFilterChange({ ...filter, sender: next });
+  const setTimeRange = (next: TimeRange) =>
+    onFilterChange({ ...filter, time: next });
   const { data: agents = [] } = useAgents();
   const { data: users = [] } = useUsers();
   // Resolver feeds formatUserDisplayName so message-meta lines and the
@@ -138,9 +167,7 @@ export function SearchPanel({
 
   const resetFilters = (): void => {
     setQuery('');
-    setWorkspaceFilter('all');
-    setSenderFilter('all');
-    setTimeRange('all');
+    onFilterChange(SEARCH_FILTER_DEFAULT);
   };
 
   return (
@@ -180,16 +207,17 @@ export function SearchPanel({
               }
             }}
             placeholder="Search messages, channels, threads"
-            className="h-10 pl-9 pr-20"
+            className="h-10 pl-9 pr-10"
           />
           <button
             type="button"
             onClick={resetFilters}
             disabled={!hasIntent}
-            className="absolute right-1.5 top-1/2 inline-flex h-7 -translate-y-1/2 items-center gap-1 rounded-md px-2 text-xs text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-35"
+            aria-label="Clear search"
+            title="Clear search"
+            className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:pointer-events-none disabled:opacity-0"
           >
-            <X className="size-3.5" />
-            Reset
+            <X className="size-4" />
           </button>
         </div>
 

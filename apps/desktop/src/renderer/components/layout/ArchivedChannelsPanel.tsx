@@ -21,17 +21,41 @@ import {
   type DateFilterValue,
 } from '@/components/ui/date-filter-select';
 
+/** Archived-view filter selection. Lifted to App so it survives pane
+ *  switches for the app session (shiki #task:1259) — NOT persisted, so a
+ *  restart clears it back to the default. Mirrors SavedFilterState. */
+export interface ArchivedFilterState {
+  workspace: WorkspaceFilterValue;
+  date: DateFilterValue;
+}
+
+export const ARCHIVED_FILTER_DEFAULT: ArchivedFilterState = {
+  workspace: 'all',
+  date: 'all',
+};
+
 interface ArchivedChannelsPanelProps {
   workspaces: WorkspaceListItem[];
+  /** Filter selection, owned by App so it persists across pane switches
+   *  within the session (see ArchivedFilterState). */
+  filter: ArchivedFilterState;
+  onFilterChange: (next: ArchivedFilterState) => void;
   onOpenChannel: (workspaceId: string, channelId: string) => void;
 }
 
 export function ArchivedChannelsPanel({
   workspaces,
+  filter,
+  onFilterChange,
   onOpenChannel,
 }: ArchivedChannelsPanelProps): JSX.Element {
-  const [workspaceFilter, setWorkspaceFilter] = useState<WorkspaceFilterValue>('all');
-  const [dateFilter, setDateFilter] = useState<DateFilterValue>('all');
+  // App-owned (controlled) filter state so switching panes and returning
+  // keeps the selection for the session (#task:1259).
+  const { workspace: workspaceFilter, date: dateFilter } = filter;
+  const setWorkspaceFilter = (next: WorkspaceFilterValue) =>
+    onFilterChange({ ...filter, workspace: next });
+  const setDateFilter = (next: DateFilterValue) =>
+    onFilterChange({ ...filter, date: next });
   // Both collections feed this recovery index (#task:1145): regular
   // workspaces' archived channels AND agent_home (DM) workspaces' archived
   // dm_channels. The backend aggregate is channel-like, so the panel offers

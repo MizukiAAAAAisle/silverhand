@@ -19,8 +19,8 @@ import { SectionLayer } from '@/components/layout/SectionLayer';
 import { ThreadPanel } from '@/components/layout/ThreadPanel';
 import { ChannelThreadsPanel } from '@/components/layout/ChannelThreadsPanel';
 import { SavedListView, SAVED_FILTER_DEFAULT, type SavedFilterState } from '@/components/layout/SavedListView';
-import { SearchPanel } from '@/components/layout/SearchPanel';
-import { ArchivedChannelsPanel } from '@/components/layout/ArchivedChannelsPanel';
+import { SearchPanel, SEARCH_FILTER_DEFAULT, type SearchFilterState } from '@/components/layout/SearchPanel';
+import { ArchivedChannelsPanel, ARCHIVED_FILTER_DEFAULT, type ArchivedFilterState } from '@/components/layout/ArchivedChannelsPanel';
 import { ActivityView } from '@/components/layout/ActivityView';
 import { SplitPane } from '@/components/layout/SplitPane';
 import { TasksSection } from '@/components/layout/TasksSection';
@@ -448,6 +448,11 @@ function RegisteredAppShell(): JSX.Element {
   // (shiki #task:1258 follow-up). Deliberately not persisted — a restart
   // resets to the default so a stale ad-hoc filter never lingers.
   const [savedFilter, setSavedFilter] = useState<SavedFilterState>(SAVED_FILTER_DEFAULT);
+  // Search / Archived filter selections are App-owned session state too
+  // (#task:1259), same rationale as savedFilter: survive pane switches, not
+  // persisted across restart. Search's query text stays panel-local.
+  const [searchFilter, setSearchFilter] = useState<SearchFilterState>(SEARCH_FILTER_DEFAULT);
+  const [archivedFilter, setArchivedFilter] = useState<ArchivedFilterState>(ARCHIVED_FILTER_DEFAULT);
   // Per-workspace notification unread count (mention / agent-failure alerts).
   const { data: unreadCounts } = useUnreadCounts();
   // Global message unread summary across all workspaces — drives workspace
@@ -2167,6 +2172,8 @@ function RegisteredAppShell(): JSX.Element {
             ) : view === 'search' ? (
               <SearchPanel
                 workspaces={workspaces}
+                filter={searchFilter}
+                onFilterChange={setSearchFilter}
                 onJumpMessage={params => handleJumpToMessage(params)}
                 onOpenWorkspace={id => nav.toWorkspace(id)}
                 onOpenConversation={(workspaceId, channelId) => {
@@ -2178,6 +2185,8 @@ function RegisteredAppShell(): JSX.Element {
             ) : view === 'archived' ? (
               <ArchivedChannelsPanel
                 workspaces={workspaces}
+                filter={archivedFilter}
+                onFilterChange={setArchivedFilter}
                 onOpenChannel={(workspaceId, channelId) => {
                   // Mirror SearchPanel: resolve through the same nav helper
                   // so a cross-workspace open lands on the right UI workspace
