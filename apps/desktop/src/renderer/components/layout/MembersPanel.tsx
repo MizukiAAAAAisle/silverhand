@@ -37,7 +37,11 @@ export function MembersPanel({
   onSelectUser,
 }: MembersPanelProps): JSX.Element {
   const [open, setOpen] = useState(false);
-  const { data: agents = [] } = useAgents();
+  // AGENTS lists only the agents the login user CREATED (#task:1256, shiki
+  // option A). The narrowing is defined by the backend `?scope=owned` contract
+  // — we pass the flag and never re-filter here, so "my agents" has one
+  // definition shared with the CLI and every other consumer.
+  const { data: agents = [] } = useAgents({ scope: 'owned' });
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const agentIds = useMemo(() => agents.map(a => a.id), [agents]);
   const agentPresence = useAgentsPresence(agentIds);

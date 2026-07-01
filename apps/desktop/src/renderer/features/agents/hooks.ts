@@ -54,11 +54,27 @@ const agentRuntimeStateKey = (id: string) => ['agents', id, 'runtime-state'] as 
 const agentDeleteImpactKey = (id: string) => ['agents', id, 'delete-impact'] as const;
 const agentSchedulesKey = (id: string, status: ScheduleListStatusFilter) =>
   ['agents', id, 'schedules', status] as const;
-export function useAgents(options?: { enabled?: boolean }) {
+/**
+ * List agents the viewer can see. Default = the full `canViewAgent` ACL set
+ * (agents the viewer created OR participates in via a shared workspace).
+ *
+ * `scope: 'owned'` narrows to agents the LOGIN USER created — the backend
+ * composes `created_by_user_id == viewer.userId` ON TOP of the ACL floor
+ * (`GET /api/agents?scope=owned`, #task:1256). The "who counts as mine"
+ * predicate lives ONLY in that backend contract; the renderer passes the flag
+ * and never re-filters `created_by_user_id` client-side, so the CLI and every
+ * other consumer share one definition. The scoped result gets its own cache
+ * key (`['agents', 'owned']`) so it doesn't clobber the default list; both are
+ * refreshed by the `['agents']`-prefixed invalidations on create/delete/avatar.
+ */
+export function useAgents(options?: { enabled?: boolean; scope?: 'owned' }) {
+  const scope = options?.scope;
   return useQuery({
-    queryKey: agentsKey,
+    queryKey: scope ? ([...agentsKey, scope] as const) : agentsKey,
     queryFn: async () => {
-      const res = await api<{ agents: AgentDto[] }>('/api/agents');
+      const res = await api<{ agents: AgentDto[] }>(
+        scope ? `/api/agents?scope=${scope}` : '/api/agents',
+      );
       return res.agents;
     },
     enabled: options?.enabled ?? true,
