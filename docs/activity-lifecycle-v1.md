@@ -96,7 +96,7 @@ shiki 提问:Activity 是不是一个独立 DDD 领域事件,有自己的读和�
 | claim | 类 | 背书(read-state 源) | eligibility |
 |---|---|---|---|
 | DM 未读 | positional | DM stream cursor | **永远进**(directed-grade) |
-| followed thread 未读 | positional | thread stream cursor | ambientPref=on(follow→默认 on) |
+| followed thread 未读 | positional | thread stream cursor | `followed` AND 父 channel ambientPref==on(aggregate-floor,#task:1268) |
 | channel 主线未读 | positional | mainline stream cursor | channel ambientPref=`所有消息`(默认即 `所有消息`,#task:1248) |
 | @我(human @-mention) | directed | `notifications.read_at` | **永远进** |
 | ~~task needs-my-action~~ | directed | — | **v2 — NOT a v1 Activity source**(见下) |
@@ -158,12 +158,13 @@ shiki 提问:Activity 是不是一个独立 DDD 领域事件,有自己的读和�
 ## 6. eligibility = 导出函数 `enter()`(非 case 清单)
 
 ```
-enter(item, me) = directed(item, me)  OR  ( ambient(item) AND ambientPref(stream) == on )
+enter(item, me) = directed(item, me)  OR  ( ambient(item) AND subscribed(item, me) AND ambientPref(parentChannel) == on )
 ```
 
 - **`directed`**(DM / @我 / agent_start_failed;task-needs-my-action = **v2**,§5.1)→ **永远进**,压过一切(不受 channel 开关管)。
-- **`ambient`**(我订阅的流里、没直接点我的未读)→ **仅当该流 `ambientPref == on` 才进**。
-- **`ambientPref` 默认**:followed thread → on(由 follow=delivery 读作 default-strong);channel → **on(默认 `所有消息`;#task:1248 起。旧默认是 `仅提及`/off)**,用户显式设 `仅提及` 才 off;非 followed thread → off(无 channel pref 介入)→ 不进 Activity,留就地提示(Threads list 弱 dot / channel 内)。**默认值在读时算、不落库**:无显式 `ChannelAttentionPreference` row 的 channel 一律取 `所有消息`,无需 migration、无需给存量用户写 row。
+- **`ambient`**(我订阅的流里、没直接点我的未读)→ **仅当 `subscribed(item, me)` AND 该聚合 `ambientPref == on` 才进**。
+- **`subscribed`**(delivery 预置):channel 主线 = 我是成员;thread = 我 `followed` 该 cluster;非 followed thread → 不进(留就地提示:Threads list 弱 dot / channel 内)。
+- **`ambientPref` = channel-like 聚合的地板(aggregate-floor,#task:1268):** channel 主线**与其下所有 thread 共享父 channel 的** `ChannelAttentionPreference`。channel → on(默认 `所有消息`;#task:1248 起,旧默认 `仅提及`/off),用户显式设 `仅提及` 才 off。**关键:followed thread 的 ambient 不再由 follow 单方顶成 on——它需 `followed` AND 父 channel pref==on。** follow 是 **delivery 决定**,绝不在 Activity 这个 attention 表面反向覆盖用户显式的 attention 决定(`仅提及`)(§5.2 `delivery ⊥ attention`);follow 仍管 delivery(你照样收/可 pull 该 thread),只是不再强行进 Activity ambient。thread 里 @我经 directed 路径进,`仅提及` channel 里仍亮。**默认值在读时算、不落库**:无显式 `ChannelAttentionPreference` row 的 channel/其 thread 一律取 `所有消息`,无需 migration、无需给存量用户写 row。
 
 每加一个表面只填参数,不加特例。
 

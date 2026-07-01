@@ -178,6 +178,61 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     expect(ambient).toHaveLength(0);
   });
 
+  it('#task:1268: mention-only channel gates followed-thread ambient but not thread @mentions (aggregate-floor)', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t);
+    const sender = (await firstChannelAgent(t, channelId))!;
+
+    // Root a thread and have the viewer follow it (delivery subscription).
+    const rootMsg = await sendAsAgent(t, channelId, sender, 'thread root topic');
+    t.ctx.conversationMessageService.followHumanThread({
+      conversationId: channelId,
+      rootMessageId: rootMsg,
+      userId: t.viewerUserId,
+    });
+
+    // Default pref = 'all': a plain followed-thread reply enters as ambient.
+    await sendThreadReply(t, channelId, sender, rootMsg, 'plain reply in thread');
+    let threadAmbient = (await getActivity(t)).filter(
+      i => i.kind === 'unread' && i.thread_root_id === rootMsg,
+    );
+    expect(threadAmbient).toHaveLength(1);
+    expect(threadAmbient[0].salience).toBe('ambient');
+
+    // Flip the PARENT channel to 'mentions' (ambient off for the aggregate).
+    expect(
+      (
+        await http(t).put(`/api/conversations/${channelId}/attention-preference`, {
+          mode: 'mentions',
+        })
+      ).status,
+    ).toBe(200);
+
+    // The followed-thread AMBIENT reply no longer enters — follow (delivery) must
+    // not override the viewer's explicit `仅提及` on the parent channel.
+    threadAmbient = (await getActivity(t)).filter(
+      i => i.kind === 'unread' && i.thread_root_id === rootMsg,
+    );
+    expect(threadAmbient).toHaveLength(0);
+
+    // …but a thread @mention still enters via the directed path (unconditional).
+    const mentionMsg = await sendThreadReply(
+      t,
+      channelId,
+      sender,
+      rootMsg,
+      'over here @local-test',
+    );
+    const threadMention = (await getActivity(t)).filter(
+      i => i.kind === 'mention' && i.message_id === mentionMsg,
+    );
+    expect(threadMention).toHaveLength(1);
+    expect(threadMention[0]).toMatchObject({
+      salience: 'directed',
+      thread_root_id: rootMsg,
+    });
+  });
+
   it('nets directed claims out of the ambient count (§8) and sorts directed first', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t);

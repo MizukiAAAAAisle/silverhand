@@ -357,13 +357,25 @@ export function listActivity(
                  WHERE cap.user_id = @viewer
                    AND cap.conversation_id = vu.conversation_id
               ), @channelDefaultMode) = 'all')
-          -- Thread: ambient is follow-driven (§6 followed → on).
-          OR (vu.root IS NOT NULL AND EXISTS (
+          -- Thread ambient: aggregate-floor (#task:1268). Requires BOTH the
+          -- delivery precondition (viewer follows the cluster) AND the parent
+          -- channel's ambient pref = 'all'. vu.conversation_id IS the parent
+          -- channel for a reply-cluster, so the SAME preference gates mainline
+          -- and its threads. follow is a delivery decision and must not force
+          -- ambient on over the viewer's explicit mentions-only pref
+          -- (delivery vs attention); thread @mentions still enter via directed.
+          OR (vu.root IS NOT NULL
+              AND EXISTS (
                 SELECT 1 FROM thread_followers tf
                  WHERE tf.thread_root_id = vu.root
                    AND tf.principal_kind = 'human'
                    AND tf.principal_id = @viewer
-              ))
+              )
+              AND COALESCE((
+                SELECT cap.mode FROM channel_attention_preferences cap
+                 WHERE cap.user_id = @viewer
+                   AND cap.conversation_id = vu.conversation_id
+              ), @channelDefaultMode) = 'all')
         )`,
     )
     .all({
