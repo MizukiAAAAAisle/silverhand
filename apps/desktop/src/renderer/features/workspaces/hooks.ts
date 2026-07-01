@@ -11,6 +11,7 @@ import type {
   CreateConversationChannelInput,
   CreateWorkspaceInput,
   DmChannelDto,
+  ListFavoritesDto,
   ThreadDto,
   UpdateAgentCapabilitiesInput,
   UpdateWorkspaceHumanMemberRoleResponse,
@@ -25,6 +26,7 @@ import type {
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
+import { favoritesKey } from '@/features/favorites/hooks';
 import { onWsFrame, subscribeWsScope, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
 
 export type WorkspaceListItem = {
@@ -103,10 +105,12 @@ export function sortConversationList(items: ChannelListItem[]): ChannelListItem[
       : item;
   // Base order is creation time only. Star (the personal ⭐ favorite) is no
   // longer a shared `pinned_at` field on the conversation — it lives in the
-  // viewer's `viewer_sort.entries[].starred_at`, so the starred-first
-  // partition + within-group ordering is composed in ChannelsSidebar against
-  // that viewer state, not here (#task:1209). This base sort just nests
-  // threads under their parent and otherwise orders by created_at.
+  // viewer's `viewer_sort.entries[].starred_at`. Under the EXCLUSIVE model
+  // (#task:1254) a starred channel is MOVED into the global STARRED list and
+  // excluded from the channel sidebar's single `unstarred` home group (composed
+  // in ChannelsSidebar via lib/home-grouping against that viewer state, not
+  // here). This base sort just nests threads under their parent and otherwise
+  // orders by created_at.
   const compareTop = (a: ChannelListItem, b: ChannelListItem): number =>
     a.created_at - b.created_at;
 
@@ -347,13 +351,14 @@ export function useArchiveWorkspace() {
 }
 
 /** Optimistically flip one entity's `starred_at` in a viewer-sort cache:
- *  star → stamp now (so the row sorts into the STARRED group on this frame),
- *  unstar → null. It ALSO clears that entity's manual `rank`, mirroring the
- *  backend `SortRepo.setStarred` (star/unstar crosses a hard group, so the old
- *  group's rank is invalid — keeping it would let a ranked row land by its
- *  stale rank for one frame, then snap to the manual tail when the server's
- *  full `viewer_sort` reconciles → a double jump). Creates a rank-null entry if
- *  the viewer had no prior state for it. Pure. (#task:1209, Cindy review) */
+ *  star → stamp now, unstar → null. The entity's home manual `rank` is ALWAYS
+ *  preserved (#task:1254 exclusive model): star MOVES the entity into the global
+ *  STARRED overlay and out of its home group, but its home rank survives as an
+ *  orphan so unstar drops it back into its original home slot (the backend keeps
+ *  the home rank for BOTH `list_key='workspaces'` and `channels:*`; the favorites
+ *  ordering rank is a SEPARATE list the unstar route clears server-side, not this
+ *  home write). A brand-new entry has no prior rank, so its rank starts null.
+ *  Pure. (#task:1209, #task:1252, #task:1254) */
 export function setStarredOptimistic(
   viewerSort: ViewerSortStateDto,
   entityId: string,
@@ -362,7 +367,7 @@ export function setStarredOptimistic(
   const starredAt = starred ? Date.now() : null;
   const entries = viewerSort.entries.some(e => e.entity_id === entityId)
     ? viewerSort.entries.map(e =>
-        e.entity_id === entityId ? { ...e, starred_at: starredAt, rank: null } : e,
+        e.entity_id === entityId ? { ...e, starred_at: starredAt } : e,
       )
     : [
         ...viewerSort.entries,
@@ -374,8 +379,11 @@ export function setStarredOptimistic(
 /** Star / unstar a workspace for the current viewer (#task:1209). Star is a
  *  PERSONAL favorite, exposed only via `viewer_sort.entries[].starred_at`
  *  (never a shared aggregate), so this mutation reconciles the rail's inline
- *  `viewerSort` cache — NOT an entity DTO. Optimistic (instant group jump),
- *  rolled back on error, reconciled from the server's full `viewer_sort`. */
+ *  `viewerSort` cache — NOT an entity DTO. Optimistic (instant STARRED membership
+ *  flip; under the EXCLUSIVE model the row MOVES out of its dm/regular home group
+ *  into STARRED, but its home rank is kept as an orphan so unstar restores the
+ *  original slot — #task:1254), rolled back on error, reconciled from the
+ *  server's full `viewer_sort`. */
 export function useStarWorkspace() {
   const qc = useQueryClient();
   return useMutation({
@@ -392,6 +400,9 @@ export function useStarWorkspace() {
       if (prev) {
         qc.setQueryData<WorkspaceListPayload>(workspacesKey, {
           ...prev,
+          // Star MOVES the workspace/DM into STARRED and out of its dm/regular
+          // home group, but preserve its home manual rank so unstar restores the
+          // original slot (#task:1254).
           viewerSort: setStarredOptimistic(prev.viewerSort, id, starred),
         });
       }
@@ -404,6 +415,9 @@ export function useStarWorkspace() {
       qc.setQueryData<WorkspaceListPayload>(workspacesKey, prev =>
         prev ? { ...prev, viewerSort } : prev,
       );
+      // STARRED is the global Favorites overlay (#task:1253) — starring/unstarring
+      // a workspace changes its membership, so refresh the favorites read-model.
+      void qc.invalidateQueries({ queryKey: ['favorites'] });
     },
   });
 }
@@ -546,8 +560,43 @@ function sortListQueryKey(listKey: string): readonly unknown[] | null {
   return null;
 }
 
+/** A list's sort cache: its query key + how to READ/WRITE the inline viewer-sort
+ *  state, abstracting the per-feature cache SHAPE. The rail / channel caches
+ *  store it camelCase (`viewerSort`, the `SortCachePayload` shape); the global
+ *  Favorites cache (`ListFavoritesDto`, `list_key='favorites'`) stores it
+ *  snake_case (`viewer_sort`) under `favoritesKey`. ALL sort mutations (mode /
+ *  reorder) go through this adapter so their optimistic + reconcile writes land
+ *  on whichever list owns `list_key` — Favorites was previously unresolved by
+ *  `sortListQueryKey` (→ null), so its mode/reorder silently no-op'd the cache
+ *  and only a later refetch reflected the change (#task:1254, Cindy P1). */
+type SortCacheAdapter = {
+  key: readonly unknown[];
+  read: (cache: unknown) => ViewerSortStateDto | undefined;
+  write: (cache: unknown, next: ViewerSortStateDto) => unknown;
+};
+
+export function sortCacheAdapter(listKey: string): SortCacheAdapter | null {
+  const key = sortListQueryKey(listKey);
+  if (key) {
+    return {
+      key,
+      read: c => (c as SortCachePayload | undefined)?.viewerSort,
+      write: (c, next) => (c ? { ...(c as SortCachePayload), viewerSort: next } : c),
+    };
+  }
+  if (listKey === 'favorites') {
+    return {
+      key: favoritesKey,
+      read: c => (c as ListFavoritesDto | undefined)?.viewer_sort,
+      write: (c, next) => (c ? { ...(c as ListFavoritesDto), viewer_sort: next } : c),
+    };
+  }
+  return null;
+}
+
 /** Toggle one SCOPE's sort mode (recent|manual). The scope is selected by
- *  `group`: `'workspaces'` requires a rail group (`starred|dm|regular`),
+ *  `group`: `'workspaces'` requires a rail group (`dm|regular`; star is the
+ *  Favorites overlay, not a rail group — #task:1252),
  *  `'channels:<id>'` omits it (list-wide scope `''`). Optimistic on the list
  *  cache's inline `viewerSort.modes`, reconciled with the authoritative server
  *  state. The optimistic scope key MUST match what the backend derives from
@@ -563,31 +612,30 @@ export function useSetSortMode() {
       return res.viewer_sort;
     },
     onMutate: async input => {
-      const key = sortListQueryKey(input.list_key);
-      if (!key) return undefined;
-      await qc.cancelQueries({ queryKey: key });
-      const prev = qc.getQueryData<SortCachePayload>(key);
-      if (prev) {
+      const adapter = sortCacheAdapter(input.list_key);
+      if (!adapter) return undefined;
+      await qc.cancelQueries({ queryKey: adapter.key });
+      const prev = qc.getQueryData(adapter.key);
+      const prevVs = adapter.read(prev);
+      if (prevVs) {
         const scope = input.group ?? '';
-        qc.setQueryData<SortCachePayload>(key, {
-          ...prev,
-          viewerSort: {
-            ...prev.viewerSort,
-            modes: { ...prev.viewerSort.modes, [scope]: input.mode },
-          },
-        });
+        qc.setQueryData(
+          adapter.key,
+          adapter.write(prev, {
+            ...prevVs,
+            modes: { ...prevVs.modes, [scope]: input.mode },
+          }),
+        );
       }
-      return { key, prev };
+      return { adapter, prev };
     },
     onError: (_e, _v, ctx) => {
-      if (ctx?.key && ctx.prev) qc.setQueryData(ctx.key, ctx.prev);
+      if (ctx?.adapter) qc.setQueryData(ctx.adapter.key, ctx.prev);
     },
     onSuccess: (viewerSort, input) => {
-      const key = sortListQueryKey(input.list_key);
-      if (key) {
-        qc.setQueryData<SortCachePayload>(key, prev =>
-          prev ? { ...prev, viewerSort } : prev,
-        );
+      const adapter = sortCacheAdapter(input.list_key);
+      if (adapter) {
+        qc.setQueryData(adapter.key, prev => (prev ? adapter.write(prev, viewerSort) : prev));
       }
     },
   });
@@ -599,12 +647,12 @@ export function useSetSortMode() {
  *  `scope` is the same one `sortModeOf`/`useSetSortMode` use for this group
  *  (rail: the group; channel: `''`) — dragging one rail group must flip ONLY
  *  that group's mode, never the whole rail. Pure — returns the next payload. */
-function applyOrderToPayload(
-  prev: SortCachePayload,
+export function applyOrderToViewerSort(
+  prev: ViewerSortStateDto,
   scope: SortGroup | undefined,
   orderedIds: string[],
-): SortCachePayload {
-  const byId = new Map(prev.viewerSort.entries.map(e => [e.entity_id, e] as const));
+): ViewerSortStateDto {
+  const byId = new Map(prev.entries.map(e => [e.entity_id, e] as const));
   orderedIds.forEach((id, rank) => {
     const e = byId.get(id);
     byId.set(id, e ? { ...e, rank } : { entity_id: id, rank, last_accessed_at: null, starred_at: null });
@@ -612,11 +660,8 @@ function applyOrderToPayload(
   const scopeKey = scope ?? '';
   return {
     ...prev,
-    viewerSort: {
-      ...prev.viewerSort,
-      modes: { ...prev.viewerSort.modes, [scopeKey]: 'manual' },
-      entries: [...byId.values()],
-    },
+    modes: { ...prev.modes, [scopeKey]: 'manual' },
+    entries: [...byId.values()],
   };
 }
 
@@ -635,10 +680,13 @@ function applyOrderToPayload(
 export function useApplySortOrder() {
   const qc = useQueryClient();
   return (listKey: string, scope: SortGroup | undefined, orderedIds: string[]): void => {
-    const key = sortListQueryKey(listKey);
-    if (!key) return;
-    const prev = qc.getQueryData<SortCachePayload>(key);
-    if (prev) qc.setQueryData<SortCachePayload>(key, applyOrderToPayload(prev, scope, orderedIds));
+    const adapter = sortCacheAdapter(listKey);
+    if (!adapter) return;
+    const prev = qc.getQueryData(adapter.key);
+    const prevVs = adapter.read(prev);
+    if (prevVs) {
+      qc.setQueryData(adapter.key, adapter.write(prev, applyOrderToViewerSort(prevVs, scope, orderedIds)));
+    }
   };
 }
 
@@ -679,14 +727,14 @@ export function useReorderSort() {
     onMutate: async input => {
       // Cancel in-flight list refetches so they can't clobber the
       // already-applied synchronous optimistic order.
-      const key = sortListQueryKey(input.list_key);
-      if (key) await qc.cancelQueries({ queryKey: key });
+      const adapter = sortCacheAdapter(input.list_key);
+      if (adapter) await qc.cancelQueries({ queryKey: adapter.key });
     },
     onError: (_e, input) => {
       // The optimistic order was applied synchronously and we didn't snapshot
       // the pre-drag state here; refetch the authoritative order instead.
-      const key = sortListQueryKey(input.list_key);
-      if (key) void qc.invalidateQueries({ queryKey: key });
+      const adapter = sortCacheAdapter(input.list_key);
+      if (adapter) void qc.invalidateQueries({ queryKey: adapter.key });
     },
   });
 }
@@ -788,6 +836,9 @@ export function useStarChannel(workspaceId: string | null) {
       if (prev) {
         qc.setQueryData<ChannelListPayload>(key, {
           ...prev,
+          // Star MOVES the channel into STARRED and out of the home channel list,
+          // but preserve its home manual rank so unstar restores the original
+          // slot (#task:1254 — exclusive model, both home lists keep rank).
           viewerSort: setStarredOptimistic(prev.viewerSort, channelId, starred),
         });
       }
@@ -801,6 +852,9 @@ export function useStarChannel(workspaceId: string | null) {
       qc.setQueryData<ChannelListPayload>(channelsKey(workspaceId), prev =>
         prev ? { ...prev, viewerSort } : prev,
       );
+      // STARRED is the global Favorites overlay (#task:1253) — a channel star
+      // toggle changes favorites membership, so refresh the read-model.
+      void qc.invalidateQueries({ queryKey: ['favorites'] });
     },
   });
 }

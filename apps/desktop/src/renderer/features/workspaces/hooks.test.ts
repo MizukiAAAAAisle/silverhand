@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { QueryClient } from '@tanstack/react-query';
 import type {
   ChannelConversationDto,
   ThreadDto,
@@ -7,15 +8,18 @@ import type {
   WorkspaceMembersResponse,
 } from '@silverhand/shared';
 import {
+  applyOrderToViewerSort,
   decideViewerSyncInvalidations,
   isViewerWorkspacesChangedPayload,
   patchHumanMemberRole,
   removeHumanMemberFromList,
   setStarredOptimistic,
+  sortCacheAdapter,
   sortConversationList,
   type ChannelListItem,
   type ViewerSyncFrame,
 } from './hooks';
+import { favoritesKey } from '../favorites/hooks';
 
 function channel(
   id: string,
@@ -65,8 +69,9 @@ function thread(
 describe('sortConversationList', () => {
   it('orders top-level channels by created_at and keeps threads under parents', () => {
     // Star is no longer a shared field on the conversation (#task:1209), so the
-    // base sort is creation-time only; starred grouping is composed in
-    // ChannelsSidebar against the viewer's sort state, not here.
+    // base sort is creation-time only. Under the exclusive model (#task:1254) a
+    // starred channel is moved to STARRED and excluded from the channel sidebar's
+    // single `unstarred` home group (composed in ChannelsSidebar), not here.
     const first = channel('first', 1);
     const second = channel('second', 2);
     const third = channel('third', 3);
@@ -95,11 +100,11 @@ describe('setStarredOptimistic', () => {
     entries,
   });
 
-  it('stars an entity and clears its manual rank (mirrors backend setStarred)', () => {
-    // A ranked row that gets starred must drop its old-group rank in the SAME
-    // optimistic write, or it would land by its stale rank for one frame then
-    // snap to the manual tail when the server reconciles (the double jump Cindy
-    // flagged). starred_at becomes non-null; rank → null; last_accessed_at kept.
+  it('star stamps starred_at and PRESERVES the home rank (#task:1254 exclusive)', () => {
+    // Under the exclusive model star MOVES the entity into STARRED and out of its
+    // home group, but its home rank survives as an orphan so unstar can restore
+    // the original slot. This holds for BOTH workspaces and channels — there is
+    // no per-list clearRank branch anymore.
     const next = setStarredOptimistic(
       vs([{ entity_id: 'a', rank: 3, last_accessed_at: 100, starred_at: null }]),
       'a',
@@ -107,22 +112,22 @@ describe('setStarredOptimistic', () => {
     );
     expect(next.entries[0]).toMatchObject({
       entity_id: 'a',
-      rank: null,
+      rank: 3,
       last_accessed_at: 100,
     });
     expect(next.entries[0]?.starred_at).not.toBeNull();
   });
 
-  it('unstars an entity and also clears its manual rank', () => {
+  it('unstar nulls starred_at and PRESERVES the home rank (restores original slot)', () => {
     const next = setStarredOptimistic(
-      vs([{ entity_id: 'a', rank: 2, last_accessed_at: null, starred_at: 999 }]),
+      vs([{ entity_id: 'a', rank: 5, last_accessed_at: 7, starred_at: 999 }]),
       'a',
       false,
     );
     expect(next.entries[0]).toEqual({
       entity_id: 'a',
-      rank: null,
-      last_accessed_at: null,
+      rank: 5,
+      last_accessed_at: 7,
       starred_at: null,
     });
   });
@@ -153,6 +158,112 @@ describe('setStarredOptimistic', () => {
       last_accessed_at: null,
       starred_at: null,
     });
+  });
+});
+
+describe('Favorites sort cache wiring (#task:1254)', () => {
+  // Regression for Cindy's P1: the generic sort mutations resolve a list's cache
+  // through `sortCacheAdapter`. Favorites was UNRESOLVED (sortListQueryKey →
+  // null), so setMode/reorder wrote the backend but silently no-op'd the local
+  // cache — the UI only caught up on a later refetch. The adapter also has to
+  // bridge the cache SHAPE: rail/channel caches store `viewerSort` (camelCase);
+  // the Favorites cache (ListFavoritesDto) stores `viewer_sort` (snake_case).
+  const vs = (
+    entries: ViewerSortStateDto['entries'],
+    modes: ViewerSortStateDto['modes'] = {},
+  ): ViewerSortStateDto => ({ list_key: 'favorites', modes, entries });
+
+  it('resolves favorites to favoritesKey and reads/writes the snake_case viewer_sort field', () => {
+    const adapter = sortCacheAdapter('favorites');
+    expect(adapter).not.toBeNull();
+    expect(adapter!.key).toEqual(favoritesKey);
+
+    const cache = { items: [], viewer_sort: vs([], { '': 'recent' }) };
+    expect(adapter!.read(cache)).toEqual(cache.viewer_sort);
+
+    const next = vs([], { '': 'manual' });
+    const written = adapter!.write(cache, next) as typeof cache;
+    expect(written.viewer_sort).toEqual(next);
+    // items preserved; no stray camelCase field leaks into the favorites shape.
+    expect(written.items).toBe(cache.items);
+    expect('viewerSort' in written).toBe(false);
+  });
+
+  it('keeps resolving workspaces/channels to the camelCase viewerSort field (no regression)', () => {
+    for (const listKey of ['workspaces', 'channels:w1']) {
+      const adapter = sortCacheAdapter(listKey);
+      expect(adapter).not.toBeNull();
+      const cache = { items: [], viewerSort: vs([], { '': 'recent' }) };
+      expect(adapter!.read(cache)).toEqual(cache.viewerSort);
+      const next = vs([], { '': 'manual' });
+      const written = adapter!.write(cache, next) as typeof cache;
+      expect(written.viewerSort).toEqual(next);
+      expect('viewer_sort' in written).toBe(false);
+    }
+    expect(sortCacheAdapter('workspaces')!.key).toEqual(['workspaces']);
+    expect(sortCacheAdapter('channels:w1')!.key).toEqual(['workspaces', 'w1', 'channels']);
+  });
+
+  it('applyOrderToViewerSort writes dense 0..n ranks and flips the list-wide scope to manual', () => {
+    const next = applyOrderToViewerSort(
+      vs(
+        [
+          { entity_id: 'channel:c1', rank: null, last_accessed_at: 5, starred_at: 1 },
+          { entity_id: 'workspace:w1', rank: null, last_accessed_at: 9, starred_at: 2 },
+        ],
+        { '': 'recent' },
+      ),
+      undefined, // list-wide scope (favorites has no per-group axis)
+      ['workspace:w1', 'channel:c1'],
+    );
+    expect(next.modes['']).toBe('manual');
+    const byId = new Map(next.entries.map(e => [e.entity_id, e]));
+    expect(byId.get('workspace:w1')?.rank).toBe(0);
+    expect(byId.get('channel:c1')?.rank).toBe(1);
+    // non-rank fields ride through untouched.
+    expect(byId.get('workspace:w1')?.last_accessed_at).toBe(9);
+  });
+
+  it('a favorites cache write lands on favoritesKey and never touches workspaces/channels caches', () => {
+    const client = new QueryClient();
+    const workspacesCache = { items: [], viewerSort: vs([], { regular: 'recent' }) };
+    const channelsCache = { items: [], viewerSort: vs([], { '': 'recent' }) };
+    client.setQueryData(['workspaces'], workspacesCache);
+    client.setQueryData(['workspaces', 'w1', 'channels'], channelsCache);
+    client.setQueryData(favoritesKey, {
+      items: [],
+      viewer_sort: vs(
+        [{ entity_id: 'channel:c1', rank: 0, last_accessed_at: 5, starred_at: 1 }],
+        { '': 'recent' },
+      ),
+    });
+
+    // setMode write (mirrors useSetSortMode.onMutate's write body).
+    const modeAdapter = sortCacheAdapter('favorites')!;
+    const prevMode = client.getQueryData(modeAdapter.key);
+    const prevModeVs = modeAdapter.read(prevMode)!;
+    client.setQueryData(
+      modeAdapter.key,
+      modeAdapter.write(prevMode, { ...prevModeVs, modes: { ...prevModeVs.modes, ['']: 'manual' } }),
+    );
+
+    // reorder write (mirrors useApplySortOrder).
+    const orderAdapter = sortCacheAdapter('favorites')!;
+    const prevOrder = client.getQueryData(orderAdapter.key);
+    const prevOrderVs = orderAdapter.read(prevOrder)!;
+    client.setQueryData(
+      orderAdapter.key,
+      orderAdapter.write(prevOrder, applyOrderToViewerSort(prevOrderVs, undefined, ['channel:c1'])),
+    );
+
+    const favAfter = client.getQueryData<{ viewer_sort: ViewerSortStateDto }>(favoritesKey)!;
+    expect(favAfter.viewer_sort.modes['']).toBe('manual');
+    expect(favAfter.viewer_sort.entries.find(e => e.entity_id === 'channel:c1')?.rank).toBe(0);
+
+    // Independent axis: the home caches are byte-identical (same object ref) —
+    // favorites reorder/mode can't perturb a workspace/channel's home rank.
+    expect(client.getQueryData(['workspaces'])).toBe(workspacesCache);
+    expect(client.getQueryData(['workspaces', 'w1', 'channels'])).toBe(channelsCache);
   });
 });
 

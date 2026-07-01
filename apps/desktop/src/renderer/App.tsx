@@ -1020,17 +1020,34 @@ function RegisteredAppShell(): JSX.Element {
     nav.toWorkspace(id);
   };
 
-  const handleSelectChannel = (id: string): void => {
-    const target = channels.find(s => s.id === id);
-    if (!selectedWorkspaceId) return;
+  // Open a channel WITH the home channel-sidebar's full open semantics —
+  // remembered layout (threads-list / thread / side) restore, unread-thread
+  // auto-surface, legacy-thread fossil handling. `workspaceId` defaults to the
+  // primary selection (the channel sidebar's same-workspace case) but is passed
+  // EXPLICITLY by cross-workspace entry points (the global STARRED list), so a
+  // starred channel in another workspace opens with the SAME restored layout
+  // instead of a bare jump. STARRED owns presence + order, never a second
+  // navigation model (docs/list-sort-v1.md) — it delegates the open here.
+  const handleSelectChannel = (
+    id: string,
+    workspaceId: string | null = selectedWorkspaceId,
+  ): void => {
+    if (!workspaceId) return;
+    const sameWorkspace = workspaceId === selectedWorkspaceId;
+    // The agent-panel and thread-fossil branches read the CURRENT workspace's
+    // loaded channels + docked panel, so they only apply same-workspace. A
+    // cross-workspace open switches workspace anyway (the docked agent panel
+    // can't follow it) and never targets a thread fossil (favorites project
+    // real channels only).
+    const target = sameWorkspace ? channels.find(s => s.id === id) : undefined;
     // A=Activity-follows-channel (#task:1189): while an agent side panel is
     // docked it owns the right pane, so switching the left channel must keep
     // `?agent` and just re-point the locked Activity context — not restore that
     // channel's remembered thread/side (which would drop the panel). Skip the
     // legacy thread fossil, which always opens as a `?side` overlay.
-    if (agentPanelId && target?.kind !== 'thread') {
+    if (sameWorkspace && agentPanelId && target?.kind !== 'thread') {
       nav.go(
-        buildChannelPathPreservingAgent(selectedWorkspaceId, id, agentPanelId),
+        buildChannelPathPreservingAgent(workspaceId, id, agentPanelId),
       );
       return;
     }
@@ -1056,10 +1073,10 @@ function RegisteredAppShell(): JSX.Element {
           channelId: id,
           messageId: intent.messageId,
           threadRootId: intent.threadRootId,
-          workspaceId: selectedWorkspaceId,
+          workspaceId,
         });
       } else {
-        nav.go(buildChannelLayoutUrl(selectedWorkspaceId, id, intent.layout));
+        nav.go(buildChannelLayoutUrl(workspaceId, id, intent.layout));
       }
     }
   };
@@ -2085,6 +2102,25 @@ function RegisteredAppShell(): JSX.Element {
                     agentsById={agentsById}
                     selectedWorkspaceId={selectedWorkspaceId}
                     onSelectWorkspace={handleSelectWorkspace}
+                    selectedChannelId={selectedChannelId}
+                    // Tri-state (Cindy/Alice contract): `null` = a channel is
+                    // open but its ws channel sort isn't cached yet (cross-ws
+                    // nav load window), so the rail fails closed and never shows
+                    // a starred leaf + its parent workspace both primary. The
+                    // starred fact stays single-source (channel payload's
+                    // `viewer_sort.starred_at` via channelStarredAt); the unknown
+                    // signal is purely `channelSort`'s load state — never a
+                    // /api/favorites join.
+                    selectedChannelStarred={
+                      selectedChannelId == null
+                        ? false
+                        : channelSort === undefined
+                          ? null
+                          : channelStarredAt.has(selectedChannelId)
+                    }
+                    onSelectChannel={(workspaceId, channelId) =>
+                      handleSelectChannel(channelId, workspaceId)
+                    }
                     onStarWorkspace={(workspaceId, starred) =>
                       starWorkspace.mutate({ id: workspaceId, starred })
                     }

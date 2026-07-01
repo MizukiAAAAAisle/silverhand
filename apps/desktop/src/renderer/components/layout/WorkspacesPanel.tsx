@@ -16,6 +16,7 @@ import {
 } from '@/components/layout/list-drag-sort';
 import { SidebarSection } from './sidebar-shared';
 import { dmWorkspaceLabel } from '@/lib/workspace-name';
+import { railRowTierClass, railSelectionTier } from '@/lib/rail-selection';
 
 type WorkspaceUiKind = 'regular' | 'dm';
 
@@ -47,9 +48,10 @@ export interface WorkspaceItem {
  *  (owned by `Sidebar`); this just carries the per-row callbacks down. */
 export interface WorkspaceSortConfig<GroupKey extends SortGroup = SortGroup> {
   /** Sub-group render order. Each rail section now drives a single group:
-   *  `['starred']`, `['dm']`, or `['regular']`. */
+   *  `['dm']` or `['regular']` (a starred ws/DM is MOVED to the global STARRED
+   *  list, not a rail group — #task:1252 / #task:1254). */
   order: GroupKey[];
-  /** The hard group a workspace lives in (live star/kind). */
+  /** The hard group a workspace lives in (by kind: dm | regular). */
   groupKeyOf: (workspace: WorkspaceItem) => GroupKey;
   /** Commit a group's new full order. */
   onReorder: (group: GroupKey, orderedIds: string[]) => void;
@@ -63,6 +65,17 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
   kind: WorkspaceUiKind;
   workspaces: WorkspaceItem[];
   selectedWorkspaceId: string | null;
+  /** The open channel — drives the single-selection rule (#task:1254): when the
+   *  open channel is a NON-starred channel the workspace row stays `primary`;
+   *  when it is a STARRED channel the STARRED row owns the highlight and the
+   *  workspace goes `none`. Null when no channel is open. */
+  selectedChannelId: string | null;
+  /** Whether the open channel is a starred (favorite) channel — from the channel
+   *  payload's `viewer_sort.starred_at`. TRI-STATE: `true`/`false` known, `null`
+   *  = a channel is open but its ws channel sort is not cached yet (cross-ws load
+   *  window). When true OR unknown a starred/loading leaf owns the single
+   *  highlight, so the parent workspace row is not highlighted (fail-closed). */
+  selectedChannelStarred: boolean | null;
   onSelectWorkspace: (id: string) => void;
   onStarWorkspace?: (id: string, starred: boolean) => void;
   canRevealWorkspace?: (workspace: WorkspaceItem) => boolean;
@@ -98,6 +111,8 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
  *  SAME component regardless of entry point (one entity, one shape). */
 interface RailRowContext {
   selectedWorkspaceId: string | null;
+  selectedChannelId: string | null;
+  selectedChannelStarred: boolean | null;
   onSelectWorkspace: (id: string) => void;
   onStarWorkspace?: (id: string, starred: boolean) => void;
   canRevealWorkspace?: (workspace: WorkspaceItem) => boolean;
@@ -122,9 +137,11 @@ function rowIconFor(workspace: WorkspaceItem, ctx: RailRowContext): JSX.Element 
 }
 
 function canStarWorkspace(workspace: WorkspaceItem, ctx: RailRowContext): boolean {
-  // Both regular workspaces and DMs can be starred into the cross-kind STARRED
-  // group (#task:1209). Archived rows never star. The backend star route
-  // accepts regular | agent_home; the gate here just mirrors that.
+  // Both regular workspaces and DMs can be starred into the global STARRED list
+  // (#task:1209 / #task:1252 / #task:1254); star MOVES the row out of its rail
+  // kind group into STARRED (home rank kept as an orphan, restored on unstar).
+  // Archived rows never star. The backend star route accepts regular |
+  // agent_home; the gate here just mirrors that.
   return (
     (workspace.kind === 'regular' || workspace.kind === 'dm') &&
     !workspace.archived &&
@@ -136,6 +153,8 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   label,
   workspaces,
   selectedWorkspaceId,
+  selectedChannelId,
+  selectedChannelStarred,
   onSelectWorkspace,
   onStarWorkspace,
   canRevealWorkspace,
@@ -149,6 +168,8 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
 }: WorkspaceGroupProps<GroupKey>): JSX.Element {
   const ctx: RailRowContext = {
     selectedWorkspaceId,
+    selectedChannelId,
+    selectedChannelStarred,
     onSelectWorkspace,
     onStarWorkspace,
     canRevealWorkspace,
@@ -258,17 +279,26 @@ function WorkspaceRow({
   const icon = rowIconFor(workspace, ctx);
   const canStar = canStarWorkspace(workspace, ctx);
   const canReveal = ctx.canRevealWorkspace?.(workspace) ?? false;
-  const selected = workspace.id === ctx.selectedWorkspaceId;
+  // Single-selection rule (#task:1254): the workspace/DM row is `primary` when it
+  // is the selected workspace AND the open leaf is not a starred channel; when a
+  // starred channel is open, that STARRED row owns the single highlight and this
+  // stays `none`. One function (`railSelectionTier`) so rail, STARRED and channel
+  // sidebar can't drift.
+  const tier = railSelectionTier(
+    { kind: workspace.kind === 'dm' ? 'dm' : 'workspace', workspaceId: workspace.id },
+    ctx.selectedWorkspaceId,
+    ctx.selectedChannelId,
+    ctx.selectedChannelStarred,
+  );
+  const isPrimary = tier === 'primary';
   const isStarred = isWorkspaceStarred(workspace);
   const unread = workspace.unread;
 
-  const rowBg = selected
-    ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-    : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary';
+  const rowBg = railRowTierClass(tier);
 
   const row = (
     <div
-      data-row-selected={selected || undefined}
+      data-row-selected={isPrimary || undefined}
       className={
         'sidebar-row-border flex h-8 w-full items-stretch border ' +
         // No `transition-colors`: selected/hover switch instantly (#task:1162).
@@ -287,7 +317,7 @@ function WorkspaceRow({
         <span
           className={
             'flex min-w-0 flex-1 items-baseline gap-1.5 ' +
-            (unread && unread > 0 && !selected ? 'font-semibold text-text-primary' : '')
+            (unread && unread > 0 && !isPrimary ? 'font-semibold text-text-primary' : '')
           }
         >
           <span className="truncate">{title}</span>
@@ -297,7 +327,7 @@ function WorkspaceRow({
             data-sidebar-unread
             className={
               'inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums ' +
-              (selected ? 'bg-bg-floating text-accent' : 'bg-accent text-text-on-accent')
+              (isPrimary ? 'bg-bg-floating text-accent' : 'bg-accent text-text-on-accent')
             }
             aria-label={`${unread} unread`}
           >

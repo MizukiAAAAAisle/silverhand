@@ -18,10 +18,11 @@ import { useListDragSort } from './list-drag-sort';
 import { SortModeMenu } from './SortModeMenu';
 import {
   WorkspaceGroup,
-  isWorkspaceStarred,
   type WorkspaceItem,
   type WorkspaceSortConfig,
 } from './WorkspacesPanel';
+import { FavoritesGroup } from './FavoritesPanel';
+import { partitionRailWorkspaces } from '@/lib/home-grouping';
 
 interface SidebarProps {
   workspaces: WorkspaceItem[];
@@ -33,6 +34,18 @@ interface SidebarProps {
   agentsById?: ReadonlyMap<string, AgentDto>;
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
+  /** The open channel (for the STARRED/Favorites channel-row highlight and the
+   *  single-selection rule). Null when no channel is open. */
+  selectedChannelId: string | null;
+  /** Whether the open channel is a starred (favorite) channel — from the channel
+   *  payload's `viewer_sort.starred_at`. TRI-STATE: `null` = a channel is open but
+   *  its ws channel sort is not cached yet (cross-ws load window). When true or
+   *  unknown the STARRED channel row owns the single rail highlight and the parent
+   *  workspace row is not highlighted (fail-closed — no transient double-highlight). */
+  selectedChannelStarred: boolean | null;
+  /** Deep-link a starred channel from the Favorites overlay → open its parent
+   *  workspace AND that channel. */
+  onSelectChannel: (workspaceId: string, channelId: string) => void;
   onStarWorkspace: (workspaceId: string, starred: boolean) => void;
   onCreateWorkspace: () => void;
   /** When true, the Saved view is the active main view — channel rows
@@ -54,14 +67,15 @@ interface SidebarProps {
   savedCount: number | undefined;
 }
 
-/** The rail is one sortable list (`list_key='workspaces'`) with three live hard
- *  groups; a workspace's group is partitioned from its star state first (STARRED
- *  is cross-kind), then its kind. Never stored. Each group is its own mode scope
- *  (#task:1146). See docs/list-sort-v1.md. */
-type RailGroup = 'starred' | 'dm' | 'regular';
+/** The rail is one sortable list (`list_key='workspaces'`) with two live hard
+ *  groups by kind (DM / regular); never stored. Each group is its own mode scope
+ *  (#task:1146). STARRED is NOT a rail partition — it is the global Favorites
+ *  overlay (#task:1253/#task:1254), a separate read-model. Under the EXCLUSIVE
+ *  model a starred workspace/DM is MOVED out of these home groups into STARRED
+ *  (it appears once, not in both). See docs/list-sort-v1.md. */
+type RailGroup = 'dm' | 'regular';
 
 function railGroupKeyOf(workspace: WorkspaceItem): RailGroup {
-  if (isWorkspaceStarred(workspace)) return 'starred';
   return workspace.kind === 'dm' ? 'dm' : 'regular';
 }
 
@@ -75,29 +89,25 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   // Activity view itself is unmounted.
   const { data: activityData } = useActivity();
   const activityCount = activityData?.items.length ?? 0;
-  // Live partition: STARRED is the cross-kind top group (any starred workspace OR
-  // starred DM); DM / WORKSPACES hold only the UNSTARRED tail of each kind. So a
-  // starred DM leaves the DM section and joins STARRED (#task:1209 star redesign).
-  const { starred, dms, regular, archived } = useMemo(() => {
-    const starred: WorkspaceItem[] = [];
-    const dms: WorkspaceItem[] = [];
-    const regular: WorkspaceItem[] = [];
-    const archived: WorkspaceItem[] = [];
-    for (const w of props.workspaces) {
-      if (w.archived) archived.push(w);
-      else if (isWorkspaceStarred(w)) starred.push(w);
-      else if (w.kind === 'dm') dms.push(w);
-      else regular.push(w);
-    }
-    return { starred, dms, regular, archived };
-  }, [props.workspaces]);
+  // Home rail groups by KIND (DM / regular), plus archived. STARRED is NOT a rail
+  // partition — it is the global Favorites overlay (#task:1253/#task:1254). Under
+  // the EXCLUSIVE model a starred (non-archived) workspace/DM is MOVED into
+  // STARRED and removed from its DM/WORKSPACES home group here, so it appears
+  // exactly once. The exclusion reads each item's `starred_at` (joined upstream
+  // from `viewer_sort.entries[].starred_at` — the same fact the backend's reorder
+  // validation uses), never a second favorites query. `props.workspaces` is the
+  // RAW full visible set; these are the home projections (see lib/home-grouping).
+  const { dms: homeDms, regular: homeRegular, archived } = useMemo(
+    () => partitionRailWorkspaces(props.workspaces),
+    [props.workspaces],
+  );
 
   // Resolve DM-agent avatar object URLs ONCE for the whole rail, over the
-  // STABLE union of every DM agent (across starred / dm / archived). Star/unstar
-  // only moves a DM between sections — the set of (agent, avatar_url) pairs is
-  // unchanged — so this map stays identical and no avatar tears down + refetches
-  // (the flash shiki saw came from per-section resolution churning on star).
-  // #task:1146
+  // STABLE union of every DM agent (across dm / regular / archived) from the RAW
+  // workspace set. Resolving over the raw set (not the home projection) keeps the
+  // map identical across renders even though star/unstar now MOVES a DM between
+  // the home group and STARRED — so no avatar tears down + refetches (the flash
+  // shiki saw came from per-section resolution churning on star). #task:1146
   const dmAvatarSources = useMemo<AgentAvatarSource[]>(() => {
     const agentsById = props.agentsById;
     if (!agentsById) return [];
@@ -124,13 +134,12 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     WorkspaceItem
   >({
     listKey: 'workspaces',
-    groups: { starred, dm: dms, regular },
+    groups: { dm: homeDms, regular: homeRegular },
     viewerSort,
     getId: w => w.id,
     getCreatedAt: w => w.created_at,
     modeScopeOf: g => g,
   });
-  const orderedStarred = orderedGroups.starred;
   const orderedDms = orderedGroups.dm;
   const orderedRegular = orderedGroups.regular;
 
@@ -153,13 +162,22 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   // Activity, like Saved / Search / Archived, is a top-level view (not a
   // workspace) — suppress the workspace-row highlight so the nav doesn't show a
   // workspace AND a top-level view both selected (Cindy review).
-  const workspaceHighlight =
+  const topLevelViewActive =
     props.savedActive ||
     props.searchActive ||
     props.archivedActive ||
-    props.activityActive
-      ? null
-      : props.selectedWorkspaceId;
+    props.activityActive;
+  const workspaceHighlight = topLevelViewActive ? null : props.selectedWorkspaceId;
+  // Mirror the workspace-highlight suppression for the Favorites channel-row
+  // highlight: while a top-level view owns selection, no favorite is "current".
+  const channelHighlight = topLevelViewActive ? null : props.selectedChannelId;
+  // The starred-channel flag only matters alongside an open channel; gate it on
+  // `channelHighlight` so a top-level view can't leak it into the single-selection
+  // rule (moot anyway — the rule reads it only when selectedChannelId != null).
+  // Stays tri-state (`null` = channel open but its ws sort not cached yet) so the
+  // fail-closed workspace-row rule survives the cross-ws load window.
+  const channelStarredHighlight: boolean | null =
+    channelHighlight !== null ? props.selectedChannelStarred : false;
 
   return (
     <aside
@@ -264,28 +282,24 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           </button>
         </div>
 
-        {orderedStarred.length > 0 ? (
-          <WorkspaceGroup
-            label="STARRED"
-            kind="regular"
-            workspaces={orderedStarred}
-            selectedWorkspaceId={workspaceHighlight}
-            onSelectWorkspace={props.onSelectWorkspace}
-            onStarWorkspace={props.onStarWorkspace}
-            canRevealWorkspace={workspace =>
-              hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
-            }
-            headerAction={sortMenuFor('starred')}
-            agentsById={props.agentsById}
-            dmAgentAvatarUrls={dmAgentAvatarUrls}
-            sort={sortConfigFor('starred')}
-          />
-        ) : null}
+        {/* STARRED = global Favorites overlay (#task:1253/#task:1254).
+          * Self-contained (owns its read-model, dm-avatar resolution, unstar);
+          * renders nothing when empty. EXCLUSIVE — a starred entity lives HERE
+          * only; it has been removed from the DM/WORKSPACES groups below. */}
+        <FavoritesGroup
+          selectedWorkspaceId={workspaceHighlight}
+          selectedChannelId={channelHighlight}
+          selectedChannelStarred={channelStarredHighlight}
+          onSelectWorkspace={props.onSelectWorkspace}
+          onSelectChannel={props.onSelectChannel}
+        />
         <WorkspaceGroup
           label="DM"
           kind="dm"
           workspaces={orderedDms}
           selectedWorkspaceId={workspaceHighlight}
+          selectedChannelId={channelHighlight}
+          selectedChannelStarred={channelStarredHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
           onStarWorkspace={props.onStarWorkspace}
           canRevealWorkspace={workspace =>
@@ -302,6 +316,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           kind="regular"
           workspaces={orderedRegular}
           selectedWorkspaceId={workspaceHighlight}
+          selectedChannelId={channelHighlight}
+          selectedChannelStarred={channelStarredHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
           onStarWorkspace={props.onStarWorkspace}
           canRevealWorkspace={workspace =>
@@ -340,6 +356,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             kind="regular"
             workspaces={archived}
             selectedWorkspaceId={workspaceHighlight}
+            selectedChannelId={channelHighlight}
+            selectedChannelStarred={channelStarredHighlight}
             onSelectWorkspace={props.onSelectWorkspace}
             canRevealWorkspace={workspace =>
               hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)

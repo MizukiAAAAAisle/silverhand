@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="forza6">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Favorites (rail STARRED) v1 — forza6 mockup (#task:1250)</title>
+<style>
+  /* ────────────────────────────────────────────────────────────────
+     forza6 token subset — copied 1:1 from
+     apps/desktop/src/renderer/styles/themes/forza6.css (same subset the
+     Activity v1 mockup uses) so this reads in the real theme language.
+     VISUAL proposal only — no cursor / no backend wiring.
+     ──────────────────────────────────────────────────────────────── */
+  :root {
+    --forza6-pink: #FF2C7A;       /* channel# / unread / brand — exclusive */
+    --forza6-pink-deep: #B3186A;
+    --forza6-lime: #D4F523;       /* selection identity (only place lime is allowed) */
+    --forza6-cyan: #22B7E0;
+    --forza6-yellow: #FFEB00;
+    --forza6-ink: #0A0A0A;
+
+    --bg-app: #329E86;
+    --bg-base: #F7F8F6;
+    --bg-channels-sidebar: #F4E7ED;       /* ≈ pink 8% over bg-base */
+    --bg-row-selected: var(--forza6-lime);
+    --bg-row-hover: #F3DCE6;               /* ≈ pink 22% wash */
+    --bg-floating: #FFFFFF;
+
+    --text-primary: #0F1F1D;
+    --text-secondary: #4A5C58;
+    --text-muted: #5A6B67;
+
+    --border: rgba(15, 31, 29, 0.14);
+    --border-subtle: rgba(15, 31, 29, 0.10);
+    --border-avatar: var(--forza6-ink);
+
+    --card-radius: 6px;
+    --control-radius: 0;
+
+    --font-display: 'Rajdhani', 'Impact', 'Arial Narrow', system-ui, sans-serif;
+    --font-sans: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html { font-size: 16px; }              /* root 16px (#task:1148) */
+  body {
+    margin: 0; font-family: var(--font-sans); font-size: 14px;
+    color: var(--text-primary); background: var(--bg-app);
+    -webkit-font-smoothing: antialiased; padding: 28px; line-height: 1.45;
+  }
+  .stage { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+  .chrome-label {
+    font-family: var(--font-display); text-transform: uppercase;
+    letter-spacing: 0.06em; font-weight: 700;
+  }
+
+  /* ── App frame: NavRail + workspace sidebar ─────────────────────── */
+  .app {
+    display: flex; background: var(--bg-app);
+    border-radius: var(--card-radius); overflow: hidden;
+    box-shadow: 0 10px 30px -8px rgba(8,30,27,0.45);
+  }
+  .navrail {
+    width: 52px; background: #FAFBF6;
+    border-right: 2px solid var(--forza6-ink);
+    display: flex; flex-direction: column; align-items: center;
+    padding: 12px 0; gap: 8px;
+  }
+  .navrail .tile {
+    width: 32px; height: 32px; display: grid; place-items: center;
+    color: var(--forza6-ink); font-family: var(--font-display); font-weight: 700;
+  }
+  .navrail .tile.current { background: var(--forza6-pink); border: 2px solid var(--forza6-ink); }
+
+  /* workspace sidebar (Sidebar.tsx) — the list that holds STARRED/DM/WORKSPACES */
+  .sidebar {
+    width: 232px; background: var(--bg-channels-sidebar);
+    border-right: 2px solid var(--forza6-ink);
+    padding: 10px 0; display: flex; flex-direction: column; gap: 2px;
+  }
+
+  /* utility rows at top (Search / Saved / Archived) — shown dim for context */
+  .util {
+    display: flex; align-items: center; gap: 8px;
+    margin: 0 6px; padding: 0 8px; height: 32px;
+    border: 2px solid transparent; color: var(--text-secondary);
+  }
+  .util svg { width: 16px; height: 16px; flex: none; }
+
+  /* group header — STARRED / WORKSPACES, with a sort affordance on the right */
+  .group-head {
+    display: flex; align-items: center;
+    font-size: 10px; color: var(--text-muted);
+    padding: 12px 14px 4px;
+  }
+  .group-head .sort { margin-left: auto; opacity: 0.55; font-size: 11px; }
+
+  /* ── the row vocabulary — ALL rows the SAME height (h-8 / 32px), square,
+        ink border on hover/selected. Stable height is load-bearing: a flat
+        mixed list with uneven row heights reads as instability. ───────── */
+  .row {
+    display: flex; align-items: center; gap: 8px;
+    margin: 0 6px; padding: 0 8px; height: 32px;
+    border: 2px solid transparent; color: var(--text-secondary);
+    cursor: pointer; position: relative; min-width: 0;
+  }
+  .row:hover { background: var(--bg-row-hover); border-color: var(--forza6-ink); }
+  .row.current {
+    background: var(--bg-row-selected); color: var(--forza6-ink);
+    border-color: var(--forza6-ink); font-weight: 600;
+  }
+
+  /* workspace icon / monogram — square, ink border (WorkspaceIcon recipe) */
+  .wsicon {
+    width: 20px; height: 20px; flex: none;
+    border: 2px solid var(--border-avatar); display: grid; place-items: center;
+    font-family: var(--font-display); font-weight: 700; font-size: 11px;
+    color: #fff; line-height: 1;
+  }
+  .wsicon.sm { width: 16px; height: 16px; font-size: 9px; }
+  .wsicon.si { background: #3B6FB5; }      /* Silverhand */
+  .wsicon.da { background: #B5573B; }      /* Dalaran */
+  .wsicon.fc { background: #6B3BB5; }      /* Foundry */
+  .avatar.nm { background: #3BB58A; }      /* agent monogram (DM) */
+
+  .row .name {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1; min-width: 0;
+  }
+
+  /* channel grain marker: the # glyph. This is what makes a channel row
+     self-evidently NOT a workspace row in a flat list (no indent, no group). */
+  .hash {
+    font-family: var(--font-mono); font-weight: 700;
+    color: var(--forza6-pink-deep); flex: none;
+  }
+  .row.current .hash { color: var(--forza6-ink); }
+
+  /* parent-workspace context on a channel row — server-resolved, muted,
+     trailing. The disambiguator for same-named channels. */
+  .wsctx {
+    flex: none; max-width: 84px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 11px; color: var(--text-muted);
+    display: flex; align-items: center; gap: 4px;
+  }
+  .row.current .wsctx { color: rgba(10,10,10,0.6); }
+
+  /* No per-row star affordance: unstar lives in the row's context menu /
+     detail, not as an always-on or hover glyph (keeps the 32px row clean). */
+
+  .divider { height: 2px; background: var(--border-subtle); margin: 8px 14px; }
+
+  /* ── annotation column (review only) ────────────────────────────── */
+  .legend { width: 360px; color: #eafff8; font-size: 13px; line-height: 1.6; }
+  .legend h1 { font-family: var(--font-display); font-size: 22px; margin: 0 0 4px; letter-spacing: 0.04em; }
+  .legend .tag { font-size: 12px; opacity: 0.85; margin-bottom: 14px; }
+  .legend h4 { margin: 16px 0 4px; font-size: 13px; color: #fff; }
+  .legend ul { margin: 4px 0; padding-left: 18px; }
+  .legend li { margin: 3px 0; }
+  .legend code { background: rgba(0,0,0,0.28); padding: 1px 4px; font-family: var(--font-mono); font-size: 12px; }
+  .legend b.k { color: var(--forza6-yellow); }
+
+  .col { display: flex; flex-direction: column; gap: 20px; }
+
+  /* small A/B card to justify the # marker (visual tradeoff = visual media) */
+  .ab {
+    background: var(--bg-floating); border: 2px solid var(--forza6-ink);
+    width: 248px; padding: 0 0 10px;
+  }
+  .ab .cap { font-size: 11px; padding: 8px 10px 6px; color: var(--text-muted); }
+  .ab .cap b { color: var(--text-primary); }
+  .ab .frame { background: var(--bg-channels-sidebar); padding: 4px 0; border-top: 2px solid var(--border-subtle); }
+  .badmark { color: var(--forza6-pink-deep); font-weight: 700; }
+  .goodmark { color: #2e7d32; font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <!-- ════ Annotation (review only) ════ -->
+  <div class="legend">
+    <h1>FAVORITES · rail STARRED</h1>
+    <div class="tag">#task:1250 · forza6 · 纯视觉 mockup（不接 cursor / 不接后端）</div>
+
+    <p>把左 rail 的 <b class="k">STARRED</b> 从「只装 starred workspace」升成<b>全局 Favorites</b>：同一个 <code>starred_at</code> 事实，跨 list_key UNION 出 workspace / DM / channel，<b>铺平一层</b>，每行一个 deep link。</p>
+
+    <h4>铺平、不分组</h4>
+    <ul>
+      <li>STARRED 下 workspace 行 / DM 行 / channel 行<b>同列同高</b>，不做二层 workspace 分组（分组=第二棵 tree，扫描慢）。</li>
+      <li>行高<b>统一 32px 单行</b>：flat 混排里行高不齐会读成「列表在跳」，所以 channel 行不换两行、不缩进。</li>
+    </ul>
+
+    <h4>channel 行怎么自证身份</h4>
+    <ul>
+      <li>开头<b>只一个 marker</b>：channel 行 = <b class="k">#</b> glyph，workspace 行 = 方块 monogram icon。形态不同 = 一眼区分频道 / 工作区（没有缩进、没有组标题兜底，全靠它）。</li>
+      <li>来源 workspace 放在右侧 muted <b>父 workspace 名</b>，不再在行首塞第二个 ws icon。</li>
+      <li>这条父 ws 名同时是消歧器：两个 <code>#general</code> 靠它分开（见下方第 4/5 行）。</li>
+    </ul>
+
+    <h4>同名 channel</h4>
+    <ul>
+      <li>regular workspace 名全局唯一（DB <code>workspaces_regular_name_unique</code>），所以「父 ws 名」副标足够消歧，不需要复杂 UI。</li>
+      <li>稳定身份永远是 id <code>{kind, wsId, channelId}</code>，绝不靠 name。</li>
+    </ul>
+
+    <h4>显示字段 server-resolved</h4>
+    <ul>
+      <li><code>{workspace_id, workspace_name, workspace_icon}</code> 由 Favorites read-model 后端带在每行（沿用 Activity <code>preview_sender</code> 先例），renderer 零本地 join —— 收藏了未加载 ws 的频道也不空窗。</li>
+    </ul>
+
+    <h4>交互</h4>
+    <ul>
+      <li>点 workspace 行 = 选中该 workspace；点 channel 行 = deep link <code>/chat/w/&lt;wsId&gt;/c/&lt;channelId&gt;</code>（打开 ws 并进频道）。</li>
+      <li>行内不放 ★：unstar 走行的右键 / 详情菜单,不占行首也不靠 hover 出图标,保持 32px 行干净。</li>
+    </ul>
+  </div>
+
+  <!-- ════ App frame ════ -->
+  <div class="app">
+    <!-- NavRail -->
+    <div class="navrail">
+      <div class="tile current">S</div>
+      <div class="tile">T</div>
+      <div class="tile">M</div>
+    </div>
+
+    <!-- Workspace sidebar -->
+    <div class="sidebar">
+
+      <!-- utility rows (context only) -->
+      <div class="util">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <span class="name">Search</span>
+      </div>
+      <div class="util">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+        <span class="name">Saved</span>
+      </div>
+
+      <!-- ── STARRED = flat global Favorites ── -->
+      <div class="group-head chrome-label">STARRED <span class="sort">Recent ⌄</span></div>
+
+      <!-- starred workspace row (existing look) -->
+      <div class="row">
+        <span class="wsicon si">SI</span>
+        <span class="name">Silverhand</span>
+      </div>
+
+      <!-- starred DM row -->
+      <div class="row">
+        <span class="wsicon avatar nm">N</span>
+        <span class="name">Norman</span>
+      </div>
+
+      <!-- starred channel row — SELECTED (deep link, lime selection).
+           Single leading marker = the # glyph (no ws icon); source ws is the
+           muted trailing name. -->
+      <div class="row current">
+        <span class="hash">#</span>
+        <span class="name">ui-ux</span>
+        <span class="wsctx">Silverhand</span>
+      </div>
+
+      <!-- starred channel row — same-name disambiguation #1 -->
+      <div class="row">
+        <span class="hash">#</span>
+        <span class="name">general</span>
+        <span class="wsctx">Silverhand</span>
+      </div>
+
+      <!-- starred channel row — same-name disambiguation #2 (different ws) -->
+      <div class="row">
+        <span class="hash">#</span>
+        <span class="name">general</span>
+        <span class="wsctx">Dalaran</span>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- ── normal WORKSPACES group below, for contrast ── -->
+      <div class="group-head chrome-label">WORKSPACES <span class="sort">Recent ⌄</span></div>
+      <div class="row">
+        <span class="wsicon si">SI</span>
+        <span class="name">Silverhand</span>
+      </div>
+      <div class="row">
+        <span class="wsicon da">DA</span>
+        <span class="name">Dalaran</span>
+      </div>
+      <div class="row">
+        <span class="wsicon fc">FC</span>
+        <span class="name">Foundry</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════ A/B: one leading marker, not two ════ -->
+  <div class="col">
+    <div class="ab">
+      <div class="cap"><b>推荐</b> · 开头只一个 marker：channel = <span class="goodmark">#</span>，ws = 方块 icon</div>
+      <div class="frame">
+        <div class="row">
+          <span class="hash">#</span>
+          <span class="name">general</span>
+          <span class="wsctx">Silverhand</span>
+        </div>
+        <div class="row">
+          <span class="wsicon si">SI</span>
+          <span class="name">Silverhand</span>
+        </div>
+      </div>
+      <div class="cap" style="padding-top:8px;"># 与方块 icon 形态不同，一眼分开频道/工作区；来源 ws 用尾部 muted 名兜底，不必再塞一个 icon。</div>
+    </div>
+
+    <div class="ab">
+      <div class="cap"><span class="badmark">不推荐</span> · channel 行同时挂 ws icon + #（<span class="badmark">两个 icon</span>）</div>
+      <div class="frame">
+        <div class="row">
+          <span class="wsicon sm si">SI</span>
+          <span class="hash">#</span>
+          <span class="name">general</span>
+          <span class="wsctx">Silverhand</span>
+        </div>
+        <div class="row">
+          <span class="wsicon si">SI</span>
+          <span class="name">Silverhand</span>
+        </div>
+      </div>
+      <div class="cap" style="padding-top:8px;">开头两个图标，行首变拥挤、视线先撞 ws icon 再找 #；尾部已有 ws 名，前面的 ws icon 是冗余。</div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
