@@ -3,7 +3,7 @@
 Status: **design / not yet implemented.** Owner: Alice (transport↔ingestor cursor
 contract). Reviewers: Cindy (backend publish + model boundary), Norman (renderer
 subscribe). Gates the Stage-2 #1255 **P2** transport work (flip cursor to
-`markApplied` + cold-start two-watermark + drop orphan gate). **No backend /
+`markSatisfied` + cold-start two-watermark + drop orphan gate). **No backend /
 transport code changes until this doc + the kind matrix below are signed off by
 Cindy and the scope-topology change is blessed by shiki** (it has grown past the
 original "single-scope cursor flip" P2 framing). Companion docs:
@@ -16,7 +16,7 @@ original "single-scope cursor flip" P2 framing). Companion docs:
 P1 made the App-level conversation ingestor the sole writer of the conversation
 **message-window** cache and turned every product view into a pure reader. P2 was
 originally scoped as "flip the transport cursor writer from `acceptEventFrame` to
-the ingestor's `markApplied`, add cold-start two-watermark, drop the orphan gate"
+the ingestor's `markSatisfied`, add cold-start two-watermark, drop the orphan gate"
 — on the assumption that, under synchronous apply, `received-high-water ≡
 applied-high-water`, so one per-scope cursor suffices.
 
@@ -120,14 +120,14 @@ the invalidate-class out:
 
 - **`conversation:<id>` = message-stream** (unchanged scope name): `message`,
   `message_reaction_changed`, `task_changed`. **Resume floor** =
-  `applied-high-water`, advanced only by ingestor `markApplied` on content-apply
+  `applied-high-water`, advanced only by ingestor `markSatisfied` on content-apply
   (§4); **wire continuity** = a separate `received-high-water` advanced on every
   received frame. The two diverge whenever a derived-invalidate reader keeps the
   scope live without a content reader (§4 two-watermark).
 - **`conversation-side:<id>` = side-channel** (new scope): `agent_status`,
   `agent_activity`, `conversation_activity`, `conversation_members_changed`,
   `thread_updated`(if ever consumed; today unconsumed — see §2).
-  **Cursor-inert**: no `markApplied`, no resume floor, no message
+  **Cursor-inert**: no `markSatisfied`, no resume floor, no message
   `snapshot_required` semantics (gate-2). Recovery is per-consumer invalidate /
   own REST cold-start (each already exists from P1c). It reuses the EventWs
   transport + replay buffer purely as a delivery pipe.
@@ -180,7 +180,7 @@ content-apply fence alone leaves the derived-invalidate readers diverging
   **only**. It does **not** imply the frame's content is store-recoverable (Cindy
   口径 1) — a received frame may have been applied, no-op'd, or readerless.
 - **`applied-high-water`** (= `positions[scope]`) — advanced by ingestor
-  `markApplied` **only on a real content write** (§4.1 predicate). It alone is the
+  `markSatisfied` **only on a real content write** (§4.1 predicate). It alone is the
   **resume floor** (resubscribe replays from here so a later-mounting content
   reader recovers).
 
@@ -219,15 +219,15 @@ Why option 2 over Cindy's 1/2/3: **option 2, with option 1 now excluded.**
 ### 4.1 The content-apply predicate
 
 - `acceptEventFrame` no longer advances `applied-high-water`
-  (`positions[conversation:<id>]`); the ingestor's `markApplied(scope, seq,
+  (`positions[conversation:<id>]`); the ingestor's `markSatisfied(scope, seq,
   epoch)` does, synchronously after the frame is applied. (`acceptEventFrame`
   still advances `received-high-water` for gap detection.) This **supersedes the
-  P1-era "markApplied fires regardless of store effect, else the cursor stalls"
+  P1-era "markSatisfied fires regardless of store effect, else the cursor stalls"
   reasoning** — under two watermarks, `received` carries continuity, so `applied`
   is free to advance *only* on real content and never stalls gap detection.
 
 - **What "applied" means — a real write to a resume-recoverable content cache**
-  (Cindy's boundary; refines `event-ws-transport-v1.md` §4.1). `markApplied` fires
+  (Cindy's boundary; refines `event-ws-transport-v1.md` §4.1). `markSatisfied` fires
   iff a helper reports it **actually mutated** a resume-recoverable cache:
   - **IN (advances `applied`):** mainline tail-append, mainline live-gap bump,
     **in-window** reply-count bump, cluster append/patch, thread-root / root-badge
@@ -239,10 +239,10 @@ Why option 2 over Cindy's 1/2/3: **option 2, with option 1 now excluded.**
 
 - **Implementation hinge — helpers must return `applied: boolean` (Norman ①).**
   `applyMainlineMessageToChannelCaches` → `bumpReplyCountInCache` returns a **new
-  outer object even on a no-op**, so `markApplied` must **not** be inferred from a
+  outer object even on a no-op**, so `markSatisfied` must **not** be inferred from a
   `setQueryData` reference change — it would misread an off-window no-op as an
   apply and wrongly advance the resume floor (the exact #1251 re-entry). Each apply
-  helper returns an explicit mutation result; `markApplied` keys on that.
+  helper returns an explicit mutation result; `markSatisfied` keys on that.
 
 - **Safety asymmetry is per-kind, gated on replay-idempotency (Norman + Cindy).**
   A false **positive** is always #1251 (no-op marked applied → floor floats past
@@ -263,7 +263,15 @@ Why option 2 over Cindy's 1/2/3: **option 2, with option 1 now excluded.**
   (Cindy): every `applied:false` path that can be replayed must be *proven*
   idempotent or accurately marked — a boolean predicate alone is insufficient.
 
-  > **Non-idempotent delta resolution (Alice + Cindy, signed).** Reachability
+  > **Non-idempotent delta resolution (Alice + Cindy, signed) — ⚠️ SUPERSEDED
+  > (#1263 (c) + #1264).** The reasoning below reaches for *delivery provenance*
+  > (`+1` on `live`, authoritative recovery on `backfill`). What actually landed is
+  > simpler: **#1263 (c) dropped the optimistic `+1` for every delivery** — reply
+  > counts recover by authoritative invalidate/refetch on `live` and `backfill`
+  > alike, so replay is idempotent-by-construction and no consumer needs the tag.
+  > **#1264 then deleted delivery provenance entirely** (see
+  > `event-ws-transport-v1.md` §2/§9). Read this as the reasoning that motivated
+  > authoritative recovery, not as the current delivery model. — Reachability
   > confirmed: refcounted `subscribe()` (ChannelView under an already-subscribed
   > Threads panel fires no resume) + authoritative REST `reply_counts_by_root`
   > including a prior off-window reply + a later reconnect resuming from the old
@@ -318,10 +326,10 @@ Why option 2 over Cindy's 1/2/3: **option 2, with option 1 now excluded.**
 - **Orphan gate → received-high-water.** The orphan gate (`f8ed335`) conflated
   two jobs: wire-gap detection and stopping a readerless frame from floating the
   resume cursor. P2 splits them: `received-high-water` (advanced for every desired
-  scope frame) takes wire-gap detection; `applied-high-water` (markApplied,
+  scope frame) takes wire-gap detection; `applied-high-water` (markSatisfied,
   content-apply only) is the resume floor. `acceptEventFrame` stops self-advancing
   the **resume** cursor — that flip is safe here because the preconditions hold
-  (ingestor sole markApplied caller + sole message-window writer; no view hook
+  (ingestor sole markSatisfied caller + sole message-window writer; no view hook
   writes the message-window cache or resume cursor). `useConversationMembers` /
   agent / activity readers no longer touch this scope (they moved to
   `conversation-side:<id>`). `useChannelThreads` / `useThreadFollowers` stay, but
@@ -330,7 +338,7 @@ Why option 2 over Cindy's 1/2/3: **option 2, with option 1 now excluded.**
 
 ## 5. Side-channel recovery model (gate-2)
 
-Side-channel frames must **never**: call `markApplied`, advance any resume floor,
+Side-channel frames must **never**: call `markSatisfied`, advance any resume floor,
 or trigger the message-stream `snapshot_required` → message refetch path. On a
 `conversation-side:<id>` `snapshot_required`, each consumer does its **own**
 invalidate / REST snapshot (members invalidate, agents reconcile, activity
@@ -341,7 +349,7 @@ infinite-query refetch). Read-inert holds throughout (no `conversation_reads` /
 condition 2).** It is a normal transport scope: it keeps `received`-side delivery
 — ordered fan-out, gap detection, the replay buffer, and `snapshot_required` as a
 delivery pipe + diagnostics. What it does **not** have is the message
-**`applied`/resume-floor** layer: no `markApplied`, it never feeds any message
+**`applied`/resume-floor** layer: no `markSatisfied`, it never feeds any message
 resume floor, and its `snapshot_required` drives only each consumer's own
 invalidate (never a message refetch). So §8's "no-listener replay on both scopes"
 is consistent — both scopes replay at the transport layer; only message-stream
@@ -351,11 +359,11 @@ carries the `applied` content-resume watermark.
 
 `components/dev/EventStream.tsx` still subscribes `conversation:<id>` via
 `useConversationStream`. Post-P2 it must **not** be a product cursor consumer:
-either (a) it subscribes observe-only (never feeds `markApplied` / never advances
+either (a) it subscribes observe-only (never feeds `markSatisfied` / never advances
 `positions`), or (b) it moves to a dedicated diagnostic subscription. Decision:
 **(a) observe-only** — least churn; `useConversationStream` already only
 dispatches, and dev EventStream never wrote the cursor. We assert (test) that no
-`markApplied` path is reachable from `useConversationStream`. This prevents the
+`markSatisfied` path is reachable from `useConversationStream`. This prevents the
 dev panel from re-creating a "listener present but no store apply" gray zone.
 
 ## 7. Migration plan (gate-4 — no double-publish / missed-subscription)
@@ -402,7 +410,7 @@ Phased, each step shippable, with test locks:
    covered for **both** scopes (≥1 each); a Threads-panel-only reader still
    receives `message` frames and refetches the list; an open activity timeline
    backfills on a side-scope `snapshot_required` (not only on remount).
-4. **P2 cursor flip on message-stream** (Alice lane): markApplied + cold-start
+4. **P2 cursor flip on message-stream** (Alice lane): markSatisfied + cold-start
    two-watermark + drop orphan gate (§4). Only after steps 1–3 land green.
 
 Ordering rule: a kind is published to its new scope and consumed there in the
@@ -415,9 +423,9 @@ other).
    appears in §2 with a single class; CI guard that a new publish kind must be
    classified.
 2. **Side-channel cursor-inertness** — a side-channel frame never advances
-   `positions` / never calls `markApplied` / a side-scope `snapshot_required`
+   `positions` / never calls `markSatisfied` / a side-scope `snapshot_required`
    drives only that consumer's invalidate, not a message refetch.
-3. **dev EventStream observe-only** — no `markApplied` reachable from
+3. **dev EventStream observe-only** — no `markSatisfied` reachable from
    `useConversationStream`; dev panel subscription does not move the product cursor.
 4. **Migration integrity** — message-stream scope test receives only
    message/reaction/task_changed; side scope only side-channel kinds; two-scope
@@ -438,7 +446,7 @@ other).
    deliver two consecutive replies to an **off-window** root (seq 12, 13); assert
    `received` → 13, `applied` does **not** advance (semantic no-op), no false gap;
    then open that root/cluster → resume/REST backfills it correctly.
-   (f) *helper mutation result, not reference (Cindy 口径 2)*: `markApplied` keys
+   (f) *helper mutation result, not reference (Cindy 口径 2)*: `markSatisfied` keys
    on the helper's explicit `applied: boolean`, which **forbids false positives**
    and **allows false negatives**. Lock all three no-op classes to `applied:false`
    even though each may return a fresh outer object: off-window reply-count bump,
@@ -448,37 +456,38 @@ other).
    on the content cache) and (ii) every content kind on message-stream has
    `snapshot_required` coverage — so an under-reported `applied` costs at most one
    extra replay / an earlier `snapshot_required`, never a drop.
-   (h) *non-idempotent delta provenance — both directions (Alice + Cindy)*:
-   (i) REST window already includes the reply count, then a resume **backfill** of
-   that reply → **not** double-counted (backfill skips the optimistic `+1`);
-   (ii) an active in-window root misses a reply during a disconnect → resume
-   **backfill** does **not** delta-apply but **does** trigger refetch/reconcile →
-   final count is correctly +1 (no missed-count). Idempotent kinds apply
-   identically on `live` and `backfill`.
-   (iii) *coalesce, no storm (Norman)*: N backfill non-idempotent deltas on the
+   (h) *reply-count replay idempotency — #1263 (c), provenance deleted #1264*:
+   the optimistic `+1` is gone; every delivery (live or replayed) recovers the
+   count by authoritative invalidate/refetch, so replay is idempotent-by-
+   construction. Tests: (i) the SAME reply frame delivered twice (live + replay)
+   → the local count is **never bumped** (`bumpReplyCountInCache` no longer `+1`s)
+   → cannot double-count; (ii) an active in-window root missing a reply during a
+   disconnect → resume redelivers → invalidate/refetch → final count correctly +1
+   (no missed-count). There is no `live`/`backfill` classification to test — a
+   replayed frame dispatches identically to fresh fanout.
+   (iii) *coalesce, no storm (Norman)*: N reply-count invalidates on the
    same target across one resume → `invalidateQueries` natural dedup → **one**
    refetch, no refetch storm.
-   (h2) *applied-water of backfill-reconcile is commit-gated, not dispatch-gated
-   (Alice + Cindy + Norman, signed; reverses the earlier "invalidate fired ⟹
-   applied" lean)*: a backfill non-idempotent delta **initiates** recovery and stays
-   **unapplied until recovery commits**; applied-water advances only through
-   **contiguous satisfied** frames, so a pending seq N blocks the floor even when a
-   later N+1 already applied. v1 = option 1 (floor pins at N−1, releases via the
-   existing buffer-overflow → `snapshot_required` path (commit the floor to the
-   server-stamped `SnapshotRequiredFrame.currentSeq`, apply-gated; transport seq,
-   never `stream_head_seq` — see `event-ws-transport-v1.md` §6)
-   path; bounded redundant replay accepted). `satisfied` = authoritative value
-   written to cache **or** old content `removeQueries`-removed (real delete) and
-   non-displayable — never "recovery merely dispatched". Tests: (i) pending backfill
-   delta does not advance floor; (ii) a later applied frame does not jump a pending
-   seq; (iii) floor releases on the covering snapshot; (iv) **inactive/absent**
-   target's `removeQueries` route → seq satisfied (floor may advance); (v) **active**
-   target uses invalidate/refetch (no `removeQueries` flash) → seq stays pending
-   until commit. (Per-scope pending-satisfaction queue = deferred option 2; canonical
-   in `event-ws-transport-v1.md` §4.1.)
+   (h2) *satisfaction is commit-gated, not dispatch-gated (#1261; Alice + Cindy +
+   Norman, signed)*: a derived-invalidate reply-count effect **initiates** a
+   refetch and stays **unsatisfied until that refetch commits**; the floor
+   advances only through **contiguous satisfied** frames, so a pending seq N blocks
+   the floor even when a later N+1 already applied. The **pending-satisfaction
+   queue** landed (was "deferred option 2"): `markSatisfied` records the seq, then
+   drains the floor contiguously; a rejected refetch pins the floor. `satisfied` =
+   all per-target effects committed (`Promise.allSettled` all-fulfilled):
+   authoritative value written **or** old content `removeQueries`-removed (real
+   delete, non-displayable) **or** cold-absent (vacuous) — never "recovery merely
+   dispatched". Tests: (i) a content-write frame satisfies once after settle;
+   (ii) a derived-invalidate reply satisfies only AFTER the refetch commits (not
+   on dispatch), no optimistic `+1`; (iii) a rejected refetch pins the floor;
+   (iv) **warm-inactive** target's `removeQueries` route → satisfied (floor may
+   advance); (v) **cold-absent** → vacuous satisfy; (vi) a multi-target reply
+   satisfies EXACTLY ONCE after all effects settle. (Canonical satisfaction
+   disposition in `event-ws-transport-v1.md` §9.)
 
 Plus the message-stream cursor tests inherited from `event-ws-transport-v1.md` §8
-(no-listener gap, orphan-frame — the latter now via markApplied), and cold-start
+(no-listener gap, orphan-frame — the latter now via markSatisfied), and cold-start
 two-watermark (§4 cold-start axis).
 
 ## P2 done-criteria + acknowledged residual (Cindy, honest delivery framing)

@@ -62,16 +62,21 @@ read-state only advances on an explicit user action elsewhere. **"补帧『可�
 must **never** touch `conversation_reads` / `notifications.read_at` (the table
 above stands unchanged).
 
-**Stage-2 (#1255) does need delivery provenance — but at the delivery layer, not
-on the payload.** A non-idempotent delta (reply-count / thread-root bump, §4.1)
-must know whether it is applying a `live` frame (optimistic `+1`) or a `backfill`
-(replay-buffer) frame (→ authoritative recovery, never `+1`). This is **delivery
-metadata** the ws-client/ingestor already has — live fanout vs replay-buffer
-drain — surfaced to the ingestor as `{provenance: 'live' | 'backfill'}` (or
-equivalent call-path context). The **wire `event` frame and `MessageDto` stay
-byte-identical**; provenance is *not* a backend payload/schema change. It governs
-only content-recovery for non-idempotent deltas — it still writes no read-state,
-so read-inertness holds.
+**Stage-2 (#1255) originally needed delivery provenance — SUPERSEDED (#1263 (c) +
+#1264).** The reason provenance existed: a non-idempotent delta (reply-count /
+thread-root bump, §4.1) applying a replayed frame optimistically (`+1`) would
+double-count if a concurrent REST snapshot already covered it, so the ingestor
+had to know whether a frame was `live` (optimistic `+1`) or `backfill` (replay
+drain → authoritative recovery). **#1263 (c) removed the optimistic `+1`
+entirely:** every non-idempotent projection now recovers by *authoritative
+invalidate* (`live` ≡ `backfill`), and rows dedupe by id. With no consumer that
+branches on it, provenance became a dead classification and **#1264 deleted it
+end to end** — the ws-client no longer derives `live`/`backfill`, `onFrame`
+carries no `meta`, and a replay-drain frame dispatches identically to fresh
+fanout. Idempotency of a replayed frame is now wholly the ingestor's
+responsibility. The wire `event` frame and `MessageDto` were byte-identical
+throughout; provenance was never a backend payload/schema concern, and its
+removal writes no read-state either, so read-inertness holds unchanged.
 
 ## 3. Subscribe = establish-listener, resume-from-cursor
 
@@ -138,7 +143,7 @@ subscribe
   → commit transport cursor = S            (transport space)
   → drain the buffer in transport-seq order:
       • message-kind: dedup by payload.message.seq vs stream_head_seq (message space)
-      • each frame: after its store effect succeeds → markApplied(scope, frame.seq, frame.epoch)
+      • each frame: after its effects commit → markSatisfied(scope, frame.seq, frame.epoch)
 ```
 
 Subscribe-before-read closes the "published after the REST read but before the
@@ -287,6 +292,26 @@ socket-received.**
 > `snapshot_required` coverage. Otherwise "false-negative safe" degenerates into a
 > hidden compensation path.
 >
+> > **⚠️ TERMINAL RESOLUTION (#1263 (c) + #1261 + #1264) — read before the debate
+> > below.** The signed narrative that follows reasons from *delivery provenance*
+> > (`live` → optimistic `+1`; `backfill` → authoritative recovery) and an
+> > *option-1 floor-pin*. Both were superseded by what actually landed:
+> > - **(c): no optimistic `+1` at all.** Every non-idempotent projection
+> >   (mainline `reply_counts_by_root`, thread-root bump) recovers by
+> >   *authoritative invalidate/refetch* on **every** delivery — `live` and
+> >   `backfill` apply identically. With nothing branching on provenance, **#1264
+> >   deleted provenance end to end** (see §2). Rows still dedupe by id.
+> > - **#1261: the option-2 pending-satisfaction queue was built** (not the
+> >   option-1 floor-pin). A frame becomes *satisfied* — and only then advances the
+> >   floor — once **all** its per-target effects **commit** (`Promise.allSettled`
+> >   all-fulfilled: sync writes done + async invalidate/refetch settled), with a
+> >   per-scope pending set draining the floor contiguously. `markApplied` was
+> >   generalized to `markSatisfied` (see §9).
+> > The "commit-gated, not dispatch-gated" and "contiguous floor" invariants below
+> > survive verbatim; the `live`/`backfill` *classification* and the floor-pin
+> > *release-via-snapshot-overflow* do not. Read the rest as the reasoning that
+> > produced those two invariants, not as the current delivery model.
+> >
 > > **Non-idempotent delta resolution (Alice + Cindy, signed).** Reachability is
 > > **confirmed** (`subscribe()` is refcounted, so a ChannelView mounting under an
 > > already-subscribed Threads panel fires no resume; the initial REST load makes
@@ -503,10 +528,11 @@ proof forbids it). The scope stays subscribed across snapshot_required (no
   — a content fact it owns — via a transport method (e.g.
   `commitSnapshotBaseline(scope, epoch)`); transport translates that into advancing
   the floor to the seq **it** stashed. This is the same commit-after-apply discipline
-  as `markApplied` for content frames and the active-target backfill recovery (§4.1).
+  as `markSatisfied` for content frames (§4.1).
 
-This is exactly what releases the option-1 backfill floor-pin (§4.1): when the
-pinned floor lets the gap grow past the replay buffer, the server emits
+This is exactly what releases a **real-gap floor-pin** (§4.1): when an unsatisfied
+seq (a genuine gap, not a cursor-inert frame the satisfaction queue absorbs) lets
+the gap grow past the replay buffer, the server emits
 `snapshot_required{currentSeq}`; the apply-gated commit above advances the floor to
 `currentSeq` with a **real transport seq**, not the imaginary `snapshotMaxSeq` the
 earlier draft named.
@@ -563,10 +589,9 @@ at once.
 ## 9. Implementation status — step-4 transport seam (#1255 P2, shipped)
 
 The transport half of the two-watermark flip is implemented in `ws-client.ts`
-(the ingestor half — `markApplied` call sites, `commitSnapshotBaseline` after the
-`allSettled` reconcile join, and the `live`/`backfill` provenance branch — is
-Norman's renderer lane). The v1 decisions worth naming (all deliberate, all
-correctness-first):
+(the ingestor half — `markSatisfied` call sites and `commitSnapshotBaseline`
+after the `allSettled` reconcile join — is Norman's renderer lane). The v1
+decisions worth naming (all deliberate, all correctness-first):
 
 - **Two watermarks only for content-gated scopes** (`isContentGated(scope) =
   parseConversationScope(scope) !== null`, i.e. the message stream
@@ -575,48 +600,67 @@ correctness-first):
   with `received`** — the pre-P2 single-cursor behavior, preserved bit-for-bit.
   `conversation-side:` is cursor-inert / self-healing, so it correctly falls in
   the auto-advance set.
-- **Provenance is derived from the REPLAY CONTEXT, not the received-water.**
-  (Corrects an earlier "derived from received-water" claim — retracted: it only
-  caught *duplicate* re-delivery.) A frame is `backfill` iff it is a duplicate
-  (`seq <= received`) **or** falls in an active replay window (`seq <=
-  backfillThrough`, same epoch); otherwise `live`. The window (`backfillThrough`)
-  is armed ONLY when a replay-buffer drain is genuinely in flight: a `subscribed`
-  ack for a scope with a retained SAME-epoch floor (a resume was paired →
-  server replays `floor+1..head`) → window = ack head; or a forward gap → window
-  = gap-trigger seq. A fresh cold-start ack (no floor) or a stale-epoch ack (→
-  `snapshot_required`, not a replay) does **not** arm it — an ack head is only a
-  baseline there. This matters because a replay drain re-delivers frames the
-  client **never received** (a forward-gap fill, a new-during-disconnect frame):
-  those are `> received` yet must be `backfill`, since a concurrent REST snapshot
-  may already cover them — a blind `+1` would double-count. Delivered as a second
-  `onFrame(frame, meta)` arg (`EventDeliveryMeta`), undefined for non-event frames
-  — no wire/payload change.
-- **`markSatisfied` advance is a pending-satisfaction queue (#1261, was v1 option 1)
-  AND not a baseline authority.** `markSatisfied` generalizes the former
-  `markApplied`: the ingestor calls it once a frame reaches a resume-safe
-  DISPOSITION (content committed OR cursor-inert and harmless to replay — see
-  §4.1). The satisfied seq is recorded, then the floor drains contiguously from
-  `floor+1` through every already-satisfied seq — so an out-of-order satisfy (a
-  later frame satisfied while an earlier seq is still pending) is remembered and
-  absorbed the moment the gap fills, and a cursor-inert frame no longer PINS the
-  floor behind it. A genuinely un-satisfied seq (a real gap) still pins the floor
-  until the covering `snapshot_required` commit or a replay re-satisfies it.
-  Set-max is still forbidden (false-positive = #1251). With **no same-epoch
-  floor** (missing / stale-epoch) `markSatisfied` is a **no-op +
-  `markSatisfied_no_floor` diagnostic** — it must NOT establish a floor from an
-  arbitrary satisfied seq (that would let the next resume start there, skipping
-  every un-received seq below it — the #1251 hole re-opened). Only the
-  `subscribed` ack and `commitSnapshotBaseline` may establish a floor (they
-  reflect the server head); the floor self-heals when the next ack / snapshot
-  baselines it. The pending set is per-scope+epoch, cleared on connection reset
-  (replay rebuilds it) and on any floor reposition, with a bounded
-  `satisfied_pending_overflow` diagnostic. **NOTE:** the CALLER-side disposition
-  contract (what counts as satisfied — vacuous only after warm-inactive
-  `removeQueries`, effect set = all active message-derived projections, all
-  `allSettled`-fulfilled) lands with the (c)+#1261 renderer half (#1263-redo);
-  this doc's §4.1 satisfaction-disposition write-up + the full
-  `markApplied`→`markSatisfied` prose rename across the ingestion docs are owed
-  when that half PASSes.
+- **No delivery-provenance classification (deleted #1264).** `acceptEventFrame`
+  is a pure seq-continuity gate returning `boolean`: `seq === received+1` →
+  accept + advance received (and, for non-content-gated scopes, the auto floor);
+  `seq > received+1` → forward gap → resume from the applied floor + swallow;
+  `seq <= received` → duplicate re-delivery, accept without moving any water mark.
+  A replay-drain frame (a forward-gap fill, a new-during-disconnect frame the
+  client never received) dispatches **identically** to fresh fanout — there is no
+  `live`/`backfill` tag, no `backfillThrough` replay window, and no `meta` arg on
+  `onFrame`. Replay idempotency is the ingestor's job (#1263 (c):
+  authoritative-invalidate on every delivery, id-dedup rows). This removed the
+  former `backfillThrough` field + `noteBackfillThrough` and the provenance
+  return; the two-watermark accept/gap/resume logic is otherwise unchanged.
+- **`markSatisfied` advance is a pending-satisfaction queue (#1261) AND not a
+  baseline authority.** `markSatisfied` generalizes the former `markApplied`: the
+  ingestor calls it once a frame reaches a resume-safe DISPOSITION (content
+  committed OR cursor-inert and harmless to replay — see §4.1). The satisfied seq
+  is recorded, then the floor drains contiguously from `floor+1` through every
+  already-satisfied seq — so an out-of-order satisfy (a later frame satisfied
+  while an earlier seq is still pending) is remembered and absorbed the moment the
+  gap fills, and a cursor-inert frame no longer PINS the floor behind it. A
+  genuinely un-satisfied seq (a real gap) still pins the floor until the covering
+  `snapshot_required` commit or a replay re-satisfies it. Set-max is still
+  forbidden (false-positive = #1251). With **no same-epoch floor** (missing /
+  stale-epoch) `markSatisfied` is a **no-op + `markSatisfied_no_floor`
+  diagnostic** — it must NOT establish a floor from an arbitrary satisfied seq
+  (that would let the next resume start there, skipping every un-received seq
+  below it — the #1251 hole re-opened). Only the `subscribed` ack and
+  `commitSnapshotBaseline` may establish a floor (they reflect the server head);
+  the floor self-heals when the next ack / snapshot baselines it. The pending set
+  is per-scope+epoch, cleared on connection reset (replay rebuilds it), on any
+  floor reposition, and on last-unsubscribe (#1261 blocker fix), with a bounded
+  `satisfied_pending_overflow` diagnostic.
+- **Satisfaction disposition — what "satisfied" means per frame kind (§4.1
+  caller contract, landed with (c)+#1261).** The ingestor computes, per delivered
+  frame, the full set of per-target effects and satisfies the seq once they all
+  **commit** (`Promise.allSettled` all-fulfilled), never on dispatch:
+  - *content write* (mainline append, cluster append) → satisfied after the
+    `setQueryData`/reconcile writes;
+  - *derived-invalidate* (reply-count on mainline + thread-root) → satisfied only
+    after the invalidate's refetch **commits** (a rejected refetch pins the floor
+    — commit-gated, not dispatch-gated);
+  - *warm-inactive target* (warm cache, no observer) → `removeQueries` then
+    satisfied (next open cold-starts authoritatively);
+  - *cold-absent* (no cache, no observer) → satisfied **vacuously** (cold-start is
+    authoritative on next open; advancing past it can't strand a warm displayable
+    cache);
+  - *side-scope frames* → never `markSatisfied` (the side floor auto-advances).
+  **Named exception — the hybrid gate (#1263 (A), first-site here).** `task_changed`
+  and `reaction` keep the **synchronous boolean** content-apply gate rather than
+  the async `allSettled` path, because they are pure idempotent patches (task sets
+  fields; reaction sets the absolute count). The criterion that governs whether an
+  effect joins the gated `allSettled` set is: **an effect is gated iff resume
+  correctness depends on its settle — i.e. it accumulates resume-replay-dependent
+  persistent state — NOT merely "it calls invalidate".** Reaction's cursor-inert
+  sub-effect `reactors_list_refresh` (the who-reacted popover) is
+  *authoritative-on-open* (a fresh REST fetch on hover) and accumulates **zero**
+  ingestor state, so it is **not** gated — advancing the floor past a reaction
+  frame strands nothing. Falsifier (test-locked): the ingestor must leave
+  `messageReactorsKey` untouched (`undefined`) after a reaction frame. This guards
+  against a future "unify everything onto the satisfaction path" refactor
+  wrongly pulling authoritative-on-open effects into the gate.
 - **`snapshot_required` re-cold-start is fully apply-gated** (pendingBaseline +
   buffer `> currentSeq` + `commitSnapshotBaseline(scope, epoch)`, epoch-checked,
   drains post-commit). **Cold-start (first subscribe) is NOT pendingBaseline-gated

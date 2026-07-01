@@ -103,28 +103,33 @@ cursor advance *because* apply happened. The agreed contract (Alice transport ·
 1. **Delivery guarantee (transport→ingestor):** within one epoch, frames are delivered **in seq order,
    contiguous**; a gap is filled by resume *before* delivery, or escalated to `snapshot_required`. The
    ingestor does **NOT** recompute continuity.
-2. **`markApplied(scope, seq, epoch)`:** the ingestor calls it **synchronously, once per frame, in seq
-   order, after a successful apply**. `epoch` is mandatory (prevents a frame applied just before an epoch
-   flip from clobbering the new baseline with a stale-epoch mark). Hard ordering: **apply → markApplied**,
-   never cursor-before-apply.
+2. **`markSatisfied(scope, seq, epoch)` (renamed from `markApplied` by #1261):** the ingestor calls it **once per
+   frame, in seq order, after the frame's effects COMMIT**. `epoch` is mandatory (prevents a frame satisfied
+   just before an epoch flip from clobbering the new baseline with a stale-epoch mark). #1261 generalized the
+   former synchronous `markApplied` (single content write) into a **pending-satisfaction queue**: a frame's
+   seq is recorded satisfied once all its per-target effects commit (`Promise.allSettled` all-fulfilled —
+   sync writes done + async invalidate/refetch settled), then the floor drains contiguously from `floor+1`
+   through every already-satisfied seq. So a cursor-inert frame no longer PINS the floor, and an
+   out-of-order satisfy is absorbed the moment the gap fills. Hard ordering: **effects commit → markSatisfied**,
+   never cursor-before-commit. (Full disposition contract per frame kind: `event-ws-transport-v1.md` §9.)
 3. **Apply-failure (Cindy #3):** the ingestor **wraps each frame's apply in try/catch**, records an
-   `ingestor:apply_failed {scope, seq, kind}` diagnostic, and **does not markApplied** — it must NOT rely
+   `ingestor:apply_failed {scope, seq, kind}` diagnostic, and **does not markSatisfied** — it must NOT rely
    on an exception bubbling up naturally. One event writes several RQ caches (a message frame touches
    `messagesKey` + `clusterMessagesKey` + `threadRootKey`) ⇒ **no natural all-or-nothing** ⇒ every partial
    write must be **idempotent / replay-safe** (already true: `cacheHasMessage` id-dedup, id-keyed reply
    bumps). Self-heal = *failure → cursor doesn't advance → the **next frame or resubscribe** triggers
    recovery/replay → resume re-delivers → idempotent replay fills in* (no instant trigger required — if no
    frame follows the failure, the unadvanced cursor still makes the next `resume` re-deliver). **Not a
-   rollback.** `markApplied` is the single commit point, reached only
-   when all of a frame's writes returned without throwing.
+   rollback.** `markSatisfied` is the single commit point, reached only
+   when all of a frame's effects committed without throwing (a rejected refetch pins the floor).
 4. **Input assertion (Cindy #4):** per scope, assert incoming seq ∈ {already-seen (dup → idempotently
    absorbed, cursor **not** rewound)} ∪ {applied+1}. A `> applied+1` frame should never reach the ingestor
-   (= transport was bypassed) → `ingestor:nonmonotonic_input` diagnostic + **no markApplied**. A narrow
+   (= transport was bypassed) → `ingestor:nonmonotonic_input` diagnostic + **no markSatisfied**. A narrow
    fence against a future bypass path — **not** a second resume engine; it never reorders or recovers.
 5. **Cold-start spans TWO independent seq spaces — never conflate them (Alice catch, Cindy confirmed).**
    - **transport seq** (`EventFrame.seq` / `subscribed.seq` / `positions.lastSeq` / resume): in-memory
      `seqCounters` (`scope-event-bus.ts`), **resets to 0 each backend boot, bound to `epoch` (process
-     UUID), counts all event kinds**. This is the **only** space `positions[scope]` / resume / `markApplied`
+     UUID), counts all event kinds**. This is the **only** space `positions[scope]` / resume / `markSatisfied`
      operate in.
    - **message seq** (`stream_head_seq` / observe `at_seq` / `conversation_reads`): the **persistent**
      conversation-global allocator (`reserveNextSeq` → `conversation_stream_heads.latest_seq`,
@@ -132,7 +137,7 @@ cursor advance *because* apply happened. The agreed contract (Alice transport ·
 
    Seeding the transport cursor with `stream_head_seq` is a **cross-space bug**: after a backend restart
    transport seq resets to 0 (new epoch) while `stream_head_seq` stays high (e.g. 2521);
-   `markApplied(scope, 2521, newEpoch)` → `resume{lastSeq:2521}` → the new buffer (transport seq 1..N) has
+   `markSatisfied(scope, 2521, newEpoch)` → `resume{lastSeq:2521}` → the new buffer (transport seq 1..N) has
    nothing `> 2521` → empty → the client thinks it is caught up, and live frames at transport seq 1,2… are
    `<= 2521` → dropped as stale. **Breaks on every restart.** So `stream_head_seq` is **never** written to
    `positions`.
@@ -147,7 +152,7 @@ cursor advance *because* apply happened. The agreed contract (Alice transport ·
       before snapshot apply — that is the corrected form of the old "no ack-head baseline" rule: not
       forbidden, just gated on snapshot apply.)
    4. Drain the buffer in **transport seq** order; for each frame, run its store effect, then
-      `markApplied(frame.seq, frame.epoch)` (transport space).
+      `markSatisfied(frame.seq, frame.epoch)` (transport space).
 
    **Two distinct concerns — do not conflate (Cindy):**
    - **(i) pre-S state coverage (snapshot completeness).** Before S the client had **no listener**, so
@@ -170,16 +175,16 @@ cursor advance *because* apply happened. The agreed contract (Alice transport ·
    seed; it is window-independent (the route captures the opened stream head, not `max(messages.seq)` of
    the loaded window).
 
-   So: **`markApplied` advances the transport cursor (transport seq); the snapshot-join dedup uses
+   So: **`markSatisfied` advances the transport cursor (transport seq); the snapshot-join dedup uses
    `message.seq` vs `stream_head_seq`. Two mechanisms, two spaces, never mixed.** A view with no
    message-window snapshot cannot independently commit the conversation cursor — it must obtain a snapshot
    first or wait for an existing cursor.
 6. **Ownership:** forward-gap detection / ordering = **transport**; dedup / idempotency / input assertion =
    **ingestor**. resume/reconnect still read `positions[scope]`; the only change is the *writer*
-   (`acceptEventFrame` → `markApplied`) for conversation scopes.
+   (`acceptEventFrame` → `markSatisfied`) for conversation scopes.
 7. **Single-cursor precondition = synchronous apply** (`setQueryData` runs synchronously — that is the
    only guarantee it gives; it is **not** a multi-cache transaction). Cross-cache consistency for a frame
-   that writes several keys rests on §4.3.3 (idempotent replay + `markApplied` as the single commit
+   that writes several keys rests on §4.3.3 (idempotent replay + `markSatisfied` as the single commit
    point), **not** on any RQ atomicity. Synchronous apply ⇒ received ≡ applied in the same tick ⇒ one
    cursor suffices. If apply ever becomes async, re-introduce a separate received-seq + pending queue —
    explicitly **not** now.
@@ -190,22 +195,22 @@ trivially — not the root cause, not in P2 (may migrate later).
 
 **What "apply" means — gap-bump still applies (Alice, two orthogonal axes).** A frame whose store effect
 is a *gap-fact bump* (not-at-tail window, see §5 P1 finding) is **still applied** and **still
-markApplied**. Two axes that must not be conflated:
-- **Axis A — transport applied:** consuming frame N → `markApplied(scope, N, epoch)`. It means only "I
+markSatisfied**. Two axes that must not be conflated:
+- **Axis A — transport applied:** consuming frame N → `markSatisfied(scope, N, epoch)`. It means only "I
   handled this frame, don't redeliver it," independent of whether the store effect was an append or a
   gap-bump.
 - **Axis B — UI affordance:** the store effect for a not-at-tail window is a window-scoped gap-fact bump
   (no append).
 
 The trap to avoid: reading "didn't append to the visible window" as "didn't really apply" and skipping
-`markApplied`. That would stall the cursor at N → resume re-delivers N → the ingestor re-bumps the gap
+`markSatisfied`. That would stall the cursor at N → resume re-delivers N → the ingestor re-bumps the gap
 forever (no-progress loop). The gapped frame's **message content** is not backfilled by resume — it is
 backfilled by gap → scroll-to-latest → REST (seeded by `stream_head_seq`, §4.3.5), the same mechanism as
 cold-start. Conversely (Cindy #3) the **gap fact is never a cursor/read input** — it never feeds
-`markApplied` / resume floor / `conversation_reads` / `read_at`. So: *the frame is markApplied; the gap
+`markSatisfied` / resume floor / `conversation_reads` / `read_at`. So: *the frame is markSatisfied; the gap
 fact does not touch the cursor.*
 
-**Granularity (confirmed from code, not assumed):** `markApplied` is **scope-level** (one cursor per
+**Granularity (confirmed from code, not assumed):** `markSatisfied` is **scope-level** (one cursor per
 `conversation:<channelId>`); the gap fact is **window/key-level** (`messagesKey` vs
 `clusterMessagesKey(channelId, root)`), finer. All conversation-scope consumers — `useChannelMessages`,
 `useThreadCluster`, `useThreadRoot`, `useThreadFollowers` — subscribe the **same**
@@ -265,14 +270,14 @@ subscription can remain roughly view-driven; the Stage-1 orphan gate covers the 
     kinds through the ingestor; convert. After P1c **every** conversation-scope view is `onWsFrame`-free →
     gate-(b) satisfiable → Alice's P2.
 - **P2 (transport, Alice) — the correctness closure:** flip the resume floor to applied-high-water via
-  `markApplied`; `acceptEventFrame` stops advancing the cursor for conversation scopes; add the cold-start
+  `markSatisfied`; `acceptEventFrame` stops advancing the cursor for conversation scopes; add the cold-start
   two-water-mark join (§4.3.5: transport cursor committed to S after snapshot apply; message dedup via
   `stream_head_seq`). **Orphan-gate removal is gated** — it may be removed only once these three are
   statically/unit verifiable, otherwise the gate stays (not "structurally unnecessary" hand-wave):
   - (a) the conversation scope's **sole** consumer is the App-level ingestor;
   - (b) **every** view hook has zero `onWsFrame` and never calls the message-apply mutators (gap-key flips
     are allowed — see the gate-(b) static-test note above);
-  - (c) the cursor writer is **fully** switched to `markApplied` (no `recordPosition` path for conversation
+  - (c) the cursor writer is **fully** switched to `markSatisfied` (no `recordPosition` path for conversation
     scopes).
 - **P3 (optional, later):** move scope subscription to an interest registry fully decoupled from view
   mount (pure bandwidth optimization layer).
@@ -297,25 +302,29 @@ Current classes:
 - **idempotent content apply** — safe to replay directly and may advance
   applied-water when the helper reports a real apply (`cluster_message_window`,
   `task_message_patch`, `reaction_message_patch`).
-- **non-idempotent live-only delta with authoritative backfill recovery** —
-  may advance applied-water only for the live optimistic path; backfill must
-  trigger authority and remain unapplied until commit. This currently covers
-  reply-count effects (`mainline_message_window` reply bump and
-  `thread_root_reply_count`) and is intentionally visible for #1263 to collapse.
+- **derived-invalidate reply count (was: non-idempotent live-only delta — #1263 (c)
+  collapsed it).** Reply-count effects (`mainline_message_window` reply bump and
+  `thread_root_reply_count`) no longer apply an optimistic `+1`. Every delivery —
+  live or replayed — recovers the count by *authoritative invalidate/refetch*, so
+  replay is idempotent-by-construction (the count is never bumped locally, so it
+  cannot double-count). These effects are **commit-gated**: the seq is satisfied
+  only after the invalidate's refetch commits (see the satisfaction disposition in
+  `event-ws-transport-v1.md` §9).
 - **derived invalidate / side self-healing** — cursor-inert. These effects may
   refetch or merge their own projection but must not advance the message-stream
   applied-water (`thread_followers_invalidate`, `channel_threads_invalidate`,
   and all side-scope effects).
 
-#1262 is a substrate, not the final replay model: it makes the current
-classification typed and test-visible so #1263 can reclassify reply count from
-non-idempotent delta to idempotent-by-construction, and #1264 can replace the
-client-side provenance inference with server-authoritative delivery metadata.
-Do not use #1262 to permanently bless the `+1` reply-count model.
+#1262 was a substrate, not the final replay model: it made the classification
+typed and test-visible so **#1263 (c)** could reclassify reply count from
+non-idempotent delta to idempotent-by-construction (authoritative-invalidate), and
+**#1264** could delete client-side delivery-provenance entirely — a replayed frame
+now dispatches identically to fresh fanout, so no consumer branches on
+`live`/`backfill`. Both have landed; the `+1` reply-count model is gone.
 
 ## 7. Resolved by the §4.3 contract
 
-- **Apply-failure** → §4.3.3: try/catch + diagnostic + no markApplied; partial writes idempotent; self-heal
+- **Apply-failure** → §4.3.3: try/catch + diagnostic + no markSatisfied; partial writes idempotent; self-heal
   via resume replay, no rollback.
 - **Replay ordering** → §4.3.1/§4.3.4: transport delivers in-order contiguous; ingestor tail-appends and
   dedups by id, does **not** seq-reorder.
@@ -335,7 +344,7 @@ Still open (non-blocking, P3): interest-registry granularity (per-conversation v
 ## 8. Test surface
 
 Transport-side (Alice owns):
-- apply success ⇒ `markApplied`; apply throw ⇒ **no** `markApplied`, and recovery (forward-gap/resume)
+- apply success ⇒ `markSatisfied`; apply throw ⇒ **no** `markSatisfied`, and recovery (forward-gap/resume)
   fires on the **next frame or resubscribe** — not necessarily immediately (if no frame follows the
   failure there is no instant recovery, but the cursor stayed put so the next `resume` re-delivers). This
   is distinct from the old tail-frame blind spot; don't assert an immediate trigger.
