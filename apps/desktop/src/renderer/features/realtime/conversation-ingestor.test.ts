@@ -13,6 +13,7 @@ import {
   ingestConversationFrame,
 } from './conversation-ingestor';
 import { clusterMessagesKey, messagesKey, threadRootKey } from '@/features/channels/hooks';
+import { messageReactorsKey } from '@/features/channels/reaction-hooks';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
 import { agentRunStatesKey } from '@/lib/agentRunStateCache';
 import { eventWsClient } from '@/lib/ws-client';
@@ -21,7 +22,7 @@ import {
   mergePendingAgentStatusPatches,
 } from '@/features/channels/hooks';
 
-describe('replay-safety contract matrix (#task:1262)', () => {
+describe('replay-safety contract matrix (#task:1262, reclassified #task:1263 (c))', () => {
   it('classifies the message-stream wire kinds and their cache effects explicitly', () => {
     expect(Object.keys(MESSAGE_STREAM_KIND_CONTRACTS).sort()).toEqual([
       MESSAGE_REACTION_CHANGED_EVENT,
@@ -29,7 +30,8 @@ describe('replay-safety contract matrix (#task:1262)', () => {
       'task_changed',
     ].sort());
     expect(MESSAGE_STREAM_KIND_CONTRACTS.message).toEqual([
-      'mainline_message_window',
+      'mainline_row_window',
+      'mainline_reply_count',
       'cluster_message_window',
       'thread_root_reply_count',
       'thread_followers_invalidate',
@@ -38,7 +40,28 @@ describe('replay-safety contract matrix (#task:1262)', () => {
     expect(MESSAGE_STREAM_KIND_CONTRACTS.task_changed).toEqual(['task_message_patch']);
     expect(MESSAGE_STREAM_KIND_CONTRACTS[MESSAGE_REACTION_CHANGED_EVENT]).toEqual([
       'reaction_message_patch',
+      'reactors_list_refresh',
     ]);
+  });
+
+  it('(A): the reactors popover refresh is a cursor-inert, non-floor-bearing detail invalidate', () => {
+    // #1263 hybrid boundary, pinned: a reaction frame keeps the SYNCHRONOUS
+    // content-apply floor gate on `reaction_message_patch`. Its `reactors_list_refresh`
+    // sub-effect is a lazy hover-detail invalidate — cursor-inert, authoritative-on-
+    // open, ZERO delta accumulation — so it is deliberately NOT commit-gated via the
+    // message allSettled path. This assertion stops a future "unify satisfaction
+    // path" refactor from silently making a tooltip refetch a floor dependency.
+    expect(REPLAY_SAFETY_CONTRACTS.reaction_message_patch).toMatchObject({
+      cursor: 'content-apply',
+      recovery: 'idempotent',
+    });
+    expect(REPLAY_SAFETY_CONTRACTS.reactors_list_refresh).toMatchObject({
+      cursor: 'cursor-inert',
+      recovery: 'authoritative-invalidate',
+    });
+    expect(REPLAY_SAFETY_CONTRACTS.reactors_list_refresh.summary).toMatch(
+      /not resume-floor-bearing/i,
+    );
   });
 
   it('classifies the side-channel wire kinds as cursor-inert self-healing effects', () => {
@@ -54,14 +77,27 @@ describe('replay-safety contract matrix (#task:1262)', () => {
     }
   });
 
-  it('keeps non-idempotent reply-count deltas visible until S1(a) collapses them', () => {
-    expect(REPLAY_SAFETY_CONTRACTS.mainline_message_window).toMatchObject({
-      cursor: 'content-apply',
-      recovery: 'provenance-gated-authoritative-backfill',
+  it('(c): reply-count effects are now cursor-inert authoritative-invalidate (no optimistic +1)', () => {
+    // The whole #1263 (c) reframe: a reply count is a message-DERIVED projection,
+    // recovered authoritatively — not a non-idempotent content delta.
+    expect(REPLAY_SAFETY_CONTRACTS.mainline_reply_count).toMatchObject({
+      cursor: 'cursor-inert',
+      recovery: 'authoritative-invalidate',
     });
     expect(REPLAY_SAFETY_CONTRACTS.thread_root_reply_count).toMatchObject({
+      cursor: 'cursor-inert',
+      recovery: 'authoritative-invalidate',
+    });
+  });
+
+  it('keeps message CONTENT appends as idempotent content-apply', () => {
+    expect(REPLAY_SAFETY_CONTRACTS.mainline_row_window).toMatchObject({
       cursor: 'content-apply',
-      recovery: 'provenance-gated-authoritative-backfill',
+      recovery: 'idempotent',
+    });
+    expect(REPLAY_SAFETY_CONTRACTS.cluster_message_window).toMatchObject({
+      cursor: 'content-apply',
+      recovery: 'idempotent',
     });
   });
 
@@ -579,7 +615,7 @@ function mainlineReplyCount(
   return data?.pages[0]?.reply_counts_by_root[rootId];
 }
 
-describe('ingestConversationFrame — dual-water markSatisfied (#task:1255 P2 step-4)', () => {
+describe('ingestConversationFrame — per-event satisfaction disposition (#task:1263 (c) / #1261)', () => {
   let markSatisfied: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -592,7 +628,15 @@ describe('ingestConversationFrame — dual-water markSatisfied (#task:1255 P2 st
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('a real mainline append advances applied floor (markSatisfied once, seq+epoch)', () => {
+  // markSatisfied is now ASYNC for `message` frames (gated on Promise.allSettled),
+  // so positives await and negatives flush a few microtasks first.
+  const flush = async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  it('① a content-write frame (mainline append) markSatisfies once (scope, seq, epoch) after settle', async () => {
     const qc = new QueryClient();
     const unsub = mountMainlineReader(qc, 'c1');
     ingestConversationFrame(
@@ -600,96 +644,105 @@ describe('ingestConversationFrame — dual-water markSatisfied (#task:1255 P2 st
       messageFrameSeq('c1', message({ id: 'm1', seq: 6 }), 6),
       { provenance: 'live' },
     );
-    expect(markSatisfied).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
     expect(markSatisfied).toHaveBeenCalledWith(conversationScope('c1'), 6, 'epoch-1');
     unsub();
   });
 
-  it('a readerless frame does NOT markSatisfied (cursor-inert)', () => {
+  it('② a derived-invalidate reply markSatisfies only AFTER the refetch COMMITS, not on dispatch', async () => {
+    const qc = new QueryClient();
+    const unsub = mountMainlineReader(qc, 'c1');
+    seedMainline(qc, 'c1', { rootId: 'root1', replyCount: 0 });
+    // A controllable invalidate so we can prove commit-gating (initiated ≠ committed).
+    let commitRefetch!: () => void;
+    vi.spyOn(qc, 'invalidateQueries').mockReturnValue(
+      new Promise<void>(resolve => {
+        commitRefetch = () => resolve();
+      }),
+    );
+    ingestConversationFrame(
+      qc,
+      messageFrameSeq('c1', message({ id: 'r1', seq: 6, thread_root_id: 'root1' }), 6),
+      { provenance: 'live' },
+    );
+    await flush();
+    // Dispatch-gated would fire now; commit-gated must wait for the refetch.
+    expect(markSatisfied).not.toHaveBeenCalled();
+    expect(mainlineReplyCount(qc, 'c1', 'root1')).toBe(0); // no optimistic +1
+    commitRefetch();
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    expect(markSatisfied).toHaveBeenCalledWith(conversationScope('c1'), 6, 'epoch-1');
+    unsub();
+  });
+
+  it('③ a rejected refetch pins the floor — markSatisfied NOT called', async () => {
+    const qc = new QueryClient();
+    const unsub = mountMainlineReader(qc, 'c1');
+    seedMainline(qc, 'c1', { rootId: 'root1', replyCount: 0 });
+    vi.spyOn(qc, 'invalidateQueries').mockRejectedValue(new Error('refetch failed'));
+    ingestConversationFrame(
+      qc,
+      messageFrameSeq('c1', message({ id: 'r1', seq: 6, thread_root_id: 'root1' }), 6),
+      { provenance: 'live' },
+    );
+    await flush();
+    expect(markSatisfied).not.toHaveBeenCalled();
+    unsub();
+  });
+
+  it('④ a warm-inactive mainline (no reader) is REMOVED, then the frame satisfies', async () => {
+    const qc = new QueryClient();
+    seedMainline(qc, 'c1'); // warm cache, NO observer
+    expect(qc.getQueryData(messagesKey('c1'))).not.toBeUndefined();
+    ingestConversationFrame(
+      qc,
+      messageFrameSeq('c1', message({ id: 'm1', seq: 6 }), 6),
+      { provenance: 'live' },
+    );
+    // Warm-removed → next open cold-starts (never left to serve stale, B1)...
+    expect(qc.getQueryData(messagesKey('c1'))).toBeUndefined();
+    // ...and the removeInactive settle (resolved) lets the floor advance.
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    expect(markSatisfied).toHaveBeenCalledWith(conversationScope('c1'), 6, 'epoch-1');
+  });
+
+  it('⑤ a cold-absent frame (no reader, no cache) satisfies VACUOUSLY', async () => {
     const qc = new QueryClient();
     ingestConversationFrame(
       qc,
       messageFrameSeq('c1', message({ id: 'm1', seq: 6 }), 6),
       { provenance: 'live' },
     );
-    expect(markSatisfied).not.toHaveBeenCalled();
+    // No cache bootstrapped (the reader gate governs cache-WRITES)...
+    expect(qc.getQueryData(messagesKey('c1'))).toBeUndefined();
+    // ...but the floor still advances: cold-start is authoritative on next open,
+    // and advancing past a cold-absent frame can't strand a warm cache (the #1251
+    // hole needs a warm DISPLAYABLE cache, which cold-absent lacks).
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    expect(markSatisfied).toHaveBeenCalledWith(conversationScope('c1'), 6, 'epoch-1');
   });
 
-  it('a derived-invalidate-only frame (Threads-list reader, no content) does NOT markSatisfied', () => {
+  it('⑥ a multi-target reply markSatisfies EXACTLY ONCE after ALL effects settle', async () => {
     const qc = new QueryClient();
-    const unsub = mountReader(qc, channelThreadsKey('c1'));
-    // A reply frame with only a Threads-list reader → invalidate only, no
-    // content write → floor must not advance (#1251 re-entry guard).
-    ingestConversationFrame(
-      qc,
-      messageFrameSeq(
-        'c1',
-        message({ id: 'r1', seq: 6, thread_root_id: 'root1' }),
-        6,
-      ),
-      { provenance: 'live' },
-    );
-    expect(markSatisfied).not.toHaveBeenCalled();
-    unsub();
-  });
-
-  it('an off-window reply no-op does NOT markSatisfied even with a mainline reader', () => {
-    const qc = new QueryClient();
-    const unsub = mountMainlineReader(qc, 'c1');
-    seedMainline(qc, 'c1'); // no root key → the bump has nowhere to land
-    ingestConversationFrame(
-      qc,
-      messageFrameSeq(
-        'c1',
-        message({ id: 'r1', seq: 6, thread_root_id: 'rootX' }),
-        6,
-      ),
-      { provenance: 'live' },
-    );
-    expect(markSatisfied).not.toHaveBeenCalled();
-    unsub();
-  });
-
-  it('live in-window reply bumps +1 AND markApplies', () => {
-    const qc = new QueryClient();
-    const unsub = mountMainlineReader(qc, 'c1');
+    const unsubMain = mountMainlineReader(qc, 'c1');
     seedMainline(qc, 'c1', { rootId: 'root1', replyCount: 0 });
+    const unsubCluster = mountReader(qc, clusterMessagesKey('c1', 'root1'));
+    const unsubThreads = mountReader(qc, channelThreadsKey('c1'));
+    // 3 effects: mainline reply-count invalidate + cluster append + threads-list
+    // invalidate → one markSatisfied once they all settle fulfilled.
     ingestConversationFrame(
       qc,
-      messageFrameSeq(
-        'c1',
-        message({ id: 'r1', seq: 6, thread_root_id: 'root1' }),
-        6,
-      ),
+      messageFrameSeq('c1', message({ id: 'r1', seq: 6, thread_root_id: 'root1' }), 6),
       { provenance: 'live' },
     );
-    expect(mainlineReplyCount(qc, 'c1', 'root1')).toBe(1);
-    expect(markSatisfied).toHaveBeenCalledTimes(1);
-    unsub();
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    expect(markSatisfied).toHaveBeenCalledWith(conversationScope('c1'), 6, 'epoch-1');
+    unsubMain();
+    unsubCluster();
+    unsubThreads();
   });
 
-  it('backfill reply does NOT +1 — authoritative recovery (invalidate), no markSatisfied', () => {
-    const qc = new QueryClient();
-    const unsub = mountMainlineReader(qc, 'c1');
-    seedMainline(qc, 'c1', { rootId: 'root1', replyCount: 0 });
-    const spy = vi.spyOn(qc, 'invalidateQueries');
-    ingestConversationFrame(
-      qc,
-      messageFrameSeq(
-        'c1',
-        message({ id: 'r1', seq: 6, thread_root_id: 'root1' }),
-        6,
-      ),
-      { provenance: 'backfill' },
-    );
-    // Count untouched (no blind +1) + authoritative refetch fired + floor pinned.
-    expect(mainlineReplyCount(qc, 'c1', 'root1')).toBe(0);
-    expect(spy).toHaveBeenCalledWith({ queryKey: messagesKey('c1') });
-    expect(markSatisfied).not.toHaveBeenCalled();
-    unsub();
-  });
-
-  it('the same reply frame replayed as backfill does not double-count', () => {
+  it('⑦ replaying the same reply frame never double-counts (Cindy #1263 falsifier)', async () => {
     const qc = new QueryClient();
     const unsub = mountMainlineReader(qc, 'c1');
     seedMainline(qc, 'c1', { rootId: 'root1', replyCount: 3 });
@@ -698,38 +751,151 @@ describe('ingestConversationFrame — dual-water markSatisfied (#task:1255 P2 st
       message({ id: 'r1', seq: 6, thread_root_id: 'root1' }),
       6,
     );
+    // Deliver the SAME reply twice (live then replay). (c) recovers the count
+    // authoritatively (invalidate), never a blind +1 → the count is never bumped
+    // locally, so replay cannot double-count (the original bug's regression guard).
+    ingestConversationFrame(qc, frame, { provenance: 'live' });
     ingestConversationFrame(qc, frame, { provenance: 'backfill' });
-    ingestConversationFrame(qc, frame, { provenance: 'backfill' });
-    expect(mainlineReplyCount(qc, 'c1', 'root1')).toBe(3); // never bumped
+    await flush();
+    expect(mainlineReplyCount(qc, 'c1', 'root1')).toBe(3); // never bumped locally
     unsub();
   });
 
-  it('side-scope frames never markSatisfied (side floor auto-advances)', () => {
+  it('an off-window reply on an ACTIVE mainline satisfies vacuously (authoritative on paginate)', async () => {
+    const qc = new QueryClient();
+    const unsub = mountMainlineReader(qc, 'c1');
+    seedMainline(qc, 'c1'); // no root key → the badge isn't on any loaded page
+    ingestConversationFrame(
+      qc,
+      messageFrameSeq('c1', message({ id: 'r1', seq: 6, thread_root_id: 'rootX' }), 6),
+      { provenance: 'live' },
+    );
+    // No effect (active mainline is authoritative; the count refetches when the
+    // window paginates to rootX) → vacuous satisfy, floor advances.
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    unsub();
+  });
+
+  it('task_changed keeps the SYNCHRONOUS content-apply gate (hybrid: not the message allSettled path)', () => {
+    const qc = new QueryClient();
+    const unsub = mountMainlineReader(qc, 'c1');
+    // Seed the row the chip patches so the patch lands (applied=true).
+    qc.setQueryData(messagesKey('c1'), {
+      pages: [
+        {
+          messages: [
+            message({ id: 't1', seq: 5, task_number: 7, task_status: 'todo' }),
+          ],
+          reply_counts_by_root: {},
+          has_more_before: false,
+          has_more_after: false,
+          stream_head_seq: 5,
+        },
+      ],
+      pageParams: [undefined],
+    });
+    ingestConversationFrame(qc, taskChangedFrame('c1', 't1', 6), { provenance: 'live' });
+    // Synchronous (no await) — task/reaction are pure idempotent patches, so they
+    // keep the boolean content-apply gate rather than the message allSettled path.
+    expect(markSatisfied).toHaveBeenCalledTimes(1);
+    expect(markSatisfied).toHaveBeenCalledWith(conversationScope('c1'), 6, 'epoch-1');
+    unsub();
+  });
+
+  it('side-scope frames never markSatisfied (side floor auto-advances)', async () => {
     const qc = new QueryClient();
     const unsub = mountReader(qc, agentRunStatesKey('c1'));
     ingestConversationFrame(qc, agentActivityFrame('c1', runState('c1', 'a1')), {
       provenance: 'live',
     });
+    await flush();
     expect(markSatisfied).not.toHaveBeenCalled();
     unsub();
   });
 
-  it('an undefined meta defaults provenance to live (optimistic bump)', () => {
+  it('reaction keeps the SYNCHRONOUS floor gate; its reactors refresh is authoritative-on-open, never accumulated (#1263 (A) falsifier)', () => {
     const qc = new QueryClient();
     const unsub = mountMainlineReader(qc, 'c1');
-    seedMainline(qc, 'c1', { rootId: 'root1', replyCount: 0 });
-    ingestConversationFrame(
-      qc,
-      messageFrameSeq(
-        'c1',
-        message({ id: 'r1', seq: 6, thread_root_id: 'root1' }),
-        6,
-      ),
-    );
-    expect(mainlineReplyCount(qc, 'c1', 'root1')).toBe(1);
+    // Seed the row the reaction targets so the absolute-count patch lands (applied).
+    qc.setQueryData(messagesKey('c1'), {
+      pages: [
+        {
+          messages: [message({ id: 'm1', seq: 5 })],
+          reply_counts_by_root: {},
+          has_more_before: false,
+          has_more_after: false,
+          stream_head_seq: 5,
+        },
+      ],
+      pageParams: [undefined],
+    });
+    ingestConversationFrame(qc, reactionFrame('c1', 'm1', 6), { provenance: 'live' });
+    // Synchronous (no await): reaction stays on the boolean `reaction_message_patch`
+    // gate despite its cursor-inert `reactors_list_refresh` sub-effect — that refresh
+    // is NOT commit-gated into the message allSettled path.
+    expect(markSatisfied).toHaveBeenCalledTimes(1);
+    expect(markSatisfied).toHaveBeenCalledWith(conversationScope('c1'), 6, 'epoch-1');
+    // (A) falsifier: the ingestor accumulates NO reactor-list state — the who-reacted
+    // popover cache is left untouched (undefined). So advancing the floor past this
+    // frame (resume won't replay it) strands nothing: the popover is authoritative-on-
+    // open (a fresh REST fetch on hover), correct without the replay.
+    expect(qc.getQueryData(messageReactorsKey('m1'))).toBeUndefined();
     unsub();
   });
 });
+
+function taskChangedFrame(
+  channelId: string,
+  messageId: string,
+  seq: number,
+): ServerFrame {
+  return {
+    type: 'event',
+    scope: conversationScope(channelId),
+    seq,
+    epoch: 'epoch-1',
+    kind: 'task_changed',
+    payload: {
+      kind: 'status',
+      workspace_id: 'w1',
+      channel_id: channelId,
+      thread_root_id: null,
+      legacy_thread_conversation_id: null,
+      thread_id: null,
+      conversation_id: channelId,
+      task_number: 7,
+      message_id: messageId,
+      status: 'in_progress',
+      assignee: null,
+      title: 'do the thing',
+      closed_at: null,
+    },
+  } as ServerFrame;
+}
+
+function reactionFrame(
+  channelId: string,
+  messageId: string,
+  seq: number,
+): ServerFrame {
+  return {
+    type: 'event',
+    scope: conversationScope(channelId),
+    seq,
+    epoch: 'epoch-1',
+    kind: MESSAGE_REACTION_CHANGED_EVENT,
+    payload: {
+      message_id: messageId,
+      conversation_id: channelId,
+      thread_root_id: null,
+      emoji: '👍',
+      op: 'add',
+      reactor_kind: 'user',
+      reactor_id: 'u2',
+      count: 1,
+    },
+  } as ServerFrame;
+}
 
 describe('ingestConversationFrame — snapshot commit gate (#task:1255 P2 step-4)', () => {
   let commit: ReturnType<typeof vi.spyOn>;

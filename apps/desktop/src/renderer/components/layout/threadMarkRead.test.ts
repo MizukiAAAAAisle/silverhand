@@ -58,10 +58,10 @@ describe('threadMarkReadSnapshot — fresh-for-this-open gate (#task:1226 §9)',
   });
 
   it('NEGATIVE (b): does not mark when setQueryData updated data before this open’s refetch succeeded', () => {
-    // During this open, an optimistic patchReplySummary / live-append bumps the
-    // cache via setQueryData. That does NOT advance windowFetchSucceededAt, so
-    // even with fresh-looking data present and no fetch in flight, the gate
-    // stays closed until the real window response lands.
+    // During this open, a setQueryData mutation (e.g. a live row append) updates
+    // the cache. That does NOT advance windowFetchSucceededAt, so even with
+    // fresh-looking data present and no fetch in flight, the gate stays closed
+    // until the real window response lands.
     const setDataOnly = gate({
       openedAt: 5_000,
       windowFetchSucceededAt: 2_000, // unchanged by setQueryData

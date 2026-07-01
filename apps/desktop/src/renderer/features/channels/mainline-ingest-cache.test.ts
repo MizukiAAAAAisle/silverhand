@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import type {
   ConversationMessagesDto,
@@ -94,37 +94,59 @@ describe('applyMainlineMessageToChannelCaches — mainline row', () => {
   });
 });
 
-describe('applyMainlineMessageToChannelCaches — reply (thread_root_id set)', () => {
-  it('bumps the root reply badge and does NOT append to the main stream', () => {
+describe('applyMainlineMessageToChannelCaches — reply (thread_root_id set), #1263 (c)', () => {
+  it('recovers the badge AUTHORITATIVELY (invalidate) — no optimistic +1 — and never enters the stream', () => {
     const qc = new QueryClient();
     qc.setQueryData(
       messagesKey('c1'),
       tailCache([message({ id: 'root1', seq: 1 })], { root1: 0 }),
     );
+    const spy = vi.spyOn(qc, 'invalidateQueries');
 
-    applyMainlineMessageToChannelCaches(
+    const eff = applyMainlineMessageToChannelCaches(
       qc,
       'c1',
       message({ id: 'reply1', seq: 2, thread_root_id: 'root1' }),
     );
 
-    // Reply count bumped...
+    // (c): the count is NOT locally bumped — it refetches authoritatively (the
+    // old blind +1 was non-idempotent and double-counted on replay).
     const data = qc.getQueryData<{ pages: ConversationMessagesDto[] }>(
       messagesKey('c1'),
     );
-    expect(data?.pages[0]?.reply_counts_by_root.root1).toBe(1);
-    // ...but the reply never enters the main stream.
+    expect(data?.pages[0]?.reply_counts_by_root.root1).toBe(0); // no +1
+    expect(spy).toHaveBeenCalledWith({ queryKey: messagesKey('c1') });
+    expect(eff).not.toBeNull(); // a satisfaction promise (settles on refetch)
+    // ...and the reply never enters the main stream.
     expect(cachedIds(qc, 'c1')).toEqual(['root1']);
   });
 
-  it('skips the badge bump for system replies', () => {
+  it('is a no-op (null, no invalidate) for a reply to an OFF-window root', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(messagesKey('c1'), tailCache([message({ id: 'root1', seq: 1 })]));
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    const eff = applyMainlineMessageToChannelCaches(
+      qc,
+      'c1',
+      // rootX is not on any loaded page → the badge isn't displayed; a fresh
+      // count arrives when the window paginates to it.
+      message({ id: 'reply1', seq: 2, thread_root_id: 'rootX' }),
+    );
+
+    expect(eff).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('skips the badge recovery for system replies (null, no invalidate)', () => {
     const qc = new QueryClient();
     qc.setQueryData(
       messagesKey('c1'),
       tailCache([message({ id: 'root1', seq: 1 })], { root1: 3 }),
     );
+    const spy = vi.spyOn(qc, 'invalidateQueries');
 
-    applyMainlineMessageToChannelCaches(
+    const eff = applyMainlineMessageToChannelCaches(
       qc,
       'c1',
       message({
@@ -135,11 +157,12 @@ describe('applyMainlineMessageToChannelCaches — reply (thread_root_id set)', (
       }),
     );
 
+    expect(eff).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
     const data = qc.getQueryData<{ pages: ConversationMessagesDto[] }>(
       messagesKey('c1'),
     );
     expect(data?.pages[0]?.reply_counts_by_root.root1).toBe(3); // unchanged
-    expect(cachedIds(qc, 'c1')).toEqual(['root1']);
   });
 });
 

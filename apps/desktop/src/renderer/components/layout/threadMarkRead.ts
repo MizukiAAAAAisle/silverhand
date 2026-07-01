@@ -5,8 +5,8 @@
  * viewer's per-thread `conversation_reads` cursor to the OPEN-TIME stream head.
  * The hard part is proving the snapshot came from THIS open's window response —
  * not the previous open's cache that React Query serves synchronously on
- * reopen, and not a `setQueryData` mutation (optimistic `patchReplySummary` /
- * live-append) that bumps `dataUpdatedAt` without being a real window read.
+ * reopen, and not a `setQueryData` mutation (an optimistic live-append) that
+ * bumps `dataUpdatedAt` without being a real window read.
  *
  * So the gate keys on `windowFetchSucceededAt` — an epoch stamped ONLY inside
  * the cluster query's success path (unreachable by `setQueryData`) — compared

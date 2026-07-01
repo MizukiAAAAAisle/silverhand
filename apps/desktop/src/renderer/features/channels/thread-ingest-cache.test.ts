@@ -15,11 +15,11 @@ import {
   threadRootKey,
 } from './hooks';
 
-// #task:1255 Stage-2 P1b — verbatim move of the useThreadCluster /
-// useThreadRoot / useThreadFollowers `onEvent` cache writes into helpers the
-// central ingestor calls. P1 = prep, so behavior is preserved exactly: cluster
-// filter + tail/gap/dedup, root reply-count bump (cut3-6 semantics), follower
-// invalidation filter.
+// #task:1255 Stage-2 P1b — move of the useThreadCluster / useThreadRoot /
+// useThreadFollowers `onEvent` cache writes into helpers the central ingestor
+// calls. Cluster filter + tail/gap/dedup and the follower invalidation filter
+// are a verbatim P1 prep move; the root reply-count is now an AUTHORITATIVE
+// recovery/invalidate (#1263 (c)) — no optimistic +1, replay-safe.
 
 function clusterGap(qc: QueryClient, cid: string, root: string): boolean {
   return qc.getQueryData<boolean>(clusterLiveGapKey(cid, root)) ?? false;
@@ -132,12 +132,13 @@ describe('applyClusterTaskChangedToCaches', () => {
   });
 });
 
-describe('applyThreadRootReplyBump', () => {
-  it('bumps the authoritative reply count for non-system replies', () => {
+describe('applyThreadRootReplyBump — #1263 (c)', () => {
+  it('recovers the count AUTHORITATIVELY (invalidate) for non-system replies — no +1', () => {
     const qc = new QueryClient();
     qc.setQueryData(threadRootKey('c1', 'root1'), rootDto('root1', 4));
+    const spy = vi.spyOn(qc, 'invalidateQueries');
 
-    applyThreadRootReplyBump(
+    const eff = applyThreadRootReplyBump(
       qc,
       'c1',
       'root1',
@@ -147,40 +148,52 @@ describe('applyThreadRootReplyBump', () => {
     const data = qc.getQueryData<ConversationMessagesDto>(
       threadRootKey('c1', 'root1'),
     );
-    expect(data?.reply_counts_by_root.root1).toBe(5);
+    expect(data?.reply_counts_by_root.root1).toBe(4); // no blind +1
+    expect(spy).toHaveBeenCalledWith({ queryKey: threadRootKey('c1', 'root1') });
+    expect(eff).not.toBeNull(); // a satisfaction promise (settles on refetch)
   });
 
-  it('skips system replies and rows for other roots', () => {
+  it('is null (no invalidate) for system replies and rows for other roots', () => {
     const qc = new QueryClient();
     qc.setQueryData(threadRootKey('c1', 'root1'), rootDto('root1', 4));
+    const spy = vi.spyOn(qc, 'invalidateQueries');
 
-    applyThreadRootReplyBump(
-      qc,
-      'c1',
-      'root1',
-      message({ id: 's1', seq: 2, thread_root_id: 'root1', from_kind: 'system' }),
-    );
-    applyThreadRootReplyBump(
-      qc,
-      'c1',
-      'root1',
-      message({ id: 'r2', seq: 3, thread_root_id: 'root2' }),
-    );
+    expect(
+      applyThreadRootReplyBump(
+        qc,
+        'c1',
+        'root1',
+        message({ id: 's1', seq: 2, thread_root_id: 'root1', from_kind: 'system' }),
+      ),
+    ).toBeNull();
+    expect(
+      applyThreadRootReplyBump(
+        qc,
+        'c1',
+        'root1',
+        message({ id: 'r2', seq: 3, thread_root_id: 'root2' }),
+      ),
+    ).toBeNull();
 
+    expect(spy).not.toHaveBeenCalled();
     const data = qc.getQueryData<ConversationMessagesDto>(
       threadRootKey('c1', 'root1'),
     );
     expect(data?.reply_counts_by_root.root1).toBe(4); // unchanged
   });
 
-  it('no-ops when the root row is not cached', () => {
+  it('is null when the root row is not cached (authoritative on its own fetch)', () => {
     const qc = new QueryClient();
-    applyThreadRootReplyBump(
-      qc,
-      'c1',
-      'root1',
-      message({ id: 'r1', seq: 2, thread_root_id: 'root1' }),
-    );
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    expect(
+      applyThreadRootReplyBump(
+        qc,
+        'c1',
+        'root1',
+        message({ id: 'r1', seq: 2, thread_root_id: 'root1' }),
+      ),
+    ).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
     expect(qc.getQueryData(threadRootKey('c1', 'root1'))).toBeUndefined();
   });
 });

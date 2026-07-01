@@ -62,7 +62,6 @@ import type { ConversationAgentStatusPatch } from '@/features/channels/hooks';
 type ReplayCursorEffect = 'content-apply' | 'cursor-inert';
 type ReplayRecoveryEffect =
   | 'idempotent'
-  | 'provenance-gated-authoritative-backfill'
   | 'authoritative-invalidate'
   | 'side-scope-self-healing';
 
@@ -73,21 +72,39 @@ type ReplaySafetySpec = {
 };
 
 /** Replay-safety contract for every cache effect this ingestor can produce
- *  (#task:1262). A new event kind or cache write must first be categorized here:
- *  - `content-apply` may advance the message-stream applied-water when the
- *    helper reports a real apply;
- *  - `cursor-inert` must never advance the message-stream applied-water.
+ *  (#task:1262, reclassified for #task:1263 (c)). A new event kind or cache write
+ *  must first be categorized here:
+ *  - `content-apply` is satisfied by a synchronous content write (an in-window
+ *    append / chip·reaction patch / live-gap affordance) — idempotent on replay;
+ *  - `cursor-inert` is satisfied by an AUTHORITATIVE invalidate settling: it holds
+ *    only a message-DERIVED projection (a reply count, a followers/threads list),
+ *    never message content, so it recovers by refetching its own source.
  *
- *  This table is the typed version of the #1255 review matrix. It is deliberately
- *  about cache EFFECTS, not just wire kinds: one `message` frame can append an
- *  idempotent cluster row, bump a non-idempotent reply count, and invalidate a
- *  derived list. */
+ *  Under #1261 the message-stream floor advances on SATISFACTION — a per-frame
+ *  `Promise.allSettled` over BOTH classes' effect promises, all-fulfilled — not on
+ *  "content-apply only". So `cursor` now documents the recovery MECHANISM
+ *  (content-commit vs authoritative-invalidate), not a runtime floor-gate: a
+ *  cursor-inert effect DOES advance the floor, but only once its refetch COMMITS
+ *  (initiated ≠ committed, §4.1). #1263 (c) moved the reply-count effects here:
+ *  the old optimistic `+1` was non-idempotent and double-counted on replay, so a
+ *  reply count is now recovered authoritatively like any other derived list.
+ *
+ *  This table is deliberately about cache EFFECTS, not wire kinds: one `message`
+ *  frame can append an idempotent cluster row (content-apply), authoritatively
+ *  recover a reply count (cursor-inert), and invalidate a derived list
+ *  (cursor-inert). */
 export const REPLAY_SAFETY_CONTRACTS = {
-  mainline_message_window: {
+  mainline_row_window: {
     cursor: 'content-apply',
-    recovery: 'provenance-gated-authoritative-backfill',
+    recovery: 'idempotent',
     summary:
-      'mainline append/gap is idempotent; reply-count delta is live-only and backfill forces authority',
+      'mainline row append / live-gap affordance is id-deduped content; the row loads authoritatively when the window reaches tail',
+  },
+  mainline_reply_count: {
+    cursor: 'cursor-inert',
+    recovery: 'authoritative-invalidate',
+    summary:
+      'mainline reply badge is a message-derived count; #1263 (c) recovers it authoritatively (no optimistic +1), replay-safe',
   },
   cluster_message_window: {
     cursor: 'content-apply',
@@ -95,14 +112,16 @@ export const REPLAY_SAFETY_CONTRACTS = {
     summary: 'cluster message append is deduped by message id',
   },
   thread_root_reply_count: {
-    cursor: 'content-apply',
-    recovery: 'provenance-gated-authoritative-backfill',
-    summary: 'thread-root reply-count delta is live-only and backfill forces authority',
+    cursor: 'cursor-inert',
+    recovery: 'authoritative-invalidate',
+    summary:
+      'thread-root reply count is message-derived; #1263 (c) recovers it authoritatively (no optimistic +1), replay-safe',
   },
   thread_followers_invalidate: {
     cursor: 'cursor-inert',
     recovery: 'authoritative-invalidate',
-    summary: 'followers projection refetches from its own source',
+    summary:
+      'followers projection refetches from its own source',
   },
   channel_threads_invalidate: {
     cursor: 'cursor-inert',
@@ -117,7 +136,14 @@ export const REPLAY_SAFETY_CONTRACTS = {
   reaction_message_patch: {
     cursor: 'content-apply',
     recovery: 'idempotent',
-    summary: 'reaction patch sets absolute reaction state by message id',
+    summary:
+      'reaction patch sets absolute reaction state by message id — the FLOOR-BEARING effect of a reaction frame (its synchronous content-apply gate)',
+  },
+  reactors_list_refresh: {
+    cursor: 'cursor-inert',
+    recovery: 'authoritative-invalidate',
+    summary:
+      'reactors popover detail list (who-reacted) refreshed by the reaction patch — a FIRE-AND-FORGET, authoritative-on-open detail invalidate. NOT resume-floor-bearing: a reaction frame keeps the SYNCHRONOUS content-apply gate on reaction_message_patch (#1263 hybrid boundary), so unlike a `message` frame this cursor-inert effect is deliberately NOT commit-gated via allSettled — do not "unify" it into the message satisfaction path',
   },
   agent_run_states: {
     cursor: 'cursor-inert',
@@ -153,14 +179,18 @@ function cursorInertEffect(_effect: ReplayEffectByCursor<'cursor-inert'>): void 
 
 export const MESSAGE_STREAM_KIND_CONTRACTS = {
   message: [
-    'mainline_message_window',
+    'mainline_row_window',
+    'mainline_reply_count',
     'cluster_message_window',
     'thread_root_reply_count',
     'thread_followers_invalidate',
     'channel_threads_invalidate',
   ],
   task_changed: ['task_message_patch'],
-  [MESSAGE_REACTION_CHANGED_EVENT]: ['reaction_message_patch'],
+  [MESSAGE_REACTION_CHANGED_EVENT]: [
+    'reaction_message_patch',
+    'reactors_list_refresh',
+  ],
 } as const satisfies Record<string, readonly ReplayEffectId[]>;
 
 type MessageStreamKind = keyof typeof MESSAGE_STREAM_KIND_CONTRACTS;
@@ -229,24 +259,34 @@ function asSideKind(kind: string): SideKind | null {
  * must NOT bootstrap/patch a target with no REST snapshot behind it — a blanket
  * gate would mis-fire (Cindy blocker #1 / its cluster-axis dual, Alice).
  *
- * These reader gates are NOT lifted by P2. P2 splits the single cursor into two
- * water-marks: a `received-water` (wire continuity / gap detection, always
- * advances on arrival) ⊥ an `applied-water` (the resume floor). Only the
- * applied-water gates recovery, and it advances ONLY on a real CONTENT apply —
- * an in-window append / cluster append·patch / thread-root reply bump /
- * reaction·task chip patch / mainline live-gap bump. It does NOT advance on a
- * derived-invalidate (cursor-INERT: an invalidate merely INITIATES recovery, it
- * is not an apply), nor on a no-op, and a non-idempotent backfill delta (e.g. a
- * reply-count bump) does not advance until its authoritative recovery COMMITS
- * (initiated ≠ committed). A frame with no active reader lands no content apply,
- * so it must not advance the applied-water (floor frozen → resume/cold-start on
- * resubscribe) — bit-for-bit today's orphan gate. Truly "apply without a reader"
- * needs per-scope cold-start snapshot seeding decoupled from view mount, which is
- * P3 (interest-registry). The `markSatisfied` / `commitSnapshotBaseline` water-mark
- * WRITERS live in Alice's transport seam (`ws-client.ts`, step-4); as of step-4
- * this ingestor is their sole content-driven CALLER — it fires `markSatisfied` on a
- * real content apply and drives `commitSnapshotBaseline` off the snapshot-reconcile
- * settle join (see `ingestConversationFrame` below). See §3.1/§5.
+ * These reader gates govern where CONTENT is WRITTEN — they are NOT lifted by P2
+ * / #1261 (P3's interest-registry adds cold-start seeding so a readerless scope
+ * can hold content at all). P2 splits the single cursor into two water-marks: a
+ * `received-water` (wire continuity / gap detection, always advances on arrival)
+ * ⊥ an `applied-water` (the resume floor). #1261 promotes the applied-water from
+ * "content-apply only" to SATISFACTION: the floor advances once EVERY per-frame
+ * effect is settled-fulfilled — a synchronous content apply (in-window append /
+ * cluster append·patch / reaction·task chip patch / live-gap affordance), an
+ * AUTHORITATIVE derived-invalidate that COMMITS (reply count #1263 (c) /
+ * followers / threads list — an invalidate INITIATES recovery, so the floor waits
+ * for its refetch, initiated ≠ committed), or a warm-inactive window REMOVED so it
+ * cold-starts. A rejected refetch pins the floor (the transport re-drives on the
+ * next resume). This REFINES the old orphan-gate floor-pin rather than preserving
+ * it: a frame with no active reader and NO warm cache is COLD-ABSENT → its effect
+ * set is empty → vacuously satisfied (the floor advances), because its content
+ * cold-starts authoritatively on next open and advancing past it can't strand a
+ * warm cache — the #1251 hole needs a warm DISPLAYABLE cache, which cold-absent
+ * lacks. A readerless-but-WARM window is instead removed (never vacuously
+ * satisfied — that would serve post-advance stale rows, Cindy B1). So the reader
+ * gate governs cache-writes, not the floor. (`task_changed` / `reaction` are the
+ * one carve-out — pure idempotent patches with no derived-invalidate, so they
+ * keep the synchronous content-apply gate; their satisfaction-model unification is
+ * a possible fast-follow.) The `markSatisfied` / `commitSnapshotBaseline` water-
+ * mark WRITERS live in Alice's transport seam (`ws-client.ts`, step-4); this
+ * ingestor is their sole content-driven CALLER — it fires `markSatisfied` off the
+ * per-frame `Promise.allSettled` satisfaction join and drives
+ * `commitSnapshotBaseline` off the snapshot-reconcile settle join (see
+ * `ingestConversationFrame` below). See §3.1/§5.
  *
  * Read-inert by construction: it never advances the viewer read cursor or
  * writes notification read state — read advancement stays visibility/intent-
@@ -264,62 +304,75 @@ function asSideKind(kind: string): SideKind | null {
 // agent_status / agent_activity / conversation_activity). The two prefixes are
 // disjoint by construction (#task:1255 P2 step-3).
 
+/** Build the SATISFACTION disposition for one message-stream `message` frame
+ *  (#task:1255 / #task:1263 (c)). Returns the per-effect settle Promises the
+ *  caller joins with `Promise.allSettled` to gate `markSatisfied` — all-fulfilled
+ *  advances the resume floor once; a rejected refetch pins it (§4.1 / #1261,
+ *  commit-gated ≠ dispatch-gated). This is the per-event twin of
+ *  {@link ingestMessageStreamSnapshotRequired}: an active reader APPLIES content
+ *  (append/gap → resolved) or RECOVERS a derived projection (reply count /
+ *  followers / threads list → the invalidate's settle); a warm-but-inactive
+ *  CONTENT window is REMOVED, never left to serve post-advance stale rows (Cindy
+ *  B1 / #1255 §6); a cold ABSENT target contributes nothing → the frame is
+ *  vacuously satisfied (its content cold-starts authoritatively on next open, so
+ *  advancing the floor past it can't strand a warm cache — the #1251 hole needs a
+ *  warm displayable cache, which cold-absent lacks). Unlike the snapshot handler's
+ *  blanket sweep, a live frame touches only its OWN root, so the warm-cluster
+ *  removal is SCOPED to that root. `provenance` is dead under (c) — threaded only
+ *  until #1264 removes the wire plumbing. */
 function ingestMessage(
   qc: QueryClient,
   channelId: string,
   msg: MessageDto,
   provenance: EventDeliveryProvenance,
-): boolean {
-  let applied = false;
-  // Mainline (badge bump for replies / append-or-gap for main-line rows). The
-  // reply-count bump is non-idempotent → provenance gates live-`+1` vs backfill
-  // authoritative recovery inside the helper.
+): Promise<void>[] {
+  const settles: Promise<void>[] = [];
+  const push = (eff: Promise<void> | null): void => {
+    if (eff) settles.push(eff);
+  };
+
+  // MAINLINE — a reply badge is a message-derived count (authoritative-invalidate,
+  // cursor-inert); a mainline row is an id-deduped content append/gap. A warm-but-
+  // inactive mainline (default staleTime:5s) would serve a stale row/count on
+  // remount → REMOVE it so the next open cold-starts (coarse, mirroring the
+  // snapshot handler: any message frame can touch the window).
   if (hasActiveMainlineReader(qc, channelId)) {
-    if (
-      contentEffectApplied(
-        'mainline_message_window',
-        applyMainlineMessageToChannelCaches(qc, channelId, msg, provenance),
-      )
-    ) {
-      applied = true;
-    }
+    push(applyMainlineMessageToChannelCaches(qc, channelId, msg, provenance));
+  } else if (hasWarmInactiveMainline(qc, channelId)) {
+    push(removeInactiveMainlineCache(qc, channelId));
   }
-  // Each open cluster filters the row to its own root (append = idempotent).
+
+  // CLUSTERS — each open cluster filters the row to its own root; append is an
+  // id-deduped content write. A warm-inactive cluster for THIS msg's root would
+  // serve stale on reopen (refetchOnMount:false) → remove it, SCOPED to the root
+  // the frame touches (the snapshot handler removes them all; a live frame only
+  // affects one).
   for (const rootId of openClusterReaderRoots(qc, channelId)) {
-    if (
-      contentEffectApplied(
-        'cluster_message_window',
-        applyClusterMessageToCaches(qc, channelId, rootId, msg),
-      )
-    ) {
-      applied = true;
+    push(applyClusterMessageToCaches(qc, channelId, rootId, msg));
+  }
+  for (const rootId of warmInactiveClusterRoots(qc, channelId)) {
+    if (msg.thread_root_id === rootId || msg.id === rootId) {
+      push(removeInactiveClusterCache(qc, channelId, rootId));
     }
   }
-  // Each open thread-root row bumps its authoritative reply count (non-idempotent
-  // → provenance-gated).
+
+  // THREAD-ROOT reply count — message-derived (authoritative-invalidate, (c)). A
+  // warm-inactive thread-root row is NOT removed — mirrors the snapshot handler
+  // (useThreadRoot refetches on mount, so a ≤staleTime stale count self-heals).
   for (const rootId of openThreadRootReaderRoots(qc, channelId)) {
-    if (
-      contentEffectApplied(
-        'thread_root_reply_count',
-        applyThreadRootReplyBump(qc, channelId, rootId, msg, provenance),
-      )
-    ) {
-      applied = true;
-    }
+    push(applyThreadRootReplyBump(qc, channelId, rootId, msg, provenance));
   }
-  // Each open follower snapshot refetches when a reply lands on its root
-  // (derived-invalidate → cursor-inert, never advances the floor).
+
+  // FOLLOWERS + THREADS-LIST — message-derived invalidations (cursor-inert): the
+  // settle is fulfilled once the refetch lands, gating the floor advance.
   for (const rootId of openThreadFollowerReaderRoots(qc, channelId)) {
-    cursorInertEffect('thread_followers_invalidate');
-    applyThreadFollowersMessage(qc, channelId, rootId, msg);
+    push(applyThreadFollowersMessage(qc, channelId, rootId, msg));
   }
-  // The channel Threads list re-sorts/refetches on any message — a
-  // derived-invalidate (cursor-inert).
   if (hasActiveChannelThreadsReader(qc, channelId)) {
-    cursorInertEffect('channel_threads_invalidate');
-    void invalidateChannelThreadsList(qc, channelId);
+    push(invalidateChannelThreadsList(qc, channelId));
   }
-  return applied;
+
+  return settles;
 }
 
 /** Apply a live/replayed `agent_activity` frame to the agent-run-states cache
@@ -404,6 +457,14 @@ function ingestReaction(
 ): boolean {
   const viewerId = getCurrentUserId();
   let applied = false;
+  // #1263 hybrid boundary: a reaction frame keeps the SYNCHRONOUS content-apply
+  // (boolean) gate — its resume-floor correctness rests solely on the idempotent
+  // `reaction_message_patch` (absolute reaction state set by message id). The
+  // reactors popover invalidate fired inside `applyReactionChangedToChannelCaches`
+  // (`reactors_list_refresh`) is a FIRE-AND-FORGET, cursor-inert, authoritative-
+  // on-open detail refresh — deliberately NOT floor-bearing, so it stays off the
+  // `message`-kind `Promise.allSettled` commit-gate. Do not promote reaction to
+  // the satisfaction path on account of that invalidate (see REPLAY_SAFETY_CONTRACTS).
   // Mainline path also patches the reply-cluster window + reactor list — the
   // sole writer of cluster reactions in the old code (useThreadCluster has no
   // reaction branch), so gating it on the mainline reader is faithful.
@@ -508,13 +569,17 @@ function ingestSideSnapshotRequired(qc: QueryClient, channelId: string): void {
  * uses the shared parsers only — the two prefixes are disjoint, so a side frame
  * never reaches a message-stream apply and vice-versa.
  *
- * DUAL-WATER FLOOR (#1255 P2 step-4). For the content-gated message-stream scope
- * this is the SOLE content-driven writer of the transport applied-water (resume
- * floor):
- *  - an `event` that produced ≥1 real content write (an ingest* helper returned
- *    `true`) → `markSatisfied(scope, seq, epoch)` exactly once; a no-op /
- *    readerless / derived-invalidate-only frame does NOT (false-positive
- *    forbidden, §4.1);
+ * DUAL-WATER FLOOR (#1255 P2 step-4 / #1263 (c)). For the content-gated
+ * message-stream scope this is the SOLE content-driven writer of the transport
+ * applied-water (resume floor):
+ *  - a `message` `event` → build the per-frame SATISFACTION disposition
+ *    ({@link ingestMessage}) and, once its `Promise.allSettled` join is
+ *    all-fulfilled, `markSatisfied(scope, seq, epoch)` once (#1261: content applies
+ *    + committed derived-invalidates + warm-removes + cold-absent vacuous all
+ *    satisfy; a rejected refetch pins the floor);
+ *  - a `task_changed` / `reaction` `event` → a pure idempotent content patch, so
+ *    the synchronous `applied` gate stands: a real patch → `markSatisfied` once, a
+ *    no-op → none (false-positive forbidden, §4.1);
  *  - `snapshot_required` → collect the reconcile settle Promises and, once the
  *    `Promise.allSettled` join is all-fulfilled, `commitSnapshotBaseline(scope,
  *    epoch)` once (apply-gated commit, §6). A rejected settle leaves the floor
@@ -523,9 +588,9 @@ function ingestSideSnapshotRequired(qc: QueryClient, channelId: string): void {
  * transport (`acceptEventFrame`), so the ingestor never calls `markSatisfied` /
  * `commitSnapshotBaseline` for it (Alice's contract).
  *
- * `meta.provenance` is delivery metadata, not payload: a non-idempotent delta
- * (reply-count bump) applies optimistically on `live` and forces authoritative
- * recovery on `backfill` — threaded into the message helpers, never mutating the
+ * `meta.provenance` is delivery metadata, not payload. It is DEAD under #1263 (c)
+ * — a reply count now recovers authoritatively regardless of live/backfill — and
+ * stays threaded only until #1264 removes the wire plumbing; it never mutates the
  * wire frame.
  */
 export function ingestConversationFrame(
@@ -555,18 +620,36 @@ export function ingestConversationFrame(
     return;
   }
 
-  // Message-stream kinds ride `conversation:<id>`. The applied-water advances
-  // only when a real content write landed (§4.1); markSatisfied is idempotent and
-  // strict-contiguous transport-side, but we still gate the CALL on `applied` so
-  // a no-op frame never even signals.
+  // Message-stream kinds ride `conversation:<id>`. The applied-water advances on
+  // SATISFACTION (#1261), split by effect nature:
+  //  - `message` carries cursor-inert derived-invalidate effects (reply counts,
+  //    followers, threads list, #1263 (c)) alongside content appends, so it gates
+  //    `markSatisfied` on a per-frame `Promise.allSettled` — all-fulfilled advances
+  //    the floor once (after any refetch COMMITS); a rejected refetch pins it; a
+  //    cold-absent frame satisfies vacuously (allSettled([]) is all-fulfilled).
+  //  - `task_changed` / `reaction` are pure idempotent content patches (set-by-id,
+  //    replay-safe) with no derived-invalidate effect, so they keep the synchronous
+  //    `applied` gate: a real patch advances the floor, a no-op pins it (harmless
+  //    on idempotent replay). Their #1261 satisfaction-model unification is a
+  //    possible fast-follow, out of #1263's reply-count scope.
   if (messageStreamId) {
     const provenance = meta?.provenance ?? 'live';
-    let applied = false;
     const kind = asMessageStreamKind(frame.kind);
     if (kind === 'message') {
       const msg = (frame.payload as { message?: MessageDto } | undefined)?.message;
-      if (msg) applied = ingestMessage(qc, messageStreamId, msg, provenance);
-    } else if (kind === 'task_changed') {
+      if (msg) {
+        const settles = ingestMessage(qc, messageStreamId, msg, provenance);
+        const { scope, seq, epoch } = frame;
+        void Promise.allSettled(settles).then(results => {
+          if (results.every(r => r.status === 'fulfilled')) {
+            eventWsClient.markSatisfied(scope, seq, epoch);
+          }
+        });
+      }
+      return;
+    }
+    let applied = false;
+    if (kind === 'task_changed') {
       const task = frame.payload as TaskChangedEvent | undefined;
       if (task?.message_id) applied = ingestTaskChanged(qc, messageStreamId, task);
     } else if (kind === MESSAGE_REACTION_CHANGED_EVENT) {

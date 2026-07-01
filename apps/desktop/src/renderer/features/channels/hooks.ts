@@ -369,14 +369,12 @@ function cacheHasMessage(data: MessagesCache | undefined, messageId: string): bo
   return data?.pages.some(page => page.messages.some(m => m.id === messageId)) ?? false;
 }
 
-/** Whether a reply-count bump for `rootId` would land on a loaded page — the
- *  root's key is already present OR the root message row is in the window. This
- *  is the exact `!hasKey && !hasRoot` early-return condition inside
- *  {@link bumpReplyCountInCache}, lifted so callers can decide `applied` WITHOUT
- *  inferring it from a `setQueryData` reference change (the updater returns a
- *  fresh outer object even on a no-op, which would mis-advance the resume floor —
- *  #task:1255 §4.1). Off-window → the bump is a no-op; the next window fetch
- *  re-derives the authoritative count. */
+/** Whether a reply badge for `rootId` is on a loaded main-stream page — the
+ *  root's `reply_counts_by_root` key is already present OR the root message row
+ *  is in the window. #1263 (c) gates the authoritative reply-count recovery on
+ *  this: an ON-window root → invalidate → refetch the count; an OFF-window root
+ *  → no-op, since the badge isn't displayed and the next window fetch re-derives
+ *  the authoritative count when the user paginates to it (#task:1255 §4.1). */
 function cacheHasRootOrKey(
   data: MessagesCache | undefined,
   rootId: string,
@@ -655,86 +653,6 @@ export function applyReactionChangedToThreadRootCache(
   return found;
 }
 
-/** Adjust a root's reply-count badge in the main-stream cache by `delta`.
- *
- *  The main window (cut3-6) excludes reply rows but carries a
- *  `reply_counts_by_root` sidecar per page; a live reply must bump that
- *  badge without inlining the reply itself. Each root appears in exactly
- *  one page's window, so we update the page that already carries the key
- *  or the page holding the root message (the first reply seeds the key).
- *  Roots not in any loaded page are a no-op — the next window fetch
- *  re-derives the authoritative count.
- *
- *  When `reply` is given (a live non-system reply) and the page already
- *  carries an enriched `reply_summaries_by_root` entry for the root (P1,
- *  #task:1073), the summary is patched in the same pass: `last_reply_at`
- *  advances, `reply_count` bumps, and the replier moves to the front of the
- *  (≤3) avatar cluster. We only patch EXISTING summary entries — never
- *  fabricate one — so a backend that hasn't shipped the sidecar keeps a
- *  consistent count-only badge everywhere. `replier_total` is an optimistic
- *  estimate (incremented only when the replier isn't already in the shown
- *  set); it self-heals on the next window refetch. */
-function bumpReplyCountInCache(
-  data: MessagesCache | undefined,
-  rootId: string,
-  delta = 1,
-  reply?: MessageDto,
-): MessagesCache | undefined {
-  if (!data) return data;
-  return {
-    ...data,
-    pages: data.pages.map(page => {
-      const hasKey = Object.prototype.hasOwnProperty.call(
-        page.reply_counts_by_root,
-        rootId,
-      );
-      const hasRoot = page.messages.some(m => m.id === rootId);
-      if (!hasKey && !hasRoot) return page;
-      const next = Math.max(0, (page.reply_counts_by_root[rootId] ?? 0) + delta);
-      const prevSummary = page.reply_summaries_by_root?.[rootId];
-      const nextSummaries =
-        reply && delta > 0 && prevSummary
-          ? {
-              ...page.reply_summaries_by_root,
-              [rootId]: patchReplySummary(prevSummary, reply),
-            }
-          : page.reply_summaries_by_root;
-      return {
-        ...page,
-        reply_counts_by_root: { ...page.reply_counts_by_root, [rootId]: next },
-        ...(nextSummaries ? { reply_summaries_by_root: nextSummaries } : {}),
-      };
-    }),
-  };
-}
-
-/** Optimistically fold a live reply into an existing enriched summary (P1).
- *  Pure; never fabricates a summary (callers gate on presence). */
-function patchReplySummary(
-  summary: ReplyBadgeSummary,
-  reply: MessageDto,
-): ReplyBadgeSummary {
-  const replier =
-    reply.from_kind === 'user'
-      ? { kind: 'human' as const, id: reply.from_user_id ?? '' }
-      : { kind: 'agent' as const, id: reply.from_agent_id ?? '' };
-  const already = summary.repliers.some(
-    r => r.kind === replier.kind && r.id === replier.id,
-  );
-  const repliers = [
-    replier,
-    ...summary.repliers.filter(
-      r => !(r.kind === replier.kind && r.id === replier.id),
-    ),
-  ].slice(0, 3);
-  return {
-    reply_count: summary.reply_count + 1,
-    last_reply_at: Math.max(summary.last_reply_at, reply.created_at),
-    repliers,
-    replier_total: already ? summary.replier_total : summary.replier_total + 1,
-  };
-}
-
 /** Set/clear the mainline live-gap affordance. Single shared writer: the
  *  ingestor sets `true` on a gapped live message; the reader view clears `false`
  *  on channel switch / reached tail / reset (#task:1255 P1a). */
@@ -772,54 +690,50 @@ export function hasActiveMainlineReader(
 }
 
 /** Apply a live/replayed mainline `message` frame to the channel main-stream
- *  caches (#task:1255 Stage-2). Returns whether a real content write landed
- *  (the resume-floor `applied` signal — §4.1; false-positive forbidden):
- *   - a reply (`thread_root_id != null`), non-system → bump the root's reply
- *     badge in the main window IF the root is on a loaded page. This is a
- *     non-idempotent `+1` delta: on `live` it bumps (applied); on `backfill` it
- *     must NOT bump (double-count) — it forces authoritative recovery
- *     (invalidate → refetch the count) and reports cursor-inert. Off-window →
- *     no-op, cursor-inert.
- *   - a mainline row at tail → append (id-deduped; applied).
- *   - a mainline row while the window is NOT at tail → set the live-gap fact;
- *     the FIRST flip is a real affordance write (applied), a bump when the gap is
- *     already `true` is a no-op (cursor-inert). */
+ *  caches (#task:1255 Stage-2 / #task:1263 (c)). Returns this frame's mainline
+ *  SATISFACTION promise, or `null` when it touches no mainline display path (the
+ *  ingestor collects the non-null promises and advances the resume floor only
+ *  once every effect settled fulfilled — §4.1 / #1261):
+ *   - a reply (`thread_root_id != null`), non-system, whose root is on a loaded
+ *     page → the root's reply badge is a message-DERIVED projection, so recover it
+ *     AUTHORITATIVELY (invalidate → refetch the count). #1263 (c): this replaces
+ *     the old optimistic `+1`, which was non-idempotent and double-counted on
+ *     replay (the Cindy #1263 falsifier). `live ≡ backfill` — `provenance` no
+ *     longer selects behavior (the whole point of (c); the param stays dead until
+ *     #1264 removes the wire plumbing). Cursor-inert: the invalidate INITIATES
+ *     recovery; the floor advances only once it COMMITS (#1261 satisfaction).
+ *     Returns the invalidate Promise.
+ *   - a reply to an OFF-window root, or a system reply → `null` (the badge isn't
+ *     displayed; a fresh count arrives when the window paginates to that root).
+ *   - a mainline row at tail → append (id-deduped) → content committed → resolved.
+ *   - a mainline row while the window is NOT at tail → set the live-gap fact; the
+ *     row loads authoritatively when the user reaches the tail, so the affordance
+ *     IS the commit → resolved (an already-gapped bump is equally satisfied —
+ *     #1261 lets the floor advance rather than pin, since paginate is authoritative). */
 export function applyMainlineMessageToChannelCaches(
   qc: QueryClient,
   channelId: string,
   msg: MessageDto,
+  // Dead under (c) — reply-count is always authoritative-invalidate now; the
+  // param stays threaded until #1264 removes the provenance wire plumbing end-to-end.
   provenance: EventDeliveryProvenance = 'live',
-): boolean {
+): Promise<void> | null {
   if (msg.thread_root_id !== null) {
-    if (msg.from_kind === 'system') return false;
+    if (msg.from_kind === 'system') return null;
     const rootId = msg.thread_root_id;
     const cur = qc.getQueryData<MessagesCache>(messagesKey(channelId));
-    if (!cacheHasRootOrKey(cur, rootId)) return false;
-    if (provenance === 'backfill') {
-      // Non-idempotent delta on replay would double-count. Force authoritative
-      // recovery of the count instead of a blind `+1`; the invalidate is a
-      // derived-invalidate → cursor-inert (floor pins, released by the covering
-      // snapshot commit, §6). Never a bare skip (that fixes double-count into
-      // missed-count, §4.1).
-      void qc.invalidateQueries({ queryKey: messagesKey(channelId) });
-      return false;
-    }
-    qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
-      bumpReplyCountInCache(prev, rootId, 1, msg),
-    );
-    return true;
+    if (!cacheHasRootOrKey(cur, rootId)) return null;
+    return qc.invalidateQueries({ queryKey: messagesKey(channelId) });
   }
   const cur = qc.getQueryData<MessagesCache>(messagesKey(channelId));
   if (!lastPageIsTail(cur)) {
-    const wasGapped =
-      qc.getQueryData<boolean>(mainlineLiveGapKey(channelId)) === true;
     setMainlineLiveGap(qc, channelId, true);
-    return !wasGapped;
+    return Promise.resolve();
   }
   qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
     appendMessageToCache(prev, msg),
   );
-  return true;
+  return Promise.resolve();
 }
 
 /** Apply a `task_changed` frame to the channel caches (#task:1255 Stage-2) —
@@ -1042,29 +956,31 @@ export function reconcileThreadRootOnSnapshotRequired(
 
 /** Apply a `message` frame to one OPEN cluster window — verbatim move of
  *  useThreadCluster.onEvent's message branch (filter to this cluster's rows;
- *  append at tail, else raise the cluster live-gap). */
+ *  append at tail, else raise the cluster live-gap). Returns this cluster's
+ *  SATISFACTION promise, or `null` when the row is not part of this cluster:
+ *  a cluster append is an id-deduped CONTENT write (idempotent on replay), and a
+ *  live-gap flip is an affordance whose row loads authoritatively when the user
+ *  reaches the tail — both are committed synchronously → resolved. An already-
+ *  gapped bump is equally satisfied (#1261 lets the floor advance vs pin, since
+ *  paginate is authoritative). #task:1255 Stage-2 / #task:1263. */
 export function applyClusterMessageToCaches(
   qc: QueryClient,
   channelId: string,
   rootId: string,
   msg: MessageDto,
-): boolean {
-  if (msg.thread_root_id !== rootId && msg.id !== rootId) return false;
+): Promise<void> | null {
+  if (msg.thread_root_id !== rootId && msg.id !== rootId) return null;
   const cur = qc.getQueryData<MessagesCache>(
     clusterMessagesKey(channelId, rootId),
   );
   if (!lastPageIsTail(cur)) {
-    // First flip false→true is a real affordance write; a bump when already
-    // gapped is a no-op (cursor-inert, §4.1).
-    const wasGapped =
-      qc.getQueryData<boolean>(clusterLiveGapKey(channelId, rootId)) === true;
     setClusterLiveGap(qc, channelId, rootId, true);
-    return !wasGapped;
+    return Promise.resolve();
   }
   qc.setQueryData<MessagesCache>(clusterMessagesKey(channelId, rootId), prev =>
     appendMessageToCache(prev, msg),
   );
-  return true;
+  return Promise.resolve();
 }
 
 /** Apply a `task_changed` frame to one OPEN cluster window — patches the chip if
@@ -1099,55 +1015,46 @@ export function reconcileClusterOnSnapshotRequired(
   return qc.invalidateQueries({ queryKey: clusterMessagesKey(channelId, rootId) });
 }
 
-/** Bump the authoritative reply count on one OPEN thread-root row (#task:1255
- *  Stage-2). Non-idempotent `+1` delta with no per-reply-id dedup: on `live` it
- *  bumps (applied); on `backfill` it must NOT bump (double-count) — it forces
- *  authoritative recovery (invalidate → refetch) and reports cursor-inert (§4.1).
- *  A no-loaded-root / system reply is a no-op (cursor-inert). Returns the
- *  `applied` signal. */
+/** Recover the authoritative reply count on one OPEN thread-root row (#task:1255
+ *  Stage-2 / #task:1263 (c)). Returns this root's SATISFACTION promise, or `null`
+ *  when the frame touches no loaded root display path:
+ *   - a non-system reply to this loaded root → the count is a message-DERIVED
+ *     projection, so recover it AUTHORITATIVELY (invalidate → refetch). #1263 (c)
+ *     replaces the old optimistic `+1`, which was non-idempotent and double-counted
+ *     on replay. `live ≡ backfill` — `provenance` no longer selects behavior (dead
+ *     until #1264 removes the wire plumbing). Cursor-inert: the invalidate INITIATES
+ *     recovery; the floor advances only once it COMMITS (#1261). Returns the
+ *     invalidate Promise.
+ *   - a system reply, a row for another root, or a not-loaded root → `null`
+ *     (nothing displayed; the count is authoritative on the root row's own fetch). */
 export function applyThreadRootReplyBump(
   qc: QueryClient,
   channelId: string,
   rootId: string,
   msg: MessageDto,
+  // Dead under (c) — see applyMainlineMessageToChannelCaches; #1264 removes it.
   provenance: EventDeliveryProvenance = 'live',
-): boolean {
-  if (msg.thread_root_id !== rootId || msg.from_kind === 'system') return false;
+): Promise<void> | null {
+  if (msg.thread_root_id !== rootId || msg.from_kind === 'system') return null;
   const prev = qc.getQueryData<ConversationMessagesDto>(
     threadRootKey(channelId, rootId),
   );
-  if (!prev) return false;
-  if (provenance === 'backfill') {
-    void qc.invalidateQueries({ queryKey: threadRootKey(channelId, rootId) });
-    return false;
-  }
-  qc.setQueryData<ConversationMessagesDto>(
-    threadRootKey(channelId, rootId),
-    p => {
-      if (!p) return p;
-      const current = p.reply_counts_by_root[rootId] ?? 0;
-      return {
-        ...p,
-        reply_counts_by_root: {
-          ...p.reply_counts_by_root,
-          [rootId]: current + 1,
-        },
-      };
-    },
-  );
-  return true;
+  if (!prev) return null;
+  return qc.invalidateQueries({ queryKey: threadRootKey(channelId, rootId) });
 }
 
 /** Invalidate one OPEN cluster's follower snapshot when a reply to this root
- *  lands — verbatim move of useThreadFollowers.onEvent's message branch. */
+ *  lands — verbatim move of useThreadFollowers.onEvent's message branch. Returns
+ *  the invalidate Promise (a derived-invalidate SATISFACTION signal, cursor-inert),
+ *  or `null` when the row is not part of this cluster. #task:1263. */
 export function applyThreadFollowersMessage(
   qc: QueryClient,
   channelId: string,
   rootId: string,
   msg: MessageDto,
-): void {
-  if (msg.thread_root_id !== rootId && msg.id !== rootId) return;
-  void qc.invalidateQueries({ queryKey: threadFollowersKey(channelId, rootId) });
+): Promise<void> | null {
+  if (msg.thread_root_id !== rootId && msg.id !== rootId) return null;
+  return qc.invalidateQueries({ queryKey: threadFollowersKey(channelId, rootId) });
 }
 
 /** Invalidate one OPEN cluster's follower snapshot on `snapshot_required`.
@@ -1422,8 +1329,8 @@ export function useThreadCluster(
   // "This open's window fetch succeeded" signal (#task:1226 §9/§9.10), carried
   // in a dedicated cache key so BOTH writers reach it: this hook's queryFn AND
   // `primeAround` (the jump-open's around-target fetch). It is NOT
-  // `dataUpdatedAt` — React Query bumps that on `setQueryData` too (optimistic
-  // `patchReplySummary` / live-append), which would open the mark-read gate
+  // `dataUpdatedAt` — React Query bumps that on `setQueryData` too (an
+  // optimistic live-append), which would open the mark-read gate
   // before a real window response landed. Only a successful window FETCH writes
   // this epoch, so it proves the loaded window is from this open. Read
   // reactively below via `useQuery`.
@@ -1590,8 +1497,9 @@ export function useThreadCluster(
  *  root is stably pinned and the header count is authoritative (not a
  *  loaded-rows count).
  *
- *  The live reply-count bump mirrors cut3-6 semantics: only non-system
- *  replies to this exact root increment the count. */
+ *  The reply count is recovered AUTHORITATIVELY (#1263 (c)): a non-system
+ *  reply to this exact root invalidates the root cache so the header count
+ *  refetches from its own sidecar — never an optimistic +1 (replay-safe). */
 export function useThreadRoot(
   channelId: string | null,
   rootMessageId: string | null,
@@ -1613,8 +1521,9 @@ export function useThreadRoot(
   });
 
   // Pure reader (#task:1255 P1b): the central ingestor owns the root-row cache
-  // writes (root reaction merge + reply-count bump), gated on this thread-root
-  // reader being mounted. This hook only declares INTEREST in the channel scope.
+  // writes (root reaction merge + reply-count authoritative recovery/invalidate),
+  // gated on this thread-root reader being mounted. This hook only declares
+  // INTEREST in the channel scope.
   useEffect(() => {
     if (!enabled || !channelId) return;
     const sub = subscribeWsScope(wsConversationScope(channelId));
