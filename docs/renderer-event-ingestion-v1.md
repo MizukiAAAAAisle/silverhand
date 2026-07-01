@@ -77,11 +77,16 @@ is the **only `onWsFrame` consumer for conversation-scope events**. It:
 
 1. **Routes by event kind** (`message`, `message_reaction_changed`, `task_changed`, `agent_activity`),
    replacing the per-view `onEvent` switches.
-2. **Applies to the React Query cache** by reusing the existing pure mutators (`appendMessageToCache`,
-   `bumpReplyCountInCache`, `applyReactionChangedToCache`, `applyTaskChangedToCache`,
-   `applyAgentRunStateToCache`) — centralized, not duplicated.
-3. **Advances the applied-cursor atomically after a successful apply** (see §4.3 contract). Apply and
-   advance are one step in one consumer ⇒ no "cursor advanced but not applied" window.
+2. **Applies to the React Query cache** by reusing the existing pure content mutators
+   (`appendMessageToCache`, `applyReactionChangedToCache`, `applyTaskChangedToCache`,
+   `applyAgentRunStateToCache`) — centralized, not duplicated. Reply count is **not**
+   a mutator: post-#1263 (c) it recovers via authoritative `invalidateQueries` (the
+   `bumpReplyCountInCache`/`patchReplySummary` `+1` helpers were deleted).
+3. **Satisfies the applied-cursor after the frame's effects commit** (see §4.3
+   contract + `event-ws-transport-v1.md` §9). For sync content writes this is the
+   same tick; for the commit-gated reply-count invalidate it is after the refetch
+   settles. Apply/satisfy live in one consumer ⇒ no "cursor advanced but not
+   applied" window.
 
 The ingestor writes the same cache keys (`messagesKey`, `clusterMessagesKey`, `threadRootKey`,
 `threadFollowersKey`) so existing readers see no shape change.
@@ -182,12 +187,19 @@ cursor advance *because* apply happened. The agreed contract (Alice transport ·
 6. **Ownership:** forward-gap detection / ordering = **transport**; dedup / idempotency / input assertion =
    **ingestor**. resume/reconnect still read `positions[scope]`; the only change is the *writer*
    (`acceptEventFrame` → `markSatisfied`) for conversation scopes.
-7. **Single-cursor precondition = synchronous apply** (`setQueryData` runs synchronously — that is the
-   only guarantee it gives; it is **not** a multi-cache transaction). Cross-cache consistency for a frame
-   that writes several keys rests on §4.3.3 (idempotent replay + `markSatisfied` as the single commit
-   point), **not** on any RQ atomicity. Synchronous apply ⇒ received ≡ applied in the same tick ⇒ one
-   cursor suffices. If apply ever becomes async, re-introduce a separate received-seq + pending queue —
-   explicitly **not** now.
+7. **Single-cursor precondition = synchronous apply — SUPERSEDED by #1261 (async
+   effects now supported via the pending-satisfaction queue).** The original claim:
+   `setQueryData` runs synchronously ⇒ received ≡ applied in the same tick ⇒ one
+   cursor suffices, and *if apply ever becomes async, re-introduce a separate
+   received-seq + pending queue*. Both halves landed: **#1255 P2** split the cursor
+   into two watermarks (received ⊥ applied), and **#1261** built the
+   pending-satisfaction queue precisely because reply-count recovery became **async**
+   (a commit-gated `invalidateQueries` refetch — #1263 (c)). So a frame's seq is now
+   satisfied only after its effects *commit* (sync writes done + async refetch
+   settled, `Promise.allSettled` all-fulfilled), and the floor drains contiguously.
+   Cross-cache consistency for a frame that writes several keys still rests on
+   §4.3.3 (idempotent replay + `markSatisfied` as the single commit point), **not**
+   on any RQ atomicity. Canonical: `event-ws-transport-v1.md` §9.
 
 **P2 scope = conversation scopes only.** The viewer/app sync hooks (`usePresenceSync` / `useAgentSync` /
 `useViewerWorkspacesSync` / `useActivity`) are already resident singletons where received ≡ applied holds
@@ -249,7 +261,7 @@ subscription can remain roughly view-driven; the Stage-1 orphan gate covers the 
   clears") — it is a UI-affordance cache, never the message cache and never a frame apply. So P1's scope is
   "consolidate cache writes **and** promote event-derived view state to an ingestor-owned cache fact," so
   every conversation-scope view becomes fully `onWsFrame`-free.
-  (The other event-derived facts are benign: `useThreadRoot`/`useThreadCluster` reply-count bumps and
+  (The other event-derived facts are benign: `useThreadRoot`/`useThreadCluster` reply-count invalidations (post-#1263 (c); no local bump) and
   `useThreadFollowers` invalidate-on-reply are cache writes/invalidations, not React state; jump-prime
   epoch is written by the *queryFn* fetch, not `onEvent`, so it stays put.)
 

@@ -229,18 +229,21 @@ the resubscribe's resume replays the orphaned frame. This is the invariant from
 §1 stated operationally: **the cursor tracks applied-to-active-scope, not
 socket-received.**
 
-> **Stage-2 (#1255): two watermarks + content-apply-only.** Canonical design:
-> `docs/event-ws-recovery-class-scope-v1.md` (recovery-class scope partition +
-> the full predicate, verdict signed by Cindy/Norman/Alice). The orphan gate's
-> two conflated jobs split into two watermarks on the message-stream scope:
+> **Stage-2 (#1255): two watermarks + satisfaction disposition.** The
+> two-watermark split is current; the "content-apply-only predicate" this
+> blockquote originally described was **superseded by #1261 + #1263 (c)** — the
+> canonical per-kind satisfy contract now lives in **§9** (this doc). Scope
+> partition: `docs/event-ws-recovery-class-scope-v1.md`. The orphan gate's two
+> conflated jobs split into two watermarks on the message-stream scope:
 >
 > - **`received-high-water`** — advanced in `acceptEventFrame` on **every**
 >   received desired-scope frame. Serves **wire continuity / forward-gap detection
 >   only** (§5). It does **not** imply the content is store-recoverable.
 > - **`applied-high-water`** (= the retained `positions[scope]` resume floor) —
->   advanced by the ingestor's `markApplied(scope, seq, epoch)` **only when a frame
->   produced a real write to a resume-recoverable content cache.** This alone is
->   the resume floor.
+>   advanced by the ingestor's `markSatisfied(scope, seq, epoch)` **only once a
+>   frame's effects reach a resume-safe satisfaction disposition** (§9: content
+>   write / commit-gated derived-invalidate / warm-inactive removeQueries /
+>   cold-absent vacuous). This alone is the resume floor.
 >
 > They coincide while a content reader applies every frame; they diverge whenever
 > the scope legally receives a message frame that writes no warm content — a
@@ -254,7 +257,14 @@ socket-received.**
 > watermarks `received` carries continuity, so `applied` is free to track only
 > real content and never stalls.
 >
-> **What counts as a content write (Cindy's boundary).**
+> **What counts as a content write (Cindy's boundary) — ⚠️ historical predicate,
+> superseded by the §9 satisfaction disposition (#1261 + #1263 (c)).** The
+> `applied: boolean` helper predicate and the in-window/off-window reply-count
+> *bump* distinction below are the pre-#1263 model. Under (c) reply count no longer
+> bumps any cache (`bumpReplyCountInCache`/`patchReplySummary` deleted; helpers
+> return `Promise<void> | null`); it recovers by commit-gated authoritative
+> invalidate. Read the rest of this blockquote as the reasoning that produced the
+> two-watermark split, not the current satisfy contract (§9).
 > - **Advances `applied`:** mainline tail-append, **first** mainline live-gap bump,
 >   **in-window** reply-count bump, cluster append/patch, thread-root / root-badge
 >   bump, reaction / task-chip patch of an in-cache row.
@@ -419,19 +429,19 @@ socket-received.**
 > > `removeQueries` flash) and its seq stays pending until commit.
 >
 > **Read-inert + granularity unchanged.** The live-gap affordance never feeds the
-> resume floor or `observe()`/`read_at` (#1244 holds). `markApplied`/`applied` is
+> resume floor or `observe()`/`read_at` (#1244 holds). `markSatisfied`/`applied` is
 > **scope-level** (one resume floor per `conversation:<id>`); the per-target reader
-> gates and the affordance are **window/key-level**. A frame may write some open
-> targets and not others; `applied` advances iff **≥1** target took a real content
-> write. Truly applying with no reader mounted = P3 interest registry, out of P2
-> scope. **The per-target reader gates are not lifted in P2; `markApplied` honors
-> them.**
+> gates and the affordance are **window/key-level**. A frame may touch some open
+> targets and not others; `applied` advances once the frame's per-target effects
+> reach satisfaction (§9 disposition). Truly applying with no reader mounted = P3
+> interest registry, out of P2 scope. **The per-target reader gates are not lifted
+> in P2; `markSatisfied` honors them.**
 >
 > Removal of the literal orphan-gate code is **not** unconditional: allowed only
 > once three preconditions are statically verifiable — (a) the App-level ingestor
 > is the sole consumer of message-stream frames, (b) no view hook calls
 > `onWsFrame` or writes a message-window cache, (c) the resume-floor writer is
-> `markApplied` (`acceptEventFrame` stops advancing `applied`, still advances
+> `markSatisfied` (`acceptEventFrame` stops advancing `applied`, still advances
 > `received`). Until all three hold, the gate stays.
 
 ## 5. Live forward-gap recovery (#1241)
@@ -465,7 +475,7 @@ on the first post-snapshot event).
 
 **Stage-2 P2 — snapshot_required IS a re-cold-start, and needs a transport-seq
 baseline source (Cindy blocker, signed option 1).** Once the cursor is
-`markApplied`-driven, "the next event re-baselines" no longer holds: nothing tells
+`markSatisfied`-driven, "the next event re-baselines" no longer holds: nothing tells
 the resume floor where to land. The baseline **must** come from the transport seq
 space (`EventFrame.seq` / `SubscribedFrame.seq` / `positions[scope]`) — it can
 **never** be `stream_head_seq` (the REST snapshot's message-seq; the §3.1 reboot

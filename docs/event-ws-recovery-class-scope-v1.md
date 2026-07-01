@@ -120,10 +120,14 @@ the invalidate-class out:
 
 - **`conversation:<id>` = message-stream** (unchanged scope name): `message`,
   `message_reaction_changed`, `task_changed`. **Resume floor** =
-  `applied-high-water`, advanced only by ingestor `markSatisfied` on content-apply
-  (§4); **wire continuity** = a separate `received-high-water` advanced on every
-  received frame. The two diverge whenever a derived-invalidate reader keeps the
-  scope live without a content reader (§4 two-watermark).
+  `applied-high-water`, advanced by the ingestor's `markSatisfied` once a frame's
+  effects reach a resume-safe **satisfaction disposition** — content write,
+  derived-invalidate *commit*, warm-inactive `removeQueries`, or cold-absent
+  vacuous (canonical per-kind contract: `event-ws-transport-v1.md` §9; §4 below is
+  the historical predicate that preceded it); **wire continuity** = a separate
+  `received-high-water` advanced on every received frame. The two diverge whenever
+  a derived-invalidate reader keeps the scope live without a content reader (§4
+  two-watermark).
 - **`conversation-side:<id>` = side-channel** (new scope): `agent_status`,
   `agent_activity`, `conversation_activity`, `conversation_members_changed`,
   `thread_updated`(if ever consumed; today unconsumed — see §2).
@@ -145,9 +149,9 @@ A reader subscribes the scope of **the kind its liveness depends on** — not
 
 | reader hook | liveness depends on | subscribes | effect on a message frame |
 |---|---|---|---|
-| `useChannelMessages` | `message`/`reaction`/`task_changed` | **message-stream** | content-apply (append / patch / gap-bump) |
+| `useChannelMessages` | `message`/`reaction`/`task_changed` | **message-stream** | content-apply (append / reaction·task patch) + derived-invalidate (reply-count, #1263 (c)) |
 | `useThreadCluster` | `message`/`reaction`/`task_changed` (per root) | **message-stream** | content-apply (cluster append / patch) |
-| `useThreadRoot` | `message` reply bump + `reaction` | **message-stream** | content-apply (reply-count bump into root cache) |
+| `useThreadRoot` | `message` reply count + `reaction` | **message-stream** | **derived-invalidate** (reply-count authoritative `invalidateQueries`, commit-gated — **no local bump**, #1263 (c)); `reaction` = content-apply patch |
 | `useThreadFollowers` | `message` to a followed root | **message-stream** | **derived-invalidate** (followers snapshot) — cursor-inert |
 | `useChannelThreads` | `message` → Threads-list count | **message-stream** | **derived-invalidate** (`invalidateChannelThreadsList`) — cursor-inert |
 | `useChannelAgents` | `agent_status` | **side-channel** | own cache + buffer |
@@ -216,52 +220,34 @@ Why option 2 over Cindy's 1/2/3: **option 2, with option 1 now excluded.**
   high-frequency self-healing kinds off message-stream keeps the two watermarks
   close and the replay buffer small.
 
-### 4.1 The content-apply predicate
+### 4.1 Satisfaction disposition (was: the content-apply predicate)
 
-- `acceptEventFrame` no longer advances `applied-high-water`
-  (`positions[conversation:<id>]`); the ingestor's `markSatisfied(scope, seq,
-  epoch)` does, synchronously after the frame is applied. (`acceptEventFrame`
-  still advances `received-high-water` for gap detection.) This **supersedes the
-  P1-era "markSatisfied fires regardless of store effect, else the cursor stalls"
-  reasoning** — under two watermarks, `received` carries continuity, so `applied`
-  is free to advance *only* on real content and never stalls gap detection.
+> **⚠️ Retitled + superseded (#1261 + #1263 (c)) — canonical contract is
+> `event-ws-transport-v1.md` §9.** This section originally specified a *content-apply
+> predicate*: apply helpers returned `applied: boolean` and the cursor writer fired
+> iff a helper *actually mutated* a resume-recoverable cache, with a per-kind
+> false-positive/false-negative asymmetry around the non-idempotent reply-count
+> `+1`. That model is gone:
+> - **#1263 (c)** deleted the optimistic reply-count `+1` — `bumpReplyCountInCache`
+>   and `patchReplySummary` are **removed** (structurally dead); reply count now
+>   recovers by authoritative `invalidateQueries` on every delivery. The two apply
+>   helpers (`applyMainlineMessageToChannelCaches` / `applyThreadRootReplyBump`)
+>   return `Promise<void> | null` (the invalidate's promise, or a no-op) — **not**
+>   `applied: boolean`.
+> - **#1261** generalized `markApplied` into a commit-gated **pending-satisfaction
+>   queue**: a frame is *satisfied* once all its per-target effects **commit**
+>   (`Promise.allSettled` all-fulfilled), and the floor drains contiguously.
+> Per-kind satisfaction disposition + the #1263 (A) hybrid-gate exception are
+> specified **once**, in transport §9. Do not re-spec them here — the paragraphs
+> below are retained only for the two-watermark rationale they motivate.
 
-- **What "applied" means — a real write to a resume-recoverable content cache**
-  (Cindy's boundary; refines `event-ws-transport-v1.md` §4.1). `markSatisfied` fires
-  iff a helper reports it **actually mutated** a resume-recoverable cache:
-  - **IN (advances `applied`):** mainline tail-append, mainline live-gap bump,
-    **in-window** reply-count bump, cluster append/patch, thread-root / root-badge
-    bump, reaction / task-chip patch of an in-cache row.
-  - **OUT (cursor-inert):** **off-window** reply-count bump (semantic no-op —
-    `bumpReplyCountInCache` returns the page unchanged when `!hasKey && !hasRoot`),
-    Threads-list / followers derived-invalidate, any frame whose target has no
-    reader.
-
-- **Implementation hinge — helpers must return `applied: boolean` (Norman ①).**
-  `applyMainlineMessageToChannelCaches` → `bumpReplyCountInCache` returns a **new
-  outer object even on a no-op**, so `markSatisfied` must **not** be inferred from a
-  `setQueryData` reference change — it would misread an off-window no-op as an
-  apply and wrongly advance the resume floor (the exact #1251 re-entry). Each apply
-  helper returns an explicit mutation result; `markSatisfied` keys on that.
-
-- **Safety asymmetry is per-kind, gated on replay-idempotency (Norman + Cindy).**
-  A false **positive** is always #1251 (no-op marked applied → floor floats past
-  un-applied content). A false **negative** leaves the frame above the floor →
-  resume **replays** it → safe **only if that kind's replay is idempotent**:
-  - **Idempotent (false-negative safe; may err toward false):**
-    `appendMessageToCache` (dedups by message id), `applyReactionToMessage` (sets
-    the aggregate from the event's absolute `count`), `applyTaskChangedToCache`
-    (sets task fields), activity `mergeById`.
-  - **Non-idempotent (false-negative UNSAFE):** `bumpReplyCountInCache` /
-    `applyThreadRootReplyBump` are `+1` deltas with no per-reply-id dedup → replay
-    double-counts. They must report `applied` **exactly** (`applied = !(took the
-    !hasKey && !hasRoot early return)`) **or** be made replay-idempotent via
-    per-reply-id dedup. "REST `reply_counts_by_root` recompute self-heals it" is
-    the hidden compensation path Cindy rejected — not an answer.
-
-  So it is **not** a blanket "conservatively mark true." Implementation gate
-  (Cindy): every `applied:false` path that can be replayed must be *proven*
-  idempotent or accurately marked — a boolean predicate alone is insufficient.
+- `acceptEventFrame` advances **only** `received-high-water`;
+  `applied-high-water` (= `positions[conversation:<id>]`, the resume floor) is
+  advanced **solely** by the ingestor's `markSatisfied`. This **supersedes the
+  P1-era "the cursor writer fires regardless of store effect, else the cursor
+  stalls" reasoning** — under two watermarks, `received` carries continuity, so
+  `applied` is free to advance only once a frame is resume-safe and never stalls
+  gap detection.
 
   > **Non-idempotent delta resolution (Alice + Cindy, signed) — ⚠️ SUPERSEDED
   > (#1263 (c) + #1264).** The reasoning below reaches for *delivery provenance*
@@ -286,25 +272,28 @@ Why option 2 over Cindy's 1/2/3: **option 2, with option 1 now excluded.**
   > confirm a covering snapshot). Bare skip would convert double-count into
   > **missed-count** (Cindy: active window misses a reply during a disconnect →
   > backfill must still refetch). No cache-shape/REST-DTO change. See
-  > `event-ws-transport-v1.md` §4.1.
+  > `event-ws-transport-v1.md` §2/§9.
 
-- **Why this boundary is right (resume-dependence, Norman ② as narrowed by
-  Cindy).** The only effects that *truly* need ordered resume are writes to a
-  **warm** content window that won't refetch (#1251 is warm-cache reuse, not a REST
-  fault — verified: REST `reply_counts_by_root` is recomputed per window fetch, and
-  `useThreadCluster` cold-starts reply bodies). Norman proposed shrinking the set
-  to "only tail-append"; Cindy correctly keeps in-window bump / cluster patch /
-  badge / chip-patch IN, because a *warm* window holding any of those stale won't
-  self-heal. The line is "did a resume-recoverable cache actually change," not "was
-  it a tail-append." Off-window no-ops and derived-invalidates fall out naturally:
-  they write no warm content, and their data is REST-recoverable on next fetch.
+- **Why this boundary is right (resume-dependence — the live criterion).** The only
+  effects that *truly* need ordered resume are writes to a **warm** content window
+  that won't refetch (#1251 is warm-cache reuse, not a REST fault — verified: REST
+  `reply_counts_by_root` is recomputed per window fetch, and `useThreadCluster`
+  cold-starts reply bodies). This is exactly the criterion transport §9 states as
+  "an effect is gated iff resume correctness depends on its settle." The line is
+  "does a resume-recoverable cache depend on this effect having committed," not
+  "was it a tail-append." Off-window no-ops and pure derived-invalidates whose data
+  is authoritative-on-open fall out naturally.
 
-  **Cluster / thread-root are content-applies (not under-counted).** A reply's
-  cluster-window append and a thread-root reply-count bump both patch
-  resume-recoverable caches → they **do** advance the cursor. The content-apply
-  set is exactly {mainline append, mainline reply-count bump, mainline live-gap
-  bump, cluster append, cluster patch, thread-root reply-bump, reaction/task patch
-  of an in-cache row}. Only Threads-list / followers invalidate are excluded.
+  **Cluster append is a content-apply; reply-count is a commit-gated
+  derived-invalidate (post-(c)).** A reply's cluster-window append patches a
+  resume-recoverable cache → satisfies after the write. A reply's mainline/thread-root
+  **reply-count** no longer *bumps* any cache — under #1263 (c) it is an
+  authoritative `invalidateQueries`, so its seq is satisfied only after the refetch
+  **commits** (commit-gated, per transport §9). The satisfying set is thus {mainline
+  append, cluster append, reaction/task patch of an in-cache row} *(sync content
+  writes)* ∪ {mainline + thread-root reply-count invalidate} *(commit-gated)* ∪
+  {warm-inactive `removeQueries`, cold-absent vacuous}. Only Threads-list /
+  followers derived-invalidate and side-scope effects never touch this floor.
 
   **Known residual — single cursor vs. multiple warm caches (P3, not introduced
   here).** One cursor governs N independently-cached content windows (mainline +
@@ -312,7 +301,7 @@ Why option 2 over Cindy's 1/2/3: **option 2, with option 1 now excluded.**
   shared cursor past it even if a *warm-but-unmounted* window B (RQ cache still
   within gcTime, no live observer → ingestor's per-target gate sees it as
   inactive → won't re-apply on remount) also needed it. This is **not** introduced
-  by the content-apply predicate and **not** a regression: today's
+  by the satisfaction disposition and **not** a regression: today's
   applied-to-desired-scope cursor (#1251 `f8ed335`) has the identical gap, because
   `desiredScopes` keys on subscription, not on which warm cache applied. The clean
   closure is **P3 interest-registry** — apply to every *interested* (warm) cache,
@@ -326,8 +315,8 @@ Why option 2 over Cindy's 1/2/3: **option 2, with option 1 now excluded.**
 - **Orphan gate → received-high-water.** The orphan gate (`f8ed335`) conflated
   two jobs: wire-gap detection and stopping a readerless frame from floating the
   resume cursor. P2 splits them: `received-high-water` (advanced for every desired
-  scope frame) takes wire-gap detection; `applied-high-water` (markSatisfied,
-  content-apply only) is the resume floor. `acceptEventFrame` stops self-advancing
+  scope frame) takes wire-gap detection; `applied-high-water` (advanced solely by
+  the ingestor's `markSatisfied`, on satisfaction disposition) is the resume floor. `acceptEventFrame` stops self-advancing
   the **resume** cursor — that flip is safe here because the preconditions hold
   (ingestor sole markSatisfied caller + sole message-window writer; no view hook
   writes the message-window cache or resume cursor). `useConversationMembers` /
@@ -442,26 +431,21 @@ other).
    size yields `snapshot_required` on reconnect, not a silent skip.
    (d) *gap-detection source*: assert wire-gap detection reads `received`, never
    `applied` (a stalled applied must not raise a false gap).
-   (e) *off-window no-op with ChannelView open (Cindy)*: ChannelView mounted,
-   deliver two consecutive replies to an **off-window** root (seq 12, 13); assert
-   `received` → 13, `applied` does **not** advance (semantic no-op), no false gap;
-   then open that root/cluster → resume/REST backfills it correctly.
-   (f) *helper mutation result, not reference (Cindy 口径 2)*: `markSatisfied` keys
-   on the helper's explicit `applied: boolean`, which **forbids false positives**
-   and **allows false negatives**. Lock all three no-op classes to `applied:false`
-   even though each may return a fresh outer object: off-window reply-count bump,
-   already-`true` live-gap bump, derived-invalidate (Threads-list / followers).
-   (g) *false-negative is bounded, not a hidden compensation path (Cindy
-   prerequisite)*: assert (i) replay is idempotent (a re-applied frame is a no-op
-   on the content cache) and (ii) every content kind on message-stream has
-   `snapshot_required` coverage — so an under-reported `applied` costs at most one
-   extra replay / an earlier `snapshot_required`, never a drop.
+   (e)–(g) *[SUPERSEDED by #1261 + #1263 (c)]* — the original axes tested the
+   `applied: boolean` helper predicate (off-window reply "does not advance applied";
+   helpers return `applied: boolean`; per-kind false-negative idempotency). That
+   model is gone: helpers return `Promise<void> | null`, reply-count is a
+   commit-gated derived-invalidate, and an off-window reply on an **active** mainline
+   now satisfies **vacuously** (authoritative on paginate — the floor DOES advance),
+   not "applied stays put". The current per-kind satisfaction tests are (h)/(h2)
+   below + the ingestor suite (`conversation-ingestor.test.ts`); canonical contract
+   in `event-ws-transport-v1.md` §9.
    (h) *reply-count replay idempotency — #1263 (c), provenance deleted #1264*:
    the optimistic `+1` is gone; every delivery (live or replayed) recovers the
    count by authoritative invalidate/refetch, so replay is idempotent-by-
    construction. Tests: (i) the SAME reply frame delivered twice (live + replay)
-   → the local count is **never bumped** (`bumpReplyCountInCache` no longer `+1`s)
-   → cannot double-count; (ii) an active in-window root missing a reply during a
+   → the local count is **never bumped locally** (the optimistic `+1` helper is
+   deleted; recovery is authoritative-invalidate) → cannot double-count; (ii) an active in-window root missing a reply during a
    disconnect → resume redelivers → invalidate/refetch → final count correctly +1
    (no missed-count). There is no `live`/`backfill` classification to test — a
    replayed frame dispatches identically to fresh fanout.
