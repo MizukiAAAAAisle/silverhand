@@ -10,7 +10,8 @@ import {
   type MemberDto,
 } from '@silverhand/shared';
 import { ApiError, api } from '@/lib/api';
-import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
+import { onWsFrame } from '@/lib/ws-client';
+import { useInterest } from '@/features/realtime/interest-registry';
 import { wsConversationSideScope } from '@/hooks/useConversationStream';
 
 export type ConversationMembersStatus =
@@ -104,12 +105,17 @@ export function useConversationMembers(
     },
   });
 
+  // #task:1260 P2 (distinct slice): scope INTEREST is migrated to the registry.
+  // The `conversation_members_changed` LISTENER below is this hook's OWN concern
+  // (not moved to the central ingestor in #1255) and stays verbatim —
+  // interest ⊥ listener: only the direct subscribe/unsubscribe leaves the effect.
+  useInterest(id ? wsConversationSideScope(id) : null);
+
   useEffect(() => {
     if (!id) return;
     // `conversation_members_changed` is a side-channel kind (#task:1255 P2
-    // step-3) — subscribe + match on the side scope, not the message stream.
+    // step-3) — match on the side scope, not the message stream.
     const scope = wsConversationSideScope(id);
-    const sub = subscribeWsScope(scope);
     const unsub = onWsFrame(frame => {
       if (frame.type === 'event') {
         if (frame.scope !== scope) return;
@@ -121,7 +127,6 @@ export function useConversationMembers(
     });
     return () => {
       unsub();
-      sub.unsubscribe();
     };
   }, [id, qc]);
 

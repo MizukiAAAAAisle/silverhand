@@ -491,7 +491,7 @@ describe('conversation-scope subscribe whitelist (#task:1255 P2 step-3)', () => 
     expect(src).not.toContain('wsConversationScope(');
   });
 
-  it('useConversationMembers subscribes the SIDE scope (own onWsFrame)', () => {
+  it('useConversationMembers declares SIDE-scope interest via the registry + keeps its own onWsFrame', () => {
     const src = readFileSync(
       fileURLToPath(
         new URL('../features/conversations/useConversationMembers.ts', import.meta.url),
@@ -500,6 +500,12 @@ describe('conversation-scope subscribe whitelist (#task:1255 P2 step-3)', () => 
     );
     expect(src).toContain('wsConversationSideScope(');
     expect(src).not.toContain('wsConversationScope(');
+    // #task:1260 P2 slice 10 (distinct slice): interest migrated to the registry,
+    // the conversation_members_changed listener stays this hook's own — interest
+    // ⊥ listener. Call-form deny so prose naming subscribeWsScope can't trip it.
+    expect(src).toContain('useInterest(');
+    expect(src).not.toContain('subscribeWsScope(');
+    expect(src).toContain('onWsFrame(');
   });
 
   it('useChannelThreads stays on the MESSAGE-STREAM scope', () => {
