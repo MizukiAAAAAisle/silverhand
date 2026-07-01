@@ -59,6 +59,130 @@ import {
 } from '@/features/channels/hooks';
 import type { ConversationAgentStatusPatch } from '@/features/channels/hooks';
 
+type ReplayCursorEffect = 'content-apply' | 'cursor-inert';
+type ReplayRecoveryEffect =
+  | 'idempotent'
+  | 'provenance-gated-authoritative-backfill'
+  | 'authoritative-invalidate'
+  | 'side-scope-self-healing';
+
+type ReplaySafetySpec = {
+  readonly cursor: ReplayCursorEffect;
+  readonly recovery: ReplayRecoveryEffect;
+  readonly summary: string;
+};
+
+/** Replay-safety contract for every cache effect this ingestor can produce
+ *  (#task:1262). A new event kind or cache write must first be categorized here:
+ *  - `content-apply` may advance the message-stream applied-water when the
+ *    helper reports a real apply;
+ *  - `cursor-inert` must never advance the message-stream applied-water.
+ *
+ *  This table is the typed version of the #1255 review matrix. It is deliberately
+ *  about cache EFFECTS, not just wire kinds: one `message` frame can append an
+ *  idempotent cluster row, bump a non-idempotent reply count, and invalidate a
+ *  derived list. */
+export const REPLAY_SAFETY_CONTRACTS = {
+  mainline_message_window: {
+    cursor: 'content-apply',
+    recovery: 'provenance-gated-authoritative-backfill',
+    summary:
+      'mainline append/gap is idempotent; reply-count delta is live-only and backfill forces authority',
+  },
+  cluster_message_window: {
+    cursor: 'content-apply',
+    recovery: 'idempotent',
+    summary: 'cluster message append is deduped by message id',
+  },
+  thread_root_reply_count: {
+    cursor: 'content-apply',
+    recovery: 'provenance-gated-authoritative-backfill',
+    summary: 'thread-root reply-count delta is live-only and backfill forces authority',
+  },
+  thread_followers_invalidate: {
+    cursor: 'cursor-inert',
+    recovery: 'authoritative-invalidate',
+    summary: 'followers projection refetches from its own source',
+  },
+  channel_threads_invalidate: {
+    cursor: 'cursor-inert',
+    recovery: 'authoritative-invalidate',
+    summary: 'threads list is message-derived invalidate, not message content',
+  },
+  task_message_patch: {
+    cursor: 'content-apply',
+    recovery: 'idempotent',
+    summary: 'task chip patch sets fields by message id',
+  },
+  reaction_message_patch: {
+    cursor: 'content-apply',
+    recovery: 'idempotent',
+    summary: 'reaction patch sets absolute reaction state by message id',
+  },
+  agent_run_states: {
+    cursor: 'cursor-inert',
+    recovery: 'side-scope-self-healing',
+    summary: 'side scope cache with its own refetch-on-mount/snapshot reconcile',
+  },
+  channel_agents: {
+    cursor: 'cursor-inert',
+    recovery: 'side-scope-self-healing',
+    summary: 'side scope agents cache with snapshot reconcile and pending patch buffer',
+  },
+  agent_activity_feed: {
+    cursor: 'cursor-inert',
+    recovery: 'side-scope-self-healing',
+    summary: 'side scope activity feed merges by row id and has REST cold-start',
+  },
+} as const satisfies Record<string, ReplaySafetySpec>;
+
+type ReplaySafetyContracts = typeof REPLAY_SAFETY_CONTRACTS;
+type ReplayEffectId = keyof ReplaySafetyContracts;
+type ReplayEffectByCursor<C extends ReplayCursorEffect> = {
+  [K in ReplayEffectId]: ReplaySafetyContracts[K]['cursor'] extends C ? K : never;
+}[ReplayEffectId];
+
+function contentEffectApplied(
+  _effect: ReplayEffectByCursor<'content-apply'>,
+  applied: boolean,
+): boolean {
+  return applied;
+}
+
+function cursorInertEffect(_effect: ReplayEffectByCursor<'cursor-inert'>): void {}
+
+export const MESSAGE_STREAM_KIND_CONTRACTS = {
+  message: [
+    'mainline_message_window',
+    'cluster_message_window',
+    'thread_root_reply_count',
+    'thread_followers_invalidate',
+    'channel_threads_invalidate',
+  ],
+  task_changed: ['task_message_patch'],
+  [MESSAGE_REACTION_CHANGED_EVENT]: ['reaction_message_patch'],
+} as const satisfies Record<string, readonly ReplayEffectId[]>;
+
+type MessageStreamKind = keyof typeof MESSAGE_STREAM_KIND_CONTRACTS;
+
+export const SIDE_KIND_CONTRACTS = {
+  agent_activity: ['agent_run_states'],
+  agent_status: ['channel_agents'],
+  conversation_activity: ['agent_activity_feed'],
+} as const satisfies Record<string, readonly ReplayEffectId[]>;
+
+type SideKind = keyof typeof SIDE_KIND_CONTRACTS;
+
+function asMessageStreamKind(kind: string): MessageStreamKind | null {
+  return kind in MESSAGE_STREAM_KIND_CONTRACTS
+    ? (kind as MessageStreamKind)
+    : null;
+}
+
+function asSideKind(kind: string): SideKind | null {
+  return kind in SIDE_KIND_CONTRACTS ? (kind as SideKind) : null;
+}
+
 /**
  * Stage-2 central conversation ingestor (#task:1255).
  *
@@ -151,29 +275,48 @@ function ingestMessage(
   // reply-count bump is non-idempotent → provenance gates live-`+1` vs backfill
   // authoritative recovery inside the helper.
   if (hasActiveMainlineReader(qc, channelId)) {
-    if (applyMainlineMessageToChannelCaches(qc, channelId, msg, provenance)) {
+    if (
+      contentEffectApplied(
+        'mainline_message_window',
+        applyMainlineMessageToChannelCaches(qc, channelId, msg, provenance),
+      )
+    ) {
       applied = true;
     }
   }
   // Each open cluster filters the row to its own root (append = idempotent).
   for (const rootId of openClusterReaderRoots(qc, channelId)) {
-    if (applyClusterMessageToCaches(qc, channelId, rootId, msg)) applied = true;
+    if (
+      contentEffectApplied(
+        'cluster_message_window',
+        applyClusterMessageToCaches(qc, channelId, rootId, msg),
+      )
+    ) {
+      applied = true;
+    }
   }
   // Each open thread-root row bumps its authoritative reply count (non-idempotent
   // → provenance-gated).
   for (const rootId of openThreadRootReaderRoots(qc, channelId)) {
-    if (applyThreadRootReplyBump(qc, channelId, rootId, msg, provenance)) {
+    if (
+      contentEffectApplied(
+        'thread_root_reply_count',
+        applyThreadRootReplyBump(qc, channelId, rootId, msg, provenance),
+      )
+    ) {
       applied = true;
     }
   }
   // Each open follower snapshot refetches when a reply lands on its root
   // (derived-invalidate → cursor-inert, never advances the floor).
   for (const rootId of openThreadFollowerReaderRoots(qc, channelId)) {
+    cursorInertEffect('thread_followers_invalidate');
     applyThreadFollowersMessage(qc, channelId, rootId, msg);
   }
   // The channel Threads list re-sorts/refetches on any message — a
   // derived-invalidate (cursor-inert).
   if (hasActiveChannelThreadsReader(qc, channelId)) {
+    cursorInertEffect('channel_threads_invalidate');
     void invalidateChannelThreadsList(qc, channelId);
   }
   return applied;
@@ -189,6 +332,7 @@ function ingestAgentActivity(
   state: AgentRunState,
 ): void {
   if (hasActiveAgentRunStatesReader(qc, channelId)) {
+    cursorInertEffect('agent_run_states');
     applyAgentRunStateToCache(channelId, state, qc);
   }
 }
@@ -201,6 +345,7 @@ function ingestAgentStatus(
   patch: ConversationAgentStatusPatch,
 ): void {
   if (hasActiveChannelAgentsReader(qc, channelId)) {
+    cursorInertEffect('channel_agents');
     applyAgentStatusToCache(qc, channelId, patch);
   }
 }
@@ -218,6 +363,7 @@ function ingestConversationActivity(
   const agentId = row.agent_id;
   if (!agentId) return;
   if (hasActiveAgentActivityReader(qc, channelId, agentId)) {
+    cursorInertEffect('agent_activity_feed');
     appendAgentActivityToCache(qc, channelId, agentId, row);
   }
 }
@@ -229,10 +375,22 @@ function ingestTaskChanged(
 ): boolean {
   let applied = false;
   if (hasActiveMainlineReader(qc, channelId)) {
-    if (applyTaskChangedToChannelCaches(qc, channelId, task)) applied = true;
+    if (
+      contentEffectApplied(
+        'task_message_patch',
+        applyTaskChangedToChannelCaches(qc, channelId, task),
+      )
+    ) {
+      applied = true;
+    }
   }
   for (const rootId of openClusterReaderRoots(qc, channelId)) {
-    if (applyClusterTaskChangedToCaches(qc, channelId, rootId, task)) {
+    if (
+      contentEffectApplied(
+        'task_message_patch',
+        applyClusterTaskChangedToCaches(qc, channelId, rootId, task),
+      )
+    ) {
       applied = true;
     }
   }
@@ -250,14 +408,24 @@ function ingestReaction(
   // sole writer of cluster reactions in the old code (useThreadCluster has no
   // reaction branch), so gating it on the mainline reader is faithful.
   if (hasActiveMainlineReader(qc, channelId)) {
-    if (applyReactionChangedToChannelCaches(qc, channelId, ev, viewerId)) {
+    if (
+      contentEffectApplied(
+        'reaction_message_patch',
+        applyReactionChangedToChannelCaches(qc, channelId, ev, viewerId),
+      )
+    ) {
       applied = true;
     }
   }
   // The thread pane's root row is a separate query; patch it for the open root
   // the reaction targets (no-op unless `ev.message_id === root`).
   for (const rootId of openThreadRootReaderRoots(qc, channelId)) {
-    if (applyReactionChangedToThreadRootCache(qc, channelId, rootId, ev, viewerId)) {
+    if (
+      contentEffectApplied(
+        'reaction_message_patch',
+        applyReactionChangedToThreadRootCache(qc, channelId, rootId, ev, viewerId),
+      )
+    ) {
       applied = true;
     }
   }
@@ -394,13 +562,14 @@ export function ingestConversationFrame(
   if (messageStreamId) {
     const provenance = meta?.provenance ?? 'live';
     let applied = false;
-    if (frame.kind === 'message') {
+    const kind = asMessageStreamKind(frame.kind);
+    if (kind === 'message') {
       const msg = (frame.payload as { message?: MessageDto } | undefined)?.message;
       if (msg) applied = ingestMessage(qc, messageStreamId, msg, provenance);
-    } else if (frame.kind === 'task_changed') {
+    } else if (kind === 'task_changed') {
       const task = frame.payload as TaskChangedEvent | undefined;
       if (task?.message_id) applied = ingestTaskChanged(qc, messageStreamId, task);
-    } else if (frame.kind === MESSAGE_REACTION_CHANGED_EVENT) {
+    } else if (kind === MESSAGE_REACTION_CHANGED_EVENT) {
       const ev = frame.payload as MessageReactionChangedEvent | undefined;
       if (ev?.message_id) applied = ingestReaction(qc, messageStreamId, ev);
     }
@@ -411,13 +580,14 @@ export function ingestConversationFrame(
   // Side-channel kinds ride `conversation-side:<id>`. No content-apply seam —
   // the transport auto-advances the side floor; never call markApplied here.
   if (!sideId) return;
-  if (frame.kind === 'agent_activity') {
+  const sideKind = asSideKind(frame.kind);
+  if (sideKind === 'agent_activity') {
     const state = frame.payload as AgentRunState | undefined;
     if (state?.runId) ingestAgentActivity(qc, sideId, state);
-  } else if (frame.kind === 'agent_status') {
+  } else if (sideKind === 'agent_status') {
     const patch = frame.payload as ConversationAgentStatusPatch | undefined;
     if (patch?.agent_id) ingestAgentStatus(qc, sideId, patch);
-  } else if (frame.kind === 'conversation_activity') {
+  } else if (sideKind === 'conversation_activity') {
     const row = frame.payload as ConversationActivityEvent | undefined;
     if (row?.id != null) ingestConversationActivity(qc, sideId, row);
   }

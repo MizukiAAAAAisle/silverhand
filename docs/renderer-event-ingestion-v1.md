@@ -285,6 +285,34 @@ subscription can remain roughly view-driven; the Stage-1 orphan gate covers the 
 - **React Query remains the only cache** — no new store; same cache keys/shapes.
 - **Idempotent apply** — dedup-by-id (`cacheHasMessage`) is retained; replay/overlap stays safe.
 
+### 6.1 Replay-safety contracts (#task:1262)
+
+Every ingestor cache effect must have an explicit replay-safety contract before
+it can participate in message-stream cursor advancement. The code-level source
+is `REPLAY_SAFETY_CONTRACTS` in `conversation-ingestor.ts`; the dispatch maps
+(`MESSAGE_STREAM_KIND_CONTRACTS` / `SIDE_KIND_CONTRACTS`) bind wire kinds to
+those effects.
+
+Current classes:
+- **idempotent content apply** — safe to replay directly and may advance
+  applied-water when the helper reports a real apply (`cluster_message_window`,
+  `task_message_patch`, `reaction_message_patch`).
+- **non-idempotent live-only delta with authoritative backfill recovery** —
+  may advance applied-water only for the live optimistic path; backfill must
+  trigger authority and remain unapplied until commit. This currently covers
+  reply-count effects (`mainline_message_window` reply bump and
+  `thread_root_reply_count`) and is intentionally visible for #1263 to collapse.
+- **derived invalidate / side self-healing** — cursor-inert. These effects may
+  refetch or merge their own projection but must not advance the message-stream
+  applied-water (`thread_followers_invalidate`, `channel_threads_invalidate`,
+  and all side-scope effects).
+
+#1262 is a substrate, not the final replay model: it makes the current
+classification typed and test-visible so #1263 can reclassify reply count from
+non-idempotent delta to idempotent-by-construction, and #1264 can replace the
+client-side provenance inference with server-authoritative delivery metadata.
+Do not use #1262 to permanently bless the `+1` reply-count model.
+
 ## 7. Resolved by the §4.3 contract
 
 - **Apply-failure** → §4.3.3: try/catch + diagnostic + no markApplied; partial writes idempotent; self-heal
@@ -323,6 +351,11 @@ Transport-side (Alice owns):
 Ingestor-side (mine; Cindy reviews):
 - **read-inert**: the ingestor writes no `conversation_reads` / `read_at` — extend the existing source
   fence (`realtime-ingestion-read-inert.test.ts`) to cover the ingestor module.
+- **replay-safety contracts**: tests assert that every message-stream and side
+  wire kind is routed through an explicit contract entry, that side effects are
+  cursor-inert, that derived invalidations do not count as content apply, and
+  that the remaining non-idempotent reply-count effects stay visible until
+  #1263 reclassifies them.
 - **multi-cache idempotency**: a frame that writes `messagesKey` + `clusterMessagesKey` + `threadRootKey`,
   replayed, produces no duplicates and no double reply-count bump.
 - **views are pure readers**: static fence that `useChannelMessages` / `useThreadCluster` / `useThreadRoot`

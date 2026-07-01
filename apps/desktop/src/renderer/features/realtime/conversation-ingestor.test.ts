@@ -1,8 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryObserver } from '@tanstack/react-query';
-import { conversationSideScope, conversationScope } from '@silverhand/shared';
+import {
+  MESSAGE_REACTION_CHANGED_EVENT,
+  conversationSideScope,
+  conversationScope,
+} from '@silverhand/shared';
 import type { AgentRunState, MessageDto, ServerFrame } from '@silverhand/shared';
-import { ingestConversationFrame } from './conversation-ingestor';
+import {
+  MESSAGE_STREAM_KIND_CONTRACTS,
+  REPLAY_SAFETY_CONTRACTS,
+  SIDE_KIND_CONTRACTS,
+  ingestConversationFrame,
+} from './conversation-ingestor';
 import { clusterMessagesKey, messagesKey, threadRootKey } from '@/features/channels/hooks';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
 import { agentRunStatesKey } from '@/lib/agentRunStateCache';
@@ -11,6 +20,60 @@ import {
   clearPendingAgentStatusPatches,
   mergePendingAgentStatusPatches,
 } from '@/features/channels/hooks';
+
+describe('replay-safety contract matrix (#task:1262)', () => {
+  it('classifies the message-stream wire kinds and their cache effects explicitly', () => {
+    expect(Object.keys(MESSAGE_STREAM_KIND_CONTRACTS).sort()).toEqual([
+      MESSAGE_REACTION_CHANGED_EVENT,
+      'message',
+      'task_changed',
+    ].sort());
+    expect(MESSAGE_STREAM_KIND_CONTRACTS.message).toEqual([
+      'mainline_message_window',
+      'cluster_message_window',
+      'thread_root_reply_count',
+      'thread_followers_invalidate',
+      'channel_threads_invalidate',
+    ]);
+    expect(MESSAGE_STREAM_KIND_CONTRACTS.task_changed).toEqual(['task_message_patch']);
+    expect(MESSAGE_STREAM_KIND_CONTRACTS[MESSAGE_REACTION_CHANGED_EVENT]).toEqual([
+      'reaction_message_patch',
+    ]);
+  });
+
+  it('classifies the side-channel wire kinds as cursor-inert self-healing effects', () => {
+    expect(Object.keys(SIDE_KIND_CONTRACTS).sort()).toEqual([
+      'agent_activity',
+      'agent_status',
+      'conversation_activity',
+    ].sort());
+    for (const effectId of Object.values(SIDE_KIND_CONTRACTS).flat()) {
+      const spec = REPLAY_SAFETY_CONTRACTS[effectId];
+      expect(spec.cursor).toBe('cursor-inert');
+      expect(spec.recovery).toBe('side-scope-self-healing');
+    }
+  });
+
+  it('keeps non-idempotent reply-count deltas visible until S1(a) collapses them', () => {
+    expect(REPLAY_SAFETY_CONTRACTS.mainline_message_window).toMatchObject({
+      cursor: 'content-apply',
+      recovery: 'provenance-gated-authoritative-backfill',
+    });
+    expect(REPLAY_SAFETY_CONTRACTS.thread_root_reply_count).toMatchObject({
+      cursor: 'content-apply',
+      recovery: 'provenance-gated-authoritative-backfill',
+    });
+  });
+
+  it('marks derived invalidations as cursor-inert, not content-apply', () => {
+    expect(REPLAY_SAFETY_CONTRACTS.thread_followers_invalidate.cursor).toBe(
+      'cursor-inert',
+    );
+    expect(REPLAY_SAFETY_CONTRACTS.channel_threads_invalidate.cursor).toBe(
+      'cursor-inert',
+    );
+  });
+});
 
 // #task:1255 P1a blocker-1 — the App-level ingestor must NOT write the mainline
 // window unless a mainline reader (`useChannelMessages`) is mounted. A scope
