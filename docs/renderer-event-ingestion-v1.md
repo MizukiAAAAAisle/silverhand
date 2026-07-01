@@ -265,14 +265,17 @@ subscription can remain roughly view-driven; the Stage-1 orphan gate covers the 
   `useThreadFollowers` invalidate-on-reply are cache writes/invalidations, not React state; jump-prime
   epoch is written by the *queryFn* fetch, not `onEvent`, so it stays put.)
 
-  **gate-(b) static test fences** "view has zero `onWsFrame`" **and** "view never calls the message-apply
-  mutators (`appendMessageToCache` / `bumpReplyCountInCache` / `applyTaskChangedToCache` /
+  **gate-(b) static test fences** "view has zero `onWsFrame`" **and** "view never calls the message cache
+  mutators / ingestor-owned apply helpers (`appendMessageToCache` / `applyTaskChangedToCache` /
   `applyReactionChangedToChannelCaches`)" — **not** "view does zero `setQueryData`" (the gap-key flip is
-  allowed).
+  allowed). Reply-count is **not** in this list as a mutator: post-#1263 (c) it is an ingestor-owned
+  authoritative invalidate, not a `+1` bump helper. (`realtime-ingestion-read-inert.test.ts` still asserts
+  `bumpReplyCountInCache(` is absent — but as a *deleted-helper* fence "this removed helper must not flow
+  back into a view", not as a current mutator.)
 
   **P1 increments (each test-green, independently shippable):**
   - **P1a** — ingestor scaffold (App-level singleton next to `usePresenceSync`/`useActivity`) + main
-    stream: it owns `useChannelMessages`'s writes (append / reply-bump / task_changed / reaction) and the
+    stream: it owns `useChannelMessages`'s writes (append / reply-count authoritative invalidate / task_changed / reaction) and the
     `hasNewerLiveGap` cache fact; `useChannelMessages` drops `useConversationStream`, reads gap from cache.
     Tests: read-inert extended to the ingestor, main-stream pure-reader static fence, multi-cache
     idempotency.
