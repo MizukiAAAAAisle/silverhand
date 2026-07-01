@@ -17,28 +17,22 @@ export type SortMode = z.infer<typeof SortModeSchema>;
 
 /**
  * Hard-group descriptor for a manual reorder. Groups are partitioned LIVE at
- * sort time, never stored on the entity. Star is **exclusive** (#task:1252): a
- * starred entity MOVES to the global Favorites/STARRED list and is removed from
- * its home list, so star is NOT a hard group in ANY home list. The lists
- * partition on these axes:
- *   workspace rail : 'dm' | 'regular' — by KIND only. Starred workspaces/DMs are
- *     excluded (they live in the global Favorites list).
- *   channel sidebar: a single 'unstarred' group. Starred channels are excluded
- *     (moved to Favorites). The old `starred ↔ unstarred` partition is gone.
+ * sort time, never stored on the entity. Star semantics differ by list:
+ *   workspace rail : 'dm' | 'regular' — by KIND only. Star is EXCLUSIVE here
+ *     (#task:1252): a starred workspace/DM MOVES to the global Favorites/STARRED
+ *     list and is removed from the rail, so star is NOT a rail hard group.
+ *   channel sidebar: 'starred' | 'unstarred'. A channel star is LOCAL — it pins
+ *     the channel to the top `starred` section of its own sidebar (channels never
+ *     enter the global Favorites list). Both sections share one list-wide mode;
+ *     rank is only compared within a section.
  *   favorites list : 'favorites' — a single FLAT group (#task:1252 C). The global
  *     Favorites list is sortable on its own axis (recent/manual + drag) but is not
  *     sub-partitioned: every member sits in the one `favorites` group.
  * Star is per-viewer personal state — it lives in the viewer's sort entries
  * (`starred_at`), never as a shared aggregate field.
- *
- * NOTE: 'starred' is VESTIGIAL under the exclusive model — no list accepts it as
- * a legal reorder group anymore (`legalGroups` never returns it). It is retained
- * in the enum only until the renderer's last `starred`-group reference
- * (ChannelsSidebar) is removed in the joint #task:1252/#task:1253 final step,
- * then it should be dropped from this enum.
  */
 export const SortGroupSchema = z.enum([
-  'starred', // vestigial (#task:1252) — see note above; pending renderer cleanup
+  'starred', // channel sidebar's top section (#task:1252) — local channel star
   'dm',
   'regular',
   'unstarred',
@@ -67,15 +61,17 @@ export const SortListKeySchema = z
   );
 
 /** Per-entity viewer state. rank/last_accessed_at/starred_at are null until set.
- *  `starred_at` is the personal ⭐ favorite (#task:1209): non-null = starred. Under
- *  the exclusive model (#task:1252) it is the home-EXCLUSION signal — a starred
- *  entity has MOVED to the global Favorites list, so its home list (rail/sidebar)
- *  hides it by reading this off its OWN inline `viewer_sort`. It is a PRESENCE
- *  marker (+ timestamp for the favorites projection / debug), NOT a sort key —
- *  within-group order is governed solely by that group's mode (recent →
- *  last_accessed_at / manual → rank). It REPLACES the former shared `pinned_at`
- *  aggregate field — star is per-viewer view state, so it lives here in the sort
- *  entry, never on the entity DTO. */
+ *  `starred_at` is the personal ⭐ favorite (#task:1209): non-null = starred. Its
+ *  effect on the home list depends on the list (#task:1252): on the workspace
+ *  rail it is the home-EXCLUSION signal — a starred workspace/DM has MOVED to the
+ *  global Favorites list, so the rail hides it by reading this off its OWN inline
+ *  `viewer_sort`; on the channel sidebar it is the SECTION-PARTITION signal — a
+ *  starred channel stays in the sidebar but moves to its top `starred` section.
+ *  Either way it is a PRESENCE marker (+ timestamp for the favorites projection /
+ *  debug), NOT a sort key — within-group order is governed solely by that group's
+ *  mode (recent → last_accessed_at / manual → rank). It REPLACES the former
+ *  shared `pinned_at` aggregate field — star is per-viewer view state, so it lives
+ *  here in the sort entry, never on the entity DTO. */
 export const ViewerSortEntryDtoSchema = z.object({
   entity_id: z.string(),
   rank: z.number().nullable(),
@@ -122,7 +118,7 @@ export type SetSortModeInput = z.infer<typeof SetSortModeInputSchema>;
 /**
  * Whole-list-within-group reorder. `ordered_ids` is the new order of ONE
  * group's entities (renderer only sends within-group ids). The backend
- * validates every id lives in `group` (live pin/kind) and rewrites their
+ * validates every id lives in `group` (live star/kind) and rewrites their
  * dense ranks — leaving other groups untouched (grouping is sort-time).
  */
 export const SortReorderInputSchema = z.object({
