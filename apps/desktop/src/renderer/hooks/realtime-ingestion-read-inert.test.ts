@@ -315,8 +315,13 @@ describe('useChannelAgents — pure reader / gate-(b) fence (#task:1255 P1c)', (
     expect(body).not.toContain('useConversationStream(');
   });
 
-  it('keeps scope interest + drains the ingestor buffer (positive)', () => {
-    expect(body).toContain('subscribeWsScope');
+  it('declares scope interest via the registry + drains the ingestor buffer (positive)', () => {
+    // #task:1260 P2 slice 7: interest routes through the registry (`useInterest`);
+    // the direct transport subscribe is gone (call-form deny, body-scoped). The
+    // refcounted patch buffer is NOT interest — retain/release stay in their own
+    // effect and must remain here untouched.
+    expect(body).toContain('useInterest(');
+    expect(body).not.toContain('subscribeWsScope(');
     expect(body).toContain('mergePendingAgentStatusPatches(');
     // Per-channel buffer is refcounted — released on leave, cleared only when
     // the last reader for the channel goes (multi-reader safe).

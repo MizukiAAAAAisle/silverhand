@@ -1784,14 +1784,15 @@ export function useChannelAgents(
   // and retain the per-channel patch buffer, releasing on leave — the buffer is
   // cleared only when the LAST reader for the channel goes (refcounted) so a
   // concurrent reader's in-flight snapshot buffer isn't wiped.
+  // #task:1260 P2: interest routes through the registry (`useInterest`) instead
+  // of a direct subscribeWsScope useEffect. The refcounted patch buffer is NOT
+  // interest — it stays its own effect on the same reader lifecycle (retain on
+  // mount, release on unmount), untouched by the interest migration.
+  useInterest(channelId ? wsConversationSideScope(channelId) : null);
   useEffect(() => {
     if (!channelId) return;
-    const subscription = subscribeWsScope(wsConversationSideScope(channelId));
     retainAgentStatusBuffer(channelId);
-    return () => {
-      subscription.unsubscribe();
-      releaseAgentStatusBuffer(channelId);
-    };
+    return () => releaseAgentStatusBuffer(channelId);
   }, [channelId]);
 
   return query;
