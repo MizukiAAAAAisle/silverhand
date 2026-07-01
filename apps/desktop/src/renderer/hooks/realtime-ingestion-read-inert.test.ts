@@ -187,43 +187,12 @@ describe('useChannelMessages — pure reader / gate-(b) fence (#task:1255)', () 
   });
 });
 
-// #task:1255 P1b — useThreadCluster / useThreadRoot / useThreadFollowers move
-// their `onEvent` cache writes into the central ingestor and become pure
-// readers (same gate-(b) precondition as useChannelMessages, now on the thread
-// axis). Fence each: no frame consumer, no cache mutator, keeps scope interest.
-describe('thread view hooks — pure reader / gate-(b) fence (#task:1255 P1b)', () => {
-  const source = readFileSync(
-    fileURLToPath(new URL('../features/channels/hooks.ts', import.meta.url)),
-    'utf8',
-  );
-  const HOOKS = [
-    'export function useThreadCluster(',
-  ];
-  // Call-form, not the bare word — these hooks' comments mention onWsFrame /
-  // useConversationStream to explain what moved out.
-  const FORBIDDEN = [
-    'onWsFrame(',
-    'useConversationStream(',
-    'appendMessageToCache(',
-    'bumpReplyCountInCache(',
-    'applyTaskChangedToCache(',
-    'applyReactionChangedToChannelCaches(',
-    'applyReactionChangedToThreadRootCache(',
-  ];
-
-  for (const decl of HOOKS) {
-    const name = decl.replace('export function ', '').replace('(', '');
-    const body = sliceFunctionBody(source, decl);
-
-    it(`${name} registers no frame consumer / cache mutator`, () => {
-      for (const sym of FORBIDDEN) expect(body).not.toContain(sym);
-    });
-
-    it(`${name} keeps scope interest (subscribeWsScope)`, () => {
-      expect(body).toContain('subscribeWsScope');
-    });
-  }
-});
+// #task:1255 P1b — useThreadCluster / useThreadRoot / useThreadFollowers moved
+// their `onEvent` cache writes into the central ingestor and became pure readers
+// (gate-(b) on the thread axis). All three have since been migrated to the
+// InterestRegistry (#task:1260 P2 slices 3-5), so their gate-(b) + interest
+// fences now live in the parametrized `MIGRATED` group below rather than a
+// separate P1b loop.
 
 // #task:1260 P2 — hooks migrated to the InterestRegistry INSIDE the shared
 // channels/hooks.ts, one per slice (slice 3: useThreadRoot, slice 4:
@@ -241,7 +210,8 @@ describe('channels/hooks.ts — registry-migrated hooks / body-scoped deny (#tas
   );
   const MIGRATED = [
     'export function useThreadRoot(',      // slice 3 (b729155)
-    'export function useThreadFollowers(', // slice 4
+    'export function useThreadFollowers(', // slice 4 (4a73aee)
+    'export function useThreadCluster(',   // slice 5
   ];
   const FORBIDDEN = [
     'onWsFrame(',

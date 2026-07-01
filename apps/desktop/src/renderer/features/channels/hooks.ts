@@ -1436,11 +1436,12 @@ export function useThreadCluster(
   // cluster reader being mounted. This hook only declares INTEREST in the
   // channel scope so it stays subscribed while open. See
   // docs/renderer-event-ingestion-v1.md §4.4.
-  useEffect(() => {
-    if (!enabledBase || !channelId) return;
-    const sub = subscribeWsScope(wsConversationScope(channelId));
-    return () => sub.unsubscribe();
-  }, [enabledBase, channelId]);
+  // #task:1260 P2: interest routes through the registry (`useInterest`) instead
+  // of a direct subscribeWsScope useEffect — identical lifecycle, single
+  // authority. The `enabledBase` gate maps to the null-scope form; not a
+  // correctness boundary (transport retains floor on unsubscribe, resume-replays
+  // on re-enable, #1251).
+  useInterest(enabledBase && channelId ? wsConversationScope(channelId) : null);
 
   // Head of the loaded cluster window: the FIRST page's `stream_head_seq`.
   // Per §9.10 `stream_head_seq` is window-INDEPENDENT (the route captures the
