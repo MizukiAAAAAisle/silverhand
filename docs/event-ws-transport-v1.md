@@ -559,3 +559,49 @@ at once.
   mount forces authoritative REST, no eviction needed). A **new** conversation-scope
   content target with no declared class **fails the test** — behavior must not drift
   implicitly.
+
+## 9. Implementation status — step-4 transport seam (#1255 P2, shipped)
+
+The transport half of the two-watermark flip is implemented in `ws-client.ts`
+(the ingestor half — `markApplied` call sites, `commitSnapshotBaseline` after the
+`allSettled` reconcile join, and the `live`/`backfill` provenance branch — is
+Norman's renderer lane). The v1 decisions worth naming (all deliberate, all
+correctness-first):
+
+- **Two watermarks only for content-gated scopes** (`isContentGated(scope) =
+  parseConversationScope(scope) !== null`, i.e. the message stream
+  `conversation:<id>`). Every other scope (`viewer:` / `workspace:` / `app` /
+  `conversation-side:`) has no content-apply seam, so its floor **auto-advances
+  with `received`** — the pre-P2 single-cursor behavior, preserved bit-for-bit.
+  `conversation-side:` is cursor-inert / self-healing, so it correctly falls in
+  the auto-advance set.
+- **Provenance is derived, not latched.** A frame extending the received-water is
+  `live`; a frame at-or-below it (`seq <= received`) is a `backfill` re-delivery.
+  This is exactly "live fanout vs replay-buffer drain" without a separate replay
+  flag: the received-water already *is* "what I have seen". Delivered as a second
+  `onFrame(frame, meta)` arg (`EventDeliveryMeta`), undefined for non-event frames
+  — no wire/payload change.
+- **`markApplied` advance is strict-contiguous (v1 = option 1).** Floor moves to
+  `seq` only when `seq === floor + 1`; any skipped seq (no-op / readerless /
+  pending backfill delta) pins the floor until the covering `snapshot_required`
+  commit. Set-max is forbidden (false-positive = #1251). Option 2's
+  pending-satisfaction queue is deferred.
+- **`snapshot_required` re-cold-start is fully apply-gated** (pendingBaseline +
+  buffer `> currentSeq` + `commitSnapshotBaseline(scope, epoch)`, epoch-checked,
+  drains post-commit). **Cold-start (first subscribe) is NOT pendingBaseline-gated
+  in v1** — the `subscribed` ack baselines both water marks immediately. This is
+  safe because the REST snapshot is the authoritative pre-S coverage (§3.1): a
+  resume-from-S that "skips" transport seqs `1..S` loses nothing, since the
+  snapshot already reflects them. The live-vs-REST *ordering* at cold-start is the
+  ingestor's concern (React Query), not a resume-floor correctness one.
+- **Orphan-frame gate retained, not removed** (§4.1 permits this). Its removal
+  preconditions are not all met — `useConversationStream` still registers an
+  `onWsFrame`. It is complementary to the applied floor (pre-filters non-desired
+  scopes before any water-mark/dispatch touch), so it stays until P3.
+- **Known v1 cost:** a snapshot reconcile that never commits (persistently
+  rejected refetch) keeps `pendingBaseline` + buffer for the connection's
+  lifetime (floor pinned, frames buffered). It self-heals on the next reconnect
+  (`clearConnectionState` drops pending/buffer; resubscribe re-arms via a fresh
+  `snapshot_required`). Matches §6 "floor stays pinned and the next resume
+  retries."
+

@@ -698,3 +698,212 @@ describe('EventWsClient — no-listener gap recovery (#1251)', () => {
     ]);
   });
 });
+
+/**
+ * #1255 P2 step-4 — the two-watermark cursor flip for CONTENT-GATED scopes
+ * (`conversation:<id>`, the message stream). The single transport cursor splits
+ * into `received` (wire continuity / gap detection / provenance) and `applied`
+ * (the resume floor, advanced ONLY by `markApplied` / `commitSnapshotBaseline`).
+ * Every scope above uses non-content-gated keys (`conv:room`, `viewer:…`) whose
+ * floor still auto-advances with received — those tests pin the unchanged
+ * pre-P2 behavior. These tests pin the NEW gated behavior. See
+ * docs/event-ws-transport-v1.md §4.1/§5/§6.
+ */
+describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)', () => {
+  const SCOPE = 'conversation:room';
+
+  function fireEvent(
+    ws: FakeWebSocket,
+    scope: string,
+    seq: number,
+    epoch = 'epoch-1',
+    kind = 'message',
+  ): void {
+    ws.fireMessage({ type: 'event', scope, epoch, seq, kind, payload: {} });
+  }
+
+  interface Delivered {
+    frame: Record<string, unknown>;
+    meta: { provenance?: string } | undefined;
+  }
+
+  function eventSeqs(delivered: Delivered[]): number[] {
+    return delivered.filter(d => d.frame.type === 'event').map(d => d.frame.seq as number);
+  }
+
+  function resumes(ws: FakeWebSocket): Array<Record<string, unknown>> {
+    return ws.sent.filter(f => f.type === 'resume');
+  }
+
+  async function connectedGated(scope: string, seq: number): Promise<{
+    client: EventWsClient;
+    ws: FakeWebSocket;
+    sub: WsScopeSubscription;
+    delivered: Delivered[];
+  }> {
+    const client = makeClient();
+    const delivered: Delivered[] = [];
+    client.onFrame((f, meta) =>
+      delivered.push({ frame: f as unknown as Record<string, unknown>, meta }),
+    );
+    const sub = client.subscribe(scope);
+    await flushMicrotasks();
+    const ws = createdSockets[0]!;
+    ws.fireOpen();
+    ws.fireMessage({ type: 'authenticated', viewerId: 'u', epoch: 'epoch-1' });
+    ws.fireMessage({ type: 'subscribed', scope, epoch: 'epoch-1', seq });
+    ws.sent.length = 0;
+    return { client, ws, sub, delivered };
+  }
+
+  it('advances received on events but pins the resume floor until markApplied', async () => {
+    const { client, ws, sub } = await connectedGated(SCOPE, 5);
+
+    // received advances 6, 7 — but with no markApplied the floor stays at the
+    // ack baseline (5). A non-content-gated scope would have advanced to 7.
+    fireEvent(ws, SCOPE, 6);
+    fireEvent(ws, SCOPE, 7);
+
+    sub.unsubscribe();
+    ws.sent.length = 0;
+    client.subscribe(SCOPE);
+    expect(resumes(ws)).toEqual([
+      { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 5 } } },
+    ]);
+  });
+
+  it('resumes from the markApplied floor once content is applied', async () => {
+    const { client, ws, sub } = await connectedGated(SCOPE, 5);
+
+    fireEvent(ws, SCOPE, 6);
+    client.markApplied(SCOPE, 6, 'epoch-1');
+    fireEvent(ws, SCOPE, 7);
+    client.markApplied(SCOPE, 7, 'epoch-1');
+
+    sub.unsubscribe();
+    ws.sent.length = 0;
+    client.subscribe(SCOPE);
+    expect(resumes(ws)).toEqual([
+      { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 7 } } },
+    ]);
+  });
+
+  it('pins the floor when an intervening seq is never applied (strict-contiguous)', async () => {
+    const { client, ws, sub } = await connectedGated(SCOPE, 5);
+
+    fireEvent(ws, SCOPE, 6);
+    client.markApplied(SCOPE, 6, 'epoch-1'); // floor → 6
+    fireEvent(ws, SCOPE, 7); // no-op: never applied (off-window / readerless)
+    fireEvent(ws, SCOPE, 8);
+    client.markApplied(SCOPE, 8, 'epoch-1'); // 8 !== 6+1 → floor stays 6
+
+    sub.unsubscribe();
+    ws.sent.length = 0;
+    client.subscribe(SCOPE);
+    expect(resumes(ws)).toEqual([
+      { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 6 } } },
+    ]);
+  });
+
+  it('detects gaps on received-water, not the lagging applied floor', async () => {
+    const { ws } = await connectedGated(SCOPE, 5);
+
+    // received advances 6, 7 while the floor stays pinned at 5 (no markApplied).
+    fireEvent(ws, SCOPE, 6);
+    fireEvent(ws, SCOPE, 7);
+    // 8 is contiguous in received space (7+1) → no false gap despite floor at 5.
+    fireEvent(ws, SCOPE, 8);
+    expect(resumes(ws)).toHaveLength(0);
+  });
+
+  it('resumes a live gap from the applied floor, not the received-water', async () => {
+    const { client, ws } = await connectedGated(SCOPE, 5);
+
+    fireEvent(ws, SCOPE, 6);
+    client.markApplied(SCOPE, 6, 'epoch-1'); // floor 6, received 6
+    fireEvent(ws, SCOPE, 7); // received 7, floor stays 6 (no markApplied)
+    fireEvent(ws, SCOPE, 9); // gap (9 > 7+1) → resume from the floor (6)
+
+    expect(resumes(ws)).toEqual([
+      { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 6 } } },
+    ]);
+  });
+
+  it('tags fresh frames live and re-deliveries backfill', async () => {
+    const { ws, delivered } = await connectedGated(SCOPE, 5);
+
+    fireEvent(ws, SCOPE, 6); // extends received → live
+    fireEvent(ws, SCOPE, 6); // seq <= received → backfill re-delivery
+
+    const evs = delivered.filter(d => d.frame.type === 'event');
+    expect(evs.map(d => d.frame.seq)).toEqual([6, 6]);
+    expect(evs.map(d => d.meta?.provenance)).toEqual(['live', 'backfill']);
+  });
+
+  it('snapshot_required pins the floor until commit (apply-gated), buffering live frames', async () => {
+    const { client, ws, sub, delivered } = await connectedGated(SCOPE, 5);
+
+    fireEvent(ws, SCOPE, 6);
+    client.markApplied(SCOPE, 6, 'epoch-1'); // floor 6
+
+    // Server can't cover the gap → re-cold-start with a server-stamped baseline.
+    ws.fireMessage({
+      type: 'snapshot_required',
+      scope: SCOPE,
+      epoch: 'epoch-1',
+      reason: 'gap_too_large',
+      currentSeq: 20,
+    });
+
+    // A live frame past the baseline is BUFFERED (not dispatched) while pending;
+    // a frame the snapshot already covers (≤ 20) is dropped.
+    fireEvent(ws, SCOPE, 21);
+    fireEvent(ws, SCOPE, 15);
+    expect(eventSeqs(delivered)).toEqual([6]); // nothing new dispatched pre-commit
+
+    // Commit (the ingestor's reconcile settled): floor jumps to the baseline (20)
+    // and the buffered frame 21 drains as a fresh live frame.
+    client.commitSnapshotBaseline(SCOPE, 'epoch-1');
+    expect(eventSeqs(delivered)).toEqual([6, 21]);
+
+    // The drained frame would be markApplied by the ingestor; that advance is
+    // only legal because the commit set the floor to 20 (21 === 20 + 1).
+    client.markApplied(SCOPE, 21, 'epoch-1');
+    sub.unsubscribe();
+    ws.sent.length = 0;
+    client.subscribe(SCOPE);
+    expect(resumes(ws)).toEqual([
+      { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 21 } } },
+    ]);
+  });
+
+  it('discards a stale-epoch or no-pending commitSnapshotBaseline', async () => {
+    const { client, ws, sub } = await connectedGated(SCOPE, 5);
+
+    fireEvent(ws, SCOPE, 6);
+    client.markApplied(SCOPE, 6, 'epoch-1'); // floor 6
+
+    // No pending baseline yet → the commit is a no-op.
+    client.commitSnapshotBaseline(SCOPE, 'epoch-1');
+
+    ws.fireMessage({
+      type: 'snapshot_required',
+      scope: SCOPE,
+      epoch: 'epoch-1',
+      reason: 'gap_too_large',
+      currentSeq: 20,
+    });
+    // Wrong epoch → discarded; floor stays pinned at 6, pending survives.
+    client.commitSnapshotBaseline(SCOPE, 'epoch-2');
+    // The correct-epoch commit still lands afterwards → floor 20.
+    client.commitSnapshotBaseline(SCOPE, 'epoch-1');
+    client.markApplied(SCOPE, 21, 'epoch-1'); // 21 === 20 + 1 → floor 21
+
+    sub.unsubscribe();
+    ws.sent.length = 0;
+    client.subscribe(SCOPE);
+    expect(resumes(ws)).toEqual([
+      { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 21 } } },
+    ]);
+  });
+});
