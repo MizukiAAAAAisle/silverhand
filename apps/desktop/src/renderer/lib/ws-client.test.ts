@@ -971,6 +971,44 @@ describe('EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)'
     ]);
   });
 
+  it('raises the replay window for gapped frames swallowed during recovery (Blocker 3)', async () => {
+    const { client, ws, delivered } = await connectedGated(SCOPE, 5);
+
+    fireEvent(ws, SCOPE, 6);
+    client.markApplied(SCOPE, 6, 'epoch-1'); // floor 6, received 6
+
+    // First gap: 9 → arm window at 9, resume from the floor (6), swallow.
+    fireEvent(ws, SCOPE, 9);
+    // While recovering, a LATER gapped live frame 12 is also swallowed — it too
+    // is replay-drain, so the window must RAISE to 12 (not stay at 9). The resume
+    // stays coalesced to the single in-flight one.
+    fireEvent(ws, SCOPE, 12);
+    expect(resumes(ws)).toEqual([
+      { type: 'resume', scopes: { [SCOPE]: { epoch: 'epoch-1', lastSeq: 6 } } },
+    ]);
+
+    // Server replays 7..12 in order — ALL backfill (incl. 10/11/12, which the old
+    // window-at-9 would have mis-tagged live → blind +1 on a reply bump). 13 is
+    // the first frame past the raised window → fresh live.
+    for (const seq of [7, 8, 9, 10, 11, 12]) fireEvent(ws, SCOPE, seq);
+    fireEvent(ws, SCOPE, 13);
+
+    const evs = delivered.filter(d => d.frame.type === 'event');
+    expect(evs.map(d => d.frame.seq)).toEqual([6, 7, 8, 9, 10, 11, 12, 13]);
+    expect(evs.map(d => d.meta?.provenance)).toEqual([
+      'live',
+      'backfill',
+      'backfill',
+      'backfill',
+      'backfill',
+      'backfill',
+      'backfill',
+      'live',
+    ]);
+    // Still exactly one resume — the latch coalesced both gaps.
+    expect(resumes(ws)).toHaveLength(1);
+  });
+
   it('does not treat a fresh cold-start ack head as a replay window (Cindy edge)', async () => {
     // connectedGated cold-starts: a `subscribed` ack at 5 with NO retained floor.
     // No resume was paired, so the ack head is only a BASELINE, not a replay

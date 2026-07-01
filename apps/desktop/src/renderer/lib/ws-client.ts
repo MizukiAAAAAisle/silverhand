@@ -672,9 +672,11 @@ export class EventWsClient {
    *   (`seq <= backfillThrough`, same epoch) — a replay-drain frame FILLING a seq
    *   we never received (a forward-gap fill, a new-during-disconnect frame) — else
    *   `live` (fresh fanout past the window).
-   * - `seq > received + 1` — forward gap. Hold received, arm the replay window at
-   *   the gap-trigger seq, resume from the applied floor, latch `recovering` so
-   *   subsequent gapped frames coalesce, swallow the frame (replay redelivers it).
+   * - `seq > received + 1` — forward gap. Hold received, RAISE the replay window
+   *   to this seq (every swallowed gapped frame extends it, so all of them tag
+   *   `backfill` on replay — not just the first), resume from the applied floor,
+   *   latch `recovering` so the resume + diagnostic coalesce, swallow the frame
+   *   (replay redelivers it).
    * - `seq <= received` — a duplicate re-delivery by definition (already observed).
    *   Dispatch as `backfill` without moving any water mark or disturbing recovery.
    *
@@ -705,12 +707,14 @@ export class EventWsClient {
     }
 
     if (frame.seq > received.lastSeq + 1) {
+      // Raise the replay window to cover EVERY swallowed gapped frame, not just
+      // the first. A later gapped live frame during recovery is ALSO replay-drain
+      // (the server redelivers it in order), so it must be `backfill` too — only
+      // the resume + diagnostic stay latch-coalesced to a single in-flight
+      // resume. `noteBackfillThrough` raises, never lowers (within an epoch).
+      this.noteBackfillThrough(frame.scope, frame.epoch, frame.seq);
       if (!this.recovering.has(frame.scope)) {
         this.recovering.add(frame.scope);
-        // Arm the replay window: the gap-trigger seq is the highest seq we now
-        // know exists, so the resume drains up to (at least) it → those replayed
-        // frames are backfill even though we never received them.
-        this.noteBackfillThrough(frame.scope, frame.epoch, frame.seq);
         recordEventWsDiagnostic({
           kind: 'live_gap',
           scope: frame.scope,
