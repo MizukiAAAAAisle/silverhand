@@ -65,17 +65,6 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
   kind: WorkspaceUiKind;
   workspaces: WorkspaceItem[];
   selectedWorkspaceId: string | null;
-  /** The open channel — drives the single-selection rule (#task:1254): when the
-   *  open channel is a NON-starred channel the workspace row stays `primary`;
-   *  when it is a STARRED channel the STARRED row owns the highlight and the
-   *  workspace goes `none`. Null when no channel is open. */
-  selectedChannelId: string | null;
-  /** Whether the open channel is a starred (favorite) channel — from the channel
-   *  payload's `viewer_sort.starred_at`. TRI-STATE: `true`/`false` known, `null`
-   *  = a channel is open but its ws channel sort is not cached yet (cross-ws load
-   *  window). When true OR unknown a starred/loading leaf owns the single
-   *  highlight, so the parent workspace row is not highlighted (fail-closed). */
-  selectedChannelStarred: boolean | null;
   onSelectWorkspace: (id: string) => void;
   onStarWorkspace?: (id: string, starred: boolean) => void;
   canRevealWorkspace?: (workspace: WorkspaceItem) => boolean;
@@ -111,8 +100,6 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
  *  SAME component regardless of entry point (one entity, one shape). */
 interface RailRowContext {
   selectedWorkspaceId: string | null;
-  selectedChannelId: string | null;
-  selectedChannelStarred: boolean | null;
   onSelectWorkspace: (id: string) => void;
   onStarWorkspace?: (id: string, starred: boolean) => void;
   canRevealWorkspace?: (workspace: WorkspaceItem) => boolean;
@@ -153,8 +140,6 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   label,
   workspaces,
   selectedWorkspaceId,
-  selectedChannelId,
-  selectedChannelStarred,
   onSelectWorkspace,
   onStarWorkspace,
   canRevealWorkspace,
@@ -168,8 +153,6 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
 }: WorkspaceGroupProps<GroupKey>): JSX.Element {
   const ctx: RailRowContext = {
     selectedWorkspaceId,
-    selectedChannelId,
-    selectedChannelStarred,
     onSelectWorkspace,
     onStarWorkspace,
     canRevealWorkspace,
@@ -279,16 +262,13 @@ function WorkspaceRow({
   const icon = rowIconFor(workspace, ctx);
   const canStar = canStarWorkspace(workspace, ctx);
   const canReveal = ctx.canRevealWorkspace?.(workspace) ?? false;
-  // Single-selection rule (#task:1254): the workspace/DM row is `primary` when it
-  // is the selected workspace AND the open leaf is not a starred channel; when a
-  // starred channel is open, that STARRED row owns the single highlight and this
-  // stays `none`. One function (`railSelectionTier`) so rail, STARRED and channel
-  // sidebar can't drift.
+  // Selection rule (#task:1254): the workspace/DM row is `primary` iff it is the
+  // selected workspace. Channels never appear in the rail/STARRED, so an open
+  // channel just leaves its parent workspace selected. One function
+  // (`railSelectionTier`) so rail and STARRED can't drift.
   const tier = railSelectionTier(
     { kind: workspace.kind === 'dm' ? 'dm' : 'workspace', workspaceId: workspace.id },
     ctx.selectedWorkspaceId,
-    ctx.selectedChannelId,
-    ctx.selectedChannelStarred,
   );
   const isPrimary = tier === 'primary';
   const isStarred = isWorkspaceStarred(workspace);

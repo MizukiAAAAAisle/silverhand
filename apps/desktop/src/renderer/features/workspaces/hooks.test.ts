@@ -100,11 +100,10 @@ describe('setStarredOptimistic', () => {
     entries,
   });
 
-  it('star stamps starred_at and PRESERVES the home rank (#task:1254 exclusive)', () => {
-    // Under the exclusive model star MOVES the entity into STARRED and out of its
-    // home group, but its home rank survives as an orphan so unstar can restore
-    // the original slot. This holds for BOTH workspaces and channels — there is
-    // no per-list clearRank branch anymore.
+  it('workspace/DM star stamps starred_at and PRESERVES the home rank (exclusive move)', () => {
+    // Workspace/DM star is an EXCLUSIVE MOVE into the global STARRED list (a
+    // different list_key), so the home rank survives as an orphan and unstar
+    // restores the original slot. clearRank defaults false.
     const next = setStarredOptimistic(
       vs([{ entity_id: 'a', rank: 3, last_accessed_at: 100, starred_at: null }]),
       'a',
@@ -118,7 +117,7 @@ describe('setStarredOptimistic', () => {
     expect(next.entries[0]?.starred_at).not.toBeNull();
   });
 
-  it('unstar nulls starred_at and PRESERVES the home rank (restores original slot)', () => {
+  it('workspace/DM unstar nulls starred_at and PRESERVES the home rank (restores original slot)', () => {
     const next = setStarredOptimistic(
       vs([{ entity_id: 'a', rank: 5, last_accessed_at: 7, starred_at: 999 }]),
       'a',
@@ -127,6 +126,40 @@ describe('setStarredOptimistic', () => {
     expect(next.entries[0]).toEqual({
       entity_id: 'a',
       rank: 5,
+      last_accessed_at: 7,
+      starred_at: null,
+    });
+  });
+
+  it('channel star CLEARS the home rank (cross-hard-group move; clearRank=true)', () => {
+    // Channel star crosses this sidebar's starred|unstarred hard groups within the
+    // SAME list. A single rank is meaningful only inside one group, so it must be
+    // cleared — the channel enters the new group unranked (recent/created_at
+    // tiebreak) and the user can drag it there (#task:1210 rank P1).
+    const next = setStarredOptimistic(
+      vs([{ entity_id: 'c', rank: 4, last_accessed_at: 100, starred_at: null }]),
+      'c',
+      true,
+      true,
+    );
+    expect(next.entries[0]).toMatchObject({
+      entity_id: 'c',
+      rank: null,
+      last_accessed_at: 100,
+    });
+    expect(next.entries[0]?.starred_at).not.toBeNull();
+  });
+
+  it('channel unstar CLEARS the home rank too (crossing back to unstarred)', () => {
+    const next = setStarredOptimistic(
+      vs([{ entity_id: 'c', rank: 2, last_accessed_at: 7, starred_at: 999 }]),
+      'c',
+      false,
+      true,
+    );
+    expect(next.entries[0]).toEqual({
+      entity_id: 'c',
+      rank: null,
       last_accessed_at: 7,
       starred_at: null,
     });

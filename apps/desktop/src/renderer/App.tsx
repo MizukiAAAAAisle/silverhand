@@ -2102,25 +2102,6 @@ function RegisteredAppShell(): JSX.Element {
                     agentsById={agentsById}
                     selectedWorkspaceId={selectedWorkspaceId}
                     onSelectWorkspace={handleSelectWorkspace}
-                    selectedChannelId={selectedChannelId}
-                    // Tri-state (Cindy/Alice contract): `null` = a channel is
-                    // open but its ws channel sort isn't cached yet (cross-ws
-                    // nav load window), so the rail fails closed and never shows
-                    // a starred leaf + its parent workspace both primary. The
-                    // starred fact stays single-source (channel payload's
-                    // `viewer_sort.starred_at` via channelStarredAt); the unknown
-                    // signal is purely `channelSort`'s load state — never a
-                    // /api/favorites join.
-                    selectedChannelStarred={
-                      selectedChannelId == null
-                        ? false
-                        : channelSort === undefined
-                          ? null
-                          : channelStarredAt.has(selectedChannelId)
-                    }
-                    onSelectChannel={(workspaceId, channelId) =>
-                      handleSelectChannel(channelId, workspaceId)
-                    }
                     onStarWorkspace={(workspaceId, starred) =>
                       starWorkspace.mutate({ id: workspaceId, starred })
                     }

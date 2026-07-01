@@ -34,18 +34,6 @@ interface SidebarProps {
   agentsById?: ReadonlyMap<string, AgentDto>;
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
-  /** The open channel (for the STARRED/Favorites channel-row highlight and the
-   *  single-selection rule). Null when no channel is open. */
-  selectedChannelId: string | null;
-  /** Whether the open channel is a starred (favorite) channel — from the channel
-   *  payload's `viewer_sort.starred_at`. TRI-STATE: `null` = a channel is open but
-   *  its ws channel sort is not cached yet (cross-ws load window). When true or
-   *  unknown the STARRED channel row owns the single rail highlight and the parent
-   *  workspace row is not highlighted (fail-closed — no transient double-highlight). */
-  selectedChannelStarred: boolean | null;
-  /** Deep-link a starred channel from the Favorites overlay → open its parent
-   *  workspace AND that channel. */
-  onSelectChannel: (workspaceId: string, channelId: string) => void;
   onStarWorkspace: (workspaceId: string, starred: boolean) => void;
   onCreateWorkspace: () => void;
   /** When true, the Saved view is the active main view — channel rows
@@ -168,16 +156,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     props.archivedActive ||
     props.activityActive;
   const workspaceHighlight = topLevelViewActive ? null : props.selectedWorkspaceId;
-  // Mirror the workspace-highlight suppression for the Favorites channel-row
-  // highlight: while a top-level view owns selection, no favorite is "current".
-  const channelHighlight = topLevelViewActive ? null : props.selectedChannelId;
-  // The starred-channel flag only matters alongside an open channel; gate it on
-  // `channelHighlight` so a top-level view can't leak it into the single-selection
-  // rule (moot anyway — the rule reads it only when selectedChannelId != null).
-  // Stays tri-state (`null` = channel open but its ws sort not cached yet) so the
-  // fail-closed workspace-row rule survives the cross-ws load window.
-  const channelStarredHighlight: boolean | null =
-    channelHighlight !== null ? props.selectedChannelStarred : false;
 
   return (
     <aside
@@ -288,18 +266,13 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           * only; it has been removed from the DM/WORKSPACES groups below. */}
         <FavoritesGroup
           selectedWorkspaceId={workspaceHighlight}
-          selectedChannelId={channelHighlight}
-          selectedChannelStarred={channelStarredHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
-          onSelectChannel={props.onSelectChannel}
         />
         <WorkspaceGroup
           label="DM"
           kind="dm"
           workspaces={orderedDms}
           selectedWorkspaceId={workspaceHighlight}
-          selectedChannelId={channelHighlight}
-          selectedChannelStarred={channelStarredHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
           onStarWorkspace={props.onStarWorkspace}
           canRevealWorkspace={workspace =>
@@ -316,8 +289,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           kind="regular"
           workspaces={orderedRegular}
           selectedWorkspaceId={workspaceHighlight}
-          selectedChannelId={channelHighlight}
-          selectedChannelStarred={channelStarredHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
           onStarWorkspace={props.onStarWorkspace}
           canRevealWorkspace={workspace =>
@@ -356,8 +327,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             kind="regular"
             workspaces={archived}
             selectedWorkspaceId={workspaceHighlight}
-            selectedChannelId={channelHighlight}
-            selectedChannelStarred={channelStarredHighlight}
             onSelectWorkspace={props.onSelectWorkspace}
             canRevealWorkspace={workspace =>
               hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { homeChannels, isStarredAt, partitionRailWorkspaces } from './home-grouping';
+import { isStarredAt, partitionHomeChannels, partitionRailWorkspaces } from './home-grouping';
 
 describe('isStarredAt', () => {
   it('treats a timestamp as starred, null/undefined as not', () => {
@@ -55,35 +55,37 @@ describe('partitionRailWorkspaces (#task:1254 exclusive home projection)', () =>
   });
 });
 
-describe('homeChannels (#task:1254 exclusive channel home list)', () => {
+describe('partitionHomeChannels (#task:1254 final — channels stay in the sidebar, starred pinned local)', () => {
   const node = (
     id: string,
     over: { parent_channel_id?: string | null; starred_at?: number | null } = {},
   ) => ({ id, parent_channel_id: over.parent_channel_id ?? null, starred_at: over.starred_at ?? null });
 
-  it('keeps top-level unstarred channels only', () => {
-    const out = homeChannels([
+  it('splits top-level channels into starred / unstarred, preserving input order within each group', () => {
+    const { starred, unstarred } = partitionHomeChannels([
       node('c1'),
       node('c2', { starred_at: 10 }),
       node('c3'),
+      node('c4', { starred_at: 20 }),
     ]);
-    expect(out.map(c => c.id)).toEqual(['c1', 'c3']);
+    expect(starred.map(c => c.id)).toEqual(['c2', 'c4']);
+    expect(unstarred.map(c => c.id)).toEqual(['c1', 'c3']);
   });
 
-  it('drops legacy thread fossils (non-null parent) regardless of star', () => {
-    const out = homeChannels([
+  it('a starred channel stays visible (never vanishes) — it is pinned, not hoisted away', () => {
+    const input = [node('c1', { starred_at: 1 }), node('c2'), node('c3', { starred_at: 2 })];
+    const { starred, unstarred } = partitionHomeChannels(input);
+    expect([...starred, ...unstarred].map(c => c.id).sort()).toEqual(['c1', 'c2', 'c3']);
+    expect(input).toHaveLength(3);
+  });
+
+  it('drops legacy thread fossils (non-null parent) from both groups', () => {
+    const { starred, unstarred } = partitionHomeChannels([
       node('c1'),
       node('t1', { parent_channel_id: 'c1' }),
       node('t2', { parent_channel_id: 'c1', starred_at: 9 }),
     ]);
-    expect(out.map(c => c.id)).toEqual(['c1']);
-  });
-
-  it('produces a list whose ids carry no starred channel — the reorder ordered_ids source', () => {
-    const input = [node('c1', { starred_at: 1 }), node('c2'), node('c3', { starred_at: 2 })];
-    const orderedIds = homeChannels(input).map(c => c.id);
-    expect(orderedIds).toEqual(['c2']);
-    // raw input still has the starred ones (server consumes the full set).
-    expect(input).toHaveLength(3);
+    expect(starred).toEqual([]);
+    expect(unstarred.map(c => c.id)).toEqual(['c1']);
   });
 });

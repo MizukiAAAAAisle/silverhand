@@ -105,12 +105,12 @@ export function sortConversationList(items: ChannelListItem[]): ChannelListItem[
       : item;
   // Base order is creation time only. Star (the personal ⭐ favorite) is no
   // longer a shared `pinned_at` field on the conversation — it lives in the
-  // viewer's `viewer_sort.entries[].starred_at`. Under the EXCLUSIVE model
-  // (#task:1254) a starred channel is MOVED into the global STARRED list and
-  // excluded from the channel sidebar's single `unstarred` home group (composed
-  // in ChannelsSidebar via lib/home-grouping against that viewer state, not
-  // here). This base sort just nests threads under their parent and otherwise
-  // orders by created_at.
+  // viewer's `viewer_sort.entries[].starred_at`. A starred CHANNEL is NOT moved
+  // to global STARRED (#task:1254): it STAYS in the channel sidebar, pinned into
+  // that sidebar's local `starred` hard group (composed in ChannelsSidebar via
+  // lib/home-grouping `partitionHomeChannels`); only workspace/DM are
+  // exclusive-moved into global STARRED. This base sort just nests threads under
+  // their parent and otherwise orders by created_at.
   const compareTop = (a: ChannelListItem, b: ChannelListItem): number =>
     a.created_at - b.created_at;
 
@@ -351,23 +351,33 @@ export function useArchiveWorkspace() {
 }
 
 /** Optimistically flip one entity's `starred_at` in a viewer-sort cache:
- *  star → stamp now, unstar → null. The entity's home manual `rank` is ALWAYS
- *  preserved (#task:1254 exclusive model): star MOVES the entity into the global
- *  STARRED overlay and out of its home group, but its home rank survives as an
- *  orphan so unstar drops it back into its original home slot (the backend keeps
- *  the home rank for BOTH `list_key='workspaces'` and `channels:*`; the favorites
- *  ordering rank is a SEPARATE list the unstar route clears server-side, not this
- *  home write). A brand-new entry has no prior rank, so its rank starts null.
+ *  star → stamp now, unstar → null. `clearRank` picks the rank policy by the
+ *  entity's star SEMANTICS (mirrors the backend's `routes/sort.ts` rank policy —
+ *  the route decides who clears rank, `SortRepo` stays list-agnostic):
+ *   - `false` (workspace/DM, default) — star is an EXCLUSIVE MOVE into the global
+ *     STARRED list (a DIFFERENT `list_key='favorites'`), so the home manual
+ *     `rank` is PRESERVED as an orphan and unstar drops the entity back into its
+ *     original home slot. (The favorites-list rank is a separate list the unstar
+ *     route clears server-side, not this home write.)
+ *   - `true` (channel) — star moves the entity across the SAME `channels:*` list's
+ *     `starred | unstarred` HARD GROUPS. A single `rank` is only meaningful within
+ *     one hard group, so carrying it across would pollute the new group's order;
+ *     clear it so the entity enters the new group unranked (recent/created_at
+ *     tiebreak) and the user can drag to position it there (#task:1210 rank P1).
+ *  A brand-new entry has no prior rank, so its rank starts null regardless.
  *  Pure. (#task:1209, #task:1252, #task:1254) */
 export function setStarredOptimistic(
   viewerSort: ViewerSortStateDto,
   entityId: string,
   starred: boolean,
+  clearRank = false,
 ): ViewerSortStateDto {
   const starredAt = starred ? Date.now() : null;
   const entries = viewerSort.entries.some(e => e.entity_id === entityId)
     ? viewerSort.entries.map(e =>
-        e.entity_id === entityId ? { ...e, starred_at: starredAt } : e,
+        e.entity_id === entityId
+          ? { ...e, starred_at: starredAt, ...(clearRank ? { rank: null } : {}) }
+          : e,
       )
     : [
         ...viewerSort.entries,
@@ -836,10 +846,11 @@ export function useStarChannel(workspaceId: string | null) {
       if (prev) {
         qc.setQueryData<ChannelListPayload>(key, {
           ...prev,
-          // Star MOVES the channel into STARRED and out of the home channel list,
-          // but preserve its home manual rank so unstar restores the original
-          // slot (#task:1254 — exclusive model, both home lists keep rank).
-          viewerSort: setStarredOptimistic(prev.viewerSort, channelId, starred),
+          // Channel star is a LOCAL move across this sidebar's `starred |
+          // unstarred` hard groups (#task:1254) — clear the home rank so the
+          // channel enters the new group unranked instead of dragging its old
+          // group's position across (`clearRank: true`, mirrors the backend).
+          viewerSort: setStarredOptimistic(prev.viewerSort, channelId, starred, true),
         });
       }
       return { prev };
@@ -852,9 +863,8 @@ export function useStarChannel(workspaceId: string | null) {
       qc.setQueryData<ChannelListPayload>(channelsKey(workspaceId), prev =>
         prev ? { ...prev, viewerSort } : prev,
       );
-      // STARRED is the global Favorites overlay (#task:1253) — a channel star
-      // toggle changes favorites membership, so refresh the read-model.
-      void qc.invalidateQueries({ queryKey: ['favorites'] });
+      // A channel star stays LOCAL to its sidebar (#task:1254 final): channels are
+      // not part of the global Favorites list, so no favorites invalidation here.
     },
   });
 }

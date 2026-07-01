@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Hash, Star, User } from 'lucide-react';
+import { Star, User } from 'lucide-react';
 import type { FavoriteRowDto } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
 import {
@@ -38,20 +38,24 @@ const FAVORITES_LIST_KEY = 'favorites';
 const FAVORITES_GROUP = 'favorites';
 
 /**
- * The rail's STARRED section — a GLOBAL favorites list (#task:1253), now a
- * first-class SORTABLE list (#task:1254). It is a flat, single-layer list that
- * mixes starred workspace / DM / channel rows from the `GET /api/favorites`
- * read-model; it is NOT the old per-list `starred` group.
+ * The rail's STARRED section — a GLOBAL favorites list (#task:1253), a
+ * first-class SORTABLE list (#task:1254).
  *
- * EXCLUSIVE, NOT AN OVERLAY (load-bearing — mirrors the shared `api/favorites.ts`
- * header + docs/list-sort-v1.md): a starred entity appears HERE and NOWHERE else.
- * It has been MOVED out of its home list (the WORKSPACES/DMS rail groups, the
- * channel sidebar exclude it via `viewer_sort.entries[].starred_at`; see
- * lib/home-grouping). This is the Slack "move", chosen over the old additive
- * overlay because one entity in two places meant every per-entity signal (unread
- * badge, …) had to stay in sync in both — a drift source. STARRED owns PRESENCE +
- * ORDER only, never BEHAVIOR: open / layout-restore / selection / unread all
- * delegate to the same home-surface entry (the navigation handlers passed in).
+ * SCOPE (final model, shiki 2026-07-01): STARRED holds WORKSPACE / DM rows ONLY.
+ * A starred CHANNEL is NOT surfaced here — a channel is a workspace-nested leaf,
+ * so its star pins it in its OWN channel sidebar (a local starred group) instead;
+ * hoisting it into a flat global peer-group severed its parent context and read
+ * as weird (dogfood). Channels are gone from the favorites bounded context: the
+ * backend does not project them and this component renders only workspace/dm.
+ *
+ * EXCLUSIVE for workspace/DM (load-bearing — mirrors shared `api/favorites.ts` +
+ * docs/list-sort-v1.md): a starred workspace/DM appears HERE and NOWHERE else —
+ * MOVED out of its home rail group via `viewer_sort.entries[].starred_at` (see
+ * lib/home-grouping). Slack "move", chosen over the old additive overlay because
+ * one entity in two places meant every per-entity signal (unread badge, …) had to
+ * stay in sync in both — a drift source. STARRED owns PRESENCE + ORDER only,
+ * never BEHAVIOR: open / layout-restore / selection / unread all delegate to the
+ * same home-surface entry (the navigation handlers passed in).
  *
  * SORT (#task:1254): Favorites has its OWN viewer-scoped ordering state under
  * `list_key='favorites'` (a flat single group, list-wide recent/manual + manual
@@ -59,20 +63,17 @@ const FAVORITES_GROUP = 'favorites';
  * channel sidebar — recent orders by the entity's HOME-list `last_accessed_at`
  * (recently-OPENED, NOT recently-starred), manual by the favorites `rank`. This
  * axis is INDEPENDENT of the home groups: reordering favorites never touches a
- * workspace/DM/channel's rank in its home list. The backend persists, the
- * renderer composes from `viewer_sort` (no client pre-sort assumption).
+ * workspace/DM's rank in its home list. The backend persists, the renderer
+ * composes from `viewer_sort` (no client pre-sort assumption).
  *
  * Self-contained: it owns its data (`useFavorites`), its dm-avatar resolution,
  * its sort wiring, and its unstar mutation, so the parent `Sidebar` only passes
- * the current selection + the navigation handlers. Renders nothing when empty.
+ * the current selection + the navigation handler. Renders nothing when empty.
  *
  * Row vocabulary (all rows one height, square, ink-on-select; #task:1250):
  *   - workspace → themed `W` poster badge + name.
  *   - dm        → the bound agent's avatar (server-resolved, no local join) +
  *                 agent name.
- *   - channel   → a single leading `#` glyph (NOT a second ws icon) + channel
- *                 name + the muted parent-workspace name as a trailing
- *                 disambiguator. Identity is `favorite_key`, never the name.
  * No inline ★ affordance — unstar lives in the row's context menu (keeps the
  * dense row clean; shiki #task:1250).
  */
@@ -80,16 +81,7 @@ export function FavoritesGroup(props: {
   /** The selected workspace, already suppressed by the parent when a top-level
    *  view (Activity/Saved/…) owns selection. */
   selectedWorkspaceId: string | null;
-  /** The open channel, likewise suppressed under top-level views. */
-  selectedChannelId: string | null;
-  /** Whether the open channel is a starred (favorite) channel — drives the
-   *  single-selection rule (a starred channel leaf highlights its STARRED row,
-   *  not its workspace). Tri-state: `null` = its ws channel sort is not cached
-   *  yet (cross-ws load window), treated fail-closed. From the channel payload's
-   *  `viewer_sort.starred_at`. */
-  selectedChannelStarred: boolean | null;
   onSelectWorkspace: (id: string) => void;
-  onSelectChannel: (workspaceId: string, channelId: string) => void;
 }): JSX.Element | null {
   const { data } = useFavorites();
   const items = useMemo(() => data?.items ?? [], [data]);
@@ -153,12 +145,9 @@ export function FavoritesGroup(props: {
             tier={railSelectionTier(
               favoriteToRailRow(item),
               props.selectedWorkspaceId,
-              props.selectedChannelId,
-              props.selectedChannelStarred,
             )}
             dmAvatarUrl={dmAvatarUrls.get(item.entity_id) ?? null}
             onSelectWorkspace={props.onSelectWorkspace}
-            onSelectChannel={props.onSelectChannel}
             onUnstar={() => unstar.mutate(item)}
           />
         ))}
@@ -172,19 +161,14 @@ interface FavoriteRowProps {
   tier: RowSelectionTier;
   dmAvatarUrl: string | null;
   onSelectWorkspace: (id: string) => void;
-  onSelectChannel: (workspaceId: string, channelId: string) => void;
   onUnstar: () => void;
 }
 
 /** Map a favorite row to the unified rail-row identity so STARRED computes its
- *  highlight through the SAME `railSelectionTier` as the home rail — a channel
- *  favorite is a leaf (primary when it is the open channel), a workspace/dm
- *  favorite is primary as a leaf. `FavoriteKind` already equals
- *  `RailRowRef.kind`. */
+ *  highlight through the SAME `railSelectionTier` as the home rail — a
+ *  workspace/dm favorite is primary when it is the selected workspace.
+ *  `FavoriteKind` (workspace/dm) already equals `RailRowRef.kind`. */
 function favoriteToRailRow(item: FavoriteRowDto): RailRowRef {
-  if (item.kind === 'channel') {
-    return { kind: 'channel', channelId: item.channel_id, workspaceId: item.workspace_id };
-  }
   return { kind: item.kind, workspaceId: item.workspace_id };
 }
 
@@ -214,25 +198,18 @@ function FavoriteRow({
   tier,
   dmAvatarUrl,
   onSelectWorkspace,
-  onSelectChannel,
   onUnstar,
 }: FavoriteRowProps): JSX.Element {
-  const onClick = () => {
-    if (item.kind === 'channel') {
-      if (item.channel_id) onSelectChannel(item.workspace_id, item.channel_id);
-    } else {
-      onSelectWorkspace(item.workspace_id);
-    }
-  };
+  const onClick = () => onSelectWorkspace(item.workspace_id);
 
   const isPrimary = tier === 'primary';
-  // Unread badge (#task:1254): STARRED is now the EXCLUSIVE home for a starred
-  // entity, so it must carry the unread signal the home group used to. The count
-  // is server-filled on the cross-workspace read-model (`FavoriteRowDto.unread_count`,
-  // canonical `ConversationReadRepo`: workspace/dm → workspace rollup, channel →
-  // that conversation incl. followed threads) — the renderer can't stitch it
-  // (per-channel unread cache is scoped to the SELECTED workspace, but a starred
-  // channel is often in another). Contract: `0` = computed, no unread; `null` =
+  // Unread badge (#task:1254): STARRED is the EXCLUSIVE home for a starred
+  // workspace/DM, so it must carry the unread signal the home group used to. The
+  // count is server-filled on the cross-workspace read-model
+  // (`FavoriteRowDto.unread_count`, canonical `ConversationReadRepo`:
+  // workspace/dm → workspace rollup) — the renderer can't stitch it (per-channel
+  // unread cache is scoped to the SELECTED workspace, but a starred workspace's
+  // rollup spans its own channels). Contract: `0` = computed, no unread; `null` =
   // wire back-compat only. Both render nothing; only `> 0` shows the pill.
   const unread = item.unread_count;
   const hasUnread = unread != null && unread > 0;
@@ -254,7 +231,7 @@ function FavoriteRow({
         className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm leading-[16px]"
       >
         {/* Fixed 16px leading column so the heterogeneous glyphs (W badge /
-            agent avatar / # ) align down the list. */}
+            agent avatar) align down the list. */}
         <span className="flex size-4 shrink-0 items-center justify-center text-text-muted">
           <FavoriteLeadingIcon item={item} dmAvatarUrl={dmAvatarUrl} />
         </span>
@@ -269,20 +246,6 @@ function FavoriteRow({
         >
           {item.title}
         </span>
-        {item.kind === 'channel' && item.workspace_name ? (
-          // Parent-workspace disambiguator. LOWER priority than the badge: it may
-          // shrink/truncate (not `shrink-0`) so a tight row squeezes the ws name
-          // before the fixed badge slot (shiki/Cindy: badge is a status signal,
-          // ws name is only disambiguation).
-          <span
-            className={
-              'min-w-0 shrink max-w-[88px] truncate text-[11px] ' +
-              (isPrimary ? 'text-text-on-selected/70' : 'text-text-muted')
-            }
-          >
-            {item.workspace_name}
-          </span>
-        ) : null}
         {hasUnread ? (
           // Rightmost fixed status slot — the SAME pill as the home rail
           // (`data-sidebar-unread`): accent pill when resting, inverse
@@ -322,9 +285,6 @@ function FavoriteLeadingIcon({
   item: FavoriteRowDto;
   dmAvatarUrl: string | null;
 }): JSX.Element {
-  if (item.kind === 'channel') {
-    return <Hash data-channel-icon className="size-3.5 shrink-0" />;
-  }
   if (item.kind === 'dm') {
     // runtime is contractually non-null for dm rows; fall back to the neutral
     // glyph if it is ever missing rather than guessing a runtime.

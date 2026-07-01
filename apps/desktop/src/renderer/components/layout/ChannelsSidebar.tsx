@@ -28,7 +28,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { useChannelSortState, useSetSortMode } from '@/features/workspaces/hooks';
 import { sortModeOf } from '@/lib/viewer-sort';
-import { homeChannels } from '@/lib/home-grouping';
+import { partitionHomeChannels } from '@/lib/home-grouping';
 
 type WorkspaceUiKind = 'regular' | 'dm';
 
@@ -96,25 +96,28 @@ export function ChannelsSidebar({
   const mode = sortModeOf(viewerSort);
 
   // The sidebar renders top-level channels only (threads are reply clusters now,
-  // never conversation nodes). Under the EXCLUSIVE Favorites model a starred
-  // channel is MOVED into the global STARRED overlay and excluded from this home
-  // list (#task:1254) — so there is no longer a `starred` hard top group, just
-  // the single `unstarred` group the viewer's sort mode orders (recent-opened
-  // `last_accessed_at` or manual drag `rank`). See docs/list-sort-v1.md. The
-  // exclusion reads each node's `starred_at` (joined upstream from
-  // `viewer_sort.entries[].starred_at` — the same fact the backend reorder
-  // validation uses), so the reorder `ordered_ids` here never contain a starred
-  // id (`legalGroups('channels:*') = ['unstarred']`; a starred id → 400). The
-  // drag state machine lives in useListDragSort — shared with the workspace rail
-  // so the CDP-tuned drop invariants can't drift between the two surfaces.
-  const homeTopLevel = homeChannels(channels);
-  const { orderedGroups, onReorder } = useListDragSort<'unstarred', ChannelNode>({
+  // never conversation nodes). Star is the personal ⭐ favorite, read off the
+  // viewer's `viewer_sort.entries[].starred_at` (joined onto each node's
+  // `starred_at` upstream in App.tsx), never a shared field (#task:1209). A
+  // starred channel does NOT leave this sidebar (unlike a starred workspace/DM,
+  // which moves into the global STARRED rail): it is PINNED into a local
+  // `starred` hard group above `unstarred` (#task:1254, shiki dogfood — a
+  // workspace-nested leaf keeps its parent context). Within each group the
+  // viewer's sort mode orders the rows — recent-opened `last_accessed_at` or
+  // manual drag `rank`. See docs/list-sort-v1.md. The drag state machine lives in
+  // useListDragSort — shared with the workspace rail so the CDP-tuned drop
+  // invariants can't drift.
+  const { starred: starredTopLevel, unstarred: unstarredTopLevel } =
+    partitionHomeChannels(channels);
+  const topLevelCount = starredTopLevel.length + unstarredTopLevel.length;
+  const { orderedGroups, onReorder } = useListDragSort<'starred' | 'unstarred', ChannelNode>({
     listKey,
-    groups: { unstarred: homeTopLevel },
+    groups: { starred: starredTopLevel, unstarred: unstarredTopLevel },
     viewerSort,
     getId: c => c.id,
     getCreatedAt: c => c.created_at,
   });
+  const starredTop = orderedGroups.starred;
   const unstarredTop = orderedGroups.unstarred;
 
   const rowProps = {
@@ -129,7 +132,7 @@ export function ChannelsSidebar({
 
   const renderGroup = (
     group: ChannelNode[],
-    groupKey: 'unstarred',
+    groupKey: 'starred' | 'unstarred',
   ): ReactNode => {
     if (listKey) {
       const ids = group.map(c => c.id);
@@ -160,7 +163,7 @@ export function ChannelsSidebar({
         <div className="shrink-0 px-1.5 pt-1.5">
           <SidebarSectionHeader
             label="CHANNELS"
-            count={homeTopLevel.length}
+            count={topLevelCount}
             action={
               <span className="flex items-center">
                 <SortModeMenu
@@ -190,10 +193,16 @@ export function ChannelsSidebar({
       <div className="scrollbar-hide flex-1 overflow-y-auto px-1.5 pb-1.5">
         {!workspaceName ? (
           <EmptyHint message="选择左侧 Workspace" />
-        ) : homeTopLevel.length === 0 ? (
+        ) : topLevelCount === 0 ? (
           <EmptyHint message="还没有 Channel。点 + 开始" />
         ) : (
           <ul className="space-y-0.5">
+            {renderGroup(starredTop, 'starred')}
+            {starredTop.length > 0 && unstarredTop.length > 0 ? (
+              <li>
+                <div className="mx-2 my-1 border-t border-border-subtle" />
+              </li>
+            ) : null}
             {renderGroup(unstarredTop, 'unstarred')}
           </ul>
         )}

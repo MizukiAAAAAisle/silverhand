@@ -1,8 +1,10 @@
 // Favorites bounded context — renderer read/write hooks (#task:1253).
 // Mirrors `@silverhand/shared` `api/favorites.ts`: the left-rail STARRED section
-// promoted to a GLOBAL, viewer-scoped FLAT favorites list that UNIONs the
-// viewer's `user_sort_entry.starred_at` across every list_key (the workspace
-// rail + every workspace's channel sidebar).
+// promoted to a GLOBAL, viewer-scoped FLAT favorites list of the viewer's starred
+// WORKSPACES / DMs — the `user_sort_entry.starred_at` set under
+// `list_key='workspaces'` only (#task:1254 final). A starred CHANNEL is NOT here:
+// its star pins it locally in its own channel sidebar (`channels:*` starred
+// group), never entering this global list.
 //
 // Storage split (#task:1252 C — do NOT collapse back to "zero storage"):
 //   - MEMBERSHIP is a read projection with NO storage of its own — a row is in
@@ -11,14 +13,14 @@
 //     rank + mode in `user_sort_entry`, written through the SHARED sort hooks
 //     (useSetSortMode / useReorderSort), NOT here.
 // So THIS hook owns: fetch (`useFavorites`) + unstar (`useUnstarFavorite`, a
-// per-entity star DELETE). It does not own favorites ordering writes.
-// Canonical: docs/list-sort-v1.md.
+// per-entity star DELETE on the workspace endpoint). It does not own favorites
+// ordering writes. Canonical: docs/list-sort-v1.md.
 //
 // Favorites is EXCLUSIVE, never an additive overlay (#task:1254): a starred
-// entity shows HERE only — it has been MOVED out of its home list. So unstar
-// invalidates the home caches not to re-sync a second visible copy, but so the
-// entity REAPPEARS in its home group (and the favorites list drops it); star
-// does the reverse. Single source of truth is `user_sort_entry.starred_at`.
+// workspace/DM shows HERE only — it has been MOVED out of its home rail group. So
+// unstar invalidates the workspace rail cache not to re-sync a second visible
+// copy, but so the entity REAPPEARS in its home group (and the favorites list
+// drops it); star does the reverse. Single source is `user_sort_entry.starred_at`.
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -92,35 +94,25 @@ export function useFavorites() {
 }
 
 /**
- * Unstar one favorite from the rail's context menu. `kind` selects the
- * per-entity star endpoint (`entity_id` is the path param; the list_key is
- * derived server-side), so this is workspace-agnostic — it correctly unstars a
- * favorite channel that lives in a workspace other than the one currently open,
- * which a workspace-scoped `useStarChannel` could not. Invalidates the favorites
- * list plus the home surfaces (rail / channel sidebar) so the entity REAPPEARS in
- * its home group (exclusive move — it was hidden from home while starred) and the
- * Star/Unstar menu state flips in lockstep.
+ * Unstar one favorite from the rail's context menu. STARRED holds workspace/DM
+ * rows only (#task:1254), so this always hits the workspace star endpoint
+ * (`entity_id` is the path param; the list_key is derived server-side). It is
+ * workspace-agnostic — it correctly unstars a favorite whose home workspace is
+ * not the one currently open. Invalidates the favorites list plus the workspace
+ * rail so the entity REAPPEARS in its home group (exclusive move — it was hidden
+ * from home while starred) and the Star/Unstar menu state flips in lockstep.
  */
 export function useUnstarFavorite() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (item: FavoriteRowDto) => {
-      const path =
-        item.kind === 'channel'
-          ? apiPaths.channelStar(item.entity_id)
-          : apiPaths.workspaceStar(item.entity_id);
-      await api<unknown>(path, { method: 'DELETE' });
+      await api<unknown>(apiPaths.workspaceStar(item.entity_id), { method: 'DELETE' });
     },
-    onSuccess: (_res, item) => {
+    onSuccess: () => {
       void qc.invalidateQueries({ queryKey: favoritesKey });
-      // Home-surface star indicators. Keys mirror `features/workspaces/hooks`
-      // (`['workspaces']` / `['workspaces', id, 'channels']`).
+      // Home-surface star indicators. Key mirrors `features/workspaces/hooks`
+      // (`['workspaces']`).
       void qc.invalidateQueries({ queryKey: ['workspaces'] });
-      if (item.kind === 'channel') {
-        void qc.invalidateQueries({
-          queryKey: ['workspaces', item.workspace_id, 'channels'],
-        });
-      }
     },
     onError: () => {
       toast.error('Failed to unstar, please retry');
