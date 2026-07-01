@@ -244,11 +244,16 @@ describe('channels/hooks.ts — registry-migrated hooks / body-scoped deny (#tas
     });
   }
 
-  it('the deny is body-scoped: the file still calls subscribeWsScope for un-migrated hooks', () => {
-    // If this ever fails, every conversation hook in the file has migrated — at
-    // that point convert the whole-file assertion or the module fence, don't just
-    // delete this guard.
-    expect(source).toContain('subscribeWsScope(');
+  it('hooks.ts is fully migrated: no conversation reader calls subscribeWsScope directly', () => {
+    // FLIPPED at slice 8 (useAgentRunStates, the last conversation reader in this
+    // file). While the file was mid-migration this required `subscribeWsScope(`
+    // (proof the per-hook deny was body-scoped — un-migrated neighbours still
+    // called it). Now the file is fully migrated, so the successor guard is the
+    // STRONGER one: NO direct transport subscribe remains anywhere in hooks.ts —
+    // any hook re-introducing one fails here. Converted, not deleted (Alice's
+    // slice-8 requirement: no bare deletion). Comments still name subscribeWsScope
+    // in prose; call-form keeps that from tripping.
+    expect(source).not.toContain('subscribeWsScope(');
   });
 });
 
@@ -271,8 +276,12 @@ describe('useAgentRunStates — pure reader / gate-(b) fence (#task:1255 P1c)', 
     expect(body).not.toContain('useConversationStream(');
   });
 
-  it('keeps scope interest (subscribeWsScope)', () => {
-    expect(body).toContain('subscribeWsScope');
+  it('declares scope interest via the registry, not a direct subscribe (#task:1260 P2 slice 8)', () => {
+    // Last conversation reader in hooks.ts migrated. Call-form deny (prose naming
+    // subscribeWsScope must not trip it), body-scoped. snapshot_required /
+    // agent_activity buffer logic lives in the ingestor, not this hook — untouched.
+    expect(body).toContain('useInterest(');
+    expect(body).not.toContain('subscribeWsScope(');
   });
 });
 

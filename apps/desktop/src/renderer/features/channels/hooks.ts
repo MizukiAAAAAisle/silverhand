@@ -31,7 +31,7 @@ import { api, ApiError } from '@/lib/api';
 import { messageReactorsKey } from '@/features/channels/reaction-hooks';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
 import { getCurrentUserId } from '@/lib/current-user';
-import { onWsFrame, subscribeViewerScope, isCurrentViewerScope, subscribeWsScope } from '@/lib/ws-client';
+import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
 import { useInterest } from '@/features/realtime/interest-registry';
 import {
   AGENT_RUN_STATES_GC_MS,
@@ -2116,11 +2116,11 @@ export function useAgentRunStates(
   // (`applyAgentRunStateToCache`) and the `snapshot_required` reconcile
   // (`invalidateAgentRunStates`), each gated on this reader being mounted. We
   // keep only the WS scope INTEREST alive so the transport stays subscribed.
-  useEffect(() => {
-    if (!channelId) return;
-    const subscription = subscribeWsScope(wsConversationSideScope(channelId));
-    return () => subscription.unsubscribe();
-  }, [channelId]);
+  // #task:1260 P2: interest routes through the registry (`useInterest`) instead
+  // of a direct subscribeWsScope useEffect — the last conversation reader in this
+  // file to migrate, so hooks.ts no longer calls the transport subscribe
+  // directly at all.
+  useInterest(channelId ? wsConversationSideScope(channelId) : null);
 
   return query;
 }
