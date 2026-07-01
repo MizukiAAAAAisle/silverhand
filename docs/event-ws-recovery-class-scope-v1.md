@@ -76,7 +76,24 @@ space*, and the design must own that — see §4. (Cindy's blocker, accepted.)
 | `agent_activity` | event-handler:686/909, outbound-event-fanout:1402/1417/1572 | ingestor → agent-run-states cache | `refetchOnMount:'always'` own cold-start | **side-channel** |
 | `conversation_activity` | event-handler:743 | ingestor → agent-activity-feed infinite query (per-agentId) | own REST cold-start (infinite query) | **side-channel** |
 | `conversation_members_changed` | conversation-member:275/421 | `useConversationMembers` (its own `onWsFrame`) | invalidate members query | **side-channel** |
-| `thread_updated` | conversation-message-service:615, channel-service:481 | **no renderer consumer (confirmed vestigial, Norman)** — Threads-list liveness rides the `message` kind via `ingestMessage → invalidateChannelThreadsList` | n/a (unconsumed) | **side-channel** — published-but-unconsumed; do not promote to a load-bearing source in P2 |
+| `agent_init_timeout` | event-handler:504 | dev EventStream only (no product consumer) | ephemeral notice; invalidate/refetch-recoverable | **side-channel** |
+| `compaction_stale` | event-handler:558 | dev EventStream only (no product consumer) | ephemeral notice; invalidate/refetch-recoverable | **side-channel** |
+| `agent_event` | event-handler:575 (parsed-event SSE, **high-frequency** — every parsed agent event) | dev EventStream only (renderer Events panel) | own cache / refetch; **must not** inflate message-stream | **side-channel** |
+| `thread_updated` | conversation-message-service:614, channel-service:480 | **no renderer consumer (confirmed vestigial, Norman)** — Threads-list liveness rides the `message` kind via `ingestMessage → invalidateChannelThreadsList` | n/a (unconsumed) | **side-channel** — published-but-unconsumed; do not promote to a load-bearing source in P2 |
+
+> **Audit gap closed (§1(b), Alice at implementation):** the original §1 audit
+> missed three conversation-scope kinds — `agent_init_timeout`,
+> `compaction_stale`, `agent_event` (all published by `event-handler` on
+> `runtime_*` frames). None is a message-window patch, so all three are
+> side-channel. `agent_event` in particular is **high-frequency** (one per
+> parsed agent event): leaving it on the message stream would inflate the
+> message-stream replay buffer and received/applied gap and defeat the
+> partition's purpose (§1), so its move is a correctness requirement, not
+> gold-plating. Their only consumer today is the dev `EventStream` panel (and
+> `agent_init_timeout` has none). Post-cutover, a dev panel that wants to keep
+> observing side kinds must add a `conversation-side:<id>` observe subscription
+> (§6) — this is already true for `agent_status`/`agent_activity` after the
+> partition, not new to these three.
 
 > **Not a transport kind (Cindy):** task `status` is a `TaskNarrativeKind`, not a
 > wire event kind — it materializes as `message` + `task_changed` frames, both
@@ -88,8 +105,9 @@ space*, and the design must own that — see §4. (Cindy's blocker, accepted.)
 the `message` kind, so it is published-but-unconsumed (vestigial). Keep it on the
 side scope at migration (it costs nothing) but do **not** make any consumer
 depend on it in P2; a separate cleanup may stop publishing it. (b) re-confirm no
-other kind reaches `conversation:<id>` (the §1 audit is the basis; the doc owner
-re-verifies each at implementation).
+other kind reaches `conversation:<id>` — **closed** (Alice at implementation):
+the re-verification surfaced `agent_init_timeout` / `compaction_stale` /
+`agent_event`, now classified side-channel above.
 
 Viewer-scoped kinds (`unread_updated`, `notification`, `mention_self`, …) are on
 `viewer:<id>`, **not** conversation scope (channels/hooks.ts:2048/2087/2211/2258
@@ -346,14 +364,27 @@ Phased, each step shippable, with test locks:
 
 1. **Introduce `conversation-side:<id>` scope** (shared/backend constant +
    renderer scope helper). No behavior change yet.
-2. **Backend publish cutover** (Alice/backend lane; Cindy reviews): change the side-channel publish sites
-   (status-projector, event-handler agent_activity/conversation_activity,
-   conversation-member members_changed, channel-service/conversation-message-service
-   thread_updated) from `conversation:<id>` to `conversation-side:<id>`. (task
-   `status` is not a transport kind — nothing to move; it stays as `message` +
-   `task_changed` on message-stream.) Test lock: message-stream scope receives
-   **only** message/reaction/task_changed; side scope receives **only** the
-   side-channel kinds.
+2. **Backend publish cutover** (Alice/backend lane; Cindy reviews) — **DONE**:
+   a new `ScopeEventBus.publishSide(conversationId, event)` routes to
+   `conversation-side:<id>` (via `conversationSideScope`, no compat emit — the
+   side channel has no legacy in-process consumers). All side-channel publish
+   sites moved from `publish()` to `publishSide()`: status-projector
+   (`agent_status` ×5), event-handler (`agent_activity`, `conversation_activity`,
+   plus the audit-surfaced `agent_init_timeout` / `compaction_stale` /
+   `agent_event`), outbound-event-fanout (`agent_status` ×2, `agent_activity`
+   ×3), conversation-member (`conversation_members_changed` ×2),
+   conversation-message-service / channel-service (`thread_updated`). `message` /
+   `task_changed` stay on `publish()`; `message_reaction_changed` stays on its
+   existing `publishToScope('conversation:<id>')`. Backend subscribe
+   authorization added: `permissions.ts::parseWsScope` parses
+   `conversation-side:` into a `conversation-side` `ParsedWsScope` variant,
+   `canSubscribeScope` gates it through the same `canViewConversation`, and
+   `conversationIdFromScope` diagnostics (ws-connection + scope-event-bus)
+   recognize both prefixes via the shared parsers. (task `status` is not a
+   transport kind — nothing to move.) Test locks: `scope-event-bus.test.ts`
+   asserts `publishSide` routes only to the side scope with an independent seq
+   space; `ws-server.test.ts` asserts a client can subscribe
+   `conversation-side:<id>` (same view gate) and receive its fanout.
 3. **Renderer subscribe cutover** (Norman lane): the **4 true side-channel
    consumers** (`useConversationMembers`, `useAgentRunStates`,
    `useAgentActivityFeed`, `useChannelAgents`) subscribe `conversation-side:<id>`;

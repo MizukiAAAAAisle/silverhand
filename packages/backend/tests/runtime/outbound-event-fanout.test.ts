@@ -1754,6 +1754,8 @@ function makeFixture(
   const publisher: EventPublisher = {
     publish: (conv, payload) =>
       events.push({ conv, kind: payload.kind, payload: payload.payload }),
+    publishSide: (conv, payload) =>
+      events.push({ conv, kind: payload.kind, payload: payload.payload }),
   };
   const transport = new FakeTransport();
   const backfiller = opts.workspaceRegistryBackfiller?.({ transport, workspaces });
@@ -1809,12 +1811,16 @@ function makeUnixHandler(fix: Fixture): RuntimeEventHandler {
     events: {
       publish: (conv, payload) =>
         fix.events.push({ conv, kind: payload.kind, payload: payload.payload }),
+      publishSide: (conv, payload) =>
+        fix.events.push({ conv, kind: payload.kind, payload: payload.payload }),
     },
     inboxAck: { markDelivered: () => {}, markUndelivered: () => {} },
     statusProjector: new DbRuntimeStatusProjector(
       new ConversationRepo(fix.db),
       {
         publish: (conv, payload) =>
+          fix.events.push({ conv, kind: payload.kind, payload: payload.payload }),
+        publishSide: (conv, payload) =>
           fix.events.push({ conv, kind: payload.kind, payload: payload.payload }),
       },
     ),

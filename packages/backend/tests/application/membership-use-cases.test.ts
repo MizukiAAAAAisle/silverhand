@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AGENT_CAPABILITIES } from '@silverhand/shared';
+import { AGENT_CAPABILITIES, conversationSideScope } from '@silverhand/shared';
 import type { Principal } from '../../src/auth/principal.js';
 import { addConversationMember } from '../../src/application/conversation-member.js';
 import { addWorkspaceAgentMember } from '../../src/application/add-workspace-agent-member.js';
@@ -100,7 +100,15 @@ function captureOrderedEvents(
   workspaceId: string,
 ): { events: string[]; stop: () => void } {
   const events: string[] = [];
+  // Stage-2 P2: `message` rides the message-stream (compat) conversation
+  // emitter; `conversation_members_changed` moved to the side-channel scope.
+  // Subscribe both plus the workspace scope — post-commit emits are synchronous
+  // in source order, so the merged array still captures the spec §7 sequence.
   const offConv = t.ctx.events.subscribe(conversationId, e => events.push(e.kind));
+  const offSide = t.ctx.events.subscribeScope(
+    conversationSideScope(conversationId),
+    e => events.push(e.kind),
+  );
   const offWs = t.ctx.events.subscribeScope(`workspace:${workspaceId}`, e =>
     events.push(e.kind),
   );
@@ -108,6 +116,7 @@ function captureOrderedEvents(
     events,
     stop: () => {
       offConv();
+      offSide();
       offWs();
     },
   };

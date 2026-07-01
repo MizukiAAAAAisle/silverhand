@@ -1,4 +1,5 @@
 import type { AttachmentRow, AgentCapability, AgentMaterializationStatus, WorkspaceRole } from '@silverhand/shared';
+import { conversationScope, conversationSideScope } from '@silverhand/shared';
 import type { BackendContext } from './context.js';
 import type { Principal, UserPrincipal } from './auth/principal.js';
 import { AgentRepo } from './repos/agent-repo.js';
@@ -10,6 +11,7 @@ export type ParsedWsScope =
   | { type: 'app'; scope: 'app' }
   | { type: 'workspace'; scope: string; workspaceId: string }
   | { type: 'conversation'; scope: string; conversationId: string }
+  | { type: 'conversation-side'; scope: string; conversationId: string }
   | { type: 'viewer'; scope: string; viewerUserId: string };
 
 export type AttachmentAclRow = Pick<
@@ -57,8 +59,17 @@ export function parseWsScope(scope: string, viewerUserId: string): ParsedWsScope
     return { type: 'workspace', scope: normalized, workspaceId: rawId };
   }
   if (prefix === 'conversation') {
-    const normalized = `conversation:${rawId}`;
-    return { type: 'conversation', scope: normalized, conversationId: rawId };
+    return { type: 'conversation', scope: conversationScope(rawId), conversationId: rawId };
+  }
+  if (prefix === 'conversation-side') {
+    // Side-channel scope shares the conversation's view-permission but is a
+    // distinct recovery class (cursor-inert, self-healing). Same viewer gate,
+    // separate seq/replay space. See docs/event-ws-recovery-class-scope-v1.md.
+    return {
+      type: 'conversation-side',
+      scope: conversationSideScope(rawId),
+      conversationId: rawId,
+    };
   }
   if (prefix === 'viewer') {
     const resolvedViewerId = rawId === 'self' ? viewerUserId : rawId;
@@ -518,6 +529,10 @@ export function canSubscribeScope(
     case 'workspace':
       return canViewWorkspace(ctx, principal, scope.workspaceId);
     case 'conversation':
+    case 'conversation-side':
+      // Both conversation recovery classes gate on the same view permission —
+      // the side channel carries no data the message stream doesn't already
+      // expose to a conversation member.
       return canViewConversation(ctx, principal, scope.conversationId);
     case 'viewer':
       return canViewOwnedState(ctx, principal, scope.viewerUserId);

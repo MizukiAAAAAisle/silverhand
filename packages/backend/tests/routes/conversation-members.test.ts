@@ -1,7 +1,31 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { AGENT_CAPABILITIES, internalPaths } from '@silverhand/shared';
+import { AGENT_CAPABILITIES, conversationSideScope, internalPaths } from '@silverhand/shared';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+
+/**
+ * Stage-2 P2: a membership flow emits `message` on the message-stream (compat)
+ * conversation emitter and `conversation_members_changed` on the side-channel
+ * scope. Capture both into one sink so order-agnostic membership assertions
+ * still see both kinds. Emits are synchronous, so the merged array preserves
+ * source order.
+ */
+function subscribeConversationEvents(
+  t: TestApp,
+  conversationId: string,
+  sink: Array<{ kind: string; payload: unknown }>,
+): () => void {
+  const offStream = t.ctx.events.subscribe(conversationId, e =>
+    sink.push({ kind: e.kind, payload: e.payload }),
+  );
+  const offSide = t.ctx.events.subscribeScope(conversationSideScope(conversationId), e =>
+    sink.push({ kind: e.kind, payload: e.payload }),
+  );
+  return () => {
+    offStream();
+    offSide();
+  };
+}
 
 async function makeAgent(t: TestApp, name: string): Promise<{
   agentId: string;
@@ -243,9 +267,7 @@ describe('POST /api/conversations/:id/members', () => {
     ]);
     const conversationEvents: Array<{ kind: string; payload: unknown }> = [];
     const workspaceEvents: Array<{ kind: string; payload: unknown }> = [];
-    const unsubscribeConversation = t.ctx.events.subscribe(channelId, e => {
-      conversationEvents.push({ kind: e.kind, payload: e.payload });
-    });
+    const unsubscribeConversation = subscribeConversationEvents(t, channelId, conversationEvents);
     const unsubscribeWorkspace = t.ctx.events.subscribeScope(
       `workspace:${reg.workspaceId}`,
       e => workspaceEvents.push({ kind: e.kind, payload: e.payload }),
@@ -394,9 +416,7 @@ describe('POST /api/conversations/:id/members', () => {
     const threadId = createThreadWithMembers(t, channelId, [alice.agentId]);
     const conversationEvents: Array<{ kind: string; payload: unknown }> = [];
     const workspaceEvents: Array<{ kind: string; payload: unknown }> = [];
-    const unsubscribeConversation = t.ctx.events.subscribe(threadId, e => {
-      conversationEvents.push({ kind: e.kind, payload: e.payload });
-    });
+    const unsubscribeConversation = subscribeConversationEvents(t, threadId, conversationEvents);
     const unsubscribeWorkspace = t.ctx.events.subscribeScope(
       `workspace:${reg.workspaceId}`,
       e => workspaceEvents.push({ kind: e.kind, payload: e.payload }),
@@ -872,9 +892,7 @@ describe('DELETE /api/conversations/:id/members/agents/:agentId', () => {
     ]);
     const conversationEvents: Array<{ kind: string; payload: unknown }> = [];
     const workspaceEvents: Array<{ kind: string; payload: unknown }> = [];
-    const unsubscribeConversation = t.ctx.events.subscribe(channelId, e => {
-      conversationEvents.push({ kind: e.kind, payload: e.payload });
-    });
+    const unsubscribeConversation = subscribeConversationEvents(t, channelId, conversationEvents);
     const unsubscribeWorkspace = t.ctx.events.subscribeScope(
       `workspace:${reg.workspaceId}`,
       e => workspaceEvents.push({ kind: e.kind, payload: e.payload }),

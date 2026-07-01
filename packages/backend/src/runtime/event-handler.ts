@@ -74,9 +74,15 @@ import { NOOP_STATUS_PROJECTOR, type RuntimeStatusProjector } from './status-pro
  * Backend-side SSE publisher contract — matches the existing
  * `BackendContext.events.publish(conversationId, {kind, payload})`
  * shape so commit 5's flip is a re-wire, not a refactor.
+ *
+ * `publish` routes to the resume-governed message-stream scope
+ * (`conversation:{id}`); `publishSide` routes to the cursor-inert
+ * side-channel scope (`conversation-side:{id}`) for agent-runtime /
+ * activity / members kinds. See docs/event-ws-recovery-class-scope-v1.md.
  */
 export interface EventPublisher {
   publish(conversationId: string, payload: { kind: string; payload: unknown }): void;
+  publishSide(conversationId: string, payload: { kind: string; payload: unknown }): void;
 }
 
 /**
@@ -501,7 +507,7 @@ export class RuntimeEventHandler {
         if (!frame.retrying) {
           this.initFailureFlag.add(`${frame.conversation_id}|${frame.agent_id}`);
         }
-        this.events.publish(frame.conversation_id, {
+        this.events.publishSide(frame.conversation_id, {
           kind: 'agent_init_timeout',
           payload: {
             agent_id: frame.agent_id,
@@ -555,7 +561,7 @@ export class RuntimeEventHandler {
         });
         return;
       case 'runtime_compaction_stale':
-        this.events.publish(frame.conversation_id, {
+        this.events.publishSide(frame.conversation_id, {
           kind: 'compaction_stale',
           payload: {
             agent_id: frame.agent_id,
@@ -572,7 +578,7 @@ export class RuntimeEventHandler {
         // original ConversationManager runtime; Cindy
         // `ch9ZsU0v0ATr6tr8` carried-forward blocker for commit 5
         // unit 1.
-        this.events.publish(frame.conversation_id, {
+        this.events.publishSide(frame.conversation_id, {
           kind: 'agent_event',
           payload: {
             agent_id: frame.agent_id,
@@ -683,7 +689,7 @@ export class RuntimeEventHandler {
       );
     }
     if (state) {
-      this.events.publish(frame.conversation_id, {
+      this.events.publishSide(frame.conversation_id, {
         kind: 'agent_activity',
         payload: state,
       });
@@ -740,7 +746,7 @@ export class RuntimeEventHandler {
           ? [result]
           : [];
       for (const event of events) {
-        this.events.publish(params.conversationId, {
+        this.events.publishSide(params.conversationId, {
           kind: 'conversation_activity',
           payload: event,
         });
@@ -906,7 +912,7 @@ export class RuntimeEventHandler {
       return;
     }
     this.cache.applyRuntimeState(key, frame.conversation_id, frame.agent_id, frame.state);
-    this.events.publish(frame.conversation_id, {
+    this.events.publishSide(frame.conversation_id, {
       kind: 'agent_activity',
       payload: frame.state,
     });

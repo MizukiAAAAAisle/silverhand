@@ -95,6 +95,61 @@ describe('ScopeEventBus', () => {
     });
   });
 
+  describe('side-channel: publishSide routes to conversation-side scope', () => {
+    it('publishSide() fans out to conversation-side: scope subscribers', () => {
+      const bus = new ScopeEventBus('epoch-s');
+      const sideEvents: ScopedEvent[] = [];
+      bus.subscribeScope('conversation-side:conv-1', e => sideEvents.push(e));
+
+      bus.publishSide('conv-1', { kind: 'agent_status', payload: { s: 'idle' } });
+
+      expect(sideEvents).toHaveLength(1);
+      expect(sideEvents[0]).toMatchObject({
+        scope: 'conversation-side:conv-1',
+        kind: 'agent_status',
+        payload: { s: 'idle' },
+        epoch: 'epoch-s',
+        seq: 1,
+      });
+    });
+
+    it('publishSide() does NOT reach the message-stream scope or compat subscribe()', () => {
+      const bus = new ScopeEventBus('e');
+      const streamEvents: ScopedEvent[] = [];
+      const compat: unknown[] = [];
+      bus.subscribeScope('conversation:conv-1', e => streamEvents.push(e));
+      bus.subscribe('conv-1', e => compat.push(e));
+
+      bus.publishSide('conv-1', { kind: 'agent_status', payload: null });
+
+      // Side-channel frames never bleed onto the resume-governed message stream
+      // nor the (dead) compat conversation emitter.
+      expect(streamEvents).toHaveLength(0);
+      expect(compat).toHaveLength(0);
+    });
+
+    it('message-stream and side scopes keep independent seq counters', () => {
+      const bus = new ScopeEventBus('e');
+      const streamEvents: ScopedEvent[] = [];
+      const sideEvents: ScopedEvent[] = [];
+      bus.subscribeScope('conversation:c', e => streamEvents.push(e));
+      bus.subscribeScope('conversation-side:c', e => sideEvents.push(e));
+
+      bus.publish('c', { kind: 'message', payload: null });
+      bus.publishSide('c', { kind: 'agent_status', payload: null });
+      bus.publish('c', { kind: 'message', payload: null });
+      bus.publishSide('c', { kind: 'agent_activity', payload: null });
+      bus.publishSide('c', { kind: 'agent_activity', payload: null });
+
+      // Each scope owns its own transport-seq space (a side frame must never
+      // advance the message-stream cursor and vice-versa).
+      expect(streamEvents.map(e => e.seq)).toEqual([1, 2]);
+      expect(sideEvents.map(e => e.seq)).toEqual([1, 2, 3]);
+      expect(bus.currentSeq('conversation:c')).toBe(2);
+      expect(bus.currentSeq('conversation-side:c')).toBe(3);
+    });
+  });
+
   describe('publishToScope (workspace / app / viewer scopes)', () => {
     it('delivers to scope subscribers with epoch and seq', () => {
       const bus = new ScopeEventBus('ep');

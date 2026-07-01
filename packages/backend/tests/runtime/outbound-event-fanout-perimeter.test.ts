@@ -154,6 +154,8 @@ function makePerimeterFixture(): PerimeterFixture {
   const publisher: EventPublisher = {
     publish: (conv, payload) =>
       events.push({ conv, kind: payload.kind, payload: payload.payload }),
+    publishSide: (conv, payload) =>
+      events.push({ conv, kind: payload.kind, payload: payload.payload }),
   };
 
   const warns: PerimeterFixture['warns'] = [];

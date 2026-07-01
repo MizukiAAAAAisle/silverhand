@@ -6,6 +6,7 @@ import type {
   EventFrame,
   ServerFrame,
 } from '@silverhand/shared';
+import { parseConversationScope, parseConversationSideScope } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
 import {
   canSubscribeScope,
@@ -368,7 +369,12 @@ export class EventWsConnection {
 }
 
 function conversationIdFromScope(scope: string): string | undefined {
-  return scope.startsWith('conversation:') ? scope.slice('conversation:'.length) : undefined;
+  // Recognize BOTH conversation recovery classes for diagnostics so a
+  // `conversation-side:` scope's logs carry the conversationId too. Routing
+  // stays on the disjoint shared parsers — never a fuzzy `startsWith`.
+  return (
+    parseConversationScope(scope) ?? parseConversationSideScope(scope) ?? undefined
+  );
 }
 
 function shouldLogSkippedSend(frame: ServerFrame): boolean {

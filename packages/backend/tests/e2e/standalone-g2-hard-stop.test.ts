@@ -41,6 +41,7 @@ import { dirname, join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import type { Driver, DriverSpawnContext, ParsedEvent } from '@silverhand/host/drivers';
 import type { RuntimeKind } from '@silverhand/shared';
+import { conversationSideScope } from '@silverhand/shared';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import {
   bootDaemonWithSupervisor,
@@ -229,8 +230,10 @@ describe('Standalone G2 — hard stop + runtime_exit projection', () => {
     // as B2's P1 fix — observe pre-trigger, assert post-trigger,
     // unsubscribe in finally.
     const busEvents: Array<{ kind: string; payload: unknown }> = [];
-    const unsubscribe = harness.backend.context.events.subscribe(
-      conversationId,
+    // Stage-2 P2: `agent_status` moved to the side-channel scope; capture it
+    // there (compat `subscribe()` only carries message-stream `publish()`).
+    const unsubscribe = harness.backend.context.events.subscribeScope(
+      conversationSideScope(conversationId),
       event => {
         busEvents.push(event);
       },

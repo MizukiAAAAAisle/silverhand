@@ -272,7 +272,7 @@ function publishMemberAdded(
   message: ReturnType<MessageRepo['insertForConversation']>,
 ): void {
   ctx.events.publish(conversation.id, { kind: 'message', payload: { message } });
-  ctx.events.publish(conversation.id, {
+  ctx.events.publishSide(conversation.id, {
     kind: 'conversation_members_changed',
     payload: {
       conversation_id: conversation.id,
@@ -418,7 +418,7 @@ export function publishMemberRemoved(
   message: ReturnType<MessageRepo['insertForConversation']>,
 ): void {
   ctx.events.publish(conversation.id, { kind: 'message', payload: { message } });
-  ctx.events.publish(conversation.id, {
+  ctx.events.publishSide(conversation.id, {
     kind: 'conversation_members_changed',
     payload: {
       conversation_id: conversation.id,

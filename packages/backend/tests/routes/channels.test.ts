@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import {
+  conversationSideScope,
   encodeUserPrincipalHeader,
   readRenameMetadata,
   X_SILVERHAND_PRINCIPAL_HEADER,
@@ -251,11 +252,17 @@ describe('workspace metadata and membership routes', () => {
     const conversationEvents = new Map<string, Array<{ kind: string; payload: unknown }>>(
       channelIds.map(channelId => [channelId, []]),
     );
-    const unsubConversations = channelIds.map(channelId =>
+    const unsubConversations = channelIds.flatMap(channelId => [
+      // Stage-2 P2: `message` rides the compat conversation emitter;
+      // `conversation_members_changed` moved to the side-channel scope. Capture
+      // both into the same per-channel array.
       t!.ctx.events.subscribe(channelId, e => {
         conversationEvents.get(channelId)!.push({ kind: e.kind, payload: e.payload });
       }),
-    );
+      t!.ctx.events.subscribeScope(conversationSideScope(channelId), e => {
+        conversationEvents.get(channelId)!.push({ kind: e.kind, payload: e.payload });
+      }),
+    ]);
     const workspaceEvents: Array<{ kind: string; payload: unknown }> = [];
     const unsubWorkspace = t.ctx.events.subscribeScope(
       `workspace:${workspace.workspace.id}`,
@@ -615,6 +622,13 @@ describe('workspace metadata and membership routes', () => {
     const unsubscribeConversation = t.ctx.events.subscribe(onboardingChannelId, event => {
       conversationEvents.push({ kind: event.kind, payload: event.payload });
     });
+    // Stage-2 P2: conversation_members_changed is a side-channel kind.
+    const unsubscribeConversationSide = t.ctx.events.subscribeScope(
+      conversationSideScope(onboardingChannelId),
+      event => {
+        conversationEvents.push({ kind: event.kind, payload: event.payload });
+      },
+    );
     const workspaceEvents: Array<{ kind: string; payload: unknown }> = [];
     const unsubscribeWorkspace = t.ctx.events.subscribeScope(
       `workspace:${workspaceId}`,
@@ -630,6 +644,7 @@ describe('workspace metadata and membership routes', () => {
     } finally {
       unsubscribeViewer();
       unsubscribeConversation();
+      unsubscribeConversationSide();
       unsubscribeWorkspace();
     }
     expect(status).toBe(204);

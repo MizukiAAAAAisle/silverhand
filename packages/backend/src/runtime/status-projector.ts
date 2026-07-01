@@ -122,7 +122,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
       status: 'active',
       cliSessionId,
     });
-    this.events.publish(conversationId, {
+    this.events.publishSide(conversationId, {
       kind: 'agent_status',
       payload: {
         agent_id: agentId,
@@ -145,7 +145,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
     this.conversations.updateAgentRuntime(conversationId, agentId, {
       status: 'active',
     });
-    this.events.publish(conversationId, {
+    this.events.publishSide(conversationId, {
       kind: 'agent_status',
       payload: {
         agent_id: agentId,
@@ -190,7 +190,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
       status,
       pid: null,
     });
-    this.events.publish(conversationId, {
+    this.events.publishSide(conversationId, {
       kind: 'agent_status',
       payload: {
         agent_id: agentId,
@@ -222,7 +222,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
       status: 'starting',
       pid: null,
     });
-    this.events.publish(conversationId, {
+    this.events.publishSide(conversationId, {
       kind: 'agent_status',
       payload: {
         agent_id: agentId,
@@ -253,7 +253,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
       status: 'crashed',
       pid: null,
     });
-    this.events.publish(conversationId, {
+    this.events.publishSide(conversationId, {
       kind: 'agent_status',
       payload: {
         agent_id: agentId,

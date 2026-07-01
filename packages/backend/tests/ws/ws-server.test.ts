@@ -251,6 +251,39 @@ describe('event WebSocket server', () => {
     });
   });
 
+  it('subscribes to the conversation side-channel scope and receives publishSide fanout', async () => {
+    t = buildTestApp();
+    const conversationId = await createWorkspaceAndConversation(t);
+    server = await openServer(t);
+    const { ws } = await connectAuthenticated(
+      server.url,
+      t.ctx.authSessions.issueSession({ userId: 'local' }).userToken,
+    );
+    sockets.push(ws);
+
+    // The side scope authorizes through the same canViewConversation gate as the
+    // message stream (permissions.ts::parseWsScope + canSubscribeScope). Without
+    // the Stage-2 parse addition this would come back `unknown_scope`.
+    const subscribedFrame = readFrame(ws);
+    sendFrame(ws, { type: 'subscribe', scope: `conversation-side:${conversationId}` });
+    expect(await subscribedFrame).toMatchObject({
+      type: 'subscribed',
+      scope: `conversation-side:${conversationId}`,
+    });
+
+    const eventFrame = readFrame(ws);
+    t.ctx.events.publishSide(conversationId, {
+      kind: 'agent_status',
+      payload: { agent_id: 'a1', status: 'active' },
+    });
+    expect(await eventFrame).toMatchObject({
+      type: 'event',
+      scope: `conversation-side:${conversationId}`,
+      kind: 'agent_status',
+      payload: { agent_id: 'a1', status: 'active' },
+    });
+  });
+
   it('fans out HTTP-posted conversation messages over subscribed WS scopes', async () => {
     t = buildTestApp();
     const conversationId = await createWorkspaceAndConversation(t);

@@ -1,4 +1,10 @@
 import { EventEmitter } from 'node:events';
+import {
+  conversationScope,
+  conversationSideScope,
+  parseConversationScope,
+  parseConversationSideScope,
+} from '@silverhand/shared';
 import { ReplayBuffer, type ReplayEntry } from './replay-buffer.js';
 
 interface ScopeEventLogger {
@@ -15,11 +21,24 @@ interface ScopeEventLogger {
  * Internally every conversation publish is also routed to the
  * 'conversation:{id}' WS scope with no changes to existing publish sites.
  *
- * Four scope layers (Phase 1):
- *   app                           — global, no private data
- *   workspace:{workspaceId}       — workspace-level public facts
- *   conversation:{conversationId} — per-conversation events
- *   viewer:{userId}               — viewer-private events (notifications, unread)
+ * Scope layers:
+ *   app                                — global, no private data
+ *   workspace:{workspaceId}            — workspace-level public facts
+ *   conversation:{conversationId}      — per-conversation MESSAGE-STREAM events
+ *                                        (message / reaction / task_changed) —
+ *                                        resume-governed, feeds the message cursor.
+ *   conversation-side:{conversationId} — per-conversation SIDE-CHANNEL events
+ *                                        (agent_status / agent_activity /
+ *                                        conversation_activity / members_changed /
+ *                                        thread_updated) — a distinct recovery class:
+ *                                        cursor-inert, self-healing via own REST /
+ *                                        invalidate. Published via publishSide().
+ *   viewer:{userId}                    — viewer-private events (notifications, unread)
+ *
+ * The message-stream and side-channel scopes are disjoint prefixes, own
+ * independent seq/replay spaces, and are routed only through the shared
+ * `parseConversationScope` / `parseConversationSideScope` parsers — never a
+ * fuzzy `startsWith('conversation')`. See docs/event-ws-recovery-class-scope-v1.md.
  *
  * WS handlers subscribe to a scope key via subscribeScope() and receive
  * ScopedEvent objects. The replay buffer per scope keeps the last 200 events.
@@ -74,15 +93,32 @@ export class ScopeEventBus {
   // ── Backward-compat conversation API ───────────────────────────────────────
 
   /**
-   * Publish an event for a conversation. Notifies conversation-level
-   * subscribers and WS subscribers on the 'conversation:{id}' scope.
+   * Publish a MESSAGE-STREAM event for a conversation. Notifies conversation-
+   * level compat subscribers and WS subscribers on the `conversation:{id}`
+   * scope (the resume-governed message cursor).
+   *
+   * Side-channel kinds (agent_status / activity / members_changed /
+   * thread_updated) must NOT use this — they go through `publishSide`, a
+   * distinct recovery class on the `conversation-side:{id}` scope.
    */
   publish(conversationId: string, event: ConversationBusEvent): void {
     // 1. Notify conversation-level subscribers.
     this.conversationEmitter.emit(conversationKey(conversationId), event);
 
     // 2. Route to WS scope fanout.
-    this.publishToScope(`conversation:${conversationId}`, event.kind, event.payload);
+    this.publishToScope(conversationScope(conversationId), event.kind, event.payload);
+  }
+
+  /**
+   * Publish a SIDE-CHANNEL event for a conversation onto the
+   * `conversation-side:{id}` scope. Symmetric with `publish` but deliberately
+   * without the compat `conversationEmitter` emit: the side channel has no
+   * legacy in-process consumers, and it is a separate recovery class (cursor-
+   * inert, self-healing) with its own seq/replay space, so it must never share
+   * the message-stream's seq counter. See docs/event-ws-recovery-class-scope-v1.md.
+   */
+  publishSide(conversationId: string, event: ConversationBusEvent): void {
+    this.publishToScope(conversationSideScope(conversationId), event.kind, event.payload);
   }
 
   /**
@@ -192,9 +228,13 @@ function conversationKey(conversationId: string): string {
 }
 
 function conversationIdFromScope(scope: string): string | undefined {
-  return scope.startsWith('conversation:') ? scope.slice('conversation:'.length) : undefined;
+  // Diagnostics recognize BOTH conversation recovery classes via the disjoint
+  // shared parsers (never a fuzzy `startsWith`).
+  return (
+    parseConversationScope(scope) ?? parseConversationSideScope(scope) ?? undefined
+  );
 }
 
 function shouldLogPublish(scope: string, kind: string): boolean {
-  return scope.startsWith('conversation:') && kind === 'message';
+  return parseConversationScope(scope) !== null && kind === 'message';
 }

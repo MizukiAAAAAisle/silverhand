@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readChannelContextMetadata } from '@silverhand/shared';
+import { conversationSideScope, readChannelContextMetadata } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
@@ -479,8 +479,9 @@ describe('ChannelService.setArchived', () => {
       expect(closedAt).not.toBeNull();
 
       const events: Array<{ kind: string; threadId?: string }> = [];
+      // Stage-2 P2: thread_updated is a side-channel kind.
       const unsub = t.events.subscribeScope(
-        `conversation:${t.source.id}`,
+        conversationSideScope(t.source.id),
         e => {
           const payload = e.payload as { thread_id?: string } | undefined;
           events.push({ kind: e.kind, threadId: payload?.thread_id });

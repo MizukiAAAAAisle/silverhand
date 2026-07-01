@@ -89,6 +89,12 @@ function makePublisher(): {
     publish(conv, payload) {
       published.push({ conv, kind: payload.kind, payload: payload.payload });
     },
+    // Stage-2 P2: agent-runtime / activity kinds route to the side-channel
+    // scope. Capture identically so behavioral assertions are channel-agnostic;
+    // scope routing is locked in scope-event-bus / ws-server tests.
+    publishSide(conv, payload) {
+      published.push({ conv, kind: payload.kind, payload: payload.payload });
+    },
   };
   return { publisher, published };
 }

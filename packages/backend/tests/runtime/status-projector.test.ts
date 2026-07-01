@@ -74,6 +74,11 @@ function makeFixture(
   const publisher: EventPublisher = {
     publish: (conv, payload) =>
       events.push({ conv, kind: payload.kind, payload: payload.payload }),
+    // Stage-2 P2: status projections now route to the side-channel scope.
+    // Capture both so behavioral assertions are indifferent to the channel;
+    // scope-routing itself is locked in scope-event-bus / ws-server tests.
+    publishSide: (conv, payload) =>
+      events.push({ conv, kind: payload.kind, payload: payload.payload }),
   };
   const projector = new DbRuntimeStatusProjector(conversations, publisher);
 

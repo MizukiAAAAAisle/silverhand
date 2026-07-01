@@ -477,7 +477,7 @@ export class ChannelService {
     // Notify any open Thread views so their cached `archived_at` flips.
     // The channel-list refetch below covers the parent channel itself.
     for (const threadId of result.affectedThreadIds) {
-      this.events.publish(result.channel.id, {
+      this.events.publishSide(result.channel.id, {
         kind: 'thread_updated',
         payload: {
           parent_conversation_id: result.channel.id,

@@ -152,7 +152,7 @@ async function makeStandaloneStalenessFixture(): Promise<StandaloneStalenessFixt
   );
   conversations.addAgent(channel.id, agent.id);
 
-  const publisher: EventPublisher = { publish: () => {} };
+  const publisher: EventPublisher = { publish: () => {}, publishSide: () => {} };
   const logger: BackendLogger = { info: () => {}, warn: () => {}, error: () => {} };
 
   const httpServer = createHttpServer((_req, res) => {

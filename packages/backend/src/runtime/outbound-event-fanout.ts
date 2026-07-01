@@ -519,7 +519,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         { status: 'crashed', pid: null },
       );
       if (!updated) continue;
-      this.opts.events.publish(row.conversation_id, {
+      this.opts.events.publishSide(row.conversation_id, {
         kind: 'agent_status',
         payload: {
           agent_id: row.agent_id,
@@ -915,7 +915,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       })();
 
       // 9. SSE + per-peer best-effort delivery (outside tx).
-      this.opts.events.publish(conversationId, {
+      this.opts.events.publishSide(conversationId, {
         kind: 'agent_status',
         payload: {
           agent_id: agentId,
@@ -1399,7 +1399,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         runId,
       );
       if (!terminal) continue;
-      this.opts.events.publish(conversationId, {
+      this.opts.events.publishSide(conversationId, {
         kind: 'agent_activity',
         payload: terminal,
       });
@@ -1414,7 +1414,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     for (const state of this.states.values()) {
       const terminals = state.cache.resolveConversationRuns(conversationId, reason);
       for (const terminal of terminals) {
-        this.opts.events.publish(conversationId, {
+        this.opts.events.publishSide(conversationId, {
           kind: 'agent_activity',
           payload: terminal,
         });
@@ -1569,7 +1569,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         combineGated: texts =>
           combineGatedBatch(texts, 'silverhand message send'),
         publishActivity: runState => {
-          this.opts.events.publish(runState.conversationId, {
+          this.opts.events.publishSide(runState.conversationId, {
             kind: 'agent_activity',
             payload: runState,
           });

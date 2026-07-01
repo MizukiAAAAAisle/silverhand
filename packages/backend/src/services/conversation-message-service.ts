@@ -611,7 +611,7 @@ export class ConversationMessageService {
     );
 
     if (txResult.targetConversation.parent_conversation_id) {
-      this.events.publish(txResult.targetConversation.parent_conversation_id, {
+      this.events.publishSide(txResult.targetConversation.parent_conversation_id, {
         kind: 'thread_updated',
         payload: {
           parent_conversation_id: txResult.targetConversation.parent_conversation_id,
