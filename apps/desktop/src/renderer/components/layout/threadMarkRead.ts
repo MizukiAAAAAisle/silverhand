@@ -1,3 +1,5 @@
+import type { MessageSeq } from '@silverhand/shared';
+
 /**
  * Pure freshness gate for thread mark-read (#task:1226 surface 4, §9).
  *
@@ -22,8 +24,9 @@ export interface ThreadMarkReadGateInput {
   alreadyMarkedForOpen: boolean;
   /** A cluster fetch is in flight (initial window or pagination). */
   isFetching: boolean;
-  /** `pages[0].stream_head_seq` of the loaded window — may be stale cache. */
-  headSeq: number | null;
+  /** `pages[0].stream_head_seq` of the loaded window — may be stale cache.
+   *  A MessageSeq (open-time stream head), or null when no window is loaded. */
+  headSeq: MessageSeq | null;
   /** Epoch (ms) of the last SUCCESSFUL window fetch; stamped only on the
    *  queryFn success path, never by `setQueryData`. */
   windowFetchSucceededAt: number;
@@ -33,7 +36,7 @@ export interface ThreadMarkReadGateInput {
 
 export function threadMarkReadSnapshot(
   input: ThreadMarkReadGateInput,
-): number | null {
+): MessageSeq | null {
   // Already marked for this open — do not re-fire (idempotent per open).
   if (input.alreadyMarkedForOpen) return null;
   // Wait for any in-flight fetch to settle before reading the head.
@@ -135,9 +138,11 @@ export interface ThreadLiveMarkReadInput {
    *  window's max (tail) reply seq. Deliberately NOT `stream_head_seq` and NOT
    *  the max of every cached reply: the semantic is max-VISIBLE, not
    *  latest-known (Cindy bar #3). Null when the window is empty. */
-  maxVisibleSeq: number | null;
-  /** Highest seq already SUCCESSFULLY marked read this open. */
-  lastMarkedSeq: number;
+  maxVisibleSeq: MessageSeq | null;
+  /** Highest seq already SUCCESSFULLY marked read this open — a MessageSeq, or
+   *  null when nothing has been marked yet (explicit absence, not a 0 sentinel:
+   *  #task:1267 Axis-B discipline forbids collapsing "none" into value 0). */
+  lastMarkedSeq: MessageSeq | null;
 }
 
 /**
@@ -160,10 +165,13 @@ export interface ThreadLiveMarkReadInput {
  */
 export function threadLiveMarkReadSeq(
   input: ThreadLiveMarkReadInput,
-): number | null {
+): MessageSeq | null {
   if (!input.pinnedAtTail) return null;
   if (!input.documentVisible) return null;
   if (input.maxVisibleSeq === null) return null;
-  if (input.maxVisibleSeq <= input.lastMarkedSeq) return null;
+  // Same-stream (this thread) MessageSeq compare, guarded on explicit absence:
+  // "nothing marked yet" (null) never blocks the first advance (#task:1267 B4).
+  if (input.lastMarkedSeq !== null && input.maxVisibleSeq <= input.lastMarkedSeq)
+    return null;
   return input.maxVisibleSeq;
 }

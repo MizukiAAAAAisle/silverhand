@@ -1,5 +1,6 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
+import { decodeMessageSeq } from '@silverhand/shared';
 import type {
   AttachmentSnapshot,
   FromKind,
@@ -202,7 +203,7 @@ export function messageRowToDto(
     // it defaults to null and the read route fills it for the human/agent
     // viewer (docs/reactions-design.md §3.5).
     reactions: null,
-    seq: row.seq,
+    seq: decodeMessageSeq(row.seq),
     created_at: row.created_at,
     thread_root_id: row.thread_root_id,
     task_number: row.task_number,

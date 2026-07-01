@@ -19,7 +19,7 @@
  * pure so the precedence is unit-tested independent of React/nav wiring.
  */
 
-import type { MessageUnreadPointerDto } from '@silverhand/shared';
+import type { MessageUnreadPointerDto, MessageSeq } from '@silverhand/shared';
 import type { ChannelLayout } from '@/router';
 
 export type ChannelOpenIntent =
@@ -28,10 +28,17 @@ export type ChannelOpenIntent =
 
 export function resolveChannelOpen(
   pointer: MessageUnreadPointerDto | undefined,
-  closeWatermark: number | null,
+  closeWatermark: MessageSeq | null,
   layout: ChannelLayout | null,
 ): ChannelOpenIntent {
-  if (pointer?.thread_root_id && pointer.seq > (closeWatermark ?? -1)) {
+  // Same-stream (this channel) MessageSeq compare, guarded on explicit absence:
+  // no watermark (null) → any unread thread surfaces; otherwise only a strictly
+  // newer pointer re-surfaces past the just-closed batch (#task:1267 §3.4 —
+  // explicit absence, not a -1 sentinel).
+  if (
+    pointer?.thread_root_id &&
+    (closeWatermark === null || pointer.seq > closeWatermark)
+  ) {
     return {
       kind: 'unread-thread',
       threadRootId: pointer.thread_root_id,

@@ -4,6 +4,7 @@ import { StaticRouter } from 'react-router-dom/server';
 import { describe, expect, it } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { MessageDto, TaskSummaryDto } from '@silverhand/shared';
+import { decodeMessageSeq } from '@silverhand/shared';
 import { SystemActivityCluster } from './SystemActivityCluster';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
@@ -14,8 +15,9 @@ import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
 function makeSystemMessage(
   subtype: string,
   metadata: Record<string, unknown>,
-  overrides: Partial<MessageDto> = {},
+  overrides: Partial<Omit<MessageDto, 'seq'>> & { seq?: number } = {},
 ): MessageDto {
+  const { seq, ...rest } = overrides;
   return {
     id: 'sys-cluster-1',
     conversation_id: 'conv-1',
@@ -25,7 +27,7 @@ function makeSystemMessage(
     content: '',
     metadata: { subtype, ...metadata },
     attachments: null,
-    seq: 1,
+    seq: decodeMessageSeq(seq ?? 1),
     created_at: 0,
     thread_root_id: null,
     task_number: null,
@@ -35,7 +37,7 @@ function makeSystemMessage(
     task_closed_at: null,
     task_assignee: null,
     reactions: null,
-    ...overrides,
+    ...rest,
   };
 }
 

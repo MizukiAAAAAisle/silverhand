@@ -5,8 +5,8 @@
 // renderer never owns any read/eliminate state of its own (answerability,
 // §5.3). Lives in the Attention bounded context because eliminate is an
 // Attention concern; messaging hooks (channel/thread mark-read) delegate here.
-import type { ActivityItemDto, ObserveSource, ObserveDto } from '@silverhand/shared';
-import { apiPaths } from '@silverhand/shared';
+import type { ActivityItemDto, ObserveSource, ObserveDto, MessageSeq } from '@silverhand/shared';
+import { apiPaths, asReadSeq } from '@silverhand/shared';
 import { api } from '@/lib/api';
 
 /** POST the eliminate primitive. One source = a single clear; many = a Mark-all
@@ -34,17 +34,24 @@ export function postObserve(sources: ObserveSource[]): Promise<ObserveDto> {
  *  open-time snapshot head / visible-live seq; or a channel with a held
  *  snapshot). The AUTO / thread mark-read path only ever emits `at_seq` — this
  *  builder is how that caller intent is enforced, independent of any endpoint
- *  rule (the backend no longer rejects thread + `stream_head`). */
+ *  rule (the backend no longer rejects thread + `stream_head`).
+ *
+ *  #task:1267 §3.1 — this is the ONE genuine MessageSeq → ReadSeq conversion in
+ *  the renderer. `seq` in is a MessageSeq (the position the viewer has seen, held
+ *  as MessageSeq all the way up the mark-read chain); pinning it as `at_seq`
+ *  makes it a read cursor, so it is minted through {@link asReadSeq} here — the
+ *  single testable bridge. No caller pre-converts; the role change lives only at
+ *  this choke point. */
 export function streamSourceAtSeq(
   conversationId: string,
   threadRootId: string | null,
-  seq: number,
+  seq: MessageSeq,
 ): ObserveSource {
   return {
     kind: 'stream',
     conversation_id: conversationId,
     thread_root_id: threadRootId,
-    position: { kind: 'at_seq', seq },
+    position: { kind: 'at_seq', seq: asReadSeq(seq) },
   };
 }
 

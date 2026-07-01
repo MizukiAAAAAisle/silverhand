@@ -6,6 +6,10 @@ import {
   type MessageSelectionHook,
 } from '@/components/chat/useMessageSelection';
 import { buildMarkdownTranscript } from '@/components/chat/markdownTranscript';
+import {
+  type CachedMessage,
+  isCommittedMessage,
+} from '@/features/channels/pending-message';
 import { useSavedMessageIds, useToggleSave } from '@/features/saved/hooks';
 
 /** Per-row action props spread onto `MessageItem` / `ChannelMessageItem`.
@@ -14,12 +18,12 @@ import { useSavedMessageIds, useToggleSave } from '@/features/saved/hooks';
  *  #task:1065 save, #task:1068 copy/share). */
 export interface MessageRowActionProps {
   saved: boolean;
-  onSave: (msg: MessageDto) => void;
+  onSave: (msg: CachedMessage) => void;
   selectionMode: boolean;
   selected: boolean;
-  onToggleSelected: (msg: MessageDto) => void;
-  onCopyMarkdown: (msg: MessageDto) => Promise<void>;
-  onShare: (msg: MessageDto) => void;
+  onToggleSelected: (msg: CachedMessage) => void;
+  onCopyMarkdown: (msg: CachedMessage) => Promise<void>;
+  onShare: (msg: CachedMessage) => void;
 }
 
 export interface MessageActionSurface {
@@ -32,7 +36,7 @@ export interface MessageActionSurface {
   /** Multi-select → open the image-export preview. */
   handleSaveImage: () => void;
   /** Build the per-row action prop bundle for one message. */
-  rowActionProps: (msg: MessageDto) => MessageRowActionProps;
+  rowActionProps: (msg: CachedMessage) => MessageRowActionProps;
 }
 
 /**
@@ -94,15 +98,23 @@ export function useMessageActionSurface(deps: {
     return () => window.removeEventListener('keydown', onKey);
   }, [selection, imagePreviewOpen]);
 
+  // Every row action requires a committed server row: a pending optimistic
+  // message has no server id / seq / permalink, so save / select / share /
+  // copy are inert on it (~200ms until the ack swaps in the real row). This
+  // replaces the old behavior where the same actions fired against a
+  // `pending-<uuid>` id the server rejects.
   const handleSave = useCallback(
-    (msg: MessageDto) => toggleSave(msg.id),
+    (msg: CachedMessage) => {
+      if (isCommittedMessage(msg)) toggleSave(msg.id);
+    },
     [toggleSave],
   );
   // Single-message copy: clipboard receives ONLY `message.content`. The
   // multi-message transcript (with sender headers) is the separate
   // `handleCopyMarkdownTranscript` path — same clipboard, different shape.
   const handleCopyMarkdown = useCallback(
-    async (msg: MessageDto): Promise<void> => {
+    async (msg: CachedMessage): Promise<void> => {
+      if (!isCommittedMessage(msg)) return;
       try {
         await navigator.clipboard.writeText(msg.content);
         toast.success('已复制到剪贴板');
@@ -117,7 +129,9 @@ export function useMessageActionSurface(deps: {
   // Per-row Share: enter selection mode with this message preselected.
   // `enter` is idempotent — re-entering just adds another message.
   const handleShare = useCallback(
-    (msg: MessageDto) => selection.enter(msg),
+    (msg: CachedMessage) => {
+      if (isCommittedMessage(msg)) selection.enter(msg);
+    },
     [selection],
   );
   const handleCopyMarkdownTranscript = useCallback(async (): Promise<void> => {
@@ -143,13 +157,20 @@ export function useMessageActionSurface(deps: {
     [imagePreviewOpen, selection],
   );
 
+  const handleToggleSelected = useCallback(
+    (msg: CachedMessage) => {
+      if (isCommittedMessage(msg)) selection.toggle(msg);
+    },
+    [selection],
+  );
+
   const rowActionProps = useCallback(
-    (msg: MessageDto): MessageRowActionProps => ({
+    (msg: CachedMessage): MessageRowActionProps => ({
       saved: savedIds.has(msg.id),
       onSave: handleSave,
       selectionMode: selection.active,
       selected: selection.isSelected(msg.id),
-      onToggleSelected: selection.toggle,
+      onToggleSelected: handleToggleSelected,
       onCopyMarkdown: handleCopyMarkdown,
       onShare: handleShare,
     }),
@@ -158,7 +179,7 @@ export function useMessageActionSurface(deps: {
       handleSave,
       selection.active,
       selection.isSelected,
-      selection.toggle,
+      handleToggleSelected,
       handleCopyMarkdown,
       handleShare,
     ],

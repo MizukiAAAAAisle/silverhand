@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { decodeTransportEpoch, decodeTransportSeq } from '@silverhand/shared';
 import { ScopeEventBus, type ScopedEvent } from '../../src/ws/scope-event-bus.js';
 
 describe('ScopeEventBus', () => {
@@ -211,8 +212,8 @@ describe('ScopeEventBus', () => {
       bus.publishToScope('app', 'workspace_list_changed', null);
 
       const buf = bus.getReplayBuffer('app');
-      expect(buf.currentSeq('ep')).toBe(2);
-      const replayed = buf.replay(0, 'ep');
+      expect(buf.currentSeq(decodeTransportEpoch('ep'))).toBe(2);
+      const replayed = buf.replay(decodeTransportSeq(0), decodeTransportEpoch('ep'));
       expect(replayed).toHaveLength(2);
       expect(replayed[0]).toMatchObject({ seq: 1, epoch: 'ep', kind: 'workspace_list_changed' });
     });
@@ -222,8 +223,8 @@ describe('ScopeEventBus', () => {
       bus.publish('conv-7', { kind: 'message', payload: 'hi' });
 
       const buf = bus.getReplayBuffer('conversation:conv-7');
-      expect(buf.currentSeq('ep')).toBe(1);
-      const replayed = buf.replay(0, 'ep');
+      expect(buf.currentSeq(decodeTransportEpoch('ep'))).toBe(1);
+      const replayed = buf.replay(decodeTransportSeq(0), decodeTransportEpoch('ep'));
       expect(replayed[0]).toMatchObject({ seq: 1, kind: 'message', payload: 'hi' });
     });
   });

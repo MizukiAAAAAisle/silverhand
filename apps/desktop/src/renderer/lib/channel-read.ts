@@ -15,16 +15,24 @@
  *   - re-marks across a channel switch (the `channelId` differs).
  *
  * Returns the new mark to record + mutate, or `null` to skip.
+ *
+ * #task:1267 §3.5: `seq` here is a LOCAL MessageSeq gate — it decides WHETHER to
+ * fire the mark, but the mark itself resolves to the server stream head (no
+ * seq), so this is NOT a MessageSeq → ReadSeq conversion. Branding it MessageSeq
+ * keeps the `prev.seq === tailSeq` compare a same-stream (same channel)
+ * MessageSeq↔MessageSeq comparison; do NOT mint a ReadSeq here.
  */
+import type { MessageSeq } from '@silverhand/shared';
+
 export interface TailReadMark {
   channelId: string;
-  seq: number;
+  seq: MessageSeq;
 }
 
 export function nextTailReadMark(
   prev: TailReadMark | null,
   channelId: string,
-  tailSeq: number | null,
+  tailSeq: MessageSeq | null,
   isAtTail: boolean,
   hasNewerLiveGap: boolean,
 ): TailReadMark | null {

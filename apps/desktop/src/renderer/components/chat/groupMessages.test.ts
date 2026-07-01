@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MessageDto } from '@silverhand/shared';
+import { decodeMessageSeq } from '@silverhand/shared';
 import {
   ACTIVITY_RUN_GAP_MS,
   CLUSTERABLE_SUBTYPES,
@@ -24,7 +25,7 @@ function makeMsg(opts: {
     content: '',
     metadata: opts.subtype ? { subtype: opts.subtype } : null,
     attachments: null,
-    seq: 1,
+    seq: decodeMessageSeq(1),
     created_at: opts.createdAt ?? 0,
     thread_root_id: null,
     task_number: null,

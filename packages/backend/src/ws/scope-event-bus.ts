@@ -1,9 +1,14 @@
 import { EventEmitter } from 'node:events';
 import {
+  advanceTransportSeq,
   conversationScope,
   conversationSideScope,
+  decodeTransportEpoch,
+  decodeTransportSeq,
   parseConversationScope,
   parseConversationSideScope,
+  type TransportEpoch,
+  type TransportSeq,
 } from '@silverhand/shared';
 import { ReplayBuffer, type ReplayEntry } from './replay-buffer.js';
 
@@ -60,8 +65,8 @@ export type ConversationBusHandler = (event: ConversationBusEvent) => void;
 /** Event shape delivered to WS scope subscribers. */
 export interface ScopedEvent {
   scope: string;
-  seq: number;
-  epoch: string;
+  seq: TransportSeq;
+  epoch: TransportEpoch;
   kind: string;
   payload: unknown;
 }
@@ -72,7 +77,7 @@ export type ScopeHandler = (event: ScopedEvent) => void;
 
 export class ScopeEventBus {
   /** Stable identifier for this process lifetime. Changes on restart. */
-  readonly epoch: string;
+  readonly epoch: TransportEpoch;
 
   /** Conversation compat emitter keyed by 'conversation:{id}'. */
   private readonly conversationEmitter = new EventEmitter();
@@ -81,13 +86,13 @@ export class ScopeEventBus {
   private readonly scopeEmitter = new EventEmitter();
 
   /** Per-scope monotonic sequence counters. */
-  private readonly seqCounters = new Map<string, number>();
+  private readonly seqCounters = new Map<string, TransportSeq>();
 
   /** Per-scope replay buffers. */
   private readonly buffers = new Map<string, ReplayBuffer>();
 
   constructor(epochOverride?: string, private readonly logger?: ScopeEventLogger) {
-    this.epoch = epochOverride ?? crypto.randomUUID();
+    this.epoch = decodeTransportEpoch(epochOverride ?? crypto.randomUUID());
     // Allow unlimited listeners — ConversationManager + many WS subscribers.
     this.conversationEmitter.setMaxListeners(0);
     this.scopeEmitter.setMaxListeners(0);
@@ -196,21 +201,24 @@ export class ScopeEventBus {
    * Named `replay` so callers (e.g. ws-connection) can duck-type against
    * this method without importing ReplayBuffer directly.
    */
-  replay(scope: string, fromSeq: number, epoch: string): ReplayEntry[] {
+  replay(scope: string, fromSeq: TransportSeq, epoch: TransportEpoch): ReplayEntry[] {
     return this.getOrCreateBuffer(scope).replay(fromSeq, epoch);
   }
 
   /**
    * Return the current seq for a scope (0 if no events published yet).
    */
-  currentSeq(scope: string): number {
-    return this.seqCounters.get(scope) ?? 0;
+  currentSeq(scope: string): TransportSeq {
+    return this.seqCounters.get(scope) ?? decodeTransportSeq(0);
   }
 
   // ── Private helpers ──────────────────────────────────────────────────────────
 
-  private nextSeq(scope: string): number {
-    const next = (this.seqCounters.get(scope) ?? 0) + 1;
+  private nextSeq(scope: string): TransportSeq {
+    // The per-scope counter starts at 0 ("no events yet", role-defined origin);
+    // advance is the single named +1 boundary (never raw `prev + 1` writeback).
+    const prev = this.seqCounters.get(scope) ?? decodeTransportSeq(0);
+    const next = advanceTransportSeq(prev);
     this.seqCounters.set(scope, next);
     return next;
   }

@@ -4,6 +4,7 @@ import { StaticRouter } from 'react-router-dom/server';
 import { describe, expect, it } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { TaskSummaryDto, UserDto } from '@silverhand/shared';
+import { decodeMessageSeq } from '@silverhand/shared';
 import { Markdown } from './Markdown';
 import { SystemMessage } from './SystemMessage';
 import type { ChannelReference } from './ChannelRef';
@@ -144,7 +145,7 @@ describe('SystemMessage channel refs', () => {
       content,
       metadata: { subtype, ...metadata },
       attachments: null,
-      seq: 1,
+      seq: decodeMessageSeq(1),
       created_at: 0,
       thread_root_id: null,
       task_number: null,
@@ -784,7 +785,7 @@ describe('SystemMessage task event rows (PR-2)', () => {
       content,
       metadata: { subtype, ...metadata },
       attachments: null,
-      seq: 1,
+      seq: decodeMessageSeq(1),
       created_at: 0,
       thread_root_id: null,
       task_number: null,

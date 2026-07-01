@@ -14,7 +14,7 @@
  * Consumers reach the handle only through `Supervisor` methods.
  */
 import type { ChildProcess } from 'node:child_process';
-import type { AgentRunState } from '@silverhand/shared';
+import type { AgentRunState, ObservedSeq } from '@silverhand/shared';
 import type { Driver } from '../../drivers/index.js';
 import type { RuntimeDelivery, RuntimeStartParams } from '../../protocol.js';
 
@@ -119,13 +119,16 @@ export interface RuntimeHandle {
    *  (reply-cluster §6.4). `stream_key` is `'main'` for the channel's
    *  main line or `thread:<rootMessageId>` for a reply cluster. A send
    *  picks the seen value of the stream it targets; absence of a key
-   *  means "never observed" (treated as 0). Advanced only at
-   *  input-admission points, not on bare stdin writes. */
-  observedSeqByStream: Map<string, number>;
+   *  means "never observed" — a distinct state from an observed `0`, so this
+   *  map is read by PRESENCE (`.has`/`=== undefined`), never flattened with
+   *  `?? 0`. Advanced only at input-admission points, not on bare stdin
+   *  writes. Each value is an {@link ObservedSeq}, minted at the daemon
+   *  observation boundary (delivery admit / stale response / send commit). */
+  observedSeqByStream: Map<string, ObservedSeq>;
   /** High-water seq, per stream, for a batch delivered mid-turn but not
    *  yet admitted as precedent context for a new model action. Flushed
    *  into `observedSeqByStream` at the next turn boundary. */
-  pendingAdmissionSeqByStream: Map<string, number>;
+  pendingAdmissionSeqByStream: Map<string, ObservedSeq>;
   /** Bounded memory of where a `--reply-to <messageId>` send should go:
    *  the message id the agent may reply to → that reply's target
    *  `stream_key`. Populated as deliveries are admitted and as the

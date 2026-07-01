@@ -11,9 +11,11 @@
  * (caller must do a snapshot instead).
  */
 
+import { decodeTransportSeq, type TransportSeq, type TransportEpoch } from '@silverhand/shared';
+
 export interface ReplayEntry {
-  seq: number;
-  epoch: string;
+  seq: TransportSeq;
+  epoch: TransportEpoch;
   kind: string;
   payload: unknown;
 }
@@ -38,7 +40,7 @@ export class ReplayBuffer {
    * Return all entries with seq > fromSeq and matching epoch, in order.
    * Returns an empty array if the epoch doesn't match (client must snapshot).
    */
-  replay(fromSeq: number, epoch: string): ReplayEntry[] {
+  replay(fromSeq: TransportSeq, epoch: TransportEpoch): ReplayEntry[] {
     if (this.count === 0) return [];
 
     // Walk entries in insertion order (oldest → newest).
@@ -63,12 +65,12 @@ export class ReplayBuffer {
    * Returns the highest seq in the buffer for the given epoch,
    * or 0 if empty / epoch mismatch.
    */
-  currentSeq(epoch: string): number {
-    if (this.count === 0) return 0;
+  currentSeq(epoch: TransportEpoch): TransportSeq {
+    if (this.count === 0) return decodeTransportSeq(0);
     // The most recently written entry is at (head - 1 + maxSize) % maxSize.
     const lastIdx = (this.head - 1 + this.maxSize) % this.maxSize;
     const last = this.buf[lastIdx]!;
-    return last.epoch === epoch ? last.seq : 0;
+    return last.epoch === epoch ? last.seq : decodeTransportSeq(0);
   }
 
   /** Number of entries currently stored. */

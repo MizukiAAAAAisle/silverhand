@@ -19,6 +19,7 @@ import type {
   ConversationStreamUnreadDto,
   MessageDto,
   MessageReactionChangedEvent,
+  MessageSeq,
   MessageUnreadByConversationDto,
   ReactionAggregateDto,
   ReplyBadgeSummary,
@@ -26,7 +27,12 @@ import type {
   ThreadFollowerStateDto,
   ThreadFollowMutationDto,
 } from '@silverhand/shared';
-import { apiPaths } from '@silverhand/shared';
+import { apiPaths, decodeMessageSeq } from '@silverhand/shared';
+import {
+  type CachedMessage,
+  type PendingMessage,
+  isCommittedMessage,
+} from '@/features/channels/pending-message';
 import { api, ApiError } from '@/lib/api';
 import { messageReactorsKey } from '@/features/channels/reaction-hooks';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
@@ -164,7 +170,16 @@ export type MessagesPageParam =
   | { kind: 'before'; seq: number }
   | { kind: 'after'; seq: number };
 
-type MessagesCache = InfiniteData<ConversationMessagesDto, MessagesPageParam>;
+/** A cached messages page. Identical to the wire {@link ConversationMessagesDto}
+ *  except the message list may also hold optimistic {@link PendingMessage} rows
+ *  (which the wire never carries). A server response widens into this freely
+ *  (`MessageDto[]` ⊆ `CachedMessage[]`); only optimistic inserts add the pending
+ *  variant. */
+type CachedMessagesPage = Omit<ConversationMessagesDto, 'messages'> & {
+  messages: CachedMessage[];
+};
+
+type MessagesCache = InfiniteData<CachedMessagesPage, MessagesPageParam>;
 
 function invalidateMessageUnreadQueries(qc: QueryClient): void {
   const existing = messageUnreadInvalidationTimers.get(qc);
@@ -359,7 +374,7 @@ export function reconcileChannelAgentsOnSnapshotRequired(
 }
 
 function makeMessagesCache(
-  page: ConversationMessagesDto,
+  page: CachedMessagesPage,
   pageParam: MessagesPageParam = undefined,
 ): MessagesCache {
   return { pages: [page], pageParams: [pageParam] };
@@ -399,9 +414,16 @@ function lastPageIsTail(data: MessagesCache | undefined): boolean {
   return last?.has_more_after === false;
 }
 
-function appendMessageToCache(
+/** Shared append core. `bootstrapHead` is the `stream_head_seq` stamped only
+ *  when this append bootstraps a page from an empty cache; an append into an
+ *  existing tail page carries the prior head forward untouched. A committed
+ *  message supplies its own seq as the head; a pending row has none, so its
+ *  caller passes a provisional head (§3.3) — that page is provisional anyway
+ *  (replaced on server ack / refetch). */
+function appendToCache(
   data: MessagesCache | undefined,
-  msg: MessageDto,
+  msg: CachedMessage,
+  bootstrapHead: MessageSeq,
 ): MessagesCache {
   if (!data) {
     return makeMessagesCache({
@@ -409,13 +431,7 @@ function appendMessageToCache(
       reply_counts_by_root: {},
       has_more_before: false,
       has_more_after: false,
-      // Optimistic/live-append bootstrap with no prior server window. For a
-      // real live-append `msg.seq` IS the new stream head; for an optimistic
-      // send the whole page is provisional (replaced on server ack / refetch).
-      // This mainline cache's head is never consumed as a thread mark-read
-      // snapshot — that comes only from the thread window response
-      // (`useThreadCluster` → stream_head_seq) — so it cannot swallow a tail.
-      stream_head_seq: msg.seq,
+      stream_head_seq: bootstrapHead,
     });
   }
   if (cacheHasMessage(data, msg.id)) return data;
@@ -429,10 +445,7 @@ function appendMessageToCache(
           reply_counts_by_root: {},
           has_more_before: false,
           has_more_after: false,
-          // No prior window to inherit a head from; this appended message is
-          // the live head. Mainline cache head is never a thread mark-read
-          // snapshot source (those come from the thread window response).
-          stream_head_seq: msg.seq,
+          stream_head_seq: bootstrapHead,
         },
       ],
       pageParams: [undefined as MessagesPageParam],
@@ -448,6 +461,28 @@ function appendMessageToCache(
         : page,
     ),
   };
+}
+
+/** Append a committed (server-acked) message. For a bootstrap page `msg.seq` IS
+ *  the new stream head; for a live-append into an existing tail the head is
+ *  carried forward. This mainline cache's head is never consumed as a thread
+ *  mark-read snapshot — that comes only from the thread window response
+ *  (`useThreadCluster` → stream_head_seq) — so it cannot swallow a tail. */
+function appendMessageToCache(
+  data: MessagesCache | undefined,
+  msg: MessageDto,
+): MessagesCache {
+  return appendToCache(data, msg, msg.seq);
+}
+
+/** Append an optimistic pending message (no server seq yet). If it bootstraps an
+ *  empty cache the page head is provisional (0) — honest "no server head yet",
+ *  corrected on the server ack (`replacePendingMessageInCache`) or a refetch. */
+function appendPendingMessage(
+  data: MessagesCache | undefined,
+  msg: PendingMessage,
+): MessagesCache {
+  return appendToCache(data, msg, decodeMessageSeq(0));
 }
 
 function removeMessageFromCache(
@@ -574,7 +609,11 @@ function applyReactionChangedToCache(
   const pages = data.pages.map(page => {
     let pageChanged = false;
     const messages = page.messages.map(message => {
-      if (message.id !== ev.message_id) return message;
+      // Reactions only ever target committed rows; a pending optimistic row has
+      // no server id an event could match, so it passes through untouched.
+      if (message.id !== ev.message_id || !isCommittedMessage(message)) {
+        return message;
+      }
       changed = true;
       pageChanged = true;
       return applyReactionToMessage(message, ev, viewerUserId);
@@ -1141,9 +1180,9 @@ export function useChannelMessages(
   }, [qc, channelId]);
 
   const query = useInfiniteQuery<
-    ConversationMessagesDto,
+    CachedMessagesPage,
     Error,
-    InfiniteData<ConversationMessagesDto, MessagesPageParam>,
+    InfiniteData<CachedMessagesPage, MessagesPageParam>,
     ReturnType<typeof messagesKey>,
     MessagesPageParam
   >({
@@ -1159,26 +1198,22 @@ export function useChannelMessages(
       }),
     getPreviousPageParam: firstPage => {
       if (!firstPage.has_more_before) return undefined;
-      // Pending optimistic messages carry `id: 'pending-<uuid>'` and
-      // `seq: Date.now()` — feeding that epoch-ms cursor to
-      // `before_seq` would make the route return the entire history.
-      // Skip them so the cursor always reflects a real DB seq. The
-      // common case (no temp at the head) still resolves to
-      // `messages[0]` in O(1).
-      const firstReal = firstPage.messages.find(
-        m => !m.id.startsWith('pending-'),
-      );
+      // Pending optimistic rows have no server seq — feeding one as a
+      // `before_seq` cursor would be meaningless. `isCommittedMessage` narrows
+      // to a real `MessageSeq`; the common case (no pending at the head) still
+      // resolves to `messages[0]` in O(1).
+      const firstReal = firstPage.messages.find(isCommittedMessage);
       return firstReal ? { kind: 'before', seq: firstReal.seq } : undefined;
     },
     getNextPageParam: lastPage => {
       if (!lastPage.has_more_after || lastPage.messages.length === 0) {
         return undefined;
       }
-      // Symmetric to getPreviousPageParam: filter out optimistic
-      // temps so `after_seq` never sees an epoch-ms cursor.
+      // Symmetric to getPreviousPageParam: skip pending rows so `after_seq`
+      // only ever sees a committed `MessageSeq`.
       for (let i = lastPage.messages.length - 1; i >= 0; i--) {
         const m = lastPage.messages[i]!;
-        if (!m.id.startsWith('pending-')) {
+        if (isCommittedMessage(m)) {
           return { kind: 'after', seq: m.seq };
         }
       }
@@ -1344,9 +1379,9 @@ export function useThreadCluster(
   }, [qc, channelId, rootMessageId]);
 
   const query = useInfiniteQuery<
-    ConversationMessagesDto,
+    CachedMessagesPage,
     Error,
-    InfiniteData<ConversationMessagesDto, MessagesPageParam>,
+    InfiniteData<CachedMessagesPage, MessagesPageParam>,
     ReturnType<typeof clusterMessagesKey>,
     MessagesPageParam
   >({
@@ -1381,9 +1416,7 @@ export function useThreadCluster(
     },
     getPreviousPageParam: firstPage => {
       if (!firstPage.has_more_before) return undefined;
-      const firstReal = firstPage.messages.find(
-        m => !m.id.startsWith('pending-'),
-      );
+      const firstReal = firstPage.messages.find(isCommittedMessage);
       return firstReal ? { kind: 'before', seq: firstReal.seq } : undefined;
     },
     getNextPageParam: lastPage => {
@@ -1392,7 +1425,7 @@ export function useThreadCluster(
       }
       for (let i = lastPage.messages.length - 1; i >= 0; i--) {
         const m = lastPage.messages[i]!;
-        if (!m.id.startsWith('pending-')) {
+        if (isCommittedMessage(m)) {
           return { kind: 'after', seq: m.seq };
         }
       }
@@ -1900,7 +1933,7 @@ export function useSendMessage(
               content_type: a.content_type,
             }))
           : null;
-      const tempMsg: MessageDto = {
+      const tempMsg: PendingMessage = {
         id: tempId,
         conversation_id: channelId,
         from_kind: 'user',
@@ -1909,7 +1942,9 @@ export function useSendMessage(
         content: input.content,
         metadata: null,
         attachments: snapshots,
-        seq: Date.now(),
+        // No `seq`: the server allocates the MessageSeq on commit. `created_at`
+        // is the honest local send time (epoch-ms wall-clock), used only for the
+        // row timestamp — never ordered against a real MessageSeq (§3.3).
         created_at: Date.now(),
         thread_root_id: threadRootId ?? null,
         task_number: null,
@@ -1919,9 +1954,10 @@ export function useSendMessage(
         task_workspace_id: null,
         task_closed_at: null,
         reactions: null,
+        pending: true,
       };
       qc.setQueryData<MessagesCache>(key, cur =>
-        appendMessageToCache(cur, tempMsg),
+        appendPendingMessage(cur, tempMsg),
       );
       return { prev, tempId };
     },
@@ -2274,7 +2310,7 @@ export function useMarkThreadRead() {
     mutationFn: async (params: {
       channelId: string;
       threadRootId: string;
-      snapshotSeq: number;
+      snapshotSeq: MessageSeq;
     }) => {
       await postObserve([
         streamSourceAtSeq(params.channelId, params.threadRootId, params.snapshotSeq),

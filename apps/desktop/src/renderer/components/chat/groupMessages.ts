@@ -65,6 +65,10 @@
  * time a new audit row arrives in real time.
  */
 import type { MessageDto, SystemSubtype } from '@silverhand/shared';
+import {
+  type CachedMessage,
+  isCommittedMessage,
+} from '@/features/channels/pending-message';
 
 /** Subtypes that participate in activity clusters. Locked with @Cindy
  *  in the PR-10 design discussion, narrowed by shiki in #task:1145.
@@ -102,7 +106,7 @@ export interface ActivityCluster {
 
 export interface SingleMessage {
   kind: 'message';
-  message: MessageDto;
+  message: CachedMessage;
 }
 
 export type StreamItem = ActivityCluster | SingleMessage;
@@ -117,9 +121,11 @@ export interface GroupMessagesOptions {
 }
 
 /** Whether `m` is a clusterable system message. Real messages (user/agent)
- *  are never clusterable; system messages are clusterable iff their
- *  `metadata.subtype` is in `CLUSTERABLE_SUBTYPES`. */
-export function isClusterableMessage(m: MessageDto): boolean {
+ *  and optimistic pending rows are never clusterable; system messages are
+ *  clusterable iff their `metadata.subtype` is in `CLUSTERABLE_SUBTYPES`. A
+ *  clusterable row is always a committed server row, so this is a type guard. */
+export function isClusterableMessage(m: CachedMessage): m is MessageDto {
+  if (!isCommittedMessage(m)) return false;
   if (m.from_kind !== 'system') return false;
   const meta = m.metadata as Record<string, unknown> | null;
   if (meta === null) return false;
@@ -133,7 +139,7 @@ export function isClusterableMessage(m: MessageDto): boolean {
  *  the same output. See module docstring for the four grouping rules
  *  and the cluster-id stability rationale. */
 export function groupMessages(
-  messages: readonly MessageDto[],
+  messages: readonly CachedMessage[],
   options: GroupMessagesOptions = {},
 ): StreamItem[] {
   const out: StreamItem[] = [];

@@ -11,6 +11,8 @@ import {
   EVENT_WS_SESSION_COOKIE,
   EMBEDDED_BOOTSTRAP_FILENAME,
   authPaths,
+  decodeTransportEpoch,
+  decodeTransportSeq,
   type ClientFrame,
   type ServerConfig,
   type ServerFrame,
@@ -335,7 +337,7 @@ describe('event WebSocket server', () => {
     const replayedFrames = readFrames(ws, 2);
     sendFrame(ws, {
       type: 'resume',
-      scopes: { app: { epoch: t.ctx.events.epoch, lastSeq: 0 } },
+      scopes: { app: { epoch: t.ctx.events.epoch, lastSeq: decodeTransportSeq(0) } },
     });
 
     const [firstEvent, secondEvent] = await replayedFrames;
@@ -356,7 +358,7 @@ describe('event WebSocket server', () => {
     const snapshotFrame = readFrame(ws);
     sendFrame(ws, {
       type: 'resume',
-      scopes: { app: { epoch: 'old-epoch', lastSeq: 0 } },
+      scopes: { app: { epoch: decodeTransportEpoch('old-epoch'), lastSeq: decodeTransportSeq(0) } },
     });
 
     expect(await snapshotFrame).toMatchObject({
@@ -385,7 +387,7 @@ describe('event WebSocket server', () => {
     const snapshotFrame = readFrame(ws);
     sendFrame(ws, {
       type: 'resume',
-      scopes: { app: { epoch: t.ctx.events.epoch, lastSeq: 0 } },
+      scopes: { app: { epoch: t.ctx.events.epoch, lastSeq: decodeTransportSeq(0) } },
     });
 
     expect(await snapshotFrame).toMatchObject({

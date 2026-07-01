@@ -5,6 +5,7 @@ import type {
   MessageDto,
   TaskChangedEvent,
 } from '@silverhand/shared';
+import { decodeMessageSeq } from '@silverhand/shared';
 import {
   applyClusterMessageToCaches,
   applyClusterTaskChangedToCaches,
@@ -230,7 +231,10 @@ describe('applyThreadFollowersMessage', () => {
   });
 });
 
-function message(overrides: Partial<MessageDto> = {}): MessageDto {
+function message(
+  overrides: Partial<Omit<MessageDto, 'seq'>> & { seq?: number } = {},
+): MessageDto {
+  const { seq, ...rest } = overrides;
   return {
     id: 'm1',
     conversation_id: 'c1',
@@ -240,7 +244,7 @@ function message(overrides: Partial<MessageDto> = {}): MessageDto {
     content: 'body',
     metadata: null,
     attachments: null,
-    seq: 1,
+    seq: decodeMessageSeq(seq ?? 1),
     created_at: 0,
     thread_root_id: null,
     task_number: null,
@@ -250,7 +254,7 @@ function message(overrides: Partial<MessageDto> = {}): MessageDto {
     task_closed_at: null,
     task_assignee: null,
     reactions: null,
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -263,7 +267,9 @@ function windowDto(
     reply_counts_by_root: {},
     has_more_before: false,
     has_more_after: hasMoreAfter,
-    stream_head_seq: messages.reduce((max, m) => Math.max(max, m.seq), 0),
+    stream_head_seq: decodeMessageSeq(
+      messages.reduce((max, m) => Math.max(max, m.seq), 0),
+    ),
   };
 }
 
@@ -285,7 +291,7 @@ function rootDto(rootId: string, count: number): ConversationMessagesDto {
     reply_counts_by_root: { [rootId]: count },
     has_more_before: false,
     has_more_after: false,
-    stream_head_seq: 1,
+    stream_head_seq: decodeMessageSeq(1),
   };
 }
 

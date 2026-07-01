@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentDto, MessageDto, UserDto } from '@silverhand/shared';
+import { decodeMessageSeq } from '@silverhand/shared';
 import {
   buildMarkdownTranscript,
   formatSenderLabel,
@@ -72,7 +73,7 @@ function msg(
     content: partial.content ?? `body-${id}`,
     metadata: null,
     attachments: null,
-    seq,
+    seq: decodeMessageSeq(seq),
     created_at: partial.created_at ?? 1_700_000_000_000 + seq * 1000,
     thread_root_id: null,
     task_number: null,

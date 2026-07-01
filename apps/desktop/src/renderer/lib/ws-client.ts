@@ -5,8 +5,10 @@ import type {
   ServerFrame,
   SubscribedFrame,
   SubscribeFrame,
+  TransportEpoch,
+  TransportSeq,
 } from '@silverhand/shared';
-import { parseConversationScope } from '@silverhand/shared';
+import { advanceTransportSeq, parseConversationScope } from '@silverhand/shared';
 import { getBackendInfo } from './api';
 
 const EVENT_WS_PATH = '/api/ws/events';
@@ -27,8 +29,8 @@ export interface WsScopeSubscription {
 }
 
 interface ResumePosition {
-  epoch: string;
-  lastSeq: number;
+  epoch: TransportEpoch;
+  lastSeq: TransportSeq;
 }
 
 type EventWsDiagnosticKind =
@@ -123,7 +125,7 @@ export class EventWsClient {
    */
   private readonly satisfiedPending = new Map<
     string,
-    { epoch: string; seqs: Set<number> }
+    { epoch: TransportEpoch; seqs: Set<TransportSeq> }
   >();
   /**
    * Server-stamped transport baseline for an in-flight `snapshot_required`
@@ -344,7 +346,7 @@ export class EventWsClient {
    * Non-content-gated scopes have no content-apply seam and are ignored here
    * (their floor auto-advances with received in `acceptEventFrame`).
    */
-  markSatisfied(scope: string, seq: number, epoch: string): void {
+  markSatisfied(scope: string, seq: TransportSeq, epoch: TransportEpoch): void {
     if (!isContentGated(scope)) return;
     const floor = this.appliedPositions.get(scope);
     if (!floor || floor.epoch !== epoch) {
@@ -355,12 +357,18 @@ export class EventWsClient {
     if (seq <= floor.lastSeq) return;
 
     // Record into the per-scope+epoch satisfied set, then drain contiguously
-    // from the floor, absorbing any already-satisfied later seqs.
+    // from the floor, absorbing any already-satisfied later seqs. Each step to
+    // the next contiguous seq goes through `advanceTransportSeq` — the sole
+    // legal +1 out for a TransportSeq — so the typed floor never decays to a
+    // bare number arithmetic.
     const pending = this.satisfiedPendingFor(scope, epoch);
     pending.add(seq);
-    let next = floor.lastSeq + 1;
-    while (pending.delete(next)) next += 1;
-    const advancedTo = next - 1;
+    let advancedTo = floor.lastSeq;
+    let candidate = advanceTransportSeq(advancedTo);
+    while (pending.delete(candidate)) {
+      advancedTo = candidate;
+      candidate = advanceTransportSeq(candidate);
+    }
     if (advancedTo > floor.lastSeq) {
       this.appliedPositions.set(scope, { epoch, lastSeq: advancedTo });
     }
@@ -380,10 +388,10 @@ export class EventWsClient {
    * entry belongs to a superseded epoch (a fresh server epoch invalidates any
    * carried-over pending seqs).
    */
-  private satisfiedPendingFor(scope: string, epoch: string): Set<number> {
+  private satisfiedPendingFor(scope: string, epoch: TransportEpoch): Set<TransportSeq> {
     const existing = this.satisfiedPending.get(scope);
     if (existing && existing.epoch === epoch) return existing.seqs;
-    const seqs = new Set<number>();
+    const seqs = new Set<TransportSeq>();
     this.satisfiedPending.set(scope, { epoch, seqs });
     return seqs;
   }
@@ -403,7 +411,7 @@ export class EventWsClient {
    * frames buffered past it during recovery drain in seq order — released to the
    * ingestor as fresh `live` frames.
    */
-  commitSnapshotBaseline(scope: string, epoch: string): void {
+  commitSnapshotBaseline(scope: string, epoch: TransportEpoch): void {
     const pending = this.pendingBaselines.get(scope);
     if (!pending || pending.epoch !== epoch) return;
     this.appliedPositions.set(scope, { epoch: pending.epoch, lastSeq: pending.lastSeq });
@@ -712,7 +720,11 @@ export class EventWsClient {
       return true;
     }
 
-    if (frame.seq > received.lastSeq + 1) {
+    // Next contiguous transport seq — the sole legal +1 out. Comparing frame.seq
+    // to this successor keeps gap-detection a same-space TransportSeq compare and
+    // never lets the `+ 1` decay to a bare number.
+    const expectedSeq = advanceTransportSeq(received.lastSeq);
+    if (frame.seq > expectedSeq) {
       if (!this.recovering.has(frame.scope)) {
         this.recovering.add(frame.scope);
         recordEventWsDiagnostic({
@@ -721,7 +733,7 @@ export class EventWsClient {
           eventKind: frame.kind,
           seq: frame.seq,
           lastSeq: received.lastSeq,
-          expectedSeq: received.lastSeq + 1,
+          expectedSeq,
           epoch: frame.epoch,
         });
         // Resume from the applied floor (may lag received), NOT received — so a
@@ -732,7 +744,7 @@ export class EventWsClient {
       return false;
     }
 
-    if (frame.seq === received.lastSeq + 1) {
+    if (frame.seq === expectedSeq) {
       this.recovering.delete(frame.scope);
       this.recordReceived(frame);
       if (!gated) this.recordApplied(frame);

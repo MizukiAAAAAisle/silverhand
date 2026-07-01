@@ -5,6 +5,7 @@ import type {
   MessageDto,
   MessageReactionChangedEvent,
 } from '@silverhand/shared';
+import { decodeMessageSeq } from '@silverhand/shared';
 import {
   applyReactionChangedToChannelCaches,
   applyReactionChangedToThreadRootCache,
@@ -200,7 +201,10 @@ describe('applyReactionChangedToThreadRootCache', () => {
   });
 });
 
-function message(overrides: Partial<MessageDto> = {}): MessageDto {
+function message(
+  overrides: Partial<Omit<MessageDto, 'seq'>> & { seq?: number } = {},
+): MessageDto {
+  const { seq, ...rest } = overrides;
   return {
     id: 'm1',
     conversation_id: 'c1',
@@ -210,7 +214,7 @@ function message(overrides: Partial<MessageDto> = {}): MessageDto {
     content: 'body',
     metadata: null,
     attachments: null,
-    seq: 1,
+    seq: decodeMessageSeq(seq ?? 1),
     created_at: 0,
     thread_root_id: null,
     task_number: null,
@@ -220,7 +224,7 @@ function message(overrides: Partial<MessageDto> = {}): MessageDto {
     task_closed_at: null,
     task_assignee: null,
     reactions: null,
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -232,7 +236,9 @@ function windowDto(messages: MessageDto[]): ConversationMessagesDto {
     has_more_after: false,
     // Tail window: the head is the latest message's seq (0 when empty). An
     // explicit, legit value — not a placeholder — per the snapshot contract.
-    stream_head_seq: messages.reduce((max, m) => Math.max(max, m.seq), 0),
+    stream_head_seq: decodeMessageSeq(
+      messages.reduce((max, m) => Math.max(max, m.seq), 0),
+    ),
   };
 }
 

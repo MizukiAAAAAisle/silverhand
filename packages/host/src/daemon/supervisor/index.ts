@@ -17,6 +17,7 @@ import {
   AUTH_TOKEN_HEADER,
   buildSystemPromptFor,
   type AgentRunState,
+  decodeObservedSeq,
   internalPaths,
   type ParsedEvent,
   ParsedEventSchema,
@@ -471,24 +472,30 @@ export class Supervisor implements SupervisorContract {
   ): void {
     const nextSeq = safeSeq(seq);
     if (nextSeq === null) return;
-    const prev = handle.observedSeqByStream.get(streamKey) ?? 0;
-    const observed = Math.max(prev, nextSeq);
+    // Mint at a real observation boundary (delivery admit / stale response /
+    // send commit): a raw backend seq becomes this stream's ObservedSeq cursor
+    // via a validated decode — never a bare cast.
+    const observed = decodeObservedSeq(nextSeq);
+    const prev = handle.observedSeqByStream.get(streamKey);
+    // Monotonic advance WITHOUT flattening absence: `prev === undefined`
+    // ("never observed") is a distinct state from `prev = 0`, so we branch on
+    // it explicitly rather than `?? 0`. A first observation of a stream is a
+    // real advance worth logging.
+    if (prev !== undefined && prev >= observed) return;
     handle.observedSeqByStream.set(streamKey, observed);
-    if (observed !== prev) {
-      this.logger.warn(
-        {
-          kind: 'process',
-          action: 'freshness_observed_seq_advanced',
-          conversationId: handle.conversationId,
-          agent_id: handle.agentId,
-          source,
-          stream_key: streamKey,
-          previous_seq: prev,
-          observed_seq: observed,
-        },
-        'runtime freshness observed seq advanced',
-      );
-    }
+    this.logger.warn(
+      {
+        kind: 'process',
+        action: 'freshness_observed_seq_advanced',
+        conversationId: handle.conversationId,
+        agent_id: handle.agentId,
+        source,
+        stream_key: streamKey,
+        previous_seq: prev ?? null,
+        observed_seq: observed,
+      },
+      'runtime freshness observed seq advanced',
+    );
   }
 
   private advanceObservedStream(
@@ -511,24 +518,24 @@ export class Supervisor implements SupervisorContract {
   ): void {
     const nextSeq = safeSeq(seq);
     if (nextSeq === null) return;
-    const prev = handle.pendingAdmissionSeqByStream.get(streamKey) ?? 0;
-    const pending = Math.max(prev, nextSeq);
+    const pending = decodeObservedSeq(nextSeq);
+    const prev = handle.pendingAdmissionSeqByStream.get(streamKey);
+    // Same present/absent discipline as `recordObservedStream`.
+    if (prev !== undefined && prev >= pending) return;
     handle.pendingAdmissionSeqByStream.set(streamKey, pending);
-    if (pending !== prev) {
-      this.logger.warn(
-        {
-          kind: 'process',
-          action: 'freshness_pending_admission_queued',
-          conversationId: handle.conversationId,
-          agent_id: handle.agentId,
-          source,
-          stream_key: streamKey,
-          previous_pending_seq: prev || null,
-          pending_admission_seq: pending,
-        },
-        'runtime freshness pending admission queued',
-      );
-    }
+    this.logger.warn(
+      {
+        kind: 'process',
+        action: 'freshness_pending_admission_queued',
+        conversationId: handle.conversationId,
+        agent_id: handle.agentId,
+        source,
+        stream_key: streamKey,
+        previous_pending_seq: prev ?? null,
+        pending_admission_seq: pending,
+      },
+      'runtime freshness pending admission queued',
+    );
   }
 
   private admitPendingSeqForNewTurn(handle: RuntimeHandle, source: string): void {
@@ -846,7 +853,13 @@ export class Supervisor implements SupervisorContract {
     // would stale against seq 1..N.
     const useFreshnessBoundary =
       targetKnown && (targetStreamKey !== MAIN_STREAM_KEY || targetObserved);
-    const seenUpToSeq =
+    // The present/absent DECISION is already made above (`.has` → targetObserved
+    // → useFreshnessBoundary). The `?? 0` below is therefore NOT absence-
+    // flattening — it is the role-defined seen=0 for a KNOWN-but-empty thread
+    // cluster, reached only once useFreshnessBoundary holds. `seenUpToSeq` is a
+    // plain wire CAS int (not an ObservedSeq brand): it crosses to the backend's
+    // per-stream freshness check.
+    const seenUpToSeq: number | undefined =
       useFreshnessBoundary
       && effectiveTarget.kind === 'thread'
       && effectiveTarget.source === 'pending_default'

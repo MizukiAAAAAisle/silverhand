@@ -24,6 +24,8 @@
  *   viewer:{userId}               — viewer-private (notifications, unread)
  */
 
+import type { TransportSeq, TransportEpoch } from './seq.js';
+
 // ── Client → Server ──────────────────────────────────────────────────────────
 
 /** Legacy frame retained so old clients are rejected explicitly. C.4
@@ -64,9 +66,11 @@ export interface ResumeFrame {
   type: 'resume';
   /**
    * Map of scope → { epoch, lastSeq } describing the client's last known
-   * position for each scope it wants to resume.
+   * position for each scope it wants to resume. Both are transport-space
+   * (per-scope replay ordinal + restart generation), never message-space —
+   * the server decodes them at ingress before touching the replay buffer.
    */
-  scopes: Record<string, { epoch: string; lastSeq: number }>;
+  scopes: Record<string, { epoch: TransportEpoch; lastSeq: TransportSeq }>;
 }
 
 /** Heartbeat reply to PingFrame. Must be sent within 5 s of receiving Ping. */
@@ -86,7 +90,7 @@ export interface AuthenticatedFrame {
   type: 'authenticated';
   viewerId: string;
   /** UUID generated at backend process startup. Changes on restart. */
-  epoch: string;
+  epoch: TransportEpoch;
 }
 
 /**
@@ -102,9 +106,9 @@ export interface AuthenticatedFrame {
 export interface SubscribedFrame {
   type: 'subscribed';
   scope: string;
-  epoch: string;
+  epoch: TransportEpoch;
   /** Current seq for this scope at subscription time. */
-  seq: number;
+  seq: TransportSeq;
 }
 
 /** A scoped real-time event pushed by the server. */
@@ -112,9 +116,9 @@ export interface EventFrame {
   type: 'event';
   scope: string;
   /** Monotonic sequence number per scope (resets on backend restart / epoch change). */
-  seq: number;
+  seq: TransportSeq;
   /** Server epoch — client detects restarts when this changes. */
-  epoch: string;
+  epoch: TransportEpoch;
   /** Event kind (e.g. 'message', 'agent_activity', 'task_changed', 'unread_updated'). */
   kind: string;
   payload: unknown;
@@ -142,13 +146,13 @@ export interface SnapshotRequiredFrame {
   scope: string;
   reason: 'epoch_mismatch' | 'gap_too_large';
   /** Server epoch for this scope at emit time (matches the post-snapshot fanout). */
-  epoch: string;
+  epoch: TransportEpoch;
   /**
    * Server's current transport seq for this scope at emit time. The client
    * commits its resume floor to this value **after** its REST reconcile settles
    * (apply-gated, not on receipt). Transport-seq space only.
    */
-  currentSeq: number;
+  currentSeq: TransportSeq;
 }
 
 /** Server-side error (auth failure, permission denied, invalid frame, etc.). */

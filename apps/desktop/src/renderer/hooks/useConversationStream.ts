@@ -70,9 +70,14 @@ function streamEventFromFrame(
 
   if (frame.type === 'subscribed') {
     if (frame.scope !== expectedScope) return null;
+    // #task:1267 §3.2: do NOT forward `frame.seq` (a TransportSeq) into the
+    // synthetic `connected` payload. It is a per-WS-scope transport ordinal, a
+    // different ordinal space from any MessageSeq; the sole consumer of this
+    // bridge's `connected` event (dev/EventStream) never reads `payload.seq`, so
+    // exposing it only recreates a one-number-two-meanings channel. `epoch`
+    // (an opaque TransportEpoch string) is not that trap and rides through.
     return connectedEvent(conversationId, routeScope, {
       epoch: frame.epoch,
-      seq: frame.seq,
       subscribed: true,
     });
   }

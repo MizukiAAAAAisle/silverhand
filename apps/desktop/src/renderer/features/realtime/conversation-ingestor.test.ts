@@ -6,6 +6,7 @@ import {
   conversationScope,
 } from '@silverhand/shared';
 import type { AgentRunState, MessageDto, ServerFrame } from '@silverhand/shared';
+import { decodeMessageSeq, decodeTransportSeq } from '@silverhand/shared';
 import {
   MESSAGE_STREAM_KIND_CONTRACTS,
   REPLAY_SAFETY_CONTRACTS,
@@ -149,7 +150,12 @@ function messageFrame(channelId: string, msg: MessageDto): ServerFrame {
   return {
     type: 'event',
     scope: `conversation:${channelId}`,
-    seq: msg.seq,
+    // #task:1267: EventFrame.seq is a TransportSeq (per-WS-scope transport
+    // ordinal), NOT the message's MessageSeq. The fixture reuses the numeric
+    // value for convenience but decodes it through the transport boundary so
+    // the frame is a well-typed TransportSeq, never a MessageSeq→TransportSeq
+    // launder.
+    seq: decodeTransportSeq(msg.seq),
     epoch: 'epoch-1',
     kind: 'message',
     payload: { message: msg },
@@ -451,7 +457,10 @@ function agentActivityFrame(
   } as ServerFrame;
 }
 
-function message(overrides: Partial<MessageDto> = {}): MessageDto {
+function message(
+  overrides: Partial<Omit<MessageDto, 'seq'>> & { seq?: number } = {},
+): MessageDto {
+  const { seq, ...rest } = overrides;
   return {
     id: 'm1',
     conversation_id: 'c1',
@@ -461,7 +470,7 @@ function message(overrides: Partial<MessageDto> = {}): MessageDto {
     content: 'body',
     metadata: null,
     attachments: null,
-    seq: 1,
+    seq: decodeMessageSeq(seq ?? 1),
     created_at: 0,
     thread_root_id: null,
     task_number: null,
@@ -471,7 +480,7 @@ function message(overrides: Partial<MessageDto> = {}): MessageDto {
     task_closed_at: null,
     task_assignee: null,
     reactions: null,
-    ...overrides,
+    ...rest,
   };
 }
 

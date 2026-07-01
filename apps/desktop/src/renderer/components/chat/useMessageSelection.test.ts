@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MessageDto } from '@silverhand/shared';
+import { decodeMessageSeq } from '@silverhand/shared';
 import {
   createSelectionState,
   selectionClear,
@@ -30,7 +31,7 @@ function msg(id: string, seq: number, content = `body-${id}`): MessageDto {
     content,
     metadata: null,
     attachments: null,
-    seq,
+    seq: decodeMessageSeq(seq),
     created_at: 1_700_000_000_000 + seq * 1000,
     thread_root_id: null,
     task_number: null,

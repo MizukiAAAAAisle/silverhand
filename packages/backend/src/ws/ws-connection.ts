@@ -6,7 +6,12 @@ import type {
   EventFrame,
   ServerFrame,
 } from '@silverhand/shared';
-import { parseConversationScope, parseConversationSideScope } from '@silverhand/shared';
+import {
+  decodeTransportEpoch,
+  decodeTransportSeq,
+  parseConversationScope,
+  parseConversationSideScope,
+} from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
 import {
   canSubscribeScope,
@@ -176,6 +181,12 @@ export class EventWsConnection {
         this.sendError('invalid_frame', `invalid resume position for ${scope.scope}`);
         continue;
       }
+      // Inbound decode boundary: this is untrusted client input, so the raw
+      // {epoch, lastSeq} is validated + branded into transport-space here (never
+      // a bare trust-cast). These are the only client→server transport mints;
+      // all server→client frames pass through already-branded bus values.
+      const resumeEpoch = decodeTransportEpoch(epoch);
+      const resumeSeq = decodeTransportSeq(lastSeq);
 
       const currentSeq = this.ctx.events.currentSeq(scope.scope);
       const replayBuffer = this.ctx.events.getReplayBuffer(scope.scope);
@@ -185,20 +196,20 @@ export class EventWsConnection {
           viewerUserId: this.viewerUserId,
           scope: scope.scope,
           conversationId: conversationIdFromScope(scope.scope),
-          lastSeq,
+          lastSeq: resumeSeq,
           currentSeq,
-          epoch,
+          epoch: resumeEpoch,
           serverEpoch: this.ctx.events.epoch,
           replayBufferSize: replayBuffer.size,
         },
         'event ws resume requested',
       );
 
-      if (epoch !== this.ctx.events.epoch) {
+      if (resumeEpoch !== this.ctx.events.epoch) {
         this.logSnapshotRequired(scope.scope, 'epoch_mismatch', {
-          lastSeq,
+          lastSeq: resumeSeq,
           currentSeq,
-          epoch,
+          epoch: resumeEpoch,
         });
         this.send({
           type: 'snapshot_required',
@@ -210,11 +221,11 @@ export class EventWsConnection {
         continue;
       }
 
-      if (currentSeq > 0 && lastSeq < currentSeq - replayBuffer.size) {
+      if (currentSeq > 0 && resumeSeq < currentSeq - replayBuffer.size) {
         this.logSnapshotRequired(scope.scope, 'gap_too_large', {
-          lastSeq,
+          lastSeq: resumeSeq,
           currentSeq,
-          epoch,
+          epoch: resumeEpoch,
           replayBufferSize: replayBuffer.size,
         });
         this.send({
@@ -227,16 +238,16 @@ export class EventWsConnection {
         continue;
       }
 
-      const replayEntries = replayBuffer.replay(lastSeq, epoch);
+      const replayEntries = replayBuffer.replay(resumeSeq, resumeEpoch);
       this.ctx.logger.info(
         {
           category: 'event_ws.resume',
           viewerUserId: this.viewerUserId,
           scope: scope.scope,
           conversationId: conversationIdFromScope(scope.scope),
-          lastSeq,
+          lastSeq: resumeSeq,
           currentSeq,
-          epoch,
+          epoch: resumeEpoch,
           replayCount: replayEntries.length,
         },
         'event ws resume replay',

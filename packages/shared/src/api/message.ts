@@ -14,6 +14,7 @@ import {
 import { AttachmentSnapshotSchema } from './attachment.js';
 import { ReactionAggregateDtoSchema } from './reactions.js';
 import { TaskAssigneeDtoSchema } from './task.js';
+import { MessageSeqSchema } from '../seq.js';
 
 export const MessageDtoSchema = z.object({
   id: z.string(),
@@ -32,7 +33,7 @@ export const MessageDtoSchema = z.object({
    *  `GET /api/messages/:id/reactions` on hover (docs/reactions-design.md §6).
    *  `viewer_reacted` is relative to the reading principal. */
   reactions: z.array(ReactionAggregateDtoSchema).nullable(),
-  seq: z.number(),
+  seq: MessageSeqSchema,
   created_at: z.number(),
   /** Reply-cluster thread anchor (v43). NULL = root / main-line message;
    *  non-NULL = a reply in the thread rooted at that message id. The thread
@@ -104,7 +105,7 @@ export const ConversationMessagesDtoSchema = z.object({
    *  around-first-unread, is a locate view, not a coverage guarantee); the
    *  invariant is only that a concurrent tail (seq > this value) is not
    *  swallowed. Window-independent. 0 for an empty stream. */
-  stream_head_seq: z.number().int().nonnegative(),
+  stream_head_seq: MessageSeqSchema,
   /** True when at least one message exists with seq > max(messages.seq).
    *  For the default "latest" window this is always false; for an
    *  anchored window (`before_seq` / `after_seq` / `around_message_id`)
@@ -168,7 +169,7 @@ export const StreamUnreadDtoSchema = z.object({
   /** First (lowest-seq) unread message in this stream — drives "jump to first
    *  unread". Both null when caught up (`unread_count === 0`). */
   first_unread_message_id: z.string().nullable(),
-  first_unread_seq: z.number().int().nonnegative().nullable(),
+  first_unread_seq: MessageSeqSchema.nullable(),
 });
 export type StreamUnreadDto = z.infer<typeof StreamUnreadDtoSchema>;
 
@@ -194,7 +195,7 @@ export type ConversationStreamUnreadDto = z.infer<
 export const MessageUnreadPointerDtoSchema = z.object({
   conversation_id: z.string(),
   message_id: z.string(),
-  seq: z.number().int().nonnegative(),
+  seq: MessageSeqSchema,
   thread_root_id: z.string().nullable(),
 });
 export type MessageUnreadPointerDto = z.infer<

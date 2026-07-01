@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ActivityItemDto } from '@silverhand/shared';
-import { ObserveSourceSchema } from '@silverhand/shared';
+import { ObserveSourceSchema, decodeMessageSeq } from '@silverhand/shared';
 import {
   activityItemSource,
   explicitStreamClearHead,
@@ -19,7 +19,7 @@ import {
 // regression, so it gets its own builder and its own test.
 describe('observe auto-path source builders', () => {
   it('builds a thread source as at_seq (never stream_head)', () => {
-    const src = streamSourceAtSeq('conv-1', 'root-9', 42);
+    const src = streamSourceAtSeq('conv-1', 'root-9', decodeMessageSeq(42));
     expect(src).toEqual({
       kind: 'stream',
       conversation_id: 'conv-1',
@@ -30,7 +30,7 @@ describe('observe auto-path source builders', () => {
   });
 
   it('builds a channel-with-snapshot source as at_seq (root null)', () => {
-    const src = streamSourceAtSeq('conv-1', null, 7);
+    const src = streamSourceAtSeq('conv-1', null, decodeMessageSeq(7));
     expect(src.kind).toBe('stream');
     expect(src).toMatchObject({ thread_root_id: null, position: { kind: 'at_seq', seq: 7 } });
     expect(() => ObserveSourceSchema.parse(src)).not.toThrow();

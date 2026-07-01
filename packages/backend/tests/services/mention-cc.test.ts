@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { decodeTransportEpoch, decodeTransportSeq } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
@@ -400,8 +401,8 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
 
       const workspaceEvents = t.events.replay(
         `workspace:${t.aliceHome.id}`,
-        0,
-        'test-epoch',
+        decodeTransportSeq(0),
+        decodeTransportEpoch('test-epoch'),
       );
       expect(workspaceEvents).toEqual([
         expect.objectContaining({
@@ -415,8 +416,8 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
 
       const conversationEvents = t.events.replay(
         `conversation:${mentionsDm!.id}`,
-        0,
-        'test-epoch',
+        decodeTransportSeq(0),
+        decodeTransportEpoch('test-epoch'),
       );
       expect(conversationEvents).toHaveLength(1);
       expect(conversationEvents[0]).toEqual(
@@ -431,7 +432,7 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
         }),
       );
 
-      const viewerEvents = t.events.replay('viewer:teammate', 0, 'test-epoch');
+      const viewerEvents = t.events.replay('viewer:teammate', decodeTransportSeq(0), decodeTransportEpoch('test-epoch'));
       expect(viewerEvents.map(e => e.kind)).toEqual([
         'unread_updated',
         'notification',
@@ -475,7 +476,7 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
 
       expect(t.events.currentSeq(`workspace:${t.aliceHome.id}`)).toBe(1);
       expect(t.events.currentSeq(`conversation:${mentionsDm!.id}`)).toBe(2);
-      expect(t.events.replay('viewer:teammate', 0, 'test-epoch').map(e => e.kind))
+      expect(t.events.replay('viewer:teammate', decodeTransportSeq(0), decodeTransportEpoch('test-epoch')).map(e => e.kind))
         .toEqual([
           'unread_updated',
           'notification',
@@ -521,7 +522,7 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
 
       expect(
         t.events
-          .replay('viewer:teammate', viewerSeqBeforeSecond, 'test-epoch')
+          .replay('viewer:teammate', viewerSeqBeforeSecond, decodeTransportEpoch('test-epoch'))
           .map(e => e.kind),
       ).toEqual(['notification']);
     } finally {
@@ -548,8 +549,8 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
       expect(mentionsDm).not.toBeNull();
       const wrappedEvents = t.events.replay(
         `conversation:${mentionsDm!.id}`,
-        0,
-        'test-epoch',
+        decodeTransportSeq(0),
+        decodeTransportEpoch('test-epoch'),
       );
       expect(wrappedEvents).toHaveLength(1);
 
@@ -561,7 +562,7 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
           message_id: expect.any(String),
         }),
       ]);
-      expect(t.events.replay('viewer:teammate', 0, 'test-epoch').map(e => e.kind))
+      expect(t.events.replay('viewer:teammate', decodeTransportSeq(0), decodeTransportEpoch('test-epoch')).map(e => e.kind))
         .toEqual(['unread_updated', 'notification']);
       expect(t.fake.delivered).toHaveLength(0);
       expect(t.logger.warn).toHaveBeenCalledWith(

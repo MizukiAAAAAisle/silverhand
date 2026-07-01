@@ -5,6 +5,7 @@ import type {
   MessageDto,
   TaskChangedEvent,
 } from '@silverhand/shared';
+import { decodeMessageSeq } from '@silverhand/shared';
 import {
   applyMainlineMessageToChannelCaches,
   applyTaskChangedToChannelCaches,
@@ -211,7 +212,10 @@ describe('reconcileChannelMainlineOnSnapshotRequired', () => {
   });
 });
 
-function message(overrides: Partial<MessageDto> = {}): MessageDto {
+function message(
+  overrides: Partial<Omit<MessageDto, 'seq'>> & { seq?: number } = {},
+): MessageDto {
+  const { seq, ...rest } = overrides;
   return {
     id: 'm1',
     conversation_id: 'c1',
@@ -221,7 +225,7 @@ function message(overrides: Partial<MessageDto> = {}): MessageDto {
     content: 'body',
     metadata: null,
     attachments: null,
-    seq: 1,
+    seq: decodeMessageSeq(seq ?? 1),
     created_at: 0,
     thread_root_id: null,
     task_number: null,
@@ -231,7 +235,7 @@ function message(overrides: Partial<MessageDto> = {}): MessageDto {
     task_closed_at: null,
     task_assignee: null,
     reactions: null,
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -247,7 +251,9 @@ function windowDto(
     has_more_after: hasMoreAfter,
     // Tail head = latest seq; the actual value only matters relative to
     // `has_more_after`, which is what `lastPageIsTail` keys off.
-    stream_head_seq: messages.reduce((max, m) => Math.max(max, m.seq), 0),
+    stream_head_seq: decodeMessageSeq(
+      messages.reduce((max, m) => Math.max(max, m.seq), 0),
+    ),
   };
 }
 

@@ -26,6 +26,8 @@
  */
 
 import type { ChannelLayout } from '@/router';
+import type { MessageSeq } from '@silverhand/shared';
+import { decodeMessageSeq } from '@silverhand/shared';
 
 export const LAST_CHANNEL_KEY = 'silverhand:layout.last-channel-by-workspace';
 export const LAST_WORKSPACE_KEY = 'silverhand:layout.last-workspace';
@@ -206,9 +208,22 @@ export function recordChannelLayout(
  */
 export const closeWatermarkByChannel = loadNumberMap(CLOSE_WATERMARK_KEY);
 
-/** Read a channel's explicit-close watermark, or null when none is set. */
-export function getCloseWatermark(channelId: string): number | null {
-  return closeWatermarkByChannel.get(channelId) ?? null;
+/** Read a channel's explicit-close watermark, or null when none is set.
+ *
+ *  #task:1267 §3.4: this read is the renderer's SOLE runtime decode boundary —
+ *  the raw `number` stored in localStorage crosses back into typed memory here,
+ *  so it is validated into a `MessageSeq` through the shared `decodeMessageSeq`
+ *  rather than blindly cast. A corrupt stored value (external tampering — the
+ *  numbers we WRITE are always valid MessageSeq) is rejected to null ("no
+ *  watermark", so unread still surfaces), never laundered through as a real seq. */
+export function getCloseWatermark(channelId: string): MessageSeq | null {
+  const raw = closeWatermarkByChannel.get(channelId);
+  if (raw === undefined) return null;
+  try {
+    return decodeMessageSeq(raw);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -216,7 +231,7 @@ export function getCloseWatermark(channelId: string): number | null {
  * Monotonic — a smaller seq never lowers an existing watermark, and a
  * byte-identical value no-ops to avoid thrashing localStorage.
  */
-export function recordCloseWatermark(channelId: string, seq: number): void {
+export function recordCloseWatermark(channelId: string, seq: MessageSeq): void {
   const prev = closeWatermarkByChannel.get(channelId);
   if (prev !== undefined && prev >= seq) return;
   closeWatermarkByChannel.set(channelId, seq);

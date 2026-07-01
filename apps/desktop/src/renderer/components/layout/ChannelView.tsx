@@ -68,6 +68,11 @@ import {
   useStartAgent,
   useStopAgent,
 } from '@/features/channels/hooks';
+import {
+  type CachedMessage,
+  isCommittedMessage,
+  lastCommittedSeq,
+} from '@/features/channels/pending-message';
 import { nextTailReadMark, type TailReadMark } from '@/lib/channel-read';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import {
@@ -286,7 +291,9 @@ function ActiveChannelView({
   // tightening over the old "any message frame → markRead" (which marked on
   // arrival even off-tail / reply-only): see the dogfood handoff note.
   const markRead = useMarkMessageChannelRead();
-  const tailSeq = messages.length > 0 ? messages[messages.length - 1]!.seq : null;
+  // Gate off the newest COMMITTED row — a pending optimistic tail has no
+  // MessageSeq, and mark-read must advance on a real ordinal (§3.3/§3.5).
+  const tailSeq = lastCommittedSeq(messages);
   const lastMarkedRef = useRef<TailReadMark | null>(null);
   useEffect(() => {
     const next = nextTailReadMark(
@@ -1020,7 +1027,7 @@ function MessageList({
 }: {
   channelId: string;
   workspaceId: string;
-  messages: MessageDto[];
+  messages: CachedMessage[];
   isLoading: boolean;
   hasMoreBefore: boolean;
   isFetchingEarlier: boolean;
@@ -1095,7 +1102,12 @@ function MessageList({
     liveChannels,
     archivedChannels,
   } = useMessageRenderContext(workspaceId, channelId);
-  const handleOpenThread = (msg: MessageDto, jumpToMessageId?: string): void => {
+  const handleOpenThread = (
+    msg: CachedMessage,
+    jumpToMessageId?: string,
+  ): void => {
+    // A pending optimistic row has no server id to anchor a thread on.
+    if (!isCommittedMessage(msg)) return;
     onOpenThread?.(msg.id, jumpToMessageId);
   };
 
@@ -1415,7 +1427,10 @@ function MessageList({
         );
       }
       const m = item.message;
-      if (m.from_kind === 'system') {
+      // System rows are always committed; narrowing here keeps SystemMessage on
+      // the plain MessageDto contract while pending rows fall through to the
+      // message item below.
+      if (isCommittedMessage(m) && m.from_kind === 'system') {
         return (
           <SystemMessage
             message={m}

@@ -2,6 +2,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { MessageDto } from '@silverhand/shared';
+import { decodeMessageSeq } from '@silverhand/shared';
 import { SystemMessage } from './SystemMessage';
 
 /** Minimal rename system message. `RenameRow` reads the structured
@@ -17,7 +18,7 @@ function renameMessage(meta: Record<string, unknown>): MessageDto {
     content: '',
     metadata: { subtype: 'rename', ...meta },
     attachments: null,
-    seq: 1,
+    seq: decodeMessageSeq(1),
     created_at: 0,
     thread_root_id: null,
     task_number: null,

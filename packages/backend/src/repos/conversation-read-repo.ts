@@ -1,7 +1,9 @@
 import type { Database as Db } from 'better-sqlite3';
+import { decodeMessageSeq } from '@silverhand/shared';
 import type {
   ConversationReadRow,
   ConversationStreamUnreadDto,
+  MessageSeq,
   StreamUnreadDto,
 } from '@silverhand/shared';
 
@@ -14,9 +16,15 @@ export interface MessageUnreadByConversation {
 export interface MessageUnreadPointer {
   conversation_id: string;
   message_id: string;
-  seq: number;
+  seq: MessageSeq;
   thread_root_id: string | null;
 }
+
+/** Raw SQLite shape for an unread pointer, before the DB-read decode boundary
+ *  brands `seq` into a {@link MessageSeq} (docs/brand-typed-seq-v1.md §4.1).
+ *  better-sqlite3 returns plain numbers, so the `.prepare<>` RowType must stay
+ *  unbranded — branding it there would be a hidden trust-cast, not a decode. */
+type MessageUnreadPointerRow = Omit<MessageUnreadPointer, 'seq'> & { seq: number };
 
 export interface StreamFirstUnread {
   message_id: string;
@@ -238,7 +246,10 @@ export class ConversationReadRepo {
       const entry: StreamUnreadDto = {
         unread_count: row.unread_count,
         first_unread_message_id: row.first_unread_message_id,
-        first_unread_seq: row.first_unread_seq,
+        first_unread_seq:
+          row.first_unread_seq === null
+            ? null
+            : decodeMessageSeq(row.first_unread_seq),
       };
       if (row.root === null) {
         mainline = entry;
@@ -308,7 +319,7 @@ export class ConversationReadRepo {
     viewerUserId: string,
   ): MessageUnreadPointer | null {
     const row = this.db
-      .prepare<{ conv: string; viewer: string }, MessageUnreadPointer>(
+      .prepare<{ conv: string; viewer: string }, MessageUnreadPointerRow>(
         `SELECT m.conversation_id, m.id AS message_id, m.seq, m.thread_root_id
            FROM messages m
           WHERE m.conversation_id = @conv AND ${ROLLUP_UNREAD}
@@ -316,7 +327,7 @@ export class ConversationReadRepo {
           LIMIT 1`,
       )
       .get({ conv: conversationId, viewer: viewerUserId });
-    return row ?? null;
+    return row ? { ...row, seq: decodeMessageSeq(row.seq) } : null;
   }
 
   latestUnreadByConversationForWorkspace(
@@ -324,7 +335,7 @@ export class ConversationReadRepo {
     viewerUserId: string,
   ): Record<string, MessageUnreadPointer> {
     const rows = this.db
-      .prepare<{ viewer: string; workspace: string }, MessageUnreadPointer>(
+      .prepare<{ viewer: string; workspace: string }, MessageUnreadPointerRow>(
         `WITH unread AS (
            SELECT c.id AS conversation_id,
                   m.id AS message_id,
@@ -347,7 +358,9 @@ export class ConversationReadRepo {
       .all({ viewer: viewerUserId, workspace: workspaceId });
 
     const latest: Record<string, MessageUnreadPointer> = {};
-    for (const row of rows) latest[row.conversation_id] = row;
+    for (const row of rows) {
+      latest[row.conversation_id] = { ...row, seq: decodeMessageSeq(row.seq) };
+    }
     return latest;
   }
 

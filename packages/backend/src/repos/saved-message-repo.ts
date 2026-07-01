@@ -1,5 +1,6 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
+import { decodeMessageSeq } from '@silverhand/shared';
 import type {
   MessageRow,
   SavedMessageRow,
@@ -78,7 +79,7 @@ function rowToDto(row: JoinedRow): SavedMessageDto {
         : null,
       attachments: extractAttachmentSnapshots(row.m_metadata),
       reactions: null,
-      seq: row.m_seq,
+      seq: decodeMessageSeq(row.m_seq),
       created_at: row.m_created_at,
       thread_root_id: row.m_thread_root_id,
       task_number: row.m_task_number,

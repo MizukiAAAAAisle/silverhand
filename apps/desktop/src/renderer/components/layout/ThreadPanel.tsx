@@ -19,6 +19,11 @@ import {
   useThreadRoot,
   useUnfollowThread,
 } from '@/features/channels/hooks';
+import {
+  isCommittedMessage,
+  lastCommittedSeq,
+} from '@/features/channels/pending-message';
+import type { MessageSeq } from '@silverhand/shared';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 
@@ -323,8 +328,11 @@ export function ThreadPanel({
   const openKeyRef = useRef('');
   const openedAtRef = useRef(0);
   const markedForOpenRef = useRef(false);
-  const markInflightSeqRef = useRef(0);
-  const lastMarkedSeqRef = useRef(0);
+  // Thread mark-read forward-only gates. `null` = "nothing marked / in flight
+  // yet" — explicit absence, not a 0 sentinel (#task:1267 Axis-B: never collapse
+  // "none" into value 0). Both hold a MessageSeq for THIS thread stream.
+  const markInflightSeqRef = useRef<MessageSeq | null>(null);
+  const lastMarkedSeqRef = useRef<MessageSeq | null>(null);
   const liveMarkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isJumpOpenRef = useRef(false);
   const openKey = `${channelId}::${rootMessageId}`;
@@ -332,8 +340,8 @@ export function ThreadPanel({
     openKeyRef.current = openKey;
     openedAtRef.current = Date.now();
     markedForOpenRef.current = false;
-    markInflightSeqRef.current = 0;
-    lastMarkedSeqRef.current = 0;
+    markInflightSeqRef.current = null;
+    lastMarkedSeqRef.current = null;
     // Whether THIS open began as a first-unread jump. Captured once at open so
     // a later `clearJump` (which nulls `jumpMessageId`) can't flip it and
     // trigger a latest refetch that clobbers the around-window mid-read.
@@ -348,19 +356,23 @@ export function ThreadPanel({
   // cursor, never delivery/wake.
   const markThreadReadMutate = markThreadRead.mutate;
   const issueMarkRead = useCallback(
-    (seq: number, onMarked?: () => void) => {
-      if (seq <= lastMarkedSeqRef.current) return;
-      if (seq <= markInflightSeqRef.current) return;
+    (seq: MessageSeq, onMarked?: () => void) => {
+      // Same-stream (this thread) MessageSeq compares, guarded on explicit
+      // absence: a null gate ("nothing marked / none in flight") never blocks
+      // the first mark (#task:1267 Axis-B).
+      if (lastMarkedSeqRef.current !== null && seq <= lastMarkedSeqRef.current) return;
+      if (markInflightSeqRef.current !== null && seq <= markInflightSeqRef.current) return;
       markInflightSeqRef.current = seq;
       markThreadReadMutate(
         { channelId, threadRootId: rootMessageId, snapshotSeq: seq },
         {
           onSuccess: () => {
-            if (seq > lastMarkedSeqRef.current) lastMarkedSeqRef.current = seq;
+            if (lastMarkedSeqRef.current === null || seq > lastMarkedSeqRef.current)
+              lastMarkedSeqRef.current = seq;
             onMarked?.();
           },
           onSettled: () => {
-            if (markInflightSeqRef.current === seq) markInflightSeqRef.current = 0;
+            if (markInflightSeqRef.current === seq) markInflightSeqRef.current = null;
           },
         },
       );
@@ -440,9 +452,7 @@ export function ThreadPanel({
   // (max-VISIBLE, not latest-known — `messages` is the loaded
   // window). `lastMarkedSeqRef` (advanced on success) keeps it forward-only.
   // `documentVisible` is a dep so returning to the foreground re-runs the gate.
-  const maxLoadedSeq = messages.length
-    ? messages[messages.length - 1]!.seq
-    : null;
+  const maxLoadedSeq = lastCommittedSeq(messages);
   const pinnedAtTail = isAtTail && pinBottomRef.current;
   useEffect(() => {
     const seq = threadLiveMarkReadSeq({
@@ -522,7 +532,7 @@ export function ThreadPanel({
   }, [jumpMessageId, onJumped]);
 
   const renderMessage = (m: typeof messages[number]): JSX.Element =>
-    m.from_kind === 'system' ? (
+    isCommittedMessage(m) && m.from_kind === 'system' ? (
       <SystemMessage
         key={m.id}
         message={m}

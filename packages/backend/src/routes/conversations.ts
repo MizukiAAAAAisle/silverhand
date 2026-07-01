@@ -14,6 +14,7 @@ import {
   apiPaths,
   ArchiveChannelInputSchema,
   ConversationLogDebugInputSchema,
+  decodeMessageSeq,
   ReactMessageInputSchema,
   SavedMessagesQueryInputSchema,
   SearchQueryInputSchema,
@@ -268,7 +269,12 @@ export function createConversationReadApp(
             .map(message => message.id);
           return {
             ...window,
-            stream_head_seq: streamHeadSeq,
+            // DB-read decode boundary (docs/brand-typed-seq-v1.md §4.1): the
+            // wire field is a MessageSeq, so brand it here at server-side DTO
+            // construction. The renderer's `api<T>()` is a typed trust boundary
+            // (no runtime schema-parse), so the brand MUST be minted server-side
+            // — never left to a client cast.
+            stream_head_seq: decodeMessageSeq(streamHeadSeq),
             messages: messagesWithReactions,
             reply_counts_by_root: messages.replyCountsByRoot(channel.id, rootIds),
             reply_summaries_by_root: messages.replyBadgeSummariesByRoot(

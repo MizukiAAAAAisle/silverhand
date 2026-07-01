@@ -1,17 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { resolveChannelOpen } from './channel-open';
 import type { MessageUnreadPointerDto } from '@silverhand/shared';
+import { decodeMessageSeq } from '@silverhand/shared';
 import type { ChannelLayout } from '@/router';
 
 function pointer(
-  overrides: Partial<MessageUnreadPointerDto> = {},
+  overrides: Partial<Omit<MessageUnreadPointerDto, 'seq'>> & { seq?: number } = {},
 ): MessageUnreadPointerDto {
+  const { seq, ...rest } = overrides;
   return {
     conversation_id: 'c-a',
     message_id: 'm-1',
-    seq: 100,
+    seq: decodeMessageSeq(seq ?? 100),
     thread_root_id: 'root-1',
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -27,7 +29,7 @@ describe('resolveChannelOpen — unread-target > layout-memory > main stream', (
   });
 
   it('surfaces the unread thread when the pointer seq is newer than the watermark', () => {
-    expect(resolveChannelOpen(pointer({ seq: 101 }), 100, layout)).toEqual({
+    expect(resolveChannelOpen(pointer({ seq: 101 }), decodeMessageSeq(100), layout)).toEqual({
       kind: 'unread-thread',
       threadRootId: 'root-1',
       messageId: 'm-1',
@@ -35,14 +37,14 @@ describe('resolveChannelOpen — unread-target > layout-memory > main stream', (
   });
 
   it('falls back to layout memory when the pointer seq is at the watermark (just-closed batch)', () => {
-    expect(resolveChannelOpen(pointer({ seq: 100 }), 100, layout)).toEqual({
+    expect(resolveChannelOpen(pointer({ seq: 100 }), decodeMessageSeq(100), layout)).toEqual({
       kind: 'layout',
       layout,
     });
   });
 
   it('falls back to layout memory when the pointer seq is below the watermark', () => {
-    expect(resolveChannelOpen(pointer({ seq: 50 }), 100, layout)).toEqual({
+    expect(resolveChannelOpen(pointer({ seq: 50 }), decodeMessageSeq(100), layout)).toEqual({
       kind: 'layout',
       layout,
     });

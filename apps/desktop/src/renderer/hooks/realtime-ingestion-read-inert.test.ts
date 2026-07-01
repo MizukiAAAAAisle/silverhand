@@ -104,10 +104,20 @@ describe('replayed-frame cache merge — idempotent (#task:1251)', () => {
   );
 
   it('appendMessageToCache de-dupes by message id (replay-overlap safe)', () => {
-    const body = sliceFunctionBody(source, 'function appendMessageToCache(');
     // The load-bearing dedup: an already-cached id returns the cache untouched.
     // Replay redelivers overlapping seqs; without this it would double-insert.
-    expect(body).toContain('cacheHasMessage(data, msg.id)');
+    // #task:1267 slice B split the append path into a shared `appendToCache`
+    // core (which owns the dedup) plus two typed public helpers
+    // (`appendMessageToCache` for committed rows, `appendPendingMessage` for
+    // optimistic ones) that BOTH delegate to it — so the dedup now guards every
+    // append, committed or pending. Fence the core holds it AND both helpers
+    // route through it, so neither can regain a non-deduping path.
+    const core = sliceFunctionBody(source, 'function appendToCache(');
+    expect(core).toContain('cacheHasMessage(data, msg.id)');
+    for (const helper of ['appendMessageToCache', 'appendPendingMessage']) {
+      const body = sliceFunctionBody(source, `function ${helper}(`);
+      expect(body).toContain('appendToCache(');
+    }
   });
 });
 

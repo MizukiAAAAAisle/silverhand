@@ -9,6 +9,7 @@ import type {
   ReactionAggregateDto,
   UserDto,
 } from '@silverhand/shared';
+import { decodeMessageSeq } from '@silverhand/shared';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 import type { StaticTaskRefSummary } from './TaskRef';
@@ -86,7 +87,7 @@ function msg(
     content,
     metadata: null,
     attachments: partial.attachments ?? null,
-    seq,
+    seq: decodeMessageSeq(seq),
     created_at: 1_700_000_000_000 + seq * 1000,
     thread_root_id: null,
     task_number: null,

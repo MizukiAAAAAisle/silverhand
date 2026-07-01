@@ -30,6 +30,8 @@ import { Markdown } from './Markdown';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 import { MessageContextMenu } from './MessageContextMenu';
+import type { CachedMessage } from '@/features/channels/pending-message';
+import { isCommittedMessage } from '@/features/channels/pending-message';
 import { MessageReactions } from './MessageReactions';
 import { MessageRowContent } from './MessageRowContent';
 import { ReactionPicker } from './ReactionPicker';
@@ -44,7 +46,7 @@ import { useMessageLayoutMode } from './useMessageLayoutMode';
 dayjs.extend(relativeTime);
 
 export interface MessageItemProps {
-  message: MessageDto;
+  message: CachedMessage;
   /** Conversation this message belongs to. Forwarded to AgentInfoPopover so
    *  the author/avatar popover can show per-conversation presence + retry. */
   conversationId: string;
@@ -70,7 +72,7 @@ export interface MessageItemProps {
   /** Lookup by conversation id for inline `#conv:<id>` references. */
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
-  onStartThread?: (msg: MessageDto, jumpToMessageId?: string) => void;
+  onStartThread?: (msg: CachedMessage, jumpToMessageId?: string) => void;
   /** When this message has an open thread anchored to it, the count of
    *  non-system replies in that thread. Drives the button label
    *  `{count} Reply` (clicking opens the existing thread instead of
@@ -88,7 +90,7 @@ export interface MessageItemProps {
    *  longer lives in `threadReplySummary` (which keeps only the optimistically
    *  patchable count / last-reply / repliers). Absent / sparse-missing ⇒ 0. */
   threadUnread?: StreamUnreadDto;
-  onSave?: (msg: MessageDto) => void;
+  onSave?: (msg: CachedMessage) => void;
   saved?: boolean;
   /** Whether the viewer may add/remove reactions here. False in a closed or
    *  archived (read-only) channel: the backend rejects the write, so the
@@ -136,18 +138,18 @@ export interface MessageItemProps {
   selected?: boolean;
   /** Toggle this row's selection membership. Required whenever
    *  `selectionMode` is true. */
-  onToggleSelected?: (msg: MessageDto) => void;
+  onToggleSelected?: (msg: CachedMessage) => void;
   /** Right-click → Copy markdown menu item. Hidden when undefined. */
-  onCopyMarkdown?: (msg: MessageDto) => void;
+  onCopyMarkdown?: (msg: CachedMessage) => void;
   /** Right-click → Share… menu item. Hidden when undefined; the
    *  parent only passes this in once the export pipeline is live so
    *  the user never sees a half-baked Share entry (Cindy review). */
-  onShare?: (msg: MessageDto) => void;
+  onShare?: (msg: CachedMessage) => void;
   /** Right-click → "Unfollow thread" menu item. Passed in only by the
    *  ThreadPanel and only while the human viewer is following this reply
    *  cluster, so the entry never appears on main-line rows or unfollowed
    *  threads (item 5). */
-  onUnfollowThread?: (msg: MessageDto) => void;
+  onUnfollowThread?: (msg: CachedMessage) => void;
   /** Resolve a `user_id` → display name for surfaces that don't already
    *  carry the user dto (task assignees, foreign-author fallback). Built
    *  by the parent from `useUsersById()` (multi-human audit 2026-06-03
@@ -216,6 +218,13 @@ export function MessageItem({
   userResolver,
 }: MessageItemProps): JSX.Element {
   const isUser = message.from_kind === 'user';
+  // A pending optimistic row has no server id/seq: every action that needs a
+  // real server row (reaction, thread, save, share, copy, select) is not just
+  // no-op'd in the handler — its affordance is not rendered at all, so the row
+  // reads as "not operable yet" instead of showing a dead button (#task:1267
+  // slice B, Cindy review). The action-surface handlers keep their committed
+  // guard as defense-in-depth, but rendering is gated here.
+  const committed = isCommittedMessage(message);
   const isCurrentUser = isUser && isCurrentUserId(message.from_user_id);
   const mode = useMessageLayoutMode();
   const alignRight = mode === 'user-right' && isCurrentUser;
@@ -427,7 +436,9 @@ export function MessageItem({
   // Null when the message has no reactions — keeps the shared bottom row
   // (task tag · replies · reactions) from rendering an empty slot.
   const reactionsNode =
-    message.reactions && message.reactions.length > 0 ? (
+    isCommittedMessage(message) &&
+    message.reactions &&
+    message.reactions.length > 0 ? (
       <MessageReactions
         message={message}
         alignRight={alignRight}
@@ -513,7 +524,7 @@ export function MessageItem({
         // checkbox's own onClick is also intercepted; the row's toggle
         // handler covers it. Outside selection mode this branch is a
         // no-op so links / attachments / popovers still work.
-        selectionMode
+        selectionMode && committed
           ? event => {
               event.preventDefault();
               event.stopPropagation();
@@ -529,7 +540,7 @@ export function MessageItem({
         // about *framed* presentations.
         'relative flex items-start gap-3 rounded-[var(--row-radius)] border-2 px-2 py-1.5 transition-colors ' +
         (jumpFlash ? 'msg-jump-flash ' : '') +
-        (selectionMode ? 'cursor-pointer ' : '') +
+        (selectionMode && committed ? 'cursor-pointer ' : '') +
         (alignRight ? 'flex-row-reverse' : 'flex-row') +
         ' ' +
         (framed
@@ -537,7 +548,7 @@ export function MessageItem({
           : 'border-transparent')
       }
     >
-      {selectionMode ? (
+      {selectionMode && committed ? (
         <SelectionCheckbox
           checked={selected}
           onChange={() => onToggleSelected?.(message)}
@@ -592,6 +603,7 @@ export function MessageItem({
           already set — the inline "{N} Reply" badge is the discovery
           affordance in that case, so a duplicate "go to thread" icon
           would just be noise. */}
+      {committed ? (
       <div
         onFocus={() => setFocusWithin(true)}
         onBlur={handleActionsBlur}
@@ -645,6 +657,7 @@ export function MessageItem({
           hovered={hover}
         />
       </div>
+      ) : null}
     </div>
   );
 
@@ -653,12 +666,14 @@ export function MessageItem({
       trigger={row}
       saved={saved}
       onCopyMarkdown={
-        onCopyMarkdown ? () => onCopyMarkdown(message) : undefined
+        committed && onCopyMarkdown ? () => onCopyMarkdown(message) : undefined
       }
-      onToggleSave={onSave ? () => onSave(message) : undefined}
-      onShare={onShare ? () => onShare(message) : undefined}
+      onToggleSave={committed && onSave ? () => onSave(message) : undefined}
+      onShare={committed && onShare ? () => onShare(message) : undefined}
       onUnfollowThread={
-        onUnfollowThread ? () => onUnfollowThread(message) : undefined
+        committed && onUnfollowThread
+          ? () => onUnfollowThread(message)
+          : undefined
       }
     />
   );
@@ -689,7 +704,7 @@ function MessageTaskTag({
   agentsById,
   userResolver,
 }: {
-  message: MessageDto;
+  message: CachedMessage;
   agentsById: Map<string, AgentDto>;
   userResolver?: UserNameResolver;
 }): JSX.Element | null {

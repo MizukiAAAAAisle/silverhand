@@ -7,19 +7,33 @@ import {
   threadMarkReadSnapshot,
   threadOpenNeedsLatestRefetch,
   type ThreadMarkReadGateInput,
+  type ThreadLiveMarkReadInput,
 } from './threadMarkRead';
 import { clusterFetchEpochKey } from '@/features/channels/hooks';
+import { decodeMessageSeq } from '@silverhand/shared';
 
 // Baseline: a clean open whose fetch has succeeded after open, nothing marked
 // yet, window head loaded. Each test overrides only what it exercises.
-function gate(over: Partial<ThreadMarkReadGateInput>): ThreadMarkReadGateInput {
+// `headSeq` is taken as a raw number (or null) and decoded to a MessageSeq here
+// (slice-A pattern), so overriding call-sites keep passing plain literals.
+function gate(
+  over: Partial<Omit<ThreadMarkReadGateInput, 'headSeq'>> & {
+    headSeq?: number | null;
+  } = {},
+): ThreadMarkReadGateInput {
+  const { headSeq, ...rest } = over;
   return {
     alreadyMarkedForOpen: false,
     isFetching: false,
-    headSeq: 42,
+    headSeq:
+      headSeq === undefined
+        ? decodeMessageSeq(42)
+        : headSeq === null
+          ? null
+          : decodeMessageSeq(headSeq),
     windowFetchSucceededAt: 2_000,
     openedAt: 1_000,
-    ...over,
+    ...rest,
   };
 }
 
@@ -213,7 +227,7 @@ describe('cluster freshness epoch carrier (primeAround → gate, §9.10)', () =>
 
     // This open began at t=5000 (captured at render before any fetch resolved).
     const openedAt = 5_000;
-    const headSeq = 43; // S+1 head from the around-window response
+    const headSeq = decodeMessageSeq(43); // S+1 head from the around-window response
 
     // (1) Before primeAround stamps: no epoch → gate closed.
     const before = (qc.getQueryData<number>(epochKey)) ?? 0;
@@ -251,35 +265,67 @@ describe('cluster freshness epoch carrier (primeAround → gate, §9.10)', () =>
 });
 
 describe('threadLiveMarkReadSeq (#task:1226 visible-live mark-read)', () => {
-  const base = {
-    pinnedAtTail: true,
-    documentVisible: true,
-    maxVisibleSeq: 42,
-    lastMarkedSeq: 10,
+  // `maxVisibleSeq` / `lastMarkedSeq` are taken as raw numbers (or null) and
+  // decoded to MessageSeq here (slice-A pattern), so overrides pass plain
+  // literals. Default: pinned + visible, tail 42, marked 10.
+  const live = (
+    over: Partial<
+      Omit<ThreadLiveMarkReadInput, 'maxVisibleSeq' | 'lastMarkedSeq'>
+    > & {
+      maxVisibleSeq?: number | null;
+      lastMarkedSeq?: number | null;
+    } = {},
+  ): ThreadLiveMarkReadInput => {
+    const { maxVisibleSeq, lastMarkedSeq, ...rest } = over;
+    return {
+      pinnedAtTail: true,
+      documentVisible: true,
+      maxVisibleSeq:
+        maxVisibleSeq === undefined
+          ? decodeMessageSeq(42)
+          : maxVisibleSeq === null
+            ? null
+            : decodeMessageSeq(maxVisibleSeq),
+      lastMarkedSeq:
+        lastMarkedSeq === undefined
+          ? decodeMessageSeq(10)
+          : lastMarkedSeq === null
+            ? null
+            : decodeMessageSeq(lastMarkedSeq),
+      ...rest,
+    };
   };
 
   it('tail pinned + visible + newer reply → marks to the visible tail seq', () => {
-    expect(threadLiveMarkReadSeq(base)).toBe(42);
+    expect(threadLiveMarkReadSeq(live())).toBe(42);
   });
 
   it('not pinned at tail (scrolled up) → null (no swallow of unrendered tail)', () => {
-    expect(threadLiveMarkReadSeq({ ...base, pinnedAtTail: false })).toBeNull();
+    expect(threadLiveMarkReadSeq(live({ pinnedAtTail: false }))).toBeNull();
   });
 
   it('document hidden / backgrounded → null even when pinned at tail', () => {
-    expect(threadLiveMarkReadSeq({ ...base, documentVisible: false })).toBeNull();
+    expect(threadLiveMarkReadSeq(live({ documentVisible: false }))).toBeNull();
   });
 
   it('empty window (no visible seq) → null', () => {
-    expect(threadLiveMarkReadSeq({ ...base, maxVisibleSeq: null })).toBeNull();
+    expect(threadLiveMarkReadSeq(live({ maxVisibleSeq: null }))).toBeNull();
+  });
+
+  it('nothing marked yet (lastMarkedSeq null) → marks the visible tail', () => {
+    // Explicit-absence gate (#task:1267 Axis-B): a null "nothing marked" must
+    // never block the first advance the way a 0 sentinel silently would.
+    expect(
+      threadLiveMarkReadSeq(live({ maxVisibleSeq: 42, lastMarkedSeq: null })),
+    ).toBe(42);
   });
 
   it('already marked at/after the visible tail → null (forward-only)', () => {
     expect(
-      threadLiveMarkReadSeq({ ...base, maxVisibleSeq: 42, lastMarkedSeq: 42 }),
+      threadLiveMarkReadSeq(live({ maxVisibleSeq: 42, lastMarkedSeq: 42 })),
     ).toBeNull();
     expect(
-      threadLiveMarkReadSeq({ ...base, maxVisibleSeq: 41, lastMarkedSeq: 42 }),
+      threadLiveMarkReadSeq(live({ maxVisibleSeq: 41, lastMarkedSeq: 42 })),
     ).toBeNull();
   });
 
@@ -287,7 +333,7 @@ describe('threadLiveMarkReadSeq (#task:1226 visible-live mark-read)', () => {
     // onSuccess is what advances lastMarkedSeq; a failed mutation leaves it
     // unchanged, so re-evaluating with the same window re-proposes the seq.
     expect(
-      threadLiveMarkReadSeq({ ...base, maxVisibleSeq: 42, lastMarkedSeq: 10 }),
+      threadLiveMarkReadSeq(live({ maxVisibleSeq: 42, lastMarkedSeq: 10 })),
     ).toBe(42);
   });
 
@@ -295,12 +341,19 @@ describe('threadLiveMarkReadSeq (#task:1226 visible-live mark-read)', () => {
     // A reply arrives while the app is backgrounded and the panel is pinned at
     // the tail. While hidden the gate holds it unread (no swallow of an unseen
     // reply)…
-    const reply = { ...base, pinnedAtTail: true, maxVisibleSeq: 42, lastMarkedSeq: 10 };
-    expect(threadLiveMarkReadSeq({ ...reply, documentVisible: false })).toBeNull();
+    expect(
+      threadLiveMarkReadSeq(
+        live({ pinnedAtTail: true, maxVisibleSeq: 42, lastMarkedSeq: 10, documentVisible: false }),
+      ),
+    ).toBeNull();
     // …and the moment the user returns to the foreground (visibilitychange →
     // documentVisible true, same pinned tail) the SAME seq becomes markable.
     // The component wires `documentVisible` as a state/effect dependency so this
     // transition actually re-runs the gate.
-    expect(threadLiveMarkReadSeq({ ...reply, documentVisible: true })).toBe(42);
+    expect(
+      threadLiveMarkReadSeq(
+        live({ pinnedAtTail: true, maxVisibleSeq: 42, lastMarkedSeq: 10, documentVisible: true }),
+      ),
+    ).toBe(42);
   });
 });
