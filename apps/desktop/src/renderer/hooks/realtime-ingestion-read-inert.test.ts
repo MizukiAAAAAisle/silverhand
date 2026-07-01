@@ -180,8 +180,8 @@ describe('useChannelMessages — pure reader / gate-(b) fence (#task:1255)', () 
   it('declares scope interest via the registry + reads the gap fact (positive)', () => {
     // #task:1260 P2 slice 6: interest now routes through the registry
     // (`useInterest`); the direct transport subscribe is gone (call-form deny so
-    // the hook's prose naming subscribeWsScope doesn't trip it). Body-scoped —
-    // the file still calls subscribeWsScope( for the un-migrated side hooks.
+    // the hook's prose naming subscribeWsScope doesn't trip it). Body-scoped deny
+    // (hooks.ts is now fully migrated — see the file-level guard below).
     expect(body).toContain('useInterest(');
     expect(body).not.toContain('subscribeWsScope(');
     expect(body).toContain('useMainlineLiveGap');
@@ -204,14 +204,15 @@ describe('useChannelMessages — pure reader / gate-(b) fence (#task:1255)', () 
 // separate P1b loop.
 
 // #task:1260 P2 — hooks migrated to the InterestRegistry INSIDE the shared
-// channels/hooks.ts, one per slice (slice 3: useThreadRoot, slice 4:
-// useThreadFollowers, …). Each entry's deny (`subscribeWsScope(` forbidden) is
-// scoped to THAT hook's sliced body only. The still-un-migrated hooks stay in
-// the #1255 P1b/P1c loops above still REQUIRING `subscribeWsScope`, and the
-// file-level assertion below pins that the file still calls it — so a migrated
-// hook + its un-migrated neighbours go green simultaneously. That co-existence
-// is the proof that migrating one hook in a shared file cannot open a fence
-// back-door for its neighbours (Alice's slice-3 transport-gate requirement).
+// channels/hooks.ts, one per slice (slices 3-8). Each entry's deny
+// (`subscribeWsScope(` forbidden) is scoped to THAT hook's sliced body. All
+// conversation readers in this file are now migrated (P2 complete); the
+// file-level guard below therefore asserts the STRONGER terminal invariant —
+// no direct transport subscribe remains anywhere in hooks.ts. While the file
+// was mid-migration this pattern proved the per-hook deny was body-scoped (a
+// migrated hook + its still-raw neighbours went green simultaneously), which is
+// why one hook's migration could never open a fence back-door (Alice's slice-3
+// transport-gate requirement).
 describe('channels/hooks.ts — registry-migrated hooks / body-scoped deny (#task:1260 P2)', () => {
   const source = readFileSync(
     fileURLToPath(new URL('../features/channels/hooks.ts', import.meta.url)),

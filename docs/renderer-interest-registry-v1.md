@@ -1,9 +1,13 @@
 # Renderer Interest Registry (v1) — design draft (#task:1260)
 
-> Status: **rev 2 — both gates PASS (Alice transport + Cindy correctness,
-> 2026-07-01); P1 code landed.** Incorporates Alice (2 refinements) and Cindy
-> (3 blockers + Q3). P1 = registry + `useInterest` pass-through + tests + the
-> registry-source inert fence (no reader migrated). P2+ still to come.
+> Status: **rev 3 — P1 + P2 landed (2026-07-01). All 10 renderer slices
+> migrated; both gates PASS (Alice transport + Cindy correctness) per slice.**
+> The InterestRegistry is the sole `subscribeWsScope` caller for **product
+> conversation readers** (message-stream + side); the dev EventStream remains a
+> deliberate out-of-scope direct observer on the conversation-side scope, and
+> viewer/app/workspace/tasks keep their own direct calls (later slices). P3 is
+> doc-only (no dead code to delete — see §5). Everything local/unpushed; push +
+> close + dogfood are shiki's.
 >
 > Canonical facts about transport seq spaces, the single-fanout-source non-goal,
 > and satisfaction/floor semantics live in `docs/event-ws-transport-v1.md` and
@@ -27,9 +31,10 @@ makes "one of those readers subscribed directly" a test failure. This is the
 terminal-state move the three-way review agreed on: *re-guard by structure the
 boundaries currently held by convention.*
 
-## 1. Current state (grounded) + full subscriber inventory
+## 1. Current state (grounded) + subscriber inventory
 
-Two layers already exist and are already decoupled:
+Two layers already existed and were already decoupled; P2 added the interest seam
+on top:
 
 - **Transport** (`renderer/lib/ws-client.ts`): `subscribe(scope)` is
   **refcounted** (`desiredScopes`, L209). Last-unsubscribe (`count → 0`, L221-259)
@@ -40,56 +45,51 @@ Two layers already exist and are already decoupled:
   `subscribeViewerScope()` (L911) wraps the **deferred** `viewer:<id>` scope
   (canonical id unknown until the `authenticated` frame; independent
   detach/re-attach lifetime via `viewerSubscribers`, L200-202).
-- **Readers** declare interest via `useEffect(subscribeWsScope)` with **no**
-  `onWsFrame` listener (except the bridge, below).
+- **Readers** now declare interest via `useInterest(scope)` (the registry) with
+  **no** `onWsFrame` listener — except the two own-listener bridges below, whose
+  *interest* also routes through the registry while their listener stays.
 - **Ingestor** (`useConversationIngestor` @ `App.tsx:234`): the **sole**
   `onWsFrame` consumer for conversation frames; owns apply+cursor; holds zero
   subscriptions.
 
-**Full inventory of direct subscribers** (the inaccuracy Cindy caught — it is
-*not* ~8, and it spans many scope families). Slice-1 boundary is drawn here:
+**Migrated subscribers (P2 — all landed).** The 8 pure interest-declarers below
+each swapped `useEffect(subscribeWsScope)` for `useInterest`, nothing else moved
+(the central ingestor consumes their frames, #1255):
 
-### IN SCOPE — slice 1 (conversation message-stream + conversation-side product readers)
-| Reader | Site | Scope family |
-|---|---|---|
-| useChannelMessages | `channels/hooks.ts:1265` | `conversation:<id>` |
-| useThreadCluster | `channels/hooks.ts:1440` | `conversation:<id>` |
-| useThreadRoot | `channels/hooks.ts:1520` | `conversation:<id>` |
-| useThreadFollowers | `channels/hooks.ts:1576` | `conversation:<id>` |
-| useChannelThreads | `useChannelThreads.ts:86` | `conversation:<id>` |
-| useChannelAgents | `channels/hooks.ts:1783` | `conversation-side:<id>` |
-| useAgentRunStates | `channels/hooks.ts:2114` | `conversation-side:<id>` |
-| useAgentActivityFeed | `useAgentActivityFeed.ts:190` | `conversation-side:<id>` |
-
-These 8 are **pure interest-declarers**: they call `subscribeWsScope` but hold no
-`onWsFrame` listener (the central ingestor consumes their frames, #1255). That is
-exactly what makes them trivially migratable — swap `subscribeWsScope` for
-`useInterest`, nothing else moves.
-
-### DISTINCT SLICES (P2-late, own `onWsFrame` — not folded into the pure-reader migration)
-| Case | Site | Scope | Why separate |
+### MIGRATED — pure interest-declarers (conversation message-stream + side)
+| Reader | Site | Scope family | Slice |
 |---|---|---|---|
-| useConversationStream (read-inert bridge) | `useConversationStream.ts:110` | `conversation:<id>` | Subscribes **and owns its own `onWsFrame` listener** (read-inert, `d3d03d7`) — the one documented exception to "ingestor is the sole conversation-frame consumer". Its *interest* migrates like a reader, but because it also listens, it migrates as its own slice so interest-migration is never conflated with the bridge's listener lifecycle. |
-| useConversationMembers | `useConversationMembers.ts:112` (listener L113) | `conversation-side:<id>` | Also **owns its own `onWsFrame` listener** (`conversation_members_changed`; not migrated to the ingestor in #1255). Same treatment as the bridge: interest migratable, but as its own slice so its listener isn't disturbed. |
+| useChannelThreads | `useChannelThreads.ts` | `conversation:<id>` | 1 |
+| useAgentActivityFeed | `useAgentActivityFeed.ts` | `conversation-side:<id>` | 2 |
+| useThreadRoot | `channels/hooks.ts` | `conversation:<id>` | 3 |
+| useThreadFollowers | `channels/hooks.ts` | `conversation:<id>` | 4 |
+| useThreadCluster | `channels/hooks.ts` | `conversation:<id>` | 5 |
+| useChannelMessages | `channels/hooks.ts` | `conversation:<id>` | 6 |
+| useChannelAgents | `channels/hooks.ts` | `conversation-side:<id>` | 7 |
+| useAgentRunStates | `channels/hooks.ts` | `conversation-side:<id>` | 8 |
 
-During any mixed period a distinct-slice case's raw subscribe legitimately
-coexists with the registry's on the same scope (transport refcount >1 is fine —
-§3.4).
+### MIGRATED — distinct slices (own `onWsFrame`; interest moved, listener kept)
+| Case | Site | Scope | Slice | Note |
+|---|---|---|---|---|
+| useConversationStream (read-inert bridge) | `useConversationStream.ts` | `conversation:<id>` | 9 | Owns its own `onWsFrame` listener (read-inert, `d3d03d7`). Only its *interest* moved to the registry; the listener + synthetic-`connected` replay are untouched. Interest keys on `conversationId` alone (transport scope is independent of the routeScope arg). |
+| useConversationMembers | `useConversationMembers.ts` | `conversation-side:<id>` | 10 | Owns its own `conversation_members_changed` listener (not moved to the ingestor in #1255). Same treatment: interest → registry, listener untouched. |
 
-### OUT OF SCOPE — slice 1 (later, own migrations)
+### OUT OF SCOPE — deliberate direct callers (own future migrations, NOT #1260)
 | Scope family | Sites | Disposition |
 |---|---|---|
-| **viewer** (`subscribeViewerScope()`) | `attention/hooks.ts:137`, `channels/hooks.ts:2135/2174/2298/2345`, `favorites/hooks.ts:72`, `notifications/hooks.ts:55/168`, `saved/hooks.ts:52`, `workspaces/hooks.ts:254` | Migrated **last**. When migrated, needs its **own dedicated entry** (NOT the generic string `retain`) — canonical id deferred to `authenticated`, independent detach/re-attach lifetime. Future-migration constraint, not a v1 method (Q2). |
+| **dev EventStream** | `components/dev/EventStream.tsx:69` — `subscribeWsScope(wsConversationSideScope(id))` | **A conversation-side direct subscriber that remains by design.** This is why the sole-caller claim is scope-qualified to *product* conversation readers, NOT the entire conversation scope group (§2). Observe-only dev panel; later or never. |
+| **viewer** (`subscribeViewerScope()`) | `attention/hooks.ts`, `channels/hooks.ts`, `favorites/hooks.ts`, `notifications/hooks.ts`, `saved/hooks.ts`, `workspaces/hooks.ts` | Migrated **last**. Needs its **own dedicated entry** (NOT the generic string `retain`) — canonical id deferred to `authenticated`, independent detach/re-attach lifetime. Future-migration constraint, not a v1 method (Q2). |
 | **`app`** | `agent-sync.ts:77`, `presence/hooks.ts:75` | App-level singleton; later slice. |
 | **`workspace:<id>`** | `workspaces/hooks.ts:462` (single), `:776` (multi) | Later slice. |
 | **tasks** | `tasks/hooks.ts:65` (multi) | Later slice. |
-| **dev EventStream** | `components/dev/EventStream.tsx:69` | Dev tool; later or never. |
 
 ## 2. The seam — `InterestRegistry`
 
 A single renderer-global registry, the **sole caller of `subscribeWsScope` for
-the migrated scope group** (§3.4 — *not* a global-sole-caller claim while other
-scope families remain unmigrated).
+*product* conversation readers** (§3.4 — the dev EventStream stays a deliberate
+out-of-scope direct observer on `conversation-side:<id>`, and other scope
+families remain unmigrated, so this is *not* a global-sole-caller claim; see the
+named invariant §4.5).
 
 ```ts
 type Scope = string;            // a transport scope, e.g. wsConversationScope(id)
@@ -158,19 +158,20 @@ stashed `subscription.unsubscribe()` exactly once. The holder set is the single
 renderer authority for "do we still want this scope."
 
 **3.4 How it calls `subscribeWsScope` — and the "sole caller" scoping.** For a
-slice-1 scope the registry calls `subscribeWsScope` once (0→1) and
-`.unsubscribe()` once (n→0). It is the sole caller **for slice-1 scopes only**;
-viewer/app/workspace/tasks/dev keep their own direct calls until their slices.
-The transport refcount stays the resilient lower guard and legitimately holds
->1 during any mixed period (a migrated reader + the still-raw
-useConversationStream on the same `conversation:<id>`). **Q1 ruling (Alice+Cindy
-reconciled — no tripwire):** *no* dev refcount assertion, not in v1 and not
-scheduled. Coupling a diagnostic to transport-internal `desiredScopes` refcount
-is exactly the internal leak to avoid; it could only arm after full migration
-(mixed-period raw callers would false-positive), so it helps the riskiest window
-zero. The static fence (§6) + registry unit tests cover the known surface; a
-dev-only diagnostic is a *possible future add only if drift is observed in
-practice*, not a planned step.
+migrated conversation scope the registry calls `subscribeWsScope` once (0→1) and
+`.unsubscribe()` once (n→0). It is the sole caller **for *product* conversation
+readers only** — NOT the entire conversation scope group: the dev EventStream
+(`components/dev/EventStream.tsx`) is a deliberate out-of-scope direct subscriber
+on `conversation-side:<id>`, and viewer/app/workspace/tasks keep their own direct
+calls until their own slices. See the named invariant §4.5. The transport
+refcount stays the resilient lower guard and legitimately holds >1 whenever a
+migrated product reader and the dev observer (or, historically, a mid-migration
+raw caller) watch the same scope. **Q1 ruling (Alice+Cindy reconciled — no
+tripwire):** *no* dev refcount assertion, not in v1 and not scheduled. Coupling a
+diagnostic to transport-internal `desiredScopes` refcount is exactly the internal
+leak to avoid. The static fence (§6) + registry unit tests cover the known
+surface; a dev-only diagnostic is a *possible future add only if drift is
+observed in practice*, not a planned step.
 
 **3.5 interest→0 reuses `80aec14` backlog-drop (no second implementation).** The
 registry has **zero** backlog/floor logic. `release → 0` → transport
@@ -195,13 +196,20 @@ orthogonal to interest, untouched.)
 3. **Readers stay cache-only** (§3.6); ingestor stays sole `onWsFrame` consumer.
 4. **Scope grammar reused** from `ws-frames.ts`.
 5. **Sole-caller is slice-scoped, not global** (§3.4) — the doc must never claim
-   a global invariant the migration hasn't reached.
+   a global invariant the migration hasn't reached. *Concrete instance (as of
+   P2):* the registry is the sole `subscribeWsScope` caller for **product
+   conversation readers** only; `components/dev/EventStream.tsx` remains a
+   conversation-side **out-of-scope direct observer**, and
+   viewer/app/workspace/tasks keep their own direct calls. Future migrations
+   (viewer/app/workspace/tasks/dev) may only **extend the migrated slice set** —
+   they must not let this scope-qualified claim drift into "the registry is the
+   global sole caller."
 6. **Generation-safe release** (§2) — a stale handle never evicts a fresh holder.
 7. **Behavior-preserving v1** — same subscribe/unsubscribe frames for the same
    view lifecycle; only the *origin* of the calls changes. Policy (sticky/
    debounce) is out of #1260 entirely (Q4 split).
 
-## 5. Migration (lane 5 — gated on this rev passing re-review)
+## 5. Migration (P1 + P2 LANDED — P3 doc-only)
 
 - **P1 — centralize, behavior-preserving. (LANDED)** Add `InterestRegistry` +
   `useInterest`. Pure pass-through refcount. Migrate **no** reader yet; the fence
@@ -210,15 +218,23 @@ orthogonal to interest, untouched.)
   direct-subscribe **deny-list is NOT built in P1** — it starts and grows from
   P2's first reader migration (§6). Prove: identical subscribe/unsubscribe
   sequence vs today.
-- **P2 — migrate slice-1 readers one at a time** (the 8 pure interest-declarers
-  in §1's in-scope table), then useConversationStream and useConversationMembers
-  each as their **own** slice (both own an `onWsFrame` listener — migrate their
-  interest without touching their listener). Per slice prove: unmount is not a
+- **P2 — migrate readers one at a time. (LANDED — 10/10 slices)** The 8 pure
+  interest-declarers in §1's MIGRATED table (slices 1-8), then
+  useConversationStream (slice 9) and useConversationMembers (slice 10) each as
+  their **own** slice (both own an `onWsFrame` listener — migrated their interest
+  without touching their listener). Each slice proved: unmount is not a
   correctness boundary (frame during unmount→remount lands via resume-replay);
-  interest→0 doesn't pin the floor; side vs message scope never cross.
-- **P3 — delete dead paths.** No Q1 tripwire (§3.4 — a diagnostic is added later
-  only if drift is observed). **App-level sticky policy is NOT here** — it's a
-  separate follow task co-landing with S2/S3 (Q4).
+  interest→0 doesn't pin the floor; side vs message scope never cross. Both gates
+  (Alice transport-boundary + Cindy correctness) PASS per slice.
+- **P3 — doc-only closeout. No dead code to delete.** `subscribeWsScope` is
+  **not** dead: it stays the registry's transport primitive and the direct
+  primitive for the out-of-scope groups (dev EventStream, viewer/app/workspace/
+  tasks). P3 = converting the reader fences to terminal-state (each migrated file
+  denies `subscribeWsScope(` + requires `useInterest(`), scope-qualifying the
+  sole-caller claim (§2/§3.4/§4.5), and this migration table. No Q1 tripwire
+  (§3.4 — a diagnostic is added later only if drift is observed). **App-level
+  sticky policy is NOT here** — it's a separate follow task co-landing with
+  S2/S3 (Q4).
 - **Later slices (own tasks):** viewer (via a dedicated entry), app, workspace,
   tasks, dev EventStream.
 
