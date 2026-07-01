@@ -266,6 +266,55 @@ describe('GET/DELETE /api/agents', () => {
     expect(localList.agents.map((a: any) => a.id)).toContain(created.agent.id);
   });
 
+  it('?scope=owned narrows to agents the viewer created, dropping workspace-visible ones (#task:1256)', async () => {
+    t = buildTestApp();
+    t.ctx.db.exec(
+      `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+       DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+    );
+    const teammateHeaders = {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    };
+    // `local` creates its OWN agent.
+    const mine = await (
+      await http(t).post('/api/agents', { name: 'mine', runtime: 'claude' })
+    ).json() as any;
+    // `teammate` creates an agent, then shares a workspace so it becomes
+    // ACL-visible to `local` via workspace membership (the branch scope=owned drops).
+    const theirs = await (
+      await http(t).post(
+        '/api/agents',
+        { name: 'theirs', runtime: 'claude' },
+        { headers: teammateHeaders },
+      )
+    ).json() as any;
+    const ws = await (
+      await http(t).post('/api/workspaces', { name: 'shared' }, { headers: teammateHeaders })
+    ).json() as any;
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_members (workspace_id, agent_id, joined_at) VALUES (?, ?, ?)`,
+      )
+      .run(ws.workspace.id, theirs.agent.id, Date.now());
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_users (workspace_id, user_id, joined_at) VALUES (?, 'local', ?)`,
+      )
+      .run(ws.workspace.id, Date.now());
+
+    // Default: the ACL-visible set includes BOTH mine and the workspace-visible theirs.
+    const full = await (await http(t).get('/api/agents')).json() as any;
+    const fullIds = full.agents.map((a: any) => a.id);
+    expect(fullIds).toContain(mine.agent.id);
+    expect(fullIds).toContain(theirs.agent.id);
+
+    // scope=owned: only the agent `local` created — the workspace-visible one is dropped.
+    const owned = await (await http(t).get('/api/agents?scope=owned')).json() as any;
+    const ownedIds = owned.agents.map((a: any) => a.id);
+    expect(ownedIds).toContain(mine.agent.id);
+    expect(ownedIds).not.toContain(theirs.agent.id);
+  });
+
   it('DELETE without confirm flag is rejected (400)', async () => {
     t = buildTestApp();
     const created = await (

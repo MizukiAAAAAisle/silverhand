@@ -236,11 +236,21 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     const includeStatuses: AgentMaterializationStatus[] = ['active'];
     if (includeFailed) includeStatuses.push('failed');
     if (includePending) includeStatuses.push('pending_materialization');
+    // `?scope=owned` NARROWS the ACL-visible set to agents THIS user created
+    // (`created_by_user_id == viewer`), dropping agents visible only via shared
+    // workspace membership (#task:1256). It never WIDENS — it composes on top of
+    // `canViewAgent`, so it cannot expose an agent the ACL already hides. Default
+    // (absent / any other value) keeps the full ACL-visible set. "Whose agent is
+    // mine" is defined here in the contract, so every consumer (desktop, CLI)
+    // agrees — the renderer passes the flag and never re-filters client-side.
+    const ownedOnly = c.req.query('scope') === 'owned';
     return c.json({
       agents: agents
         .list()
-        .filter(agent =>
-          canViewAgent(ctx, principal, agent.id, { includeStatuses }),
+        .filter(
+          agent =>
+            canViewAgent(ctx, principal, agent.id, { includeStatuses })
+            && (!ownedOnly || agent.created_by_user_id === principal.userId),
         ),
     });
   });
