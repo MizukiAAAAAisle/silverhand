@@ -15,6 +15,7 @@ import {
   ArchiveChannelInputSchema,
   ConversationLogDebugInputSchema,
   ReactMessageInputSchema,
+  SavedMessagesQueryInputSchema,
   SearchQueryInputSchema,
   UpdateChannelInputSchema,
   SendMessageInputSchema,
@@ -451,6 +452,7 @@ export function createConversationReadApp(
 export interface ConversationMessagingRouteDeps {
   ctx: BackendContext;
   conversations: ConversationRepo;
+  workspaces: WorkspaceRepo;
   messages: MessageRepo;
   conversationReads: ConversationReadRepo;
   conversationEvents: ConversationEventRepo;
@@ -465,6 +467,7 @@ export function createConversationMessagingApp(
   const {
     ctx,
     conversations,
+    workspaces,
     messages,
     conversationReads,
     conversationEvents,
@@ -854,7 +857,33 @@ export function createConversationMessagingApp(
 
   app.get(apiPaths.saved, c => {
     const principal = getUserPrincipal(c);
-    return c.json({ saved: saved.listForUser(principal.userId) });
+    const parsed = SavedMessagesQueryInputSchema.safeParse({
+      workspace_id: c.req.query('workspace_id'),
+      since: c.req.query('since'),
+    });
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    if (
+      parsed.data.workspace_id !== undefined &&
+      !canViewWorkspace(ctx, principal, parsed.data.workspace_id)
+    ) {
+      // Mirror archived-channels: 404 when the workspace doesn't exist, 403 when
+      // the caller can't see it. The membership gate in the repo already keeps
+      // saved rows from leaking, so this is API-semantic consistency (and
+      // future-proofing for multi-human) rather than the security boundary.
+      const exists = workspaces.get(parsed.data.workspace_id);
+      return c.json(
+        { error: exists ? 'forbidden' : 'workspace not found' },
+        exists ? 403 : 404,
+      );
+    }
+    return c.json({
+      saved: saved.listForUser(principal.userId, {
+        workspaceId: parsed.data.workspace_id,
+        since: parsed.data.since,
+      }),
+    });
   });
 
   return app;

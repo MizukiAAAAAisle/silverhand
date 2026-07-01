@@ -751,6 +751,68 @@ describe('canonical channel/thread routes', () => {
     expect(unsave.status).toBe(404);
   });
 
+  it('?workspace_id filters saved messages to one workspace; unknown workspace → 404 (#task:1258)', async () => {
+    t = buildTestApp();
+    const local = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const a = await createWorkspaceChannel(t, ['alice']);
+    const b = await createWorkspaceChannel(t, ['bob']);
+    const msgA = await (
+      await local.post(`/api/channels/${a.channelId}/messages`, { content: 'in A' })
+    ).json() as any;
+    const msgB = await (
+      await local.post(`/api/channels/${b.channelId}/messages`, { content: 'in B' })
+    ).json() as any;
+    await local.post(`/api/messages/${msgA.message.id}/save`);
+    await local.post(`/api/messages/${msgB.message.id}/save`);
+
+    const all = await (await local.get('/api/saved')).json() as any;
+    expect(all.saved.map((s: any) => s.message.id).sort()).toEqual(
+      [msgA.message.id, msgB.message.id].sort(),
+    );
+
+    const onlyA = await (
+      await local.get(`/api/saved?workspace_id=${a.workspace.id}`)
+    ).json() as any;
+    expect(onlyA.saved).toHaveLength(1);
+    expect(onlyA.saved[0].message.id).toBe(msgA.message.id);
+    expect(onlyA.saved[0].workspace_id).toBe(a.workspace.id);
+
+    // Unknown workspace id → 404 (mirrors archived-channels not-found semantics).
+    const unknown = await local.get('/api/saved?workspace_id=does-not-exist');
+    expect(unknown.status).toBe(404);
+  });
+
+  it('?since filters saved messages by the saved_at window (#task:1258)', async () => {
+    t = buildTestApp();
+    const local = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+    const older = await (
+      await local.post(`/api/channels/${channelId}/messages`, { content: 'older' })
+    ).json() as any;
+    const newer = await (
+      await local.post(`/api/channels/${channelId}/messages`, { content: 'newer' })
+    ).json() as any;
+    await local.post(`/api/messages/${older.message.id}/save`);
+    await local.post(`/api/messages/${newer.message.id}/save`);
+    // Backdate the "older" save so it falls outside the `since` window. `since`
+    // is a SAVE-time filter (`saved_at >= since`), not message time.
+    t.ctx.db
+      .prepare(
+        `UPDATE saved_messages SET saved_at = 1000 WHERE message_id = ? AND user_id = 'local'`,
+      )
+      .run(older.message.id);
+
+    const since = await (await local.get('/api/saved?since=2000')).json() as any;
+    expect(since.saved).toHaveLength(1);
+    expect(since.saved[0].message.id).toBe(newer.message.id);
+
+    // since=0 returns the whole window again.
+    const both = await (await local.get('/api/saved?since=0')).json() as any;
+    expect(both.saved.map((s: any) => s.message.id).sort()).toEqual(
+      [older.message.id, newer.message.id].sort(),
+    );
+  });
+
   it('starts and clears channel agents through canonical routes', async () => {
     t = buildTestApp();
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);

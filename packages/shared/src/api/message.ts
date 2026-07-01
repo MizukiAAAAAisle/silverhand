@@ -318,6 +318,26 @@ export const SavedMessageDtoSchema = z.object({
 });
 export type SavedMessageDto = z.infer<typeof SavedMessageDtoSchema>;
 
+/** Query for `GET /api/saved` (#task:1258). Mirrors
+ *  `ArchivedChannelsQueryInputSchema`: the Saved view filters SERVER-SIDE so the
+ *  filters act over the whole saved history, not the `LIMIT`-capped client
+ *  window (a client-side date/workspace filter would silently drop saved
+ *  messages older than the newest N). `workspace_id` narrows to one workspace
+ *  (omitted = all workspaces the caller can see); `since` is `saved_at >= since`
+ *  (epoch ms) — the SAVE-time window, not message created/updated time, matching
+ *  the list's `saved_at DESC` order. Both are applied before `ORDER BY … LIMIT`. */
+export const SavedMessagesQueryInputSchema = z.object({
+  workspace_id: z.preprocess(
+    v => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  since: z.preprocess(
+    v => (v === '' || v === undefined ? undefined : v),
+    z.coerce.number().int().nonnegative().optional(),
+  ),
+});
+export type SavedMessagesQueryInput = z.infer<typeof SavedMessagesQueryInputSchema>;
+
 //
 // Single source of truth for what "@name" means in a message body.
 // Mirrors the renderer-side regex in `Markdown.tsx` and the

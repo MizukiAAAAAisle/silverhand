@@ -190,23 +190,50 @@ export class SavedMessageRepo {
     return rows.map(rowToDto);
   }
 
-  listForUser(userId: string, limit = 200): SavedMessageDto[] {
+  /**
+   * The viewer's saved messages, newest-saved first. Filters (`workspaceId` /
+   * `since`) are applied in the WHERE clause — BEFORE `ORDER BY saved_at DESC
+   * LIMIT` — so they narrow the whole saved history, not just the capped window
+   * a client would otherwise filter (#task:1258, mirrors archived-channels).
+   * `since` is `saved_at >= since` (save-time window, epoch ms). Membership is
+   * always enforced (`sm.user_id` + `conversation_users`), so an unknown/hidden
+   * `workspaceId` simply yields no rows on top of that gate.
+   */
+  listForUser(
+    userId: string,
+    opts: { workspaceId?: string; since?: number; limit?: number } = {},
+  ): SavedMessageDto[] {
+    const { workspaceId, since, limit = 200 } = opts;
+    const conds = [
+      'sm.user_id = ?',
+      `EXISTS (
+         SELECT 1
+           FROM conversation_users cu
+          WHERE cu.conversation_id = sm.conversation_id
+            AND cu.user_id = ?
+       )`,
+    ];
+    const params: (string | number)[] = [userId, userId];
+    if (workspaceId !== undefined) {
+      conds.push('sm.workspace_id = ?');
+      params.push(workspaceId);
+    }
+    if (since !== undefined) {
+      conds.push('sm.saved_at >= ?');
+      params.push(since);
+    }
+    params.push(limit);
     const rows = this.db
-      .prepare<[string, string, number], JoinedRow>(
+      .prepare<(string | number)[], JoinedRow>(
         `${SELECT_JOINED}
-         WHERE sm.user_id = ?
-           AND EXISTS (
-           SELECT 1
-             FROM conversation_users cu
-            WHERE cu.conversation_id = sm.conversation_id
-              AND cu.user_id = ?
-         )
+         WHERE ${conds.join('\n           AND ')}
          ORDER BY sm.saved_at DESC
          LIMIT ?`,
       )
-      .all(userId, userId, limit);
+      .all(...params);
     return rows.map(rowToDto);
   }
+
 
   /** Returns the existing row when the message was already saved
    *  (UNIQUE(user_id, message_id) makes this idempotent on the client). */

@@ -478,6 +478,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     createConversationMessagingApp({
       ctx,
       conversations,
+      workspaces,
       messages,
       conversationReads,
       conversationEvents,
