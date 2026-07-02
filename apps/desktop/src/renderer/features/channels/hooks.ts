@@ -516,31 +516,26 @@ function replacePendingMessageInCache(
   return appendMessageToCache(withoutTempAndDuplicate, msg);
 }
 
-function applyTaskChangedToCache(
-  data: MessagesCache | undefined,
+/** Apply a `task_changed` frame to a SINGLE message row — the one place the
+ *  task-chip merge lives so the mainline window, reply-cluster window, and the
+ *  thread-pane root row all stay consistent (mirrors {@link applyReactionToMessage},
+ *  and the reason the projection-fan-out {@link patchMessageInActiveProjections}
+ *  seam can carry it as an opaque `patchRow`). Idempotent: SETS the task fields
+ *  absolute from the event, so replay is a no-op. The caller matches
+ *  `message.id === task.message_id`. */
+export function applyTaskChangedToMessage(
+  message: MessageDto,
   task: TaskChangedEvent,
-): MessagesCache | undefined {
-  if (!data) return data;
-  let changed = false;
-  const pages = data.pages.map(page => {
-    let pageChanged = false;
-    const messages = page.messages.map(message => {
-      if (message.id !== task.message_id) return message;
-      changed = true;
-      pageChanged = true;
-      return {
-        ...message,
-        task_number: task.task_number,
-        task_status: task.status,
-        task_title: task.title,
-        task_workspace_id: task.workspace_id,
-        task_closed_at: task.closed_at,
-        task_assignee: task.assignee,
-      };
-    });
-    return pageChanged ? { ...page, messages } : page;
-  });
-  return changed ? { ...data, pages } : data;
+): MessageDto {
+  return {
+    ...message,
+    task_number: task.task_number,
+    task_status: task.status,
+    task_title: task.title,
+    task_workspace_id: task.workspace_id,
+    task_closed_at: task.closed_at,
+    task_assignee: task.assignee,
+  };
 }
 
 /** Apply a `message_reaction_changed` event to a SINGLE message row.
@@ -599,97 +594,147 @@ export function applyReactionToMessage(
  *  this window — so the same handler can be fired against both the
  *  main-stream and reply-cluster caches and only the one actually holding
  *  the row changes. */
-function applyReactionChangedToCache(
-  data: MessagesCache | undefined,
-  ev: MessageReactionChangedEvent,
-  viewerUserId: string | null,
-): MessagesCache | undefined {
-  if (!data) return data;
-  let changed = false;
-  const pages = data.pages.map(page => {
-    let pageChanged = false;
-    const messages = page.messages.map(message => {
-      // Reactions only ever target committed rows; a pending optimistic row has
-      // no server id an event could match, so it passes through untouched.
-      if (message.id !== ev.message_id || !isCommittedMessage(message)) {
-        return message;
-      }
-      changed = true;
-      pageChanged = true;
-      return applyReactionToMessage(message, ev, viewerUserId);
+// ─── Message-scoped content-patch seam (#task:1270) ──────────────────────────
+// SINGLE entry for "set fields on an existing message row, by id, across every
+// currently-DISPLAYED projection that holds it". Before this, each row-patch
+// event handler (reaction, task_changed) hand-enumerated which projections to
+// write — and a new handler could (and #task:1269 item 1 did) forget one,
+// silently dropping live patches for that projection. The fix is by-construction:
+// handlers no longer enumerate projections; they hand this seam an idempotent
+// per-row `patchRow` and it fans out to all three message projections, each
+// gated on {active observer AND cache actually holds the row} — never
+// bootstrapping an absent window.
+//
+// SSOT for "which displayed projections hold M" = React Query observer count +
+// cache content (NOT the transport interest registry #1260, a bandwidth-scope
+// concern that can't answer "is M in this window"). The per-projection walkers
+// below are deliberately NOT exported: the only way to patch a message row is
+// through this seam (a by-construction fence — you can't call a function that
+// isn't exported), backed by a source-scan fence forbidding row-patch handlers
+// from touching the reader gates / `setQueryData` directly. `applied` = ≥1
+// displayed projection was actually written; it is the SYNCHRONOUS commit signal
+// (reaction/task stay on the #1263 hybrid boolean gate, off the async `message`
+// allSettled path). Fire-and-forget refreshes (reactors popover, task-by-number
+// detail) are NOT this seam's job and never count toward `applied` — they
+// self-heal authoritative-on-open.
+//
+// S1 note: only the resolver (which projections + membership) is React-Query
+// specific; the seam SIGNATURE is the S1 projection-recovery shape, so S1 can
+// swap the resolver internals without touching callers.
+
+/** Map the one row `messageId` inside a paginated message-window cache via
+ *  `patchRow`; a no-op (returns false) when the window is absent or doesn't hold
+ *  the row. Only committed rows are touched — a pending optimistic row carries a
+ *  temp id an event's server id can't match anyway (belt-and-suspenders). */
+function mapMessageRowInWindow(
+  qc: QueryClient,
+  key: readonly unknown[],
+  messageId: string,
+  patchRow: (message: MessageDto) => MessageDto,
+): boolean {
+  const cur = qc.getQueryData<MessagesCache>(key);
+  if (!cacheHasMessage(cur, messageId)) return false;
+  qc.setQueryData<MessagesCache>(key, prev => {
+    if (!prev) return prev;
+    let changed = false;
+    const pages = prev.pages.map(page => {
+      let pageChanged = false;
+      const messages = page.messages.map(message => {
+        if (message.id !== messageId || !isCommittedMessage(message)) {
+          return message;
+        }
+        changed = true;
+        pageChanged = true;
+        return patchRow(message);
+      });
+      return pageChanged ? { ...page, messages } : page;
     });
-    return pageChanged ? { ...page, messages } : page;
+    return changed ? { ...prev, pages } : prev;
   });
-  return changed ? { ...data, pages } : data;
+  return true;
 }
 
-/** Patch every channel-scope cache a `message_reaction_changed` event
- *  touches: the main-stream window, the reply-cluster window (only when the
- *  event targets a reply), and the lazy hover reactor-detail query —
- *  invalidated so an already-open "who reacted" list refetches instead of
- *  showing names stale by up to its `staleTime` (#task:1122 review, P1.2).
- *  Mirrors `applyTaskChangedToTaskByNumberCache`'s QueryClient-operating
- *  shape so the WS handler stays a thin caller and the cache effects are
- *  unit-testable without a stream mock. */
-export function applyReactionChangedToChannelCaches(
+/** Map the single root row of an open thread-pane root cache via `patchRow`;
+ *  a no-op unless this open root IS `messageId` and its row is loaded. (Replies
+ *  in the pane live in the cluster window, not this single-row root cache.) */
+function mapMessageRowInThreadRoot(
   qc: QueryClient,
   channelId: string,
-  ev: MessageReactionChangedEvent,
-  viewerUserId: string | null,
+  rootId: string,
+  messageId: string,
+  patchRow: (message: MessageDto) => MessageDto,
 ): boolean {
-  // Idempotent: `applyReactionToMessage` SETS the aggregate from the event's
-  // absolute `count`, so replay is a no-op (false-negative safe, §4.1). `applied`
-  // = the targeted row is in a loaded window (a reaction on an off-window message
-  // is a cursor-inert no-op).
-  const mainlineCur = qc.getQueryData<MessagesCache>(messagesKey(channelId));
-  let applied = cacheHasMessage(mainlineCur, ev.message_id);
-  qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
-    applyReactionChangedToCache(prev, ev, viewerUserId),
-  );
-  if (ev.thread_root_id) {
-    const clusterCur = qc.getQueryData<MessagesCache>(
-      clusterMessagesKey(channelId, ev.thread_root_id),
-    );
-    if (cacheHasMessage(clusterCur, ev.message_id)) applied = true;
-    qc.setQueryData<MessagesCache>(
-      clusterMessagesKey(channelId, ev.thread_root_id),
-      prev => applyReactionChangedToCache(prev, ev, viewerUserId),
-    );
-  }
-  void qc.invalidateQueries({ queryKey: messageReactorsKey(ev.message_id) });
-  return applied;
-}
-
-/** Patch the thread pane's root-row query for a `message_reaction_changed`
- *  event. The root lives in the main stream (the event's `thread_root_id` is
- *  null), so {@link applyReactionChangedToChannelCaches} only updates the
- *  LEFT-side main cache — without this the open pane's root reaction stays
- *  stale until a manual refetch (#task:1122 review, P1.1). Reuses the one
- *  merge helper; no-op unless the event targets this exact root. */
-export function applyReactionChangedToThreadRootCache(
-  qc: QueryClient,
-  channelId: string,
-  rootMessageId: string,
-  ev: MessageReactionChangedEvent,
-  viewerUserId: string | null,
-): boolean {
-  if (ev.message_id !== rootMessageId) return false;
+  if (rootId !== messageId) return false;
   const prev = qc.getQueryData<ConversationMessagesDto>(
-    threadRootKey(channelId, rootMessageId),
+    threadRootKey(channelId, rootId),
   );
-  const found = prev?.messages.some(m => m.id === rootMessageId) ?? false;
-  if (!found) return false;
+  if (!(prev?.messages.some(m => m.id === messageId) ?? false)) return false;
   qc.setQueryData<ConversationMessagesDto>(
-    threadRootKey(channelId, rootMessageId),
-    p => {
-      if (!p) return p;
-      const messages = p.messages.map(m =>
-        m.id === rootMessageId ? applyReactionToMessage(m, ev, viewerUserId) : m,
-      );
-      return { ...p, messages };
-    },
+    threadRootKey(channelId, rootId),
+    p =>
+      p
+        ? {
+            ...p,
+            messages: p.messages.map(m =>
+              m.id === messageId ? patchRow(m) : m,
+            ),
+          }
+        : p,
   );
-  return found;
+  return true;
+}
+
+/** THE message-row content-patch seam (#task:1270) — see the block comment
+ *  above. Fans an idempotent `patchRow` out to every DISPLAYED projection that
+ *  holds `messageId` (mainline window, each open reply cluster, each open
+ *  thread-root row), membership-gated so it never bootstraps an absent window.
+ *  Returns `applied` = at least one displayed projection was written (the
+ *  synchronous content-commit signal for the resume floor). */
+export function patchMessageInActiveProjections(
+  qc: QueryClient,
+  target: { channelId: string; messageId: string; threadRootId: string | null },
+  patchRow: (message: MessageDto) => MessageDto,
+): boolean {
+  // `threadRootId` is a FUTURE RESOLVER HINT, not a correctness gate — the seam
+  // deliberately does not read it. Projection membership is decided by observer
+  // count + cache content (walk every open cluster/thread-root, membership-gate),
+  // never by trusting the event's declared root. It stays on the target so an S1
+  // per-projection recovery can key off it without a signature change; if that
+  // never lands, drop the field rather than start trusting it as input.
+  const { channelId, messageId } = target;
+  let applied = false;
+  // MAINLINE window — gated on a mounted mainline reader; then membership-gated.
+  if (
+    hasActiveMainlineReader(qc, channelId) &&
+    mapMessageRowInWindow(qc, messagesKey(channelId), messageId, patchRow)
+  ) {
+    applied = true;
+  }
+  // REPLY-CLUSTER windows — every OPEN cluster; each no-ops unless its window
+  // holds the row. Enumerate-all + membership-gate (rather than only the row's
+  // own root cluster) mirrors the mainline-append path and is robust to a row
+  // surfacing in more than one loaded window.
+  for (const rootId of openClusterReaderRoots(qc, channelId)) {
+    if (
+      mapMessageRowInWindow(
+        qc,
+        clusterMessagesKey(channelId, rootId),
+        messageId,
+        patchRow,
+      )
+    ) {
+      applied = true;
+    }
+  }
+  // THREAD-PANE root rows — a separate single-row cache; no-op unless this open
+  // root IS the target message. This is the projection reaction covered but
+  // task_changed did not (#task:1269-class gap) — the seam closes it uniformly.
+  for (const rootId of openThreadRootReaderRoots(qc, channelId)) {
+    if (mapMessageRowInThreadRoot(qc, channelId, rootId, messageId, patchRow)) {
+      applied = true;
+    }
+  }
+  return applied;
 }
 
 /** Set/clear the mainline live-gap affordance. Single shared writer: the
@@ -768,26 +813,6 @@ export function applyMainlineMessageToChannelCaches(
     appendMessageToCache(prev, msg),
   );
   return Promise.resolve();
-}
-
-/** Apply a `task_changed` frame to the channel caches (#task:1255 Stage-2) —
- *  patches the by-number task cache AND the inline task chip in the main-stream
- *  window. Returns whether the in-stream chip was for a loaded row (the `applied`
- *  signal, §4.1). Idempotent: `applyTaskChangedToCache` SETS task fields, so
- *  replay is a no-op (false-negative safe). The by-number cache is a separate
- *  projection, not the message-stream content the resume floor tracks. */
-export function applyTaskChangedToChannelCaches(
-  qc: QueryClient,
-  channelId: string,
-  task: TaskChangedEvent,
-): boolean {
-  applyTaskChangedToTaskByNumberCache(qc, task);
-  const cur = qc.getQueryData<MessagesCache>(messagesKey(channelId));
-  const inCache = cacheHasMessage(cur, task.message_id);
-  qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
-    applyTaskChangedToCache(prev, task),
-  );
-  return inCache;
 }
 
 /** Reconcile the channel main-stream window on `snapshot_required` (reconnect
@@ -1015,25 +1040,6 @@ export function applyClusterMessageToCaches(
     appendMessageToCache(prev, msg),
   );
   return Promise.resolve();
-}
-
-/** Apply a `task_changed` frame to one OPEN cluster window — patches the chip if
- *  the row is loaded (no-op otherwise). Returns whether it patched a loaded row
- *  (the `applied` signal, §4.1); idempotent (sets fields), so false-negative safe. */
-export function applyClusterTaskChangedToCaches(
-  qc: QueryClient,
-  channelId: string,
-  rootId: string,
-  task: TaskChangedEvent,
-): boolean {
-  const cur = qc.getQueryData<MessagesCache>(
-    clusterMessagesKey(channelId, rootId),
-  );
-  const inCache = cacheHasMessage(cur, task.message_id);
-  qc.setQueryData<MessagesCache>(clusterMessagesKey(channelId, rootId), prev =>
-    applyTaskChangedToCache(prev, task),
-  );
-  return inCache;
 }
 
 /** Reconcile one OPEN cluster on `snapshot_required` — clear its live-gap and

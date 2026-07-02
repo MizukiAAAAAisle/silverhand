@@ -1,14 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
-import type {
-  ConversationMessagesDto,
-  MessageDto,
-  TaskChangedEvent,
-} from '@silverhand/shared';
+import type { ConversationMessagesDto, MessageDto } from '@silverhand/shared';
 import { decodeMessageSeq } from '@silverhand/shared';
 import {
   applyClusterMessageToCaches,
-  applyClusterTaskChangedToCaches,
   applyThreadFollowersMessage,
   applyThreadRootReplyBump,
   clusterLiveGapKey,
@@ -105,31 +100,6 @@ describe('applyClusterMessageToCaches', () => {
     );
 
     expect(clusterIds(qc, 'c1', 'root1')).toEqual(['root1', 'r1']);
-  });
-});
-
-describe('applyClusterTaskChangedToCaches', () => {
-  it('patches the inline task chip in the cluster window', () => {
-    const qc = new QueryClient();
-    qc.setQueryData(
-      clusterMessagesKey('c1', 'root1'),
-      tailCache([
-        message({
-          id: 't1',
-          seq: 2,
-          thread_root_id: 'root1',
-          task_number: 7,
-          task_status: 'todo',
-        }),
-      ]),
-    );
-
-    applyClusterTaskChangedToCaches(qc, 'c1', 'root1', taskEvent('t1'));
-
-    const data = qc.getQueryData<{ pages: ConversationMessagesDto[] }>(
-      clusterMessagesKey('c1', 'root1'),
-    );
-    expect(data?.pages[0]?.messages[0]?.task_status).toBe('in_progress');
   });
 });
 
@@ -292,23 +262,5 @@ function rootDto(rootId: string, count: number): ConversationMessagesDto {
     has_more_before: false,
     has_more_after: false,
     stream_head_seq: decodeMessageSeq(1),
-  };
-}
-
-function taskEvent(messageId: string): TaskChangedEvent {
-  return {
-    kind: 'status',
-    workspace_id: 'w1',
-    channel_id: 'c1',
-    thread_root_id: 'root1',
-    legacy_thread_conversation_id: null,
-    thread_id: null,
-    conversation_id: 'c1',
-    task_number: 7,
-    message_id: messageId,
-    status: 'in_progress',
-    assignee: null,
-    title: 'do the thing',
-    closed_at: null,
   };
 }

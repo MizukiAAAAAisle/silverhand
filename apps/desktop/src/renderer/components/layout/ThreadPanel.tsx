@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUpRight, Bell, BellOff, CornerUpLeft, Loader2, X } from 'lucide-react';
+import { ArrowDown, ArrowUpRight, Bell, BellOff, CornerUpLeft, X } from 'lucide-react';
 import { groupMessages } from '@/components/chat/groupMessages';
 import { MessageItem } from '@/components/chat/MessageItem';
 import { SystemMessage } from '@/components/chat/SystemMessage';
 import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
 import { Composer } from '@/components/chat/Composer';
+import { MessageRowsSkeleton } from '@/components/layout/ConversationViewSkeleton';
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import { useMessageActionSurface } from '@/components/chat/useMessageActionSurface';
 import { MessageActionChrome } from '@/components/chat/MessageActionChrome';
@@ -639,9 +640,9 @@ export function ThreadPanel({
           无法加载该消息,它可能已被删除或不可用
         </div>
       ) : rootCtx.isLoading && !rootCtx.root ? (
-        <div className="flex flex-1 items-center justify-center text-text-muted">
-          <Loader2 className="size-4 animate-spin" />
-        </div>
+        // Root still loading: the shared message skeleton under the thread
+        // header, matching every other conversation-loading surface.
+        <MessageRowsSkeleton />
       ) : (
         <div className="relative flex min-h-0 flex-1 flex-col">
           <MessageActionChrome
@@ -696,9 +697,7 @@ export function ThreadPanel({
               // finishes, and hiding the messages would starve that locate of its
               // DOM node, timing the jump out with first-unread locate failed.
               // `threadClusterShowsLoader` encodes this.
-              <div className="flex flex-1 items-center justify-center text-text-muted">
-                <Loader2 className="size-4 animate-spin" />
-              </div>
+              <MessageRowsSkeleton />
             ) : replyMessages.length === 0 ? (
               <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-text-muted">
                 No replies yet

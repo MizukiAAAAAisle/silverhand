@@ -33,11 +33,9 @@ import {
 import {
   applyAgentStatusToCache,
   applyClusterMessageToCaches,
-  applyClusterTaskChangedToCaches,
   applyMainlineMessageToChannelCaches,
-  applyReactionChangedToChannelCaches,
-  applyReactionChangedToThreadRootCache,
-  applyTaskChangedToChannelCaches,
+  applyReactionToMessage,
+  applyTaskChangedToMessage,
   applyThreadFollowersMessage,
   applyThreadRootReplyBump,
   hasActiveChannelAgentsReader,
@@ -47,6 +45,7 @@ import {
   openClusterReaderRoots,
   openThreadFollowerReaderRoots,
   openThreadRootReaderRoots,
+  patchMessageInActiveProjections,
   reconcileChannelAgentsOnSnapshotRequired,
   reconcileChannelMainlineOnSnapshotRequired,
   reconcileClusterOnSnapshotRequired,
@@ -56,6 +55,8 @@ import {
   warmInactiveClusterRoots,
 } from '@/features/channels/hooks';
 import type { ConversationAgentStatusPatch } from '@/features/channels/hooks';
+import { messageReactorsKey } from '@/features/channels/reaction-hooks';
+import { applyTaskChangedToTaskByNumberCache } from '@/features/tasks/useTaskByNumber';
 
 type ReplayCursorEffect = 'content-apply' | 'cursor-inert';
 type ReplayRecoveryEffect =
@@ -422,28 +423,30 @@ function ingestTaskChanged(
   channelId: string,
   task: TaskChangedEvent,
 ): boolean {
-  let applied = false;
-  if (hasActiveMainlineReader(qc, channelId)) {
-    if (
-      contentEffectApplied(
-        'task_message_patch',
-        applyTaskChangedToChannelCaches(qc, channelId, task),
-      )
-    ) {
-      applied = true;
-    }
-  }
-  for (const rootId of openClusterReaderRoots(qc, channelId)) {
-    if (
-      contentEffectApplied(
-        'task_message_patch',
-        applyClusterTaskChangedToCaches(qc, channelId, rootId, task),
-      )
-    ) {
-      applied = true;
-    }
-  }
-  return applied;
+  // The task-by-number DETAIL cache is a SEPARATE projection (task hover/detail
+  // by number), not the message-stream content the resume floor tracks. It is
+  // fired outside the row-patch seam, membership-gated by its OWN cache (no-op /
+  // no bootstrap when absent), and NEVER counted in `applied` — authoritative-on-
+  // open, same class as the reaction reactors-list refresh (#task:1270). Firing
+  // it unconditionally (not behind the mainline gate) drops an incidental
+  // coupling: task detail must update even when the mainline isn't open.
+  applyTaskChangedToTaskByNumberCache(qc, task);
+  // The message-row chip (task_number/status/title/…) is a message-scoped row
+  // patch → the seam fans it to every displayed projection holding the row
+  // (mainline / open clusters / open thread-root), closing the coverage the
+  // old hand-enumerated handler missed for thread-root task rows.
+  return contentEffectApplied(
+    'task_message_patch',
+    patchMessageInActiveProjections(
+      qc,
+      {
+        channelId,
+        messageId: task.message_id,
+        threadRootId: task.thread_root_id,
+      },
+      message => applyTaskChangedToMessage(message, task),
+    ),
+  );
 }
 
 function ingestReaction(
@@ -452,40 +455,28 @@ function ingestReaction(
   ev: MessageReactionChangedEvent,
 ): boolean {
   const viewerId = getCurrentUserId();
-  let applied = false;
-  // #1263 hybrid boundary: a reaction frame keeps the SYNCHRONOUS content-apply
-  // (boolean) gate — its resume-floor correctness rests solely on the idempotent
-  // `reaction_message_patch` (absolute reaction state set by message id). The
-  // reactors popover invalidate fired inside `applyReactionChangedToChannelCaches`
-  // (`reactors_list_refresh`) is a FIRE-AND-FORGET, cursor-inert, authoritative-
-  // on-open detail refresh — deliberately NOT floor-bearing, so it stays off the
-  // `message`-kind `Promise.allSettled` commit-gate. Do not promote reaction to
-  // the satisfaction path on account of that invalidate (see REPLAY_SAFETY_CONTRACTS).
-  // Mainline path also patches the reply-cluster window + reactor list — the
-  // sole writer of cluster reactions in the old code (useThreadCluster has no
-  // reaction branch), so gating it on the mainline reader is faithful.
-  if (hasActiveMainlineReader(qc, channelId)) {
-    if (
-      contentEffectApplied(
-        'reaction_message_patch',
-        applyReactionChangedToChannelCaches(qc, channelId, ev, viewerId),
-      )
-    ) {
-      applied = true;
-    }
-  }
-  // The thread pane's root row is a separate query; patch it for the open root
-  // the reaction targets (no-op unless `ev.message_id === root`).
-  for (const rootId of openThreadRootReaderRoots(qc, channelId)) {
-    if (
-      contentEffectApplied(
-        'reaction_message_patch',
-        applyReactionChangedToThreadRootCache(qc, channelId, rootId, ev, viewerId),
-      )
-    ) {
-      applied = true;
-    }
-  }
+  // Message-scoped absolute-count row patch → the seam fans it to every
+  // displayed projection holding the row (mainline / open clusters / open
+  // thread-root). This is what fixes #task:1269 item 1 by construction: the
+  // Activity thread side panel opens a reply cluster with NO mainline reader, and
+  // the old hand-enumerated gate only checked the mainline → live reactions were
+  // dropped. #1263 hybrid boundary: reaction keeps the SYNCHRONOUS content-apply
+  // (boolean) gate; `applied` is the synchronous content-commit signal.
+  const applied = contentEffectApplied(
+    'reaction_message_patch',
+    patchMessageInActiveProjections(
+      qc,
+      { channelId, messageId: ev.message_id, threadRootId: ev.thread_root_id },
+      message => applyReactionToMessage(message, ev, viewerId),
+    ),
+  );
+  // FIRE-AND-FORGET, cursor-inert, authoritative-on-open: refresh the open
+  // "who reacted" popover (`reactors_list_refresh`). Fired once regardless of row
+  // writes and NEVER counted in `applied` — it self-heals on next open, so it
+  // stays off the resume floor / the `message`-kind allSettled commit-gate (do
+  // not promote reaction to the satisfaction path on its account — see
+  // REPLAY_SAFETY_CONTRACTS).
+  void qc.invalidateQueries({ queryKey: messageReactorsKey(ev.message_id) });
   return applied;
 }
 

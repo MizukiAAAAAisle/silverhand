@@ -1,11 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { QueryClient, QueryObserver } from '@tanstack/react-query';
 import {
   MESSAGE_REACTION_CHANGED_EVENT,
   conversationSideScope,
   conversationScope,
 } from '@silverhand/shared';
-import type { AgentRunState, MessageDto, ServerFrame } from '@silverhand/shared';
+import type {
+  AgentRunState,
+  MessageDto,
+  ServerFrame,
+  TaskSummaryDto,
+} from '@silverhand/shared';
 import { decodeMessageSeq, decodeTransportSeq } from '@silverhand/shared';
 import {
   MESSAGE_STREAM_KIND_CONTRACTS,
@@ -15,6 +22,7 @@ import {
 } from './conversation-ingestor';
 import { clusterMessagesKey, messagesKey, threadRootKey } from '@/features/channels/hooks';
 import { messageReactorsKey } from '@/features/channels/reaction-hooks';
+import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
 import { agentRunStatesKey } from '@/lib/agentRunStateCache';
 import { eventWsClient } from '@/lib/ws-client';
@@ -842,6 +850,360 @@ describe('ingestConversationFrame — per-event satisfaction disposition (#task:
     expect(qc.getQueryData(messageReactorsKey('m1'))).toBeUndefined();
     unsub();
   });
+
+  it('patches cluster reactions for a cluster-only reader (Activity thread side panel, NO mainline reader) (#task:1269 item 1)', () => {
+    const qc = new QueryClient();
+    // The Activity thread side panel opens a reply cluster (ThreadPanel) with NO
+    // mainline reader mounted. Before the gate widened, ingestReaction only checked
+    // hasActiveMainlineReader → live reactions on a reply were silently dropped.
+    const unsub = mountReader(qc, clusterMessagesKey('c1', 'root1'));
+    qc.setQueryData(clusterMessagesKey('c1', 'root1'), {
+      pages: [
+        {
+          messages: [message({ id: 'r1', seq: 5, thread_root_id: 'root1' })],
+          reply_counts_by_root: {},
+          has_more_before: false,
+          has_more_after: false,
+          stream_head_seq: 5,
+        },
+      ],
+      pageParams: [undefined],
+    });
+    ingestConversationFrame(qc, reactionFrame('c1', 'r1', 6, 'root1'));
+    const cache = qc.getQueryData(clusterMessagesKey('c1', 'root1')) as {
+      pages: { messages: MessageDto[] }[];
+    };
+    const patched = cache.pages[0]!.messages[0]!;
+    expect(patched.reactions?.[0]).toMatchObject({ emoji: '👍', count: 1 });
+    // Floor still advances synchronously (reaction stays on the boolean gate).
+    expect(markSatisfied).toHaveBeenCalledWith(conversationScope('c1'), 6, 'epoch-1');
+    unsub();
+  });
+});
+
+// #task:1270 — THE message-row patch seam matrix. #1269 item 1 (reaction gate
+// forgot the cluster projection) and its dual (task_changed forgot the
+// thread-root projection) were the same BUG CLASS: a message-row content-patch
+// handler hand-enumerated which projections to write and missed one. The seam
+// (`patchMessageInActiveProjections`) fixes it BY CONSTRUCTION — every displayed
+// projection holding the row is fanned the same idempotent patch, membership-
+// gated, never bootstrapping. This matrix pins that: standard event × projection
+// surface (mainline / cluster / thread-root / multi-open / no-reader) × {reaction,
+// task}. The `applied` boolean is the synchronous floor signal, so a spied
+// `markSatisfied` doubles as the applied assertion (reaction/task keep the
+// synchronous content-apply gate — #1263 hybrid boundary).
+describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)', () => {
+  let markSatisfied: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    markSatisfied = vi
+      .spyOn(eventWsClient, 'markSatisfied')
+      .mockImplementation(() => {});
+    vi.spyOn(eventWsClient, 'commitSnapshotBaseline').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const windowCache = (rows: MessageDto[]) => ({
+    pages: [
+      {
+        messages: rows,
+        reply_counts_by_root: {},
+        has_more_before: false,
+        has_more_after: false,
+        stream_head_seq: 5,
+      },
+    ],
+    pageParams: [undefined],
+  });
+  const threadRootCache = (row: MessageDto) => ({
+    messages: [row],
+    reply_counts_by_root: {},
+    has_more_before: false,
+    has_more_after: false,
+    stream_head_seq: 5,
+  });
+  const rowInWindow = (
+    qc: QueryClient,
+    key: readonly unknown[],
+    id: string,
+  ): MessageDto | undefined => {
+    const c = qc.getQueryData<{ pages: { messages: MessageDto[] }[] }>(key);
+    return c?.pages.flatMap(p => p.messages).find(m => m.id === id);
+  };
+  const rowInThreadRoot = (
+    qc: QueryClient,
+    channelId: string,
+    rootId: string,
+    id: string,
+  ): MessageDto | undefined => {
+    const c = qc.getQueryData<{ messages: MessageDto[] }>(
+      threadRootKey(channelId, rootId),
+    );
+    return c?.messages.find(m => m.id === id);
+  };
+
+  // Two message-row patch event kinds; the seam is the shared machinery, so the
+  // grid runs identically for both — proving the fix is class-wide, not a
+  // reaction-local patch (Cindy's requirement).
+  const EVENTS = [
+    {
+      kind: 'reaction',
+      seedRow: (id: string, rootId: string | null = null) =>
+        message({ id, seq: 5, thread_root_id: rootId, reactions: null }),
+      fire: (
+        qc: QueryClient,
+        channelId: string,
+        id: string,
+        rootId: string | null = null,
+      ) => ingestConversationFrame(qc, reactionFrame(channelId, id, 6, rootId)),
+      assertPatched: (row: MessageDto | undefined) =>
+        expect(row?.reactions?.[0]).toMatchObject({ emoji: '👍', count: 1 }),
+      assertUnpatched: (row: MessageDto | undefined) =>
+        expect(row?.reactions).toBeNull(),
+    },
+    {
+      kind: 'task',
+      seedRow: (id: string, rootId: string | null = null) =>
+        message({
+          id,
+          seq: 5,
+          thread_root_id: rootId,
+          task_number: 7,
+          task_status: 'todo',
+          task_title: 'old',
+        }),
+      fire: (qc: QueryClient, channelId: string, id: string) =>
+        ingestConversationFrame(qc, taskChangedFrame(channelId, id, 6)),
+      assertPatched: (row: MessageDto | undefined) => {
+        expect(row?.task_status).toBe('in_progress');
+        expect(row?.task_title).toBe('do the thing');
+      },
+      assertUnpatched: (row: MessageDto | undefined) => {
+        expect(row?.task_status).toBe('todo');
+        expect(row?.task_title).toBe('old');
+      },
+    },
+  ] as const;
+
+  for (const ev of EVENTS) {
+    describe(ev.kind, () => {
+      it('mainline-only reader: patches the mainline row + markSatisfied once', () => {
+        const qc = new QueryClient();
+        const unsub = mountMainlineReader(qc, 'c1');
+        qc.setQueryData(messagesKey('c1'), windowCache([ev.seedRow('m1')]));
+
+        ev.fire(qc, 'c1', 'm1');
+
+        ev.assertPatched(rowInWindow(qc, messagesKey('c1'), 'm1'));
+        expect(markSatisfied).toHaveBeenCalledTimes(1);
+        expect(markSatisfied).toHaveBeenCalledWith(
+          conversationScope('c1'),
+          6,
+          'epoch-1',
+        );
+        unsub();
+      });
+
+      it('cluster-only reader (NO mainline): patches the cluster row, mainline stays absent', () => {
+        const qc = new QueryClient();
+        const unsub = mountReader(qc, clusterMessagesKey('c1', 'root1'));
+        qc.setQueryData(
+          clusterMessagesKey('c1', 'root1'),
+          windowCache([ev.seedRow('r1', 'root1')]),
+        );
+
+        ev.fire(qc, 'c1', 'r1', 'root1');
+
+        ev.assertPatched(rowInWindow(qc, clusterMessagesKey('c1', 'root1'), 'r1'));
+        // No mainline reader → the mainline window is never bootstrapped.
+        expect(qc.getQueryData(messagesKey('c1'))).toBeUndefined();
+        expect(markSatisfied).toHaveBeenCalledTimes(1);
+        unsub();
+      });
+
+      it('thread-root-only reader: patches the root row (the projection the old hand-enumerated handler forgot)', () => {
+        const qc = new QueryClient();
+        const unsub = mountReader(qc, threadRootKey('c1', 'root1'));
+        qc.setQueryData(
+          threadRootKey('c1', 'root1'),
+          threadRootCache(ev.seedRow('root1')),
+        );
+
+        ev.fire(qc, 'c1', 'root1', 'root1');
+
+        ev.assertPatched(rowInThreadRoot(qc, 'c1', 'root1', 'root1'));
+        expect(markSatisfied).toHaveBeenCalledTimes(1);
+        unsub();
+      });
+
+      it('multi-open (mainline + cluster + thread-root all hold the root row): patches ALL three, markSatisfied ONCE', () => {
+        const qc = new QueryClient();
+        const unsubM = mountMainlineReader(qc, 'c1');
+        const unsubC = mountReader(qc, clusterMessagesKey('c1', 'root1'));
+        const unsubR = mountReader(qc, threadRootKey('c1', 'root1'));
+        qc.setQueryData(messagesKey('c1'), windowCache([ev.seedRow('root1')]));
+        qc.setQueryData(
+          clusterMessagesKey('c1', 'root1'),
+          windowCache([ev.seedRow('root1')]),
+        );
+        qc.setQueryData(
+          threadRootKey('c1', 'root1'),
+          threadRootCache(ev.seedRow('root1')),
+        );
+
+        ev.fire(qc, 'c1', 'root1', 'root1');
+
+        ev.assertPatched(rowInWindow(qc, messagesKey('c1'), 'root1'));
+        ev.assertPatched(
+          rowInWindow(qc, clusterMessagesKey('c1', 'root1'), 'root1'),
+        );
+        ev.assertPatched(rowInThreadRoot(qc, 'c1', 'root1', 'root1'));
+        // One frame → exactly one floor advance, no matter how many projections
+        // the patch fanned to.
+        expect(markSatisfied).toHaveBeenCalledTimes(1);
+        unsubM();
+        unsubC();
+        unsubR();
+      });
+
+      it('no reader (warm caches, zero observers): patches nothing + markSatisfied NOT called', () => {
+        const qc = new QueryClient();
+        // Warm caches exist but nothing observes them → not DISPLAYED, so the
+        // membership gate skips every projection (never resurrect a background
+        // cache off a live frame).
+        qc.setQueryData(messagesKey('c1'), windowCache([ev.seedRow('m1')]));
+        qc.setQueryData(
+          clusterMessagesKey('c1', 'root1'),
+          windowCache([ev.seedRow('r1', 'root1')]),
+        );
+
+        ev.fire(qc, 'c1', 'm1');
+
+        ev.assertUnpatched(rowInWindow(qc, messagesKey('c1'), 'm1'));
+        ev.assertUnpatched(
+          rowInWindow(qc, clusterMessagesKey('c1', 'root1'), 'r1'),
+        );
+        expect(markSatisfied).not.toHaveBeenCalled();
+      });
+
+      it('membership-gated: an OPEN reader whose window does NOT hold the row is a no-op (not applied)', () => {
+        const qc = new QueryClient();
+        // Mainline reader open, but its window holds a DIFFERENT row → the patch
+        // must not apply (id membership, not just reader presence).
+        const unsub = mountMainlineReader(qc, 'c1');
+        qc.setQueryData(
+          messagesKey('c1'),
+          windowCache([ev.seedRow('other')]),
+        );
+
+        ev.fire(qc, 'c1', 'm1');
+
+        expect(rowInWindow(qc, messagesKey('c1'), 'm1')).toBeUndefined();
+        ev.assertUnpatched(rowInWindow(qc, messagesKey('c1'), 'other'));
+        expect(markSatisfied).not.toHaveBeenCalled();
+        unsub();
+      });
+    });
+  }
+
+  // Alice's decoupling regression: the task-by-number DETAIL projection (inline
+  // `#task:<n>` hover/detail) is a SEPARATE projection — authoritative-on-open,
+  // fired OUTSIDE the row-patch seam, membership-gated by its OWN cache, and NOT
+  // counted in `applied`. Same class as reaction's reactors-list refresh. This
+  // locks: it still refreshes when the mainline is closed, it never bootstraps
+  // when absent, and it never advances the resume floor.
+  describe('task-by-number detail projection rides OUTSIDE the floor seam (Alice)', () => {
+    const taskSummary = (): TaskSummaryDto => ({
+      message_id: 't1',
+      task_number: 7,
+      workspace_id: 'w1',
+      workspace_name: 'WS',
+      channel_id: 'c1',
+      channel_name: 'general',
+      thread_root_id: null,
+      legacy_thread_conversation_id: null,
+      thread_id: null,
+      conversation: { id: 'c1', title: 'general' },
+      status: 'todo',
+      title: 'old',
+      assignee: null,
+      creator: { type: 'user', id: 'u1', name: 'shiki' },
+      created_at: 0,
+      closed_at: null,
+    });
+
+    it('refreshes the detail cache when the mainline is CLOSED — and does NOT markSatisfied', () => {
+      const qc = new QueryClient();
+      qc.setQueryData(taskByNumberKey('w1', 7), taskSummary());
+      // No mainline / cluster / thread-root reader → the row seam applies nothing.
+
+      ingestConversationFrame(qc, taskChangedFrame('c1', 't1', 6));
+
+      const detail = qc.getQueryData<TaskSummaryDto>(taskByNumberKey('w1', 7));
+      expect(detail?.status).toBe('in_progress');
+      expect(detail?.title).toBe('do the thing');
+      // Decoupled: the detail refresh is NOT a floor-bearing content apply.
+      expect(markSatisfied).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op when the detail cache is absent (no bootstrap, no throw, no floor advance)', () => {
+      const qc = new QueryClient();
+
+      ingestConversationFrame(qc, taskChangedFrame('c1', 't1', 6));
+
+      expect(qc.getQueryData(taskByNumberKey('w1', 7))).toBeUndefined();
+      expect(markSatisfied).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// #task:1270 — SOURCE-SCAN FENCE (orthogonal to the by-construction fence: the
+// 4 per-projection fan-out exports were deleted so a handler physically cannot
+// hand-pick projections). This fence guards the OTHER direction: the message-row
+// patch handlers must route EVERY projection write through the seam — never
+// touch a projection cache directly (`setQueryData`) and never re-derive the
+// per-projection reader gates (`hasActiveMainlineReader` / `openClusterReaderRoots`
+// / `openThreadRootReaderRoots`). Those gates can't be globally unexported
+// (ingestMessage's append path legitimately uses them), so the fence is body-
+// scoped to the two row-patch handlers. The node test env can't render, so — in
+// the spirit of the read-inert fences — we statically slice + scan the source.
+describe('message-row patch handlers — route through the seam, never hand-pick projections (#task:1270)', () => {
+  const source = readFileSync(
+    fileURLToPath(new URL('./conversation-ingestor.ts', import.meta.url)),
+    'utf8',
+  );
+
+  function sliceFunctionBody(declaration: string): string {
+    const start = source.indexOf(declaration);
+    if (start === -1) {
+      throw new Error(`could not find "${declaration}" — was it renamed?`);
+    }
+    const rest = source.slice(start + declaration.length);
+    const nextDecl = rest.search(/\n(?:export )?function /);
+    return nextDecl === -1 ? rest : rest.slice(0, nextDecl);
+  }
+
+  // The reader-gate predicates a hand-enumerated handler would re-derive to pick
+  // projections, plus the raw cache writer. All must be absent from the row-patch
+  // handler bodies — the seam owns projection selection + writes.
+  const FORBIDDEN = [
+    'setQueryData',
+    'hasActiveMainlineReader(',
+    'openClusterReaderRoots(',
+    'openThreadRootReaderRoots(',
+  ];
+
+  for (const decl of ['function ingestReaction(', 'function ingestTaskChanged(']) {
+    const name = decl.replace('function ', '').replace('(', '');
+    const body = sliceFunctionBody(decl);
+
+    it(`${name} routes projection writes through patchMessageInActiveProjections`, () => {
+      expect(body).toContain('patchMessageInActiveProjections(');
+    });
+
+    it(`${name} never hand-picks projections (no gate predicate / direct setQueryData)`, () => {
+      for (const sym of FORBIDDEN) expect(body).not.toContain(sym);
+    });
+  }
 });
 
 function taskChangedFrame(
@@ -877,6 +1239,7 @@ function reactionFrame(
   channelId: string,
   messageId: string,
   seq: number,
+  threadRootId: string | null = null,
 ): ServerFrame {
   return {
     type: 'event',
@@ -887,7 +1250,7 @@ function reactionFrame(
     payload: {
       message_id: messageId,
       conversation_id: channelId,
-      thread_root_id: null,
+      thread_root_id: threadRootId,
       emoji: '👍',
       op: 'add',
       reactor_kind: 'user',

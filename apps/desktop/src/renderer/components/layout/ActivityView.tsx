@@ -515,12 +515,15 @@ function ActivityRow({
   // null only for a malformed item — then the row offers no ✓.
   const clearSource = activityItemSource(item);
 
-  // Dense row-1 count metadata: grouped but quiet. Neutral ink + hairline
-  // outline (never the sidebar unread badge's accent fill); purely
-  // presentational — the row stays the only hit target.
+  // Dense row-1 count metadata. Sits RIGHT AFTER the channel title (an
+  // attention count belongs with the stream it counts, not floated to the far
+  // edge) and carries a soft-accent fill so the unread signal reads at a glance
+  // — louder than the old borderless neutral, but a step below the sidebar's
+  // full-accent pill so the dense header line stays scannable (#task:1269
+  // item 2).
   const countEl =
     item.unread_count != null && item.unread_count > 0 ? (
-      <span className="shrink-0 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border-subtle px-1.5 py-px text-xs leading-tight tabular-nums text-text-secondary">
+      <span className="shrink-0 rounded-[var(--control-radius)] bg-accent-soft px-1.5 py-px text-xs font-medium leading-tight tabular-nums text-accent">
         {item.unread_count > 99 ? '99+' : item.unread_count} new
       </span>
     ) : null;
@@ -585,25 +588,27 @@ function ActivityRow({
               </>
             ) : null}
             <ChannelGlyph item={item} />
-            <span className="min-w-0 flex-1 truncate text-text-secondary">
+            <span className="min-w-0 shrink truncate text-text-secondary">
               {item.title}
             </span>
-            {/* "N new" is item-level aggregate META about the stream, not body
-                content, so it rides the header line and leaves the message line
-                below for content only. */}
+            {/* "N new" rides right after the title — an aggregate about THIS
+                stream, kept next to its subject rather than floated to the row
+                edge (the timestamp owns the far-right). */}
             {countEl}
           </div>
 
           {/* row 2 — thread root summary (thread glyph marks it as the root
               message), OR the triggering message line with its sender when
-              there is no separate root. */}
+              there is no separate root. The root is CONTEXT, so it's recessed
+              to muted ink (cohesive with its muted glyph) — the reply below is
+              the focus and keeps primary ink (#task:1269 item 3). */}
           {hasRootLine ? (
             <div className="mt-1 flex items-center gap-2">
               <MessagesSquare
                 aria-hidden
                 className="size-3.5 shrink-0 text-text-muted"
               />
-              <span className="min-w-0 flex-1 truncate text-sm text-text-primary">
+              <span className="min-w-0 flex-1 truncate text-sm text-text-muted">
                 {item.thread_root_preview}
               </span>
             </div>

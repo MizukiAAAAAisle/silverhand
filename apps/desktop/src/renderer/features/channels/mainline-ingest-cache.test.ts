@@ -8,7 +8,7 @@ import type {
 import { decodeMessageSeq } from '@silverhand/shared';
 import {
   applyMainlineMessageToChannelCaches,
-  applyTaskChangedToChannelCaches,
+  applyTaskChangedToMessage,
   mainlineLiveGapKey,
   messagesKey,
   reconcileChannelMainlineOnSnapshotRequired,
@@ -167,37 +167,40 @@ describe('applyMainlineMessageToChannelCaches — reply (thread_root_id set), #1
   });
 });
 
-describe('applyTaskChangedToChannelCaches', () => {
-  it('patches the inline task chip in the main-stream window', () => {
-    const qc = new QueryClient();
-    qc.setQueryData(
-      messagesKey('c1'),
-      tailCache([
-        message({ id: 't1', seq: 1, task_number: 7, task_status: 'todo' }),
-      ]),
+describe('applyTaskChangedToMessage (the one task-chip merge helper)', () => {
+  it('sets the task-chip fields absolute from the event', () => {
+    // The projection fan-out that used to live in `applyTaskChangedToChannelCaches`
+    // / `applyClusterTaskChangedToCaches` moved into the message-row patch seam
+    // (`patchMessageInActiveProjections`, #task:1270); its event×projection×reader
+    // coverage lives in the ingestor's "message-row patch seam" matrix. This keeps
+    // the ONE merge helper the seam carries as its `patchRow`.
+    const out = applyTaskChangedToMessage(
+      message({
+        id: 't1',
+        seq: 1,
+        task_number: 7,
+        task_status: 'todo',
+        task_title: 'old',
+      }),
+      {
+        kind: 'status',
+        workspace_id: 'w1',
+        channel_id: 'c1',
+        thread_root_id: null,
+        legacy_thread_conversation_id: null,
+        thread_id: null,
+        conversation_id: 'c1',
+        task_number: 7,
+        message_id: 't1',
+        status: 'in_progress',
+        assignee: null,
+        title: 'do the thing',
+        closed_at: null,
+      },
     );
-
-    const ev: TaskChangedEvent = {
-      kind: 'status',
-      workspace_id: 'w1',
-      channel_id: 'c1',
-      thread_root_id: null,
-      legacy_thread_conversation_id: null,
-      thread_id: null,
-      conversation_id: 'c1',
-      task_number: 7,
-      message_id: 't1',
-      status: 'in_progress',
-      assignee: null,
-      title: 'do the thing',
-      closed_at: null,
-    };
-    applyTaskChangedToChannelCaches(qc, 'c1', ev);
-
-    const data = qc.getQueryData<{ pages: ConversationMessagesDto[] }>(
-      messagesKey('c1'),
-    );
-    expect(data?.pages[0]?.messages[0]?.task_status).toBe('in_progress');
+    expect(out.task_status).toBe('in_progress');
+    expect(out.task_title).toBe('do the thing');
+    expect(out.task_number).toBe(7);
   });
 });
 

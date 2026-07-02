@@ -1,20 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { QueryClient } from '@tanstack/react-query';
-import type {
-  ConversationMessagesDto,
-  MessageDto,
-  MessageReactionChangedEvent,
-} from '@silverhand/shared';
+import type { MessageDto, MessageReactionChangedEvent } from '@silverhand/shared';
 import { decodeMessageSeq } from '@silverhand/shared';
-import {
-  applyReactionChangedToChannelCaches,
-  applyReactionChangedToThreadRootCache,
-  applyReactionToMessage,
-  clusterMessagesKey,
-  messagesKey,
-  threadRootKey,
-} from './hooks';
-import { messageReactorsKey } from './reaction-hooks';
+import { applyReactionToMessage } from './hooks';
+
+// The projection fan-out that used to live in `applyReactionChangedToChannelCaches`
+// / `applyReactionChangedToThreadRootCache` moved into the single message-row
+// patch seam (`patchMessageInActiveProjections`, #task:1270); its
+// event×projection×reader coverage now lives in
+// `features/realtime/conversation-ingestor.test.ts` (the "message-row patch seam"
+// matrix). This file keeps the ONE merge helper's unit tests — the pure row
+// transform the seam carries as its `patchRow`.
 
 const VIEWER = 'user-self';
 const OTHER = 'user-other';
@@ -81,126 +76,6 @@ describe('applyReactionToMessage (the one merge helper)', () => {
   });
 });
 
-describe('applyReactionChangedToChannelCaches', () => {
-  it('patches the main-stream window row in place', () => {
-    const qc = new QueryClient();
-    qc.setQueryData(messagesKey('c1'), cache([message({ id: 'm1' })]));
-
-    applyReactionChangedToChannelCaches(
-      qc,
-      'c1',
-      reactionEvent({ message_id: 'm1', emoji: '👍', op: 'add', count: 1 }),
-      VIEWER,
-    );
-
-    const data = qc.getQueryData(messagesKey('c1')) as ReturnType<typeof cache>;
-    expect(data.pages[0]?.messages[0]?.reactions).toEqual([
-      { emoji: '👍', count: 1, viewer_reacted: true },
-    ]);
-  });
-
-  it('patches the reply-cluster window when the event targets a reply', () => {
-    const qc = new QueryClient();
-    qc.setQueryData(
-      clusterMessagesKey('c1', 'root1'),
-      cache([message({ id: 'reply1' })]),
-    );
-
-    applyReactionChangedToChannelCaches(
-      qc,
-      'c1',
-      reactionEvent({
-        message_id: 'reply1',
-        thread_root_id: 'root1',
-        emoji: '🔥',
-        op: 'add',
-        count: 2,
-        reactor_id: OTHER,
-      }),
-      VIEWER,
-    );
-
-    const data = qc.getQueryData(
-      clusterMessagesKey('c1', 'root1'),
-    ) as ReturnType<typeof cache>;
-    expect(data.pages[0]?.messages[0]?.reactions).toEqual([
-      { emoji: '🔥', count: 2, viewer_reacted: false },
-    ]);
-  });
-
-  // P1.2 (#task:1122 review): the lazy hover "who reacted" list must be
-  // invalidated, or an already-open list shows names stale by up to its
-  // staleTime even though the chip count already moved.
-  it('invalidates the lazy reactor-detail query', () => {
-    const qc = new QueryClient();
-    qc.setQueryData(messageReactorsKey('m1'), []);
-    expect(qc.getQueryState(messageReactorsKey('m1'))?.isInvalidated).toBe(
-      false,
-    );
-
-    applyReactionChangedToChannelCaches(
-      qc,
-      'c1',
-      reactionEvent({ message_id: 'm1', emoji: '👍', op: 'add', count: 1 }),
-      VIEWER,
-    );
-
-    expect(qc.getQueryState(messageReactorsKey('m1'))?.isInvalidated).toBe(true);
-  });
-});
-
-describe('applyReactionChangedToThreadRootCache', () => {
-  // P1.1 (#task:1122 review): a reaction on a thread root (thread_root_id is
-  // null — it lives in the main stream) must reach the thread pane's separate
-  // root-row query, which the channel handler never touches.
-  it('patches the thread-pane root row for its own root', () => {
-    const qc = new QueryClient();
-    qc.setQueryData(
-      threadRootKey('c1', 'root1'),
-      windowDto([message({ id: 'root1' })]),
-    );
-
-    applyReactionChangedToThreadRootCache(
-      qc,
-      'c1',
-      'root1',
-      reactionEvent({
-        message_id: 'root1',
-        thread_root_id: null,
-        emoji: '👀',
-        op: 'add',
-        count: 1,
-        reactor_id: OTHER,
-      }),
-      VIEWER,
-    );
-
-    const data = qc.getQueryData(
-      threadRootKey('c1', 'root1'),
-    ) as ConversationMessagesDto;
-    expect(data.messages[0]?.reactions).toEqual([
-      { emoji: '👀', count: 1, viewer_reacted: false },
-    ]);
-  });
-
-  it('is a no-op for an event targeting a different message', () => {
-    const qc = new QueryClient();
-    const seeded = windowDto([message({ id: 'root1' })]);
-    qc.setQueryData(threadRootKey('c1', 'root1'), seeded);
-
-    applyReactionChangedToThreadRootCache(
-      qc,
-      'c1',
-      'root1',
-      reactionEvent({ message_id: 'someone-else', emoji: '👀', op: 'add' }),
-      VIEWER,
-    );
-
-    // Untouched — same reference, no reactions added.
-    expect(qc.getQueryData(threadRootKey('c1', 'root1'))).toBe(seeded);
-  });
-});
-
 function message(
   overrides: Partial<Omit<MessageDto, 'seq'>> & { seq?: number } = {},
 ): MessageDto {
@@ -225,27 +100,6 @@ function message(
     task_assignee: null,
     reactions: null,
     ...rest,
-  };
-}
-
-function windowDto(messages: MessageDto[]): ConversationMessagesDto {
-  return {
-    messages,
-    reply_counts_by_root: {},
-    has_more_before: false,
-    has_more_after: false,
-    // Tail window: the head is the latest message's seq (0 when empty). An
-    // explicit, legit value — not a placeholder — per the snapshot contract.
-    stream_head_seq: decodeMessageSeq(
-      messages.reduce((max, m) => Math.max(max, m.seq), 0),
-    ),
-  };
-}
-
-function cache(messages: MessageDto[]) {
-  return {
-    pages: [windowDto(messages)],
-    pageParams: [undefined],
   };
 }
 

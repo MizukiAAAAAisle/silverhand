@@ -393,7 +393,7 @@ function RegisteredAppShell(): JSX.Element {
       ),
     [workspaces],
   );
-  const { data: activeChannels = [] as ChannelListItem[] } = useChannelsForWorkspace(
+  const { data: activeChannels = [] as ChannelListItem[], isLoading: activeChannelsLoading } = useChannelsForWorkspace(
     selectedWorkspaceId,
     selectedWorkspace?.kind ?? null,
   );
@@ -910,6 +910,14 @@ function RegisteredAppShell(): JSX.Element {
   const deferredChannelId = useDeferredValue(selectedChannelId);
   const deferredSelectedChannel =
     channels.find(s => s.id === deferredChannelId) ?? null;
+  // A channel IS selected in the route but its descriptor hasn't resolved yet
+  // and its workspace's channel list is still loading — the transient window on
+  // a cross-workspace jump (e.g. Activity "back to source"). Lets the primary
+  // pane show a loader instead of the "select a channel" empty state (#1269).
+  const parentChannelResolving =
+    deferredChannelId != null &&
+    deferredSelectedChannel == null &&
+    activeChannelsLoading;
   // Same decoupling at the TOP-LEVEL view axis (#task:1168). The NavRail
   // highlight reads urgent `appSection` (instant), while the heavy main-view
   // branch (TasksSection's cross-workspace fetch + 5-column kanban, Settings,
@@ -1461,6 +1469,13 @@ function RegisteredAppShell(): JSX.Element {
     [requestJump],
   );
   const closeActivitySource = useCallback(() => setActivitySource(null), []);
+  // Every fresh entry into Activity starts collapsed — opening the view must not
+  // re-open a source pane docked in a prior visit. Clearing on LEAVE (view flips
+  // away from 'activity') means the next entry always finds a null source, so
+  // the side panel only opens on an explicit row click (#task:1269 item 5).
+  useEffect(() => {
+    if (view !== 'activity') setActivitySource(null);
+  }, [view]);
   // A #conv ref clicked INSIDE the docked source swaps the right pane to that
   // conversation (the panel is a real working viewer), instead of writing a
   // hidden global `?side` the Activity branch never renders (Cindy review
@@ -1590,6 +1605,7 @@ function RegisteredAppShell(): JSX.Element {
     <ChannelView
       channelKind={channelKindForView}
       conversation={deferredParentDescriptor}
+      resolving={parentChannelResolving}
       parentTitle={null}
       jumpTarget={parentJumpTarget}
       jumpPrimePending={parentJumpPrimePending}

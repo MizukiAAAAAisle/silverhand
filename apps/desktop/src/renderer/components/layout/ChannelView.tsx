@@ -41,6 +41,10 @@ import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
 import { groupMessages } from '@/components/chat/groupMessages';
 import { useMessageActionSurface } from '@/components/chat/useMessageActionSurface';
 import { MessageActionChrome } from '@/components/chat/MessageActionChrome';
+import {
+  ConversationViewSkeleton,
+  MessageRowsSkeleton,
+} from '@/components/layout/ConversationViewSkeleton';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
@@ -101,6 +105,12 @@ interface ChannelViewProps {
    *  management). Threaded as a prop so the divergences stay local. */
   channelKind: WorkspaceUiKind | null;
   conversation: ChannelDescriptor | null;
+  /** True when a channel IS selected in the route but its workspace's channel
+   *  list hasn't resolved yet (e.g. a cross-workspace jump from Activity's
+   *  "back to source"): `conversation` is transiently null. Distinguishes this
+   *  loading window from "no channel selected" so the pane shows a loader
+   *  instead of the misleading "select a channel" empty state (#task:1269). */
+  resolving?: boolean;
   parentTitle?: string | null;
   /** One-shot scroll-to target. When set and the target message is in
    *  the current channel, MessageList scrolls + flashes it, then calls
@@ -197,6 +207,14 @@ interface ChannelViewProps {
 
 export const ChannelView = memo(function ChannelView(props: ChannelViewProps): JSX.Element {
   if (!props.conversation) {
+    if (props.resolving) {
+      // A channel IS selected but its descriptor is still resolving (a
+      // cross-workspace jump waiting on the channels list). Show the full
+      // conversation skeleton — same header/messages/composer shape the live
+      // view will take — so the swap never jumps and we never flash the
+      // "no channel" empty text during the 1-2s resolve.
+      return <ConversationViewSkeleton />;
+    }
     return (
       <main
         className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-chat text-sm text-text-muted"
@@ -1521,7 +1539,11 @@ function MessageList({
       />
       <div className="relative min-h-0 min-w-0 flex-1">
       {isLoading ? (
-        <div className="px-4 py-3 text-sm text-text-muted">加载消息…</div>
+        // Initial window fetch: the message skeleton (shared with the full-view
+        // skeleton) rather than a "加载消息…" line, so entering a channel reads
+        // the same as every other conversation-loading surface. `absolute
+        // inset-0` fills this `relative` box.
+        <MessageRowsSkeleton className="absolute inset-0" />
       ) : items.length === 0 && !leadingSlot ? (
         <div className="px-4 py-3 text-sm text-text-muted">
           还没有消息。在下方输入。

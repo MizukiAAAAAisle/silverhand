@@ -34,6 +34,48 @@ const ROWS: ReadonlyArray<{ author: string; lines: readonly string[] }> = [
   { author: 'w-20', lines: ['w-[64%]', 'w-[34%]'] },
 ];
 
+/**
+ * The message-area pulse block on its own — one shared `animate-pulse` over a
+ * few rows that reuse ChannelView's row geometry exactly (`flex items-start
+ * gap-3 px-2 py-1.5`, `size-8` square avatar with `mt-0.5`, content capped at
+ * `max-w-[85%]`). Extracted so every "a conversation's messages are loading"
+ * state renders the SAME skeleton instead of an ad-hoc spinner / "加载中" text:
+ * the full-pane `ConversationViewSkeleton` composes it under a header+composer,
+ * while in-pane loaders (ChannelView message list, ThreadPanel root/cluster)
+ * drop it straight into their already-rendered chrome.
+ *
+ * `className` controls how it fills its container — default `min-h-0 flex-1`
+ * suits a flex-col parent; pass `absolute inset-0` for a `relative` box, etc.
+ */
+export function MessageRowsSkeleton({
+  className = 'min-h-0 flex-1',
+}: {
+  className?: string;
+} = {}): JSX.Element {
+  return (
+    <div
+      className={`animate-pulse space-y-1 overflow-hidden px-4 py-3 ${className}`}
+      aria-hidden
+      data-conversation-rows-skeleton
+    >
+      {ROWS.map((row, i) => (
+        <div key={i} className="flex items-start gap-3 px-2 py-1.5">
+          <div className="mt-0.5 size-8 shrink-0 rounded-none bg-bg-hover" />
+          <div className="min-w-0 max-w-[85%] flex-1">
+            {/* Author + time line — ChannelView uses `mb-1 text-xs` here. */}
+            <div className={`mb-2 h-2.5 rounded bg-bg-hover ${row.author}`} />
+            <div className="space-y-1.5">
+              {row.lines.map((w, j) => (
+                <div key={j} className={`h-3.5 rounded bg-bg-hover ${w}`} />
+              ))}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ConversationViewSkeleton(): JSX.Element {
   return (
     <main
@@ -59,26 +101,10 @@ export function ConversationViewSkeleton(): JSX.Element {
         </div>
       </header>
 
-      {/* Message area — one shared `animate-pulse` over a few rows that reuse
-        * ChannelView's row geometry exactly (`flex items-start gap-3 px-2
-        * py-1.5`, `size-8` square avatar with `mt-0.5`, content capped at
-        * `max-w-[85%]`). */}
-      <div className="min-h-0 flex-1 animate-pulse space-y-1 overflow-hidden px-4 py-3">
-        {ROWS.map((row, i) => (
-          <div key={i} className="flex items-start gap-3 px-2 py-1.5">
-            <div className="mt-0.5 size-8 shrink-0 rounded-none bg-bg-hover" />
-            <div className="min-w-0 max-w-[85%] flex-1">
-              {/* Author + time line — ChannelView uses `mb-1 text-xs` here. */}
-              <div className={`mb-2 h-2.5 rounded bg-bg-hover ${row.author}`} />
-              <div className="space-y-1.5">
-                {row.lines.map((w, j) => (
-                  <div key={j} className={`h-3.5 rounded bg-bg-hover ${w}`} />
-                ))}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
+      {/* Message area — the shared pulse-rows block (MessageRowsSkeleton),
+        * also reused by the in-pane loading states in ChannelView / ThreadPanel
+        * so every "messages loading" surface reads identically. */}
+      <MessageRowsSkeleton />
 
       {/* Composer — reproduces the `<form>` footer (`border-t … px-3 py-3`)
         * wrapping the bordered shell (`rounded-md border`), with the
