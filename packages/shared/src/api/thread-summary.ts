@@ -8,6 +8,7 @@
 // activity first). The path takes a conversation id but only resolves
 // channel / dm_channel. This file is the canonical contract for that endpoint.
 import { z } from 'zod';
+import { MessageSeqSchema } from '../seq.js';
 
 /** Author identity kind for a thread row. 'human' mirrors the
  *  principal-level vocabulary (DB `principal_kind`); the storage column
@@ -42,6 +43,17 @@ export const ThreadSummarySchema = z.object({
    *  (raw text; the frontend handles final ellipsis + mention sigils). */
   root_preview: z.string(),
   root_created_at: z.number(),
+  /** Root message's conversation-global `MessageSeq`. This is the **tie-break
+   *  half of the list keyset** `(last_reply_at DESC, root_seq DESC)`
+   *  (`message-repo.ts:578`) — `last_reply_at` can tie to the millisecond across
+   *  roots, and the server resolves the tie by `root.seq DESC`. Exposed so the
+   *  client can reproduce the server's total order EXACTLY when it repositions a
+   *  row from an S1 `threads_list_entry` patch (docs/projection-recovery-s1-v1.md
+   *  §6) — there is one documented keyset, applied to authoritative values, so
+   *  the client order is a deterministic function of authority and cannot drift.
+   *  Additive (the value was always computed at `message-repo.ts:552`, just not
+   *  surfaced). */
+  root_seq: MessageSeqSchema,
 
   /** Non-system replies only — matches `replyCountsByRoot` / the inline badge. */
   reply_count: z.number().int().nonnegative(),
@@ -67,6 +79,22 @@ export const ThreadSummarySchema = z.object({
   viewer_following: z.boolean(),
 });
 export type ThreadSummary = z.infer<typeof ThreadSummarySchema>;
+
+/** The VIEWER-INVARIANT subset of `ThreadSummary` — every field except the
+ *  per-viewer `viewer_following` (`thread_followers`, principal-scoped). This is
+ *  the exact shape an S1 `threads_list_entry` projection carries on the broadcast
+ *  `conversation:{id}` message frame (docs/projection-recovery-s1-v1.md §3/§5):
+ *  the frame fans one payload to every subscriber, so it can carry ONLY
+ *  viewer-invariant facts. The client merges these invariant fields into the row
+ *  it already holds and KEEPS its own cached `viewer_following` (it cannot be
+ *  defaulted here without the client inventing a viewer fact — Cindy gate ③).
+ *  Derived from `ThreadSummarySchema` (one source of truth, no field drift). */
+export const ThreadSummaryInvariantSchema = ThreadSummarySchema.omit({
+  viewer_following: true,
+});
+export type ThreadSummaryInvariant = z.infer<
+  typeof ThreadSummaryInvariantSchema
+>;
 
 export const ListChannelThreadsResponseSchema = z.object({
   threads: z.array(ThreadSummarySchema),

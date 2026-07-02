@@ -39,7 +39,7 @@ on top:
 - **Transport** (`renderer/lib/ws-client.ts`): `subscribe(scope)` is
   **refcounted** (`desiredScopes`, L209). Last-unsubscribe (`count → 0`, L221-259)
   sends `unsubscribe`, **drops** `satisfiedPending` (backlog — `80aec14`, #1261)
-  + in-flight recovery buffers, but **retains** `appliedPositions` (resume floor)
+  + in-flight recovery buffers, but **retains** `resumeFloorPositions` (resume floor)
   + `receivedPositions` so a resubscribe resumes+replays the no-listener gap
   (#1251). `subscribeWsScope(scope)` (L898) is the thin wrapper;
   `subscribeViewerScope()` (L911) wraps the **deferred** `viewer:<id>` scope

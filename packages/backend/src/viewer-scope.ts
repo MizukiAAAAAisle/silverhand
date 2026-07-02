@@ -1,4 +1,6 @@
+import type { UnreadUpdatedMessagePayload } from '@silverhand/shared';
 import type { ConversationRepo } from './repos/conversation-repo.js';
+import type { ConversationReadRepo } from './repos/conversation-read-repo.js';
 import type { ScopeEventBus } from './ws/scope-event-bus.js';
 
 export function conversationViewerUserIds(
@@ -28,16 +30,55 @@ export function publishToConversationViewers(
   }
 }
 
+/** Build the authoritative `unread_updated` MESSAGE-variant payload for ONE
+ *  viewer (#task:1283). All values are absolute, from the same
+ *  `ConversationReadRepo` REST serves — the client patches badges instead of
+ *  refetching. `workspaceId` is passed in (the caller already holds the
+ *  conversation) so this stays a pure per-(viewer,conversation) build with no
+ *  extra conversation lookup. Uses the single-workspace rollup helper — never an
+ *  all-workspaces scan (B4 cost gate). See docs/projection-recovery-s1-unread-v1.md. */
+export function buildUnreadUpdatedMessagePayload(
+  reads: ConversationReadRepo,
+  conversationId: string,
+  workspaceId: string,
+  viewerUserId: string,
+): UnreadUpdatedMessagePayload {
+  return {
+    conversation_id: conversationId,
+    workspace_id: workspaceId,
+    conversation_unread_count: reads.unreadCountForConversation(
+      conversationId,
+      viewerUserId,
+    ),
+    workspace_unread_count: reads.unreadCountForWorkspace(
+      workspaceId,
+      viewerUserId,
+    ),
+    latest_unread: reads.latestUnreadForConversation(
+      conversationId,
+      viewerUserId,
+    ),
+  };
+}
+
 export function publishUnreadUpdatedToConversationViewers(
   events: ScopeEventBus,
   conversations: ConversationRepo,
+  reads: ConversationReadRepo,
   conversationId: string,
 ): void {
-  publishToConversationViewers(
-    events,
-    conversations,
-    conversationId,
-    'unread_updated',
-    { conversation_id: conversationId },
-  );
+  const conversation = conversations.get(conversationId);
+  if (!conversation) return;
+  const workspaceId = conversation.workspace_id;
+  // Per-viewer: unread is viewer-specific, so the payload is computed inside the
+  // loop (never one payload reused across viewers). The frame rides the
+  // per-viewer `viewer:<id>` scope, so per-viewer absolutes carry no
+  // broadcast-invariant risk (#task:1283).
+  for (const userId of conversationViewerUserIds(conversations, conversationId)) {
+    events.publishToScope(
+      `viewer:${userId}`,
+      'unread_updated',
+      buildUnreadUpdatedMessagePayload(reads, conversationId, workspaceId, userId),
+    );
+  }
 }

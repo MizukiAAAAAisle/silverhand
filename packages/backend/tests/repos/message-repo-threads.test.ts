@@ -135,6 +135,8 @@ describe('MessageRepo.listChannelThreads', () => {
       { kind: 'human', id: 'alice' },
     ]);
     expect(tA.replier_total).toBe(2);
+    // P2 (§6): root_seq is exposed as the keyset tie-break half.
+    expect(tA.root_seq).toBe(rootA.seq);
 
     const tB = page.threads[1]!;
     expect(tB.reply_count).toBe(1);
@@ -338,3 +340,180 @@ describe('MessageRepo.replyBadgeSummariesByRoot (P1)', () => {
     expect(repo.replyBadgeSummariesByRoot(channel.id, [])).toEqual({});
   });
 });
+
+// S1 P2 (docs/projection-recovery-s1-v1.md §5/§6): the single-root, viewer-
+// invariant threads-list entry the backend emits on a `message` frame. Mirrors
+// listChannelThreads's per-row projection MINUS viewer_following, PLUS root_seq.
+describe('MessageRepo.threadListEntryForRoot (P2)', () => {
+  it('mirrors the list row minus viewer_following, plus root_seq', () => {
+    const { db, channel, agentId, repo } = bootstrap();
+    const root = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'R'.repeat(200),
+    });
+    repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      fromUserId: 'alice',
+      content: 'a1',
+      threadRootId: root.id,
+    });
+    const a2 = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      fromAgentId: agentId,
+      content: 'a2',
+      threadRootId: root.id,
+    });
+    // A system reply must be excluded from count / last-reply, matching the list.
+    repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'system',
+      content: 'sys',
+      threadRootId: root.id,
+    });
+    setCreatedAt(db, a2.id, 9000);
+
+    // The viewer follows the cluster — the entry must STILL omit viewer_following
+    // (it is per-viewer, barred from the broadcast frame), unlike the list row.
+    db.prepare(
+      `INSERT INTO thread_followers
+         (thread_root_id, conversation_id, principal_kind, principal_id, followed_at, source)
+       VALUES (?, ?, 'human', ?, ?, 'manual')`,
+    ).run(root.id, channel.id, 'local', Date.now());
+
+    const entry = repo.threadListEntryForRoot(channel.id, root.id);
+    expect(entry).not.toBeNull();
+    // Invariant fields mirror the list row.
+    expect(entry).toEqual({
+      root_message_id: root.id,
+      root_author: { kind: 'human', id: 'local' },
+      root_preview: 'R'.repeat(160),
+      root_created_at: root.created_at,
+      root_seq: root.seq,
+      reply_count: 2, // a1 + a2, system excluded
+      last_reply_at: 9000,
+      last_reply_message_id: a2.id,
+      repliers: [
+        { kind: 'agent', id: agentId },
+        { kind: 'human', id: 'alice' },
+      ],
+      replier_total: 2,
+    });
+    // Structurally viewer-invariant: no per-viewer key leaks in.
+    expect('viewer_following' in (entry as object)).toBe(false);
+  });
+
+  it('returns null for a root with no non-system reply', () => {
+    const { channel, repo } = bootstrap();
+    const root = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'lonely',
+    });
+    // A system-only reply does not make it a thread.
+    repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'system',
+      content: 'sys',
+      threadRootId: root.id,
+    });
+    expect(repo.threadListEntryForRoot(channel.id, root.id)).toBeNull();
+  });
+
+  it('exposes root_seq so same-last_reply_at roots order by root_seq DESC (tie-break)', () => {
+    const { db, channel, agentId, repo } = bootstrap();
+    const roots = [0, 1, 2].map(i =>
+      repo.insertForConversation({
+        conversationId: channel.id,
+        fromKind: 'user',
+        fromUserId: 'local',
+        content: `r${i}`,
+      }),
+    );
+    // One reply each, ALL with an identical last_reply_at → the ONLY discriminator
+    // is root_seq. The client keyset (last_reply_at DESC, root_seq DESC) must
+    // reproduce the server order using the entry's root_seq alone.
+    for (const r of roots) {
+      const re = repo.insertForConversation({
+        conversationId: channel.id,
+        fromKind: 'agent',
+        fromAgentId: agentId,
+        content: 're',
+        threadRootId: r.id,
+      });
+      setCreatedAt(db, re.id, 1000);
+    }
+
+    const entries = roots.map(
+      r => repo.threadListEntryForRoot(channel.id, r.id)!,
+    );
+    // Every entry carries the SAME last_reply_at, so ordering hinges on root_seq.
+    expect(entries.map(e => e.last_reply_at)).toEqual([1000, 1000, 1000]);
+    expect(entries.map(e => e.root_seq)).toEqual([
+      roots[0]!.seq,
+      roots[1]!.seq,
+      roots[2]!.seq,
+    ]);
+    // Applying the documented keyset (last_reply_at DESC, root_seq DESC) to the
+    // entries reproduces the server's list order EXACTLY (root_seq DESC here).
+    const clientOrder = [...entries]
+      .sort((a, b) => b.last_reply_at - a.last_reply_at || b.root_seq - a.root_seq)
+      .map(e => e.root_message_id);
+    const serverOrder = repo
+      .listChannelThreads(channel.id, 'local', {})
+      .threads.map(t => t.root_message_id);
+    expect(clientOrder).toEqual(serverOrder);
+    expect(serverOrder).toEqual([roots[2]!.id, roots[1]!.id, roots[0]!.id]);
+  });
+
+  it('stays in lock-step with listChannelThreads (shared mapper — no drift)', () => {
+    // Anti-drift guard for the extracted rowToThreadSummaryInvariant mapper:
+    // the single-root entry and the list row for the SAME root must agree on every
+    // viewer-invariant field (they now go through one mapper). The ONLY legitimate
+    // difference is viewer_following (per-viewer, on the list row, omitted here).
+    const { db, channel, agentId, repo } = bootstrap();
+    const root = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'R'.repeat(200),
+    });
+    repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      fromUserId: 'alice',
+      content: 'a1',
+      threadRootId: root.id,
+    });
+    const a2 = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      fromAgentId: agentId,
+      content: 'a2',
+      threadRootId: root.id,
+    });
+    setCreatedAt(db, a2.id, 4242);
+    // Viewer follows the cluster → the list row carries viewer_following:true; the
+    // entry must omit it while every other field stays byte-identical.
+    db.prepare(
+      `INSERT INTO thread_followers
+         (thread_root_id, conversation_id, principal_kind, principal_id, followed_at, source)
+       VALUES (?, ?, 'human', ?, ?, 'manual')`,
+    ).run(root.id, channel.id, 'local', Date.now());
+
+    const listRow = repo
+      .listChannelThreads(channel.id, 'local', {})
+      .threads.find(t => t.root_message_id === root.id)!;
+    const entry = repo.threadListEntryForRoot(channel.id, root.id)!;
+
+    const { viewer_following, ...listInvariant } = listRow;
+    expect(viewer_following).toBe(true); // list carries the per-viewer bit
+    expect('viewer_following' in (entry as object)).toBe(false); // entry never does
+    expect(entry).toEqual(listInvariant); // …and agrees on all invariant fields
+  });
+});
+

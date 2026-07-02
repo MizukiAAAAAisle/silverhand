@@ -10,6 +10,7 @@ import type {
   TaskAssigneeDto,
   ThreadReplier,
   ThreadSummary,
+  ThreadSummaryInvariant,
 } from '@silverhand/shared';
 
 function newId(): string {
@@ -139,6 +140,35 @@ function authorId(
 ): string {
   if (fromKind === 'agent') return fromAgentId ?? '';
   return fromUserId ?? '';
+}
+
+/** SINGLE-SOURCE row→ThreadSummary projection for the VIEWER-INVARIANT subset.
+ *  Both {@link MessageRepo.listChannelThreads} (per page row) and
+ *  {@link MessageRepo.threadListEntryForRoot} (single root, S1 P2) map a
+ *  `ThreadRootRow` + its repliers into the same shape — keeping that in one place
+ *  is the anti-drift guard: when `ThreadSummary` grows a viewer-invariant field it
+ *  is added here once, and the two callers can't silently diverge. `viewer_following`
+ *  is NOT set here — it is per-viewer (barred from the broadcast frame, S1 §3); the
+ *  list layers it on top per viewer, the single-root entry omits it entirely. */
+function rowToThreadSummaryInvariant(
+  row: ThreadRootRow,
+  rep: { repliers: ThreadReplier[]; total: number },
+): ThreadSummaryInvariant {
+  return {
+    root_message_id: row.root_message_id,
+    root_author: {
+      kind: mapAuthorKind(row.root_from_kind),
+      id: authorId(row.root_from_kind, row.root_from_agent_id, row.root_from_user_id),
+    },
+    root_preview: row.root_content.slice(0, THREAD_PREVIEW_MAX_CHARS),
+    root_created_at: row.root_created_at,
+    root_seq: decodeMessageSeq(row.root_seq),
+    reply_count: row.reply_count,
+    last_reply_at: row.last_reply_at,
+    last_reply_message_id: row.last_reply_message_id,
+    repliers: rep.repliers,
+    replier_total: rep.total,
+  };
 }
 
 /** Mutually-exclusive cursor anchors. The repo enforces "at most
@@ -576,6 +606,9 @@ export class MessageRepo {
                  OR (lr.created_at = ? AND root.seq < ?)
                )
          ORDER BY lr.created_at DESC, root.seq DESC
+         -- SOURCE-FENCE (#task:1279): this total order is the AUTHORITY. The client
+         -- mirror is compareThreadSummary (apps/desktop .../useChannelThreads.ts) --
+         -- keep the two byte-identical: (last_reply_at DESC, root_seq DESC).
          LIMIT ?`,
       )
       .all(
@@ -612,18 +645,7 @@ export class MessageRepo {
         total: 0,
       };
       return {
-        root_message_id: r.root_message_id,
-        root_author: {
-          kind: mapAuthorKind(r.root_from_kind),
-          id: authorId(r.root_from_kind, r.root_from_agent_id, r.root_from_user_id),
-        },
-        root_preview: r.root_content.slice(0, THREAD_PREVIEW_MAX_CHARS),
-        root_created_at: r.root_created_at,
-        reply_count: r.reply_count,
-        last_reply_at: r.last_reply_at,
-        last_reply_message_id: r.last_reply_message_id,
-        repliers: rep.repliers,
-        replier_total: rep.total,
+        ...rowToThreadSummaryInvariant(r, rep),
         viewer_following: followedRoots.has(r.root_message_id),
       };
     });
@@ -638,6 +660,63 @@ export class MessageRepo {
         : null;
 
     return { threads, next_cursor };
+  }
+
+  /** S1 P2 (docs/projection-recovery-s1-v1.md §5/§6): the VIEWER-INVARIANT
+   *  threads-list entry for ONE root — the single-row analogue of
+   *  {@link listChannelThreads}'s per-row projection, MINUS the per-viewer
+   *  `viewer_following` (barred from the broadcast frame, §3). Computed in the
+   *  SAME write transaction as a reply insert so `reply_count` / `last_reply_*`
+   *  include the just-inserted reply (authoritative, never a future-seq value) —
+   *  mirrors {@link replyCountsByRoot}'s authority (`from_kind != 'system'`), so
+   *  live == replay == cold-open. Returns `null` when the root has no non-system
+   *  reply (nothing to place; the client then keeps its refetch fallback). The
+   *  aggregation is the exact `(reply_count, last_reply_seq)` shape the list uses,
+   *  scoped to this root, so the entry's keyset values `(last_reply_at, root_seq)`
+   *  match the list's ordering by construction. */
+  threadListEntryForRoot(
+    conversationId: string,
+    rootId: string,
+  ): ThreadSummaryInvariant | null {
+    const row = this.db
+      .prepare<[string, string, string, string], ThreadRootRow>(
+        `SELECT
+           root.id            AS root_message_id,
+           root.from_kind     AS root_from_kind,
+           root.from_agent_id AS root_from_agent_id,
+           root.from_user_id  AS root_from_user_id,
+           root.content       AS root_content,
+           root.created_at    AS root_created_at,
+           root.seq           AS root_seq,
+           agg.reply_count    AS reply_count,
+           lr.id              AS last_reply_message_id,
+           lr.created_at      AS last_reply_at
+         FROM (
+           SELECT thread_root_id AS root_id,
+                  COUNT(*)       AS reply_count,
+                  MAX(seq)       AS last_reply_seq
+             FROM messages
+            WHERE conversation_id = ?
+              AND thread_root_id = ?
+              AND from_kind != 'system'
+            GROUP BY thread_root_id
+         ) agg
+         JOIN messages lr
+           ON lr.conversation_id = ?
+          AND lr.thread_root_id = agg.root_id
+          AND lr.seq = agg.last_reply_seq
+         JOIN messages root
+           ON root.id = agg.root_id
+          AND root.conversation_id = ?`,
+      )
+      .get(conversationId, rootId, conversationId, conversationId);
+    if (!row) return null;
+
+    const rep = this.repliersForRoots(conversationId, [rootId]).get(rootId) ?? {
+      repliers: [],
+      total: 0,
+    };
+    return rowToThreadSummaryInvariant(row, rep);
   }
 
   /** Distinct repliers per root, most-recent first (up to 3) plus the full

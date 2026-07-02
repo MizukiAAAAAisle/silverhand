@@ -6,6 +6,7 @@ import type { MessageRepo } from '../repos/message-repo.js';
 import type { ConversationReadRepo } from '../repos/conversation-read-repo.js';
 import type { NotificationRepo } from '../repos/notification-repo.js';
 import { canViewConversation } from '../permissions.js';
+import { buildUnreadUpdatedMessagePayload } from '../viewer-scope.js';
 import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
 
 /**
@@ -255,11 +256,23 @@ export async function observe(
     // renderer's two-variant discrimination — not a single literal event.
     const effects: PostCommitEffect[] = [];
     for (const conversationId of outcome.changedConversations) {
+      const conversation = deps.conversations.get(conversationId);
+      if (!conversation) continue;
+      const workspaceId = conversation.workspace_id;
+      // Enriched message variant (#task:1283): the closure runs POST-COMMIT, so
+      // the counts reflect the just-lowered read state — the same authoritative
+      // absolutes as arrival, so read/clear patches badges via one shape (no
+      // half-model where read refetches).
       effects.push(() =>
         deps.ctx.events.publishToScope(
           `viewer:${input.viewerUserId}`,
           'unread_updated',
-          { conversation_id: conversationId },
+          buildUnreadUpdatedMessagePayload(
+            deps.conversationReads,
+            conversationId,
+            workspaceId,
+            input.viewerUserId,
+          ),
         ),
       );
     }

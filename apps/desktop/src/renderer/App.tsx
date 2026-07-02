@@ -52,6 +52,7 @@ import { useConversationById } from '@/features/conversations/useConversationByI
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentSync } from '@/features/agents/agent-sync';
 import { useConversationIngestor } from '@/features/realtime/conversation-ingestor';
+import { useViewerUnreadIngestor } from '@/features/realtime/viewer-unread-ingestor';
 import { usePresenceSync } from '@/features/presence/hooks';
 import {
   useWorkspaces,
@@ -232,6 +233,14 @@ function RegisteredAppShell(): JSX.Element {
   // P1a = main stream only; thread cluster/root/followers + agent_activity
   // migrate in P1b/P1c. See docs/renderer-event-ingestion-v1.md.
   useConversationIngestor();
+
+  // S1 viewer-unread badge dispatcher (#task:1284). Mounted ONCE here — the sole
+  // `onWsFrame` consumer for message-variant `unread_updated`, patching the
+  // per-workspace `by_conversation` map, the global `by_workspace` summary, and
+  // the favorites badges in place from the enriched absolute payload (zero
+  // refetch). Seed of a viewer-scope ingestor; wires only `unread_updated` this
+  // cut. See docs/projection-recovery-s1-unread-v1.md.
+  useViewerUnreadIngestor();
 
   // Shutdown overlay — shown when the main process starts its graceful
   // quit sequence. Steps arrive via IPC; null means not shutting down.

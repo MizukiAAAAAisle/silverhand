@@ -437,8 +437,10 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
         'unread_updated',
         'notification',
       ]);
-      expect(viewerEvents[0]!.payload).toEqual({
+      expect(viewerEvents[0]!.payload).toMatchObject({
         conversation_id: mentionsDm!.id,
+        conversation_unread_count: expect.any(Number),
+        workspace_unread_count: expect.any(Number),
       });
       expect(viewerEvents[1]!.payload).toEqual(
         expect.objectContaining({

@@ -24,7 +24,12 @@
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import type { FavoriteRowDto, ListFavoritesDto } from '@silverhand/shared';
+import type { QueryClient } from '@tanstack/react-query';
+import type {
+  FavoriteRowDto,
+  ListFavoritesDto,
+  UnreadUpdatedMessagePayload,
+} from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
 import {
@@ -37,6 +42,34 @@ import {
  *  is global, like Activity); `['favorites']` is its prefix for broad
  *  invalidation from the star mutations. */
 export const favoritesKey = ['favorites', 'all'] as const;
+
+/** S1 viewer-unread ingestor patch (#task:1284, doc §6) — write ONE favorite
+ *  row's absolute unread from an enriched `unread_updated` frame. Favorites is a
+ *  LIST whose membership (which entities are starred) is orthogonal to unread, so
+ *  this is PRESENT-ONLY: it writes `unread_count` on the row whose `workspace_id`
+ *  matches (0 is written too — a cleared badge), and is a no-op if the row is
+ *  absent or the list is not loaded. It NEVER inserts a row and NEVER refetches
+ *  (an unread change can't add/remove a favorite; a fallback refetch would turn a
+ *  badge tick back into a whole-list refetch — the exact regression this replaces,
+ *  Cindy B3). Idempotent: an unchanged count writes nothing. */
+export function patchFavoritesUnread(
+  qc: QueryClient,
+  payload: UnreadUpdatedMessagePayload,
+): 'patched' | 'unchanged' | 'absent' | 'cold' {
+  const prev = qc.getQueryData<ListFavoritesDto>(favoritesKey);
+  if (!prev) return 'cold'; // list not loaded → no-op
+  const idx = prev.items.findIndex(it => it.workspace_id === payload.workspace_id);
+  if (idx < 0) return 'absent'; // no such favorite row → no-op (never insert)
+  const row = prev.items[idx];
+  if (!row) return 'absent'; // unreachable (idx >= 0) — narrows the index access
+  if (row.unread_count === payload.workspace_unread_count) {
+    return 'unchanged';
+  }
+  const items = prev.items.slice();
+  items[idx] = { ...row, unread_count: payload.workspace_unread_count };
+  qc.setQueryData<ListFavoritesDto>(favoritesKey, { ...prev, items });
+  return 'patched';
+}
 
 /**
  * The viewer's GLOBAL favorites (`GET /api/favorites`, no workspace filter).
@@ -54,16 +87,14 @@ export const favoritesKey = ['favorites', 'all'] as const;
  * Archive / access changes are rarer and reconcile on the next refetch (window
  * focus / remount), which is acceptable for a v1 navigation list.
  *
- * UNREAD liveness (#task:1254): each row now carries a server-scored
- * `unread_count`, so the list is an unread-bearing read-model like
- * `useMessageUnreadSummary` — it MUST refresh on the viewer-scoped
- * `unread_updated` / `snapshot_required` WS signals, else the badge renders once
- * and goes stale (a message arriving or being read wouldn't move it). We
- * invalidate on ANY viewer-scoped `unread_updated` rather than filtering to the
- * message sub-type: over-invalidation is at worst one extra refetch of a single
- * cheap global query, and it keeps the favorites context from importing another
- * module's private payload guard. Unread is server-scored — never derived
- * client-side — so this is the only correct freshness path (same as the rail).
+ * UNREAD liveness (#task:1254): each row carries a server-scored `unread_count`,
+ * so the list is an unread-bearing read-model like `useMessageUnreadSummary`. A
+ * message-variant `unread_updated` is now patched in place by the central
+ * viewer-unread ingestor (#task:1284, via {@link patchFavoritesUnread}) — this
+ * hook no longer invalidates on it (that would turn a badge tick back into a
+ * whole-list refetch). Only a `snapshot_required` (resume/epoch) still refetches
+ * authoritatively; membership still changes only on star/unstar. Unread is
+ * server-scored — never derived client-side.
  */
 export function useFavorites() {
   const qc = useQueryClient();
@@ -71,14 +102,8 @@ export function useFavorites() {
   useEffect(() => {
     const sub = subscribeViewerScope();
     const unsub = onWsFrame(frame => {
-      if (frame.type === 'snapshot_required') {
-        if (!isCurrentViewerScope(frame.scope)) return;
-        void qc.invalidateQueries({ queryKey: favoritesKey });
-        return;
-      }
-      if (frame.type !== 'event') return;
+      if (frame.type !== 'snapshot_required') return;
       if (!isCurrentViewerScope(frame.scope)) return;
-      if (frame.kind !== 'unread_updated') return;
       void qc.invalidateQueries({ queryKey: favoritesKey });
     });
     return () => {

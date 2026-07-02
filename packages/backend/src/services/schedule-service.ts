@@ -17,6 +17,7 @@ import type { BackendLogger } from '../context.js';
 import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
+import type { ConversationReadRepo } from '../repos/conversation-read-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { ScheduleRepo } from '../repos/schedule-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
@@ -77,6 +78,9 @@ export interface ScheduleServiceOptions {
   /** Used to validate `target_conversation_id` (existence, not closed)
    *  and the owner agent's membership at create time. */
   conversations: ConversationRepo;
+  /** Authoritative unread read-model for the enriched `unread_updated` frame
+   *  (#task:1283). */
+  conversationReads: ConversationReadRepo;
   messages: MessageRepo;
   agents: AgentRepo;
   runtimeHost: AgentRuntimeHost;
@@ -126,6 +130,7 @@ export class ScheduleService {
   private readonly schedules: ScheduleRepo;
   private readonly workspaces: WorkspaceRepo;
   private readonly conversations: ConversationRepo;
+  private readonly conversationReads: ConversationReadRepo;
   private readonly messages: MessageRepo;
   private readonly agents: AgentRepo;
   private readonly runtimeHost: AgentRuntimeHost;
@@ -145,6 +150,7 @@ export class ScheduleService {
     this.schedules = opts.schedules;
     this.workspaces = opts.workspaces;
     this.conversations = opts.conversations;
+    this.conversationReads = opts.conversationReads;
     this.messages = opts.messages;
     this.agents = opts.agents;
     this.runtimeHost = opts.runtimeHost;
@@ -775,6 +781,7 @@ export class ScheduleService {
     publishUnreadUpdatedToConversationViewers(
       this.events,
       this.conversations,
+      this.conversationReads,
       targetConvId,
     );
     // Order matters: `start()` is required for non-oneShot drivers
@@ -831,6 +838,7 @@ export class ScheduleService {
       publishUnreadUpdatedToConversationViewers(
         this.events,
         this.conversations,
+        this.conversationReads,
         home.dm_channel_id,
       );
     } catch (err) {

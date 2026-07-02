@@ -14,6 +14,7 @@ import {
 import { AttachmentSnapshotSchema } from './attachment.js';
 import { ReactionAggregateDtoSchema } from './reactions.js';
 import { TaskAssigneeDtoSchema } from './task.js';
+import { ThreadSummaryInvariantSchema } from './thread-summary.js';
 import { MessageSeqSchema } from '../seq.js';
 
 export const MessageDtoSchema = z.object({
@@ -49,6 +50,56 @@ export const MessageDtoSchema = z.object({
   task_assignee: TaskAssigneeDtoSchema.nullable(),
 });
 export type MessageDto = z.infer<typeof MessageDtoSchema>;
+
+/** S1 projection-level recovery (#task:1276) — authoritative projection patches
+ *  the backend attaches to a `message` event so the client can idempotently
+ *  MERGE a derived value instead of invalidate→refetch.
+ *
+ *  VIEWER-INVARIANT ONLY: a `message` event rides the broadcast
+ *  `conversation:{id}` scope (one payload fans to every subscriber), so every
+ *  field here MUST be identical for all viewers. Per-viewer facts
+ *  (e.g. `viewer_following`) are barred — they ride `viewer:{userId}` or fall
+ *  back to refetch. All patches carry ABSOLUTE values (never a delta / `+1`) so
+ *  they are replay-idempotent. Canonical: docs/projection-recovery-s1-v1.md. */
+export const ThreadRootReplyCountPatchSchema = z.object({
+  root_id: z.string(),
+  /** Authoritative non-system reply count for `root_id`, computed in the SAME
+   *  write transaction as the triggering reply insert (never a future-seq
+   *  value). Mirrors `replyCountsByRoot` (`from_kind != 'system'`). */
+  reply_count: z.number().int().nonnegative(),
+});
+export type ThreadRootReplyCountPatch = z.infer<
+  typeof ThreadRootReplyCountPatchSchema
+>;
+
+export const MessageProjectionsSchema = z.object({
+  /** Reply-count projection for the replied-to root (P1). Present only when the
+   *  triggering message is a reply (`thread_root_id != null`). */
+  thread_root_reply_count: ThreadRootReplyCountPatchSchema.optional(),
+  /** Threads-list entry projection for the replied-to root (P2,
+   *  docs/projection-recovery-s1-v1.md §5/§6). Present only when the triggering
+   *  message is a reply. Carries the VIEWER-INVARIANT `ThreadSummaryInvariant`
+   *  (no `viewer_following`) plus `root_seq` (the keyset tie-break); the client
+   *  merges the invariant fields into the row it already holds and repositions
+   *  its page by the documented keyset `(last_reply_at DESC, root_seq DESC)`. NO
+   *  insert in P2 v1 — a root not on the client's page falls back to refetch
+   *  (off-page insert is deferred to P2.5). The `{ entry }` wrapper reserves room
+   *  for future sibling hints without a wire break. */
+  threads_list_entry: z
+    .object({ entry: ThreadSummaryInvariantSchema })
+    .optional(),
+});
+export type MessageProjections = z.infer<typeof MessageProjectionsSchema>;
+
+/** Wire payload of a `message` event (`kind:'message'`). `message` is the
+ *  inserted row; `projections` is the optional S1 authoritative-delta sidecar —
+ *  ADDITIVE: a client that ignores it falls back to invalidate→refetch, so the
+ *  backend can ship this ahead of the renderer consumer. */
+export const MessageEventPayloadSchema = z.object({
+  message: MessageDtoSchema,
+  projections: MessageProjectionsSchema.optional(),
+});
+export type MessageEventPayload = z.infer<typeof MessageEventPayloadSchema>;
 
 /** Per-root enriched reply-badge data (#task:1073, P1). Optional sidecar
  *  that augments `reply_counts_by_root` with what a Slack-style inline reply
@@ -216,6 +267,30 @@ export const MessageUnreadSummaryDtoSchema = z.object({
 });
 export type MessageUnreadSummaryDto = z.infer<
   typeof MessageUnreadSummaryDtoSchema
+>;
+
+/** The `unread_updated` MESSAGE-variant payload (viewer scope, #task:1283).
+ *  Carries authoritative ABSOLUTE unread at each read-model boundary a badge
+ *  consumer keys on, so the client idempotently patches the displayed badge
+ *  caches instead of invalidate→whole-list refetch. All values are absolute
+ *  (never deltas), from the same `ConversationReadRepo` REST serves.
+ *  - `conversation_unread_count` → `by_conversation[conversation_id]`
+ *  - `workspace_unread_count`    → `by_workspace[workspace_id]`, `total`,
+ *                                   favorites row `unread_count`
+ *  - `latest_unread` (pointer, not a count) → `latest_by_conversation`;
+ *    null ⇒ this conversation has no unread (cleared → delete the key).
+ *  The BADGE variant stays `{}` (no `conversation_id`) and is NOT extended —
+ *  the renderer discriminates the two variants by `conversation_id` presence.
+ *  See docs/projection-recovery-s1-unread-v1.md. */
+export const UnreadUpdatedMessagePayloadSchema = z.object({
+  conversation_id: z.string(),
+  workspace_id: z.string(),
+  conversation_unread_count: z.number(),
+  workspace_unread_count: z.number(),
+  latest_unread: MessageUnreadPointerDtoSchema.nullable(),
+});
+export type UnreadUpdatedMessagePayload = z.infer<
+  typeof UnreadUpdatedMessagePayloadSchema
 >;
 
 const SearchOptionalMillisSchema = z.preprocess(

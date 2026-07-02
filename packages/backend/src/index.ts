@@ -58,6 +58,7 @@ import { runBootMaterializeReconciler } from './runtime/materialize-reconciler.j
 import { AgentRepo } from './repos/agent-repo.js';
 import { AttachmentRepo } from './repos/attachment-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
+import { ConversationReadRepo } from './repos/conversation-read-repo.js';
 import { ConversationInboxRepo } from './repos/conversation-inbox-repo.js';
 import { MessageRepo } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
@@ -463,6 +464,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     schedules: new ScheduleRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot }),
     conversations: new ConversationRepo(db),
+    conversationReads: new ConversationReadRepo(db),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
     runtimeHost: ctx.runtimeHost,

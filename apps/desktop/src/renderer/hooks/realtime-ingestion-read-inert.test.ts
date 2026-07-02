@@ -272,6 +272,33 @@ describe('channels/hooks.ts — registry-migrated hooks / body-scoped deny (#tas
   });
 });
 
+// #task:1284 — the mark-read mutations advance the read cursor via `observe`; the
+// message-unread badge is then cleared by observe's post-commit enriched
+// `unread_updated` patch (the viewer-unread ingestor), NOT by a client-side
+// invalidate. A re-introduced `invalidateMessageUnreadQueries` here forces a
+// whole-list refetch and defeats the projection — the dogfood FAIL that pulled
+// #1284 back (arrival patched, then the focused-channel auto-read refetched).
+// Lock it out; keep the SEPARATE Threads-list read-model invalidate.
+describe('mark-read mutations — badge rides the WS clear patch, no refetch (#task:1284)', () => {
+  const source = readFileSync(
+    fileURLToPath(new URL('../features/channels/hooks.ts', import.meta.url)),
+    'utf8',
+  );
+
+  it('useMarkMessageChannelRead does not invalidate message-unread', () => {
+    const body = sliceFunctionBody(source, 'export function useMarkMessageChannelRead(');
+    expect(body).not.toContain('invalidateMessageUnreadQueries(');
+  });
+
+  it('useMarkThreadRead drops message-unread invalidate, keeps the Threads-list read-model', () => {
+    const body = sliceFunctionBody(source, 'export function useMarkThreadRead(');
+    expect(body).not.toContain('invalidateMessageUnreadQueries(');
+    // channelThreadsKey is a DIFFERENT read-model (per-thread sticker/dot) that
+    // never rides `unread_updated`, so it legitimately still invalidates.
+    expect(body).toContain('channelThreadsKey(');
+  });
+});
+
 // #task:1255 P1c — the remaining conversation-scope onEvent consumers move into
 // the ingestor / become pure readers: useChannelThreads (threads-list
 // invalidate), useAgentRunStates (agent_activity + snapshot_required),

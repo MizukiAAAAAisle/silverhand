@@ -14,7 +14,11 @@ import type { NotificationRepo } from './repos/notification-repo.js';
 import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import type { BackendLogger } from './context.js';
 import type { ScopeEventBus } from './ws/scope-event-bus.js';
-import { singleConversationViewerUserId } from './viewer-scope.js';
+import {
+  buildUnreadUpdatedMessagePayload,
+  singleConversationViewerUserId,
+} from './viewer-scope.js';
+import { ConversationReadRepo } from './repos/conversation-read-repo.js';
 
 export interface MentionCcOpts {
   /** The user message that triggered this CC pass. Only `from_kind='user'`
@@ -275,9 +279,16 @@ async function deliverOne(
       wrapped.thread_root_id ?? null,
     )
   ) {
-    opts.events.publishToScope(`viewer:${humanMemberId}`, 'unread_updated', {
-      conversation_id: mentionsConversation.id,
-    });
+    opts.events.publishToScope(
+      `viewer:${humanMemberId}`,
+      'unread_updated',
+      buildUnreadUpdatedMessagePayload(
+        new ConversationReadRepo(opts.db),
+        mentionsConversation.id,
+        mentionsConversation.workspace_id,
+        humanMemberId,
+      ),
+    );
   }
   if (humanMemberId) {
     opts.events.publishToScope(`viewer:${humanMemberId}`, 'notification', {

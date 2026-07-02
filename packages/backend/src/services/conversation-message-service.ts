@@ -7,6 +7,8 @@ import type {
   LegacySendMessageTarget,
   MessageSendTarget,
   MessageDto,
+  MessageEventPayload,
+  MessageProjections,
   SendMessageTarget,
 } from '@silverhand/shared';
 import { extractMentions } from '@silverhand/shared';
@@ -15,6 +17,7 @@ import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import { ccMentionsFromUserMessage } from '../mention-cc.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
+import { ConversationReadRepo } from '../repos/conversation-read-repo.js';
 import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { NotificationRepo } from '../repos/notification-repo.js';
@@ -329,6 +332,10 @@ interface SendMessageTxResult {
   /** Non-null when `asTask` promoted this send into an open todo task;
    *  drives the post-commit `task_changed` announcement. */
   taskInfo: { taskNumber: number; title: string } | null;
+  /** S1 (#task:1276) authoritative projection deltas computed IN this
+   *  transaction, attached to the post-commit `message` event. Null when the
+   *  send touches no derived projection (a main-line, non-reply message). */
+  projections: MessageProjections | null;
 }
 
 const REPLIED: AgentRunTerminalReason = 'replied';
@@ -364,6 +371,7 @@ function describeStartFailure(err: unknown): string {
 export class ConversationMessageService {
   private readonly db: Db;
   private readonly conversations: ConversationRepo;
+  private readonly conversationReads: ConversationReadRepo;
   private readonly conversationInboxes: ConversationInboxRepo;
   private readonly messages: MessageRepo;
   private readonly threadFollowers: ThreadFollowerRepo;
@@ -380,6 +388,10 @@ export class ConversationMessageService {
   constructor(opts: ConversationMessageServiceOptions) {
     this.db = opts.db;
     this.conversations = opts.conversations;
+    // Stateless read-model wrapper over the same db (favorites read-model uses
+    // the same ad-hoc construction) — powers the authoritative unread counts on
+    // the `unread_updated` frame (#task:1283).
+    this.conversationReads = new ConversationReadRepo(opts.db);
     this.conversationInboxes = opts.conversationInboxes;
     this.messages = opts.messages;
     this.threadFollowers = opts.threadFollowers;
@@ -493,6 +505,34 @@ export class ConversationMessageService {
                 actor: input.actor,
               })
             : null;
+        // S1 (#task:1276) P1+P2: a thread reply changes the root's authoritative
+        // reply badge (P1) and its threads-list entry (P2). Both are computed IN
+        // THIS TRANSACTION (after the insert, so they INCLUDE this reply — never a
+        // future-seq value; Cindy gate #1), as ABSOLUTE values the client merges
+        // idempotently. Both mirror `from_kind != 'system'` authority, so live ==
+        // replay == cold-open, and both are viewer-invariant → safe on the
+        // broadcast `conversation:{id}` frame. Absent for a main-line send.
+        let projections: MessageProjections | null = null;
+        if (threadRootId !== null) {
+          const replyCount =
+            this.messages.replyCountsByRoot(targetConversation.id, [
+              threadRootId,
+            ])[threadRootId] ?? 0;
+          // P2 (§5/§6): viewer-invariant threads-list entry (ThreadSummary minus
+          // per-viewer viewer_following, plus root_seq keyset tie-break). Null
+          // only if the root has no non-system reply → omit; client keeps refetch.
+          const listEntry = this.messages.threadListEntryForRoot(
+            targetConversation.id,
+            threadRootId,
+          );
+          projections = {
+            thread_root_reply_count: {
+              root_id: threadRootId,
+              reply_count: replyCount,
+            },
+            ...(listEntry ? { threads_list_entry: { entry: listEntry } } : {}),
+          };
+        }
         return {
           sourceConversation,
           targetConversation,
@@ -506,6 +546,7 @@ export class ConversationMessageService {
               : [],
           threadDelivery,
           skippedFreshnessReason,
+          projections,
         };
       })();
     } catch (err) {
@@ -602,7 +643,10 @@ export class ConversationMessageService {
 
     this.events.publish(txResult.targetConversation.id, {
       kind: 'message',
-      payload: { message: txResult.message },
+      payload: {
+        message: txResult.message,
+        ...(txResult.projections ? { projections: txResult.projections } : {}),
+      } satisfies MessageEventPayload,
     });
     this.publishUnreadUpdated(txResult.targetConversation.id);
     this.notifyViewerMentionBestEffort(
@@ -969,6 +1013,7 @@ export class ConversationMessageService {
     publishUnreadUpdatedToConversationViewers(
       this.events,
       this.conversations,
+      this.conversationReads,
       conversationId,
     );
   }

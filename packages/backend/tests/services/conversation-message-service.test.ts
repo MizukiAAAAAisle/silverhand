@@ -213,9 +213,79 @@ describe('ConversationMessageService.sendMessage', () => {
         kind: 'message',
         payload: { message: { id: result.message.id } },
       });
-      expect(viewerEvents).toContainEqual({
-        kind: 'unread_updated',
-        payload: { conversation_id: t.channel.id },
+      // #task:1283: the message variant now carries authoritative absolute
+      // unread counts (enriched), keyed by conversation_id (the discriminator).
+      const unread = viewerEvents.find(
+        e =>
+          e.kind === 'unread_updated' &&
+          (e.payload as { conversation_id?: string }).conversation_id ===
+            t.channel.id,
+      );
+      expect(unread?.payload).toMatchObject({
+        conversation_id: t.channel.id,
+        workspace_id: expect.any(String),
+        conversation_unread_count: expect.any(Number),
+        workspace_unread_count: expect.any(Number),
+      });
+      expect(unread?.payload).toHaveProperty('latest_unread');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  // #task:1283: the enriched payload is computed PER VIEWER inside the fan-out
+  // loop, not once and reused. The sharpest regression: one arrival must yield
+  // DIFFERENT absolutes for two humans — the sender sees 0 (own message never
+  // unread), the other human sees exactly this one message. If the payload were
+  // hoisted out of the viewer loop, both would share one (wrong) count.
+  it('computes per-viewer absolutes for one arrival: sender=0/null, other human=1/pointer', async () => {
+    const t = bootstrap();
+    try {
+      // A second human member alongside the implicit `local` sender.
+      t.conversations.addUser(t.channel.id, 'teammate');
+
+      const localEvents: Array<{ kind: string; payload: any }> = [];
+      const teammateEvents: Array<{ kind: string; payload: any }> = [];
+      const unsubLocal = t.events.subscribeScope('viewer:local', e => {
+        localEvents.push({ kind: e.kind, payload: e.payload });
+      });
+      const unsubTeammate = t.events.subscribeScope('viewer:teammate', e => {
+        teammateEvents.push({ kind: e.kind, payload: e.payload });
+      });
+
+      const result = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'user', userId: 'local' },
+        content: 'hello team',
+      });
+      unsubLocal();
+      unsubTeammate();
+
+      const pick = (evts: Array<{ kind: string; payload: any }>) =>
+        evts.find(
+          e =>
+            e.kind === 'unread_updated' &&
+            (e.payload as { conversation_id?: string }).conversation_id ===
+              t.channel.id,
+        )?.payload;
+
+      // Sender: their own message is never unread for them.
+      expect(pick(localEvents)).toMatchObject({
+        conversation_id: t.channel.id,
+        conversation_unread_count: 0,
+        workspace_unread_count: 0,
+        latest_unread: null,
+      });
+      // Other human: exactly one unread — this message — with a real pointer.
+      expect(pick(teammateEvents)).toMatchObject({
+        conversation_id: t.channel.id,
+        conversation_unread_count: 1,
+        workspace_unread_count: 1,
+        latest_unread: {
+          conversation_id: t.channel.id,
+          message_id: result.message.id,
+          thread_root_id: null,
+        },
       });
     } finally {
       t.cleanup();

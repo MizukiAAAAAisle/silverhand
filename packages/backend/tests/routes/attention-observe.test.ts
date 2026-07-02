@@ -79,6 +79,52 @@ describe('POST /api/attention/observe (#task:1231)', () => {
     expect(events.filter(k => k === 'unread_updated')).toHaveLength(1);
   });
 
+  // #task:1283: the enriched message-variant absolutes must reflect the
+  // POST-COMMIT state — the cursor already advanced inside observe(), so the
+  // count the renderer patches is the CLEARED value (0), never a pre-commit
+  // stale count. This is the whole point of running the enrich as a post-commit
+  // effect. The badge-variant `{}` stays empty (no discriminator).
+  it('observe clear emits a message variant with post-commit zeroed absolutes (#task:1283)', async () => {
+    t = buildTestApp();
+    const { channelId, agentId } = await createChannel(t);
+    const messages = new MessageRepo(t.ctx.db);
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: agentId,
+      content: 'one unread',
+    });
+
+    const events: { kind: string; payload: any }[] = [];
+    const unsub = t.ctx.events.subscribeScope('viewer:local', e =>
+      events.push({ kind: e.kind, payload: e.payload }),
+    );
+    await http(t).post(observePath, {
+      sources: [
+        {
+          kind: 'stream',
+          conversation_id: channelId,
+          thread_root_id: null,
+          position: { kind: 'stream_head' },
+        },
+      ],
+    });
+    unsub();
+
+    const unreadEvents = events.filter(e => e.kind === 'unread_updated');
+    const messageVariant = unreadEvents.filter(
+      e => (e.payload as { conversation_id?: unknown }).conversation_id != null,
+    );
+    expect(messageVariant).toHaveLength(1);
+    // Cleared: count is 0, workspace rollup is 0, and the pointer is null.
+    expect(messageVariant[0]?.payload).toMatchObject({
+      conversation_id: channelId,
+      conversation_unread_count: 0,
+      workspace_unread_count: 0,
+      latest_unread: null,
+    });
+  });
+
   it('is idempotent: re-observing an already-read stream changes nothing and emits no event', async () => {
     t = buildTestApp();
     const { channelId, agentId } = await createChannel(t);
@@ -515,7 +561,12 @@ describe('POST /api/attention/observe (#task:1231)', () => {
     const unreadEvents = events.filter(e => e.kind === 'unread_updated');
     // Both streams advanced, but they share one conversation → one event.
     expect(unreadEvents).toHaveLength(1);
-    expect(unreadEvents[0]?.payload).toEqual({ conversation_id: channelId });
+    // #task:1283: enriched message variant — assert discriminator + counts.
+    expect(unreadEvents[0]?.payload).toMatchObject({
+      conversation_id: channelId,
+      conversation_unread_count: expect.any(Number),
+      workspace_unread_count: expect.any(Number),
+    });
   });
 
   it('emits a message-variant (with conversation_id) + a badge-variant (without) for a stream+notification batch', async () => {
@@ -562,7 +613,11 @@ describe('POST /api/attention/observe (#task:1231)', () => {
       e => (e.payload as { conversation_id?: unknown }).conversation_id == null,
     );
     expect(messageVariant).toHaveLength(1);
-    expect(messageVariant[0]?.payload).toEqual({ conversation_id: channelId });
+    expect(messageVariant[0]?.payload).toMatchObject({
+      conversation_id: channelId,
+      conversation_unread_count: expect.any(Number),
+      workspace_unread_count: expect.any(Number),
+    });
     expect(badgeVariant).toHaveLength(1);
   });
 });

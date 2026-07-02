@@ -21,6 +21,7 @@ import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
+import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 
 class FakeConversationManager {
   starts: Array<{ conversationId: string; agentId: string }> = [];
@@ -126,6 +127,7 @@ function bootstrap(
     schedules,
     workspaces,
     conversations,
+    conversationReads: new ConversationReadRepo(db),
     messages,
     agents,
     runtimeHost: fake as unknown as AgentRuntimeHost,
@@ -1303,10 +1305,12 @@ describe('ScheduleService renders wake body', () => {
     expect((conversationEvents[0]!.payload as any).message.metadata.subtype).toBe(
       'schedule_fire',
     );
-    expect(viewerEvents).toContainEqual({
-      kind: 'unread_updated',
-      payload: { conversation_id: f.homeDmId },
-    });
+    expect(viewerEvents).toContainEqual(
+      expect.objectContaining({
+        kind: 'unread_updated',
+        payload: expect.objectContaining({ conversation_id: f.homeDmId }),
+      }),
+    );
   });
 
   it('includes repeat metadata when fired_count is non-terminal', async () => {

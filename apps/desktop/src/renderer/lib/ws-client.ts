@@ -82,7 +82,7 @@ const SATISFIED_PENDING_CAP = 200;
  *   socket. Advanced in `acceptEventFrame` on every in-order desired-scope
  *   frame. Serves wire-continuity / forward-gap detection ONLY. It is NOT a
  *   resume floor.
- * - `appliedPositions[scope]` — the resume FLOOR (what `resume` replays from).
+ * - `resumeFloorPositions[scope]` — the resume FLOOR (what `resume` replays from).
  *   For a CONTENT-GATED scope (`conversation:<id>`, the message stream) it is
  *   advanced ONLY by `markSatisfied` (a resume-safe disposition) or `commitSnapshotBaseline`
  *   (an apply-settled snapshot re-cold-start) — never by frame receipt. For every
@@ -93,7 +93,7 @@ const SATISFIED_PENDING_CAP = 200;
  * The two coincide for auto-advance scopes and while a content reader applies
  * every frame; they diverge when a content-gated scope receives a frame that
  * writes no warm content (no reader / off-window no-op) — `received` advances so
- * the stream keeps flowing and gaps stay detectable, `applied` stays pinned so a
+ * the stream keeps flowing and gaps stay detectable, the resume floor stays pinned so a
  * resume re-delivers the un-applied frame (idempotent) rather than skipping it
  * (the #1251 class of bug). See docs/event-ws-transport-v1.md §1/§4.1/§5/§6.
  */
@@ -109,14 +109,14 @@ export class EventWsClient {
   /** Wire-continuity / gap-detection high-water (see class docstring). */
   private readonly receivedPositions = new Map<string, ResumePosition>();
   /** Resume floor (see class docstring). The ONLY thing `resume` replays from. */
-  private readonly appliedPositions = new Map<string, ResumePosition>();
+  private readonly resumeFloorPositions = new Map<string, ResumePosition>();
   /**
    * Per-scope pending-SATISFACTION queue (#1261) — the option-2 queue the
    * original strict-contiguous floor-advance note (see `markSatisfied` below)
    * deferred. Holds satisfied seqs that are not yet contiguous with the resume
    * floor, waiting for the gap below them to fill. Stamped with the epoch it
    * belongs to (a newer server epoch resets it). `markSatisfied` drains it into
-   * `appliedPositions` contiguously, so a cursor-inert frame (an off-window
+   * `resumeFloorPositions` contiguously, so a cursor-inert frame (an off-window
    * vacuous-satisfy, or a derived-invalidate whose refetch settled) no longer
    * PINS the floor behind it. It is per-connection: cleared in
    * `clearConnectionState` (a reconnect replays from the floor and re-satisfies),
@@ -130,7 +130,7 @@ export class EventWsClient {
   /**
    * Server-stamped transport baseline for an in-flight `snapshot_required`
    * re-cold-start on a content-gated scope (§6). Recorded on receipt but NOT
-   * committed to `appliedPositions` until the ingestor signals its REST
+   * committed to `resumeFloorPositions` until the ingestor signals its REST
    * reconcile settled via `commitSnapshotBaseline` (apply-gated). While present,
    * live frames for the scope are buffered (`pendingBuffers`) rather than
    * applied, exactly like cold-start.
@@ -196,7 +196,7 @@ export class EventWsClient {
     this.resolvedViewerId = null;
     // Detach viewer wrappers so the canonical `viewer:<id>` subscription
     // state — desiredScopes refcount + confirmed — is released. The
-    // resume floor (`appliedPositions`) and received-water are deliberately
+    // resume floor (`resumeFloorPositions`) and received-water are deliberately
     // retained so a later resume can replay; wrappers re-attach on the next
     // connect() → authenticated cycle if the wrapper handle is still live.
     for (const sub of Array.from(this.viewerSubscribers)) {
@@ -240,7 +240,7 @@ export class EventWsClient {
           // (same hazard as reconnect, just the same-socket path). Floor +
           // received are retained (below) for the #1251 replay.
           this.satisfiedPending.delete(scope);
-          // Retain the resume floor (`appliedPositions`) AND the received-water
+          // Retain the resume floor (`resumeFloorPositions`) AND the received-water
           // — do NOT delete them. The retained floor is what lets the next
           // resubscribe resume and replay the no-listener gap (#task:1251); the
           // received-water lets gap detection continue seamlessly. Cost is a
@@ -271,7 +271,7 @@ export class EventWsClient {
    */
   private sendSubscribe(scope: string): void {
     if (!this.sendIfConnected({ type: 'subscribe', scope })) return;
-    const floor = this.appliedPositions.get(scope);
+    const floor = this.resumeFloorPositions.get(scope);
     if (floor) this.sendResume({ [scope]: floor });
   }
 
@@ -300,7 +300,7 @@ export class EventWsClient {
 
   resume(scope: string, position: ResumePosition): void {
     this.recovering.delete(scope);
-    this.appliedPositions.set(scope, position);
+    this.resumeFloorPositions.set(scope, position);
     this.receivedPositions.set(scope, position);
     // Floor forcibly repositioned: any pending-satisfaction backlog for the scope
     // is relative to the old floor and no longer meaningful (#1261).
@@ -348,7 +348,7 @@ export class EventWsClient {
    */
   markSatisfied(scope: string, seq: TransportSeq, epoch: TransportEpoch): void {
     if (!isContentGated(scope)) return;
-    const floor = this.appliedPositions.get(scope);
+    const floor = this.resumeFloorPositions.get(scope);
     if (!floor || floor.epoch !== epoch) {
       recordEventWsDiagnostic({ kind: 'markSatisfied_no_floor', scope, seq, epoch });
       return;
@@ -370,7 +370,7 @@ export class EventWsClient {
       candidate = advanceTransportSeq(candidate);
     }
     if (advancedTo > floor.lastSeq) {
-      this.appliedPositions.set(scope, { epoch, lastSeq: advancedTo });
+      this.resumeFloorPositions.set(scope, { epoch, lastSeq: advancedTo });
     }
     if (pending.size > SATISFIED_PENDING_CAP) {
       recordEventWsDiagnostic({
@@ -414,7 +414,7 @@ export class EventWsClient {
   commitSnapshotBaseline(scope: string, epoch: TransportEpoch): void {
     const pending = this.pendingBaselines.get(scope);
     if (!pending || pending.epoch !== epoch) return;
-    this.appliedPositions.set(scope, { epoch: pending.epoch, lastSeq: pending.lastSeq });
+    this.resumeFloorPositions.set(scope, { epoch: pending.epoch, lastSeq: pending.lastSeq });
     this.receivedPositions.set(scope, { epoch: pending.epoch, lastSeq: pending.lastSeq });
     this.pendingBaselines.delete(scope);
     this.recovering.delete(scope);
@@ -578,7 +578,7 @@ export class EventWsClient {
       // must NOT re-baseline to server head (the no-listener-gap skip,
       // #task:1251). A floor from a stale epoch is moot — baseline both water
       // marks fresh; a mismatched resume self-heals via snapshot_required.
-      const floor = this.appliedPositions.get(frame.scope);
+      const floor = this.resumeFloorPositions.get(frame.scope);
       if (!floor || floor.epoch !== frame.epoch) {
         this.recordReceived(frame);
         this.recordApplied(frame);
@@ -648,7 +648,7 @@ export class EventWsClient {
         // Non-content-gated scopes keep Stage-1 behavior: they are cursor-inert
         // / self-healing (own REST + invalidate), so drop both water marks and
         // let the next event re-baseline.
-        this.appliedPositions.delete(frame.scope);
+        this.resumeFloorPositions.delete(frame.scope);
         this.receivedPositions.delete(frame.scope);
       }
       recordEventWsDiagnostic({
@@ -672,7 +672,7 @@ export class EventWsClient {
       this.send({ type: 'subscribe', scope });
     }
     const resumeScopes: ResumeFrame['scopes'] = {};
-    for (const [scope, floor] of this.appliedPositions.entries()) {
+    for (const [scope, floor] of this.resumeFloorPositions.entries()) {
       if (!this.desiredScopes.has(scope)) continue;
       resumeScopes[scope] = floor;
     }
@@ -738,7 +738,7 @@ export class EventWsClient {
         });
         // Resume from the applied floor (may lag received), NOT received — so a
         // frame that reached the socket but never applied is re-delivered.
-        const floor = this.appliedPositions.get(frame.scope) ?? received;
+        const floor = this.resumeFloorPositions.get(frame.scope) ?? received;
         this.sendResume({ [frame.scope]: floor });
       }
       return false;
@@ -772,7 +772,7 @@ export class EventWsClient {
   }
 
   private recordApplied(frame: EventFrame | SubscribedFrame): void {
-    const previous = this.appliedPositions.get(frame.scope);
+    const previous = this.resumeFloorPositions.get(frame.scope);
     if (
       previous &&
       previous.epoch === frame.epoch &&
@@ -780,7 +780,7 @@ export class EventWsClient {
     ) {
       return;
     }
-    this.appliedPositions.set(frame.scope, {
+    this.resumeFloorPositions.set(frame.scope, {
       epoch: frame.epoch,
       lastSeq: frame.seq,
     });

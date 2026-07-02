@@ -101,12 +101,20 @@ describe('message routes', () => {
     );
     expect(viewerEvents).toEqual(
       expect.arrayContaining([
-        { kind: 'unread_updated', payload: { conversation_id: channelId } },
+        expect.objectContaining({
+          kind: 'unread_updated',
+          payload: expect.objectContaining({ conversation_id: channelId }),
+        }),
       ]),
     );
     expect(viewerEvents).not.toEqual(
       expect.arrayContaining([
-        { kind: 'unread_updated', payload: { conversation_id: thread.thread_id } },
+        expect.objectContaining({
+          kind: 'unread_updated',
+          payload: expect.objectContaining({
+            conversation_id: thread.thread_id,
+          }),
+        }),
       ]),
     );
   });

@@ -164,10 +164,18 @@ describe('POST /internal/.../send-message', () => {
     expect(inserted.from_kind).toBe('agent');
     expect(inserted.from_agent_id).toBe(agentIds.alice);
     expect(inserted.content).toBe('hello team');
-    expect(viewerEvents).toContainEqual({
-      kind: 'unread_updated',
-      payload: { conversation_id: conversationId },
-    });
+    // #task:1283: message variant enriched with absolute counts; assert the
+    // discriminator + presence of the enriched fields.
+    expect(viewerEvents).toContainEqual(
+      expect.objectContaining({
+        kind: 'unread_updated',
+        payload: expect.objectContaining({
+          conversation_id: conversationId,
+          conversation_unread_count: expect.any(Number),
+          workspace_unread_count: expect.any(Number),
+        }),
+      }),
+    );
   });
 
   it('returns a stale_event_id when same-conversation agent send is stale', async () => {

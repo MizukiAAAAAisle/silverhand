@@ -364,6 +364,30 @@ export class ConversationReadRepo {
     return latest;
   }
 
+  /** Single-workspace unread rollup for one viewer (#task:1283 B4). The hot-path
+   *  source for the `unread_updated` frame's `workspace_unread_count` — a per-row
+   *  body identical to {@link unreadCountsByWorkspace} / {@link
+   *  unreadCountsByWorkspaceSidebar} but scoped to ONE workspace (no all-ws
+   *  GROUP-BY scan; arrival fans to K viewers, so an all-ws scan per viewer would
+   *  let backend amplification cancel the client refetch win). An equivalence
+   *  test locks `unreadCountForWorkspace == unreadCountsByWorkspace[ws] ==
+   *  unreadCountsByWorkspaceSidebar[ws]` so the emitted value is provably the same
+   *  authoritative rollup the summary route and favorites row serve. */
+  unreadCountForWorkspace(workspaceId: string, viewerUserId: string): number {
+    const row = this.db
+      .prepare<{ viewer: string; workspace: string }, { c: number }>(
+        `SELECT COUNT(m.id) AS c
+           FROM conversations c
+           JOIN conversation_users cu
+             ON cu.conversation_id = c.id AND cu.user_id = @viewer
+           JOIN messages m
+             ON m.conversation_id = c.id AND ${ROLLUP_UNREAD}
+          WHERE c.workspace_id = @workspace`,
+      )
+      .get({ viewer: viewerUserId, workspace: workspaceId });
+    return row?.c ?? 0;
+  }
+
   unreadCountsByWorkspace(viewerUserId: string): Record<string, number> {
     const rows = this.db
       .prepare<{ viewer: string }, { workspace_id: string; c: number }>(

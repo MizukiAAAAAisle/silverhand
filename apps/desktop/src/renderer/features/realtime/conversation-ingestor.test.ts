@@ -881,8 +881,384 @@ describe('ingestConversationFrame — per-event satisfaction disposition (#task:
   });
 });
 
-// #task:1270 — THE message-row patch seam matrix. #1269 item 1 (reaction gate
-// forgot the cluster projection) and its dual (task_changed forgot the
+// #task:1277 — S1 P1 reply_count projection MERGE. A reply frame carrying an
+// absolute `thread_root_reply_count` patch sets the authoritative count on the
+// displayed surfaces (thread-root row + mainline badge) IN PLACE — no
+// invalidate→whole-window refetch (the amplification kill). Cindy's four gates:
+// patch present → NO refetch; active-but-no-patch → fallback/pin; projection
+// absent → vacuous; floor only after settle. docs/projection-recovery-s1-v1.md.
+describe('ingestConversationFrame — S1 reply_count projection merge (#task:1277)', () => {
+  let markSatisfied: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    markSatisfied = vi
+      .spyOn(eventWsClient, 'markSatisfied')
+      .mockImplementation(() => {});
+    vi.spyOn(eventWsClient, 'commitSnapshotBaseline').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const flush = async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  /** A reply frame WITH the absolute reply_count projection sidecar. */
+  function patchedReplyFrame(
+    channelId: string,
+    rootId: string,
+    replyCount: number,
+    seq: number,
+  ): ServerFrame {
+    return {
+      type: 'event',
+      scope: conversationScope(channelId),
+      seq,
+      epoch: 'epoch-1',
+      kind: 'message',
+      payload: {
+        message: message({ id: `r${seq}`, seq, thread_root_id: rootId }),
+        projections: {
+          thread_root_reply_count: { root_id: rootId, reply_count: replyCount },
+        },
+      },
+    } as ServerFrame;
+  }
+
+  function seedThreadRoot(
+    qc: QueryClient,
+    channelId: string,
+    rootId: string,
+    replyCount: number,
+  ): void {
+    qc.setQueryData(threadRootKey(channelId, rootId), {
+      messages: [message({ id: rootId, seq: 1 })],
+      reply_counts_by_root: { [rootId]: replyCount },
+      has_more_before: false,
+      has_more_after: false,
+      stream_head_seq: 1,
+    });
+  }
+  function threadRootReplyCount(
+    qc: QueryClient,
+    channelId: string,
+    rootId: string,
+  ): number | undefined {
+    return qc.getQueryData<{ reply_counts_by_root: Record<string, number> }>(
+      threadRootKey(channelId, rootId),
+    )?.reply_counts_by_root[rootId];
+  }
+
+  it('merges the absolute count into an open thread-root row — NO refetch, markSatisfied once', async () => {
+    const qc = new QueryClient();
+    const unsub = mountReader(qc, threadRootKey('c1', 'root1'));
+    seedThreadRoot(qc, 'c1', 'root1', 0);
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+    ingestConversationFrame(qc, patchedReplyFrame('c1', 'root1', 1, 6));
+
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    // Merged in place to the authoritative absolute value...
+    expect(threadRootReplyCount(qc, 'c1', 'root1')).toBe(1);
+    // ...WITHOUT any invalidate→refetch (the #1277 amplification kill / dogfood判据).
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(markSatisfied).toHaveBeenCalledWith(conversationScope('c1'), 6, 'epoch-1');
+    unsub();
+  });
+
+  it('merges the absolute count into the mainline reply badge — NO whole-window refetch', async () => {
+    const qc = new QueryClient();
+    const unsub = mountMainlineReader(qc, 'c1');
+    seedMainline(qc, 'c1', { rootId: 'root1', replyCount: 0 });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+    ingestConversationFrame(qc, patchedReplyFrame('c1', 'root1', 2, 6));
+
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    expect(mainlineReplyCount(qc, 'c1', 'root1')).toBe(2);
+    expect(invalidate).not.toHaveBeenCalled(); // old path invalidated the whole window
+    unsub();
+  });
+
+  it('replaying the same patched frame is idempotent — the absolute value never double-counts', async () => {
+    const qc = new QueryClient();
+    const unsub = mountReader(qc, threadRootKey('c1', 'root1'));
+    seedThreadRoot(qc, 'c1', 'root1', 0);
+    const frame = patchedReplyFrame('c1', 'root1', 1, 6);
+
+    ingestConversationFrame(qc, frame);
+    ingestConversationFrame(qc, frame);
+    await flush();
+
+    // Absolute set (not +1) → replay lands the same value, never 2.
+    expect(threadRootReplyCount(qc, 'c1', 'root1')).toBe(1);
+    unsub();
+  });
+
+  it('projection absent (reader mounted, cache empty) → cold-absent-vacuous, no write, no refetch', async () => {
+    const qc = new QueryClient();
+    // Reader mounted but its snapshot never loaded (still fetching).
+    const unsub = mountReader(qc, threadRootKey('c1', 'root1'));
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+    ingestConversationFrame(qc, patchedReplyFrame('c1', 'root1', 1, 6));
+
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    // Nothing merged (the root's own mount-fetch is the authoritative recovery)...
+    expect(threadRootReplyCount(qc, 'c1', 'root1')).toBeUndefined();
+    // ...and NOT a fallback refetch — cold-absent is vacuous, not pending-fallback.
+    expect(invalidate).not.toHaveBeenCalled();
+    unsub();
+  });
+
+  it('no reader at all → fully vacuous satisfy (floor advances, no cache bootstrapped)', async () => {
+    const qc = new QueryClient();
+    ingestConversationFrame(qc, patchedReplyFrame('c1', 'root1', 1, 6));
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    expect(qc.getQueryData(threadRootKey('c1', 'root1'))).toBeUndefined();
+    expect(qc.getQueryData(messagesKey('c1'))).toBeUndefined();
+  });
+
+  it('active reader but NO patch (additive-compat) → fallback invalidate→refetch, commit-gated', async () => {
+    const qc = new QueryClient();
+    const unsub = mountReader(qc, threadRootKey('c1', 'root1'));
+    seedThreadRoot(qc, 'c1', 'root1', 0);
+    let commitRefetch!: () => void;
+    const invalidate = vi
+      .spyOn(qc, 'invalidateQueries')
+      .mockReturnValue(
+        new Promise<void>(resolve => {
+          commitRefetch = () => resolve();
+        }),
+      );
+
+    // A reply frame with NO projections sidecar (old backend / non-emit path).
+    ingestConversationFrame(
+      qc,
+      messageFrameSeq('c1', message({ id: 'r1', seq: 6, thread_root_id: 'root1' }), 6),
+    );
+    await flush();
+    // Fallback took the invalidate path; floor waits for the refetch to COMMIT.
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: threadRootKey('c1', 'root1'),
+    });
+    expect(markSatisfied).not.toHaveBeenCalled();
+    commitRefetch();
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    unsub();
+  });
+
+  // Cindy #1277 blocker / doc §10 gate #6 — the dirty-sidecar anti-corruption case.
+  // A frame is a reply to rootA, but the sidecar's `root_id` disagrees (rootB). The
+  // authoritative association key is `msg.thread_root_id` (rootA); a mismatch is
+  // "active but no valid patch". Single-point validation drops the patch, so: (a)
+  // rootA keeps its invalidate→refetch fallback, commit-gated — NOT silently merged
+  // from a stale value; (b) rootB is NEVER merged from the dirty patch, even though
+  // its row is displayed. Merging rootB (or suppressing rootA's fallback) would
+  // strand rootA's real update once the floor advances.
+  it('mismatched sidecar root (msg=rootA, patch.root_id=rootB) → rootA fallback commit-gated, rootB never merged', async () => {
+    const qc = new QueryClient();
+    const unsubA = mountReader(qc, threadRootKey('c1', 'rootA'));
+    const unsubB = mountReader(qc, threadRootKey('c1', 'rootB'));
+    seedThreadRoot(qc, 'c1', 'rootA', 0);
+    seedThreadRoot(qc, 'c1', 'rootB', 7);
+    let commitRefetch!: () => void;
+    const invalidate = vi
+      .spyOn(qc, 'invalidateQueries')
+      .mockReturnValue(
+        new Promise<void>(resolve => {
+          commitRefetch = () => resolve();
+        }),
+      );
+
+    // Frame: reply to rootA, but the sidecar carries rootB → dirty.
+    ingestConversationFrame(qc, {
+      type: 'event',
+      scope: conversationScope('c1'),
+      seq: 6,
+      epoch: 'epoch-1',
+      kind: 'message',
+      payload: {
+        message: message({ id: 'r6', seq: 6, thread_root_id: 'rootA' }),
+        projections: {
+          thread_root_reply_count: { root_id: 'rootB', reply_count: 99 },
+        },
+      },
+    } as ServerFrame);
+    await flush();
+
+    // (a) rootA fell back to invalidate→refetch, floor waits for COMMIT (not merged).
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: threadRootKey('c1', 'rootA'),
+    });
+    expect(markSatisfied).not.toHaveBeenCalled();
+    // (b) rootB was never merged from the dirty patch — stays at its seeded value.
+    expect(threadRootReplyCount(qc, 'c1', 'rootB')).toBe(7);
+
+    commitRefetch();
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    // Still never touched rootB even after the floor advanced.
+    expect(threadRootReplyCount(qc, 'c1', 'rootB')).toBe(7);
+    unsubA();
+    unsubB();
+  });
+});
+
+// #task:1278 — S1 P2 threads_list_entry projection MERGE. A reply frame carrying an
+// absolute viewer-invariant `threads_list_entry` repositions the HELD threads-list
+// row in place (keyset resort) instead of the blanket invalidate→refetch. Same
+// anti-corruption + disposition model as P1: valid-on-page → merged (no refetch);
+// off-page → fallback (no insert); mismatch → the real root falls back.
+describe('ingestConversationFrame — S1 threads_list_entry projection merge (#task:1278)', () => {
+  let markSatisfied: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    markSatisfied = vi.spyOn(eventWsClient, 'markSatisfied').mockImplementation(() => {});
+    vi.spyOn(eventWsClient, 'commitSnapshotBaseline').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+  const flush = async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  function invariantEntry(rootId: string, lastReplyAt: number, replyCount: number) {
+    return {
+      root_message_id: rootId,
+      root_author: { kind: 'human' as const, id: 'u1' },
+      root_preview: `root ${rootId}`,
+      root_created_at: 0,
+      root_seq: decodeMessageSeq(2),
+      reply_count: replyCount,
+      last_reply_at: lastReplyAt,
+      last_reply_message_id: `lr-${rootId}-${lastReplyAt}`,
+      repliers: [{ kind: 'human' as const, id: 'u1' }],
+      replier_total: 1,
+    };
+  }
+  /** A reply frame WITH the threads_list_entry projection (no reply_count patch, to
+   *  isolate the P2 surface). */
+  function threadsListPatchFrame(
+    channelId: string,
+    rootId: string,
+    lastReplyAt: number,
+    replyCount: number,
+    seq: number,
+  ): ServerFrame {
+    return {
+      type: 'event',
+      scope: conversationScope(channelId),
+      seq,
+      epoch: 'epoch-1',
+      kind: 'message',
+      payload: {
+        message: message({ id: `r${seq}`, seq, thread_root_id: rootId }),
+        projections: { threads_list_entry: { entry: invariantEntry(rootId, lastReplyAt, replyCount) } },
+      },
+    } as ServerFrame;
+  }
+  function seedThreadsList(
+    qc: QueryClient,
+    channelId: string,
+    rows: { rootId: string; lastReplyAt: number; replyCount: number }[],
+  ): void {
+    qc.setQueryData(channelThreadsKey(channelId), {
+      threads: rows.map(r => ({
+        ...invariantEntry(r.rootId, r.lastReplyAt, r.replyCount),
+        viewer_following: false,
+      })),
+      next_cursor: null,
+    });
+  }
+  const listRow = (qc: QueryClient, channelId: string, rootId: string) =>
+    qc
+      .getQueryData<{ threads: { root_message_id: string; reply_count: number }[] }>(
+        channelThreadsKey(channelId),
+      )
+      ?.threads.find(t => t.root_message_id === rootId);
+
+  it('merges + repositions a held row in place — NO threads-list refetch, markSatisfied once', async () => {
+    const qc = new QueryClient();
+    const unsub = mountReader(qc, channelThreadsKey('c1'));
+    // root1 is the bottom row; a reply bumps it above root2 → must move to top.
+    seedThreadsList(qc, 'c1', [
+      { rootId: 'root2', lastReplyAt: 200, replyCount: 1 },
+      { rootId: 'root1', lastReplyAt: 100, replyCount: 1 },
+    ]);
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+    ingestConversationFrame(qc, threadsListPatchFrame('c1', 'root1', 300, 5, 6));
+
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    // Absolute merge + keyset resort, in place...
+    expect(listRow(qc, 'c1', 'root1')?.reply_count).toBe(5);
+    expect(
+      qc
+        .getQueryData<{ threads: { root_message_id: string }[] }>(channelThreadsKey('c1'))
+        ?.threads.map(t => t.root_message_id),
+    ).toEqual(['root1', 'root2']);
+    // ...WITHOUT invalidating the threads list (the #1278 amplification kill).
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: channelThreadsKey('c1') });
+    unsub();
+  });
+
+  it('off-page root (page loaded, root absent) → invalidate fallback, commit-gated (no insert)', async () => {
+    const qc = new QueryClient();
+    const unsub = mountReader(qc, channelThreadsKey('c1'));
+    seedThreadsList(qc, 'c1', [{ rootId: 'other', lastReplyAt: 200, replyCount: 1 }]);
+    let commit!: () => void;
+    const invalidate = vi
+      .spyOn(qc, 'invalidateQueries')
+      .mockReturnValue(new Promise<void>(resolve => (commit = () => resolve())));
+
+    ingestConversationFrame(qc, threadsListPatchFrame('c1', 'root1', 300, 5, 6));
+    await flush();
+
+    // No insert — fell back to a refetch; floor waits for its COMMIT.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: channelThreadsKey('c1') });
+    expect(markSatisfied).not.toHaveBeenCalled();
+    commit();
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    unsub();
+  });
+
+  it('mismatch (msg=rootA, entry.root_message_id=rootB) → rootA blanket-invalidate fallback, rootB not repositioned', async () => {
+    const qc = new QueryClient();
+    const unsub = mountReader(qc, channelThreadsKey('c1'));
+    seedThreadsList(qc, 'c1', [{ rootId: 'rootB', lastReplyAt: 100, replyCount: 1 }]);
+    let commit!: () => void;
+    const invalidate = vi
+      .spyOn(qc, 'invalidateQueries')
+      .mockReturnValue(new Promise<void>(resolve => (commit = () => resolve())));
+
+    // Frame is a reply to rootA, but the entry carries rootB → validation drops it.
+    ingestConversationFrame(qc, {
+      type: 'event',
+      scope: conversationScope('c1'),
+      seq: 6,
+      epoch: 'epoch-1',
+      kind: 'message',
+      payload: {
+        message: message({ id: 'r6', seq: 6, thread_root_id: 'rootA' }),
+        projections: { threads_list_entry: { entry: invariantEntry('rootB', 999, 9) } },
+      },
+    } as ServerFrame);
+    await flush();
+
+    // rootA (the real root) falls back to the blanket threads-list invalidate...
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: channelThreadsKey('c1') });
+    expect(markSatisfied).not.toHaveBeenCalled();
+    // ...and rootB's row was NOT repositioned/merged (stays reply_count 1, not 9).
+    expect(listRow(qc, 'c1', 'rootB')?.reply_count).toBe(1);
+    commit();
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    expect(listRow(qc, 'c1', 'rootB')?.reply_count).toBe(1);
+    unsub();
+  });
+});
+
+
 // thread-root projection) were the same BUG CLASS: a message-row content-patch
 // handler hand-enumerated which projections to write and missed one. The seam
 // (`patchMessageInActiveProjections`) fixes it BY CONSTRUCTION — every displayed

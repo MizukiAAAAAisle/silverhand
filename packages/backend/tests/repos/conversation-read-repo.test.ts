@@ -103,6 +103,51 @@ describe('ConversationReadRepo', () => {
     expect(reads.unreadCountsByWorkspace('local')).toEqual({ [workspace.id]: 3 });
   });
 
+  // #task:1283 B4: the single-workspace rollup used to enrich the
+  // `unread_updated` frame MUST equal the two existing all-workspaces rollups
+  // (and the by-conversation `total`) for the same (viewer, workspace) —
+  // otherwise the emitted `workspace_unread_count` would drift from what the
+  // summary route and favorites row serve.
+  it('unreadCountForWorkspace == all-workspaces rollups == by-conversation total', () => {
+    const { workspace, messages, reads, channel, otherChannel } = bootstrap();
+    messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      fromUserId: 'alice',
+      content: 'a',
+    });
+    messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      content: 'b',
+    });
+    messages.insertForConversation({
+      conversationId: otherChannel.id,
+      fromKind: 'user',
+      fromUserId: 'bob',
+      content: 'c',
+    });
+
+    const single = reads.unreadCountForWorkspace(workspace.id, 'local');
+    expect(single).toBe(3);
+    expect(single).toBe(reads.unreadCountsByWorkspace('local')[workspace.id]);
+    expect(single).toBe(
+      reads.unreadCountsByWorkspaceSidebar('local')[workspace.id],
+    );
+    expect(single).toBe(
+      reads.unreadCountsByConversationForWorkspace(workspace.id, 'local').total,
+    );
+  });
+
+  it('unreadCountForWorkspace is 0 when caught up (absent-key ⟺ 0 parity)', () => {
+    const { workspace, reads } = bootstrap();
+    // No unread: the single-ws helper returns 0; the sparse all-ws rollup omits
+    // the key. Both express "0 unread" — the doc §6 sparse-map invariant the
+    // renderer patch depends on (absent key == 0, not "not loaded").
+    expect(reads.unreadCountForWorkspace(workspace.id, 'local')).toBe(0);
+    expect(reads.unreadCountsByWorkspace('local')[workspace.id]).toBeUndefined();
+  });
+
   it('returns latest unread pointers with thread root and seq', () => {
     const { workspace, db, messages, reads, channel } = bootstrap();
 

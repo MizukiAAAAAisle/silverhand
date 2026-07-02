@@ -10,6 +10,8 @@ import type {
   AgentRunState,
   ConversationActivityEvent,
   MessageDto,
+  MessageEventPayload,
+  MessageProjections,
   MessageReactionChangedEvent,
   ServerFrame,
   TaskChangedEvent,
@@ -57,6 +59,11 @@ import {
 import type { ConversationAgentStatusPatch } from '@/features/channels/hooks';
 import { messageReactorsKey } from '@/features/channels/reaction-hooks';
 import { applyTaskChangedToTaskByNumberCache } from '@/features/tasks/useTaskByNumber';
+import {
+  dispositionSettle,
+  ingestMessageProjections,
+  validateMessageProjections,
+} from './projection-registry';
 
 type ReplayCursorEffect = 'content-apply' | 'cursor-inert';
 type ReplayRecoveryEffect =
@@ -322,19 +329,43 @@ function ingestMessage(
   qc: QueryClient,
   channelId: string,
   msg: MessageDto,
+  projections: MessageProjections | undefined,
 ): Promise<void>[] {
   const settles: Promise<void>[] = [];
   const push = (eff: Promise<void> | null): void => {
     if (eff) settles.push(eff);
   };
 
+  // S1 (#task:1277): a reply frame carrying an absolute reply_count patch MERGES
+  // the authoritative value into the displayed root row + mainline badge (below,
+  // via the projection registry) instead of the invalidate→refetch fallback. The
+  // patch is EFFECTIVE only when it targets THIS frame's reply root — a root
+  // mismatch is a dirty sidecar ("active but no valid patch", Cindy blocker / doc
+  // §10 gate #6), so keep the fallback and don't merge the wrong root. SINGLE-POINT
+  // validation ({@link validateMessageProjections}) is the anti-corruption boundary:
+  // it validates each projection against its own association key ONCE, and BOTH the
+  // suppression flag here and the registry dispatch below consume that one result —
+  // you cannot suppress rootA's fallback while still merging rootB's dirty patch.
+  const validatedProjections = projections
+    ? validateMessageProjections(projections, msg)
+    : undefined;
+  const isPatchedReply = validatedProjections?.thread_root_reply_count != null;
+  // #1278: a valid threads_list_entry patch merges/repositions the row in place
+  // (registry below) → suppress the blanket threads-list invalidate for this frame.
+  const isPatchedThreadsList = validatedProjections?.threads_list_entry != null;
+
   // MAINLINE — a reply badge is a message-derived count (authoritative-invalidate,
-  // cursor-inert); a mainline row is an id-deduped content append/gap. A warm-but-
+  // cursor-inert; #1277 upgrades it to an absolute merge when a patch rides the
+  // frame); a mainline row is an id-deduped content append/gap. A warm-but-
   // inactive mainline (default staleTime:5s) would serve a stale row/count on
   // remount → REMOVE it so the next open cold-starts (coarse, mirroring the
   // snapshot handler: any message frame can touch the window).
   if (hasActiveMainlineReader(qc, channelId)) {
-    push(applyMainlineMessageToChannelCaches(qc, channelId, msg));
+    // A patched reply's badge is merged by the registry below; a non-reply row
+    // (append/gap) and the no-patch reply-badge fallback still go through here.
+    if (!isPatchedReply) {
+      push(applyMainlineMessageToChannelCaches(qc, channelId, msg));
+    }
   } else if (hasWarmInactiveMainline(qc, channelId)) {
     push(removeInactiveMainlineCache(qc, channelId));
   }
@@ -356,17 +387,39 @@ function ingestMessage(
   // THREAD-ROOT reply count — message-derived (authoritative-invalidate, (c)). A
   // warm-inactive thread-root row is NOT removed — mirrors the snapshot handler
   // (useThreadRoot refetches on mount, so a ≤staleTime stale count self-heals).
-  for (const rootId of openThreadRootReaderRoots(qc, channelId)) {
-    push(applyThreadRootReplyBump(qc, channelId, rootId, msg));
+  // #1277: suppressed when a patch merges the count (registry below).
+  if (!isPatchedReply) {
+    for (const rootId of openThreadRootReaderRoots(qc, channelId)) {
+      push(applyThreadRootReplyBump(qc, channelId, rootId, msg));
+    }
   }
 
   // FOLLOWERS + THREADS-LIST — message-derived invalidations (cursor-inert): the
   // settle is fulfilled once the refetch lands, gating the floor advance.
+  // FOLLOWERS stay on the invalidate path (P3 `viewer_following` is per-viewer, not
+  // yet emitted). THREADS-LIST: #1278 upgrades it to an in-place merge+resort when a
+  // valid `threads_list_entry` patch rides the frame (registry below) — suppress the
+  // blanket invalidate then; absent/off-page still fall back (off-page via the
+  // reader's own pending-fallback, no-patch via this invalidate).
   for (const rootId of openThreadFollowerReaderRoots(qc, channelId)) {
     push(applyThreadFollowersMessage(qc, channelId, rootId, msg));
   }
   if (hasActiveChannelThreadsReader(qc, channelId)) {
-    push(invalidateChannelThreadsList(qc, channelId));
+    if (!isPatchedThreadsList) push(invalidateChannelThreadsList(qc, channelId));
+  }
+
+  // S1 authoritative projection merge (#task:1277): dispatch the frame's VALIDATED
+  // absolute projection patches through the reader registry; each displayed surface
+  // returns a 4-state disposition (§7) mapped to its settle promise for the
+  // satisfaction join. A merge settles synchronously (resolved); a surface with no
+  // reader / no loaded row is cold-absent-vacuous (nothing pushed). Mismatched
+  // patches were already dropped by `validateMessageProjections`, so a dirty
+  // sidecar's wrong root never reaches a reader (the suppressed paths above are its
+  // no-patch fallback for the frame's real root).
+  if (validatedProjections) {
+    for (const d of ingestMessageProjections(qc, channelId, validatedProjections)) {
+      push(dispositionSettle(d));
+    }
   }
 
   return settles;
@@ -616,9 +669,15 @@ export function ingestConversationFrame(
   if (messageStreamId) {
     const kind = asMessageStreamKind(frame.kind);
     if (kind === 'message') {
-      const msg = (frame.payload as { message?: MessageDto } | undefined)?.message;
+      const payload = frame.payload as MessageEventPayload | undefined;
+      const msg = payload?.message;
       if (msg) {
-        const settles = ingestMessage(qc, messageStreamId, msg);
+        const settles = ingestMessage(
+          qc,
+          messageStreamId,
+          msg,
+          payload?.projections,
+        );
         const { scope, seq, epoch } = frame;
         void Promise.allSettled(settles).then(results => {
           if (results.every(r => r.status === 'fulfilled')) {

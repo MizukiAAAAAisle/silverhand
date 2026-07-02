@@ -21,11 +21,14 @@ import type {
   MessageReactionChangedEvent,
   MessageSeq,
   MessageUnreadByConversationDto,
+  MessageUnreadPointerDto,
+  MessageUnreadSummaryDto,
   ReactionAggregateDto,
   ReplyBadgeSummary,
   TaskChangedEvent,
   ThreadFollowerStateDto,
   ThreadFollowMutationDto,
+  UnreadUpdatedMessagePayload,
 } from '@silverhand/shared';
 import { apiPaths, decodeMessageSeq } from '@silverhand/shared';
 import {
@@ -181,7 +184,15 @@ type CachedMessagesPage = Omit<ConversationMessagesDto, 'messages'> & {
 
 type MessagesCache = InfiniteData<CachedMessagesPage, MessagesPageParam>;
 
-function invalidateMessageUnreadQueries(qc: QueryClient): void {
+/** Debounced invalidate of every message-unread badge query (per-workspace
+ *  `by_conversation` maps + the global `by_workspace` summary). The legacy
+ *  fallback path: the S1 viewer-unread ingestor (#task:1284) patches these caches
+ *  in place from an enriched `unread_updated` frame, and this invalidate remains
+ *  ONLY for the frames it can't patch — a `snapshot_required` reconcile, or a
+ *  legacy/malformed message-variant payload missing the enriched absolute fields.
+ *  Never called on a well-formed enriched frame (that would defeat the patch's
+ *  zero-refetch). */
+export function invalidateMessageUnreadQueries(qc: QueryClient): void {
   const existing = messageUnreadInvalidationTimers.get(qc);
   if (existing) clearTimeout(existing);
   const timer = setTimeout(() => {
@@ -212,6 +223,109 @@ function isMessageUnreadUpdatedPayload(payload: unknown): boolean {
     payload !== null &&
     typeof (payload as { conversation_id?: unknown }).conversation_id === 'string'
   );
+}
+
+/** Query key for the per-workspace message-unread `by_conversation` read-model
+ *  (`useMessageUnreadCounts`). `kind` partitions regular vs dm workspaces; a
+ *  workspace id is only ever one kind, so the S1 viewer-unread ingestor
+ *  (#task:1284) patches whichever partition is loaded. MUST stay identical to the
+ *  `useMessageUnreadCounts` queryKey — both build it here so they cannot drift. */
+export const messageUnreadByConversationKey = (
+  workspaceId: string,
+  kind: 'regular' | 'dm',
+) => ['workspaces', workspaceId, kind, 'message-unread'] as const;
+
+/** Query key for the global cross-workspace message-unread summary
+ *  (`by_workspace`, `useMessageUnreadSummary`). */
+export const messageUnreadSummaryKey = ['message-unread', 'summary'] as const;
+
+/** Two unread pointers are equal iff they point at the same message (or both
+ *  null). `message_id` is unique, so it alone decides — no need to compare seq /
+ *  thread_root_id. Powers the idempotency short-circuit below. */
+function unreadPointerEqual(
+  a: MessageUnreadPointerDto | undefined,
+  b: MessageUnreadPointerDto | null,
+): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return a.message_id === b.message_id;
+}
+
+/** S1 viewer-unread ingestor patch (#task:1284, doc §6) — authoritative UPSERT of
+ *  ONE conversation's absolute unread into the per-workspace `by_conversation`
+ *  read-model. The map is a COMPLETE sparse model keyed by conversation id
+ *  (absent key == 0 unread), so — unlike a paginated list — key membership is
+ *  authoritative from the payload: `count > 0` sets the key, `count == 0` DELETES
+ *  it (never a phantom `0` that a refetch would omit — the patched map must be
+ *  structurally identical to a refetched one, else the two silently diverge).
+ *  `latest_by_conversation` mirrors the pointer (non-null set / null delete);
+ *  `total` is the absolute workspace rollup. A whole-query that is not loaded is a
+ *  no-op — absence is NOT a refetch trigger; the next mount fetches the
+ *  authoritative REST snapshot. Idempotent: an unchanged patch writes nothing. */
+export function patchMessageUnreadByConversation(
+  qc: QueryClient,
+  payload: UnreadUpdatedMessagePayload,
+): 'patched' | 'cleared' | 'unchanged' | 'cold' {
+  let outcome: 'patched' | 'cleared' | 'unchanged' | 'cold' = 'cold';
+  const cid = payload.conversation_id;
+  // A workspace id is only ever one kind; patch whichever partition is loaded.
+  for (const kind of ['regular', 'dm'] as const) {
+    const key = messageUnreadByConversationKey(payload.workspace_id, kind);
+    const prev = qc.getQueryData<MessageUnreadByConversationDto>(key);
+    if (!prev) continue; // whole-query not loaded → no-op for this partition
+    const countUnchanged =
+      (prev.by_conversation[cid] ?? 0) === payload.conversation_unread_count;
+    const totalUnchanged = prev.total === payload.workspace_unread_count;
+    const pointerUnchanged = unreadPointerEqual(
+      prev.latest_by_conversation[cid],
+      payload.latest_unread,
+    );
+    if (countUnchanged && totalUnchanged && pointerUnchanged) {
+      if (outcome === 'cold') outcome = 'unchanged';
+      continue;
+    }
+    const by_conversation = { ...prev.by_conversation };
+    if (payload.conversation_unread_count > 0) {
+      by_conversation[cid] = payload.conversation_unread_count;
+    } else {
+      delete by_conversation[cid];
+    }
+    const latest_by_conversation = { ...prev.latest_by_conversation };
+    if (payload.latest_unread) {
+      latest_by_conversation[cid] = payload.latest_unread;
+    } else {
+      delete latest_by_conversation[cid];
+    }
+    qc.setQueryData<MessageUnreadByConversationDto>(key, {
+      by_conversation,
+      latest_by_conversation,
+      total: payload.workspace_unread_count,
+    });
+    outcome = payload.conversation_unread_count > 0 ? 'patched' : 'cleared';
+  }
+  return outcome;
+}
+
+/** S1 viewer-unread ingestor patch (#task:1284, doc §6) — authoritative UPSERT of
+ *  one workspace's absolute unread into the global `by_workspace` summary. Same
+ *  sparse-map discipline as {@link patchMessageUnreadByConversation}: `> 0` set /
+ *  `== 0` delete key; whole-query not loaded → no-op; idempotent. */
+export function patchMessageUnreadSummary(
+  qc: QueryClient,
+  payload: UnreadUpdatedMessagePayload,
+): 'patched' | 'cleared' | 'unchanged' | 'cold' {
+  const prev = qc.getQueryData<MessageUnreadSummaryDto>(messageUnreadSummaryKey);
+  if (!prev) return 'cold';
+  const wsId = payload.workspace_id;
+  const count = payload.workspace_unread_count;
+  if ((prev.by_workspace[wsId] ?? 0) === count) return 'unchanged';
+  const by_workspace = { ...prev.by_workspace };
+  if (count > 0) by_workspace[wsId] = count;
+  else delete by_workspace[wsId];
+  qc.setQueryData<MessageUnreadSummaryDto>(messageUnreadSummaryKey, {
+    by_workspace,
+  });
+  return count > 0 ? 'patched' : 'cleared';
 }
 
 export type ConversationAgentStatusPatch = Pick<ConversationAgentDto, 'agent_id'> &
@@ -1078,6 +1192,81 @@ export function applyThreadRootReplyBump(
   );
   if (!prev) return null;
   return qc.invalidateQueries({ queryKey: threadRootKey(channelId, rootId) });
+}
+
+/** S1 (#task:1277 / docs/projection-recovery-s1-v1.md §5): idempotently SET the
+ *  authoritative reply count for `rootId` on the OPEN thread-root row cache from
+ *  a backend absolute-value patch — the merge that REPLACES
+ *  {@link applyThreadRootReplyBump}'s invalidate→refetch on the patch path (the
+ *  #1277 amplification kill). Returns `true` when the displayed cache holds the
+ *  root (→ `merged`), `false` when its snapshot isn't loaded (→
+ *  `cold-absent-vacuous`; the root's own mount-fetch is the authoritative
+ *  recovery). Absolute set is replay-idempotent (an equal value is a no-op that
+ *  skips the write to avoid needless re-render churn). */
+export function mergeThreadRootReplyCount(
+  qc: QueryClient,
+  channelId: string,
+  rootId: string,
+  replyCount: number,
+): boolean {
+  const prev = qc.getQueryData<ConversationMessagesDto>(
+    threadRootKey(channelId, rootId),
+  );
+  if (!prev) return false;
+  if (prev.reply_counts_by_root[rootId] === replyCount) return true;
+  qc.setQueryData<ConversationMessagesDto>(threadRootKey(channelId, rootId), p =>
+    p
+      ? {
+          ...p,
+          reply_counts_by_root: {
+            ...p.reply_counts_by_root,
+            [rootId]: replyCount,
+          },
+        }
+      : p,
+  );
+  return true;
+}
+
+/** S1 (#task:1277 / §5): idempotently SET the authoritative reply count for
+ *  `rootId` on the mainline window (the inline reply badge) from a backend
+ *  absolute-value patch — REPLACES the whole-window invalidate of
+ *  {@link applyMainlineMessageToChannelCaches}'s reply branch on the patch path.
+ *  Returns `true` when the badge is displayed (→ `merged`), `false` when the root
+ *  isn't on a loaded page (→ `cold-absent-vacuous`). Writes the value onto every
+ *  page already carrying the root's key/row so the reader's page-merge ("later
+ *  wins") yields the authoritative count regardless of page order; an equal value
+ *  is a no-op (no ref churn). */
+export function mergeMainlineReplyCount(
+  qc: QueryClient,
+  channelId: string,
+  rootId: string,
+  replyCount: number,
+): boolean {
+  const cur = qc.getQueryData<MessagesCache>(messagesKey(channelId));
+  if (!cacheHasRootOrKey(cur, rootId)) return false;
+  qc.setQueryData<MessagesCache>(messagesKey(channelId), prev => {
+    if (!prev) return prev;
+    let changed = false;
+    const pages = prev.pages.map(page => {
+      const holdsRoot =
+        Object.prototype.hasOwnProperty.call(page.reply_counts_by_root, rootId) ||
+        page.messages.some(m => m.id === rootId);
+      if (!holdsRoot || page.reply_counts_by_root[rootId] === replyCount) {
+        return page;
+      }
+      changed = true;
+      return {
+        ...page,
+        reply_counts_by_root: {
+          ...page.reply_counts_by_root,
+          [rootId]: replyCount,
+        },
+      };
+    });
+    return changed ? { ...prev, pages } : prev;
+  });
+  return true;
 }
 
 /** Invalidate one OPEN cluster's follower snapshot when a reply to this root
@@ -2208,29 +2397,31 @@ export function useChannelUnreadCounts(workspaceId: string | null) {
 
 /**
  * Per-channel message unread counts for the channels sidebar badge.
- * Backed by the conversation_reads cursor system. Invalidated by WS
- * viewer-scoped `unread_updated` events — no polling.
+ * Backed by the conversation_reads cursor system. Message-variant
+ * `unread_updated` is patched in place by the viewer-unread ingestor
+ * (#task:1284); only a `snapshot_required` (resume/epoch) refetches — no polling.
  */
 export function useMessageUnreadCounts(
   workspaceId: string | null,
   workspaceKind: 'regular' | 'dm' | null = 'regular',
 ) {
   const qc = useQueryClient();
-  const queryKey = ['workspaces', workspaceId, workspaceKind, 'message-unread'] as const;
+  const queryKey = messageUnreadByConversationKey(
+    workspaceId ?? 'none',
+    workspaceKind ?? 'regular',
+  );
 
   useEffect(() => {
     if (!workspaceId) return;
+    // Interest only (#task:1260) + `snapshot_required` fallback. Message-variant
+    // `unread_updated` is now patched IN PLACE by the central viewer-unread
+    // ingestor (#task:1284), so this hook no longer invalidates on it — that
+    // would defeat the patch's zero-refetch. Only a resume/epoch
+    // `snapshot_required` still needs the authoritative refetch.
     const sub = subscribeViewerScope();
     const unsub = onWsFrame(frame => {
-      if (frame.type === 'snapshot_required') {
-        if (!isCurrentViewerScope(frame.scope)) return;
-        invalidateMessageUnreadQueries(qc);
-        return;
-      }
-      if (frame.type !== 'event') return;
+      if (frame.type !== 'snapshot_required') return;
       if (!isCurrentViewerScope(frame.scope)) return;
-      if (frame.kind !== 'unread_updated') return;
-      if (!isMessageUnreadUpdatedPayload(frame.payload)) return;
       invalidateMessageUnreadQueries(qc);
     });
     return () => { sub.unsubscribe(); unsub(); };
@@ -2279,18 +2470,19 @@ export function useMarkConversationNotificationsRead() {
   * conversation_reads cursor — clears message unread badges.
   */
 export function useMarkMessageChannelRead() {
-  const qc = useQueryClient();
   return useMutation({
     mutationFn: async (params: string | { id: string }) => {
       const channelId = typeof params === 'string' ? params : params.id;
       await postObserve([mainlineStreamSourceHead(channelId)]);
     },
-    onSuccess: () => {
-      // Only unread counters need to refresh after marking a conversation
-      // read. Invalidating ['workspaces'] also refetches the channel/tree
-      // data, which makes every channel click redo the sidebar thread load.
-      invalidateMessageUnreadQueries(qc);
-    },
+    // No onSuccess message-unread invalidate (#task:1284). observe's post-commit
+    // enriched `unread_updated` message variant is fanned to EVERY viewer —
+    // including THIS client that issued the observe (no actor exclusion / no
+    // origin-connection suppression, backend contract) — and the viewer-unread
+    // ingestor patches the badge caches to 0 in place. Invalidating here would
+    // defeat that with a whole-list refetch (the exact regression the projection
+    // replaces). Absolute-value payloads are idempotent, so HTTP-return vs
+    // WS-frame arrival order can't leave a stale badge.
   });
 }
 
@@ -2323,11 +2515,13 @@ export function useMarkThreadRead() {
       ]);
     },
     onSuccess: (_d, params) => {
-      // Sidebar/global unread roll-up includes followed-thread unread, and the
-      // Threads list shows the per-thread sticker/dot — both must refresh.
-      // The threads-list query only invalidates on stream message / connected,
-      // never on `unread_updated`, so we invalidate it explicitly here.
-      invalidateMessageUnreadQueries(qc);
+      // message-unread badge (sidebar + global roll-up, incl. followed-thread
+      // unread) is now cleared by observe's post-commit enriched `unread_updated`
+      // patch via the viewer-unread ingestor (#task:1284) — NO invalidate here
+      // (it would force a whole-list refetch and defeat the projection).
+      // The Threads-list is a SEPARATE read-model: it only invalidates on stream
+      // message / connected, never on `unread_updated`, so its per-thread
+      // sticker/dot still needs this explicit invalidate.
       qc.invalidateQueries({ queryKey: channelThreadsKey(params.channelId) });
     },
   });
@@ -2337,24 +2531,21 @@ export function useMarkThreadRead() {
  * Global message unread summary across ALL workspaces.
  * Backed by conversation_reads — returns total unread message count per workspace.
  * Used by the workspace sidebar to show per-workspace unread badges.
- * Invalidated by WS viewer-scoped `unread_updated` events — no polling.
+ * Message-variant `unread_updated` is patched in place by the viewer-unread
+ * ingestor (#task:1284); only a `snapshot_required` refetches — no polling.
  */
 export function useMessageUnreadSummary() {
   const qc = useQueryClient();
-  const queryKey = ['message-unread', 'summary'] as const;
+  const queryKey = messageUnreadSummaryKey;
 
   useEffect(() => {
+    // Interest only + `snapshot_required` fallback — message-variant
+    // `unread_updated` is patched in place by the viewer-unread ingestor
+    // (#task:1284), no invalidate here (see useMessageUnreadCounts).
     const sub = subscribeViewerScope();
     const unsub = onWsFrame(frame => {
-      if (frame.type === 'snapshot_required') {
-        if (!isCurrentViewerScope(frame.scope)) return;
-        invalidateMessageUnreadQueries(qc);
-        return;
-      }
-      if (frame.type !== 'event') return;
+      if (frame.type !== 'snapshot_required') return;
       if (!isCurrentViewerScope(frame.scope)) return;
-      if (frame.kind !== 'unread_updated') return;
-      if (!isMessageUnreadUpdatedPayload(frame.payload)) return;
       invalidateMessageUnreadQueries(qc);
     });
     return () => { sub.unsubscribe(); unsub(); };

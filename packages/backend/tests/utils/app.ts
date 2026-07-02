@@ -30,6 +30,7 @@ import { HostRepo } from '../../src/repos/host-repo.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
@@ -1073,6 +1074,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     schedules: new ScheduleRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
     conversations: new ConversationRepo(db),
+    conversationReads: new ConversationReadRepo(db),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
     runtimeHost: ctx.runtimeHost,
