@@ -344,6 +344,14 @@ describe('MessageScreenshotView — non-interactive contract', () => {
     expect(html).toContain('link');
   });
 
+  it('strips XML-invalid control characters from static export text', () => {
+    const html = render([
+      msg('m1', 1, 'ok. now I switch\u0008 away'),
+    ]);
+    expect(html).toContain('ok. now I switch away');
+    expect(html).not.toContain('\u0008');
+  });
+
   it('renders cached image attachments as static images', () => {
     const html = render(
       [

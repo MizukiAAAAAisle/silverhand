@@ -69,19 +69,22 @@ export function MessageScreenshotView({
   channelTitle?: string | null;
   channelKind?: 'channel' | 'dm' | null;
 }): JSX.Element {
+  const safeChannelTitle = channelTitle
+    ? sanitizeScreenshotText(channelTitle)
+    : null;
   return (
     <div
       data-screenshot-root
       className="flex w-[760px] flex-col gap-3 bg-bg-floating p-6 text-text-primary"
     >
-      {channelTitle ? (
+      {safeChannelTitle ? (
         <div className="border-b border-border-subtle pb-2 text-sm font-semibold">
           {channelKind === 'dm' ? (
             <span
               data-conversation-title
               className="inline-flex items-center font-serif text-base font-semibold text-text-primary"
             >
-              {channelTitle}
+              {safeChannelTitle}
             </span>
           ) : (
             <span
@@ -89,7 +92,7 @@ export function MessageScreenshotView({
               className="inline-flex items-center font-serif text-base font-semibold text-text-primary"
             >
               <span data-conversation-hash>#</span>
-              {channelTitle}
+              {safeChannelTitle}
             </span>
           )}
         </div>
@@ -144,12 +147,15 @@ function ScreenshotRow({
     ? agentsById.get(message.from_agent_id)
     : undefined;
   const isViewer = isUser && viewer && message.from_user_id === viewer.id;
-  const senderName = isUser
-    ? isViewer
-      ? viewer.display_name?.trim() || viewer.name
-      : message.from_user_id ?? 'user'
-    : `@${agent?.display_name?.trim() || agent?.name || 'agent'}`;
+  const senderName = sanitizeScreenshotText(
+    isUser
+      ? isViewer
+        ? viewer.display_name?.trim() || viewer.name
+        : message.from_user_id ?? 'user'
+      : `@${agent?.display_name?.trim() || agent?.name || 'agent'}`,
+  );
   const time = formatExportTime(message.created_at);
+  const content = sanitizeScreenshotText(message.content);
 
   return (
     <div className="flex items-start gap-3">
@@ -187,7 +193,7 @@ function ScreenshotRow({
              lookup maps; click handlers are intentionally absent so the
              captured DOM contains no buttons. */
           <Markdown
-            content={message.content}
+            content={content}
             conversationId={message.conversation_id}
             agentsByName={new Map(agentsByName)}
             humansByName={humansByName ? new Map(humansByName) : undefined}
@@ -254,12 +260,13 @@ function ScreenshotAttachmentTile({
   imageUrl?: string;
 }): JSX.Element {
   const isImage = attachment.content_type.startsWith('image/');
+  const filename = sanitizeScreenshotText(attachment.filename);
   if (isImage && imageUrl) {
     return (
       <figure className="block overflow-hidden rounded-md border border-border-subtle bg-bg-floating">
         <img
           src={imageUrl}
-          alt={attachment.filename}
+          alt={filename}
           className="block max-h-64 max-w-[320px] object-contain"
           draggable={false}
         />
@@ -269,7 +276,7 @@ function ScreenshotAttachmentTile({
   return (
     <div className="flex max-w-[280px] items-center gap-2 rounded-md border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary">
       <FileText className="size-4 shrink-0 text-text-muted" />
-      <span className="min-w-0 truncate">{attachment.filename}</span>
+      <span className="min-w-0 truncate">{filename}</span>
       <span className="shrink-0 text-[10px] text-text-muted">
         {formatBytes(attachment.size)}
       </span>
@@ -323,7 +330,7 @@ function ScreenshotAvatar({
         size={32}
         className="border-[length:var(--border-avatar-width)] border-border-avatar"
         avatarObjectUrl={agentAvatarObjectUrl}
-        alt={agent.display_name || agent.name}
+        alt={sanitizeScreenshotText(agent.display_name || agent.name)}
       />
     );
   }
@@ -345,6 +352,17 @@ function formatExportTime(epochMs: number): string {
   const hh = String(d.getHours()).padStart(2, '0');
   const mi = String(d.getMinutes()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+}
+
+// html-to-image serializes the offscreen DOM through an SVG foreignObject.
+// XML 1.0 forbids most C0/C1 control characters; a single pasted backspace
+// (`\b`) in message text can make the generated `data:image/svg+xml` fail to
+// load. Keep the live message untouched and only strip those invisible controls
+// in the static export tree. Preserve whitespace controls that XML allows.
+const XML_INVALID_CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
+
+function sanitizeScreenshotText(value: string): string {
+  return value.replace(XML_INVALID_CONTROL_RE, '');
 }
 
 function formatBytes(n: number): string {
