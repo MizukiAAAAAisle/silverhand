@@ -4,7 +4,7 @@ import type {
   MessageDto,
   UserDto,
 } from '@silverhand/shared';
-import { FileText, User } from 'lucide-react';
+import { FileText, Hash, User } from 'lucide-react';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { getAttachmentBlobUrl } from '@/lib/attachment-blob-cache';
 import { Markdown } from './Markdown';
@@ -91,7 +91,10 @@ export function MessageScreenshotView({
               data-conversation-title
               className="inline-flex items-center font-serif text-base font-semibold text-text-primary"
             >
-              <span data-conversation-hash>#</span>
+              <Hash
+                data-conversation-hash-icon
+                className="size-4 shrink-0 align-[-0.15em]"
+              />
               {safeChannelTitle}
             </span>
           )}

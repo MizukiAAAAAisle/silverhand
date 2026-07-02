@@ -51,7 +51,15 @@
      drops to transparent. Full-saturation brand is reserved for the real
      brand moment — the nav rail. Hover stays a softer veil so scanning a
      list doesn't strobe. Dark text on both veils holds high contrast. */
-  --sidebar-row-border-width: 2px;
+  /* Sidebar-row stroke weight. 2px is forza6's poster vocabulary (bold
+     hard-cut frames); warm-script speaks a softer, more delicate language,
+     so its sidebar rows + NavRail active tile take a 1px stroke to match
+     `--control-border-width` (also 1px here). forza6/slack keep 2px. The
+     width mostly reserves gutter (warm rows carry a transparent border at
+     rest/hover, selected uses a left-bar); the one visibly-stroked surface
+     is the NavRail active tile, which now reads as a fine outline instead
+     of a poster frame. shiki 2026-07-03: "2px 更适配 forza6，不适合 warm". */
+  --sidebar-row-border-width: 1px;
   --bg-row-selected: color-mix(in oklab, var(--brand-primary) 40%, var(--bg-channels-sidebar));
   --bg-row-hover: color-mix(in oklab, var(--brand-primary) 22%, var(--bg-channels-sidebar));
 
@@ -550,19 +558,86 @@
   border: none;
 }
 
-/* ── list-row hover — warm structural signal ─────────────────────────
-   Search / Saved / Archived list rows share one token-driven card
-   (`[data-list-row]`: white `--bg-floating`, 1px `--control-border-width`,
-   `--row-radius`). forza6 paints its own poster hover (ink border + hard
-   shadow + lift). warm's hover is deliberately quiet and OFF the brand hue:
-   a row hover is a utility signal, not a selection, so it must not flip to
-   the pink `--accent` (the earlier `hover:border-accent` did, reading louder
-   than a real commit — same lesson as the sidebar-row veil fix above). The
-   thin border only DEEPENS (warm ink 12%→28%), plus a soft paper lift +
-   1px rise — structural, no ground colour change. shiki: border thin, no
-   heavier than resting. */
+/* ── warm-script state-signal language: borderless (fill / veil / glow) ──
+   shiki 2026-07-03: warm-script (and slack-dark, its dark twin — same
+   border language, only light-vs-dark values) speak a soft paper language.
+   Hard borders and focus rings are forza6's poster vocabulary; here every
+   STATE signal drops the border/ring and carries itself with a fill/veil or
+   a soft brand glow instead. Resting cards keep their 1px hairline for
+   structure (option A) — only state changes go borderless. forza6 is
+   untouched: it stays the bordered poster theme. */
+
+/* list-row hover (Search / Saved / Archived): bg veil + soft paper lift,
+   no border change. Resting 1px hairline stays. */
 [data-theme='warm-script'] [data-list-row]:hover {
-  border-color: rgba(var(--shadow-base), 0.28);
+  background-color: var(--bg-hover);
   box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.12);
   transform: translateY(-1px);
+}
+
+/* message-row hover (framed = hover / saved / replying): a fully borderless
+   frame read as invisible on the cream ground (shiki), so keep a fine 1px
+   hairline — but drop the component's 2px poster width to 1px (the whole row
+   goes 1px so resting↔framed never shifts) and soften the colour off the hard
+   accent. The `bg-floating` fill the component applies rides along. */
+[data-theme='warm-script'] [data-message-row] {
+  border-width: 1px;
+}
+[data-theme='warm-script'] [data-message-row].border-accent {
+  border-color: rgba(var(--shadow-base), 0.32);
+}
+
+/* composer focus: the main-stage input's focus is warm's brand moment, but a
+   full-bright yellow glow was too loud (shiki). Deepen the hue toward ink and
+   drop the outer bloom — a single soft, translucent amber ring, border unhard-
+   ened. */
+[data-theme='warm-script'] [data-composer-shell]:focus-within {
+  border-color: var(--border-subtle);
+  box-shadow: 0 0 0 2px
+    color-mix(in oklab, color-mix(in oklab, var(--brand-primary) 70%, var(--accent)) 38%, transparent);
+}
+
+/* NavRail selected / hover: the white tile fill on the yellow rail (and the
+   hover veil) already say "selected / hovered" — drop the accent border.
+   Scoped to the NavRail so the shared sidebar-row tokens are untouched. */
+[data-theme='warm-script'] nav[aria-label='App sections'] button[aria-current='page'],
+[data-theme='warm-script'] nav[aria-label='App sections'] button:not([aria-current='page']):hover {
+  border-color: transparent;
+}
+
+/* thread-row hover: same borderless-state language as the list rows — drop
+   the ink border deepen (the component's `hover:border-[--border-control-hover]`
+   resolves to the near-black accent in warm), letting the bg-hover veil + 1px
+   lift the component applies carry it. (slack resolves --border-control-hover
+   to --border already, so its thread-row hover is borderless out of the box.) */
+[data-theme='warm-script'] [data-thread-row]:hover {
+  border-color: var(--border);
+}
+
+/* ── channel `#` icon — warm colour accent (no chip) ─────────────────
+   forza6 gives the `#` a filled poster sticker; copying that fill into warm
+   read as heavy / borrowed (shiki). warm strengthens by COLOUR alone — a
+   flat, slightly bolder gold glyph, no background / chip. NOT a mix of brand
+   yellow with ink (that desaturates into a muddy olive that reads "washed
+   out" — shiki); a saturated deep goldenrod keeps the gold chroma while
+   staying readable on the light paper ground. Applies to every
+   `[data-channel-icon]` consumer. */
+[data-theme='warm-script'] [data-channel-icon] {
+  color: #c6890a;
+  stroke-width: 2.5;
+}
+
+/* ── chat-header `#` icon — same colour identity as the sidebar `#` ────
+   Every channel `#` (sidebar `[data-channel-icon]` + chat-header
+   `[data-conversation-hash-icon]`, ChannelView + screenshot export) is the
+   same lucide Hash SVG. warm strengthens by COLOUR alone (no fill/chip —
+   see the sidebar rule): a saturated deep goldenrod glyph, bolder stroke, a
+   hair of right margin mirroring the sidebar's flex `gap-2`. */
+[data-theme='warm-script'] [data-conversation-hash-icon] {
+  /* Tailwind preflight sets `svg { display: block }`, which would drop the
+     icon onto its own line beside the title — force it back inline. */
+  display: inline-block;
+  color: #c6890a;
+  stroke-width: 2.5;
+  margin-right: 0.1em;
 }

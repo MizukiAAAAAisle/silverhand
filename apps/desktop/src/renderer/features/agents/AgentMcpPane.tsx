@@ -659,7 +659,7 @@ function NoticeLine({
   children: ReactNode;
 }): JSX.Element {
   return (
-    <div className="flex items-start gap-2 border border-border-subtle bg-bg-floating/50 px-3 py-2 text-xs leading-relaxed text-text-muted">
+    <div className="flex items-start gap-2 rounded-[var(--control-radius)] border border-border-subtle bg-bg-floating/50 px-3 py-2 text-xs leading-relaxed text-text-muted">
       <span className="mt-0.5 text-text-muted">{icon}</span>
       <span>{children}</span>
     </div>
@@ -694,7 +694,7 @@ function CopyButton({
         });
       }}
       className={cn(
-        'inline-flex items-center gap-1.5 border border-border-subtle px-2 py-1 text-text-secondary transition-colors hover:border-border hover:text-text-primary',
+        'inline-flex items-center gap-1.5 rounded-[var(--control-radius)] border border-border-subtle px-2 py-1 text-text-secondary transition-colors hover:border-border hover:text-text-primary',
         mono ? 'font-mono text-xs' : 'text-[11px]',
       )}
       title="Copy to clipboard"

@@ -378,14 +378,87 @@
   border: none;
 }
 
-/* ── list-row hover — slack-dark structural signal ───────────────────
-   Matches the warm treatment: Search / Saved / Archived share the one
-   token card (`[data-list-row]`), and hover stays a quiet structural
-   signal — thin border deepens (white 10%→22%), a soft shadow + 1px lift,
-   no bg wash and no brand hue. Keeps the three rows identical per theme
-   while speaking slack-dark's own restrained vocabulary. */
+/* ── slack-dark state-signal language: borderless (fill / veil / glow) ──
+   Dark twin of warm-script — SAME border language, only dark values
+   (shiki 2026-07-03: warm & slack use borders identically, one light one
+   dark). Every STATE signal drops the border/ring and carries itself with a
+   fill/veil or a soft brand glow; resting cards keep their 1px hairline
+   (option A). forza6 stays the bordered poster theme, untouched. */
+
+/* list-row hover (Search / Saved / Archived): bg veil + soft lift, no
+   border change. Resting 1px hairline stays. */
 [data-theme='slack-dark'] [data-list-row]:hover {
-  border-color: rgba(255, 255, 255, 0.22);
+  background-color: var(--bg-hover);
   box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.45);
   transform: translateY(-1px);
+}
+
+/* message-row hover (framed = hover / saved / replying): drop the 2px
+   accent frame; the `bg-floating` fill the component applies (lighter than
+   the chat ground) carries the state. */
+/* message-row hover (framed): keep a fine 1px hairline (fully borderless read
+   as invisible) — drop the 2px poster width to 1px across the row so
+   resting↔framed never shifts, soften the colour off the hard accent. The
+   component's `bg-floating` fill rides along. */
+[data-theme='slack-dark'] [data-message-row] {
+  border-width: 1px;
+}
+[data-theme='slack-dark'] [data-message-row].border-accent {
+  border-color: rgba(255, 255, 255, 0.26);
+}
+
+/* composer focus: deep-blue translucent ring, no outer bloom (mirrors warm's
+   quieted glow), border unhardened. */
+[data-theme='slack-dark'] [data-composer-shell]:focus-within {
+  border-color: var(--border-subtle);
+  box-shadow: 0 0 0 2px
+    color-mix(in oklab, color-mix(in oklab, var(--accent) 60%, var(--brand-primary)) 45%, transparent);
+}
+
+/* NavRail selected / hover: the brand-blue tile fill (and the hover veil)
+   carry the state — drop the border. Scoped to the NavRail so shared
+   sidebar-row tokens are untouched. */
+[data-theme='slack-dark'] nav[aria-label='App sections'] button[aria-current='page'],
+[data-theme='slack-dark'] nav[aria-label='App sections'] button:not([aria-current='page']):hover {
+  border-color: transparent;
+}
+
+/* sidebar selected row: the brand-blue fill + white text already carry
+   "selected" — drop the white border so slack matches warm's borderless
+   selected (warm uses a veil + left-bar; slack uses the full brand fill).
+   Two selectors mirror the aside-hosted rows and the ChannelsSidebar
+   `data-row-selected` variant. */
+[data-theme='slack-dark'] aside[data-sidebar] .sidebar-row-border.text-text-on-selected,
+[data-theme='slack-dark'] [data-row-selected].sidebar-row-border.text-text-on-selected {
+  border-color: transparent;
+}
+
+/* ── channel `#` icon — slack colour accent (no chip) ────────────────
+   Colour-only strengthening (no fill/chip — matches warm's approach, avoids
+   the borrowed-from-forza6 look): a flat, slightly bolder bright-blue accent
+   glyph, readable on the dark ground. */
+[data-theme='slack-dark'] [data-channel-icon] {
+  color: var(--accent);
+  stroke-width: 2.5;
+}
+/* selected sidebar row is brand-blue with white text — the `#` follows, going
+   white so it reads on the blue and matches the row's channel name. */
+[data-theme='slack-dark'] [data-row-selected] [data-channel-icon] {
+  color: var(--text-on-selected);
+}
+
+/* ── chat-header `#` icon — same colour identity as the sidebar `#` ────
+   Every channel `#` (sidebar `[data-channel-icon]` + chat-header
+   `[data-conversation-hash-icon]`, ChannelView + screenshot export) is the
+   same lucide Hash SVG. slack strengthens by COLOUR alone (no fill/chip):
+   a bright-blue accent glyph, bolder stroke, a hair of right margin
+   mirroring the sidebar's flex `gap-2`. The header is never on a
+   selected/brand ground, so no `data-row-selected` variant. */
+[data-theme='slack-dark'] [data-conversation-hash-icon] {
+  /* Tailwind preflight sets `svg { display: block }`, which would drop the
+     icon onto its own line beside the title — force it back inline. */
+  display: inline-block;
+  color: var(--accent);
+  stroke-width: 2.5;
+  margin-right: 0.1em;
 }

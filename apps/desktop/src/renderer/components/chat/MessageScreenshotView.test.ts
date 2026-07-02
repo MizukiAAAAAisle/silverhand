@@ -140,8 +140,11 @@ describe('MessageScreenshotView — non-interactive contract', () => {
   it('renders the export channel header with the same channel symbol hook', () => {
     const html = render([msg('m1', 1, 'hello')]);
     expect(html).toContain('data-conversation-title');
-    expect(html).toContain('data-conversation-hash');
-    expect(html).toContain('>#</span>');
+    // The channel `#` is now a lucide Hash icon (unified with the sidebar `#`
+    // across every theme — forza6 paints it as a poster sticker, warm/slack as
+    // a coloured glyph), not a text `#` glyph.
+    expect(html).toContain('data-conversation-hash-icon');
+    expect(html).toContain('lucide-hash');
     expect(html).toContain('design');
   });
 
@@ -151,7 +154,7 @@ describe('MessageScreenshotView — non-interactive contract', () => {
       channelTitle: 'Alice',
     });
     expect(html).toContain('data-conversation-title');
-    expect(html).not.toContain('data-conversation-hash');
+    expect(html).not.toContain('data-conversation-hash-icon');
     expect(html).toContain('Alice');
   });
 

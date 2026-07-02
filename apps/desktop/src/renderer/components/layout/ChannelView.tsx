@@ -14,6 +14,7 @@ import {
   ArrowDown,
   ArrowUpRight,
   CornerDownRight,
+  Hash,
   Maximize2,
   CornerUpLeft,
   Minimize2,
@@ -156,8 +157,8 @@ interface ChannelViewProps {
   /** Render this view as an Activity DOCKED SOURCE VIEWER (#task:1227): a
    *  convenience pane, NOT full conversation chrome. The header collapses to
    *  identity + exit only — the SAME themed `#` channel identity the full header
-   *  uses (`data-conversation-hash`, so forza6 paints its `#` sticker — no new
-   *  icon language), title, member strip, and on the right `Open in conversation`
+   *  uses (the `data-conversation-hash-icon` lucide glyph, so forza6 paints its
+   *  `#` poster sticker), title, member strip, and on the right `Open in conversation`
    *  + close. All management/structural controls (settings/archive-rename,
    *  channel attention pref, threads-list toggle, fullscreen, agent restart/stop,
    *  add-member) are suppressed: those belong in the original conversation. The
@@ -501,7 +502,13 @@ function ActiveChannelView({
               data-conversation-title
               className="min-w-0 truncate font-serif text-base font-semibold text-text-primary"
             >
-              <span data-conversation-hash>#</span>
+              {/* All themes render the channel `#` as this lucide icon; each
+                  theme paints it via `[data-conversation-hash-icon]` (forza6 =
+                  hero poster sticker, warm/slack = coloured glyph). */}
+              <Hash
+                data-conversation-hash-icon
+                className="size-4 shrink-0 align-[-0.15em]"
+              />
               {parentTitle ?? conversation.title}
             </span>
             {memberStrip}
@@ -530,7 +537,10 @@ function ActiveChannelView({
             >
               {conversation.kind === 'channel' ||
               conversation.kind === 'dm_channel' ? (
-                <span data-conversation-hash>#</span>
+                <Hash
+                  data-conversation-hash-icon
+                  className="size-4 shrink-0 align-[-0.15em]"
+                />
               ) : null}
               {conversation.title}
             </span>

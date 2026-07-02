@@ -219,7 +219,7 @@
    forza6-specific.
 
    v6.4 update (shiki #task:917): poster sticker drop shadow ON
-   selected sidebar rows, mirroring the `[data-conversation-hash]`
+   selected sidebar rows, mirroring the `[data-conversation-hash-icon]`
    chat-header chip + `[data-channel-icon]` sidebar chip recipe.
    Box-shadow doesn't take layout space so adding it on selected
    doesn't shift surrounding rows. 1.5px ink offset matches the
@@ -410,82 +410,34 @@
   text-transform: uppercase;
 }
 
-/* ── `#` mark — sticker recipe across both surfaces (v6.4, #task:917) ──
-   v5.x painted both `#` surfaces (chat header + sidebar) in plain
-   magenta. v6.1 pulled both into poster-teal. v6.2 split them by
-   role (chat header magenta + ink stroke / sidebar ink). v6.3 just
-   bumped the chat header `#` to 2em.
-   v6.4 promotes BOTH surfaces to the same **poster sticker recipe**
-   per shiki "channel 的 # 号加上一个方框和背景色，channel list 和
-   channel header 上都加":
-     - Chat header `#` (`[data-conversation-hash]`, ChannelView.tsx) —
-       inline-flex pink fill + white text + 1.5px ink border + 0
-       radius + 1.5px ink box-shadow (poster sticker drop). The
-       v6.3 `-webkit-text-stroke` is unset because the sticker frame
-       IS the structure — no need for a glyph-level stroke.
-     - Sidebar `<Hash />` (`[data-channel-icon]`, ChannelsSidebar.tsx
-       L284) — pink fill + white stroke + 1px ink border + 0 radius +
-       content-box so the 14px size-3.5 lucide viewport stays its
-       designed size while padding/border grows the chip ~2px each
-       side. Visually a tiny sticker that mirrors the chat header
-       hero glyph; one-color-and-frame language across both surfaces.
-   Result: every channel `#` you see (~30 in sidebar + 1 hero in
-   header) reads as the same poster sticker family — the magenta
-   "channel" identity now has a consistent structural form across
-   the app. */
-[data-theme='forza6'] [data-conversation-hash] {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  /* v6.7 (#task:917, shiki "之前黑黄 box 的颜色, 把它应用到 channel
-     list item 和 channel header 的 # 号上来, 替换现在的粉色"):
-     channel identity moves from pink fill + white glyph to the racing-
-     poster HUD readout. Pink used to do triple duty (channel `#` +
-     unread badge + brand accent), which competed with itself across
-     the chrome; the yellow-ink pair reads as "Forza HUD" instantly and
-     frees pink to focus on the unread badge + general brand accent.
-
-     v6.7.1 — flipped to YELLOW ground + INK glyph (shiki "反转一下,
-     背景色黄色, 字体黑色试试"). v6.7 first tried ink ground / yellow
-     glyph as the inverted twin of tasks-hero; this round flips them to
-     share the SAME yellow-ground recipe (channel `#` and tasks ✓ both
-     yellow-on-ink chips), with glyph carrying the semantic distinction
-     instead of color role swap. Treats all the yellow chips as one
-     "loud HUD marker" family — like road signs where shape/symbol
-     carries meaning over a unified yellow background. */
+/* ── channel `#` icon — forza6 poster sticker (chat header + sidebar) ──
+   Every channel `#` renders as the same lucide Hash SVG painted into the
+   racing-poster sticker — yellow ground + ink glyph + ink frame + 0 radius +
+   hard offset ink shadow (shiki v6.7.1 "黑黄 box", #task:917):
+     - Sidebar `<Hash />` (`[data-channel-icon]`, ChannelsSidebar) — small
+       chip (1px border / 1px shadow), painted in its own rule below.
+     - Chat header (`[data-conversation-hash-icon]`, ChannelView +
+       MessageScreenshotView export) — the HERO of the family, scaled up via
+       content-box (18px viewport + 4px pad → framed chip ≈28px, ~75% taller
+       than the 16px title text); vertical-align:middle + margin-right pin it
+       beside the italic title.
+   The header `#` used to be a styled text glyph; shiki asked to unify it onto
+   the same icon as the sidebar across every theme, so the old text-sticker
+   rule was dropped and both surfaces now share the icon language. */
+[data-theme='forza6'] [data-conversation-hash-icon] {
+  display: inline-block;
+  vertical-align: middle;
+  box-sizing: content-box;
+  width: 18px;
+  height: 18px;
+  padding: 4px;
+  margin-right: 0.4em;
   background-color: var(--forza6-yellow);
   color: var(--forza6-ink);
+  stroke-width: 2.5;
   border: 1.5px solid var(--forza6-ink);
   border-radius: 0;
-  /* v6.5i (#task:917): hard-coded 28×28 square per shiki "不要自适应,
-     而是硬编码一个值". The em-based padding (0.04em / 0.32em / 0.08em)
-     plus 1.4em font-size used to derive width/height from the glyph
-     metrics, which produced a rectangle (left/right padding bigger
-     than top/bottom) and tracked the user's Appearance font-size
-     setting unpredictably. Fixed 28×28 + padding 0 + matching 22px
-     glyph yields a stable square sticker regardless of inherited
-     font metrics, and reads as a hero chip (~75% taller than the
-     16px text-base title text) — proportion shiki asked for back in
-     v6.3 ("放大突出海报和冲撞感"). */
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  font-weight: 900;
-  /* Explicitly upright — `#` lives inside `[data-conversation-title]`
-     which is italic (forza6 channel header subhead language); the
-     sticker chip needs to stamp upright (shiki v6.4 "把 channel header
-     的 # 号的斜体取消"). */
-  font-style: normal;
-  font-size: 22px;
-  line-height: 1;
-  letter-spacing: -0.04em;
-  margin-right: 0.4em;
-  /* `middle` aligns the sticker mid-line with the parent text's
-     x-height middle (v6.5 fix — the prior `-0.16em` pulled the line
-     baseline off-axis). */
-  vertical-align: middle;
   box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
-  -webkit-text-stroke: 0;
 }
 
 /* ── #task:491 — channel header italic (forza6 only) ─────────────────
@@ -503,9 +455,9 @@
 
    - DOES italicize: `[data-conversation-title]` (chat header,
      channel + thread variants).
-   - DOES NOT italicize: `[data-conversation-hash]` (now upright
-     sticker), `[data-workspace-name]` (titlebar), sidebar
-     `<Hash />` SVG icon. */
+   - DOES NOT italicize: `[data-conversation-hash-icon]` (an SVG icon,
+     unaffected by font-style), `[data-workspace-name]` (titlebar),
+     sidebar `<Hash />` SVG icon. */
 [data-theme='forza6'] [data-conversation-title] {
   font-style: italic;
 }
@@ -524,11 +476,11 @@
      - stroke-width 2 (was 2.75) — the pink fill carries the visual
        weight now, the strokes can lighten back to lucide default. */
 [data-theme='forza6'] [data-channel-icon] {
-  /* v6.7.1 (#task:917): mirrors `[data-conversation-hash]` — channel
-     identity = yellow fill + ink glyph (see hero rule above for the
-     full pink → ink+yellow → yellow+ink rationale). Same yellow-ink
-     recipe family as tasks-hero; glyph carries the semantic. Sidebar
-     chip uses small-chip proportions (1px border + 1px shadow). */
+  /* v6.7.1 (#task:917): mirrors `[data-conversation-hash-icon]` — channel
+     identity = yellow fill + ink glyph (see the chat-header icon rule
+     above for the full pink → ink+yellow → yellow+ink rationale). Same
+     yellow-ink recipe family as tasks-hero; glyph carries the semantic.
+     Sidebar chip uses small-chip proportions (1px border + 1px shadow). */
   background-color: var(--forza6-yellow);
   color: var(--forza6-ink);
   stroke-width: 2;
@@ -1510,7 +1462,7 @@
    semantics (v6.6, #task:917, shiki "几个重点产品语义的地方都加上类
    似风格的 icon, 通过这几个强化的 icon 来培养用户对功能的直觉")
 
-   The chat header `[data-conversation-hash]` taught users that pink
+   The chat header `[data-conversation-hash-icon]` taught users that pink
    square = channel. v6.6 extends the same poster-sticker family to
    two more product semantics so each pane has a memorable visual
    anchor:

@@ -513,6 +513,7 @@ export function MessageItem({
   const row = (
     <div
       id={`msg-${message.id}`}
+      data-message-row
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onClickCapture={
