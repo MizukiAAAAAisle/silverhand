@@ -103,9 +103,9 @@ export function ChannelThreadsPanel({
       data-pane="threads-list"
       className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
     >
-      <header className="flex items-center gap-2 border-b border-border-subtle px-3 py-2">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-3">
         <CornerUpLeft className="size-3.5 shrink-0 text-text-muted" />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 leading-tight">
           <div className="truncate text-sm font-medium text-text-primary">
             Threads
           </div>
@@ -182,7 +182,10 @@ function ThreadRow({
   renderAvatar,
   onOpen,
 }: ThreadRowProps): JSX.Element {
-  const { relative, absolute } = useRelativeTime(summary.last_reply_at);
+  // Last-reply time lives in the activity band (reply recency, not root
+  // metadata). The root's own creation time isn't surfaced — in a thread list
+  // "latest activity" is the time that matters.
+  const lastReplyTime = useRelativeTime(summary.last_reply_at);
   const replyLabel = `${summary.reply_count} ${
     summary.reply_count === 1 ? 'reply' : 'replies'
   }`;
@@ -195,32 +198,35 @@ function ThreadRow({
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full items-start gap-2.5 rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border px-2 py-2 text-left transition-colors hover:border-[color:var(--border-control-hover)] hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+        data-thread-row
+        className="flex w-full flex-col overflow-hidden rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating text-left transition hover:-translate-y-px hover:border-[color:var(--border-control-hover)] hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
       >
-        <span className="mt-0.5 shrink-0">
-          {renderAvatar(summary.root_author, 28)}
-        </span>
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="flex min-w-0 items-baseline gap-2">
-            <span className="min-w-0 truncate text-sm font-medium text-text-primary">
-              {authorName(summary.root_author)}
-            </span>
-            <time
-              dateTime={new Date(summary.last_reply_at).toISOString()}
-              title={absolute}
-              className="ml-auto shrink-0 text-xs text-text-muted"
-            >
-              {relative}
-            </time>
+        {/* Band 1 — root message: sender avatar + a natural "Name: content"
+            flow. shiki wants the avatar kept; the standalone byline row read as
+            disjoint, so the display name folds into the preview as a bold
+            prefix and the content carries the visual mass. */}
+        <span className="flex items-start gap-2 px-2.5 py-2">
+          <span className="mt-px flex shrink-0">
+            {renderAvatar(summary.root_author, 20)}
           </span>
-          <span className="line-clamp-2 break-words text-xs text-text-muted">
+          <span className="line-clamp-2 break-words text-sm text-text-primary">
+            <span className="font-semibold">
+              {authorName(summary.root_author)}:{' '}
+            </span>
             {summary.root_preview}
           </span>
-          <span className="mt-0.5 flex items-center gap-2">
+        </span>
+
+        {/* Band 2 — reply activity. Full-width footer, hairline-separated so it
+            reads as its own band rather than a column tucked under the avatar.
+            Dropped entirely when there are no replies (row degrades to a single
+            band; height stays content-stable). */}
+        {summary.reply_count > 0 ? (
+          <span className="flex w-full items-center gap-2 border-t border-border px-2.5 py-1.5">
             {summary.repliers.length > 0 ? (
               <span className="flex items-center gap-[3px]">
                 {summary.repliers.map(r => (
-                  <span key={`${r.kind}:${r.id}`} className="shrink-0">
+                  <span key={`${r.kind}:${r.id}`} className="flex shrink-0">
                     {renderAvatar(r, 18)}
                   </span>
                 ))}
@@ -234,10 +240,11 @@ function ThreadRow({
             <span className="text-xs font-medium text-text-secondary">
               {replyLabel}
             </span>
+            {/* Unread hint rides right after the reply count (not right-aligned):
+                followed → filled count sticker, unfollowed → soft dot. forza6
+                squares both via data-thread-unread. */}
             {hasUnread ? (
               summary.viewer_following ? (
-                // Followed thread → strong signal: filled count sticker.
-                // forza6 squares it (data-thread-unread="sticker").
                 <span
                   data-thread-unread="sticker"
                   className="shrink-0 min-w-[16px] rounded-full bg-accent px-1 text-center text-[9px] font-semibold leading-[16px] text-text-on-accent"
@@ -247,9 +254,6 @@ function ThreadRow({
                   {unreadCount > 99 ? '99+' : unreadCount} new
                 </span>
               ) : (
-                // Non-followed thread → weak ambient hint: a soft dot, no
-                // number. Distinguished from the strong sticker by shape +
-                // absence of a count, not by a second hue. forza6 squares it.
                 <span
                   data-thread-unread="dot"
                   className="size-1.5 shrink-0 rounded-full bg-accent"
@@ -258,8 +262,18 @@ function ThreadRow({
                 />
               )
             ) : null}
+            <span className="text-xs leading-4 text-text-muted" aria-hidden>
+              ·
+            </span>
+            <time
+              dateTime={new Date(summary.last_reply_at).toISOString()}
+              title={lastReplyTime.absolute}
+              className="shrink-0 text-xs text-text-muted"
+            >
+              {lastReplyTime.relative}
+            </time>
           </span>
-        </span>
+        ) : null}
       </button>
     </li>
   );

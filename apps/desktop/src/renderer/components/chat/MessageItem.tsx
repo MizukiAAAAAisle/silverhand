@@ -358,12 +358,14 @@ export function MessageItem({
   const renderReplierAvatar = (
     replier: { kind: 'agent' | 'human'; id: string },
     size: number,
+    key: string,
   ): JSX.Element => {
     if (replier.kind === 'agent') {
       const a = agentsById.get(replier.id);
       if (a) {
         return (
           <AgentAvatar
+            key={key}
             runtime={a.runtime}
             size={size}
             avatarObjectUrl={agentAvatarUrls?.get(a.id) ?? null}
@@ -376,6 +378,7 @@ export function MessageItem({
     const u = replier.kind === 'human' ? humansById?.get(replier.id) : undefined;
     return (
       <UserAvatar
+        key={key}
         size={size}
         avatarObjectUrl={
           replier.kind === 'human'
@@ -469,12 +472,10 @@ export function MessageItem({
       >
         {enrichedReply ? (
           <>
-            <span className="flex items-center gap-[3px]">
-              {enrichedReply.repliers.map(r => (
-                <span key={`${r.kind}:${r.id}`} className="shrink-0">
-                  {renderReplierAvatar(r, 14)}
-                </span>
-              ))}
+            <span className="flex items-center gap-[3px] leading-none">
+              {enrichedReply.repliers.map(r =>
+                renderReplierAvatar(r, 14, `${r.kind}:${r.id}`),
+              )}
               {enrichedReply.replier_total > enrichedReply.repliers.length ? (
                 <span className="flex size-[14px] shrink-0 items-center justify-center rounded-none bg-bg-muted text-[9px] font-medium text-text-muted">
                   +{enrichedReply.replier_total - enrichedReply.repliers.length}
@@ -1112,7 +1113,7 @@ function AttachmentTile({ attachment }: { attachment: AttachmentSnapshot }): JSX
           type="button"
           onClick={() => imageUrl && setLightboxOpen(true)}
           disabled={!imageUrl}
-          className="block overflow-hidden rounded-md border border-border-subtle bg-bg-floating focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+          className="block overflow-hidden rounded-[var(--chip-radius)] border border-border-subtle bg-bg-floating focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
           title={`${attachment.filename} (${formatBytes(attachment.size)})`}
         >
           {imageUrl ? (
@@ -1144,7 +1145,7 @@ function AttachmentTile({ attachment }: { attachment: AttachmentSnapshot }): JSX
     <button
       type="button"
       onClick={downloadAndOpen}
-      className="flex max-w-[280px] items-center gap-2 rounded-md border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+      className="flex max-w-[280px] items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
       title={error ?? `${attachment.filename} (${formatBytes(attachment.size)})`}
     >
       <FileText className="size-4 shrink-0 text-text-muted" />

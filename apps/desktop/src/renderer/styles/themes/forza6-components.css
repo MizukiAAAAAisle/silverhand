@@ -253,6 +253,21 @@
   box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
 }
 
+/* ── Thread-list row hover — poster sticker preview, no ground shift ──
+   shiki #task:1286: in forza6 the row hover must NOT tint the
+   background (a flat bg wash reads off-language for the poster
+   system). Instead the row earns the poster sticker drop shadow, and
+   its border already flips to ink via the global
+   `hover:border-[--border-control-hover]` utility (= --forza6-ink).
+   Same 1.5px ink offset as the sidebar row / `#` chip sticker family
+   — box-shadow takes no layout space so rows don't shift. Holds the
+   resting `--bg-floating` ground (matches saved-message / archived
+   cards; cancels the `hover:bg-bg-hover` utility other themes keep). */
+[data-theme='forza6'] [data-thread-row]:hover {
+  background-color: var(--bg-floating);
+  box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
+}
+
 /* `bg-success` status dot in SELECTED row (lime wedge): default PR-1
    `--success #3F7A1B` deep lime collapses on lime wedge. Override
    to near-black so the 1.5px dot reads as a HUD marker on lime.

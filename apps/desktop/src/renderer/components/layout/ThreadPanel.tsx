@@ -572,9 +572,9 @@ export function ThreadPanel({
       data-pane="thread"
       className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
     >
-      <header className="flex items-center gap-2 border-b border-border-subtle px-3 py-2">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-3">
         <CornerUpLeft className="size-3.5 shrink-0 text-text-muted" />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 leading-tight">
           <div className="truncate text-sm font-medium text-text-primary">
             {parentTitle || 'Thread'}
           </div>
