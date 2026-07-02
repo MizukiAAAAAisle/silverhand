@@ -377,3 +377,15 @@
 [data-theme='slack-dark'] [data-message-task-tag] {
   border: none;
 }
+
+/* ── list-row hover — slack-dark structural signal ───────────────────
+   Matches the warm treatment: Search / Saved / Archived share the one
+   token card (`[data-list-row]`), and hover stays a quiet structural
+   signal — thin border deepens (white 10%→22%), a soft shadow + 1px lift,
+   no bg wash and no brand hue. Keeps the three rows identical per theme
+   while speaking slack-dark's own restrained vocabulary. */
+[data-theme='slack-dark'] [data-list-row]:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.45);
+  transform: translateY(-1px);
+}

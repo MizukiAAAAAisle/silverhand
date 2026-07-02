@@ -607,7 +607,7 @@ function SearchResultRow({
         type="button"
         onClick={onClick}
         data-list-row
-        className="flex w-full min-w-0 items-start gap-3 rounded-md border-2 border-border bg-bg-floating px-3 py-3 text-left transition-colors hover:border-accent hover:bg-bg-hover"
+        className="flex w-full min-w-0 items-start gap-3 rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-3 py-3 text-left transition"
       >
         <span data-list-row-icon className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md border border-border-subtle bg-bg-base text-text-muted">
           {icon}

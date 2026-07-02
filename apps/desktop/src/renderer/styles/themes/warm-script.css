@@ -549,3 +549,20 @@
 [data-theme='warm-script'] [data-message-task-tag] {
   border: none;
 }
+
+/* ── list-row hover — warm structural signal ─────────────────────────
+   Search / Saved / Archived list rows share one token-driven card
+   (`[data-list-row]`: white `--bg-floating`, 1px `--control-border-width`,
+   `--row-radius`). forza6 paints its own poster hover (ink border + hard
+   shadow + lift). warm's hover is deliberately quiet and OFF the brand hue:
+   a row hover is a utility signal, not a selection, so it must not flip to
+   the pink `--accent` (the earlier `hover:border-accent` did, reading louder
+   than a real commit — same lesson as the sidebar-row veil fix above). The
+   thin border only DEEPENS (warm ink 12%→28%), plus a soft paper lift +
+   1px rise — structural, no ground colour change. shiki: border thin, no
+   heavier than resting. */
+[data-theme='warm-script'] [data-list-row]:hover {
+  border-color: rgba(var(--shadow-base), 0.28);
+  box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.12);
+  transform: translateY(-1px);
+}

@@ -1,5 +1,4 @@
-import { useMemo, useState } from 'react';
-// useState is still used by SavedItem (per-row hover).
+import { useMemo } from 'react';
 import { Bookmark, Hash, Layers } from 'lucide-react';
 import dayjs from 'dayjs';
 import type { SavedMessageDto } from '@silverhand/shared';
@@ -168,7 +167,6 @@ function SavedItem({
   onJump: () => void;
   onUnsave: () => void;
 }): JSX.Element {
-  const [hover, setHover] = useState(false);
   // Multi-human audit 2026-06-03 #task:857 P0.10: resolve the saved
   // message's author against the global directory so it renders as the
   // human's display name instead of a raw uuid.
@@ -200,20 +198,16 @@ function SavedItem({
             onJump();
           }
         }}
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
         data-list-row
         className={
-          // Row radius routed via `--row-radius` token (#task:912 review
-          // round 2). Saved items are list records — slack-dark gets
-          // 6px Slack-style rounding; warm/forza6 keep `0`. Border width
-          // follows `--control-border-width` (forza6=2px, slack/warm=1px)
-          // so the card adapts per theme instead of a hardcoded 2px; hover
-          // goes to ink (`--border-control-hover`), not accent pink — a row
-          // hover is a utility signal, so it stays off the brand hue (matches
-          // the channel Threads list).
-          'rounded-[var(--row-radius)] border-[length:var(--control-border-width)] bg-bg-floating px-4 py-3 transition-colors ' +
-          (hover ? 'border-[color:var(--border-control-hover)]' : 'border-border')
+          // Row card identity is token-driven and shared verbatim with the
+          // Search / Archived list rows so all three read identically per
+          // theme (radius `--row-radius`, border `--control-border-width`).
+          // Hover is NOT painted here — it's a per-theme structural signal
+          // in each theme's CSS via `[data-list-row]:hover` (forza6 = ink
+          // border + poster shadow + lift; warm/slack = border deepen + soft
+          // lift), so a row hover never flips to the brand hue or a bg wash.
+          'rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-4 py-3 transition'
         }
       >
         <header className="mb-2 flex items-center gap-2 text-xs text-text-muted">

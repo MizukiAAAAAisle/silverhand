@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import dayjs from 'dayjs';
 import { Archive, ArchiveRestore, Hash } from 'lucide-react';
 import type { ArchivedChannelListItemDto } from '@silverhand/shared';
@@ -7,7 +7,6 @@ import {
   useArchivedChannelsIndex,
   type WorkspaceListItem,
 } from '@/features/workspaces/hooks';
-import { cn } from '@/lib/cn';
 import { dmWorkspaceLabel } from '@/lib/workspace-name';
 import { FilterBlock } from '@/components/ui/filter-select';
 import {
@@ -173,7 +172,6 @@ function ArchivedChannelRow({
   onOpen: () => void;
   onRestore: () => void;
 }): JSX.Element {
-  const [hover, setHover] = useState(false);
   const archivedAt = item.channel.archived_at
     ? dayjs(item.channel.archived_at).format('YYYY-MM-DD HH:mm')
     : 'Unknown archive date';
@@ -183,13 +181,8 @@ function ArchivedChannelRow({
   return (
     <li>
       <div
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
         data-list-row
-        className={cn(
-          'sidebar-row-border flex min-w-0 items-stretch border bg-bg-floating transition-colors',
-          hover ? 'border-accent bg-bg-hover' : 'border-border',
-        )}
+        className="flex min-w-0 items-stretch rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating transition"
       >
         <button
           type="button"
