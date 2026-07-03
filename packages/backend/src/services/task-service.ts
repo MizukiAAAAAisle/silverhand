@@ -2,34 +2,53 @@ import type { Database as Db } from 'better-sqlite3';
 import {
   type ClaimErrorCode,
   type ClaimResultEntry,
-  type AgentCapability,
   type ConversationDto,
-  type CreateTasksOpError,
   type CreateTasksResult,
-  type MessageSendTarget,
-  type MessageRow,
   type TaskAssigneeDto,
-  type TaskChangedEvent,
-  type TaskMutationErrorCode,
   type TaskMutationResult,
   type TaskStatus,
   type TaskSummaryDto,
-  type TaskSystemActor,
-  type WorkspaceDto,
-  taskSystemSubtype,
 } from '@silverhand/shared';
-import type { BackendLogger } from '../context.js';
-import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
-import type { AgentRepo } from '../repos/agent-repo.js';
-import type { ConversationRepo } from '../repos/conversation-repo.js';
-import type { MessageRepo } from '../repos/message-repo.js';
-import type { WorkspaceRepo } from '../repos/workspace-repo.js';
-import type { ScopeEventBus } from '../ws/scope-event-bus.js';
+import { assertActorConversationMatch } from '../auth/principal.js';
+import { TaskStore } from './task/store.js';
+import { TaskAccessControl } from './task/access.js';
+import { TaskBroadcaster } from './task/broadcaster.js';
 import {
-  assertActorConversationMatch,
-  type AgentPrincipal,
-  type UserPrincipal,
-} from '../auth/principal.js';
+  failClaim,
+  firstLine,
+  isThreadAnchor,
+  mutationFailure,
+  userCanAccessConversation,
+  VALID_TRANSITIONS,
+  type AgentActor,
+  type AgentCapabilityChecker,
+  type AgentTaskRef,
+  type ClaimTaskInput,
+  type CreateTasksInput,
+  type ListTasksFilters,
+  type TaskActor,
+  type TaskServiceOptions,
+  type UnclaimTaskInput,
+  type UpdateStatusInput,
+  type UserActor,
+  type UserTaskRef,
+  type WorkspaceSelector,
+} from './task/contracts.js';
+
+// Public contract surface re-exported so external importers keep resolving
+// these from `services/task-service.js` unchanged (they now live in the
+// contracts module split out of this file).
+export type {
+  AgentCapabilityChecker,
+  ClaimTaskInput,
+  CreateTasksInput,
+  ListTasksFilters,
+  TaskActor,
+  TaskServiceOptions,
+  UnclaimTaskInput,
+  UpdateStatusInput,
+  WorkspaceSelector,
+} from './task/contracts.js';
 
 /**
  * TaskService is the single owner of task create / claim / unclaim /
@@ -61,339 +80,59 @@ import {
  *   and DM alike.
  * - Return shape stays `{success:false, reason, code}` (preserves the
  *   MCP claim_tasks tool contract); typed `code` is additive.
+ *
+ * This class is the task-lifecycle aggregate root: it owns the mutation
+ * transactions and their invariants directly. Peripheral concerns are
+ * delegated to collaborators constructed here — `TaskStore` (all task-row
+ * SQL + the read queries), `TaskAccessControl` (pre-tx actor / workspace /
+ * message-id authorization), and `TaskBroadcaster` (post-commit system
+ * narrative, `task_changed` events, delivery, and cross-op audit).
  */
-
-export type TaskActor =
-  | UserPrincipal
-  | AgentPrincipal;
-
-type UserActor = Extract<TaskActor, { kind: 'user' }>;
-type AgentActor = Extract<TaskActor, { kind: 'agent' }>;
-
-type AgentTaskRef = { messageId: string } | { taskNumber: number };
-type UserTaskRef = { messageId: string };
-type TaskNarrativeKind = TaskChangedEvent['kind'];
-
-export interface CreateTasksInput {
-  conversationId: string;
-  actor: TaskActor;
-  tasks: { title: string; body?: string }[];
-  /** Optional public destination. Omitted / channel keeps task creation on
-   *  the main line; thread anchors the task body under that message's
-   *  reply cluster. */
-  target?: MessageSendTarget;
-  /** @deprecated Compatibility alias for old CLI/runtime callers. */
-  legacyReplyToMessageId?: string;
-}
-
-export type ClaimTaskInput =
-  | {
-      actor: UserActor;
-      by: UserTaskRef;
-      assignee?: { agentId: string };
-    }
-  | {
-      actor: AgentActor;
-      by: AgentTaskRef;
-      assignee?: { agentId: string };
-      workspaceSelector?: WorkspaceSelector;
-    };
-
-export type UnclaimTaskInput =
-  | { actor: UserActor; by: UserTaskRef }
-  | { actor: AgentActor; by: AgentTaskRef; workspaceSelector?: WorkspaceSelector };
-
-export type UpdateStatusInput =
-  | { actor: UserActor; by: UserTaskRef; status: TaskStatus }
-  | {
-      actor: AgentActor;
-      by: AgentTaskRef;
-      status: TaskStatus;
-      workspaceSelector?: WorkspaceSelector;
-    };
-
-/** Optional `--workspace-id` / `--workspace <name>` selector wired
- *  through from the CLI. Empty / undefined means "use the actor's
- *  current conversation's workspace" (the legacy default). The
- *  service validates exclusivity (id XOR name) defensively, even
- *  though the wire schema also enforces it. */
-export interface WorkspaceSelector {
-  workspaceId?: string;
-  workspaceName?: string;
-}
-
-export interface ListTasksFilters {
-  actor: TaskActor;
-  /** user actor: optional filter; agent actor: ignored (service derives
-   *  physical workspace from actor.conversationId). */
-  workspaceId?: string;
-  conversationId?: string;
-  /** OR-ed status filter. Empty array or undefined = no filter.
-   *  Single-element array is the legacy single-value form. */
-  status?: readonly TaskStatus[];
-  /** OR-ed task-number filter. Empty array or undefined = no filter. */
-  taskNumbers?: readonly number[];
-  /** Filter by assignee agent id. Single-valued. */
-  assigneeAgentId?: string;
-  /** Cap the number of rows returned. */
-  limit?: number;
-}
-
-export interface TaskServiceOptions {
-  db: Db;
-  conversations: ConversationRepo;
-  messages: MessageRepo;
-  agents: AgentRepo;
-  workspaces: WorkspaceRepo;
-  runtimeHost: AgentRuntimeHost;
-  events: ScopeEventBus;
-  logger: BackendLogger;
-  /**
-   * Agent-capability gate (graded-permissions cut 2). Injected — not
-   * re-implemented here — so the agent_home exemption and table lookup
-   * have a SINGLE source (`canAgentUseCapability`). Evaluated on the
-   * task's RESOLVED workspace, which only the service knows (message-id
-   * claims land in the message's workspace, not the principal's).
-   */
-  canUseCapability: AgentCapabilityChecker;
-}
-
-/** Signature of the injected `canAgentUseCapability` binding (see
- *  TaskServiceOptions.canUseCapability). */
-export type AgentCapabilityChecker = (
-  actor: AgentActor,
-  workspaceId: string,
-  capability: AgentCapability,
-) => boolean;
-
-const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
-  todo: ['closed'],
-  in_progress: ['in_review', 'done', 'closed'],
-  in_review: ['in_progress', 'done', 'closed'],
-  done: ['closed'],
-  closed: ['todo', 'in_progress', 'in_review', 'done'],
-};
-
-interface TaskJoinedRow {
-  id: string;
-  conversation_id: string;
-  from_kind: MessageRow['from_kind'];
-  from_agent_id: string | null;
-  from_user_id: string | null;
-  content: string;
-  task_number: number;
-  task_status: TaskStatus;
-  task_title: string | null;
-  task_closed_at: number | null;
-  workspace_id: string;
-  workspace_name: string;
-  channel_id: string;
-  channel_name: string;
-  thread_root_id: string | null;
-  legacy_thread_conversation_id: string | null;
-  thread_id: string | null;
-  task_assignee_agent_id: string | null;
-  task_assignee_user_id: string | null;
-  created_at: number;
-  conversation_title: string;
-  assignee_agent_name: string | null;
-  assignee_user_name: string | null;
-  creator_agent_name: string | null;
-  creator_user_name: string | null;
-}
-
-const SELECT_TASK_JOINED = `
-  SELECT
-    m.id                       AS id,
-    m.conversation_id          AS conversation_id,
-    m.from_kind                AS from_kind,
-    m.from_agent_id            AS from_agent_id,
-    m.from_user_id             AS from_user_id,
-    m.content                  AS content,
-    m.task_number              AS task_number,
-    m.task_status              AS task_status,
-    m.task_title               AS task_title,
-    m.task_closed_at           AS task_closed_at,
-    COALESCE(m.task_workspace_id, conv.workspace_id)
-                               AS workspace_id,
-    CASE
-      WHEN root.kind = 'thread' THEN root.parent_conversation_id
-      ELSE root.id
-    END                        AS channel_id,
-    root.title                 AS channel_name,
-    m.thread_root_id           AS thread_root_id,
-    CASE
-      WHEN conv.kind = 'thread' THEN conv.id
-      ELSE NULL
-    END                        AS legacy_thread_conversation_id,
-    CASE
-      WHEN conv.kind = 'thread' THEN conv.id
-      ELSE NULL
-    END                        AS thread_id,
-    m.task_assignee_agent_id   AS task_assignee_agent_id,
-    m.task_assignee_user_id    AS task_assignee_user_id,
-    m.created_at               AS created_at,
-    conv.title                 AS conversation_title,
-    w.name                     AS workspace_name,
-    aa.display_name            AS assignee_agent_name,
-    au.display_name            AS assignee_user_name,
-    ca.display_name            AS creator_agent_name,
-    cu.display_name            AS creator_user_name
-  FROM messages m
-  JOIN conversations conv ON conv.id = m.conversation_id
-  JOIN workspaces w ON w.id = conv.workspace_id
-  JOIN conversations root ON root.id = CASE
-    WHEN conv.kind = 'thread' THEN conv.parent_conversation_id
-    ELSE conv.id
-  END
-  LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
-  LEFT JOIN users au ON au.id = m.task_assignee_user_id
-  LEFT JOIN agents ca ON ca.id = m.from_agent_id
-  LEFT JOIN users cu ON cu.id = m.from_user_id
-`;
-
-interface ResolvedTaskRow {
-  id: string;
-  conversation_id: string;
-  task_number: number;
-  task_workspace_id: string;
-  task_status: TaskStatus;
-  task_closed_at: number | null;
-  task_assignee_agent_id: string | null;
-  task_title: string | null;
-  content: string;
-  owner_conversation_title: string;
-  /** Creator origin — used for the "creator may close own stale
-   *  unassigned task" exception in `updateStatusAgent`. */
-  from_kind: MessageRow['from_kind'];
-  from_agent_id: string | null;
-}
-
-interface ResolvedMessageRow {
-  id: string;
-  conversation_id: string;
-  thread_root_id: string | null;
-  from_kind: MessageRow['from_kind'];
-  metadata: string | null;
-  content: string;
-  task_number: number | null;
-  task_workspace_id: string | null;
-  task_status: TaskStatus | null;
-  task_closed_at: number | null;
-  task_assignee_agent_id: string | null;
-  task_title: string | null;
-}
-
 export class TaskService {
   private readonly db: Db;
-  private readonly conversations: ConversationRepo;
-  private readonly messages: MessageRepo;
-  private readonly agents: AgentRepo;
-  private readonly workspaces: WorkspaceRepo;
-  private readonly runtimeHost: AgentRuntimeHost;
-  private readonly events: ScopeEventBus;
-  private readonly logger: BackendLogger;
+  private readonly conversations: TaskServiceOptions['conversations'];
+  private readonly messages: TaskServiceOptions['messages'];
+  private readonly agents: TaskServiceOptions['agents'];
   private readonly canUseCapability: AgentCapabilityChecker;
+  private readonly store: TaskStore;
+  private readonly access: TaskAccessControl;
+  private readonly broadcaster: TaskBroadcaster;
 
   constructor(opts: TaskServiceOptions) {
     this.db = opts.db;
     this.conversations = opts.conversations;
     this.messages = opts.messages;
     this.agents = opts.agents;
-    this.workspaces = opts.workspaces;
-    this.runtimeHost = opts.runtimeHost;
-    this.events = opts.events;
-    this.logger = opts.logger;
     this.canUseCapability = opts.canUseCapability;
+    this.store = new TaskStore({
+      db: opts.db,
+      conversations: opts.conversations,
+    });
+    this.access = new TaskAccessControl({
+      agents: opts.agents,
+      conversations: opts.conversations,
+      workspaces: opts.workspaces,
+    });
+    this.broadcaster = new TaskBroadcaster({
+      db: opts.db,
+      store: this.store,
+      messages: opts.messages,
+      agents: opts.agents,
+      conversations: opts.conversations,
+      runtimeHost: opts.runtimeHost,
+      events: opts.events,
+      logger: opts.logger,
+    });
   }
 
   // ── Read ─────────────────────────────────────────────────────────
 
   list(filters: ListTasksFilters): TaskSummaryDto[] {
-    const clauses: string[] = ['m.task_number IS NOT NULL'];
-    const args: (string | number)[] = [];
-
-    if (filters.actor.kind === 'agent') {
-      // The agent path defaults to the actor's current workspace. The
-      // route layer is responsible for validating that any explicit
-      // `filters.workspaceId` (from the agent's `--workspace-id` flag)
-      // exists AND that the agent is a member — see the agent task list
-      // route in routes.ts (#task:530). Once validated, we honor the
-      // explicit value here so the agent can read a sister workspace's
-      // board.
-      const conv = this.conversations.get(filters.actor.conversationId);
-      if (!conv) return [];
-      const effectiveWs = filters.workspaceId ?? conv.workspace_id;
-      clauses.push('m.task_workspace_id = ?');
-      args.push(effectiveWs);
-    } else {
-      clauses.push(
-        `EXISTS (
-          SELECT 1
-            FROM conversation_users cu
-           WHERE cu.conversation_id = m.conversation_id
-             AND cu.user_id = ?
-        )`,
-      );
-      args.push(filters.actor.userId);
-      if (filters.workspaceId) {
-        clauses.push('m.task_workspace_id = ?');
-        args.push(filters.workspaceId);
-      }
-    }
-
-    if (filters.conversationId) {
-      clauses.push('m.conversation_id = ?');
-      args.push(filters.conversationId);
-    }
-    if (filters.status && filters.status.length > 0) {
-      const placeholders = filters.status.map(() => '?').join(',');
-      clauses.push(`m.task_status IN (${placeholders})`);
-      args.push(...filters.status);
-    }
-    if (filters.taskNumbers && filters.taskNumbers.length > 0) {
-      const placeholders = filters.taskNumbers.map(() => '?').join(',');
-      clauses.push(`m.task_number IN (${placeholders})`);
-      args.push(...filters.taskNumbers);
-    }
-    if (filters.assigneeAgentId) {
-      clauses.push('m.task_assignee_agent_id = ?');
-      args.push(filters.assigneeAgentId);
-    }
-    // Newest-first: task_number is a monotonic per-workspace sequence, so
-    // DESC surfaces the most recently created tasks at the top — the useful
-    // default for both the desktop kanban columns and the CLI `task list`
-    // (a `limit` then caps to the newest N). Routes that need a specific task
-    // filter by number, so the ordering is purely a list-presentation choice.
-    let sql = `${SELECT_TASK_JOINED} WHERE ${clauses.join(' AND ')} ORDER BY m.task_number DESC`;
-    if (filters.limit && filters.limit > 0) {
-      sql += ' LIMIT ?';
-      args.push(filters.limit);
-    }
-    const rows = this.db.prepare<typeof args, TaskJoinedRow>(sql).all(...args);
-    return rows.map(r => this.joinedToSummary(r));
+    return this.store.list(filters);
   }
 
   getByMessageId(messageId: string, actor: TaskActor): TaskSummaryDto | null {
-    const row = this.db
-      .prepare<[string], TaskJoinedRow>(
-        `${SELECT_TASK_JOINED} WHERE m.id = ? AND m.task_number IS NOT NULL`,
-      )
-      .get(messageId);
-    if (!row) return null;
-    if (actor.kind === 'agent') {
-      const conv = this.conversations.get(actor.conversationId);
-      if (!conv) return null;
-      const physicalRow = this.db
-        .prepare<[string], { task_workspace_id: string | null }>(
-          `SELECT task_workspace_id FROM messages WHERE id = ?`,
-        )
-        .get(messageId);
-      if (physicalRow?.task_workspace_id !== conv.workspace_id) return null;
-    } else if (!this.canUserAccessConversation(actor.userId, row.conversation_id)) {
-      return null;
-    }
-    return this.joinedToSummary(row);
+    return this.store.getByMessageId(messageId, actor);
   }
 
   // ── Create ──────────────────────────────────────────────────────
@@ -414,7 +153,7 @@ export class TaskService {
     let threadRootId: string | null = null;
     const targetMessageId = this.taskThreadTargetMessageId(input);
     if (targetMessageId) {
-      const target = this.fetchMessage(targetMessageId);
+      const target = this.store.fetchMessage(targetMessageId);
       if (!target || target.conversation_id !== input.conversationId) {
         return { error: 'reply_target_not_found' };
       }
@@ -434,7 +173,7 @@ export class TaskService {
             content: t.body && t.body.length > 0 ? t.body : t.title,
             threadRootId,
           });
-          const nextNumber = this.writeOpenTaskRow(msg.id, taskWorkspaceId, t.title);
+          const nextNumber = this.store.writeOpenTaskRow(msg.id, taskWorkspaceId, t.title);
           out.push({ message_id: msg.id, task_number: nextNumber, title: t.title });
         }
         return out;
@@ -442,7 +181,7 @@ export class TaskService {
 
     const actorLabel = this.actorLabel(input.actor);
     for (const t of created) {
-      await this.broadcast({
+      await this.broadcaster.broadcast({
         conversation,
         kind: 'create',
         messageId: t.message_id,
@@ -486,7 +225,7 @@ export class TaskService {
     messageId: string;
     taskWorkspaceId: string;
   }): { taskNumber: number; title: string } {
-    const msg = this.fetchMessage(args.messageId);
+    const msg = this.store.fetchMessage(args.messageId);
     if (!msg) {
       throw new Error(`createOpenTaskFromMessage: message ${args.messageId} not found`);
     }
@@ -497,7 +236,7 @@ export class TaskService {
       throw new Error('createOpenTaskFromMessage: message is already a task');
     }
     const title = firstLine(msg.content);
-    const taskNumber = this.writeOpenTaskRow(args.messageId, args.taskWorkspaceId, title);
+    const taskNumber = this.store.writeOpenTaskRow(args.messageId, args.taskWorkspaceId, title);
     return { taskNumber, title };
   }
 
@@ -515,7 +254,7 @@ export class TaskService {
     taskNumber: number;
     title: string;
   }): void {
-    this.publishTaskChanged({
+    this.broadcaster.publishTaskChanged({
       conversation: args.conversation,
       kind: 'create',
       messageId: args.messageId,
@@ -560,7 +299,7 @@ export class TaskService {
         reason: 'conversation not found',
       });
     }
-    const actorErr = this.validateAgentActorForClaim(actor);
+    const actorErr = this.access.validateAgentActorForClaim(actor);
     if (actorErr) return actorErr;
 
     // #task:530 Round 2 + Round 3 (Cindy `CZ7Un3P5YATZ1GTq` Blocker 1
@@ -589,14 +328,14 @@ export class TaskService {
     // reverse (peek numbered, txn null) cannot happen.
     let isPromotion = false;
     if ('messageId' in by) {
-      const peek = this.fetchMessage(by.messageId);
+      const peek = this.store.fetchMessage(by.messageId);
       if (peek) {
         if (peek.task_number === null && peek.conversation_id === actor.conversationId) {
           taskWorkspaceId = sourceConv.workspace_id;
           skipSelector = true;
           isPromotion = true;
         } else if (peek.task_number !== null) {
-          const access = this.validateMessageIdAccess(actor, peek, workspaceSelector);
+          const access = this.access.validateMessageIdAccess(actor, peek, workspaceSelector);
           if ('failure' in access) {
             return failClaim({
               code: access.failure,
@@ -610,7 +349,7 @@ export class TaskService {
       }
     }
     if (!skipSelector) {
-      const resolved = this.resolveAgentTaskWorkspace(
+      const resolved = this.access.resolveAgentTaskWorkspace(
         actor,
         sourceConv,
         workspaceSelector,
@@ -673,10 +412,10 @@ export class TaskService {
         };
 
     const txOut = this.db.transaction((): ClaimTxOut => {
-      let row: ResolvedTaskRow | null;
+      let row: ReturnType<TaskStore['fetchTaskByMessageId']>;
 
       if ('messageId' in by) {
-        const msg = this.fetchMessage(by.messageId);
+        const msg = this.store.fetchMessage(by.messageId);
         if (!msg) {
           return { failure: failClaim({
             code: 'message_not_found',
@@ -716,7 +455,7 @@ export class TaskService {
           // not the selector — the selector only routes lookups of
           // already-numbered tasks.
           const promoteWorkspaceId = sourceConv.workspace_id;
-          const nextNumber = this.allocateTaskNumber(promoteWorkspaceId);
+          const nextNumber = this.store.allocateTaskNumber(promoteWorkspaceId);
           this.db
             .prepare(
               `UPDATE messages
@@ -742,9 +481,9 @@ export class TaskService {
         // ran validateMessageIdAccess; fetch by id so a different
         // workspace's same-numbered task can never be touched
         // (Round 3 blocker `zJ4xdGu3uEo68_k7`).
-        row = this.fetchTaskByMessageId(msg.id);
+        row = this.store.fetchTaskByMessageId(msg.id);
       } else {
-        row = this.fetchTaskByNumber(resolvedTaskWorkspaceId, by.taskNumber);
+        row = this.store.fetchTaskByNumber(resolvedTaskWorkspaceId, by.taskNumber);
       }
       if (!row) {
         return { failure: failClaim({
@@ -813,7 +552,7 @@ export class TaskService {
         reason: 'task owner conversation vanished after commit',
       });
     }
-    this.auditCrossOp({
+    this.broadcaster.auditCrossOp({
       op: 'claim',
       actor,
       sourceConv,
@@ -822,8 +561,8 @@ export class TaskService {
       taskWorkspaceId: resolvedTaskWorkspaceId,
     });
 
-    const fresh = this.refetchTaskSnapshot(txOut.messageId);
-    await this.broadcast({
+    const fresh = this.store.refetchTaskSnapshot(txOut.messageId);
+    await this.broadcaster.broadcast({
       conversation: ownerConv,
       kind: 'claim',
       messageId: txOut.messageId,
@@ -859,7 +598,7 @@ export class TaskService {
         };
 
     const txOut = this.db.transaction((): UserClaimTxOut => {
-      const msg = this.fetchMessage(by.messageId);
+      const msg = this.store.fetchMessage(by.messageId);
       if (!msg || msg.task_number === null || !msg.task_workspace_id) {
         return { failure: failClaim({
           code: 'not_a_task',
@@ -867,7 +606,7 @@ export class TaskService {
           messageId: by.messageId,
         }) };
       }
-      if (!this.canUserAccessConversation(actor.userId, msg.conversation_id)) {
+      if (!userCanAccessConversation(this.db, actor.userId, msg.conversation_id)) {
         return { failure: failClaim({
           code: 'not_a_task',
           reason: 'not a task',
@@ -919,11 +658,11 @@ export class TaskService {
 
     const conversation = this.conversations.get(txOut.conversationId);
     if (conversation) {
-      const fresh = this.refetchTaskSnapshot(txOut.messageId);
+      const fresh = this.store.refetchTaskSnapshot(txOut.messageId);
       const sysMessage = assignee
         ? `task #${txOut.taskNumber} assigned to @${this.agentName(assignee.agentId)} (by user)`
         : `task #${txOut.taskNumber} unassigned (by user)`;
-      await this.broadcast({
+      await this.broadcaster.broadcast({
         conversation,
         kind: 'claim',
         messageId: txOut.messageId,
@@ -966,7 +705,7 @@ export class TaskService {
     if (!sourceConv) {
       return { success: false, code: 'conversation_not_found', reason: 'conversation not found' };
     }
-    const actorErr = this.validateAgentActorForMutation(actor);
+    const actorErr = this.access.validateAgentActorForMutation(actor);
     if (actorErr) return actorErr;
 
     // #task:530 Round 3 (Cindy `zJ4xdGu3uEo68_k7` + `YreWED1qOBStvZxG`):
@@ -978,9 +717,9 @@ export class TaskService {
     let taskWorkspaceId: string | undefined;
     let skipSelector = false;
     if ('messageId' in by) {
-      const peek = this.fetchMessage(by.messageId);
+      const peek = this.store.fetchMessage(by.messageId);
       if (peek && peek.task_number !== null) {
-        const access = this.validateMessageIdAccess(actor, peek, workspaceSelector);
+        const access = this.access.validateMessageIdAccess(actor, peek, workspaceSelector);
         if ('failure' in access) {
           return { success: false, code: access.failure, reason: access.reason };
         }
@@ -989,7 +728,7 @@ export class TaskService {
       }
     }
     if (!skipSelector) {
-      const resolved = this.resolveAgentTaskWorkspace(
+      const resolved = this.access.resolveAgentTaskWorkspace(
         actor,
         sourceConv,
         workspaceSelector,
@@ -1019,9 +758,9 @@ export class TaskService {
         };
 
     const txOut = this.db.transaction((): UnclaimAgentTxOut => {
-      let row: ResolvedTaskRow | null;
+      let row: ReturnType<TaskStore['fetchTaskByMessageId']>;
       if ('messageId' in by) {
-        const msg = this.fetchMessage(by.messageId);
+        const msg = this.store.fetchMessage(by.messageId);
         if (!msg || msg.task_number === null) {
           return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
         }
@@ -1030,9 +769,9 @@ export class TaskService {
         // and pinned the workspace; use msg.id so a selector cannot
         // retarget the mutation onto a same-numbered task in another
         // workspace (Round 3 blocker `zJ4xdGu3uEo68_k7`).
-        row = this.fetchTaskByMessageId(msg.id);
+        row = this.store.fetchTaskByMessageId(msg.id);
       } else {
-        row = this.fetchTaskByNumber(resolvedTaskWorkspaceId, by.taskNumber);
+        row = this.store.fetchTaskByNumber(resolvedTaskWorkspaceId, by.taskNumber);
       }
       if (!row) {
         return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
@@ -1074,7 +813,7 @@ export class TaskService {
     if (!ownerConv) {
       return { success: false, code: 'conversation_not_found', reason: 'task owner conversation vanished after commit' };
     }
-    this.auditCrossOp({
+    this.broadcaster.auditCrossOp({
       op: 'unclaim',
       actor,
       sourceConv,
@@ -1083,8 +822,8 @@ export class TaskService {
       taskWorkspaceId: resolvedTaskWorkspaceId,
     });
 
-    const fresh = this.refetchTaskSnapshot(txOut.messageId);
-    await this.broadcast({
+    const fresh = this.store.refetchTaskSnapshot(txOut.messageId);
+    await this.broadcaster.broadcast({
       conversation: ownerConv,
       kind: 'unclaim',
       messageId: txOut.messageId,
@@ -1115,11 +854,11 @@ export class TaskService {
         };
 
     const txOut = this.db.transaction((): UnclaimUserTxOut => {
-      const msg = this.fetchMessage(by.messageId);
+      const msg = this.store.fetchMessage(by.messageId);
       if (!msg || msg.task_number === null) {
         return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
       }
-      if (!this.canUserAccessConversation(actor.userId, msg.conversation_id)) {
+      if (!userCanAccessConversation(this.db, actor.userId, msg.conversation_id)) {
         return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
       }
       if (msg.task_status === 'closed') {
@@ -1147,8 +886,8 @@ export class TaskService {
 
     const conversation = this.conversations.get(txOut.conversationId);
     if (conversation) {
-      const fresh = this.refetchTaskSnapshot(txOut.messageId);
-      await this.broadcast({
+      const fresh = this.store.refetchTaskSnapshot(txOut.messageId);
+      await this.broadcaster.broadcast({
         conversation,
         kind: 'unclaim',
         messageId: txOut.messageId,
@@ -1189,7 +928,7 @@ export class TaskService {
     if (!sourceConv) {
       return { success: false, code: 'conversation_not_found', reason: 'conversation not found' };
     }
-    const actorErr = this.validateAgentActorForMutation(actor);
+    const actorErr = this.access.validateAgentActorForMutation(actor);
     if (actorErr) return actorErr;
 
     // #task:530 Round 3 mirror of unclaim — message-id form pins the
@@ -1198,9 +937,9 @@ export class TaskService {
     let taskWorkspaceId: string | undefined;
     let skipSelector = false;
     if ('messageId' in by) {
-      const peek = this.fetchMessage(by.messageId);
+      const peek = this.store.fetchMessage(by.messageId);
       if (peek && peek.task_number !== null) {
-        const access = this.validateMessageIdAccess(actor, peek, workspaceSelector);
+        const access = this.access.validateMessageIdAccess(actor, peek, workspaceSelector);
         if ('failure' in access) {
           return { success: false, code: access.failure, reason: access.reason };
         }
@@ -1209,7 +948,7 @@ export class TaskService {
       }
     }
     if (!skipSelector) {
-      const resolved = this.resolveAgentTaskWorkspace(
+      const resolved = this.access.resolveAgentTaskWorkspace(
         actor,
         sourceConv,
         workspaceSelector,
@@ -1240,16 +979,16 @@ export class TaskService {
         };
 
     const txOut = this.db.transaction((): StatusAgentTxOut => {
-      let row: ResolvedTaskRow | null;
+      let row: ReturnType<TaskStore['fetchTaskByMessageId']>;
       if ('messageId' in by) {
-        const msg = this.fetchMessage(by.messageId);
+        const msg = this.store.fetchMessage(by.messageId);
         if (!msg || msg.task_number === null) {
           return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
         }
         // Pin to message id — see unclaim path for rationale.
-        row = this.fetchTaskByMessageId(msg.id);
+        row = this.store.fetchTaskByMessageId(msg.id);
       } else {
-        row = this.fetchTaskByNumber(resolvedTaskWorkspaceId, by.taskNumber);
+        row = this.store.fetchTaskByNumber(resolvedTaskWorkspaceId, by.taskNumber);
       }
       if (!row) {
         return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
@@ -1304,7 +1043,7 @@ export class TaskService {
     if (!ownerConv) {
       return { success: false, code: 'conversation_not_found', reason: 'task owner conversation vanished after commit' };
     }
-    this.auditCrossOp({
+    this.broadcaster.auditCrossOp({
       op: 'status',
       actor,
       sourceConv,
@@ -1314,8 +1053,8 @@ export class TaskService {
       status,
     });
 
-    const fresh = this.refetchTaskSnapshot(txOut.messageId);
-    await this.broadcast({
+    const fresh = this.store.refetchTaskSnapshot(txOut.messageId);
+    await this.broadcaster.broadcast({
       conversation: ownerConv,
       kind: 'status',
       messageId: txOut.messageId,
@@ -1349,11 +1088,11 @@ export class TaskService {
         };
 
     const txOut = this.db.transaction((): StatusUserTxOut => {
-      const msg = this.fetchMessage(by.messageId);
+      const msg = this.store.fetchMessage(by.messageId);
       if (!msg || msg.task_number === null) {
         return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
       }
-      if (!this.canUserAccessConversation(actor.userId, msg.conversation_id)) {
+      if (!userCanAccessConversation(this.db, actor.userId, msg.conversation_id)) {
         return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
       }
       if (msg.task_status === status) {
@@ -1382,8 +1121,8 @@ export class TaskService {
 
     const conversation = this.conversations.get(txOut.conversationId);
     if (conversation) {
-      const fresh = this.refetchTaskSnapshot(txOut.messageId);
-      await this.broadcast({
+      const fresh = this.store.refetchTaskSnapshot(txOut.messageId);
+      await this.broadcaster.broadcast({
         conversation,
         kind: 'status',
         messageId: txOut.messageId,
@@ -1400,434 +1139,15 @@ export class TaskService {
     return { success: true };
   }
 
-  // ── Internals ──────────────────────────────────────────────────
-
-  private validateAgentActorForClaim(actor: AgentActor): ClaimResultEntry | undefined {
-    if (!this.agents.get(actor.agentId)) {
-      return failClaim({ code: 'agent_not_found', reason: 'agent not found' });
-    }
-    if (!this.conversations.getAgent(actor.conversationId, actor.agentId)) {
-      return failClaim({
-        code: 'not_conversation_member',
-        reason: 'agent is not a member of this conversation',
-      });
-    }
-    return undefined;
-  }
-
-  private validateAgentActorForMutation(
-    actor: AgentActor,
-  ): TaskMutationResult | undefined {
-    if (!this.agents.get(actor.agentId)) {
-      return { success: false, code: 'agent_not_found', reason: 'agent not found' };
-    }
-    if (!this.conversations.getAgent(actor.conversationId, actor.agentId)) {
-      return {
-        success: false,
-        code: 'not_conversation_member',
-        reason: 'agent is not a member of this conversation',
-      };
-    }
-    return undefined;
-  }
-
-  /** True iff the agent counts as a member of the workspace for the
-   *  purposes of task ops. `agent_home` workspaces have an implicit
-   *  membership (owner_agent_id === agent.id); every other kind goes
-   *  through the `workspace_members` table. Mirrors the union in
-   *  `WorkspaceRepo.listForAgent`. */
-  private isAgentWorkspaceMember(ws: WorkspaceDto, agentId: string): boolean {
-    if (ws.workspace_kind === 'agent_home') {
-      return ws.owner_agent_id === agentId;
-    }
-    return this.workspaces.isMember(ws.id, agentId);
-  }
-
-  private canUserAccessConversation(userId: string, conversationId: string): boolean {
-    return this.db
-      .prepare<[string, string], { ok: 1 }>(
-        `SELECT 1 AS ok
-           FROM conversation_users
-          WHERE conversation_id = ?
-            AND user_id = ?
-          LIMIT 1`,
-      )
-      .get(conversationId, userId) !== undefined;
-  }
-
-  /** Resolve the workspace whose `task_number` namespace the agent op
-   *  should target. Returns:
-   *  - `{ workspace }` on success
-   *  - `{ failure }` envelope using the supplied builder when the
-   *    selector is ambiguous / missing / unauthorized
-   *
-   *  Callers pass a `fail` builder so the same logic can produce either
-   *  `ClaimResultEntry` (claim) or `TaskMutationResult` (unclaim /
-   *  status) shapes without leaking shape knowledge here. */
-  private resolveAgentTaskWorkspace<F>(
-    actor: AgentActor,
-    sourceConv: ConversationDto,
-    selector: WorkspaceSelector | undefined,
-    fail: (args: {
-      code: 'unknown_workspace' | 'ambiguous_workspace' | 'workspace_membership_required';
-      reason: string;
-      candidates?: string[];
-    }) => F,
-  ): { workspace: WorkspaceDto } | { failure: F } {
-    // Schema enforces XOR but defend against an out-of-band call.
-    if (selector?.workspaceId && selector?.workspaceName) {
-      return {
-        failure: fail({
-          code: 'unknown_workspace',
-          reason: 'workspace_id and workspace_name are mutually exclusive',
-        }),
-      };
-    }
-
-    let ws: WorkspaceDto | null = null;
-    if (selector?.workspaceId) {
-      ws = this.workspaces.get(selector.workspaceId);
-      if (!ws) {
-        return {
-          failure: fail({
-            code: 'unknown_workspace',
-            reason: `workspace ${selector.workspaceId} not found`,
-          }),
-        };
-      }
-    } else if (selector?.workspaceName) {
-      const matches = this.workspaces.findAllByName(selector.workspaceName);
-      if (matches.length === 0) {
-        return {
-          failure: fail({
-            code: 'unknown_workspace',
-            reason: `no workspace named "${selector.workspaceName}"`,
-          }),
-        };
-      }
-      if (matches.length > 1) {
-        return {
-          failure: fail({
-            code: 'ambiguous_workspace',
-            reason:
-              `${matches.length} workspaces named "${selector.workspaceName}"; ` +
-              'disambiguate with --workspace-id',
-            candidates: matches.map(m => m.id),
-          }),
-        };
-      }
-      ws = matches[0]!;
-    } else {
-      ws = this.workspaces.get(sourceConv.workspace_id);
-      if (!ws) {
-        // Source conversation exists but its workspace was deleted —
-        // should be impossible given FK, but fail clean instead of
-        // crashing.
-        return {
-          failure: fail({
-            code: 'unknown_workspace',
-            reason: 'current conversation workspace not found',
-          }),
-        };
-      }
-    }
-
-    if (!this.isAgentWorkspaceMember(ws, actor.agentId)) {
-      return {
-        failure: fail({
-          code: 'workspace_membership_required',
-          reason: `agent is not a member of workspace ${ws.id}`,
-        }),
-      };
-    }
-    return { workspace: ws };
-  }
-
-  private allocateTaskNumber(workspaceId: string): number {
-    const row = this.db
-      .prepare<[string], { next: number }>(
-        `SELECT COALESCE(MAX(task_number), 0) + 1 AS next
-         FROM messages WHERE task_workspace_id = ?`,
-      )
-      .get(workspaceId);
-    return row?.next ?? 1;
-  }
-
-  /**
-   * The single open-task writer: allocate the next workspace-scoped task
-   * number and stamp an existing message row as an open (`todo`) task
-   * with the given title and NO assignee. Transaction-agnostic — runs
-   * inside the caller's transaction. Shared by `createTasks` and
-   * `createOpenTaskFromMessageInTxn` so there is exactly one place that
-   * defines what "open task" means on the row.
-   */
-  private writeOpenTaskRow(
-    messageId: string,
-    taskWorkspaceId: string,
-    title: string,
-  ): number {
-    const nextNumber = this.allocateTaskNumber(taskWorkspaceId);
-    this.db
-      .prepare(
-        `UPDATE messages
-         SET task_number = ?,
-             task_status = 'todo',
-             task_title = ?,
-             task_workspace_id = ?
-         WHERE id = ?`,
-      )
-      .run(nextNumber, title, taskWorkspaceId, messageId);
-    return nextNumber;
-  }
-
-  private fetchTaskByNumber(
-    taskWorkspaceId: string,
-    taskNumber: number,
-  ): ResolvedTaskRow | null {
-    const row = this.db
-      .prepare<[string, number], ResolvedTaskRow>(
-        `SELECT m.id,
-                m.conversation_id AS conversation_id,
-                m.task_number,
-                m.task_workspace_id,
-                m.task_status,
-                m.task_closed_at,
-                m.task_assignee_agent_id,
-                m.task_title,
-                m.content,
-                m.from_kind,
-                m.from_agent_id,
-                c.title AS owner_conversation_title
-         FROM messages m
-         JOIN conversations c ON c.id = m.conversation_id
-         WHERE m.task_workspace_id = ? AND m.task_number = ?`,
-      )
-      .get(taskWorkspaceId, taskNumber);
-    return row ?? null;
-  }
-
-  /** Fetch a task row keyed by message id. The message-id form of
-   *  claim/unclaim/status uses this so the row identity stays pinned
-   *  to the message — Cindy `zJ4xdGu3uEo68_k7` Round 2 blocker:
-   *  reaching the row via `fetchTaskByNumber(selectorWs, msg.task_number)`
-   *  would let a `--workspace-id` selector silently retarget the
-   *  mutation onto a same-numbered task in another workspace. The
-   *  message id is the canonical key. */
-  private fetchTaskByMessageId(messageId: string): ResolvedTaskRow | null {
-    const row = this.db
-      .prepare<[string], ResolvedTaskRow>(
-        `SELECT m.id,
-                m.conversation_id AS conversation_id,
-                m.task_number,
-                m.task_workspace_id,
-                m.task_status,
-                m.task_closed_at,
-                m.task_assignee_agent_id,
-                m.task_title,
-                m.content,
-                m.from_kind,
-                m.from_agent_id,
-                c.title AS owner_conversation_title
-         FROM messages m
-         JOIN conversations c ON c.id = m.conversation_id
-         WHERE m.id = ? AND m.task_number IS NOT NULL`,
-      )
-      .get(messageId);
-    return row ?? null;
-  }
-
-  /** Validate that the agent may operate on a task identified by
-   *  message id. Returns the message's actual `task_workspace_id` on
-   *  success. Per Cindy `zJ4xdGu3uEo68_k7` + `YreWED1qOBStvZxG`:
-   *  - The row's workspace is `msg.task_workspace_id` (NOT the
-   *    selector-resolved one).
-   *  - Membership of that workspace is always required, even when no
-   *    selector was passed — otherwise a leaked message id would let
-   *    a non-member mutate the task.
-   *  - If a selector WAS passed and resolves to a different workspace,
-   *    we return `task_not_found` so the caller can't infer existence
-   *    of the row outside their authorized scope.
-   *
-   *  Callers wrap the failure into their own envelope (ClaimResultEntry
-   *  vs TaskMutationResult). */
-  private validateMessageIdAccess(
-    actor: AgentActor,
-    msg: ResolvedMessageRow,
-    selector: WorkspaceSelector | undefined,
-  ):
-    | { ok: true; workspaceId: string }
-    | { failure: 'task_not_found' | 'workspace_membership_required'; reason: string } {
-    if (msg.task_number === null || msg.task_workspace_id === null) {
-      // Caller should only invoke this for already-numbered tasks.
-      // Treat as not-a-task so the failure surfaces cleanly.
-      return { failure: 'task_not_found', reason: 'message is not a task' };
-    }
-    const rowWorkspaceId = msg.task_workspace_id;
-    if (selector?.workspaceId && selector.workspaceId !== rowWorkspaceId) {
-      return {
-        failure: 'task_not_found',
-        reason: 'task not found in the specified workspace',
-      };
-    }
-    if (selector?.workspaceName) {
-      const matches = this.workspaces.findAllByName(selector.workspaceName);
-      const ids = new Set(matches.map(m => m.id));
-      if (!ids.has(rowWorkspaceId)) {
-        return {
-          failure: 'task_not_found',
-          reason: 'task not found in the specified workspace',
-        };
-      }
-    }
-    const targetWs = this.workspaces.get(rowWorkspaceId);
-    if (!targetWs) {
-      return { failure: 'task_not_found', reason: 'task workspace not found' };
-    }
-    if (!this.isAgentWorkspaceMember(targetWs, actor.agentId)) {
-      return {
-        failure: 'workspace_membership_required',
-        reason: `agent is not a member of workspace ${targetWs.id}`,
-      };
-    }
-    return { ok: true, workspaceId: rowWorkspaceId };
-  }
-
-  private fetchMessage(messageId: string): ResolvedMessageRow | null {
-    const row = this.db
-      .prepare<[string], ResolvedMessageRow>(
-        `SELECT id, conversation_id AS conversation_id,
-                thread_root_id,
-                from_kind, metadata, content,
-                task_number, task_workspace_id, task_status, task_closed_at,
-                task_assignee_agent_id, task_title
-         FROM messages WHERE id = ?`,
-      )
-      .get(messageId);
-    return row ?? null;
-  }
-
-  private refetchTaskSnapshot(messageId: string): {
-    title: string;
-    task_status: TaskStatus | null;
-    closed_at: number | null;
-    assignee: TaskAssigneeDto | null;
-  } | null {
-    const row = this.db
-      .prepare<[string], {
-        content: string;
-        task_status: TaskStatus | null;
-        task_closed_at: number | null;
-        task_title: string | null;
-        task_assignee_agent_id: string | null;
-        task_assignee_user_id: string | null;
-        assignee_agent_name: string | null;
-        assignee_user_name: string | null;
-      }>(
-        `SELECT m.content,
-                m.task_status,
-                m.task_closed_at,
-                m.task_title,
-                m.task_assignee_agent_id,
-                m.task_assignee_user_id,
-                aa.display_name AS assignee_agent_name,
-                au.display_name AS assignee_user_name
-         FROM messages m
-         LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
-         LEFT JOIN users au ON au.id = m.task_assignee_user_id
-         WHERE m.id = ?`,
-      )
-      .get(messageId);
-    if (!row) return null;
-    let assignee: TaskAssigneeDto | null = null;
-    if (row.task_assignee_agent_id) {
-      assignee = {
-        type: 'agent',
-        id: row.task_assignee_agent_id,
-        name: row.assignee_agent_name ?? row.task_assignee_agent_id,
-      };
-    } else if (row.task_assignee_user_id) {
-      assignee = {
-        type: 'user',
-        id: row.task_assignee_user_id,
-        name: row.assignee_user_name ?? row.task_assignee_user_id,
-      };
-    }
-    return {
-      title: row.task_title ?? firstLine(row.content),
-      task_status: row.task_status,
-      closed_at: row.task_closed_at,
-      assignee,
-    };
-  }
-
-  private joinedToSummary(row: TaskJoinedRow): TaskSummaryDto {
-    let assignee: TaskAssigneeDto | null = null;
-    if (row.task_assignee_agent_id) {
-      assignee = {
-        type: 'agent',
-        id: row.task_assignee_agent_id,
-        name: row.assignee_agent_name ?? row.task_assignee_agent_id,
-      };
-    } else if (row.task_assignee_user_id) {
-      assignee = {
-        type: 'user',
-        id: row.task_assignee_user_id,
-        name: row.assignee_user_name ?? row.task_assignee_user_id,
-      };
-    }
-    return {
-      message_id: row.id,
-      task_number: row.task_number,
-      workspace_id: row.workspace_id,
-      workspace_name: row.workspace_name,
-      channel_id: row.channel_id,
-      channel_name: row.channel_name,
-      thread_root_id: row.thread_root_id,
-      legacy_thread_conversation_id: row.legacy_thread_conversation_id,
-      thread_id: row.thread_id,
-      conversation: { id: row.conversation_id, title: row.conversation_title },
-      status: row.task_status,
-      title: row.task_title ?? firstLine(row.content),
-      assignee,
-      creator:
-        row.from_kind === 'agent' && row.from_agent_id
-          ? {
-              type: 'agent',
-              id: row.from_agent_id,
-              name: row.creator_agent_name ?? row.from_agent_id,
-            }
-          : row.from_kind === 'user'
-            ? {
-                type: 'user',
-                id: row.from_user_id,
-                name: row.creator_user_name ?? row.from_user_id ?? 'user',
-            }
-          : { type: 'system', id: null, name: 'system' },
-      created_at: row.created_at,
-      closed_at: row.task_closed_at,
-    };
-  }
+  // ── Actor formatting ───────────────────────────────────────────
+  // Small `AgentRepo`-backed label helpers used by the mutation methods to
+  // build system-message text and assignee DTOs. Kept on the facade (not the
+  // broadcaster) because their callers are the mutation bodies here.
 
   private actorLabel(actor: TaskActor): string {
     if (actor.kind === 'user') return 'user';
     const agent = this.agents.get(actor.agentId);
     return agent ? `@${agent.name}` : 'agent';
-  }
-
-  /** Render a `TaskActor` (UserPrincipal | AgentPrincipal) into the
-   *  structured `TaskSystemActor` we embed in task system metadata.
-   *  Renderers read this to draw an actor pill without parsing
-   *  `message.content`. */
-  private taskSystemActor(actor: TaskActor): TaskSystemActor {
-    if (actor.kind === 'user') {
-      return { kind: 'user', id: actor.userId, name: 'user' };
-    }
-    const agent = this.agents.get(actor.agentId);
-    return {
-      kind: 'agent',
-      id: actor.agentId,
-      name: agent?.display_name ?? agent?.name ?? actor.agentId,
-    };
   }
 
   private agentName(agentId: string): string {
@@ -1843,217 +1163,4 @@ export class TaskService {
       name: agent?.display_name ?? agent?.name ?? agentId,
     };
   }
-
-  /** Log a single line per agent task op whenever the call crossed a
-   *  conversation/workspace boundary (the actor's running conversation
-   *  ≠ the task's owner conversation). Lightweight audit trail per
-   *  shiki / Cindy decision — no visible system message hook. */
-  private auditCrossOp(args: {
-    op: 'claim' | 'unclaim' | 'status';
-    actor: AgentActor;
-    sourceConv: ConversationDto;
-    ownerConv: ConversationDto;
-    taskNumber: number;
-    taskWorkspaceId: string;
-    status?: TaskStatus;
-  }): void {
-    if (args.sourceConv.id === args.ownerConv.id) return;
-    const crossWorkspace = args.sourceConv.workspace_id !== args.ownerConv.workspace_id;
-    // warn-level (not info) per Cindy `JLdi59K-TD11CAWy`: backend
-    // default log level since #523 is `warn`, so info lines never make
-    // it to disk. The message text is intentionally framed as an
-    // audit log line, not an exception, so on-call reading
-    // `backend-<utc>.log` recognizes it as routine cross-conv activity
-    // rather than a fault.
-    this.logger.warn(
-      {
-        op: 'task_cross_op',
-        action: args.op,
-        agent_id: args.actor.agentId,
-        source_conversation_id: args.sourceConv.id,
-        source_workspace_id: args.sourceConv.workspace_id,
-        owner_conversation_id: args.ownerConv.id,
-        owner_workspace_id: args.ownerConv.workspace_id,
-        task_workspace_id: args.taskWorkspaceId,
-        task_number: args.taskNumber,
-        cross_workspace: crossWorkspace,
-        ...(args.status ? { status: args.status } : {}),
-      },
-      'task-service: audit cross-conversation task op',
-    );
-  }
-
-  private async broadcast(args: {
-    conversation: ConversationDto;
-    kind: TaskNarrativeKind;
-    /** Canonical task body message id — same value for every mutation
-     *  on a given task (the row created by `task_create`). Used to
-     *  anchor cross-thread / cross-workspace task lookups without
-     *  relying on the workspace-scoped `task_number`. */
-    messageId: string;
-    taskNumber: number;
-    title: string;
-    /** Status snapshot AFTER this mutation. */
-    status: TaskStatus;
-    assignee: TaskAssigneeDto | null;
-    closedAt: number | null;
-    /** Who triggered the mutation. Rendered as an actor pill on the
-     *  task event row instead of being parsed back out of `sysMessage`. */
-    actor: TaskActor;
-    sysMessage: string;
-  }): Promise<void> {
-    const conversationId = args.conversation.id;
-    const taskMessage = this.fetchMessage(args.messageId);
-    const threadRootId = taskMessage?.conversation_id === conversationId
-      ? taskMessage.thread_root_id
-      : null;
-
-    const systemActor: TaskSystemActor = this.taskSystemActor(args.actor);
-    const sysMsg = this.db.transaction(() =>
-      this.messages.insertForConversation({
-        conversationId,
-        fromKind: 'system',
-        content: args.sysMessage,
-        threadRootId,
-        metadata: {
-          subtype: taskSystemSubtype(args.kind),
-          task_number: args.taskNumber,
-          task_status: args.status,
-          task_message_id: args.messageId,
-          task_title: args.title,
-          task_assignee: args.assignee,
-          actor: systemActor,
-        },
-      }),
-    )();
-
-    // Publish FIRST (matches PR-1/PR-2/PR-3 invariant; today's tasks.ts
-    // awaits deliver before publish, this inverts that drift).
-    this.events.publish(conversationId, {
-      kind: 'message',
-      payload: { message: sysMsg },
-    });
-    this.publishTaskChanged({
-      conversation: args.conversation,
-      kind: args.kind,
-      messageId: args.messageId,
-      taskNumber: args.taskNumber,
-      title: args.title,
-      status: args.status,
-      assignee: args.assignee,
-      closedAt: args.closedAt,
-    });
-
-    // Best-effort, fire-and-forget delivery to recipients.
-    const recipients = this.conversations.listAgents(conversationId);
-    for (const ca of recipients) {
-      void this.runtimeHost
-        .deliverMessage(conversationId, ca.agent_id, sysMsg.id)
-        .catch(err => {
-          this.logger.warn(
-            { err, conversationId, agentId: ca.agent_id, messageId: sysMsg.id },
-            'task-service: deliverMessage failed',
-          );
-        });
-    }
-  }
-
-  private publishTaskChanged(args: {
-    conversation: ConversationDto;
-    kind: TaskChangedEvent['kind'];
-    messageId: string;
-    taskNumber: number;
-    title: string;
-    status: TaskStatus;
-    assignee: TaskAssigneeDto | null;
-    closedAt: number | null;
-  }): void {
-    const conversationId = args.conversation.id;
-    const workspaceId = args.conversation.workspace_id;
-    const channelId = args.conversation.parent_conversation_id ?? args.conversation.id;
-    const threadId = args.conversation.parent_conversation_id ? args.conversation.id : null;
-    const taskMessage = this.fetchMessage(args.messageId);
-    const threadRootId = taskMessage?.conversation_id === conversationId
-      ? taskMessage.thread_root_id
-      : null;
-    const event: TaskChangedEvent = {
-      kind: args.kind,
-      workspace_id: workspaceId,
-      channel_id: channelId,
-      thread_root_id: threadRootId,
-      legacy_thread_conversation_id: threadId,
-      thread_id: threadId,
-      conversation_id: conversationId,
-      task_number: args.taskNumber,
-      message_id: args.messageId,
-      status: args.status,
-      assignee: args.assignee,
-      title: args.title,
-      closed_at: args.closedAt,
-    };
-    this.events.publish(conversationId, { kind: 'task_changed', payload: event });
-    this.events.publishToScope(`workspace:${workspaceId}`, 'task_changed', event);
-  }
-}
-
-interface ClaimFailureArgs {
-  code: ClaimErrorCode;
-  reason: string;
-  taskNumber?: number;
-  messageId?: string;
-  ownerConversation?: { id: string; title: string };
-  workspaceCandidates?: string[];
-  capability?: AgentCapability;
-}
-
-function failClaim(args: ClaimFailureArgs): ClaimResultEntry {
-  const entry: ClaimResultEntry = {
-    success: false,
-    code: args.code,
-    reason: args.reason,
-  };
-  if (args.capability !== undefined) entry.capability = args.capability;
-  if (args.taskNumber !== undefined) entry.task_number = args.taskNumber;
-  if (args.messageId !== undefined) entry.message_id = args.messageId;
-  if (args.ownerConversation) entry.owner_conversation = args.ownerConversation;
-  if (args.workspaceCandidates && args.workspaceCandidates.length > 0) {
-    entry.workspace_candidates = args.workspaceCandidates;
-  }
-  return entry;
-}
-
-/** Mirror of `failClaim` for the `TaskMutationResult` shape; used by
- *  the shared workspace resolver to emit unclaim/status failures
- *  without duplicating the envelope-build logic. */
-function mutationFailure(args: {
-  code: TaskMutationErrorCode;
-  reason: string;
-  candidates?: string[];
-  capability?: AgentCapability;
-}): TaskMutationResult {
-  const out: TaskMutationResult = {
-    success: false,
-    code: args.code,
-    reason: args.reason,
-  };
-  if (args.capability !== undefined) out.capability = args.capability;
-  if (args.candidates && args.candidates.length > 0) {
-    out.workspace_candidates = args.candidates;
-  }
-  return out;
-}
-
-function isThreadAnchor(metadata: string | null): boolean {
-  if (!metadata) return false;
-  try {
-    const md = JSON.parse(metadata) as Record<string, unknown>;
-    return typeof md['subtype'] === 'string' && md['subtype'] === 'thread_anchor';
-  } catch {
-    return false;
-  }
-}
-
-function firstLine(s: string): string {
-  const line = s.split('\n', 1)[0]!.trim();
-  return line.length > 120 ? line.slice(0, 120) + '…' : line || '(empty)';
 }

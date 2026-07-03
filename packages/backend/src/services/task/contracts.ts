@@ -1,0 +1,250 @@
+// Shared contract surface for the task-service aggregate: the public input /
+// option types, the transition table, the internal row shapes exchanged
+// between the facade and its collaborators, and the stateless helpers
+// (failure-envelope builders, row predicates, access check). No behavior —
+// this is the ubiquitous-language module the facade + store + access +
+// broadcaster all import from.
+import type { Database as Db } from 'better-sqlite3';
+import {
+  type AgentCapability,
+  type ClaimErrorCode,
+  type ClaimResultEntry,
+  type MessageRow,
+  type MessageSendTarget,
+  type TaskChangedEvent,
+  type TaskMutationErrorCode,
+  type TaskMutationResult,
+  type TaskStatus,
+} from '@silverhand/shared';
+import type { BackendLogger } from '../../context.js';
+import type { AgentRuntimeHost } from '../../runtime/agent-runtime-host.js';
+import type { AgentRepo } from '../../repos/agent-repo.js';
+import type { ConversationRepo } from '../../repos/conversation-repo.js';
+import type { MessageRepo } from '../../repos/message-repo.js';
+import type { WorkspaceRepo } from '../../repos/workspace-repo.js';
+import type { ScopeEventBus } from '../../ws/scope-event-bus.js';
+import type { AgentPrincipal, UserPrincipal } from '../../auth/principal.js';
+
+export type TaskActor =
+  | UserPrincipal
+  | AgentPrincipal;
+
+export type UserActor = Extract<TaskActor, { kind: 'user' }>;
+export type AgentActor = Extract<TaskActor, { kind: 'agent' }>;
+
+export type AgentTaskRef = { messageId: string } | { taskNumber: number };
+export type UserTaskRef = { messageId: string };
+export type TaskNarrativeKind = TaskChangedEvent['kind'];
+
+export interface CreateTasksInput {
+  conversationId: string;
+  actor: TaskActor;
+  tasks: { title: string; body?: string }[];
+  /** Optional public destination. Omitted / channel keeps task creation on
+   *  the main line; thread anchors the task body under that message's
+   *  reply cluster. */
+  target?: MessageSendTarget;
+  /** @deprecated Compatibility alias for old CLI/runtime callers. */
+  legacyReplyToMessageId?: string;
+}
+
+export type ClaimTaskInput =
+  | {
+      actor: UserActor;
+      by: UserTaskRef;
+      assignee?: { agentId: string };
+    }
+  | {
+      actor: AgentActor;
+      by: AgentTaskRef;
+      assignee?: { agentId: string };
+      workspaceSelector?: WorkspaceSelector;
+    };
+
+export type UnclaimTaskInput =
+  | { actor: UserActor; by: UserTaskRef }
+  | { actor: AgentActor; by: AgentTaskRef; workspaceSelector?: WorkspaceSelector };
+
+export type UpdateStatusInput =
+  | { actor: UserActor; by: UserTaskRef; status: TaskStatus }
+  | {
+      actor: AgentActor;
+      by: AgentTaskRef;
+      status: TaskStatus;
+      workspaceSelector?: WorkspaceSelector;
+    };
+
+/** Optional `--workspace-id` / `--workspace <name>` selector wired
+ *  through from the CLI. Empty / undefined means "use the actor's
+ *  current conversation's workspace" (the legacy default). The
+ *  service validates exclusivity (id XOR name) defensively, even
+ *  though the wire schema also enforces it. */
+export interface WorkspaceSelector {
+  workspaceId?: string;
+  workspaceName?: string;
+}
+
+export interface ListTasksFilters {
+  actor: TaskActor;
+  /** user actor: optional filter; agent actor: ignored (service derives
+   *  physical workspace from actor.conversationId). */
+  workspaceId?: string;
+  conversationId?: string;
+  /** OR-ed status filter. Empty array or undefined = no filter.
+   *  Single-element array is the legacy single-value form. */
+  status?: readonly TaskStatus[];
+  /** OR-ed task-number filter. Empty array or undefined = no filter. */
+  taskNumbers?: readonly number[];
+  /** Filter by assignee agent id. Single-valued. */
+  assigneeAgentId?: string;
+  /** Cap the number of rows returned. */
+  limit?: number;
+}
+
+export interface TaskServiceOptions {
+  db: Db;
+  conversations: ConversationRepo;
+  messages: MessageRepo;
+  agents: AgentRepo;
+  workspaces: WorkspaceRepo;
+  runtimeHost: AgentRuntimeHost;
+  events: ScopeEventBus;
+  logger: BackendLogger;
+  /**
+   * Agent-capability gate (graded-permissions cut 2). Injected — not
+   * re-implemented here — so the agent_home exemption and table lookup
+   * have a SINGLE source (`canAgentUseCapability`). Evaluated on the
+   * task's RESOLVED workspace, which only the service knows (message-id
+   * claims land in the message's workspace, not the principal's).
+   */
+  canUseCapability: AgentCapabilityChecker;
+}
+
+/** Signature of the injected `canAgentUseCapability` binding (see
+ *  TaskServiceOptions.canUseCapability). */
+export type AgentCapabilityChecker = (
+  actor: AgentActor,
+  workspaceId: string,
+  capability: AgentCapability,
+) => boolean;
+
+export const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
+  todo: ['closed'],
+  in_progress: ['in_review', 'done', 'closed'],
+  in_review: ['in_progress', 'done', 'closed'],
+  done: ['closed'],
+  closed: ['todo', 'in_progress', 'in_review', 'done'],
+};
+
+export interface ResolvedTaskRow {
+  id: string;
+  conversation_id: string;
+  task_number: number;
+  task_workspace_id: string;
+  task_status: TaskStatus;
+  task_closed_at: number | null;
+  task_assignee_agent_id: string | null;
+  task_title: string | null;
+  content: string;
+  owner_conversation_title: string;
+  /** Creator origin — used for the "creator may close own stale
+   *  unassigned task" exception in `updateStatusAgent`. */
+  from_kind: MessageRow['from_kind'];
+  from_agent_id: string | null;
+}
+
+export interface ResolvedMessageRow {
+  id: string;
+  conversation_id: string;
+  thread_root_id: string | null;
+  from_kind: MessageRow['from_kind'];
+  metadata: string | null;
+  content: string;
+  task_number: number | null;
+  task_workspace_id: string | null;
+  task_status: TaskStatus | null;
+  task_closed_at: number | null;
+  task_assignee_agent_id: string | null;
+  task_title: string | null;
+}
+
+interface ClaimFailureArgs {
+  code: ClaimErrorCode;
+  reason: string;
+  taskNumber?: number;
+  messageId?: string;
+  ownerConversation?: { id: string; title: string };
+  workspaceCandidates?: string[];
+  capability?: AgentCapability;
+}
+
+export function failClaim(args: ClaimFailureArgs): ClaimResultEntry {
+  const entry: ClaimResultEntry = {
+    success: false,
+    code: args.code,
+    reason: args.reason,
+  };
+  if (args.capability !== undefined) entry.capability = args.capability;
+  if (args.taskNumber !== undefined) entry.task_number = args.taskNumber;
+  if (args.messageId !== undefined) entry.message_id = args.messageId;
+  if (args.ownerConversation) entry.owner_conversation = args.ownerConversation;
+  if (args.workspaceCandidates && args.workspaceCandidates.length > 0) {
+    entry.workspace_candidates = args.workspaceCandidates;
+  }
+  return entry;
+}
+
+/** Mirror of `failClaim` for the `TaskMutationResult` shape; used by
+ *  the shared workspace resolver to emit unclaim/status failures
+ *  without duplicating the envelope-build logic. */
+export function mutationFailure(args: {
+  code: TaskMutationErrorCode;
+  reason: string;
+  candidates?: string[];
+  capability?: AgentCapability;
+}): TaskMutationResult {
+  const out: TaskMutationResult = {
+    success: false,
+    code: args.code,
+    reason: args.reason,
+  };
+  if (args.capability !== undefined) out.capability = args.capability;
+  if (args.candidates && args.candidates.length > 0) {
+    out.workspace_candidates = args.candidates;
+  }
+  return out;
+}
+
+export function isThreadAnchor(metadata: string | null): boolean {
+  if (!metadata) return false;
+  try {
+    const md = JSON.parse(metadata) as Record<string, unknown>;
+    return typeof md['subtype'] === 'string' && md['subtype'] === 'thread_anchor';
+  } catch {
+    return false;
+  }
+}
+
+export function firstLine(s: string): string {
+  const line = s.split('\n', 1)[0]!.trim();
+  return line.length > 120 ? line.slice(0, 120) + '…' : line || '(empty)';
+}
+
+/** Whether the user is a member of the conversation (task read/mutate access
+ *  for the human actor). Stateless query over `conversation_users`; the store
+ *  and the facade's user-mutation paths share this single definition. */
+export function userCanAccessConversation(
+  db: Db,
+  userId: string,
+  conversationId: string,
+): boolean {
+  return db
+    .prepare<[string, string], { ok: 1 }>(
+      `SELECT 1 AS ok
+         FROM conversation_users
+        WHERE conversation_id = ?
+          AND user_id = ?
+        LIMIT 1`,
+    )
+    .get(conversationId, userId) !== undefined;
+}
