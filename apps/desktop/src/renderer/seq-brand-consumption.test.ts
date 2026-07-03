@@ -133,6 +133,9 @@ describe('seq-brand renderer consumption fences (#task:1267 §6)', () => {
     // justified here.
     const ALLOWED = new Set([
       'features/channels/hooks.ts',
+      // #task:1292: appendPendingMessage's §3.3 provisional-head decode moved
+      // here with the append trio.
+      'features/channels/message-cache-core.ts',
       'lib/place-memory.ts',
     ]);
     const offenders = FILES.filter(

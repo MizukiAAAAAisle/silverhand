@@ -96,9 +96,12 @@ describe('realtime ingestion bridge — read-inert (#task:1251)', () => {
 });
 
 describe('replayed-frame cache merge — idempotent (#task:1251)', () => {
+  // #task:1292: the append trio (appendToCache + the two typed helpers) moved to
+  // the extracted message-cache-core module; the dedup invariant travels with it
+  // (assertions below unchanged — this fence just follows the code to its home).
   const source = readFileSync(
     fileURLToPath(
-      new URL('../features/channels/hooks.ts', import.meta.url),
+      new URL('../features/channels/message-cache-core.ts', import.meta.url),
     ),
     'utf8',
   );

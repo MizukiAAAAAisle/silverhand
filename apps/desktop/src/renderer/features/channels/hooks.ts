@@ -1,12 +1,18 @@
+// Channel read-model hooks (#task:1292). After the split this file holds the
+// public reader hooks (useChannelMessages / cluster / thread-root / followers /
+// agents / run-states — all fenced by hooks/realtime-ingestion-read-inert.test.ts
+// as pure readers), the send/agent mutations, and the read-cursor hooks. The
+// cache primitives, projection seam, agent-status buffer, unread badges, and
+// error formatting moved to sibling modules; re-exported below so the existing
+// import surface (`@/features/channels/hooks`) is unchanged.
 import {
   useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
   type InfiniteData,
-  type QueryClient,
 } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { toast } from 'sonner';
 import type {
   AgentRunStatesDto,
@@ -16,31 +22,20 @@ import type {
   ConversationAgentDto,
   ConversationMembersResponse,
   ConversationMessagesDto,
-  ConversationStreamUnreadDto,
   MessageDto,
-  MessageReactionChangedEvent,
-  MessageSeq,
-  MessageUnreadByConversationDto,
-  MessageUnreadPointerDto,
-  MessageUnreadSummaryDto,
-  ReactionAggregateDto,
   ReplyBadgeSummary,
-  TaskChangedEvent,
+  MessageSeq,
   ThreadFollowerStateDto,
   ThreadFollowMutationDto,
-  UnreadUpdatedMessagePayload,
 } from '@silverhand/shared';
-import { apiPaths, decodeMessageSeq } from '@silverhand/shared';
+import { apiPaths } from '@silverhand/shared';
 import {
-  type CachedMessage,
   type PendingMessage,
   isCommittedMessage,
 } from '@/features/channels/pending-message';
 import { api, ApiError } from '@/lib/api';
-import { messageReactorsKey } from '@/features/channels/reaction-hooks';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
 import { getCurrentUserId } from '@/lib/current-user';
-import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
 import { useInterest } from '@/features/realtime/interest-registry';
 import {
   AGENT_RUN_STATES_GC_MS,
@@ -48,7 +43,6 @@ import {
   reconcileAgentRunStateSnapshot,
 } from '@/lib/agentRunStateCache';
 import { wsConversationScope, wsConversationSideScope } from '@/hooks/useConversationStream';
-import { applyTaskChangedToTaskByNumberCache } from '@/features/tasks/useTaskByNumber';
 import { clusterInitialFetchEnabled } from '@/components/layout/threadMarkRead';
 import {
   mainlineStreamSourceHead,
@@ -56,1243 +50,98 @@ import {
   streamSourceAtSeq,
 } from '@/features/attention/observe';
 
-export const messagesKey = (cid: string) =>
-  ['channels', cid, 'messages'] as const;
-/** Cache key for one reply cluster's window. A cluster lives in the same
- *  channel conversation as its root (rows with `thread_root_id = rootId`),
- *  so it is keyed off the channel id plus the root message id — distinct
- *  from the main-stream window (`messagesKey`) which excludes replies. */
-export const clusterMessagesKey = (cid: string, rootId: string) =>
-  ['channels', cid, 'cluster', rootId, 'messages'] as const;
-/** Cache key carrying the "this-open window fetch succeeded" epoch (ms) for a
- *  reply cluster (#task:1226 §9/§9.10). Written on the success path by both
- *  `useThreadCluster`'s queryFn AND `primeAround`'s around-target fetch, so a
- *  jump open arms the mark-read freshness gate the same way a normal open does.
- *  Deliberately separate from `clusterMessagesKey` so `setQueryData` appends to
- *  the window (live reply / optimistic patch) never advance it. */
-export const clusterFetchEpochKey = (cid: string, rootId: string) =>
-  ['channels', cid, 'cluster', rootId, 'fetch-epoch'] as const;
-/** Cache key for the thread pane's root row. The root message lives in the
- *  main stream, but ThreadPanel loads it through its own single-row window
- *  query so the pane can mount independently of the channel list. */
-export const threadRootKey = (cid: string, rootId: string) =>
-  ['channels', cid, 'thread-root', rootId] as const;
-/** Cache key for one reply cluster's human-follower state (cut3 slice B). */
-const threadFollowersKey = (cid: string, rootId: string) =>
-  ['channels', cid, 'thread-followers', rootId] as const;
-const agentsKey = (cid: string) => ['channels', cid, 'agents'] as const;
-/** Per-window UI-affordance fact (#task:1255 Stage-2): a live mainline message
- *  arrived while this window was NOT at tail, so the UI offers "scroll to
- *  latest" instead of lying with an append. It is NOT the message cache and NOT
- *  a read/cursor input — purely a hint. Stage-2 moves the SET onto the central
- *  conversation ingestor (so the reader view holds zero `onWsFrame`); the view
- *  keeps the position-based CLEARS (channel switch / reached tail / reset),
- *  which are explicit-helper writes of this affordance key, never a frame apply
- *  and never the message cache. See docs/renderer-event-ingestion-v1.md §5. */
-export const mainlineLiveGapKey = (cid: string) =>
-  ['channels', cid, 'live-gap', 'mainline'] as const;
-/** Per-cluster sibling of {@link mainlineLiveGapKey} (#task:1255 Stage-2 P1b):
- *  a live reply arrived while THIS cluster window was not at tail. Same
- *  contract — ingestor SETs, the reader view CLEARs on position changes. */
-export const clusterLiveGapKey = (cid: string, rootId: string) =>
-  ['channels', cid, 'cluster', rootId, 'live-gap'] as const;
-const MESSAGE_PAGE_LIMIT = 100;
-const AROUND_MESSAGE_LIMIT = 100;
-
-function parseApiErrorBody(err: ApiError): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(err.body) as unknown;
-    return parsed && typeof parsed === 'object'
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function formatStartAgentError(err: unknown): string {
-  if (err instanceof ApiError) {
-    const body = parseApiErrorBody(err);
-    const code = typeof body?.code === 'string' ? body.code : null;
-    const detail =
-      typeof body?.error === 'string'
-        ? body.error
-        : typeof body?.message === 'string'
-          ? body.message
-          : err.body || err.message;
-    if (code === 'host_attach_pending') {
-      return 'Agent 启动失败：daemon host 还未连接，稍后重试。';
-    }
-    if (code === 'workspace_path_missing') {
-      return `Agent 启动失败：${detail}`;
-    }
-    if (code === 'workspace_not_provisioned') {
-      return `Agent 启动失败：workspace 尚未 provision。${detail}`;
-    }
-    if (code === 'registry_unavailable') {
-      return `Agent 启动失败：daemon workspace registry 不可用。${detail}`;
-    }
-    return `Agent 启动失败：${detail}`;
-  }
-  return `Agent 启动失败：${err instanceof Error ? err.message : String(err)}`;
-}
-
-function formatRemoveAgentError(err: unknown): string {
-  if (err instanceof ApiError) {
-    const body = parseApiErrorBody(err);
-    const code = typeof body?.code === 'string' ? body.code : null;
-    if (code === 'conversation_member_remove_unsupported') {
-      return '只能从 channel 或 thread 移除成员(DM 不支持)。';
-    }
-    if (code === 'conversation_closed') {
-      return '该会话已关闭,无法移除成员。';
-    }
-    if (err.status === 403) return '没有权限将该 agent 从此频道移除。';
-    if (err.status === 404) return '该 agent 已不在此频道。';
-    const detail =
-      typeof body?.error === 'string'
-        ? body.error
-        : typeof body?.message === 'string'
-          ? body.message
-          : `HTTP ${err.status}`;
-    return `移除失败：${detail}`;
-  }
-  return `移除失败：${err instanceof Error ? err.message : String(err)}`;
-}
-
-/** Page-param shape for the bidirectional infinite query.
- *  - `undefined` (the initial param) → fetch the latest window.
- *  - `{ kind: 'before', seq }` → fetch a window with seq < `seq`.
- *  - `{ kind: 'after', seq }` → fetch a window with seq > `seq`.
- *  We model it as a tagged union instead of a bare number so the
- *  hook knows which direction it's paging without re-deriving it
- *  from "is this a fetchPrevious or fetchNext call". React Query's
- *  inferred page-param type stays `MessagesPageParam` end-to-end. */
-export type MessagesPageParam =
-  | undefined
-  | { kind: 'before'; seq: number }
-  | { kind: 'after'; seq: number };
-
-/** A cached messages page. Identical to the wire {@link ConversationMessagesDto}
- *  except the message list may also hold optimistic {@link PendingMessage} rows
- *  (which the wire never carries). A server response widens into this freely
- *  (`MessageDto[]` ⊆ `CachedMessage[]`); only optimistic inserts add the pending
- *  variant. */
-type CachedMessagesPage = Omit<ConversationMessagesDto, 'messages'> & {
-  messages: CachedMessage[];
-};
-
-type MessagesCache = InfiniteData<CachedMessagesPage, MessagesPageParam>;
-
-/** Debounced invalidate of every message-unread badge query (per-workspace
- *  `by_conversation` maps + the global `by_workspace` summary). The legacy
- *  fallback path: the S1 viewer-unread ingestor (#task:1284) patches these caches
- *  in place from an enriched `unread_updated` frame, and this invalidate remains
- *  ONLY for the frames it can't patch — a `snapshot_required` reconcile, or a
- *  legacy/malformed message-variant payload missing the enriched absolute fields.
- *  Never called on a well-formed enriched frame (that would defeat the patch's
- *  zero-refetch). */
-export function invalidateMessageUnreadQueries(qc: QueryClient): void {
-  const existing = messageUnreadInvalidationTimers.get(qc);
-  if (existing) clearTimeout(existing);
-  const timer = setTimeout(() => {
-    messageUnreadInvalidationTimers.delete(qc);
-    void qc.invalidateQueries({
-      predicate: query => {
-        const key = query.queryKey;
-        return (
-          Array.isArray(key) &&
-          key[0] === 'workspaces' &&
-          key[key.length - 1] === 'message-unread'
-        );
-      },
-    });
-    void qc.invalidateQueries({ queryKey: ['message-unread', 'summary'] });
-  }, 100);
-  messageUnreadInvalidationTimers.set(qc, timer);
-}
-
-const messageUnreadInvalidationTimers = new WeakMap<
-  QueryClient,
-  ReturnType<typeof setTimeout>
->();
-
-function isMessageUnreadUpdatedPayload(payload: unknown): boolean {
-  return (
-    typeof payload === 'object' &&
-    payload !== null &&
-    typeof (payload as { conversation_id?: unknown }).conversation_id === 'string'
-  );
-}
-
-/** Query key for the per-workspace message-unread `by_conversation` read-model
- *  (`useMessageUnreadCounts`). `kind` partitions regular vs dm workspaces; a
- *  workspace id is only ever one kind, so the S1 viewer-unread ingestor
- *  (#task:1284) patches whichever partition is loaded. MUST stay identical to the
- *  `useMessageUnreadCounts` queryKey — both build it here so they cannot drift. */
-export const messageUnreadByConversationKey = (
-  workspaceId: string,
-  kind: 'regular' | 'dm',
-) => ['workspaces', workspaceId, kind, 'message-unread'] as const;
-
-/** Query key for the global cross-workspace message-unread summary
- *  (`by_workspace`, `useMessageUnreadSummary`). */
-export const messageUnreadSummaryKey = ['message-unread', 'summary'] as const;
-
-/** Two unread pointers are equal iff they point at the same message (or both
- *  null). `message_id` is unique, so it alone decides — no need to compare seq /
- *  thread_root_id. Powers the idempotency short-circuit below. */
-function unreadPointerEqual(
-  a: MessageUnreadPointerDto | undefined,
-  b: MessageUnreadPointerDto | null,
-): boolean {
-  if (!a && !b) return true;
-  if (!a || !b) return false;
-  return a.message_id === b.message_id;
-}
-
-/** S1 viewer-unread ingestor patch (#task:1284, doc §6) — authoritative UPSERT of
- *  ONE conversation's absolute unread into the per-workspace `by_conversation`
- *  read-model. The map is a COMPLETE sparse model keyed by conversation id
- *  (absent key == 0 unread), so — unlike a paginated list — key membership is
- *  authoritative from the payload: `count > 0` sets the key, `count == 0` DELETES
- *  it (never a phantom `0` that a refetch would omit — the patched map must be
- *  structurally identical to a refetched one, else the two silently diverge).
- *  `latest_by_conversation` mirrors the pointer (non-null set / null delete);
- *  `total` is the absolute workspace rollup. A whole-query that is not loaded is a
- *  no-op — absence is NOT a refetch trigger; the next mount fetches the
- *  authoritative REST snapshot. Idempotent: an unchanged patch writes nothing. */
-export function patchMessageUnreadByConversation(
-  qc: QueryClient,
-  payload: UnreadUpdatedMessagePayload,
-): 'patched' | 'cleared' | 'unchanged' | 'cold' {
-  let outcome: 'patched' | 'cleared' | 'unchanged' | 'cold' = 'cold';
-  const cid = payload.conversation_id;
-  // A workspace id is only ever one kind; patch whichever partition is loaded.
-  for (const kind of ['regular', 'dm'] as const) {
-    const key = messageUnreadByConversationKey(payload.workspace_id, kind);
-    const prev = qc.getQueryData<MessageUnreadByConversationDto>(key);
-    if (!prev) continue; // whole-query not loaded → no-op for this partition
-    const countUnchanged =
-      (prev.by_conversation[cid] ?? 0) === payload.conversation_unread_count;
-    const totalUnchanged = prev.total === payload.workspace_unread_count;
-    const pointerUnchanged = unreadPointerEqual(
-      prev.latest_by_conversation[cid],
-      payload.latest_unread,
-    );
-    if (countUnchanged && totalUnchanged && pointerUnchanged) {
-      if (outcome === 'cold') outcome = 'unchanged';
-      continue;
-    }
-    const by_conversation = { ...prev.by_conversation };
-    if (payload.conversation_unread_count > 0) {
-      by_conversation[cid] = payload.conversation_unread_count;
-    } else {
-      delete by_conversation[cid];
-    }
-    const latest_by_conversation = { ...prev.latest_by_conversation };
-    if (payload.latest_unread) {
-      latest_by_conversation[cid] = payload.latest_unread;
-    } else {
-      delete latest_by_conversation[cid];
-    }
-    qc.setQueryData<MessageUnreadByConversationDto>(key, {
-      by_conversation,
-      latest_by_conversation,
-      total: payload.workspace_unread_count,
-    });
-    outcome = payload.conversation_unread_count > 0 ? 'patched' : 'cleared';
-  }
-  return outcome;
-}
-
-/** S1 viewer-unread ingestor patch (#task:1284, doc §6) — authoritative UPSERT of
- *  one workspace's absolute unread into the global `by_workspace` summary. Same
- *  sparse-map discipline as {@link patchMessageUnreadByConversation}: `> 0` set /
- *  `== 0` delete key; whole-query not loaded → no-op; idempotent. */
-export function patchMessageUnreadSummary(
-  qc: QueryClient,
-  payload: UnreadUpdatedMessagePayload,
-): 'patched' | 'cleared' | 'unchanged' | 'cold' {
-  const prev = qc.getQueryData<MessageUnreadSummaryDto>(messageUnreadSummaryKey);
-  if (!prev) return 'cold';
-  const wsId = payload.workspace_id;
-  const count = payload.workspace_unread_count;
-  if ((prev.by_workspace[wsId] ?? 0) === count) return 'unchanged';
-  const by_workspace = { ...prev.by_workspace };
-  if (count > 0) by_workspace[wsId] = count;
-  else delete by_workspace[wsId];
-  qc.setQueryData<MessageUnreadSummaryDto>(messageUnreadSummaryKey, {
-    by_workspace,
-  });
-  return count > 0 ? 'patched' : 'cleared';
-}
-
-export type ConversationAgentStatusPatch = Pick<ConversationAgentDto, 'agent_id'> &
-  Partial<Pick<ConversationAgentDto, 'status' | 'pid' | 'cli_session_id'>>;
-
-function applySessionAgentPatch(
-  agent: ConversationAgentDto,
-  patch: ConversationAgentStatusPatch,
-): ConversationAgentDto {
-  if (agent.agent_id !== patch.agent_id) return agent;
-  return {
-    ...agent,
-    ...(patch.status !== undefined ? { status: patch.status } : {}),
-    ...(patch.pid !== undefined ? { pid: patch.pid } : {}),
-    ...(patch.cli_session_id !== undefined
-      ? { cli_session_id: patch.cli_session_id }
-      : {}),
-  };
-}
-
-function applyPendingSessionAgentPatches(
-  agents: ConversationAgentDto[],
-  pending: Map<string, ConversationAgentStatusPatch>,
-): ConversationAgentDto[] {
-  if (pending.size === 0) return agents;
-  return agents.map(agent => {
-    const patch = pending.get(agent.agent_id);
-    return patch ? applySessionAgentPatch(agent, patch) : agent;
-  });
-}
-
-// ─── Stage-2 P1c: channel agents (agent_status) ingestor buffer ──────────────
-// `useChannelAgents` used a hook-local `useRef` buffer so a live `agent_status`
-// that arrives WHILE the snapshot GET is in flight isn't lost when the snapshot
-// replaces the cache (the queryFn replays the buffer onto the fresh snapshot).
-// To make the hook a pure reader (#task:1255 P1c) the buffer moves here, keyed
-// per channel, written by the central ingestor and drained by the queryFn. A
-// channel can have MORE THAN ONE `useChannelAgents` reader at once (e.g.
-// ChannelView + an AgentInfoPopover surface), so the buffer is refcounted: it is
-// cleared only when the LAST reader for that channel leaves. A naive
-// clear-on-any-unmount would wipe a still-mounted reader's in-flight snapshot
-// buffer and drop a live `agent_status` patch (Cindy P1c #1 blocker). This
-// mirrors the old per-hook ref, where one hook unmounting never touched another
-// hook's buffer.
-const pendingAgentStatusPatchesByChannel = new Map<
-  string,
-  Map<string, ConversationAgentStatusPatch>
->();
-const agentStatusBufferRefcount = new Map<string, number>();
-
-function getPendingAgentStatusPatches(
-  channelId: string,
-): Map<string, ConversationAgentStatusPatch> {
-  let buffer = pendingAgentStatusPatchesByChannel.get(channelId);
-  if (!buffer) {
-    buffer = new Map();
-    pendingAgentStatusPatchesByChannel.set(channelId, buffer);
-  }
-  return buffer;
-}
-
-/** Drop the buffered `agent_status` patches for a channel outright (not
- *  refcounted) — used on `snapshot_required`, where the authoritative snapshot
- *  refetch supersedes any buffered live patch regardless of how many readers are
- *  mounted. Reader-lifecycle clearing goes through retain/release instead. */
-export function clearPendingAgentStatusPatches(channelId: string): void {
-  pendingAgentStatusPatchesByChannel.delete(channelId);
-}
-
-/** Register a `useChannelAgents(channelId)` reader's interest in the patch
- *  buffer (#task:1255 P1c). */
-export function retainAgentStatusBuffer(channelId: string): void {
-  agentStatusBufferRefcount.set(
-    channelId,
-    (agentStatusBufferRefcount.get(channelId) ?? 0) + 1,
-  );
-}
-
-/** Release a reader's interest; clear the buffer only when the last reader for
- *  the channel leaves so a concurrent reader's in-flight snapshot buffer isn't
- *  wiped (Cindy P1c #1 blocker). */
-export function releaseAgentStatusBuffer(channelId: string): void {
-  const next = (agentStatusBufferRefcount.get(channelId) ?? 0) - 1;
-  if (next <= 0) {
-    agentStatusBufferRefcount.delete(channelId);
-    pendingAgentStatusPatchesByChannel.delete(channelId);
-  } else {
-    agentStatusBufferRefcount.set(channelId, next);
-  }
-}
-
-/** Replay the buffered `agent_status` patches for a channel onto a fresh agents
- *  snapshot (#task:1255 P1c). Called by `useChannelAgents`'s queryFn so a patch
- *  that landed while the GET was in flight isn't clobbered by the snapshot. */
-export function mergePendingAgentStatusPatches(
-  channelId: string,
-  agents: ConversationAgentDto[],
-): ConversationAgentDto[] {
-  return applyPendingSessionAgentPatches(
-    agents,
-    getPendingAgentStatusPatches(channelId),
-  );
-}
-
-/** True when a `useChannelAgents(channelId)` reader is mounted — the exact
- *  agents key has at least one active observer. Stage-2 P1c gate (#task:1255):
- *  the ingestor patches the agents cache only while a reader is alive. */
-export function hasActiveChannelAgentsReader(
-  qc: QueryClient,
-  channelId: string,
-): boolean {
-  const entry = qc
-    .getQueryCache()
-    .find({ queryKey: agentsKey(channelId), exact: true });
-  return (entry?.getObserversCount() ?? 0) > 0;
-}
-
-/** Apply a live `agent_status` patch to the channel agents cache (#task:1255
- *  P1c) — verbatim move of `useChannelAgents.onEvent`'s agent_status branch:
- *  buffer the patch (so a concurrent snapshot refetch replays it), patch the
- *  cached rows in place, and invalidate to refetch if the agent isn't a known
- *  row yet (a freshly-provisioned agent). */
-export function applyAgentStatusToCache(
-  qc: QueryClient,
-  channelId: string,
-  patch: ConversationAgentStatusPatch,
-): void {
-  if (!patch?.agent_id) return;
-  const buffer = getPendingAgentStatusPatches(channelId);
-  const prevPatch = buffer.get(patch.agent_id);
-  buffer.set(patch.agent_id, { ...prevPatch, ...patch });
-
-  const key = agentsKey(channelId);
-  const current = qc.getQueryData<ConversationAgentDto[]>(key);
-  const hasCurrentRow =
-    current?.some(a => a.agent_id === patch.agent_id) ?? false;
-
-  qc.setQueryData<ConversationAgentDto[]>(key, prev =>
-    prev ? prev.map(a => applySessionAgentPatch(a, patch)) : prev,
-  );
-
-  if (!hasCurrentRow) {
-    void qc.invalidateQueries({ queryKey: key });
-  }
-}
-
-/** Reconcile the channel agents cache on `snapshot_required` (#task:1255 P1c) —
- *  verbatim move of `useChannelAgents.onEvent`'s connected+snapshot_required
- *  branch: drop the stale buffer and refetch the authoritative snapshot.
- *
- *  Returns the invalidate Promise so the ingestor can join reconcile settle for
- *  the P2 snapshot-baseline commit (#1255 P2). Strategy is unchanged — the
- *  returned Promise ONLY expresses "this reconcile has settled". */
-export function reconcileChannelAgentsOnSnapshotRequired(
-  qc: QueryClient,
-  channelId: string,
-): Promise<void> {
-  clearPendingAgentStatusPatches(channelId);
-  return qc.invalidateQueries({ queryKey: agentsKey(channelId) });
-}
-
-function makeMessagesCache(
-  page: CachedMessagesPage,
-  pageParam: MessagesPageParam = undefined,
-): MessagesCache {
-  return { pages: [page], pageParams: [pageParam] };
-}
-
-function cacheHasMessage(data: MessagesCache | undefined, messageId: string): boolean {
-  return data?.pages.some(page => page.messages.some(m => m.id === messageId)) ?? false;
-}
-
-/** Whether a reply badge for `rootId` is on a loaded main-stream page — the
- *  root's `reply_counts_by_root` key is already present OR the root message row
- *  is in the window. #1263 (c) gates the authoritative reply-count recovery on
- *  this: an ON-window root → invalidate → refetch the count; an OFF-window root
- *  → no-op, since the badge isn't displayed and the next window fetch re-derives
- *  the authoritative count when the user paginates to it (#task:1255 §4.1). */
-function cacheHasRootOrKey(
-  data: MessagesCache | undefined,
-  rootId: string,
-): boolean {
-  return (
-    data?.pages.some(
-      page =>
-        Object.prototype.hasOwnProperty.call(page.reply_counts_by_root, rootId) ||
-        page.messages.some(m => m.id === rootId),
-    ) ?? false
-  );
-}
-
-/** Live-append is only safe when the last cached page is the tail
- *  of the conversation — otherwise we would lie to the user (the
- *  appended message wouldn't follow the message right above it).
- *  Callers MUST gate on this; the helper itself stays loose so the
- *  optimistic-send path can still bootstrap an empty cache. */
-function lastPageIsTail(data: MessagesCache | undefined): boolean {
-  if (!data || data.pages.length === 0) return true;
-  const last = data.pages[data.pages.length - 1];
-  return last?.has_more_after === false;
-}
-
-/** Shared append core. `bootstrapHead` is the `stream_head_seq` stamped only
- *  when this append bootstraps a page from an empty cache; an append into an
- *  existing tail page carries the prior head forward untouched. A committed
- *  message supplies its own seq as the head; a pending row has none, so its
- *  caller passes a provisional head (§3.3) — that page is provisional anyway
- *  (replaced on server ack / refetch). */
-function appendToCache(
-  data: MessagesCache | undefined,
-  msg: CachedMessage,
-  bootstrapHead: MessageSeq,
-): MessagesCache {
-  if (!data) {
-    return makeMessagesCache({
-      messages: [msg],
-      reply_counts_by_root: {},
-      has_more_before: false,
-      has_more_after: false,
-      stream_head_seq: bootstrapHead,
-    });
-  }
-  if (cacheHasMessage(data, msg.id)) return data;
-
-  if (data.pages.length === 0) {
-    return {
-      ...data,
-      pages: [
-        {
-          messages: [msg],
-          reply_counts_by_root: {},
-          has_more_before: false,
-          has_more_after: false,
-          stream_head_seq: bootstrapHead,
-        },
-      ],
-      pageParams: [undefined as MessagesPageParam],
-    };
-  }
-
-  const lastIndex = data.pages.length - 1;
-  return {
-    ...data,
-    pages: data.pages.map((page, index) =>
-      index === lastIndex
-        ? { ...page, messages: [...page.messages, msg] }
-        : page,
-    ),
-  };
-}
-
-/** Append a committed (server-acked) message. For a bootstrap page `msg.seq` IS
- *  the new stream head; for a live-append into an existing tail the head is
- *  carried forward. This mainline cache's head is never consumed as a thread
- *  mark-read snapshot — that comes only from the thread window response
- *  (`useThreadCluster` → stream_head_seq) — so it cannot swallow a tail. */
-function appendMessageToCache(
-  data: MessagesCache | undefined,
-  msg: MessageDto,
-): MessagesCache {
-  return appendToCache(data, msg, msg.seq);
-}
-
-/** Append an optimistic pending message (no server seq yet). If it bootstraps an
- *  empty cache the page head is provisional (0) — honest "no server head yet",
- *  corrected on the server ack (`replacePendingMessageInCache`) or a refetch. */
-function appendPendingMessage(
-  data: MessagesCache | undefined,
-  msg: PendingMessage,
-): MessagesCache {
-  return appendToCache(data, msg, decodeMessageSeq(0));
-}
-
-function removeMessageFromCache(
-  data: MessagesCache | undefined,
-  messageId: string,
-): MessagesCache | undefined {
-  if (!data) return data;
-  return {
-    ...data,
-    pages: data.pages.map(page => ({
-      ...page,
-      messages: page.messages.filter(m => m.id !== messageId),
-    })),
-  };
-}
-
-function replacePendingMessageInCache(
-  data: MessagesCache | undefined,
-  tempId: string,
-  msg: MessageDto,
-): MessagesCache {
-  const withoutTempAndDuplicate = data
-    ? {
-        ...data,
-        pages: data.pages.map(page => ({
-          ...page,
-          messages: page.messages.filter(m => m.id !== tempId && m.id !== msg.id),
-        })),
-      }
-    : undefined;
-  return appendMessageToCache(withoutTempAndDuplicate, msg);
-}
-
-/** Apply a `task_changed` frame to a SINGLE message row — the one place the
- *  task-chip merge lives so the mainline window, reply-cluster window, and the
- *  thread-pane root row all stay consistent (mirrors {@link applyReactionToMessage},
- *  and the reason the projection-fan-out {@link patchMessageInActiveProjections}
- *  seam can carry it as an opaque `patchRow`). Idempotent: SETS the task fields
- *  absolute from the event, so replay is a no-op. The caller matches
- *  `message.id === task.message_id`. */
-export function applyTaskChangedToMessage(
-  message: MessageDto,
-  task: TaskChangedEvent,
-): MessageDto {
-  return {
-    ...message,
-    task_number: task.task_number,
-    task_status: task.status,
-    task_title: task.title,
-    task_workspace_id: task.workspace_id,
-    task_closed_at: task.closed_at,
-    task_assignee: task.assignee,
-  };
-}
-
-/** Apply a `message_reaction_changed` event to a SINGLE message row.
- *
- *  Count is **absolute-assigned** from the event (`ev.count`, the server's
- *  authoritative post-change aggregate), never derived from `op` +/- — WS
- *  replay / reorder + the viewer's own optimism would otherwise drift
- *  (docs/reactions-design.md §5.2). `viewer_reacted` flips ONLY when the
- *  event's reactor is the current viewer; other reactors bump the count but
- *  leave the viewer flag untouched. `count <= 0` drops the emoji's chip;
- *  the array collapses to `null` when the last reaction goes.
- *
- *  The caller is responsible for matching `message.id === ev.message_id`;
- *  this is the one place the reaction-merge logic lives so the main window,
- *  reply-cluster window, and the thread-pane root row all stay consistent
- *  (#task:1122 review, P1.1 — no second copy of the merge). */
-export function applyReactionToMessage(
-  message: MessageDto,
-  ev: MessageReactionChangedEvent,
-  viewerUserId: string | null,
-): MessageDto {
-  const viewerMatch =
-    ev.reactor_kind === 'user' && ev.reactor_id === viewerUserId;
-  const prev = message.reactions ?? [];
-  const idx = prev.findIndex(r => r.emoji === ev.emoji);
-  let next: ReactionAggregateDto[];
-  if (ev.count <= 0) {
-    next = prev.filter(r => r.emoji !== ev.emoji);
-  } else if (idx === -1) {
-    next = [
-      ...prev,
-      {
-        emoji: ev.emoji,
-        count: ev.count,
-        viewer_reacted: viewerMatch && ev.op === 'add',
-      },
-    ];
-  } else {
-    next = prev.map((r, i) =>
-      i === idx
-        ? {
-            emoji: r.emoji,
-            count: ev.count,
-            viewer_reacted: viewerMatch ? ev.op === 'add' : r.viewer_reacted,
-          }
-        : r,
-    );
-  }
-  return { ...message, reactions: next.length ? next : null };
-}
-
-/** Apply a `message_reaction_changed` event to a message-window cache.
- *
- *  Delegates the per-row merge to {@link applyReactionToMessage}; this just
- *  walks the infinite-query pages and is a no-op when the message isn't in
- *  this window — so the same handler can be fired against both the
- *  main-stream and reply-cluster caches and only the one actually holding
- *  the row changes. */
-// ─── Message-scoped content-patch seam (#task:1270) ──────────────────────────
-// SINGLE entry for "set fields on an existing message row, by id, across every
-// currently-DISPLAYED projection that holds it". Before this, each row-patch
-// event handler (reaction, task_changed) hand-enumerated which projections to
-// write — and a new handler could (and #task:1269 item 1 did) forget one,
-// silently dropping live patches for that projection. The fix is by-construction:
-// handlers no longer enumerate projections; they hand this seam an idempotent
-// per-row `patchRow` and it fans out to all three message projections, each
-// gated on {active observer AND cache actually holds the row} — never
-// bootstrapping an absent window.
-//
-// SSOT for "which displayed projections hold M" = React Query observer count +
-// cache content (NOT the transport interest registry #1260, a bandwidth-scope
-// concern that can't answer "is M in this window"). The per-projection walkers
-// below are deliberately NOT exported: the only way to patch a message row is
-// through this seam (a by-construction fence — you can't call a function that
-// isn't exported), backed by a source-scan fence forbidding row-patch handlers
-// from touching the reader gates / `setQueryData` directly. `applied` = ≥1
-// displayed projection was actually written; it is the SYNCHRONOUS commit signal
-// (reaction/task stay on the #1263 hybrid boolean gate, off the async `message`
-// allSettled path). Fire-and-forget refreshes (reactors popover, task-by-number
-// detail) are NOT this seam's job and never count toward `applied` — they
-// self-heal authoritative-on-open.
-//
-// S1 note: only the resolver (which projections + membership) is React-Query
-// specific; the seam SIGNATURE is the S1 projection-recovery shape, so S1 can
-// swap the resolver internals without touching callers.
-
-/** Map the one row `messageId` inside a paginated message-window cache via
- *  `patchRow`; a no-op (returns false) when the window is absent or doesn't hold
- *  the row. Only committed rows are touched — a pending optimistic row carries a
- *  temp id an event's server id can't match anyway (belt-and-suspenders). */
-function mapMessageRowInWindow(
-  qc: QueryClient,
-  key: readonly unknown[],
-  messageId: string,
-  patchRow: (message: MessageDto) => MessageDto,
-): boolean {
-  const cur = qc.getQueryData<MessagesCache>(key);
-  if (!cacheHasMessage(cur, messageId)) return false;
-  qc.setQueryData<MessagesCache>(key, prev => {
-    if (!prev) return prev;
-    let changed = false;
-    const pages = prev.pages.map(page => {
-      let pageChanged = false;
-      const messages = page.messages.map(message => {
-        if (message.id !== messageId || !isCommittedMessage(message)) {
-          return message;
-        }
-        changed = true;
-        pageChanged = true;
-        return patchRow(message);
-      });
-      return pageChanged ? { ...page, messages } : page;
-    });
-    return changed ? { ...prev, pages } : prev;
-  });
-  return true;
-}
-
-/** Map the single root row of an open thread-pane root cache via `patchRow`;
- *  a no-op unless this open root IS `messageId` and its row is loaded. (Replies
- *  in the pane live in the cluster window, not this single-row root cache.) */
-function mapMessageRowInThreadRoot(
-  qc: QueryClient,
-  channelId: string,
-  rootId: string,
-  messageId: string,
-  patchRow: (message: MessageDto) => MessageDto,
-): boolean {
-  if (rootId !== messageId) return false;
-  const prev = qc.getQueryData<ConversationMessagesDto>(
-    threadRootKey(channelId, rootId),
-  );
-  if (!(prev?.messages.some(m => m.id === messageId) ?? false)) return false;
-  qc.setQueryData<ConversationMessagesDto>(
-    threadRootKey(channelId, rootId),
-    p =>
-      p
-        ? {
-            ...p,
-            messages: p.messages.map(m =>
-              m.id === messageId ? patchRow(m) : m,
-            ),
-          }
-        : p,
-  );
-  return true;
-}
-
-/** THE message-row content-patch seam (#task:1270) — see the block comment
- *  above. Fans an idempotent `patchRow` out to every DISPLAYED projection that
- *  holds `messageId` (mainline window, each open reply cluster, each open
- *  thread-root row), membership-gated so it never bootstraps an absent window.
- *  Returns `applied` = at least one displayed projection was written (the
- *  synchronous content-commit signal for the resume floor). */
-export function patchMessageInActiveProjections(
-  qc: QueryClient,
-  target: { channelId: string; messageId: string; threadRootId: string | null },
-  patchRow: (message: MessageDto) => MessageDto,
-): boolean {
-  // `threadRootId` is a FUTURE RESOLVER HINT, not a correctness gate — the seam
-  // deliberately does not read it. Projection membership is decided by observer
-  // count + cache content (walk every open cluster/thread-root, membership-gate),
-  // never by trusting the event's declared root. It stays on the target so an S1
-  // per-projection recovery can key off it without a signature change; if that
-  // never lands, drop the field rather than start trusting it as input.
-  const { channelId, messageId } = target;
-  let applied = false;
-  // MAINLINE window — gated on a mounted mainline reader; then membership-gated.
-  if (
-    hasActiveMainlineReader(qc, channelId) &&
-    mapMessageRowInWindow(qc, messagesKey(channelId), messageId, patchRow)
-  ) {
-    applied = true;
-  }
-  // REPLY-CLUSTER windows — every OPEN cluster; each no-ops unless its window
-  // holds the row. Enumerate-all + membership-gate (rather than only the row's
-  // own root cluster) mirrors the mainline-append path and is robust to a row
-  // surfacing in more than one loaded window.
-  for (const rootId of openClusterReaderRoots(qc, channelId)) {
-    if (
-      mapMessageRowInWindow(
-        qc,
-        clusterMessagesKey(channelId, rootId),
-        messageId,
-        patchRow,
-      )
-    ) {
-      applied = true;
-    }
-  }
-  // THREAD-PANE root rows — a separate single-row cache; no-op unless this open
-  // root IS the target message. This is the projection reaction covered but
-  // task_changed did not (#task:1269-class gap) — the seam closes it uniformly.
-  for (const rootId of openThreadRootReaderRoots(qc, channelId)) {
-    if (mapMessageRowInThreadRoot(qc, channelId, rootId, messageId, patchRow)) {
-      applied = true;
-    }
-  }
-  return applied;
-}
-
-/** Set/clear the mainline live-gap affordance. Single shared writer: the
- *  ingestor sets `true` on a gapped live message; the reader view clears `false`
- *  on channel switch / reached tail / reset (#task:1255 P1a). */
-export function setMainlineLiveGap(
-  qc: QueryClient,
-  channelId: string,
-  value: boolean,
-): void {
-  qc.setQueryData<boolean>(mainlineLiveGapKey(channelId), value);
-}
-
-/** True when a `useChannelMessages(channelId)` reader is mounted — i.e. the
- *  exact mainline window key has at least one active observer.
- *
- *  Stage-2 P1a gate (#task:1255): the central ingestor took over what used to
- *  be `useChannelMessages.onEvent`, which only ran while that hook was mounted.
- *  To stay behavior-equivalent (P1 = prep, NOT correctness), mainline cache
- *  writes must happen ONLY while a mainline reader is alive — thread/follower
- *  scope INTEREST keeps the WS scope subscribed but must not bootstrap or patch
- *  the mainline window (that would surface a live-frame-stitched, incomplete
- *  window with no REST snapshot behind it). P2 does NOT remove this gate — it
- *  makes `markSatisfied` honor it (a frame with no active reader is not applied
- *  and must not advance the cursor); full decouple is P3
- *  (docs/renderer-event-ingestion-v1.md §3.1/§5).
- *  `messagesKey` is observed only by `useChannelMessages`; primers/jumps use
- *  `setQueryData`/`fetchQuery` and register no standing observer. */
-export function hasActiveMainlineReader(
-  qc: QueryClient,
-  channelId: string,
-): boolean {
-  const entry = qc
-    .getQueryCache()
-    .find({ queryKey: messagesKey(channelId), exact: true });
-  return (entry?.getObserversCount() ?? 0) > 0;
-}
-
-/** Apply a live/replayed mainline `message` frame to the channel main-stream
- *  caches (#task:1255 Stage-2 / #task:1263 (c)). Returns this frame's mainline
- *  SATISFACTION promise, or `null` when it touches no mainline display path (the
- *  ingestor collects the non-null promises and advances the resume floor only
- *  once every effect settled fulfilled — §4.1 / #1261):
- *   - a reply (`thread_root_id != null`), non-system, whose root is on a loaded
- *     page → the root's reply badge is a message-DERIVED projection, so recover it
- *     AUTHORITATIVELY (invalidate → refetch the count). #1263 (c): this replaces
- *     the old optimistic `+1`, which was non-idempotent and double-counted on
- *     replay (the Cindy #1263 falsifier). Cursor-inert: the invalidate INITIATES
- *     recovery; the floor advances only once it COMMITS (#1261 satisfaction).
- *     Returns the invalidate Promise.
- *   - a reply to an OFF-window root, or a system reply → `null` (the badge isn't
- *     displayed; a fresh count arrives when the window paginates to that root).
- *   - a mainline row at tail → append (id-deduped) → content committed → resolved.
- *   - a mainline row while the window is NOT at tail → set the live-gap fact; the
- *     row loads authoritatively when the user reaches the tail, so the affordance
- *     IS the commit → resolved (an already-gapped bump is equally satisfied —
- *     #1261 lets the floor advance rather than pin, since paginate is authoritative). */
-export function applyMainlineMessageToChannelCaches(
-  qc: QueryClient,
-  channelId: string,
-  msg: MessageDto,
-): Promise<void> | null {
-  if (msg.thread_root_id !== null) {
-    if (msg.from_kind === 'system') return null;
-    const rootId = msg.thread_root_id;
-    const cur = qc.getQueryData<MessagesCache>(messagesKey(channelId));
-    if (!cacheHasRootOrKey(cur, rootId)) return null;
-    return qc.invalidateQueries({ queryKey: messagesKey(channelId) });
-  }
-  const cur = qc.getQueryData<MessagesCache>(messagesKey(channelId));
-  if (!lastPageIsTail(cur)) {
-    setMainlineLiveGap(qc, channelId, true);
-    return Promise.resolve();
-  }
-  qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
-    appendMessageToCache(prev, msg),
-  );
-  return Promise.resolve();
-}
-
-/** Reconcile the channel main-stream window on `snapshot_required` (reconnect
- *  epoch mismatch / replay gap) — verbatim move of `useChannelMessages.onEvent`'s
- *  snapshot_required branch: drop back to latest (invalidate) and clear the
- *  live-gap hint. */
-export function reconcileChannelMainlineOnSnapshotRequired(
-  qc: QueryClient,
-  channelId: string,
-): Promise<void> {
-  setMainlineLiveGap(qc, channelId, false);
-  // Returns the invalidate Promise (reconcile-settle signal for the P2 join,
-  // #1255 P2); invalidate strategy unchanged.
-  return qc.invalidateQueries({ queryKey: messagesKey(channelId) });
-}
-
-/** Reactive reader for the mainline live-gap affordance (#task:1255 P1a). The
- *  central ingestor owns the SET; this just subscribes the cache key so the
- *  view re-renders when the hint flips. No queryFn fetch — the value lives only
- *  in cache (default `false`); `staleTime: Infinity` keeps the placeholder
- *  `queryFn` from ever clobbering an ingestor-written `true`. */
-function useMainlineLiveGap(channelId: string | null): boolean {
-  const { data } = useQuery<boolean>({
-    queryKey: mainlineLiveGapKey(channelId ?? 'none'),
-    enabled: !!channelId,
-    queryFn: () => false,
-    initialData: false,
-    staleTime: Infinity,
-  });
-  return data ?? false;
-}
-
-// ─── Stage-2 P1b: thread cluster / root / followers ingestor helpers ─────────
-// Move the cache writes that lived in useThreadCluster / useThreadRoot /
-// useThreadFollowers `onEvent` into the central ingestor. As with the mainline
-// path (P1a), behavior is preserved (P1 = prep): every write is gated on the
-// matching reader being mounted. A channel can hold several open clusters at
-// once, so the ingestor enumerates the OPEN reader roots (those with a live
-// observer) and applies per-root — exactly mirroring "each mounted hook ran its
-// own onEvent". P2 does NOT lift these gates — `markSatisfied` honors them (a
-// frame with no active reader is not applied and must not advance the cursor);
-// full decouple from view mount is P3.
-
-export function setClusterLiveGap(
-  qc: QueryClient,
-  channelId: string,
-  rootId: string,
-  value: boolean,
-): void {
-  qc.setQueryData<boolean>(clusterLiveGapKey(channelId, rootId), value);
-}
-
-function useClusterLiveGap(
-  channelId: string | null,
-  rootId: string | null,
-): boolean {
-  const { data } = useQuery<boolean>({
-    queryKey: clusterLiveGapKey(channelId ?? 'none', rootId ?? 'none'),
-    enabled: !!channelId && !!rootId,
-    queryFn: () => false,
-    initialData: false,
-    staleTime: Infinity,
-  });
-  return data ?? false;
-}
-
-/** Roots of the OPEN clusters in this channel (cluster window has ≥1 observer). */
-export function openClusterReaderRoots(
-  qc: QueryClient,
-  channelId: string,
-): string[] {
-  return qc
-    .getQueryCache()
-    .findAll({ queryKey: ['channels', channelId, 'cluster'] })
-    .filter(q => {
-      const k = q.queryKey as readonly unknown[];
-      // The cluster id space holds two keys per root (`…cluster/<root>/messages`
-      // and `…/fetch-epoch`); only the window query is a reader.
-      return k[4] === 'messages' && q.getObserversCount() > 0;
-    })
-    .map(q => (q.queryKey as readonly unknown[])[3] as string);
-}
-
-/** Roots of the OPEN thread-root rows in this channel (≥1 observer). */
-export function openThreadRootReaderRoots(
-  qc: QueryClient,
-  channelId: string,
-): string[] {
-  return qc
-    .getQueryCache()
-    .findAll({ queryKey: ['channels', channelId, 'thread-root'] })
-    .filter(q => q.getObserversCount() > 0)
-    .map(q => (q.queryKey as readonly unknown[])[3] as string);
-}
-
-/** Roots of the OPEN follower snapshots in this channel (≥1 observer). */
-export function openThreadFollowerReaderRoots(
-  qc: QueryClient,
-  channelId: string,
-): string[] {
-  return qc
-    .getQueryCache()
-    .findAll({ queryKey: ['channels', channelId, 'thread-followers'] })
-    .filter(q => q.getObserversCount() > 0)
-    .map(q => (q.queryKey as readonly unknown[])[3] as string);
-}
-
-/** Roots of reply clusters in this channel that hold a WARM cache but have NO
- *  active reader. `useThreadCluster` is `refetchOnMount: false`, so an inactive,
- *  merely-invalidated cluster would serve stale data on its next open. On
- *  `snapshot_required` these must be REMOVED (cold-start on next mount) rather
- *  than invalidated — the "旧内容已同步移除且不会展示" arm of the `satisfied`
- *  predicate (#task:1255 §6). Active clusters are covered by
- *  {@link openClusterReaderRoots} (invalidate→refetch settles the promise). */
-export function warmInactiveClusterRoots(
-  qc: QueryClient,
-  channelId: string,
-): string[] {
-  return qc
-    .getQueryCache()
-    .findAll({ queryKey: ['channels', channelId, 'cluster'] })
-    .filter(q => {
-      const k = q.queryKey as readonly unknown[];
-      return (
-        k[4] === 'messages' &&
-        q.getObserversCount() === 0 &&
-        q.state.data !== undefined
-      );
-    })
-    .map(q => (q.queryKey as readonly unknown[])[3] as string);
-}
-
-/** Warm-remove one inactive cluster window on `snapshot_required` (#task:1255
- *  §6). `removeQueries` is synchronous — the returned resolved Promise lets it
- *  join the P2 `Promise.allSettled` commit gate as a fulfilled reconcile. Its
- *  live-gap fact is cleared alongside so a stale "new below" hint can't survive
- *  the cold-start. */
-export function removeInactiveClusterCache(
-  qc: QueryClient,
-  channelId: string,
-  rootId: string,
-): Promise<void> {
-  setClusterLiveGap(qc, channelId, rootId, false);
-  qc.removeQueries({
-    queryKey: clusterMessagesKey(channelId, rootId),
-    exact: true,
-  });
-  return Promise.resolve();
-}
-
-/** True when this channel's main-stream window (`messagesKey`) holds a WARM
- *  cache but has NO active reader. `useChannelMessages` runs at the global
- *  default `staleTime: 5_000`, so a remount within that window serves the warm
- *  cache WITHOUT a refetch — meaning an inactive mainline cache can NOT be
- *  treated as absent/vacuous on `snapshot_required`: it would still display
- *  post-commit stale rows. Like {@link warmInactiveClusterRoots} (the cluster
- *  axis), it must be REMOVED (cold-start on next open), not merely invalidated.
- *  `event-ws-transport-v1.md §8` lists both mainline `useChannelMessages` and
- *  `useThreadCluster` in the warm-remove class. Active mainlines are covered by
- *  {@link hasActiveMainlineReader} (invalidate→refetch settles the promise). */
-export function hasWarmInactiveMainline(
-  qc: QueryClient,
-  channelId: string,
-): boolean {
-  const entry = qc
-    .getQueryCache()
-    .find({ queryKey: messagesKey(channelId), exact: true });
-  return (
-    entry !== undefined &&
-    entry.getObserversCount() === 0 &&
-    entry.state.data !== undefined
-  );
-}
-
-/** Warm-remove the inactive main-stream window on `snapshot_required` (#task:1255
- *  §6). `removeQueries` is synchronous — the resolved Promise joins the P2
- *  `Promise.allSettled` commit gate as a fulfilled reconcile. The mainline
- *  live-gap fact is cleared alongside so a stale "new below" hint can't survive
- *  the cold-start. Sibling of {@link removeInactiveClusterCache}. */
-export function removeInactiveMainlineCache(
-  qc: QueryClient,
-  channelId: string,
-): Promise<void> {
-  setMainlineLiveGap(qc, channelId, false);
-  qc.removeQueries({ queryKey: messagesKey(channelId), exact: true });
-  return Promise.resolve();
-}
-
-/** Reconcile one OPEN thread-root row on `snapshot_required` — refetch its
- *  authoritative reply count. This is the covering recovery that releases a
- *  reply-count invalidate that pinned the floor ({@link applyThreadRootReplyBump}
- *  §4.1). Returns the invalidate Promise for the P2 commit join. */
-export function reconcileThreadRootOnSnapshotRequired(
-  qc: QueryClient,
-  channelId: string,
-  rootId: string,
-): Promise<void> {
-  return qc.invalidateQueries({ queryKey: threadRootKey(channelId, rootId) });
-}
-
-/** Apply a `message` frame to one OPEN cluster window — verbatim move of
- *  useThreadCluster.onEvent's message branch (filter to this cluster's rows;
- *  append at tail, else raise the cluster live-gap). Returns this cluster's
- *  SATISFACTION promise, or `null` when the row is not part of this cluster:
- *  a cluster append is an id-deduped CONTENT write (idempotent on replay), and a
- *  live-gap flip is an affordance whose row loads authoritatively when the user
- *  reaches the tail — both are committed synchronously → resolved. An already-
- *  gapped bump is equally satisfied (#1261 lets the floor advance vs pin, since
- *  paginate is authoritative). #task:1255 Stage-2 / #task:1263. */
-export function applyClusterMessageToCaches(
-  qc: QueryClient,
-  channelId: string,
-  rootId: string,
-  msg: MessageDto,
-): Promise<void> | null {
-  if (msg.thread_root_id !== rootId && msg.id !== rootId) return null;
-  const cur = qc.getQueryData<MessagesCache>(
-    clusterMessagesKey(channelId, rootId),
-  );
-  if (!lastPageIsTail(cur)) {
-    setClusterLiveGap(qc, channelId, rootId, true);
-    return Promise.resolve();
-  }
-  qc.setQueryData<MessagesCache>(clusterMessagesKey(channelId, rootId), prev =>
-    appendMessageToCache(prev, msg),
-  );
-  return Promise.resolve();
-}
-
-/** Reconcile one OPEN cluster on `snapshot_required` — clear its live-gap and
- *  invalidate the window so it refetches (mirrors useThreadCluster.onEvent).
- *  Returns the invalidate Promise (reconcile-settle signal for the P2 join,
- *  #1255 P2); strategy unchanged. */
-export function reconcileClusterOnSnapshotRequired(
-  qc: QueryClient,
-  channelId: string,
-  rootId: string,
-): Promise<void> {
-  setClusterLiveGap(qc, channelId, rootId, false);
-  return qc.invalidateQueries({ queryKey: clusterMessagesKey(channelId, rootId) });
-}
-
-/** Recover the authoritative reply count on one OPEN thread-root row (#task:1255
- *  Stage-2 / #task:1263 (c)). Returns this root's SATISFACTION promise, or `null`
- *  when the frame touches no loaded root display path:
- *   - a non-system reply to this loaded root → the count is a message-DERIVED
- *     projection, so recover it AUTHORITATIVELY (invalidate → refetch). #1263 (c)
- *     replaces the old optimistic `+1`, which was non-idempotent and double-counted
- *     on replay. Cursor-inert: the invalidate INITIATES
- *     recovery; the floor advances only once it COMMITS (#1261). Returns the
- *     invalidate Promise.
- *   - a system reply, a row for another root, or a not-loaded root → `null`
- *     (nothing displayed; the count is authoritative on the root row's own fetch). */
-export function applyThreadRootReplyBump(
-  qc: QueryClient,
-  channelId: string,
-  rootId: string,
-  msg: MessageDto,
-): Promise<void> | null {
-  if (msg.thread_root_id !== rootId || msg.from_kind === 'system') return null;
-  const prev = qc.getQueryData<ConversationMessagesDto>(
-    threadRootKey(channelId, rootId),
-  );
-  if (!prev) return null;
-  return qc.invalidateQueries({ queryKey: threadRootKey(channelId, rootId) });
-}
-
-/** S1 (#task:1277 / docs/projection-recovery-s1-v1.md §5): idempotently SET the
- *  authoritative reply count for `rootId` on the OPEN thread-root row cache from
- *  a backend absolute-value patch — the merge that REPLACES
- *  {@link applyThreadRootReplyBump}'s invalidate→refetch on the patch path (the
- *  #1277 amplification kill). Returns `true` when the displayed cache holds the
- *  root (→ `merged`), `false` when its snapshot isn't loaded (→
- *  `cold-absent-vacuous`; the root's own mount-fetch is the authoritative
- *  recovery). Absolute set is replay-idempotent (an equal value is a no-op that
- *  skips the write to avoid needless re-render churn). */
-export function mergeThreadRootReplyCount(
-  qc: QueryClient,
-  channelId: string,
-  rootId: string,
-  replyCount: number,
-): boolean {
-  const prev = qc.getQueryData<ConversationMessagesDto>(
-    threadRootKey(channelId, rootId),
-  );
-  if (!prev) return false;
-  if (prev.reply_counts_by_root[rootId] === replyCount) return true;
-  qc.setQueryData<ConversationMessagesDto>(threadRootKey(channelId, rootId), p =>
-    p
-      ? {
-          ...p,
-          reply_counts_by_root: {
-            ...p.reply_counts_by_root,
-            [rootId]: replyCount,
-          },
-        }
-      : p,
-  );
-  return true;
-}
-
-/** S1 (#task:1277 / §5): idempotently SET the authoritative reply count for
- *  `rootId` on the mainline window (the inline reply badge) from a backend
- *  absolute-value patch — REPLACES the whole-window invalidate of
- *  {@link applyMainlineMessageToChannelCaches}'s reply branch on the patch path.
- *  Returns `true` when the badge is displayed (→ `merged`), `false` when the root
- *  isn't on a loaded page (→ `cold-absent-vacuous`). Writes the value onto every
- *  page already carrying the root's key/row so the reader's page-merge ("later
- *  wins") yields the authoritative count regardless of page order; an equal value
- *  is a no-op (no ref churn). */
-export function mergeMainlineReplyCount(
-  qc: QueryClient,
-  channelId: string,
-  rootId: string,
-  replyCount: number,
-): boolean {
-  const cur = qc.getQueryData<MessagesCache>(messagesKey(channelId));
-  if (!cacheHasRootOrKey(cur, rootId)) return false;
-  qc.setQueryData<MessagesCache>(messagesKey(channelId), prev => {
-    if (!prev) return prev;
-    let changed = false;
-    const pages = prev.pages.map(page => {
-      const holdsRoot =
-        Object.prototype.hasOwnProperty.call(page.reply_counts_by_root, rootId) ||
-        page.messages.some(m => m.id === rootId);
-      if (!holdsRoot || page.reply_counts_by_root[rootId] === replyCount) {
-        return page;
-      }
-      changed = true;
-      return {
-        ...page,
-        reply_counts_by_root: {
-          ...page.reply_counts_by_root,
-          [rootId]: replyCount,
-        },
-      };
-    });
-    return changed ? { ...prev, pages } : prev;
-  });
-  return true;
-}
-
-/** Invalidate one OPEN cluster's follower snapshot when a reply to this root
- *  lands — verbatim move of useThreadFollowers.onEvent's message branch. Returns
- *  the invalidate Promise (a derived-invalidate SATISFACTION signal, cursor-inert),
- *  or `null` when the row is not part of this cluster. #task:1263. */
-export function applyThreadFollowersMessage(
-  qc: QueryClient,
-  channelId: string,
-  rootId: string,
-  msg: MessageDto,
-): Promise<void> | null {
-  if (msg.thread_root_id !== rootId && msg.id !== rootId) return null;
-  return qc.invalidateQueries({ queryKey: threadFollowersKey(channelId, rootId) });
-}
-
-/** Invalidate one OPEN cluster's follower snapshot on `snapshot_required`.
- *  Returns the invalidate Promise (reconcile-settle signal for the P2 join,
- *  #1255 P2); strategy unchanged. */
-export function invalidateThreadFollowers(
-  qc: QueryClient,
-  channelId: string,
-  rootId: string,
-): Promise<void> {
-  return qc.invalidateQueries({ queryKey: threadFollowersKey(channelId, rootId) });
-}
+// ─── Split-module imports (#task:1292) ───────────────────────────────────────
+import {
+  type CachedMessagesPage,
+  type MessagesCache,
+  type MessagesPageParam,
+  messagesKey,
+  clusterMessagesKey,
+  clusterFetchEpochKey,
+  threadRootKey,
+  threadFollowersKey,
+  agentsKey,
+  MESSAGE_PAGE_LIMIT,
+  AROUND_MESSAGE_LIMIT,
+  makeMessagesCache,
+  appendPendingMessage,
+  replacePendingMessageInCache,
+  removeMessageFromCache,
+  lastPageIsTail,
+} from '@/features/channels/message-cache-core';
+import {
+  useMainlineLiveGap,
+  setMainlineLiveGap,
+  useClusterLiveGap,
+  setClusterLiveGap,
+} from '@/features/channels/projection-cache';
+import {
+  mergePendingAgentStatusPatches,
+  retainAgentStatusBuffer,
+  releaseAgentStatusBuffer,
+} from '@/features/channels/agent-status-cache';
+import {
+  formatStartAgentError,
+  formatRemoveAgentError,
+} from '@/features/channels/message-errors';
+
+// ─── Barrel re-exports: preserve the pre-#1292 public import surface ──────────
+export {
+  messagesKey,
+  clusterMessagesKey,
+  clusterFetchEpochKey,
+  threadRootKey,
+  mainlineLiveGapKey,
+  clusterLiveGapKey,
+} from '@/features/channels/message-cache-core';
+export type { MessagesPageParam } from '@/features/channels/message-cache-core';
+export {
+  invalidateMessageUnreadQueries,
+  messageUnreadByConversationKey,
+  messageUnreadSummaryKey,
+  patchMessageUnreadByConversation,
+  patchMessageUnreadSummary,
+  useChannelUnreadCounts,
+  useMessageUnreadCounts,
+  useMessageUnreadSummary,
+  conversationUnreadKey,
+  useConversationUnread,
+} from '@/features/channels/message-unread';
+export {
+  clearPendingAgentStatusPatches,
+  retainAgentStatusBuffer,
+  releaseAgentStatusBuffer,
+  mergePendingAgentStatusPatches,
+  hasActiveChannelAgentsReader,
+  applyAgentStatusToCache,
+  reconcileChannelAgentsOnSnapshotRequired,
+} from '@/features/channels/agent-status-cache';
+export type { ConversationAgentStatusPatch } from '@/features/channels/agent-status-cache';
+export {
+  applyTaskChangedToMessage,
+  applyReactionToMessage,
+  patchMessageInActiveProjections,
+  setMainlineLiveGap,
+  hasActiveMainlineReader,
+  applyMainlineMessageToChannelCaches,
+  reconcileChannelMainlineOnSnapshotRequired,
+  setClusterLiveGap,
+  openClusterReaderRoots,
+  openThreadRootReaderRoots,
+  openThreadFollowerReaderRoots,
+  warmInactiveClusterRoots,
+  removeInactiveClusterCache,
+  hasWarmInactiveMainline,
+  removeInactiveMainlineCache,
+  reconcileThreadRootOnSnapshotRequired,
+  applyClusterMessageToCaches,
+  reconcileClusterOnSnapshotRequired,
+  applyThreadRootReplyBump,
+  mergeThreadRootReplyCount,
+  mergeMainlineReplyCount,
+  applyThreadFollowersMessage,
+  invalidateThreadFollowers,
+} from '@/features/channels/projection-cache';
 
 /** Build a single messages-window page request URL.
  *
@@ -2357,89 +1206,6 @@ export function useAgentRunStates(
 }
 
 /**
- * Notification-backed unread counts per channel. Invalidated by WS
- * viewer-scoped `unread_updated` events — no polling.
- *
- * @deprecated Backed by the notification system (mention_external /
- * agent_start_failed only). Use useMessageUnreadCounts for IM-style
- * message unread badges.
- */
-export function useChannelUnreadCounts(workspaceId: string | null) {
-  const qc = useQueryClient();
-  const queryKey = ['workspaces', workspaceId, 'unread-by-channel'] as const;
-
-  useEffect(() => {
-    if (!workspaceId) return;
-    const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
-      if (frame.type !== 'event') return;
-      if (!isCurrentViewerScope(frame.scope)) return;
-      if (frame.kind === 'unread_updated' && isMessageUnreadUpdatedPayload(frame.payload)) {
-        return;
-      }
-      if (frame.kind !== 'notification' && frame.kind !== 'unread_updated') return;
-      qc.invalidateQueries({ queryKey });
-    });
-    return () => { sub.unsubscribe(); unsub(); };
-  }, [qc, workspaceId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  return useQuery({
-    queryKey,
-    enabled: !!workspaceId,
-    queryFn: async () => {
-      const res = await api<{ counts: Record<string, number> }>(
-        `/api/channels/${workspaceId}/unread-by-conversation`,
-      );
-      return res.counts;
-    },
-  });
-}
-
-/**
- * Per-channel message unread counts for the channels sidebar badge.
- * Backed by the conversation_reads cursor system. Message-variant
- * `unread_updated` is patched in place by the viewer-unread ingestor
- * (#task:1284); only a `snapshot_required` (resume/epoch) refetches — no polling.
- */
-export function useMessageUnreadCounts(
-  workspaceId: string | null,
-  workspaceKind: 'regular' | 'dm' | null = 'regular',
-) {
-  const qc = useQueryClient();
-  const queryKey = messageUnreadByConversationKey(
-    workspaceId ?? 'none',
-    workspaceKind ?? 'regular',
-  );
-
-  useEffect(() => {
-    if (!workspaceId) return;
-    // Interest only (#task:1260) + `snapshot_required` fallback. Message-variant
-    // `unread_updated` is now patched IN PLACE by the central viewer-unread
-    // ingestor (#task:1284), so this hook no longer invalidates on it — that
-    // would defeat the patch's zero-refetch. Only a resume/epoch
-    // `snapshot_required` still needs the authoritative refetch.
-    const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
-      if (frame.type !== 'snapshot_required') return;
-      if (!isCurrentViewerScope(frame.scope)) return;
-      invalidateMessageUnreadQueries(qc);
-    });
-    return () => { sub.unsubscribe(); unsub(); };
-  }, [qc, workspaceId]);
-
-  return useQuery({
-    queryKey,
-    enabled: !!workspaceId && workspaceKind !== null,
-    queryFn: async () => {
-      const res = await api<MessageUnreadByConversationDto>(
-        `/api/workspaces/${workspaceId}/message-unread`,
-      );
-      return res;
-    },
-  });
-}
-
-/**
  * Clear a CONVERSATION's notification badges (read_at-only) — the
  * notification-surface / focused-conversation cleanup path (#task:1231). Renamed
  * from `useMarkChannelRead`: it does NOT advance the read cursor (that is
@@ -2524,94 +1290,5 @@ export function useMarkThreadRead() {
       // sticker/dot still needs this explicit invalidate.
       qc.invalidateQueries({ queryKey: channelThreadsKey(params.channelId) });
     },
-  });
-}
-
-/**
- * Global message unread summary across ALL workspaces.
- * Backed by conversation_reads — returns total unread message count per workspace.
- * Used by the workspace sidebar to show per-workspace unread badges.
- * Message-variant `unread_updated` is patched in place by the viewer-unread
- * ingestor (#task:1284); only a `snapshot_required` refetches — no polling.
- */
-export function useMessageUnreadSummary() {
-  const qc = useQueryClient();
-  const queryKey = messageUnreadSummaryKey;
-
-  useEffect(() => {
-    // Interest only + `snapshot_required` fallback — message-variant
-    // `unread_updated` is patched in place by the viewer-unread ingestor
-    // (#task:1284), no invalidate here (see useMessageUnreadCounts).
-    const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
-      if (frame.type !== 'snapshot_required') return;
-      if (!isCurrentViewerScope(frame.scope)) return;
-      invalidateMessageUnreadQueries(qc);
-    });
-    return () => { sub.unsubscribe(); unsub(); };
-  }, [qc]);
-
-  return useQuery({
-    queryKey,
-    queryFn: () =>
-      api<{ by_workspace: Record<string, number> }>(apiPaths.messageUnreadSummary),
-  });
-}
-
-export const conversationUnreadKey = (conversationId: string) =>
-  ['conversation', conversationId, 'unread'] as const;
-
-/**
- * Per-conversation per-viewer stream-unread read-model (#task:1226) — the
- * SINGLE client source of truth for thread / mainline "N new" + first-unread.
- * The reply chip (`MessageItem`) and the Threads list (`ChannelThreadsPanel`)
- * both read this (keyed by root), so the same server-scored fact never lives in
- * two caches that drift. `threads` is sparse: only roots with unread > 0 appear
- * (absent root ⇒ 0).
- *
- * Unread is server-scored — the client can't optimistically derive it — so this
- * is refreshed ONLY by the viewer-scoped `unread_updated` WS signal, NEVER
- * inferred from message events. Scoped to THIS conversation so an unrelated
- * conversation's unread change doesn't refetch it. Human-attention read path
- * only; it never reads or writes `thread_followers` / delivery / wake.
- */
-export function useConversationUnread(conversationId: string | null) {
-  const qc = useQueryClient();
-  const enabled = !!conversationId;
-  const queryKey = conversationUnreadKey(conversationId ?? 'none');
-
-  useEffect(() => {
-    if (!conversationId) return;
-    const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
-      if (frame.type === 'snapshot_required') {
-        if (!isCurrentViewerScope(frame.scope)) return;
-        void qc.invalidateQueries({ queryKey });
-        return;
-      }
-      if (frame.type !== 'event') return;
-      if (!isCurrentViewerScope(frame.scope)) return;
-      if (frame.kind !== 'unread_updated') return;
-      if (!isMessageUnreadUpdatedPayload(frame.payload)) return;
-      // Per-stream unread for a thread reply carries the parent CHANNEL's
-      // conversation_id (threads share the channel conversation), so this match
-      // covers both mainline and thread unread of this conversation.
-      const payload = frame.payload as { conversation_id?: unknown };
-      if (payload.conversation_id !== conversationId) return;
-      void qc.invalidateQueries({ queryKey });
-    });
-    return () => {
-      sub.unsubscribe();
-      unsub();
-    };
-  }, [qc, conversationId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  return useQuery<ConversationStreamUnreadDto>({
-    queryKey,
-    enabled,
-    queryFn: ({ signal }) =>
-      api<ConversationStreamUnreadDto>(apiPaths.conversationUnread(conversationId!), {
-        signal,
-      }),
   });
 }
