@@ -124,11 +124,9 @@ export {
   clearPlaceMemory,
 };
 import { resolveChannelOpen } from '@/lib/channel-open';
-import {
-  pickDefaultChannel,
-  pickFallbackAfterArchive,
-} from '@/lib/archive-fallback';
+import { pickFallbackAfterArchive } from '@/lib/archive-fallback';
 import { pickWorkspaceToRestore } from '@/lib/workspace-restore';
+import { resolveRestoreNavigation } from '@/lib/restore-navigation';
 export function App(): JSX.Element {
   useAppearance();
   // Hydrate the viewer profile from the main-process auth session so
@@ -505,68 +503,64 @@ function RegisteredAppShell(): JSX.Element {
   // Wait for `channels` to populate so we don't race the empty placeholder.
   useEffect(() => {
     if (!selectedWorkspaceId) return;
-    if (selectedChannelId) return;
-    if (channels.length === 0) return;
-    // A channel just archived from the primary pane that cleared selection
-    // must be excluded from BOTH the remembered and the fallback branch —
-    // the stale active/channels lists can still contain it until the query
+    // The precedence (honored jump > remembered-channel open > default
+    // fallback) lives in the pure `resolveRestoreNavigation`; this effect only
+    // reads the current ref / place-memory / unread state and executes the
+    // returned action. A channel just archived from the primary pane that
+    // cleared selection is excluded from BOTH the remembered and fallback
+    // branch — the stale lists can still contain it until the query
     // invalidation lands, and re-selecting it would undo the clear
     // (#task:1145). Scoped to the same workspace the archive happened in.
     const excludeId =
       recentlyArchivedPrimaryRef.current?.workspaceId === selectedWorkspaceId
         ? recentlyArchivedPrimaryRef.current.channelId
         : null;
-    // If a jump asked for a specific channel, honor it instead of the
-    // remembered/default — Saved → jump shouldn't snap back.
-    if (jumpTarget && channels.some(s => s.id === jumpTarget.channelId)) {
-      nav.go(`/chat/w/${selectedWorkspaceId}/c/${jumpTarget.channelId}`, {
-        replace: true,
-      });
-      return;
-    }
-    const remembered = lastChannelByWorkspace.get(selectedWorkspaceId);
-    const stillExists =
-      remembered &&
-      remembered !== excludeId &&
-      channels.some(s => s.id === remembered);
-    if (stillExists) {
-      // Channel-open precedence (#task:1082): a fresh unread reply in one
-      // of this channel's threads (and newer than the explicit-close
-      // watermark) auto-surfaces that thread; otherwise restore the
-      // remembered secondary-pane layout. On the restore path the unread
-      // pointer is only consulted best-effort — if the selected
-      // workspace's unread data hasn't loaded yet it degrades to layout
-      // memory rather than waiting.
-      const intent = resolveChannelOpen(
-        messageUnreadData?.latest_by_conversation?.[remembered],
-        getCloseWatermark(remembered),
-        getChannelLayout(remembered),
-      );
-      if (intent.kind === 'unread-thread') {
-        handleJumpToMessage({
-          channelId: remembered,
-          messageId: intent.messageId,
-          threadRootId: intent.threadRootId,
-          workspaceId: selectedWorkspaceId,
+    // On the restore path the remembered channel's unread pointer is consulted
+    // best-effort — if the workspace's unread data hasn't loaded yet it
+    // degrades to layout memory rather than waiting (#task:1082).
+    const rememberedChannelId =
+      lastChannelByWorkspace.get(selectedWorkspaceId) ?? null;
+    const action = resolveRestoreNavigation({
+      workspaceId: selectedWorkspaceId,
+      selectedChannelId,
+      channels,
+      activeTopLevel: activeChannels.filter(s => s.parent_conversation_id === null),
+      jumpTargetChannelId: jumpTarget?.channelId ?? null,
+      excludeId,
+      rememberedChannelId,
+      rememberedUnreadPointer: rememberedChannelId
+        ? messageUnreadData?.latest_by_conversation?.[rememberedChannelId]
+        : undefined,
+      rememberedCloseWatermark: rememberedChannelId
+        ? getCloseWatermark(rememberedChannelId)
+        : null,
+      rememberedLayout: rememberedChannelId
+        ? getChannelLayout(rememberedChannelId)
+        : null,
+    });
+    switch (action.kind) {
+      case 'none':
+        return;
+      case 'open-channel':
+        nav.go(`/chat/w/${selectedWorkspaceId}/c/${action.channelId}`, {
+          replace: true,
         });
-      } else {
+        return;
+      case 'open-remembered':
         nav.go(
-          buildChannelLayoutUrl(selectedWorkspaceId, remembered, intent.layout),
+          buildChannelLayoutUrl(selectedWorkspaceId, action.channelId, action.layout),
           { replace: true },
         );
-      }
-      return;
+        return;
+      case 'jump-unread':
+        handleJumpToMessage({
+          channelId: action.channelId,
+          messageId: action.messageId,
+          threadRootId: action.threadRootId,
+          workspaceId: selectedWorkspaceId,
+        });
+        return;
     }
-    // Default: pick the first ACTIVE top-level channel, excluding a
-    // just-archived primary still lingering in the stale list. We
-    // deliberately don't fall through to archivedChannels[0] — opening an
-    // archived channel that lives in the (default-collapsed) Archived group
-    // would be invisible to the user. With no active channels, leave
-    // selection empty and let the chat pane render an empty state.
-    const topLevel = activeChannels.filter(s => s.parent_conversation_id === null);
-    const fallbackId = pickDefaultChannel(topLevel, excludeId);
-    if (!fallbackId) return;
-    nav.go(`/chat/w/${selectedWorkspaceId}/c/${fallbackId}`, { replace: true });
   }, [
     selectedWorkspaceId,
     selectedChannelId,
