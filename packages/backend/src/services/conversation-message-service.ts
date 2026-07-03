@@ -1,43 +1,67 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type {
-  AgentRunTerminalReason,
-  AgentSendStaleResolutionReason,
-  ConversationDto,
   LegacySendMessageTarget,
-  MessageSendTarget,
   MessageDto,
   MessageEventPayload,
   MessageProjections,
-  SendMessageTarget,
 } from '@silverhand/shared';
-import { extractMentions } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
 import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
-import { ccMentionsFromUserMessage } from '../mention-cc.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
-import { ConversationReadRepo } from '../repos/conversation-read-repo.js';
-import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
-import type { NotificationRepo } from '../repos/notification-repo.js';
-import type {
-  ThreadFollowerRepo,
-  ThreadFollowerSource,
-} from '../repos/thread-follower-repo.js';
-import type { UserRepo } from '../repos/user-repo.js';
-import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { AttachmentService } from './attachment-service.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
+import { assertActorConversationMatch } from '../auth/principal.js';
 import {
-  conversationViewerUserIds,
-  publishUnreadUpdatedToConversationViewers,
-} from '../viewer-scope.js';
-import {
-  assertActorConversationMatch,
-  type AgentPrincipal,
-  type UserPrincipal,
-} from '../auth/principal.js';
+  POLICIES,
+  REPLIED,
+  STALE_MESSAGE_LIMIT,
+  ConversationError,
+  TargetError,
+  PolicyError,
+  AttachmentError,
+  ActorError,
+  MessageFreshnessError,
+  MessageFreshnessGuardError,
+  resolveOwnerChannelId,
+  type ConversationMessageServiceOptions,
+  type NormalizedMessageTarget,
+  type ResolveStaleMessageInput,
+  type SendMessageActor,
+  type SendMessageInput,
+  type SendMessagePolicy,
+  type SendMessageResult,
+  type SendMessageTxResult,
+} from './conversation-message/contracts.js';
+import { ThreadFollowManager } from './conversation-message/thread-follow.js';
+import { MessageDeliveryCoordinator } from './conversation-message/delivery.js';
+import type { AgentSendStaleResolutionReason } from '@silverhand/shared';
+
+// Re-export the previously-public taxonomy + types so external importers keep
+// importing from `conversation-message-service.js` (the split is internal).
+export {
+  ConversationError,
+  ActorError,
+  TargetError,
+  PolicyError,
+  AttachmentError,
+  MessageFreshnessError,
+} from './conversation-message/contracts.js';
+export type {
+  ConversationErrorCode,
+  ActorErrorCode,
+  TargetErrorCode,
+  PolicyErrorCode,
+  AttachmentErrorCode,
+  SendMessageActor,
+  SendMessageInput,
+  SendMessageResult,
+  ResolveStaleMessageInput,
+  ConversationMessageServiceOptions,
+  SendAsTaskWriter,
+} from './conversation-message/contracts.js';
 
 /**
  * ConversationMessageService is the single owner of send-message business
@@ -56,354 +80,60 @@ import {
  *   one DB transaction.
  * - Message/unread/thread events and agent run resolution happen after commit
  *   and before any best-effort delivery/start work.
+ *
+ * This class is the send aggregate. Two cohesive concerns are delegated to
+ * collaborators constructed here: `ThreadFollowManager` owns reply-cluster
+ * follow/unfollow + the in-transaction auto-follow effects, and
+ * `MessageDeliveryCoordinator` owns all post-commit best-effort
+ * delivery/notification. The send-transaction target/freshness/attachment
+ * helpers stay here because they are the aggregate's own internals, not a
+ * separate reason to change.
  */
-
-export type SendMessageActor =
-  | UserPrincipal
-  | AgentPrincipal;
-
-export interface SendMessageInput {
-  conversationId: string;
-  actor: SendMessageActor;
-  content: string;
-  attachmentIds?: string[];
-  /** Public send destination. Omitted means the current channel main line. */
-  target?: SendMessageTarget;
-  /** @deprecated Compatibility alias for old agent/runtime callers. New
-   *  callers must pass `target: { kind: 'thread', message_id }`. */
-  legacyReplyToMessageId?: string;
-  /** Daemon's assertion of which per-stream boundary `seenUpToSeq` was
-   *  read against (`'main'` or `thread:<rootMessageId>`). When present it
-   *  is cross-checked against the stream the backend resolves from `target`;
-   *  a mismatch hard-rejects (§6.4). */
-  assertedStreamKey?: string;
-  seenUpToSeq?: number;
-  staleEventId?: string;
-  staleResolutionReason?: AgentSendStaleResolutionReason;
-  freshnessBypass?: boolean;
-  /** Human composer `Send as task`: atomically promote this message into
-   *  an open todo task in the send transaction (one canonical row that is
-   *  both message and task anchor). Only the human send route plumbs this;
-   *  the agent route has its own schema and uses `create_tasks` instead. */
-  asTask?: boolean;
-}
-
-export interface SendMessageResult {
-  message: MessageDto;
-  targetConversationId: string;
-}
-
-type NormalizedMessageTarget =
-  | { kind: 'channel' }
-  | { kind: 'thread'; messageId: string }
-  | { kind: 'legacy'; target: LegacySendMessageTarget };
-
-export interface ResolveStaleMessageInput {
-  conversationId: string;
-  actor: AgentPrincipal;
-  staleEventId: string;
-  resolutionReason: 'obsolete';
-}
-
-interface SendMessagePolicy {
-  requireSenderMembership: boolean;
-  allowTarget: boolean;
-  distributeExcludeSender: boolean;
-  /**
-   * Default auto-start behavior for the actor. The runtime decision in
-   * `sendMessage` overrides this for agent cross-target sends — see the
-   * `shouldAutoStartIdle` derivation. Agents sending to their own
-   * conversation (`target = self`) keep this `false` so in-channel
-   * back-and-forth does not ping-pong every idle member; agents sending
-   * across conversations (`target = parent` or `target = <thread_id>`)
-   * always auto-start the target's idle members so the receiving session
-   * can take over the work.
-   */
-  autoStartIdleRecipients: boolean;
-  ccMentions: boolean;
-  resolveRun: boolean;
-}
-
-const POLICIES: Record<SendMessageActor['kind'], SendMessagePolicy> = {
-  user: {
-    requireSenderMembership: false,
-    allowTarget: false,
-    distributeExcludeSender: false,
-    autoStartIdleRecipients: true,
-    ccMentions: true,
-    resolveRun: false,
-  },
-  agent: {
-    requireSenderMembership: true,
-    allowTarget: true,
-    distributeExcludeSender: true,
-    // Same-target (self) baseline: no auto-start. Cross-target sends are
-    // promoted to auto-start at runtime in `sendMessage`.
-    autoStartIdleRecipients: false,
-    ccMentions: false,
-    resolveRun: true,
-  },
-};
-
-export type ConversationErrorCode =
-  | 'conversation_not_found'
-  | 'conversation_closed'
-  | 'conversation_archived';
-
-export class ConversationError extends Error {
-  constructor(
-    public readonly code: ConversationErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'ConversationError';
-  }
-}
-
-export type ActorErrorCode =
-  | 'agent_not_found'
-  | 'agent_not_member_of_conversation';
-
-export class ActorError extends Error {
-  constructor(
-    public readonly code: ActorErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'ActorError';
-  }
-}
-
-export type TargetErrorCode =
-  | 'no_parent'
-  | 'thread_not_found'
-  | 'thread_not_child'
-  | 'legacy_thread_target_deprecated'
-  | 'target_closed'
-  | 'target_archived'
-  | 'target_conflict'
-  | 'reply_target_not_found'
-  | 'stream_key_mismatch'
-  | 'legacy_thread_read_only';
-
-export class TargetError extends Error {
-  constructor(
-    public readonly code: TargetErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'TargetError';
-  }
-}
-
-export type PolicyErrorCode = 'target_not_allowed_for_user';
-
-export class PolicyError extends Error {
-  constructor(
-    public readonly code: PolicyErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'PolicyError';
-  }
-}
-
-export type AttachmentErrorCode =
-  | 'attachment_owner_unresolved'
-  | 'attachment_outside_channel';
-
-export class AttachmentError extends Error {
-  constructor(
-    public readonly code: AttachmentErrorCode,
-    message: string,
-    public readonly attachmentId?: string,
-  ) {
-    super(message);
-    this.name = 'AttachmentError';
-  }
-}
-
-export class MessageFreshnessError extends Error {
-  readonly code = 'message_stale' as const;
-
-  constructor(
-    public readonly conversationId: string,
-    public readonly seenUpToSeq: number,
-    public readonly currentSeq: number,
-    public readonly newerMessages: MessageDto[],
-    public readonly staleEventId: string,
-    /** Target stream the CAS was scoped to (NULL = main line). The
-     *  `newerMessages` list is drawn from this stream only. */
-    public readonly threadRootId: string | null = null,
-  ) {
-    super(
-      `message is stale: conversation advanced from seq ${seenUpToSeq} ` +
-        `to ${currentSeq} before send`,
-    );
-    this.name = 'MessageFreshnessError';
-  }
-}
-
-class MessageFreshnessGuardError extends Error {
-  constructor(
-    public readonly conversationId: string,
-    public readonly seenUpToSeq: number,
-    public readonly currentSeq: number,
-    public readonly threadRootId: string | null,
-  ) {
-    super(
-      `message is stale: conversation advanced from seq ${seenUpToSeq} ` +
-        `to ${currentSeq} before send`,
-    );
-    this.name = 'MessageFreshnessGuardError';
-  }
-}
-
-export interface ConversationMessageServiceOptions {
-  db: Db;
-  conversations: ConversationRepo;
-  conversationInboxes: ConversationInboxRepo;
-  messages: MessageRepo;
-  threadFollowers: ThreadFollowerRepo;
-  agents: AgentRepo;
-  users: UserRepo;
-  notifications: NotificationRepo;
-  workspaces: WorkspaceRepo;
-  attachmentService: AttachmentService;
-  runtimeHost: AgentRuntimeHost;
-  events: ScopeEventBus;
-  logger: BackendLogger;
-  /** Task-context collaborator for `Send as task`. Narrow role interface
-   *  (not the whole TaskService) so this service depends on the open-task
-   *  creation capability, not the task bounded context's internals. */
-  sendAsTaskWriter: SendAsTaskWriter;
-}
-
-/**
- * The slice of the task context the send path needs for `Send as task`.
- * `createOpenTaskFromMessageInTxn` runs inside the send transaction (DB
- * write, no own transaction); `announceOpenTaskCreated` is the post-commit
- * event publish. TaskService satisfies this structurally.
- */
-export interface SendAsTaskWriter {
-  createOpenTaskFromMessageInTxn(args: {
-    messageId: string;
-    taskWorkspaceId: string;
-  }): { taskNumber: number; title: string };
-  announceOpenTaskCreated(args: {
-    conversation: ConversationDto;
-    messageId: string;
-    taskNumber: number;
-    title: string;
-  }): void;
-}
-
-/**
- * Per-recipient plan for delivering a thread reply (§6 reply-cluster).
- * Current thread messages align with main-line channel delivery: follower
- * agents that are visible in the channel receive a `turn`, excluding the
- * sender. `observe` is reserved for non-waking context paths such as
- * backfill/pull history.
- */
-type ThreadDeliveryKind = 'turn' | 'observe';
-
-interface ThreadDeliveryRecipient {
-  agentId: string;
-  kind: ThreadDeliveryKind;
-}
-
-interface ThreadDeliveryPlan {
-  threadRootId: string;
-  /** Follower agents that are current channel members, EXCLUDING the
-   *  reply sender. Computed inside the send transaction after auto-follow
-   *  upserts so newly-followed agents are included. */
-  recipients: ThreadDeliveryRecipient[];
-}
-
-interface SendMessageTxResult {
-  sourceConversation: NonNullable<ReturnType<ConversationRepo['get']>>;
-  targetConversation: NonNullable<ReturnType<ConversationRepo['get']>>;
-  message: MessageDto;
-  recipients: ReturnType<ConversationRepo['listAgents']>;
-  /** Non-null when this send is a thread reply: drives follower-gated
-   *  delivery instead of the main-line channel-member fan-out. */
-  threadDelivery: ThreadDeliveryPlan | null;
-  skippedFreshnessReason: string | null;
-  /** Non-null when `asTask` promoted this send into an open todo task;
-   *  drives the post-commit `task_changed` announcement. */
-  taskInfo: { taskNumber: number; title: string } | null;
-  /** S1 (#task:1276) authoritative projection deltas computed IN this
-   *  transaction, attached to the post-commit `message` event. Null when the
-   *  send touches no derived projection (a main-line, non-reply message). */
-  projections: MessageProjections | null;
-}
-
-const REPLIED: AgentRunTerminalReason = 'replied';
-const MENTION_EXCERPT_LIMIT = 160;
-const START_FAILURE_ERROR_LIMIT = 240;
-const STALE_MESSAGE_LIMIT = 10;
-
-function excerpt(s: string): string {
-  const compact = s.replace(/\s+/g, ' ').trim();
-  return compact.length <= MENTION_EXCERPT_LIMIT
-    ? compact
-    : `${compact.slice(0, MENTION_EXCERPT_LIMIT - 1)}…`;
-}
-
-function nonEmptyName(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}
-
-function describeStartFailure(err: unknown): string {
-  const message =
-    err instanceof Error
-      ? err.message
-      : typeof err === 'string'
-        ? err
-        : 'unknown error';
-  const compact = message.replace(/\s+/g, ' ').trim() || 'unknown error';
-  return compact.length <= START_FAILURE_ERROR_LIMIT
-    ? compact
-    : `${compact.slice(0, START_FAILURE_ERROR_LIMIT - 1)}…`;
-}
-
 export class ConversationMessageService {
   private readonly db: Db;
   private readonly conversations: ConversationRepo;
-  private readonly conversationReads: ConversationReadRepo;
-  private readonly conversationInboxes: ConversationInboxRepo;
   private readonly messages: MessageRepo;
-  private readonly threadFollowers: ThreadFollowerRepo;
   private readonly agents: AgentRepo;
-  private readonly users: UserRepo;
-  private readonly notifications: NotificationRepo;
-  private readonly workspaces: WorkspaceRepo;
   private readonly attachmentService: AttachmentService;
   private readonly runtimeHost: AgentRuntimeHost;
   private readonly events: ScopeEventBus;
   private readonly logger: BackendLogger;
-  private readonly sendAsTaskWriter: SendAsTaskWriter;
+  private readonly sendAsTaskWriter: ConversationMessageServiceOptions['sendAsTaskWriter'];
+  private readonly threadFollow: ThreadFollowManager;
+  private readonly delivery: MessageDeliveryCoordinator;
 
   constructor(opts: ConversationMessageServiceOptions) {
     this.db = opts.db;
     this.conversations = opts.conversations;
-    // Stateless read-model wrapper over the same db (favorites read-model uses
-    // the same ad-hoc construction) — powers the authoritative unread counts on
-    // the `unread_updated` frame (#task:1283).
-    this.conversationReads = new ConversationReadRepo(opts.db);
-    this.conversationInboxes = opts.conversationInboxes;
     this.messages = opts.messages;
-    this.threadFollowers = opts.threadFollowers;
     this.agents = opts.agents;
-    this.users = opts.users;
-    this.notifications = opts.notifications;
-    this.workspaces = opts.workspaces;
     this.attachmentService = opts.attachmentService;
     this.runtimeHost = opts.runtimeHost;
     this.events = opts.events;
     this.logger = opts.logger;
     this.sendAsTaskWriter = opts.sendAsTaskWriter;
+    this.threadFollow = new ThreadFollowManager({
+      db: opts.db,
+      conversations: opts.conversations,
+      conversationInboxes: opts.conversationInboxes,
+      messages: opts.messages,
+      threadFollowers: opts.threadFollowers,
+      agents: opts.agents,
+      users: opts.users,
+    });
+    this.delivery = new MessageDeliveryCoordinator({
+      db: opts.db,
+      conversations: opts.conversations,
+      conversationInboxes: opts.conversationInboxes,
+      messages: opts.messages,
+      agents: opts.agents,
+      users: opts.users,
+      notifications: opts.notifications,
+      workspaces: opts.workspaces,
+      runtimeHost: opts.runtimeHost,
+      events: opts.events,
+      logger: opts.logger,
+    });
   }
 
   async sendMessage(input: SendMessageInput): Promise<SendMessageResult> {
@@ -498,7 +228,7 @@ export class ConversationMessageService {
         // reply, executed best-effort after commit.
         const threadDelivery =
           threadRootId !== null
-            ? this.applyThreadFollowEffects({
+            ? this.threadFollow.applyThreadFollowEffects({
                 conversationId: targetConversation.id,
                 threadRootId,
                 message,
@@ -648,8 +378,8 @@ export class ConversationMessageService {
         ...(txResult.projections ? { projections: txResult.projections } : {}),
       } satisfies MessageEventPayload,
     });
-    this.publishUnreadUpdated(txResult.targetConversation.id);
-    this.notifyViewerMentionBestEffort(
+    this.delivery.publishUnreadUpdated(txResult.targetConversation.id);
+    this.delivery.notifyViewerMentionBestEffort(
       txResult.targetConversation,
       txResult.message,
     );
@@ -692,7 +422,7 @@ export class ConversationMessageService {
         ? input.actor.agentId
         : null;
     if (policy.ccMentions) {
-      void this.ccMentionsBestEffort(txResult.sourceConversation, txResult.message);
+      void this.delivery.ccMentionsBestEffort(txResult.sourceConversation, txResult.message);
     }
 
     // Thread reply: follower-gated delivery (§6). Recipients were narrowed
@@ -702,7 +432,7 @@ export class ConversationMessageService {
     // active delivery (spawn idle / wake ready); `observe` recipients get a
     // durable inbox row only and must NOT start an idle runtime.
     if (txResult.threadDelivery) {
-      void this.deliverThreadReplyBestEffort(
+      void this.delivery.deliverThreadReplyBestEffort(
         txResult.targetConversation,
         txResult.message,
         txResult.threadDelivery,
@@ -713,7 +443,7 @@ export class ConversationMessageService {
       };
     }
 
-    void this.deliverBestEffort(
+    void this.delivery.deliverBestEffort(
       txResult.targetConversation.id,
       txResult.message.id,
       txResult.recipients,
@@ -738,7 +468,7 @@ export class ConversationMessageService {
       policy.autoStartIdleRecipients
       || (input.actor.kind === 'agent' && targetIsCrossConversation);
     if (shouldAutoStartIdle) {
-      void this.startIdleRecipientsBestEffort(
+      void this.delivery.startIdleRecipientsBestEffort(
         txResult.targetConversation,
         txResult.message,
         txResult.recipients,
@@ -1008,235 +738,23 @@ export class ConversationMessageService {
     return resolved.snapshots;
   }
 
-  /** Publish `unread_updated` to every human member of this conversation. */
-  private publishUnreadUpdated(conversationId: string): void {
-    publishUnreadUpdatedToConversationViewers(
-      this.events,
-      this.conversations,
-      this.conversationReads,
-      conversationId,
-    );
-  }
+  // ── Thread reply-cluster follow surface (§5) ───────────────────────────
+  // Public API preserved verbatim; the logic lives in `ThreadFollowManager`.
 
-  private notifyViewerMentionBestEffort(
-    conversation: NonNullable<ReturnType<ConversationRepo['get']>>,
-    message: MessageDto,
-  ): void {
-    try {
-      const mentionedHandles = new Set(extractMentions(message.content));
-      if (mentionedHandles.size === 0) return;
-
-      for (const viewerUserId of conversationViewerUserIds(
-        this.conversations,
-        conversation.id,
-      )) {
-        if (message.from_kind === 'user' && message.from_user_id === viewerUserId) {
-          continue;
-        }
-        const viewer = this.users.get(viewerUserId);
-        if (!viewer || !mentionedHandles.has(viewer.name)) continue;
-
-        this.notifications.insert({
-          kind: 'mention_self',
-          userId: viewerUserId,
-          workspaceId: conversation.workspace_id,
-          conversationId: conversation.id,
-          messageId: message.id,
-          sourceWorkspaceId: conversation.workspace_id,
-          sourceConversationId: conversation.id,
-          sourceMessageId: message.id,
-          payload: {
-            conversation_title: conversation.title,
-            trigger_name: this.resolveMessageSenderName(message),
-            mentioned_name: viewer.name,
-            mention_excerpt: excerpt(message.content),
-          },
-        });
-        this.events.publishToScope(`viewer:${viewerUserId}`, 'notification', {
-          kind: 'mention_self',
-          conversation_id: conversation.id,
-          message_id: message.id,
-        });
-      }
-    } catch (err) {
-      this.logger.warn(
-        {
-          conversationId: conversation.id,
-          messageId: message.id,
-          err,
-        },
-        'conversation-message-service: viewer mention notification failed',
-      );
-    }
-  }
-
-  private resolveMessageSenderName(message: MessageDto): string | null {
-    if (message.from_kind === 'agent' && message.from_agent_id) {
-      const agent = this.agents.get(message.from_agent_id);
-      return (
-        nonEmptyName(agent?.display_name)
-        ?? nonEmptyName(agent?.name)
-        ?? message.from_agent_id
-      );
-    }
-    if (message.from_kind === 'user' && message.from_user_id) {
-      const user = this.users.get(message.from_user_id);
-      return (
-        nonEmptyName(user?.display_name)
-        ?? nonEmptyName(user?.name)
-        ?? message.from_user_id
-      );
-    }
-    return null;
-  }
-
-  private async deliverBestEffort(
-    conversationId: string,
-    messageId: string,
-    recipients: ReturnType<ConversationRepo['listAgents']>,
-    excludeAgentId: string | null,
-  ): Promise<void> {
-    const selected = recipients.filter(ca => ca.agent_id !== excludeAgentId);
-    const failures: Array<{ agentId: string; err: unknown }> = [];
-    await Promise.all(
-      selected.map(async ca => {
-        try {
-          await this.runtimeHost.deliverMessage(
-            conversationId,
-            ca.agent_id,
-            messageId,
-          );
-        } catch (err) {
-          failures.push({ agentId: ca.agent_id, err });
-        }
-      }),
-    );
-    if (failures.length === 0) return;
-    // Only touch the DB on the failure path — the success path stays read-free.
-    const conversation = this.conversations.get(conversationId);
-    const message = this.messages.getById(messageId);
-    if (conversation && message) {
-      for (const { agentId, err } of failures) {
-        this.notifyAgentStartFailureBestEffort(conversation, message, agentId, err);
-      }
-    }
-    this.logger.warn(
-      { conversationId, messageId, excludeAgentId, failures },
-      'conversation-message-service: delivery failed',
-    );
-  }
-
-  private notifyAgentStartFailureBestEffort(
-    conversation: NonNullable<ReturnType<ConversationRepo['get']>>,
-    message: MessageDto,
-    agentId: string,
-    err: unknown,
-  ): void {
-    if (message.from_kind !== 'user' || !message.from_user_id) return;
-    const agent = this.agents.get(agentId);
-    const error = describeStartFailure(err);
-    try {
-      const notification = this.notifications.insert({
-        kind: 'agent_start_failed',
-        userId: message.from_user_id,
-        agentId,
-        workspaceId: conversation.workspace_id,
-        conversationId: conversation.id,
-        messageId: null,
-        sourceWorkspaceId: conversation.workspace_id,
-        sourceConversationId: conversation.id,
-        sourceMessageId: message.id,
-        payload: {
-          reason: 'runtime_start_failed',
-          error,
-          agent_name:
-            nonEmptyName(agent?.display_name)
-            ?? nonEmptyName(agent?.name)
-            ?? agentId,
-          runtime: agent?.runtime ?? null,
-          host_id: agent?.host_id ?? null,
-        },
-      });
-      this.events.publishToScope(`viewer:${message.from_user_id}`, 'notification', {
-        kind: 'agent_start_failed',
-        id: notification.id,
-        conversation_id: conversation.id,
-        agent_id: agentId,
-      });
-    } catch (notifyErr) {
-      this.logger.warn(
-        {
-          conversationId: conversation.id,
-          messageId: message.id,
-          agentId,
-          err: notifyErr,
-        },
-        'conversation-message-service: agent start failure notification failed',
-      );
-    }
-  }
-
-  /**
-   * Reply-cluster auto-follow + history backfill (§5/§6.1). Runs INSIDE the
-   * send transaction so a follower is never registered without its catch-up
-   * inbox rows (Cindy ruling). Registers as followers of the thread:
-   *   - the reply author (`source='reply'`),
-   *   - the root message author (`source='target_author'`),
-   *   - every @mentioned principal that is a current channel member
-   *     (`source='mention'`).
-   * For each AGENT principal becoming a follower now (newly-inserted row)
-   * that is a current channel member, backfills the thread's prior replies
-   * (plus the root) into its inbox. Returns the follower-gated delivery plan
-   * for the current reply, executed best-effort after commit.
-   */
-  /** Voluntary manual follow of a reply cluster (§5 B / §8). The thread is
-   *  named by a message id — the root or ANY reply in it; we normalize to the
-   *  canonical root (symmetry with the send/read paths). `source='manual'`;
-   *  a repeat follow is idempotent and keeps its original source (no
-   *  re-backfill). A newly-created follow backfills the cluster's full prior
-   *  history into the agent's inbox (§6.1) — `MAX_SAFE_INTEGER` includes every
-   *  existing reply since there is no "current reply" to exclude. Runs in one
-   *  transaction so the follower row and its backfill commit together. */
   followThread(params: {
     conversationId: string;
     rootMessageId: string;
     agentId: string;
   }): { threadRootId: string; changed: boolean } {
-    const threadRootId = this.resolveExistingThreadRoot(
-      params.conversationId,
-      params.rootMessageId,
-    );
-    const changed = this.db.transaction(() =>
-      this.followAgent(
-        params.conversationId,
-        threadRootId,
-        params.agentId,
-        'manual',
-        Number.MAX_SAFE_INTEGER,
-      ),
-    )();
-    return { threadRootId, changed };
+    return this.threadFollow.followThread(params);
   }
 
-  /** Voluntary unfollow (§5). Idempotent; deletes the follower row whatever
-   *  its original source. A later mention/reply re-follows automatically, so
-   *  unfollow never makes `@`-addressing silently fail. Already-delivered
-   *  backfill is NOT retracted — unfollow only stops FUTURE delivery. */
   unfollowThread(params: {
     conversationId: string;
     rootMessageId: string;
     agentId: string;
   }): { threadRootId: string; changed: boolean } {
-    const threadRootId = this.resolveExistingThreadRoot(
-      params.conversationId,
-      params.rootMessageId,
-    );
-    const { removed } = this.threadFollowers.remove(
-      threadRootId,
-      'agent',
-      params.agentId,
-    );
-    return { threadRootId, changed: removed };
+    return this.threadFollow.unfollowThread(params);
   }
 
   threadFollowerState(params: {
@@ -1248,21 +766,7 @@ export class ConversationMessageService {
     viewerFollowing: boolean;
     followerAgentIds: string[];
   } {
-    const threadRootId = this.resolveExistingThreadRoot(
-      params.conversationId,
-      params.rootMessageId,
-    );
-    return {
-      threadRootId,
-      viewerFollowing: this.threadFollowers.isFollower(
-        threadRootId,
-        'human',
-        params.userId,
-      ),
-      followerAgentIds: this.threadFollowers
-        .listFollowerAgentsVisible(threadRootId)
-        .map(f => f.agent_id),
-    };
+    return this.threadFollow.threadFollowerState(params);
   }
 
   followHumanThread(params: {
@@ -1270,18 +774,7 @@ export class ConversationMessageService {
     rootMessageId: string;
     userId: string;
   }): { threadRootId: string; changed: boolean } {
-    const threadRootId = this.resolveExistingThreadRoot(
-      params.conversationId,
-      params.rootMessageId,
-    );
-    const { inserted } = this.threadFollowers.upsert({
-      threadRootId,
-      conversationId: params.conversationId,
-      principalKind: 'human',
-      principalId: params.userId,
-      source: 'manual',
-    });
-    return { threadRootId, changed: inserted };
+    return this.threadFollow.followHumanThread(params);
   }
 
   unfollowHumanThread(params: {
@@ -1289,317 +782,6 @@ export class ConversationMessageService {
     rootMessageId: string;
     userId: string;
   }): { threadRootId: string; changed: boolean } {
-    const threadRootId = this.resolveExistingThreadRoot(
-      params.conversationId,
-      params.rootMessageId,
-    );
-    const { removed } = this.threadFollowers.remove(
-      threadRootId,
-      'human',
-      params.userId,
-    );
-    return { threadRootId, changed: removed };
+    return this.threadFollow.unfollowHumanThread(params);
   }
-
-  private resolveExistingThreadRoot(
-    conversationId: string,
-    rootMessageId: string,
-  ): string {
-    const root = this.messages.getInConversation(
-      conversationId,
-      rootMessageId,
-    );
-    if (!root) {
-      const legacyThread = this.conversations.getThread(rootMessageId);
-      if (legacyThread) {
-        throw new TargetError(
-          'legacy_thread_target_deprecated',
-          `legacy isolated thread ${legacyThread.id} is read-only; use conversation:${legacyThread.id} for read-only history`,
-        );
-      }
-      throw new TargetError(
-        'reply_target_not_found',
-        'thread root message not found in conversation',
-      );
-    }
-    return root.thread_root_id ?? root.id;
-  }
-
-  private applyThreadFollowEffects(params: {
-    conversationId: string;
-    threadRootId: string;
-    message: MessageDto;
-    actor: SendMessageActor;
-  }): ThreadDeliveryPlan {
-    const { conversationId, threadRootId, message } = params;
-    const currentSeq = message.seq;
-
-    // reply author → follower
-    this.followMessageAuthor(conversationId, threadRootId, message, 'reply', currentSeq);
-
-    // root message author → follower. Delivery kind no longer has a
-    // target-author carve-out: the current thread message follows channel
-    // semantics and turns every visible follower agent except the sender.
-    const root = this.messages.getInConversation(conversationId, threadRootId);
-    if (root) {
-      this.followMessageAuthor(
-        conversationId,
-        threadRootId,
-        root,
-        'target_author',
-        currentSeq,
-      );
-    }
-
-    // @mentioned channel members → follower. Mention no longer changes
-    // delivery kind because current thread messages already turn every
-    // visible follower agent; it still creates a follower row for the mention.
-    // Non-members are never followed via mention (§4.1: follow is not a
-    // membership backdoor); their visibility is filtered at delivery anyway.
-    let userMemberIds: Set<string> | null = null;
-    for (const handle of new Set(extractMentions(message.content))) {
-      const agent = this.agents.getByName(handle);
-      if (agent && this.conversations.getAgent(conversationId, agent.id)) {
-        this.followAgent(conversationId, threadRootId, agent.id, 'mention', currentSeq);
-        continue;
-      }
-      const user = this.users.getByName(handle);
-      if (user) {
-        userMemberIds ??= this.conversationUserMemberIds(conversationId);
-        if (userMemberIds.has(user.id)) {
-          this.threadFollowers.upsert({
-            threadRootId,
-            conversationId,
-            principalKind: 'human',
-            principalId: user.id,
-            source: 'mention',
-          });
-        }
-      }
-    }
-
-    // Current-reply delivery plan: follower agents that are channel-visible,
-    // excluding the sender. Current thread messages match channel delivery:
-    // every recipient gets a `turn`; `observe` is only used for historical
-    // backfill and other non-waking context paths.
-    const senderAgentId =
-      message.from_kind === 'agent' ? message.from_agent_id : null;
-    const recipients: ThreadDeliveryRecipient[] = this.threadFollowers
-      .listFollowerAgentsVisible(threadRootId)
-      .filter(ca => ca.agent_id !== senderAgentId)
-      .map(ca => ({
-        agentId: ca.agent_id,
-        kind: 'turn',
-      }));
-    return { threadRootId, recipients };
-  }
-
-  /** Follow the author of `msg` (agent or human). Agent authors get history
-   *  backfill when newly followed; human authors are recorded as followers
-   *  (UI/notification consumer) but have no inbox. Only current channel
-   *  members are recorded (follower ⊆ member, enforced again at delivery).
-   *  Returns the agent id only when a NEW agent follower row was inserted. */
-  private followMessageAuthor(
-    conversationId: string,
-    threadRootId: string,
-    msg: MessageDto,
-    source: ThreadFollowerSource,
-    currentSeq: number,
-  ): string | null {
-    if (msg.from_kind === 'agent' && msg.from_agent_id) {
-      return this.followAgent(
-        conversationId,
-        threadRootId,
-        msg.from_agent_id,
-        source,
-        currentSeq,
-      )
-        ? msg.from_agent_id
-        : null;
-    } else if (msg.from_kind === 'user' && msg.from_user_id) {
-      if (this.conversationUserMemberIds(conversationId).has(msg.from_user_id)) {
-        this.threadFollowers.upsert({
-          threadRootId,
-          conversationId,
-          principalKind: 'human',
-          principalId: msg.from_user_id,
-          source,
-        });
-      }
-    }
-    return null;
-  }
-
-  /** Upsert an agent follower; if it is newly followed AND a current channel
-   *  member, backfill the thread's prior history into its inbox. Non-members
-   *  are skipped (follower ⊆ member). Returns whether a NEW follower row was
-   *  created (false = already following or not a member → no backfill). */
-  private followAgent(
-    conversationId: string,
-    threadRootId: string,
-    agentId: string,
-    source: ThreadFollowerSource,
-    currentSeq: number,
-  ): boolean {
-    if (!this.conversations.getAgent(conversationId, agentId)) return false;
-    const { inserted } = this.threadFollowers.upsert({
-      threadRootId,
-      conversationId,
-      principalKind: 'agent',
-      principalId: agentId,
-      source,
-    });
-    if (inserted) {
-      this.backfillThreadHistory(conversationId, threadRootId, agentId, currentSeq);
-    }
-    return inserted;
-  }
-
-  /** Backfill prior thread context — the root (it anchors the thread) plus
-   *  all replies with `seq < currentSeq` — into a newly-followed agent's
-   *  inbox. Ordered by seq, idempotent on (conversation, agent, message), and
-   *  skips the agent's own messages. Runs in the send transaction; the current
-   *  reply is delivered separately afterwards so it is never double-enqueued
-   *  (§6.1). The catch-up is COMPLETE by design — no cap — so a mid-thread
-   *  follower never lands with a hole in the replies nearest the current one. */
-  private backfillThreadHistory(
-    conversationId: string,
-    threadRootId: string,
-    agentId: string,
-    currentSeq: number,
-  ): void {
-    const root = this.messages.getInConversation(conversationId, threadRootId);
-    if (root && !(root.from_kind === 'agent' && root.from_agent_id === agentId)) {
-      this.conversationInboxes.ensureDelivery(conversationId, agentId, root.id, 'observe');
-    }
-    const replies = this.messages.listStreamBelowSeq(
-      conversationId,
-      threadRootId,
-      currentSeq,
-    );
-    for (const reply of replies) {
-      if (reply.from_kind === 'agent' && reply.from_agent_id === agentId) continue;
-      this.conversationInboxes.ensureDelivery(conversationId, agentId, reply.id, 'observe');
-    }
-  }
-
-  private conversationUserMemberIds(conversationId: string): Set<string> {
-    return new Set(
-      this.conversations.listUserMembers(conversationId).map(u => u.id),
-    );
-  }
-
-  /** Deliver the current thread reply to its follower-gated recipients
-   *  (post-commit, best-effort). `turn` recipients get active delivery
-   *  (spawn idle / wake ready). `observe` recipients get a durable inbox row
-   *  only — they must NOT start an idle runtime, so a normal follower is not
-   *  woken by every thread reply (§6.2). Pushing an observe reply into an
-   *  already-ready runtime's context without a turn needs the `delivery_kind`
-   *  envelope and is 段2. */
-  private async deliverThreadReplyBestEffort(
-    conversation: NonNullable<ReturnType<ConversationRepo['get']>>,
-    message: MessageDto,
-    plan: ThreadDeliveryPlan,
-  ): Promise<void> {
-    const failures: Array<{ agentId: string; err: unknown }> = [];
-    await Promise.all(
-      plan.recipients.map(async r => {
-        try {
-          if (r.kind === 'turn') {
-            await this.runtimeHost.deliverMessage(
-              conversation.id,
-              r.agentId,
-              message.id,
-            );
-          } else {
-            this.conversationInboxes.ensureDelivery(
-              conversation.id,
-              r.agentId,
-              message.id,
-              'observe',
-            );
-          }
-        } catch (err) {
-          failures.push({ agentId: r.agentId, err });
-        }
-      }),
-    );
-    if (failures.length === 0) return;
-    for (const { agentId, err } of failures) {
-      this.notifyAgentStartFailureBestEffort(conversation, message, agentId, err);
-    }
-    this.logger.warn(
-      { conversationId: conversation.id, messageId: message.id, failures },
-      'conversation-message-service: thread reply delivery failed',
-    );
-  }
-
-  private async ccMentionsBestEffort(
-    sourceConversation: NonNullable<ReturnType<ConversationRepo['get']>>,
-    message: MessageDto,
-  ): Promise<void> {
-    const sourceWorkspace = this.workspaces.get(sourceConversation.workspace_id);
-    if (!sourceWorkspace) return;
-    try {
-      await ccMentionsFromUserMessage({
-        message,
-        sourceConversation,
-        sourceWorkspace,
-        db: this.db,
-        agents: this.agents,
-        conversations: this.conversations,
-        messages: this.messages,
-        notifications: this.notifications,
-        runtimeHost: this.runtimeHost,
-        logger: this.logger,
-        events: this.events,
-      });
-    } catch (err) {
-      this.logger.warn(
-        { conversationId: sourceConversation.id, messageId: message.id, err },
-        'conversation-message-service: mention cc failed',
-      );
-    }
-  }
-
-  private async startIdleRecipientsBestEffort(
-    conversation: NonNullable<ReturnType<ConversationRepo['get']>>,
-    message: MessageDto,
-    recipients: ReturnType<ConversationRepo['listAgents']>,
-  ): Promise<void> {
-    await Promise.all(
-      recipients
-        .filter(ca => ca.status !== 'active' && ca.status !== 'starting')
-        .map(async ca => {
-          try {
-            await this.runtimeHost.start(conversation.id, ca.agent_id);
-          } catch (err) {
-            this.notifyAgentStartFailureBestEffort(
-              conversation,
-              message,
-              ca.agent_id,
-              err,
-            );
-            this.logger.warn(
-              { conversationId: conversation.id, agentId: ca.agent_id, err },
-              'conversation-message-service: auto-start on message send failed',
-            );
-          }
-        }),
-    );
-  }
-}
-
-function resolveOwnerChannelId(conversation: {
-  id: string;
-  kind: string;
-  parent_conversation_id: string | null;
-}): string | null {
-  if (conversation.kind === 'channel' || conversation.kind === 'dm_channel') {
-    return conversation.id;
-  }
-  if (conversation.kind === 'thread') {
-    return conversation.parent_conversation_id ?? null;
-  }
-  return null;
 }
