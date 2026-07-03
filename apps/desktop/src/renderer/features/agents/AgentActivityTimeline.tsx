@@ -133,7 +133,13 @@ export function AgentActivityTimeline({
   const items = useMemo(() => coalesceActivity(events), [events]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    // `min-w-0` is load-bearing: as a flex-1 row child its default
+    // `min-width:auto` refuses to shrink below content min-content, so a wide
+    // Activity row (Markdown code block, long tool arg) would push the pane
+    // wider than its column — which clips overflow-hidden, hiding the
+    // right-pinned time with no horizontal scroll (#task:1288). With min-w-0
+    // the chain is width-bounded and `.code-block` scrolls internally instead.
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div
         ref={scrollRef}
         onScroll={onScroll}
