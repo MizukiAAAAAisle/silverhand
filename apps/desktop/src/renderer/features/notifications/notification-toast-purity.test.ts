@@ -55,13 +55,22 @@ describe('notification toast surface — surfaced ≠ eliminated', () => {
 // `read_at` for the focused conversation on focus alone (no cursor advance),
 // silently evicting cursor-unread @me mentions. We fence both ends of that
 // wiring at source level (node test env, no RTL):
-//   - App.tsx must keep EXACTLY ONE `markConversationNotificationsRead.mutate`
-//     call — the active activity-source-open (paired with a cursor→head advance,
-//     self-consistent). A re-introduced focus-drain would make it two.
+//   - the activity-source hook (`features/app-shell/activity-source.ts`, split
+//     out of App.tsx in #task:1291) must keep EXACTLY ONE
+//     `markConversationNotificationsRead.mutate` call — the active
+//     activity-source-open (paired with a cursor→head advance, self-consistent).
+//   - App.tsx must never call the drain DIRECTLY — it only threads the mutation
+//     into the hook. A re-introduced focus-drain in the shell would show up here.
 //   - the focus selector (`secondary-pane.ts`) must never wire that mutation.
 describe('conversation focus surface — must not drain notification read_at', () => {
   const appSource = readFileSync(
     fileURLToPath(new URL('../../App.tsx', import.meta.url)),
+    'utf8',
+  );
+  const activitySourceHook = readFileSync(
+    fileURLToPath(
+      new URL('../app-shell/activity-source.ts', import.meta.url),
+    ),
     'utf8',
   );
   const focusSelectorSource = readFileSync(
@@ -70,12 +79,19 @@ describe('conversation focus surface — must not drain notification read_at', (
   );
   const DRAIN_CALL = 'markConversationNotificationsRead.mutate';
 
-  it('App.tsx invokes the notification drain exactly once — the active source-open', () => {
-    const calls = appSource.match(/markConversationNotificationsRead\.mutate\(/g) ?? [];
+  it('the activity-source hook invokes the notification drain exactly once — the active source-open', () => {
+    const calls =
+      activitySourceHook.match(/markConversationNotificationsRead\.mutate\(/g) ?? [];
     expect(calls).toHaveLength(1);
     // The sole survivor must be the cursor→head-paired activity-source-open, not
     // a focus-keyed call. If this literal changes, re-verify it is still active.
-    expect(appSource).toContain(`${DRAIN_CALL}(activitySourceReadChannelId)`);
+    expect(activitySourceHook).toContain(`${DRAIN_CALL}(activitySourceReadChannelId)`);
+  });
+
+  it('App.tsx never invokes the notification drain directly (no focus-drain)', () => {
+    // The shell threads the mutation into useActivitySource as a prop but must
+    // never call `.mutate` itself — a re-introduced focus-drain lands here.
+    expect(appSource).not.toContain(`${DRAIN_CALL}(`);
   });
 
   it('the focus selector never wires the notification drain', () => {

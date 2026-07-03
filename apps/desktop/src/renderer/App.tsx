@@ -48,15 +48,19 @@ import { AgentView } from '@/features/agents/AgentView';
 import { HumanView } from '@/features/me/HumanView';
 import { SideUnresolvedPlaceholder } from '@/components/layout/SideUnresolvedPlaceholder';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
-import { useConversationById } from '@/features/conversations/useConversationById';
 import { useAgents } from '@/features/agents/hooks';
-import { useAgentSync } from '@/features/agents/agent-sync';
-import { useConversationIngestor } from '@/features/realtime/conversation-ingestor';
-import { useViewerUnreadIngestor } from '@/features/realtime/viewer-unread-ingestor';
-import { usePresenceSync } from '@/features/presence/hooks';
+import {
+  useAppShellGlobalSync,
+  useShutdownProgress,
+  useComposerDraftCleanup,
+  useDockBadge,
+  useLayoutKeyboardShortcuts,
+  useSettingsMenuNav,
+} from '@/features/app-shell/effects';
+import { useSecondaryPaneModel } from '@/features/app-shell/secondary-pane-model';
+import { useActivitySource } from '@/features/app-shell/activity-source';
 import {
   useWorkspaces,
-  useViewerWorkspacesSync,
   useChannelsForWorkspace,
   useArchivedChannelsForWorkspace,
   useWorkspaceSortState,
@@ -83,15 +87,10 @@ import {
   useMessageJumpController,
   type MessageJumpTarget,
 } from '@/features/channels/useMessageJumpController';
-import { cleanupAllComposerDrafts } from '@/lib/composer-draft-cache';
+
 import {
-  selectFocusedConversation,
-  selectSecondaryDescriptor,
   selectSecondaryViewInputs,
-  selectVisibleConversations,
   shouldSecondaryFullscreen,
-  type ConversationPointer,
-  type SecondaryDescriptor,
 } from '@/lib/secondary-pane';
 import {
   buildChannelLayoutUrl,
@@ -205,57 +204,14 @@ function RegisteredAppShell(): JSX.Element {
     toggleChannelSidebar,
   } = useLayoutSettings();
 
-  // Keep the viewer's workspace list live when their cross-workspace
-  // membership/role changes from any source (added/removed/role-changed).
-  // Mounted here — post-auth and independent of workspace selection — so it
-  // also catches "added to your first workspace". See
-  // docs/viewer-visibility-sync-v1.md.
-  useViewerWorkspacesSync();
+  // Global mount-once realtime/visibility sync (5 app-scope WS consumers),
+  // lifted to a hook so the shell stays a thin composition root. See
+  // features/app-shell/effects.ts for the per-hook rationale.
+  useAppShellGlobalSync();
 
-  // Keep human online/offline presence live. Mounted ONCE here (post-auth,
-  // independent of any view) so the global `app`-scope `user_presence`
-  // deltas patch the shared ['presence'] cache regardless of which surface
-  // is reading it. See docs/human-presence-v1.md.
-  usePresenceSync();
-
-  // Keep every AgentDto (name / description / avatar / runtime / model)
-  // live. Mounted ONCE here (post-auth, independent of any view) so the
-  // global `app`-scope `agent_changed` event invalidates the ['agents']
-  // query tree regardless of who made the edit — this client's UI, another
-  // window, or an agent's own `silverhand profile update`. See #task:1178.
-  useAgentSync();
-
-  // Stage-2 central conversation ingestor (#task:1255). Mounted ONCE here
-  // (post-auth, independent of any view) so it is the single `onWsFrame`
-  // consumer for `conversation:<id>`-scope main-stream cache writes — message
-  // append / reply-badge bump / task_changed / reaction / snapshot_required.
-  // Views (`useChannelMessages` …) are pure readers of the caches it fills.
-  // P1a = main stream only; thread cluster/root/followers + agent_activity
-  // migrate in P1b/P1c. See docs/renderer-event-ingestion-v1.md.
-  useConversationIngestor();
-
-  // S1 viewer-unread badge dispatcher (#task:1284). Mounted ONCE here — the sole
-  // `onWsFrame` consumer for message-variant `unread_updated`, patching the
-  // per-workspace `by_conversation` map, the global `by_workspace` summary, and
-  // the favorites badges in place from the enriched absolute payload (zero
-  // refetch). Seed of a viewer-scope ingestor; wires only `unread_updated` this
-  // cut. See docs/projection-recovery-s1-unread-v1.md.
-  useViewerUnreadIngestor();
-
-  // Shutdown overlay — shown when the main process starts its graceful
-  // quit sequence. Steps arrive via IPC; null means not shutting down.
-  const [shutdownStep, setShutdownStep] = useState<string | null>(null);
-  useEffect(() => {
-    return window.agentHub.onShutdownProgress(step => setShutdownStep(step));
-  }, []);
-
-  useEffect(() => {
-    const cleanup = (): void => cleanupAllComposerDrafts();
-    window.addEventListener('beforeunload', cleanup);
-    return () => {
-      window.removeEventListener('beforeunload', cleanup);
-    };
-  }, []);
+  // Shutdown overlay step — null means not shutting down.
+  const shutdownStep = useShutdownProgress();
+  useComposerDraftCleanup();
 
   // Sidebar widths persist across launches and mirror into CSS vars so
   // existing `var(--sidebar-width)` consumers (Titlebar pad, Sidebar
@@ -314,28 +270,11 @@ function RegisteredAppShell(): JSX.Element {
     isPrimePendingFor,
   } = useMessageJumpController();
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (!event.metaKey || event.ctrlKey || event.altKey) return;
-      if (event.code !== 'Backslash') return;
-      event.preventDefault();
-      if (event.shiftKey) {
-        toggleWorkspaceSidebar();
-      } else {
-        toggleChannelSidebar();
-      }
-    };
+  useLayoutKeyboardShortcuts(toggleWorkspaceSidebar, toggleChannelSidebar);
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleChannelSidebar, toggleWorkspaceSidebar]);
-
-  // App menu's "Settings…" item (Cmd+,) — main process focuses the
-  // window and pushes this; renderer just navigates. `nav.toSettings`
-  // is stable across renders (memoized inside `useNav`).
-  useEffect(() => {
-    return window.agentHub.onNavigateSettings(() => nav.toSettings());
-  }, [nav.toSettings]);
+  // App menu's "Settings…" item (Cmd+,) — main process focuses the window and
+  // pushes this; renderer just navigates.
+  useSettingsMenuNav(nav.toSettings);
 
   // Per-workspace "last viewed channel" memory lives as a module
   // singleton above (persisted via localStorage). The recording effect
@@ -477,75 +416,19 @@ function RegisteredAppShell(): JSX.Element {
 
   // ── Dock badge sync ────────────────────────────────────────────────────
   // macOS dock icon shows total unread messages across every workspace.
-  // `useMessageUnreadSummary` already aggregates `conversation_reads`
-  // globally and self-invalidates on viewer-scoped `unread_updated`,
-  // so summing here gives a reactive total without any extra wiring.
-  // Notification unread (mentions / agent_start_failed) is intentionally
-  // excluded — it's a different concept and would double-count mentions
-  // that are also unread messages.
-  const dockBadgeCount = useMemo(() => {
-    if (!messageUnreadSummary) return 0;
-    let total = 0;
-    for (const n of Object.values(messageUnreadSummary.by_workspace)) {
-      total += n;
-    }
-    return total;
-  }, [messageUnreadSummary]);
-  useEffect(() => {
-    void window.agentHub.setBadgeCount(dockBadgeCount);
-  }, [dockBadgeCount]);
+  useDockBadge(messageUnreadSummary);
 
   // ── Secondary pane state ──────────────────────────────────────────────
-  // The right-hand pane is driven by `?side=<id>` (overlay). Selectors in
-  // `lib/secondary-pane` resolve it into:
-  //   - `secondaryDescriptor`  what the right pane renders (resolved
-  //     channel, an unresolved placeholder, or null).
-  //   - `visibleConversations` { primary, secondary } drives message
-  //     read-cursor advancement.
-  //   - `focusedConversation`  single id for toast suppression / IPC
-  //     setActiveConversation / notification badge clearing. A resolved
-  //     secondary wins over primary for focus.
-  //
-  const primaryPointer = useMemo<ConversationPointer | null>(() => {
-    if (!selectedChannelId) return null;
-    const hit = channels.find(c => c.id === selectedChannelId);
-    if (!hit) return null;
-    return { id: hit.id, kind: hit.kind };
-  }, [channels, selectedChannelId]);
-  // PR-2: cross-workspace `?side=<id>` resolution. The ref hook is the
-  // single source of truth for the right pane's identity & workspace —
-  // same-workspace and cross-workspace ids both flow through it. The
-  // fetch is React-Query–cached (30s stale, 5min gc) so navigating
-  // back to a recently-opened side hits the cache without a round-trip.
-  const sideRef = useConversationById(sideConversationId);
-  const secondaryDescriptor = useMemo<SecondaryDescriptor | null>(
-    () => selectSecondaryDescriptor({ sideConversationId }, sideRef),
-    [sideConversationId, sideRef],
-  );
-  // Workspace metadata for a `?side` resolved descriptor flows through
-  // `secondaryViewInputs` below — no separate memo needed. The four
-  // cross-workspace wiring sites (channelKind, archive invalidation,
-  // handleJumpToOriginal parent navigation, sidebar selected-row gate)
-  // each pull what they need straight from the descriptor.
-  const visibleConversations = useMemo(
-    () =>
-      selectVisibleConversations({
-        primary: primaryPointer,
-        secondary: secondaryDescriptor,
-        fullscreen: routeFullscreen,
-      }),
-    [primaryPointer, secondaryDescriptor, routeFullscreen],
-  );
-  const focusedConversation = useMemo(
-    () =>
-      selectFocusedConversation({
-        primary: primaryPointer,
-        primaryWorkspaceId: selectedWorkspaceId,
-        secondary: secondaryDescriptor,
-        fullscreen: routeFullscreen,
-      }),
-    [primaryPointer, selectedWorkspaceId, secondaryDescriptor, routeFullscreen],
-  );
+  // Resolves `?side=<id>` into the descriptor + visible/focused conversation
+  // pointers. See features/app-shell/secondary-pane-model.ts.
+  const { secondaryDescriptor, visibleConversations, focusedConversation } =
+    useSecondaryPaneModel({
+      selectedChannelId,
+      channels,
+      sideConversationId,
+      selectedWorkspaceId,
+      routeFullscreen,
+    });
   // Conversation notification-badge cleanup (mention/agent-failure alerts) —
   // read_at-only, includes anchorless `agent_start_failed`. NOT a read cursor.
   const markConversationNotificationsRead = useMarkConversationNotificationsRead();
@@ -1446,145 +1329,28 @@ function RegisteredAppShell(): JSX.Element {
   );
 
   // ── Activity source pane (#task:1227 point 2) ─────────────────────────
-  // Clicking an Activity row opens the row's REAL conversation/thread source
-  // as a working side panel INSIDE the Activity view (shiki: "side panel 是真实
-  // 可以工作的地方，就跟 thread side panel 一样，并不是 previewer"). It reuses the
-  // live ChannelView / ThreadPanel, so reading happens through the source's own
-  // path — the Attention layer writes NO clearing state of its own. Resolved
-  // independently of the global `?side`/`?thread` nav so opening a source here
-  // never perturbs the channel view's selection. Cross-workspace is automatic:
-  // ChannelView is descriptor-driven and ThreadPanel takes explicit props, and
-  // neither assumes the session-current workspace.
-  // The Activity source pane target. Distinct from `MessageJumpTarget`: a source
-  // opened from a ROW carries a message anchor, but a `#conv` ref opened in-panel
-  // has NONE — so `messageId` is optional here (no `''` sentinel). The optionality
-  // is load-bearing: only an anchored source primes a jump / message-jumps on
-  // "Open in conversation" (Cindy review blocker 3).
-  type ActivitySourceTarget = {
-    workspaceId?: string;
-    channelId: string;
-    threadRootId?: string | null;
-    messageId?: string | null;
-  };
-  const [activitySource, setActivitySource] =
-    useState<ActivitySourceTarget | null>(null);
-  const openActivitySource = useCallback(
-    (target: MessageJumpTarget) => {
-      setActivitySource(target);
-      // Row items always carry a message anchor — prime the around-window so the
-      // source pane scroll-locates the triggering message.
-      if (target.messageId) requestJump(target);
-    },
-    [requestJump],
-  );
-  const closeActivitySource = useCallback(() => setActivitySource(null), []);
-  // Every fresh entry into Activity starts collapsed — opening the view must not
-  // re-open a source pane docked in a prior visit. Clearing on LEAVE (view flips
-  // away from 'activity') means the next entry always finds a null source, so
-  // the side panel only opens on an explicit row click (#task:1269 item 5).
-  useEffect(() => {
-    if (view !== 'activity') setActivitySource(null);
-  }, [view]);
-  // A #conv ref clicked INSIDE the docked source swaps the right pane to that
-  // conversation (the panel is a real working viewer), instead of writing a
-  // hidden global `?side` the Activity branch never renders (Cindy review
-  // blocker 2). No message anchor → no scroll-jump, no mark-read until resolved.
-  const openActivitySourceConversation = useCallback((conversationId: string) => {
-    setActivitySource({ channelId: conversationId });
-  }, []);
-  // A source's identity (workspace, kind, parent title, closed/archived) comes
-  // from the same ref hook the secondary pane uses — for a thread item the id is
-  // the PARENT channel, so this resolves the channel either way.
-  const activitySourceRef = useConversationById(
-    activitySource?.channelId ?? null,
-  );
-  const activitySourceDescriptor = useMemo<SecondaryDescriptor | null>(
-    () =>
-      activitySource
-        ? selectSecondaryDescriptor(
-            { sideConversationId: activitySource.channelId },
-            activitySourceRef,
-          )
-        : null,
-    [activitySource, activitySourceRef],
-  );
-  const activitySourceViewInputs = useMemo(
-    () =>
-      selectSecondaryViewInputs({
-        secondary: activitySourceDescriptor,
-        primaryChannelKind: null,
-        primaryWorkspaceId: activitySource?.workspaceId ?? null,
-      }),
-    [activitySourceDescriptor, activitySource],
-  );
-  // Per-pane jump targets, mirroring the secondary/thread derivations above.
-  const activityChannelJumpTarget = useMemo(
-    () =>
-      activitySource && !activitySource.threadRootId && activitySource.messageId
-        ? {
-            channelId: activitySource.channelId,
-            messageId: activitySource.messageId,
-          }
-        : null,
-    [activitySource],
-  );
-  const activityChannelJumpPrimePending = useMemo(
-    () =>
-      activityChannelJumpTarget !== null &&
-      isPrimePendingFor(
-        activityChannelJumpTarget.channelId,
-        activityChannelJumpTarget.messageId,
-      ),
-    [isPrimePendingFor, activityChannelJumpTarget],
-  );
-  const activityThreadJumpMessageId =
-    activitySource?.threadRootId && activitySource.messageId
-      ? activitySource.messageId
-      : null;
-  const activityThreadJumpPrimePending = useMemo(
-    () =>
-      activityThreadJumpMessageId !== null &&
-      activitySource !== null &&
-      isPrimePendingFor(activitySource.channelId, activityThreadJumpMessageId),
-    [isPrimePendingFor, activityThreadJumpMessageId, activitySource],
-  );
-  // Opening a channel/DM source in the Activity side panel counts as reading
-  // that stream (shiki "打开 side panel 算已读"), exactly like a route pane
-  // becoming visible (the `visiblePrimary`/`visibleSecondary` effects above).
-  // Route it through the SAME source cursor mutation — Activity owns no read
-  // state of its own (Cindy review blocker 1). Keyed by a dedicated guard so it
-  // never races the route panes' refs.
-  //
-  // Gate on a RESOLVED channel/DM (Cindy review blocker 3): `conversationDescriptor`
-  // is non-null exactly for a resolved channel/dm, so a `#conv` pointing at a
-  // legacy thread / not_found / unauthorized id never gets a cursor write before
-  // we know it is a real mainline stream. Thread sources carry `threadRootId`
-  // and are excluded — ThreadPanel advances its own snapshot-gated reply cursor.
-  const activitySourceReadChannelId =
-    activitySource &&
-    !activitySource.threadRootId &&
-    activitySourceViewInputs.conversationDescriptor
-      ? activitySource.channelId
-      : null;
-  const lastActivitySourceReadKey = useRef<string | null>(null);
-  useEffect(() => {
-    if (!activitySourceReadChannelId) {
-      lastActivitySourceReadKey.current = null;
-      return;
-    }
-    if (lastActivitySourceReadKey.current === activitySourceReadChannelId) return;
-    lastActivitySourceReadKey.current = activitySourceReadChannelId;
-    markMessageChannelRead.mutate(activitySourceReadChannelId);
-    // Opening an Activity item's source IS an active eliminate intent, and the
-    // line above advances the cursor to stream head — so clearing this
-    // conversation's notification badges here is self-consistent (read_at and
-    // cursor move together, no divergence). This is the legitimate active
-    // counterpart to the removed passive focus-drain: it also reaches anchorless
-    // `agent_start_failed` that the cursor overlap can't. (`requestJump` no
-    // longer clears badges — it pushes the cursor via stream observe instead.)
-    markConversationNotificationsRead.mutate(activitySourceReadChannelId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activitySourceReadChannelId]);
+  // State + resolution for the working side panel docked inside the Activity
+  // view. See features/app-shell/activity-source.ts. The pane's JSX stays in the
+  // shell below (it wires many shell handlers).
+  const {
+    activitySource,
+    openActivitySource,
+    closeActivitySource,
+    openActivitySourceConversation,
+    activitySourceRef,
+    activitySourceDescriptor,
+    activitySourceViewInputs,
+    activityChannelJumpTarget,
+    activityChannelJumpPrimePending,
+    activityThreadJumpMessageId,
+    activityThreadJumpPrimePending,
+  } = useActivitySource({
+    view,
+    requestJump,
+    isPrimePendingFor,
+    markMessageChannelRead,
+    markConversationNotificationsRead,
+  });
 
   // Parent-message highlight only renders alongside an open thread
   // (channel-typed sides aren't anchored to a parent message). Side

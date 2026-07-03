@@ -81,23 +81,36 @@ function suffixOf(path: string): string {
  *
  * Internal route registrations live in `routes.ts` AND in the extracted
  * per-context route modules under `src/routes/` (the #task:966/#967 context
- * split moved e.g. `agentAddConversationMember` into `routes/membership.ts`).
- * We scan all of them so the guard follows handlers as they move out of the
- * monolith.
+ * split moved e.g. `agentAddConversationMember` into `routes/membership.ts`;
+ * the #task:1293 facet split moved the internal-agent handlers into
+ * `routes/internal-agent/*.ts`). We scan `routes/` recursively so the guard
+ * follows handlers as they move out of the monolith, into sibling files or
+ * nested facet directories.
  *
  * Uses a regex over the source rather than booting the app: cheaper,
  * deterministic, and the test wants to fail when the *source registers*
  * the wrong method, not when a runtime probe happens to 404.
  */
+function collectRouteSources(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = resolve(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...collectRouteSources(full));
+    } else if (entry.name.endsWith('.ts')) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
 function buildRegistrationMap(): Map<string, 'GET' | 'POST'> {
   const here = dirname(fileURLToPath(import.meta.url));
   const srcDir = resolve(here, '../../src');
   const routesDir = resolve(srcDir, 'routes');
   const files = [
     resolve(srcDir, 'routes.ts'),
-    ...readdirSync(routesDir)
-      .filter(f => f.endsWith('.ts'))
-      .map(f => resolve(routesDir, f)),
+    ...collectRouteSources(routesDir),
   ];
   const re = /app\.(get|post)\(\s*internalPaths\.(\w+)\s*\(/g;
   const map = new Map<string, 'GET' | 'POST'>();
