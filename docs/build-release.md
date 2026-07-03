@@ -24,7 +24,8 @@ rm -r icon.iconset
 
 # 2. build (from repo root)
 pnpm package           # universal off, arm64 dmg + zip in apps/desktop/release/
-pnpm package:dir       # faster: skip dmg, just .app for smoke testing
+pnpm package:dir       # faster: skip dmg, just .app for smoke testing; JS stays readable
+pnpm package -- --no-minify  # debug dmg/zip with readable JS bundles
 ```
 
 Artifacts land in `apps/desktop/release/`:
@@ -45,6 +46,16 @@ scripts/package.sh
               ↓
        apps/desktop/release/
 ```
+
+`pnpm package` minifies shipped JavaScript by default; `pnpm package:dir` does
+not, because the raw `.app` path is for smoke/debug iteration. The minified
+release path covers the Electron main/preload/renderer output plus the extra
+shipped CLI and daemon bundles; the same `SILVERHAND_MINIFY=true` switch also
+minifies the standalone server bundle (`pnpm --filter @silverhand/server
+build`). Use `--no-minify` (or `SILVERHAND_MINIFY=false`) when producing a
+debug dmg/zip whose JS should remain readable, or `--minify` to force a
+minified `--dir` build. This is a size/readability knob, not an obfuscation or
+security boundary.
 
 Three things this dance handles that electron-builder alone can't:
 

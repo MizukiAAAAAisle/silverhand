@@ -3,9 +3,9 @@
 #
 # Steps:
 #   1. Build all workspace packages (`pnpm -r build`) — backend/shared need
-#      their tsc output and `packages/cli` produces the esbuild bundle
-#      (`dist/cli.js`) that electron-builder ships outside the asar;
-#      apps/desktop needs `out/` populated.
+#      their tsc output; `packages/cli`, `packages/host`, and
+#      `packages/server` produce esbuild bundles; apps/desktop needs `out/`
+#      populated.
 #   2. Swap better-sqlite3's binding to the Electron ABI (cached, see
 #      _native.sh). electron-builder won't rebuild it for us — we set
 #      npmRebuild: false in the config because builder would otherwise
@@ -13,10 +13,12 @@
 #      would crash at startup.
 #   3. Run electron-builder, which packages the .app bundle and dmg.
 #
-# Usage: ./scripts/package.sh [--dir] [--remote-only --server-url <origin>]
+# Usage: ./scripts/package.sh [--dir] [--remote-only --server-url <origin>] [--minify|--no-minify]
 #   --dir          skip dmg creation, only produce the .app (faster iteration)
 #   --remote-only  package a Desktop build without embedded backend/server code
 #   --server-url   bake a default backend origin into the app
+#   --minify       minify shipped JS bundles (default for release packages)
+#   --no-minify    keep shipped JS readable (default with --dir)
 
 set -euo pipefail
 
@@ -29,6 +31,20 @@ source "$ROOT_DIR/scripts/_native.sh"
 DIR_ONLY=0
 REMOTE_ONLY=0
 SERVER_URL=""
+
+parse_minify_flag() {
+  local raw="$1"
+  case "$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) echo "true" ;;
+    0|false|no|off) echo "false" ;;
+    *)
+      echo "[package] SILVERHAND_MINIFY must be true or false (got: $raw)" >&2
+      exit 2
+      ;;
+  esac
+}
+
+MINIFY="${SILVERHAND_MINIFY:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dir)
@@ -51,13 +67,29 @@ while [[ $# -gt 0 ]]; do
       SERVER_URL="${1#--server-url=}"
       shift
       ;;
+    --minify)
+      MINIFY="true"
+      shift
+      ;;
+    --no-minify)
+      MINIFY="false"
+      shift
+      ;;
     -h|--help)
-      echo "Usage: $0 [--dir] [--remote-only --server-url <origin>]"
+      echo "Usage: $0 [--dir] [--remote-only --server-url <origin>] [--minify|--no-minify]"
       exit 0
       ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
+if [[ -z "$MINIFY" ]]; then
+  if [[ "$DIR_ONLY" == "1" ]]; then
+    MINIFY="false"
+  else
+    MINIFY="true"
+  fi
+fi
+MINIFY="$(parse_minify_flag "$MINIFY")"
 
 if ! command -v pnpm >/dev/null 2>&1; then
   echo "[package] pnpm not found" >&2
@@ -120,6 +152,7 @@ fi
 
 export SILVERHAND_DESKTOP_REMOTE_ONLY="$REMOTE_ONLY"
 export SILVERHAND_DESKTOP_DEFAULT_SERVER_URL="$SERVER_URL"
+export SILVERHAND_MINIFY="$MINIFY"
 
 # electron-builder downloads the per-arch Electron zip from GitHub
 # releases by default; from CN networks that connection EOFs partway
@@ -129,6 +162,7 @@ export SILVERHAND_DESKTOP_DEFAULT_SERVER_URL="$SERVER_URL"
 export ELECTRON_MIRROR="${ELECTRON_MIRROR:-https://npmmirror.com/mirrors/electron/}"
 export ELECTRON_BUILDER_BINARIES_MIRROR="${ELECTRON_BUILDER_BINARIES_MIRROR:-https://npmmirror.com/mirrors/electron-builder-binaries/}"
 echo "[package] ELECTRON_MIRROR=$ELECTRON_MIRROR"
+echo "[package] minify JS bundles: $SILVERHAND_MINIFY"
 if [[ "$REMOTE_ONLY" == "1" ]]; then
   echo "[package] remote-only Desktop enabled"
 fi

@@ -15,7 +15,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc && esbuild src/daemon/entry.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/daemon.js --banner:js='import{createRequire}from\"node:module\";const require=createRequire(import.meta.url);'",
+    "build": "tsc && esbuild src/daemon/entry.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/daemon.js --minify=${SILVERHAND_MINIFY:-false} --banner:js='import{createRequire}from\"node:module\";const require=createRequire(import.meta.url);'",
     "test": "vitest run",
     "test:watch": "vitest"
   },
