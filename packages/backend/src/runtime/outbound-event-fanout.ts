@@ -37,7 +37,6 @@ import { singleConversationViewerUserId } from '../viewer-scope.js';
 import { JsonlActivityLogWriter, type ActivityLogWriter } from './activity-log-writer.js';
 import {
   CLEAR_SESSION_EXIT_TIMEOUT_MS,
-  ClearSessionExitTimeoutError,
   ClearSessionInProgressError,
   DEFAULT_SOFT_DIRECTIVE,
   LegacyThreadRuntimeDisabledError,
@@ -64,6 +63,8 @@ import {
   buildRuntimeStartOptions,
 } from './runtime-start-options.js';
 import type { WorkspaceRegistryBackfiller } from './workspace-registry-backfill.js';
+import { EventPerimeterGuard } from './event-perimeter.js';
+import { ClearSessionWaiterRegistry } from './clear-session-registry.js';
 
 export interface OutboundRuntimeEventFanoutOptions {
   db: Database;
@@ -107,31 +108,6 @@ interface HostFanoutState {
   dispatchConnectionId: string | null;
 }
 
-/**
- * D4.c C7 — one-shot waiter for `clearSession`'s bounded wait on
- * the post-`runtime_clear_session` `runtime_exit` event landing in
- * projection. Cindy `szDHSdeKwtEUlxZb` P1 + `nPqEVJjCLjuNDH-6` final.
- *
- * Lifecycle:
- *
- *   1. Registered BEFORE `transport.sendCommand('runtime_clear_session')`
- *      so a `runtime_exit` that lands during the WS round-trip cannot
- *      be missed (the daemon emits the event from `onChildExit`,
- *      which can race the command response).
- *   2. `notifyExit` is called from `stateForHost.onRuntimeExit`'s
- *      callback wrapper after the cache/SSE has already updated.
- *      Latches `exited = true` and resolves any awaiter.
- *   3. `clearSession` calls `awaitExit(timeoutMs)` after dispatch;
- *      either resolves immediately (latched) or races the timeout.
- *   4. `finally` cleanup (Cindy `nPqEVJjCLjuNDH-6` constraint #2)
- *      removes the entry from `clearSessionWaiters` regardless of
- *      success/timeout/dispatch-fail/DB-tx-fail.
- */
-interface ClearSessionWaiter {
-  exited: boolean;
-  resolveExited: (() => void) | null;
-}
-
 interface PendingDeliveryBatch {
   deliveryIds: number[];
   deliveredUpToSeq: number;
@@ -162,14 +138,10 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   private readonly inboxAck: InboxAckSink;
   private readonly activityLog: ActivityLogWriter | null;
   private readonly ownsActivityLog: boolean;
-  /**
-   * D4.c C7 — keyed by `${conversationId}|${agentId}`. Presence of
-   * an entry means a `clearSession` is awaiting `runtime_exit` for
-   * that pair; concurrent dispatch on the same pair fails fast with
-   * {@link ClearSessionInProgressError}.
-   */
-  private readonly clearSessionWaiters = new Map<string, ClearSessionWaiter>();
-  private readonly clearSessionExitTimeoutMs: number;
+  /** D4.c C5 — validates inbound event ownership before dispatch. */
+  private readonly perimeter: EventPerimeterGuard;
+  /** D4.c C7 — bounded-wait registry for `clearSession`. */
+  private readonly clearSessions: ClearSessionWaiterRegistry;
 
   constructor(private readonly opts: OutboundRuntimeEventFanoutOptions) {
     this.inboxRepo = new ConversationInboxRepo(opts.db);
@@ -187,8 +159,15 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       users: new UserRepo(opts.db),
       conversations: new ConversationRepo(opts.db),
     });
-    this.clearSessionExitTimeoutMs =
-      opts.clearSessionExitTimeoutMs ?? CLEAR_SESSION_EXIT_TIMEOUT_MS;
+    this.clearSessions = new ClearSessionWaiterRegistry(
+      opts.clearSessionExitTimeoutMs ?? CLEAR_SESSION_EXIT_TIMEOUT_MS,
+    );
+    this.perimeter = new EventPerimeterGuard({
+      agents: this.agents,
+      conversations: this.conversations,
+      workspaces: this.workspaces,
+      logger: opts.logger,
+    });
     this.inboxAck = {
       markDelivered: ids => this.inboxRepo.markDelivered([...ids]),
       markUndelivered: (ids, reason) => {
@@ -271,7 +250,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     // glitch); kicking the socket would also break the host's
     // legitimate runtimes. Anti-abuse rate-counting is out of
     // scope (D5 / T2).
-    if (!this.assertEventOwnership(hostId, event)) {
+    if (!this.perimeter.assert(hostId, event)) {
       return;
     }
     const state = this.stateForHost(hostId);
@@ -312,149 +291,6 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     } finally {
       state.dispatchConnectionId = null;
     }
-  }
-
-  /**
-   * D4.c C5 — runtime perimeter check. Returns `true` when the
-   * event is allowed to proceed into per-host state mutation
-   * + dispatch; `false` after logging and dropping a mismatch.
-   *
-   * Daemon-level frames (no `agent_id` — currently `ready` and
-   * `shutting_down`) are owned by the connection's hostId by
-   * construction and always pass. Future daemon-level event
-   * kinds without `agent_id` will be admitted automatically.
-   *
-   * Per-agent frames are runtime claims — daemon X is asserting
-   * "agent A on conversation C just produced event E". The full
-   * runtime pair claim must hold against the server's DB state,
-   * otherwise host X could (a) emit events for someone else's
-   * agent, OR (b) emit events using its own agent but TARGETING
-   * someone else's conversation, leaking projections / DB writes /
-   * SSE into another tenant. Cindy `dgCAVQ3fbHoOFvvN` P1 was the
-   * second arm: a previous version only checked `agent.host_id`
-   * which left the `(agent_id == mine, conversation_id == theirs)`
-   * shape uncovered.
-   *
-   * Validation chain (short-circuited; first failure wins):
-   *
-   *   1. `agents.get(agent_id)` exists.
-   *      → fail: drop, log `outbound_event_unknown_agent`.
-   *   2. `agent.host_id === hostId`.
-   *      → fail: drop, log `outbound_event_perimeter_mismatch`
-   *        with `reason: 'agent_host_mismatch'`.
-   *   3. `conversations.get(conversation_id)` exists.
-   *      → fail: drop, log `outbound_event_perimeter_mismatch`
-   *        with `reason: 'conversation_unknown'`.
-   *   4. `workspaces.get(conversation.workspace_id).workspace_host_id === hostId`.
-   *      → fail: drop, log `outbound_event_perimeter_mismatch`
-   *        with `reason: 'conversation_host_mismatch'`. Workspace
-   *        host equality is the right axis here, not just agent
-   *        host: we already required (2), so `agent.host_id` and
-   *        `workspace.workspace_host_id` must agree on the same
-   *        host or the runtime claim is impossible.
-   *   5. `conversations.getAgent(conversation_id, agent_id)`
-   *      exists (i.e. the (cid, aid) pair is in `conversation_agents`).
-   *      → fail: drop, log `outbound_event_perimeter_mismatch`
-   *        with `reason: 'agent_not_in_conversation'`.
-   *
-   * We keep `outbound_event_unknown_agent` as a separate warn
-   * action because "host references a non-existent agent" is a
-   * different operational signal (likely DB rollback / migration
-   * skew) from "host crossed the runtime boundary".
-   *
-   * We deliberately do NOT close the WS on any of these. A single
-   * bad frame may be a transient bug (race / refactor glitch);
-   * kicking the socket would also break the host's legitimate
-   * runtimes. Anti-abuse rate-counting is out of scope (D5 / T2).
-   */
-  private assertEventOwnership(
-    hostId: string,
-    event: OutboundDaemonToServerEventFrame,
-  ): boolean {
-    if (!('agent_id' in event)) {
-      // Daemon-level frame — owned by the connection's hostId by
-      // construction (no per-agent target), admitted.
-      return true;
-    }
-    const agent = this.agents.get(event.agent_id);
-    if (!agent) {
-      this.opts.logger.warn(
-        {
-          connectionHostId: hostId,
-          agentId: event.agent_id,
-          eventKind: event.kind,
-          action: 'outbound_event_unknown_agent',
-        },
-        'outbound event references unknown agent — dropped (D4.c C5 perimeter)',
-      );
-      return false;
-    }
-    if (agent.host_id !== hostId) {
-      this.opts.logger.warn(
-        {
-          connectionHostId: hostId,
-          agentId: event.agent_id,
-          agentHostId: agent.host_id,
-          eventKind: event.kind,
-          reason: 'agent_host_mismatch',
-          action: 'outbound_event_perimeter_mismatch',
-        },
-        'outbound event from host A references agent owned by host B — dropped (D4.c C5 perimeter)',
-      );
-      return false;
-    }
-    // Per-agent frames carry conversation_id by schema construction
-    // (every OutboundDaemonToServerEventFrame variant with
-    // `agent_id` also has `conversation_id`). A missing field
-    // here would be a schema bug.
-    const conversationId = (event as { conversation_id: string }).conversation_id;
-    const conversation = this.conversations.get(conversationId);
-    if (!conversation) {
-      this.opts.logger.warn(
-        {
-          connectionHostId: hostId,
-          agentId: event.agent_id,
-          conversationId,
-          eventKind: event.kind,
-          reason: 'conversation_unknown',
-          action: 'outbound_event_perimeter_mismatch',
-        },
-        'outbound event references unknown conversation — dropped (D4.c C5 perimeter)',
-      );
-      return false;
-    }
-    const workspace = this.workspaces.get(conversation.workspace_id);
-    if (!workspace || workspace.workspace_host_id !== hostId) {
-      this.opts.logger.warn(
-        {
-          connectionHostId: hostId,
-          agentId: event.agent_id,
-          conversationId,
-          workspaceId: conversation.workspace_id,
-          workspaceHostId: workspace?.workspace_host_id ?? null,
-          eventKind: event.kind,
-          reason: 'conversation_host_mismatch',
-          action: 'outbound_event_perimeter_mismatch',
-        },
-        'outbound event from host A targets a conversation owned by host B — dropped (D4.c C5 perimeter)',
-      );
-      return false;
-    }
-    if (!this.conversations.getAgent(conversationId, event.agent_id)) {
-      this.opts.logger.warn(
-        {
-          connectionHostId: hostId,
-          agentId: event.agent_id,
-          conversationId,
-          eventKind: event.kind,
-          reason: 'agent_not_in_conversation',
-          action: 'outbound_event_perimeter_mismatch',
-        },
-        'outbound event claims an agent that is not a member of the conversation — dropped (D4.c C5 perimeter)',
-      );
-      return false;
-    }
-    return true;
   }
 
   onDisconnect(hostId: string, connectionId: string): void {
@@ -825,8 +661,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     }
 
     // 2. Concurrent guard.
-    const waiterKey = clearSessionKey(conversationId, agentId);
-    if (this.clearSessionWaiters.has(waiterKey)) {
+    if (this.clearSessions.inProgress(conversationId, agentId)) {
       throw new ClearSessionInProgressError(conversationId, agentId);
     }
 
@@ -840,8 +675,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       cacheEntryBefore !== undefined && cacheEntryBefore.phase !== 'exited';
 
     // 4. Register waiter BEFORE dispatch.
-    const waiter: ClearSessionWaiter = { exited: false, resolveExited: null };
-    this.clearSessionWaiters.set(waiterKey, waiter);
+    this.clearSessions.begin(conversationId, agentId);
 
     try {
       // 5. Dispatch over WS. Connection must exist; outbound
@@ -874,15 +708,15 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       //    Rules:
       //      - `result.cleared === true` → MUST wait. The waiter
       //        may already be latched (synchronous runtime_exit
-      //        during dispatch) — `awaitRuntimeExitLanded` resolves
-      //        immediately when `waiter.exited` is true, otherwise
+      //        during dispatch) — `clearSessions.awaitExit` resolves
+      //        immediately when the waiter is already latched, otherwise
       //        races the configured bound. On timeout throw
       //        `ClearSessionExitTimeoutError`; DB UNCHANGED.
       //      - `result.cleared === false` → daemon had no handle
       //        for this pair; skip wait. This is the legitimate
       //        fast path for already-exited / orphan-row clears.
       if (result.cleared) {
-        await this.awaitRuntimeExitLanded(waiter, conversationId, agentId);
+        await this.clearSessions.awaitExit(conversationId, agentId);
       }
 
       // 7. Coordinator-side cleanup.
@@ -954,64 +788,8 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       return { prevCliSessionId, wasRunning };
     } finally {
       // 10. Finally cleanup — Cindy `nPqEVJjCLjuNDH-6` #2.
-      this.clearSessionWaiters.delete(waiterKey);
+      this.clearSessions.end(conversationId, agentId);
     }
-  }
-
-  /**
-   * D4.c C7 — race a one-shot `runtime_exit` waiter against the
-   * configured timeout. Throws {@link ClearSessionExitTimeoutError}
-   * on timeout; resolves on `runtime_exit` projection landed.
-   *
-   * The waiter is held by `clearSession`'s `try/finally`; this
-   * helper does NOT delete the entry — the caller's `finally` does
-   * that for both branches (success & timeout).
-   */
-  private awaitRuntimeExitLanded(
-    waiter: ClearSessionWaiter,
-    conversationId: string,
-    agentId: string,
-  ): Promise<void> {
-    if (waiter.exited) return Promise.resolve();
-    return new Promise<void>((resolve, reject) => {
-      let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-        timer = null;
-        // Detach the resolver so a late `runtime_exit` doesn't try
-        // to call `resolve` on an already-rejected promise.
-        waiter.resolveExited = null;
-        reject(new ClearSessionExitTimeoutError(conversationId, agentId));
-      }, this.clearSessionExitTimeoutMs);
-      waiter.resolveExited = () => {
-        if (timer) {
-          clearTimeout(timer);
-          timer = null;
-        }
-        waiter.resolveExited = null;
-        resolve();
-      };
-    });
-  }
-
-  /**
-   * D4.c C7 — invoked from the `RuntimeEventHandler.onRuntimeExit`
-   * callback wrapper after the cache and SSE have already updated.
-   * Latches `exited = true` on any in-flight waiter for this pair
-   * and resolves the awaiter (if one is parked).
-   *
-   * Idempotent: a second `runtime_exit` for the same pair is a
-   * no-op (the resolver is null after first fire).
-   */
-  private notifyClearSessionWaiter(
-    conversationId: string,
-    agentId: string,
-  ): void {
-    const waiter = this.clearSessionWaiters.get(
-      clearSessionKey(conversationId, agentId),
-    );
-    if (!waiter) return;
-    waiter.exited = true;
-    const resolve = waiter.resolveExited;
-    if (resolve) resolve();
   }
 
   /**
@@ -1597,7 +1375,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         // own respawn-gate logic doesn't care whether a clear-session
         // is awaiting; the waiter does. Order: waiter first so a
         // synchronous resolve cannot race the next microtask.
-        this.notifyClearSessionWaiter(cid, aid);
+        this.clearSessions.notifyExit(cid, aid);
         coordinator.onRuntimeExit(cid, aid, meta);
       },
       onInitTimeout: (cid, aid) =>
