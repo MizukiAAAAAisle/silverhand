@@ -1,5 +1,11 @@
 import type { RuntimeKind } from '@silverhand/shared';
-import { ClaudeIcon, CodexIcon, CursorIcon, GeminiIcon, QoderIcon } from '@/icons/agents';
+import {
+  ClaudeIcon,
+  CodexIcon,
+  CursorIcon,
+  GeminiIcon,
+  QODER_LOGO_DATA_URI,
+} from '@/icons/agents';
 import { cn } from '@/lib/cn';
 
 interface AgentAvatarProps {
@@ -28,26 +34,33 @@ interface AgentAvatarProps {
   alt?: string;
 }
 
-const ICONS: Record<
-  RuntimeKind,
-  (p: { style?: React.CSSProperties }) => JSX.Element
+// Monochrome vector marks, tinted via `currentColor` on a soft badge.
+// Runtimes with a full-bleed raster brand logo (see `BRAND_LOGOS`) are
+// NOT here — they render edge-to-edge and skip the tinted badge.
+const ICONS: Partial<
+  Record<RuntimeKind, (p: { style?: React.CSSProperties }) => JSX.Element>
 > = {
   claude: ClaudeIcon,
   codex: CodexIcon,
   cursor: CursorIcon,
   gemini: GeminiIcon,
-  qoder: QoderIcon,
+};
+
+// Full-color raster brand logos that carry their own background + corner
+// radius — rendered edge-to-edge (like an uploaded avatar), no badge tint.
+const BRAND_LOGOS: Partial<Record<RuntimeKind, string>> = {
+  qoder: QODER_LOGO_DATA_URI,
 };
 
 // Tints picked to match each brand's primary color when one exists.
 // `bg` is the badge fill, `fg` is the icon `currentColor`. Claude's
 // path carries its own `#d97757` fill so `fg` is a no-op there.
-const TINTS: Record<RuntimeKind, { bg: string; fg: string }> = {
+// Only runtimes rendered as tinted vector marks need an entry.
+const TINTS: Partial<Record<RuntimeKind, { bg: string; fg: string }>> = {
   claude: { bg: 'bg-[#fdf3ec]', fg: 'text-[#d97757]' },
   codex: { bg: 'bg-[#1f1f1f]', fg: 'text-white' },
   cursor: { bg: 'bg-[#0f0f0f]', fg: 'text-white' },
   gemini: { bg: 'bg-[#e8f0fe]', fg: 'text-[#1a73e8]' },
-  qoder: { bg: 'bg-[#eef1f6]', fg: 'text-[#4b5a6b]' },
 };
 
 export function AgentAvatar({
@@ -81,6 +94,30 @@ export function AgentAvatar({
     );
   }
 
+  // Full-bleed brand logo (own background + corners) — render edge-to-edge
+  // like an uploaded avatar, no tinted badge.
+  const brandLogo = BRAND_LOGOS[runtime];
+  if (brandLogo) {
+    return (
+      <span
+        className={cn(
+          'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle',
+          className,
+        )}
+        style={{ width: size, height: size }}
+        title={title}
+        aria-hidden
+      >
+        <img
+          src={brandLogo}
+          alt=""
+          className="h-full w-full object-cover"
+          draggable={false}
+        />
+      </span>
+    );
+  }
+
   const Icon = ICONS[runtime];
   const tint = TINTS[runtime];
   const inner = Math.round(size * 0.6);
@@ -88,15 +125,15 @@ export function AgentAvatar({
     <span
       className={cn(
         'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle',
-        tint.bg,
-        tint.fg,
+        tint?.bg,
+        tint?.fg,
         className,
       )}
       style={{ width: size, height: size }}
       title={title}
       aria-hidden
     >
-      <Icon style={{ width: inner, height: inner }} />
+      {Icon ? <Icon style={{ width: inner, height: inner }} /> : null}
     </span>
   );
 }
