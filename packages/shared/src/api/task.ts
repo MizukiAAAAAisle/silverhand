@@ -44,10 +44,8 @@ export const TaskSummaryDtoSchema = z.object({
   channel_id: z.string(),
   channel_name: z.string(),
   /** Reply-cluster root message id for tasks whose body lives inside a
-   *  thread cluster. NULL = main-line task. Distinct from `thread_id`,
-   *  which is a legacy isolated thread conversation id. */
+   *  thread cluster. NULL = main-line task. */
   thread_root_id: z.string().nullable(),
-  thread_id: z.string().nullable(),
   conversation: TaskConversationRefSchema,
   status: TaskStatusSchema,
   title: z.string(),
@@ -283,9 +281,8 @@ export const TaskChangedEventSchema = z.object({
   workspace_id: z.string(),
   channel_id: z.string(),
   /** Reply-cluster root message id for task body / lifecycle events
-   *  inside a thread cluster. NULL = main-line or legacy fossil. */
+   *  inside a thread cluster. NULL = main-line. */
   thread_root_id: z.string().nullable(),
-  thread_id: z.string().nullable(),
   conversation_id: z.string(),
   task_number: z.number(),
   message_id: z.string(),

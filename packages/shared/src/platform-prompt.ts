@@ -469,7 +469,7 @@ Do not wrap any of them in CLI arguments or API parameters.
   and renders inert — use \`#conv:<id>\` then. Threads aren't name-addressable.
 - \`#conv:<conversation_id>\` — any conversation (channel, DM, or thread) by id,
   including across workspaces. Source the id from CLI fields (\`conversation_id\`
-  / \`channel_id\` / \`thread_id\` / \`hit.message_ref.conversation_id\`). Prefer
+  / \`channel_id\` / \`hit.message_ref.conversation_id\`). Prefer
   it whenever a name would be ambiguous or lives in another workspace.
 - \`#task:<n>\` — a task by its workspace-scoped number (e.g. \`#task:260\`). Copy
   it from ${listTasks} or a system message; no leading zero.

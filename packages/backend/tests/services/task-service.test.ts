@@ -197,7 +197,6 @@ describe('TaskService.createTasks', () => {
       });
       expect(summaries.find(x => x.message_id === taskMessageId)).toMatchObject({
         thread_root_id: root.id,
-        thread_id: null,
       });
 
       const createRows = fetchSystemRows(t, 'task_create');

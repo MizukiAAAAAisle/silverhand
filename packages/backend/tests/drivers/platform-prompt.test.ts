@@ -444,7 +444,6 @@ describe('buildPlatformPrompt', () => {
     // earlier drafts even though `silverhand channel create` returns it).
     expect(text).toContain('`conversation_id`');
     expect(text).toContain('`channel_id`');
-    expect(text).toContain('`thread_id`');
     expect(text).toContain('`hit.message_ref.conversation_id`');
 
     // Hard scope boundary: chat text only. Without this an agent will

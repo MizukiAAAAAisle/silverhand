@@ -581,7 +581,6 @@ describe('canonical channel/thread routes', () => {
     expect(listed.saved).toHaveLength(1);
     expect(listed.saved[0].message.id).toBe(msg.message.id);
     expect(listed.saved[0]).toMatchObject({
-      thread_id: null,
       message: { thread_root_id: null },
     });
 
@@ -621,7 +620,6 @@ describe('canonical channel/thread routes', () => {
     expect(listed.saved).toHaveLength(1);
     expect(listed.saved[0]).toMatchObject({
       channel_id: channelId,
-      thread_id: null,
       message: {
         id: reply.message.id,
         thread_root_id: root.message.id,

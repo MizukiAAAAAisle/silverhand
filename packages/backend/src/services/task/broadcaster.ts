@@ -208,7 +208,6 @@ export class TaskBroadcaster {
       workspace_id: workspaceId,
       channel_id: channelId,
       thread_root_id: threadRootId,
-      thread_id: null,
       conversation_id: conversationId,
       task_number: args.taskNumber,
       message_id: args.messageId,

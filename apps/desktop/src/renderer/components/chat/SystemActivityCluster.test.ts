@@ -49,7 +49,6 @@ function seededTask(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
     workspace_name: 'silverhand',
     channel_id: 'chan-1',
     channel_name: 'general',
-    thread_id: null,
     thread_root_id: null,
     conversation: { id: 'chan-1', title: 'general' },
     status: 'todo',

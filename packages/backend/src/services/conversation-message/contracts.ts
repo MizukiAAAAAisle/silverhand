@@ -89,8 +89,8 @@ export interface SendMessagePolicy {
    * `shouldAutoStartIdle` derivation. Agents sending to their own
    * conversation (`target = self`) keep this `false` so in-channel
    * back-and-forth does not ping-pong every idle member; agents sending
-   * across conversations (`target = parent` or `target = <thread_id>`)
-   * always auto-start the target's idle members so the receiving session
+   * across conversations (`target = thread:<message_id>`) always
+   * auto-start the target's idle members so the receiving session
    * can take over the work.
    */
   autoStartIdleRecipients: boolean;
