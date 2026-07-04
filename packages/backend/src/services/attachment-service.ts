@@ -8,8 +8,10 @@ import type {
   StorageKind,
 } from '@silverhand/shared';
 import {
+  attachmentLabelKind,
   isGenericMimeHint,
   mimeFromFilename,
+  parseAttachmentLabel,
 } from '@silverhand/shared';
 import {
   AttachmentRepo,
@@ -202,14 +204,19 @@ export class AttachmentService {
   }
 
   /** Resolve attachment refs (id + optional compose-time label) → snapshots,
-   *  validating that all belong to the destination channel. The sender's label
-   *  is stamped onto the snapshot (the label is a per-message-reference identity,
-   *  not a property of the stored row). Returns either the snapshots or the
-   *  first id that violated channel membership. */
+   *  validating that all belong to the destination channel AND that a declared
+   *  label kind (`Image`/`File`) matches the row's real content type — the
+   *  label is agent-visible, so a `{pdf, "Image #1"}` claim is a trust-boundary
+   *  lie, not a renderer concern. The sender's label is stamped onto the
+   *  snapshot (a per-message-reference identity, not a property of the stored
+   *  row). Returns the snapshots, or the first id that violated a rule with a
+   *  discriminated reason. */
   resolveSnapshotsForChannel(
     refs: AttachmentRefInput[],
     channelId: string,
-  ): { ok: true; snapshots: AttachmentSnapshot[] } | { ok: false; offendingId: string } {
+  ):
+    | { ok: true; snapshots: AttachmentSnapshot[] }
+    | { ok: false; offendingId: string; reason: 'outside_channel' | 'label_kind_mismatch' } {
     if (refs.length === 0) return { ok: true, snapshots: [] };
     const rows = this.attachments.listByIds(refs.map(r => r.id));
     const found = new Map(rows.map(r => [r.id, r] as const));
@@ -217,7 +224,15 @@ export class AttachmentService {
     for (const ref of refs) {
       const row = found.get(ref.id);
       if (!row || row.channel_id !== channelId) {
-        return { ok: false, offendingId: ref.id };
+        return { ok: false, offendingId: ref.id, reason: 'outside_channel' };
+      }
+      if (ref.label !== undefined) {
+        // ref.label is wire-validated to the canonical form, so parse is
+        // non-null; reject when the declared kind contradicts the real type.
+        const parsed = parseAttachmentLabel(ref.label);
+        if (!parsed || parsed.kind !== attachmentLabelKind(row.content_type)) {
+          return { ok: false, offendingId: ref.id, reason: 'label_kind_mismatch' };
+        }
       }
       const snapshot = rowToSnapshot(row);
       snapshots.push(

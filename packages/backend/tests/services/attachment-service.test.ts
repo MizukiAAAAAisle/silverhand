@@ -313,7 +313,48 @@ describe('AttachmentService.resolveSnapshotsForChannel', () => {
         [{ id: owned.id }, { id: foreign.id }],
         channel.id,
       );
-      expect(result).toEqual({ ok: false, offendingId: foreign.id });
+      expect(result).toEqual({
+        ok: false,
+        offendingId: foreign.id,
+        reason: 'outside_channel',
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('rejects a label whose kind contradicts the real content type', async () => {
+    const { service, channel, cleanup } = bootstrap();
+    try {
+      const pdf = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'doc.pdf',
+        contentType: 'application/pdf',
+        buffer: Buffer.from('%PDF'),
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      const png = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'pic.png',
+        contentType: 'image/png',
+        buffer: Buffer.from('x'),
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+
+      // PDF claiming to be an image is a trust-boundary lie → rejected.
+      expect(
+        service.resolveSnapshotsForChannel([{ id: pdf.id, label: 'Image #1' }], channel.id),
+      ).toEqual({ ok: false, offendingId: pdf.id, reason: 'label_kind_mismatch' });
+
+      // A matching kind passes and stamps the label onto the snapshot.
+      const ok = service.resolveSnapshotsForChannel(
+        [{ id: png.id, label: 'Image #1' }],
+        channel.id,
+      );
+      expect(ok.ok).toBe(true);
+      if (ok.ok) expect(ok.snapshots[0]?.label).toBe('Image #1');
     } finally {
       cleanup();
     }

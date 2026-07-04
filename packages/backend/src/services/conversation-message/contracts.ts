@@ -180,7 +180,9 @@ export class PolicyError extends Error {
   }
 }
 
-export type AttachmentErrorCode = 'attachment_outside_channel';
+export type AttachmentErrorCode =
+  | 'attachment_outside_channel'
+  | 'attachment_label_kind_mismatch';
 
 export class AttachmentError extends Error {
   constructor(

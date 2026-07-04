@@ -671,8 +671,12 @@ export class ConversationMessageService {
     );
     if (!resolved.ok) {
       throw new AttachmentError(
-        'attachment_outside_channel',
-        'attachment does not belong to this channel',
+        resolved.reason === 'label_kind_mismatch'
+          ? 'attachment_label_kind_mismatch'
+          : 'attachment_outside_channel',
+        resolved.reason === 'label_kind_mismatch'
+          ? 'attachment label kind does not match its content type'
+          : 'attachment does not belong to this channel',
         resolved.offendingId,
       );
     }
