@@ -147,7 +147,7 @@ export type UpdateProfileInput = z.infer<typeof UpdateProfileInputSchema>;
  * backend whenever an agent's stored `AgentDto` changes through ANY write
  * path: human `PATCH /api/agents/:id`, human avatar upload/delete, or the
  * agent's own `silverhand profile update` (display_name / description /
- * avatar — and also runtime / model / fast_mode). Clients invalidate the
+ * avatar). Clients invalidate the
  * `['agents']` query prefix (covering the list, the `['agents', id]`
  * detail, and the avatar object-url, which re-fetches on its own because
  * the refetched DTO carries a bumped `avatar_url` `?v=` cache-buster).
