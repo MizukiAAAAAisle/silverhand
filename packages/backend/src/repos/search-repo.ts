@@ -220,9 +220,9 @@ export class SearchRepo {
             conv.id AS conversation_id,
             conv.title AS conversation_title,
             conv.kind AS conversation_kind,
-            root.id AS channel_id,
-            CASE WHEN conv.kind = 'thread' THEN conv.id ELSE NULL END AS legacy_thread_conversation_id,
-            CASE WHEN conv.kind = 'thread' THEN conv.id ELSE NULL END AS thread_id,
+            conv.id AS channel_id,
+            NULL AS legacy_thread_conversation_id,
+            NULL AS thread_id,
             conv.parent_conversation_id AS parent_conversation_id,
             conv.closed_at AS closed_at,
             conv.created_at AS conversation_created_at,
@@ -231,10 +231,6 @@ export class SearchRepo {
             CASE WHEN w.workspace_kind = 'agent_home' THEN 'dm' ELSE 'regular' END AS workspace_kind
            FROM conversations conv
            JOIN workspaces w ON w.id = conv.workspace_id
-           JOIN conversations root ON root.id = CASE
-             WHEN conv.kind = 'thread' THEN conv.parent_conversation_id
-             ELSE conv.id
-           END
           WHERE ${where.join(' AND ')}
           ORDER BY conv.updated_at DESC
           LIMIT ?`,
@@ -288,9 +284,9 @@ export class SearchRepo {
             m.*,
             conv.title AS conversation_title,
             conv.kind AS conversation_kind,
-            root.id AS channel_id,
-            CASE WHEN conv.kind = 'thread' THEN conv.id ELSE NULL END AS legacy_thread_conversation_id,
-            CASE WHEN conv.kind = 'thread' THEN conv.id ELSE NULL END AS thread_id,
+            conv.id AS channel_id,
+            NULL AS legacy_thread_conversation_id,
+            NULL AS thread_id,
             conv.parent_conversation_id AS parent_conversation_id,
             conv.closed_at AS closed_at,
             conv.created_at AS conversation_created_at,
@@ -301,10 +297,6 @@ export class SearchRepo {
            FROM messages m
            JOIN conversations conv ON conv.id = m.conversation_id
            JOIN workspaces w ON w.id = conv.workspace_id
-           JOIN conversations root ON root.id = CASE
-             WHEN conv.kind = 'thread' THEN conv.parent_conversation_id
-             ELSE conv.id
-           END
            LEFT JOIN agents a ON a.id = m.from_agent_id
           WHERE ${whereSql}
           ORDER BY m.created_at DESC, m.seq DESC

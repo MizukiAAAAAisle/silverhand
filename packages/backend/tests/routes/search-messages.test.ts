@@ -1,28 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Database as Db } from 'better-sqlite3';
-import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
-
-/**
- * Seed a fossil `kind='thread'` conversation via raw SQL. The producer
- * (`ConversationRepo.insertThread`) and the `thread` kind were retired in
- * #task:1303 phase 2; the channel-scope search still sweeps physical child
- * threads, so this reproduces the row without touching the narrowed model.
- */
-function insertFossilThread(
-  db: Db,
-  channel: { id: string; workspace_id: string; workspace_path: string },
-): { id: string } {
-  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
-  db.prepare(
-    `INSERT INTO conversations
-       (id, workspace_id, workspace_path, kind, parent_conversation_id,
-        title, status, created_at, updated_at, latest_message_seq)
-     VALUES (?, ?, ?, 'thread', ?, 'Fossil', 'idle', ?, ?, 0)`,
-  ).run(id, channel.workspace_id, channel.workspace_path, channel.id, Date.now(), Date.now());
-  return { id };
-}
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const created = await (
@@ -182,55 +160,6 @@ describe('agent list_channels / search_messages routes', () => {
     expect(body.hits[0].sender).toMatchObject({
       kind: 'agent',
       agent_id: aliceId,
-    });
-  });
-
-  it('searches channel scope across the channel and visible child threads', async () => {
-    t = buildTestApp();
-    const { workspaceId, channelId, agentIds } = await createWorkspaceChannel(t, [
-      'alice',
-    ]);
-    const aliceId = agentIds.alice!;
-    const searchChannel = await createChannel(t, workspaceId, 'search-channel', [
-      aliceId,
-    ]);
-    const conversations = new ConversationRepo(t.ctx.db);
-    const parent = conversations.getChannel(searchChannel)!;
-    const thread = insertFossilThread(t.ctx.db, {
-      id: searchChannel,
-      workspace_id: parent.workspace_id,
-      workspace_path: parent.workspace_path,
-    });
-    conversations.addAgent(thread.id, aliceId);
-    const messages = new MessageRepo(t.ctx.db);
-    const channelHit = messages.insertForConversation({
-      conversationId: searchChannel,
-      fromKind: 'user',
-      content: 'channel-scope shared token',
-    });
-    const threadHit = messages.insertForConversation({
-      conversationId: thread.id,
-      fromKind: 'user',
-      content: 'thread channel-scope shared token',
-    });
-
-    const res = await http(t).post(searchMessagesPath(channelId, aliceId), {
-      q: 'channel-scope',
-      scope: 'channel',
-      channel_id: searchChannel,
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json() as any;
-    expect(body.channel_id).toBe(searchChannel);
-    expect(body.hits.map((h: any) => h.message_ref.id).sort()).toEqual(
-      [channelHit.id, threadHit.id].sort(),
-    );
-    const threadRef = body.hits.find((h: any) => h.message_ref.id === threadHit.id)
-      .message_ref;
-    expect(threadRef).toMatchObject({
-      conversation_id: thread.id,
-      channel_id: searchChannel,
-      thread_id: thread.id,
     });
   });
 

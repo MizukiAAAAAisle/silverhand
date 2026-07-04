@@ -23,24 +23,12 @@ describe('conversationMessageServiceErrorResponse — TargetError mapping', () =
     ).toBe(404);
   });
 
-  it('keeps thread_not_found at 404', async () => {
-    expect(
-      await statusFor(new TargetError('thread_not_found', 'thread not found')),
-    ).toBe(404);
-  });
-
   it('keeps closed/archived targets at 409', async () => {
     expect(
       await statusFor(new TargetError('target_closed', 'closed')),
     ).toBe(409);
     expect(
       await statusFor(new TargetError('target_archived', 'archived')),
-    ).toBe(409);
-  });
-
-  it('maps legacy isolated thread write attempts to 409', async () => {
-    expect(
-      await statusFor(new TargetError('legacy_thread_read_only', 'read only')),
     ).toBe(409);
   });
 

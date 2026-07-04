@@ -155,24 +155,14 @@ const SELECT_JOINED = `
     ta.display_name           AS m_task_assignee_name,
     w.name             AS workspace_name,
     conv.title         AS conversation_title,
-    root.id            AS channel_id,
-    CASE
-      WHEN conv.kind = 'thread' THEN conv.id
-      ELSE NULL
-    END                AS legacy_thread_conversation_id,
-    CASE
-      WHEN conv.kind = 'thread' THEN conv.id
-      ELSE NULL
-    END                AS thread_id,
+    conv.id            AS channel_id,
+    NULL               AS legacy_thread_conversation_id,
+    NULL               AS thread_id,
     a.name             AS agent_name
   FROM saved_messages sm
   JOIN messages m ON m.id = sm.message_id
   JOIN conversations conv ON conv.id = sm.conversation_id
   JOIN workspaces w ON w.id = conv.workspace_id
-  JOIN conversations root ON root.id = CASE
-    WHEN conv.kind = 'thread' THEN conv.parent_conversation_id
-    ELSE conv.id
-  END
   LEFT JOIN agents a  ON a.id  = m.from_agent_id
   LEFT JOIN agents ta ON ta.id = m.task_assignee_agent_id
 `;

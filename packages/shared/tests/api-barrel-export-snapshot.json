@@ -209,7 +209,6 @@
   "ThreadAuthorKindSchema",
   "ThreadAuthorSchema",
   "ThreadCloseOpenTaskDetailSchema",
-  "ThreadDtoSchema",
   "ThreadFollowMutationDtoSchema",
   "ThreadFollowerStateDtoSchema",
   "ThreadReplierSchema",

@@ -699,8 +699,7 @@ export function buildAgentSearchMessagesDto(
     // channel_id is globally unique. PR-B made list_channels return
     // channels from any workspace the agent has access to, so the
     // bottom guard is conversation-membership, not source-workspace
-    // identity. The SQL `JOIN conversation_agents` below still
-    // filters child threads by per-conversation membership.
+    // identity.
     if (!conversations.getAgent(channel.id, agentId)) {
       return {
         ok: false,
@@ -709,8 +708,8 @@ export function buildAgentSearchMessagesDto(
         message: 'agent is not a member of this channel',
       };
     }
-    where.push(`(conv.id = ? OR conv.parent_conversation_id = ?)`);
-    params.push(channel.id, channel.id);
+    where.push(`conv.id = ?`);
+    params.push(channel.id);
   }
 
   const sqlParams: Array<string | number> = [agentId, ...params, input.limit];
@@ -722,9 +721,8 @@ export function buildAgentSearchMessagesDto(
           sender.display_name AS sender_agent_name,
           conv.workspace_id AS workspace_id,
           conv.kind AS conversation_kind,
-          CASE WHEN conv.kind = 'thread' THEN conv.parent_conversation_id ELSE conv.id END
-            AS channel_id,
-          CASE WHEN conv.kind = 'thread' THEN conv.id ELSE NULL END AS thread_id
+          conv.id AS channel_id,
+          NULL AS thread_id
          FROM messages m
          JOIN conversations conv ON conv.id = m.conversation_id
          JOIN conversation_agents ca

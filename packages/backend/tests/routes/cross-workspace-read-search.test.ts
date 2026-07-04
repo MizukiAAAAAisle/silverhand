@@ -1,29 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Database as Db } from 'better-sqlite3';
-import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
-
-/**
- * Seed a fossil `kind='thread'` conversation via raw SQL. The producer
- * (`ConversationRepo.insertThread`) and the `thread` kind were retired in
- * #task:1303 phase 2; tests that still exercise legacy isolated-thread reads
- * (still readable via `{conversation_id}`) or child-thread search sweeps
- * reproduce the physical row here without touching the narrowed domain model.
- */
-function insertFossilThread(
-  db: Db,
-  channel: { id: string; workspace_id: string; workspace_path: string },
-): { id: string } {
-  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
-  db.prepare(
-    `INSERT INTO conversations
-       (id, workspace_id, workspace_path, kind, parent_conversation_id,
-        title, status, created_at, updated_at, latest_message_seq)
-     VALUES (?, ?, ?, 'thread', ?, 'Fossil', 'idle', ?, ?, 0)`,
-  ).run(id, channel.workspace_id, channel.workspace_path, channel.id, Date.now(), Date.now());
-  return { id };
-}
 
 async function makeAgent(t: TestApp, name: string): Promise<{
   agentId: string;
@@ -336,26 +313,11 @@ describe('PR-B: cross-workspace search_messages({workspace_id?})', () => {
     const remoteChannel = await createChannel(t, reg.workspaceId, 'eng', [
       alice.agentId,
     ]);
-    // Spawn a child thread alice is in too, to verify the SQL still
-    // sweeps visible child threads of the remote channel.
-    const conversations = new ConversationRepo(t.ctx.db);
-    const remote = conversations.getChannel(remoteChannel)!;
-    const thread = insertFossilThread(t.ctx.db, {
-      id: remoteChannel,
-      workspace_id: remote.workspace_id,
-      workspace_path: remote.workspace_path,
-    });
-    conversations.addAgent(thread.id, alice.agentId);
     const messages = new MessageRepo(t.ctx.db);
     const channelHit = messages.insertForConversation({
       conversationId: remoteChannel,
       fromKind: 'user',
       content: 'remote-channel-search-token in channel',
-    });
-    const threadHit = messages.insertForConversation({
-      conversationId: thread.id,
-      fromKind: 'user',
-      content: 'remote-channel-search-token in child thread',
     });
     // Same token in alice's home DM must NOT appear under channel
     // scope.
@@ -377,9 +339,7 @@ describe('PR-B: cross-workspace search_messages({workspace_id?})', () => {
     const body = await res.json() as any;
     expect(body.scope).toBe('channel');
     expect(body.channel_id).toBe(remoteChannel);
-    expect(body.hits.map((h: any) => h.message_ref.id).sort()).toEqual(
-      [channelHit.id, threadHit.id].sort(),
-    );
+    expect(body.hits.map((h: any) => h.message_ref.id)).toEqual([channelHit.id]);
     // Each hit's channel_id must point at the remote channel, not
     // the source DM channel.
     for (const h of body.hits) {

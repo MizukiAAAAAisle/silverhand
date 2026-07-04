@@ -63,20 +63,13 @@ const SELECT_TASK_JOINED = `
     m.task_closed_at           AS task_closed_at,
     COALESCE(m.task_workspace_id, conv.workspace_id)
                                AS workspace_id,
-    CASE
-      WHEN root.kind = 'thread' THEN root.parent_conversation_id
-      ELSE root.id
-    END                        AS channel_id,
-    root.title                 AS channel_name,
+    conv.id                    AS channel_id,
+    conv.title                 AS channel_name,
     m.thread_root_id           AS thread_root_id,
-    CASE
-      WHEN conv.kind = 'thread' THEN conv.id
-      ELSE NULL
-    END                        AS legacy_thread_conversation_id,
-    CASE
-      WHEN conv.kind = 'thread' THEN conv.id
-      ELSE NULL
-    END                        AS thread_id,
+    -- Isolated-thread conversations were retired (#task:1303); these
+    -- vestigial wire fields are always null now (removed in 2d).
+    NULL                       AS legacy_thread_conversation_id,
+    NULL                       AS thread_id,
     m.task_assignee_agent_id   AS task_assignee_agent_id,
     m.task_assignee_user_id    AS task_assignee_user_id,
     m.created_at               AS created_at,
@@ -89,10 +82,6 @@ const SELECT_TASK_JOINED = `
   FROM messages m
   JOIN conversations conv ON conv.id = m.conversation_id
   JOIN workspaces w ON w.id = conv.workspace_id
-  JOIN conversations root ON root.id = CASE
-    WHEN conv.kind = 'thread' THEN conv.parent_conversation_id
-    ELSE conv.id
-  END
   LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
   LEFT JOIN users au ON au.id = m.task_assignee_user_id
   LEFT JOIN agents ca ON ca.id = m.from_agent_id

@@ -195,8 +195,10 @@ export class TaskBroadcaster {
   }): void {
     const conversationId = args.conversation.id;
     const workspaceId = args.conversation.workspace_id;
-    const channelId = args.conversation.parent_conversation_id ?? args.conversation.id;
-    const threadId = args.conversation.parent_conversation_id ? args.conversation.id : null;
+    // Isolated-thread conversations were retired (#task:1303): a task-bearing
+    // conversation is always a channel-like top-level conversation, so
+    // channel_id is its own id and the vestigial thread fields are null.
+    const channelId = args.conversation.id;
     const taskMessage = this.store.fetchMessage(args.messageId);
     const threadRootId = taskMessage?.conversation_id === conversationId
       ? taskMessage.thread_root_id
@@ -206,8 +208,8 @@ export class TaskBroadcaster {
       workspace_id: workspaceId,
       channel_id: channelId,
       thread_root_id: threadRootId,
-      legacy_thread_conversation_id: threadId,
-      thread_id: threadId,
+      legacy_thread_conversation_id: null,
+      thread_id: null,
       conversation_id: conversationId,
       task_number: args.taskNumber,
       message_id: args.messageId,

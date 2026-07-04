@@ -71,8 +71,7 @@ export class NotificationRepo {
         `SELECT
             n.*,
             m.thread_root_id AS thread_root_id,
-            CASE WHEN conv.kind = 'thread' THEN conv.id ELSE NULL END
-              AS legacy_thread_conversation_id
+            NULL AS legacy_thread_conversation_id
            FROM notifications n
            LEFT JOIN messages m ON m.id = n.message_id
            LEFT JOIN conversations conv ON conv.id = n.conversation_id
@@ -103,8 +102,7 @@ export class NotificationRepo {
         `SELECT
             n.*,
             m.thread_root_id AS thread_root_id,
-            CASE WHEN conv.kind = 'thread' THEN conv.id ELSE NULL END
-              AS legacy_thread_conversation_id
+            NULL AS legacy_thread_conversation_id
            FROM notifications n
            LEFT JOIN messages m ON m.id = n.message_id
            LEFT JOIN conversations conv ON conv.id = n.conversation_id
@@ -173,8 +171,7 @@ export class NotificationRepo {
            n.conversation_id,
            n.message_id,
            m.thread_root_id AS thread_root_id,
-           CASE WHEN c.kind = 'thread' THEN c.id ELSE NULL END
-             AS legacy_thread_conversation_id
+           NULL AS legacy_thread_conversation_id
          FROM notifications n
          JOIN conversations c ON c.id = n.conversation_id
          LEFT JOIN messages m ON m.id = n.message_id

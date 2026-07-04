@@ -150,15 +150,11 @@ export class ActorError extends Error {
 
 export type TargetErrorCode =
   | 'no_parent'
-  | 'thread_not_found'
-  | 'thread_not_child'
-  | 'legacy_thread_target_deprecated'
   | 'target_closed'
   | 'target_archived'
   | 'target_conflict'
   | 'reply_target_not_found'
-  | 'stream_key_mismatch'
-  | 'legacy_thread_read_only';
+  | 'stream_key_mismatch';
 
 export class TargetError extends Error {
   constructor(

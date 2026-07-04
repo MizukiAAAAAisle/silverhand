@@ -291,12 +291,11 @@ export function conversationMessageServiceErrorResponse(
   }
   if (err instanceof TargetError) {
     const status =
-      err.code === 'thread_not_found' || err.code === 'reply_target_not_found'
+      err.code === 'reply_target_not_found'
         ? 404
         : err.code === 'target_closed'
           || err.code === 'target_archived'
           || err.code === 'stream_key_mismatch'
-          || err.code === 'legacy_thread_read_only'
           ? 409
           : 400;
     return c.json({ error: err.message, code: err.code }, status);

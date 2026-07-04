@@ -557,21 +557,16 @@ export class AgentRepo {
            w.name             AS workspace_name,
            w.workspace_kind   AS workspace_kind,
            c.kind             AS conversation_kind,
-           CASE WHEN c.kind = 'thread' THEN parent.id ELSE c.id END
-                              AS channel_id,
-           CASE WHEN c.kind = 'thread' THEN c.id ELSE NULL END
-                              AS thread_id,
-           CASE WHEN c.kind = 'thread' THEN parent.title ELSE c.title END
-                              AS channel_title,
-           CASE WHEN c.kind = 'thread' THEN c.title ELSE NULL END
-                              AS thread_title,
+           c.id               AS channel_id,
+           NULL               AS thread_id,
+           c.title            AS channel_title,
+           NULL               AS thread_title,
            ca.status          AS status,
            ca.pid             AS pid,
            c.closed_at        AS closed_at
          FROM conversation_agents ca
          JOIN conversations c ON c.id = ca.conversation_id
          JOIN workspaces w ON w.id = c.workspace_id
-         LEFT JOIN conversations parent ON parent.id = c.parent_conversation_id
          WHERE ca.agent_id = ?
          ORDER BY c.closed_at IS NULL DESC, c.updated_at DESC`,
       )
