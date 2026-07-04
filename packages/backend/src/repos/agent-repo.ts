@@ -542,9 +542,7 @@ export class AgentRepo {
       workspace_kind: WorkspaceKind;
       conversation_kind: ConversationKind;
       channel_id: string;
-      thread_id: string | null;
       channel_title: string;
-      thread_title: string | null;
       status: ConversationAgentStatus;
       pid: number | null;
       closed_at: number | null;
@@ -558,9 +556,7 @@ export class AgentRepo {
            w.workspace_kind   AS workspace_kind,
            c.kind             AS conversation_kind,
            c.id               AS channel_id,
-           NULL               AS thread_id,
            c.title            AS channel_title,
-           NULL               AS thread_title,
            ca.status          AS status,
            ca.pid             AS pid,
            c.closed_at        AS closed_at

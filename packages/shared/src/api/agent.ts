@@ -226,7 +226,7 @@ export type AgentWorkspaceFileRead = z.infer<
 >;
 
 // GET /api/agents/:id/runtime-state — every (conversation, agent) pair
-// involving this agent, with workspace/channel/thread names denormalized so
+// involving this agent, with workspace/channel names denormalized so
 // the UI can render the "where it runs" table without N+1 queries.
 export const AgentRuntimeConversationSchema = z.object({
   conversation_id: z.string(),
@@ -235,9 +235,7 @@ export const AgentRuntimeConversationSchema = z.object({
   workspace_kind: WorkspaceKindSchema,
   conversation_kind: ConversationKindSchema,
   channel_id: z.string(),
-  thread_id: z.string().nullable(),
   channel_title: z.string(),
-  thread_title: z.string().nullable(),
   status: ConversationAgentStatusSchema,
   pid: z.number().nullable(),
   closed_at: z.number().nullable(),

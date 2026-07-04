@@ -1267,7 +1267,6 @@ describe('GET /api/agents/:id/runtime-state', () => {
     );
     expect(dm.workspace_kind).toBe('agent_home');
     expect(dm.channel_title).toBe('Onboarding');
-    expect(dm.thread_title).toBeNull();
     expect(dm.status).toBe('idle'); // FakeConversationManager doesn't flip status
   });
 });
