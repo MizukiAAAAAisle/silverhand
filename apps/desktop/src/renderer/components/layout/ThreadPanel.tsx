@@ -9,7 +9,7 @@ import { MessageRowsSkeleton } from '@/components/layout/ConversationViewSkeleto
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import { useMessageActionSurface } from '@/components/chat/useMessageActionSurface';
 import { MessageActionChrome } from '@/components/chat/MessageActionChrome';
-import { threadClusterShowsLoader, threadLiveMarkReadSeq, threadLocateReady, threadMarkReadSnapshot, threadOpenNeedsLatestRefetch } from './threadMarkRead';
+import { threadClusterShowsLoader, threadLiveMarkReadSeq, threadMarkReadSnapshot, threadOpenNeedsLatestRefetch } from './threadMarkRead';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import {
@@ -500,60 +500,10 @@ export function ThreadPanel({
   // commit. A target outside the loaded window (an older paginated reply)
   // releases the jump rather than latching — cross-page locate is a
   // follow-up, not silently broken.
-  //
-  // The bounded rAF poll must NOT start counting until THIS open's cluster
-  // window has landed. Two traps make "are rows present?" the wrong question:
-  //   1. A first-unread open shows a loader while `primeAround` fetches the
-  //      around-window — the target row doesn't exist yet.
-  //   2. React Query serves the PREVIOUS open's cluster cache synchronously on
-  //      reopen, so `messages.length > 0` is true from frame 0 even though it's
-  //      a STALE tail, not this open's around-first-unread window (the query is
-  //      held disabled while priming, so it won't refetch to replace it).
-  // Either way, spending the ~1s attempt budget before the fresh window commits
-  // burns it against a loader or a stale tail and gives up — the pane lands at
-  // the bottom / on the old tail instead of the first unread (#task:1317, the
-  // intermittent "didn't anchor to earliest unread"; Cindy's stale-window catch
-  // closes the reopened-thread hole).
-  //
-  // `windowReadyForOpen` is the SAME "this open's window fetch landed" epoch the
-  // mark-read gate uses (`windowFetchSucceededAt >= openedAt`). `primeAround`
-  // stamps that epoch in the same synchronous block it writes the window, and
-  // `queryFn` stamps it on a real fetch success — but a `setQueryData` live
-  // append does NOT, and a previous open's success epoch is `< openedAt`. So it
-  // flips true exactly when THIS open's real rows exist.
-  //
-  // But fresh-epoch is the readiness signal ONLY WHILE THE PRIME IS IN FLIGHT —
-  // it is NOT a permanent gate on every jump target (Cindy's fallback catch). By
-  // the controller's contract a FAILED prime (not `not_found`: aborted/stale/
-  // network) calls `setPrimePending(null)` but KEEPS the target, so a recent
-  // cached target can still be located. A jump open does not force a latest
-  // refetch (`threadOpenNeedsLatestRefetch` skips it to protect the around-
-  // window) and a re-enabled query with an existing cache won't refetch either,
-  // so no new epoch may ever be stamped. Gating unconditionally on the epoch
-  // would strand that fallback forever. So:
-  //   • prime pending  → gate on `windowReadyForOpen` (a committed prime keeps
-  //     pending true through the locate phase, and it stamped the epoch, so this
-  //     fires; a stale reopen cache is correctly withheld until the fresh epoch).
-  //   • prime settled  → restore the fallback: try to locate against whatever
-  //     window is currently loaded (stale cache or a fallback latest fetch); the
-  //     rAF poll's timeout releases the jump if the target isn't in it.
-  const windowReadyForOpen =
-    cluster.windowFetchSucceededAt >= openedAtRef.current;
-  const locateReady = threadLocateReady({
-    jumpPrimePending,
-    windowFreshForOpen: windowReadyForOpen,
-    hasRows: messages.length > 0,
-  });
   useEffect(() => {
     if (!jumpMessageId) return;
-    // Override follow-bottom immediately (even while still priming) so the
-    // pin-to-bottom effect can't yank the pane to the tail once the window
-    // commits — the locate scroll must win.
     pinBottomRef.current = false;
     setShowScrollBottom(true);
-    // Not ready to locate yet (fresh window not landed while priming, or no rows
-    // loaded in the settled fallback). The effect re-runs when readiness flips.
-    if (!locateReady) return;
     let raf = 0;
     let attempts = 0;
     let flashTimer: ReturnType<typeof setTimeout> | undefined;
@@ -580,7 +530,7 @@ export function ThreadPanel({
       cancelAnimationFrame(raf);
       if (flashTimer) clearTimeout(flashTimer);
     };
-  }, [jumpMessageId, locateReady, onJumped]);
+  }, [jumpMessageId, onJumped]);
 
   const renderMessage = (m: typeof messages[number]): JSX.Element =>
     isCommittedMessage(m) && m.from_kind === 'system' ? (
@@ -736,19 +686,17 @@ export function ThreadPanel({
             {threadClusterShowsLoader({
               isLoading: cluster.isLoading,
               jumpPrimePending,
-              hasFreshWindow: windowReadyForOpen,
+              hasWindow: messages.length > 0,
             }) ? (
-              // Loader only while there is genuinely nothing FRESH to render
-              // yet: a real in-flight fetch, OR a still-priming jump whose
-              // THIS-OPEN window has not committed. `windowReadyForOpen` (the
-              // `windowFetchSucceededAt >= openedAt` epoch) is deliberately NOT
-              // `messages.length > 0`: React Query serves the previous open's
-              // cluster cache synchronously on reopen, so raw rows are present
-              // from frame 0 and would drop the loader onto a STALE tail while
-              // primeAround still fetches this open's window (#task:1317, Cindy).
-              // primeAround stamps the epoch in the same block it writes the
-              // window, so once it commits the loader clears and the fresh rows
-              // render — the locate effect then finds `#msg-<id>`; no deadlock.
+              // Loader only while there is genuinely nothing to render yet: a
+              // real in-flight fetch, OR a still-priming jump whose around-window
+              // has not committed. Once primeAround commits, the (disabled)
+              // query's cache carries the window (`messages.length > 0`) and we
+              // MUST render it even though `jumpPrimePending` is still true — the
+              // controller keeps prime pending until the VISUAL locate/flash
+              // finishes, and hiding the messages would starve that locate of its
+              // DOM node, timing the jump out with first-unread locate failed.
+              // `threadClusterShowsLoader` encodes this.
               <MessageRowsSkeleton />
             ) : replyMessages.length === 0 ? (
               <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-text-muted">

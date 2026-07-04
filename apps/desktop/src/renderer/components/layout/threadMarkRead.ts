@@ -108,64 +108,21 @@ export function clusterInitialFetchEnabled(input: {
  * pending flag: by the controller's existing contract it stays set until the
  * VISUAL locate/flash completes and calls `onJumped → clearJump`. So once the
  * around-window commits into the cache the disabled query's `data` already
- * carries it and we MUST render it — keeping the loader up on `jumpPrimePending`
- * alone would hide the messages, the locate effect could never find
- * `#msg-<id>` in the DOM, and the jump would time out with the first-unread
- * locate/flash failed.
+ * carries it (`hasWindow` true) and we MUST render it — keeping the loader up on
+ * `jumpPrimePending` alone would hide the messages, the locate effect could
+ * never find `#msg-<id>` in the DOM, and the jump would time out with the
+ * first-unread locate/flash failed.
  *
- * `hasFreshWindow` is the "this open's window fetch landed" epoch signal
- * (`windowFetchSucceededAt >= openedAt`), NOT raw "any rows cached" (#task:1317,
- * Cindy's stale-window catch). React Query serves the PREVIOUS open's cluster
- * cache synchronously on reopen, so a naive `messages.length > 0` is true from
- * frame 0 and would drop the loader onto a STALE tail while `primeAround` is
- * still fetching this open's around-first-unread window. The epoch flips true
- * only when THIS open's window commits — and `primeAround` stamps that epoch in
- * the SAME synchronous block it writes the window (`hooks.ts` §9.10), so gating
- * on it renders exactly when the fresh rows exist: no deadlock, no stale flash.
- *
- * So the loader shows only while there is genuinely nothing fresh to render yet:
- * a real in-flight fetch, OR a still-priming jump whose THIS-OPEN window has not
- * committed. Pure so the "fresh window present → render, not loader" invariant
- * is unit-tested.
+ * So the loader shows only while there is genuinely nothing to render yet: a
+ * real in-flight fetch, OR a still-priming jump whose window has not committed.
+ * Pure so the "window present → render, not loader" invariant is unit-tested.
  */
 export function threadClusterShowsLoader(input: {
   isLoading: boolean;
   jumpPrimePending: boolean;
-  hasFreshWindow: boolean;
+  hasWindow: boolean;
 }): boolean {
-  return input.isLoading || (input.jumpPrimePending && !input.hasFreshWindow);
-}
-
-/**
- * Whether ThreadPanel's jump-locate rAF poll may START spending its attempt
- * budget (#task:1317). Fresh-epoch readiness (`windowFreshForOpen =
- * windowFetchSucceededAt >= openedAt`) is the gate ONLY while the prime is in
- * flight — that is the window in which React Query's synchronously-served
- * previous-open cache would be mistaken for THIS open's around-first-unread
- * window, so the poll must wait for the fresh epoch (a committed prime stamps it
- * and keeps `jumpPrimePending` true through the locate phase, so it still fires).
- *
- * Once the prime SETTLES to not-pending it is a genuine failed/aborted fallback
- * that KEPT the target (`useMessageJumpController` clears pending but not the
- * target unless `not_found`). Then restore the controller's fallback semantics:
- * try to locate against whatever window is currently loaded (stale cache or a
- * fallback latest fetch), because a jump open may never stamp a new epoch
- * (`threadOpenNeedsLatestRefetch` skips the latest refetch to protect the
- * around-window; a re-enabled query with an existing cache won't refetch). The
- * caller's rAF poll timeout releases the jump if the target isn't in that
- * window. Gating unconditionally on the epoch would strand this fallback forever
- * (Cindy's catch) — fresh-epoch is prime-pending readiness, NOT a permanent gate
- * on every jump target.
- *
- * Pure so both halves of that contract are unit-tested (no rAF/DOM harness in
- * this env).
- */
-export function threadLocateReady(input: {
-  jumpPrimePending: boolean;
-  windowFreshForOpen: boolean;
-  hasRows: boolean;
-}): boolean {
-  return input.jumpPrimePending ? input.windowFreshForOpen : input.hasRows;
+  return input.isLoading || (input.jumpPrimePending && !input.hasWindow);
 }
 
 export interface ThreadLiveMarkReadInput {
