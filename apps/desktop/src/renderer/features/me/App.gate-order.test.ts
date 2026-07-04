@@ -76,6 +76,7 @@ const SIG_REG_LOGIN_AUTOCOMPLETE = 'autoComplete="current-password"';
 const agentHub = {
   getDesktopBuildConfig: vi.fn(() => Promise.resolve({
     remote_only: false,
+    allow_insecure_remote: false,
     default_server_url: '',
   })),
   getAuthState: vi.fn(),

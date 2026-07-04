@@ -246,6 +246,14 @@ export function applyRotateSideEffects(input: {
     ...(existing?.profile_version !== undefined
       ? { profile_version: existing.profile_version }
       : {}),
+    // Preserve the local/package insecure-remote opt-in across token
+    // rotation. Rotate refreshes only the host token; dropping this
+    // field would make a daemon attached to an explicitly allowed
+    // http:// remote start rejecting the same config on the next
+    // reload/restart.
+    ...(existing?.allow_insecure_remote === true
+      ? { allow_insecure_remote: true }
+      : {}),
   });
 }
 

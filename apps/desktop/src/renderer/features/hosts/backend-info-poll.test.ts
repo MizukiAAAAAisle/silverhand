@@ -21,6 +21,7 @@ import {
 
 function snap(over: Partial<BackendInfoSnapshot> = {}): BackendInfoSnapshot {
   return {
+    mode: 'embedded',
     url: 'http://127.0.0.1:1234',
     local_host_id: 'host-1',
     local_host_status: 'claimed',

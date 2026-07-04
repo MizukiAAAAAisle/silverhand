@@ -29,13 +29,13 @@
  * just the connect/repair affordance and trusts the next
  * `getAuthState()` reload to deliver the real arm.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AlertTriangle, Check, Loader2, Pencil, RefreshCw, X } from 'lucide-react';
-import { classifyServerUrl } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/cn';
 import type { SaveServerUrlBanner } from '@/features/settings/describe-save-server-url-outcome';
+import { validateServerUrlDraft } from '@/features/settings/server-url-validation';
 import { describeProbeOutcome } from '@/features/setup/describe-probe-outcome';
 import type { DesktopProfileSaveWithTestResult } from '../../../preload/api';
 
@@ -60,6 +60,21 @@ export function BackendUnreachableGate({
   const [draft, setDraft] = useState(serverUrl);
   const [saving, setSaving] = useState(false);
   const [banner, setBanner] = useState<SaveServerUrlBanner | null>(null);
+  const [allowInsecureRemote, setAllowInsecureRemote] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.agentHub.getDesktopBuildConfig()
+      .then(config => {
+        if (!cancelled) setAllowInsecureRemote(config.allow_insecure_remote);
+      })
+      .catch(() => {
+        if (!cancelled) setAllowInsecureRemote(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const startEdit = (): void => {
     setDraft(serverUrl);
@@ -75,15 +90,9 @@ export function BackendUnreachableGate({
   // origin is, so the gate can't accept an address Settings would
   // reject.
   const trimmed = draft.trim();
-  const classification =
-    trimmed === ''
-      ? { kind: 'empty' as const }
-      : (() => {
-          const c = classifyServerUrl(trimmed);
-          return c.ok
-            ? { kind: 'ok' as const }
-            : { kind: 'reject' as const, message: c.message };
-        })();
+  const classification = validateServerUrlDraft(draft, {
+    allowInsecureRemote,
+  });
   const isUnchanged = trimmed === serverUrl.trim();
   const saveDisabled = saving || classification.kind !== 'ok' || isUnchanged;
 

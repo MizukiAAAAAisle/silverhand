@@ -16,12 +16,11 @@
  * refresh, other owned host records) is tucked behind a collapsed
  * **Details** disclosure so the primary surface stays product copy.
  *
- * IMPORTANT — this is a presentation-layer change only. The underlying
- * model is untouched: `server_url` still lives in daemon-config.json,
- * host records are still the backend's source of truth, and the same
- * `window.agentHub.*` IPCs back every action here. No D3/D4 protocol
- * boundary is crossed. Token-handling invariant is preserved: the
- * renderer NEVER sees `host_token` (main reads it from disk itself).
+ * IMPORTANT — token-handling invariant is preserved: the renderer NEVER sees
+ * `host_token` (main reads it from disk itself). In embedded mode this pane
+ * edits daemon-config directly; in remote mode it edits the persisted server
+ * profile so the app backend handle, event WS, and daemon outbound config all
+ * converge on the same origin.
  */
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -31,10 +30,10 @@ import {
   Save,
   Trash2,
 } from 'lucide-react';
-import { classifyServerUrl } from '@silverhand/shared';
 import type { HostDto } from '@silverhand/shared';
 import type {
   DesktopHostMutationResult,
+  DesktopProfileSaveWithTestResult,
   DesktopSaveServerUrlResult,
 } from '../../../preload/api';
 import { Button } from '@/components/ui/button';
@@ -54,10 +53,13 @@ import {
   type ConnectionTone,
   type LocalHostStatus,
 } from '@/features/hosts/connection-state';
+import { eventWsClient } from '@/lib/ws-client';
+import { describeProbeOutcome } from '@/features/setup/describe-probe-outcome';
 import {
   describeSaveServerUrlOutcome,
   type SaveServerUrlBanner,
 } from './describe-save-server-url-outcome';
+import { validateServerUrlDraft } from './server-url-validation';
 
 function formatTimestamp(value: number | null): string {
   if (!value) return '—';
@@ -150,6 +152,43 @@ function describeMutationFailure(
   }
 }
 
+type ServerUrlSaveResult =
+  | { source: 'daemon_reload'; result: DesktopSaveServerUrlResult }
+  | { source: 'profile'; result: DesktopProfileSaveWithTestResult };
+
+function describeProfileSaveForConnection(
+  result: DesktopProfileSaveWithTestResult,
+): SaveServerUrlBanner {
+  if (result.ok) {
+    return {
+      tone: 'info',
+      title: 'Saved. Reconnecting…',
+      description: `Using ${result.profile.server_url}. Watch “This computer” below for the live connection status.`,
+      dismissOnReady: true,
+    };
+  }
+  if (result.phase === 'test') {
+    const banner = describeProbeOutcome(result.test);
+    return {
+      tone: banner.tone === 'success' ? 'success' : 'error',
+      title: banner.title,
+      description: banner.description,
+    };
+  }
+  if (result.phase === 'commit_guard') {
+    return {
+      tone: 'error',
+      title: 'Cannot save this server URL in this build.',
+      description: result.message,
+    };
+  }
+  return {
+    tone: 'error',
+    title: 'Could not write the profile.',
+    description: result.detail ?? 'Check that Silverhand can write to its app data folder.',
+  };
+}
+
 export function ConnectionPane(): JSX.Element {
   const qc = useQueryClient();
   const hostsQuery = useHostsQuery();
@@ -164,12 +203,20 @@ export function ConnectionPane(): JSX.Element {
   const backendInfoQuery = useBackendInfoSnapshot({ pollWhileConnecting: true });
 
   // ---- Server address form -------------------------------------------------
-  // Source-of-truth pin (carried over from ServerUrlPane): seed from
-  // `local_host_server_url` (the daemon-config view), falling back to
-  // the embedded `url` only pre-claim.
+  // Source-of-truth pin:
+  // - Embedded mode edits the daemon outbound URL, so seed from
+  //   `local_host_server_url`.
+  // - Remote mode edits the app's active server profile, so seed from
+  //   `url`. A previous legacy Settings save may have already changed
+  //   daemon-config without changing the profile; showing daemon-config there
+  //   would make the form look unchanged while the app is still on the old
+  //   backend.
   const savedUrl = backendInfoQuery.data?.local_host_server_url ?? null;
   const fallbackUrl = backendInfoQuery.data?.url ?? '';
-  const currentUrl = savedUrl ?? fallbackUrl;
+  const currentUrl =
+    backendInfoQuery.data?.mode === 'remote'
+      ? fallbackUrl
+      : savedUrl ?? fallbackUrl;
 
   const [draft, setDraft] = useState<string>('');
   useEffect(() => {
@@ -180,6 +227,20 @@ export function ConnectionPane(): JSX.Element {
   const [reconnectBannerStartedAt, setReconnectBannerStartedAt] = useState<
     number | null
   >(null);
+  const [allowInsecureRemote, setAllowInsecureRemote] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    window.agentHub.getDesktopBuildConfig()
+      .then(config => {
+        if (!cancelled) setAllowInsecureRemote(config.allow_insecure_remote);
+      })
+      .catch(() => {
+        if (!cancelled) setAllowInsecureRemote(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const updateDraft = (value: string): void => {
     setDraft(value);
     setBanner(null);
@@ -187,15 +248,36 @@ export function ConnectionPane(): JSX.Element {
   };
 
   const save = useMutation({
-    mutationFn: async (serverUrl: string): Promise<DesktopSaveServerUrlResult> =>
-      window.agentHub.saveServerUrl({ serverUrl }),
-    onSuccess: result => {
-      const nextBanner = describeSaveServerUrlOutcome(result);
+    mutationFn: async (serverUrl: string): Promise<ServerUrlSaveResult> => {
+      if (backendInfoQuery.data?.mode === 'remote') {
+        return {
+          source: 'profile',
+          result: await window.agentHub.saveServerConnectionProfile({ serverUrl }),
+        };
+      }
+      return {
+        source: 'daemon_reload',
+        result: await window.agentHub.saveServerUrl({ serverUrl }),
+      };
+    },
+    onSuccess: saveResult => {
+      const nextBanner =
+        saveResult.source === 'profile'
+          ? describeProfileSaveForConnection(saveResult.result)
+          : describeSaveServerUrlOutcome(saveResult.result);
       setBanner(nextBanner);
       setReconnectBannerStartedAt(
         nextBanner.dismissOnReady ? Date.now() : null,
       );
-      if (result.ok) {
+      if (saveResult.result.ok) {
+        if (saveResult.source === 'profile') {
+          // Remote-mode Settings edits must retarget the renderer transport too.
+          // The profile pipeline updates main's active backend handle; forcing a
+          // reconnect makes event WS re-read BackendInfo and dial the new origin
+          // instead of leaving the old server socket open indefinitely.
+          eventWsClient.disconnect();
+          eventWsClient.connect();
+        }
         void qc.invalidateQueries({ queryKey: backendInfoKey });
         void qc.invalidateQueries({ queryKey: hostsKey });
         // `#task:1021` — a save bounces the daemon's outbound WS. The
@@ -225,13 +307,8 @@ export function ConnectionPane(): JSX.Element {
   });
 
   const classification = useMemo(() => {
-    const trimmed = draft.trim();
-    if (trimmed === '') return { kind: 'empty' as const };
-    const c = classifyServerUrl(trimmed);
-    return c.ok
-      ? { kind: 'ok' as const, url: c.url }
-      : { kind: 'reject' as const, reason: c.reason, message: c.message };
-  }, [draft]);
+    return validateServerUrlDraft(draft, { allowInsecureRemote });
+  }, [allowInsecureRemote, draft]);
 
   const isUnchanged = draft.trim() === currentUrl.trim();
   const saveDisabled =

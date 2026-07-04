@@ -147,6 +147,11 @@ export interface PerformProfilePhase2Input {
 }
 
 export interface PerformProfilePhase2Deps {
+  /** Local desktop/package policy bit for non-loopback http:// remote
+   *  URLs. Not profile state; phase-2 stamps it into daemon-config so
+   *  the daemon validates reload/attach with the same local opt-in that
+   *  admitted the profile. */
+  allowInsecureRemote?: boolean;
   /** Atomic write to `daemon-config.json`. Production binding is
    *  `writeDaemonHostConfig(silverhandDir, config)`. */
   writeDaemonHostConfig: WriteDaemonHostConfigFn;
@@ -249,6 +254,9 @@ export async function performProfilePhase2(
     host_id: hostId,
     host_token: hostToken,
     profile_version: profileVersion,
+    ...(deps.allowInsecureRemote === true
+      ? { allow_insecure_remote: true }
+      : {}),
   };
   try {
     deps.writeDaemonHostConfig(newConfig);

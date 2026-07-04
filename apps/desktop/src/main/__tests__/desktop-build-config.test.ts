@@ -43,6 +43,35 @@ describe('resolveEffectiveBootProfile', () => {
     });
   });
 
+  it('accepts package-time http remote only when the build explicitly allows it', () => {
+    const rejected = resolveEffectiveBootProfile({
+      savedProfileView: null,
+      packagedDefaultServerUrl: 'http://203.0.113.10:8080',
+      allowInsecureRemote: false,
+      remoteOnly: true,
+      now: () => 20,
+    });
+    expect(rejected.source).toBe('none');
+    expect(rejected.profileView).toBeNull();
+    expect(rejected.warning?.reason).toBe('packaged_default_invalid');
+
+    const accepted = resolveEffectiveBootProfile({
+      savedProfileView: null,
+      packagedDefaultServerUrl: 'http://203.0.113.10:8080',
+      allowInsecureRemote: true,
+      remoteOnly: true,
+      now: () => 20,
+    });
+    expect(accepted).toEqual({
+      source: 'packaged_default',
+      profileView: {
+        server_url: 'http://203.0.113.10:8080',
+        updated_at: 20,
+      },
+      warning: null,
+    });
+  });
+
   it('rejects a loopback package-time default in remote-only builds', () => {
     const result = resolveEffectiveBootProfile({
       savedProfileView: null,

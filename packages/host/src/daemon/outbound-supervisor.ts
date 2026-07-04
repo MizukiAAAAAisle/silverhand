@@ -238,7 +238,9 @@ export class OutboundSupervisor {
     // remote https -> wss OK, non-loopback http -> tls_required" and
     // unsupported schemes.
     try {
-      hostConnectWebSocketUrl(probe.config.server_url);
+      hostConnectWebSocketUrl(probe.config.server_url, {
+        allowInsecureRemote: probe.config.allow_insecure_remote === true,
+      });
     } catch (err) {
       return failure(
         'invalid_server_url',
@@ -377,7 +379,9 @@ export class OutboundSupervisor {
     // `hostConnectWebSocketUrl` so the daemon WS policy applies here
     // just as it does at attach time.
     try {
-      hostConnectWebSocketUrl(probe.config.server_url);
+      hostConnectWebSocketUrl(probe.config.server_url, {
+        allowInsecureRemote: probe.config.allow_insecure_remote === true,
+      });
     } catch (err) {
       return reloadFailure('invalid_server_url', (err as Error).message);
     }

@@ -11,9 +11,9 @@
  *     CA chains, or pin anything. The typed surface lives in
  *     `tls-policy.ts`.
  *   - **remote http** is accepted as `kind: 'remote', insecure: true`
- *     ONLY when the caller passes `allowInsecureRemote: true` (read
- *     from the dev env flag `SILVERHAND_ALLOW_INSECURE_REMOTE=1`).
- *     Without the flag, remote http is rejected as
+ *     ONLY when the caller passes `allowInsecureRemote: true` (from
+ *     an explicit trust-boundary opt-in such as a dev env flag or a
+ *     packaged desktop build option). Without that opt-in, remote http is rejected as
  *     `insecure_remote_http_disallowed`.
  *
  * Raw-host strict-allowlist contract preserved from D3.c (Cindy
@@ -221,7 +221,7 @@ export function extractRawAuthorityHost(input: string): string | null {
  *     TLS verification will be Node's system-default at connect time.
  *   - `kind: 'remote', insecure: true` — non-loopback over http://
  *     accepted ONLY because the caller passed `allowInsecureRemote`
- *     (i.e. the dev env flag was set). Callers SHOULD surface a
+ *     (e.g. a dev env flag or packaged build option was set). Callers SHOULD surface a
  *     "connection is unencrypted" warning in any UI that consumes
  *     this variant.
  */
@@ -303,11 +303,11 @@ export interface ClassifyServerUrlOptions {
    *     userinfo, IPv6 bracket-suffix smuggling still rejected /
    *     classified as remote, never loopback).
    *
-   * Callers are expected to derive this from the dev env flag
-   * `SILVERHAND_ALLOW_INSECURE_REMOTE=1` via
-   * {@link readAllowInsecureRemoteFlag} (`./config.ts`). The flag
-   * value MUST NOT be persisted into the server connection profile
-   * (would create profile↔runtime drift if the env toggled).
+   * Callers derive this from their trust boundary (for example
+   * `SILVERHAND_ALLOW_INSECURE_REMOTE=1` in development, or an
+   * explicit packaged desktop build option). The value MUST NOT be
+   * persisted into the server connection profile (would create
+   * profile↔runtime drift if that caller-side opt-in toggled).
    */
   allowInsecureRemote?: boolean;
 }
@@ -454,7 +454,8 @@ export function classifyServerUrl(
   //   - https: always accepted; system-default TLS verifies at connect.
   //   - http: accepted ONLY with `allowInsecureRemote`. Without the
   //     flag, surface a typed rejection that points the operator at
-  //     the two valid escape routes (use https, or set the dev env).
+  //     the two valid escape routes (use https, or opt in at the
+  //     caller boundary).
   if (parsed.protocol === 'https:') {
     return { ok: true, kind: 'remote', url: parsed, insecure: false };
   }
@@ -469,6 +470,6 @@ export function classifyServerUrl(
     // obfuscated-IP messages.
     message:
       `Backend host '${rawHost}' is non-loopback over http://. ` +
-      `Use https://, or set SILVERHAND_ALLOW_INSECURE_REMOTE=1 for dev use.`,
+      `Use https://, or explicitly allow insecure remote HTTP for this client.`,
   };
 }

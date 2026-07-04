@@ -28,6 +28,10 @@ export const hostProxyConfigKey = (hostId: string) =>
   ['host-proxy-config', hostId] as const;
 
 export interface BackendInfoSnapshot {
+  /** Deployment mode of the active backend handle. Remote Settings saves must
+   * update the persisted profile + renderer backend handle, not only the
+   * daemon's outbound config. */
+  mode: 'embedded' | 'remote';
   /** D3.c Commit 4 — embedded backend's listen URL (where the
    *  renderer's HTTP API calls go). Used as fallback display when
    *  `local_host_server_url` is null (pre-claim). NOT the value
@@ -63,6 +67,7 @@ async function fetchBackendInfo(): Promise<BackendInfoSnapshot> {
   const info = await window.agentHub.getBackendInfo();
   if (!info) {
     return {
+      mode: 'embedded',
       url: '',
       local_host_id: null,
       local_host_status: 'error',
@@ -71,6 +76,7 @@ async function fetchBackendInfo(): Promise<BackendInfoSnapshot> {
     };
   }
   return {
+    mode: info.mode,
     url: info.url,
     local_host_id: info.local_host_id,
     local_host_status: info.local_host_status,

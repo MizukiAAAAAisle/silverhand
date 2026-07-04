@@ -55,6 +55,11 @@ describe('outbound daemon websocket client', () => {
     expect(() => hostConnectWebSocketUrl('http://example.test')).toThrow(
       'tls_required_for_non_loopback_host_ws',
     );
+    expect(
+      hostConnectWebSocketUrl('http://example.test:8080', {
+        allowInsecureRemote: true,
+      }),
+    ).toBe('ws://example.test:8080/api/hosts/connect');
     // Remote HTTPS is the production remote attach path.
     expect(hostConnectWebSocketUrl('https://example.test')).toBe(
       'wss://example.test/api/hosts/connect',

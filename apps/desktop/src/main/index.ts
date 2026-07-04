@@ -36,6 +36,7 @@ import {
   type FileLogger,
 } from '@silverhand/server';
 import {
+  DESKTOP_ALLOW_INSECURE_REMOTE,
   DESKTOP_REMOTE_ONLY,
   PACKAGED_DEFAULT_SERVER_URL,
 } from '../build-flags.js';
@@ -212,6 +213,13 @@ let partialApplyState: PartialApplyState = { kind: 'fully_applied' };
  *  `pnpm dev:headless`. The process keeps the backend alive until
  *  SIGINT / SIGTERM. */
 const HEADLESS = process.env.SILVERHAND_HEADLESS === '1';
+
+function desktopAllowsInsecureRemote(): boolean {
+  return (
+    DESKTOP_ALLOW_INSECURE_REMOTE ||
+    readAllowInsecureRemoteFlag(process.env)
+  );
+}
 
 interface RemoteDebuggingConfig {
   enabled: boolean;
@@ -1005,11 +1013,13 @@ async function claimLocalHostForUserSession(): Promise<void> {
     });
     const profileVersion =
       profileRead.ok ? profileRead.profile.version : undefined;
+    const allowInsecureRemote = desktopAllowsInsecureRemote();
 
     writeDaemonHostConfig(dir, {
       server_url: backendUrlSnapshot,
       host_id: localHostId,
       host_token: hostToken,
+      ...(allowInsecureRemote ? { allow_insecure_remote: true } : {}),
       ...(profileVersion !== undefined ? { profile_version: profileVersion } : {}),
     });
     localHostClaim = { status: 'claimed', hostId: localHostId };
@@ -1543,10 +1553,12 @@ async function saveServerUrlFromSettings(
   // connectivity is shown by the renderer's connection indicator, which
   // polls remote host-status `availability` — #task:1010).
   const controller = getEmbeddedHostWsController();
+  const allowInsecureRemote = desktopAllowsInsecureRemote();
   const outcome = await performOutboundReload(
     { serverUrl: rawServerUrl },
     {
       classifyServerUrl,
+      allowInsecureRemote,
       writeDaemonHostConfig: config => writeDaemonHostConfig(dir, config),
       hostOutboundReload: () => client.hostOutboundReload(),
       getAttachment: bindAttachmentAccessor(controller),
@@ -1782,7 +1794,7 @@ async function bootstrap(): Promise<void> {
           }
         : undefined,
     });
-    const allowInsecureRemote = readAllowInsecureRemoteFlag(process.env);
+    const allowInsecureRemote = desktopAllowsInsecureRemote();
     const forceEmbedded = readForceEmbeddedFlag(process.env);
     const effectiveBootProfile = resolveEffectiveBootProfile({
       savedProfileView: savedBootProfileView,
@@ -1796,6 +1808,7 @@ async function bootstrap(): Promise<void> {
           reason: effectiveBootProfile.warning.reason,
           packagedDefaultServerUrl: PACKAGED_DEFAULT_SERVER_URL,
           remoteOnly: DESKTOP_REMOTE_ONLY,
+          allowInsecureRemote: DESKTOP_ALLOW_INSECURE_REMOTE,
         },
         effectiveBootProfile.warning.message,
       );
@@ -1805,6 +1818,7 @@ async function bootstrap(): Promise<void> {
         {
           serverUrl: effectiveBootProfile.profileView.server_url,
           remoteOnly: DESKTOP_REMOTE_ONLY,
+          allowInsecureRemote: DESKTOP_ALLOW_INSECURE_REMOTE,
         },
         'desktop packaged default server URL selected for boot',
       );
@@ -1877,8 +1891,12 @@ async function bootstrap(): Promise<void> {
       );
       if (startupPlan.insecure) {
         logger.warn(
-          { serverUrl: startupPlan.serverUrl },
-          'D4.a Commit 5d remote-mode boot admitted insecure http URL via SILVERHAND_ALLOW_INSECURE_REMOTE=1; see runbook §12 for production guidance',
+          {
+            serverUrl: startupPlan.serverUrl,
+            packagedAllowInsecureRemote: DESKTOP_ALLOW_INSECURE_REMOTE,
+            envAllowInsecureRemote: readAllowInsecureRemoteFlag(process.env),
+          },
+          'D4.a Commit 5d remote-mode boot admitted insecure http URL; see runbook §12 for production guidance',
         );
       }
     } else {
@@ -2747,6 +2765,7 @@ function buildProfilePhase2Deps(): PerformProfilePhase2Deps | null {
   // without claiming to have verified attachment from main.
   const controller = getEmbeddedHostWsController();
   return {
+    allowInsecureRemote: desktopAllowsInsecureRemote(),
     writeDaemonHostConfig: config => writeDaemonHostConfig(dir, config),
     hostOutboundReload: () => client.hostOutboundReload(),
     getAttachment: bindAttachmentAccessor(controller),
@@ -2816,7 +2835,7 @@ async function handleProfileSaveWithTest(
   input: { serverUrl: string } | undefined,
 ): Promise<ProfileSaveWithTestResult> {
   const serverUrl = (input?.serverUrl ?? '').trim();
-  const allowInsecureRemote = readAllowInsecureRemoteFlag(process.env);
+  const allowInsecureRemote = desktopAllowsInsecureRemote();
   // Phase A — test the candidate URL against the live backend.
   const test = await probeServerInfo({ serverUrl, allowInsecureRemote });
   if (!test.ok) {

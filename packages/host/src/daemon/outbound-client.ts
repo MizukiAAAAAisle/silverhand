@@ -238,7 +238,9 @@ export class OutboundDaemonClient {
 
     let wsUrl: string;
     try {
-      wsUrl = hostConnectWebSocketUrl(next.config.server_url);
+      wsUrl = hostConnectWebSocketUrl(next.config.server_url, {
+        allowInsecureRemote: next.config.allow_insecure_remote === true,
+      });
     } catch (err) {
       this.opts.logger.warn(
         {
@@ -820,7 +822,8 @@ export function writeHostConfigAtomic(path: string, config: DaemonHostConfig): v
  * compute "same config?" the same way or reload's `unchanged` arm
  * drifts away from what the client treats as no-op-worthy.
  *
- * Bytes covered: `server_url`, `host_id`, `host_token`, and (D4.a
+ * Bytes covered: `server_url`, `host_id`, `host_token`, local
+ * insecure-remote policy, and (D4.a
  * Commit 5b, per `docs/remote-backend-architecture-notes.md §3` daemon
  * fingerprint nuance) `profile_version` — the local-config consistency
  * anchor that links daemon-config to the server connection profile
@@ -845,8 +848,11 @@ export function daemonHostConfigFingerprint(config: DaemonHostConfig): string {
     config.profile_version === undefined
       ? '<none>'
       : String(config.profile_version);
+  const allowInsecureRemoteToken =
+    config.allow_insecure_remote === true ? '1' : '0';
   return (
     `${config.server_url}\0${config.host_id}\0${config.host_token}` +
+    `\0allow_insecure_remote=${allowInsecureRemoteToken}` +
     `\0pv=${profileVersionToken}`
   );
 }
@@ -855,7 +861,10 @@ export function defaultDaemonHostConfigPath(silverhandDir: string): string {
   return join(silverhandDir, DAEMON_HOST_CONFIG_FILENAME);
 }
 
-export function hostConnectWebSocketUrl(serverUrl: string): string {
+export function hostConnectWebSocketUrl(
+  serverUrl: string,
+  options?: { allowInsecureRemote?: boolean },
+): string {
   // D3.c Commit 1 P1 (Cindy `#task:631`): delegate the V1 server-URL
   // acceptance check to `classifyServerUrl` so renderer / main /
   // daemon all gate on the same allowlist. Without this delegation,
@@ -869,12 +878,14 @@ export function hostConnectWebSocketUrl(serverUrl: string): string {
   // authority host on every hop.
   //
   // Remote attach policy: non-loopback HTTPS is accepted and converted
-  // to `wss://.../api/hosts/connect`; non-loopback HTTP remains
-  // rejected unless a future caller explicitly opts into the dev-only
-  // insecure classifier flag. Keep the legacy error name for the
-  // non-loopback HTTP rejection so older daemon logs / runbooks still
-  // line up with the failure mode operators know.
-  const classification = classifyServerUrl(serverUrl);
+  // to `wss://.../api/hosts/connect`; non-loopback HTTP is accepted
+  // only when daemon-config carries the local client/package opt-in.
+  // Keep the legacy error name for the default rejection so older
+  // daemon logs / runbooks still line up with the failure mode
+  // operators know.
+  const classification = classifyServerUrl(serverUrl, {
+    allowInsecureRemote: options?.allowInsecureRemote === true,
+  });
   if (!classification.ok) {
     if (classification.reason === 'insecure_remote_http_disallowed') {
       // Non-loopback http is still rejected at the daemon WS layer.

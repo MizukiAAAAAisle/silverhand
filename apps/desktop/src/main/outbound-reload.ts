@@ -54,6 +54,7 @@
  *      kept the live client (no swap → no reconnect to wait for).
  */
 import type {
+  ClassifyServerUrlOptions,
   DaemonHostConfig,
   ServerUrlClassification,
   ServerUrlRejectionReason,
@@ -189,11 +190,22 @@ export type HostOutboundReloadFn = () => Promise<HostOutboundReloadResult>;
  * fixed-response fake; production callers always pass the real
  * function.
  */
-export type ClassifyServerUrlFn = (input: string) => ServerUrlClassification;
+export type ClassifyServerUrlFn = (
+  input: string,
+  options?: ClassifyServerUrlOptions,
+) => ServerUrlClassification;
 
 export interface PerformOutboundReloadDeps {
   /** D3.c-1 shared classifier, defense-in-depth on raw input. */
   classifyServerUrl: ClassifyServerUrlFn;
+  /**
+   * Explicit caller-side opt-in for non-loopback http:// remote URLs.
+   * This is a client/package policy bit, not profile state; production
+   * binds it from the packaged desktop flag / dev env. The accepted
+   * value is also stamped into daemon-config so the daemon applies the
+   * same local policy during reload/attach.
+   */
+  allowInsecureRemote?: boolean;
   /** Atomic write to `daemon-config.json`. */
   writeDaemonHostConfig: WriteDaemonHostConfigFn;
   /** Daemon IPC — `HostClient.hostOutboundReload`. */
@@ -275,7 +287,7 @@ export interface PerformOutboundReloadInput {
  * D3.a's freshness contract: the daemon may attach the new bytes
  * before its IPC ack returns).
  *
- *   1. classifyServerUrl(input) — reject up-front; no write.
+ *   1. classifyServerUrl(input, callerPolicy) — reject up-front; no write.
  *   2. currentLocalHostId() / currentHostToken() — reload requires
  *      both. Missing → `reload_rejected/not_attached` (mirrors the
  *      daemon's own reject reason rather than minting a new one).
@@ -304,7 +316,9 @@ export async function performOutboundReload(
   // 1. Classify raw input. Anchor 1: defense-in-depth on the V1
   //    loopback policy. The renderer also validates, but main MUST
   //    NOT trust renderer-sent values for security-bearing fields.
-  const classified = deps.classifyServerUrl(input.serverUrl);
+  const classified = deps.classifyServerUrl(input.serverUrl, {
+    allowInsecureRemote: deps.allowInsecureRemote === true,
+  });
   if (!classified.ok) {
     return {
       ok: false,
@@ -321,8 +335,9 @@ export async function performOutboundReload(
   //     below — no Settings-layer short-circuit. Insecure non-loopback
   //     http is still rejected upstream by `classifyServerUrl`
   //     (`classify_rejected` / `insecure_remote_http_disallowed`)
-  //     unless the dev flag is set, so removing this guard does not
-  //     open an insecure hole.
+  //     unless the caller explicitly opted this client/build into
+  //     insecure remote HTTP, so removing this guard does not open
+  //     an insecure hole.
 
   // 2. Reload precondition — must have a current attachment to
   //    refresh. Missing host id or token means there's nothing to
@@ -371,6 +386,9 @@ export async function performOutboundReload(
     server_url: classified.url.toString(),
     host_id: hostId,
     host_token: hostToken,
+    ...(deps.allowInsecureRemote === true
+      ? { allow_insecure_remote: true }
+      : {}),
     // 5c-1 carry-through. Legacy settings:saveServerUrl is not a
     // profile commit, so the daemon's `<none>` ↔ explicit-value
     // distinction must reflect only profile commits — not raw URL

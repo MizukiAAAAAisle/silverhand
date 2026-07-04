@@ -4,6 +4,8 @@ import tailwindcss from '@tailwindcss/vite';
 import { resolve } from 'node:path';
 
 const remoteOnly = process.env.SILVERHAND_DESKTOP_REMOTE_ONLY === '1';
+const allowInsecureRemote =
+  process.env.SILVERHAND_DESKTOP_ALLOW_INSECURE_REMOTE === '1';
 const packagedDefaultServerUrl =
   process.env.SILVERHAND_DESKTOP_DEFAULT_SERVER_URL ?? '';
 
@@ -47,6 +49,9 @@ export default defineConfig({
   main: {
     define: {
       __SILVERHAND_DESKTOP_REMOTE_ONLY__: JSON.stringify(remoteOnly),
+      __SILVERHAND_DESKTOP_ALLOW_INSECURE_REMOTE__: JSON.stringify(
+        allowInsecureRemote,
+      ),
       __SILVERHAND_DESKTOP_DEFAULT_SERVER_URL__: JSON.stringify(
         packagedDefaultServerUrl,
       ),
@@ -73,6 +78,9 @@ export default defineConfig({
   preload: {
     define: {
       __SILVERHAND_DESKTOP_REMOTE_ONLY__: JSON.stringify(remoteOnly),
+      __SILVERHAND_DESKTOP_ALLOW_INSECURE_REMOTE__: JSON.stringify(
+        allowInsecureRemote,
+      ),
       __SILVERHAND_DESKTOP_DEFAULT_SERVER_URL__: JSON.stringify(
         packagedDefaultServerUrl,
       ),
@@ -87,6 +95,15 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
+    define: {
+      __SILVERHAND_DESKTOP_REMOTE_ONLY__: JSON.stringify(remoteOnly),
+      __SILVERHAND_DESKTOP_ALLOW_INSECURE_REMOTE__: JSON.stringify(
+        allowInsecureRemote,
+      ),
+      __SILVERHAND_DESKTOP_DEFAULT_SERVER_URL__: JSON.stringify(
+        packagedDefaultServerUrl,
+      ),
+    },
     resolve: {
       alias: {
         '@': resolve(__dirname, 'src/renderer'),

@@ -93,6 +93,8 @@ interface FakeOptions {
   hostId?: string | null;
   /** undefined = default 'tok-1'; null = explicit null (revoked / pre-claim). */
   hostToken?: string | null;
+  /** Local package/client opt-in to stamp into daemon-config. */
+  allowInsecureRemote?: boolean;
   /** Pass `false` to drop the controller entirely (drives the
    *  `no_attachment_controller` arm). */
   hasController?: boolean;
@@ -118,6 +120,7 @@ function makeDeps(opts: FakeOptions = {}): {
     };
   const hasController = opts.hasController ?? true;
   const deps: PerformProfilePhase2Deps = {
+    allowInsecureRemote: opts.allowInsecureRemote,
     writeDaemonHostConfig: config => {
       if (opts.writeThrows) throw opts.writeThrows;
       state.writeCalls.push(config);
@@ -433,6 +436,18 @@ describe('performProfilePhase2 — profile_version stamping', () => {
       host_id: 'host-1',
       host_token: 'tok-1',
       profile_version: 42,
+    });
+  });
+
+  it('stamps allow_insecure_remote when the local client policy opted in', async () => {
+    const { deps, state } = makeDeps({ allowInsecureRemote: true });
+    await performProfilePhase2({ profile: makeProfile({ version: 43 }) }, deps);
+    expect(state.writeCalls[0]).toEqual({
+      server_url: 'http://127.0.0.1:4321',
+      host_id: 'host-1',
+      host_token: 'tok-1',
+      profile_version: 43,
+      allow_insecure_remote: true,
     });
   });
 });

@@ -266,6 +266,30 @@ describe('desktop local host claim helpers', () => {
     });
   });
 
+  it('rotate preserves allow_insecure_remote when the existing config carries it', () => {
+    const dir = tempDir();
+    writeDaemonHostConfig(dir, {
+      server_url: 'http://215.192.147.162:8080',
+      host_id: 'host-local',
+      host_token: 'old-token',
+      allow_insecure_remote: true,
+    });
+
+    applyRotateSideEffects({
+      silverhandDir: dir,
+      serverUrl: 'http://215.192.147.162:8080',
+      hostId: 'host-local',
+      hostToken: 'new-token-cleartext',
+    });
+
+    expect(readDaemonHostConfig(dir)).toEqual({
+      server_url: 'http://215.192.147.162:8080',
+      host_id: 'host-local',
+      host_token: 'new-token-cleartext',
+      allow_insecure_remote: true,
+    });
+  });
+
   it('rotate omits profile_version when the existing config has none', () => {
     const dir = tempDir();
     // Legacy D3.x config — no profile_version field.

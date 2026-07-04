@@ -83,6 +83,7 @@ interface SupervisorFixture {
   writeInvalidJson(name?: string): string;
   writeInvalidShape(name?: string): string;
   writeNonLoopbackHttp(name?: string): string;
+  writeNonLoopbackHttpAllowed(name?: string): string;
   writeRemoteHttps(name?: string): string;
   writeDirectory(name?: string): string;
   cleanup(): void;
@@ -144,6 +145,16 @@ function makeFixture(): SupervisorFixture {
           server_url: 'http://example.com:8765',
           host_id: 'host-1',
           host_token: 'token-1',
+        }),
+      ),
+    writeNonLoopbackHttpAllowed: (name = 'daemon-config-non-loopback-allowed.json') =>
+      writeJson(
+        name,
+        JSON.stringify({
+          server_url: 'http://example.com:8765',
+          host_id: 'host-1',
+          host_token: 'token-1',
+          allow_insecure_remote: true,
         }),
       ),
     writeRemoteHttps: (name = 'daemon-config-remote-https.json') =>
@@ -248,6 +259,18 @@ describe('OutboundSupervisor — validation matrix (fail-closed; never mutates a
     const res = f.supervisor.attach({ config_path: path });
     expect(res).toMatchObject({ attached: false, reason: 'invalid_server_url' });
     expect(f.spawned).toEqual([]);
+  });
+
+  it('accepts non-loopback http server_url when daemon-config carries the local opt-in', () => {
+    f = makeFixture();
+    const path = f.writeNonLoopbackHttpAllowed();
+    const res = f.supervisor.attach({ config_path: path });
+    expect(res).toMatchObject({
+      attached: true,
+      action: 'started',
+      config_path: path,
+    });
+    expect(f.spawned).toHaveLength(1);
   });
 
   it('accepts remote https server_url for daemon outbound attach', () => {
@@ -780,6 +803,28 @@ describe('OutboundSupervisor — reload() (D3.c Commit 2)', () => {
     expect(f.spawned[0]!.stopCalls).toEqual([]);
   });
 
+  it('reload accepts non-loopback http when config carries allow_insecure_remote', () => {
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        server_url: 'http://example.com:8765',
+        host_id: 'host-1',
+        host_token: 'token-2',
+        allow_insecure_remote: true,
+      }),
+      'utf8',
+    );
+    const res = f.supervisor.reload();
+    expect(res.reloaded).toBe(true);
+    if (!res.reloaded) throw new Error('unreachable');
+    expect(res.action).toBe('reloaded');
+    expect(f.spawned).toHaveLength(2);
+    expect(f.spawned[0]!.stopCalls).toEqual([{ reason: 'config_reload' }]);
+  });
+
   // ── Success arms: unchanged / reloaded ───────────────────────────
 
   it('reload with byte-identical config returns action=unchanged and does NOT swap the client (no WS bounce on no-op Save)', () => {
@@ -1002,6 +1047,15 @@ describe('daemonHostConfigFingerprint — D4.a Commit 5b profile_version coverag
     const c = daemonHostConfigFingerprint({ ...baseConfig, profile_version: 1 });
     expect(a).not.toEqual(b);
     expect(a).toEqual(c);
+  });
+
+  it('allow_insecure_remote participates in the fingerprint', () => {
+    expect(daemonHostConfigFingerprint(baseConfig)).not.toEqual(
+      daemonHostConfigFingerprint({
+        ...baseConfig,
+        allow_insecure_remote: true,
+      }),
+    );
   });
 
   it('profile_version is independent of the other three fields (changing URL alone still flips even with same profile_version)', () => {

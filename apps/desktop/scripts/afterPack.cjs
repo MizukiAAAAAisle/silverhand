@@ -176,14 +176,32 @@ exports.default = async function afterPack(context) {
 
   const appName = `${context.packager.appInfo.productFilename}.app`;
   const appPath = path.join(context.appOutDir, appName);
+  const entitlementsPath = path.join(
+    context.packager.projectDir,
+    "build",
+    "entitlements.mac.plist",
+  );
+  if (!fs.existsSync(entitlementsPath)) {
+    throw new Error(`[afterPack] entitlements file missing: ${entitlementsPath}`);
+  }
 
   await rewriteRemoteOnlyAsar(context, appPath);
   restorePackagedBetterSqlite3Binding(appPath);
 
   console.log(`[afterPack] ad-hoc deep-signing ${appPath}`);
-  execFileSync("codesign", ["--deep", "--force", "--sign", "-", appPath], {
-    stdio: "inherit",
-  });
+  execFileSync(
+    "codesign",
+    [
+      "--deep",
+      "--force",
+      "--sign",
+      "-",
+      "--entitlements",
+      entitlementsPath,
+      appPath,
+    ],
+    { stdio: "inherit" },
+  );
   execFileSync("codesign", ["--verify", "--deep", "--strict", appPath], {
     stdio: "inherit",
   });

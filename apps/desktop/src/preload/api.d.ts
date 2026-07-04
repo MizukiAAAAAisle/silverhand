@@ -431,6 +431,7 @@ export type DesktopClearProfileResult =
 
 export interface DesktopBuildConfig {
   remote_only: boolean;
+  allow_insecure_remote: boolean;
   default_server_url: string;
 }
 

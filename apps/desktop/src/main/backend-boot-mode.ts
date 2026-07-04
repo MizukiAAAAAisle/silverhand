@@ -128,10 +128,10 @@ export type BackendBootMode =
        */
       serverUrl: string;
       /**
-       * `true` when the URL was admitted only because
-       * `SILVERHAND_ALLOW_INSECURE_REMOTE=1` was set (non-loopback
-       * http). Bootstrap consumers should emit a visible WARN line
-       * referencing the runbook on this branch.
+       * `true` when the URL was admitted only because this client
+       * explicitly allows non-loopback http (via dev env or packaged
+       * build option). Bootstrap consumers should emit a visible WARN
+       * line referencing the runbook on this branch.
        */
       insecure: boolean;
     }
@@ -213,9 +213,9 @@ export interface DecideBackendBootModeInput {
  *      {@link RemoteModeNotYetWiredError}).
  *   5. Profile URL fails classification → `profile_invalid`.
  *      Real-world drift cases this covers: writer ran under
- *      `allowInsecureRemote: true` but that env flag is now off, an
- *      older binary persisted an obfuscated loopback or non-origin
- *      URL, a future schema migration widened the persisted shape.
+ *      `allowInsecureRemote: true` but that caller-side opt-in is now
+ *      off, an older binary persisted an obfuscated loopback or
+ *      non-origin URL, a future schema migration widened the persisted shape.
  *      Bootstrap MUST throw {@link ProfileUnusableError} on this
  *      arm — silently falling back to embedded would violate the
  *      "profile present is data, not a hint" boundary (Cindy
@@ -307,8 +307,8 @@ export class RemoteModeNotYetWiredError extends Error {
  * `mode: 'profile_invalid'` — a profile is present but the boot-
  * time classifier refused it. This error surfaces the underlying
  * classifier message so the operator can fix the profile (clear it
- * in Settings, or set the env flag that made the URL acceptable at
- * write time, e.g. `SILVERHAND_ALLOW_INSECURE_REMOTE=1`).
+ * in Settings, or restore the caller-side opt-in that made the URL
+ * acceptable at write time).
  *
  * Rationale (Cindy D4.a Commit 3 review P1-B): silently falling
  * back to embedded when the user has a present-but-unusable profile
@@ -329,9 +329,9 @@ export class ProfileUnusableError extends Error {
         `Profile URL: '${decision.profileUrl}'. ` +
         `Classifier message: ${decision.classifyMessage} ` +
         `Repair options: ` +
-        `(1) restore the env flag that made the URL acceptable at write ` +
-        `time (e.g. SILVERHAND_ALLOW_INSECURE_REMOTE=1 for http remote ` +
-        `URLs) and relaunch; ` +
+        `(1) restore the caller-side opt-in that made the URL acceptable ` +
+        `at write time (for example the packaged insecure-remote build ` +
+        `option, or SILVERHAND_ALLOW_INSECURE_REMOTE=1 in dev) and relaunch; ` +
         `(2) set SILVERHAND_FORCE_EMBEDDED=1 to boot the embedded backend ` +
         `(this ignores the profile but does NOT delete it — once the UI ` +
         `is up you can clear the profile via Settings → "Connect to ` +
@@ -362,7 +362,7 @@ export class ProfileUnusableError extends Error {
  *   - `loopback_ok` → embedded boot (unchanged).
  *   - `system_ca_verified` → remote boot, https / valid CA chain.
  *   - `insecure_dev_remote` → remote boot, admitted by
- *     `SILVERHAND_ALLOW_INSECURE_REMOTE=1`.
+ *     explicit insecure-remote opt-in.
  *
  * The guard's discriminated `allow: false` arm is kept in the type
  * surface (rather than collapsed to `boolean`) for two reasons:
@@ -467,7 +467,7 @@ export type BackendStartupPlan =
       mode: 'remote';
       /** Canonical origin URL (post-classify + origin-normalize). */
       serverUrl: string;
-      /** Admitted via `SILVERHAND_ALLOW_INSECURE_REMOTE=1`. */
+      /** Admitted via explicit insecure-remote opt-in. */
       insecure: boolean;
     }
   | {

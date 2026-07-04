@@ -133,7 +133,11 @@ function SetupWizardBody({
         const buildConfig =
           results[1].status === 'fulfilled'
             ? results[1].value
-            : { remote_only: false, default_server_url: '' };
+            : {
+                remote_only: false,
+                allow_insecure_remote: false,
+                default_server_url: '',
+              };
         if (view) {
           setCurrent({
             serverUrl: view.server_url,

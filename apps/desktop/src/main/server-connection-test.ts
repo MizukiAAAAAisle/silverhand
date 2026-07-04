@@ -37,8 +37,9 @@ import {
  *     verified the chain (§8.1 single accept state for remote TLS).
  *   - `loopback_ok` — loopback http/https; no remote TLS path involved.
  *     The wizard renders "embedded backend" copy.
- *   - `insecure_dev_remote` — non-loopback http with the dev env flag
- *     set. Wizard MUST render a "connection is unencrypted" warning.
+ *   - `insecure_dev_remote` — non-loopback http admitted by explicit
+ *     insecure-remote opt-in. Wizard MUST render a "connection is
+ *     unencrypted" warning.
  *
  * Failure kinds (all `ok: false`):
  *   - `classify_rejected` — URL shape itself unacceptable; copy is
@@ -124,9 +125,8 @@ export interface ProbeServerInfoOptions {
   /** Raw URL the user typed. Trimmed by the caller; this helper does
    *  not normalize whitespace. */
   serverUrl: string;
-  /** Value of the `SILVERHAND_ALLOW_INSECURE_REMOTE` env (true when
-   *  set to `'1'`). The classifier needs it to decide whether to
-   *  admit non-loopback http URLs. */
+  /** Caller-side policy bit. The classifier needs it to decide whether
+   *  to admit non-loopback http URLs. */
   allowInsecureRemote: boolean;
   /** Fetch implementation. Defaults to `globalThis.fetch`. */
   fetcher?: FetcherFn;

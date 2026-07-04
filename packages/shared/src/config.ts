@@ -38,6 +38,14 @@ export const DaemonHostConfigSchema = z.object({
   host_id: z.string().min(1),
   host_token: z.string().min(1),
   /**
+   * Local daemon policy bit allowing non-loopback http:// remote
+   * outbound connections for this client. This is derived from the
+   * desktop package/env opt-in and written only into daemon-config;
+   * it is intentionally not part of the server connection profile and
+   * never crosses the daemon↔server protocol.
+   */
+  allow_insecure_remote: z.boolean().optional(),
+  /**
    * D4.a Commit 5b — local config consistency anchor (per
    * `docs/remote-backend-architecture-notes.md §3`). When the desktop main
    * process derives daemon-config from the server connection profile

@@ -13,12 +13,13 @@
 #      would crash at startup.
 #   3. Run electron-builder, which packages the .app bundle and dmg.
 #
-# Usage: ./scripts/package.sh [--dir] [--remote-only --server-url <origin>] [--minify|--no-minify]
-#   --dir          skip dmg creation, only produce the .app (faster iteration)
-#   --remote-only  package a Desktop build without embedded backend/server code
-#   --server-url   bake a default backend origin into the app
-#   --minify       minify shipped JS bundles (default for release packages)
-#   --no-minify    keep shipped JS readable (default with --dir)
+# Usage: ./scripts/package.sh [--dir] [--remote-only --server-url <origin>] [--allow-insecure-remote] [--minify|--no-minify]
+#   --dir                    skip dmg creation, only produce the .app (faster iteration)
+#   --remote-only            package a Desktop build without embedded backend/server code
+#   --server-url             bake a default backend origin into the app
+#   --allow-insecure-remote  bake acceptance for non-loopback http:// remote URLs
+#   --minify                 minify shipped JS bundles (default for release packages)
+#   --no-minify              keep shipped JS readable (default with --dir)
 
 set -euo pipefail
 
@@ -30,6 +31,7 @@ source "$ROOT_DIR/scripts/_native.sh"
 
 DIR_ONLY=0
 REMOTE_ONLY=0
+ALLOW_INSECURE_REMOTE="${SILVERHAND_ALLOW_INSECURE_REMOTE:-0}"
 SERVER_URL=""
 
 parse_minify_flag() {
@@ -55,6 +57,10 @@ while [[ $# -gt 0 ]]; do
       REMOTE_ONLY=1
       shift
       ;;
+    --allow-insecure-remote)
+      ALLOW_INSECURE_REMOTE=1
+      shift
+      ;;
     --server-url)
       if [[ $# -lt 2 ]]; then
         echo "[package] --server-url requires a value" >&2
@@ -76,7 +82,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h|--help)
-      echo "Usage: $0 [--dir] [--remote-only --server-url <origin>] [--minify|--no-minify]"
+      echo "Usage: $0 [--dir] [--remote-only --server-url <origin>] [--allow-insecure-remote] [--minify|--no-minify]"
       exit 0
       ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
@@ -90,6 +96,9 @@ if [[ -z "$MINIFY" ]]; then
   fi
 fi
 MINIFY="$(parse_minify_flag "$MINIFY")"
+if [[ "$ALLOW_INSECURE_REMOTE" != "1" ]]; then
+  ALLOW_INSECURE_REMOTE=0
+fi
 
 if ! command -v pnpm >/dev/null 2>&1; then
   echo "[package] pnpm not found" >&2
@@ -99,7 +108,8 @@ fi
 validate_server_url() {
   local raw="$1"
   local remote_only="$2"
-  node - "$raw" "$remote_only" "${SILVERHAND_ALLOW_INSECURE_REMOTE:-}" <<'NODE'
+  local allow_insecure_remote="$3"
+  node - "$raw" "$remote_only" "$allow_insecure_remote" <<'NODE'
 const raw = process.argv[2].trim();
 const remoteOnly = process.argv[3] === '1';
 const allowInsecureRemote = process.argv[4] === '1';
@@ -143,7 +153,7 @@ NODE
 }
 
 if [[ -n "$SERVER_URL" ]]; then
-  SERVER_URL="$(validate_server_url "$SERVER_URL" "$REMOTE_ONLY")"
+  SERVER_URL="$(validate_server_url "$SERVER_URL" "$REMOTE_ONLY" "$ALLOW_INSECURE_REMOTE")"
 fi
 if [[ "$REMOTE_ONLY" == "1" && -z "$SERVER_URL" ]]; then
   echo "[package] --remote-only requires --server-url <origin>" >&2
@@ -151,6 +161,7 @@ if [[ "$REMOTE_ONLY" == "1" && -z "$SERVER_URL" ]]; then
 fi
 
 export SILVERHAND_DESKTOP_REMOTE_ONLY="$REMOTE_ONLY"
+export SILVERHAND_DESKTOP_ALLOW_INSECURE_REMOTE="$ALLOW_INSECURE_REMOTE"
 export SILVERHAND_DESKTOP_DEFAULT_SERVER_URL="$SERVER_URL"
 export SILVERHAND_MINIFY="$MINIFY"
 
@@ -165,6 +176,9 @@ echo "[package] ELECTRON_MIRROR=$ELECTRON_MIRROR"
 echo "[package] minify JS bundles: $SILVERHAND_MINIFY"
 if [[ "$REMOTE_ONLY" == "1" ]]; then
   echo "[package] remote-only Desktop enabled"
+fi
+if [[ "$ALLOW_INSECURE_REMOTE" == "1" ]]; then
+  echo "[package] insecure remote HTTP enabled for packaged Desktop"
 fi
 if [[ -n "$SERVER_URL" ]]; then
   echo "[package] packaged default server URL: $SERVER_URL"

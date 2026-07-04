@@ -25,9 +25,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HostWsAttachment } from '@silverhand/backend';
 import type {
+  ClassifyServerUrlOptions,
   DaemonHostConfig,
   ServerUrlClassification,
 } from '@silverhand/shared';
+import { classifyServerUrl } from '@silverhand/shared';
 import type { HostOutboundReloadResult } from '@silverhand/host';
 import type {
   AttachWatchdogOutcome,
@@ -42,6 +44,7 @@ import {
 
 interface FakeState {
   classifyCalls: string[];
+  classifyOptions: Array<ClassifyServerUrlOptions | undefined>;
   writeCalls: DaemonHostConfig[];
   reloadCalls: number;
   watchdogCalls: {
@@ -60,7 +63,11 @@ function makeAttachment(overrides?: Partial<HostWsAttachment>): HostWsAttachment
 }
 
 interface FakeOptions {
-  classify?: (input: string) => ServerUrlClassification;
+  classify?: (
+    input: string,
+    options?: ClassifyServerUrlOptions,
+  ) => ServerUrlClassification;
+  allowInsecureRemote?: boolean;
   writeThrows?: Error;
   reloadResult?: HostOutboundReloadResult;
   reloadThrows?: Error;
@@ -86,6 +93,7 @@ function makeDeps(opts: FakeOptions = {}): {
 } {
   const state: FakeState = {
     classifyCalls: [],
+    classifyOptions: [],
     writeCalls: [],
     reloadCalls: 0,
     watchdogCalls: [],
@@ -104,10 +112,12 @@ function makeDeps(opts: FakeOptions = {}): {
       host_id: 'host-1',
     };
   const deps: PerformOutboundReloadDeps = {
-    classifyServerUrl: input => {
+    classifyServerUrl: (input, options) => {
       state.classifyCalls.push(input);
-      return (opts.classify ?? defaultClassify)(input);
+      state.classifyOptions.push(options);
+      return (opts.classify ?? defaultClassify)(input, options);
     },
+    allowInsecureRemote: opts.allowInsecureRemote,
     writeDaemonHostConfig: config => {
       if (opts.writeThrows) throw opts.writeThrows;
       state.writeCalls.push(config);
@@ -180,6 +190,65 @@ describe('performOutboundReload — anchor 1: raw input classify', () => {
     const out = await performOutboundReload({ serverUrl: 'http://example.com' }, deps);
     expect(out.ok).toBe(false);
     if (out.ok) throw new Error('unreachable');
+    if (out.kind !== 'classify_rejected') throw new Error('unreachable');
+    expect(out.reason).toBe('insecure_remote_http_disallowed');
+    expect(state.writeCalls).toEqual([]);
+    expect(state.reloadCalls).toBe(0);
+  });
+
+  it('passes the caller insecure-remote-http opt-in into the classifier', async () => {
+    const { deps, state } = makeDeps({
+      allowInsecureRemote: true,
+      classify: (_input, options) => {
+        expect(options).toEqual({ allowInsecureRemote: true });
+        return {
+          ok: true,
+          kind: 'remote',
+          url: new URL('http://215.192.147.162:8080/'),
+          insecure: true,
+        };
+      },
+    });
+    const out = await performOutboundReload(
+      { serverUrl: 'http://215.192.147.162:8080' },
+      deps,
+    );
+    expect(out.ok).toBe(true);
+    expect(state.classifyOptions).toEqual([
+      { allowInsecureRemote: true },
+    ]);
+    expect(state.writeCalls[0]!.server_url).toBe(
+      'http://215.192.147.162:8080/',
+    );
+    expect(state.writeCalls[0]!.allow_insecure_remote).toBe(true);
+  });
+
+  it('admits real non-loopback http classification when the caller opted in', async () => {
+    const { deps, state } = makeDeps({
+      allowInsecureRemote: true,
+      classify: classifyServerUrl,
+    });
+    const out = await performOutboundReload(
+      { serverUrl: 'http://215.192.147.162:8080' },
+      deps,
+    );
+    expect(out.ok).toBe(true);
+    expect(state.writeCalls).toHaveLength(1);
+    expect(state.writeCalls[0]!.server_url).toBe(
+      'http://215.192.147.162:8080/',
+    );
+    expect(state.writeCalls[0]!.allow_insecure_remote).toBe(true);
+  });
+
+  it('keeps real non-loopback http rejected without caller opt-in', async () => {
+    const { deps, state } = makeDeps({ classify: classifyServerUrl });
+    const out = await performOutboundReload(
+      { serverUrl: 'http://215.192.147.162:8080' },
+      deps,
+    );
+    expect(out.ok).toBe(false);
+    if (out.ok) throw new Error('unreachable');
+    expect(out.kind).toBe('classify_rejected');
     if (out.kind !== 'classify_rejected') throw new Error('unreachable');
     expect(out.reason).toBe('insecure_remote_http_disallowed');
     expect(state.writeCalls).toEqual([]);
@@ -655,6 +724,23 @@ describe('performOutboundReload — happy path end-to-end shape', () => {
       host_token: 'tok-1',
     });
     expect('profile_version' in written).toBe(false);
+  });
+
+  it('stamps allow_insecure_remote when the caller opted into insecure remote http', async () => {
+    const { deps, state } = makeDeps({
+      allowInsecureRemote: true,
+      currentProfileVersion: undefined,
+    });
+    await performOutboundReload(
+      { serverUrl: 'http://127.0.0.1:8765' },
+      deps,
+    );
+    expect(state.writeCalls[0]).toEqual({
+      server_url: 'http://127.0.0.1:8765/',
+      host_id: 'host-1',
+      host_token: 'tok-1',
+      allow_insecure_remote: true,
+    });
   });
 
   it('omits profile_version when the dep is unwired entirely (D3.x callers / pre-5c-1 tests)', async () => {
