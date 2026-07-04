@@ -14,7 +14,6 @@ export const ConversationDtoSchema = z.object({
   workspace_id: z.string(),
   workspace_path: z.string(),
   kind: ConversationKindSchema,
-  parent_conversation_id: z.string().nullable(),
   title: z.string(),
   status: ConversationStatusSchema,
   spawned_by_agent_id: z.string().nullable(),
@@ -28,13 +27,11 @@ export type ConversationDto = z.infer<typeof ConversationDtoSchema>;
 
 export const ChannelConversationDtoSchema = ConversationDtoSchema.extend({
   kind: z.literal('channel'),
-  parent_conversation_id: z.null(),
 });
 export type ChannelConversationDto = z.infer<typeof ChannelConversationDtoSchema>;
 
 export const DmChannelDtoSchema = ConversationDtoSchema.extend({
   kind: z.literal('dm_channel'),
-  parent_conversation_id: z.null(),
 });
 export type DmChannelDto = z.infer<typeof DmChannelDtoSchema>;
 

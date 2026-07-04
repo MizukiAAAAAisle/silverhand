@@ -1002,8 +1002,6 @@ function runtimeStartOptions(): unknown {
       conversation_id: 'c1',
       kind: 'channel',
       title: 'workspace',
-      parent_conversation_id: null,
-      parent_title: null,
       spawned_by_agent_id: null,
       members: [
         {

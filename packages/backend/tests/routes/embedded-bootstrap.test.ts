@@ -219,11 +219,11 @@ function freshUserApp(): TestApp {
   app.ctx.db
     .prepare<[string, number, number]>(
       `INSERT INTO conversations
-       (id, workspace_id, workspace_path, kind, parent_conversation_id,
+       (id, workspace_id, workspace_path, kind,
         title, status, spawned_by_agent_id, closed_at, close_summary,
         pinned_at, created_at, updated_at)
        VALUES ('pre-user-bootstrap-channel', 'pre-user-bootstrap', ?,
-               'channel', NULL, 'pre-user-bootstrap', 'idle', NULL,
+               'channel', 'pre-user-bootstrap', 'idle', NULL,
                NULL, NULL, NULL, ?, ?)`,
     )
     .run(workspacePath, now, now);

@@ -1027,13 +1027,8 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         `conversation_agent row missing for ${conversationId}/${agentId}`,
       );
     }
-    const parentConversation = conversation.parent_conversation_id
-      ? this.conversations.get(conversation.parent_conversation_id)
-      : null;
-
     return buildRuntimeStartOptions({
       conversation,
-      parentConversation,
       workspace,
       agent,
       sessionAgent,

@@ -10,7 +10,6 @@ import type { SilverhandCliLauncher } from '../context.js';
 
 export interface BuildRuntimeStartOptionsInput {
   conversation: ConversationDto;
-  parentConversation: ConversationDto | null;
   workspace: WorkspaceDto;
   agent: AgentDto;
   sessionAgent: ConversationAgentDto;
@@ -47,8 +46,6 @@ export function buildRuntimeStartOptions(
       conversation_id: input.conversation.id,
       kind: input.conversation.kind,
       title: input.conversation.title,
-      parent_conversation_id: input.conversation.parent_conversation_id,
-      parent_title: input.parentConversation?.title ?? null,
       spawned_by_agent_id: input.conversation.spawned_by_agent_id,
       members: input.members,
     },

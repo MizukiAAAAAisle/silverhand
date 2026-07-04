@@ -29,7 +29,6 @@ function channel(
     workspace_id: 'w1',
     workspace_path: '/tmp/w1',
     kind: 'channel',
-    parent_conversation_id: null,
     title: id,
     status: 'idle',
     spawned_by_agent_id: null,

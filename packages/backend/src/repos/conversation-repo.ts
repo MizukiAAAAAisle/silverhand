@@ -32,19 +32,19 @@ function assertChannelLike(row: ConversationRow): ChannelConversationDto | DmCha
 }
 
 function rowToChannel(row: ConversationRow): ChannelConversationDto {
-  if (row.kind !== 'channel' || row.parent_conversation_id !== null) {
+  if (row.kind !== 'channel') {
     throw new Error('conversation is not a channel');
   }
   const { pinned_at: _pinnedAt, ...rest } = row;
-  return { ...rest, kind: 'channel', parent_conversation_id: null };
+  return { ...rest, kind: 'channel' };
 }
 
 function rowToDmChannel(row: ConversationRow): DmChannelDto {
-  if (row.kind !== 'dm_channel' || row.parent_conversation_id !== null) {
+  if (row.kind !== 'dm_channel') {
     throw new Error('conversation is not a dm_channel');
   }
   const { pinned_at: _pinnedAt, ...rest } = row;
-  return { ...rest, kind: 'dm_channel', parent_conversation_id: null };
+  return { ...rest, kind: 'dm_channel' };
 }
 
 export class ConversationRepo {
@@ -383,7 +383,6 @@ export class ConversationRepo {
       workspacePath: params.workspacePath,
       kind: 'channel',
       title: params.title,
-      parentConversationId: null,
       spawnedByAgentId: params.spawnedByAgentId ?? null,
     });
     return rowToChannel(row);
@@ -400,7 +399,6 @@ export class ConversationRepo {
       workspacePath: params.workspacePath,
       kind: 'dm_channel',
       title: params.title,
-      parentConversationId: null,
       spawnedByAgentId: null,
     });
     return rowToDmChannel(row);
@@ -632,7 +630,6 @@ export class ConversationRepo {
     workspaceId: string;
     workspacePath: string;
     kind: ConversationKind;
-    parentConversationId: string | null;
     title: string;
     spawnedByAgentId: string | null;
   }): ConversationRow {
@@ -641,17 +638,16 @@ export class ConversationRepo {
     this.db
       .prepare(
         `INSERT INTO conversations
-         (id, workspace_id, workspace_path, kind, parent_conversation_id,
-          title, status, spawned_by_agent_id, closed_at, close_summary,
+         (id, workspace_id, workspace_path, kind, title, status,
+          spawned_by_agent_id, closed_at, close_summary,
           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'idle', ?, NULL, NULL, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, 'idle', ?, NULL, NULL, ?, ?)`,
       )
       .run(
         id,
         params.workspaceId,
         params.workspacePath,
         params.kind,
-        params.parentConversationId,
         params.title,
         params.spawnedByAgentId,
         now,

@@ -177,9 +177,7 @@ export class PolicyError extends Error {
   }
 }
 
-export type AttachmentErrorCode =
-  | 'attachment_owner_unresolved'
-  | 'attachment_outside_channel';
+export type AttachmentErrorCode = 'attachment_outside_channel';
 
 export class AttachmentError extends Error {
   constructor(
@@ -335,18 +333,4 @@ export function describeStartFailure(err: unknown): string {
   return compact.length <= START_FAILURE_ERROR_LIMIT
     ? compact
     : `${compact.slice(0, START_FAILURE_ERROR_LIMIT - 1)}…`;
-}
-
-export function resolveOwnerChannelId(conversation: {
-  id: string;
-  kind: string;
-  parent_conversation_id: string | null;
-}): string | null {
-  if (conversation.kind === 'channel' || conversation.kind === 'dm_channel') {
-    return conversation.id;
-  }
-  if (conversation.kind === 'thread') {
-    return conversation.parent_conversation_id ?? null;
-  }
-  return null;
 }

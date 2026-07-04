@@ -504,8 +504,6 @@ const RuntimeStartSessionSchema = z
     conversation_id: z.string().min(1),
     kind: ConversationKindSchema,
     title: z.string(),
-    parent_conversation_id: z.string().min(1).nullable(),
-    parent_title: z.string().nullable(),
     spawned_by_agent_id: z.string().min(1).nullable(),
     members: z.array(MemberDtoSchema),
   })

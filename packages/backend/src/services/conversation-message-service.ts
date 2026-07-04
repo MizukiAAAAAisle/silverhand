@@ -25,7 +25,6 @@ import {
   ActorError,
   MessageFreshnessError,
   MessageFreshnessGuardError,
-  resolveOwnerChannelId,
   type ConversationMessageServiceOptions,
   type NormalizedMessageTarget,
   type ResolveStaleMessageInput,
@@ -372,16 +371,6 @@ export class ConversationMessageService {
       txResult.message,
     );
 
-    if (txResult.targetConversation.parent_conversation_id) {
-      this.events.publishSide(txResult.targetConversation.parent_conversation_id, {
-        kind: 'thread_updated',
-        payload: {
-          parent_conversation_id: txResult.targetConversation.parent_conversation_id,
-          thread_id: txResult.targetConversation.id,
-        },
-      });
-    }
-
     if (policy.resolveRun && input.actor.kind === 'agent') {
       this.runtimeHost.resolveRun(
         txResult.sourceConversation.id,
@@ -675,16 +664,9 @@ export class ConversationMessageService {
     attachmentIds: string[],
   ): NonNullable<Parameters<MessageRepo['insertForConversation']>[0]['attachments']> {
     if (attachmentIds.length === 0) return [];
-    const ownerChannelId = resolveOwnerChannelId(targetConversation);
-    if (!ownerChannelId) {
-      throw new AttachmentError(
-        'attachment_owner_unresolved',
-        'attachment owner channel could not be resolved',
-      );
-    }
     const resolved = this.attachmentService.resolveSnapshotsForChannel(
       attachmentIds,
-      ownerChannelId,
+      targetConversation.id,
     );
     if (!resolved.ok) {
       throw new AttachmentError(

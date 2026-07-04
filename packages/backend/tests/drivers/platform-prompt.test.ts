@@ -21,7 +21,6 @@ function prompt(): string {
       sessionTitle: 'member activity',
       members: [],
       selfAgentId: 'agent-1',
-      isChildSession: false,
     },
   });
 }
@@ -44,30 +43,6 @@ describe('buildPlatformPrompt', () => {
     const regular = prompt();
     expect(regular).toContain('Conversation id: `conv-channel-1`');
     expect(regular).not.toContain('Parent channel conversation id');
-
-    const thread = buildPlatformPrompt({
-      agentId: 'agent-1',
-      agentName: 'Cindy',
-      runtime: 'claude',
-      activeProfileDir: './.silverhand/agents/agent-1',
-      roleSystemPrompt: '_role_',
-      currentMemory: { kind: 'missing' },
-      workspaceMemoryIndex: [],
-      sessionContext: {
-        conversationId: 'thread-1',
-        channelName: 'silverhand',
-        channelKind: 'regular',
-        sessionTitle: 'Thread: topic',
-        members: [],
-        selfAgentId: 'agent-1',
-        isChildSession: true,
-        parentSessionTitle: 'member activity',
-        parentChannelConversationId: 'channel-1',
-      },
-    });
-
-    expect(thread).toContain('Conversation id: `thread-1`');
-    expect(thread).toContain('Parent channel conversation id: `channel-1`');
   });
 
   it('avoids generic platform wording in the rendered agent manual', () => {
@@ -132,7 +107,6 @@ describe('buildPlatformPrompt', () => {
         sessionTitle: 'Onboarding',
         members: [],
         selfAgentId: 'agent-1',
-        isChildSession: false,
       },
     });
 
@@ -158,7 +132,6 @@ describe('buildPlatformPrompt', () => {
         sessionTitle: 'member activity',
         members: [],
         selfAgentId: 'agent-1',
-        isChildSession: false,
       },
     });
 
@@ -247,7 +220,6 @@ describe('buildPlatformPrompt', () => {
         sessionTitle: 'member activity',
         members: [],
         selfAgentId: 'agent-1',
-        isChildSession: false,
       },
     });
 
@@ -539,46 +511,6 @@ describe('buildPlatformPrompt', () => {
     expect(text).toMatch(/inert/i);
   });
 
-  it('renders thread (child-session) context positively, with no legacy/migration language', () => {
-    // Legacy threads退场: the prompt describes only the current model
-    // (#task:1094). A thread session renders as the current reply-cluster
-    // stream — never "legacy ... read-only during migration", and the
-    // `isAgentSpawnedChild` prompt-contract field is gone.
-    const text = buildPlatformPrompt({
-      agentId: 'agent-1',
-      agentName: 'Cindy',
-      runtime: 'claude',
-      activeProfileDir: './.silverhand/agents/agent-1',
-      roleSystemPrompt: '_role_',
-      currentMemory: { kind: 'missing' },
-      workspaceMemoryIndex: [],
-      sessionContext: {
-        conversationId: 'thread-1',
-        channelName: 'silverhand',
-        channelKind: 'regular',
-        sessionTitle: 'Thread: topic',
-        members: [],
-        selfAgentId: 'agent-1',
-        isChildSession: true,
-        parentSessionTitle: 'member activity',
-        parentChannelConversationId: 'channel-1',
-      },
-    });
-
-    // Positive current-model rendering.
-    expect(text).toContain(
-      'Current stream: a thread (reply cluster) under the channel "member activity"',
-    );
-    expect(text).toContain('Bare sends stay in this thread');
-    expect(text).toContain('Parent channel conversation id: `channel-1`');
-
-    // No migration/legacy vocabulary survives anywhere in the prompt.
-    expect(text).not.toContain('legacy');
-    expect(text).not.toContain('migration');
-    expect(text).not.toContain('silverhand thread close');
-    expect(text).not.toContain('target=parent');
-  });
-
   // ── Members block (PR-B) ────────────────────────────────────────
   //
   // The platform prompt teaches agents who else is in the channel by
@@ -624,7 +556,6 @@ describe('buildPlatformPrompt', () => {
           },
         ],
         selfAgentId: 'agent-1',
-        isChildSession: false,
       },
     });
   }
@@ -685,7 +616,6 @@ describe('buildPlatformPrompt', () => {
         sessionTitle: 'general',
         members: [],
         selfAgentId: 'agent-1',
-        isChildSession: false,
       },
     });
     expect(text).not.toContain('Members in this conversation:');
@@ -718,7 +648,6 @@ describe('buildPlatformPrompt', () => {
           },
         ],
         selfAgentId: 'agent-1',
-        isChildSession: false,
       },
     });
     expect(text).toContain(
@@ -788,7 +717,6 @@ describe('buildPlatformPrompt', () => {
           },
         ],
         selfAgentId: 'agent-1',
-        isChildSession: false,
       },
     });
 
@@ -877,7 +805,6 @@ describe('buildPlatformPrompt', () => {
           },
         ],
         selfAgentId: 'agent-1',
-        isChildSession: false,
       },
     });
 
@@ -1056,7 +983,6 @@ describe('buildPlatformPrompt — three-file model', () => {
         sessionTitle: 'main',
         members: [],
         selfAgentId: 'agent-1',
-        isChildSession: false,
       },
     });
   }

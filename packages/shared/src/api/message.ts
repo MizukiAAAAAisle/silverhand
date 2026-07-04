@@ -331,7 +331,6 @@ export const SearchConversationRefSchema = z.object({
   title: z.string(),
   kind: ConversationKindSchema,
   channel_id: z.string(),
-  parent_conversation_id: z.string().nullable(),
   closed_at: z.number().nullable(),
   created_at: z.number(),
 });

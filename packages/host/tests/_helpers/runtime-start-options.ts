@@ -50,8 +50,6 @@ export function testStartOptions(overrides: {
       conversation_id: conversationId,
       kind: 'channel',
       title: 'test-session',
-      parent_conversation_id: null,
-      parent_title: null,
       spawned_by_agent_id: null,
       members: [
         {

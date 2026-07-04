@@ -27,7 +27,6 @@ describe('archivedRowWorkspaceLabel — kind drives the context label', () => {
     id: 'c1',
     workspace_id: 'w1',
     title: 'general',
-    parent_conversation_id: null,
     closed_at: null,
     archived_at: 1_000,
   };
@@ -54,7 +53,6 @@ describe('archivedRowOpenTarget — opens in the channel\'s OWN workspace', () =
     id: 'c1',
     workspace_id: 'agent-home-ws',
     title: 'general',
-    parent_conversation_id: null,
     closed_at: null,
     archived_at: 1_000,
   };

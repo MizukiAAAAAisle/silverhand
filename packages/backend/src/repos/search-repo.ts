@@ -18,7 +18,6 @@ interface ConversationSearchRow {
   conversation_title: string;
   conversation_kind: ConversationKind;
   channel_id: string;
-  parent_conversation_id: string | null;
   closed_at: number | null;
   conversation_created_at: number;
   workspace_id: string;
@@ -40,7 +39,6 @@ type MessageSearchRow = MessageRow & {
   conversation_title: string;
   conversation_kind: ConversationKind;
   channel_id: string;
-  parent_conversation_id: string | null;
   closed_at: number | null;
   conversation_created_at: number;
   workspace_id: string;
@@ -74,7 +72,6 @@ function conversationRef(row: {
   conversation_title: string;
   conversation_kind: ConversationKind;
   channel_id: string;
-  parent_conversation_id: string | null;
   closed_at: number | null;
   conversation_created_at: number;
 }): SearchConversationRef {
@@ -83,7 +80,6 @@ function conversationRef(row: {
     title: row.conversation_title,
     kind: row.conversation_kind,
     channel_id: row.channel_id,
-    parent_conversation_id: row.parent_conversation_id,
     closed_at: row.closed_at,
     created_at: row.conversation_created_at,
   };
@@ -213,7 +209,6 @@ export class SearchRepo {
             conv.title AS conversation_title,
             conv.kind AS conversation_kind,
             conv.id AS channel_id,
-            conv.parent_conversation_id AS parent_conversation_id,
             conv.closed_at AS closed_at,
             conv.created_at AS conversation_created_at,
             w.id AS workspace_id,
@@ -275,7 +270,6 @@ export class SearchRepo {
             conv.title AS conversation_title,
             conv.kind AS conversation_kind,
             conv.id AS channel_id,
-            conv.parent_conversation_id AS parent_conversation_id,
             conv.closed_at AS closed_at,
             conv.created_at AS conversation_created_at,
             w.id AS workspace_id,

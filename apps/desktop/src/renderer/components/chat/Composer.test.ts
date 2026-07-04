@@ -49,7 +49,6 @@ function channel(overrides: Partial<ChannelConversationDto> = {}): ChannelConver
     workspace_id: 'w-1',
     workspace_path: '/tmp/w',
     kind: 'channel',
-    parent_conversation_id: null,
     title: 'general',
     status: 'open',
     spawned_by_agent_id: null,

@@ -94,13 +94,6 @@ export interface SessionContextInput {
   /** Agent id of the currently-spawning agent (i.e. "you"); used to
    *  apply the `self: true` marker on its row in the members block. */
   selfAgentId: string;
-  /** True when the current context is a Thread. Tweaks the prompt so the
-   *  agent knows it's in a sub-discussion. */
-  isChildSession: boolean;
-  /** Parent channel title — only meaningful when `isChildSession` is true. */
-  parentSessionTitle?: string | null;
-  /** Parent channel conversation id — only meaningful when `isChildSession` is true. */
-  parentChannelConversationId?: string | null;
 }
 
 export interface DriverPromptContext {
@@ -733,14 +726,6 @@ function renderSessionContext(sc: SessionContextInput): string {
   }
   lines.push(`- Channel: "${sc.sessionTitle}"`);
   lines.push(`- Conversation id: \`${sc.conversationId}\``);
-  if (sc.isChildSession) {
-    lines.push(
-      `- Current stream: a thread (reply cluster) under the channel "${sc.parentSessionTitle ?? '(unknown)'}". Bare sends stay in this thread; \`--target channel\` steps out to the main line.`,
-    );
-    if (sc.parentChannelConversationId) {
-      lines.push(`- Parent channel conversation id: \`${sc.parentChannelConversationId}\``);
-    }
-  }
   if (sc.members.length === 0) {
     // Defensive: every spawn happens because the agent IS a member,
     // so this list should always contain at least self. If we somehow

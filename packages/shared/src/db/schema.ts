@@ -338,7 +338,6 @@ export interface ConversationRow {
   workspace_id: string;
   workspace_path: string;
   kind: ConversationKind;
-  parent_conversation_id: string | null;
   title: string;
   status: ConversationStatus;
   spawned_by_agent_id: string | null;

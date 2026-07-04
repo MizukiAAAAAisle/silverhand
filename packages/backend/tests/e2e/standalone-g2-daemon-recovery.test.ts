@@ -198,10 +198,10 @@ describe('Standalone G2 — daemon disconnect + pending inbox replay recovery', 
     ).run(workspaceId, agentId, now);
     db.prepare(
       `INSERT INTO conversations
-        (id, workspace_id, workspace_path, kind, parent_conversation_id,
-         title, status, spawned_by_agent_id, closed_at, close_summary,
+        (id, workspace_id, workspace_path, kind,
+title, status, spawned_by_agent_id, closed_at, close_summary,
          pinned_at, created_at, updated_at)
-        VALUES (?, ?, ?, 'channel', NULL, ?, 'active', NULL, NULL, NULL,
+        VALUES (?, ?, ?, 'channel', ?, 'active', NULL, NULL, NULL,
                 NULL, ?, ?)`,
     ).run(conversationId, workspaceId, workspacePath, 'g2-recovery-channel', now, now);
     db.prepare(

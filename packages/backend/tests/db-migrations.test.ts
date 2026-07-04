@@ -726,11 +726,11 @@ describe('database migrations', () => {
             ('ws_main', 'Main', NULL, 'regular', '/tmp/ws_main', 'host_local',
              NULL, NULL, NULL, 1, 1);
           INSERT INTO conversations
-            (id, workspace_id, workspace_path, kind, parent_conversation_id, title,
+            (id, workspace_id, workspace_path, kind, title,
              status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
              archived_at, created_at, updated_at)
           VALUES
-            ('conv_main', 'ws_main', '/tmp/ws_main', 'channel', NULL, 'general',
+            ('conv_main', 'ws_main', '/tmp/ws_main', 'channel', 'general',
              'idle', NULL, NULL, NULL, NULL, NULL, 1, 1);
         `);
 
@@ -1028,10 +1028,10 @@ describe('database migrations', () => {
         ).run(now, now);
         db.prepare(
           `INSERT INTO conversations
-             (id, workspace_id, workspace_path, kind, parent_conversation_id, title,
+             (id, workspace_id, workspace_path, kind, title,
               status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
               archived_at, created_at, updated_at)
-           VALUES ('c1', 'ws1', '/tmp/ws1', 'channel', NULL, 'general',
+           VALUES ('c1', 'ws1', '/tmp/ws1', 'channel', 'general',
                    'idle', NULL, NULL, NULL, NULL, NULL, ?, ?)`,
         ).run(now, now);
 
@@ -1556,6 +1556,180 @@ describe('database migrations', () => {
         expect(
           db.prepare(`SELECT kind FROM conversations WHERE id = 't_fossil'`).get(),
         ).toEqual({ kind: 'thread' });
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  describe('v54 drop_conversation_parent_column', () => {
+    const now = 1_700_000_000_000;
+
+    function seedBase(db: Database.Database): void {
+      db.exec(`
+        INSERT INTO hosts (id, name, kind, created_at)
+        VALUES ('host_local', 'local', 'local', ${now});
+        INSERT INTO workspaces
+          (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+           owner_agent_id, archived_at, pinned_at, created_at, updated_at)
+        VALUES
+          ('ws_main', 'Main', NULL, 'regular', '/tmp/ws_main', 'host_local',
+           NULL, NULL, NULL, ${now}, ${now});
+        INSERT INTO conversations
+          (id, workspace_id, workspace_path, kind, parent_conversation_id, title,
+           status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+           archived_at, created_at, updated_at)
+        VALUES
+          ('c_channel', 'ws_main', '/tmp/ws_main', 'channel', NULL, 'general',
+           'idle', NULL, NULL, NULL, NULL, NULL, ${now}, ${now}),
+          ('c_dm', 'ws_main', '/tmp/ws_main', 'dm_channel', NULL, 'dm',
+           'idle', NULL, NULL, NULL, NULL, NULL, ${now}, ${now});
+        INSERT INTO conversation_events (conversation_id, agent_id, kind, payload, created_at)
+        VALUES ('c_channel', NULL, 'archived', NULL, ${now});
+        INSERT INTO messages
+          (id, conversation_id, from_kind, content, seq, created_at)
+        VALUES ('m1', 'c_channel', 'system', 'hello', 1, ${now});
+      `);
+    }
+
+    it('drops parent_conversation_id and its index while preserving channel-like rows', () => {
+      const db = openDbAt(53);
+      try {
+        seedBase(db);
+
+        applyMigrationsThrough(db, 54);
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 54`).get(),
+        ).toBeDefined();
+
+        const columns = db
+          .prepare<[], { name: string }>(`PRAGMA table_info(conversations)`)
+          .all()
+          .map(r => r.name);
+        expect(columns).not.toContain('parent_conversation_id');
+        expect(columns).toEqual(
+          expect.arrayContaining([
+            'id',
+            'workspace_id',
+            'workspace_path',
+            'kind',
+            'title',
+            'status',
+            'spawned_by_agent_id',
+            'closed_at',
+            'close_summary',
+            'pinned_at',
+            'created_at',
+            'updated_at',
+            'archived_at',
+            'latest_message_seq',
+          ]),
+        );
+
+        const rows = db
+          .prepare(`SELECT id, kind, title FROM conversations ORDER BY id`)
+          .all();
+        expect(rows).toEqual([
+          { id: 'c_channel', kind: 'channel', title: 'general' },
+          { id: 'c_dm', kind: 'dm_channel', title: 'dm' },
+        ]);
+        expect(
+          db
+            .prepare(
+              `SELECT conversation_id, kind FROM conversation_events WHERE conversation_id = 'c_channel'`,
+            )
+            .get(),
+        ).toEqual({ conversation_id: 'c_channel', kind: 'archived' });
+        expect(
+          db
+            .prepare(
+              `SELECT id, conversation_id, content FROM messages WHERE id = 'm1'`,
+            )
+            .get(),
+        ).toEqual({ id: 'm1', conversation_id: 'c_channel', content: 'hello' });
+
+        const indexes = db
+          .prepare<[], { name: string }>(
+            `SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'conversations'`,
+          )
+          .all()
+          .map(r => r.name);
+        expect(indexes).toEqual(
+          expect.arrayContaining([
+            'idx_conversations_workspace',
+            'idx_conversations_status',
+            'idx_conversations_archived_at',
+          ]),
+        );
+        expect(indexes).not.toContain('idx_conversations_parent');
+
+        expect(() =>
+          db.exec(`
+            INSERT INTO conversations
+              (id, workspace_id, workspace_path, kind, parent_conversation_id, title,
+               status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+               archived_at, created_at, updated_at)
+            VALUES
+              ('c_bad_parent_col', 'ws_main', '/tmp/ws_main', 'channel', NULL, 'bad',
+               'idle', NULL, NULL, NULL, NULL, NULL, ${now}, ${now})
+          `),
+        ).toThrow(/parent_conversation_id/);
+
+        expect(() =>
+          db.exec(`
+            INSERT INTO conversations
+              (id, workspace_id, workspace_path, kind, title, status,
+               spawned_by_agent_id, closed_at, close_summary, pinned_at,
+               archived_at, created_at, updated_at)
+            VALUES
+              ('c_thread', 'ws_main', '/tmp/ws_main', 'thread', 'bad',
+               'idle', NULL, NULL, NULL, NULL, NULL, ${now}, ${now})
+          `),
+        ).toThrow(/CHECK/);
+
+        expect(db.pragma('foreign_key_check')).toEqual([]);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('fails loud and writes no _migrations row when a non-null parent column remains', () => {
+      const db = openDbAt(53);
+      try {
+        seedBase(db);
+        db.pragma('ignore_check_constraints = ON');
+        try {
+          db.exec(`
+            INSERT INTO conversations
+              (id, workspace_id, workspace_path, kind, parent_conversation_id, title,
+               status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+               archived_at, created_at, updated_at)
+            VALUES
+              ('c_dirty_parent', 'ws_main', '/tmp/ws_main', 'channel', 'c_channel', 'dirty',
+               'idle', NULL, NULL, NULL, NULL, NULL, ${now}, ${now});
+          `);
+        } finally {
+          db.pragma('ignore_check_constraints = OFF');
+        }
+
+        expect(() => applyMigrationsThrough(db, 54)).toThrow(
+          /parent_conversation_id/,
+        );
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 54`).get(),
+        ).toBeUndefined();
+        const columns = db
+          .prepare<[], { name: string }>(`PRAGMA table_info(conversations)`)
+          .all()
+          .map(r => r.name);
+        expect(columns).toContain('parent_conversation_id');
+        expect(
+          db
+            .prepare(
+              `SELECT parent_conversation_id FROM conversations WHERE id = 'c_dirty_parent'`,
+            )
+            .get(),
+        ).toEqual({ parent_conversation_id: 'c_channel' });
       } finally {
         db.close();
       }

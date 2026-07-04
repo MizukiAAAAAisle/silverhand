@@ -70,12 +70,6 @@ export async function buildPromptContextFromRuntimeStartOptions(
       sessionTitle: options.session.title,
       members: options.session.members,
       selfAgentId: options.agent.id,
-      // Isolated-thread conversations were retired (#task:1303); a runtime
-      // session is never a child session. Parent fields remain in the wire
-      // schema (always null) until they are dropped in a coordinated pass.
-      isChildSession: false,
-      parentSessionTitle: options.session.parent_title,
-      parentChannelConversationId: options.session.parent_conversation_id,
     },
   };
 }

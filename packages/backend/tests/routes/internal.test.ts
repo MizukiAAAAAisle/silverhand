@@ -249,7 +249,6 @@ describe('POST /internal/.../create-channel', () => {
     const created = await (
       await http(t).get(`/api/channels/${body.channel_id}`)
     ).json() as any;
-    expect(created.channel.parent_conversation_id).toBeNull();
     expect(created.channel.workspace_id).toBe(channelId);
     expect(created.channel.spawned_by_agent_id).toBe(agentIds.alice);
     expect(workspaceEvents).toContainEqual({

@@ -453,6 +453,74 @@ export const migrations: Migration[] = [
         ON conversations(workspace_id) WHERE archived_at IS NOT NULL;
     `,
   },
+  {
+    version: 54,
+    name: 'drop_conversation_parent_column',
+    // #task:1305 — the legacy isolated-thread conversation model is gone from
+    // data, schema, DTOs, and runtime code. v53 kept parent_conversation_id as
+    // an always-NULL physical column so the kind discriminator cleanup could
+    // land independently; this migration removes that last storage fossil.
+    //
+    // SQLite table rebuild is the least ambiguous shape here: it drops the
+    // column, drops idx_conversations_parent, and preserves every surviving
+    // conversations column/index explicitly.
+    foreignKeyEscape: true,
+    precondition: (db) => {
+      const handle = db as {
+        prepare: (sql: string) => { get: () => { n: number } };
+      };
+      const { n } = handle
+        .prepare(
+          `SELECT COUNT(*) AS n FROM conversations
+             WHERE parent_conversation_id IS NOT NULL`,
+        )
+        .get();
+      if (n > 0) {
+        throw new Error(
+          `migration v54: refusing to drop conversations.parent_conversation_id — ${n} row(s) still reference a parent conversation`,
+        );
+      }
+    },
+    up: `
+      CREATE TABLE conversations_new (
+        id                      TEXT PRIMARY KEY,
+        workspace_id            TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        workspace_path          TEXT NOT NULL,
+        kind                    TEXT NOT NULL CHECK (kind IN ('channel', 'dm_channel')),
+        title                   TEXT NOT NULL,
+        status                  TEXT NOT NULL,
+        spawned_by_agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        closed_at               INTEGER,
+        close_summary           TEXT,
+        pinned_at               INTEGER,
+        created_at              INTEGER NOT NULL,
+        updated_at              INTEGER NOT NULL,
+        archived_at             INTEGER,
+        latest_message_seq      INTEGER NOT NULL DEFAULT 0
+      );
+
+      INSERT INTO conversations_new (
+        id, workspace_id, workspace_path, kind, title, status,
+        spawned_by_agent_id, closed_at, close_summary, pinned_at,
+        created_at, updated_at, archived_at, latest_message_seq
+      )
+        SELECT
+          id, workspace_id, workspace_path, kind, title, status,
+          spawned_by_agent_id, closed_at, close_summary, pinned_at,
+          created_at, updated_at, archived_at, latest_message_seq
+        FROM conversations;
+
+      DROP TABLE conversations;
+      ALTER TABLE conversations_new RENAME TO conversations;
+
+      CREATE INDEX idx_conversations_workspace
+        ON conversations(workspace_id, kind, updated_at DESC);
+      CREATE INDEX idx_conversations_status
+        ON conversations(status);
+      CREATE INDEX idx_conversations_archived_at
+        ON conversations(workspace_id) WHERE archived_at IS NOT NULL;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =
