@@ -192,8 +192,8 @@ function ScheduleItem({
            *  (conversation, owner_agent) runtime wakes up on each fire
            *  AND posts the result. `target_label` is server-projected
            *  under schedule's own ACL (see ScheduleDto.target_label):
-           *  '#name' / '@name' / '#parent:thread' / 'Unavailable
-           *  conversation'. We never call /conversations/:id/ref from
+           *  '#name' / '@name' / 'Unavailable conversation'. We never
+           *  call /conversations/:id/ref from
            *  here — schedule list is the single auth boundary, and
            *  fan-out lookups would mix two ACL models. The full id is
            *  retained as the tooltip for audit. */}
@@ -431,17 +431,16 @@ function SpecPill({ row }: { row: ScheduleDto }): JSX.Element | null {
 
 /**
  * Schedule-target pill (#task:816). `target_label` is one of:
- *   `#name` (channel) · `@name` (DM) · `#parent:thread` (thread) ·
- *   `Unavailable conversation` (deleted target).
+ *   `#name` (channel) · `@name` (DM) · `Unavailable conversation`
+ *   (deleted target).
  *
  * Rendered as `→ [<label>]` — the arrow stays as a connector glyph in
  * the muted meta-strip color, the label sits in a code-island chip so
  * it scans as a navigation target instead of a plain word in a
  * sentence. The `#`/`@` prefix in the label already carries the kind
  * semantic; we don't add a separate glyph (`Hash` / `At`) inside the
- * chip because target_label can be `#parent:thread` form or the
- * literal "Unavailable conversation" sentence — a single glyph would
- * lie about half of those.
+ * chip because target_label can be the literal "Unavailable
+ * conversation" sentence — a single glyph would lie about that case.
  *
  * The full conversation id stays as the tooltip for audit (you can
  * grep logs for it).
