@@ -2,7 +2,7 @@
 
 > **Status**: 2026-05-09 整理。来自 PR-1 ~ PR-6 落地的"Human/Agent 同构"主线。
 >
-> 本 doc 是 silverhand 后端**新功能 / 新 service / 新 DB 表 / 新 migration 必须遵守的约束清单**，与 `core-design.md`（产品/数据模型权威）和 `permissions.md`（鉴权模型权威）平级。代码与本 doc 冲突时，以本 doc 为准。
+> 本 doc 是 silverhand 后端**新功能 / 新 service / 新 DB 表 / 新 migration / 新 compat·legacy·fallback shim 必须遵守的约束清单**，与 `core-design.md`（产品/数据模型权威）和 `permissions.md`（鉴权模型权威）平级。代码与本 doc 冲突时，以本 doc 为准。
 >
 > 任何提交前 review 都应当用 §1 checklist 检查；任何例外必须在设计稿里写明理由。
 
@@ -112,6 +112,7 @@ PRAGMA restore (foreign_keys=ON, legacy_alter_table 恢复原值)
 - `agent_home` workspace 上加 `workspace_members` 行
 - 新建 dm_channel 时硬假设"agent_home → exactly one dm_channel"
 - 新 route 在 service 注释里说 "caller has already passed auth"，但 route 实际没校验
+- 新增 compat / fallback / 迁移过渡 shim，但注释/设计稿里没写「退出条件三件套」（守哪个具名契约 / 删除触发条件 / owner）（见 §11）
 
 ---
 
@@ -136,6 +137,7 @@ PR / 设计稿 review 时按以下顺序检查：
 4. 涉及鉴权 → 同时过 `permissions.md`
 5. 涉及数据模型 → 同时过 `core-design.md` §2
 6. 涉及 spawn / 子进程 / runtime 生命周期 → 同时过 §9 AgentHost runtime boundary
+7. 涉及 compat / legacy / fallback / 迁移过渡 shim → 过 §11 退出条件三件套（守哪个具名契约 / 删除触发条件 / owner）
 
 ---
 
@@ -228,9 +230,30 @@ agent 授权是 capability-based（见 `graded-permissions-v1.md`）。新增 ca
 
 ---
 
-## 11. 历史
+## 11. Compat / legacy shim 的退出条件（合入 gate）
+
+> 这轮 #1301 legacy 审计（#1303/#1304/#1305/#1310/#1311/#1312）清的所有东西，根因都是同一个：当初 shim 加进来时没写退出条件、没人知道何时能删，于是永久沉淀成债。本节把审计时**事后**用的 A/B/C 判据**前置成合入 gate**——治本，免下一轮考古。
+
+**约束：新增任何 compat / legacy / fallback / 迁移过渡 shim，必须在代码注释（或设计稿）里内联「退出条件三件套」，缺任一项不许合入：**
+
+| # | 项 | 说明 |
+|---|-----|------|
+| 1 | **守哪个具名的真实契约** | 这层 shim 在保护哪个**具体的、真实存在**的契约？公开 API / 已落库的旧数据行 / 文档化的对外集成 / 对用户的承诺。答不出具名契约 = 它守的是「空」，现在就不该加（存量的立即删）。 |
+| 2 | **删除的明确触发条件** | 什么**可观测事实**为真时这层就该删？e.g. `DB count(fossil)=0` / 旧 client 全部下线 / 全 workspace registry-bound / 某 migration version 之后。必须是可验证的谓词，不是「以后再说」。 |
+| 3 | **owner** | 谁负责在触发条件满足时删它。无主的 shim 永远不会被删。 |
+
+**退役时按 A/B/C 三桶处置（判据来源）：**
+
+- **A 守空** → 触发条件本就满足或契约为空 → 现在就删，根本不该新增。
+- **B 守可能不存在的 fossil 行** → 触发条件 = 对该 fossil 跑 DB count。count=0 → 删整条兼容分支 + 相关 DTO/API 判别式/字段；count≠0 的处置 = 有价值→迁移 / 可丢→同刀 destructive 删 / 既不能丢又无迁移目标才「保留」（last resort）。**legacy 数据存在本身 ≠ 清理否决项**——否则任何 legacy 都清不掉。
+- **C 守活契约** → 触发条件可能**永远不满足**。典型：**local-first 多 DB 下 renderer 对历史行的 fallback**——每个用户库都留着自己的旧 system-message 行、缺失字段（如 task audit 行的 `actor`）不可回填、任何**单库** count 都不授权删。这类是**永久前向兼容，不是 legacy debt**；仍要写①②③，②写明「永久（local-first 历史行）」并在代码里标 `// intentional forward-compat, not legacy`，防下一轮审计误删。
+
+**失败模式（不钉这条会怎样）：** shim 加进来时没记录守什么、何时能删 → 半年后审计者面对一堆 compat 分支，分不清哪个是死化石、哪个还守着活契约，只能逐个 DB probe + 全链路 grep 重新考古（正是 #1301/#1303/#1311/#1312 花掉的力气）。退出条件把这份成本从「每次审计 O(n) 考古」降到「加入时 O(1) 写清楚」。
+
+## 12. 历史
 
 - 2026-05-04 ~ 05-05：mcp system 频道下 thread `bbUBIrwJO5ZNY1ww`（"统一 human/agent 共用业务到 application service 层"）通过 PR-1 ~ PR-6 完成首轮落地
 - 2026-05-07：`permissions.md` 锁版 Slice A'/B/C/D 计划，task #125 是 Slice A' 实施
 - 2026-05-09：本 doc 创建，把"同构"提升为后端设计期强制规则
 - 2026-07-01：IM-终态三方架构 review 后加 §10（transport/cursor 不变量 + 单一 fanout 源非目标 + seq id-space 命名规则 + capability 桶判据）
+- 2026-07-04：#1301 legacy 审计（#1303/#1304/#1305/#1310/#1311/#1312）收官后加 §11——把审计时事后用的 A/B/C 退役判据前置成合入 gate（compat/legacy/fallback shim 必带「退出条件三件套」）
