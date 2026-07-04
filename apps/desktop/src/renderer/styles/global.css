@@ -829,6 +829,33 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   overflow-wrap: normal;
 }
 
+/* Mermaid diagrams (#task:1322). Auto-rendered ```mermaid fences. The SVG
+   carries mermaid's own theme palette (dark/light mapped from the app theme),
+   so the container stays chrome-light: a centered, horizontally-scrollable
+   block that never overflows the message column. */
+.markdown-body .mermaid-diagram {
+  margin: 0.5em 0;
+  max-width: 100%;
+  overflow-x: auto;
+  text-align: center;
+}
+.markdown-body .mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+.markdown-body .mermaid-diagram__pending {
+  display: inline-block;
+  padding: 0.6em 0;
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+/* Source fall-back when a diagram fails to render — reuses `.code-block`
+   chrome; this note just tags why the source is showing. */
+.markdown-body .mermaid-fallback__note {
+  font-size: 0.9em;
+  color: var(--text-muted);
+}
+
 /* Flash highlight applied by SessionView when jumping to a message
    from the Saved view. Two pulses of accent-soft so the eye catches
    it even if the page is already at the right scroll position. */

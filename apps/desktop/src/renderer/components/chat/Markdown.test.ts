@@ -1534,3 +1534,103 @@ describe('Markdown task refs', () => {
     );
   });
 });
+
+describe('Markdown mermaid fences (#task:1322)', () => {
+  const DIAGRAM = '```mermaid\ngraph TD; A-->B;\n```';
+
+  function renderInteractive(content: string): string {
+    return renderToStaticMarkup(
+      React.createElement(
+        QueryClientProvider,
+        { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
+        React.createElement(Markdown, { content }),
+      ),
+    );
+  }
+
+  function renderExport(content: string): string {
+    return renderToStaticMarkup(
+      React.createElement(
+        QueryClientProvider,
+        { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
+        React.createElement(Markdown, { content, interactive: false }),
+      ),
+    );
+  }
+
+  function renderExportWithSvg(
+    content: string,
+    mermaidSvgByCode: ReadonlyMap<string, string>,
+  ): string {
+    return renderToStaticMarkup(
+      React.createElement(
+        QueryClientProvider,
+        { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
+        React.createElement(Markdown, {
+          content,
+          interactive: false,
+          mermaidSvgByCode,
+        }),
+      ),
+    );
+  }
+
+  it('routes a ```mermaid fence to the diagram container, not a code block', () => {
+    // SSR can't run the async render effect, so we assert the wiring: the
+    // fence mounts MermaidDiagram (pending state) rather than a <CodeBlock>.
+    const html = renderInteractive(DIAGRAM);
+    expect(html).toContain('class="mermaid-diagram"');
+    expect(html).toContain('data-mermaid-state="pending"');
+    // Not the interactive code-block chrome (that path has a copy button).
+    expect(html).not.toContain('code-block__copy');
+  });
+
+  it('detects the language case-insensitively (```Mermaid with capital M)', () => {
+    // `mermaid` is a proper noun; a stray capital must not demote the diagram
+    // to a plain code block.
+    const html = renderInteractive('```Mermaid\ngraph TD; A-->B;\n```');
+    expect(html).toContain('class="mermaid-diagram"');
+    expect(html).not.toContain('code-block__copy');
+  });
+
+  it('a non-mermaid fence still renders the interactive code block', () => {
+    const html = renderInteractive('```ts\nconst x = 1;\n```');
+    expect(html).toContain('code-block__copy');
+    expect(html).not.toContain('mermaid-diagram');
+  });
+
+  it('export path renders mermaid source as a plain code block (screenshot-safe)', () => {
+    // The export tree is captured synchronously; async diagram render would be
+    // blank, so the source is shown instead. No diagram container, no copy chrome.
+    const html = renderExport(DIAGRAM);
+    expect(html).toContain('class="code-block"');
+    expect(html).not.toContain('mermaid-diagram');
+    expect(html).not.toContain('code-block__copy');
+    expect(html).toContain('graph TD');
+  });
+
+  it('export path injects a pre-rendered SVG when one is supplied (#task:1322)', () => {
+    // ImagePreviewModal pre-renders diagrams before capture and passes the SVGs
+    // in, keyed by trimmed source. That diagram then renders as an SVG instead
+    // of falling back to source, so the shared image shows the real diagram.
+    const svgByCode = new Map([
+      ['graph TD; A-->B;', '<svg data-testid="prerendered"></svg>'],
+    ]);
+    const html = renderExportWithSvg(DIAGRAM, svgByCode);
+    expect(html).toContain('class="mermaid-diagram"');
+    expect(html).toContain('data-mermaid-state="ok"');
+    expect(html).toContain('data-testid="prerendered"');
+    // No source fallback chrome this time.
+    expect(html).not.toContain('class="code-block"');
+  });
+
+  it('export path falls back to source when the diagram is absent from the map', () => {
+    // A diagram that failed or timed out pre-render is simply not in the map;
+    // the export must still show its source, never a blank — "always produces
+    // an image" is bounded, not a bet on every render succeeding.
+    const html = renderExportWithSvg(DIAGRAM, new Map());
+    expect(html).toContain('class="code-block"');
+    expect(html).not.toContain('mermaid-diagram');
+    expect(html).toContain('graph TD');
+  });
+});

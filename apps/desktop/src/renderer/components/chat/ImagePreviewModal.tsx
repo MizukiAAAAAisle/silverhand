@@ -13,6 +13,11 @@ import type {
 import { loadAttachmentBlobUrl } from '@/lib/attachment-blob-cache';
 import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
 import { MessageScreenshotView } from './MessageScreenshotView';
+import {
+  extractMermaidSources,
+  isDarkTheme,
+  renderMermaidSvg,
+} from './MermaidDiagram';
 import { suggestImageFilename } from './markdownTranscript';
 import { SelectionActionButton } from './SelectionToolbar';
 import type { ChannelReference } from './ChannelRef';
@@ -23,6 +28,50 @@ import type { StaticTaskRefSummary } from './TaskRef';
  *  single failed avatar doesn't abort the whole screenshot. */
 const TRANSPARENT_PIXEL_DATA_URL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=';
+
+/** Per-diagram pre-render budget (#task:1322). A diagram that doesn't settle
+ *  within this bound is treated as failed → falls back to source, so a single
+ *  stuck mermaid render can never hang the whole "share as image" flow. This
+ *  is what makes "always produces an image" bounded rather than a bet that
+ *  every diagram resolves promptly (Alice's review point). */
+const MERMAID_PRERENDER_TIMEOUT_MS = 4000;
+
+/**
+ * Pre-render every Mermaid diagram in the selected messages to SVG, off-screen
+ * and BEFORE the html-to-image capture (#task:1322). Reuses the live render
+ * entry (`renderMermaidSvg`) + the active theme so the exported diagram matches
+ * what's on screen. Returns a map (trimmed source → SVG) of only the diagrams
+ * that succeeded within the timeout; any that fail or time out are simply
+ * absent, so the export tree falls back to source for them. Never rejects —
+ * the share flow must always reach capture.
+ */
+async function prerenderMermaidSvgs(
+  messages: readonly MessageDto[],
+): Promise<Map<string, string>> {
+  const sources = Array.from(
+    new Set(messages.flatMap(m => extractMermaidSources(m.content))),
+  );
+  const map = new Map<string, string>();
+  if (sources.length === 0) return map;
+  const dark = isDarkTheme();
+  const results = await Promise.allSettled(
+    sources.map(src =>
+      Promise.race([
+        renderMermaidSvg(src, dark),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error('mermaid pre-render timeout')),
+            MERMAID_PRERENDER_TIMEOUT_MS,
+          ),
+        ),
+      ]),
+    ),
+  );
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') map.set(sources[i]!, r.value);
+  });
+  return map;
+}
 
 /** html-to-image rejects from its image-embed step with the raw DOM
  *  `Event` (the one passed to `<img>.onerror`). Decode it into a
@@ -192,6 +241,9 @@ export function ImagePreviewModal({
   const [taskRefsByNumber, setTaskRefsByNumber] = useState<
     ReadonlyMap<number, StaticTaskRefSummary>
   >(() => new Map());
+  const [mermaidSvgByCode, setMermaidSvgByCode] = useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
   const [busy, setBusy] = useState(false);
   // Offscreen container ref — html-to-image runs against this DOM
   // subtree. We position it offscreen rather than `display:none` so
@@ -209,6 +261,7 @@ export function ImagePreviewModal({
       setPngBytes(null);
       setAttachmentImageUrls(new Map());
       setTaskRefsByNumber(new Map());
+      setMermaidSvgByCode(new Map());
       return;
     }
     setPhase('rendering');
@@ -279,10 +332,18 @@ export function ImagePreviewModal({
       workspaceId ?? null,
       queryClient,
     );
-    void preloadImageAttachments(messages).then(urls => {
+    void Promise.all([
+      preloadImageAttachments(messages),
+      // Pre-render Mermaid diagrams to SVG off-screen and wait for ALL of them
+      // to settle (ok/error/timeout) before capture, so the static tree html-
+      // to-image walks already contains the finished diagrams (#task:1322).
+      // Never rejects — failures/timeouts just fall back to source.
+      prerenderMermaidSvgs(messages),
+    ]).then(([urls, mermaidSvgs]) => {
       if (cancelled) return;
       setAttachmentImageUrls(urls);
       setTaskRefsByNumber(taskRefs);
+      setMermaidSvgByCode(mermaidSvgs);
       rafs.push(
         requestAnimationFrame(() => {
           // One more frame — the first commit only mounts the JSX; React
@@ -420,6 +481,7 @@ export function ImagePreviewModal({
                 attachmentImageUrls={attachmentImageUrls}
                 viewer={viewer}
                 viewerAvatarObjectUrl={viewerAvatarObjectUrl}
+                mermaidSvgByCode={mermaidSvgByCode}
               />
             </div>
           </div>

@@ -6,6 +6,7 @@ import rehypeHighlight from 'rehype-highlight';
 import { AtSign, Check, Copy, Hash } from 'lucide-react';
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { Mention } from './Mention';
+import { MermaidDiagram } from './MermaidDiagram';
 import { ChannelRef, type ChannelReference } from './ChannelRef';
 import {
   ConversationRef,
@@ -72,6 +73,13 @@ interface MarkdownProps {
    *  2f8a2ca: the export view was leaking interactive chrome into
    *  the captured PNG). */
   interactive?: boolean;
+  /** Pre-rendered Mermaid SVGs keyed by trimmed diagram source, for the
+   *  export/screenshot path (#task:1322). When a mermaid fence's source is
+   *  present here, the non-interactive export tree injects the finished SVG
+   *  instead of falling back to source — so a shared image shows the rendered
+   *  diagram. Absent key (diagram failed / timed out pre-render, or interactive
+   *  path) → source fallback, exactly as before. */
+  mermaidSvgByCode?: ReadonlyMap<string, string>;
 }
 
 const MENTION_PREFIX = 'silverhand-mention:';
@@ -105,6 +113,7 @@ function MarkdownInner({
   onOpenConversationRef,
   taskRefsByNumber,
   interactive = true,
+  mermaidSvgByCode,
 }: MarkdownProps): JSX.Element {
   // Plugin instance is recreated per render but is a thin closure;
   // remark instantiates the transformer once per `process` call so
@@ -281,8 +290,42 @@ function MarkdownInner({
               </a>
             );
           },
-          pre: ({ children }) =>
-            interactive ? (
+          pre: ({ children }) => {
+            // Mermaid fences auto-render to a diagram on the live path
+            // (#task:1322). The export/screenshot path (`interactive=false`)
+            // keeps the source as a plain code block instead — the capture is
+            // synchronous and mermaid's async render wouldn't finish in time,
+            // so showing the (always-correct) source beats a blank diagram.
+            // Case-insensitive: `mermaid` is a proper noun (capital M) and
+            // agents commonly write ```Mermaid — a stray capital shouldn't
+            // silently demote the diagram to a plain code block.
+            if (extractLang(children)?.toLowerCase() === 'mermaid') {
+              if (interactive) {
+                return <MermaidDiagram code={extractText(children)} />;
+              }
+              // Export path: use the SVG pre-rendered before capture
+              // (#task:1322) if this diagram succeeded; otherwise keep the
+              // always-correct source. The SVG was produced by the same
+              // `renderMermaidSvg` entry + theme as the live component, so the
+              // shared image matches what's on screen. It's already
+              // DOMPurify-sanitized (securityLevel:'strict'), safe to inject.
+              const svg = mermaidSvgByCode?.get(extractText(children).trim());
+              if (svg) {
+                return (
+                  <div
+                    className="mermaid-diagram"
+                    data-mermaid-state="ok"
+                    dangerouslySetInnerHTML={{ __html: svg }}
+                  />
+                );
+              }
+              return (
+                <div className="code-block">
+                  <pre>{children}</pre>
+                </div>
+              );
+            }
+            return interactive ? (
               <CodeBlock>{children}</CodeBlock>
             ) : (
               // Export path: bare `<pre>`. No copy / expand button,
@@ -293,7 +336,8 @@ function MarkdownInner({
               <div className="code-block">
                 <pre>{children}</pre>
               </div>
-            ),
+            );
+          },
           code: ({ className, children, ...rest }) => (
             <code className={className} {...rest}>
               {children}
