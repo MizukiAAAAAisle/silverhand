@@ -18,6 +18,7 @@ import {
 } from './attachment-blob-cache';
 import {
   __resetComposerDraftCacheForTests,
+  assignAttachmentLabel,
   cleanupAllComposerDrafts,
   clearComposerDraft,
   dropSentAttachmentsFromDraft,
@@ -257,6 +258,124 @@ describe('composer draft cache', () => {
 
     expect(deleteAttachmentBestEffort).toHaveBeenCalledWith('late-id');
     expect(readComposerDraft('c1')).toBeNull();
+  });
+});
+
+describe('composer draft attachment labels (#task:1324)', () => {
+  it('assigns per-kind labels through the shared generator', () => {
+    expect(assignAttachmentLabel('c1', 'image/png')).toBe('Image #1');
+    expect(assignAttachmentLabel('c1', 'image/jpeg')).toBe('Image #2');
+    expect(assignAttachmentLabel('c1', 'application/pdf')).toBe('File #1');
+    expect(assignAttachmentLabel('c1', 'text/plain')).toBe('File #2');
+    // Independent counters per draft.
+    expect(assignAttachmentLabel('c2', 'image/png')).toBe('Image #1');
+  });
+
+  it('is monotonic — never reuses a number, even after the top is removed', () => {
+    // Three images, then the composer removes the most recent (#3). Adding
+    // another must yield #4, not the freed #3 — otherwise a body reference the
+    // user already typed (`Image #3`) would silently rebind to the new file.
+    assignAttachmentLabel('c1', 'image/png'); // #1
+    assignAttachmentLabel('c1', 'image/png'); // #2
+    assignAttachmentLabel('c1', 'image/png'); // #3
+    // Simulate the unmount write built from Composer state: it OMITS labelSeq
+    // and carries only the surviving pending items (#1, #2). The counter must
+    // still not regress.
+    writeComposerDraft({
+      conversationId: 'c1',
+      text: 'see Image #3',
+      caret: 0,
+      pending: [
+        { key: 'a', filename: 'a', size: 1, contentType: 'image/png', state: 'done', label: 'Image #1' },
+        { key: 'b', filename: 'b', size: 1, contentType: 'image/png', state: 'done', label: 'Image #2' },
+      ],
+      updatedAt: 1,
+    });
+    expect(assignAttachmentLabel('c1', 'image/png')).toBe('Image #4');
+  });
+
+  it('floors the counter at the highest live label even without a persisted counter', () => {
+    // A draft reconstructed straight from a snapshot (no prior assign call):
+    // reconcileLabelSeq lifts the counter to the highest live ordinal so the
+    // next assignment can't collide with a surviving label.
+    writeComposerDraft({
+      conversationId: 'c1',
+      text: '',
+      caret: 0,
+      pending: [
+        { key: 'a', filename: 'a', size: 1, contentType: 'image/png', state: 'done', label: 'Image #2' },
+      ],
+      updatedAt: 1,
+    });
+    expect(assignAttachmentLabel('c1', 'image/png')).toBe('Image #3');
+  });
+
+  it('resets to #1 after the draft is cleared (a fresh message starts over)', () => {
+    assignAttachmentLabel('c1', 'image/png'); // #1
+    assignAttachmentLabel('c1', 'image/png'); // #2
+    clearComposerDraft('c1');
+    expect(assignAttachmentLabel('c1', 'image/png')).toBe('Image #1');
+  });
+
+  it('resets the counter after a send is dropped, so the next message starts at #1', () => {
+    // Send flow: message A held Image #1 + Image #2, then those rows are dropped
+    // once the submit settles. A new message must number from #1, not continue
+    // A's counter (#task:1324 — the "send-pending pollution" Cindy flagged).
+    writeComposerDraft({
+      conversationId: 'c1',
+      text: 'A',
+      caret: 0,
+      pending: [
+        donePending('a', 'a-id'),
+        donePending('b', 'b-id'),
+      ],
+      labelSeq: { image: 2, file: 0 },
+      updatedAt: 1,
+    });
+    dropSentAttachmentsFromDraft('c1', ['a', 'b']);
+    expect(assignAttachmentLabel('c1', 'image/png')).toBe('Image #1');
+  });
+
+  it('floors the reset counter at a survivor added while the prior send was in flight', () => {
+    // The user pasted a new image (Image #2, key `keep`) before message A's send
+    // settled. Dropping A's sent row must NOT free #2 back to the survivor's peer
+    // — the next new file gets #3 so the live `Image #2` reference stays unique.
+    writeComposerDraft({
+      conversationId: 'c1',
+      text: 'A',
+      caret: 0,
+      pending: [
+        { key: 'sent', filename: 's', size: 1, contentType: 'image/png', state: 'done', label: 'Image #1', attachment: attachment('sent-id') },
+        { key: 'keep', filename: 'k', size: 1, contentType: 'image/png', state: 'done', label: 'Image #2' },
+      ],
+      labelSeq: { image: 2, file: 0 },
+      updatedAt: 1,
+    });
+    dropSentAttachmentsFromDraft('c1', ['sent']);
+    expect(assignAttachmentLabel('c1', 'image/png')).toBe('Image #3');
+  });
+
+  it('carries the label through an upload from start to done', async () => {
+    let resolveUpload!: (dto: AttachmentDto) => void;
+    vi.mocked(apiUpload).mockReturnValueOnce(
+      new Promise<AttachmentDto>(res => {
+        resolveUpload = res;
+      }),
+    );
+    const label = assignAttachmentLabel('c1', 'image/png');
+    const promise = startComposerDraftAttachmentUpload({
+      conversationId: 'c1',
+      attachmentKey: 'a1',
+      file: testFile('x', 'x.png', 'image/png'),
+      label,
+    });
+    expect(readComposerDraft('c1')?.pending[0]?.label).toBe('Image #1');
+    resolveUpload(attachment('real-id'));
+    await promise;
+    const done = readComposerDraft('c1')?.pending[0];
+    expect(done?.state).toBe('done');
+    // Label survives the upload-completion patch (compose-time identity).
+    expect(done?.label).toBe('Image #1');
   });
 });
 

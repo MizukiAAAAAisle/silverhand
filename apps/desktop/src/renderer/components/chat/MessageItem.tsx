@@ -10,6 +10,7 @@ import type {
   StreamUnreadDto,
   UserDto,
 } from '@silverhand/shared';
+import { resolveAttachmentLabels } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
@@ -1022,20 +1023,30 @@ function AttachmentList({
   attachments: AttachmentSnapshot[];
   alignRight: boolean;
 }): JSX.Element {
+  // Resolve every tile's label once at the list level so ordinals match the
+  // agent-facing stdin suffix exactly (same shared resolver). This lets a
+  // reader map an agent's "Image #1" back to the actual tile (#task:1324).
+  const labels = resolveAttachmentLabels(attachments);
   return (
     <div
       className={
         'mt-2 flex flex-wrap gap-2 ' + (alignRight ? 'justify-end' : 'justify-start')
       }
     >
-      {attachments.map(att => (
-        <AttachmentTile key={att.id} attachment={att} />
+      {attachments.map((att, i) => (
+        <AttachmentTile key={att.id} attachment={att} label={labels[i]} />
       ))}
     </div>
   );
 }
 
-function AttachmentTile({ attachment }: { attachment: AttachmentSnapshot }): JSX.Element {
+function AttachmentTile({
+  attachment,
+  label,
+}: {
+  attachment: AttachmentSnapshot;
+  label?: string;
+}): JSX.Element {
   const isImage = attachment.content_type.startsWith('image/');
   // Synchronous cache hit covers both the optimistic-message render
   // (Composer pre-populated the cache from the local File) and any
@@ -1109,7 +1120,7 @@ function AttachmentTile({ attachment }: { attachment: AttachmentSnapshot }): JSX
 
   if (isImage) {
     return (
-      <>
+      <div className="flex flex-col gap-1">
         <button
           type="button"
           onClick={() => imageUrl && setLightboxOpen(true)}
@@ -1130,6 +1141,7 @@ function AttachmentTile({ attachment }: { attachment: AttachmentSnapshot }): JSX
             </div>
           )}
         </button>
+        {label ? <AttachmentLabelBadge label={label} /> : null}
         {imageUrl ? (
           <Lightbox
             open={lightboxOpen}
@@ -1138,23 +1150,40 @@ function AttachmentTile({ attachment }: { attachment: AttachmentSnapshot }): JSX
             alt={attachment.filename}
           />
         ) : null}
-      </>
+      </div>
     );
   }
 
   return (
-    <button
-      type="button"
-      onClick={downloadAndOpen}
-      className="flex max-w-[280px] items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
-      title={error ?? `${attachment.filename} (${formatBytes(attachment.size)})`}
-    >
-      <FileText className="size-4 shrink-0 text-text-muted" />
-      <span className="min-w-0 truncate">{attachment.filename}</span>
-      <span className="shrink-0 text-[10px] text-text-muted">
-        {formatBytes(attachment.size)}
-      </span>
-    </button>
+    <div className="flex flex-col items-start gap-1">
+      <button
+        type="button"
+        onClick={downloadAndOpen}
+        className="flex max-w-[280px] items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+        title={error ?? `${attachment.filename} (${formatBytes(attachment.size)})`}
+      >
+        <FileText className="size-4 shrink-0 text-text-muted" />
+        <span className="min-w-0 truncate">{attachment.filename}</span>
+        <span className="shrink-0 text-[10px] text-text-muted">
+          {formatBytes(attachment.size)}
+        </span>
+      </button>
+      {label ? <AttachmentLabelBadge label={label} /> : null}
+    </div>
+  );
+}
+
+/** The `Image #N` / `File #N` reference caption under a received attachment
+ *  tile (#task:1324). It's a reference identifier, not a status/action badge —
+ *  so it's rendered as light, document-caption-style text centered under the
+ *  tile, NOT an accent pill (which would over-read as a chip and steal the
+ *  saturated-hue budget). Non-interactive here (unlike the composer's insert
+ *  button): on a sent message the label is already fixed. */
+function AttachmentLabelBadge({ label }: { label: string }): JSX.Element {
+  return (
+    <span className="block w-full text-center font-mono text-[10px] text-text-muted">
+      {label}
+    </span>
   );
 }
 

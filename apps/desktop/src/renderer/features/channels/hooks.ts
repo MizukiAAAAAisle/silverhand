@@ -17,6 +17,7 @@ import { toast } from 'sonner';
 import type {
   AgentRunStatesDto,
   AttachmentDto,
+  AttachmentRefInput,
   AttachmentSnapshot,
   ClearSessionResponse,
   ConversationAgentDto,
@@ -881,7 +882,11 @@ export function useChannelAgents(
 
 export interface SendMessageInput {
   content: string;
-  attachments?: AttachmentDto[];
+  /** Uploaded attachments to reference. Each carries an optional compose-time
+   *  `label` (`Image #N` / `File #N`) — the stable identity assigned when the
+   *  file entered the composer, sent verbatim so the agent sees the same
+   *  reference the user typed (#task:1324). */
+  attachments?: Array<AttachmentDto & { label?: string }>;
   /** When true, promote this send into an open `todo` task in the same
    *  request (#task:1125). Maps to `as_task` on the wire; the backend
    *  derives the task title from the first line and leaves it unassigned. */
@@ -912,14 +917,20 @@ export function useSendMessage(
       const path = apiPaths.channelMessages(channelId);
       const body: {
         content: string;
-        attachment_ids?: string[];
+        attachment_ids?: Array<string | AttachmentRefInput>;
         reply_to_message_id?: string;
         as_task?: boolean;
       } = {
         content: input.content,
       };
       if (input.attachments && input.attachments.length > 0) {
-        body.attachment_ids = input.attachments.map(a => a.id);
+        // Send `{id, label}` when the composer assigned a stable label, bare id
+        // otherwise. The backend normalizes the union and echoes the label —
+        // never recomputes it — so chip / body / payload / suffix stay in sync
+        // (#task:1324).
+        body.attachment_ids = input.attachments.map(a =>
+          a.label ? { id: a.id, label: a.label } : a.id,
+        );
       }
       if (threadRootId) {
         body.reply_to_message_id = threadRootId;
@@ -979,6 +990,9 @@ export function useSendMessage(
               filename: a.filename,
               size: a.size,
               content_type: a.content_type,
+              // Carry the label so the optimistic bubble shows the same
+              // reference the server will echo (no flash-to-relabel on commit).
+              ...(a.label ? { label: a.label } : {}),
             }))
           : null;
       const tempMsg: PendingMessage = {

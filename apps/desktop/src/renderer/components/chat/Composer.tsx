@@ -11,6 +11,7 @@ import {
 } from 'react';
 import { ChevronDown, Hash, ListTodo, Paperclip, X } from 'lucide-react';
 import type { AgentDto, ChannelConversationDto } from '@silverhand/shared';
+import { isGenericMimeHint, mimeFromFilename } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import {
   AppDropdownMenu,
@@ -35,6 +36,7 @@ import {
   useViewerUser,
 } from '@/features/me/hooks';
 import {
+  assignAttachmentLabel,
   clearComposerDraft,
   dropSentAttachmentsFromDraft,
   hasComposerDraftInFlightUpload,
@@ -75,6 +77,24 @@ interface ComposerProps {
 const MAX_TEXTAREA_HEIGHT = 192; // Mirrors Tailwind max-h-48.
 const MAX_ATTACHMENTS = 20; // Matches backend SendMessageInputSchema cap.
 type PendingAttachment = CachedPendingAttachment;
+
+/**
+ * Best-effort mirror of the backend's `detectContentType` hint→suffix path
+ * (#task:1324), so the label's Image/File kind matches the content_type the
+ * backend will finally store. If the browser gave a usable hint we trust it;
+ * otherwise (empty / octet-stream / malformed) we recover from the filename
+ * suffix, exactly like the backend does. Magic-byte sniffing — the backend's
+ * one stronger signal — needs the file bytes and would make label assignment
+ * async; we keep it synchronous so the chip is correct at paste time. A file
+ * whose extension lies about its content is still caught by the backend's
+ * kind check at send time (a clear reject, never a silent misbinding).
+ */
+function effectiveContentType(file: File): string {
+  const hint = file.type;
+  if (!isGenericMimeHint(hint)) return hint;
+  return mimeFromFilename(file.name) ?? 'application/octet-stream';
+}
+
 type SubmittingSnapshot = {
   snapshot: ComposerDraftSnapshot;
   editGeneration: number;
@@ -396,11 +416,40 @@ export function Composer({
     || pending.some(p => p.state === 'uploading')
     || (!draft.trim() && pending.filter(p => p.state === 'done').length === 0);
 
+  /** Insert an attachment's label (e.g. `Image #1`) as plain text at the
+   *  caret so the user can describe it inline (#task:1324). The body reference
+   *  is verbatim the label the agent receives, so the two match; it stays plain
+   *  text (deleting it doesn't remove the attachment — that's the chip's job). */
+  const insertLabelAtCaret = (label: string): void => {
+    const el = ref.current;
+    const pos = el?.selectionStart ?? caretRef.current;
+    const text = draftRef.current;
+    const before = text.slice(0, pos);
+    const after = text.slice(pos);
+    // Pad with a leading space only when the preceding char isn't already
+    // whitespace, and a trailing space so typing continues cleanly.
+    const lead = before.length > 0 && !/\s$/.test(before) ? ' ' : '';
+    const insertion = `${lead}${label} `;
+    const nextDraft = before + insertion + after;
+    const nextCaret = (before + insertion).length;
+    updateDraft(nextDraft, nextCaret);
+    requestAnimationFrame(() => {
+      const node = ref.current;
+      if (!node) return;
+      node.focus();
+      node.setSelectionRange(nextCaret, nextCaret);
+      updateCaret(nextCaret);
+    });
+  };
+
   function submit(asTask = false): void {
     const content = draft.trim();
     const ready = pending
       .filter(p => p.state === 'done' && p.attachment)
-      .map(p => p.attachment!);
+      // Carry the compose-time label alongside the uploaded dto so the send
+      // payload (and the optimistic snapshot) reference the same stable
+      // identity the chip showed (#task:1324).
+      .map(p => ({ ...p.attachment!, label: p.label }));
     if ((!content && ready.length === 0) || disabled) return;
     if (pending.some(p => p.state === 'uploading')) return;
     const submittedPending = pending.filter(p => p.state === 'done' && p.attachment);
@@ -460,21 +509,39 @@ export function Composer({
     if (list.length === 0) return;
     const slotsLeft = MAX_ATTACHMENTS - pendingRef.current.length;
     if (slotsLeft <= 0) return;
+    // Adding an attachment is the start of editing the next message. Detach the
+    // just-submitted snapshot FIRST — once, before any label assignment — so the
+    // draft's label counter is reset and the new files number from #1 instead of
+    // continuing the sent message's sequence (#task:1324). Doing this per-file
+    // AFTER assign (as before) let the first new file inherit the sent counter.
+    detachSubmittingDraftForEdit();
+    editGenerationRef.current += 1;
     for (const file of list.slice(0, slotsLeft)) {
       const key = `att-${crypto.randomUUID()}`;
-      const isImage = file.type.startsWith('image/');
+      // Derive the label's kind from the content_type the backend will finally
+      // store, NOT the raw browser File.type (#task:1324). A dropped `.png`
+      // often arrives with an empty File.type; the backend recovers image/png
+      // from the suffix, so trusting the raw hint would label it `File #N`
+      // while the stored row is an image → a send-time
+      // `attachment_label_kind_mismatch` 400. We reuse the same shared helpers
+      // the backend's detectContentType uses for its hint→suffix path.
+      const contentType = effectiveContentType(file);
+      const isImage = contentType.startsWith('image/');
       const previewUrl = isImage ? URL.createObjectURL(file) : undefined;
+      // Assign the stable `Image #N` / `File #N` label the instant the file
+      // enters the draft, so the chip the user sees IS the reference the agent
+      // will get (#task:1324). Bound to this instance for the draft's life.
+      const label = assignAttachmentLabel(draftKey, contentType);
       const item: PendingAttachment = {
         key,
         filename: file.name,
         size: file.size,
-        contentType: file.type || 'application/octet-stream',
+        contentType,
         state: 'uploading',
         file,
         previewUrl,
+        label,
       };
-      detachSubmittingDraftForEdit();
-      editGenerationRef.current += 1;
       setPendingValue(curr => [
         ...curr,
         item,
@@ -485,6 +552,7 @@ export function Composer({
         attachmentKey: key,
         file,
         previewUrl,
+        label,
       });
     }
   }
@@ -616,6 +684,11 @@ export function Composer({
               key={p.key}
               item={p}
               onRemove={() => removePending(p.key)}
+              onInsertLabel={
+                p.label && p.state !== 'error'
+                  ? () => insertLabelAtCaret(p.label!)
+                  : undefined
+              }
               onPreview={
                 p.previewUrl
                   ? () => setPreviewing({ url: p.previewUrl!, alt: p.filename })
@@ -798,10 +871,14 @@ export function Composer({
 function AttachmentChip({
   item,
   onRemove,
+  onInsertLabel,
   onPreview,
 }: {
   item: PendingAttachment;
   onRemove: () => void;
+  /** Insert this attachment's stable label into the message body. Omitted when
+   *  the attachment has no label yet or failed to upload. */
+  onInsertLabel?: () => void;
   /** Provided only for image attachments with a local previewUrl. */
   onPreview?: () => void;
 }): JSX.Element {
@@ -816,9 +893,15 @@ function AttachmentChip({
 
   // Image chip: small thumbnail + filename + remove. Click thumbnail
   // opens the lightbox. Non-image chip: paperclip icon + filename.
+  // Two-line layout (#task:1324): the filename owns the main line and
+  // truncates; the `Image #N` label + size sit on a light sub-line so the
+  // label never competes with the filename for horizontal width. The label
+  // doubles as the "insert reference" button — clicking it drops the label
+  // into the message body as plain text — but it's de-emphasized to a subtle
+  // text button, not a heavy accent badge.
   return (
     <div
-      className={`flex max-w-[260px] items-center gap-1.5 rounded-md border bg-bg-floating px-2 py-1 text-xs ${stateClass}`}
+      className={`flex max-w-[280px] items-center gap-1.5 rounded-md border bg-bg-floating px-2 py-1 text-xs ${stateClass}`}
       title={item.error ?? `${item.filename} (${sizeLabel})`}
     >
       {isImage && item.previewUrl ? (
@@ -838,14 +921,34 @@ function AttachmentChip({
       ) : (
         <Paperclip className="size-3 shrink-0" />
       )}
-      <span className="truncate">{item.filename}</span>
-      <span className="shrink-0 text-[10px] text-text-muted">
-        {item.state === 'uploading' ? '上传中…' : sizeLabel}
-      </span>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate">{item.filename}</span>
+        <div className="flex items-center gap-1 text-[10px] text-text-muted">
+          {item.label ? (
+            onInsertLabel ? (
+              <button
+                type="button"
+                onClick={onInsertLabel}
+                title="Insert reference into message"
+                aria-label={`Insert ${item.label} into message`}
+                className="shrink-0 rounded-sm font-mono text-text-muted transition-colors hover:text-text-secondary hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+              >
+                {item.label}
+              </button>
+            ) : (
+              <span className="shrink-0 font-mono">{item.label}</span>
+            )
+          ) : null}
+          {item.label ? <span aria-hidden>·</span> : null}
+          <span className="shrink-0">
+            {item.state === 'uploading' ? '上传中…' : sizeLabel}
+          </span>
+        </div>
+      </div>
       <button
         type="button"
         onClick={onRemove}
-        className="ml-1 inline-flex size-4 items-center justify-center rounded-sm text-text-muted hover:text-text-primary"
+        className="ml-1 inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-text-muted hover:text-text-primary"
         aria-label="移除附件"
       >
         <X className="size-3" />

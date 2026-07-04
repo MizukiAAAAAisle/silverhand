@@ -4,6 +4,7 @@ import type {
   MessageDto,
   UserDto,
 } from '@silverhand/shared';
+import { resolveAttachmentLabels } from '@silverhand/shared';
 import { FileText, Hash, User } from 'lucide-react';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { getAttachmentBlobUrl } from '@/lib/attachment-blob-cache';
@@ -54,6 +55,7 @@ export function MessageScreenshotView({
   viewerAvatarObjectUrl,
   channelTitle,
   channelKind,
+  mermaidSvgByCode,
 }: {
   messages: readonly MessageDto[];
   agentsById: ReadonlyMap<string, AgentDto>;
@@ -68,6 +70,10 @@ export function MessageScreenshotView({
   viewerAvatarObjectUrl?: string | null;
   channelTitle?: string | null;
   channelKind?: 'channel' | 'dm' | null;
+  /** Mermaid diagrams pre-rendered to SVG before capture (#task:1322), keyed
+   *  by trimmed source. Threaded into each row's Markdown so the export shows
+   *  rendered diagrams; a diagram absent here falls back to source. */
+  mermaidSvgByCode?: ReadonlyMap<string, string>;
 }): JSX.Element {
   const safeChannelTitle = channelTitle
     ? sanitizeScreenshotText(channelTitle)
@@ -114,6 +120,7 @@ export function MessageScreenshotView({
           attachmentImageUrls={attachmentImageUrls}
           viewer={viewer}
           viewerAvatarObjectUrl={viewerAvatarObjectUrl}
+          mermaidSvgByCode={mermaidSvgByCode}
         />
       ))}
     </div>
@@ -132,6 +139,7 @@ function ScreenshotRow({
   attachmentImageUrls,
   viewer,
   viewerAvatarObjectUrl,
+  mermaidSvgByCode,
 }: {
   message: MessageDto;
   agentsById: ReadonlyMap<string, AgentDto>;
@@ -144,6 +152,7 @@ function ScreenshotRow({
   attachmentImageUrls?: ReadonlyMap<string, string>;
   viewer?: UserDto;
   viewerAvatarObjectUrl?: string | null;
+  mermaidSvgByCode?: ReadonlyMap<string, string>;
 }): JSX.Element {
   const isUser = message.from_kind === 'user';
   const agent = !isUser && message.from_agent_id
@@ -209,6 +218,7 @@ function ScreenshotRow({
               taskRefsByNumber ? new Map(taskRefsByNumber) : undefined
             }
             interactive={false}
+            mermaidSvgByCode={mermaidSvgByCode}
           />
         }
         attachments={
@@ -237,12 +247,16 @@ function ScreenshotAttachmentList({
   attachments: AttachmentSnapshot[];
   imageUrls?: ReadonlyMap<string, string>;
 }): JSX.Element {
+  // Same shared resolver as the live tile + agent suffix, so an exported image
+  // shows the identical `Image #N` references (#task:1324).
+  const labels = resolveAttachmentLabels(attachments);
   return (
     <div className="mt-2 flex flex-wrap gap-2">
-      {attachments.map(attachment => (
+      {attachments.map((attachment, i) => (
         <ScreenshotAttachmentTile
           key={attachment.id}
           attachment={attachment}
+          label={labels[i]}
           imageUrl={
             attachment.content_type.startsWith('image/')
               ? imageUrls?.get(attachment.id) ??
@@ -257,32 +271,45 @@ function ScreenshotAttachmentList({
 
 function ScreenshotAttachmentTile({
   attachment,
+  label,
   imageUrl,
 }: {
   attachment: AttachmentSnapshot;
+  label?: string;
   imageUrl?: string;
 }): JSX.Element {
   const isImage = attachment.content_type.startsWith('image/');
   const filename = sanitizeScreenshotText(attachment.filename);
+  const labelBadge = label ? (
+    <span className="block w-full text-center font-mono text-[10px] text-text-muted">
+      {label}
+    </span>
+  ) : null;
   if (isImage && imageUrl) {
     return (
-      <figure className="block overflow-hidden rounded-md border border-border-subtle bg-bg-floating">
-        <img
-          src={imageUrl}
-          alt={filename}
-          className="block max-h-64 max-w-[320px] object-contain"
-          draggable={false}
-        />
+      <figure className="flex flex-col gap-1">
+        <span className="block overflow-hidden rounded-md border border-border-subtle bg-bg-floating">
+          <img
+            src={imageUrl}
+            alt={filename}
+            className="block max-h-64 max-w-[320px] object-contain"
+            draggable={false}
+          />
+        </span>
+        {labelBadge}
       </figure>
     );
   }
   return (
-    <div className="flex max-w-[280px] items-center gap-2 rounded-md border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary">
-      <FileText className="size-4 shrink-0 text-text-muted" />
-      <span className="min-w-0 truncate">{filename}</span>
-      <span className="shrink-0 text-[10px] text-text-muted">
-        {formatBytes(attachment.size)}
-      </span>
+    <div className="flex flex-col items-start gap-1">
+      <div className="flex max-w-[280px] items-center gap-2 rounded-md border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary">
+        <FileText className="size-4 shrink-0 text-text-muted" />
+        <span className="min-w-0 truncate">{filename}</span>
+        <span className="shrink-0 text-[10px] text-text-muted">
+          {formatBytes(attachment.size)}
+        </span>
+      </div>
+      {labelBadge}
     </div>
   );
 }

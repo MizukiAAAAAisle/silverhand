@@ -1,5 +1,10 @@
 import type { AttachmentDto } from '@silverhand/shared';
-import { apiPaths } from '@silverhand/shared';
+import {
+  apiPaths,
+  attachmentLabelKind,
+  formatAttachmentLabel,
+  parseAttachmentLabel,
+} from '@silverhand/shared';
 import { apiUpload, deleteAttachmentBestEffort } from './api';
 import {
   releaseAttachmentPreview,
@@ -18,13 +23,32 @@ export type CachedPendingAttachment = {
   previewUrl?: string;
   attachment?: AttachmentDto;
   error?: string;
+  /** Compose-time display identity (`Image #N` / `File #N`), assigned the
+   *  moment the attachment enters this draft and STABLE for the draft's whole
+   *  lifetime (#task:1324). Never renumbers when other attachments are removed
+   *  or reordered — so a body reference the user typed (`Image #1`) can never
+   *  silently rebind to a different file. Carried into the send payload and
+   *  echoed by the backend. */
+  label?: string;
 };
+
+/** Per-kind high-water counters for a draft's attachment labels. Monotonic:
+ *  a number, once handed out, is never reused for that draft even after the
+ *  attachment that held it is removed — hence gaps are allowed (a visible
+ *  dangling reference is far safer than a silent rebind). Reset only when the
+ *  draft is cleared/sent (a fresh message starts at #1). */
+export type ComposerLabelSeq = { image: number; file: number };
 
 export type ComposerDraftSnapshot = {
   conversationId: string;
   text: string;
   caret: number;
   pending: CachedPendingAttachment[];
+  /** Monotonic label counters for this draft (see {@link ComposerLabelSeq}).
+   *  Optional so older snapshots / callers that don't manage labels round-trip
+   *  unchanged; {@link writeComposerDraft} reconciles it with the live entry so
+   *  it never regresses. */
+  labelSeq?: ComposerLabelSeq;
   updatedAt: number;
 };
 
@@ -58,6 +82,10 @@ export function writeComposerDraft(snapshot: ComposerDraftSnapshot): void {
   const entry = {
     ...snapshot,
     pending,
+    // Never let a snapshot that omits labelSeq (e.g. the unmount write built
+    // from Composer state) wipe the monotonic counter — reconcile against the
+    // live entry AND the surviving labels so it can only move forward.
+    labelSeq: reconcileLabelSeq(existing?.labelSeq, snapshot.labelSeq, pending),
     updatedAt: Date.now(),
   };
   if (isEmptySnapshot(entry)) {
@@ -67,6 +95,40 @@ export function writeComposerDraft(snapshot: ComposerDraftSnapshot): void {
   }
   drafts.set(snapshot.conversationId, entry);
   evictIfNeeded();
+}
+
+/**
+ * Assign the next stable label for an attachment entering this draft
+ * (#task:1324). Called the instant a file is pasted/dropped/picked, so what
+ * the user sees in the chip is exactly what will be sent to the agent.
+ *
+ * The ordinal is a per-kind monotonic counter: `max(persisted high-water,
+ * highest live ordinal) + 1`. It never reuses a number for the draft, so
+ * deleting the most-recent attachment and adding another yields the NEXT
+ * number, not the freed one — otherwise a body reference the user already
+ * typed could silently rebind to the new file.
+ */
+export function assignAttachmentLabel(
+  conversationId: string,
+  contentType: string,
+): string {
+  const entry = ensureEntry(conversationId);
+  const kind = attachmentLabelKind(contentType);
+  const image = kind === 'Image';
+  const seq = entry.labelSeq ?? { image: 0, file: 0 };
+  const base = Math.max(
+    image ? seq.image : seq.file,
+    maxLiveOrdinal(entry.pending, image),
+  );
+  const next = base + 1;
+  entry.labelSeq = image
+    ? { image: next, file: seq.file }
+    : { image: seq.image, file: next };
+  entry.updatedAt = Date.now();
+  drafts.set(conversationId, entry);
+  // Build through the shared generator so the composer's label form can never
+  // drift from the backend schema / resolver (#task:1324).
+  return formatAttachmentLabel(kind, next);
 }
 
 export function clearComposerDraft(
@@ -85,6 +147,15 @@ export function dropSentAttachmentsFromDraft(
   if (!entry || sentAttachmentKeys.length === 0) return;
   const sentKeys = new Set(sentAttachmentKeys);
   entry.pending = entry.pending.filter(item => !sentKeys.has(item.key));
+  // A send is a draft boundary: the label counter resets so the NEXT message
+  // starts at #1 (#task:1324). detach alone is not enough — without this the
+  // counter (e.g. 2 after sending Image #1, Image #2) would carry into the new
+  // message. Floor at the highest surviving live label so an attachment the
+  // user added while the prior send was still in flight keeps a unique number.
+  entry.labelSeq = {
+    image: maxLiveOrdinal(entry.pending, true),
+    file: maxLiveOrdinal(entry.pending, false),
+  };
   entry.updatedAt = Date.now();
   if (isEmptySnapshot(entry)) {
     drafts.delete(conversationId);
@@ -149,6 +220,9 @@ export function startComposerDraftAttachmentUpload(input: {
   attachmentKey: string;
   file: File;
   previewUrl?: string;
+  /** Stable compose-time label assigned by {@link assignAttachmentLabel},
+   *  persisted on the cached attachment so it survives draft save/restore. */
+  label?: string;
   /** Channel id used to build the upload network path, when it differs
    *  from `conversationId` (the draft identity key). Reply-cluster drafts
    *  key the draft by a composite `${channelId}#cluster#${rootId}` so they
@@ -175,6 +249,7 @@ export function startComposerDraftAttachmentUpload(input: {
     state: 'uploading',
     file: input.file,
     previewUrl: input.previewUrl,
+    label: input.label ?? current?.label,
     error: undefined,
   }, true);
 
@@ -367,6 +442,9 @@ function mergeAttachment(
     file: incoming.file ?? previous.file,
     previewUrl: incoming.previewUrl ?? previous.previewUrl,
     attachment: incoming.attachment ?? previous.attachment,
+    // Label is compose-time identity: once assigned it must survive every
+    // later patch (upload done, snapshot round-trip), never be nulled out.
+    label: incoming.label ?? previous.label,
   };
 }
 
@@ -440,10 +518,53 @@ function uploadKey(conversationId: string, attachmentKey: string): string {
   return `${conversationId}:${attachmentKey}`;
 }
 
+/** Highest ordinal currently held by a live attachment of the given kind, or 0.
+ *  A secondary floor for the counter so it can't regress below a surviving
+ *  label even if the persisted counter were somehow lost. Parses via the shared
+ *  canonical parser so a non-canonical label is ignored, not misread. */
+function maxLiveOrdinal(
+  pending: ReadonlyArray<CachedPendingAttachment>,
+  image: boolean,
+): number {
+  const kind = image ? 'Image' : 'File';
+  let max = 0;
+  for (const item of pending) {
+    const parsed = parseAttachmentLabel(item.label);
+    if (parsed && parsed.kind === kind) max = Math.max(max, parsed.ordinal);
+  }
+  return max;
+}
+
+/** Fold a snapshot's label counter into the live one so it only moves forward:
+ *  the max of the persisted counter, the incoming snapshot's counter, and the
+ *  highest live label. Guarantees monotonicity across every persistence path. */
+function reconcileLabelSeq(
+  existing: ComposerLabelSeq | undefined,
+  incoming: ComposerLabelSeq | undefined,
+  pending: ReadonlyArray<CachedPendingAttachment>,
+): ComposerLabelSeq {
+  return {
+    image: Math.max(
+      existing?.image ?? 0,
+      incoming?.image ?? 0,
+      maxLiveOrdinal(pending, true),
+    ),
+    file: Math.max(
+      existing?.file ?? 0,
+      incoming?.file ?? 0,
+      maxLiveOrdinal(pending, false),
+    ),
+  };
+}
+
 function cloneSnapshot(snapshot: ComposerDraftSnapshot): ComposerDraftSnapshot {
   return {
     ...snapshot,
     pending: snapshot.pending.map(cloneAttachment),
+    // Clone the mutable label counter too so a reader can't mutate the live
+    // entry's state through the returned snapshot (keeps the cache read boundary
+    // clean — Cindy's #1324 nit).
+    labelSeq: snapshot.labelSeq ? { ...snapshot.labelSeq } : undefined,
   };
 }
 
