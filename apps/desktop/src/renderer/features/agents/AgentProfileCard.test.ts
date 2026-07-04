@@ -114,4 +114,15 @@ describe('AgentProfileCard creator/read-only render branches', () => {
     expect(html).not.toMatch(/agent\s+self/i);
     expect(html).not.toMatch(/sign in as|log in as/i);
   });
+
+  it('renders the model field as an editable combobox (not a native datalist)', () => {
+    // #task:1328: model is a free-text combobox with runtime suggestions
+    // (qoder tiers). The earlier native <datalist> approach is gone.
+    const html = render(
+      makeAgent({ runtime: 'qoder', created_by_user_id: 'u-creator' }),
+      'u-creator',
+    );
+    expect(html).toContain('role="combobox"');
+    expect(html).not.toContain('<datalist');
+  });
 });

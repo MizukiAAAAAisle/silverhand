@@ -23,6 +23,7 @@ import {
   runtimeSupportsReasoningEffort,
 } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { Combobox } from '@/components/ui/combobox';
 import { cn } from '@/lib/cn';
 import {
   MetadataList,
@@ -111,11 +112,6 @@ export function AgentProfileCard({
     if (description === (agent.description ?? '')) return;
     commit({ description: description === '' ? null : description });
   };
-  const onCommitModel = () => {
-    const next = model.trim();
-    if (next === (agent.model ?? '')) return;
-    commit({ model: next === '' ? null : next });
-  };
 
   const isCodex = agent.runtime === 'codex';
   const catalogEntry = runtimeCatalogEntry(agent.runtime);
@@ -132,7 +128,6 @@ export function AgentProfileCard({
     })),
   ];
   const modelSuggestions = catalogEntry.modelSuggestions;
-  const modelListId = modelSuggestions.length > 0 ? `model-suggestions-${agent.id}` : undefined;
   const reasoningValue = agent.reasoning_effort ?? '__default__';
   const fastModeValue =
     agent.fast_mode === null || agent.fast_mode === undefined
@@ -254,31 +249,24 @@ export function AgentProfileCard({
           </ProfileField>
           <ProfileField label="Model" hint={canEdit ? runtimeHint(agent.runtime) : undefined}>
             {canEdit ? (
-              <>
-                <GhostInput
-                  value={model}
-                  onChange={e => setModel(e.target.value)}
-                  onBlur={onCommitModel}
-                  placeholder="driver default"
-                  list={modelListId}
-                  // `h-8` matches the sibling `RuntimeSelect` trigger
-                  // height (also `h-8`). Without it the bare GhostInput
-                  // collapses to its text height (~17.5px) and reads
-                  // visibly shorter than the Select beside it in the
-                  // 2-col grid (#task:912 review round 6 — shiki).
-                  className="h-8"
-                />
-                {modelListId ? (
-                  // Native datalist = quick-pick suggestions (qoder's
-                  // capability tiers) WITHOUT closing the field to free
-                  // text — the input still accepts any model id string.
-                  <datalist id={modelListId}>
-                    {modelSuggestions.map(m => (
-                      <option key={m} value={m} />
-                    ))}
-                  </datalist>
-                ) : null}
-              </>
+              // Editable combobox: free-text model id + the runtime's
+              // suggested values (qoder tiers). `h-8` matches the sibling
+              // RuntimeSelect trigger height so the 2-col grid stays even.
+              <Combobox
+                id={`ag-model-${agent.id}`}
+                ariaLabel="Model"
+                value={model}
+                onChange={setModel}
+                onCommit={next => {
+                  const trimmed = next.trim();
+                  if (trimmed !== (agent.model ?? '')) {
+                    commit({ model: trimmed === '' ? null : trimmed });
+                  }
+                }}
+                suggestions={modelSuggestions}
+                placeholder="driver default"
+                className="h-8"
+              />
             ) : (
               <ReadOnlyValue value={agent.model} placeholder="driver default" />
             )}
@@ -591,6 +579,6 @@ function runtimeHint(runtime: RuntimeKind): string {
     case 'gemini':
       return 'e.g. gemini-2.5-pro';
     case 'qoder':
-      return 'e.g. claude-sonnet-4.5 · gpt-5 (or leave blank)';
+      return 'e.g. Auto · Qwen3.7-Max · GLM-5.2 (or leave blank)';
   }
 }
