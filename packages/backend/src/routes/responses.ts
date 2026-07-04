@@ -239,10 +239,6 @@ function isRepoError(err: unknown): err is RepoError {
 }
 
 const repoErrorStatusMap: Record<string, 400 | 404 | 409 | 429> = {
-  parent_not_found: 404,
-  parent_closed: 409,
-  cross_channel_parent: 400,
-  max_depth_exceeded: 400,
   concurrent_limit: 429,
   spawn_cooldown: 429,
   not_found: 404,

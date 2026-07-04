@@ -345,7 +345,7 @@ describe('silverhand message send (stdin-only, real subprocess)', () => {
     const r = await runSend({
       argv: [
         '--target',
-        'parent',
+        'thread:m-1',
         '--attachment',
         'att-1',
         '--attachment',
@@ -356,11 +356,11 @@ describe('silverhand message send (stdin-only, real subprocess)', () => {
     expect(r.code, r.stderr).toBe(0);
     const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
       content: string;
-      target?: string;
+      target?: unknown;
       attachment_ids?: string[];
     };
     expect(reqBody.content).toBe('hi');
-    expect(reqBody.target).toBe('parent');
+    expect(reqBody.target).toEqual({ kind: 'thread', message_id: 'm-1' });
     expect(reqBody.attachment_ids).toEqual(['att-1', 'att-2']);
   });
 

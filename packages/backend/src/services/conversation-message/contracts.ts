@@ -149,7 +149,6 @@ export class ActorError extends Error {
 }
 
 export type TargetErrorCode =
-  | 'no_parent'
   | 'target_closed'
   | 'target_archived'
   | 'target_conflict'

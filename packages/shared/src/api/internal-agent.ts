@@ -20,10 +20,7 @@ export const MessageSendTargetSchema = z.union([
 ]);
 export type MessageSendTarget = z.infer<typeof MessageSendTargetSchema>;
 
-export const LegacySendMessageTargetSchema = z.union([
-  z.literal('self'),
-  z.literal('parent'),
-]);
+export const LegacySendMessageTargetSchema = z.literal('self');
 export type LegacySendMessageTarget = z.infer<typeof LegacySendMessageTargetSchema>;
 
 export const SendMessageTargetSchema = z.union([
@@ -180,7 +177,6 @@ const ReadHistoryOptionalLimitSchema = z.preprocess(
  *  reply whose `thread_root_id` equals the root. */
 export const ReadHistoryTargetSchema = z.union([
   z.literal('self'),
-  z.literal('parent'),
   z.object({ thread_root_id: z.string().min(1) }),
   z.object({ conversation_id: z.string().min(1) }),
 ]);

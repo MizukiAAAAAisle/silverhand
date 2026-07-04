@@ -95,24 +95,6 @@ export function resolveAgentReadHistoryTarget(
   let threadRootId: string | null = null;
   if (requested === 'self') {
     resolved = sourceConversation;
-  } else if (requested === 'parent') {
-    if (!sourceConversation.parent_conversation_id) {
-      return {
-        ok: false,
-        status: 400,
-        code: 'no_parent',
-        message: 'no parent channel',
-      };
-    }
-    resolved = conversations.get(sourceConversation.parent_conversation_id);
-    if (!resolved) {
-      return {
-        ok: false,
-        status: 404,
-        code: 'parent_not_found',
-        message: 'parent channel not found',
-      };
-    }
   } else if ('thread_root_id' in requested) {
     // Reply-cluster read: the value is a *message id*. The cluster
     // lives inside the root message's channel; normalize a reply to

@@ -677,7 +677,7 @@ describe('ConversationMessageService.sendMessage', () => {
           conversationId: t.channel.id,
           actor: { kind: 'user', userId: 'local' },
           content: 'up',
-          target: 'parent',
+          target: 'self',
         }),
       ).rejects.toBeInstanceOf(PolicyError);
       expect(spy).not.toHaveBeenCalled();
@@ -1076,22 +1076,6 @@ describe('ConversationMessageService.sendMessage', () => {
         }),
         'conversation-message-service: stale send resolution observed',
       );
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('rejects invalid agent targets', async () => {
-    const t = bootstrap();
-    try {
-      await expect(
-        t.service.sendMessage({
-          conversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-          content: 'up',
-          target: 'parent',
-        }),
-      ).rejects.toMatchObject({ code: 'no_parent' });
     } finally {
       t.cleanup();
     }

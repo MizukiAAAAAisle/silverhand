@@ -33,6 +33,6 @@ describe('conversationMessageServiceErrorResponse — TargetError mapping', () =
   });
 
   it('defaults other target errors to 400', async () => {
-    expect(await statusFor(new TargetError('no_parent', 'no parent'))).toBe(400);
+    expect(await statusFor(new TargetError('target_conflict', 'conflict'))).toBe(400);
   });
 });

@@ -206,19 +206,6 @@ describe('POST /internal/.../send-message', () => {
     expect(await r.json()).toEqual({ ok: true });
   });
 
-  it('rejects parent target when current session has no parent', async () => {
-    t = buildTestApp();
-    const { conversationId, agentIds } = await setupSession(t, ['alice']);
-    const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
-      { content: 'up', target: 'parent' },
-      { headers: authHeaders(t.authToken) },
-    );
-    expect(r.status).toBe(400);
-    const body = await r.json() as any;
-    expect(body.code).toBe('no_parent');
-  });
-
 });
 
 describe('POST /internal/.../create-channel', () => {

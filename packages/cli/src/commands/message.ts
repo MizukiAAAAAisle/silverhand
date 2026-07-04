@@ -45,7 +45,7 @@ Two recommended call shapes:
   printf "%s" "hello" | silverhand message send
 
   # multi-line / contains quotes / contains $/backticks
-  silverhand message send --target parent <<'SILVERHAND_EOF'
+  silverhand message send <<'SILVERHAND_EOF'
   Any text. Quotes, backticks, $vars, multi-line markdown — all safe.
   SILVERHAND_EOF
 
@@ -336,7 +336,7 @@ const historyCommand: Command = {
   verb: 'history',
   summary: 'Read an anchored window of message history.',
   help: `silverhand message history (--before-seq N | --after-seq N | --around <id>)
-                             [--target self|parent|conversation:<id>|thread:<id>]
+                             [--target self|conversation:<id>|thread:<id>]
                              [--include-content] [--no-include-system]
                              [--limit N]
 
@@ -349,7 +349,6 @@ Flags:
   --around <message_id> Read a window centered on this message id.
   --target              Where to read.
                           self                    (default; current conv)
-                          parent                  (only inside a Thread)
                           thread:<root_msg_id>    (a reply cluster, by its
                                                   root message id)
                           conversation:<conv_id>  (any conv you can reach)
@@ -573,7 +572,6 @@ function parseSendTarget(raw: string | undefined): SendMessageTarget | undefined
   }
   if (raw === 'channel') return { kind: 'channel' };
   if (raw === 'self') return { kind: 'channel' };
-  if (raw === 'parent') return 'parent';
   if (raw.startsWith('thread:')) {
     const messageId = raw.slice('thread:'.length);
     if (!messageId) {
@@ -704,17 +702,15 @@ function parseHistoryTarget(
   raw: string | undefined,
 ):
   | 'self'
-  | 'parent'
   | { thread_root_id: string }
   | { conversation_id: string }
   | undefined {
   if (raw === undefined) return undefined;
-  if (raw === 'self' || raw === 'parent') return raw;
+  if (raw === 'self') return raw;
   // `thread:<id>` now means a reply cluster identified by its ROOT
-  // message id (docs/thread-reply-cluster-v1.md §8) — threads are no
-  // longer separate conversations. The old "child thread conversation
-  // id" reading moves to `conversation:<id>`; legacy dual-resolution
-  // lives in the freeze cut.
+  // message id (docs/thread-reply-cluster-v1.md §8) — threads are not
+  // separate conversations. Read any other conversation by its id via
+  // `conversation:<id>`.
   if (raw.startsWith('thread:')) {
     return { thread_root_id: raw.slice('thread:'.length) };
   }
@@ -724,7 +720,7 @@ function parseHistoryTarget(
   throw new CliError({
     code: 'validation_error',
     message:
-      '--target must be self | parent | thread:<root_msg_id> | conversation:<id>',
+      '--target must be self | thread:<root_msg_id> | conversation:<id>',
     retriable: false,
   });
 }

@@ -71,7 +71,7 @@ export type {
  * mention CC, agent delivery, or auto-start behavior.
  *
  * Contract:
- * - User callers cannot target parent/child conversations; reject before
+ * - User callers cannot cross-target another conversation; reject before
  *   target resolution so the service is not a target-existence oracle.
  * - Agent callers must be members of their source conversation.
  * - Attachment snapshots are validated against the effective target
@@ -441,12 +441,13 @@ export class ConversationMessageService {
     //  - User send: always (policy.autoStartIdleRecipients = true).
     //  - Agent send to self: never — prevents same-conversation ping-pong
     //    where every reply would wake every other idle member.
-    //  - Agent cross-target send (`--target parent` / `<thread_id>`):
-    //    always wake the target's idle members. Cross-target send is an
-    //    explicit hand-off; if the receiving session is idle, the message
-    //    just sits in inbox and "delivery" is a no-op for collaboration
-    //    purposes. Cross-conversation traffic does not ping-pong because
-    //    target replies stay scoped to the target's own member set.
+    //  - Agent cross-target send (`--target thread:<message_id>` reply
+    //    cluster): always wake the target's idle members. Cross-target send
+    //    is an explicit hand-off; if the receiving session is idle, the
+    //    message just sits in inbox and "delivery" is a no-op for
+    //    collaboration purposes. Cross-conversation traffic does not
+    //    ping-pong because target replies stay scoped to the target's own
+    //    member set.
     //  Wake intentionally does NOT exclude the sender's session in the
     //  target conversation: when Cindy@channel sends to a thread where a
     //  separate Cindy@thread session exists, the thread session must be
@@ -661,27 +662,12 @@ export class ConversationMessageService {
 
   private resolveLegacyTarget(
     sourceConversation: NonNullable<ReturnType<ConversationRepo['get']>>,
-    target: LegacySendMessageTarget,
+    _target: LegacySendMessageTarget,
   ): NonNullable<ReturnType<ConversationRepo['get']>> {
-    if (target === 'self') return sourceConversation;
-    if (target === 'parent') {
-      if (!sourceConversation.parent_conversation_id) {
-        throw new TargetError('no_parent', 'no parent channel');
-      }
-      const parent = this.conversations.get(sourceConversation.parent_conversation_id);
-      if (!parent) {
-        throw new TargetError('no_parent', 'parent channel not found');
-      }
-      if (parent.closed_at !== null) {
-        throw new TargetError('target_closed', 'target conversation is closed');
-      }
-      if (parent.archived_at !== null) {
-        throw new TargetError('target_archived', 'target conversation is archived');
-      }
-      return parent;
-    }
-
-    return target;
+    // `self` (the current conversation) is now the only scalar send
+    // target; `parent` was retired with the isolated-thread fossil
+    // (#task:1303/2d).
+    return sourceConversation;
   }
 
   private resolveAttachmentSnapshots(
