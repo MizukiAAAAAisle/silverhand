@@ -2,6 +2,7 @@ import {
   type AgentDto,
   type AgentRow,
   type CreateAgentInput,
+  runtimeDefaultModel,
   systemSubtype,
 } from '@silverhand/shared';
 import { agentHomeWorkspaceId } from '../repos/workspace-repo.js';
@@ -148,6 +149,22 @@ function requestMetadataSnapshot(
     template_choice: 'default',
     host_id: effectiveHostId,
   };
+}
+
+/**
+ * Apply runtime-specific create defaults before any idempotency snapshot,
+ * reserve INSERT, or daemon materialize payload is built. Keeping this in
+ * the backend write path (not just the desktop form) makes API/CLI creates
+ * agree with UI creates. Explicit non-blank `model` still wins; model
+ * clearing remains an update-time profile action.
+ */
+export function normalizeCreateAgentInput(
+  input: CreateAgentInput,
+): CreateAgentInput {
+  if (input.model !== undefined && input.model.trim() !== '') return input;
+  const defaultModel = runtimeDefaultModel(input.runtime);
+  if (defaultModel === null) return input;
+  return { ...input, model: defaultModel };
 }
 
 /**
@@ -555,7 +572,8 @@ export async function createAgent(
   cmd: CreateAgentCommand,
 ): Promise<CreateAgentResult> {
   const { ctx, agents } = deps;
-  const { input, idempotencyKey, retry, creatorUserId } = cmd;
+  const { idempotencyKey, retry, creatorUserId } = cmd;
+  const input = normalizeCreateAgentInput(cmd.input);
 
   // L0.3 — idempotency lookup (creator-scoped via the v33 partial unique
   // index; cross-creator collisions are impossible at SQL).

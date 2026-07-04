@@ -7,6 +7,7 @@ import {
   ReasoningEffortSchema,
   reasoningEffortLabel,
   reasoningEffortValidForRuntime,
+  runtimeDefaultModel,
   runtimeCatalogCoversAllKinds,
   runtimeCatalogEntry,
   runtimeCliLabel,
@@ -70,6 +71,24 @@ describe('runtime catalog (shared source of truth)', () => {
     ]);
     // claude has no reasoning control.
     expect(runtimeCatalogEntry('claude').reasoningEffortOptions).toEqual([]);
+  });
+
+  it('models qoder tiers as suggestions plus an explicit Ultimate create default', () => {
+    expect(runtimeCatalogEntry('qoder').modelSuggestions).toEqual([
+      'Auto',
+      'Ultimate',
+      'Performance',
+      'Efficient',
+      'Lite',
+    ]);
+    expect(runtimeDefaultModel('qoder')).toBe('Ultimate');
+    expect(runtimeCatalogEntry('qoder').modelSuggestions).toContain(
+      runtimeDefaultModel('qoder'),
+    );
+
+    for (const kind of ['claude', 'codex', 'cursor', 'gemini'] as const) {
+      expect(runtimeDefaultModel(kind)).toBeNull();
+    }
   });
 
   it('title-cases reasoning labels for display while values stay lowercase', () => {

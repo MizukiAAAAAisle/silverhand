@@ -72,7 +72,7 @@ function freshKey(): string {
 }
 
 interface CreateAgentOk {
-  agent: { id: string; name: string };
+  agent: { id: string; name: string; model?: string | null };
   agent_home_workspace_id: string;
   dm_channel_id: string;
   onboarding_message_id: string;
@@ -582,6 +582,34 @@ describe('D4.d structural invariants', () => {
       expect(
         (call.params as { agent_id: string }).agent_id,
       ).toBe(body.agent.id);
+    });
+  });
+
+  describe('Runtime create defaults', () => {
+    it('qoder create without explicit model stores and materializes Ultimate', async () => {
+      const t = buildTestApp();
+      tests.push(t);
+      const res = await http(t).post('/api/agents', {
+        name: `qoder-default-model-${randomBytes(4).toString('base64url')}`,
+        runtime: 'qoder',
+      });
+      expect(res.status, await res.clone().text()).toBe(201);
+      const body = (await res.json()) as CreateAgentOk;
+      expect(body.agent.model).toBe('Ultimate');
+
+      const row = t.ctx.db
+        .prepare<[string], { model: string | null }>(
+          `SELECT model FROM agents WHERE id = ?`,
+        )
+        .get(body.agent.id)!;
+      expect(row.model).toBe('Ultimate');
+
+      const calls =
+        t.fakeHostWs?.calls.filter(c => c.kind === 'agent_materialize') ?? [];
+      expect(calls).toHaveLength(1);
+      expect((calls[0]!.params as { model: string | null }).model).toBe(
+        'Ultimate',
+      );
     });
   });
 

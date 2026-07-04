@@ -53,6 +53,14 @@ export interface RuntimeCatalogEntry {
    * suggestions (free-text only).
    */
   modelSuggestions: readonly string[];
+  /**
+   * Stored model to apply when creating an agent without an explicit
+   * `model`. Omitted means preserve the runtime's own CLI default by
+   * storing NULL and passing no `--model`. Qoder is the exception today:
+   * product default is the `Ultimate` tier while still allowing custom
+   * model-id strings later through the profile combobox.
+   */
+  defaultModel?: string;
 }
 
 // Exhaustive by construction: `Record<RuntimeKind, …>` forces an entry
@@ -88,6 +96,7 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     // model ids (Qwen*/GLM*/DeepSeek*/Kimi*/MiniMax*) go through free
     // text, per shiki: keep the tiers as suggestions, allow custom ids.
     modelSuggestions: ['Auto', 'Ultimate', 'Performance', 'Efficient', 'Lite'],
+    defaultModel: 'Ultimate',
   },
   cursor: {
     kind: 'cursor',
@@ -145,6 +154,11 @@ export function runtimeLabel(kind: RuntimeKind): string {
 /** Product / CLI label ("Claude Code"). */
 export function runtimeCliLabel(kind: RuntimeKind): string {
   return CATALOG[kind]?.cliLabel ?? kind;
+}
+
+/** Stored create-time default model, if this runtime has one. */
+export function runtimeDefaultModel(kind: RuntimeKind): string | null {
+  return CATALOG[kind].defaultModel ?? null;
 }
 
 /** True if the runtime exposes a reasoning-effort control. */
