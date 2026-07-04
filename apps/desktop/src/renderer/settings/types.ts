@@ -31,23 +31,3 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
 export const FONT_SIZE_MIN = 12;
 export const FONT_SIZE_MAX = 22;
 export const DEFAULT_MARKDOWN_FONT_SIZE = 14;
-
-export interface LayoutSettings {
-  workspaceSidebarVisible: boolean;
-  channelSidebarVisible: boolean;
-}
-
-export const DEFAULT_LAYOUT: LayoutSettings = {
-  workspaceSidebarVisible: true,
-  channelSidebarVisible: true,
-};
-
-export interface AppSettings {
-  appearance: AppearanceSettings;
-  layout: LayoutSettings;
-}
-
-export const DEFAULT_SETTINGS: AppSettings = {
-  appearance: DEFAULT_APPEARANCE,
-  layout: DEFAULT_LAYOUT,
-};
