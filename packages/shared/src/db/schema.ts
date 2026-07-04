@@ -3,7 +3,20 @@ import { z } from 'zod';
 export const RuntimeKindSchema = z.enum(['claude', 'codex', 'cursor', 'gemini', 'qoder']);
 export type RuntimeKind = z.infer<typeof RuntimeKindSchema>;
 
-export const ReasoningEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh']);
+// Canonical reasoning-effort values. `none/xhigh/max` beyond the classic
+// low/medium/high come from qoder's canonical set (verified from the
+// qodercli binary). Stored/sent verbatim (lowercase); per-runtime which
+// subset is user-facing lives in the runtime catalog. `null` (unset) is
+// distinct from `'none'` (explicitly disabled) — unset means the driver
+// doesn't pass `--reasoning-effort` at all.
+export const ReasoningEffortSchema = z.enum([
+  'none',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+]);
 export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
 
 /** Tri-state fast_mode for the codex driver: NULL = use codex's own

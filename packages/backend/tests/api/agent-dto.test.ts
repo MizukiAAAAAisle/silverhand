@@ -8,8 +8,10 @@ import {
 } from '@silverhand/shared';
 
 describe('agent reasoning_effort validation', () => {
-  it('accepts the Codex reasoning effort values supported by the bundled catalog', () => {
-    for (const effort of ['low', 'medium', 'high', 'xhigh']) {
+  it('accepts every canonical reasoning effort value in the shared enum', () => {
+    // Union of codex (low/medium/high/xhigh) and qoder (none/…/max); the
+    // per-runtime catalog gates which subset each picker offers.
+    for (const effort of ['none', 'low', 'medium', 'high', 'xhigh', 'max']) {
       expect(
         UpdateAgentInputSchema.safeParse({ reasoning_effort: effort }).success,
       ).toBe(true);
@@ -17,13 +19,15 @@ describe('agent reasoning_effort validation', () => {
   });
 
   it('rejects unsupported reasoning effort values before persistence', () => {
-    expect(
-      CreateAgentInputSchema.safeParse({
-        name: 'bad-effort',
-        runtime: 'codex',
-        reasoning_effort: 'minimal',
-      }).success,
-    ).toBe(false);
+    for (const effort of ['minimal', 'off', 'HIGH', 'ultra']) {
+      expect(
+        CreateAgentInputSchema.safeParse({
+          name: 'bad-effort',
+          runtime: 'codex',
+          reasoning_effort: effort,
+        }).success,
+      ).toBe(false);
+    }
   });
 });
 
