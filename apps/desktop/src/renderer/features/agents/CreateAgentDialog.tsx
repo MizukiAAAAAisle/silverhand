@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { CreateAgentInput, RuntimeKind } from '@silverhand/shared';
-import { RUNTIME_CATALOG } from '@silverhand/shared';
+import {
+  RUNTIME_CATALOG,
+  runtimeCatalogEntry,
+  runtimeDefaultModel,
+} from '@silverhand/shared';
 import {
   Dialog,
   DialogContent,
@@ -9,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Combobox } from '@/components/ui/combobox';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { describeApiError } from '@/lib/api-error-message';
@@ -61,9 +66,26 @@ export function CreateAgentDialog({
 }: CreateAgentDialogProps): JSX.Element {
   const [name, setName] = useState('');
   const [runtime, setRuntime] = useState<RuntimeKind>('claude');
+  // Model tracks the selected runtime's catalog default (qoder → `Ultimate`,
+  // others → blank = the runtime's own CLI default). Switching runtime resets
+  // it to that runtime's default so the field always reflects what will be
+  // stored (the backend applies the same default, but showing it here keeps
+  // create WYSIWYG). Any suggested tier or custom model-id is accepted.
+  const [model, setModel] = useState(runtimeDefaultModel('claude') ?? '');
   const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const createAgent = useCreateAgent();
+
+  const modelSuggestions = runtimeCatalogEntry(runtime).modelSuggestions;
+
+  // Switching runtime resets the model to the new runtime's default. A model-id
+  // is runtime-specific (qoder tiers vs a codex/claude id), so carrying a stale
+  // value across a runtime switch would be meaningless — mirror the backend's
+  // per-runtime normalization at the form.
+  const selectRuntime = (next: RuntimeKind): void => {
+    setRuntime(next);
+    setModel(runtimeDefaultModel(next) ?? '');
+  };
 
   const { currentLocalHost } = useHostProvenanceGate();
   const hostsQuery = useHostsQuery();
@@ -138,11 +160,14 @@ export function CreateAgentDialog({
     }
     try {
       const input: CreateAgentInput = { name: name.trim(), runtime };
+      const trimmedModel = model.trim();
+      if (trimmedModel) input.model = trimmedModel;
       if (effectiveHostId) input.host_id = effectiveHostId;
       const res = await createAgent.mutateAsync(input);
       onCreated?.(res.agent.id);
       setName('');
       setRuntime('claude');
+      setModel(runtimeDefaultModel('claude') ?? '');
       setSelectedHostId(null);
       onOpenChange(false);
     } catch (err) {
@@ -190,7 +215,7 @@ export function CreateAgentDialog({
                     title={isDisabled ? 'coming soon' : undefined}
                     onClick={() => {
                       if (isDisabled) return;
-                      setRuntime(rt.value);
+                      selectRuntime(rt.value);
                     }}
                     className={chipClass(isSelected, isDisabled)}
                   >
@@ -199,6 +224,24 @@ export function CreateAgentDialog({
                 );
               })}
             </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="ag-model">Model</Label>
+            <Combobox
+              id="ag-model"
+              ariaLabel="Model"
+              value={model}
+              onChange={setModel}
+              onCommit={setModel}
+              suggestions={modelSuggestions}
+              placeholder="driver default"
+              className="h-8"
+            />
+            <span className="text-xs text-text-muted">
+              Optional — pick a suggestion or type any model id. Blank uses the
+              runtime's default.
+            </span>
           </div>
 
           {showPicker ? (
