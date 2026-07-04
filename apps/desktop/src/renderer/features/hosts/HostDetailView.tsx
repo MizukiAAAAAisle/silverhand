@@ -81,7 +81,7 @@ import type {
   HostStatusResponse,
   RuntimeKind,
 } from '@silverhand/shared';
-import { RuntimeKindSchema } from '@silverhand/shared';
+import { RuntimeKindSchema, RUNTIME_ORDER_LIST, runtimeLabel } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import {
@@ -136,22 +136,11 @@ const TONE_BANNER_CLASS: Record<HostStatusTone, string> = {
   muted: 'border-border-subtle text-text-secondary',
 };
 
-/** Human label for each known runtime kind. The runtime *list* is
- *  derived from `RuntimeKindSchema.options` so a new kind shipping in
- *  shared can't silently drop out of the proxy form; the *label* table
- *  is keyed by kind and any unknown kind falls back to title-cased
- *  kind so the form still renders. Mirrors the labels the original
- *  Settings ProxyPane used. */
-const RUNTIME_LABELS: Record<string, string> = {
-  claude: 'Claude',
-  codex: 'Codex',
-  cursor: 'Cursor',
-  gemini: 'Gemini',
-};
-function runtimeLabel(kind: RuntimeKind): string {
-  return RUNTIME_LABELS[kind] ?? kind.charAt(0).toUpperCase() + kind.slice(1);
-}
-const PROXY_RUNTIMES: readonly RuntimeKind[] = [...RuntimeKindSchema.options];
+/** The proxy form lists every known runtime kind (availability-agnostic:
+ *  proxying is a host-network concern, not a "can we spawn it" concern),
+ *  in the shared catalog's canonical display order — so a new runtime can't
+ *  silently drop out of the form and the label matches every other surface. */
+const PROXY_RUNTIMES: readonly RuntimeKind[] = RUNTIME_ORDER_LIST;
 
 export interface HostDetailViewProps {
   host: HostDto;

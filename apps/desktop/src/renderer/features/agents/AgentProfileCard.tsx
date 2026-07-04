@@ -15,6 +15,13 @@ import type {
   RuntimeKind,
   UpdateAgentInput,
 } from '@silverhand/shared';
+import {
+  RUNTIME_CATALOG,
+  reasoningEffortLabel,
+  runtimeCatalogEntry,
+  runtimeCliLabel,
+  runtimeSupportsReasoningEffort,
+} from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { cn } from '@/lib/cn';
 import {
@@ -28,24 +35,6 @@ import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { canEditAgentProfile } from './permissions';
 import { EditableAgentAvatar } from './EditableAgentAvatar';
 import { isBackendUnreachable, useViewerUser } from '@/features/me/hooks';
-
-const RUNTIMES: { value: RuntimeKind; label: string }[] = [
-  { value: 'claude', label: 'Claude Code' },
-  { value: 'codex', label: 'Codex CLI' },
-  { value: 'qoder', label: 'Qoder' },
-  { value: 'cursor', label: 'Cursor' },
-  { value: 'gemini', label: 'Gemini' },
-];
-
-// codex maps `reasoning_effort` to its `model_reasoning_effort` config
-// key. Other runtimes ignore the field — UI hides the row for them.
-const CODEX_REASONING: { value: string; label: string }[] = [
-  { value: '__default__', label: 'Use codex default' },
-  { value: 'low', label: 'low' },
-  { value: 'medium', label: 'medium' },
-  { value: 'high', label: 'high' },
-  { value: 'xhigh', label: 'xhigh' },
-];
 
 // codex feature flag `fast_mode`. Tri-state so the user can pin
 // either side or fall back to the catalog default (currently `true`).
@@ -129,6 +118,21 @@ export function AgentProfileCard({
   };
 
   const isCodex = agent.runtime === 'codex';
+  const catalogEntry = runtimeCatalogEntry(agent.runtime);
+  const supportsReasoning = runtimeSupportsReasoningEffort(agent.runtime);
+  // Reasoning options come from the shared catalog per-runtime set (codex
+  // low/medium/high/xhigh, qoder none…max) so the picker can never offer a
+  // value the runtime doesn't take. `__default__` = leave the field unset
+  // (null), letting the runtime use its own default.
+  const reasoningOptions: { value: string; label: string }[] = [
+    { value: '__default__', label: 'Use driver default' },
+    ...catalogEntry.reasoningEffortOptions.map(v => ({
+      value: v,
+      label: reasoningEffortLabel(v),
+    })),
+  ];
+  const modelSuggestions = catalogEntry.modelSuggestions;
+  const modelListId = modelSuggestions.length > 0 ? `model-suggestions-${agent.id}` : undefined;
   const reasoningValue = agent.reasoning_effort ?? '__default__';
   const fastModeValue =
     agent.fast_mode === null || agent.fast_mode === undefined
@@ -250,23 +254,36 @@ export function AgentProfileCard({
           </ProfileField>
           <ProfileField label="Model" hint={canEdit ? runtimeHint(agent.runtime) : undefined}>
             {canEdit ? (
-              <GhostInput
-                value={model}
-                onChange={e => setModel(e.target.value)}
-                onBlur={onCommitModel}
-                placeholder="driver default"
-                // `h-8` matches the sibling `RuntimeSelect` trigger
-                // height (also `h-8`). Without it the bare GhostInput
-                // collapses to its text height (~17.5px) and reads
-                // visibly shorter than the Select beside it in the
-                // 2-col grid (#task:912 review round 6 — shiki).
-                className="h-8"
-              />
+              <>
+                <GhostInput
+                  value={model}
+                  onChange={e => setModel(e.target.value)}
+                  onBlur={onCommitModel}
+                  placeholder="driver default"
+                  list={modelListId}
+                  // `h-8` matches the sibling `RuntimeSelect` trigger
+                  // height (also `h-8`). Without it the bare GhostInput
+                  // collapses to its text height (~17.5px) and reads
+                  // visibly shorter than the Select beside it in the
+                  // 2-col grid (#task:912 review round 6 — shiki).
+                  className="h-8"
+                />
+                {modelListId ? (
+                  // Native datalist = quick-pick suggestions (qoder's
+                  // capability tiers) WITHOUT closing the field to free
+                  // text — the input still accepts any model id string.
+                  <datalist id={modelListId}>
+                    {modelSuggestions.map(m => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                ) : null}
+              </>
             ) : (
               <ReadOnlyValue value={agent.model} placeholder="driver default" />
             )}
           </ProfileField>
-          {isCodex ? (
+          {supportsReasoning ? (
             <ProfileField
               label="Reasoning"
               hint={canEdit ? 'Higher = slower but more thorough.' : undefined}
@@ -274,7 +291,7 @@ export function AgentProfileCard({
               {canEdit ? (
                 <PickerSelect
                   value={reasoningValue}
-                  options={CODEX_REASONING}
+                  options={reasoningOptions}
                   onChange={value =>
                     commit({
                       reasoning_effort:
@@ -285,7 +302,7 @@ export function AgentProfileCard({
               ) : (
                 <ReadOnlyValue
                   value={agent.reasoning_effort}
-                  placeholder="codex default"
+                  placeholder="driver default"
                 />
               )}
             </ProfileField>
@@ -395,7 +412,7 @@ function ReadOnlyValue({
 }
 
 function runtimeLabel(runtime: RuntimeKind): string {
-  return RUNTIMES.find(rt => rt.value === runtime)?.label ?? runtime;
+  return runtimeCliLabel(runtime);
 }
 
 // ── Ghost inputs (transparent until hover/focus) ─────────────────────────
@@ -498,13 +515,18 @@ function RuntimeSelect({
           className={selectContentClass()}
         >
           <Select.Viewport>
-            {RUNTIMES.map(rt => (
+            {RUNTIME_CATALOG.filter(
+              // Offer only spawnable runtimes, but always keep the agent's
+              // current runtime visible so its label renders even if that
+              // runtime is no longer selectable.
+              rt => rt.selectable || rt.kind === value,
+            ).map(rt => (
               <Select.Item
-                key={rt.value}
-                value={rt.value}
+                key={rt.kind}
+                value={rt.kind}
                 className={selectItemClass()}
               >
-                <Select.ItemText>{rt.label}</Select.ItemText>
+                <Select.ItemText>{rt.cliLabel}</Select.ItemText>
               </Select.Item>
             ))}
           </Select.Viewport>

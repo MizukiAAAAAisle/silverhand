@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { CreateAgentInput, RuntimeKind } from '@silverhand/shared';
+import { RUNTIME_CATALOG } from '@silverhand/shared';
 import {
   Dialog,
   DialogContent,
@@ -14,18 +15,16 @@ import { describeApiError } from '@/lib/api-error-message';
 import { useHostProvenanceGate, useHostsQuery } from '@/features/hosts/hooks';
 import { useCreateAgent } from './hooks';
 
-// Runtime catalog for the create dialog. `disabled` runtimes appear in
-// the picker but can't be selected — they're listed so users know what
-// the roadmap looks like without us silently dropping options.
-type RuntimeChoice = { value: RuntimeKind; label: string; disabled?: boolean };
+// The runtime picker is driven entirely by the shared catalog (single
+// source of truth). Non-`selectable` runtimes still render — disabled —
+// so the roadmap is visible without us silently dropping options.
+type RuntimeChoice = { value: RuntimeKind; label: string; disabled: boolean };
 
-const RUNTIMES: RuntimeChoice[] = [
-  { value: 'claude', label: 'Claude Code' },
-  { value: 'codex', label: 'Codex CLI' },
-  { value: 'qoder', label: 'Qoder' },
-  { value: 'cursor', label: 'Cursor', disabled: true },
-  { value: 'gemini', label: 'Gemini', disabled: true },
-];
+const RUNTIMES: RuntimeChoice[] = RUNTIME_CATALOG.map(entry => ({
+  value: entry.kind,
+  label: entry.cliLabel,
+  disabled: !entry.selectable,
+}));
 
 // Shared chip styling for the Runtime + "Runs on" pickers: ink border +
 // the theme's own selection fill (`--bg-row-selected`), border WIDTH /

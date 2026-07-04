@@ -15,6 +15,8 @@ import {
 import {
   MCP_CONFIG_FILENAME,
   parseMcpConfig,
+  runtimeCatalogEntry,
+  runtimeLabel,
   runtimeMcpServerName,
   toClaudeMcpConfig,
   toCodexMcpOverrides,
@@ -510,27 +512,13 @@ function projectForRuntime(config: McpConfig, runtime: RuntimeKind): void {
 }
 
 /**
- * Does this runtime actually load profile MCP at spawn? Source of truth is the
- * host spawn loader (`mcp-spawn.ts` switch: claude | codex). Keep in lockstep
- * with it — if a new runtime gains an adapter there, add it here too.
+ * Does this runtime actually load profile MCP at spawn? The shared runtime
+ * catalog mirrors the host spawn loader (`mcp-spawn.ts` switch: claude |
+ * codex) and a host-side test asserts the two stay in lockstep, so reading
+ * `supportsProfileMcp` here keeps this UI in step automatically.
  */
 function runtimeSupportsProfileMcp(runtime: RuntimeKind): boolean {
-  return runtime === 'claude' || runtime === 'codex';
-}
-
-function runtimeLabel(runtime: RuntimeKind): string {
-  switch (runtime) {
-    case 'claude':
-      return 'Claude';
-    case 'codex':
-      return 'Codex';
-    case 'cursor':
-      return 'Cursor';
-    case 'gemini':
-      return 'Gemini';
-    default:
-      return runtime;
-  }
+  return runtimeCatalogEntry(runtime).supportsProfileMcp;
 }
 
 function ConfigCheckButton({

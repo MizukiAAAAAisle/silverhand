@@ -9,6 +9,7 @@ export * from './mcp-config.js';
 export * from './mime.js';
 export * from './platform-prompt.js';
 export * from './proxy-env.js';
+export * from './runtime-catalog.js';
 export * from './seq.js';
 export * from './server-connection-profile.js';
 export * from './server-url.js';
