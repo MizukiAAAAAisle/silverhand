@@ -16,19 +16,15 @@ import { useCreateAgent } from './hooks';
 
 // Runtime catalog for the create dialog. `disabled` runtimes appear in
 // the picker but can't be selected — they're listed so users know what
-// the roadmap looks like without us silently dropping options. `qoder`
-// isn't a real RuntimeKind yet (no driver / no DB enum value), so it's
-// rendered from a parallel struct rather than from RuntimeKind.
-type RuntimeChoice =
-  | { value: RuntimeKind; label: string; disabled?: boolean }
-  | { value: 'qoder'; label: string; disabled: true };
+// the roadmap looks like without us silently dropping options.
+type RuntimeChoice = { value: RuntimeKind; label: string; disabled?: boolean };
 
 const RUNTIMES: RuntimeChoice[] = [
   { value: 'claude', label: 'Claude Code' },
   { value: 'codex', label: 'Codex CLI' },
+  { value: 'qoder', label: 'Qoder' },
   { value: 'cursor', label: 'Cursor', disabled: true },
   { value: 'gemini', label: 'Gemini', disabled: true },
-  { value: 'qoder', label: 'Qoder', disabled: true },
 ];
 
 // Shared chip styling for the Runtime + "Runs on" pickers: ink border +
@@ -195,7 +191,7 @@ export function CreateAgentDialog({
                     title={isDisabled ? 'coming soon' : undefined}
                     onClick={() => {
                       if (isDisabled) return;
-                      setRuntime(rt.value as RuntimeKind);
+                      setRuntime(rt.value);
                     }}
                     className={chipClass(isSelected, isDisabled)}
                   >
