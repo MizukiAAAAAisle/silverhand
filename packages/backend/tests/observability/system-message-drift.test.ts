@@ -59,7 +59,6 @@ const RETIRED_RENDERED_SUBTYPES = new Set<string>([
   // renderer until the legacy isolated-thread UI path is fully retired.
   'thread_anchor',
   'child_context',
-  'thread_summary',
 ]);
 
 interface ProducerHit {

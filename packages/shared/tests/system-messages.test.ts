@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  LEGACY_SUBTYPES,
   SYSTEM_SUBTYPES,
   TASK_MUTATION_KINDS,
   TASK_SUBTYPES,
@@ -36,18 +35,11 @@ describe('system-messages constants', () => {
     }
   });
 
-  it('LEGACY_SUBTYPES does not overlap with SYSTEM_SUBTYPES', () => {
-    const live = new Set<string>(SYSTEM_SUBTYPES);
-    for (const s of LEGACY_SUBTYPES) {
-      expect(live.has(s)).toBe(false);
-    }
-  });
 });
 
 describe('systemSubtype helper', () => {
   it('returns the input unchanged (identity)', () => {
     expect(systemSubtype('mention_cc')).toBe('mention_cc');
-    expect(systemSubtype('thread_summary')).toBe('thread_summary');
     expect(systemSubtype('task_create')).toBe('task_create');
   });
 });
@@ -80,26 +72,15 @@ describe('resolveSubtype', () => {
     });
   });
 
-  it('returns legacy for retired subtypes still in DB', () => {
-    expect(resolveSubtype('join')).toEqual({
-      kind: 'legacy',
-      subtype: 'join',
-    });
-    expect(resolveSubtype('session_context')).toEqual({
-      kind: 'legacy',
-      subtype: 'session_context',
-    });
-    expect(resolveSubtype('child_summary')).toEqual({
-      kind: 'legacy',
-      subtype: 'child_summary',
-    });
-  });
-
-  it('returns unknown for null/undefined/unfamiliar strings', () => {
+  it('returns unknown for null/undefined/unfamiliar strings and deleted retired subtypes', () => {
     expect(resolveSubtype(null)).toEqual({ kind: 'unknown' });
     expect(resolveSubtype(undefined)).toEqual({ kind: 'unknown' });
     expect(resolveSubtype('')).toEqual({ kind: 'unknown' });
     expect(resolveSubtype('not_a_real_subtype')).toEqual({ kind: 'unknown' });
+    expect(resolveSubtype('join')).toEqual({ kind: 'unknown' });
+    expect(resolveSubtype('session_context')).toEqual({ kind: 'unknown' });
+    expect(resolveSubtype('child_summary')).toEqual({ kind: 'unknown' });
+    expect(resolveSubtype('thread_summary')).toEqual({ kind: 'unknown' });
   });
 });
 
@@ -109,10 +90,7 @@ describe('readSubtype', () => {
       kind: 'current',
       subtype: 'onboarding',
     });
-    expect(readSubtype({ subtype: 'join' })).toEqual({
-      kind: 'legacy',
-      subtype: 'join',
-    });
+    expect(readSubtype({ subtype: 'join' })).toEqual({ kind: 'unknown' });
     expect(readSubtype({ subtype: 'mystery' })).toEqual({ kind: 'unknown' });
   });
 

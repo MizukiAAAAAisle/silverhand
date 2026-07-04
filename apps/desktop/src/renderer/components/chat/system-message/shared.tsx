@@ -39,7 +39,7 @@ export type SystemMessageRenderer = ComponentType<RendererProps>;
 
 // ─── Generic fallback ──────────────────────────────────────────────────
 
-/** IM-convention narration for legacy/unknown subtypes and any current
+/** IM-convention narration for unknown subtypes and any current
  *  subtype that doesn't have a custom renderer yet (PR-2..PR-6 will
  *  progressively replace fallthrough entries with bespoke components). */
 export function GenericNarrationFallback({

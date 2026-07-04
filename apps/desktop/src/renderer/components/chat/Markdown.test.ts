@@ -185,22 +185,22 @@ describe('SystemMessage channel refs', () => {
     );
   }
 
-  it('resolves #<channel_name> inside a thread_summary card body', () => {
-    // thread_summary cards render `metadata.summary` through Markdown —
-    // the previous gap was that `MessageList` only forwarded
-    // `conversationRefsById`, so summaries that mention `#version3`
-    // got the unresolved branch even when the title existed in the
-    // workspace's channel map.
+  it('renders retired thread_summary through generic narration content', () => {
+    // thread_summary is no longer a live subtype with a structured card.
+    // If an unexpected old row appears, it falls through to generic
+    // narration and renders message.content, not metadata.summary.
     const channels = new Map<string, ChannelReference | null>([
       ['version3', { id: 'ch-v3', title: 'version3' }],
     ]);
-    const msg = makeSystemMessage('thread_summary', {
-      thread_title: 't1',
-      summary: 'see #version3 for context',
-    });
+    const msg = makeSystemMessage(
+      'thread_summary',
+      { thread_title: 't1', summary: 'ignored #missing' },
+      'see #version3 for context',
+    );
     const html = renderSystem(msg, channels);
     expect(html).toContain('data-channel-ref-state="resolved"');
     expect(html).toContain('data-channel-ref-id="ch-v3"');
+    expect(html).not.toContain('ignored');
   });
 
   it('resolves #<channel_name> inside a non-collapsible system narration', () => {
@@ -234,10 +234,11 @@ describe('SystemMessage channel refs', () => {
         },
       ],
     ]);
-    const msg = makeSystemMessage('thread_summary', {
-      thread_title: 'Follow-up',
-      summary: 'cc @shiki for review.',
-    });
+    const msg = makeSystemMessage(
+      'thread_summary',
+      { thread_title: 'Follow-up', summary: 'ignored' },
+      'cc @shiki for review.',
+    );
 
     const html = renderSystem(msg, new Map(), undefined, humans);
 
@@ -567,11 +568,11 @@ describe('SystemMessage channel refs', () => {
     expect(html).toContain('legacy summary');
   });
 
-  // PR-1 added three-state subtype resolution. Legacy DB-resident
-  // subtypes (`join`, `session_context`, `child_summary`) and unknown
-  // strings both fall through to generic narration — neither pretends
-  // to be a current subtype's custom card.
-  it('renders legacy `child_summary` rows as generic narration, not collapsible', () => {
+  // PR-1 removed content-prefix inference. Deleted retired subtypes
+  // (`join`, `session_context`, `child_summary`) are now unknown strings:
+  // they fall through to generic narration and do not pretend to be a
+  // current subtype's custom card.
+  it('renders retired `child_summary` rows as generic narration, not collapsible', () => {
     const msg = makeSystemMessage(
       'child_summary',
       {},
@@ -585,7 +586,7 @@ describe('SystemMessage channel refs', () => {
     expect(html).toContain('Sub-session 8c2a closed');
   });
 
-  it('renders legacy `join` rows as generic narration', () => {
+  it('renders retired `join` rows as generic narration', () => {
     const msg = makeSystemMessage('join', {}, '@old-agent joined #version3');
     const html = renderSystem(msg, new Map());
     expect(html).not.toContain('aria-expanded');
@@ -704,7 +705,7 @@ describe('SystemMessage channel refs', () => {
     // `SystemMessage.tsx`'s `INFO_BLOCK_SUBTYPES` set, paired with
     // `.system-message-row[data-system-layout="info"]` in
     // global.css. Banners + cards (schedule_fire, context cards,
-    // thread_summary, mention_cc, onboarding) must carry the
+    // mention_cc, onboarding) must carry the
     // attribute so the avatar-column alignment kicks in; cluster
     // narration (task_* / session_cleared / rename) must NOT carry
     // it because it stays in the regular content column. Adding a
@@ -731,7 +732,6 @@ describe('SystemMessage channel refs', () => {
       }],
       ['onboarding', {}],
       ['mention_cc', { source_conversation_id: 'c1', source_user_id: null, source_user_name: 'me' }],
-      ['thread_summary', { thread_title: 't1', summary: 'done' }],
     ];
     for (const [subtype, metadata] of infoSubtypes) {
       const msg = makeSystemMessage(subtype, metadata);

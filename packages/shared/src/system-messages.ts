@@ -22,18 +22,16 @@
  *    `SYSTEM_SUBTYPES`; a literal in producer code with no constant entry
  *    (or vice versa) fails CI.
  *
- * # Three-state resolution
+ * # Subtype resolution
  *
- * `resolveSubtype()` returns one of three states:
+ * `resolveSubtype()` returns one of two states:
  *  - `current`: live subtype; the renderer registry is authoritative.
- *  - `legacy`: subtype was used in past producer code, removed since.
- *    DB rows still exist and the renderer falls back to generic narration.
- *    Do NOT pretend to parse content prefixes for these — the inferSubtype
- *    helper that did so was removed in PR-1.
  *  - `unknown`: missing metadata (null/undefined) or string in neither set.
  *    Renderer falls back to generic narration.
  *
- * Both `legacy` and `unknown` are first-class fallback states, NOT errors.
+ * `unknown` is a first-class fallback state, NOT a renderer error. Retired
+ * subtype rows are expected to be migrated away before deleting their registry
+ * entry; if one resurfaces afterwards it should be visible as unknown drift.
  */
 import { z } from 'zod';
 import { TaskAssigneeDtoSchema } from './api/task.js';
@@ -45,7 +43,6 @@ export const SYSTEM_SUBTYPES = [
   'channel_context',
   'child_context',
   'thread_anchor',
-  'thread_summary',
   'mention_cc',
   'schedule_fire',
   'session_cleared',
@@ -90,17 +87,6 @@ type _IsExactTaskSubtype =
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 type _TaskSubtypeExhaustive = Assert<_IsExactTaskSubtype>;
 
-/** DB-resident subtypes that no current producer writes. Renderer treats
- *  them as `legacy` — falls through to generic narration without a
- *  dedicated component. `null` / missing metadata is NOT a legacy
- *  member; `resolveSubtype()` returns it as `unknown`. */
-export const LEGACY_SUBTYPES = [
-  'join',
-  'session_context',
-  'child_summary',
-] as const;
-export type LegacySystemSubtype = typeof LEGACY_SUBTYPES[number];
-
 /**
  * Identity helper for non-task subtypes. Forces TypeScript to narrow the
  * argument to `SystemSubtype` at the call site, giving the drift test a
@@ -124,17 +110,15 @@ export function taskSystemSubtype(kind: TaskMutationKind): TaskSubtype {
   return `task_${kind}` as TaskSubtype;
 }
 
-/** Three-state resolution result. `current` rows are renderer registry's
- *  responsibility; `legacy` and `unknown` both fall through to generic
- *  narration but are reported separately so observability/telemetry can
- *  distinguish historic data from drift bugs. */
+/** Subtype resolution result. `current` rows are renderer registry's
+ *  responsibility; `unknown` rows fall through to generic narration and are
+ *  observable as drift / malformed / migrated-away history. */
 export type SubtypeResolution =
   | { kind: 'current'; subtype: SystemSubtype }
-  | { kind: 'legacy'; subtype: LegacySystemSubtype }
   | { kind: 'unknown' };
 
 /**
- * Resolve a raw subtype string (or null/undefined) to one of three states.
+ * Resolve a raw subtype string (or null/undefined) to one of two states.
  * Renderers consume this — they switch on `resolution.kind` first, then
  * dispatch on `resolution.subtype` only in the `current` branch.
  */
@@ -144,9 +128,6 @@ export function resolveSubtype(
   if (raw == null) return { kind: 'unknown' };
   if ((SYSTEM_SUBTYPES as readonly string[]).includes(raw)) {
     return { kind: 'current', subtype: raw as SystemSubtype };
-  }
-  if ((LEGACY_SUBTYPES as readonly string[]).includes(raw)) {
-    return { kind: 'legacy', subtype: raw as LegacySystemSubtype };
   }
   return { kind: 'unknown' };
 }

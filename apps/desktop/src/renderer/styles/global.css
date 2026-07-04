@@ -534,7 +534,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    - `border-inline-start: 1px solid border-subtle` is the single
      anchor that says "this strip is one segment". No fill bg — cards
      are reserved for info blocks (schedule_fire, context cards,
-     thread_summary, mention_cc, onboarding); a tinted cluster would
+     mention_cc, onboarding); a tinted cluster would
      compete and re-introduce the "everything is a card" density
      problem PR-10 is meant to undo. */
 .system-activity-cluster {

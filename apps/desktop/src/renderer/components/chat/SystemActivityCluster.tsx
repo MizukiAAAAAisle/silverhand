@@ -23,8 +23,8 @@ import type { ConversationReference } from './ConversationRef';
  *  - 7px outer margin so the strip detaches from real messages above
  *    and below it.
  *  - background is intentionally transparent — cards are reserved for
- *    info blocks (`schedule_fire`, context-card series, `thread_summary`,
- *    `mention_cc`, `onboarding`); a tinted cluster would compete with
+ *    info blocks (`schedule_fire`, context-card series, `mention_cc`,
+ *    `onboarding`); a tinted cluster would compete with
  *    those and re-introduce the "everything is a card" density problem
  *    PR-10 is meant to undo.
  *

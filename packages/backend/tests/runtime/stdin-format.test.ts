@@ -20,7 +20,7 @@ describe('formatDeliveryInstruction system-message subtypes', () => {
     );
   });
 
-  it('does not treat legacy thread_summary as actionable in reply-cluster mode', () => {
+  it('does not treat retired thread_summary as actionable in reply-cluster mode', () => {
     expect(
       formatDeliveryInstruction(
         [systemMessage({ subtype: 'thread_summary' })],

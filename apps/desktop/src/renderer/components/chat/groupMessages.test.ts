@@ -56,7 +56,6 @@ describe('isClusterableMessage', () => {
       'thread_anchor',
       'child_context',
       'channel_context',
-      'thread_summary',
       'mention_cc',
       'onboarding',
       'rename',
@@ -151,8 +150,8 @@ describe('groupMessages — adjacency rule', () => {
   });
 
   it('an info-block system message (schedule_fire) also breaks the run', () => {
-    // Drift guard: the four info-block subtypes (schedule_fire /
-    // context-card series / thread_summary / mention_cc / onboarding)
+    // Drift guard: info-block subtypes (schedule_fire / context-card series /
+    // mention_cc / onboarding)
     // must NOT be sucked into a cluster — they're real information,
     // not lifecycle noise.
     const a = makeMsg({ id: 'a', subtype: 'task_claim', createdAt: T0 });

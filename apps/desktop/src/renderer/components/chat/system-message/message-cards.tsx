@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import {
   AtSign,
-  CheckCircle2,
   ChevronRight,
   Pencil,
   RotateCcw,
@@ -239,71 +238,6 @@ function SessionClearedRow({
       <span data-session-cleared-running={meta.was_running ? '1' : '0'}>
         was {meta.was_running ? 'running' : 'idle'}
       </span>
-    </div>
-  );
-}
-
-// ─── thread_summary card ───────────────────────────────────────────────
-
-/**
- * Compact render for `thread_summary` system messages — emitted to the
- * parent channel when a thread is closed. The summary itself is
- * markdown (often headings + lists + code), so we surface it as a
- * left-aligned card with full markdown rendering rather than the
- * centered-italic narration treatment that suits one-liners.
- */
-export function ThreadSummaryCard({
-  message,
-  conversationRefsById,
-  onOpenConversationRef,
-  channelsByName,
-  onOpenChannelRef,
-  humansByName,
-}: RendererProps): JSX.Element {
-  const meta = (message.metadata ?? {}) as Record<string, unknown>;
-  const threadTitle =
-    typeof meta['thread_title'] === 'string'
-      ? (meta['thread_title'] as string)
-      : null;
-  const closedBy =
-    typeof meta['closed_by'] === 'string'
-      ? (meta['closed_by'] as string)
-      : null;
-  const summary =
-    typeof meta['summary'] === 'string'
-      ? (meta['summary'] as string)
-      : message.content;
-
-  return (
-    <div className="border-l-2 border-accent/60 bg-bg-floating/60 px-3 py-2">
-      <div className="mb-1 flex items-center gap-1.5 text-xs text-text-muted">
-        <CheckCircle2 className="size-3.5" />
-        <span>
-          Thread closed
-          {threadTitle ? (
-            <>
-              {' · '}
-              <span className="text-text-secondary">{threadTitle}</span>
-            </>
-          ) : null}
-          {closedBy ? (
-            <>
-              {' · by '}
-              <span className="text-text-secondary">{closedBy}</span>
-            </>
-          ) : null}
-        </span>
-      </div>
-      <div className="text-text-primary">
-        <Markdown
-          content={summary}
-          conversationRefsById={conversationRefsById}
-          onOpenConversationRef={onOpenConversationRef}
-          channelsByName={channelsByName}
-          onOpenChannelRef={onOpenChannelRef}
-          humansByName={humansByName}
-        />
-      </div>
     </div>
   );
 }

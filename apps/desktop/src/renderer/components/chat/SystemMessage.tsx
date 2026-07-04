@@ -23,7 +23,6 @@ import {
   OnboardingRow,
   RenameRow,
   SessionClearedCard,
-  ThreadSummaryCard,
 } from './system-message/message-cards';
 
 interface SystemMessageProps {
@@ -41,17 +40,13 @@ interface SystemMessageProps {
  * typecheck, so adding a new subtype to `@silverhand/shared` forces a
  * matching renderer here.
  *
- * Resolution is three-state (`resolveSubtype`):
+ * Resolution is two-state (`resolveSubtype`):
  *  - `current`: look up in `systemMessageRenderers` and render.
- *  - `legacy`: DB-resident subtype no producer writes anymore — generic
- *    narration. We do NOT re-parse content prefixes to fake current
- *    rendering for legacy rows; that path lived in the old `inferSubtype`
- *    helper and was removed in PR-1.
  *  - `unknown`: missing/unrecognized subtype — generic narration.
  *
- * Both fallback states render the same generic-narration component; we
- * keep them as separate `kind` values so future telemetry can distinguish
- * historic rows from drift bugs.
+ * We do NOT re-parse content prefixes to fake current rendering for retired
+ * rows; that path lived in the old `inferSubtype` helper and was removed in
+ * PR-1.
  */
 export function SystemMessage(props: SystemMessageProps): JSX.Element {
   const resolution = resolveSubtype(readRawSubtype(props.message.metadata));
@@ -112,12 +107,12 @@ function readRawSubtype(
  * typecheck. Adding a new subtype to `SYSTEM_SUBTYPES` in shared forces
  * a corresponding entry here before the build passes.
  *
- * PR-1 baseline: existing custom cards (mention_cc / thread_summary /
- * session_cleared) and the existing collapsible narration treatment
- * (onboarding / child_context / thread_anchor) are wired up. The
- * remaining current subtypes (channel_context / schedule_fire / rename /
- * task_*) point at `GenericNarrationFallback` and will be replaced one
- * by one in subsequent PRs (PR-2..PR-6).
+ * PR-1 baseline: existing custom cards (mention_cc / session_cleared) and
+ * the existing collapsible narration treatment (onboarding / child_context /
+ * thread_anchor) are wired up. The remaining current subtypes
+ * (channel_context / schedule_fire / rename / task_*) point at
+ * `GenericNarrationFallback` and will be replaced one by one in subsequent
+ * PRs (PR-2..PR-6).
  */
 const systemMessageRenderers: Record<SystemSubtype, SystemMessageRenderer> = {
   // P0 (PR-2): task event row reads enriched metadata; legacy rows
@@ -149,7 +144,6 @@ const systemMessageRenderers: Record<SystemSubtype, SystemMessageRenderer> = {
   conversation_member_added: ConversationMemberChangeRow,
   conversation_member_removed: ConversationMemberChangeRow,
   mention_cc: MentionCcCard,
-  thread_summary: ThreadSummaryCard,
 };
 
 /**
@@ -162,7 +156,7 @@ const systemMessageRenderers: Record<SystemSubtype, SystemMessageRenderer> = {
  * (the latter two dropped from the clusterable set in #task:1145) — is
  * intentionally NOT in this set —
  * those read as conversation-adjacent commentary and stay in the
- * regular content column. Generic / legacy fallbacks also stay at
+ * regular content column. Generic / unknown fallbacks also stay at
  * content column (default behavior of `.system-message-row`).
  *
  * Drift guard: every entry here must be a `SystemSubtype`; new
@@ -176,5 +170,4 @@ const INFO_BLOCK_SUBTYPES: ReadonlySet<SystemSubtype> = new Set<SystemSubtype>([
   'thread_anchor',
   'onboarding',
   'mention_cc',
-  'thread_summary',
 ]);
