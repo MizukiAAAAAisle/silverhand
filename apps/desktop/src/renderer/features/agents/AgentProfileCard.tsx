@@ -10,13 +10,11 @@ import { ChevronDown, Lock } from 'lucide-react';
 import dayjs from 'dayjs';
 import type {
   AgentDto,
-  AgentRuntimeStateDto,
   ReasoningEffort,
   RuntimeKind,
   UpdateAgentInput,
 } from '@silverhand/shared';
 import {
-  RUNTIME_CATALOG,
   reasoningEffortLabel,
   runtimeCatalogEntry,
   runtimeCliLabel,
@@ -48,7 +46,6 @@ const CODEX_FAST_MODE: { value: string; label: string }[] = [
 
 interface AgentProfileCardProps {
   agent: AgentDto;
-  runtimeState: AgentRuntimeStateDto | undefined;
 }
 
 /**
@@ -64,11 +61,10 @@ interface AgentProfileCardProps {
  * 120px-label form grid, so the panel reads as a profile sheet
  * rather than a settings form. The editors themselves (GhostInput /
  * GhostTextarea / Radix Select) are unchanged so codex-specific
- * options and runtime-blocked disables keep working.
+ * options keep working.
  */
 export function AgentProfileCard({
   agent,
-  runtimeState,
 }: AgentProfileCardProps): JSX.Element {
   const { data: viewer } = useViewerUser();
   // D4.a Commit 5d-fixup (Cindy P1-2): the BackendUnreachable arm
@@ -92,13 +88,6 @@ export function AgentProfileCard({
   useEffect(() => setDisplayName(agent.display_name), [agent.display_name, agent.id]);
   useEffect(() => setDescription(agent.description ?? ''), [agent.description, agent.id]);
   useEffect(() => setModel(agent.model ?? ''), [agent.model, agent.id]);
-
-  // Runtime change is blocked by the backend (409) when any conversation_agent
-  // is starting/active. Mirror that locally so the select looks disabled
-  // instead of producing a confusing toast on click.
-  const hasRunning = (runtimeState?.conversation_agents ?? []).some(
-    s => s.status === 'starting' || s.status === 'active',
-  );
 
   const commit = (patch: UpdateAgentInput) => {
     update.mutate(patch);
@@ -231,27 +220,14 @@ export function AgentProfileCard({
               />
             )}
           </ProfileField>
-          <ProfileField
-            label="Runtime"
-            hint={
-              canEdit && hasRunning ? 'Stop the agent before changing.' : undefined
-            }
-          >
-            {canEdit ? (
-              <RuntimeSelect
-                value={agent.runtime}
-                disabled={hasRunning}
-                onChange={value => commit({ runtime: value })}
-              />
-            ) : (
-              <ReadOnlyValue value={runtimeLabel(agent.runtime)} />
-            )}
+          <ProfileField label="Runtime">
+            <ReadOnlyValue value={runtimeLabel(agent.runtime)} />
           </ProfileField>
           <ProfileField label="Model" hint={canEdit ? runtimeHint(agent.runtime) : undefined}>
             {canEdit ? (
               // Editable combobox: free-text model id + the runtime's
-              // suggested values (qoder tiers). `h-8` matches the sibling
-              // RuntimeSelect trigger height so the 2-col grid stays even.
+              // suggested values (qoder tiers). `h-8` keeps it aligned with
+              // the compact read-only Runtime value in the 2-col grid.
               <Combobox
                 id={`ag-model-${agent.id}`}
                 ariaLabel="Model"
@@ -469,59 +445,6 @@ function selectContentClass(): string {
 
 function selectItemClass(): string {
   return 'flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-text-primary outline-none data-[highlighted]:bg-bg-hover';
-}
-
-function RuntimeSelect({
-  value,
-  disabled,
-  onChange,
-}: {
-  value: RuntimeKind;
-  disabled: boolean;
-  onChange: (value: RuntimeKind) => void;
-}): JSX.Element {
-  return (
-    <Select.Root
-      value={value}
-      disabled={disabled}
-      onValueChange={v => onChange(v as RuntimeKind)}
-    >
-      <Select.Trigger
-        data-panel-control="select-trigger"
-        className={selectTriggerClass(disabled)}
-      >
-        <Select.Value />
-        <Select.Icon>
-          <ChevronDown className="size-3.5 text-text-muted" />
-        </Select.Icon>
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Content
-          position="popper"
-          sideOffset={4}
-          data-panel-control="select-content"
-          className={selectContentClass()}
-        >
-          <Select.Viewport>
-            {RUNTIME_CATALOG.filter(
-              // Offer only spawnable runtimes, but always keep the agent's
-              // current runtime visible so its label renders even if that
-              // runtime is no longer selectable.
-              rt => rt.selectable || rt.kind === value,
-            ).map(rt => (
-              <Select.Item
-                key={rt.kind}
-                value={rt.kind}
-                className={selectItemClass()}
-              >
-                <Select.ItemText>{rt.cliLabel}</Select.ItemText>
-              </Select.Item>
-            ))}
-          </Select.Viewport>
-        </Select.Content>
-      </Select.Portal>
-    </Select.Root>
-  );
 }
 
 function PickerSelect({

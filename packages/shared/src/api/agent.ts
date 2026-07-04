@@ -92,14 +92,15 @@ export const CreateAgentInputSchema = z
 export type CreateAgentInput = z.infer<typeof CreateAgentInputSchema>;
 
 // PATCH /api/agents/:id — every field optional, only provided keys
-// are written. `name` and `host_id` are deliberately excluded; `name`
-// is the immutable identifier (see migrations.ts v5 comment), and
-// changing host is not supported in v1.
+// are written. `name`, `host_id`, and `runtime` are deliberately excluded:
+// `name` is the immutable identifier (see migrations.ts v5 comment),
+// `host_id` swap is out of v1 scope, and runtime is a create-time driver
+// boundary rather than profile metadata.
 export const UpdateAgentInputSchema = z
   .object({
     display_name: DisplayNameSchema.optional(),
     description: z.string().max(2000).nullable().optional(),
-    runtime: RuntimeKindSchema.optional(),
+    runtime: z.never().optional(),
     model: z.string().nullable().optional(),
     reasoning_effort: ReasoningEffortSchema.nullable().optional(),
     fast_mode: FastModeSchema.nullable().optional(),

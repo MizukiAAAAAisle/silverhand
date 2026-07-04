@@ -230,10 +230,7 @@ export function AgentView({
             <div className="flex-1 overflow-y-auto">
               <div className="px-8 py-6">
                 {section === 'profile' ? (
-                  <AgentProfileCard
-                    agent={agent}
-                    runtimeState={runtimeQuery.data}
-                  />
+                  <AgentProfileCard agent={agent} />
                 ) : null}
                 {section === 'mcp' ? (
                   <AgentMcpPane agentId={agent.id} runtime={agent.runtime} />
@@ -534,7 +531,7 @@ function AgentSidePanel({
           )
         ) : section === 'profile' ? (
           <div className="flex-1 overflow-y-auto px-4 py-4">
-            <AgentProfileCard agent={agent} runtimeState={runtimeState} />
+            <AgentProfileCard agent={agent} />
           </div>
         ) : canManageSchedules ? (
           <div className="flex-1 overflow-y-auto px-4 py-4">

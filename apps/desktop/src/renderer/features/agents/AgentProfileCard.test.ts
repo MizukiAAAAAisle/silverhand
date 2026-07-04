@@ -56,7 +56,6 @@ function render(agent: AgentDto, viewerId: string): string {
         { location: '/members/a-1' },
         React.createElement(AgentProfileCard, {
           agent,
-          runtimeState: undefined,
         }),
       ),
     ),

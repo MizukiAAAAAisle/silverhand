@@ -429,13 +429,12 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     return c.json({ agent });
   });
 
-  // PATCH — partial update. `name` and `host_id` are intentionally not
+  // PATCH — partial update. `name`, `host_id`, and `runtime` are intentionally not
   // patchable here: `name` is the immutable handle (renaming would
   // ripple through the agent_home workspace, every @mention in history,
-  // every L2 file path), and host swap is out of v1 scope. Runtime change is
-  // refused while any conversation_agent for this agent is starting/active
-  // — otherwise the next event from the in-flight CLI would be parsed
-  // by the wrong driver.
+  // every L2 file path), host swap is out of v1 scope, and runtime swap is
+  // not a simple profile edit: it would invalidate existing CLI session/resume
+  // state and needs a dedicated migration use case if it ever ships.
   //
   // Permission: `canEditAgent` (v26). The creator user — recorded on
   // `agents.created_by_user_id` at create time — and the agent acting
@@ -458,22 +457,11 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    if (parsed.data.runtime && parsed.data.runtime !== agent.runtime) {
-      const live = agents
-        .listRuntimeConversations(id)
-        .some(s => s.status === 'starting' || s.status === 'active');
-      if (live) {
-        return c.json(
-          { error: 'agent_busy_change_runtime', detail: 'stop the agent before changing runtime' },
-          409,
-        );
-      }
-    }
     // Route the write through the service so the `agent_changed` refresh
     // event is published in ONE seam (shared with the avatar routes and the
     // agent-self `profile update` route) — no per-route publish to drift.
-    // The service also normalizes runtime tuning (reasoning valid for the
-    // effective runtime); an explicit out-of-runtime value throws → 400.
+    // The service also validates runtime tuning (reasoning valid for the
+    // current runtime); an explicit out-of-runtime value throws → 400.
     let updated: AgentDto | null;
     try {
       updated = ctx.agentService.updateAgent(id, parsed.data);

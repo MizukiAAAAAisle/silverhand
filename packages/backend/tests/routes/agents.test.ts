@@ -457,49 +457,25 @@ describe('PATCH /api/agents/:id', () => {
     expect(res.status).toBe(400);
   });
 
-  it('rejects runtime change while a conversation_agent is starting/active (409)', async () => {
+  it('rejects runtime changes; runtime is create-time immutable', async () => {
     t = buildTestApp();
     const created = await (
       await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
     ).json() as any;
-    // Provisioning auto-starts the DM onboarding channel — force a
-    // running status row by writing to conversation_agents directly so the
-    // test doesn't depend on a real spawn.
-    const dmConversations = t.ctx.db
-      .prepare(
-        `SELECT conversation_id AS id
-           FROM conversation_agents ca
-           JOIN conversations c ON c.id = ca.conversation_id
-          WHERE ca.agent_id = ? AND c.kind = 'dm_channel'`,
-      )
-      .all(created.agent.id) as { id: string }[];
-    expect(dmConversations.length).toBe(1);
-    t.ctx.db
-      .prepare(
-        `UPDATE conversation_agents SET status = 'active'
-         WHERE conversation_id = ? AND agent_id = ?`,
-      )
-      .run(dmConversations[0]!.id, created.agent.id);
 
     const res = await http(t).patch(`/api/agents/${created.agent.id}`, {
       runtime: 'codex',
     });
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(400);
     const body = await res.json() as any;
-    expect(body.error).toBe('agent_busy_change_runtime');
-  });
+    expect(body.error).toBe('invalid input');
 
-  it('allows runtime change when nothing is running', async () => {
-    t = buildTestApp();
-    const created = await (
-      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
-    ).json() as any;
-    const res = await http(t).patch(`/api/agents/${created.agent.id}`, {
-      runtime: 'codex',
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json() as any;
-    expect(body.agent.runtime).toBe('codex');
+    const row = t.ctx.db
+      .prepare<[string], { runtime: string }>(
+        `SELECT runtime FROM agents WHERE id = ?`,
+      )
+      .get(created.agent.id)!;
+    expect(row.runtime).toBe('claude');
   });
 
   it('rejects display_name with control chars or Unicode line separators (400)', async () => {

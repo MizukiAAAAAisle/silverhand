@@ -430,8 +430,7 @@ export class AgentRepo {
   /**
    * Partial update. Only keys present in `input` are written. Returns
    * the updated row, or null if the agent does not exist. Caller is
-   * responsible for higher-level invariants such as "no runtime change
-   * while a session_agent is active" — this repo just persists.
+   * responsible for higher-level invariants — this repo just persists.
    */
   update(id: string, input: UpdateAgentInput): AgentDto | null {
     if (!this.get(id)) return null;
@@ -444,10 +443,6 @@ export class AgentRepo {
     if (input.description !== undefined) {
       sets.push('description = ?');
       values.push(input.description);
-    }
-    if (input.runtime !== undefined) {
-      sets.push('runtime = ?');
-      values.push(input.runtime);
     }
     if (input.model !== undefined) {
       sets.push('model = ?');

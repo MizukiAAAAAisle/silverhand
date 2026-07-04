@@ -32,19 +32,12 @@ export interface AgentServiceOptions {
 }
 
 /**
- * Enforce the runtime/reasoning invariant on an update, resolving against the
- * EFFECTIVE runtime (`patch.runtime ?? existing.runtime`). Two paths:
- *
- *  - **Explicit reasoning_effort in the patch** (incl. an API caller passing
- *    a bad value): must be valid for the effective runtime, else throw →
- *    400. We reject rather than silently drop an explicit value — dropping
- *    what the caller asked for would be a silent rebind.
- *  - **Runtime switch that leaves reasoning_effort untouched** (the UI's
- *    `RuntimeSelect` sends only `{ runtime }`): a stale value the NEW runtime
- *    doesn't support is cleared to null. It belonged to the old runtime and
- *    would otherwise be forwarded to the new driver — this is exactly the
- *    qoder(`max`)→codex leak. Silent here is correct: the value isn't part of
- *    this request's intent and is meaningless under the new runtime.
+ * Enforce the runtime/reasoning invariant on an update. Runtime itself is a
+ * create-time driver boundary (changing it would invalidate stored CLI session
+ * / resume semantics), so PATCH rejects runtime before reaching this service.
+ * Explicit reasoning_effort in the patch must be valid for the agent's current
+ * runtime, else throw → 400. We reject rather than silently drop an explicit
+ * value — dropping what the caller asked for would be a silent rebind.
  *
  * fast_mode needs no equivalent: its values (true/false/null) are all valid
  * for its only consumer (codex); a stale fast_mode on another runtime is
@@ -54,22 +47,15 @@ export function normalizeRuntimeTuning(
   existing: AgentRow,
   input: UpdateAgentInput,
 ): UpdateAgentInput {
-  const effectiveRuntime = input.runtime ?? existing.runtime;
   if (input.reasoning_effort !== undefined) {
-    if (!reasoningEffortValidForRuntime(effectiveRuntime, input.reasoning_effort)) {
+    if (
+      !reasoningEffortValidForRuntime(existing.runtime, input.reasoning_effort)
+    ) {
       throw new AgentServiceError(
         'reasoning_effort_invalid_for_runtime',
-        `reasoning_effort '${input.reasoning_effort}' is not valid for runtime '${effectiveRuntime}'`,
+        `reasoning_effort '${input.reasoning_effort}' is not valid for runtime '${existing.runtime}'`,
       );
     }
-    return input;
-  }
-  if (
-    input.runtime !== undefined &&
-    input.runtime !== existing.runtime &&
-    !reasoningEffortValidForRuntime(effectiveRuntime, existing.reasoning_effort)
-  ) {
-    return { ...input, reasoning_effort: null };
   }
   return input;
 }
@@ -120,7 +106,7 @@ export class AgentService {
   }
 
   /**
-   * Update an agent's stored fields (profile metadata + runtime/model)
+   * Update an agent's stored fields (profile metadata + model/tuning)
    * and broadcast `agent_changed` on success. Returns null when the agent
    * does not exist (no event). This is the text/metadata counterpart of
    * the avatar methods; both the public human PATCH and the internal

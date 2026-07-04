@@ -95,6 +95,20 @@ describe('agent fast_mode validation', () => {
   });
 });
 
+describe('agent update validation', () => {
+  it('rejects runtime changes; runtime is create-time immutable', () => {
+    expect(
+      UpdateAgentInputSchema.safeParse({ runtime: 'codex' }).success,
+    ).toBe(false);
+    expect(
+      UpdateAgentInputSchema.safeParse({
+        runtime: 'codex',
+        display_name: 'Alice',
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe('agent materialization fields (D4.d v33)', () => {
   const baseAgent = {
     id: 'a1',
