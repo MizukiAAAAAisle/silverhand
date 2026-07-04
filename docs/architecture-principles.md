@@ -2,7 +2,7 @@
 
 > **Status**: 2026-05-09 整理。来自 PR-1 ~ PR-6 落地的"Human/Agent 同构"主线。
 >
-> 本 doc 是 silverhand 后端**新功能 / 新 service / 新 DB 表 / 新 migration / 新 compat·legacy·fallback shim 必须遵守的约束清单**，与 `core-design.md`（产品/数据模型权威）和 `permissions.md`（鉴权模型权威）平级。代码与本 doc 冲突时，以本 doc 为准。
+> 本 doc 是 silverhand **后端**新功能 / 新 service / 新 DB 表 / 新 migration 必须遵守的约束清单，与 `core-design.md`（产品/数据模型权威）和 `permissions.md`（鉴权模型权威）平级。代码与本 doc 冲突时，以本 doc 为准。**（§11 是例外：compat / legacy / fallback shim 的退出条件是系统级约束，同样覆盖客户端 / renderer 的兼容 shim，不限后端。）**
 >
 > 任何提交前 review 都应当用 §1 checklist 检查；任何例外必须在设计稿里写明理由。
 
@@ -233,6 +233,8 @@ agent 授权是 capability-based（见 `graded-permissions-v1.md`）。新增 ca
 ## 11. Compat / legacy shim 的退出条件（合入 gate）
 
 > 这轮 #1301 legacy 审计（#1303/#1304/#1305/#1310/#1311/#1312）清的所有东西，根因都是同一个：当初 shim 加进来时没写退出条件、没人知道何时能删，于是永久沉淀成债。本节把审计时**事后**用的 A/B/C 判据**前置成合入 gate**——治本，免下一轮考古。
+
+**本节范围 = 系统级**（不限后端）：compat shim 在后端和客户端 / renderer 两个 plane 都会长（如 renderer 对历史 system-message 行的 fallback），退出条件对两边同样强制。
 
 **约束：新增任何 compat / legacy / fallback / 迁移过渡 shim，必须在代码注释（或设计稿）里内联「退出条件三件套」，缺任一项不许合入：**
 
