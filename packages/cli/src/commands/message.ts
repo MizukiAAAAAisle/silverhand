@@ -334,16 +334,17 @@ stdout: { "changed": <bool>, "emoji": "<emoji>", "count": <n> }`,
 
 const historyCommand: Command = {
   verb: 'history',
-  summary: 'Read an anchored window of message history.',
-  help: `silverhand message history (--before-seq N | --after-seq N | --around <id>)
+  summary: 'Read message history; omit the anchor for the latest window.',
+  help: `silverhand message history [--before-seq N | --after-seq N | --around <id>]
                              [--target self|conversation:<id>|thread:<id>]
                              [--include-content] [--no-include-system]
                              [--limit N]
 
-Read a window of messages anchored at a position. Exactly one of --before-seq,
---after-seq, or --around must be provided.
+Read a window of messages. With no anchor, returns the latest window in
+ascending seq order. Pass at most one of --before-seq, --after-seq, or --around.
 
 Flags:
+  (no anchor)          Read the latest window.
   --before-seq N        Read messages with seq < N.
   --after-seq N         Read messages with seq > N.
   --around <message_id> Read a window centered on this message id.
@@ -369,11 +370,11 @@ stdout: full AgentReadHistoryDto JSON.`,
     const after = flagNumber(args, 'after-seq');
     const around = flagString(args, 'around');
     const anchorCount = [before, after, around].filter(v => v !== undefined).length;
-    if (anchorCount !== 1) {
+    if (anchorCount > 1) {
       throw new CliError({
         code: 'validation_error',
         message:
-          'message history requires exactly one of --before-seq, --after-seq, or --around',
+          'message history accepts at most one of --before-seq, --after-seq, or --around; omit all to read the latest window',
         retriable: false,
       });
     }
@@ -434,7 +435,8 @@ stdout: full AgentReadHistoryDto JSON.`,
 const searchCommand: Command = {
   verb: 'search',
   summary: 'Search visible message text.',
-  help: `silverhand message search (--q <text> | --query <text>)
+  help: `silverhand message search <query>
+silverhand message search (--q <text> | --query <text>)
                             [--scope current|workspace|channel]
                             [--workspace-id <id>] [--channel-id <id>]
                             [--no-include-system] [--limit N]
@@ -442,11 +444,13 @@ const searchCommand: Command = {
 Full-text search over messages this agent can see.
 
 Flags:
-  --q <text>           Required (mutually exclusive with --query).
-                       Search query. 1..200 chars.
-  --query <text>       Alias for --q. Same length limit. Passing both
-                       --q and --query at once fails with
-                       mutually_exclusive — pick one form per call.
+  <query>              Positional query, equivalent to --q. Quote
+                       multi-word queries.
+  --q <text>           Search query. Mutually exclusive with --query and
+                       positional <query>. 1..200 chars.
+  --query <text>       Alias for --q. Same length limit. Passing more than
+                       one query form fails with mutually_exclusive — pick
+                       one form per call.
   --scope              Default "current". One of:
                          current   — only the current channel/thread
                          workspace — every conv in this workspace (or one
@@ -461,25 +465,32 @@ Flags:
 stdout: AgentSearchMessagesDto JSON.`,
   flags: ['q', 'query', 'scope', 'workspace-id', 'channel-id', 'limit'] as const,
   booleanFlags: ['include-system'],
+  allowPositional: true,
   async run({ client, args }) {
     const qShort = flagString(args, 'q');
     const qLong = flagString(args, 'query');
-    if (qShort !== undefined && qLong !== undefined) {
+    const positionalQuery = parseSearchPositionalQuery(args.positional);
+    const queryForms = [
+      qShort !== undefined ? '--q' : null,
+      qLong !== undefined ? '--query' : null,
+      positionalQuery !== undefined ? '<query>' : null,
+    ].filter((v): v is string => v !== null);
+    if (queryForms.length > 1) {
       throw new CliError({
         code: 'validation_error',
         subkind: 'mutually_exclusive',
         message:
-          '--q and --query are mutually exclusive (they are aliases). ' +
+          '--q, --query, and positional <query> are mutually exclusive (they are aliases). ' +
           'Pass exactly one.',
         retriable: false,
-        details: { flags: ['q', 'query'] },
+        details: { query_forms: queryForms },
       });
     }
-    const q = qShort ?? qLong;
+    const q = qShort ?? qLong ?? positionalQuery;
     if (!q) {
       throw new CliError({
         code: 'validation_error',
-        message: '--q (or --query) is required',
+        message: 'search query is required: pass positional <query>, --q, or --query',
         retriable: false,
       });
     }
@@ -528,6 +539,20 @@ stdout: AgentSearchMessagesDto JSON.`,
     });
   },
 };
+
+function parseSearchPositionalQuery(positional: readonly string[]): string | undefined {
+  if (positional.length === 0) return undefined;
+  if (positional.length === 1) return positional[0];
+  throw new CliError({
+    code: 'validation_error',
+    subkind: 'unexpected_arguments',
+    message:
+      'message search accepts at most one positional <query>. ' +
+      'Quote multi-word queries, e.g. `silverhand message search "hello world"`.',
+    retriable: false,
+    details: { positional },
+  });
+}
 
 export const messageCommands: readonly Command[] = [
   sendCommand,

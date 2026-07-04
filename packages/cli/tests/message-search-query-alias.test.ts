@@ -1,10 +1,12 @@
 /**
- * Tests for `silverhand message search` query input — the `--q` /
- * `--query` alias pair.
+ * Tests for `silverhand message search` query input — positional
+ * `<query>` plus the `--q` / `--query` alias pair.
  *
  * Locks the contract @Alice + @Cindy aligned in #task:274:
- *   - `--q` and `--query` are aliases (same semantics, same length cap).
- *   - Passing both at once fails with `subkind: 'mutually_exclusive'`
+ *   - positional `<query>`, `--q`, and `--query` are aliases (same
+ *     semantics, same length cap).
+ *   - Passing more than one at once fails with `subkind:
+ *     'mutually_exclusive'`
  *     (NOT silently picking one). Agents that mix them up should see
  *     a structured failure, not a hidden last-wins choice.
  *   - `--scope` enum failures carry `subkind: 'enum_invalid'` so trace
@@ -44,20 +46,34 @@ const env: CliEnv = {
   authToken: 'tok',
 };
 
-function parsedFlags(flags: Record<string, string | string[]>): ParsedArgs {
-  return { flags, positional: [], rest: [] } as ParsedArgs;
+function parsedArgs(
+  flags: Record<string, string | string[]>,
+  positional: string[] = [],
+): ParsedArgs {
+  return { flags, positional, rest: [] } as ParsedArgs;
 }
 
 const search = findCommand('message', 'search')!;
 
 describe('message search --q / --query alias pair', () => {
+  it('accepts positional <query> on its own', async () => {
+    const { client, capture } = fakeSearchClient();
+    await search.run({
+      env,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      client: client as any,
+      args: parsedArgs({}, ['hello world']),
+    });
+    expect(capture()!.q).toBe('hello world');
+  });
+
   it('accepts --q on its own', async () => {
     const { client, capture } = fakeSearchClient();
     await search.run({
       env,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       client: client as any,
-      args: parsedFlags({ q: 'hello world' }),
+      args: parsedArgs({ q: 'hello world' }),
     });
     expect(capture()!.q).toBe('hello world');
   });
@@ -68,19 +84,19 @@ describe('message search --q / --query alias pair', () => {
       env,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       client: client as any,
-      args: parsedFlags({ query: 'hello world' }),
+      args: parsedArgs({ query: 'hello world' }),
     });
     expect(capture()!.q).toBe('hello world');
   });
 
-  it('rejects --q and --query together with subkind=mutually_exclusive', async () => {
+  it('rejects multiple query forms with subkind=mutually_exclusive', async () => {
     let caught: unknown;
     try {
       await search.run({
         env,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         client: { searchMessages: async () => ({ hits: [] }) } as any,
-        args: parsedFlags({ q: 'foo', query: 'bar' }),
+        args: parsedArgs({ q: 'foo', query: 'bar' }, ['baz']),
       });
     } catch (e) {
       caught = e;
@@ -93,23 +109,44 @@ describe('message search --q / --query alias pair', () => {
     // `--q` mentioned have re-tried with two flags before.
     expect(err.message).toContain('--q');
     expect(err.message).toContain('--query');
-    expect(err.details).toEqual({ flags: ['q', 'query'] });
+    expect(err.message).toContain('<query>');
+    expect(err.details).toEqual({ query_forms: ['--q', '--query', '<query>'] });
   });
 
-  it('requires at least one of --q / --query', async () => {
+  it('rejects multiple positional query tokens', async () => {
     let caught: unknown;
     try {
       await search.run({
         env,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         client: { searchMessages: async () => ({ hits: [] }) } as any,
-        args: parsedFlags({}),
+        args: parsedArgs({}, ['hello', 'world']),
       });
     } catch (e) {
       caught = e;
     }
     const err = caught as CliError;
     expect(err.code).toBe('validation_error');
+    expect(err.subkind).toBe('unexpected_arguments');
+    expect(err.message).toContain('Quote multi-word queries');
+    expect(err.details).toEqual({ positional: ['hello', 'world'] });
+  });
+
+  it('requires at least one of positional <query> / --q / --query', async () => {
+    let caught: unknown;
+    try {
+      await search.run({
+        env,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        client: { searchMessages: async () => ({ hits: [] }) } as any,
+        args: parsedArgs({}),
+      });
+    } catch (e) {
+      caught = e;
+    }
+    const err = caught as CliError;
+    expect(err.code).toBe('validation_error');
+    expect(err.message).toMatch(/<query>/);
     expect(err.message).toMatch(/--q.*--query|--query.*--q/);
   });
 });
@@ -122,7 +159,7 @@ describe('message search --scope enum validation', () => {
         env,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         client: { searchMessages: async () => ({ hits: [] }) } as any,
-        args: parsedFlags({ q: 'foo', scope: 'global' }),
+        args: parsedArgs({ q: 'foo', scope: 'global' }),
       });
     } catch (e) {
       caught = e;

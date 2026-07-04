@@ -302,6 +302,30 @@ function listHistoryBefore(
   return rows;
 }
 
+function listHistoryHead(
+  ctx: BackendContext,
+  conversationId: string,
+  includeSystem: boolean,
+  limit: number,
+  threadRootId: string | null,
+): HistoryMessageRow[] {
+  if (limit <= 0) return [];
+  return ctx.db
+    .prepare<(string | number)[], HistoryMessageRow>(
+      `SELECT *
+         FROM (
+           ${historySelectSql(
+             `m.conversation_id = ?
+              ${historySystemFilter(includeSystem)}
+              ${threadScopeClause(threadRootId)}`,
+             'ORDER BY m.seq DESC',
+           )}
+         )
+        ORDER BY seq ASC`,
+    )
+    .all(conversationId, ...threadScopeParams(threadRootId), limit);
+}
+
 function listHistoryAfter(
   ctx: BackendContext,
   conversationId: string,
@@ -446,8 +470,8 @@ export function buildReadHistoryDto(
       input.limit,
       threadRootId,
     );
-  } else {
-    const messageId = input.around_message_id!;
+  } else if (input.around_message_id !== undefined) {
+    const messageId = input.around_message_id;
     const anchorSeq = getHistoryAnchorSeq(
       ctx,
       targetConversation.id,
@@ -491,6 +515,15 @@ export function buildReadHistoryDto(
       threadRootId,
     );
     rows = [...before, ...(anchorRow ? [anchorRow] : []), ...after];
+  } else {
+    anchor = { type: 'head' };
+    rows = listHistoryHead(
+      ctx,
+      targetConversation.id,
+      input.include_system,
+      input.limit,
+      threadRootId,
+    );
   }
 
   const minSeq = rows[0]?.seq ?? null;

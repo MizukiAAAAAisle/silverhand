@@ -196,9 +196,10 @@ export const AgentReadHistoryInputSchema = z
     value =>
       [value.before_seq, value.after_seq, value.around_message_id].filter(
         v => v !== undefined,
-      ).length === 1,
+      ).length <= 1,
     {
-      message: 'anchor required: pass exactly one of before_seq, after_seq, or around_message_id',
+      message:
+        'pass at most one of before_seq, after_seq, or around_message_id; omit all to read the latest window',
       path: ['before_seq'],
     },
   );
@@ -255,6 +256,7 @@ export const ReadHistoryMessageSchema = z.object({
 export type ReadHistoryMessage = z.infer<typeof ReadHistoryMessageSchema>;
 
 export const ReadHistoryAnchorSchema = z.union([
+  z.object({ type: z.literal('head') }),
   z.object({ type: z.literal('before_seq'), seq: z.number() }),
   z.object({ type: z.literal('after_seq'), seq: z.number() }),
   z.object({ type: z.literal('around_message_id'), message_id: z.string() }),

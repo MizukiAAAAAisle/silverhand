@@ -121,6 +121,16 @@ describe('dispatcher A1 hard guard (real subprocess)', () => {
     expect(body.error.subkind).not.toBe('unexpected_arguments');
   });
 
+  it('lets commands with an explicit positional contract reach their handler path', async () => {
+    const r = await runCli(['message', 'search', 'hello']);
+    expect(r.code).not.toBe(0);
+    const body = parseStderrJson(r.stderr);
+    // Env is stripped, so success is impossible here. The contract we
+    // need is narrower: the dispatcher must not reject the positional
+    // query before env loading / command execution.
+    expect(body.error.subkind).not.toBe('unexpected_arguments');
+  });
+
   // ── verb_removed migration hint ────────────────────────────────────
   // 5/14 daily report logged one `unknown verb message read` failure.
   // Pointing the typo at the canonical verb (`history`) saves a retry

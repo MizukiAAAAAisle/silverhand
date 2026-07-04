@@ -191,17 +191,18 @@ async function executeCommand(
     removedFlags: cmd.removedFlags,
   });
 
-  // Dispatcher-level hard guard (A1): no command in the catalogue
-  // currently consumes positional arguments or `--`-trailing tokens.
+  // Dispatcher-level hard guard (A1): commands are flag-only unless
+  // they explicitly opt in to a small positional surface. No command
+  // consumes `--`-trailing tokens.
   // The original product-base bug was a `silverhand message send
   // --content "..."` where bash word-split on an unescaped `"` and the
   // tail got dropped silently into `args.positional`. Rejecting both
   // here turns that into an explicit `unexpected_arguments` failure
   // every agent can see. Both arrays are surfaced in `details` so the
   // agent can echo back exactly which token tripped the check.
-  if (args.positional.length > 0 || args.rest.length > 0) {
+  if ((!cmd.allowPositional && args.positional.length > 0) || args.rest.length > 0) {
     const parts: string[] = [];
-    if (args.positional.length > 0) {
+    if (!cmd.allowPositional && args.positional.length > 0) {
       parts.push(`positional ${JSON.stringify(args.positional)}`);
     }
     if (args.rest.length > 0) {
@@ -211,12 +212,18 @@ async function executeCommand(
       code: 'validation_error',
       subkind: 'unexpected_arguments',
       message:
-        `silverhand ${noun} ${verb} accepts flags only; ` +
+        `silverhand ${noun} ${verb} ${
+          cmd.allowPositional
+            ? 'does not accept tokens after `--`'
+            : 'accepts flags only'
+        }; ` +
         `got unexpected ${parts.join(' and ')}. ` +
-        `If a value contains spaces or quotes, pipe it via stdin or use a quoted heredoc.`,
+        (cmd.allowPositional
+          ? 'If the positional value contains spaces, quote it as one shell argument.'
+          : 'If a value contains spaces or quotes, pipe it via stdin or use a quoted heredoc.'),
       retriable: false,
       details: {
-        positional: args.positional,
+        positional: cmd.allowPositional ? [] : args.positional,
         rest: args.rest,
       },
     });

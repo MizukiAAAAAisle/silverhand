@@ -51,6 +51,10 @@ export interface Command {
    *  BEFORE the unknown-flag / positional-rest guards run. Use this
    *  when removing a flag in a backwards-incompatible way. */
   removedFlags?: Readonly<Record<string, RemovedFlagSpec>>;
+  /** Allow bare positional arguments to reach the command handler.
+   *  Keep this rare: most commands must stay flag-only so shell
+   *  quoting mistakes fail loudly at the dispatcher. */
+  allowPositional?: boolean;
   /** Run the command. Return value (or null) is written to stdout
    *  as a JSON line. Throw `CliError` (or anything else — fromUnknown
    *  will normalize) on failure. */
@@ -101,7 +105,7 @@ export const COMMAND_GROUPS: readonly NounGroup[] = [
     commands: messageCommands,
     // Agents reach for `silverhand message read` because every IM-style
     // CLI uses `read` for "show me messages" — but our verb is
-    // `history` (anchored window read). 5/14 daily report logged one
+    // `history`. 5/14 daily report logged one
     // `unknown verb message read` failure. Pointing the typo at the
     // right verb saves a retry round and keeps the agent in the
     // command surface they intended.
@@ -114,8 +118,8 @@ export const COMMAND_GROUPS: readonly NounGroup[] = [
         // with another "is not a verb" sentence reads as a stutter
         // (`Cindy review nit on #task:349`).
         hint:
-          'use `silverhand message history` to read an anchored window ' +
-          '(--before-seq | --after-seq | --around). For full-text ' +
+          'use `silverhand message history` to read recent messages ' +
+          '(or pass --before-seq | --after-seq | --around for an anchor). For full-text ' +
           'lookup across the workspace use `silverhand message search`.',
       },
     },

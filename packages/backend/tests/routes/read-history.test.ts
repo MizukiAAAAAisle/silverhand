@@ -44,21 +44,64 @@ describe('POST /internal/.../read-history', () => {
     t = null;
   });
 
-  it('requires exactly one anchor', async () => {
+  it('defaults to the latest window when no anchor is supplied', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const aliceId = agentIds.alice!;
+    const messages = new MessageRepo(t.ctx.db);
+    const rows = Array.from({ length: 4 }, (_, i) =>
+      messages.insertForConversation({
+        conversationId: channelId,
+        fromKind: 'user',
+        content: `latest ${i + 1}`,
+      }),
+    );
+
+    const latest = await http(t).post(readHistoryPath(channelId, aliceId), {
+      limit: 2,
+      include_system: false,
+    });
+    expect(latest.status).toBe(200);
+    const body = await latest.json() as any;
+    expect(body.anchor).toEqual({ type: 'head' });
+    // The SQL selects the latest N by seq DESC, then returns them ASC so
+    // callers still read in chronological order.
+    expect(body.messages.map((m: any) => m.message_ref.id)).toEqual([
+      rows[2]!.id,
+      rows[3]!.id,
+    ]);
+    expect(body.has_more_before).toBe(true);
+    expect(body.has_more_after).toBe(false);
+  });
+
+  it('returns an empty latest window when the target has no visible messages', async () => {
     t = buildTestApp();
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
     const aliceId = agentIds.alice!;
 
-    const missing = await http(t).post(readHistoryPath(channelId, aliceId), {});
-    expect(missing.status).toBe(400);
-    const missingBody = await missing.json() as any;
-    expect(JSON.stringify(missingBody)).toContain('anchor required');
+    const latest = await http(t).post(readHistoryPath(channelId, aliceId), {
+      include_system: false,
+    });
+    expect(latest.status).toBe(200);
+    const body = await latest.json() as any;
+    expect(body.anchor).toEqual({ type: 'head' });
+    expect(body.messages).toEqual([]);
+    expect(body.has_more_before).toBe(false);
+    expect(body.has_more_after).toBe(false);
+  });
+
+  it('rejects more than one anchor', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const aliceId = agentIds.alice!;
 
     const mixed = await http(t).post(readHistoryPath(channelId, aliceId), {
       before_seq: 10,
       after_seq: 1,
     });
     expect(mixed.status).toBe(400);
+    const mixedBody = await mixed.json() as any;
+    expect(JSON.stringify(mixedBody)).toContain('at most one');
   });
 
   it('reads anchored snippets without mutating inbox delivery state', async () => {

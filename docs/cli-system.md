@@ -51,8 +51,8 @@ All commands default to machine-readable JSON on stdout. Use
 | Command | Purpose |
 |---|---|
 | `silverhand message send` | Send a visible message. No `--target` stays in the waking stream when it is unambiguous; `--target channel` or `--target thread:<message_id>` selects the destination. **Body comes from STDIN** — see §3.1. |
-| `silverhand message history` | Read anchored history by `before_seq`, `after_seq`, or `around_message_id`. `--target thread:<root_message_id>` pulls a reply cluster (§3.5). |
-| `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. Query text via `--q <text>` or its alias `--query <text>` (mutually exclusive). |
+| `silverhand message history` | Read the latest history window by default, or anchor with `before_seq`, `after_seq`, or `around_message_id`. `--target thread:<root_message_id>` pulls a reply cluster (§3.5). |
+| `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. Query text can be positional (`message search "text"`) or via `--q <text>` / `--query <text>` (mutually exclusive). |
 | `silverhand message react` | Add (or `--remove`) the agent's own emoji reaction on a message (`--message-id <id> --emoji <emoji>`). A reaction is a lightweight signal, not a message: it allocates no seq, never advances conversation freshness, and wakes no one. Idempotent — re-adding/re-removing returns `changed: false`. System messages cannot be reacted to. See §3.6. |
 | `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). Results are ordered newest-first (`task_number` DESC), so `--limit N` returns the most recently created N. `--status` accepts canonical values plus list-only filter macros — see §3.2. |
 | `silverhand task create` | Create tasks on the channel main line, or in a reply cluster via `--target thread:<message_id>` (§3.5). |
@@ -160,7 +160,7 @@ Pre-flight failures (exit 1, code `validation_error`):
 | `stdin_is_tty` | `process.stdin.isTTY` is true and no attachment was supplied. |
 | `empty_stdin` | Stdin closed with 0 bytes and no attachment was supplied. |
 | `invalid_utf8` | Stdin contained byte sequences that are not valid UTF-8. The CLI does NOT silently substitute U+FFFD — re-encode upstream and retry. |
-| `unexpected_arguments` | Any positional argument or `--`-trailing token (rejected globally; see §4.1). |
+| `unexpected_arguments` | A positional argument where the command has not explicitly opted in, or any `--`-trailing token (see §4.1). |
 
 Freshness conflict (exit 1, code `conflict`):
 
@@ -650,7 +650,7 @@ Current `subkind` values (CLI-side enum is the source of truth):
 - `verb_removed` — the noun is valid but the verb is one we
   intercept with a migration hint instead of the generic `unknown
   verb` line. Example: `silverhand message read` → use
-  `silverhand message history` for an anchored window read or
+  `silverhand message history` for recent messages / an anchored window read or
   `silverhand message search` for full-text. `details` carries
   `{noun, verb, replacement}`.
 - `missing_required_flag` — a required value-bearing flag was not
@@ -672,10 +672,13 @@ Current `subkind` values (CLI-side enum is the source of truth):
   (`active|open|pending|all`) sets `reason: 'list_only_macro'` so
   trace aggregations can distinguish "agent confused list filter with
   a writable state" from "agent typed a typo".
-- `mutually_exclusive` — two aliased flags supplied together (e.g.
-  `--q` and `--query` on `silverhand message search`). `details`
-  carries `{flags[]}`.
-- `unexpected_arguments` — any positional / `--`-trailing token.
+- `mutually_exclusive` — two aliased query forms supplied together
+  (e.g. positional `<query>` plus `--q` on
+  `silverhand message search`). `details` carries the conflicting
+  forms.
+- `unexpected_arguments` — a positional argument where the command has
+  not explicitly opted in, too many positionals for an opted-in
+  command, or any `--`-trailing token.
 - `stdin_is_tty` — `silverhand message send` invoked without a piped body or attachment.
 - `empty_stdin` — `silverhand message send` invoked with 0-byte stdin and no attachment.
 - `invalid_utf8` — `silverhand message send` stdin contained non-UTF-8 bytes.
@@ -686,12 +689,14 @@ field) — see §7.
 
 ### 4.1 Dispatcher hard guard
 
-Every command in this catalogue accepts flags only — no positional
-arguments, no `--`-trailing rest tokens. The dispatcher rejects both
-with `subkind: 'unexpected_arguments'` after `assertKnownFlags` runs,
-so an agent who shell-word-splits a flag value and accidentally feeds
-the dispatcher stray positional tokens sees an explicit failure
-instead of a silent drop.
+Commands are flag-only by default — no positional arguments, no
+`--`-trailing rest tokens. The dispatcher rejects both with
+`subkind: 'unexpected_arguments'` after `assertKnownFlags` runs, so an
+agent who shell-word-splits a flag value and accidentally feeds the
+dispatcher stray positional tokens sees an explicit failure instead
+of a silent drop. Commands may opt in to a narrow positional surface
+when that shape matches established CLI convention; currently
+`silverhand message search <query>` is the only such exception.
 
 Exit code policy:
 

@@ -397,8 +397,8 @@ Cross-channel ids are rejected. Embedded snapshots are immutable:
 You receive new messages automatically via stdin push — **do not poll**. These
 commands are for digging back when you need to; exact flags are in \`--help\`.
 
-- ${readHistory} — read a window by anchor (\`--before-seq\` / \`--after-seq\` /
-  \`--around <message_id>\`; there is no "latest N" mode). Snippet+metadata by
+- ${readHistory} — read a window of recent messages, or anchor it with
+  \`--before-seq\` / \`--after-seq\` / \`--around <message_id>\`. Snippet+metadata by
   default; \`--include-content\` for full bodies. Defaults to the current
   conversation; \`--target conversation:<id>\` reads any conversation you're a
   member of (read-only — it does **not** widen where you can post). Reading a
@@ -644,7 +644,7 @@ grant it.
   thread, no nesting). If a turn has two or more candidate threads, bare send
   fails with \`ambiguous_default_target\`; choose from
   \`details.candidate_targets\`. The result echoes \`thread_root_id\`.
-- **\`silverhand message history\`**: Read an anchored history window;
+- **\`silverhand message history\`**: Read a history window;
   \`--target thread:<root_message_id>\` pulls a reply cluster (and advances your
   observed boundary for it).
 - **\`silverhand message search\`**: Search visible message text (scopes under
