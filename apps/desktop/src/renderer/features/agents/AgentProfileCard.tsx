@@ -32,6 +32,7 @@ import { isBackendUnreachable, useViewerUser } from '@/features/me/hooks';
 const RUNTIMES: { value: RuntimeKind; label: string }[] = [
   { value: 'claude', label: 'Claude Code' },
   { value: 'codex', label: 'Codex CLI' },
+  { value: 'qoder', label: 'Qoder' },
   { value: 'cursor', label: 'Cursor' },
   { value: 'gemini', label: 'Gemini' },
 ];
