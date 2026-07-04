@@ -58,11 +58,6 @@ export type SecondaryDescriptor =
       id: string;
       kind: 'channel' | 'dm_channel';
       title: string;
-      parentChannelId: string | null;
-      /** Denormalised parent channel title. Nullable wire field carried
-       *  through from the ref; always null for the channel/dm side
-       *  conversations the pane renders (retained pending 2d wire cleanup). */
-      parentTitle: string | null;
       workspaceId: string;
       workspaceKind: 'regular' | 'dm';
       workspacePath: string;
@@ -89,9 +84,9 @@ export interface SecondaryRouteInputs {
  *
  * Cross-workspace `?side` ids resolve through the ref hook
  * (`useConversationById`); the resolved branch carries workspace
- * metadata (`workspaceId`, `workspaceKind`, `workspacePath`,
- * `parentTitle`) so ChannelView can switch its workspace-scoped hooks
- * via the `workspaceContext` prop without a second round-trip.
+ * metadata (`workspaceId`, `workspaceKind`, `workspacePath`) so
+ * ChannelView can switch its workspace-scoped hooks via the
+ * `workspaceContext` prop without a second round-trip.
  *
  * `sideRef === null` is treated as "ref hook hasn't been read yet"
  * (i.e. the React component hasn't run yet); we surface this as
@@ -124,8 +119,6 @@ export function selectSecondaryDescriptor(
       id: ref.id,
       kind: ref.kind,
       title: ref.title,
-      parentChannelId: ref.parent_channel_id,
-      parentTitle: ref.parent_title,
       workspaceId: ref.workspace_id,
       workspaceKind: ref.workspace_kind,
       workspacePath: ref.workspace_path,
@@ -161,7 +154,6 @@ export interface SecondaryConversationDescriptor {
   id: string;
   title: string;
   kind: 'channel' | 'dm_channel';
-  parent_conversation_id: string | null;
   closed_at: number | null;
   archived_at: number | null;
   workspace_id: string;
@@ -176,10 +168,6 @@ export interface SecondaryViewInputs {
    *  this comes from the ref's `workspace_kind`; otherwise falls
    *  through to the primary's kind. */
   channelKind: 'regular' | 'dm' | null;
-  /** ChannelView `parentTitle` prop value. Nullable wire pass-through;
-   *  always null now that the secondary pane only renders channel/dm
-   *  conversations (retained pending 2d wire cleanup). */
-  parentTitle: string | null;
   /** Workspace id to bake into the secondary archive mutation
    *  invalidation. Cross-workspace secondary needs the foreign
    *  workspace id so the `['workspaces', wid, 'channels']` cache
@@ -218,7 +206,6 @@ export function selectSecondaryViewInputs(
     return {
       conversationDescriptor: null,
       channelKind: primaryChannelKind,
-      parentTitle: null,
       archiveWorkspaceId: primaryWorkspaceId,
     };
   }
@@ -231,13 +218,11 @@ export function selectSecondaryViewInputs(
         id: secondary.id,
         title: secondary.title,
         kind: secondary.kind,
-        parent_conversation_id: secondary.parentChannelId,
         closed_at: secondary.closedAt,
         archived_at: secondary.archivedAt,
         workspace_id: secondary.workspaceId,
       },
       channelKind: secondary.workspaceKind,
-      parentTitle: secondary.parentTitle,
       archiveWorkspaceId: secondary.workspaceId,
     };
   }
@@ -247,7 +232,6 @@ export function selectSecondaryViewInputs(
   return {
     conversationDescriptor: null,
     channelKind: primaryChannelKind,
-    parentTitle: null,
     archiveWorkspaceId: primaryWorkspaceId,
   };
 }

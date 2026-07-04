@@ -71,13 +71,10 @@ export function useSelectionPersistenceEffects(params: {
   // this viewer, so the write-point is selection, not message activity.
   // Fire-and-forget + deduped per (workspace, channel) so a re-render with
   // the same selection doesn't re-ping; the reorder lands on the next list
-  // fetch (no jump under the cursor). Threads are out of scope — only stamp
-  // when the selected id is a top-level channel in the active list.
+  // fetch (no jump under the cursor).
   useEffect(() => {
     if (!selectedWorkspaceId || !selectedChannelId) return;
-    const isTopLevel = activeChannels.some(
-      c => c.id === selectedChannelId && c.parent_conversation_id === null,
-    );
+    const isTopLevel = activeChannels.some(c => c.id === selectedChannelId);
     if (!isTopLevel) return;
     const key = `${selectedWorkspaceId}:${selectedChannelId}`;
     if (lastTouchedChannelRef.current === key) return;

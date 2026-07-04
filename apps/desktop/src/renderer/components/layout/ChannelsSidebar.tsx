@@ -37,7 +37,6 @@ interface ChannelNode {
   title: string;
   kind: 'channel' | 'dm_channel';
   status: 'active' | 'idle' | 'crashed';
-  parent_channel_id: string | null;
   closed_at: number | null;
   starred_at: number | null;
   archived_at: number | null;

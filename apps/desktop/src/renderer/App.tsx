@@ -1026,7 +1026,6 @@ function RegisteredAppShell(): JSX.Element {
             id: s.id,
             title: s.title,
             kind: s.kind,
-            parent_conversation_id: null,
             closed_at: s.closed_at,
             archived_at: s.archived_at,
             workspace_id: s.workspace_id,
@@ -1357,7 +1356,7 @@ function RegisteredAppShell(): JSX.Element {
         <ChannelView
           channelKind={secondaryViewInputs.channelKind}
           conversation={secondaryConversationDescriptor}
-          parentTitle={secondaryViewInputs.parentTitle}
+          parentTitle={null}
           jumpTarget={secondaryJumpTarget}
           jumpPrimePending={secondaryJumpPrimePending}
           onJumped={handleJumped}
@@ -1512,7 +1511,7 @@ function RegisteredAppShell(): JSX.Element {
         <ChannelView
           channelKind={activitySourceViewInputs.channelKind}
           conversation={activitySourceViewInputs.conversationDescriptor}
-          parentTitle={activitySourceViewInputs.parentTitle}
+          parentTitle={null}
           jumpTarget={activityChannelJumpTarget}
           jumpPrimePending={activityChannelJumpPrimePending}
           onJumped={handleJumped}
@@ -1920,7 +1919,6 @@ function RegisteredAppShell(): JSX.Element {
                           kind: s.kind,
                           status:
                             s.status === 'active' || s.status === 'crashed' ? s.status : 'idle',
-                          parent_channel_id: null,
                           closed_at: s.closed_at,
                           starred_at: channelStarredAt.get(s.id) ?? null,
                           archived_at: s.archived_at,

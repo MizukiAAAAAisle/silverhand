@@ -74,8 +74,6 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
       id: 'c-other',
       kind: 'channel',
       title: 'planning',
-      parentChannelId: null,
-      parentTitle: null,
       workspaceId: 'w-1',
       workspaceKind: 'regular',
       workspacePath: '/tmp/w-1',
@@ -164,8 +162,6 @@ const sideChannelDescriptor: SecondaryDescriptor = {
   id: 'c-other',
   kind: 'channel',
   title: 'planning',
-  parentChannelId: null,
-  parentTitle: null,
   workspaceId: 'w-1',
   workspaceKind: 'regular',
   workspacePath: '/tmp/w-1',
@@ -180,8 +176,6 @@ const sideSecondDescriptor: SecondaryDescriptor = {
   id: 't-of-primary',
   kind: 'channel',
   title: 'investigations',
-  parentChannelId: null,
-  parentTitle: null,
   workspaceId: 'w-1',
   workspaceKind: 'regular',
   workspacePath: '/tmp/w-1',
@@ -194,8 +188,6 @@ const foreignSideDescriptor: SecondaryDescriptor = {
   id: 'c-foreign',
   kind: 'channel',
   title: 'team-y planning',
-  parentChannelId: null,
-  parentTitle: null,
   workspaceId: 'w-2',
   workspaceKind: 'regular',
   workspacePath: '/tmp/w-2',
@@ -458,7 +450,6 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     expect(out).toEqual({
       conversationDescriptor: null,
       channelKind: 'regular',
-      parentTitle: null,
       archiveWorkspaceId: 'w-1',
     });
   });
@@ -476,8 +467,6 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
       id: 'c-foreign',
       kind: 'channel',
       title: 'team-y planning',
-      parentChannelId: null,
-      parentTitle: null,
       workspaceId: 'w-2',
       workspaceKind: 'regular',
       workspacePath: '/tmp/w-2',
@@ -495,7 +484,6 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
       id: 'c-foreign',
       title: 'team-y planning',
       kind: 'channel',
-      parent_conversation_id: null,
       closed_at: null,
       archived_at: null,
       // The whole point: ChannelView's workspace_id is the FOREIGN
@@ -506,7 +494,6 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     // ChannelView's `channelKind` projects from the FOREIGN workspace,
     // not from `primaryChannelKind`. (Renderer never sees agent_home.)
     expect(out.channelKind).toBe('regular');
-    expect(out.parentTitle).toBeNull();
     // Archive mutation invalidation targets the FOREIGN workspace.
     expect(out.archiveWorkspaceId).toBe('w-2');
   });
@@ -523,8 +510,6 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
       id: 'dm-bob',
       kind: 'dm_channel',
       title: 'dm-bob',
-      parentChannelId: null,
-      parentTitle: null,
       workspaceId: 'w-bob-home',
       workspaceKind: 'dm',
       workspacePath: '/tmp/w-bob-home',
@@ -551,8 +536,6 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
       id: 'c-other',
       kind: 'channel',
       title: 'planning',
-      parentChannelId: null,
-      parentTitle: null,
       workspaceId: 'w-1',
       workspaceKind: 'regular',
       workspacePath: '/tmp/w-1',
@@ -582,7 +565,6 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     expect(out).toEqual({
       conversationDescriptor: null,
       channelKind: 'regular',
-      parentTitle: null,
       archiveWorkspaceId: 'w-1',
     });
   });

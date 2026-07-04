@@ -175,8 +175,6 @@ function ArchivedChannelRow({
   const archivedAt = item.channel.archived_at
     ? dayjs(item.channel.archived_at).format('YYYY-MM-DD HH:mm')
     : 'Unknown archive date';
-  const threadCopy =
-    item.thread_count === 1 ? '1 thread' : `${item.thread_count} threads`;
 
   return (
     <li>
@@ -209,8 +207,6 @@ function ArchivedChannelRow({
             </span>
             <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
               <span>Archived {archivedAt}</span>
-              <span>·</span>
-              <span>{threadCopy}</span>
             </span>
           </span>
         </button>

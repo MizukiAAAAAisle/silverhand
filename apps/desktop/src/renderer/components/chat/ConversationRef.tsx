@@ -9,8 +9,6 @@ export interface ConversationReference {
   id: string;
   kind: 'channel' | 'dm_channel';
   title: string;
-  parent_channel_id?: string | null;
-  parent_title?: string | null;
 }
 
 interface ConversationRefProps {
@@ -62,8 +60,6 @@ export function ConversationRef({
           id: hookResult.ref.id,
           kind: hookResult.ref.kind,
           title: hookResult.ref.title,
-          parent_channel_id: hookResult.ref.parent_channel_id,
-          parent_title: hookResult.ref.parent_title,
         }
       : null);
   // Three-state for popover purposes:
@@ -159,9 +155,9 @@ export function ConversationRef({
 }
 
 /**
- * Popover body for resolved conversation refs — kind, full title,
- * parent (threads), and the id (small + monospace) so the user can
- * eyeball-match the reference if needed.
+ * Popover body for resolved conversation refs — kind, full title, and
+ * the id (small + monospace) so the user can eyeball-match the
+ * reference if needed.
  */
 function ConversationPopoverBody({
   id,
