@@ -265,6 +265,7 @@ function RegisteredAppShell(): JSX.Element {
     requestJump,
     clearJump,
     isPrimePendingFor,
+    primePhaseFor,
   } = useMessageJumpController();
 
   useLayoutKeyboardShortcuts(toggleWorkspaceSidebar, toggleChannelSidebar);
@@ -1218,16 +1219,17 @@ function RegisteredAppShell(): JSX.Element {
     [isPrimePendingFor, parentJumpTarget],
   );
 
-  // Same derivation for the thread pane (#task:1226 §9.10): true while a
-  // first-unread jump into the open thread is still priming its around-window.
-  // ThreadPanel holds the cluster query disabled meanwhile so its empty-cache
-  // initial latest fetch can't pre-empt/clobber primeAround's around-window.
-  const threadJumpPrimePending = useMemo(
+  // Thread pane (#task:1317): expose the jump's lifecycle PHASE, not a bare
+  // boolean. ThreadPanel projects window-lock (query-disable), loader, and
+  // locate from this single source of truth via `threadMarkRead` pure fns — the
+  // window stays locked through `committed` so a latest fetch can't clobber the
+  // around-window, and locate only runs once the window is committed/settled.
+  const threadJumpPhase = useMemo(
     () =>
-      threadJumpMessageId !== null &&
-      selectedChannelId !== null &&
-      isPrimePendingFor(selectedChannelId, threadJumpMessageId),
-    [isPrimePendingFor, threadJumpMessageId, selectedChannelId],
+      threadJumpMessageId !== null && selectedChannelId !== null
+        ? primePhaseFor(selectedChannelId, threadJumpMessageId)
+        : null,
+    [primePhaseFor, threadJumpMessageId, selectedChannelId],
   );
 
   // ── Activity source pane (#task:1227 point 2) ─────────────────────────
@@ -1245,11 +1247,12 @@ function RegisteredAppShell(): JSX.Element {
     activityChannelJumpTarget,
     activityChannelJumpPrimePending,
     activityThreadJumpMessageId,
-    activityThreadJumpPrimePending,
+    activityThreadJumpPhase,
   } = useActivitySource({
     view,
     requestJump,
     isPrimePendingFor,
+    primePhaseFor,
     markMessageChannelRead,
     markConversationNotificationsRead,
   });
@@ -1425,7 +1428,7 @@ function RegisteredAppShell(): JSX.Element {
         onOpenChannelRef={handleOpenChannelByName}
         onOpenTask={handleOpenTask}
         jumpMessageId={threadJumpMessageId}
-        jumpPrimePending={threadJumpPrimePending}
+        jumpPhase={threadJumpPhase}
         onJumped={handleJumped}
       />
     );
@@ -1489,7 +1492,7 @@ function RegisteredAppShell(): JSX.Element {
             onOpenChannelRef={handleOpenChannelByName}
             onOpenTask={handleOpenTask}
             jumpMessageId={activityThreadJumpMessageId}
-            jumpPrimePending={activityThreadJumpPrimePending}
+            jumpPhase={activityThreadJumpPhase}
             onJumped={handleJumped}
             sourceViewer
           />

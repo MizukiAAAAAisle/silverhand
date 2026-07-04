@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConversationById } from '@/features/conversations/useConversationById';
 import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
+import type { JumpPhase } from '@/features/channels/messageJumpPhase';
 import {
   selectSecondaryDescriptor,
   selectSecondaryViewInputs,
@@ -41,6 +42,7 @@ export function useActivitySource(params: {
   view: string;
   requestJump: (target: MessageJumpTarget) => void;
   isPrimePendingFor: (channelId: string, messageId: string) => boolean;
+  primePhaseFor: (channelId: string, messageId: string) => JumpPhase | null;
   markMessageChannelRead: MarkReadMutation;
   markConversationNotificationsRead: MarkReadMutation;
 }) {
@@ -48,6 +50,7 @@ export function useActivitySource(params: {
     view,
     requestJump,
     isPrimePendingFor,
+    primePhaseFor,
     markMessageChannelRead,
     markConversationNotificationsRead,
   } = params;
@@ -127,12 +130,15 @@ export function useActivitySource(params: {
     activitySource?.threadRootId && activitySource.messageId
       ? activitySource.messageId
       : null;
-  const activityThreadJumpPrimePending = useMemo(
+  // Thread pane: expose the jump's lifecycle PHASE (not a bare boolean), so the
+  // docked ThreadPanel projects window-lock / loader / locate from the single
+  // source of truth exactly like the route thread pane (#task:1317).
+  const activityThreadJumpPhase = useMemo<JumpPhase | null>(
     () =>
-      activityThreadJumpMessageId !== null &&
-      activitySource !== null &&
-      isPrimePendingFor(activitySource.channelId, activityThreadJumpMessageId),
-    [isPrimePendingFor, activityThreadJumpMessageId, activitySource],
+      activityThreadJumpMessageId !== null && activitySource !== null
+        ? primePhaseFor(activitySource.channelId, activityThreadJumpMessageId)
+        : null,
+    [primePhaseFor, activityThreadJumpMessageId, activitySource],
   );
   // Opening a channel/DM source in the Activity side panel counts as reading
   // that stream ("打开 side panel 算已读"), exactly like a route pane becoming
@@ -182,6 +188,6 @@ export function useActivitySource(params: {
     activityChannelJumpTarget,
     activityChannelJumpPrimePending,
     activityThreadJumpMessageId,
-    activityThreadJumpPrimePending,
+    activityThreadJumpPhase,
   };
 }

@@ -118,98 +118,88 @@ describe('threadOpenNeedsLatestRefetch — jump-window clobber prevention (§9.1
   });
 });
 
-describe('clusterInitialFetchEnabled — empty-cache jump race (§9.10, Cindy)', () => {
-  it('enables the initial fetch on a NORMAL open (no prime pending)', () => {
+describe('clusterInitialFetchEnabled — empty-cache jump race (#task:1317)', () => {
+  it('enables the initial fetch on a NORMAL open (no window lock)', () => {
     // A normal open keeps its mount-time latest initial fetch — that fetch IS
     // this open's window and what arms the mark-read gate.
     expect(
       clusterInitialFetchEnabled({
         hasChannelAndRoot: true,
-        jumpPrimePending: false,
+        jumpWindowLocked: false,
       }),
     ).toBe(true);
   });
 
-  it('DISABLES the query while a jump-open is still priming (no latest may pre-empt primeAround)', () => {
-    // The blocker: enabled + empty cache → React Query fires a target-less
-    // LATEST initial fetch regardless of refetchOnMount, racing primeAround's
-    // around-window. Holding the query disabled while the prime is pending
-    // makes primeAround the sole writer of this open's window.
+  it('DISABLES the query while a jump-open holds the window lock (priming OR committed)', () => {
+    // The lock spans priming AND committed: primeAround is the sole writer of
+    // this open's window, and the committed around-window is not re-enabled (not
+    // refetchable) until clearJump drops the lock — so no latest can pre-empt or
+    // clobber it.
     expect(
       clusterInitialFetchEnabled({
         hasChannelAndRoot: true,
-        jumpPrimePending: true,
+        jumpWindowLocked: true,
       }),
     ).toBe(false);
   });
 
-  it('re-enables once the jump prime resolves (commit → reads around; fail → latest fallback)', () => {
-    // When primeAround resolves, `jumpPrimePending` flips false and the query
-    // re-enables. On commit the cache is present → refetchOnMount:false → it
-    // reads the around-window with no fetch. On failure the cache is empty → a
-    // latest initial fetch fires as a graceful fallback (pane never blank).
+  it('re-enables once the lock releases (settled/cleared → around read, or latest fallback)', () => {
+    // When the jump settles/clears, the lock drops and the query re-enables. On
+    // a committed window still in cache → refetchOnMount:false reads it with no
+    // fetch; on an empty cache (prime failed) → a latest initial fetch fires as
+    // a graceful fallback (pane never blank).
     expect(
       clusterInitialFetchEnabled({
         hasChannelAndRoot: true,
-        jumpPrimePending: false,
+        jumpWindowLocked: false,
       }),
     ).toBe(true);
   });
 
-  it('stays disabled without a channel/root regardless of prime state', () => {
+  it('stays disabled without a channel/root regardless of lock state', () => {
     expect(
       clusterInitialFetchEnabled({
         hasChannelAndRoot: false,
-        jumpPrimePending: false,
+        jumpWindowLocked: false,
       }),
     ).toBe(false);
   });
 });
 
-describe('threadClusterShowsLoader — locate-deadlock prevention (§9.10, Cindy)', () => {
+describe('threadClusterShowsLoader — committed-fact loader, zero wall-clock (#task:1317)', () => {
   it('shows the loader on a real in-flight fetch', () => {
     expect(
-      threadClusterShowsLoader({
-        isLoading: true,
-        jumpPrimePending: false,
-        hasWindow: false,
-      }),
+      threadClusterShowsLoader({ isLoading: true, jumpPhase: null }),
     ).toBe(true);
   });
 
-  it('shows the loader while a jump primes with no window yet (avoids "No replies yet" flash)', () => {
-    // Pre-commit: query disabled (isLoading false), no around-window in cache.
+  it('shows the loader while a jump is PRIMING (its around-window has not committed)', () => {
+    // Pre-commit: query disabled (isLoading false), around-window not yet in
+    // cache. Cover with the loader — even on a reopen where React Query serves
+    // the PREVIOUS open's stale rows, they must not flash (no `hasWindow` term).
     expect(
-      threadClusterShowsLoader({
-        isLoading: false,
-        jumpPrimePending: true,
-        hasWindow: false,
-      }),
+      threadClusterShowsLoader({ isLoading: false, jumpPhase: 'priming' }),
     ).toBe(true);
   });
 
-  it('RENDERS the window once primeAround commits, even though prime is still pending', () => {
-    // The deadlock Cindy caught: primeAround success does NOT clear
-    // `jumpPrimePending` (the controller waits for the visual locate/flash). The
-    // around-window is now in the disabled query's cache (hasWindow true), so we
-    // must render it — keeping the loader up would starve the locate effect of
-    // its `#msg-<id>` DOM node and time the jump out.
+  it('RENDERS once the prime is COMMITTED, even though the jump is still active', () => {
+    // committed: the around-window is in the (still-locked) cache; keeping the
+    // loader up would starve the locate effect of its `#msg-<id>` DOM node. The
+    // window stays protected by the lock, not by the loader.
     expect(
-      threadClusterShowsLoader({
-        isLoading: false,
-        jumpPrimePending: true,
-        hasWindow: true,
-      }),
+      threadClusterShowsLoader({ isLoading: false, jumpPhase: 'committed' }),
     ).toBe(false);
   });
 
-  it('does not show the loader once settled', () => {
+  it('RENDERS on a settled fallback (no loader)', () => {
     expect(
-      threadClusterShowsLoader({
-        isLoading: false,
-        jumpPrimePending: false,
-        hasWindow: true,
-      }),
+      threadClusterShowsLoader({ isLoading: false, jumpPhase: 'settled' }),
+    ).toBe(false);
+  });
+
+  it('does not show the loader with no active jump once loaded', () => {
+    expect(
+      threadClusterShowsLoader({ isLoading: false, jumpPhase: null }),
     ).toBe(false);
   });
 });

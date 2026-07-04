@@ -11,6 +11,7 @@ import { useMessageActionSurface } from '@/components/chat/useMessageActionSurfa
 import { MessageActionChrome } from '@/components/chat/MessageActionChrome';
 import { threadClusterShowsLoader, threadLiveMarkReadSeq, threadMarkReadSnapshot, threadOpenNeedsLatestRefetch } from './threadMarkRead';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
+import { type JumpPhase, jumpWindowLockedForPhase, threadLocateAllowed } from '@/features/channels/messageJumpPhase';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import {
   useFollowThread,
@@ -63,12 +64,15 @@ interface ThreadPanelProps {
    *  `thread_root_id === rootMessageId`. App gates this to this cluster, so
    *  the panel just locates. Null = no pending jump. */
   jumpMessageId?: string | null;
-  /** True while a first-unread jump into THIS thread is still priming its
-   *  around-window (#task:1226 §9.10). App derives it from the jump
-   *  controller's `isPrimePendingFor`. While set, the cluster query is held
-   *  disabled so its empty-cache initial latest fetch can't race / clobber
-   *  `primeAround`'s around-window; the pane shows a loader meanwhile. */
-  jumpPrimePending?: boolean;
+  /** The jump's `primeAround` lifecycle PHASE for a first-unread jump into
+   *  THIS thread (#task:1317), or null when no jump is active. The single
+   *  source of truth from which this pane projects three independent signals: the
+   *  shared phase projections `jumpWindowLockedForPhase` (→ holds the
+   *  cluster query disabled so a latest fetch can't clobber the around-window,
+   *  through `committed` until `clearJump`) and `threadLocateAllowed` (→ poll only
+   *  once `committed`/`settled`, never against a still-priming/stale window), plus
+   *  the loader `threadClusterShowsLoader` (→ cover only while `priming`). */
+  jumpPhase?: JumpPhase | null;
   /** Called once the jump completes (flashed) or is given up (target not in
    *  the loaded window). App clears the jump target on this. */
   onJumped?: () => void;
@@ -108,13 +112,13 @@ export function ThreadPanel({
   onOpenChannelRef,
   onOpenTask,
   jumpMessageId,
-  jumpPrimePending = false,
+  jumpPhase = null,
   onJumped,
   sourceViewer,
 }: ThreadPanelProps): JSX.Element {
   const rootCtx = useThreadRoot(channelId, rootMessageId);
   const cluster = useThreadCluster(channelId, rootMessageId, {
-    jumpPrimePending,
+    jumpWindowLocked: jumpWindowLockedForPhase(jumpPhase),
   });
   const messages = cluster.data;
   // Window-position signals (mirrors the channel pane). A cluster can be
@@ -294,6 +298,15 @@ export function ThreadPanel({
     }
     scrollToBottom();
   }, [shouldResetToLatest, resetToLatest, scrollToBottom]);
+
+  // Mirror the tail-retreat action into a ref so the jump-locate effect can call
+  // it on GIVE-UP (#task:1317 §4.3) without taking window-position values
+  // (`shouldResetToLatest`) as effect deps — which would cancel/restart the poll
+  // on every scroll. Retreating to the TRUE thread tail (reset the window if
+  // mid-history, else scroll to bottom) is exactly `handleScrollBottomClick`, so
+  // the "jump to latest" button and the locate give-up degrade identically.
+  const retreatToTailRef = useRef(handleScrollBottomClick);
+  retreatToTailRef.current = handleScrollBottomClick;
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -502,6 +515,13 @@ export function ThreadPanel({
   // follow-up, not silently broken.
   useEffect(() => {
     if (!jumpMessageId) return;
+    // Locate only once the around-window is the authoritative one for THIS open:
+    // `committed` (window written to cache AND still locked, so it can't be
+    // clobbered) or `settled` (best-effort fallback against whatever loaded).
+    // NEVER while `priming` — polling a still-fetching / previous-open stale
+    // window is the original mis-anchor bug (#task:1317). The effect re-runs
+    // when the phase advances (dep below), so a committed prime kicks it off.
+    if (!threadLocateAllowed(jumpPhase)) return;
     pinBottomRef.current = false;
     setShowScrollBottom(true);
     let raf = 0;
@@ -520,6 +540,13 @@ export function ThreadPanel({
       }
       attempts += 1;
       if (attempts > 60) {
+        // Give up: the target isn't in the loaded window (a `settled` fallback
+        // whose target is off-window, or an unexpected miss). Degrade to the
+        // TRUE thread tail — reset the window if it's mid-history, else scroll
+        // the loaded window to its bottom — never latch a half-way stale scroll
+        // and never leave a stuck loader (#task:1317 §4.3). Then release the
+        // jump so the phase clears (no "neither render nor release" state).
+        retreatToTailRef.current();
         onJumped?.();
         return;
       }
@@ -530,7 +557,7 @@ export function ThreadPanel({
       cancelAnimationFrame(raf);
       if (flashTimer) clearTimeout(flashTimer);
     };
-  }, [jumpMessageId, onJumped]);
+  }, [jumpMessageId, jumpPhase, onJumped]);
 
   const renderMessage = (m: typeof messages[number]): JSX.Element =>
     isCommittedMessage(m) && m.from_kind === 'system' ? (
@@ -685,18 +712,18 @@ export function ThreadPanel({
 
             {threadClusterShowsLoader({
               isLoading: cluster.isLoading,
-              jumpPrimePending,
-              hasWindow: messages.length > 0,
+              jumpPhase,
             }) ? (
-              // Loader only while there is genuinely nothing to render yet: a
-              // real in-flight fetch, OR a still-priming jump whose around-window
-              // has not committed. Once primeAround commits, the (disabled)
-              // query's cache carries the window (`messages.length > 0`) and we
-              // MUST render it even though `jumpPrimePending` is still true — the
-              // controller keeps prime pending until the VISUAL locate/flash
-              // finishes, and hiding the messages would starve that locate of its
-              // DOM node, timing the jump out with first-unread locate failed.
-              // `threadClusterShowsLoader` encodes this.
+              // Loader only while there is genuinely nothing THIS open can render
+              // yet: a real in-flight fetch, OR a jump still `priming` (its
+              // around-window has not committed). Once the prime advances to
+              // `committed` the (still-locked) query's cache carries the
+              // around-window and we render it even though the jump isn't done —
+              // the controller keeps the window LOCKED until the visual
+              // locate/flash calls `onJumped → clearJump`, and hiding the
+              // messages would starve that locate of its DOM node.
+              // `threadClusterShowsLoader` is a pure projection of `jumpPhase`
+              // (committed-fact, zero wall-clock) — no deadlock (#task:1317).
               <MessageRowsSkeleton />
             ) : replyMessages.length === 0 ? (
               <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-text-muted">

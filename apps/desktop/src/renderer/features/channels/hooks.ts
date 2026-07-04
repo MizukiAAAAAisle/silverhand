@@ -372,25 +372,28 @@ export function useThreadCluster(
   channelId: string | null,
   rootMessageId: string | null,
   opts?: {
-    /** True while THIS open is a first-unread jump whose `primeAround`
-     *  around-window fetch has not yet resolved (#task:1226 §9.10). While set,
-     *  the infinite query is held DISABLED so its empty-cache initial LATEST
-     *  fetch cannot race / clobber primeAround's around-window. See
-     *  `clusterInitialFetchEnabled`. Omit / false for a normal open — it then
-     *  keeps its mount-time latest initial fetch unchanged. */
-    jumpPrimePending?: boolean;
+    /** WINDOW LOCK for a jump-open (#task:1317): true while this open's
+     *  `primeAround` around-window must stay protected — the prime is `priming`
+     *  (fetch in flight) OR `committed` (written, awaiting the visual locate).
+     *  While set, the infinite query is held DISABLED so its empty-cache initial
+     *  LATEST fetch cannot race / clobber the around-window, and the committed
+     *  window is not re-enabled (not refetchable) until `clearJump` drops the
+     *  lock. See `jumpWindowLockedForPhase` / `clusterInitialFetchEnabled`. Omit /
+     *  false for a normal open — it then keeps its mount-time latest initial
+     *  fetch unchanged. */
+    jumpWindowLocked?: boolean;
   },
 ) {
   const qc = useQueryClient();
   const enabledBase = !!channelId && !!rootMessageId;
   // The infinite query is enabled (and so allowed to auto-fire its initial
-  // latest fetch on an empty cache) only when NOT waiting on a jump's
-  // primeAround. The stream subscription + epoch carrier below stay on
-  // `enabledBase` so live replies and the freshness epoch are still observed
-  // while the initial fetch is suppressed.
+  // latest fetch on an empty cache) only when NOT holding a jump's window lock.
+  // The stream subscription + epoch carrier below stay on `enabledBase` so live
+  // replies and the freshness epoch are still observed while the initial fetch
+  // is suppressed.
   const enabled = clusterInitialFetchEnabled({
     hasChannelAndRoot: enabledBase,
-    jumpPrimePending: opts?.jumpPrimePending ?? false,
+    jumpWindowLocked: opts?.jumpWindowLocked ?? false,
   });
   const key = clusterMessagesKey(channelId ?? 'none', rootMessageId ?? 'none');
 
@@ -441,8 +444,9 @@ export function useThreadCluster(
     // `refetchOnMount` only governs refetch when a cache ALREADY exists, NOT
     // the initial fetch on an EMPTY cache (that fires whenever `enabled`). So on
     // a jump-open the empty-cache initial latest fetch is suppressed a layer up,
-    // via `enabled` (gated on `jumpPrimePending`), so primeAround is the sole
-    // writer of this open's window and no latest can pre-empt it.
+    // via `enabled` (gated on `jumpWindowLocked`, held through `committed`), so
+    // primeAround is the sole writer of this open's window and no latest can
+    // pre-empt or clobber it until `clearJump` drops the lock (#task:1317).
     refetchOnMount: false,
     initialPageParam: undefined as MessagesPageParam,
     queryFn: async ({ pageParam, signal }) => {

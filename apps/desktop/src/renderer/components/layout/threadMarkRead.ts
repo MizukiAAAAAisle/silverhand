@@ -1,4 +1,5 @@
 import type { MessageSeq } from '@silverhand/shared';
+import type { JumpPhase } from '@/features/channels/messageJumpPhase';
 
 /**
  * Pure freshness gate for thread mark-read (#task:1226 surface 4, §9).
@@ -75,54 +76,57 @@ export function threadOpenNeedsLatestRefetch(input: {
  * `enabled`, REGARDLESS of `refetchOnMount` (the flag only governs refetch when
  * a cache already exists). On a jump-open that initial fetch is a target-less
  * LATEST window, and it races `primeAround`'s around-first-unread fetch —
- * whichever lands first writes `clusterMessagesKey` + the freshness epoch and
- * wins, so a latest could clobber the locate window and open the mark-read gate
- * before the around-window arrives.
+ * whichever lands first writes `clusterMessagesKey` and wins, so a latest could
+ * clobber the locate window.
  *
- * So while a jump-open's prime is still PENDING we keep the query DISABLED:
- * `primeAround` becomes the sole writer of this open's window — no latest can
- * pre-empt it. Once the prime resolves the query re-enables (NOT a mount, so
- * `refetchOnMount:false` still suppresses a refetch): cache present (prime
- * committed) → the around-window is read with no fetch; cache empty (prime
- * failed/aborted) → a latest initial fetch fires as a graceful fallback so the
- * pane is never left blank. A normal open never gates (no prime pending), so it
- * keeps its mount-time latest initial fetch exactly as before.
+ * So while a jump-open's window is LOCKED (`jumpWindowLocked` — the prime is
+ * `priming` OR `committed`, see `JumpPhase`) we keep the query DISABLED:
+ * `primeAround` is the sole writer of this open's window, and the committed
+ * around-window is NOT re-enabled (hence NOT refetchable) until the visual
+ * locate finishes and `clearJump` drops the lock. Once the lock releases
+ * (`settled` / cleared) the query re-enables: cache present → the around-window
+ * is read with no fetch; cache empty (prime failed) → a latest initial fetch
+ * fires as a graceful fallback so the pane is never left blank. A normal open
+ * never locks, so it keeps its mount-time latest initial fetch exactly as before.
  *
- * Pure so the "jump-open does not mount as a latest-initial-fetch-enabled
+ * Pure so the "locked jump-open does not mount as a latest-initial-fetch-enabled
  * query" invariant is locked by a unit test instead of only living in hook
  * wiring (no RTL/jsdom mount harness in this env).
  */
 export function clusterInitialFetchEnabled(input: {
   hasChannelAndRoot: boolean;
-  jumpPrimePending: boolean;
+  jumpWindowLocked: boolean;
 }): boolean {
-  return input.hasChannelAndRoot && !input.jumpPrimePending;
+  return input.hasChannelAndRoot && !input.jumpWindowLocked;
 }
 
 /**
- * Whether ThreadPanel's reply area shows the loader vs. its content (#task:1226
- * §9.10, Cindy's locate-deadlock catch). On a jump-open the cluster query is
- * held disabled while priming (`clusterInitialFetchEnabled`), so `isLoading` is
- * false even though no window has landed yet — without a loader the pane would
- * flash "No replies yet". BUT `primeAround` success does NOT clear the prime
- * pending flag: by the controller's existing contract it stays set until the
- * VISUAL locate/flash completes and calls `onJumped → clearJump`. So once the
- * around-window commits into the cache the disabled query's `data` already
- * carries it (`hasWindow` true) and we MUST render it — keeping the loader up on
- * `jumpPrimePending` alone would hide the messages, the locate effect could
- * never find `#msg-<id>` in the DOM, and the jump would time out with the
- * first-unread locate/flash failed.
+ * Whether ThreadPanel's reply area shows the loader vs. its content (#task:1317).
+ * The loader shows ONLY while there is genuinely nothing THIS open can render
+ * yet — a real in-flight fetch, OR a jump still `priming` (its around-window has
+ * not committed). It is deliberately a COMMITTED-FACT gate with ZERO wall-clock:
  *
- * So the loader shows only while there is genuinely nothing to render yet: a
- * real in-flight fetch, OR a still-priming jump whose window has not committed.
- * Pure so the "window present → render, not loader" invariant is unit-tested.
+ *  - `isLoading` — a real window fetch is in flight (normal open's latest, or a
+ *    settled jump's fallback latest). A jump in `priming` holds the query
+ *    disabled so `isLoading` is false there — hence the second term.
+ *  - `jumpPhase === 'priming'` — a jump is fetching its around-window;
+ *    UNCONDITIONALLY cover with the loader, even if React Query is serving the
+ *    PREVIOUS open's stale rows on reopen (that stale window must not flash).
+ *
+ * Once the prime advances to `committed` the around-window is in the cache (rows
+ * present) and the window is still LOCKED (no clobber), so we render — keeping
+ * the loader up would starve the locate effect of its `#msg-<id>` DOM node. The
+ * previous #1317 attempt gated this on a wall-clock epoch and deadlocked; this
+ * gate is a pure projection of the controller's lifecycle phase, and `priming`
+ * is never terminal (the prime promise always settles) so the loader always
+ * clears. No `hasWindow` term (would leak stale rows on reopen), and no
+ * wall-clock freshness term (the reverted #1317 epoch). Pure → unit-tested.
  */
 export function threadClusterShowsLoader(input: {
   isLoading: boolean;
-  jumpPrimePending: boolean;
-  hasWindow: boolean;
+  jumpPhase: JumpPhase | null;
 }): boolean {
-  return input.isLoading || (input.jumpPrimePending && !input.hasWindow);
+  return input.isLoading || input.jumpPhase === 'priming';
 }
 
 export interface ThreadLiveMarkReadInput {
