@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { conversationSideScope, readChannelContextMetadata } from '@silverhand/shared';
+import { readChannelContextMetadata } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
@@ -443,82 +443,12 @@ describe('ChannelService.setArchived', () => {
     }
   });
 
-  it('rejects threads and missing ids with not_archivable / not_found', async () => {
+  it('rejects missing ids with not_found', async () => {
     const t = bootstrap();
     try {
       await expect(
         t.service.setArchived({ channelId: 'missing', archived: true }),
       ).rejects.toMatchObject({ code: 'not_found' });
-      const thread = t.conversations.insertThread({
-        channelId: t.source.id,
-        title: 'thread',
-      });
-      await expect(
-        t.service.setArchived({ channelId: thread.id, archived: true }),
-      ).rejects.toMatchObject({ code: 'not_archivable' });
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('cascades archive flag to child threads and publishes thread_updated', async () => {
-    const t = bootstrap();
-    try {
-      const liveThread = t.conversations.insertThread({
-        channelId: t.source.id,
-        title: 'live',
-      });
-      const closedThread = t.conversations.insertThread({
-        channelId: t.source.id,
-        title: 'already-closed',
-      });
-      // Close one thread independently — its closed_at must survive an
-      // unarchive cycle.
-      t.conversations.close(closedThread.id, 'wrap-up');
-      const closedAt = t.conversations.get(closedThread.id)?.closed_at ?? null;
-      expect(closedAt).not.toBeNull();
-
-      const events: Array<{ kind: string; threadId?: string }> = [];
-      // Stage-2 P2: thread_updated is a side-channel kind.
-      const unsub = t.events.subscribeScope(
-        conversationSideScope(t.source.id),
-        e => {
-          const payload = e.payload as { thread_id?: string } | undefined;
-          events.push({ kind: e.kind, threadId: payload?.thread_id });
-        },
-      );
-
-      await t.service.setArchived({ channelId: t.source.id, archived: true });
-
-      expect(t.conversations.get(liveThread.id)?.archived_at).not.toBeNull();
-      expect(t.conversations.get(closedThread.id)?.archived_at).not.toBeNull();
-      // closed_at must be untouched on the independently closed thread.
-      expect(t.conversations.get(closedThread.id)?.closed_at).toBe(closedAt);
-
-      await t.service.setArchived({ channelId: t.source.id, archived: false });
-
-      expect(t.conversations.get(liveThread.id)?.archived_at).toBeNull();
-      expect(t.conversations.get(closedThread.id)?.archived_at).toBeNull();
-      // Independently closed thread stays closed after the channel is
-      // unarchived.
-      expect(t.conversations.get(closedThread.id)?.closed_at).toBe(closedAt);
-
-      unsub();
-
-      const threadUpdatedIds = events
-        .filter(e => e.kind === 'thread_updated')
-        .map(e => e.threadId)
-        .sort();
-      // 2 threads × 2 toggles = 4 events.
-      expect(threadUpdatedIds).toEqual(
-        [liveThread.id, closedThread.id, liveThread.id, closedThread.id].sort(),
-      );
-
-      // Re-running the same state is a no-op (no thread_updated emitted).
-      const eventsBeforeNoop = events.length;
-      await t.service.setArchived({ channelId: t.source.id, archived: false });
-      const newEvents = events.slice(eventsBeforeNoop);
-      expect(newEvents.filter(e => e.kind === 'thread_updated')).toEqual([]);
     } finally {
       t.cleanup();
     }

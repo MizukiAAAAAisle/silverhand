@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 async function makeAgent(t: TestApp, name: string): Promise<{
@@ -93,33 +92,6 @@ describe('GET /api/conversations/:id/ref', () => {
     });
     expect(typeof ref.workspace_path).toBe('string');
     expect(ref.workspace_path.length).toBeGreaterThan(0);
-  });
-
-  it('returns a thread ref with parent_channel_id + parent_title denormalised', async () => {
-    t = buildTestApp();
-    const alice = await makeAgent(t, 'alice');
-    const reg = await createRegularWorkspace(t, 'team-y', [alice.agentId]);
-    const channelId = await createChannel(t, reg.workspaceId, 'investigations', [
-      alice.agentId,
-    ]);
-    const conversations = new ConversationRepo(t.ctx.db);
-    const thread = conversations.insertThread({
-      channelId,
-      title: 'perf-dive',
-    });
-
-    const res = await http(t).get(refPath(thread.id));
-    expect(res.status).toBe(200);
-    const { ref } = await res.json() as any;
-    expect(ref).toMatchObject({
-      id: thread.id,
-      kind: 'thread',
-      title: 'perf-dive',
-      workspace_id: reg.workspaceId,
-      workspace_kind: 'regular',
-      parent_channel_id: channelId,
-      parent_title: 'investigations',
-    });
   });
 
   it("projects an agent's dm_channel ref with workspace_kind='dm' (not agent_home)", async () => {

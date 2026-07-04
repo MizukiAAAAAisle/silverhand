@@ -17,7 +17,6 @@ import {
   ConversationMessageService,
   MessageFreshnessError,
   PolicyError,
-  TargetError,
 } from '../../src/services/conversation-message-service.js';
 import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
@@ -287,34 +286,6 @@ describe('ConversationMessageService.sendMessage', () => {
           thread_root_id: null,
         },
       });
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('rejects user sends into a legacy isolated thread as read-only', async () => {
-    const t = bootstrap();
-    try {
-      const thread = t.conversations.insertThread({
-        channelId: t.channel.id,
-        title: 'thread',
-      });
-      t.conversations.addAgent(thread.id, t.alice.id);
-      const parentEvents: Array<{ kind: string; payload: any }> = [];
-      const unsub = t.events.subscribe(t.channel.id, e => {
-        parentEvents.push({ kind: e.kind, payload: e.payload });
-      });
-
-      await expect(
-        t.service.sendMessage({
-          conversationId: thread.id,
-          actor: { kind: 'user', userId: 'local' },
-          content: 'thread reply',
-        }),
-      ).rejects.toMatchObject({ code: 'legacy_thread_read_only' });
-      unsub();
-
-      expect(parentEvents).toEqual([]);
     } finally {
       t.cleanup();
     }
@@ -1110,108 +1081,6 @@ describe('ConversationMessageService.sendMessage', () => {
     }
   });
 
-  it('rejects agent sends originating from a legacy isolated thread', async () => {
-    const t = bootstrap();
-    try {
-      const thread = t.conversations.insertThread({
-        channelId: t.channel.id,
-        title: 'thread',
-      });
-      t.conversations.addAgent(thread.id, t.alice.id);
-
-      await expect(
-        t.service.sendMessage({
-          conversationId: thread.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: thread.id },
-          content: 'parent update',
-          target: 'parent',
-        }),
-      ).rejects.toMatchObject({ code: 'legacy_thread_read_only' });
-      expect(t.messages.listForConversation(t.channel.id).map(m => m.content))
-        .not.toContain('parent update');
-      expect(t.fake.resolvedRuns).toEqual([]);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('does not auto-start parent members from a legacy thread send attempt', async () => {
-    const t = bootstrap();
-    try {
-      const thread = t.conversations.insertThread({
-        channelId: t.channel.id,
-        title: 'thread',
-      });
-      t.conversations.addAgent(thread.id, t.alice.id);
-
-      await expect(
-        t.service.sendMessage({
-          conversationId: thread.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: thread.id },
-          content: 'forward to parent',
-          target: 'parent',
-        }),
-      ).rejects.toMatchObject({ code: 'legacy_thread_read_only' });
-
-      expect(t.fake.starts).toEqual([]);
-      expect(t.fake.delivered).toEqual([]);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('rejects agent sends targeted at a legacy isolated thread', async () => {
-    const t = bootstrap();
-    try {
-      const thread = t.conversations.insertThread({
-        channelId: t.channel.id,
-        title: 'thread',
-      });
-      t.conversations.addAgent(thread.id, t.alice.id);
-      t.conversations.addAgent(thread.id, t.bob.id);
-
-      await expect(
-        t.service.sendMessage({
-          conversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-          content: 'down',
-          target: { thread_id: thread.id },
-        }),
-      ).rejects.toMatchObject({ code: 'legacy_thread_read_only' });
-      expect(t.messages.listForConversation(thread.id).map(m => m.content))
-        .not.toContain('down');
-      expect(t.fake.delivered).toEqual([]);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('does not auto-start legacy thread members from a targeted send attempt', async () => {
-    const t = bootstrap();
-    try {
-      const thread = t.conversations.insertThread({
-        channelId: t.channel.id,
-        title: 'thread',
-      });
-      t.conversations.addAgent(thread.id, t.alice.id);
-      t.conversations.addAgent(thread.id, t.bob.id);
-
-      await expect(
-        t.service.sendMessage({
-          conversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-          content: 'down to thread',
-          target: { thread_id: thread.id },
-        }),
-      ).rejects.toMatchObject({ code: 'legacy_thread_read_only' });
-
-      expect(t.fake.starts).toEqual([]);
-      expect(t.fake.delivered).toEqual([]);
-    } finally {
-      t.cleanup();
-    }
-  });
-
   it('rejects invalid agent targets', async () => {
     const t = bootstrap();
     try {
@@ -1223,36 +1092,6 @@ describe('ConversationMessageService.sendMessage', () => {
           target: 'parent',
         }),
       ).rejects.toMatchObject({ code: 'no_parent' });
-
-      const siblingParent = t.conversations.insertChannel({
-        workspaceId: t.workspace.id,
-        workspacePath: t.workspace.workspace_path,
-        title: 'sibling parent',
-      });
-      t.conversations.addAgent(siblingParent.id, t.alice.id);
-      const siblingThread = t.conversations.insertThread({
-        channelId: siblingParent.id,
-        title: 'sibling',
-      });
-      await expect(
-        t.service.sendMessage({
-          conversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-          content: 'sideways',
-          target: { thread_id: siblingThread.id },
-        }),
-      ).rejects.toMatchObject({ code: 'thread_not_child' });
-
-      t.db.prepare(`UPDATE conversations SET closed_at = ? WHERE id = ?`)
-        .run(Date.now(), siblingThread.id);
-      await expect(
-        t.service.sendMessage({
-          conversationId: siblingParent.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: siblingParent.id },
-          content: 'closed',
-          target: { thread_id: siblingThread.id },
-        }),
-      ).rejects.toBeInstanceOf(TargetError);
     } finally {
       t.cleanup();
     }

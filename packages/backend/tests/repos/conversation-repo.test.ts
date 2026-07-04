@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -26,7 +26,7 @@ function bootstrap() {
 }
 
 describe('ConversationRepo canonical schema', () => {
-  it('creates channels, threads, agents, and messages without legacy tables', () => {
+  it('creates channels, agents, and messages without legacy tables', () => {
     const t = bootstrap();
     try {
       const agent = t.agents.create({ name: 'alice', runtime: 'claude' }, t.localHostId, 'local');
@@ -44,10 +44,6 @@ describe('ConversationRepo canonical schema', () => {
         title: 'Planning',
       });
       t.conversations.addAgent(channel.id, agent.id);
-      const thread = t.conversations.insertThread({
-        channelId: channel.id,
-        title: 'Follow-up',
-      });
       const message = t.messages.insertForConversation({
         conversationId: channel.id,
         fromKind: 'user',
@@ -67,13 +63,6 @@ describe('ConversationRepo canonical schema', () => {
         workspace_path: workspacePath,
         kind: 'channel',
         title: 'Planning',
-      });
-      expect(t.conversations.getThread(thread.id)).toMatchObject({
-        id: thread.id,
-        workspace_id: workspace.id,
-        channel_id: channel.id,
-        workspace_path: workspacePath,
-        kind: 'thread',
       });
       expect(t.conversations.listAgents(channel.id).map(a => a.agent_id)).toEqual([
         agent.id,
@@ -123,10 +112,6 @@ describe('ConversationRepo canonical schema', () => {
         agentId: agent.id,
       });
       t.conversations.addAgent(mentions.id, agent.id);
-      const thread = t.conversations.insertThread({
-        channelId: dm.id,
-        title: 'Thread in DM',
-      });
 
       expect(t.workspaces.get(home.id)).toMatchObject({
         workspace_kind: 'agent_home',
@@ -141,43 +126,6 @@ describe('ConversationRepo canonical schema', () => {
         workspace_path: agentWorkspacePath,
         kind: 'dm_channel',
       });
-      expect(t.conversations.getThread(thread.id)).toMatchObject({
-        id: thread.id,
-        workspace_id: home.id,
-        channel_id: dm.id,
-        workspace_path: agentWorkspacePath,
-        kind: 'thread',
-      });
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('rejects nested threads', () => {
-    const t = bootstrap();
-    try {
-      const workspacePath = join(t.tmp.workspacesRoot, 'nested');
-      const workspace = t.workspaces.insert({
-        name: 'nested',
-        description: null,
-        workspacePath,
-        workspaceHostId: t.localHostId,
-      });
-      const channel = t.conversations.insertChannel({
-        workspaceId: workspace.id,
-        workspacePath,
-        title: 'Root',
-      });
-      const thread = t.conversations.insertThread({
-        channelId: channel.id,
-        title: 'Child',
-      });
-      expect(() =>
-        t.conversations.insertThread({
-          channelId: thread.id,
-          title: 'Nested',
-        }),
-      ).toThrow('parent channel not found');
     } finally {
       t.cleanup();
     }

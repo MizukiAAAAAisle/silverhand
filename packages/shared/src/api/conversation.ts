@@ -54,13 +54,6 @@ export type CreateConversationChannelInput = z.infer<
   typeof CreateConversationChannelInputSchema
 >;
 
-export const ThreadDtoSchema = ConversationDtoSchema.extend({
-  kind: z.literal('thread'),
-  channel_id: z.string(),
-  anchor_message_id: z.string().nullable(),
-});
-export type ThreadDto = z.infer<typeof ThreadDtoSchema>;
-
 //
 // Identity + routing metadata for a conversation, returned by
 // `GET /api/conversations/:id/ref`. Designed to back cross-workspace

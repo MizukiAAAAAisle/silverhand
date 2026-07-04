@@ -588,9 +588,15 @@ function parseSendTarget(raw: string | undefined): SendMessageTarget | undefined
     const target: MessageSendTarget = { kind: 'thread', message_id: messageId };
     return target;
   }
-  // Hidden compatibility for legacy isolated-thread targets. Public help
-  // teaches only `channel` and `thread:<message_id>`.
-  return { thread_id: raw };
+  // Isolated-thread conversations were retired (#task:1303); the only
+  // targets are `channel` and `thread:<message_id>` (reply cluster).
+  throw new CliError({
+    code: 'validation_error',
+    subkind: 'enum_invalid',
+    message: '--target must be channel or thread:<message_id>',
+    retriable: false,
+    details: { flag: 'target', value: raw },
+  });
 }
 
 function parseSendStaleResolution(

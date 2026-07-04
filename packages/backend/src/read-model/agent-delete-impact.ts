@@ -47,10 +47,7 @@ export function computeDeleteImpact(
   let attachmentsCount = 0;
   if (dm) {
     const rootIds = dmChannels.map(c => c.id);
-    const threadIds = rootIds.flatMap(channelId =>
-      conversations.listThreadsForChannel(channelId).map(t => t.id),
-    );
-    const ids = [...rootIds, ...threadIds];
+    const ids = [...rootIds];
     const placeholders = ids.map(() => '?').join(',');
     const messageCount =
       ids.length === 0

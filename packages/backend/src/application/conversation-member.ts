@@ -78,7 +78,7 @@ export async function addConversationMember(
 ): Promise<AddConversationMemberResult> {
   const conversation = deps.conversations.get(input.conversationId);
   if (!conversation) return { ok: false, error: { code: 'conversation_not_found' } };
-  if (conversation.kind !== 'channel' && conversation.kind !== 'thread') {
+  if (conversation.kind !== 'channel') {
     return { ok: false, error: { code: 'conversation_member_add_unsupported' } };
   }
   if (conversation.closed_at !== null) {
@@ -337,7 +337,7 @@ export async function removeConversationMember(
 ): Promise<RemoveConversationMemberResult> {
   const conversation = deps.conversations.get(input.conversationId);
   if (!conversation) return { ok: false, error: { code: 'conversation_not_found' } };
-  if (conversation.kind !== 'channel' && conversation.kind !== 'thread') {
+  if (conversation.kind !== 'channel') {
     return { ok: false, error: { code: 'unsupported' } };
   }
   if (conversation.closed_at !== null) {

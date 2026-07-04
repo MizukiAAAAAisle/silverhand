@@ -275,9 +275,6 @@ export class AttachmentService {
   private resolveChannelId(conversationId: string): string | null {
     const conv = this.conversations.get(conversationId);
     if (!conv) return null;
-    if (conv.kind === 'thread') {
-      return conv.parent_conversation_id ?? null;
-    }
     return isChannelLikeKind(conv.kind) ? conv.id : null;
   }
 }

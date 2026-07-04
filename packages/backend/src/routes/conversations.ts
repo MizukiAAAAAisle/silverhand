@@ -181,19 +181,6 @@ export function createConversationReadApp(
       }
       const rootMessage = messages.getById(requestedThreadRootId);
       if (!rootMessage) {
-        const legacyThread = conversations.getThread(requestedThreadRootId);
-        if (legacyThread) {
-          return c.json(
-            {
-              error:
-                `legacy isolated thread ${legacyThread.id} is read-only; read it with ` +
-                `conversation:${legacyThread.id}. The thread_root_id query is reserved ` +
-                'for reply-cluster root message ids.',
-              code: 'legacy_thread_target_deprecated',
-            },
-            400,
-          );
-        }
         return c.json(
           {
             error: 'thread root message not found',
@@ -344,16 +331,12 @@ export function createConversationReadApp(
     const workspace = workspaces.get(conversation.workspace_id);
     if (!workspace) return c.json({ error: 'conversation not found' }, 404);
 
-    const parentChannelId =
-      conversation.kind === 'thread' ? conversation.parent_conversation_id : null;
-    let parentTitle: string | null = null;
-    if (parentChannelId) {
-      const parent = conversations.get(parentChannelId);
-      // Parent missing implies a stale row; we still return ref but
-      // leave parent_title null so the renderer falls back to "thread"
-      // instead of crashing.
-      parentTitle = parent ? parent.title : null;
-    }
+    // `parent_channel_id` / `parent_title` are vestigial wire fields:
+    // isolated-thread conversations were retired (#task:1303), so a
+    // conversation ref never has a parent channel. Kept null in the
+    // response shape until the renderer stops reading them (2d).
+    const parentChannelId = null;
+    const parentTitle: string | null = null;
 
     const ref = {
       id: conversation.id,

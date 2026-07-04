@@ -53,6 +53,7 @@ interface Fixture {
   workspaces: WorkspaceRepo;
   messages: MessageRepo;
   conversations: ConversationRepo;
+  db: ReturnType<typeof openTestDb>['db'];
   events: ScopeEventBus;
   fake: FakeConversationManager;
   ownerAgentId: string;
@@ -64,6 +65,35 @@ interface Fixture {
 }
 
 let currentNow = 0;
+
+/**
+ * Seed a fossil `kind='thread'` conversation via raw SQL. The producer
+ * (`ConversationRepo.insertThread`) and the `thread` kind were retired in
+ * #task:1303 phase 2, but old/remote DBs may still physically contain such
+ * rows, and the schedule label projection still renders them. This reproduces
+ * that reality WITHOUT the removed producer.
+ */
+function insertFossilThread(
+  db: Fixture['db'],
+  channel: { id: string; workspace_id: string; workspace_path: string },
+): { id: string } {
+  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
+  db.prepare(
+    `INSERT INTO conversations
+       (id, workspace_id, workspace_path, kind, parent_conversation_id,
+        title, status, created_at, updated_at, latest_message_seq)
+     VALUES (?, ?, ?, 'thread', ?, ?, 'idle', ?, ?, 0)`,
+  ).run(
+    id,
+    channel.workspace_id,
+    channel.workspace_path,
+    channel.id,
+    'rollout-plan',
+    Date.now(),
+    Date.now(),
+  );
+  return { id };
+}
 
 function bootstrap(
   capChecker: (
@@ -145,6 +175,7 @@ function bootstrap(
     workspaces,
     messages,
     conversations,
+    db,
     events,
     fake,
     ownerAgentId: owner.id,
@@ -530,9 +561,12 @@ describe('ScheduleService.create', () => {
       title: 'release',
     });
     f.conversations.addAgent(parent.id, f.ownerAgentId);
-    const thread = f.conversations.insertThread({
-      channelId: parent.id,
-      title: 'rollout-plan',
+    // Fossil kind='thread' row seeded directly — the producer was retired in
+    // #task:1303 but the label projection still renders '#parent:thread'.
+    const thread = insertFossilThread(f.db, {
+      id: parent.id,
+      workspace_id: ws.id,
+      workspace_path: ws.workspace_path,
     });
     f.conversations.addAgent(thread.id, f.ownerAgentId);
 

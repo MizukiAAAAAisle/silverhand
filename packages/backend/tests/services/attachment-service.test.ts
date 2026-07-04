@@ -35,10 +35,6 @@ function bootstrap() {
     workspacePath,
     title: 't',
   });
-  const thread = conversations.insertThread({
-    channelId: channel.id,
-    title: 'thread',
-  });
   conversations.addAgent(channel.id, agent.id);
 
   const storage = createLocalBlobFileStorage({ silverhandDir: tmp.silverhandDir });
@@ -50,7 +46,6 @@ function bootstrap() {
   return {
     db,
     channel,
-    thread,
     service,
     storage,
     agent,
@@ -80,24 +75,6 @@ describe('AttachmentService.upload', () => {
       expect(dto.content_type).toBe('image/png');
       expect(dto.filename).toBe('shot.png');
       expect(dto.size).toBe(12);
-    } finally {
-      cleanup();
-    }
-  });
-
-  it('uploads from a thread and resolves to the parent channel', async () => {
-    const { service, channel, thread, agent, cleanup } = bootstrap();
-    try {
-      const dto = await service.upload({
-        sourceConversationId: thread.id,
-        filename: 'doc.pdf',
-        contentType: 'application/pdf',
-        buffer: Buffer.from('%PDF-1.4'),
-        createdByKind: 'agent',
-        createdById: agent.id,
-      });
-      expect(dto.channel_id).toBe(channel.id);
-      expect(dto.source_conversation_id).toBe(thread.id);
     } finally {
       cleanup();
     }

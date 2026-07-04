@@ -40,9 +40,7 @@ function principalConversationChannelId(
   const conversation = repo.get(principal.conversationId);
   if (!conversation) return null;
   if (!repo.getAgent(conversation.id, principal.agentId)) return null;
-  return conversation.kind === 'thread'
-    ? conversation.parent_conversation_id
-    : conversation.id;
+  return conversation.id;
 }
 
 export function parseWsScope(scope: string, viewerUserId: string): ParsedWsScope | null {

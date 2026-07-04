@@ -10,7 +10,6 @@ import type {
   ConversationUserMemberDto,
   ConversationUserMemberRow,
   DmChannelDto,
-  ThreadDto,
   UserRow,
 } from '@silverhand/shared';
 
@@ -46,22 +45,6 @@ function rowToDmChannel(row: ConversationRow): DmChannelDto {
   }
   const { pinned_at: _pinnedAt, ...rest } = row;
   return { ...rest, kind: 'dm_channel', parent_conversation_id: null };
-}
-
-function rowToThread(
-  row: ConversationRow,
-  anchorMessageId: string | null = null,
-): ThreadDto {
-  if (row.kind !== 'thread' || row.parent_conversation_id === null) {
-    throw new Error('conversation is not a thread');
-  }
-  const { pinned_at: _pinnedAt, ...rest } = row;
-  return {
-    ...rest,
-    kind: 'thread',
-    channel_id: row.parent_conversation_id,
-    anchor_message_id: anchorMessageId,
-  };
 }
 
 export class ConversationRepo {
@@ -101,16 +84,6 @@ export class ConversationRepo {
       )
       .get(id);
     return row ? rowToDmChannel(row) : null;
-  }
-
-  getThread(id: string): ThreadDto | null {
-    const row = this.db
-      .prepare<[string], ConversationRow>(
-        `SELECT * FROM conversations
-         WHERE id = ? AND kind = 'thread'`,
-      )
-      .get(id);
-    return row ? rowToThread(row, this.findThreadAnchorMessageId(row.id)) : null;
   }
 
   getChannelLike(id: string): ChannelConversationDto | DmChannelDto | null {
@@ -238,12 +211,7 @@ export class ConversationRepo {
            c.*,
            w.name AS workspace_name,
            w.archived_at AS workspace_archived_at,
-           (
-             SELECT COUNT(*)
-               FROM conversations t
-              WHERE t.parent_conversation_id = c.id
-                AND t.kind = 'thread'
-           ) AS thread_count
+           0 AS thread_count
          FROM conversations c
          JOIN workspaces w ON w.id = c.workspace_id
          WHERE ${where.join(' AND ')}
@@ -410,71 +378,6 @@ export class ConversationRepo {
     return rows.map(rowToDmChannel);
   }
 
-  listThreadsForChannel(channelId: string): ThreadDto[] {
-    const rows = this.db
-      .prepare<[string], ConversationRow>(
-        `SELECT * FROM conversations
-         WHERE parent_conversation_id = ? AND kind = 'thread'
-         ORDER BY created_at ASC`,
-      )
-      .all(channelId);
-    return rows.map(r => rowToThread(r, this.findThreadAnchorMessageId(r.id)));
-  }
-
-  listThreadsForWorkspace(
-    workspaceId: string,
-    opts: { parentArchived?: boolean; forUserId?: string } = {},
-  ): ThreadDto[] {
-    // Threads always render under their parent. Splitting active vs
-    // archived at the SQL layer (rather than in the route) keeps the
-    // response self-consistent — any thread we return belongs to a
-    // channel in the same response.
-    let parentClause = '';
-    if (opts.parentArchived === true) {
-      parentClause = `AND p.archived_at IS NOT NULL`;
-    } else if (opts.parentArchived === false) {
-      parentClause = `AND p.archived_at IS NULL`;
-    }
-    const args: Array<string> = [workspaceId];
-    let userJoin = '';
-    if (opts.forUserId !== undefined) {
-      userJoin = `AND EXISTS (
-        SELECT 1 FROM conversation_users cu
-         WHERE cu.conversation_id = c.id AND cu.user_id = ?
-      )`;
-      args.push(opts.forUserId);
-    }
-    const rows = this.db
-      .prepare<
-        typeof args,
-        ConversationRow & { anchor_message_id: string | null }
-      >(
-        `SELECT c.*,
-                json_extract(m.metadata, '$.quoted_message_id') AS anchor_message_id
-           FROM conversations c
-           JOIN conversations p ON p.id = c.parent_conversation_id
-           LEFT JOIN messages m
-             ON m.id = (
-               SELECT m2.id
-                 FROM messages m2
-                WHERE m2.conversation_id = c.id
-                  AND m2.from_kind = 'system'
-                  AND json_extract(m2.metadata, '$.subtype') = 'thread_anchor'
-                ORDER BY m2.created_at ASC
-                LIMIT 1
-             )
-          WHERE c.workspace_id = ? AND c.kind = 'thread' ${parentClause}
-            ${userJoin}
-          ORDER BY c.created_at ASC`,
-      )
-      .all(...args);
-    return rows.map(r => rowToThread(r, r.anchor_message_id));
-  }
-
-  listChildren(parentId: string): ThreadDto[] {
-    return this.listThreadsForChannel(parentId);
-  }
-
   insertChannel(params: {
     workspaceId: string;
     workspacePath: string;
@@ -507,27 +410,6 @@ export class ConversationRepo {
       spawnedByAgentId: null,
     });
     return rowToDmChannel(row);
-  }
-
-  insertThread(params: {
-    channelId: string;
-    title: string;
-    spawnedByAgentId?: string | null;
-  }): ThreadDto {
-    const parent = this.getChannelLike(params.channelId);
-    if (!parent) throw repoError('parent_not_found', 'parent channel not found');
-    if (parent.closed_at !== null) {
-      throw repoError('parent_closed', 'parent channel is closed');
-    }
-    const row = this.insert({
-      workspaceId: parent.workspace_id,
-      workspacePath: parent.workspace_path,
-      kind: 'thread',
-      title: params.title,
-      parentConversationId: parent.id,
-      spawnedByAgentId: params.spawnedByAgentId ?? null,
-    });
-    return rowToThread(row);
   }
 
   setArchived(
@@ -566,35 +448,6 @@ export class ConversationRepo {
     if (result.changes === 0) return null;
     const row = this.getRaw(id);
     return row ? assertChannelLike(row) : null;
-  }
-
-  /** Cascade archive state to every thread under a channel. Mirrors
-   *  Slack/Discord semantics: archiving a channel freezes all its
-   *  threads; unarchiving releases only the archive flag (a thread
-   *  that was independently `closed` stays closed). Only flips threads
-   *  whose `archived_at` differs from the target state, so re-running
-   *  is a no-op. Returns the ids of threads actually updated so the
-   *  caller can publish `thread_updated` events for live UIs. */
-  setArchivedForChildThreads(
-    channelId: string,
-    archived: boolean,
-  ): string[] {
-    const now = Date.now();
-    // SQLite returns 1 for TRUE / 0 for FALSE on boolean expressions.
-    // Select the threads whose current archive state mismatches the
-    // target, update them, then return their ids. RETURNING keeps it a
-    // single statement.
-    const rows = this.db
-      .prepare<[number | null, number, string, number], { id: string }>(
-        `UPDATE conversations
-         SET archived_at = ?, updated_at = ?
-         WHERE parent_conversation_id = ?
-           AND kind = 'thread'
-           AND (archived_at IS NULL) = ?
-         RETURNING id`,
-      )
-      .all(archived ? now : null, now, channelId, archived ? 1 : 0);
-    return rows.map(r => r.id);
   }
 
   close(id: string, summary: string): ConversationDto | null {
@@ -822,21 +675,6 @@ export class ConversationRepo {
       .prepare<[string], ConversationRow>('SELECT * FROM conversations WHERE id = ?')
       .get(id);
     return row ?? null;
-  }
-
-  private findThreadAnchorMessageId(threadId: string): string | null {
-    const row = this.db
-      .prepare<[string], { anchor_message_id: string | null }>(
-        `SELECT json_extract(metadata, '$.quoted_message_id') AS anchor_message_id
-           FROM messages
-          WHERE conversation_id = ?
-            AND from_kind = 'system'
-            AND json_extract(metadata, '$.subtype') = 'thread_anchor'
-          ORDER BY created_at ASC
-          LIMIT 1`,
-      )
-      .get(threadId);
-    return row?.anchor_message_id ?? null;
   }
 }
 

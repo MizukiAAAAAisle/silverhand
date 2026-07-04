@@ -444,52 +444,20 @@ export class ChannelService {
     if (!existing) {
       throw repoError('not_found', 'channel not found');
     }
-    if (existing.kind === 'thread') {
-      throw repoError('not_archivable', 'threads cannot be archived');
-    }
 
-    // Cascade to child threads in the same transaction so a partial
-    // failure can't leave the channel and its threads with diverging
-    // archive state. Unarchive only clears `archived_at`; threads that
-    // were independently closed stay closed. Cascade is keyed on
-    // `parent_conversation_id`, so it applies to channel and dm_channel
-    // parents alike.
-    const result = this.db.transaction(
-      (): {
-        channel: ChannelConversationDto | DmChannelDto;
-        affectedThreadIds: string[];
-      } => {
-        const updated = this.conversations.setArchived(
-          input.channelId,
-          input.archived,
-        );
-        if (!updated) {
-          throw repoError('not_found', 'channel not found');
-        }
-        const affectedThreadIds = this.conversations.setArchivedForChildThreads(
-          input.channelId,
-          input.archived,
-        );
-        return { channel: updated, affectedThreadIds };
-      },
-    )();
-
-    // Notify any open Thread views so their cached `archived_at` flips.
-    // The channel-list refetch below covers the parent channel itself.
-    for (const threadId of result.affectedThreadIds) {
-      this.events.publishSide(result.channel.id, {
-        kind: 'thread_updated',
-        payload: {
-          parent_conversation_id: result.channel.id,
-          thread_id: threadId,
-        },
-      });
-    }
-    this.publishWorkspaceChannelsChanged(
-      result.channel.workspace_id,
-      result.channel.id,
+    const updated = this.conversations.setArchived(
+      input.channelId,
+      input.archived,
     );
-    return { channel: result.channel };
+    if (!updated) {
+      throw repoError('not_found', 'channel not found');
+    }
+
+    this.publishWorkspaceChannelsChanged(
+      updated.workspace_id,
+      updated.id,
+    );
+    return { channel: updated };
   }
 
   /**
@@ -522,16 +490,12 @@ export class ChannelService {
     if (!existing) {
       throw repoError('not_found', 'channel not found');
     }
-    if (existing.kind === 'thread') {
-      throw repoError('not_renamable', 'threads cannot be renamed');
-    }
 
     const oldTitle = existing.title;
     if (input.title === oldTitle) {
       // No-op: nothing changed, so emit nothing. Re-fetch through the
-      // channel-like getter — `existing` is the wider ConversationDto and
-      // the `thread` kind was excluded above, so this resolves to a
-      // ChannelConversationDto | DmChannelDto.
+      // channel-like getter to narrow `existing` (the wider
+      // ConversationDto) to a ChannelConversationDto | DmChannelDto.
       const channel = this.conversations.getChannelLike(input.channelId);
       if (!channel) {
         throw repoError('not_found', 'channel not found');

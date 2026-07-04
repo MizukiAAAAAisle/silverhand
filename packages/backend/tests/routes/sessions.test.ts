@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import type { Database as Db } from 'better-sqlite3';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
@@ -37,21 +37,30 @@ function createLegacyThread(
   channelId: string,
   opts: { anchorMessageId?: string; title?: string } = {},
 ) {
-  const conversations = new ConversationRepo(t.ctx.db);
-  const messages = new MessageRepo(t.ctx.db);
-  const thread = conversations.insertThread({
+  const db: Db = t.ctx.db;
+  const parent = db
+    .prepare(
+      `SELECT workspace_id, workspace_path FROM conversations WHERE id = ?`,
+    )
+    .get(channelId) as { workspace_id: string; workspace_path: string };
+  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
+  db.prepare(
+    `INSERT INTO conversations
+       (id, workspace_id, workspace_path, kind, parent_conversation_id,
+        title, status, created_at, updated_at, latest_message_seq)
+     VALUES (?, ?, ?, 'thread', ?, ?, 'idle', ?, ?, 0)`,
+  ).run(
+    id,
+    parent.workspace_id,
+    parent.workspace_path,
     channelId,
-    title: opts.title ?? 'Legacy thread',
-  });
-  for (const member of conversations.listAgents(channelId)) {
-    conversations.addAgent(thread.id, member.agent_id);
-  }
-  for (const member of conversations.listUsers(channelId)) {
-    conversations.addUser(thread.id, member.user_id);
-  }
+    opts.title ?? 'Legacy thread',
+    Date.now(),
+    Date.now(),
+  );
   if (opts.anchorMessageId) {
-    messages.insertForConversation({
-      conversationId: thread.id,
+    new MessageRepo(db).insertForConversation({
+      conversationId: id,
       fromKind: 'system',
       content: 'Legacy thread anchor',
       metadata: {
@@ -60,7 +69,7 @@ function createLegacyThread(
       },
     });
   }
-  return thread;
+  return { id };
 }
 
 describe('canonical channel/thread routes', () => {
@@ -375,23 +384,6 @@ describe('canonical channel/thread routes', () => {
     );
     expect(cross.status).toBe(404);
     expect(((await cross.json()) as any).code).toBe('thread_root_not_found');
-
-    const legacyAnchor = messages.insertForConversation({
-      conversationId: channelId,
-      fromKind: 'user',
-      fromUserId: 'local',
-      content: 'legacy anchor',
-    });
-    const legacy = createLegacyThread(t, channelId, {
-      anchorMessageId: legacyAnchor.id,
-    });
-    const deprecated = await http(t).get(
-      `/api/channels/${channelId}/messages?thread_root_id=${legacy.id}`,
-    );
-    expect(deprecated.status).toBe(400);
-    const deprecatedBody = (await deprecated.json()) as any;
-    expect(deprecatedBody.code).toBe('legacy_thread_target_deprecated');
-    expect(deprecatedBody.error).toContain(`conversation:${legacy.id}`);
   });
 
   it('human channel sends can reply to root messages and existing replies', async () => {

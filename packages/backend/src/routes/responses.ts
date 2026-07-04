@@ -29,7 +29,6 @@ import {
   ScheduleError,
   type ScheduleErrorCode,
 } from '../services/schedule-service.js';
-import { LegacyThreadRuntimeDisabledError } from '../runtime/agent-runtime-host.js';
 import { AgentServiceError } from '../services/agent-service.js';
 
 const placementErrorStatusMap: Record<
@@ -343,9 +342,6 @@ export function conversationMessageServiceErrorResponse(
 // `runtime_start` HostWsCommandResponseError with a recognised code, so callers
 // fall through to placement / generic handling.
 export function runtimeStartErrorResponse(c: Context, err: unknown): Response | null {
-  if (err instanceof LegacyThreadRuntimeDisabledError) {
-    return c.json({ error: err.message, code: err.code }, 409);
-  }
   if (!(err instanceof HostWsCommandResponseError)) return null;
   if (err.details.commandKind !== 'runtime_start') return null;
   const code = err.code as string;

@@ -23,7 +23,6 @@ export type MessageSendTarget = z.infer<typeof MessageSendTargetSchema>;
 export const LegacySendMessageTargetSchema = z.union([
   z.literal('self'),
   z.literal('parent'),
-  z.object({ thread_id: z.string().min(1) }),
 ]);
 export type LegacySendMessageTarget = z.infer<typeof LegacySendMessageTargetSchema>;
 
@@ -178,14 +177,10 @@ const ReadHistoryOptionalLimitSchema = z.preprocess(
  *  server normalizes a reply to its canonical root, symmetric with
  *  the send-side `resolveThreadRoot`). It reads the cluster inside
  *  the root message's channel: the root message (anchor) plus every
- *  reply whose `thread_root_id` equals the root. Distinct from the
- *  legacy `{ thread_id }` form, whose value is a *conversation id*
- *  for an old isolated-thread conversation (frozen; read via
- *  `{ conversation_id }`). */
+ *  reply whose `thread_root_id` equals the root. */
 export const ReadHistoryTargetSchema = z.union([
   z.literal('self'),
   z.literal('parent'),
-  z.object({ thread_id: z.string().min(1) }),
   z.object({ thread_root_id: z.string().min(1) }),
   z.object({ conversation_id: z.string().min(1) }),
 ]);

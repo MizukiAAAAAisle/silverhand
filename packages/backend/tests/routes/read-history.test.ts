@@ -1,8 +1,31 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import type { Database as Db } from 'better-sqlite3';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { MessageReactionRepo } from '../../src/repos/message-reaction-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+
+/**
+ * Seed a fossil `kind='thread'` conversation via raw SQL. The producer
+ * (`ConversationRepo.insertThread`) and the `thread` kind were retired in
+ * #task:1303 phase 2; tests that still need a physical fossil row (as
+ * incidental setup for still-valid behavior) reproduce it here WITHOUT
+ * touching the narrowed domain model. The `conversations_thread_parent_*`
+ * triggers only require a channel-like parent, so passing a real channel works.
+ */
+function insertFossilThread(
+  db: Db,
+  channel: { id: string; workspace_id: string; workspace_path: string },
+): { id: string } {
+  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
+  db.prepare(
+    `INSERT INTO conversations
+       (id, workspace_id, workspace_path, kind, parent_conversation_id,
+        title, status, created_at, updated_at, latest_message_seq)
+     VALUES (?, ?, ?, 'thread', ?, 'Fossil', 'idle', ?, ?, 0)`,
+  ).run(id, channel.workspace_id, channel.workspace_path, channel.id, Date.now(), Date.now());
+  return { id };
+}
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const created = await (
@@ -157,10 +180,15 @@ describe('POST /internal/.../read-history', () => {
 
   it('allows a thread member to read parent history via target=parent', async () => {
     t = buildTestApp();
-    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const { workspaceId, channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
     const aliceId = agentIds.alice!;
     const conversations = new ConversationRepo(t.ctx.db);
-    const thread = conversations.insertThread({ channelId, title: 'child' });
+    const channel = conversations.getChannel(channelId)!;
+    const thread = insertFossilThread(t.ctx.db, {
+      id: channelId,
+      workspace_id: workspaceId,
+      workspace_path: channel.workspace_path,
+    });
     conversations.addAgent(thread.id, aliceId);
     const parentMessage = new MessageRepo(t.ctx.db).insertForConversation({
       conversationId: channelId,
@@ -180,28 +208,6 @@ describe('POST /internal/.../read-history', () => {
     const body = await res.json() as any;
     expect(body.target.conversation_id).toBe(channelId);
     expect(body.messages.map((m: any) => m.content)).toContain('parent context');
-  });
-
-  it('rejects legacy {thread_id} reads before membership checks', async () => {
-    t = buildTestApp();
-    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice', 'bob']);
-    const aliceId = agentIds.alice!;
-    const bobId = agentIds.bob!;
-    const conversations = new ConversationRepo(t.ctx.db);
-    const thread = conversations.insertThread({
-      channelId,
-      title: 'alice-only child',
-    });
-    conversations.addAgent(thread.id, aliceId);
-
-    const res = await http(t).post(readHistoryPath(channelId, bobId), {
-      target: { thread_id: thread.id },
-      before_seq: 99,
-    });
-    expect(res.status).toBe(400);
-    const body = await res.json() as any;
-    expect(body.code).toBe('legacy_thread_target_deprecated');
-    expect(body.error).toContain(`conversation:${thread.id}`);
   });
 
   // Characterization for the read-model SQL extraction (#task:980, Slice B):
@@ -406,33 +412,6 @@ describe('POST /internal/.../read-history', () => {
     expect(res.status).toBe(404);
     const body = await res.json() as any;
     expect(body.code).toBe('thread_root_not_found');
-  });
-
-  it('rejects a legacy thread conversation id passed as thread:<id> with a deprecation error', async () => {
-    t = buildTestApp();
-    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
-    const aliceId = agentIds.alice!;
-    const conversations = new ConversationRepo(t.ctx.db);
-    const thread = conversations.insertThread({
-      channelId,
-      title: 'legacy thread',
-    });
-    conversations.addAgent(thread.id, aliceId);
-    const messages = new MessageRepo(t.ctx.db);
-    const anchor = messages.insertForConversation({
-      conversationId: channelId,
-      fromKind: 'user',
-      content: 'channel anchor',
-    });
-
-    const res = await http(t).post(readHistoryPath(channelId, aliceId), {
-      target: { thread_root_id: thread.id },
-      around_message_id: anchor.id,
-    });
-    expect(res.status).toBe(400);
-    const body = await res.json() as any;
-    expect(body.code).toBe('legacy_thread_target_deprecated');
-    expect(body.error).toContain(`conversation:${thread.id}`);
   });
 
   it('returns only the root for a cluster with no replies (underpins seen=0 on first reply)', async () => {

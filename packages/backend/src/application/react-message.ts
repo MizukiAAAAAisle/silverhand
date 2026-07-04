@@ -170,18 +170,6 @@ function checkOpen(
       message: 'conversation is archived',
     };
   }
-  if (
-    conversation.kind === 'thread'
-    && conversation.parent_conversation_id !== null
-  ) {
-    const parent = deps.conversations.get(conversation.parent_conversation_id);
-    if (parent && parent.closed_at !== null) {
-      return { code: 'conversation_closed', message: 'parent is closed' };
-    }
-    if (parent && parent.archived_at !== null) {
-      return { code: 'conversation_archived', message: 'parent is archived' };
-    }
-  }
   return null;
 }
 

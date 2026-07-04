@@ -1,7 +1,28 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import type { Database as Db } from 'better-sqlite3';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+
+/**
+ * Seed a fossil `kind='thread'` conversation via raw SQL. The producer
+ * (`ConversationRepo.insertThread`) and the `thread` kind were retired in
+ * #task:1303 phase 2; the channel-scope search still sweeps physical child
+ * threads, so this reproduces the row without touching the narrowed model.
+ */
+function insertFossilThread(
+  db: Db,
+  channel: { id: string; workspace_id: string; workspace_path: string },
+): { id: string } {
+  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
+  db.prepare(
+    `INSERT INTO conversations
+       (id, workspace_id, workspace_path, kind, parent_conversation_id,
+        title, status, created_at, updated_at, latest_message_seq)
+     VALUES (?, ?, ?, 'thread', ?, 'Fossil', 'idle', ?, ?, 0)`,
+  ).run(id, channel.workspace_id, channel.workspace_path, channel.id, Date.now(), Date.now());
+  return { id };
+}
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const created = await (
@@ -73,10 +94,6 @@ describe('agent list_channels / search_messages routes', () => {
     const bobId = agentIds.bob!;
     const aliceOnly = await createChannel(t, workspaceId, 'alice-only', [aliceId]);
     const bobOnly = await createChannel(t, workspaceId, 'bob-only', [bobId]);
-    const thread = new ConversationRepo(t.ctx.db).insertThread({
-      channelId: aliceOnly,
-      title: 'child thread',
-    });
     await http(t).patch(`/api/channels/${aliceOnly}/archive`, { archived: true });
 
     const res = await http(t).get(listChannelsPath(channelId, aliceId));
@@ -86,7 +103,6 @@ describe('agent list_channels / search_messages routes', () => {
     expect(ids).toContain(channelId);
     expect(ids).toContain(aliceOnly);
     expect(ids).not.toContain(bobOnly);
-    expect(ids).not.toContain(thread.id);
     expect(body.channels.find((c: any) => c.id === aliceOnly)).toMatchObject({
       title: 'alice-only',
       kind: 'channel',
@@ -179,9 +195,11 @@ describe('agent list_channels / search_messages routes', () => {
       aliceId,
     ]);
     const conversations = new ConversationRepo(t.ctx.db);
-    const thread = conversations.insertThread({
-      channelId: searchChannel,
-      title: 'thread',
+    const parent = conversations.getChannel(searchChannel)!;
+    const thread = insertFossilThread(t.ctx.db, {
+      id: searchChannel,
+      workspace_id: parent.workspace_id,
+      workspace_path: parent.workspace_path,
     });
     conversations.addAgent(thread.id, aliceId);
     const messages = new MessageRepo(t.ctx.db);

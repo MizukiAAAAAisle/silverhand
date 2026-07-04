@@ -946,33 +946,10 @@ describe('PATCH /api/channels/:id/archive', () => {
     expect(t.fake.delivered).toEqual([]);
   });
 
-  it('rejects threads with 400 not_archivable but archives dm_channels', async () => {
+  it('archives and restores dm_channels', async () => {
     t = buildTestApp();
-    const aliceId = await makeAgent(t, 'alice');
-    const workspace = await (
-      await http(t).post('/api/workspaces', {
-        name: 'reject',
-        member_agent_ids: [aliceId],
-      })
-    ).json() as any;
-    const created = await (
-      await http(t).post(
-        `/api/workspaces/${workspace.workspace.id}/channels`,
-        { title: 'planning', member_agent_ids: [aliceId] },
-      )
-    ).json() as any;
+    await makeAgent(t, 'alice');
     const conversations = new ConversationRepo(t.ctx.db);
-    const thread = conversations.insertThread({
-      channelId: created.channel.id,
-      title: 'thread',
-    });
-    const threadRes = await http(t).patch(
-      `/api/channels/${thread.id}/archive`,
-      { archived: true },
-    );
-    expect(threadRes.status).toBe(400);
-    expect(((await threadRes.json()) as any).code).toBe('not_archivable');
-
     // dm_channel is channel-like: archive/restore is supported and the
     // caller (agent_home owner) passes the workspace governance gate.
     const dmChannel = conversations.listDmChannels()[0];
@@ -1016,45 +993,6 @@ describe('PATCH /api/channels/:id/archive', () => {
       { archived: 'yes' },
     );
     expect(bad.status).toBe(400);
-  });
-
-  it('archived dm and its child threads move from the active dm list to the archived dm list', async () => {
-    t = buildTestApp();
-    await makeAgent(t, 'alice');
-    const conversations = new ConversationRepo(t.ctx.db);
-    const dm = conversations.listDmChannels()[0];
-    expect(dm).toBeTruthy();
-    const homeId = dm!.workspace_id;
-    // A child thread of the DM must travel with its parent across archive.
-    const dmThread = conversations.insertThread({
-      channelId: dm!.id,
-      title: 'dm-thread',
-    });
-
-    // Before archiving: the DM and its thread appear in the active tree.
-    const before = (await (
-      await http(t).get(`/api/workspaces/${homeId}/channels`)
-    ).json()) as any;
-    expect(before.channels.map((c: any) => c.id)).toContain(dm!.id);
-    expect(before.threads.map((c: any) => c.id)).toContain(dmThread.id);
-
-    const arch = await http(t).patch(`/api/channels/${dm!.id}/archive`, {
-      archived: true,
-    });
-    expect(arch.status).toBe(200);
-
-    // After: parent + thread sidecar both leave active and surface in archived.
-    const active = (await (
-      await http(t).get(`/api/workspaces/${homeId}/channels`)
-    ).json()) as any;
-    expect(active.channels.map((c: any) => c.id)).not.toContain(dm!.id);
-    expect(active.threads.map((c: any) => c.id)).not.toContain(dmThread.id);
-
-    const archived = (await (
-      await http(t).get(`/api/workspaces/${homeId}/channels/archived`)
-    ).json()) as any;
-    expect(archived.channels.map((c: any) => c.id)).toContain(dm!.id);
-    expect(archived.threads.map((c: any) => c.id)).toContain(dmThread.id);
   });
 });
 
@@ -1162,32 +1100,10 @@ describe('PATCH /api/channels/:id (rename)', () => {
     expect(events).toEqual([]);
   });
 
-  it('rejects threads with 400 not_renamable but renames dm_channels', async () => {
+  it('renames dm_channels', async () => {
     t = buildTestApp();
-    const aliceId = await makeAgent(t, 'alice');
-    const workspace = await (
-      await http(t).post('/api/workspaces', {
-        name: 'rejectrename',
-        member_agent_ids: [aliceId],
-      })
-    ).json() as any;
-    const created = await (
-      await http(t).post(
-        `/api/workspaces/${workspace.workspace.id}/channels`,
-        { title: 'planning', member_agent_ids: [aliceId] },
-      )
-    ).json() as any;
+    await makeAgent(t, 'alice');
     const conversations = new ConversationRepo(t.ctx.db);
-    const thread = conversations.insertThread({
-      channelId: created.channel.id,
-      title: 'thread',
-    });
-    const threadRes = await http(t).patch(`/api/channels/${thread.id}`, {
-      title: 'renamed-thread',
-    });
-    expect(threadRes.status).toBe(400);
-    expect(((await threadRes.json()) as any).code).toBe('not_renamable');
-
     // dm_channel is channel-like: rename is supported (creation already
     // accepts a user-supplied title — this just closes the edit gap).
     const dmChannel = conversations.listDmChannels()[0];
@@ -1270,7 +1186,7 @@ describe('GET /api/workspaces/:id/channels (active vs archived split)', () => {
     t = null;
   });
 
-  it('active list excludes archived channels and threads under archived parents; archived list includes them', async () => {
+  it('active list excludes archived channels; archived list includes them', async () => {
     t = buildTestApp();
     const aliceId = await makeAgent(t, 'alice');
     const workspace = await (
@@ -1293,15 +1209,6 @@ describe('GET /api/workspaces/:id/channels (active vs archived split)', () => {
         { title: 'cold', member_agent_ids: [aliceId] },
       )
     ).json() as any;
-    const conversations = new ConversationRepo(t.ctx.db);
-    const liveThread = conversations.insertThread({
-      channelId: live.channel.id,
-      title: 'live-thread',
-    });
-    const coldThread = conversations.insertThread({
-      channelId: cold.channel.id,
-      title: 'cold-thread',
-    });
 
     const archived = await http(t).patch(
       `/api/channels/${cold.channel.id}/archive`,
@@ -1311,19 +1218,14 @@ describe('GET /api/workspaces/:id/channels (active vs archived split)', () => {
 
     const active = await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json() as any;
     const activeChannelIds = active.channels.map((c: any) => c.id);
-    const activeThreadIds = active.threads.map((c: any) => c.id);
     expect(activeChannelIds).toContain(live.channel.id);
     expect(activeChannelIds).not.toContain(cold.channel.id);
-    expect(activeThreadIds).toContain(liveThread.id);
-    expect(activeThreadIds).not.toContain(coldThread.id);
 
     const archivedRes = await (
       await http(t).get(`/api/workspaces/${wsId}/channels/archived`)
     ).json() as any;
     const archivedChannelIds = archivedRes.channels.map((c: any) => c.id);
-    const archivedThreadIds = archivedRes.threads.map((c: any) => c.id);
     expect(archivedChannelIds).toEqual([cold.channel.id]);
-    expect(archivedThreadIds).toEqual([coldThread.id]);
 
     // Round-trip: unarchive moves the channel back into the active list.
     const unarchived = await http(t).patch(
@@ -1333,12 +1235,10 @@ describe('GET /api/workspaces/:id/channels (active vs archived split)', () => {
     expect(unarchived.status).toBe(200);
     const active2 = await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json() as any;
     expect(active2.channels.map((c: any) => c.id)).toContain(cold.channel.id);
-    expect(active2.threads.map((c: any) => c.id)).toContain(coldThread.id);
     const archived2 = await (
       await http(t).get(`/api/workspaces/${wsId}/channels/archived`)
     ).json() as any;
     expect(archived2.channels).toEqual([]);
-    expect(archived2.threads).toEqual([]);
   });
 
   it('agent_home workspaces return empty archived tree without erroring', async () => {
@@ -1392,9 +1292,6 @@ describe('GET /api/archived-channels (cross-workspace aggregate)', () => {
         member_agent_ids: [aliceId],
       })
     ).json() as any;
-    const conversations = new ConversationRepo(t.ctx.db);
-    conversations.insertThread({ channelId: c1.channel.id, title: 't1' });
-    conversations.insertThread({ channelId: c1.channel.id, title: 't2' });
 
     // Active channels must not appear.
     const active = await (
@@ -1422,7 +1319,7 @@ describe('GET /api/archived-channels (cross-workspace aggregate)', () => {
     expect(list.channels[0].thread_count).toBe(0);
     expect(list.channels[1].channel.id).toBe(c1.channel.id);
     expect(list.channels[1].workspace.name).toBe('one');
-    expect(list.channels[1].thread_count).toBe(2);
+    expect(list.channels[1].thread_count).toBe(0);
   });
 
   it('filters by workspace_id and since (epoch ms)', async () => {
@@ -1601,20 +1498,11 @@ describe('list routes filter by conversation_users (v25 PR-A blocker fix)', () =
     expect(privateCh.status).toBe(201);
     const priv = await privateCh.json() as any;
 
-    // Insert a thread under the private channel, then strip
-    // `teammate` from BOTH the channel and the thread so the
-    // membership filter has something to hide.
-    const conversations = new ConversationRepo(t.ctx.db);
-    const thread = conversations.insertThread({
-      channelId: priv.channel.id,
-      title: 'priv-thread',
-    });
+    // Strip `teammate` from the private channel so the membership filter
+    // has something to hide.
     t.ctx.db
       .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = 'teammate'`)
       .run(priv.channel.id);
-    t.ctx.db
-      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = 'teammate'`)
-      .run(thread.id);
 
     // Archive the private channel so we can also assert the archived
     // route + aggregate route filter the same way.
@@ -1625,9 +1513,7 @@ describe('list routes filter by conversation_users (v25 PR-A blocker fix)', () =
     expect(archive.status).toBe(200);
 
     // Active list — local sees Onboarding+Public, teammate sees the
-    // same minus the (now archived) Private. priv is archived, so the
-    // active list does not include it for either principal; the
-    // membership filter still hides the archived parent's threads.
+    // same minus the (now archived) Private.
     const activeLocal = await (
       await http(t).get(`/api/workspaces/${workspaceId}/channels`)
     ).json() as any;
@@ -1643,13 +1529,6 @@ describe('list routes filter by conversation_users (v25 PR-A blocker fix)', () =
     expect(activeTeammate.channels.map((c: any) => c.title).sort()).toEqual(
       ['Onboarding', 'Public'],
     );
-    expect(activeTeammate.threads.map((t: any) => t.id)).not.toContain(thread.id);
-    expect(activeTeammate.channels.map((c: any) => c.title).sort()).toEqual(
-      ['Onboarding', 'Public'],
-    );
-    // The private thread under the (now-archived) private channel
-    // should not surface to teammate via the active list either.
-    expect(activeTeammate.threads.map((t: any) => t.id)).not.toContain(thread.id);
 
     // Archived list (workspace-scoped) — local sees the archived
     // private channel; teammate sees nothing.
@@ -1665,7 +1544,6 @@ describe('list routes filter by conversation_users (v25 PR-A blocker fix)', () =
     );
     const archivedTeammate = await archivedTeammateResp.json() as any;
     expect(archivedTeammate.channels).toEqual([]);
-    expect(archivedTeammate.threads.map((t: any) => t.id)).not.toContain(thread.id);
 
     // Cross-workspace aggregate — same gate.
     const aggLocal = await (

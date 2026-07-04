@@ -169,23 +169,11 @@ export class ConversationMessageService {
             'conversation is archived',
           );
         }
-        if (sourceConversation.kind === 'thread') {
-          throw new TargetError(
-            'legacy_thread_read_only',
-            'legacy isolated threads are read-only; use message send --reply-to for reply clusters or a channel for isolated work',
-          );
-        }
         this.validateActor(input.actor, policy, sourceConversation.id);
 
         const targetConversation = target.kind === 'legacy'
           ? this.resolveLegacyTarget(sourceConversation, target.target)
           : sourceConversation;
-        if (targetConversation.kind === 'thread') {
-          throw new TargetError(
-            'legacy_thread_read_only',
-            'legacy isolated threads are read-only; use message send --target thread:<message_id> for reply clusters or a channel for isolated work',
-          );
-        }
         const threadRootId = this.resolveThreadRootForTarget(
           targetConversation.id,
           target,
@@ -693,23 +681,7 @@ export class ConversationMessageService {
       return parent;
     }
 
-    const thread = this.conversations.getThread(target.thread_id);
-    if (!thread) {
-      throw new TargetError('thread_not_found', 'thread not found');
-    }
-    if (thread.parent_conversation_id !== sourceConversation.id) {
-      throw new TargetError(
-        'thread_not_child',
-        'target is not a direct thread of current channel',
-      );
-    }
-    if (thread.closed_at !== null) {
-      throw new TargetError('target_closed', 'target conversation is closed');
-    }
-    if (thread.archived_at !== null) {
-      throw new TargetError('target_archived', 'target conversation is archived');
-    }
-    return thread;
+    return target;
   }
 
   private resolveAttachmentSnapshots(

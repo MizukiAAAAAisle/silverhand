@@ -39,7 +39,6 @@ import {
   CLEAR_SESSION_EXIT_TIMEOUT_MS,
   ClearSessionInProgressError,
   DEFAULT_SOFT_DIRECTIVE,
-  LegacyThreadRuntimeDisabledError,
   type ClearSessionResult,
   type ReapIdleRuntimesOptions,
   type ReapIdleRuntimesResult,
@@ -837,9 +836,6 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     conversationId: string,
     agentId: string,
   ): Promise<boolean> {
-    if (this.isLegacyThreadConversation(conversationId)) {
-      return false;
-    }
     if (this.inboxRepo.listPending(conversationId, agentId).length === 0) {
       // Idempotency guard for concurrent claimants. A pending row can
       // already be in-flight when an explicit `runtimeHost.start` / HTTP
@@ -973,7 +969,6 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     conversationId: string,
     agentId: string,
   ): Promise<void> {
-    this.assertCanStartConversation(conversationId, agentId);
     const hostId = this.hostIdForAgent(agentId);
     const connectionId = this.connectedConnectionId(hostId, 'runtime_start');
     const state = this.stateForHost(hostId);
@@ -1047,19 +1042,6 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       silverhandCli: this.opts.silverhandCli,
       agentToken: this.opts.agentTokens.issue(conversationId, agentId),
     });
-  }
-
-  private isLegacyThreadConversation(conversationId: string): boolean {
-    return this.conversations.get(conversationId)?.kind === 'thread';
-  }
-
-  private assertCanStartConversation(
-    conversationId: string,
-    agentId: string,
-  ): void {
-    if (this.isLegacyThreadConversation(conversationId)) {
-      throw new LegacyThreadRuntimeDisabledError(conversationId, agentId);
-    }
   }
 
   /**

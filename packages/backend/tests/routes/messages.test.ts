@@ -3,7 +3,6 @@ import {
   encodeUserPrincipalHeader,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
-import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
@@ -38,25 +37,33 @@ async function createWorkspaceChannel(
   };
 }
 
-function authHeaders(token: string): Record<string, string> {
-  return { authorization: `Bearer ${token}` };
-}
-
 function seedLegacyThread(
   t: TestApp,
   channelId: string,
   title: string,
-  memberAgentIds: string[],
 ): { thread_id: string } {
-  const conversations = new ConversationRepo(t.ctx.db);
-  const thread = conversations.insertThread({ channelId, title });
-  for (const agentId of memberAgentIds) {
-    conversations.addAgent(thread.id, agentId);
-  }
-  for (const member of conversations.listUsers(channelId)) {
-    conversations.addUser(thread.id, member.user_id);
-  }
-  return { thread_id: thread.id };
+  const db = t.ctx.db;
+  const parent = db
+    .prepare(
+      `SELECT workspace_id, workspace_path FROM conversations WHERE id = ?`,
+    )
+    .get(channelId) as { workspace_id: string; workspace_path: string };
+  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
+  db.prepare(
+    `INSERT INTO conversations
+       (id, workspace_id, workspace_path, kind, parent_conversation_id,
+        title, status, created_at, updated_at, latest_message_seq)
+     VALUES (?, ?, ?, 'thread', ?, ?, 'idle', ?, ?, 0)`,
+  ).run(
+    id,
+    parent.workspace_id,
+    parent.workspace_path,
+    channelId,
+    title,
+    Date.now(),
+    Date.now(),
+  );
+  return { thread_id: id };
 }
 
 describe('message routes', () => {
@@ -83,7 +90,7 @@ describe('message routes', () => {
         content: 'topic',
       })
     ).json() as any;
-    const thread = seedLegacyThread(t, channelId, 'legacy child', []);
+    const thread = seedLegacyThread(t, channelId, 'legacy child');
     const threadPost = await http(t).post(`/api/threads/${thread.thread_id}/messages`, {
       content: 'thread reply',
     });
@@ -134,50 +141,6 @@ describe('message routes', () => {
     expect(post.status).toBe(201);
     const body = await post.json() as any;
     expect(body.message.from_user_id).toBe('teammate');
-  });
-
-  it('rejects agent sends originating from legacy threads', async () => {
-    t = buildTestApp();
-    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice', 'bob']);
-    const thread = seedLegacyThread(
-      t,
-      channelId,
-      'child',
-      [agentIds.alice!, agentIds.bob!],
-    );
-    t.fake.delivered = [];
-    t.fake.resolvedRuns = [];
-
-    const send = await http(t).post(
-      `/internal/conversations/${thread.thread_id}/agents/${agentIds.alice}/send-message`,
-      { content: 'up to parent', target: 'parent' },
-      { headers: authHeaders(t.authToken) },
-    );
-
-    expect(send.status).toBe(409);
-    expect(await send.json()).toMatchObject({ code: 'legacy_thread_read_only' });
-    const parentMessages = await (
-      await http(t).get(`/api/channels/${channelId}/messages`)
-    ).json() as any;
-    expect(parentMessages.messages.map((m: any) => m.content)).not.toContain('up to parent');
-    expect(t.fake.resolvedRuns).toEqual([]);
-  });
-
-  it('agent send-message into a closed target returns 409', async () => {
-    t = buildTestApp();
-    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
-    const thread = seedLegacyThread(t, channelId, 'child', [agentIds.alice!]);
-    t.ctx.db
-      .prepare(`UPDATE conversations SET closed_at = ?, status = 'archived' WHERE id = ?`)
-      .run(Date.now(), thread.thread_id);
-
-    const send = await http(t).post(
-      `/internal/conversations/${channelId}/agents/${agentIds.alice}/send-message`,
-      { content: 'down', target: { thread_id: thread.thread_id } },
-      { headers: authHeaders(t.authToken) },
-    );
-
-    expect(send.status).toBe(409);
   });
 });
 

@@ -203,23 +203,4 @@ describe('human thread follower routes', () => {
     expect(res.status).toBe(403);
     expect(followerSource(t, root.id, 'human', 'teammate')).toBeNull();
   });
-
-  it('rejects legacy isolated thread ids on reply-cluster follower routes', async () => {
-    t = buildTestApp();
-    const { channelId } = await createWorkspaceChannel(t, ['alice']);
-    const conversations = new ConversationRepo(t.ctx.db);
-    const legacy = conversations.insertThread({
-      channelId,
-      title: 'legacy thread',
-    });
-
-    const res = await http(t).get(
-      apiPaths.channelThreadFollowers(channelId, legacy.id),
-    );
-
-    expect(res.status).toBe(400);
-    expect(await res.json()).toMatchObject({
-      code: 'legacy_thread_target_deprecated',
-    });
-  });
 });

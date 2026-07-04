@@ -21,7 +21,7 @@ export type HostCredentialKind = z.infer<typeof HostCredentialKindSchema>;
 export const WorkspaceKindSchema = z.enum(['regular', 'agent_home']);
 export type WorkspaceKind = z.infer<typeof WorkspaceKindSchema>;
 
-export const ConversationKindSchema = z.enum(['channel', 'dm_channel', 'thread']);
+export const ConversationKindSchema = z.enum(['channel', 'dm_channel']);
 export type ConversationKind = z.infer<typeof ConversationKindSchema>;
 
 export const ConversationStatusSchema = z.enum([

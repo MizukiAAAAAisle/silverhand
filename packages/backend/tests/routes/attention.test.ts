@@ -1,6 +1,21 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import type { Database as Db } from 'better-sqlite3';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+
+function insertFossilThread(
+  db: Db,
+  channel: { id: string; workspace_id: string; workspace_path: string },
+): { id: string } {
+  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
+  db.prepare(
+    `INSERT INTO conversations
+       (id, workspace_id, workspace_path, kind, parent_conversation_id,
+        title, status, created_at, updated_at, latest_message_seq)
+     VALUES (?, ?, ?, 'thread', ?, 'Fossil', 'idle', ?, ?, 0)`,
+  ).run(id, channel.workspace_id, channel.workspace_path, channel.id, Date.now(), Date.now());
+  return { id };
+}
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const created = (await (
@@ -105,7 +120,11 @@ describe('channel attention preference routes (#task:1227 ②a)', () => {
         .prepare(`SELECT workspace_path FROM conversations WHERE id = ?`)
         .get(channelId) as any
     ).workspace_path as string;
-    const thread = conversations.insertThread({ channelId, title: 'child' });
+    const thread = insertFossilThread(t.ctx.db, {
+      id: channelId,
+      workspace_id: workspaceId,
+      workspace_path: workspacePath,
+    });
     const dm = conversations.insertDmChannel({
       workspaceId,
       workspacePath,
@@ -136,7 +155,11 @@ describe('channel attention preference routes (#task:1227 ②a)', () => {
         .prepare(`SELECT workspace_path FROM conversations WHERE id = ?`)
         .get(channelId) as any
     ).workspace_path as string;
-    const thread = conversations.insertThread({ channelId, title: 'child' });
+    const thread = insertFossilThread(t.ctx.db, {
+      id: channelId,
+      workspace_id: workspaceId,
+      workspace_path: workspacePath,
+    });
     const dm = conversations.insertDmChannel({
       workspaceId,
       workspacePath,

@@ -1,7 +1,29 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import type { Database as Db } from 'better-sqlite3';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+
+/**
+ * Seed a fossil `kind='thread'` conversation via raw SQL. The producer
+ * (`ConversationRepo.insertThread`) and the `thread` kind were retired in
+ * #task:1303 phase 2; tests that still exercise legacy isolated-thread reads
+ * (still readable via `{conversation_id}`) or child-thread search sweeps
+ * reproduce the physical row here without touching the narrowed domain model.
+ */
+function insertFossilThread(
+  db: Db,
+  channel: { id: string; workspace_id: string; workspace_path: string },
+): { id: string } {
+  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
+  db.prepare(
+    `INSERT INTO conversations
+       (id, workspace_id, workspace_path, kind, parent_conversation_id,
+        title, status, created_at, updated_at, latest_message_seq)
+     VALUES (?, ?, ?, 'thread', ?, 'Fossil', 'idle', ?, ?, 0)`,
+  ).run(id, channel.workspace_id, channel.workspace_path, channel.id, Date.now(), Date.now());
+  return { id };
+}
 
 async function makeAgent(t: TestApp, name: string): Promise<{
   agentId: string;
@@ -102,42 +124,6 @@ describe('PR-B: cross-workspace read_history({target:{conversation_id}})', () =>
     expect(hitMsg.content).toBe('hello cross-workspace world');
   });
 
-  it('reads a thread by conversation_id even when the agent is not in its parent channel', async () => {
-    t = buildTestApp();
-    const alice = await makeAgent(t, 'alice');
-    const bob = await makeAgent(t, 'bob');
-    const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId, bob.agentId]);
-    // Channel only bob is in; alice is added to a thread off it directly
-    // via the repo so we can construct the "parent-not-member" topology
-    // (the create-thread route would refuse to seed a non-parent-member).
-    const bobOnly = await createChannel(t, reg.workspaceId, 'bob-only', [bob.agentId]);
-    const conversations = new ConversationRepo(t.ctx.db);
-    const thread = conversations.insertThread({
-      channelId: bobOnly,
-      title: 'mixed',
-    });
-    conversations.addAgent(thread.id, bob.agentId);
-    conversations.addAgent(thread.id, alice.agentId);
-
-    const messages = new MessageRepo(t.ctx.db);
-    const hit = messages.insertForConversation({
-      conversationId: thread.id,
-      fromKind: 'user',
-      content: 'thread message alice should see',
-    });
-
-    const res = await http(t).post(readHistoryPath(alice.dmChannelId, alice.agentId), {
-      target: { conversation_id: thread.id },
-      around_message_id: hit.id,
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json() as any;
-    expect(body.target.conversation_id).toBe(thread.id);
-    expect(body.target.thread_id).toBe(thread.id);
-    expect(body.target.channel_id).toBe(bobOnly);
-    expect(body.messages.map((m: any) => m.message_ref.id)).toContain(hit.id);
-  });
-
   it('returns 403 when the agent is not a member of the target conversation', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
@@ -180,65 +166,6 @@ describe('PR-B: cross-workspace read_history({target:{conversation_id}})', () =>
     expect(res.status).toBe(404);
     const body = await res.json() as any;
     expect(body.code).toBe('conversation_not_found');
-  });
-
-  it('resolves self/parent and rejects legacy {thread_id} targets with a deprecation error', async () => {
-    t = buildTestApp();
-    const alice = await makeAgent(t, 'alice');
-    const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
-    const channel = await createChannel(t, reg.workspaceId, 'main', [alice.agentId]);
-    const conversations = new ConversationRepo(t.ctx.db);
-    const thread = conversations.insertThread({
-      channelId: channel,
-      title: 'child',
-    });
-    conversations.addAgent(thread.id, alice.agentId);
-    const messages = new MessageRepo(t.ctx.db);
-    const channelMsg = messages.insertForConversation({
-      conversationId: channel,
-      fromKind: 'user',
-      content: 'channel anchor',
-    });
-    const threadMsg = messages.insertForConversation({
-      conversationId: thread.id,
-      fromKind: 'user',
-      content: 'thread anchor',
-    });
-
-    // self from channel
-    const selfRes = await http(t).post(readHistoryPath(channel, alice.agentId), {
-      around_message_id: channelMsg.id,
-    });
-    expect(selfRes.status).toBe(200);
-    expect((await selfRes.json() as any).target.conversation_id).toBe(channel);
-
-    // parent from thread
-    const parentRes = await http(t).post(readHistoryPath(thread.id, alice.agentId), {
-      target: 'parent',
-      around_message_id: channelMsg.id,
-    });
-    expect(parentRes.status).toBe(200);
-    expect((await parentRes.json() as any).target.conversation_id).toBe(channel);
-
-    // Legacy isolated thread conversations remain readable via
-    // {conversation_id}, but the thread:<id> / {thread_id} target form is
-    // now reserved for reply-cluster root ids.
-    const threadRes = await http(t).post(readHistoryPath(channel, alice.agentId), {
-      target: { thread_id: thread.id },
-      around_message_id: threadMsg.id,
-    });
-    expect(threadRes.status).toBe(400);
-    const threadBody = await threadRes.json() as any;
-    expect(threadBody.code).toBe('legacy_thread_target_deprecated');
-    expect(threadBody.error).toContain(`conversation:${thread.id}`);
-
-    const conversationRes = await http(t).post(readHistoryPath(channel, alice.agentId), {
-      target: { conversation_id: thread.id },
-      around_message_id: threadMsg.id,
-    });
-    expect(conversationRes.status).toBe(200);
-    expect((await conversationRes.json() as any).target.conversation_id)
-      .toBe(thread.id);
   });
 
   it('rejects {conversation_id} pointing at the workspace itself or other unsupported kinds', async () => {
@@ -412,9 +339,11 @@ describe('PR-B: cross-workspace search_messages({workspace_id?})', () => {
     // Spawn a child thread alice is in too, to verify the SQL still
     // sweeps visible child threads of the remote channel.
     const conversations = new ConversationRepo(t.ctx.db);
-    const thread = conversations.insertThread({
-      channelId: remoteChannel,
-      title: 'child',
+    const remote = conversations.getChannel(remoteChannel)!;
+    const thread = insertFossilThread(t.ctx.db, {
+      id: remoteChannel,
+      workspace_id: remote.workspace_id,
+      workspace_path: remote.workspace_path,
     });
     conversations.addAgent(thread.id, alice.agentId);
     const messages = new MessageRepo(t.ctx.db);

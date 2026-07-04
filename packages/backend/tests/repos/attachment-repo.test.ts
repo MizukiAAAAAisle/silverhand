@@ -96,15 +96,25 @@ describe('AttachmentRepo', () => {
   });
 
   it('cascades on channel delete and SET NULL on source conversation delete', () => {
-    const { db, channel, conversations, workspace } = bootstrap();
-    const thread = conversations.insertThread({
-      channelId: channel.id,
-      title: 't',
-    });
+    const { db, channel, workspace } = bootstrap();
+    const threadId = `fossil_thread_${Math.random().toString(36).slice(2)}`;
+    db.prepare(
+      `INSERT INTO conversations
+         (id, workspace_id, workspace_path, kind, parent_conversation_id,
+          title, status, created_at, updated_at, latest_message_seq)
+       VALUES (?, ?, ?, 'thread', ?, 'Fossil', 'idle', ?, ?, 0)`,
+    ).run(
+      threadId,
+      channel.workspace_id,
+      channel.workspace_path,
+      channel.id,
+      Date.now(),
+      Date.now(),
+    );
     const repo = new AttachmentRepo(db);
     const dto = repo.insert({
       channelId: channel.id,
-      sourceConversationId: thread.id,
+      sourceConversationId: threadId,
       filename: 'x.png',
       size: 1,
       contentType: 'image/png',
@@ -115,7 +125,7 @@ describe('AttachmentRepo', () => {
     });
 
     // Source conversation delete → SET NULL on attachments.source_conversation_id.
-    db.prepare('DELETE FROM conversations WHERE id = ?').run(thread.id);
+    db.prepare('DELETE FROM conversations WHERE id = ?').run(threadId);
     const afterThreadDelete = repo.getById(dto.id);
     expect(afterThreadDelete?.source_conversation_id).toBeNull();
 

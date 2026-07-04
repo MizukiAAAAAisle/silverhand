@@ -173,13 +173,6 @@ export class ThreadFollowManager {
       rootMessageId,
     );
     if (!root) {
-      const legacyThread = this.conversations.getThread(rootMessageId);
-      if (legacyThread) {
-        throw new TargetError(
-          'legacy_thread_target_deprecated',
-          `legacy isolated thread ${legacyThread.id} is read-only; use conversation:${legacyThread.id} for read-only history`,
-        );
-      }
       throw new TargetError(
         'reply_target_not_found',
         'thread root message not found in conversation',

@@ -83,26 +83,6 @@ async function createChannel(
   return created.channel.id;
 }
 
-function createThreadWithMembers(
-  t: TestApp,
-  channelId: string,
-  memberAgentIds: string[],
-  memberUserIds: string[] = ['local'],
-): string {
-  const conversations = new ConversationRepo(t.ctx.db);
-  const thread = conversations.insertThread({
-    channelId,
-    title: 'member-thread',
-  });
-  for (const agentId of memberAgentIds) {
-    conversations.addAgent(thread.id, agentId);
-  }
-  for (const userId of memberUserIds) {
-    conversations.addUser(thread.id, userId);
-  }
-  return thread.id;
-}
-
 function membersPath(id: string): string {
   return `/api/conversations/${id}/members`;
 }
@@ -163,31 +143,6 @@ describe('GET /api/conversations/:id/members', () => {
       .filter((m: any) => m.kind === 'human')
       .map((m: any) => m.user_id);
     expect(humanIds).toContain('local');
-  });
-
-  it('returns the same shape for a thread (members snapshotted from parent at create)', async () => {
-    t = buildTestApp();
-    const alice = await makeAgent(t, 'alice');
-    const reg = await createRegularWorkspace(t, 'team-y', [alice.agentId]);
-    const channelId = await createChannel(t, reg.workspaceId, 'investigations', [
-      alice.agentId,
-    ]);
-    const conversations = new ConversationRepo(t.ctx.db);
-    const thread = conversations.insertThread({
-      channelId,
-      title: 'perf-dive',
-    });
-    // Snapshot the parent's agents into the legacy thread fixture; direct
-    // repo insertion does not imply per-thread membership rows.
-    for (const ca of conversations.listAgents(channelId)) {
-      conversations.addAgent(thread.id, ca.agent_id);
-    }
-
-    const res = await http(t).get(membersPath(thread.id));
-    expect(res.status).toBe(200);
-    const { members } = await res.json() as any;
-    const agents = members.filter((m: any) => m.kind === 'agent');
-    expect(agents.map((m: any) => m.agent_id)).toEqual([alice.agentId]);
   });
 
   it("returns dm channel members (agent + viewer)", async () => {
@@ -400,66 +355,6 @@ describe('POST /api/conversations/:id/members', () => {
         .filter((m: any) => m.kind === 'human')
         .map((m: any) => m.user_id),
     ).toContain('teammate');
-  });
-
-  it('adds an existing workspace agent to a thread', async () => {
-    t = buildTestApp();
-    const alice = await makeAgent(t, 'alice');
-    const bob = await makeAgent(t, 'bob');
-    const reg = await createRegularWorkspace(t, 'post-thread-agent', [
-      alice.agentId,
-      bob.agentId,
-    ]);
-    const channelId = await createChannel(t, reg.workspaceId, 'thread-parent', [
-      alice.agentId,
-    ]);
-    const threadId = createThreadWithMembers(t, channelId, [alice.agentId]);
-    const conversationEvents: Array<{ kind: string; payload: unknown }> = [];
-    const workspaceEvents: Array<{ kind: string; payload: unknown }> = [];
-    const unsubscribeConversation = subscribeConversationEvents(t, threadId, conversationEvents);
-    const unsubscribeWorkspace = t.ctx.events.subscribeScope(
-      `workspace:${reg.workspaceId}`,
-      e => workspaceEvents.push({ kind: e.kind, payload: e.payload }),
-    );
-
-    const add = await http(t).post(membersPath(threadId), {
-      kind: 'agent',
-      agent_id: bob.agentId,
-    });
-    unsubscribeConversation();
-    unsubscribeWorkspace();
-    expect(add.status).toBe(200);
-    const body = await add.json() as any;
-    expect(
-      body.members
-        .filter((m: any) => m.kind === 'agent')
-        .map((m: any) => m.agent_id),
-    ).toEqual(expect.arrayContaining([alice.agentId, bob.agentId]));
-    const memberAddedMessage = conversationEvents.find(e => e.kind === 'message');
-    expect((memberAddedMessage?.payload as any)?.message).toMatchObject({
-      from_kind: 'system',
-      metadata: {
-        subtype: 'conversation_member_added',
-        actor_kind: 'user',
-        actor_id: 'local',
-        member_kind: 'agent',
-        member_id: bob.agentId,
-      },
-    });
-    expect(conversationEvents).toContainEqual({
-      kind: 'conversation_members_changed',
-      payload: {
-        conversation_id: threadId,
-        workspace_id: reg.workspaceId,
-      },
-    });
-    expect(workspaceEvents).toContainEqual({
-      kind: 'workspace_channels_changed',
-      payload: {
-        workspace_id: reg.workspaceId,
-        channel_id: threadId,
-      },
-    });
   });
 
   it('auto-adds non-workspace agents and humans for human admins', async () => {
@@ -730,50 +625,6 @@ describe('POST /api/conversations/:id/members', () => {
     expect((memberAddedMessage?.payload as any)?.message).toMatchObject({
       from_kind: 'system',
       content: '@alice added @bob to this conversation.',
-      metadata: {
-        subtype: 'conversation_member_added',
-        actor_kind: 'agent',
-        actor_id: alice.agentId,
-        actor_name: 'alice',
-        member_kind: 'agent',
-        member_id: bob.agentId,
-        member_name: 'bob',
-      },
-    });
-  });
-
-  it('allows an agent principal to add workspace members to its current thread', async () => {
-    t = buildTestApp();
-    const alice = await makeAgent(t, 'alice');
-    const bob = await makeAgent(t, 'bob');
-    const reg = await createRegularWorkspace(t, 'agent-can-add-thread', [
-      alice.agentId,
-      bob.agentId,
-    ]);
-    const channelId = await createChannel(t, reg.workspaceId, 'agent-thread-parent', [
-      alice.agentId,
-    ]);
-    const threadId = createThreadWithMembers(t, channelId, [alice.agentId]);
-    const conversationEvents: Array<{ kind: string; payload: unknown }> = [];
-    const unsubscribeConversation = t.ctx.events.subscribe(threadId, e => {
-      conversationEvents.push({ kind: e.kind, payload: e.payload });
-    });
-
-    const res = await http(t).post(
-      internalPaths.agentAddConversationMember(threadId, alice.agentId),
-      { handle: '@bob' },
-    );
-    unsubscribeConversation();
-    expect(res.status).toBe(200);
-    const body = await res.json() as any;
-    expect(
-      body.members
-        .filter((m: any) => m.kind === 'agent')
-        .map((m: any) => m.agent_id),
-    ).toEqual(expect.arrayContaining([alice.agentId, bob.agentId]));
-    const memberAddedMessage = conversationEvents.find(e => e.kind === 'message');
-    expect((memberAddedMessage?.payload as any)?.message).toMatchObject({
-      from_kind: 'system',
       metadata: {
         subtype: 'conversation_member_added',
         actor_kind: 'agent',

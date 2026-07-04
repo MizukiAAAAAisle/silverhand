@@ -48,6 +48,40 @@ const countReplyCluster = (db: Db): number =>
 let seedSeq = 0;
 const nextId = (prefix: string): string => `${prefix}_${(seedSeq += 1)}`;
 
+/**
+ * Seed a fossil `kind='thread'` conversation via raw SQL. The producer
+ * (`ConversationRepo.insertThread`) and the `thread` kind were retired in
+ * #task:1303 phase 2, but the purge device must still handle old/remote DBs
+ * that physically contain such rows. This helper reproduces that reality
+ * WITHOUT touching the narrowed domain model (no ConversationKindSchema, no
+ * repo mapper, no DTO) — exactly the decoupling the device relies on.
+ *
+ * The `conversations_thread_parent_*` triggers only require the parent to be
+ * a channel-like conversation, which `channel` is, so no trigger drop is
+ * needed here (contrast the external-guard test, which drops
+ * `messages_thread_root_*` to simulate a corrupt row).
+ */
+function insertFossilThread(
+  db: Db,
+  channel: { id: string; workspace_id: string; workspace_path: string },
+): { id: string } {
+  const id = nextId('thread');
+  db.prepare(
+    `INSERT INTO conversations
+       (id, workspace_id, workspace_path, kind, parent_conversation_id,
+        title, status, created_at, updated_at, latest_message_seq)
+     VALUES (?, ?, ?, 'thread', ?, 'Fossil', 'idle', ?, ?, 0)`,
+  ).run(
+    id,
+    channel.workspace_id,
+    channel.workspace_path,
+    channel.id,
+    Date.now(),
+    Date.now(),
+  );
+  return { id };
+}
+
 function insertNotification(
   db: Db,
   cols: {
@@ -103,7 +137,7 @@ describe('runLegacyThreadPurge', () => {
   it('dry-run reports inventory and writes nothing', () => {
     const t = bootstrap();
     try {
-      const thread = t.conversations.insertThread({ channelId: t.channel.id, title: 'Fossil' });
+      const thread = insertFossilThread(t.db, t.channel);
       t.messages.insertForConversation({
         conversationId: thread.id,
         fromKind: 'user',
@@ -152,7 +186,7 @@ describe('runLegacyThreadPurge', () => {
 
       // Legacy fossil thread + its messages + referencing stream-head rows
       // (insertForConversation bumps the per-stream head → real refs to purge).
-      const thread = t.conversations.insertThread({ channelId: t.channel.id, title: 'Fossil' });
+      const thread = insertFossilThread(t.db, t.channel);
       t.messages.insertForConversation({
         conversationId: thread.id,
         fromKind: 'user',
@@ -197,7 +231,7 @@ describe('runLegacyThreadPurge', () => {
   it('aborts (guard fails) when a non-legacy message is rooted at a legacy message', () => {
     const t = bootstrap();
     try {
-      const thread = t.conversations.insertThread({ channelId: t.channel.id, title: 'Fossil' });
+      const thread = insertFossilThread(t.db, t.channel);
       const fossilMsg = t.messages.insertForConversation({
         conversationId: thread.id,
         fromKind: 'user',
@@ -242,7 +276,7 @@ describe('runLegacyThreadPurge', () => {
   it('deletes notifications referencing the legacy set via all four ref columns, keeps unrelated ones', () => {
     const t = bootstrap();
     try {
-      const thread = t.conversations.insertThread({ channelId: t.channel.id, title: 'Fossil' });
+      const thread = insertFossilThread(t.db, t.channel);
       const fossilMsg = t.messages.insertForConversation({
         conversationId: thread.id,
         fromKind: 'user',
@@ -285,7 +319,7 @@ describe('runLegacyThreadPurge', () => {
   it('deletes saved_messages saved on a legacy message', () => {
     const t = bootstrap();
     try {
-      const thread = t.conversations.insertThread({ channelId: t.channel.id, title: 'Fossil' });
+      const thread = insertFossilThread(t.db, t.channel);
       const fossilMsg = t.messages.insertForConversation({
         conversationId: thread.id,
         fromKind: 'user',
@@ -312,7 +346,7 @@ describe('runLegacyThreadPurge', () => {
   it('nulls attachment.source_conversation_id sourced from a legacy conversation, keeps the body', () => {
     const t = bootstrap();
     try {
-      const thread = t.conversations.insertThread({ channelId: t.channel.id, title: 'Fossil' });
+      const thread = insertFossilThread(t.db, t.channel);
       // Attachment lives in the LIVE channel but was sourced from the fossil.
       const att = insertAttachment(t.db, {
         channelId: t.channel.id,
@@ -338,7 +372,7 @@ describe('runLegacyThreadPurge', () => {
   it('aborts when an attachment physically lives in a legacy conversation (channel_id)', () => {
     const t = bootstrap();
     try {
-      const thread = t.conversations.insertThread({ channelId: t.channel.id, title: 'Fossil' });
+      const thread = insertFossilThread(t.db, t.channel);
       const att = insertAttachment(t.db, { channelId: thread.id });
 
       const dry = runLegacyThreadPurge(t.db, { apply: false });

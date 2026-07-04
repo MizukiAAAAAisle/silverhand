@@ -46,10 +46,23 @@ function seed(t: TestApp) {
     title: 'Main',
   });
   conversations.addAgent(channel.id, alice.id);
-  const thread = conversations.insertThread({
-    channelId: channel.id,
-    title: 'Thread',
-  });
+  const threadId = `fossil_thread_${randomUUID().slice(0, 8)}`;
+  t.ctx.db
+    .prepare(
+      `INSERT INTO conversations
+         (id, workspace_id, workspace_path, kind, parent_conversation_id,
+          title, status, created_at, updated_at, latest_message_seq)
+       VALUES (?, ?, ?, 'thread', ?, 'Thread', 'idle', ?, ?, 0)`,
+    )
+    .run(
+      threadId,
+      channel.workspace_id,
+      channel.workspace_path,
+      channel.id,
+      Date.now(),
+      Date.now(),
+    );
+  const thread = { id: threadId };
   conversations.addAgent(thread.id, alice.id);
   const sibling = conversations.insertChannel({
     workspaceId: workspace.id,
@@ -167,11 +180,6 @@ describe('permission helpers', () => {
       agentId: f.alice.id,
       conversationId: f.channel.id,
     };
-    const threadAgent: AgentPrincipal = {
-      kind: 'agent',
-      agentId: f.alice.id,
-      conversationId: f.thread.id,
-    };
     const siblingAgent: AgentPrincipal = {
       kind: 'agent',
       agentId: f.alice.id,
@@ -206,7 +214,6 @@ describe('permission helpers', () => {
     expect(canDeleteAttachment(t.ctx, otherUser, userAttachment)).toBe(false);
 
     expect(canViewAttachment(t.ctx, channelAgent, agentAttachment)).toBe(true);
-    expect(canViewAttachment(t.ctx, threadAgent, agentAttachment)).toBe(true);
     expect(canViewAttachment(t.ctx, siblingAgent, agentAttachment)).toBe(false);
     expect(canDeleteAttachment(t.ctx, channelAgent, agentAttachment)).toBe(true);
     expect(canDeleteAttachment(t.ctx, channelAgent, userAttachment)).toBe(false);

@@ -46,11 +46,32 @@ function seedLegacyThread(
   memberAgentIds: string[],
 ): { thread_id: string } {
   const conversations = new ConversationRepo(t.ctx.db);
-  const thread = conversations.insertThread({ channelId, title });
+  const parent = t.ctx.db
+    .prepare(
+      `SELECT workspace_id, workspace_path FROM conversations WHERE id = ?`,
+    )
+    .get(channelId) as { workspace_id: string; workspace_path: string };
+  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
+  t.ctx.db
+    .prepare(
+      `INSERT INTO conversations
+         (id, workspace_id, workspace_path, kind, parent_conversation_id,
+          title, status, created_at, updated_at, latest_message_seq)
+       VALUES (?, ?, ?, 'thread', ?, ?, 'idle', ?, ?, 0)`,
+    )
+    .run(
+      id,
+      parent.workspace_id,
+      parent.workspace_path,
+      channelId,
+      title,
+      Date.now(),
+      Date.now(),
+    );
   for (const agentId of memberAgentIds) {
-    conversations.addAgent(thread.id, agentId);
+    conversations.addAgent(id, agentId);
   }
-  return { thread_id: thread.id };
+  return { thread_id: id };
 }
 
 describe('Internal route auth', () => {
@@ -232,63 +253,6 @@ describe('POST /internal/.../send-message', () => {
     expect(r.status).toBe(400);
     const body = await r.json() as any;
     expect(body.code).toBe('no_parent');
-  });
-
-  it('rejects child target that is not a direct child', async () => {
-    t = buildTestApp();
-    const { conversationId, agentIds, channelId } = await setupSession(t, ['alice']);
-    // Make a sibling top-level channel with its own thread, not a direct
-    // child of the current conversation.
-    const sibling = await (
-      await http(t).post(`/api/workspaces/${channelId}/channels`, {
-        title: 'sibling',
-        member_agent_ids: [agentIds.alice],
-      })
-    ).json() as any;
-    const siblingThread = seedLegacyThread(
-      t,
-      sibling.channel.id,
-      'sibling child',
-      [agentIds.alice!],
-    );
-    const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
-      {
-        content: 'down',
-        target: { thread_id: siblingThread.thread_id },
-      },
-      { headers: authHeaders(t.authToken) },
-    );
-    expect(r.status).toBe(400);
-  });
-
-  it('rejects legacy thread targets via { thread_id }', async () => {
-    t = buildTestApp();
-    const { conversationId, agentIds } = await setupSession(t, ['alice']);
-    const child = seedLegacyThread(t, conversationId, 'child', [agentIds.alice!]);
-    const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
-      {
-        content: 'down to child',
-        target: { thread_id: child.thread_id },
-      },
-      { headers: authHeaders(t.authToken) },
-    );
-    expect(r.status).toBe(409);
-    expect(await r.json()).toMatchObject({ code: 'legacy_thread_read_only' });
-    const leaked = t.ctx.db
-      .prepare<
-        [string, string],
-        { one: 1 }
-      >(
-        `SELECT 1 AS one
-           FROM messages
-          WHERE conversation_id = ?
-            AND content = ?
-          LIMIT 1`,
-      )
-      .get(child.thread_id, 'down to child');
-    expect(leaked).toBeUndefined();
   });
 
 });

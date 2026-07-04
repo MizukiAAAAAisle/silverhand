@@ -65,23 +65,6 @@ type ReadHistoryTargetResult =
       message: string;
     };
 
-const LEGACY_THREAD_TARGET_DEPRECATED_CODE = 'legacy_thread_target_deprecated';
-
-function legacyThreadTargetDeprecated(threadId: string): Extract<
-  ReadHistoryTargetResult,
-  { ok: false }
-> {
-  return {
-    ok: false,
-    status: 400,
-    code: LEGACY_THREAD_TARGET_DEPRECATED_CODE,
-    message:
-      `legacy isolated thread ${threadId} is read-only; read it with ` +
-      `conversation:${threadId}. The thread:<id> target is reserved for ` +
-      'reply-cluster root message ids.',
-  };
-}
-
 /** Minimal cluster-root lookup for the `{ thread_root_id }` read
  *  form. Returns just the routing fields (no DTO assembly) for a
  *  message id, or `null` when no such message exists. */
@@ -130,17 +113,6 @@ export function resolveAgentReadHistoryTarget(
         message: 'parent channel not found',
       };
     }
-  } else if ('thread_id' in requested) {
-    const thread = conversations.getThread(requested.thread_id);
-    if (!thread) {
-      return {
-        ok: false,
-        status: 404,
-        code: 'thread_not_found',
-        message: 'thread not found',
-      };
-    }
-    return legacyThreadTargetDeprecated(thread.id);
   } else if ('thread_root_id' in requested) {
     // Reply-cluster read: the value is a *message id*. The cluster
     // lives inside the root message's channel; normalize a reply to
@@ -148,10 +120,6 @@ export function resolveAgentReadHistoryTarget(
     // so `thread:<reply_id>` reads the whole cluster, not nothing.
     const rootMsg = lookupClusterRootMessage(ctx, requested.thread_root_id);
     if (!rootMsg) {
-      const legacyThread = conversations.getThread(requested.thread_root_id);
-      if (legacyThread) {
-        return legacyThreadTargetDeprecated(legacyThread.id);
-      }
       return {
         ok: false,
         status: 404,
@@ -197,8 +165,7 @@ export function resolveAgentReadHistoryTarget(
     }
     if (
       conversation.kind !== 'channel' &&
-      conversation.kind !== 'dm_channel' &&
-      conversation.kind !== 'thread'
+      conversation.kind !== 'dm_channel'
     ) {
       return {
         ok: false,
@@ -228,11 +195,8 @@ function targetRef(
   return {
     conversation_id: conversation.id,
     conversation_kind: conversation.kind,
-    channel_id:
-      conversation.kind === 'thread'
-        ? conversation.parent_conversation_id ?? conversation.id
-        : conversation.id,
-    thread_id: conversation.kind === 'thread' ? conversation.id : null,
+    channel_id: conversation.id,
+    thread_id: null,
     thread_root_id: threadRootId,
     workspace_id: conversation.workspace_id,
     title: conversation.title,
