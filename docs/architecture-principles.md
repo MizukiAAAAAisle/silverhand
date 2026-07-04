@@ -248,7 +248,9 @@ agent 授权是 capability-based（见 `graded-permissions-v1.md`）。新增 ca
 
 - **A 守空** → 触发条件本就满足或契约为空 → 现在就删，根本不该新增。
 - **B 守可能不存在的 fossil 行** → 触发条件 = 对该 fossil 跑 DB count。count=0 → 删整条兼容分支 + 相关 DTO/API 判别式/字段；count≠0 的处置 = 有价值→迁移 / 可丢→同刀 destructive 删 / 既不能丢又无迁移目标才「保留」（last resort）。**legacy 数据存在本身 ≠ 清理否决项**——否则任何 legacy 都清不掉。
-- **C 守活契约** → 触发条件可能**永远不满足**。典型：**local-first 多 DB 下 renderer 对历史行的 fallback**——每个用户库都留着自己的旧 system-message 行、缺失字段（如 task audit 行的 `actor`）不可回填、任何**单库** count 都不授权删。这类是**永久前向兼容，不是 legacy debt**；仍要写①②③，②写明「永久（local-first 历史行）」并在代码里标 `// intentional forward-compat, not legacy`，防下一轮审计误删。
+- **C 守活契约** → 它在活读，count=0 也不授权删（故不是 B）。按②删除触发条件能否满足，分两味：
+  - **C1 永久前向兼容** → ②触发**永远不满足**。典型：**local-first 多 DB 下 renderer 对历史行的 fallback**——每个用户库都留着自己的旧 system-message 行、缺失字段（如 task audit 行的 `actor`）不可回填、任何**单库** count 都不授权删。这类是**永久兼容，不是 legacy debt**；②写明「永久（local-first 历史行）」并在代码里标 `// intentional forward-compat, not legacy`，防下一轮审计误删。
+  - **C2 活迁移 seam / 活展示契约** → ②触发**可满足，但前置是「设计刀」而非某个 count 归零**。典型：`workspace_path`（一列背 create 输入 / daemon binding cache / 用户可见展示 path 三契约，且正被启动·恢复·Open-in-Finder 活读）——退役前提是先做设计动作把三契约拆开分别安置，不是等 count=0。②写明该**设计前置** + owner；前置达成前按 C 保留，绝不当死码删。
 
 **失败模式（不钉这条会怎样）：** shim 加进来时没记录守什么、何时能删 → 半年后审计者面对一堆 compat 分支，分不清哪个是死化石、哪个还守着活契约，只能逐个 DB probe + 全链路 grep 重新考古（正是 #1301/#1303/#1311/#1312 花掉的力气）。退出条件把这份成本从「每次审计 O(n) 考古」降到「加入时 O(1) 写清楚」。
 
