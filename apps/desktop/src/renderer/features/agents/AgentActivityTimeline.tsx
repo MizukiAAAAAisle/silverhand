@@ -74,13 +74,51 @@ export function AgentActivityTimeline({
   // auto-follows the tail (console feel) without yanking the viewport
   // when they've scrolled up to read history.
   const atBottomRef = useRef(true);
+  const tailFrameRef = useRef<number[]>([]);
+  const tailObserverRef = useRef<ResizeObserver | null>(null);
+
+  const cancelTailFrames = useCallback(() => {
+    for (const frame of tailFrameRef.current) cancelAnimationFrame(frame);
+    tailFrameRef.current = [];
+  }, []);
+
+  const pinToTailIfNeeded = useCallback(() => {
+    const el = scrollRef.current;
+    if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, []);
+
+  // Pin immediately and across the next two frames. This covers the side-panel
+  // open path where the scroller/list can mount before SplitPane width/height
+  // and markdown wrapping have fully settled; ResizeObserver below handles all
+  // later size changes.
+  const scheduleTailPin = useCallback(() => {
+    cancelTailFrames();
+    pinToTailIfNeeded();
+    const first = requestAnimationFrame(() => {
+      pinToTailIfNeeded();
+      const second = requestAnimationFrame(() => {
+        pinToTailIfNeeded();
+        tailFrameRef.current = [];
+      });
+      tailFrameRef.current = [second];
+    });
+    tailFrameRef.current = [first];
+  }, [cancelTailFrames, pinToTailIfNeeded]);
 
   // Re-pin to the tail when the selected (conversation, agent) changes. The
   // ResizeObserver tail-follow (setListRef) then keeps it pinned as the backfill
   // rows paint and the list grows — no one-shot rAF needed here.
   useEffect(() => {
     atBottomRef.current = true;
-  }, [conversationId, agentId]);
+    scheduleTailPin();
+  }, [conversationId, agentId, scheduleTailPin]);
+
+  useEffect(() => {
+    return () => {
+      cancelTailFrames();
+      tailObserverRef.current?.disconnect();
+    };
+  }, [cancelTailFrames]);
 
   const onLoadEarlier = useCallback(async () => {
     const el = scrollRef.current;
@@ -101,31 +139,25 @@ export function AgentActivityTimeline({
       el.scrollHeight - el.scrollTop - el.clientHeight < 48;
   }, []);
 
-  // Tail-follow that survives late layout growth. The initial open/switch jump
-  // (the rAF in the backfill effect) fires once, right after the rows commit —
-  // but the final height isn't settled yet: Activity rows render Markdown +
-  // diff/code wrapping, web fonts swap in, and the side panel/SplitPane settles
-  // its width a frame or two after mount, all of which grow the list AFTER that
-  // single scroll. With nothing re-pinning, it lands mid-list ("有时候不会滚到
-  // 底"). So we observe the list's height instead: while the user is pinned to
-  // the bottom (atBottomRef), every height change re-pins to the tail; once
-  // they scroll up to read history, atBottomRef flips false (onScroll) and the
-  // follow stops — manual up-scroll and "Load earlier" are never yanked.
-  // Height-driven, never a fixed timeout (Cindy). A callback ref re-attaches
-  // the observer across the list's mount/unmount (loading↔ready, conversation
-  // switch). Setting scrollTop doesn't resize the list, so this can't loop.
-  const tailObserverRef = useRef<ResizeObserver | null>(null);
+  // Tail-follow that survives late layout growth. Opening from the agent side
+  // panel can mount the list before the pane's width/height and Markdown/code
+  // wrapping have settled; a one-shot scroll can land mid-list. While the user
+  // is pinned to bottom, observe BOTH the list (content height/wrapping) and the
+  // scroller (viewport size) and re-pin on changes. Once they scroll up to read
+  // history, atBottomRef flips false (onScroll) and follow stops — manual
+  // up-scroll and "Load earlier" are never yanked.
   const setListRef = useCallback((node: HTMLOListElement | null) => {
     tailObserverRef.current?.disconnect();
     tailObserverRef.current = null;
     if (!node) return;
     const ro = new ResizeObserver(() => {
-      const el = scrollRef.current;
-      if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
+      scheduleTailPin();
     });
     ro.observe(node);
+    if (scrollRef.current) ro.observe(scrollRef.current);
     tailObserverRef.current = ro;
-  }, []);
+    scheduleTailPin();
+  }, [scheduleTailPin]);
 
   // Fold codex's per-token thinking/text fragments into display blocks. Pure
   // display layer — raw `events` (and their ids) are untouched, so dedupe /
