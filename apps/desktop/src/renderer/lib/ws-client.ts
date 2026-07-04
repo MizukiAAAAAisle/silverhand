@@ -903,10 +903,6 @@ class ViewerSubscriber {
   }
 }
 
-export function connectEventWs(): void {
-  eventWsClient.connect();
-}
-
 export function subscribeWsScope(scope: SubscribeFrame['scope']): WsScopeSubscription {
   return eventWsClient.subscribe(scope);
 }
@@ -925,15 +921,6 @@ export function subscribeViewerScope(): WsScopeSubscription {
 }
 
 /**
- * On-the-wire alias the server canonicalises to
- * `viewer:{resolvedViewerId}`. Exposed for documentation / tests; do
- * not pass it to `subscribeWsScope()` directly — call
- * `subscribeViewerScope()` so the client refcounts on the canonical
- * key.
- */
-export const VIEWER_SCOPE_ALIAS = 'viewer:self';
-
-/**
  * True iff `scope` is the current viewer's resolved scope. Hooks call
  * this on incoming `event`/`snapshot_required` frames so they don't
  * need to hardcode the viewer's id.
@@ -946,10 +933,6 @@ export function isCurrentViewerScope(scope: string): boolean {
 
 export function onWsFrame(listener: WsClientListener): () => void {
   return eventWsClient.onFrame(listener);
-}
-
-export function onWsStatus(listener: WsStatusListener): () => void {
-  return eventWsClient.onStatus(listener);
 }
 
 function recordEventWsDiagnostic(input: EventWsDiagnostic): void {

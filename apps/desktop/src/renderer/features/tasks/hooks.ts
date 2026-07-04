@@ -116,20 +116,3 @@ export function useUpdateTaskStatus() {
     },
   });
 }
-
-export function useUnclaimTaskHuman() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (messageId: string) => {
-      const res = await api<{ success: boolean; reason?: string }>(
-        `/api/tasks/${messageId}/unclaim`,
-        { method: 'POST' },
-      );
-      if (!res.success) throw new Error(res.reason ?? 'unclaim failed');
-      return res;
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['tasks'] });
-    },
-  });
-}

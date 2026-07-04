@@ -111,14 +111,6 @@ export function patchComposerDraftText(
   }
 }
 
-export function patchComposerDraftAttachment(
-  conversationId: string,
-  attachmentKey: string,
-  patch: Partial<CachedPendingAttachment>,
-): void {
-  patchAttachment(conversationId, attachmentKey, patch, true);
-}
-
 export function upsertComposerDraftAttachment(
   conversationId: string,
   attachment: CachedPendingAttachment,

@@ -17,10 +17,6 @@
 
 const OPEN_SETUP_WIZARD_EVENT = 'silverhand:open-setup-wizard';
 
-export function dispatchOpenSetupWizard(): void {
-  window.dispatchEvent(new CustomEvent(OPEN_SETUP_WIZARD_EVENT));
-}
-
 export function subscribeOpenSetupWizard(handler: () => void): () => void {
   const listener = (): void => handler();
   window.addEventListener(OPEN_SETUP_WIZARD_EVENT, listener);

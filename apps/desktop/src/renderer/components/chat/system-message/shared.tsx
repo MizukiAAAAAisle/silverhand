@@ -1,5 +1,4 @@
-import { useMemo, useState, type ComponentType } from 'react';
-import { ChevronRight } from 'lucide-react';
+import { useMemo, type ComponentType } from 'react';
 import type { MessageDto, UserDto } from '@silverhand/shared';
 import { useUsersById, makeUserNameResolver } from '@/features/users/hooks';
 import { Markdown } from '@/components/chat/Markdown';
@@ -64,54 +63,7 @@ export function GenericNarrationFallback({
   );
 }
 
-// ─── Collapsible long-form narration ───────────────────────────────────
-
-/** Long markdown bodies (onboarding prompt, inherited context, quoted
- *  anchor) collapse to a single line by default and expand on click. */
-function CollapsibleNarration({
-  message,
-  conversationRefsById,
-  onOpenConversationRef,
-  channelsByName,
-  onOpenChannelRef,
-  humansByName,
-}: RendererProps): JSX.Element {
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <button
-      type="button"
-      onClick={() => setExpanded((v) => !v)}
-      className={
-        'group flex w-full items-start gap-1 px-2 py-1 text-left text-text-muted ' +
-        (expanded ? 'bg-bg-floating' : 'rounded hover:bg-bg-hover')
-      }
-      aria-expanded={expanded}
-    >
-      <ChevronRight
-        className={
-          'mt-[3px] size-3 shrink-0 text-text-muted/60 transition-transform ' +
-          (expanded ? 'rotate-90' : '')
-        }
-      />
-      <div className={'min-w-0 flex-1 ' + (expanded ? '' : 'truncate')}>
-        {expanded ? (
-          <Markdown
-            content={message.content}
-            conversationRefsById={conversationRefsById}
-            onOpenConversationRef={onOpenConversationRef}
-            channelsByName={channelsByName}
-            onOpenChannelRef={onOpenChannelRef}
-            humansByName={humansByName}
-          />
-        ) : (
-          // Plain text — markdown leaks block elements that break a
-          // single-line clamp.
-          <span>{firstLine(message.content)}</span>
-        )}
-      </div>
-    </button>
-  );
-}
+// ─── Text helpers ──────────────────────────────────────────────────────
 
 export function firstLine(text: string): string {
   const newline = text.indexOf('\n');

@@ -166,15 +166,6 @@ export async function apiUpload<T = unknown>(
   return JSON.parse(textResponseBody(res)) as T;
 }
 
-/** Build an absolute URL to an attachment download. The renderer doesn't
- *  share an origin with the backend, so links must include the host.
- *  It is only useful for display/debug; authenticated fetches must go
- *  through `fetchAttachmentBlob()` so main can inject the user session. */
-export async function attachmentEndpoint(attachmentId: string): Promise<string> {
-  const info = await getInfo();
-  return `${info.url}/api/attachments/${encodeURIComponent(attachmentId)}`;
-}
-
 /** Fetch an attachment as a Blob through the main-process auth proxy, then return an
  *  object URL the renderer can drop into `<img src>` or `window.open`.
  *  Caller is responsible for `URL.revokeObjectURL` when the URL is no

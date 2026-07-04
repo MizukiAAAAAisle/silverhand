@@ -179,7 +179,3 @@ export function AppDropdownMenuItem({
     </DropdownMenu.Item>
   );
 }
-
-export function AppDropdownMenuSeparator(): JSX.Element {
-  return <DropdownMenu.Separator className="my-1 h-px bg-border-subtle/60" />;
-}
