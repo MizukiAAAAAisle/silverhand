@@ -15,10 +15,21 @@ export const SearchOptionalStringSchema = z.preprocess(
  *  daemon relay — no compose-time label) OR as `{id, label}` refs (the composer
  *  carries the label the user saw). Both branches normalize to a uniform ref
  *  list at the route boundary (`normalizeAttachmentRefs`); the union is confined
- *  to the wire edge. */
+ *  to the wire edge. Labels present in one payload must be unique — a message
+ *  never carries two `Image #1` — enforced here so the invariant lives at the
+ *  trust boundary, not on composer discipline. */
 export const MessageAttachmentIdsInputSchema = z
   .array(z.union([z.string().min(1), AttachmentRefInputSchema]))
   .max(20)
+  .refine(
+    entries => {
+      const labels = entries
+        .map(e => (typeof e === 'string' ? undefined : e.label))
+        .filter((l): l is string => l !== undefined);
+      return new Set(labels).size === labels.length;
+    },
+    { message: 'attachment labels must be unique within a message' },
+  )
   .optional();
 
 export function hasMessagePayload(value: {

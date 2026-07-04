@@ -31,20 +31,71 @@ export const AttachmentDtoSchema = z.object({
 });
 export type AttachmentDto = z.infer<typeof AttachmentDtoSchema>;
 
+// ── Attachment display label (`Image #N` / `File #N`) ──────────────────────
+//
+// The label is rendered VERBATIM into the agent-facing stdin suffix, so it is
+// untrusted-content territory: an unconstrained string would be a prompt-
+// injection / suffix-forgery surface (a `\n`-bearing label could forge a second
+// attachment line pointing at a fake id). It is therefore constrained to a
+// canonical closed form at every boundary — the wire (400 on violation), the
+// stored snapshot, and the read path (`extractAttachmentSnapshots` drops a
+// non-canonical legacy/tampered label rather than echoing it).
+
+export type AttachmentLabelKind = 'Image' | 'File';
+
+/** The one canonical label form. Digits capped at 4 (≤ `#9999`) to bound length
+ *  — a message carries at most 20 attachments, so this is slack, not a limit. */
+export const ATTACHMENT_LABEL_PATTERN = /^(Image|File) #([1-9]\d{0,3})$/;
+
+export const AttachmentLabelSchema = z
+  .string()
+  .trim()
+  .regex(ATTACHMENT_LABEL_PATTERN, 'label must be "Image #N" or "File #N"');
+
+/** The label kind for a content-type (`Image` for `image/*`, else `File`). */
+export function attachmentLabelKind(contentType: string): AttachmentLabelKind {
+  return contentType.startsWith('image/') ? 'Image' : 'File';
+}
+
+/** True when a content-type denotes an image. */
+export function isImageAttachment(contentType: string): boolean {
+  return attachmentLabelKind(contentType) === 'Image';
+}
+
+/** The single generator of the label form — composer, resolver fallback, and
+ *  tests build labels through this so they never drift from the pattern. */
+export function formatAttachmentLabel(
+  kind: AttachmentLabelKind,
+  ordinal: number,
+): string {
+  return `${kind} #${ordinal}`;
+}
+
+/** Parse a canonical label into kind + ordinal, or null if it is not the
+ *  canonical form. Defensive: callers treat a non-canonical label as absent
+ *  rather than trusting it. */
+export function parseAttachmentLabel(
+  label: string | null | undefined,
+): { kind: AttachmentLabelKind; ordinal: number } | null {
+  if (typeof label !== 'string') return null;
+  const m = ATTACHMENT_LABEL_PATTERN.exec(label.trim());
+  return m ? { kind: m[1] as AttachmentLabelKind, ordinal: Number(m[2]) } : null;
+}
+
 /** Minimal immutable subset embedded into a message's metadata. */
 export const AttachmentSnapshotSchema = z.object({
   id: z.string(),
   filename: z.string(),
   size: z.number(),
   content_type: z.string(),
-  /** Sender-assigned display identity captured at compose time (e.g.
-   *  `Image #1`). Stable per attachment instance from paste through send, so a
-   *  body reference the user typed never renumbers on the receiver. Carried
-   *  verbatim; the backend echoes it, never recomputes. Absent for bare-id
-   *  callers (agent CLI `--attachment <id>`, daemon relay) that have no
+  /** Sender-assigned display identity captured at compose time (canonical
+   *  `Image #N` / `File #N`). Stable per attachment instance from paste through
+   *  send, so a body reference the user typed never renumbers on the receiver.
+   *  Carried verbatim; the backend echoes it, never recomputes. Absent for
+   *  bare-id callers (agent CLI `--attachment <id>`, daemon relay) that have no
    *  compose-time labelling — those fall back to a positional label derived by
    *  `resolveAttachmentLabels`. */
-  label: z.string().optional(),
+  label: AttachmentLabelSchema.optional(),
 });
 export type AttachmentSnapshot = z.infer<typeof AttachmentSnapshotSchema>;
 
@@ -56,7 +107,7 @@ export type AttachmentSnapshot = z.infer<typeof AttachmentSnapshotSchema>;
  *  route boundary via `normalizeAttachmentRefs`. */
 export const AttachmentRefInputSchema = z.object({
   id: z.string().min(1),
-  label: z.string().min(1).optional(),
+  label: AttachmentLabelSchema.optional(),
 });
 export type AttachmentRefInput = z.infer<typeof AttachmentRefInputSchema>;
 
@@ -76,27 +127,39 @@ export function normalizeAttachmentRefs(
   );
 }
 
-/** True when a content-type denotes an image (drives the `Image #N` vs
- *  `File #N` label family). */
-export function isImageAttachment(contentType: string): boolean {
-  return contentType.startsWith('image/');
-}
-
 /** Effective display label for each attachment, aligned to the input order.
- *  Uses the sender's stored `label` when present; otherwise derives a
- *  positional fallback (`Image #N` / `File #N`, N = 1-based position within its
- *  kind). Single source of truth shared by the agent-facing stdin suffix and
- *  the renderer chip so the two never drift. Pure. */
+ *  A valid stored label is emitted verbatim (never renumbered); the rest get a
+ *  positional `Image #N` / `File #N` fallback that is guaranteed NOT to collide
+ *  with any stored ordinal in the same kind (a mixed labeled+unlabeled list —
+ *  a compatibility / read-path case — must never emit two identical labels).
+ *  A non-canonical stored label is treated as absent. Single source of truth
+ *  shared by the agent-facing stdin suffix and the renderer chip. Pure. */
 export function resolveAttachmentLabels(
   attachments: ReadonlyArray<Pick<AttachmentSnapshot, 'label' | 'content_type'>>,
 ): string[] {
-  let imageCount = 0;
-  let fileCount = 0;
-  return attachments.map(a => {
-    const image = isImageAttachment(a.content_type);
-    const ordinal = image ? (imageCount += 1) : (fileCount += 1);
-    if (a.label !== undefined && a.label.trim().length > 0) return a.label;
-    return image ? `Image #${ordinal}` : `File #${ordinal}`;
+  // Pass 1: reserve every ordinal a valid stored label already occupies, per
+  // kind, so positional fallbacks below never collide with a stored label.
+  const used: Record<AttachmentLabelKind, Set<number>> = {
+    Image: new Set(),
+    File: new Set(),
+  };
+  const stored = attachments.map(a => {
+    const parsed = parseAttachmentLabel(a.label);
+    if (parsed) used[parsed.kind].add(parsed.ordinal);
+    return parsed;
+  });
+  // Pass 2: emit a valid stored label verbatim; otherwise assign the next
+  // ordinal in the attachment's own kind that is not already taken.
+  const next: Record<AttachmentLabelKind, number> = { Image: 1, File: 1 };
+  return attachments.map((a, i) => {
+    const parsed = stored[i];
+    if (parsed) return formatAttachmentLabel(parsed.kind, parsed.ordinal);
+    const kind = attachmentLabelKind(a.content_type);
+    while (used[kind].has(next[kind])) next[kind] += 1;
+    const ordinal = next[kind];
+    used[kind].add(ordinal);
+    next[kind] += 1;
+    return formatAttachmentLabel(kind, ordinal);
   });
 }
 

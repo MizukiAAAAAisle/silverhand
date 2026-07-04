@@ -1,6 +1,10 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import { decodeMessageSeq } from '@silverhand/shared';
+import {
+  formatAttachmentLabel,
+  parseAttachmentLabel,
+} from '@silverhand/shared';
 import type {
   AttachmentSnapshot,
   FromKind,
@@ -263,16 +267,19 @@ export function extractAttachmentSnapshots(
       && typeof (item as { content_type?: unknown }).content_type === 'string'
     ) {
       const a = item as AttachmentSnapshot;
+      const parsedLabel = parseAttachmentLabel(
+        (item as { label?: unknown }).label as string | undefined,
+      );
       snapshots.push({
         id: a.id,
         filename: a.filename,
         size: a.size,
         content_type: a.content_type,
-        // Preserve the sender-assigned display label when present (absent for
-        // bare-id / pre-label rows). Dropping it here would silently strip the
-        // identity the user saw at compose time.
-        ...(typeof (item as { label?: unknown }).label === 'string'
-          ? { label: (item as { label: string }).label }
+        // Preserve only a canonical stored label; a legacy/tampered/non-canonical
+        // label is dropped (treated as absent → positional fallback, never
+        // echoed) so it can never reach the agent-facing suffix.
+        ...(parsedLabel
+          ? { label: formatAttachmentLabel(parsedLabel.kind, parsedLabel.ordinal) }
           : {}),
       });
     }
