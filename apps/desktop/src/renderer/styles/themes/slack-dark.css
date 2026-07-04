@@ -120,7 +120,7 @@
   /* ── Task status badge (5 × 3 = 15 tokens) ──
      dark 主题统一走 "soft fill + 同色描边 + chip 内字色 ≥ AA" 的公式，
      不像 forza6 用饱和实心填充。每个 status 保留语义 hue（design-new-theme
-     §3.2.2 / TaskStatusPill.tsx spec）：
+     §3.2.2）：
        todo = neutral gray, in_progress = warning amber/HUD-live, in_review =
        accent Slack blue ("loud beacon needing human attention"), done =
        success green ("passed"), closed = transparent + hairline. */

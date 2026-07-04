@@ -94,7 +94,7 @@
   --radius-inline-code: var(--radius-sm);
 
   /* Task status badge — 4 statuses × {bg, text, border} = 12 tokens.
-     Semantic intent (matches `TaskStatusPill.tsx` doc + forza6 v5
+     Semantic intent (matches forza6 v5
      framing + docs/tasks-design.md): todo = neutral; in_progress =
      warning/HUD-live ("actively in motion"); in_review = accent/loud
      beacon ("needs human attention"); done = success/passed.
