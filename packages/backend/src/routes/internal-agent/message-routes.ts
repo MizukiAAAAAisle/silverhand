@@ -25,6 +25,7 @@ import {
   AgentSearchMessagesInputSchema,
   AgentSendMessageInputSchema,
   internalPaths,
+  normalizeAttachmentRefs,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
 
@@ -72,7 +73,7 @@ export function registerMessageRoutes(
         conversationId: principal.conversationId,
         actor: principal,
         content: parsed.data.content,
-        attachmentIds: parsed.data.attachment_ids ?? [],
+        attachmentRefs: normalizeAttachmentRefs(parsed.data.attachment_ids),
         target: parsed.data.target,
         legacyReplyToMessageId: parsed.data.reply_to_message_id,
         assertedStreamKey: parsed.data.stream_key,

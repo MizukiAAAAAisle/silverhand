@@ -703,6 +703,25 @@ describe('formatAttachmentSuffix', () => {
     expect(out).toContain('content_type=image/png');
   });
 
+  it('leads each line with a positional label when none is stored', () => {
+    const out = formatAttachmentSuffix([
+      { id: 'att-1', filename: 'a.png', size: 12, content_type: 'image/png' },
+      { id: 'att-2', filename: 'b.pdf', size: 200, content_type: 'application/pdf' },
+    ]);
+    expect(out).toContain('- Image #1 — id=att-1');
+    expect(out).toContain('- File #1 — id=att-2');
+  });
+
+  it('echoes the sender-stored label instead of a positional fallback', () => {
+    const out = formatAttachmentSuffix([
+      { id: 'att-1', filename: 'a.png', size: 12, content_type: 'image/png', label: 'Image #3' },
+    ]);
+    expect(out).toContain('- Image #3 — id=att-1');
+    // Not the positional fallback line (the header may mention `Image #1` as an
+    // example, so assert on the attachment line, not the whole suffix).
+    expect(out).not.toContain('- Image #1 — id=att-1');
+  });
+
   it('lists every attachment and pluralises the header', () => {
     const out = formatAttachmentSuffix([
       { id: 'att-1', filename: 'a.png', size: 12, content_type: 'image/png' },

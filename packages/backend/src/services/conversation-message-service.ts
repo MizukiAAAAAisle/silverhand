@@ -1,6 +1,7 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type {
+  AttachmentRefInput,
   LegacySendMessageTarget,
   MessageDto,
   MessageEventPayload,
@@ -178,8 +179,8 @@ export class ConversationMessageService {
           target,
         );
         this.assertStreamKeyConsistent(input, threadRootId);
-        const attachmentIds = input.attachmentIds ?? [];
-        const snapshots = this.resolveAttachmentSnapshots(targetConversation, attachmentIds);
+        const attachmentRefs = input.attachmentRefs ?? [];
+        const snapshots = this.resolveAttachmentSnapshots(targetConversation, attachmentRefs);
         const { message, skippedFreshnessReason } =
           this.insertMessageWithFreshnessIfApplicable({
             input,
@@ -661,11 +662,11 @@ export class ConversationMessageService {
 
   private resolveAttachmentSnapshots(
     targetConversation: NonNullable<ReturnType<ConversationRepo['get']>>,
-    attachmentIds: string[],
+    attachmentRefs: AttachmentRefInput[],
   ): NonNullable<Parameters<MessageRepo['insertForConversation']>[0]['attachments']> {
-    if (attachmentIds.length === 0) return [];
+    if (attachmentRefs.length === 0) return [];
     const resolved = this.attachmentService.resolveSnapshotsForChannel(
-      attachmentIds,
+      attachmentRefs,
       targetConversation.id,
     );
     if (!resolved.ok) {

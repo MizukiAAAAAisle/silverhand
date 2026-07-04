@@ -9,6 +9,7 @@ import type { Database as Db } from 'better-sqlite3';
 import type {
   AgentRunTerminalReason,
   AgentSendStaleResolutionReason,
+  AttachmentRefInput,
   ConversationDto,
   LegacySendMessageTarget,
   MessageDto,
@@ -40,7 +41,9 @@ export interface SendMessageInput {
   conversationId: string;
   actor: SendMessageActor;
   content: string;
-  attachmentIds?: string[];
+  /** Attachment references (id + optional compose-time label), already
+   *  normalized from the wire union at the route boundary. */
+  attachmentRefs?: AttachmentRefInput[];
   /** Public send destination. Omitted means the current channel main line. */
   target?: SendMessageTarget;
   /** @deprecated Compatibility alias for old agent/runtime callers. New

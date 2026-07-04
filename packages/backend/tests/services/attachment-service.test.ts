@@ -261,7 +261,10 @@ describe('AttachmentService.resolveSnapshotsForChannel', () => {
         createdByKind: 'user',
         createdById: 'local',
       });
-      const result = service.resolveSnapshotsForChannel([a.id, b.id], channel.id);
+      const result = service.resolveSnapshotsForChannel(
+        [{ id: a.id }, { id: b.id }],
+        channel.id,
+      );
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.snapshots.map(s => s.filename).sort()).toEqual(['a.txt', 'b.txt']);
@@ -307,7 +310,7 @@ describe('AttachmentService.resolveSnapshotsForChannel', () => {
       });
 
       const result = service.resolveSnapshotsForChannel(
-        [owned.id, foreign.id],
+        [{ id: owned.id }, { id: foreign.id }],
         channel.id,
       );
       expect(result).toEqual({ ok: false, offendingId: foreign.id });

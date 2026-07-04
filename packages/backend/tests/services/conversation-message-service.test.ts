@@ -615,7 +615,7 @@ describe('ConversationMessageService.sendMessage', () => {
           conversationId: t.channel.id,
           actor: { kind: 'user', userId: 'local' },
           content: 'file',
-          attachmentIds: [foreign.id],
+          attachmentRefs: [{ id: foreign.id }],
         }),
       ).rejects.toMatchObject({
         code: 'attachment_outside_channel',
@@ -648,7 +648,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
         content: 'file',
-        attachmentIds: [attachment.id],
+        attachmentRefs: [{ id: attachment.id, label: 'Image #1' }],
       });
 
       expect(result.message.attachments).toEqual([
@@ -657,6 +657,7 @@ describe('ConversationMessageService.sendMessage', () => {
           filename: 'ok.png',
           size: 12,
           content_type: 'image/png',
+          label: 'Image #1',
         },
       ]);
       expect(t.fake.delivered.map(d => d.agentId).sort()).toEqual(

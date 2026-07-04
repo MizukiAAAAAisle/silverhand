@@ -1,6 +1,7 @@
 import type {
   AttachmentDto,
   AttachmentLocateDto,
+  AttachmentRefInput,
   AttachmentRow,
   AttachmentSnapshot,
   ConversationKind,
@@ -200,23 +201,28 @@ export class AttachmentService {
     );
   }
 
-  /** Resolve an array of attachment ids → snapshots, validating that all
-   *  belong to the destination channel. Returns either the snapshots or
-   *  the first id that violated channel membership. */
+  /** Resolve attachment refs (id + optional compose-time label) → snapshots,
+   *  validating that all belong to the destination channel. The sender's label
+   *  is stamped onto the snapshot (the label is a per-message-reference identity,
+   *  not a property of the stored row). Returns either the snapshots or the
+   *  first id that violated channel membership. */
   resolveSnapshotsForChannel(
-    ids: string[],
+    refs: AttachmentRefInput[],
     channelId: string,
   ): { ok: true; snapshots: AttachmentSnapshot[] } | { ok: false; offendingId: string } {
-    if (ids.length === 0) return { ok: true, snapshots: [] };
-    const rows = this.attachments.listByIds(ids);
+    if (refs.length === 0) return { ok: true, snapshots: [] };
+    const rows = this.attachments.listByIds(refs.map(r => r.id));
     const found = new Map(rows.map(r => [r.id, r] as const));
     const snapshots: AttachmentSnapshot[] = [];
-    for (const id of ids) {
-      const row = found.get(id);
+    for (const ref of refs) {
+      const row = found.get(ref.id);
       if (!row || row.channel_id !== channelId) {
-        return { ok: false, offendingId: id };
+        return { ok: false, offendingId: ref.id };
       }
-      snapshots.push(rowToSnapshot(row));
+      const snapshot = rowToSnapshot(row);
+      snapshots.push(
+        ref.label !== undefined ? { ...snapshot, label: ref.label } : snapshot,
+      );
     }
     return { ok: true, snapshots };
   }

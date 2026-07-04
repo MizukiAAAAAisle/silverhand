@@ -28,6 +28,26 @@ describe('message send input schemas', () => {
     ).toBe(true);
   });
 
+  it('accepts attachment refs carrying a compose-time label alongside bare ids', () => {
+    // Composer path: {id, label} objects; mixed with a bare id is still valid
+    // (the wire union normalizes both at the route boundary).
+    expect(
+      SendMessageInputSchema.safeParse({
+        content: '',
+        attachment_ids: [{ id: 'att-1', label: 'Image #1' }, 'att-2'],
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects attachment refs with an empty id', () => {
+    expect(
+      SendMessageInputSchema.safeParse({
+        content: 'x',
+        attachment_ids: [{ id: '' }],
+      }).success,
+    ).toBe(false);
+  });
+
   it('rejects empty messages without text or attachments', () => {
     const user = SendMessageInputSchema.safeParse({ content: '' });
     const agent = AgentSendMessageInputSchema.safeParse({ content: '   ' });

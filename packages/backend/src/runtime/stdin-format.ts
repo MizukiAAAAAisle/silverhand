@@ -22,6 +22,7 @@
  * agent/user ids into `@<handle>` text.
  */
 import { extractMentions } from '@silverhand/shared';
+import { resolveAttachmentLabels } from '@silverhand/shared';
 import type { AttachmentSnapshot, FromKind } from '@silverhand/shared';
 import type { PendingConversationInboxItem } from '../repos/conversation-inbox-repo.js';
 import {
@@ -216,15 +217,16 @@ export function formatAttachmentSuffix(
   attachments: AttachmentSnapshot[] | null | undefined,
 ): string {
   if (!attachments || attachments.length === 0) return '';
+  const labels = resolveAttachmentLabels(attachments);
   const lines = attachments.map(
-    a =>
-      `  - id=${a.id} filename=${JSON.stringify(a.filename)} ` +
-      `size=${a.size} content_type=${a.content_type}`,
+    (a, i) =>
+      `  - ${labels[i]} — id=${a.id} filename=${JSON.stringify(a.filename)} ` +
+      `content_type=${a.content_type} size=${a.size}`,
   );
   const header =
     attachments.length === 1
-      ? '[1 attachment — use `silverhand file view --attachment-id <id>` with the id below to read it]'
-      : `[${attachments.length} attachments — use \`silverhand file view --attachment-id <id>\` with each id below to read them]`;
+      ? '[1 attachment — the label (e.g. `Image #1`) is how the sender refers to it; use `silverhand file view --attachment-id <id>` with the id below to read it]'
+      : `[${attachments.length} attachments — the label (e.g. \`Image #1\`) is how the sender refers to each; use \`silverhand file view --attachment-id <id>\` with each id below to read them]`;
   return `\n\n${header}\n${lines.join('\n')}`;
 }
 

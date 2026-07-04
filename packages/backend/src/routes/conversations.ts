@@ -15,6 +15,7 @@ import {
   ArchiveChannelInputSchema,
   ConversationLogDebugInputSchema,
   decodeMessageSeq,
+  normalizeAttachmentRefs,
   ReactMessageInputSchema,
   SavedMessagesQueryInputSchema,
   SearchQueryInputSchema,
@@ -821,7 +822,7 @@ export function createConversationMessagingApp(
         conversationId: channel.id,
         actor: getUserPrincipal(c),
         content: parsed.data.content,
-        attachmentIds: parsed.data.attachment_ids ?? [],
+        attachmentRefs: normalizeAttachmentRefs(parsed.data.attachment_ids),
         target: parsed.data.reply_to_message_id
           ? { kind: 'thread', message_id: parsed.data.reply_to_message_id }
           : undefined,

@@ -268,6 +268,12 @@ export function extractAttachmentSnapshots(
         filename: a.filename,
         size: a.size,
         content_type: a.content_type,
+        // Preserve the sender-assigned display label when present (absent for
+        // bare-id / pre-label rows). Dropping it here would silently strip the
+        // identity the user saw at compose time.
+        ...(typeof (item as { label?: unknown }).label === 'string'
+          ? { label: (item as { label: string }).label }
+          : {}),
       });
     }
   }

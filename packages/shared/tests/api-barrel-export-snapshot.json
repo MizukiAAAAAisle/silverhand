@@ -58,6 +58,7 @@
   "ArchivedChannelsQueryInputSchema",
   "AttachmentDtoSchema",
   "AttachmentLocateDtoSchema",
+  "AttachmentRefInputSchema",
   "AttachmentSnapshotSchema",
   "AttachmentUploadResponseSchema",
   "AuthLoginInputSchema",
@@ -250,7 +251,10 @@
   "encodeUserPrincipalHeader",
   "extractMentions",
   "internalPaths",
+  "isImageAttachment",
+  "normalizeAttachmentRefs",
   "probePaths",
+  "resolveAttachmentLabels",
   "validateAvatarFile",
   "validateReactionEmoji"
 ]
