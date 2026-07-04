@@ -35,12 +35,11 @@ interface ScheduleRow {
   // Projected by every SELECT via LEFT JOIN; null when the target row
   // no longer exists (orphan) — formatted as 'Unavailable conversation'.
   target_title: string | null;
-  target_kind: 'channel' | 'dm_channel' | 'thread' | null;
-  target_parent_title: string | null;
+  target_kind: 'channel' | 'dm_channel' | null;
 }
 
 /**
- * Common SELECT fragment that joins conversations + their parents so
+ * Common SELECT fragment that joins the target conversation so
  * `rowToDto` can project `target_label`. Centralised so every read site
  * (agent list, scheduler tick, get-by-id) sees the same projection
  * shape and the label is computed once.
@@ -55,20 +54,14 @@ interface ScheduleRow {
 const SCHEDULE_SELECT_WITH_TARGET = `
   SELECT s.*,
          tc.title           AS target_title,
-         tc.kind            AS target_kind,
-         tp.title           AS target_parent_title
+         tc.kind            AS target_kind
     FROM schedules s
     LEFT JOIN conversations tc ON tc.id = s.target_conversation_id
-    LEFT JOIN conversations tp ON tp.id = tc.parent_conversation_id
 `;
 
 function buildTargetLabel(row: ScheduleRow): string {
   if (row.target_title === null || row.target_kind === null) {
     return 'Unavailable conversation';
-  }
-  if (row.target_kind === 'thread') {
-    const parent = row.target_parent_title?.trim();
-    return parent ? `#${parent}:${row.target_title}` : row.target_title;
   }
   if (row.target_kind === 'dm_channel') {
     return `@${row.target_title}`;
