@@ -30,7 +30,6 @@ import { createNotificationsApp } from './routes/notifications.js';
 import { createPresenceApp } from './routes/presence.js';
 import { createUsersApp } from './routes/users.js';
 import { createAuthApp } from './routes/auth.js';
-import { createSettingsApp } from './routes/settings.js';
 import { createAgentsApp } from './routes/agents.js';
 import { createAttachmentsApp } from './routes/attachments.js';
 import {
@@ -512,9 +511,6 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     '/',
     createAgentsApp({ ctx, agents, workspaces, conversations, messages, conversationInboxes }),
   );
-  // Legacy settings compatibility surface.
-  app.route('/', createSettingsApp());
-
   // Current viewer, user directory, and avatar routes.
   app.route('/', createUsersApp({ ctx }));
 

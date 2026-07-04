@@ -96,8 +96,6 @@
   "POST /api/agents/:id/stop",
   "GET /api/agents/:id/delete-impact",
   "DELETE /api/agents/:id",
-  "GET /api/settings",
-  "PUT /api/settings",
   "GET /api/users",
   "GET /api/me",
   "PATCH /api/me",

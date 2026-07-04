@@ -243,9 +243,6 @@ export const apiPaths = {
   // old rows whose metadata snapshot is missing (pre-PR4-fix data).
   message: (id: string) => `/api/messages/${id}`,
 
-  // legacy host-wide app settings. Runtime proxy is daemon-local now.
-  settings: '/api/settings',
-
   // current viewer (the local human user). Pre-authentication the
   // endpoint returns the discriminated `RegistrationRequired` shape so
   // the renderer can mount the auth gate.
