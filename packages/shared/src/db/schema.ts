@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const RuntimeKindSchema = z.enum(['claude', 'codex', 'cursor', 'gemini']);
+export const RuntimeKindSchema = z.enum(['claude', 'codex', 'cursor', 'gemini', 'qoder']);
 export type RuntimeKind = z.infer<typeof RuntimeKindSchema>;
 
 export const ReasoningEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh']);

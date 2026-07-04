@@ -567,5 +567,7 @@ function runtimeHint(runtime: RuntimeKind): string {
       return 'cursor uses its own selection';
     case 'gemini':
       return 'e.g. gemini-2.5-pro';
+    case 'qoder':
+      return 'e.g. claude-sonnet-4.5 · gpt-5 (or leave blank)';
   }
 }

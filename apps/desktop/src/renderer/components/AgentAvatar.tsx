@@ -1,5 +1,5 @@
 import type { RuntimeKind } from '@silverhand/shared';
-import { ClaudeIcon, CodexIcon, CursorIcon, GeminiIcon } from '@/icons/agents';
+import { ClaudeIcon, CodexIcon, CursorIcon, GeminiIcon, QoderIcon } from '@/icons/agents';
 import { cn } from '@/lib/cn';
 
 interface AgentAvatarProps {
@@ -36,6 +36,7 @@ const ICONS: Record<
   codex: CodexIcon,
   cursor: CursorIcon,
   gemini: GeminiIcon,
+  qoder: QoderIcon,
 };
 
 // Tints picked to match each brand's primary color when one exists.
@@ -46,6 +47,7 @@ const TINTS: Record<RuntimeKind, { bg: string; fg: string }> = {
   codex: { bg: 'bg-[#1f1f1f]', fg: 'text-white' },
   cursor: { bg: 'bg-[#0f0f0f]', fg: 'text-white' },
   gemini: { bg: 'bg-[#e8f0fe]', fg: 'text-[#1a73e8]' },
+  qoder: { bg: 'bg-[#eef1f6]', fg: 'text-[#4b5a6b]' },
 };
 
 export function AgentAvatar({

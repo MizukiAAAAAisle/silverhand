@@ -4,6 +4,11 @@ import {
   type DriverSpawnContext,
   type ParsedEvent,
 } from './index.js';
+import {
+  classifyStreamJsonInitProgress,
+  encodeStreamJsonUserMessage,
+  parseStreamJsonLine,
+} from './stream-json.js';
 
 const DISALLOWED_TOOLS = [
   'EnterPlanMode',
@@ -81,14 +86,7 @@ export class ClaudeDriver implements Driver {
   }
 
   encodeStdinMessage(content: string, cliSessionId: string | null): string {
-    return JSON.stringify({
-      type: 'user',
-      message: {
-        role: 'user',
-        content: [{ type: 'text', text: content }],
-      },
-      ...(cliSessionId ? { session_id: cliSessionId } : {}),
-    });
+    return encodeStreamJsonUserMessage(content, cliSessionId);
   }
 
   encodeInterruptControl(): string {
@@ -100,186 +98,15 @@ export class ClaudeDriver implements Driver {
   }
 
   parseLine(line: string): ParsedEvent[] {
-    const trimmed = line.trim();
-    if (!trimmed) return [];
-
-    let event: any;
-    try {
-      event = JSON.parse(trimmed);
-    } catch {
-      return [{ kind: 'unknown', raw: trimmed }];
-    }
-
-    const events: ParsedEvent[] = [];
-
-    switch (event.type) {
-      case 'system': {
-        if (event.subtype === 'init' && typeof event.session_id === 'string') {
-          events.push({ kind: 'session_init', sessionId: event.session_id });
-        }
-        if (event.subtype === 'api_error') {
-          events.push(parseClaudeApiError(event));
-        }
-        if (event.subtype === 'status' && event.status === 'compacting') {
-          events.push({ kind: 'compaction_started' });
-        }
-        if (event.subtype === 'compact_boundary') {
-          events.push({ kind: 'compaction_finished' });
-        }
-        break;
-      }
-
-      case 'assistant': {
-        const content = event.message?.content;
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            if (block?.type === 'thinking' && typeof block.thinking === 'string') {
-              events.push({ kind: 'thinking', text: block.thinking });
-            } else if (block?.type === 'text' && typeof block.text === 'string') {
-              events.push({ kind: 'text', text: block.text });
-            } else if (block?.type === 'tool_use') {
-              events.push({
-                kind: 'tool_call',
-                name: typeof block.name === 'string' ? block.name : 'unknown_tool',
-                input: block.input,
-                toolCallId: typeof block.id === 'string' ? block.id : undefined,
-              });
-            }
-          }
-        }
-        break;
-      }
-
-      case 'user': {
-        const content = event.message?.content;
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            if (block?.type === 'tool_result') {
-              events.push({
-                kind: 'tool_output',
-                name: typeof block.name === 'string' ? block.name : undefined,
-                toolCallId:
-                  typeof block.tool_use_id === 'string' ? block.tool_use_id : undefined,
-              });
-            }
-          }
-        }
-        break;
-      }
-
-      case 'result': {
-        const subtype = typeof event.subtype === 'string' ? event.subtype : 'success';
-        const stopReason =
-          typeof event.stop_reason === 'string' ? event.stop_reason : null;
-          const errorIfNotBudget = (fallback: string) => {
-            if (stopReason !== 'max_tokens') {
-              const detail = collectResultError(event) || fallback;
-              events.push({
-                kind: 'error',
-                message: detail,
-                ...classifyClaudeError(detail),
-              });
-            }
-          };
-        switch (subtype) {
-          case 'success':
-            if (event.is_error) errorIfNotBudget('Execution failed');
-            break;
-          case 'error_during_execution':
-            errorIfNotBudget('Execution failed');
-            break;
-          case 'error_max_budget_usd':
-            events.push({
-              kind: 'error',
-              message: collectResultError(event) || 'Budget limit exceeded',
-            });
-            break;
-          case 'error_max_turns':
-            events.push({
-              kind: 'error',
-              message: collectResultError(event) || 'Max turns exceeded',
-            });
-            break;
-          case 'error_max_structured_output_retries':
-            events.push({
-              kind: 'error',
-              message:
-                collectResultError(event) || 'Structured output retries exceeded',
-            });
-            break;
-        }
-        events.push({
-          kind: 'turn_end',
-          sessionId:
-            typeof event.session_id === 'string' ? event.session_id : undefined,
-        });
-        break;
-      }
-
-      default:
-        // unknown but well-formed JSON — discard silently
-        break;
-    }
-
-    return events;
+    return parseStreamJsonLine(line, {
+      runtimeLabel: 'Claude',
+      classifyError: classifyClaudeError,
+    });
   }
 
   classifyInitProgress(line: string): 'protocol_ready' | 'session_ready' | null {
-    const trimmed = line.trim();
-    if (!trimmed) return null;
-
-    let event: any;
-    try {
-      event = JSON.parse(trimmed);
-    } catch {
-      return null;
-    }
-
-    if (event?.type === 'system' && event.subtype === 'init' && typeof event.session_id === 'string') {
-      return 'session_ready';
-    }
-    return event && typeof event === 'object' ? 'protocol_ready' : null;
+    return classifyStreamJsonInitProgress(line);
   }
-}
-
-function parseClaudeApiError(event: any): ParsedEvent {
-  const causeCode =
-    typeof event.error?.cause?.code === 'string'
-      ? event.error.cause.code
-      : typeof event.cause?.code === 'string'
-        ? event.cause.code
-        : null;
-  const retryAttempt =
-    typeof event.retryAttempt === 'number' && Number.isFinite(event.retryAttempt)
-      ? event.retryAttempt
-      : null;
-  const code =
-    causeCode === 'ConnectionRefused'
-      ? 'api_connection_refused'
-      : 'api_error';
-  const base =
-    causeCode === 'ConnectionRefused'
-      ? 'Claude API gateway unreachable; retrying'
-      : 'Claude API request failed; retrying';
-  return {
-    kind: 'error',
-    code,
-    message:
-      retryAttempt !== null ? `${base} (attempt ${retryAttempt})` : base,
-  };
-}
-
-function collectResultError(event: any): string {
-  const parts: string[] = [];
-  if (Array.isArray(event.errors)) {
-    for (const e of event.errors) {
-      if (typeof e === 'string' && e.trim()) parts.push(e.trim());
-    }
-  }
-  if (typeof event.result === 'string' && event.result.trim()) {
-    parts.push(event.result.trim());
-  }
-  return parts.join(' | ');
 }
 
 function classifyClaudeError(message: string): { code?: string; fatal?: boolean } {

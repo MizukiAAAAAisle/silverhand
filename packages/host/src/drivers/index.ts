@@ -147,6 +147,7 @@ export interface Driver {
 import { ClaudeDriver } from './claude.js';
 import { CodexDriver } from './codex.js';
 import { CursorDriver } from './cursor.js';
+import { QoderDriver } from './qoder.js';
 
 /** Per-spawn factory: codex/cursor hold per-handle state (threadId,
  *  protocol counters, …) so we can't share a singleton across handles. */
@@ -154,6 +155,7 @@ const FACTORIES: Partial<Record<RuntimeKind, () => Driver>> = {
   claude: () => new ClaudeDriver(),
   codex: () => new CodexDriver(),
   cursor: () => new CursorDriver(),
+  qoder: () => new QoderDriver(),
 };
 
 /** Returns a fresh driver instance for `kind`, or throws. */

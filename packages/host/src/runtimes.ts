@@ -7,6 +7,7 @@ const DETECT_BINARIES: Record<RuntimeKind, string> = {
   codex: 'codex',
   cursor: 'cursor-agent',
   gemini: 'gemini',
+  qoder: 'qodercli',
 };
 
 /**
