@@ -337,15 +337,14 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
   // D4.c C3 round-1 P1 (Cindy `BWZz2ps68DuvMKsW`): the helper must
   // cover every conversation kind, not just `kind = 'channel'`.
   // `listAllChannelsForWorkspace` returns channels only — a
-  // cross-host agent attached to a thread or dm_channel would
+  // cross-host agent attached to a dm_channel would
   // bypass the preflight while DELETE's downstream loop
   // (`conversations.list().filter(workspace_id===id)`) would still
   // walk the runtime stop / delete path on it. This test seeds
-  // a thread (the dm_channel case is structurally identical at
-  // the conversation_agents layer; thread is sufficient to pin
-  // the helper's coverage contract) carrying a cross-host agent
+  // a dm_channel (a non-channel kind is sufficient to pin the
+  // helper's coverage contract) carrying a cross-host agent
   // and asserts BOTH PATCH and DELETE 409 + zero side effect.
-  it('PATCH/DELETE — cross-host agent attached to a THREAD (not channel) is also caught by the preflight (Cindy round-1 P1)', async () => {
+  it('PATCH/DELETE — cross-host agent attached to a DM_CHANNEL (not channel) is also caught by the preflight (Cindy round-1 P1)', async () => {
     t = buildTestApp({ deploymentMode: 'standalone' });
     const viewerHost = new HostRepo(t.ctx.db).getOwnedLocalForUser(
       t.viewerUserId,
@@ -362,11 +361,10 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
     const ws = (await wsRes.json()) as any;
     expect(ws.workspace.workspace_host_id).toBe(viewerHost.id);
 
-    // Direct-INSERT a thread row under the onboarding channel.
-    // (`ConversationRepo.insertThread` requires spawn-context
-    // setup; raw INSERT with the same column shape gives us the
-    // `kind = 'thread'` row the preflight must cover.)
-    const threadId = `cross-host-thread-${Date.now()}`;
+    // Direct-INSERT a dm_channel row (dm_channels have no parent
+    // conversation). A non-channel conversation kind is what the
+    // preflight must also cover; a raw INSERT gives us the row.
+    const dmId = `cross-host-dm-${Date.now()}`;
     const now = Date.now();
     t.ctx.db
       .prepare(
@@ -374,19 +372,18 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
           (id, workspace_id, workspace_path, kind, parent_conversation_id,
            title, status, spawned_by_agent_id, closed_at, close_summary,
            pinned_at, created_at, updated_at)
-         VALUES (?, ?, ?, 'thread', ?, ?, 'idle', NULL, NULL, NULL, NULL, ?, ?)`,
+         VALUES (?, ?, ?, 'dm_channel', NULL, ?, 'idle', NULL, NULL, NULL, NULL, ?, ?)`,
       )
       .run(
-        threadId,
+        dmId,
         ws.workspace.id,
         ws.workspace.workspace_path,
-        ws.onboarding_channel_id,
-        'thread under onboarding',
+        'dm under workspace',
         now,
         now,
       );
 
-    // Insert cross-host agent + attach to the thread (NOT the
+    // Insert cross-host agent + attach to the dm_channel (NOT the
     // onboarding channel). The pre-fix helper scanned channels
     // only and would miss this row.
     const agentId = `cross-host-thread-agent-${Date.now()}`;
@@ -401,7 +398,7 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
         `INSERT INTO conversation_agents (conversation_id, agent_id, status, joined_at)
          VALUES (?, ?, 'idle', ?)`,
       )
-      .run(threadId, agentId, now);
+      .run(dmId, agentId, now);
 
     // PATCH must 409 + leave metadata / system message / runtime
     // delivery untouched.
@@ -454,7 +451,7 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
         .prepare<[string], { id: string }>(
           'SELECT id FROM conversations WHERE id = ?',
         )
-        .get(threadId),
+        .get(dmId),
     ).toBeDefined();
     expect(
       t.ctx.db

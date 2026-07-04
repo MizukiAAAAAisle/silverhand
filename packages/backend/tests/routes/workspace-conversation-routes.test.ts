@@ -4,23 +4,8 @@ import {
   encodeUserPrincipalHeader,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
-import type { Database as Db } from 'better-sqlite3';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
-
-function insertFossilThread(
-  db: Db,
-  channel: { id: string; workspace_id: string; workspace_path: string },
-): { id: string } {
-  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
-  db.prepare(
-    `INSERT INTO conversations
-       (id, workspace_id, workspace_path, kind, parent_conversation_id,
-        title, status, created_at, updated_at, latest_message_seq)
-     VALUES (?, ?, ?, 'thread', ?, 'Fossil', 'idle', ?, ?, 0)`,
-  ).run(id, channel.workspace_id, channel.workspace_path, channel.id, Date.now(), Date.now());
-  return { id };
-}
 
 describe('workspace/conversation routes', () => {
   let t: TestApp | null = null;
@@ -298,23 +283,6 @@ describe('workspace/conversation routes', () => {
     expect((await http(t).get(`/api/channels/${channelId}/messages`)).status)
       .toBe(200);
     expect((await http(t).get(`/api/threads/${channelId}/messages`)).status)
-      .toBe(404);
-
-    const parent = t.ctx.db
-      .prepare(
-        `SELECT workspace_id, workspace_path FROM conversations WHERE id = ?`,
-      )
-      .get(channelId) as { workspace_id: string; workspace_path: string };
-    const thread = insertFossilThread(t.ctx.db, {
-      id: channelId,
-      workspace_id: parent.workspace_id,
-      workspace_path: parent.workspace_path,
-    });
-    const threadId = thread.id;
-
-    expect((await http(t).get(`/api/channels/${threadId}/messages`)).status)
-      .toBe(404);
-    expect((await http(t).get(`/api/threads/${threadId}/messages`)).status)
       .toBe(404);
   });
 

@@ -1396,4 +1396,169 @@ describe('database migrations', () => {
       }
     });
   });
+
+  // v53 retires the legacy `conversations.kind='thread'` fossil (#task:1303,
+  // 2c): a table rebuild that narrows the kind CHECK to ('channel','dm_channel')
+  // and drops the thread branch of the parent CHECK, dropping the old
+  // conversations_thread_parent_{insert,update} triggers with it. It is
+  // destructive DDL guarded by a fail-loud precondition (fossil rows must have
+  // been purged in Phase-1 first), so pin both the success shape and the guard.
+  describe('v53 retire_thread_conversation_kind', () => {
+    const now = 1_700_000_000_000;
+
+    /** Seed a host + regular workspace + one channel at v52, so we can insert
+     *  conversations (workspace/host FKs satisfied) before applying v53. */
+    function seedBase(db: Database.Database): void {
+      db.exec(`
+        INSERT INTO hosts (id, name, kind, created_at)
+        VALUES ('host_local', 'local', 'local', ${now});
+        INSERT INTO workspaces
+          (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+           owner_agent_id, archived_at, pinned_at, created_at, updated_at)
+        VALUES
+          ('ws_main', 'Main', NULL, 'regular', '/tmp/ws_main', 'host_local',
+           NULL, NULL, NULL, ${now}, ${now});
+        INSERT INTO conversations
+          (id, workspace_id, workspace_path, kind, parent_conversation_id, title,
+           status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+           archived_at, created_at, updated_at)
+        VALUES
+          ('c_parent', 'ws_main', '/tmp/ws_main', 'channel', NULL, 'general',
+           'idle', NULL, NULL, NULL, NULL, NULL, ${now}, ${now});
+      `);
+    }
+
+    it('tightens the CHECK, drops the thread triggers, and preserves channel-like rows', () => {
+      const db = openDbAt(52);
+      try {
+        seedBase(db);
+        // A dm_channel row too, to prove both surviving kinds round-trip the rebuild.
+        db.exec(`
+          INSERT INTO conversations
+            (id, workspace_id, workspace_path, kind, parent_conversation_id, title,
+             status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+             archived_at, created_at, updated_at)
+          VALUES
+            ('c_dm', 'ws_main', '/tmp/ws_main', 'dm_channel', NULL, 'dm',
+             'idle', NULL, NULL, NULL, NULL, NULL, ${now}, ${now});
+        `);
+
+        applyMigrationsThrough(db, 53);
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 53`).get(),
+        ).toBeDefined();
+
+        // Both channel-like rows survived the rebuild verbatim.
+        const rows = db
+          .prepare(`SELECT id, kind FROM conversations ORDER BY id`)
+          .all();
+        expect(rows).toEqual([
+          { id: 'c_dm', kind: 'dm_channel' },
+          { id: 'c_parent', kind: 'channel' },
+        ]);
+
+        // The thread-parent triggers are gone (auto-dropped with the old table,
+        // not recreated).
+        const triggers = db
+          .prepare<[], { name: string }>(
+            `SELECT name FROM sqlite_schema WHERE type = 'trigger'`,
+          )
+          .all()
+          .map(r => r.name);
+        expect(triggers).not.toContain('conversations_thread_parent_insert');
+        expect(triggers).not.toContain('conversations_thread_parent_update');
+
+        // All four conversations indexes were rebuilt.
+        const indexes = db
+          .prepare<[], { name: string }>(
+            `SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'conversations'`,
+          )
+          .all()
+          .map(r => r.name);
+        expect(indexes).toEqual(
+          expect.arrayContaining([
+            'idx_conversations_workspace',
+            'idx_conversations_parent',
+            'idx_conversations_status',
+            'idx_conversations_archived_at',
+          ]),
+        );
+
+        // The narrowed column CHECK now rejects kind='thread' outright.
+        expect(() =>
+          db
+            .prepare(
+              `INSERT INTO conversations
+                 (id, workspace_id, workspace_path, kind, parent_conversation_id, title,
+                  status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+                  archived_at, created_at, updated_at)
+               VALUES ('t_new', 'ws_main', '/tmp/ws_main', 'thread', 'c_parent', 't',
+                       'idle', NULL, NULL, NULL, NULL, NULL, ${now}, ${now})`,
+            )
+            .run(),
+        ).toThrow(/CHECK/);
+
+        // The tightened table CHECK now rejects a non-NULL parent on a channel.
+        expect(() =>
+          db
+            .prepare(
+              `INSERT INTO conversations
+                 (id, workspace_id, workspace_path, kind, parent_conversation_id, title,
+                  status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+                  archived_at, created_at, updated_at)
+               VALUES ('c_bad', 'ws_main', '/tmp/ws_main', 'channel', 'c_parent', 't',
+                       'idle', NULL, NULL, NULL, NULL, NULL, ${now}, ${now})`,
+            )
+            .run(),
+        ).toThrow(/CHECK/);
+
+        // FK integrity holds across the rebuild.
+        expect(db.pragma('foreign_key_check')).toEqual([]);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('fails loud and writes no _migrations row when a thread fossil still exists', () => {
+      const db = openDbAt(52);
+      try {
+        seedBase(db);
+        // A surviving Sense1 fossil: kind='thread' child of the channel (the v52
+        // triggers require a channel-like parent in the same workspace).
+        db.exec(`
+          INSERT INTO conversations
+            (id, workspace_id, workspace_path, kind, parent_conversation_id, title,
+             status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+             archived_at, created_at, updated_at)
+          VALUES
+            ('t_fossil', 'ws_main', '/tmp/ws_main', 'thread', 'c_parent', 'old thread',
+             'idle', NULL, NULL, NULL, NULL, NULL, ${now}, ${now});
+        `);
+
+        expect(() => applyMigrationsThrough(db, 53)).toThrow(
+          /legacy thread fossil/,
+        );
+
+        // Precondition threw inside the tx → rolled back → no v53 ledger row.
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 53`).get(),
+        ).toBeUndefined();
+        // …and the table was NOT rebuilt: the old thread triggers still stand.
+        const triggers = db
+          .prepare<[], { name: string }>(
+            `SELECT name FROM sqlite_schema WHERE type = 'trigger'`,
+          )
+          .all()
+          .map(r => r.name);
+        expect(triggers).toContain('conversations_thread_parent_insert');
+        expect(triggers).toContain('conversations_thread_parent_update');
+        // The fossil is still readable (nothing was destroyed).
+        expect(
+          db.prepare(`SELECT kind FROM conversations WHERE id = 't_fossil'`).get(),
+        ).toEqual({ kind: 'thread' });
+      } finally {
+        db.close();
+      }
+    });
+  });
 });

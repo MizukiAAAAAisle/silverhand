@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Database as Db } from 'better-sqlite3';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
@@ -32,46 +31,6 @@ async function createWorkspaceChannel(
   };
 }
 
-function createLegacyThread(
-  t: TestApp,
-  channelId: string,
-  opts: { anchorMessageId?: string; title?: string } = {},
-) {
-  const db: Db = t.ctx.db;
-  const parent = db
-    .prepare(
-      `SELECT workspace_id, workspace_path FROM conversations WHERE id = ?`,
-    )
-    .get(channelId) as { workspace_id: string; workspace_path: string };
-  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
-  db.prepare(
-    `INSERT INTO conversations
-       (id, workspace_id, workspace_path, kind, parent_conversation_id,
-        title, status, created_at, updated_at, latest_message_seq)
-     VALUES (?, ?, ?, 'thread', ?, ?, 'idle', ?, ?, 0)`,
-  ).run(
-    id,
-    parent.workspace_id,
-    parent.workspace_path,
-    channelId,
-    opts.title ?? 'Legacy thread',
-    Date.now(),
-    Date.now(),
-  );
-  if (opts.anchorMessageId) {
-    new MessageRepo(db).insertForConversation({
-      conversationId: id,
-      fromKind: 'system',
-      content: 'Legacy thread anchor',
-      metadata: {
-        subtype: 'thread_anchor',
-        quoted_message_id: opts.anchorMessageId,
-      },
-    });
-  }
-  return { id };
-}
-
 describe('canonical channel/thread routes', () => {
   let t: TestApp | null = null;
   afterEach(() => {
@@ -88,20 +47,9 @@ describe('canonical channel/thread routes', () => {
       content: 'legacy',
     })).ok).toBe(false);
 
-    const msg = await (
-      await http(t).post(`/api/channels/${channelId}/messages`, {
-        content: 'thread anchor',
-      })
-    ).json() as any;
-    const thread = createLegacyThread(t, channelId, {
-      anchorMessageId: msg.message.id,
-    });
-
     for (const path of [
       `/api/channels/${channelId}/stream`,
       `/api/channels/${channelId}/events`,
-      `/api/threads/${thread.id}/stream`,
-      `/api/threads/${thread.id}/events`,
     ]) {
       expect((await http(t).get(path)).ok).toBe(false);
     }
@@ -455,19 +403,12 @@ describe('canonical channel/thread routes', () => {
     expect(cross.status).toBe(404);
     expect(((await cross.json()) as any).code).toBe('reply_target_not_found');
 
-    const root = await (
-      await http(t).post(`/api/channels/${channelId}/messages`, {
-        content: 'legacy root',
-      })
-    ).json() as any;
-    const legacy = createLegacyThread(t, channelId, {
-      anchorMessageId: root.message.id,
-    });
+    // The public legacy thread write route stays retired: posting to a
+    // `/api/threads/:id/messages` path (using a real channel id) 404s.
     const legacyWrite = await http(t).post(
-      `/api/threads/${legacy.id}/messages`,
+      `/api/threads/${channelId}/messages`,
       {
         content: 'public legacy route is gone',
-        reply_to_message_id: root.message.id,
       },
     );
     expect(legacyWrite.status).toBe(404);
@@ -536,49 +477,19 @@ describe('canonical channel/thread routes', () => {
     expect(okBody.has_more_after).toBe(false);
   });
 
-  it('retires public legacy thread reads and enforces channel guards', async () => {
+  it('enforces channel guards on the retired public thread read route', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
-    const msg = await (
-      await http(t).post(`/api/channels/${channelId}/messages`, {
-        content: 'start a thread here',
-      })
-    ).json() as any;
-    const thread = createLegacyThread(t, channelId, {
-      anchorMessageId: msg.message.id,
-    });
-
-    expect((await http(t).get(`/api/channels/${thread.id}/messages`)).status)
-      .toBe(404);
+    // The public `/api/threads/:id` read route is retired: a real channel id
+    // routed through it must 404 (a channel is not addressable as a thread).
     expect((await http(t).get(`/api/threads/${channelId}/messages`)).status)
-      .toBe(404);
-    expect((await http(t).get(`/api/threads/${thread.id}/messages`)).status)
       .toBe(404);
   });
 
-  it('retires public legacy thread writes, reads, and old summary route', async () => {
+  it('retires the old channel threads summary route', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice']);
-    const msg = await (
-      await http(t).post(`/api/channels/${channelId}/messages`, {
-        content: 'topic',
-      })
-    ).json() as any;
-    const thread = createLegacyThread(t, channelId, {
-      anchorMessageId: msg.message.id,
-    });
-
-    const post = await http(t).post(`/api/threads/${thread.id}/messages`, {
-      content: 'thread reply',
-    });
-    expect(post.status).toBe(404);
     expect((await http(t).get(`/api/channels/${channelId}/threads`)).status)
-      .toBe(404);
-
-    t.ctx.db
-      .prepare(`UPDATE conversations SET closed_at = ?, status = 'archived' WHERE id = ?`)
-      .run(Date.now(), thread.id);
-    expect((await http(t).get(`/api/threads/${thread.id}/messages`)).status)
       .toBe(404);
   });
 
@@ -838,37 +749,6 @@ describe('canonical channel/thread routes', () => {
       agentId: agentIds.alice,
       actorUserId: 'local',
     });
-  });
-
-  it('retires the public legacy thread mark-read route (thread-fossil compat lock)', async () => {
-    t = buildTestApp();
-    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
-    const { channelId } = await createWorkspaceChannel(t, ['alice']);
-    const msg = await (
-      await viewer.post(`/api/channels/${channelId}/messages`, {
-        content: 'topic',
-      })
-    ).json() as any;
-    const thread = createLegacyThread(t, channelId, {
-      anchorMessageId: msg.message.id,
-    });
-    new MessageRepo(t.ctx.db).insertForConversation({
-      conversationId: thread.id,
-      fromKind: 'user',
-      fromUserId: 'local',
-      content: 'existing fossil reply',
-    });
-    // A thread is a reply-cluster, never its own conversation: the legacy
-    // thread-as-conversation write/read routes stay retired (404). Reads advance
-    // the parent channel's per-stream cursor via observe(), not a thread route.
-    // (The channel mark-read route was itself retired in #task:1232 — all cursor
-    // writes now go through POST /api/attention/observe.)
-    const writeThread = await viewer.post(`/api/threads/${thread.id}/messages`, {
-      content: 'thread msg',
-    });
-    expect(writeThread.status).toBe(404);
-    const markThread = await viewer.post(`/api/threads/${thread.id}/mark-read`);
-    expect(markThread.status).toBe(404);
   });
 
   it('publishes notification unread updates only when rows are marked', async () => {

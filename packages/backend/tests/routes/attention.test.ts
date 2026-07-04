@@ -1,21 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Database as Db } from 'better-sqlite3';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
-
-function insertFossilThread(
-  db: Db,
-  channel: { id: string; workspace_id: string; workspace_path: string },
-): { id: string } {
-  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
-  db.prepare(
-    `INSERT INTO conversations
-       (id, workspace_id, workspace_path, kind, parent_conversation_id,
-        title, status, created_at, updated_at, latest_message_seq)
-     VALUES (?, ?, ?, 'thread', ?, 'Fossil', 'idle', ?, ?, 0)`,
-  ).run(id, channel.workspace_id, channel.workspace_path, channel.id, Date.now(), Date.now());
-  return { id };
-}
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const created = (await (
@@ -111,7 +96,7 @@ describe('channel attention preference routes (#task:1227 ②a)', () => {
     expect(res.status).toBe(400);
   });
 
-  it('404s for non-regular-channel conversations (dm_channel + thread)', async () => {
+  it('404s for non-regular-channel conversations (dm_channel)', async () => {
     t = buildTestApp();
     const { workspaceId, channelId } = await createWorkspaceChannel(t);
     const conversations = new ConversationRepo(t.ctx.db);
@@ -120,20 +105,15 @@ describe('channel attention preference routes (#task:1227 ②a)', () => {
         .prepare(`SELECT workspace_path FROM conversations WHERE id = ?`)
         .get(channelId) as any
     ).workspace_path as string;
-    const thread = insertFossilThread(t.ctx.db, {
-      id: channelId,
-      workspace_id: workspaceId,
-      workspace_path: workspacePath,
-    });
     const dm = conversations.insertDmChannel({
       workspaceId,
       workspacePath,
       title: 'dm',
     });
 
-    // A DM's unread is directed-grade (always enters, §5.1) and a thread's
-    // ambient is follow-driven — neither has a channel ambient preference.
-    for (const id of [thread.id, dm.id]) {
+    // A DM's unread is directed-grade (always enters, §5.1) — it has no
+    // channel ambient preference.
+    for (const id of [dm.id]) {
       const get = await http(t).get(
         `/api/conversations/${id}/attention-preference`,
       );
@@ -146,7 +126,7 @@ describe('channel attention preference routes (#task:1227 ②a)', () => {
     }
   });
 
-  it('DB trigger rejects a pref on a dm_channel / thread (fail-loud backstop)', async () => {
+  it('DB trigger rejects a pref on a dm_channel (fail-loud backstop)', async () => {
     t = buildTestApp();
     const { workspaceId, channelId } = await createWorkspaceChannel(t);
     const conversations = new ConversationRepo(t.ctx.db);
@@ -155,11 +135,6 @@ describe('channel attention preference routes (#task:1227 ②a)', () => {
         .prepare(`SELECT workspace_path FROM conversations WHERE id = ?`)
         .get(channelId) as any
     ).workspace_path as string;
-    const thread = insertFossilThread(t.ctx.db, {
-      id: channelId,
-      workspace_id: workspaceId,
-      workspace_path: workspacePath,
-    });
     const dm = conversations.insertDmChannel({
       workspaceId,
       workspacePath,
@@ -173,7 +148,6 @@ describe('channel attention preference routes (#task:1227 ②a)', () => {
     );
     // A regular channel is accepted; the non-channel kinds abort.
     expect(() => insert.run('local', channelId)).not.toThrow();
-    expect(() => insert.run('local', thread.id)).toThrow(/regular channel/);
     expect(() => insert.run('local', dm.id)).toThrow(/regular channel/);
   });
 

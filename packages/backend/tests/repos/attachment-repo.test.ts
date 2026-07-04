@@ -96,25 +96,16 @@ describe('AttachmentRepo', () => {
   });
 
   it('cascades on channel delete and SET NULL on source conversation delete', () => {
-    const { db, channel, workspace } = bootstrap();
-    const threadId = `fossil_thread_${Math.random().toString(36).slice(2)}`;
-    db.prepare(
-      `INSERT INTO conversations
-         (id, workspace_id, workspace_path, kind, parent_conversation_id,
-          title, status, created_at, updated_at, latest_message_seq)
-       VALUES (?, ?, ?, 'thread', ?, 'Fossil', 'idle', ?, ?, 0)`,
-    ).run(
-      threadId,
-      channel.workspace_id,
-      channel.workspace_path,
-      channel.id,
-      Date.now(),
-      Date.now(),
-    );
+    const { db, channel, conversations, workspace } = bootstrap();
+    const sourceConv = conversations.insertChannel({
+      workspaceId: workspace.id,
+      workspacePath: workspace.workspace_path,
+      title: 'source',
+    });
     const repo = new AttachmentRepo(db);
     const dto = repo.insert({
       channelId: channel.id,
-      sourceConversationId: threadId,
+      sourceConversationId: sourceConv.id,
       filename: 'x.png',
       size: 1,
       contentType: 'image/png',
@@ -125,13 +116,12 @@ describe('AttachmentRepo', () => {
     });
 
     // Source conversation delete → SET NULL on attachments.source_conversation_id.
-    db.prepare('DELETE FROM conversations WHERE id = ?').run(threadId);
-    const afterThreadDelete = repo.getById(dto.id);
-    expect(afterThreadDelete?.source_conversation_id).toBeNull();
+    db.prepare('DELETE FROM conversations WHERE id = ?').run(sourceConv.id);
+    const afterSourceDelete = repo.getById(dto.id);
+    expect(afterSourceDelete?.source_conversation_id).toBeNull();
 
     // Channel delete → CASCADE removes the row.
     db.prepare('DELETE FROM conversations WHERE id = ?').run(channel.id);
     expect(repo.getById(dto.id)).toBeNull();
-    void workspace;
   });
 });

@@ -1,31 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Database as Db } from 'better-sqlite3';
-import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { MessageReactionRepo } from '../../src/repos/message-reaction-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
-
-/**
- * Seed a fossil `kind='thread'` conversation via raw SQL. The producer
- * (`ConversationRepo.insertThread`) and the `thread` kind were retired in
- * #task:1303 phase 2; tests that still need a physical fossil row (as
- * incidental setup for still-valid behavior) reproduce it here WITHOUT
- * touching the narrowed domain model. The `conversations_thread_parent_*`
- * triggers only require a channel-like parent, so passing a real channel works.
- */
-function insertFossilThread(
-  db: Db,
-  channel: { id: string; workspace_id: string; workspace_path: string },
-): { id: string } {
-  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
-  db.prepare(
-    `INSERT INTO conversations
-       (id, workspace_id, workspace_path, kind, parent_conversation_id,
-        title, status, created_at, updated_at, latest_message_seq)
-     VALUES (?, ?, ?, 'thread', ?, 'Fossil', 'idle', ?, ?, 0)`,
-  ).run(id, channel.workspace_id, channel.workspace_path, channel.id, Date.now(), Date.now());
-  return { id };
-}
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const created = await (
@@ -176,38 +152,6 @@ describe('POST /internal/.../read-history', () => {
     ]);
     expect(body.messages[0].content).toBe('anchor body');
     expect(body.messages.every((m: any) => m.sender.kind !== 'system')).toBe(true);
-  });
-
-  it('allows a thread member to read parent history via target=parent', async () => {
-    t = buildTestApp();
-    const { workspaceId, channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
-    const aliceId = agentIds.alice!;
-    const conversations = new ConversationRepo(t.ctx.db);
-    const channel = conversations.getChannel(channelId)!;
-    const thread = insertFossilThread(t.ctx.db, {
-      id: channelId,
-      workspace_id: workspaceId,
-      workspace_path: channel.workspace_path,
-    });
-    conversations.addAgent(thread.id, aliceId);
-    const parentMessage = new MessageRepo(t.ctx.db).insertForConversation({
-      conversationId: channelId,
-      fromKind: 'user',
-      content: 'parent context',
-    });
-
-    const res = await http(t).post(
-      readHistoryPath(thread.id, aliceId),
-      {
-        target: 'parent',
-        around_message_id: parentMessage.id,
-        include_content: true,
-      },
-    );
-    expect(res.status).toBe(200);
-    const body = await res.json() as any;
-    expect(body.target.conversation_id).toBe(channelId);
-    expect(body.messages.map((m: any) => m.content)).toContain('parent context');
   });
 
   // Characterization for the read-model SQL extraction (#task:980, Slice B):

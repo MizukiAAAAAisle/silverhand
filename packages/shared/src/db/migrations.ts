@@ -355,6 +355,104 @@ export const migrations: Migration[] = [
         END;
     `,
   },
+  {
+    version: 53,
+    name: 'retire_thread_conversation_kind',
+    // #task:1303 (2c) — retire the legacy `conversations.kind='thread'` fossil
+    // (isolated thread conversations, "Sense1"). Its producer was removed
+    // 2026-06-11; the reply-cluster model (messages.thread_root_id, "Sense2")
+    // is now the sole meaning of "thread" in the domain. Phase-1 of #task:1303
+    // hard-deleted every fossil row from the live DBs (the legacy-thread purge
+    // device); this migration tightens the schema so no new fossil row can ever
+    // be written, closing the fossil out of the ubiquitous language for good.
+    //
+    // SQLite cannot ALTER a CHECK constraint, so narrowing the column CHECK
+    // `kind IN ('channel','dm_channel','thread')` → `('channel','dm_channel')`
+    // and dropping the `thread` branch of the table-level parent CHECK requires
+    // a full table rebuild. foreignKeyEscape: the runner toggles foreign_keys
+    // OFF + legacy_alter_table ON around it (conversations has a self-FK via
+    // parent_conversation_id and is referenced by nearly every table) and runs
+    // foreign_key_check afterward.
+    //
+    // parent_conversation_id is KEPT (now provably always NULL under the tight
+    // CHECK) along with idx_conversations_parent — dropping the column is out of
+    // scope for this cut. DROP TABLE auto-drops the old
+    // conversations_thread_parent_{insert,update} triggers; they are NOT
+    // recreated (nothing left to guard once 'thread' cannot exist).
+    foreignKeyEscape: true,
+    // Fail-loud backstop: safe only on a DB whose fossil rows were already
+    // purged (Phase-1). If any kind='thread' row — or any non-NULL
+    // parent_conversation_id — survives, the INSERT...SELECT below would trip
+    // the new CHECK with an opaque SQLite error. Abort first with a
+    // developer-readable message; the throw rolls back the transaction so no
+    // _migrations row is written and the upgrade is retried next boot (after
+    // the operator runs the purge device).
+    precondition: (db) => {
+      const handle = db as {
+        prepare: (sql: string) => { get: () => { n: number } };
+      };
+      const { n } = handle
+        .prepare(
+          `SELECT COUNT(*) AS n FROM conversations
+             WHERE kind = 'thread' OR parent_conversation_id IS NOT NULL`,
+        )
+        .get();
+      if (n > 0) {
+        throw new Error(
+          `migration v53: refusing to tighten the conversations CHECK — ${n} legacy thread fossil row(s) remain ` +
+            `(kind='thread' or parent_conversation_id NOT NULL). Run the legacy-thread purge before upgrading.`,
+        );
+      }
+    },
+    up: `
+      CREATE TABLE conversations_new (
+        id                      TEXT PRIMARY KEY,
+        workspace_id            TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        workspace_path          TEXT NOT NULL,
+        kind                    TEXT NOT NULL CHECK (kind IN ('channel', 'dm_channel')),
+        parent_conversation_id  TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+        title                   TEXT NOT NULL,
+        status                  TEXT NOT NULL,
+        spawned_by_agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        closed_at               INTEGER,
+        close_summary           TEXT,
+        pinned_at               INTEGER,
+        created_at              INTEGER NOT NULL,
+        updated_at              INTEGER NOT NULL,
+        archived_at             INTEGER,
+        latest_message_seq      INTEGER NOT NULL DEFAULT 0,
+        CHECK (
+          (kind = 'channel' AND parent_conversation_id IS NULL)
+          OR
+          (kind = 'dm_channel' AND parent_conversation_id IS NULL)
+        )
+      );
+
+      INSERT INTO conversations_new (
+        id, workspace_id, workspace_path, kind, parent_conversation_id, title,
+        status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+        created_at, updated_at, archived_at, latest_message_seq
+      )
+        SELECT
+          id, workspace_id, workspace_path, kind, parent_conversation_id, title,
+          status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+          created_at, updated_at, archived_at, latest_message_seq
+        FROM conversations;
+
+      DROP TABLE conversations;
+      ALTER TABLE conversations_new RENAME TO conversations;
+
+      -- Rebuild every conversations index verbatim (DROP TABLE took them out).
+      CREATE INDEX idx_conversations_workspace
+        ON conversations(workspace_id, kind, updated_at DESC);
+      CREATE INDEX idx_conversations_parent
+        ON conversations(parent_conversation_id, created_at ASC);
+      CREATE INDEX idx_conversations_status
+        ON conversations(status);
+      CREATE INDEX idx_conversations_archived_at
+        ON conversations(workspace_id) WHERE archived_at IS NOT NULL;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

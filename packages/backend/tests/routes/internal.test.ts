@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { X_SILVERHAND_PRINCIPAL_HEADER } from '@silverhand/shared';
-import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 async function setupSession(
@@ -37,41 +36,6 @@ async function setupSession(
 
 function authHeaders(token: string): Record<string, string> {
   return { authorization: `Bearer ${token}` };
-}
-
-function seedLegacyThread(
-  t: TestApp,
-  channelId: string,
-  title: string,
-  memberAgentIds: string[],
-): { thread_id: string } {
-  const conversations = new ConversationRepo(t.ctx.db);
-  const parent = t.ctx.db
-    .prepare(
-      `SELECT workspace_id, workspace_path FROM conversations WHERE id = ?`,
-    )
-    .get(channelId) as { workspace_id: string; workspace_path: string };
-  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
-  t.ctx.db
-    .prepare(
-      `INSERT INTO conversations
-         (id, workspace_id, workspace_path, kind, parent_conversation_id,
-          title, status, created_at, updated_at, latest_message_seq)
-       VALUES (?, ?, ?, 'thread', ?, ?, 'idle', ?, ?, 0)`,
-    )
-    .run(
-      id,
-      parent.workspace_id,
-      parent.workspace_path,
-      channelId,
-      title,
-      Date.now(),
-      Date.now(),
-    );
-  for (const agentId of memberAgentIds) {
-    conversations.addAgent(id, agentId);
-  }
-  return { thread_id: id };
 }
 
 describe('Internal route auth', () => {
@@ -347,56 +311,6 @@ describe('POST /internal/.../create-channel', () => {
       { conversationId: body.channel_id, agentId: agentIds.alice },
       { conversationId: body.channel_id, agentId: agentIds.bob },
     ]));
-  });
-
-  it('creates a top-level sibling when invoked from a child session', async () => {
-    t = buildTestApp();
-    const { conversationId, channelId, agentIds } = await setupSession(t, ['alice']);
-    const child = seedLegacyThread(t, conversationId, 'thread', [agentIds.alice!]);
-
-    const r = await http(t).post(
-      `/internal/conversations/${child.thread_id}/agents/${agentIds.alice}/create-channel`,
-      {
-        title: 'sibling topic',
-        context_summary: 'user asked for a separate top-level session',
-        initial_prompt: 'Continue this topic in a new session.',
-      },
-      { headers: authHeaders(t.authToken) },
-    );
-    expect(r.status).toBe(200);
-    const body = await r.json() as any;
-    const created = await (
-      await http(t).get(`/api/channels/${body.channel_id}`)
-    ).json() as any;
-    expect(created.channel.workspace_id).toBe(channelId);
-    expect(created.channel.parent_conversation_id).toBeNull();
-  });
-
-  it('uses current thread members, not parent channel members, when creating a channel from a thread', async () => {
-    t = buildTestApp();
-    const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
-    const child = seedLegacyThread(
-      t,
-      conversationId,
-      'alice-only-thread',
-      [agentIds.alice!],
-    );
-
-    const created = await (
-      await http(t).post(
-        `/internal/conversations/${child.thread_id}/agents/${agentIds.alice}/create-channel`,
-        {
-          title: 'thread-member-snapshot',
-          context_summary: 'from thread',
-          initial_prompt: 'continue here',
-        },
-        { headers: authHeaders(t.authToken) },
-      )
-    ).json() as any;
-    const channelAgents = await (
-      await http(t).get(`/api/channels/${created.channel_id}/agents`)
-    ).json() as any;
-    expect(channelAgents.agents.map((a: any) => a.agent_id)).toEqual([agentIds.alice]);
   });
 
   it('requires an initial_prompt', async () => {

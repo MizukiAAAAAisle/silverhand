@@ -8,20 +8,6 @@ import type { Database as Db } from 'better-sqlite3';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
-function insertFossilThread(
-  db: Db,
-  channel: { id: string; workspace_id: string; workspace_path: string },
-): { id: string } {
-  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
-  db.prepare(
-    `INSERT INTO conversations
-       (id, workspace_id, workspace_path, kind, parent_conversation_id,
-        title, status, created_at, updated_at, latest_message_seq)
-     VALUES (?, ?, ?, 'thread', ?, 'Fossil', 'idle', ?, ?, 0)`,
-  ).run(id, channel.workspace_id, channel.workspace_path, channel.id, Date.now(), Date.now());
-  return { id };
-}
-
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const created = (await (
     await http(t).post('/api/agents', { name, runtime: 'claude' })
@@ -148,24 +134,6 @@ describe('GET /api/conversations/:id/threads', () => {
     t = buildTestApp();
     await createChannel(t);
     expect((await http(t).get(threadsPath('does-not-exist'))).status).toBe(404);
-  });
-
-  it('returns 404 for a legacy thread conversation (not revived as a channel)', async () => {
-    t = buildTestApp();
-    const { channelId } = await createChannel(t);
-    const parent = t.ctx.db
-      .prepare(
-        `SELECT workspace_id, workspace_path FROM conversations WHERE id = ?`,
-      )
-      .get(channelId) as { workspace_id: string; workspace_path: string };
-    const legacy = insertFossilThread(t.ctx.db, {
-      id: channelId,
-      workspace_id: parent.workspace_id,
-      workspace_path: parent.workspace_path,
-    });
-    // A legacy `kind='thread'` conversation id is not channel-like, so the
-    // discovery list refuses to resolve it.
-    expect((await http(t).get(threadsPath(legacy.id))).status).toBe(404);
   });
 
   it('forbids a non-member viewer', async () => {

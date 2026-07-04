@@ -66,35 +66,6 @@ interface Fixture {
 
 let currentNow = 0;
 
-/**
- * Seed a fossil `kind='thread'` conversation via raw SQL. The producer
- * (`ConversationRepo.insertThread`) and the `thread` kind were retired in
- * #task:1303 phase 2, but old/remote DBs may still physically contain such
- * rows, and the schedule label projection still renders them. This reproduces
- * that reality WITHOUT the removed producer.
- */
-function insertFossilThread(
-  db: Fixture['db'],
-  channel: { id: string; workspace_id: string; workspace_path: string },
-): { id: string } {
-  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
-  db.prepare(
-    `INSERT INTO conversations
-       (id, workspace_id, workspace_path, kind, parent_conversation_id,
-        title, status, created_at, updated_at, latest_message_seq)
-     VALUES (?, ?, ?, 'thread', ?, ?, 'idle', ?, ?, 0)`,
-  ).run(
-    id,
-    channel.workspace_id,
-    channel.workspace_path,
-    channel.id,
-    'rollout-plan',
-    Date.now(),
-    Date.now(),
-  );
-  return { id };
-}
-
 function bootstrap(
   capChecker: (
     agentId: string,
@@ -542,45 +513,6 @@ describe('ScheduleService.create', () => {
     // assert the exact suffix because that's seeding territory, only
     // that the prefix marks it as a DM.
     expect(created.target_label.startsWith('@')).toBe(true);
-  });
-
-  it('projects target_label as `#parent:thread` for a thread target', () => {
-    // Threads are nested resources — operators need to see both the
-    // thread's title AND the channel it lives under, otherwise "→
-    // rollout-plan" gives no spatial context. Format: '#<parent>:<thread>'.
-    const f = setup();
-    const ws = f.workspaces.insert({
-      name: 'team',
-      description: null,
-      workspacePath: '/tmp/silverhand-team-thread',
-      workspaceHostId: f.localHostId,
-    });
-    const parent = f.conversations.insertChannel({
-      workspaceId: ws.id,
-      workspacePath: ws.workspace_path,
-      title: 'release',
-    });
-    f.conversations.addAgent(parent.id, f.ownerAgentId);
-    // Fossil kind='thread' row seeded directly — the producer was retired in
-    // #task:1303 but the label projection still renders '#parent:thread'.
-    const thread = insertFossilThread(f.db, {
-      id: parent.id,
-      workspace_id: ws.id,
-      workspace_path: ws.workspace_path,
-    });
-    f.conversations.addAgent(thread.id, f.ownerAgentId);
-
-    const created = f.service.create(
-      {
-        title: 'Thread cron',
-        message: 'fire in thread',
-        target_conversation_id: thread.id,
-        spec: { kind: 'once', delay_seconds: 60 },
-      },
-      f.ownerAgentId,
-      f.homeDmId,
-    );
-    expect(created.target_label).toBe('#release:rollout-plan');
   });
 
   it('rejects when target_conversation_id does not exist', () => {

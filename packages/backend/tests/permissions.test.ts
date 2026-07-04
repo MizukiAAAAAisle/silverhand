@@ -46,24 +46,6 @@ function seed(t: TestApp) {
     title: 'Main',
   });
   conversations.addAgent(channel.id, alice.id);
-  const threadId = `fossil_thread_${randomUUID().slice(0, 8)}`;
-  t.ctx.db
-    .prepare(
-      `INSERT INTO conversations
-         (id, workspace_id, workspace_path, kind, parent_conversation_id,
-          title, status, created_at, updated_at, latest_message_seq)
-       VALUES (?, ?, ?, 'thread', ?, 'Thread', 'idle', ?, ?, 0)`,
-    )
-    .run(
-      threadId,
-      channel.workspace_id,
-      channel.workspace_path,
-      channel.id,
-      Date.now(),
-      Date.now(),
-    );
-  const thread = { id: threadId };
-  conversations.addAgent(thread.id, alice.id);
   const sibling = conversations.insertChannel({
     workspaceId: workspace.id,
     workspacePath: workspace.workspace_path,
@@ -79,7 +61,6 @@ function seed(t: TestApp) {
     bob,
     workspace,
     channel,
-    thread,
     sibling,
   };
 }
@@ -104,7 +85,6 @@ describe('permission helpers', () => {
     expect(canGovernWorkspace(t.ctx, user, f.workspace.id, 'admin')).toBe(true);
     expect(canGovernWorkspace(t.ctx, user, f.workspace.id, 'member')).toBe(true);
     expect(canViewConversation(t.ctx, user, f.channel.id)).toBe(true);
-    expect(canViewConversation(t.ctx, user, f.thread.id)).toBe(true);
     expect(canPostToConversation(t.ctx, user, f.channel.id)).toBe(true);
     expect(canPostToConversation(t.ctx, { kind: 'system' }, f.channel.id)).toBe(true);
 

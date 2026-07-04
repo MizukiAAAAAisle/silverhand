@@ -37,93 +37,11 @@ async function createWorkspaceChannel(
   };
 }
 
-function seedLegacyThread(
-  t: TestApp,
-  channelId: string,
-  title: string,
-): { thread_id: string } {
-  const db = t.ctx.db;
-  const parent = db
-    .prepare(
-      `SELECT workspace_id, workspace_path FROM conversations WHERE id = ?`,
-    )
-    .get(channelId) as { workspace_id: string; workspace_path: string };
-  const id = `fossil_thread_${Math.random().toString(36).slice(2)}`;
-  db.prepare(
-    `INSERT INTO conversations
-       (id, workspace_id, workspace_path, kind, parent_conversation_id,
-        title, status, created_at, updated_at, latest_message_seq)
-     VALUES (?, ?, ?, 'thread', ?, ?, 'idle', ?, ?, 0)`,
-  ).run(
-    id,
-    parent.workspace_id,
-    parent.workspace_path,
-    channelId,
-    title,
-    Date.now(),
-    Date.now(),
-  );
-  return { thread_id: id };
-}
-
 describe('message routes', () => {
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
     t = null;
-  });
-
-  it('human channel routes publish message and public legacy thread writes are gone', async () => {
-    t = buildTestApp();
-    const { channelId } = await createWorkspaceChannel(t, ['alice']);
-    const channelEvents: Array<{ kind: string; payload: any }> = [];
-    const viewerEvents: Array<{ kind: string; payload: any }> = [];
-    const unsubChannel = t.ctx.events.subscribe(channelId, e => {
-      channelEvents.push({ kind: e.kind, payload: e.payload });
-    });
-    const unsubViewer = t.ctx.events.subscribeScope('viewer:local', e => {
-      viewerEvents.push({ kind: e.kind, payload: e.payload });
-    });
-
-    const channelPost = await (
-      await http(t).post(`/api/channels/${channelId}/messages`, {
-        content: 'topic',
-      })
-    ).json() as any;
-    const thread = seedLegacyThread(t, channelId, 'legacy child');
-    const threadPost = await http(t).post(`/api/threads/${thread.thread_id}/messages`, {
-      content: 'thread reply',
-    });
-    unsubChannel();
-    unsubViewer();
-
-    expect(threadPost.status).toBe(404);
-    expect(channelEvents).toEqual(
-      expect.arrayContaining([
-        {
-          kind: 'message',
-          payload: { message: expect.objectContaining({ id: channelPost.message.id }) },
-        },
-      ]),
-    );
-    expect(viewerEvents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: 'unread_updated',
-          payload: expect.objectContaining({ conversation_id: channelId }),
-        }),
-      ]),
-    );
-    expect(viewerEvents).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: 'unread_updated',
-          payload: expect.objectContaining({
-            conversation_id: thread.thread_id,
-          }),
-        }),
-      ]),
-    );
   });
 
   it('routes user requests through the session bearer subject', async () => {
