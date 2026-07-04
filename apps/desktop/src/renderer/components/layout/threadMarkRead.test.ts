@@ -4,6 +4,7 @@ import {
   clusterInitialFetchEnabled,
   threadClusterShowsLoader,
   threadLiveMarkReadSeq,
+  threadLocateReady,
   threadMarkReadSnapshot,
   threadOpenNeedsLatestRefetch,
   type ThreadMarkReadGateInput,
@@ -172,7 +173,7 @@ describe('threadClusterShowsLoader — locate-deadlock prevention (§9.10, Cindy
       threadClusterShowsLoader({
         isLoading: true,
         jumpPrimePending: false,
-        hasWindow: false,
+        hasFreshWindow: false,
       }),
     ).toBe(true);
   });
@@ -183,7 +184,24 @@ describe('threadClusterShowsLoader — locate-deadlock prevention (§9.10, Cindy
       threadClusterShowsLoader({
         isLoading: false,
         jumpPrimePending: true,
-        hasWindow: false,
+        hasFreshWindow: false,
+      }),
+    ).toBe(true);
+  });
+
+  it('holds the loader on a REOPEN whose stale cache has rows but this open has not fetched (#task:1317, Cindy)', () => {
+    // The stale-window hole: React Query serves the previous open's cluster
+    // cache synchronously on reopen, so raw rows are present — but this open's
+    // around-first-unread fetch (`primeAround`) has not committed yet, so its
+    // epoch is still `< openedAt` and `hasFreshWindow` is false. A naive
+    // "rows present" check would drop the loader onto the STALE tail and let the
+    // locate poll spend its budget on it; gating on the fresh-window epoch keeps
+    // the loader up until this open's window lands.
+    expect(
+      threadClusterShowsLoader({
+        isLoading: false,
+        jumpPrimePending: true,
+        hasFreshWindow: false,
       }),
     ).toBe(true);
   });
@@ -191,14 +209,14 @@ describe('threadClusterShowsLoader — locate-deadlock prevention (§9.10, Cindy
   it('RENDERS the window once primeAround commits, even though prime is still pending', () => {
     // The deadlock Cindy caught: primeAround success does NOT clear
     // `jumpPrimePending` (the controller waits for the visual locate/flash). The
-    // around-window is now in the disabled query's cache (hasWindow true), so we
-    // must render it — keeping the loader up would starve the locate effect of
-    // its `#msg-<id>` DOM node and time the jump out.
+    // fresh around-window is now in the cache AND its epoch is stamped
+    // (`hasFreshWindow` true), so we must render it — keeping the loader up would
+    // starve the locate effect of its `#msg-<id>` DOM node and time the jump out.
     expect(
       threadClusterShowsLoader({
         isLoading: false,
         jumpPrimePending: true,
-        hasWindow: true,
+        hasFreshWindow: true,
       }),
     ).toBe(false);
   });
@@ -208,7 +226,59 @@ describe('threadClusterShowsLoader — locate-deadlock prevention (§9.10, Cindy
       threadClusterShowsLoader({
         isLoading: false,
         jumpPrimePending: false,
-        hasWindow: true,
+        hasFreshWindow: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('threadLocateReady — fresh-epoch is prime-pending readiness, not a permanent gate (#task:1317, Cindy)', () => {
+  it('WHILE PRIMING: withholds the poll on a stale reopen cache (rows present but epoch not fresh)', () => {
+    // The stale-window hole: prime in flight, previous open's rows served from
+    // cache, but this open's fetch has not stamped the epoch. Must NOT locate
+    // yet — the rows are the wrong (stale) window.
+    expect(
+      threadLocateReady({
+        jumpPrimePending: true,
+        windowFreshForOpen: false,
+        hasRows: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('WHILE PRIMING: locates once the fresh epoch lands (primeAround committed; pending still true)', () => {
+    // A committed prime keeps `jumpPrimePending` true through the locate phase
+    // and stamped the epoch, so the poll fires against this open's window.
+    expect(
+      threadLocateReady({
+        jumpPrimePending: true,
+        windowFreshForOpen: true,
+        hasRows: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('SETTLED FALLBACK: locates against the current cache even without a fresh epoch (failed/aborted prime kept the target)', () => {
+    // The blocking Cindy caught: a jump open won't force a latest refetch and a
+    // re-enabled query with an existing cache won't refetch, so no new epoch may
+    // ever be stamped. Once pending clears, the fallback must still try to
+    // locate against whatever rows are loaded — an unconditional epoch gate
+    // would strand this forever.
+    expect(
+      threadLocateReady({
+        jumpPrimePending: false,
+        windowFreshForOpen: false,
+        hasRows: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('SETTLED FALLBACK: waits while no rows are loaded yet (empty cache + in-flight fallback fetch)', () => {
+    expect(
+      threadLocateReady({
+        jumpPrimePending: false,
+        windowFreshForOpen: false,
+        hasRows: false,
       }),
     ).toBe(false);
   });
