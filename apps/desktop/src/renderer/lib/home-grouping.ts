@@ -69,7 +69,6 @@ export function partitionRailWorkspaces<T extends RailWorkspaceItem>(
 }
 
 interface HomeChannelItem {
-  parent_channel_id: string | null;
   starred_at: number | null;
 }
 
@@ -82,7 +81,6 @@ interface HomeChannelItem {
  * are hard sort groups (each its own recent/manual + drag scope, wired in
  * ChannelsSidebar); within a group the viewer's sort mode orders the rows. The
  * input order is preserved within each group, so an upstream sort still holds.
- * Legacy thread fossils (non-null `parent_channel_id`) are dropped from both.
  */
 export function partitionHomeChannels<T extends HomeChannelItem>(
   items: readonly T[],
@@ -90,7 +88,6 @@ export function partitionHomeChannels<T extends HomeChannelItem>(
   const starred: T[] = [];
   const unstarred: T[] = [];
   for (const c of items) {
-    if (c.parent_channel_id !== null) continue;
     if (isStarredAt(c.starred_at)) starred.push(c);
     else unstarred.push(c);
   }

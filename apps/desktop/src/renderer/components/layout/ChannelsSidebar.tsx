@@ -35,7 +35,7 @@ type WorkspaceUiKind = 'regular' | 'dm';
 interface ChannelNode {
   id: string;
   title: string;
-  kind: 'channel' | 'dm_channel' | 'thread';
+  kind: 'channel' | 'dm_channel';
   status: 'active' | 'idle' | 'crashed';
   parent_channel_id: string | null;
   closed_at: number | null;
@@ -57,8 +57,7 @@ interface ChannelsSidebarProps {
   /** Active (non-archived) top-level channels, server-filtered. In the
    *  reply-cluster model a thread is no longer a conversation node, so it
    *  never appears in this tree — the sidebar only renders top-level
-   *  channels / DM channels. Any legacy `kind='thread'` row (which carries
-   *  a `parent_channel_id`) is filtered out below. Archived channels live
+   *  channels / DM channels. Archived channels live
    *  on a dedicated chat tool page. */
   channels: ChannelNode[];
   workspaceKind: WorkspaceUiKind | null;

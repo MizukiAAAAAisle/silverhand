@@ -137,15 +137,13 @@ export function useMessageRenderContext(
     return byName;
   }, [conversationMembers.status, conversationMembers.members, humansById, viewer]);
 
-  // Channel-name lookup keyed by `title`. Threads aren't addressable by
-  // `#<name>` (use `#conv:<id>`), so only top-level channels are
-  // considered. A shared title records the ambiguity sentinel `null` so
-  // `<ChannelRef>` degrades to inert text rather than guess a target.
+  // Channel-name lookup keyed by `title`. A shared title records the
+  // ambiguity sentinel `null` so `<ChannelRef>` degrades to inert text
+  // rather than guess a target.
   const channelsByName = useMemo(() => {
     const m = new Map<string, ChannelReference | null>();
     if (workspaceKind === null) return m;
     const consider = (c: ChannelListItem): void => {
-      if (c.kind === 'thread') return;
       const title = c.title;
       if (m.has(title)) {
         m.set(title, null);

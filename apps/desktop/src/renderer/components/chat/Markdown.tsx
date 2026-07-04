@@ -3,7 +3,7 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { AtSign, Check, Copy, CornerDownRight, Hash } from 'lucide-react';
+import { AtSign, Check, Copy, Hash } from 'lucide-react';
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { Mention } from './Mention';
 import { ChannelRef, type ChannelReference } from './ChannelRef';
@@ -398,17 +398,10 @@ function StaticConversationRef({
 }
 
 function conversationDisplayName(conversation: ConversationReference): string {
-  if (conversation.kind === 'thread') {
-    const parentTitle = conversation.parent_title?.trim();
-    return parentTitle
-      ? `${parentTitle}:${conversation.title}`
-      : conversation.title;
-  }
   return conversation.title;
 }
 
 function kindLabel(kind: ConversationReference['kind']): string {
-  if (kind === 'thread') return 'Thread';
   if (kind === 'dm_channel') return 'DM';
   return 'Channel';
 }
@@ -416,9 +409,6 @@ function kindLabel(kind: ConversationReference['kind']): string {
 function conversationIcon(
   kind: ConversationReference['kind'] | undefined,
 ): JSX.Element {
-  if (kind === 'thread') {
-    return <CornerDownRight className="size-3 shrink-0 self-center" />;
-  }
   if (kind === 'dm_channel') {
     return <AtSign className="size-3 shrink-0 self-center" />;
   }

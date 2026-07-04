@@ -42,7 +42,7 @@ export interface TaskChannelOptions {
 interface MappableChannel {
   id: string;
   title: string;
-  kind: 'channel' | 'dm_channel' | 'thread';
+  kind: 'channel' | 'dm_channel';
   archived_at: number | null;
 }
 
@@ -87,7 +87,7 @@ export function useTaskChannelOptions(): TaskChannelOptions {
   );
 
   const channelOptions = useMemo<ChannelOption[]>(() => {
-    // Eligibility (skip fossil threads + archived, dedup, derive the
+    // Eligibility (skip archived, dedup, derive the
     // data-source group) is single-sourced in buildChannelFilterOptions;
     // this hook owns only the scope (every member workspace's active
     // channels) and the ordering. Per-workspace label/subtitle mapping is

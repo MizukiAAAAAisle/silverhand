@@ -51,7 +51,7 @@ type WorkspaceUiKind = 'regular' | 'dm';
 interface ChannelDescriptor {
   id: string;
   title: string;
-  kind: 'channel' | 'dm_channel' | 'thread';
+  kind: 'channel' | 'dm_channel';
   parent_conversation_id: string | null;
   closed_at: number | null;
   archived_at: number | null;
@@ -191,19 +191,17 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
 
 /**
  * Show the "+ add member" popover when the conversation can take
- * one. Channels and threads both support adding (a thread inherits
- * its parent channel's workspace and has its own membership row);
- * DM channels are single-pair by definition. Closed conversations
- * are gated out — the route would also reject with
- * `conversation_closed`, but hiding the trigger keeps the surface
- * intentional.
+ * one. Regular channels support adding; DM channels are single-pair
+ * by definition. Closed conversations are gated out — the route would
+ * also reject with `conversation_closed`, but hiding the trigger keeps
+ * the surface intentional.
  */
 function canAddMember(
-  conv: { kind: 'channel' | 'dm_channel' | 'thread' },
+  conv: { kind: 'channel' | 'dm_channel' },
   closed: boolean,
 ): boolean {
   if (closed) return false;
-  return conv.kind === 'channel' || conv.kind === 'thread';
+  return conv.kind === 'channel';
 }
 
 // Split out so the React-Query hooks below only mount once a channel
@@ -415,7 +413,7 @@ function ActiveChannelView({
 
   // The reply affordance (open thread + per-root reply badge) is
   // actionable only on the parent pane, gated by `onOpenThread` being
-  // passed. Secondary panes (legacy thread / `?side`) pass it undefined
+  // passed. The secondary `?side` pane passes it undefined
   // so the action is hidden. Per-root reply counts come from the message
   // window's cut3-6 sidecar (`replyCountsByRoot`) — there is no separate
   // threads query anymore.

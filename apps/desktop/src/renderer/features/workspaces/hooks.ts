@@ -12,7 +12,6 @@ import type {
   CreateWorkspaceInput,
   DmChannelDto,
   ListFavoritesDto,
-  ThreadDto,
   UpdateAgentCapabilitiesInput,
   UpdateWorkspaceHumanMemberRoleResponse,
   UpdateWorkspaceInput,
@@ -44,7 +43,7 @@ export type WorkspaceListItem = {
   updated_at: number;
 };
 
-export type ChannelListItem = ChannelConversationDto | DmChannelDto | ThreadDto;
+export type ChannelListItem = ChannelConversationDto | DmChannelDto;
 
 const workspacesKey = ['workspaces'] as const;
 const channelsKey = (workspaceId: string) => ['workspaces', workspaceId, 'channels'] as const;
@@ -98,29 +97,12 @@ function workspaceToListItem(workspace: WorkspaceDto): WorkspaceListItem {
 }
 
 export function sortConversationList(items: ChannelListItem[]): ChannelListItem[] {
-  const byId = new Map(items.map(item => [item.id, item] as const));
-  const topFor = (item: ChannelListItem): ChannelListItem =>
-    item.kind === 'thread' && item.parent_conversation_id
-      ? byId.get(item.parent_conversation_id) ?? item
-      : item;
-  // Base order is creation time only. Star (the personal ⭐ favorite) is no
-  // longer a shared `pinned_at` field on the conversation — it lives in the
-  // viewer's `viewer_sort.entries[].starred_at`. A starred CHANNEL is NOT moved
-  // to global STARRED (#task:1254): it STAYS in the channel sidebar, pinned into
-  // that sidebar's local `starred` hard group (composed in ChannelsSidebar via
-  // lib/home-grouping `partitionHomeChannels`); only workspace/DM are
-  // exclusive-moved into global STARRED. This base sort just nests threads under
-  // their parent and otherwise orders by created_at.
-  const compareTop = (a: ChannelListItem, b: ChannelListItem): number =>
-    a.created_at - b.created_at;
-
-  return [...items].sort((a, b) => {
-    const aTop = topFor(a);
-    const bTop = topFor(b);
-    if (aTop.id !== bTop.id) return compareTop(aTop, bTop);
-    if (a.kind !== b.kind) return a.kind === 'thread' ? 1 : -1;
-    return a.created_at - b.created_at;
-  });
+  // Channels and DM channels are all top-level (isolated-thread fossils were
+  // retired in #task:1303), so ordering is purely by creation time. Star (the
+  // personal ⭐ favorite) is not a shared conversation field — it lives in the
+  // viewer's `viewer_sort.entries[].starred_at` and is applied downstream
+  // (ChannelsSidebar via `partitionHomeChannels`), not here.
+  return [...items].sort((a, b) => a.created_at - b.created_at);
 }
 
 /** The workspace rail list cache now carries the viewer's inline sort state
@@ -442,11 +424,10 @@ export interface ChannelListPayload {
 async function fetchWorkspaceChannels(workspaceId: string): Promise<ChannelListPayload> {
   const res = await api<{
     channels: ChannelLikeDto[];
-    threads: ThreadDto[];
     viewer_sort: ViewerSortStateDto;
   }>(apiPaths.workspaceChannels(workspaceId));
   return {
-    items: sortConversationList([...res.channels, ...res.threads]),
+    items: sortConversationList(res.channels),
     viewerSort: res.viewer_sort,
   };
 }
@@ -512,7 +493,7 @@ export function archivedChannelsEnabledForKind(
   return workspaceKind === 'regular' || workspaceKind === 'dm';
 }
 
-/** Archived channel-like conversations (and their threads) for a workspace.
+/** Archived channel-like conversations for a workspace.
  *  Backed by `GET /api/workspaces/:id/channels/archived`. Enabled for BOTH
  *  regular workspaces (archived `channel`s) and agent_home / DM workspaces
  *  (archived `dm_channel`s) — the backend endpoint is channel-like and
@@ -533,9 +514,8 @@ export function useArchivedChannelsForWorkspace(
     queryFn: async () => {
       const res = await api<{
         channels: ChannelLikeDto[];
-        threads: ThreadDto[];
       }>(apiPaths.workspaceArchivedChannels(workspaceId!));
-      return sortConversationList([...res.channels, ...res.threads]);
+      return sortConversationList(res.channels);
     },
   });
 }
@@ -936,20 +916,6 @@ export function useRenameChannel(workspaceId: string | null) {
       qc.invalidateQueries({ queryKey: ['archived-channels'] });
       qc.invalidateQueries({ queryKey: ['conversation-ref', channel.id] });
     },
-  });
-}
-
-export function useWorkspaceMembers(workspaceId: string | null) {
-  return useQuery({
-    queryKey: workspaceId ? membersKey(workspaceId) : ['workspaces', 'none', 'members'],
-    enabled: !!workspaceId,
-    queryFn: async () => {
-      const res = await api<WorkspaceMembersResponse>(
-        apiPaths.workspaceMembers(workspaceId!),
-      );
-      return res;
-    },
-    select: res => res.members,
   });
 }
 

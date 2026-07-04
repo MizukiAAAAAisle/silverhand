@@ -1273,28 +1273,6 @@ describe('Markdown conversation refs', () => {
     expect(html).not.toContain(`#conv:${id}`);
   });
 
-  it('renders resolved thread refs with parent channel display name', () => {
-    const id = 'ThC123_-xyZ789qR';
-    const refs = new Map<string, ConversationReference>([
-      [
-        id,
-        {
-          id,
-          kind: 'thread',
-          title: 'thread 1',
-          parent_channel_id: 'parent-channel',
-          parent_title: 'debug',
-        },
-      ],
-    ]);
-
-    const html = render(`See #conv:${id}.`, refs);
-
-    expect(html).toContain(`data-conversation-ref="${id}"`);
-    expect(html).toContain('debug:thread 1');
-    expect(html).not.toContain('#debug:thread 1');
-  });
-
   it('keeps unresolved refs clickable by id', () => {
     const html = render('Open #conv:foreignRef123456.');
 

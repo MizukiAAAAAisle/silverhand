@@ -32,8 +32,7 @@ export function useMessageJumpController() {
   const requestJump = useCallback(
     (target: MessageJumpTarget) => {
       // A jump always targets the channel — a reply-cluster message lives
-      // in the parent channel, and the legacy isolated-thread target was
-      // retired.
+      // in the parent channel.
       const conversationId = target.channelId;
 
       setJumpTarget({

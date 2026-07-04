@@ -524,7 +524,7 @@ function RegisteredAppShell(): JSX.Element {
       workspaceId: selectedWorkspaceId,
       selectedChannelId,
       channels,
-      activeTopLevel: activeChannels.filter(s => s.parent_conversation_id === null),
+      activeTopLevel: activeChannels,
       jumpTargetChannelId: jumpTarget?.channelId ?? null,
       excludeId,
       rememberedChannelId,
@@ -767,28 +767,12 @@ function RegisteredAppShell(): JSX.Element {
   const deferredSection = useDeferredValue(appSection);
   const conversationRefsById = useMemo(() => {
     const m = new Map<string, ConversationReference>();
-    const topLevelById = new Map(
-      channels
-        .filter(item => item.kind !== 'thread')
-        .map(item => [item.id, item] as const),
-    );
     for (const item of channels) {
-      if (item.kind === 'thread') {
-        const parent = topLevelById.get(item.channel_id);
-        m.set(item.id, {
-          id: item.id,
-          kind: item.kind,
-          title: item.title,
-          parent_channel_id: item.channel_id,
-          parent_title: parent?.title ?? null,
-        });
-      } else {
-        m.set(item.id, {
-          id: item.id,
-          kind: item.kind,
-          title: item.title,
-        });
-      }
+      m.set(item.id, {
+        id: item.id,
+        kind: item.kind,
+        title: item.title,
+      });
     }
     return m;
   }, [channels]);
@@ -869,7 +853,7 @@ function RegisteredAppShell(): JSX.Element {
 
   // Open a channel WITH the home channel-sidebar's full open semantics —
   // remembered layout (threads-list / thread / side) restore, unread-thread
-  // auto-surface, legacy-thread fossil handling. `workspaceId` defaults to the
+  // auto-surface. `workspaceId` defaults to the
   // primary selection (the channel sidebar's same-workspace case) but is passed
   // EXPLICITLY by cross-workspace entry points (the global STARRED list), so a
   // starred channel in another workspace opens with the SAME restored layout
@@ -881,18 +865,13 @@ function RegisteredAppShell(): JSX.Element {
   ): void => {
     if (!workspaceId) return;
     const sameWorkspace = workspaceId === selectedWorkspaceId;
-    // The agent-panel and thread-fossil branches read the CURRENT workspace's
-    // loaded channels + docked panel, so they only apply same-workspace. A
-    // cross-workspace open switches workspace anyway (the docked agent panel
-    // can't follow it) and never targets a thread fossil (favorites project
-    // real channels only).
-    const target = sameWorkspace ? channels.find(s => s.id === id) : undefined;
     // A=Activity-follows-channel (#task:1189): while an agent side panel is
     // docked it owns the right pane, so switching the left channel must keep
     // `?agent` and just re-point the locked Activity context — not restore that
-    // channel's remembered thread/side (which would drop the panel). Skip the
-    // legacy thread fossil, which always opens as a `?side` overlay.
-    if (sameWorkspace && agentPanelId && target?.kind !== 'thread') {
+    // channel's remembered thread/side (which would drop the panel). Only
+    // same-workspace: a cross-workspace open switches workspace anyway and the
+    // docked agent panel can't follow it.
+    if (sameWorkspace && agentPanelId) {
       nav.go(
         buildChannelPathPreservingAgent(workspaceId, id, agentPanelId),
       );
@@ -900,31 +879,25 @@ function RegisteredAppShell(): JSX.Element {
     }
     // Read cursors are advanced by the navigation effects above. Keeping
     // this handler side-effect free avoids duplicate mark-read/refetch storms.
-    if (target?.kind === 'thread') {
-      // Legacy isolated-thread fossil: open it as a `?side` overlay (which
-      // resolves to the unavailable placeholder — the viewer was retired).
-      nav.openSide(id);
+    // Channel-open precedence (#task:1082): a fresh unread reply in one
+    // of this channel's threads (newer than the explicit-close
+    // watermark) auto-surfaces that thread; otherwise restore the
+    // remembered secondary-pane layout (threads-list / thread / side),
+    // and `none`/absent memory yields the bare channel path.
+    const intent = resolveChannelOpen(
+      messageUnreadData?.latest_by_conversation?.[id],
+      getCloseWatermark(id),
+      getChannelLayout(id),
+    );
+    if (intent.kind === 'unread-thread') {
+      handleJumpToMessage({
+        channelId: id,
+        messageId: intent.messageId,
+        threadRootId: intent.threadRootId,
+        workspaceId,
+      });
     } else {
-      // Channel-open precedence (#task:1082): a fresh unread reply in one
-      // of this channel's threads (newer than the explicit-close
-      // watermark) auto-surfaces that thread; otherwise restore the
-      // remembered secondary-pane layout (threads-list / thread / side),
-      // and `none`/absent memory yields the bare channel path.
-      const intent = resolveChannelOpen(
-        messageUnreadData?.latest_by_conversation?.[id],
-        getCloseWatermark(id),
-        getChannelLayout(id),
-      );
-      if (intent.kind === 'unread-thread') {
-        handleJumpToMessage({
-          channelId: id,
-          messageId: intent.messageId,
-          threadRootId: intent.threadRootId,
-          workspaceId,
-        });
-      } else {
-        nav.go(buildChannelLayoutUrl(workspaceId, id, intent.layout));
-      }
+      nav.go(buildChannelLayoutUrl(workspaceId, id, intent.layout));
     }
   };
 
@@ -1053,8 +1026,7 @@ function RegisteredAppShell(): JSX.Element {
             id: s.id,
             title: s.title,
             kind: s.kind,
-            parent_conversation_id:
-              s.kind === 'thread' ? s.parent_conversation_id : null,
+            parent_conversation_id: null,
             closed_at: s.closed_at,
             archived_at: s.archived_at,
             workspace_id: s.workspace_id,
@@ -1099,12 +1071,8 @@ function RegisteredAppShell(): JSX.Element {
                 // `activeChannels` here still includes the just-archived
                 // channel (the list invalidation hasn't landed yet), which is
                 // exactly what the neighbor-aware picker needs to find its
-                // siblings. Threads are filtered out — only top-level rows
-                // are navigable primaries.
-                const topLevel = activeChannels.filter(
-                  c => c.parent_conversation_id === null,
-                );
-                const fallbackId = pickFallbackAfterArchive(topLevel, channelId);
+                // siblings.
+                const fallbackId = pickFallbackAfterArchive(activeChannels, channelId);
                 if (fallbackId) {
                   nav.toChannel(wid, fallbackId);
                   return;
@@ -1221,10 +1189,8 @@ function RegisteredAppShell(): JSX.Element {
         : null,
     [jumpTarget, deferredChannelId],
   );
-  // Jumping *into* the secondary pane is not supported — the only matcher
-  // here was the legacy "jump to thread", which was retired with the
-  // isolated-thread viewer. Always null/false so the secondary ChannelView
-  // never receives a stale jump target.
+  // Jumping *into* the secondary pane is not supported — always null/false
+  // so the secondary ChannelView never receives a stale jump target.
   const secondaryJumpTarget: { channelId: string; messageId: string } | null =
     null;
   const secondaryJumpPrimePending = false;
@@ -1353,8 +1319,7 @@ function RegisteredAppShell(): JSX.Element {
   //     ChannelView's workspace-scoped hooks auto-target the right cache
   //     without a separate prop.
   //   - Loading / unauthorized / not_found (`?side` ref hook didn't
-  //     return a usable conversation, or it resolved to a retired
-  //     isolated-thread fossil) → SideUnresolvedPlaceholder.
+  //     return a usable conversation) → SideUnresolvedPlaceholder.
   //   - null → no secondary, render only `parentView`.
   let secondaryView: JSX.Element | null = null;
   if (agentPanelId) {
@@ -1398,8 +1363,7 @@ function RegisteredAppShell(): JSX.Element {
           onJumped={handleJumped}
           onCloseChild={closeSecondary}
           // The secondary pane only ever renders a channel/dm `?side`
-          // overlay now (legacy isolated-thread fossils are no longer
-          // renderable here), so the close affordance is the generic
+          // overlay, so the close affordance is the generic
           // "关闭侧栏" — never the thread wording.
           closeLabel="关闭侧栏"
           isFullscreen={false}
@@ -1718,8 +1682,6 @@ function RegisteredAppShell(): JSX.Element {
                 onDeleted={() => nav.toMembers()}
                 onOpenConversation={s => {
                   // Jump back to chat view, focusing the agent's channel.
-                  // Legacy isolated-thread conversations are no longer
-                  // openable, so land on the parent channel either way.
                   const workspaceId = resolveNavWorkspaceId(s.workspace_id, s.channel_id);
                   if (!workspaceId) return;
                   nav.toChannel(workspaceId, s.channel_id);
@@ -1958,7 +1920,7 @@ function RegisteredAppShell(): JSX.Element {
                           kind: s.kind,
                           status:
                             s.status === 'active' || s.status === 'crashed' ? s.status : 'idle',
-                          parent_channel_id: s.kind === 'thread' ? s.parent_conversation_id : null,
+                          parent_channel_id: null,
                           closed_at: s.closed_at,
                           starred_at: channelStarredAt.get(s.id) ?? null,
                           archived_at: s.archived_at,

@@ -1,4 +1,4 @@
-import { AtSign, CornerDownRight, Hash } from 'lucide-react';
+import { AtSign, Hash } from 'lucide-react';
 import { HoverPopover } from './HoverPopover';
 import {
   useConversationById,
@@ -7,7 +7,7 @@ import {
 
 export interface ConversationReference {
   id: string;
-  kind: 'channel' | 'dm_channel' | 'thread';
+  kind: 'channel' | 'dm_channel';
   title: string;
   parent_channel_id?: string | null;
   parent_title?: string | null;
@@ -18,7 +18,7 @@ interface ConversationRefProps {
   id: string;
   /** Current-workspace metadata when available. Acts as a synchronous
    *  fast path — avoids a brief loading flash on chips that point at a
-   *  channel/thread already in the current workspace's lookup map. The
+   *  channel already in the current workspace's lookup map. The
    *  authoritative source is `useConversationById(id)` below, which
    *  also handles cross-workspace refs the lookup map can't see. */
   conversation: ConversationReference | undefined;
@@ -180,17 +180,6 @@ function ConversationPopoverBody({
       <p className="line-clamp-2 break-words text-xs font-medium text-text-primary">
         {conversation.title}
       </p>
-      {conversation.kind === 'thread' && conversation.parent_title ? (
-        <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-[11px]">
-          <dt className="text-text-muted">In</dt>
-          <dd
-            className="truncate text-text-secondary"
-            aria-label={conversation.parent_title}
-          >
-            #{conversation.parent_title}
-          </dd>
-        </dl>
-      ) : null}
       <p
         className="truncate font-mono text-[10px] text-text-muted"
         aria-label={id}
@@ -240,25 +229,15 @@ export function shortConversationId(id: string): string {
 }
 
 function conversationDisplayName(conversation: ConversationReference): string {
-  if (conversation.kind === 'thread') {
-    const parentTitle = conversation.parent_title?.trim();
-    return parentTitle
-      ? `${parentTitle}:${conversation.title}`
-      : conversation.title;
-  }
   return conversation.title;
 }
 
 function kindLabel(kind: ConversationReference['kind']): string {
-  if (kind === 'thread') return 'Thread';
   if (kind === 'dm_channel') return 'DM';
   return 'Channel';
 }
 
 function conversationIcon(kind: ConversationReference['kind'] | undefined): JSX.Element {
-  if (kind === 'thread') {
-    return <CornerDownRight className="size-3 shrink-0 self-center" />;
-  }
   if (kind === 'dm_channel') {
     return <AtSign className="size-3 shrink-0 self-center" />;
   }

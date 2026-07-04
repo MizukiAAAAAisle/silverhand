@@ -45,16 +45,21 @@ function ev(
 }
 
 describe('partitionRoster', () => {
-  it('drops thread rows via allowlist (legacy fossils are not nav targets)', () => {
+  it('drops out-of-allowlist kinds (defensive against unexpected conversation kinds)', () => {
     const rows = [
       conv({ conversation_id: 'ch', conversation_kind: 'channel' }),
       conv({ conversation_id: 'dm', conversation_kind: 'dm_channel' }),
-      conv({ conversation_id: 'th', conversation_kind: 'thread' }),
+      // A kind outside the {channel,dm_channel} allowlist should never
+      // reach here, but the allowlist (not a denylist) must still drop it.
+      conv({
+        conversation_id: 'x',
+        conversation_kind: 'thread' as unknown as ConversationKind,
+      }),
     ];
     const { active, recent } = partitionRoster(rows);
     const ids = [...active, ...recent].map(r => r.conversation_id);
     expect(ids).toEqual(['ch', 'dm']);
-    expect(ids).not.toContain('th');
+    expect(ids).not.toContain('x');
   });
 
   it('splits active (running, not closed) from recent', () => {

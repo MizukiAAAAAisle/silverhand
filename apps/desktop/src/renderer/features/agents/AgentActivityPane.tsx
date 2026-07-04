@@ -23,13 +23,11 @@ interface RosterGroups {
  * Partition the runtime roster into the two groups the Activity rail shows.
  *
  * Allowlist `conversation_kind IN ('channel','dm_channel')` (mirrors the
- * `agent-read.ts` visible-channel predicate) — threads are NOT navigation
- * targets: a reply-cluster thread shares its parent channel's agent session,
- * so its activity already lands under the parent channel id (backend
- * #task:1186). Any `kind === 'thread'` row that still surfaces here is a
- * legacy runtime-disabled fossil; the allowlist drops it. Using an
- * allowlist (not a `!== 'thread'` denylist) keeps us safe against future
- * conversation kinds.
+ * `agent-read.ts` visible-channel predicate) — a reply-cluster thread
+ * shares its parent channel's agent session, so its activity already
+ * lands under the parent channel id (backend #task:1186). Using an
+ * allowlist (not a denylist) keeps us safe against any unexpected /
+ * future conversation kind that surfaces here.
  *
  *  - `active` → not closed AND status `active` | `starting`
  *  - `recent` → everything else that survived the allowlist (idle / crashed

@@ -25,7 +25,7 @@ import { api } from '@/lib/api';
  *     may be outside the workspace for admin/owner callers; the server
  *     provisions workspace membership as part of the same
  *     permission-protected add action.
- *   - Conversation must be `kind === 'channel' || 'thread'` and not
+ *   - Conversation must be `kind === 'channel'` and not
  *     closed (`conversation_member_add_unsupported` 422 /
  *     `conversation_closed` 409). The trigger button hides on DM
  *     channels + closed conversations, so these are also defense-in-

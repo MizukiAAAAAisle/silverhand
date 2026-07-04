@@ -703,11 +703,7 @@ function resultIcon(result: SearchResultDto): JSX.Element {
     );
   }
   if (result.type === 'conversation') {
-    return result.conversation.kind === 'thread' ? (
-      <MessageSquareText className="size-4" />
-    ) : (
-      <Hash className="size-4" />
-    );
+    return <Hash className="size-4" />;
   }
   return <MessageSquareText className="size-4" />;
 }
@@ -722,7 +718,7 @@ function resultMeta(
   }
   if (result.type === 'conversation') {
     return [
-      result.conversation.kind === 'thread' ? 'Thread' : 'Channel',
+      'Channel',
       workspaceDisplayName(result.workspace),
       dayjs(result.conversation.created_at).format('YYYY-MM-DD HH:mm'),
     ];

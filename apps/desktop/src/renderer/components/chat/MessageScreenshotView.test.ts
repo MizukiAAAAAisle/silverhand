@@ -257,28 +257,6 @@ describe('MessageScreenshotView — non-interactive contract', () => {
     expect(html).not.toMatch(/<button/);
   });
 
-  it('resolved thread #conv: refs render without pretending to be a channel', () => {
-    const refs = new Map<string, ConversationReference>([
-      [
-        'qrstuvwxyzabcdef',
-        {
-          id: 'qrstuvwxyzabcdef',
-          kind: 'thread',
-          title: 'launch',
-          parent_channel_id: 'parent-1',
-          parent_title: 'infra',
-        },
-      ],
-    ]);
-    const html = render([msg('m1', 1, 'see #conv:qrstuvwxyzabcdef')], {
-      conversationRefsById: refs,
-    });
-    expect(html).toContain('infra:launch');
-    expect(html).not.toContain('#infra:launch');
-    expect(html).not.toContain('#conv:qrstuvwxyzabcdef');
-    expect(html).not.toMatch(/<button/);
-  });
-
   it('#task: refs render as static task chips (no live TaskRef hook)', () => {
     const html = render([msg('m1', 1, 'fixed in #task:42')]);
     expect(html).toContain('data-task-ref="42"');

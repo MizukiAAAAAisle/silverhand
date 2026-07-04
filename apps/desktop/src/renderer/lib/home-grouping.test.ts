@@ -58,8 +58,8 @@ describe('partitionRailWorkspaces (#task:1254 exclusive home projection)', () =>
 describe('partitionHomeChannels (#task:1254 final — channels stay in the sidebar, starred pinned local)', () => {
   const node = (
     id: string,
-    over: { parent_channel_id?: string | null; starred_at?: number | null } = {},
-  ) => ({ id, parent_channel_id: over.parent_channel_id ?? null, starred_at: over.starred_at ?? null });
+    over: { starred_at?: number | null } = {},
+  ) => ({ id, starred_at: over.starred_at ?? null });
 
   it('splits top-level channels into starred / unstarred, preserving input order within each group', () => {
     const { starred, unstarred } = partitionHomeChannels([
@@ -77,15 +77,5 @@ describe('partitionHomeChannels (#task:1254 final — channels stay in the sideb
     const { starred, unstarred } = partitionHomeChannels(input);
     expect([...starred, ...unstarred].map(c => c.id).sort()).toEqual(['c1', 'c2', 'c3']);
     expect(input).toHaveLength(3);
-  });
-
-  it('drops legacy thread fossils (non-null parent) from both groups', () => {
-    const { starred, unstarred } = partitionHomeChannels([
-      node('c1'),
-      node('t1', { parent_channel_id: 'c1' }),
-      node('t2', { parent_channel_id: 'c1', starred_at: 9 }),
-    ]);
-    expect(starred).toEqual([]);
-    expect(unstarred.map(c => c.id)).toEqual(['c1']);
   });
 });

@@ -86,9 +86,8 @@ export function EventsApp(): JSX.Element {
     retry: false,
     queryFn: async (): Promise<ConversationOption> => {
       if (!conversationId) throw new Error('missing conversation id');
-      // The legacy isolated-thread viewer was retired, so only channels
-      // resolve here. A fossil-thread id throws and the events panel shows
-      // no selection (retry:false) — the degraded behavior for fossils.
+      // Only channels resolve here; a non-channel id throws and the events
+      // panel shows no selection (retry:false).
       const res = await api<{ channel: ChannelLike }>(`/api/channels/${conversationId}`);
       return optionFromChannel(
         res.channel,

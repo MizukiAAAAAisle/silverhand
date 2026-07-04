@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import type {
   ChannelConversationDto,
-  ThreadDto,
   ViewerSortStateDto,
   WorkspaceHumanMemberDto,
   WorkspaceMembersResponse,
@@ -42,32 +41,8 @@ function channel(
   };
 }
 
-function thread(
-  id: string,
-  parentId: string,
-  createdAt: number,
-): ThreadDto {
-  return {
-    id,
-    workspace_id: 'w1',
-    workspace_path: '/tmp/w1',
-    kind: 'thread',
-    parent_conversation_id: parentId,
-    channel_id: parentId,
-    anchor_message_id: null,
-    title: id,
-    status: 'idle',
-    spawned_by_agent_id: null,
-    closed_at: null,
-    close_summary: null,
-    archived_at: null,
-    created_at: createdAt,
-    updated_at: createdAt,
-  };
-}
-
 describe('sortConversationList', () => {
-  it('orders top-level channels by created_at and keeps threads under parents', () => {
+  it('orders channels by created_at', () => {
     // Star is no longer a shared field on the conversation (#task:1209), so the
     // base sort is creation-time only. Under the exclusive model (#task:1254) a
     // starred channel is moved to STARRED and excluded from the channel sidebar's
@@ -75,11 +50,9 @@ describe('sortConversationList', () => {
     const first = channel('first', 1);
     const second = channel('second', 2);
     const third = channel('third', 3);
-    const child = thread('second-thread', second.id, 4);
 
     const sorted = sortConversationList([
       third,
-      child,
       first,
       second,
     ] satisfies ChannelListItem[]);
@@ -87,7 +60,6 @@ describe('sortConversationList', () => {
     expect(sorted.map(item => item.id)).toEqual([
       first.id,
       second.id,
-      child.id,
       third.id,
     ]);
   });

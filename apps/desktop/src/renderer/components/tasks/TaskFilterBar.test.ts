@@ -27,14 +27,6 @@ describe('buildChannelFilterOptions', () => {
     ]);
   });
 
-  it('skips legacy fossil threads', () => {
-    const out = buildChannelFilterOptions([
-      candidate({ id: 'c1' }),
-      candidate({ id: 't1', kind: 'thread' }),
-    ]);
-    expect(out.map(o => o.id)).toEqual(['c1']);
-  });
-
   it('skips archived channels — this is the drawer leak being fixed', () => {
     const out = buildChannelFilterOptions([
       candidate({ id: 'c1' }),
@@ -83,7 +75,7 @@ describe('buildChannelFilterOptions', () => {
 });
 
 describe('workspaceChannelCandidates — channel picker label/subtitle rule', () => {
-  const ch = (id: string, title: string, over: Partial<{ kind: 'channel' | 'dm_channel' | 'thread'; archived_at: number | null }> = {}) => ({
+  const ch = (id: string, title: string, over: Partial<{ kind: 'channel' | 'dm_channel'; archived_at: number | null }> = {}) => ({
     id,
     title,
     kind: over.kind ?? ('channel' as const),

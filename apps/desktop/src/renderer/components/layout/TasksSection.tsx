@@ -70,9 +70,8 @@ export const TasksSection = memo(function TasksSection({
       applyTaskFilters(
         allTasks,
         filters,
-        // Channel-scoped filtering: every task (main-line, reply-cluster, or
-        // legacy fossil) resolves to a real channel through `channel_id`
-        // (the read model maps a fossil's channel_id to its parent channel).
+        // Channel-scoped filtering: every task (main-line or reply-cluster)
+        // resolves to a real channel through `channel_id`.
         (task, channelId) => task.channel_id === channelId,
       ),
     [allTasks, filters],

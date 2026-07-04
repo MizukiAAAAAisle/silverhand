@@ -31,19 +31,6 @@ const localChannelRef: ConversationRef = {
   archived_at: null,
 };
 
-const localThreadRef: ConversationRef = {
-  id: 't-of-primary',
-  kind: 'thread',
-  title: 'investigations',
-  workspace_id: 'w-1',
-  workspace_kind: 'regular',
-  workspace_path: '/tmp/w-1',
-  parent_channel_id: 'c-primary',
-  parent_title: 'planning',
-  closed_at: null,
-  archived_at: null,
-};
-
 const foreignChannelRef: ConversationRef = {
   id: 'c-foreign',
   kind: 'channel',
@@ -127,21 +114,6 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
     });
   });
 
-  it('?side resolved to a legacy fossil thread degrades to not_found (viewer retired)', () => {
-    // The isolated-thread viewer was retired with the reply-cluster model.
-    // The chip popover still resolves the thread label via the ref hook,
-    // but the openable side pane is gone — fossils map to not_found.
-    const out = selectSecondaryDescriptor(
-      { sideConversationId: 't-of-primary' },
-      makeRefResult('resolved', localThreadRef),
-    );
-    expect(out).toEqual({
-      source: 'side',
-      status: 'not_found',
-      id: 't-of-primary',
-    });
-  });
-
   it('?side loading produces a loading descriptor that still carries the id', () => {
     // Placeholder/skeleton needs the id to render `#conv:<id>` and offer
     // a Close button while the ref hook is in-flight.
@@ -200,18 +172,16 @@ const sideChannelDescriptor: SecondaryDescriptor = {
   closedAt: null,
   archivedAt: null,
 };
-// A resolved thread-kind side can no longer be produced by
-// selectSecondaryDescriptor (fossils degrade to not_found), but the
-// downstream pure selectors must still handle a resolved descriptor of any
-// kind — keep one to exercise that logic directly.
-const sideThreadDescriptor: SecondaryDescriptor = {
+// A second resolved channel-kind side (distinct id from primary) to
+// exercise the downstream pure selectors on a resolved secondary.
+const sideSecondDescriptor: SecondaryDescriptor = {
   source: 'side',
   status: 'resolved',
   id: 't-of-primary',
-  kind: 'thread',
+  kind: 'channel',
   title: 'investigations',
-  parentChannelId: 'c-primary',
-  parentTitle: 'planning',
+  parentChannelId: null,
+  parentTitle: null,
   workspaceId: 'w-1',
   workspaceKind: 'regular',
   workspacePath: '/tmp/w-1',
@@ -293,12 +263,12 @@ describe('selectVisibleConversations — read-cursor visibility matrix', () => {
   it('only secondary visible when fullscreen + resolved secondary', () => {
     const out = selectVisibleConversations({
       primary,
-      secondary: sideThreadDescriptor,
+      secondary: sideSecondDescriptor,
       fullscreen: true,
     });
     expect(out).toEqual({
       primary: null,
-      secondary: { id: 't-of-primary', kind: 'thread' },
+      secondary: { id: 't-of-primary', kind: 'channel' },
     });
   });
 
@@ -366,12 +336,12 @@ describe('selectFocusedConversation — single-id focus rule', () => {
     const out = selectFocusedConversation({
       primary,
       primaryWorkspaceId: 'w-1',
-      secondary: sideThreadDescriptor,
+      secondary: sideSecondDescriptor,
       fullscreen: false,
     });
     expect(out).toEqual({
       id: 't-of-primary',
-      kind: 'thread',
+      kind: 'channel',
       workspaceId: 'w-1',
     });
   });
@@ -397,7 +367,7 @@ describe('selectFocusedConversation — single-id focus rule', () => {
     const out = selectFocusedConversation({
       primary,
       primaryWorkspaceId: 'w-1',
-      secondary: sideThreadDescriptor,
+      secondary: sideSecondDescriptor,
       fullscreen: true,
     });
     expect(out?.id).toBe('t-of-primary');
@@ -452,13 +422,13 @@ describe('shouldSecondaryFullscreen — render-time fullscreen gate', () => {
 
   it('false when fullscreen flag is off (split / overlay render)', () => {
     expect(shouldSecondaryFullscreen(sideChannelDescriptor, false)).toBe(false);
-    expect(shouldSecondaryFullscreen(sideThreadDescriptor, false)).toBe(false);
+    expect(shouldSecondaryFullscreen(sideSecondDescriptor, false)).toBe(false);
     expect(shouldSecondaryFullscreen(loadingSide, false)).toBe(false);
   });
 
   it('true only when secondary is resolved AND fullscreen is set', () => {
     expect(shouldSecondaryFullscreen(sideChannelDescriptor, true)).toBe(true);
-    expect(shouldSecondaryFullscreen(sideThreadDescriptor, true)).toBe(true);
+    expect(shouldSecondaryFullscreen(sideSecondDescriptor, true)).toBe(true);
     expect(shouldSecondaryFullscreen(foreignSideDescriptor, true)).toBe(true);
   });
 
@@ -489,7 +459,6 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
       conversationDescriptor: null,
       channelKind: 'regular',
       parentTitle: null,
-      isThread: false,
       archiveWorkspaceId: 'w-1',
     });
   });
@@ -538,7 +507,6 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     // not from `primaryChannelKind`. (Renderer never sees agent_home.)
     expect(out.channelKind).toBe('regular');
     expect(out.parentTitle).toBeNull();
-    expect(out.isThread).toBe(false);
     // Archive mutation invalidation targets the FOREIGN workspace.
     expect(out.archiveWorkspaceId).toBe('w-2');
   });
@@ -598,7 +566,6 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     });
     expect(out.conversationDescriptor?.workspace_id).toBe('w-1');
     expect(out.archiveWorkspaceId).toBe('w-1');
-    expect(out.isThread).toBe(false);
   });
 
   it('non-resolved ?side: descriptor null, primary fallbacks (placeholder pane handles render)', () => {
@@ -616,7 +583,6 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
       conversationDescriptor: null,
       channelKind: 'regular',
       parentTitle: null,
-      isThread: false,
       archiveWorkspaceId: 'w-1',
     });
   });

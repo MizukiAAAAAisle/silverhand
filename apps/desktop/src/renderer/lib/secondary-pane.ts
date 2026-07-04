@@ -19,10 +19,7 @@
  *   - `secondaryDescriptor` — what the right pane shows. The only source
  *     is `?side=<id>` (overlay; cross-workspace capable via the ref
  *     hook). The descriptor's status reflects the ref-hook lifecycle
- *     (loading/resolved/unauthorized/not_found). A `?side` that resolves
- *     to a legacy `kind='thread'` fossil is treated as not_found — the
- *     isolated-thread viewer was retired with the reply-cluster model, so
- *     fossils are no longer renderable in the secondary pane.
+ *     (loading/resolved/unauthorized/not_found).
  *   - `visibleConversations` — set of conversations whose pane is
  *     currently on screen. Drives message read-cursor advancement.
  *     Fullscreen collapses to just the displayed pane; non-resolved
@@ -59,12 +56,12 @@ export type SecondaryDescriptor =
       source: 'side';
       status: 'resolved';
       id: string;
-      kind: 'channel' | 'dm_channel' | 'thread';
+      kind: 'channel' | 'dm_channel';
       title: string;
       parentChannelId: string | null;
-      /** Denormalised parent channel title — present when kind=thread
-       *  and the parent still exists. Renderer falls back to "thread"
-       *  when null (e.g. parent was deleted). */
+      /** Denormalised parent channel title. Nullable wire field carried
+       *  through from the ref; always null for the channel/dm side
+       *  conversations the pane renders (retained pending 2d wire cleanup). */
       parentTitle: string | null;
       workspaceId: string;
       workspaceKind: 'regular' | 'dm';
@@ -96,12 +93,6 @@ export interface SecondaryRouteInputs {
  * `parentTitle`) so ChannelView can switch its workspace-scoped hooks
  * via the `workspaceContext` prop without a second round-trip.
  *
- * A `?side` that resolves to a legacy `kind='thread'` fossil is mapped to
- * `not_found`: the isolated-thread viewer was retired with the
- * reply-cluster model, so the secondary pane no longer renders threads.
- * The chip popover (via `useConversationById`) still surfaces the
- * thread's label — only the openable side pane is gone.
- *
  * `sideRef === null` is treated as "ref hook hasn't been read yet"
  * (i.e. the React component hasn't run yet); we surface this as
  * `loading` so the URL state and the descriptor never disagree
@@ -127,12 +118,6 @@ export function selectSecondaryDescriptor(
     // the descriptor is the single source of truth for downstream
     // wiring (no second hop into channels list / workspace store).
     const ref = sideRef!.ref!;
-    // Legacy isolated-thread fossils are no longer renderable in the
-    // secondary pane (the `/t/` viewer was retired). Surface them as
-    // the unavailable placeholder rather than rendering a broken pane.
-    if (ref.kind === 'thread') {
-      return { source: 'side', status: 'not_found', id };
-    }
     return {
       source: 'side',
       status: 'resolved',
@@ -175,7 +160,7 @@ export function selectSecondaryWorkspaceContext(
 export interface SecondaryConversationDescriptor {
   id: string;
   title: string;
-  kind: 'channel' | 'dm_channel' | 'thread';
+  kind: 'channel' | 'dm_channel';
   parent_conversation_id: string | null;
   closed_at: number | null;
   archived_at: number | null;
@@ -191,14 +176,10 @@ export interface SecondaryViewInputs {
    *  this comes from the ref's `workspace_kind`; otherwise falls
    *  through to the primary's kind. */
   channelKind: 'regular' | 'dm' | null;
-  /** ChannelView `parentTitle` prop value. Reserved for thread-typed
-   *  sides; always null now that the secondary pane only renders
-   *  channel/dm conversations. */
+  /** ChannelView `parentTitle` prop value. Nullable wire pass-through;
+   *  always null now that the secondary pane only renders channel/dm
+   *  conversations (retained pending 2d wire cleanup). */
   parentTitle: string | null;
-  /** True iff the secondary pane is a thread. Always false now that
-   *  fossil threads are no longer renderable in the secondary pane;
-   *  retained so downstream prop wiring stays explicit. */
-  isThread: boolean;
   /** Workspace id to bake into the secondary archive mutation
    *  invalidation. Cross-workspace secondary needs the foreign
    *  workspace id so the `['workspaces', wid, 'channels']` cache
@@ -238,7 +219,6 @@ export function selectSecondaryViewInputs(
       conversationDescriptor: null,
       channelKind: primaryChannelKind,
       parentTitle: null,
-      isThread: false,
       archiveWorkspaceId: primaryWorkspaceId,
     };
   }
@@ -246,7 +226,6 @@ export function selectSecondaryViewInputs(
   // `?side` resolved: build the descriptor entirely from the ref
   // payload so cross-workspace secondaries don't need a lookup hit.
   if (secondary.source === 'side' && secondary.status === 'resolved') {
-    const isThread = secondary.kind === 'thread';
     return {
       conversationDescriptor: {
         id: secondary.id,
@@ -258,8 +237,7 @@ export function selectSecondaryViewInputs(
         workspace_id: secondary.workspaceId,
       },
       channelKind: secondary.workspaceKind,
-      parentTitle: isThread ? secondary.parentTitle : null,
-      isThread,
+      parentTitle: secondary.parentTitle,
       archiveWorkspaceId: secondary.workspaceId,
     };
   }
@@ -270,7 +248,6 @@ export function selectSecondaryViewInputs(
     conversationDescriptor: null,
     channelKind: primaryChannelKind,
     parentTitle: null,
-    isThread: false,
     archiveWorkspaceId: primaryWorkspaceId,
   };
 }
@@ -278,7 +255,7 @@ export function selectSecondaryViewInputs(
 /** Conversation pointer used by the read-cursor / focus selectors. */
 export interface ConversationPointer {
   id: string;
-  kind: 'channel' | 'dm_channel' | 'thread';
+  kind: 'channel' | 'dm_channel';
 }
 
 export interface VisibleConversations {
@@ -336,7 +313,7 @@ export function selectVisibleConversations(
 
 export interface FocusedConversation {
   id: string;
-  kind: 'channel' | 'dm_channel' | 'thread';
+  kind: 'channel' | 'dm_channel';
   /** Workspace id for the focused conversation. PR-2: pulled from
    *  the resolved secondary's `workspaceId` (cross-workspace capable)
    *  or from the caller's `primaryWorkspaceId` for the primary case. */

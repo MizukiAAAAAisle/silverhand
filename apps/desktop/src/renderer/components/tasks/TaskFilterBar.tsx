@@ -64,7 +64,7 @@ export interface ChannelOption {
 export interface ChannelFilterCandidate {
   id: string;
   title: string;
-  kind: 'channel' | 'dm_channel' | 'thread';
+  kind: 'channel' | 'dm_channel';
   archived_at: number | null;
   /** True when the owning workspace is a DM workspace — drives the data-source
    *  group even though the conversation kind is plain 'channel'. */
@@ -75,10 +75,9 @@ export interface ChannelFilterCandidate {
 
 /**
  * Single source of truth for *which* conversations are valid channel-filter
- * options. The eligibility rules — skip legacy fossil threads
- * (`kind === 'thread'`), never offer an archived channel, dedup by id, and
- * map to the dropdown's `ChannelOption` shape — live here ONLY, so the task
- * pane (TasksSection) and the workspace task drawer (WorkspaceTasksDrawer)
+ * options. The eligibility rules — never offer an archived channel, dedup by
+ * id, and map to the dropdown's `ChannelOption` shape — live here ONLY, so the
+ * task pane (TasksSection) and the workspace task drawer (WorkspaceTasksDrawer)
  * cannot drift. Callers own their own *scope* (which candidates to feed in)
  * and their own *ordering* (sort the result); those are legitimate
  * per-surface differences. Eligibility and option shape are not.
@@ -91,7 +90,6 @@ export function buildChannelFilterOptions(
 ): ChannelOption[] {
   const byId = new Map<string, ChannelOption>();
   for (const c of candidates) {
-    if (c.kind === 'thread') continue;
     if (c.archived_at !== null) continue;
     if (byId.has(c.id)) continue;
     const isDm = c.fromDmWorkspace || c.kind === 'dm_channel';

@@ -142,7 +142,7 @@ export function useActivitySource(params: {
   //
   // Gate on a RESOLVED channel/DM (Cindy review blocker 3): `conversationDescriptor`
   // is non-null exactly for a resolved channel/dm, so a `#conv` pointing at a
-  // legacy thread / not_found / unauthorized id never gets a cursor write before
+  // not_found / unauthorized id never gets a cursor write before
   // we know it is a real mainline stream. Thread sources carry `threadRootId`
   // and are excluded — ThreadPanel advances its own snapshot-gated reply cursor.
   const activitySourceReadChannelId =

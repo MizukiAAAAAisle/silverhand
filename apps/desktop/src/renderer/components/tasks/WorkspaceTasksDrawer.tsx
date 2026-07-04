@@ -287,9 +287,8 @@ export function WorkspaceTasksDrawer({
       applyTaskFilters(
         allTasks,
         filters,
-        // Channel-scoped: cluster + fossil tasks both resolve to a real
-        // channel through `channel_id` (the read model maps a fossil's
-        // channel_id to its parent channel).
+        // Channel-scoped: main-line + reply-cluster tasks both resolve to a
+        // real channel through `channel_id`.
         (task, conversationId) => task.channel_id === conversationId,
       ),
     [allTasks, filters],
