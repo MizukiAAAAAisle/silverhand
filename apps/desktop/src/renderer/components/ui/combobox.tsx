@@ -91,6 +91,7 @@ export function Combobox({
               if (hasSuggestions) setOpen(true);
             }}
             onFocus={() => hasSuggestions && setOpen(true)}
+            onClick={() => hasSuggestions && setOpen(true)}
             onBlur={() => onCommit(value)}
             onKeyDown={onKeyDown}
             className="min-w-0 flex-1 bg-transparent px-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none"
