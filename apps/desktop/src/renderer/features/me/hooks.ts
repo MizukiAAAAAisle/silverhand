@@ -14,10 +14,15 @@ import {
   type UpdateUserProfileInput,
   type UserDto,
 } from '@silverhand/shared';
-import { ApiError, api, apiUpload, fetchBackendBlob } from '@/lib/api';
+import { ApiError, api, apiUpload } from '@/lib/api';
 import { clearCurrentUser, setCurrentUserId } from '@/lib/current-user';
 import { eventWsClient } from '@/lib/ws-client';
 import { clearPlaceMemory } from '@/lib/place-memory';
+import {
+  clearAvatarBlobCache,
+  getAvatarBlobUrl,
+  loadAvatarBlobUrl,
+} from '@/lib/avatar-blob-cache';
 
 /**
  * Multi-human audit 2026-06-03 #task:857 P0.7 (review-fold by Cindy
@@ -60,7 +65,11 @@ const IDENTITY_BOUND_KEYS: ReadonlyArray<string> = [
 function clearViewerLocalState(): void {
   // 1. In-memory + disk for the place-memory maps.
   clearPlaceMemory();
-  // 2. Other identity-bound localStorage keys. Wrap each removal so a
+  // 2. App-session avatar blob cache — revoke every cached object URL so the
+  //    next signed-in viewer never inherits the previous session's avatars and
+  //    the blob memory is released (#task:1321).
+  clearAvatarBlobCache();
+  // 3. Other identity-bound localStorage keys. Wrap each removal so a
   //    quota error on one doesn't strand the others.
   try {
     for (const key of IDENTITY_BOUND_KEYS) {
@@ -442,30 +451,30 @@ export function useViewerAvatarObjectUrl(): string | null {
     data && !isRegistrationRequired(data) && !isBackendUnreachable(data)
       ? data.avatar_url
       : null;
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  // Shares the app-session avatar cache (#task:1321): the viewer's blob is
+  // fetched once and reused by SettingsPage + every chat MessageItem (via the
+  // threaded viewer URL), and it survives re-renders without re-fetching. The
+  // cache — not this hook — owns the object URL, so there is no revoke here;
+  // logout clears it via `clearAvatarBlobCache` in `clearViewerLocalState`.
+  const [objectUrl, setObjectUrl] = useState<string | null>(() =>
+    avatarUrl ? getAvatarBlobUrl(avatarUrl) ?? null : null,
+  );
   useEffect(() => {
-    let cancelled = false;
-    let createdUrl: string | null = null;
     if (!avatarUrl) {
       setObjectUrl(null);
       return;
     }
-    void (async () => {
-      try {
-        const res = await fetchBackendBlob(avatarUrl);
-        if (cancelled) {
-          URL.revokeObjectURL(res.url);
-          return;
-        }
-        createdUrl = res.url;
-        setObjectUrl(createdUrl);
-      } catch {
-        // Best-effort — falls back to the placeholder.
-      }
-    })();
+    const cached = getAvatarBlobUrl(avatarUrl);
+    if (cached) {
+      setObjectUrl(cached);
+      return;
+    }
+    let cancelled = false;
+    void loadAvatarBlobUrl(avatarUrl).then(url => {
+      if (!cancelled) setObjectUrl(url);
+    });
     return () => {
       cancelled = true;
-      if (createdUrl) URL.revokeObjectURL(createdUrl);
     };
   }, [avatarUrl]);
   return objectUrl;

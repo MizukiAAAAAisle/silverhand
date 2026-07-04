@@ -1,67 +1,39 @@
 import { useEffect, useMemo, useState } from 'react';
-import { fetchBackendBlob } from '@/lib/api';
+import { getAvatarBlobUrl, loadAvatarBlobUrl } from '@/lib/avatar-blob-cache';
 import { useUsersById } from './hooks';
 
 /**
- * Avatar fetch hooks for human users. Mirrors
- * `apps/desktop/src/renderer/features/agents/avatar-hooks.ts` for
- * humans: turn a stored `avatar_url` (or a user id resolved against the
- * directory) into a `URL.createObjectURL(...)` blob URL, with proper
- * lifecycle cleanup.
+ * Avatar fetch hooks for human users. Mirror the agent hooks
+ * (`apps/desktop/src/renderer/features/agents/avatar-hooks.ts`): turn a stored
+ * `avatar_url` (or a user id resolved against the directory) into a browser
+ * object URL by delegating to the app-session avatar cache
+ * (`@/lib/avatar-blob-cache`), which owns the URL's lifetime and fetches each
+ * `avatar_url` exactly once per renderer session (#task:1321). These hooks never
+ * revoke.
  *
  * Why two flavors:
  *
- * - `useUserAvatarObjectUrl(userId)`: the obvious shape for views that
- *   render exactly one human (HumanHeader, HumanProfileCard, single-row
- *   HumanInfoPopover). Resolves the user from the global directory and
- *   fetches one blob.
+ * - `useUserAvatarObjectUrl(input)`: one human (HumanHeader, HumanProfileCard,
+ *   single-row HumanInfoPopover). Accepts a user id (resolved via the directory)
+ *   or a raw `avatar_url`.
  *
- * - `useUserAvatarObjectUrls(users)`: the parent-batch shape for
- *   surfaces that render N humans in the same view (chat header member
- *   chips, mention picker, members rail). Calling the single-user hook
- *   from inside every leaf component would trigger N concurrent fetches
- *   and N object URLs for the same blob; the batch hook fetches once
- *   per (id, avatar_url) pair, returns a `Map<id, objectUrl | null>`,
- *   and the parent threads the map down as a prop. Mirrors the agent
- *   batch shape so the two surfaces stay isomorphic.
+ * - `useUserAvatarObjectUrls(users)`: the parent-batch shape for surfaces that
+ *   render N humans (chat header chips, mention picker, members rail). The
+ *   parent threads a `Map<id, objectUrl | null>` down as a prop.
  *
- * Both helpers fetch through the main-process auth proxy. On 4xx/5xx
- * the URL falls back to `null` so the caller renders the placeholder —
- * there is no second-class error state for missing avatars.
+ * On 4xx/5xx the value falls back to `null` so the caller renders the
+ * placeholder — there is no second-class error state for missing avatars.
  *
- * The viewer's own avatar still has its own hook
- * (`useViewerAvatarObjectUrl` in `features/me/hooks.ts`) — that path
- * keys off the viewer's auth-resolved dto (`useViewerUser`) rather
- * than the public directory, so it works even before `/api/users` has
- * hydrated.
+ * The viewer's own avatar still has its own hook (`useViewerAvatarObjectUrl` in
+ * `features/me/hooks.ts`) — that path keys off the auth-resolved dto rather than
+ * the public directory — but it now shares the same session cache.
  */
 
-async function fetchAvatarObjectUrl(
-  avatarUrl: string,
-  signal: AbortSignal,
-): Promise<string | null> {
-  try {
-    if (signal.aborted) return null;
-    const res = await fetchBackendBlob(avatarUrl);
-    if (signal.aborted) {
-      URL.revokeObjectURL(res.url);
-      return null;
-    }
-    return res.url;
-  } catch {
-    // Best-effort — caller falls back to the placeholder.
-    return null;
-  }
-}
-
 /**
- * Resolve one human's `avatar_url` to a browser object URL.
- *
- * Pass either a user id (looked up against the directory) or a raw
- * `avatar_url` string. `null`/`undefined` short-circuits to null.
- *
- * The hook owns the URL's lifetime: it revokes the previous URL
- * whenever the input changes or the component unmounts.
+ * Resolve one human's `avatar_url` to a session-cached object URL. Pass either a
+ * user id (looked up against the directory) or a raw `avatar_url` string.
+ * `null`/`undefined` short-circuits to null. Seeds from the cache synchronously
+ * so a remount with an already-fetched avatar shows it with no flash.
  */
 export function useUserAvatarObjectUrl(
   input: { userId: string | null | undefined } | { avatarUrl: string | null | undefined },
@@ -74,26 +46,25 @@ export function useUserAvatarObjectUrl(
         ? (usersById.get(input.userId)?.avatar_url ?? null)
         : null;
 
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [objectUrl, setObjectUrl] = useState<string | null>(() =>
+    avatarUrl ? getAvatarBlobUrl(avatarUrl) ?? null : null,
+  );
   useEffect(() => {
     if (!avatarUrl) {
       setObjectUrl(null);
       return;
     }
-    const ac = new AbortController();
-    let createdUrl: string | null = null;
-    void (async () => {
-      const url = await fetchAvatarObjectUrl(avatarUrl, ac.signal);
-      if (ac.signal.aborted) {
-        if (url) URL.revokeObjectURL(url);
-        return;
-      }
-      createdUrl = url;
-      setObjectUrl(url);
-    })();
+    const cached = getAvatarBlobUrl(avatarUrl);
+    if (cached) {
+      setObjectUrl(cached);
+      return;
+    }
+    let cancelled = false;
+    void loadAvatarBlobUrl(avatarUrl).then(url => {
+      if (!cancelled) setObjectUrl(url);
+    });
     return () => {
-      ac.abort();
-      if (createdUrl) URL.revokeObjectURL(createdUrl);
+      cancelled = true;
     };
   }, [avatarUrl]);
   return objectUrl;
@@ -108,19 +79,23 @@ export interface UserAvatarSource {
 /**
  * Batch resolver: takes a list of humans, returns `Map<id, objectUrl | null>`.
  *
- * Dedupes by `${id}:${avatar_url ?? ''}` so a list with the same human
- * twice (e.g. mention chip + author row) shares one fetch.
+ * Session-cache-backed, so a cached avatar fills the returned map synchronously
+ * (no flash) and only genuinely-uncached avatars fetch; concurrent fetches for
+ * the same url are de-duped by the cache.
  *
  * Caller responsibilities:
- *   - Pass a stable list (memoize the array reference). Re-creating
- *     the array every render forces a teardown/refetch cycle.
+ *   - Pass a stable list (memoize the array reference).
  *   - Treat the returned map as read-only.
  */
 export function useUserAvatarObjectUrls(
   users: ReadonlyArray<UserAvatarSource>,
 ): Map<string, string | null> {
+  // Deduped + sorted so the key depends only on the SET of pairs, not order.
   const cacheKey = useMemo(
-    () => users.map(u => `${u.id}:${u.avatar_url ?? ''}`).join('|'),
+    () =>
+      Array.from(new Set(users.map(u => `${u.id}:${u.avatar_url ?? ''}`)))
+        .sort()
+        .join('|'),
     [users],
   );
 
@@ -130,43 +105,33 @@ export function useUserAvatarObjectUrls(
 
   useEffect(() => {
     let cancelled = false;
-    const acs = new Map<string, AbortController>();
-    const created = new Map<string, string>();
-    const fetched = new Map<string, Promise<void>>();
 
     const next = new Map<string, string | null>();
+    const toLoad: Array<{ id: string; url: string }> = [];
     for (const u of users) {
       if (!u.avatar_url) {
         next.set(u.id, null);
         continue;
       }
-      next.set(u.id, null);
-      const k = `${u.id}:${u.avatar_url}`;
-      if (fetched.has(k)) continue;
-      const ac = new AbortController();
-      acs.set(k, ac);
-      const p = (async () => {
-        const url = await fetchAvatarObjectUrl(u.avatar_url!, ac.signal);
-        if (cancelled || ac.signal.aborted) {
-          if (url) URL.revokeObjectURL(url);
-          return;
-        }
-        if (url) created.set(k, url);
+      const cached = getAvatarBlobUrl(u.avatar_url);
+      next.set(u.id, cached ?? null);
+      if (!cached) toLoad.push({ id: u.id, url: u.avatar_url });
+    }
+    setById(next);
+
+    for (const { id, url } of toLoad) {
+      void loadAvatarBlobUrl(url).then(resolved => {
+        if (cancelled || !resolved) return;
         setById(prev => {
           const out = new Map(prev);
-          out.set(u.id, url);
+          out.set(id, resolved);
           return out;
         });
-      })();
-      fetched.set(k, p);
+      });
     }
-
-    setById(next);
 
     return () => {
       cancelled = true;
-      for (const ac of acs.values()) ac.abort();
-      for (const url of created.values()) URL.revokeObjectURL(url);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- cacheKey is the
     // stable identity of the input set; using `users` here would re-fire on
