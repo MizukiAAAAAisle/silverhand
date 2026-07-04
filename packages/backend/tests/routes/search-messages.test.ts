@@ -118,7 +118,6 @@ describe('agent list_channels / search_messages routes', () => {
       id: hit.id,
       conversation_id: channelId,
       channel_id: channelId,
-      thread_id: null,
       seq: hit.seq,
     });
     expect(body.hits[0]).not.toHaveProperty('content');

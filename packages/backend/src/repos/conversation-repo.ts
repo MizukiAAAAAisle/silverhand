@@ -169,11 +169,9 @@ export class ConversationRepo {
   }
 
   /** Flat archived-channel list across all workspaces, with the parent
-   *  workspace's name + a `thread_count` (number of threads under this
-   *  channel regardless of their own archive state). Drives the global
-   *  Archived chat-tool page. Sorted by `archived_at DESC, created_at
-   *  ASC`. Filters: optional workspace narrowing and `since` (inclusive
-   *  lower bound on archived_at, epoch ms). */
+   *  workspace's name. Drives the global Archived chat-tool page. Sorted
+   *  by `archived_at DESC, created_at ASC`. Filters: optional workspace
+   *  narrowing and `since` (inclusive lower bound on archived_at, epoch ms). */
   listArchivedChannelsAggregate(opts: {
     workspaceId?: string;
     since?: number;
@@ -205,13 +203,11 @@ export class ConversationRepo {
       .prepare<typeof args, ConversationRow & {
         workspace_name: string;
         workspace_archived_at: number | null;
-        thread_count: number;
       }>(
         `SELECT
            c.*,
            w.name AS workspace_name,
-           w.archived_at AS workspace_archived_at,
-           0 AS thread_count
+           w.archived_at AS workspace_archived_at
          FROM conversations c
          JOIN workspaces w ON w.id = c.workspace_id
          WHERE ${where.join(' AND ')}
@@ -222,7 +218,6 @@ export class ConversationRepo {
       const {
         workspace_name,
         workspace_archived_at,
-        thread_count,
         ...conversation
       } = r;
       return {
@@ -232,7 +227,6 @@ export class ConversationRepo {
           name: workspace_name,
           archived_at: workspace_archived_at,
         },
-        thread_count,
       };
     });
   }
@@ -685,7 +679,6 @@ export interface ArchivedAggregateRow {
     name: string;
     archived_at: number | null;
   };
-  thread_count: number;
 }
 
 export interface RepoError extends Error {

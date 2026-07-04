@@ -73,7 +73,6 @@ describe('GET /api/search', () => {
           type: 'message',
           conversation: expect.objectContaining({
             channel_id: workspace.onboarding_channel_id,
-            legacy_thread_conversation_id: null,
             thread_id: null,
           }),
           message: expect.objectContaining({

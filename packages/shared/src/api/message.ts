@@ -332,9 +332,6 @@ export const SearchConversationRefSchema = z.object({
   kind: ConversationKindSchema,
   channel_id: z.string(),
   thread_id: z.string().nullable(),
-  /** Legacy isolated-thread conversation id. New reply-cluster message
-   *  hits use `message.thread_root_id` instead. */
-  legacy_thread_conversation_id: z.string().nullable(),
   parent_conversation_id: z.string().nullable(),
   closed_at: z.number().nullable(),
   created_at: z.number(),
@@ -384,9 +381,6 @@ export const SavedMessageDtoSchema = z.object({
   conversation_id: z.string(),
   conversation_title: z.string(),
   channel_id: z.string(),
-  /** Legacy isolated-thread conversation id. New reply-cluster saved
-   *  messages use `message.thread_root_id` instead. */
-  legacy_thread_conversation_id: z.string().nullable(),
   thread_id: z.string().nullable(),
   /** Display name of the message author at save time. `null` for user messages. */
   agent_name: z.string().nullable(),

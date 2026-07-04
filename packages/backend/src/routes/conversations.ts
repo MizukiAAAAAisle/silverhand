@@ -331,13 +331,6 @@ export function createConversationReadApp(
     const workspace = workspaces.get(conversation.workspace_id);
     if (!workspace) return c.json({ error: 'conversation not found' }, 404);
 
-    // `parent_channel_id` / `parent_title` are vestigial wire fields:
-    // isolated-thread conversations were retired (#task:1303), so a
-    // conversation ref never has a parent channel. Kept null in the
-    // response shape until the renderer stops reading them (2d).
-    const parentChannelId = null;
-    const parentTitle: string | null = null;
-
     const ref = {
       id: conversation.id,
       kind: conversation.kind,
@@ -350,8 +343,6 @@ export function createConversationReadApp(
           ? ('dm' as const)
           : ('regular' as const),
       workspace_path: conversation.workspace_path,
-      parent_channel_id: parentChannelId,
-      parent_title: parentTitle,
       closed_at: conversation.closed_at,
       archived_at: conversation.archived_at,
     };

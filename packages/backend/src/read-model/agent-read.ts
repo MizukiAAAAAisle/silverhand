@@ -53,7 +53,6 @@ type AgentSearchMessageRow = HistoryMessageRow & {
   workspace_id: string;
   conversation_kind: ConversationDto['kind'];
   channel_id: string;
-  thread_id: string | null;
 };
 
 type ReadHistoryTargetResult =
@@ -178,7 +177,6 @@ function targetRef(
     conversation_id: conversation.id,
     conversation_kind: conversation.kind,
     channel_id: conversation.id,
-    thread_id: null,
     thread_root_id: threadRootId,
     workspace_id: conversation.workspace_id,
     title: conversation.title,
@@ -192,7 +190,6 @@ function messageRef(row: MessageRow, target: ReadHistoryTargetRef): MessageRef {
     conversation_id: target.conversation_id,
     conversation_kind: target.conversation_kind,
     channel_id: target.channel_id,
-    thread_id: target.thread_id,
     seq: row.seq,
     created_at: row.created_at,
   };
@@ -583,7 +580,6 @@ function searchMessageRef(row: AgentSearchMessageRow): MessageRef {
     conversation_id: row.conversation_id,
     conversation_kind: row.conversation_kind,
     channel_id: row.channel_id,
-    thread_id: row.thread_id,
     seq: row.seq,
     created_at: row.created_at,
   };
@@ -703,8 +699,7 @@ export function buildAgentSearchMessagesDto(
           sender.display_name AS sender_agent_name,
           conv.workspace_id AS workspace_id,
           conv.kind AS conversation_kind,
-          conv.id AS channel_id,
-          NULL AS thread_id
+          conv.id AS channel_id
          FROM messages m
          JOIN conversations conv ON conv.id = m.conversation_id
          JOIN conversation_agents ca

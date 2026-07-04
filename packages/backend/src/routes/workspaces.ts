@@ -302,12 +302,8 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
               }),
             result => ({ channelCount: result.length }),
           );
-    // `threads` is a vestigial wire field: isolated-thread conversations
-    // were retired (#task:1303), so the list is always empty. Kept in the
-    // response shape until the renderer stops reading it (2d).
     return c.json({
       channels,
-      threads: [],
       // Filter to the live channel set so a stale entity_id never leaks.
       viewer_sort: sort.getState(
         principal.userId,
@@ -345,7 +341,7 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
           }),
         result => ({ channelCount: result.length }),
       );
-      return c.json({ channels: dmChannels, threads: [] });
+      return c.json({ channels: dmChannels });
     }
     const channels = timedRouteSpan(
       ctx,
@@ -357,7 +353,7 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
         }),
       result => ({ channelCount: result.length }),
     );
-    return c.json({ channels, threads: [] });
+    return c.json({ channels });
   });
 
   app.get(apiPaths.archivedChannels, c => {

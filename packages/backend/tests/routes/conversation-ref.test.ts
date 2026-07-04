@@ -85,8 +85,6 @@ describe('GET /api/conversations/:id/ref', () => {
       title: 'planning',
       workspace_id: reg.workspaceId,
       workspace_kind: 'regular',
-      parent_channel_id: null,
-      parent_title: null,
       closed_at: null,
       archived_at: null,
     });
@@ -107,8 +105,6 @@ describe('GET /api/conversations/:id/ref', () => {
       workspace_id: alice.agentHomeWorkspaceId,
       // The hard contract: external callers never see 'agent_home'.
       workspace_kind: 'dm',
-      parent_channel_id: null,
-      parent_title: null,
     });
   });
 

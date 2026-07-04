@@ -95,13 +95,11 @@ describe('Notifications routes — characterization (P15 prep)', () => {
       notifications: Array<{
         id: string;
         thread_root_id: string | null;
-        legacy_thread_conversation_id: string | null;
       }>;
     }>(http(t).get('/api/notifications'));
 
     expect(all.notifications.find(x => x.id === n.id)).toMatchObject({
       thread_root_id: rootId,
-      legacy_thread_conversation_id: null,
     });
   });
 
@@ -144,7 +142,6 @@ describe('Notifications routes — characterization (P15 prep)', () => {
           conversation_id: string;
           message_id: string;
           thread_root_id: string | null;
-          legacy_thread_conversation_id: string | null;
         }
       >;
     }>(http(t).get('/api/notifications/unread'));
@@ -153,7 +150,6 @@ describe('Notifications routes — characterization (P15 prep)', () => {
       conversation_id: conversationId,
       message_id: replyId,
       thread_root_id: rootId,
-      legacy_thread_conversation_id: null,
     });
   });
 

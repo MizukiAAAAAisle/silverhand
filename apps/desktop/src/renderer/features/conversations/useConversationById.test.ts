@@ -10,8 +10,6 @@ const baseRef: ConversationRef = {
   workspace_id: 'ws-a',
   workspace_kind: 'regular',
   workspace_path: '/tmp/ws-a',
-  parent_channel_id: null,
-  parent_title: null,
   closed_at: null,
   archived_at: null,
 };

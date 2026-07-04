@@ -36,7 +36,6 @@ describe('archivedRowWorkspaceLabel — kind drives the context label', () => {
     const item = {
       channel: { ...baseChannel, kind: 'channel' },
       workspace: { id: 'w1', name: 'Engineering', archived_at: null },
-      thread_count: 0,
     } as unknown as ArchivedChannelListItemDto;
     expect(archivedRowWorkspaceLabel(item)).toBe('Engineering');
   });
@@ -45,7 +44,6 @@ describe('archivedRowWorkspaceLabel — kind drives the context label', () => {
     const item = {
       channel: { ...baseChannel, kind: 'dm_channel' },
       workspace: { id: 'w2', name: 'Norman', archived_at: null },
-      thread_count: 0,
     } as unknown as ArchivedChannelListItemDto;
     expect(archivedRowWorkspaceLabel(item)).toBe('@Norman');
   });
@@ -65,7 +63,6 @@ describe('archivedRowOpenTarget — opens in the channel\'s OWN workspace', () =
     const item = {
       channel: { ...baseChannel, kind: 'channel' },
       workspace: { id: 'w1', name: 'Engineering', archived_at: null },
-      thread_count: 0,
     } as unknown as ArchivedChannelListItemDto;
     expect(archivedRowOpenTarget(item)).toEqual({
       workspaceId: 'w1',
@@ -81,7 +78,6 @@ describe('archivedRowOpenTarget — opens in the channel\'s OWN workspace', () =
     const item = {
       channel: { ...baseChannel, id: 'dm-c', kind: 'dm_channel' },
       workspace: { id: 'agent-home-ws', name: 'Norman', archived_at: null },
-      thread_count: 2,
     } as unknown as ArchivedChannelListItemDto;
     expect(archivedRowOpenTarget(item)).toEqual({
       workspaceId: 'agent-home-ws',

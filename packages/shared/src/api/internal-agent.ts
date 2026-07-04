@@ -210,7 +210,6 @@ export const MessageRefSchema = z.object({
   conversation_id: z.string(),
   conversation_kind: ConversationKindSchema,
   channel_id: z.string(),
-  thread_id: z.string().nullable(),
   seq: z.number(),
   created_at: z.number(),
 });
@@ -228,7 +227,6 @@ export const ReadHistoryTargetRefSchema = z.object({
   conversation_id: z.string(),
   conversation_kind: ConversationKindSchema,
   channel_id: z.string(),
-  thread_id: z.string().nullable(),
   /** Set only for the reply-cluster read form (`{ thread_root_id }`):
    *  the canonical cluster root message id. `null` for every other
    *  target. Lets the caller tell the anchor root apart from its

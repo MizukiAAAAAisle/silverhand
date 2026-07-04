@@ -8,14 +8,12 @@ function newId(): string {
 
 type NotificationJoinedRow = NotificationRow & {
   thread_root_id?: string | null;
-  legacy_thread_conversation_id?: string | null;
 };
 
 function rowToDto(row: NotificationJoinedRow): NotificationDto {
   return {
     ...row,
     thread_root_id: row.thread_root_id ?? null,
-    legacy_thread_conversation_id: row.legacy_thread_conversation_id ?? null,
     payload: row.payload ? (JSON.parse(row.payload) as Record<string, unknown>) : null,
   };
 }
@@ -70,8 +68,7 @@ export class NotificationRepo {
       .prepare<[string], NotificationJoinedRow>(
         `SELECT
             n.*,
-            m.thread_root_id AS thread_root_id,
-            NULL AS legacy_thread_conversation_id
+            m.thread_root_id AS thread_root_id
            FROM notifications n
            LEFT JOIN messages m ON m.id = n.message_id
            LEFT JOIN conversations conv ON conv.id = n.conversation_id
@@ -101,8 +98,7 @@ export class NotificationRepo {
       .prepare<typeof args, NotificationJoinedRow>(
         `SELECT
             n.*,
-            m.thread_root_id AS thread_root_id,
-            NULL AS legacy_thread_conversation_id
+            m.thread_root_id AS thread_root_id
            FROM notifications n
            LEFT JOIN messages m ON m.id = n.message_id
            LEFT JOIN conversations conv ON conv.id = n.conversation_id
@@ -149,7 +145,6 @@ export class NotificationRepo {
       conversation_id: string;
       message_id: string;
       thread_root_id: string | null;
-      legacy_thread_conversation_id: string | null;
     }
   > {
     const userPredicate =
@@ -163,15 +158,13 @@ export class NotificationRepo {
           conversation_id: string;
           message_id: string;
           thread_root_id: string | null;
-          legacy_thread_conversation_id: string | null;
         }
       >(
         `SELECT
            COALESCE(n.workspace_id, c.workspace_id) AS scope_id,
            n.conversation_id,
            n.message_id,
-           m.thread_root_id AS thread_root_id,
-           NULL AS legacy_thread_conversation_id
+           m.thread_root_id AS thread_root_id
          FROM notifications n
          JOIN conversations c ON c.id = n.conversation_id
          LEFT JOIN messages m ON m.id = n.message_id
@@ -199,7 +192,6 @@ export class NotificationRepo {
         conversation_id: string;
         message_id: string;
         thread_root_id: string | null;
-        legacy_thread_conversation_id: string | null;
       }
     >();
     for (const r of rows) {
@@ -207,7 +199,6 @@ export class NotificationRepo {
         conversation_id: r.conversation_id,
         message_id: r.message_id,
         thread_root_id: r.thread_root_id ?? null,
-        legacy_thread_conversation_id: r.legacy_thread_conversation_id ?? null,
       });
     }
     return out;

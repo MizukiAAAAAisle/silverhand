@@ -843,7 +843,6 @@ describe('SystemMessage task event rows (PR-2)', () => {
       channel_name: 'general',
       thread_id: null,
       thread_root_id: null,
-      legacy_thread_conversation_id: null,
       conversation: { id: 'chan-1', title: 'general' },
       status: 'todo',
       title: 'wire registry',
@@ -1327,8 +1326,6 @@ describe('Markdown conversation refs', () => {
         workspace_id: 'ws-foreign',
         workspace_kind: 'regular',
         workspace_path: '/tmp/ws-foreign',
-        parent_channel_id: null,
-        parent_title: null,
         closed_at: null,
       },
     });

@@ -197,7 +197,6 @@ describe('TaskService.createTasks', () => {
       });
       expect(summaries.find(x => x.message_id === taskMessageId)).toMatchObject({
         thread_root_id: root.id,
-        legacy_thread_conversation_id: null,
         thread_id: null,
       });
 
@@ -1729,12 +1728,10 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
           expect.objectContaining({
             kind: 'claim',
             thread_root_id: root.id,
-            legacy_thread_conversation_id: null,
           }),
           expect.objectContaining({
             kind: 'status',
             thread_root_id: root.id,
-            legacy_thread_conversation_id: null,
           }),
         ]),
       );

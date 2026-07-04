@@ -25,8 +25,6 @@ const localChannelRef: ConversationRef = {
   workspace_id: 'w-1',
   workspace_kind: 'regular',
   workspace_path: '/tmp/w-1',
-  parent_channel_id: null,
-  parent_title: null,
   closed_at: null,
   archived_at: null,
 };
@@ -38,8 +36,6 @@ const foreignChannelRef: ConversationRef = {
   workspace_id: 'w-2',
   workspace_kind: 'regular',
   workspace_path: '/tmp/w-2',
-  parent_channel_id: null,
-  parent_title: null,
   closed_at: null,
   archived_at: null,
 };
@@ -51,8 +47,6 @@ const foreignDmRef: ConversationRef = {
   workspace_id: 'w-bob-home',
   workspace_kind: 'dm',
   workspace_path: '/tmp/w-bob-home',
-  parent_channel_id: null,
-  parent_title: null,
   closed_at: null,
   archived_at: null,
 };

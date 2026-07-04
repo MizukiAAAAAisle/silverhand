@@ -62,9 +62,6 @@ export type CreateConversationChannelInput = z.infer<
 // Hard contract:
 //   - `workspace_kind` is the *external* projection — `agent_home` is
 //     mapped to `'dm'` here so the renderer never sees a third kind.
-//   - For threads, `parent_channel_id` and `parent_title` are
-//     denormalised so the placeholder/sigil can render the parent
-//     channel name without an extra round-trip.
 //   - Does NOT include unread count, last_seq, message previews, or
 //     any per-user state — those go through the existing read-cursor
 //     and message-window endpoints. Keep this endpoint identity-only.
@@ -84,8 +81,6 @@ export const ConversationRefSchema = z.object({
   workspace_id: z.string(),
   workspace_kind: ConversationRefWorkspaceKindSchema,
   workspace_path: z.string(),
-  parent_channel_id: z.string().nullable(),
-  parent_title: z.string().nullable(),
   closed_at: z.number().nullable(),
   archived_at: z.number().nullable(),
 });
@@ -275,9 +270,7 @@ export type ArchivedChannelsQueryInput = z.infer<
  *  workspace-scoped read paths (`/workspaces/:id/channels/archived`) stay
  *  segregated — only this global index merges. `workspace.archived_at`
  *  is included so the UI can flag rows whose workspace itself is
- *  archived without a second lookup. `thread_count` is computed
- *  server-side so the row can render "N threads" without requesting
- *  the threads themselves. */
+ *  archived without a second lookup. */
 export const ArchivedChannelListItemDtoSchema = z.object({
   channel: ChannelLikeDtoSchema,
   workspace: z.object({
@@ -285,7 +278,6 @@ export const ArchivedChannelListItemDtoSchema = z.object({
     name: z.string(),
     archived_at: z.number().nullable(),
   }),
-  thread_count: z.number().int().nonnegative(),
 });
 export type ArchivedChannelListItemDto = z.infer<
   typeof ArchivedChannelListItemDtoSchema

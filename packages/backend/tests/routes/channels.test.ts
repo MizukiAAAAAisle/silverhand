@@ -1253,7 +1253,7 @@ describe('GET /api/workspaces/:id/channels (active vs archived split)', () => {
     const res = await http(t).get(`/api/workspaces/${home.id}/channels/archived`);
     expect(res.status).toBe(200);
     const body = await res.json() as any;
-    expect(body).toEqual({ channels: [], threads: [] });
+    expect(body).toEqual({ channels: [] });
   });
 });
 
@@ -1264,7 +1264,7 @@ describe('GET /api/archived-channels (cross-workspace aggregate)', () => {
     t = null;
   });
 
-  it('returns channels across workspaces with workspace name + thread_count, sorted by archived_at DESC', async () => {
+  it('returns channels across workspaces with workspace name, sorted by archived_at DESC', async () => {
     t = buildTestApp();
     const aliceId = await makeAgent(t, 'alice');
     const ws1 = await (
@@ -1316,10 +1316,8 @@ describe('GET /api/archived-channels (cross-workspace aggregate)', () => {
       name: 'two',
       archived_at: null,
     });
-    expect(list.channels[0].thread_count).toBe(0);
     expect(list.channels[1].channel.id).toBe(c1.channel.id);
     expect(list.channels[1].workspace.name).toBe('one');
-    expect(list.channels[1].thread_count).toBe(0);
   });
 
   it('filters by workspace_id and since (epoch ms)', async () => {

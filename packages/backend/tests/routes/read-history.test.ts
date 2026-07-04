@@ -262,7 +262,6 @@ describe('POST /internal/.../read-history', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as any;
     expect(body.target.thread_root_id).toBe(root.id);
-    expect(body.target.thread_id).toBeNull();
     expect(body.target.conversation_id).toBe(channelId);
     expect(body.messages.map((m: any) => m.message_ref.id)).toEqual([
       root.id,

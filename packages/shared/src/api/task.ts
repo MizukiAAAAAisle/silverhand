@@ -47,10 +47,6 @@ export const TaskSummaryDtoSchema = z.object({
    *  thread cluster. NULL = main-line task. Distinct from `thread_id`,
    *  which is a legacy isolated thread conversation id. */
   thread_root_id: z.string().nullable(),
-  /** Legacy isolated-thread conversation id. Present only for fossil
-   *  `kind='thread'` conversations; new reply clusters use
-   *  `thread_root_id` instead. */
-  legacy_thread_conversation_id: z.string().nullable(),
   thread_id: z.string().nullable(),
   conversation: TaskConversationRefSchema,
   status: TaskStatusSchema,
@@ -289,9 +285,6 @@ export const TaskChangedEventSchema = z.object({
   /** Reply-cluster root message id for task body / lifecycle events
    *  inside a thread cluster. NULL = main-line or legacy fossil. */
   thread_root_id: z.string().nullable(),
-  /** Legacy isolated-thread conversation id; compatibility alias for
-   *  old fossil conversations only. */
-  legacy_thread_conversation_id: z.string().nullable(),
   thread_id: z.string().nullable(),
   conversation_id: z.string(),
   task_number: z.number(),

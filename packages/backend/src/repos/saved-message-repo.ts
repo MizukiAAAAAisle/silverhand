@@ -36,7 +36,6 @@ interface JoinedRow extends SavedMessageRow {
   workspace_name: string;
   conversation_title: string;
   channel_id: string;
-  legacy_thread_conversation_id: string | null;
   thread_id: string | null;
   agent_name: string | null;
 }
@@ -64,7 +63,6 @@ function rowToDto(row: JoinedRow): SavedMessageDto {
     conversation_id: row.conversation_id!,
     conversation_title: row.conversation_title,
     channel_id: row.channel_id,
-    legacy_thread_conversation_id: row.legacy_thread_conversation_id,
     thread_id: row.thread_id,
     agent_name: row.agent_name,
     message: {
@@ -156,7 +154,6 @@ const SELECT_JOINED = `
     w.name             AS workspace_name,
     conv.title         AS conversation_title,
     conv.id            AS channel_id,
-    NULL               AS legacy_thread_conversation_id,
     NULL               AS thread_id,
     a.name             AS agent_name
   FROM saved_messages sm

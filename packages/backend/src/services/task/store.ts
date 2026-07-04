@@ -37,7 +37,6 @@ interface TaskJoinedRow {
   channel_id: string;
   channel_name: string;
   thread_root_id: string | null;
-  legacy_thread_conversation_id: string | null;
   thread_id: string | null;
   task_assignee_agent_id: string | null;
   task_assignee_user_id: string | null;
@@ -66,9 +65,8 @@ const SELECT_TASK_JOINED = `
     conv.id                    AS channel_id,
     conv.title                 AS channel_name,
     m.thread_root_id           AS thread_root_id,
-    -- Isolated-thread conversations were retired (#task:1303); these
-    -- vestigial wire fields are always null now (removed in 2d).
-    NULL                       AS legacy_thread_conversation_id,
+    -- Isolated-thread conversations were retired (#task:1303); thread_id
+    -- is a vestigial wire field, always null now.
     NULL                       AS thread_id,
     m.task_assignee_agent_id   AS task_assignee_agent_id,
     m.task_assignee_user_id    AS task_assignee_user_id,
@@ -373,7 +371,6 @@ export class TaskStore {
       channel_id: row.channel_id,
       channel_name: row.channel_name,
       thread_root_id: row.thread_root_id,
-      legacy_thread_conversation_id: row.legacy_thread_conversation_id,
       thread_id: row.thread_id,
       conversation: { id: row.conversation_id, title: row.conversation_title },
       status: row.task_status,

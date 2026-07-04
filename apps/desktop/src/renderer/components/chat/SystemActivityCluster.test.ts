@@ -51,7 +51,6 @@ function seededTask(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
     channel_name: 'general',
     thread_id: null,
     thread_root_id: null,
-    legacy_thread_conversation_id: null,
     conversation: { id: 'chan-1', title: 'general' },
     status: 'todo',
     title: 'wire registry',
