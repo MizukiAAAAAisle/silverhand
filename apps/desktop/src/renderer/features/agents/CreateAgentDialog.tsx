@@ -10,7 +10,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { ApiError } from '@/lib/api';
+import { describeApiError } from '@/lib/api-error-message';
 import { useHostProvenanceGate, useHostsQuery } from '@/features/hosts/hooks';
 import { useCreateAgent } from './hooks';
 
@@ -255,35 +255,28 @@ export function CreateAgentDialog({
   );
 }
 
-/** Map a create-agent failure to a calm, user-facing line. The host-placement
- *  codes are defensive: a desktop submit always carries an explicit `host_id`,
- *  so `local_host_ambiguous` shouldn't surface from here — but a host revoked
- *  or detached between load and submit still can. Anything unrecognised falls
- *  back to a generic retry message rather than leaking a raw `ApiError`. */
-function friendlyCreateError(err: unknown): string {
-  if (err instanceof ApiError) {
-    if (err.kind === 'backend_unreachable') {
-      return "Can't reach the backend. Check your connection and try again.";
-    }
-    switch (parseErrorCode(err.body)) {
-      case 'local_host_ambiguous':
-        return 'Choose which computer should run this agent.';
-      case 'local_host_unbound':
-        return 'No connected computer can run this agent. Connect one and try again.';
-      case 'host_revoked':
-      case 'host_not_owned':
-      case 'host_missing':
-        return "That computer isn't available anymore. Pick another and try again.";
-    }
-  }
-  return "Couldn't create the agent. Please try again.";
-}
+const AGENT_CREATE_ERROR_MESSAGES: Record<string, string> = {
+  local_host_ambiguous: 'Choose which computer should run this agent.',
+  local_host_unbound:
+    'No connected computer can run this agent. Connect one and try again.',
+  host_revoked:
+    "That computer isn't available anymore. Pick another and try again.",
+  host_not_owned:
+    "That computer isn't available anymore. Pick another and try again.",
+  host_missing:
+    "That computer isn't available anymore. Pick another and try again.",
+};
 
-function parseErrorCode(body: string): string | null {
-  try {
-    const parsed = JSON.parse(body) as { code?: unknown };
-    return typeof parsed.code === 'string' ? parsed.code : null;
-  } catch {
-    return null;
-  }
+/** Map a create-agent failure to a calm, user-facing line. Known
+ *  host-placement codes keep their tailored copy; new backend errors still
+ *  surface their structured reason instead of disappearing behind a generic
+ *  retry message. */
+function friendlyCreateError(err: unknown): string {
+  return describeApiError(err, {
+    actionLabel: "Couldn't create the agent",
+    backendUnreachableMessage:
+      "Can't reach the backend. Check your connection and try again.",
+    fallbackMessage: "Couldn't create the agent. Please try again.",
+    knownCodeMessages: AGENT_CREATE_ERROR_MESSAGES,
+  });
 }

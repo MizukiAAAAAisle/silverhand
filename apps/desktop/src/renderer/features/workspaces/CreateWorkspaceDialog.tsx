@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { ApiError } from '@/lib/api';
+import { describeApiError } from '@/lib/api-error-message';
 import { useHostProvenanceGate, useHostsQuery } from '@/features/hosts/hooks';
 import { useAgents } from '@/features/agents/hooks';
 import {
@@ -385,34 +385,27 @@ export function CreateWorkspaceDialog({
   );
 }
 
-function friendlyCreateWorkspaceError(err: unknown): string {
-  if (err instanceof ApiError) {
-    if (err.kind === 'backend_unreachable') {
-      return "Can't reach the backend. Check your connection and try again.";
-    }
-    switch (parseErrorCode(err.body)) {
-      case 'local_host_ambiguous':
-        return 'Choose which computer should store this workspace.';
-      case 'local_host_unbound':
-        return 'No connected computer can store this workspace. Connect one and try again.';
-      case 'host_revoked':
-      case 'host_not_owned':
-      case 'host_missing':
-        return "That computer isn't available anymore. Pick another and try again.";
-      case 'host_mismatch':
-        return 'Initial agents must live on the selected computer.';
-      case 'host_attach_pending':
-        return 'That computer is not connected yet. Try again in a moment.';
-    }
-  }
-  return "Couldn't create the workspace. Please try again.";
-}
+const WORKSPACE_CREATE_ERROR_MESSAGES: Record<string, string> = {
+  local_host_ambiguous: 'Choose which computer should store this workspace.',
+  local_host_unbound:
+    'No connected computer can store this workspace. Connect one and try again.',
+  host_revoked:
+    "That computer isn't available anymore. Pick another and try again.",
+  host_not_owned:
+    "That computer isn't available anymore. Pick another and try again.",
+  host_missing:
+    "That computer isn't available anymore. Pick another and try again.",
+  host_mismatch: 'Initial agents must live on the selected computer.',
+  host_attach_pending:
+    'That computer is not connected yet. Try again in a moment.',
+};
 
-function parseErrorCode(body: string): string | null {
-  try {
-    const parsed = JSON.parse(body) as { code?: unknown };
-    return typeof parsed.code === 'string' ? parsed.code : null;
-  } catch {
-    return null;
-  }
+function friendlyCreateWorkspaceError(err: unknown): string {
+  return describeApiError(err, {
+    actionLabel: "Couldn't create the workspace",
+    backendUnreachableMessage:
+      "Can't reach the backend. Check your connection and try again.",
+    fallbackMessage: "Couldn't create the workspace. Please try again.",
+    knownCodeMessages: WORKSPACE_CREATE_ERROR_MESSAGES,
+  });
 }
