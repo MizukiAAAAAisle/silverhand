@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { RuntimeKindSchema } from '@silverhand/shared';
+import { hasDriver } from '../src/drivers/index.js';
 import {
   AnyFrameSchema,
   EventFrameSchema,
@@ -121,6 +123,21 @@ describe('protocol — hello handshake', () => {
 
   it('does not advertise runtimes without a driver implementation', () => {
     expect(KNOWN_CAPABILITIES_V1).not.toContain('runtime.gemini');
+  });
+
+  it('advertises exactly the runtimes that have a driver (runtime.* ⟺ hasDriver)', () => {
+    // The hello capabilities are the daemon's promise of what it can
+    // spawn — so `runtime.<kind>` must be present iff a driver exists.
+    // qoder shipped a driver, so it must be advertised; gemini has none.
+    const advertised = new Set(
+      KNOWN_CAPABILITIES_V1.filter(c => c.startsWith('runtime.')).map(c =>
+        c.slice('runtime.'.length),
+      ),
+    );
+    for (const kind of RuntimeKindSchema.options) {
+      expect(advertised.has(kind)).toBe(hasDriver(kind));
+    }
+    expect(advertised.has('qoder')).toBe(true);
   });
 });
 
