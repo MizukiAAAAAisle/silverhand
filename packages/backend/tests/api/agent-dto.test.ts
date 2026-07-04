@@ -29,6 +29,43 @@ describe('agent reasoning_effort validation', () => {
       ).toBe(false);
     }
   });
+
+  it('rejects a reasoning value not valid for the chosen runtime on create', () => {
+    // `max`/`none` are valid enum members but qoder-only — codex create
+    // must reject them at the schema (route + CLI get this for free).
+    for (const effort of ['max', 'none']) {
+      const res = CreateAgentInputSchema.safeParse({
+        name: 'codex-agent',
+        runtime: 'codex',
+        reasoning_effort: effort,
+      });
+      expect(res.success).toBe(false);
+    }
+  });
+
+  it('accepts qoder create with any of its six canonical reasoning values', () => {
+    for (const effort of ['none', 'low', 'medium', 'high', 'xhigh', 'max']) {
+      expect(
+        CreateAgentInputSchema.safeParse({
+          name: 'qoder-agent',
+          runtime: 'qoder',
+          reasoning_effort: effort,
+        }).success,
+      ).toBe(true);
+    }
+  });
+
+  it('accepts codex create with its four supported reasoning values', () => {
+    for (const effort of ['low', 'medium', 'high', 'xhigh']) {
+      expect(
+        CreateAgentInputSchema.safeParse({
+          name: 'codex-agent',
+          runtime: 'codex',
+          reasoning_effort: effort,
+        }).success,
+      ).toBe(true);
+    }
+  });
 });
 
 describe('agent fast_mode validation', () => {

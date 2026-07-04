@@ -1,5 +1,5 @@
 import type { AgentRow, AgentDto, UpdateAgentInput } from '@silverhand/shared';
-import { validateAvatarFile } from '@silverhand/shared';
+import { reasoningEffortValidForRuntime, validateAvatarFile } from '@silverhand/shared';
 import type { BlobFileStorage } from '../storage/blob-file-storage.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import { AgentRepo } from '../repos/agent-repo.js';
@@ -13,6 +13,7 @@ export class AgentServiceError extends Error {
   constructor(
     public readonly code:
       | 'agent_not_found'
+      | 'reasoning_effort_invalid_for_runtime'
       | 'avatar_too_large'
       | 'avatar_unsupported_type'
       | 'avatar_missing'
@@ -28,6 +29,49 @@ export interface AgentServiceOptions {
   agents: AgentRepo;
   blobStorage: BlobFileStorage;
   events: ScopeEventBus;
+}
+
+/**
+ * Enforce the runtime/reasoning invariant on an update, resolving against the
+ * EFFECTIVE runtime (`patch.runtime ?? existing.runtime`). Two paths:
+ *
+ *  - **Explicit reasoning_effort in the patch** (incl. an API caller passing
+ *    a bad value): must be valid for the effective runtime, else throw →
+ *    400. We reject rather than silently drop an explicit value — dropping
+ *    what the caller asked for would be a silent rebind.
+ *  - **Runtime switch that leaves reasoning_effort untouched** (the UI's
+ *    `RuntimeSelect` sends only `{ runtime }`): a stale value the NEW runtime
+ *    doesn't support is cleared to null. It belonged to the old runtime and
+ *    would otherwise be forwarded to the new driver — this is exactly the
+ *    qoder(`max`)→codex leak. Silent here is correct: the value isn't part of
+ *    this request's intent and is meaningless under the new runtime.
+ *
+ * fast_mode needs no equivalent: its values (true/false/null) are all valid
+ * for its only consumer (codex); a stale fast_mode on another runtime is
+ * ignored by that driver, so there's no out-of-range value to leak.
+ */
+export function normalizeRuntimeTuning(
+  existing: AgentRow,
+  input: UpdateAgentInput,
+): UpdateAgentInput {
+  const effectiveRuntime = input.runtime ?? existing.runtime;
+  if (input.reasoning_effort !== undefined) {
+    if (!reasoningEffortValidForRuntime(effectiveRuntime, input.reasoning_effort)) {
+      throw new AgentServiceError(
+        'reasoning_effort_invalid_for_runtime',
+        `reasoning_effort '${input.reasoning_effort}' is not valid for runtime '${effectiveRuntime}'`,
+      );
+    }
+    return input;
+  }
+  if (
+    input.runtime !== undefined &&
+    input.runtime !== existing.runtime &&
+    !reasoningEffortValidForRuntime(effectiveRuntime, existing.reasoning_effort)
+  ) {
+    return { ...input, reasoning_effort: null };
+  }
+  return input;
 }
 
 export interface UploadAgentAvatarInput {
@@ -84,7 +128,10 @@ export class AgentService {
    * in one place, regardless of who wrote.
    */
   updateAgent(id: string, input: UpdateAgentInput): AgentDto | null {
-    const updated = this.agents.update(id, input);
+    const existing = this.agents.getRow(id);
+    if (!existing) return null;
+    const normalized = normalizeRuntimeTuning(existing, input);
+    const updated = this.agents.update(id, normalized);
     if (updated) this.publishChanged(id);
     return updated;
   }

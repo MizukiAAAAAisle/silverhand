@@ -56,6 +56,7 @@ import {
   ScheduleListInputSchema,
   UpdateAgentInputSchema,
   apiPaths,
+  type AgentDto,
   type AgentMaterializationStatus,
 } from '@silverhand/shared';
 import {
@@ -471,7 +472,16 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     // Route the write through the service so the `agent_changed` refresh
     // event is published in ONE seam (shared with the avatar routes and the
     // agent-self `profile update` route) — no per-route publish to drift.
-    const updated = ctx.agentService.updateAgent(id, parsed.data);
+    // The service also normalizes runtime tuning (reasoning valid for the
+    // effective runtime); an explicit out-of-runtime value throws → 400.
+    let updated: AgentDto | null;
+    try {
+      updated = ctx.agentService.updateAgent(id, parsed.data);
+    } catch (err) {
+      const status = agentServiceErrorStatus(err);
+      if (status) return c.json(agentServiceErrorBody(err), status);
+      throw err;
+    }
     if (!updated) return c.json({ error: 'agent not found' }, 404);
     return c.json({ agent: updated });
   });

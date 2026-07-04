@@ -6,6 +6,7 @@ import {
   RuntimeKindSchema,
   ReasoningEffortSchema,
   reasoningEffortLabel,
+  reasoningEffortValidForRuntime,
   runtimeCatalogCoversAllKinds,
   runtimeCatalogEntry,
   runtimeCliLabel,
@@ -75,5 +76,22 @@ describe('runtime catalog (shared source of truth)', () => {
     expect(reasoningEffortLabel('xhigh')).toBe('Xhigh');
     expect(reasoningEffortLabel('none')).toBe('None');
     expect(reasoningEffortLabel('max')).toBe('Max');
+  });
+
+  it('reasoningEffortValidForRuntime gates values to the runtime (null always ok)', () => {
+    // null/undefined (unset) is always valid.
+    expect(reasoningEffortValidForRuntime('codex', null)).toBe(true);
+    expect(reasoningEffortValidForRuntime('codex', undefined)).toBe(true);
+    // codex accepts its four, rejects qoder-only values.
+    expect(reasoningEffortValidForRuntime('codex', 'high')).toBe(true);
+    expect(reasoningEffortValidForRuntime('codex', 'max')).toBe(false);
+    expect(reasoningEffortValidForRuntime('codex', 'none')).toBe(false);
+    // qoder accepts the full canonical set.
+    for (const v of ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
+      expect(reasoningEffortValidForRuntime('qoder', v)).toBe(true);
+    }
+    // claude has no reasoning control → only null is valid.
+    expect(reasoningEffortValidForRuntime('claude', 'low')).toBe(false);
+    expect(reasoningEffortValidForRuntime('claude', null)).toBe(true);
   });
 });

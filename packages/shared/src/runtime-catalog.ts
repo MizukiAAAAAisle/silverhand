@@ -152,6 +152,24 @@ export function runtimeSupportsReasoningEffort(kind: RuntimeKind): boolean {
   return CATALOG[kind].reasoningEffortOptions.length > 0;
 }
 
+/**
+ * Domain invariant: a stored `reasoning_effort` must be `null` (unset) OR a
+ * value this runtime actually supports (per its catalog options). The UI
+ * picker only offers valid values, but this is the AUTHORITATIVE check the
+ * write boundary (create + update) enforces so a direct-API call or a
+ * runtime switch can't persist e.g. qoder's `max` onto a codex agent (which
+ * would then forward an out-of-range value to the codex driver). Keeping the
+ * rule here — beside the options it reads — means create and update share one
+ * definition instead of two hand-copied allowlists.
+ */
+export function reasoningEffortValidForRuntime(
+  kind: RuntimeKind,
+  value: ReasoningEffort | null | undefined,
+): boolean {
+  if (value === null || value === undefined) return true;
+  return CATALOG[kind].reasoningEffortOptions.includes(value);
+}
+
 /** Generic display label for a reasoning-effort value (title-cased):
  *  `xhigh` → "Xhigh", `none` → "None". Persistence + driver args use
  *  the raw lowercase token; this is display-only. */

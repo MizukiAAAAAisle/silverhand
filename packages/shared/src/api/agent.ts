@@ -11,6 +11,7 @@ import {
   WorkspaceKindSchema,
 } from '../db/schema.js';
 import { DisplayNameSchema } from './user.js';
+import { reasoningEffortValidForRuntime } from '../runtime-catalog.js';
 
 export const AgentDtoSchema = z.object({
   id: z.string(),
@@ -61,19 +62,33 @@ export const AgentDtoSchema = z.object({
 });
 export type AgentDto = z.infer<typeof AgentDtoSchema>;
 
-export const CreateAgentInputSchema = z.object({
-  name: z
-    .string()
-    .min(1)
-    .max(64)
-    .regex(/^[a-zA-Z0-9_\-]+$/, 'name must be alphanumeric / dash / underscore'),
-  runtime: RuntimeKindSchema,
-  model: z.string().optional(),
-  reasoning_effort: ReasoningEffortSchema.optional(),
-  fast_mode: FastModeSchema.optional(),
-  host_id: z.string().optional(), // defaults to the current user's owned local host
-  description: z.string().optional(),
-});
+export const CreateAgentInputSchema = z
+  .object({
+    name: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-zA-Z0-9_\-]+$/, 'name must be alphanumeric / dash / underscore'),
+    runtime: RuntimeKindSchema,
+    model: z.string().optional(),
+    reasoning_effort: ReasoningEffortSchema.optional(),
+    fast_mode: FastModeSchema.optional(),
+    host_id: z.string().optional(), // defaults to the current user's owned local host
+    description: z.string().optional(),
+  })
+  // reasoning_effort must be valid for the chosen runtime — the shared enum
+  // is the union across runtimes, so a value like qoder's `max` would parse
+  // structurally but be meaningless for codex. Both fields are present in the
+  // create payload, so this closes at the schema (route + CLI get it free).
+  .superRefine((val, ctx) => {
+    if (!reasoningEffortValidForRuntime(val.runtime, val.reasoning_effort)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['reasoning_effort'],
+        message: `reasoning_effort '${val.reasoning_effort}' is not valid for runtime '${val.runtime}'`,
+      });
+    }
+  });
 export type CreateAgentInput = z.infer<typeof CreateAgentInputSchema>;
 
 // PATCH /api/agents/:id — every field optional, only provided keys
