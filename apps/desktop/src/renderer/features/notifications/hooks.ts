@@ -352,7 +352,7 @@ async function resolveTargetFromConversationId(
   // New reply-cluster: the notification already carries the cluster root,
   // and `conversation_id` is the parent channel (cluster replies live in
   // the channel). Anchor straight to the message — no ref fetch, and never
-  // the legacy `thread_id`.
+  // a legacy thread hop.
   if (threadRootId) {
     return {
       workspaceId: workspaceId ?? undefined,

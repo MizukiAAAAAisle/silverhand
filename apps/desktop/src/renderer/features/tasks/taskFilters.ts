@@ -11,7 +11,7 @@ import type { TaskSummaryDto } from '@silverhand/shared';
  * lives in one TaskFilterBar.
  *
  * Filtering is entirely CLIENT-SIDE here: `TaskSummaryDto` already carries
- * `channel_id` / `thread_id` / `assignee` / `creator`, lists are
+ * `channel_id` / `assignee` / `creator`, lists are
  * unpaginated, and each surface fetches-broadly-then-slices — so no
  * backend query change is needed. Backend `creator_type/creator_id` +
  * assignee `{type,id}` params are a later perf optimization once task
