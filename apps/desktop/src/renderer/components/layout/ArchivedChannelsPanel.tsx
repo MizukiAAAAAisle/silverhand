@@ -19,6 +19,7 @@ import {
   dateFilterSince,
   type DateFilterValue,
 } from '@/components/ui/date-filter-select';
+import { ListRowsSkeleton } from './ListRowsSkeleton';
 
 /** Archived-view filter selection. Lifted to App so it survives pane
  *  switches for the app session (shiki #task:1259) — NOT persisted, so a
@@ -98,7 +99,7 @@ export function ArchivedChannelsPanel({
         </span>
         <span className="text-xs tabular-nums text-text-muted">{channels.length}</span>
         {isFetching ? (
-          <span className="ml-auto text-xs text-text-muted">刷新中…</span>
+          <span className="ml-auto text-xs text-text-muted">Refreshing…</span>
         ) : null}
       </header>
 
@@ -125,7 +126,7 @@ export function ArchivedChannelsPanel({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {isLoading ? (
-          <EmptyState text="加载 archived channels…" />
+          <ListRowsSkeleton withIcon />
         ) : channels.length === 0 ? (
           <EmptyState
             text={

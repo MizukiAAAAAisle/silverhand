@@ -34,6 +34,7 @@ import {
   type UserNameResolver,
 } from '@/lib/current-user';
 import { workspaceDisplayName } from '@/lib/workspace-name';
+import { ListRowsSkeleton } from './ListRowsSkeleton';
 
 interface SearchPanelProps {
   workspaces: WorkspaceListItem[];
@@ -190,7 +191,7 @@ export function SearchPanel({
           </span>
         ) : null}
         {isFetching ? (
-          <span className="ml-auto text-xs text-text-muted">搜索中…</span>
+          <span className="ml-auto text-xs text-text-muted">Searching…</span>
         ) : null}
       </header>
 
@@ -254,10 +255,7 @@ export function SearchPanel({
             text="输入关键词开始搜索"
           />
         ) : isLoading ? (
-          <EmptyState
-            icon={<SearchIcon className="size-5 animate-pulse" />}
-            text="搜索中…"
-          />
+          <ListRowsSkeleton withIcon />
         ) : results.length === 0 ? (
           <EmptyState
             icon={<SearchIcon className="size-5" />}

@@ -19,6 +19,7 @@ import {
   useMarkActivityAllRead,
 } from '@/features/attention/hooks';
 import { activityItemSource } from '@/features/attention/observe';
+import { ListRowsSkeleton } from './ListRowsSkeleton';
 import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
 
 /**
@@ -368,7 +369,7 @@ export function ActivityView({
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
         {isLoading ? (
-          <div className="text-sm text-text-muted">Loading…</div>
+          <ListRowsSkeleton />
         ) : isError ? (
           // Distinct from the empty state — a failed load must not read as an
           // empty queue.

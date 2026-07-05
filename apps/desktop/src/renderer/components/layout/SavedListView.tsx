@@ -8,6 +8,7 @@ import { useUsersById, makeUserNameResolver } from '@/features/users/hooks';
 import { formatUserDisplayName } from '@/lib/current-user';
 import type { WorkspaceListItem } from '@/features/workspaces/hooks';
 import { FilterBlock } from '@/components/ui/filter-select';
+import { ListRowsSkeleton } from './ListRowsSkeleton';
 import {
   WorkspaceFilterSelect,
   workspaceFilterId,
@@ -127,7 +128,7 @@ export function SavedListView({
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
         {isLoading ? (
-          <div className="text-sm text-text-muted">加载中…</div>
+          <ListRowsSkeleton />
         ) : items.length === 0 ? (
           <div className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-text-muted">
             {hasFilters ? 'No matches' : 'No saved messages'}
