@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUpRight, Bell, BellOff, CornerUpLeft, X } from 'lucide-react';
+import { ArrowDown, ArrowUpRight, Bell, BellOff, CornerUpLeft, Search, X } from 'lucide-react';
 import { groupMessages } from '@/components/chat/groupMessages';
 import { MessageItem } from '@/components/chat/MessageItem';
+import { InlineFindBar } from './InlineFindBar';
+import {
+  useInlineFindController,
+  useInlineFindHotkey,
+} from '@/features/search/useInlineFind';
 import { SystemMessage } from '@/components/chat/SystemMessage';
 import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
 import { Composer } from '@/components/chat/Composer';
@@ -12,6 +17,7 @@ import { MessageActionChrome } from '@/components/chat/MessageActionChrome';
 import { threadClusterShowsLoader, threadLiveMarkReadSeq, threadMarkReadSnapshot, threadOpenNeedsLatestRefetch } from './threadMarkRead';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import { type JumpPhase, jumpWindowLockedForPhase, threadLocateAllowed } from '@/features/channels/messageJumpPhase';
+import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import {
   useFollowThread,
@@ -81,6 +87,16 @@ interface ThreadPanelProps {
    *  op) is suppressed — the user manages following from the original thread.
    *  Keeps `Open in conversation` + close. See `ChannelView.sourceViewer`. */
   sourceViewer?: boolean;
+  /** In-conversation header find (#task:1335), scoped to THIS thread stream.
+   *  When provided, the thread header shows a search-toggle icon. The callback
+   *  navigates to a prev/next match via App's shared jump/prime path (carrying
+   *  `threadRootId` so the cluster window is primed + this pane scroll-locates
+   *  the reply). Absent → no find affordance (e.g. docked source viewer). */
+  onJumpToMessage?: (params: MessageJumpTarget) => void;
+  /** Opens the advanced `SearchPanel`, carrying the current inline query AND
+   *  this thread's workspace so the advanced panel opens scoped to it
+   *  (shiki #task:1335). */
+  onOpenAdvancedSearch?: (query: string, workspaceId?: string) => void;
 }
 
 /**
@@ -115,6 +131,8 @@ export function ThreadPanel({
   jumpPhase = null,
   onJumped,
   sourceViewer,
+  onJumpToMessage,
+  onOpenAdvancedSearch,
 }: ThreadPanelProps): JSX.Element {
   const rootCtx = useThreadRoot(channelId, rootMessageId);
   const cluster = useThreadCluster(channelId, rootMessageId, {
@@ -252,6 +270,9 @@ export function ThreadPanel({
     [workspaceId, onOpenTask],
   );
 
+  // In-conversation header find (#task:1335) is set up below, after the scroll
+  // controller it depends on (`pinBottomRef` / `setShowScrollBottom`).
+
   // The root is pinned separately (see below), so drop it from the
   // scrolled reply list to avoid rendering it twice — it can appear in
   // the cluster window for small threads (where the window reaches the
@@ -315,6 +336,69 @@ export function ThreadPanel({
     pinBottomRef.current = atBottom;
     setShowScrollBottom(!atBottom);
   }, []);
+
+  // In-conversation header find (#task:1335), scoped to THIS thread stream
+  // (stream='thread' + thread_root_id). Navigation is "ensure the match is
+  // visible", NOT "reopen a window" (Cindy). This pane is a plain (non-
+  // virtualized) scroller, so every LOADED reply is mounted:
+  //   • match in the loaded data (a reply in `messages`, or the pinned root) →
+  //     scroll to its already-mounted node locally — no prime, no cluster
+  //     re-window, no white flash. We decide on the loaded DATA, not DOM
+  //     presence, to stay consistent with the channel pane.
+  //   • match off the loaded window → App's jump/prime path (carrying
+  //     `threadRootId`) primes the cluster window and this pane's rAF locate
+  //     (below) scroll-flashes the reply once it lands.
+  // Offered only when the pane supports being jumped into (`onJumpToMessage`).
+  // `findRootRef` is declared before `inlineFindNavigate` so the local locate can
+  // scope its node lookup to THIS pane (see below).
+  const findRootRef = useRef<HTMLElement>(null);
+  const findEnabled = !sourceViewer && !!onJumpToMessage;
+  const inlineFindNavigate = useCallback(
+    (messageId: string) => {
+      const inWindow =
+        messageId === rootMessageId || messages.some(m => m.id === messageId);
+      if (inWindow) {
+        // Scope the lookup to THIS pane's root: the thread root is rendered in
+        // BOTH the channel mainline and here with the same `id="msg-<root>"`, so
+        // a global `document.getElementById` would resolve to the channel's copy
+        // and scroll the WRONG pane (Cindy). Message ids are URL-safe, so the
+        // attribute selector needs no escaping — its job is the pane SCOPE (dodge
+        // the duplicate global id), not char-escaping.
+        const node = findRootRef.current?.querySelector(
+          `[id="msg-${messageId}"]`,
+        );
+        if (node) {
+          // Hold position: stop follow-bottom from yanking away from the match
+          // when the next reply arrives (mirrors the jump-locate effect).
+          pinBottomRef.current = false;
+          setShowScrollBottom(true);
+          node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          return;
+        }
+      }
+      onJumpToMessage?.({
+        workspaceId,
+        channelId,
+        threadRootId: rootMessageId,
+        messageId,
+      });
+    },
+    [messages, onJumpToMessage, workspaceId, channelId, rootMessageId],
+  );
+  const find = useInlineFindController({
+    conversationId: channelId,
+    stream: 'thread',
+    threadRootId: rootMessageId,
+    onNavigate: inlineFindNavigate,
+  });
+  // ⌘F opens the thread find — but only when focus is inside this panel (the
+  // channel handles the nowhere-focus default). See useInlineFindHotkey.
+  useInlineFindHotkey({
+    rootRef: findRootRef,
+    enabled: findEnabled,
+    isPrimary: false,
+    onOpen: find.openFind,
+  });
 
   // Reopening the panel for a (different) root resets to follow-bottom mode
   // and drops any in-flight selection (the frame the user was selecting in
@@ -589,6 +673,10 @@ export function ThreadPanel({
         humanAvatarUrls={humanAvatarUrls}
         agentAvatarUrls={agentAvatarUrls}
         userResolver={userResolver}
+        searchQuery={find.highlightQuery}
+        searchActive={
+          find.activeMessageId != null && m.id === find.activeMessageId
+        }
         {...actions.rowActionProps(m)}
       />
     );
@@ -596,8 +684,9 @@ export function ThreadPanel({
   return (
     <TaskRefContextProvider value={taskRefContext}>
     <aside
+      ref={findRootRef}
       data-pane="thread"
-      className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
+      className="relative flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
     >
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-3">
         <CornerUpLeft className="size-3.5 shrink-0 text-text-muted" />
@@ -613,6 +702,23 @@ export function ThreadPanel({
           data-channel-actions
           className="ml-auto flex shrink-0 items-center gap-1"
         >
+          {findEnabled ? (
+            <button
+              type="button"
+              onClick={find.open ? find.close : find.openFind}
+              aria-label="Search this thread"
+              aria-pressed={find.open}
+              title="Search this thread"
+              className={
+                'flex size-8 shrink-0 items-center justify-center rounded-[var(--control-radius)] ' +
+                (find.open
+                  ? 'bg-bg-hover text-text-primary'
+                  : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
+              }
+            >
+              <Search className="size-4" />
+            </button>
+          ) : null}
           {!sourceViewer && followers.data ? (
             <button
               type="button"
@@ -658,6 +764,22 @@ export function ThreadPanel({
           </button>
         </div>
       </header>
+
+      {/* Inline find bar (#task:1335) — a header OVERLAY, not a flex sibling of
+          the reply scroller. Anchored just below the h-12 header (`top-12`) and
+          out of flow (`absolute`) so opening / closing / typing never changes
+          the scroller's height (shiki: 搜索框不应挤压对话流、不应触发重渲染).
+          It drives only the search controller + overlay; the cluster window is
+          untouched until the user navigates to a match (ensure-visible above). */}
+      {findEnabled && find.open ? (
+        <div className="absolute inset-x-0 top-12 z-20">
+          <InlineFindBar
+            controller={find}
+            onOpenAdvanced={() => onOpenAdvancedSearch?.(find.query, workspaceId)}
+            placeholder="Search this thread"
+          />
+        </div>
+      ) : null}
 
       {rootCtx.isError ? (
         // Root unavailable (404 / legacy thread target / fetch failure).

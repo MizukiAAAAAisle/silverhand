@@ -253,6 +253,12 @@
   --accent-soft: rgba(29, 155, 209, 0.14);
   --accent-hover: #4FB7DC;        /* hover 抬亮一档 */
   --accent-glow: rgba(29, 155, 209, 0.30);
+  /* Search-hit goose-yellow (#task:1335) — on the dark ground a bright goose
+     with dark ink text pops like a browser find highlight. Active match
+     brightens the ground (no border). */
+  --search-hit-bg: #D9C158;
+  --search-hit-bg-active: #F0D970;
+  --search-hit-text: #1A1712;
 
   /* ── Semantic ──
      Slack-flavored saturated hues — 都是 foreground-primary 色

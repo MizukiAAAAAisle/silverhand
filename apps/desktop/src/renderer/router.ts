@@ -30,7 +30,12 @@ import type { AppSection } from '@/components/layout/NavRail';
 export const routes = {
   home: () => '/',
   chat: () => '/chat',
-  chatSearch: () => '/chat/search',
+  // Optional `q` prefills the advanced SearchPanel's query — the inline header
+  // find's "高级搜索" hand-off carries the current keyword (#task:1335).
+  chatSearch: (query?: string) =>
+    query && query.trim()
+      ? `/chat/search?q=${encodeURIComponent(query.trim())}`
+      : '/chat/search',
   chatSaved: () => '/chat/saved',
   chatArchived: () => '/chat/archived',
   chatActivity: () => '/chat/activity',
@@ -76,6 +81,10 @@ export interface RouteState {
   section: AppSection;
   /** Within the chat section: 'channel' or 'saved'. */
   chatView: ChatView;
+  /** Advanced-search prefill (`/chat/search?q=<query>`). Seeds the SearchPanel
+   *  query on mount when the inline header find hands off to advanced search
+   *  (#task:1335). Null when absent. */
+  searchQuery: string | null;
   workspaceId: string | null;
   channelId: string | null;
   /** Generic side-pane pointer (`?side=<conversation_id>`). May be any
@@ -181,6 +190,11 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   const focusedTaskNumber =
     rawTask !== null && /^[1-9]\d*$/.test(rawTask) ? Number(rawTask) : null;
 
+  // Advanced-search prefill query (`?q=`); empty treated as unset.
+  const rawSearchQuery = searchParams.get('q');
+  const searchQuery =
+    rawSearchQuery && rawSearchQuery.length > 0 ? rawSearchQuery : null;
+
   let section: AppSection = 'chat';
   if (pathname.startsWith('/members')) section = 'members';
   else if (pathname.startsWith('/computers')) section = 'computers';
@@ -200,6 +214,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   return {
     section,
     chatView,
+    searchQuery,
     workspaceId: workspaceId ?? null,
     channelId: channelId ?? null,
     sideConversationId,
@@ -590,7 +605,7 @@ export function buildAgentPanelOpenUrl(
 export function useNav(): {
   go: (to: string, opts?: { replace?: boolean }) => void;
   toChat: () => void;
-  toChatSearch: () => void;
+  toChatSearch: (query?: string) => void;
   toChatSaved: () => void;
   toChatArchived: () => void;
   toChatActivity: () => void;
@@ -730,7 +745,10 @@ export function useNav(): {
     navigate(next, { replace: true });
   }, [navigate, location.pathname, location.search]);
   const toChat = useCallback(() => go(routes.chat()), [go]);
-  const toChatSearch = useCallback(() => go(routes.chatSearch()), [go]);
+  const toChatSearch = useCallback(
+    (query?: string) => go(routes.chatSearch(query)),
+    [go],
+  );
   const toChatSaved = useCallback(() => go(routes.chatSaved()), [go]);
   const toChatArchived = useCallback(() => go(routes.chatArchived()), [go]);
   const toChatActivity = useCallback(() => go(routes.chatActivity()), [go]);

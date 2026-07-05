@@ -458,6 +458,13 @@
   --accent-soft: rgba(179, 24, 106, 0.14);
   --accent-hover: #8E0F50;
   --accent-glow: rgba(179, 24, 106, 0.30);
+  /* Search-hit goose-yellow (#task:1335) — a soft pale yellow, deliberately
+     paler than the fluorescent `--forza6-yellow` (#FFEB00) claimed by Tasks so
+     the transient find highlight reads as "found text", not a task chip. Ink
+     glyph; active match deepens the ground (no border). */
+  --search-hit-bg: #FFF3A6;
+  --search-hit-bg-active: #FFDD5C;
+  --search-hit-text: var(--forza6-ink);
 
   /* ── Semantic — deep-saturation variants of the festival palette so
      `text-success` / `text-warning` / `text-error` clear AA on light

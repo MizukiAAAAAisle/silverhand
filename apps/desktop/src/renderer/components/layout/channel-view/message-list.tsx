@@ -58,6 +58,8 @@ export function MessageList({
   onOpenConversationRef,
   onOpenChannelRef,
   canReact,
+  searchQuery,
+  searchActiveMessageId,
 }: {
   channelId: string;
   workspaceId: string;
@@ -116,6 +118,13 @@ export function MessageList({
    *  archived. Threaded down to each MessageItem so the reaction write
    *  affordances hide in a read-only channel. */
   canReact: boolean;
+  /** In-conversation header find (#task:1335). The active term — highlighted
+   *  inside every rendered row's body via `MessageItem`→`Markdown`. */
+  searchQuery?: string;
+  /** The id of the CURRENT prev/next find match, framed + marked "current".
+   *  Off-window matches are materialised by the shared jump/prime path (App's
+   *  `handleJumpToMessage`) before they can be the active row. */
+  searchActiveMessageId?: string | null;
 }): JSX.Element {
   // Render context (lookup maps + sigil resolution + resolved viewer)
   // comes from the shared hook so the channel pane and the thread
@@ -194,6 +203,9 @@ export function MessageList({
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [flashedMessageId, setFlashedMessageId] = useState<string | null>(null);
+  // Last find match we locally scrolled to (see the in-window find effect
+  // below). Guards against re-scrolling on every unrelated `items` change.
+  const lastScrolledSearchIdRef = useRef<string | null>(null);
 
   // `firstItemIndex` shifts down as older messages prepend so the visible
   // logical index stays stable and Virtuoso can hold scroll position. We
@@ -446,6 +458,36 @@ export function MessageList({
     return () => clearTimeout(timer);
   }, [flashedMessageId, onJumped]);
 
+  // In-window find navigation (#task:1335) — the LOCAL half of "ensure the
+  // match is visible" (Cindy). When the active find match is a row already in
+  // the loaded window, scroll to it via the virtualizer INDEX (not a DOM
+  // lookup: a loaded row may be unmounted by virtualization) — no jump, no
+  // prime, so the list never remounts. That remount is the prev/next "white
+  // flash"; off-window matches are the only ones that legitimately re-window,
+  // and those come through `jumpToMessageId` (the branch below), which owns
+  // positioning — so we bail while a jump is in flight. We only re-scroll when
+  // the active id actually CHANGES (ref guard), never on unrelated `items`
+  // churn (a new live message must not yank the reader back to the match).
+  useEffect(() => {
+    if (jumpToMessageId) return; // the jump/prime path owns scroll position
+    const id = searchActiveMessageId;
+    if (!id) {
+      lastScrolledSearchIdRef.current = null;
+      return;
+    }
+    if (id === lastScrolledSearchIdRef.current) return;
+    const idx = items.findIndex(
+      it => it.kind === 'message' && it.message.id === id,
+    );
+    if (idx === -1) return; // not in the loaded window — ChannelView escalates it
+    lastScrolledSearchIdRef.current = id;
+    virtuosoRef.current?.scrollToIndex({
+      index: idx,
+      align: 'center',
+      behavior: 'smooth',
+    });
+  }, [searchActiveMessageId, items, jumpToMessageId]);
+
   const renderItem = useCallback(
     (item: ReturnType<typeof groupMessages>[number]) => {
       if (item.kind === 'cluster') {
@@ -507,6 +549,10 @@ export function MessageList({
           }
           jumpFlash={flashedMessageId != null && m.id === flashedMessageId}
           userResolver={userResolver}
+          searchQuery={searchQuery}
+          searchActive={
+            searchActiveMessageId != null && m.id === searchActiveMessageId
+          }
         />
       );
     },
@@ -532,6 +578,8 @@ export function MessageList({
       highlightedMessageId,
       flashedMessageId,
       userResolver,
+      searchQuery,
+      searchActiveMessageId,
     ],
   );
 

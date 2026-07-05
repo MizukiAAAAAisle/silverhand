@@ -391,6 +391,19 @@ function RegisteredAppShell(): JSX.Element {
   // (#task:1259), same rationale as savedFilter: survive pane switches, not
   // persisted across restart. Search's query text stays panel-local.
   const [searchFilter, setSearchFilter] = useState<SearchFilterState>(SEARCH_FILTER_DEFAULT);
+  // Inline header find → advanced SearchPanel handoff (#task:1335). Carries the
+  // query (via `?q=` route prefill) AND scopes the advanced panel to the source
+  // conversation's workspace by seeding the App-owned workspace filter — so the
+  // handoff actually lands in the filter, not just the URL.
+  const handleOpenAdvancedSearch = useCallback(
+    (query: string, workspaceId?: string) => {
+      if (workspaceId) {
+        setSearchFilter(f => ({ ...f, workspace: `workspace:${workspaceId}` }));
+      }
+      nav.toChatSearch(query);
+    },
+    [nav],
+  );
   const [archivedFilter, setArchivedFilter] = useState<ArchivedFilterState>(ARCHIVED_FILTER_DEFAULT);
   // Per-workspace notification unread count (mention / agent-failure alerts).
   const { data: unreadCounts } = useUnreadCounts();
@@ -952,6 +965,14 @@ function RegisteredAppShell(): JSX.Element {
 
   const handleJumpToMessage = (params: MessageJumpTarget): void => {
     requestJump(params);
+    // Inline channel find (#task:1335): a main-stream ensure-visible on the
+    // ALREADY-open channel. `requestJump` above primes + scroll-locates; running
+    // the route navigation below would drop the `?thread` query and collapse an
+    // open thread side panel (shiki/Cindy). The channel is already selected (the
+    // find bar lives in it), so no nav is needed. Fail-closed on `!threadRootId`
+    // so the flag can ONLY skip nav for a main-channel target — a thread target
+    // that mistakenly carries it still runs `withThreadQuery` below (Cindy).
+    if (params.preserveSidePanel && !params.threadRootId) return;
     const wid = resolveNavWorkspaceId(params.workspaceId, params.channelId);
     if (!wid) return;
     // Reply-cluster target (new model): the message lives in the parent
@@ -1311,6 +1332,8 @@ function RegisteredAppShell(): JSX.Element {
       onOpenConversationRef={nav.openSide}
       onOpenChannelRef={handleOpenChannelByName}
       onOpenTask={handleOpenTask}
+      onJumpToMessage={handleJumpToMessage}
+      onOpenAdvancedSearch={handleOpenAdvancedSearch}
     />
   );
 
@@ -1430,6 +1453,8 @@ function RegisteredAppShell(): JSX.Element {
         jumpMessageId={threadJumpMessageId}
         jumpPhase={threadJumpPhase}
         onJumped={handleJumped}
+        onJumpToMessage={handleJumpToMessage}
+        onOpenAdvancedSearch={handleOpenAdvancedSearch}
       />
     );
   } else if (threadsListOpen && selectedChannelId && selectedWorkspaceId) {
@@ -1864,6 +1889,7 @@ function RegisteredAppShell(): JSX.Element {
             ) : view === 'search' ? (
               <SearchPanel
                 workspaces={workspaces}
+                initialQuery={route.searchQuery ?? undefined}
                 filter={searchFilter}
                 onFilterChange={setSearchFilter}
                 onJumpMessage={params => handleJumpToMessage(params)}

@@ -1,9 +1,10 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ComponentProps, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { AtSign, Check, Copy, Hash } from 'lucide-react';
+import { rehypeHighlightTerm } from './rehypeHighlightTerm';
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { Mention } from './Mention';
 import { MermaidDiagram } from './MermaidDiagram';
@@ -80,6 +81,11 @@ interface MarkdownProps {
    *  diagram. Absent key (diagram failed / timed out pre-render, or interactive
    *  path) → source fallback, exactly as before. */
   mermaidSvgByCode?: ReadonlyMap<string, string>;
+  /** In-conversation header find (#task:1335): when set (non-empty), every
+   *  case-insensitive literal occurrence of this term in the rendered body is
+   *  wrapped in `<mark class="search-hit">` by a rehype plugin. Absent / empty
+   *  → the exact pre-find pipeline (no extra plugin, no re-processing). */
+  searchQuery?: string;
 }
 
 const MENTION_PREFIX = 'silverhand-mention:';
@@ -114,6 +120,7 @@ function MarkdownInner({
   taskRefsByNumber,
   interactive = true,
   mermaidSvgByCode,
+  searchQuery,
 }: MarkdownProps): JSX.Element {
   // Plugin instance is recreated per render but is a thin closure;
   // remark instantiates the transformer once per `process` call so
@@ -122,11 +129,27 @@ function MarkdownInner({
   // plugins array.
   const plugins = useMemo(() => [remarkGfm, remarkBreaks, remarkRefs], []);
 
+  // Keyword highlight is opt-in: only when the header find is active do we
+  // append `rehypeHighlightTerm` after `rehype-highlight`. Recreated when the
+  // term changes so react-markdown re-processes (that's the point — the marks
+  // must track the query); when there's no term we return the stable
+  // highlight-only array so ordinary rendering is byte-identical to before.
+  const trimmedTerm = searchQuery?.trim() ?? '';
+  const rehypePlugins = useMemo<
+    NonNullable<ComponentProps<typeof ReactMarkdown>['rehypePlugins']>
+  >(
+    () =>
+      trimmedTerm
+        ? [rehypeHighlight, [rehypeHighlightTerm, { term: trimmedTerm }]]
+        : [rehypeHighlight],
+    [trimmedTerm],
+  );
+
   return (
     <div className="markdown-body">
       <ReactMarkdown
         remarkPlugins={plugins}
-        rehypePlugins={[rehypeHighlight]}
+        rehypePlugins={rehypePlugins}
         // Whitelist our internal mention scheme — react-markdown's
         // default sanitizer drops unknown URL schemes (turning `href`
         // into an empty string), which would cause the `a` override

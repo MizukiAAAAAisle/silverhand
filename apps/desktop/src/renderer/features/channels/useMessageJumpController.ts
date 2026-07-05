@@ -12,6 +12,13 @@ export interface MessageJumpTarget {
    *  conversation: a cluster message is a channel message. */
   threadRootId?: string | null;
   messageId: string;
+  /** In-pane "ensure this message is visible" jump (channel inline find,
+   *  #task:1335): the channel is ALREADY the open one, so the caller wants only
+   *  the main-stream prime + scroll-locate — NOT the route navigation that
+   *  `handleJumpToMessage` otherwise runs, which would drop the `?thread` query
+   *  and collapse an open thread side panel. Only main-channel targets (no
+   *  `threadRootId`) set this. */
+  preserveSidePanel?: boolean;
 }
 
 /**

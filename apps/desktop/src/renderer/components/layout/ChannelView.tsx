@@ -15,6 +15,7 @@ import {
   Minimize2,
   Power,
   RefreshCw,
+  Search,
   Settings,
   X,
 } from 'lucide-react';
@@ -45,6 +46,12 @@ import { nextTailReadMark, type TailReadMark } from '@/lib/channel-read';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import { MemberStrip } from './channel-view/member-strip';
 import { MessageList } from './channel-view/message-list';
+import { InlineFindBar } from './InlineFindBar';
+import {
+  useInlineFindController,
+  useInlineFindHotkey,
+} from '@/features/search/useInlineFind';
+import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
 
 type WorkspaceUiKind = 'regular' | 'dm';
 
@@ -161,6 +168,18 @@ interface ChannelViewProps {
    *  workspace-scoped. App.tsx switches the selected workspace when
    *  needed (cross-workspace `?side` panes) and writes `?task=<n>`. */
   onOpenTask?: (taskNumber: number, workspaceId: string) => void;
+  /** In-conversation header find (#task:1335). When provided, the header shows
+   *  a search-toggle icon that opens the inline find bar below it. The callback
+   *  navigates to a prev/next match in THIS channel via App's shared jump/prime
+   *  path (`handleJumpToMessage`) — so off-window matches are materialised, not
+   *  skipped. Absent → no find affordance (e.g. secondary panes, which don't
+   *  support being jumped into). */
+  onJumpToMessage?: (params: MessageJumpTarget) => void;
+  /** Opens the advanced `SearchPanel`, carrying the current inline query AND
+   *  this conversation's workspace so the advanced panel opens scoped to the
+   *  same workspace (shiki #task:1335). Wired in App to prefill the query +
+   *  workspace filter. */
+  onOpenAdvancedSearch?: (query: string, workspaceId?: string) => void;
 }
 
 export const ChannelView = memo(function ChannelView(props: ChannelViewProps): JSX.Element {
@@ -231,6 +250,8 @@ function ActiveChannelView({
   onOpenConversationRef,
   onOpenChannelRef,
   onOpenTask,
+  onJumpToMessage,
+  onOpenAdvancedSearch,
 }: ChannelViewProps & { conversation: ChannelDescriptor }): JSX.Element {
   const {
     data: messages = [],
@@ -439,10 +460,58 @@ function ActiveChannelView({
     [conversation.workspace_id, onOpenChannelRef],
   );
 
+  // In-conversation header find (#task:1335). Local to this pane. Navigation is
+  // an "ensure the match is visible" op, NOT "reopen a message window" (Cindy):
+  //   • match already in the LOADED window (data, not DOM — a virtualized row
+  //     can be loaded-but-unmounted) → MessageList scrolls to it locally via
+  //     `searchActiveMessageId` (no prime, no Virtuoso remount → no white flash).
+  //   • match off the loaded window → App's jump/prime path materialises it.
+  // Offered only when the pane supports being jumped into (`onJumpToMessage`
+  // present) — secondary `?side` panes don't, so they show no find affordance.
+  const findEnabled = !sourceViewer && !!onJumpToMessage;
+  const loadedMessageIds = useMemo(
+    () => new Set(visibleMessages.map(m => m.id)),
+    [visibleMessages],
+  );
+  const inlineFindNavigate = useCallback(
+    (messageId: string) => {
+      // Ensure-visible: an in-window match needs no prime — the reactive local
+      // scroll in MessageList (keyed on the active match id) positions it
+      // without touching the message window. Only escalate genuine off-window
+      // matches to the heavier jump/prime path.
+      if (loadedMessageIds.has(messageId)) return;
+      onJumpToMessage?.({
+        workspaceId: conversation.workspace_id,
+        channelId: conversation.id,
+        messageId,
+        // Main-stream ensure-visible: prime + locate in THIS already-open
+        // channel without a route change, so an open thread side panel isn't
+        // collapsed (shiki/Cindy #task:1335).
+        preserveSidePanel: true,
+      });
+    },
+    [loadedMessageIds, onJumpToMessage, conversation.workspace_id, conversation.id],
+  );
+  const find = useInlineFindController({
+    conversationId: conversation.id,
+    stream: 'mainline',
+    onNavigate: inlineFindNavigate,
+  });
+  // ⌘F opens the find. Channel is the primary pane, so it also claims ⌘F when
+  // focus is nowhere specific (see useInlineFindHotkey).
+  const findRootRef = useRef<HTMLElement>(null);
+  useInlineFindHotkey({
+    rootRef: findRootRef,
+    enabled: findEnabled,
+    isPrimary: true,
+    onOpen: find.openFind,
+  });
+
   return (
     <TaskRefContextProvider value={taskRefContext}>
     <main
-      className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
+      ref={findRootRef}
+      className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
       style={{
         borderRadius: 'var(--card-radius, 0)',
         boxShadow: 'var(--card-shadow, none)',
@@ -525,6 +594,23 @@ function ActiveChannelView({
         ) : null}
 
         <div data-channel-actions className="ml-auto flex shrink-0 items-center gap-1">
+          {findEnabled ? (
+            <button
+              type="button"
+              onClick={find.open ? find.close : find.openFind}
+              aria-label="Search this channel"
+              aria-pressed={find.open}
+              title="Search this channel"
+              className={
+                'flex size-7 shrink-0 items-center justify-center rounded-[6px] ' +
+                (find.open
+                  ? 'bg-bg-hover text-text-primary'
+                  : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
+              }
+            >
+              <Search className="size-4" />
+            </button>
+          ) : null}
           {!sourceViewer && onToggleThreadsList ? (
             <button
               type="button"
@@ -617,6 +703,25 @@ function ActiveChannelView({
         </div>
       </header>
 
+      {/* Inline find bar (#task:1335) — a header OVERLAY, not a flex sibling of
+          the message list. Anchored just below the h-12 header (`top-12`) and
+          taken out of flow (`absolute`) so opening / closing / typing NEVER
+          changes the scroll container's height → no Virtuoso reflow / flicker
+          (shiki: 搜索框不应挤压对话流、不应触发重渲染). It only drives the
+          search controller + this overlay; the message window is untouched
+          until the user navigates to a match (ensure-visible below). */}
+      {findEnabled && find.open ? (
+        <div className="absolute inset-x-0 top-12 z-20">
+          <InlineFindBar
+            controller={find}
+            onOpenAdvanced={() =>
+              onOpenAdvancedSearch?.(find.query, conversation.workspace_id)
+            }
+            placeholder="Search this channel"
+          />
+        </div>
+      ) : null}
+
       {canRenameChannel || canToggleArchive ? (
         <ChannelSettingsDialog
           open={settingsOpen}
@@ -687,6 +792,8 @@ function ActiveChannelView({
             conversationRefsById={conversationRefsById}
             onOpenConversationRef={onOpenConversationRef}
             onOpenChannelRef={onOpenChannelRef ? handleOpenChannelRef : undefined}
+            searchQuery={find.highlightQuery}
+            searchActiveMessageId={find.activeMessageId}
           />
         </div>
 

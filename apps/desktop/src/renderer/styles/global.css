@@ -867,6 +867,25 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   animation: msg-jump-flash 3s ease-in-out;
 }
 
+/* In-conversation header find (#task:1335). Every matched keyword inside a
+   rendered message body is wrapped in `<mark class="search-hit">` by
+   `rehypeHighlightTerm`. shiki asked for a goose-yellow highlight (not the
+   accent tint — forza6's accent-soft read as an unwanted pink) with NO border.
+   The geometry is structural (lives here); the actual yellow is a per-theme
+   token (`--search-hit-bg` / `--search-hit-text`) so each theme speaks its own
+   goose-yellow. The ACTIVE match (`[data-search-active]`, set by MessageItem on
+   the current prev/next target) deepens the ground rather than adding a border
+   — a value shift, still borderless. */
+.markdown-body .search-hit {
+  background-color: var(--search-hit-bg, #fff3a6);
+  color: var(--search-hit-text, #0a0a0a);
+  border-radius: 0;
+  padding: 0 1px;
+}
+[data-search-active] .markdown-body .search-hit {
+  background-color: var(--search-hit-bg-active, #ffde5c);
+}
+
 /* Tool-badge bump — plays when a tool call count increments or a new
    tool type appears in the activity bubble. Applied to the whole badge
    span so users get a clear visual signal. Disabled for reduced motion. */

@@ -281,6 +281,12 @@
   --accent-soft: #2D231615;
   --accent-hover: #1A1510;
   --accent-glow: #2D231622;
+  /* Search-hit goose-yellow (#task:1335) — warm paper-tuned goose so the find
+     highlight sits inside this theme's amber palette. Dark ink text; active
+     match deepens the ground (no border). */
+  --search-hit-bg: #F3E29A;
+  --search-hit-bg-active: #E8CE64;
+  --search-hit-text: #1F1B14;
 
   /* ── Semantic ── */
   --success: #5A7A3D;

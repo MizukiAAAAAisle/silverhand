@@ -157,6 +157,14 @@ export interface MessageItemProps {
    *  #task:857 P0.10). Optional — when absent, formatUserDisplayName
    *  falls back to the raw id, matching v1 behaviour. */
   userResolver?: UserNameResolver;
+  /** In-conversation header find (#task:1335). When set, every occurrence of
+   *  this term in the row's markdown body is highlighted (`<mark>`). Threaded
+   *  straight to `<Markdown>`. Empty / absent → no highlight. */
+  searchQuery?: string;
+  /** This row is the CURRENT prev/next find match: it takes the framed look
+   *  (same `border-accent bg-bg-floating` as `highlighted`) and its keyword
+   *  marks read as "current" via the `data-search-active` hook. */
+  searchActive?: boolean;
 }
 
 /**
@@ -217,6 +225,8 @@ export function MessageItem({
   onShare,
   onUnfollowThread,
   userResolver,
+  searchQuery,
+  searchActive = false,
 }: MessageItemProps): JSX.Element {
   const isUser = message.from_kind === 'user';
   // A pending optimistic row has no server id/seq: every action that needs a
@@ -321,7 +331,7 @@ export function MessageItem({
   // selected rows so the user can see at a glance which messages are
   // in the export queue.
   const framed =
-    hover || highlighted || reactionPickerOpen || (selectionMode && selected);
+    hover || highlighted || reactionPickerOpen || searchActive || (selectionMode && selected);
 
   // "{N} Reply/Replies" — pluralized to match the ThreadPanel header
   // (which says "N replies"); the badge previously hard-coded "Reply".
@@ -431,6 +441,7 @@ export function MessageItem({
       onOpenChannelRef={onOpenChannelRef}
       conversationRefsById={conversationRefsById}
       onOpenConversationRef={onOpenConversationRef}
+      searchQuery={searchQuery}
     />
   );
   const attachmentsNode =
@@ -515,6 +526,7 @@ export function MessageItem({
     <div
       id={`msg-${message.id}`}
       data-message-row
+      data-search-active={searchActive || undefined}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onClickCapture={

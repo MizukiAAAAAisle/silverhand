@@ -38,6 +38,10 @@ import { ListRowsSkeleton } from './ListRowsSkeleton';
 
 interface SearchPanelProps {
   workspaces: WorkspaceListItem[];
+  /** Seeds the query on mount when the inline header find hands off to
+   *  advanced search (#task:1335). Read once — the panel remounts fresh per
+   *  route, so a new `?q=` seeds a fresh useState. */
+  initialQuery?: string;
   /** Filter selection (workspace / sender / time), owned by App so it
    *  survives pane switches for the app session (#task:1259). The free-text
    *  query stays panel-local — it's per-keystroke, so lifting it to the App
@@ -100,13 +104,14 @@ function WorkspaceGlyph({ size = 3.5 }: { size?: 3 | 3.5 | 4 }): JSX.Element {
 
 export function SearchPanel({
   workspaces,
+  initialQuery,
   filter,
   onFilterChange,
   onJumpMessage,
   onOpenWorkspace,
   onOpenConversation,
 }: SearchPanelProps): JSX.Element {
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(initialQuery ?? '');
   // Filters are App-owned (controlled) so they persist across pane switches
   // for the session (#task:1259). Query stays local (see SearchPanelProps).
   const { workspace: workspaceFilter, sender: senderFilter, time: timeRange } = filter;
