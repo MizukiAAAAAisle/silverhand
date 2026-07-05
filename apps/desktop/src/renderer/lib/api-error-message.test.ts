@@ -10,6 +10,8 @@ const options = {
   knownCodeMessages: {
     local_host_unbound:
       'No connected computer can store this workspace. Connect one and try again.',
+    workspace_path_conflict:
+      'This folder is already used by another Silverhand workspace; choose a different folder.',
   },
 };
 
@@ -62,6 +64,25 @@ describe('describeApiError', () => {
       ),
     ).toBe(
       'No connected computer can store this workspace. Connect one and try again.',
+    );
+  });
+
+  it('lets known codes replace noisy backend path details', () => {
+    expect(
+      describeApiError(
+        new ApiError(
+          409,
+          'Conflict',
+          JSON.stringify({
+            error:
+              'path /Users/alice/work/my-workspace is already bound to workspace ws_other',
+            code: 'workspace_path_conflict',
+          }),
+        ),
+        options,
+      ),
+    ).toBe(
+      'This folder is already used by another Silverhand workspace; choose a different folder.',
     );
   });
 

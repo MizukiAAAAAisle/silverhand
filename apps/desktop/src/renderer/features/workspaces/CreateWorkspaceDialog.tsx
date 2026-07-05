@@ -398,6 +398,8 @@ const WORKSPACE_CREATE_ERROR_MESSAGES: Record<string, string> = {
   host_mismatch: 'Initial agents must live on the selected computer.',
   host_attach_pending:
     'That computer is not connected yet. Try again in a moment.',
+  workspace_path_conflict:
+    'This folder is already used by another Silverhand workspace; choose a different folder.',
 };
 
 function friendlyCreateWorkspaceError(err: unknown): string {
