@@ -23,8 +23,9 @@ import {
  *  `by_conversation` maps + the global `by_workspace` summary). The legacy
  *  fallback path: the S1 viewer-unread ingestor (#task:1284) patches these caches
  *  in place from an enriched `unread_updated` frame, and this invalidate remains
- *  ONLY for the frames it can't patch — a `snapshot_required` reconcile, or a
- *  legacy/malformed message-variant payload missing the enriched absolute fields.
+ *  for cases the live patch cannot cover — a `snapshot_required` reconcile, a
+ *  legacy/malformed message-variant payload missing the enriched absolute fields,
+ *  or a post-observe fallback while the event websocket is offline.
  *  Never called on a well-formed enriched frame (that would defeat the patch's
  *  zero-refetch). */
 export function invalidateMessageUnreadQueries(qc: QueryClient): void {

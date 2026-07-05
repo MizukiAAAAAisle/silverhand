@@ -50,6 +50,7 @@ import {
   postObserve,
   streamSourceAtSeq,
 } from '@/features/attention/observe';
+import { reconcileUnreadAfterObserveIfRealtimeUnavailable } from '@/features/attention/observe-cache-fallback';
 
 // ─── Split-module imports (#task:1292) ───────────────────────────────────────
 import {
@@ -1254,19 +1255,26 @@ export function useMarkConversationNotificationsRead() {
   * conversation_reads cursor — clears message unread badges.
   */
 export function useMarkMessageChannelRead() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: async (params: string | { id: string }) => {
       const channelId = typeof params === 'string' ? params : params.id;
-      await postObserve([mainlineStreamSourceHead(channelId)]);
+      return postObserve([mainlineStreamSourceHead(channelId)]);
     },
-    // No onSuccess message-unread invalidate (#task:1284). observe's post-commit
-    // enriched `unread_updated` message variant is fanned to EVERY viewer —
-    // including THIS client that issued the observe (no actor exclusion / no
-    // origin-connection suppression, backend contract) — and the viewer-unread
-    // ingestor patches the badge caches to 0 in place. Invalidating here would
-    // defeat that with a whole-list refetch (the exact regression the projection
-    // replaces). Absolute-value payloads are idempotent, so HTTP-return vs
-    // WS-frame arrival order can't leave a stale badge.
+    onSuccess: result => {
+      reconcileUnreadAfterObserveIfRealtimeUnavailable(qc, result);
+    },
+    // No onSuccess message-unread invalidate while event WS is connected
+    // (#task:1284). observe's post-commit enriched `unread_updated` message
+    // variant is fanned to EVERY viewer — including THIS client that issued the
+    // observe (no actor exclusion / no origin-connection suppression, backend
+    // contract) — and the viewer-unread ingestor patches the badge caches to 0
+    // in place. Invalidating on the healthy path would defeat that with a
+    // whole-list refetch (the exact regression the projection replaces). The
+    // onSuccess fallback above only runs while event WS is not connected, when
+    // that post-commit frame cannot reach this client.
+    // Absolute-value payloads are idempotent, so HTTP-return vs WS-frame arrival
+    // order can't leave a stale badge.
   });
 }
 
@@ -1294,15 +1302,17 @@ export function useMarkThreadRead() {
       threadRootId: string;
       snapshotSeq: MessageSeq;
     }) => {
-      await postObserve([
+      return postObserve([
         streamSourceAtSeq(params.channelId, params.threadRootId, params.snapshotSeq),
       ]);
     },
-    onSuccess: (_d, params) => {
+    onSuccess: (result, params) => {
+      reconcileUnreadAfterObserveIfRealtimeUnavailable(qc, result);
       // message-unread badge (sidebar + global roll-up, incl. followed-thread
       // unread) is now cleared by observe's post-commit enriched `unread_updated`
       // patch via the viewer-unread ingestor (#task:1284) — NO invalidate here
       // (it would force a whole-list refetch and defeat the projection).
+      // The fallback above is gated to event-WS outage only.
       // The Threads-list is a SEPARATE read-model: it only invalidates on stream
       // message / connected, never on `unread_updated`, so its per-thread
       // sticker/dot still needs this explicit invalidate.

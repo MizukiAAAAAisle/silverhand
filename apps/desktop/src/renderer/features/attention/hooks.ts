@@ -16,6 +16,7 @@ import type {
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
 import { activityItemSource, postObserve } from './observe';
+import { reconcileUnreadAfterObserveIfRealtimeUnavailable } from './observe-cache-fallback';
 import {
   onWsFrame,
   subscribeViewerScope,
@@ -172,7 +173,8 @@ export function useClearActivityItem() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (source: ObserveSource) => postObserve([source]),
-    onSuccess: () => {
+    onSuccess: result => {
+      reconcileUnreadAfterObserveIfRealtimeUnavailable(qc, result);
       void qc.invalidateQueries({ queryKey: ['activity'] });
       void qc.invalidateQueries({ queryKey: ['notifications'] });
     },
@@ -202,10 +204,11 @@ export function useMarkActivityAllRead() {
       const sources = items
         .map(activityItemSource)
         .filter((s): s is ObserveSource => s != null);
-      if (sources.length === 0) return;
-      await postObserve(sources);
+      if (sources.length === 0) return { changed: false };
+      return postObserve(sources);
     },
-    onSuccess: () => {
+    onSuccess: result => {
+      reconcileUnreadAfterObserveIfRealtimeUnavailable(qc, result);
       void qc.invalidateQueries({ queryKey: ['activity'] });
       void qc.invalidateQueries({ queryKey: ['notifications'] });
     },
