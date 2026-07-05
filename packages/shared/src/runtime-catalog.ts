@@ -91,7 +91,7 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     selectable: true,
     // qoder's full canonical set from the qodercli binary.
     reasoningEffortOptions: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
-    supportsProfileMcp: false,
+    supportsProfileMcp: true,
     // The five capability tiers from `qodercli --list-models`. Specific
     // model ids (Qwen*/GLM*/DeepSeek*/Kimi*/MiniMax*) go through free
     // text, per shiki: keep the tiers as suggestions, allow custom ids.

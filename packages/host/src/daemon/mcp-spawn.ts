@@ -22,7 +22,7 @@ import type { DaemonLogger } from './logger.js';
  *
  * Mechanisms (both additive — never replace the user's own MCP, never write
  * the user's runtime config, never call `<runtime> mcp add`):
- *  - **claude:** write a per-spawn temp JSON, pass `--mcp-config <temp>` (no
+ *  - **claude/qoder:** write a per-spawn temp JSON, pass `--mcp-config <temp>` (no
  *    `--strict-mcp-config`).
  *  - **codex:** one `-c mcp_servers.<prefixed>=<inline-toml>` override per
  *    server (per-server so it MERGES with the user's `[mcp_servers.*]`).
@@ -89,7 +89,8 @@ export async function buildProfileMcpSpawnArgs(
 
   try {
     switch (runtimeKind) {
-      case 'claude': {
+      case 'claude':
+      case 'qoder': {
         const claudeConfig = toClaudeMcpConfig(parsed.config, 'profile');
         if (!claudeConfig) return { args: [] };
         const outPath = join(spawnDir, 'profile-mcp.json');

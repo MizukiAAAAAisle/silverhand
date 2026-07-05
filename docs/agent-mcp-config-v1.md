@@ -177,7 +177,8 @@ Two distinct stages, and within spawn two distinct failure *classes*:
   surfaced (agent-log + run-state), and **the agent still spawns**. A broken MCP
   config must not make the agent undeployable.
 - **Spawn stage — MCP server runtime init: not our concern.** Once a valid
-  config is handed to claude/codex, a server failing to connect is the runtime's
+  config is handed to claude/codex/qoder, a server failing to connect is the
+  runtime's
   MCP health / tool-availability problem. Silverhand does **not** pre-check or
   block spawn on it; it only surfaces diagnostics. v1 has no `required: true`, so
   one external MCP process failing never blocks the agent.

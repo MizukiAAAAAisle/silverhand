@@ -57,16 +57,16 @@ const DISALLOWED_TOOLS = [
  *    protocol is unverified, so we let the supervisor fall through to
  *    SIGTERM/SIGKILL rather than send a frame Qoder might not honor.
  *
- * Known follow-ups (out of core-driver scope, flagged for review):
- *  - User-config isolation (hooks/skills/settings): Qoder loads the
- *    developer machine's `~/.qoder` config by default (visible as
- *    `hook_started`/`hook_response` frames + auto-triggered skills).
- *    A hermetic default is cleanly addable via `--config-dir` +
- *    `--setting-sources` + `--strict-mcp-config` — deliberately NOT
- *    wired here (deferred), and nothing below hard-codes an assumption
- *    that blocks adding it later.
- *  - MCP: Qoder supports `--mcp-config` (Claude-shaped); profile MCP
- *    injection lives in the backend spawn loader, not this driver.
+ * Operational notes:
+ *  - Qoder intentionally inherits the developer machine's normal qoder
+ *    config/hooks/skills by default (visible as `hook_started` /
+ *    `hook_response` frames + auto-triggered skills). shiki explicitly
+ *    chose this over a hermetic config root so existing user habits carry
+ *    into Silverhand. A future hermetic mode would be a product decision,
+ *    not a driver-default cleanup.
+ *  - Profile MCP injection lives in the daemon spawn loader, not this
+ *    driver. Qoder uses the same Claude-shaped `--mcp-config <file>`
+ *    projection there.
  *  - Resume-failure surfaces on stderr (not a stdout `result` frame),
  *    so it can't be classified here as `session_not_found`. Behaviour
  *    then matches Claude's invalid-resume path anyway: no `session_init`

@@ -12,8 +12,8 @@
  *
  * MCP config is stored as raw JSON at the agent's L1 `mcp.json` (the host is
  * the single source of truth — no DB copy). It is loaded ADDITIVELY at the
- * NEXT spawn (no hot reload): claude via `--mcp-config`, codex via per-server
- * `-c mcp_servers.*` overrides. Server names are namespaced to
+ * NEXT spawn (no hot reload): claude/qoder via `--mcp-config`, codex via
+ * per-server `-c mcp_servers.*` overrides. Server names are namespaced to
  * `silverhand_profile__<name>` at spawn so they never collide with the user's
  * own MCP servers.
  *

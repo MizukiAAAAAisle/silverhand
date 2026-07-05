@@ -144,7 +144,7 @@ function ProfileMcpScope({
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-error" />
           <span>
             Profile MCP is not loaded for <strong>{runtimeLabel(runtime)}</strong>{' '}
-            yet — only Claude and Codex support it. The servers below are kept but{' '}
+            yet. The servers below are kept but{' '}
             <strong>ignored at the next spawn</strong>.
           </span>
         </div>
@@ -490,15 +490,15 @@ function runConfigCheck(raw: string | null, runtime: RuntimeKind): ConfigCheckRe
 }
 
 function projectForRuntime(config: McpConfig, runtime: RuntimeKind): void {
-  // Mirror the spawn loader EXACTLY (host `mcp-spawn.ts` switch): only claude
-  // and codex have a profile-MCP adapter. cursor / gemini / anything else
-  // skips the whole layer at spawn, so projecting them through the Claude
-  // adapter would falsely report "Config OK" for servers that load as ZERO —
-  // a direct lie about the next-spawn contract. Throw a clear message instead
-  // (the UI also hides the trigger for these via `runtimeSupportsProfileMcp`,
-  // so this is the belt-and-braces guard).
+  // Mirror the spawn loader EXACTLY (host `mcp-spawn.ts` switch). Unsupported
+  // runtimes skip the whole layer at spawn, so projecting them through a
+  // supported adapter would falsely report "Config OK" for servers that load
+  // as ZERO — a direct lie about the next-spawn contract. Throw a clear message
+  // instead (the UI also hides the trigger for these via
+  // `runtimeSupportsProfileMcp`, so this is the belt-and-braces guard).
   switch (runtime) {
     case 'claude':
+    case 'qoder':
       toClaudeMcpConfig(config, 'profile');
       return;
     case 'codex':
@@ -506,15 +506,15 @@ function projectForRuntime(config: McpConfig, runtime: RuntimeKind): void {
       return;
     default:
       throw new Error(
-        `Profile MCP is not loaded for ${runtimeLabel(runtime)} — only Claude and Codex are supported.`,
+        `Profile MCP is not loaded for ${runtimeLabel(runtime)}.`,
       );
   }
 }
 
 /**
  * Does this runtime actually load profile MCP at spawn? The shared runtime
- * catalog mirrors the host spawn loader (`mcp-spawn.ts` switch: claude |
- * codex) and a host-side test asserts the two stay in lockstep, so reading
+ * catalog mirrors the host spawn loader and a host-side test asserts the two
+ * stay in lockstep, so reading
  * `supportsProfileMcp` here keeps this UI in step automatically.
  */
 function runtimeSupportsProfileMcp(runtime: RuntimeKind): boolean {

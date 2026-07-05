@@ -20,6 +20,7 @@ import type { DaemonLogger } from '../src/daemon/logger.js';
  *   - claude       → writes a per-spawn JSON, returns `--mcp-config <path>`
  *                    with names prefixed `silverhand_profile__*` (NEVER
  *                    `--strict-mcp-config`, which would REPLACE the user's MCP)
+ *   - qoder        → same Claude-shaped JSON file path via `--mcp-config`
  *   - codex        → one `-c mcp_servers.<prefixed>=<toml>` per server
  *   - bad JSON     → loud, drop the WHOLE layer, still spawn (`[]`)
  *   - hard read err→ loud, `[]`
@@ -113,6 +114,38 @@ describe('buildProfileMcpSpawnArgs', () => {
       'silverhand_profile__remote',
     ]);
     expect(written.mcpServers.silverhand_profile__fs.command).toBe('npx');
+  });
+
+  it('qoder: writes a per-spawn config and passes --mcp-config (NEVER --strict-mcp-config)', async () => {
+    writeFileSync(
+      join(homeDir, 'mcp.json'),
+      JSON.stringify({
+        mcpServers: {
+          fs: { command: 'npx', args: ['-y', 'server-fs'] },
+          remote: { type: 'http', url: 'https://example.com/mcp' },
+        },
+      }),
+    );
+    const { logger } = captureLogger();
+    const r = await buildProfileMcpSpawnArgs({
+      runtimeKind: 'qoder',
+      agentHomeDir: homeDir,
+      spawnDir,
+      agentId: AGENT_ID,
+      logger,
+    });
+    expect(r.args[0]).toBe('--mcp-config');
+    expect(r.args).not.toContain('--strict-mcp-config');
+    const outPath = r.args[1]!;
+    expect(outPath).toBe(join(spawnDir, 'profile-mcp.json'));
+    const written = JSON.parse(readFileSync(outPath, 'utf-8'));
+    expect(Object.keys(written.mcpServers).sort()).toEqual([
+      'silverhand_profile__fs',
+      'silverhand_profile__remote',
+    ]);
+    expect(written.mcpServers.silverhand_profile__remote.url).toBe(
+      'https://example.com/mcp',
+    );
   });
 
   it('codex: emits one -c mcp_servers.<prefixed> override per server', async () => {
