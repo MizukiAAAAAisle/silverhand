@@ -484,7 +484,7 @@ export function MessageList({
     virtuosoRef.current?.scrollToIndex({
       index: idx,
       align: 'center',
-      behavior: 'smooth',
+      behavior: 'auto',
     });
   }, [searchActiveMessageId, items, jumpToMessageId]);
 
