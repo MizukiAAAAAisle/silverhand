@@ -128,6 +128,12 @@ export function SearchPanel({
   // the raw uuid (multi-human audit 2026-06-03 #task:857 P0.10).
   const usersById = useUsersById();
   const userResolver = useMemo(() => makeUserNameResolver(usersById), [usersById]);
+  // Batch avatar-url resolvers (shared session cache — no per-row fetch): feed
+  // message result rows so the sender segment shows the real agent/user avatar
+  // instead of a bare name (#task:1336). Keyed by (id, avatar_url) so reordering
+  // results never re-runs the effect.
+  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
+  const userAvatarUrls = useUserAvatarObjectUrls(users);
 
   const channelQuery = useMemo(
     () => parseWorkspaceFilter(workspaceFilter),
@@ -284,6 +290,8 @@ export function SearchPanel({
                       result={result}
                       query={query}
                       agentsById={agentsById}
+                      agentAvatarUrls={agentAvatarUrls}
+                      userAvatarUrls={userAvatarUrls}
                       userResolver={userResolver}
                       onClick={() => {
                         if (result.type === 'workspace') {
@@ -590,18 +598,21 @@ function SearchResultRow({
   result,
   query,
   agentsById,
+  agentAvatarUrls,
+  userAvatarUrls,
   userResolver,
   onClick,
 }: {
   result: SearchResultDto;
   query: string;
   agentsById: Map<string, AgentDto>;
+  agentAvatarUrls: Map<string, string | null>;
+  userAvatarUrls: Map<string, string | null>;
   userResolver: UserNameResolver;
   onClick: () => void;
 }): JSX.Element {
+  const isMessage = result.type === 'message';
   const icon = resultIcon(result);
-  const meta = resultMeta(result, agentsById, userResolver);
-  const title = resultTitle(result);
   const excerpt = resultExcerpt(result, query);
 
   return (
@@ -612,20 +623,35 @@ function SearchResultRow({
         data-list-row
         className="flex w-full min-w-0 items-start gap-3 rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-3 py-3 text-left transition"
       >
-        <span data-list-row-icon className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md border border-border-subtle bg-bg-base text-text-muted">
+        <span
+          data-list-row-icon
+          className="flex size-8 shrink-0 items-center justify-center self-center rounded-md border border-border-subtle bg-bg-base text-text-muted"
+        >
           {icon}
         </span>
         <span className="min-w-0 flex-1">
-          <span className="mb-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
-            {meta.map((item, index) => (
-              <span key={`${index}:${item}`} className="min-w-0 truncate">
-                {item}
+          {isMessage ? (
+            <MessageResultHeader
+              result={result}
+              agentsById={agentsById}
+              agentAvatarUrls={agentAvatarUrls}
+              userAvatarUrls={userAvatarUrls}
+              userResolver={userResolver}
+            />
+          ) : (
+            <>
+              <span className="mb-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
+                {resultMeta(result).map((item, index) => (
+                  <span key={`${index}:${item}`} className="min-w-0 truncate">
+                    {item}
+                  </span>
+                ))}
               </span>
-            ))}
-          </span>
-          <span className="block truncate text-sm font-medium text-text-primary">
-            {highlightText(title, query)}
-          </span>
+              <span className="block truncate text-sm font-medium text-text-primary">
+                {highlightText(resultTitle(result), query)}
+              </span>
+            </>
+          )}
           {excerpt ? (
             <span className="mt-1 block max-h-10 overflow-hidden text-sm leading-5 text-text-secondary">
               {highlightText(excerpt, query)}
@@ -635,6 +661,128 @@ function SearchResultRow({
       </button>
     </li>
   );
+}
+
+/**
+ * Header for a message search result: workspace · channel · sender · time, each
+ * named entity carrying its canonical icon/avatar (#task:1336). The type itself
+ * is expressed by the left row icon, so no "Message" text label here. Reuses the
+ * same name resolvers as the rest of the panel (no second metadata source) and
+ * the shared avatar-url caches for the sender glyph.
+ */
+function MessageResultHeader({
+  result,
+  agentsById,
+  agentAvatarUrls,
+  userAvatarUrls,
+  userResolver,
+}: {
+  result: Extract<SearchResultDto, { type: 'message' }>;
+  agentsById: Map<string, AgentDto>;
+  agentAvatarUrls: Map<string, string | null>;
+  userAvatarUrls: Map<string, string | null>;
+  userResolver: UserNameResolver;
+}): JSX.Element {
+  const senderName = messageSenderName(result, agentsById, userResolver);
+  return (
+    <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-muted">
+      <span className="flex min-w-0 items-center gap-1">
+        <WorkspaceIcon
+          kind={result.workspace.kind === 'dm' ? 'dm' : 'regular'}
+          dmAgentId={null}
+        />
+        <span className="truncate">{workspaceDisplayName(result.workspace)}</span>
+      </span>
+      <MetaDot />
+      <span className="flex min-w-0 items-center gap-1">
+        {/* Same channel glyph the sidebar / saved / activity lists use — the
+            `data-channel-icon` hook lets each theme paint its `#` chip (forza6
+            poster sticker) so a channel reads identically everywhere. Not a
+            bare Hash, and not the chat-header hero (`data-conversation-hash-icon`,
+            which scales up to ~28px). `size-3` (12px) so forza6's content-box
+            chip (+2px pad +2px border) lands at 16px — matching the 16px
+            workspace icon + sender avatar on this row (shiki #task:1336). warm /
+            slack paint no chip, so their glyph is simply 12px. */}
+        <Hash data-channel-icon className="size-3 shrink-0" />
+        <span className="truncate">{result.conversation.title}</span>
+      </span>
+      <MetaDot />
+      <span className="flex min-w-0 items-center gap-1">
+        {messageSenderAvatar(result, agentsById, agentAvatarUrls, userAvatarUrls)}
+        <span className="truncate">{senderName}</span>
+      </span>
+      <MetaDot />
+      <span className="shrink-0 tabular-nums">
+        {dayjs(result.message.created_at).format('YYYY-MM-DD HH:mm')}
+      </span>
+    </span>
+  );
+}
+
+function MetaDot(): JSX.Element {
+  return (
+    <span aria-hidden className="shrink-0 text-xs text-text-muted/60">
+      ·
+    </span>
+  );
+}
+
+/** Sender display name for a message result — the SAME resolution the panel
+ *  uses everywhere (agents via `agentsById`/`agent_name`, humans via the
+ *  resolver), so the header never introduces a second metadata source. */
+function messageSenderName(
+  result: Extract<SearchResultDto, { type: 'message' }>,
+  agentsById: Map<string, AgentDto>,
+  userResolver: UserNameResolver,
+): string {
+  const { message } = result;
+  if (message.from_kind === 'agent') {
+    return formatAgentName(message.from_agent_id, result.agent_name, agentsById);
+  }
+  if (message.from_kind === 'user') {
+    return formatUserDisplayName(message.from_user_id, userResolver);
+  }
+  return 'system';
+}
+
+/** Sender avatar glyph for a message result: the agent's runtime/uploaded
+ *  avatar, the human's uploaded avatar, or nothing for system (the left type
+ *  icon already reads "system"). All bytes come from the shared avatar-url
+ *  caches — this component never fetches. */
+function messageSenderAvatar(
+  result: Extract<SearchResultDto, { type: 'message' }>,
+  agentsById: Map<string, AgentDto>,
+  agentAvatarUrls: Map<string, string | null>,
+  userAvatarUrls: Map<string, string | null>,
+): JSX.Element | null {
+  const { message } = result;
+  if (message.from_kind === 'agent') {
+    const agent = message.from_agent_id
+      ? agentsById.get(message.from_agent_id)
+      : undefined;
+    if (!agent) return <Bot className="size-4 shrink-0 text-text-muted" />;
+    return (
+      <AgentAvatar
+        runtime={agent.runtime}
+        size={16}
+        avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
+        alt={agent.display_name?.trim() || agent.name}
+      />
+    );
+  }
+  if (message.from_kind === 'user') {
+    return (
+      <UserAvatar
+        size={16}
+        avatarObjectUrl={
+          message.from_user_id
+            ? userAvatarUrls.get(message.from_user_id) ?? null
+            : null
+        }
+      />
+    );
+  }
+  return null;
 }
 
 function EmptyState({
@@ -711,11 +859,10 @@ function resultIcon(result: SearchResultDto): JSX.Element {
   return <MessageSquareText className="size-4" />;
 }
 
-function resultMeta(
-  result: SearchResultDto,
-  agentsById: Map<string, AgentDto>,
-  userResolver: UserNameResolver,
-): string[] {
+/** Metadata line for named-entity (workspace / conversation) result rows.
+ *  Message rows render a richer icon+avatar header via `MessageResultHeader`
+ *  instead, so they don't pass through here. */
+function resultMeta(result: SearchResultDto): string[] {
   if (result.type === 'workspace') {
     return [result.workspace.kind === 'dm' ? 'DM' : 'Workspace'];
   }
@@ -726,18 +873,7 @@ function resultMeta(
       dayjs(result.conversation.created_at).format('YYYY-MM-DD HH:mm'),
     ];
   }
-  const sender = result.message.from_kind === 'agent'
-    ? formatAgentName(result.message.from_agent_id, result.agent_name, agentsById)
-    : result.message.from_kind === 'user'
-      ? formatUserDisplayName(result.message.from_user_id, userResolver)
-      : 'system';
-  return [
-    result.workspace.kind === 'dm' ? 'DM message' : 'Message',
-    workspaceDisplayName(result.workspace),
-    result.conversation.title,
-    sender,
-    dayjs(result.message.created_at).format('YYYY-MM-DD HH:mm'),
-  ];
+  return [];
 }
 
 function resultTitle(result: SearchResultDto): string {
