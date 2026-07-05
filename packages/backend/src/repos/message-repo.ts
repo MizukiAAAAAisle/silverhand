@@ -16,6 +16,12 @@ import type {
   ThreadSummary,
   ThreadSummaryInvariant,
 } from '@silverhand/shared';
+import {
+  streamScopePredicate,
+  streamScopeParams,
+  type WindowScope,
+  type WindowScopeMode,
+} from './message-stream-scope.js';
 
 function newId(): string {
   return randomBytes(12).toString('base64url');
@@ -185,12 +191,6 @@ export interface ListWindowOpts {
   afterSeq?: number | null;
   aroundMessageId?: string | null;
 }
-
-type WindowScope =
-  | { mode: 'all' }
-  | { mode: 'main' }
-  | { mode: 'cluster'; threadRootId: string };
-type WindowScopeMode = WindowScope['mode'];
 
 type MessageRowWithTaskAssignee = MessageRow & {
   task_assignee_name: string | null;
@@ -847,11 +847,7 @@ export class MessageRepo {
                FROM messages
               WHERE conversation_id = ?
                 AND (? IS NULL OR seq < ?)
-                AND (
-                  ? = 'all'
-                  OR (? = 'main' AND thread_root_id IS NULL)
-                  OR (? = 'cluster' AND (id = ? OR thread_root_id = ?))
-                )
+                AND ${streamScopePredicate()}
               ORDER BY seq DESC
               LIMIT ?
            ) m
@@ -862,7 +858,7 @@ export class MessageRepo {
         conversationId,
         beforeSeq,
         beforeSeq,
-        ...this.scopeParams(scope),
+        ...streamScopeParams(scope),
         limit,
       );
   }
@@ -896,15 +892,11 @@ export class MessageRepo {
            LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
           WHERE m.conversation_id = ?
             AND m.seq > ?
-            AND (
-              ? = 'all'
-              OR (? = 'main' AND m.thread_root_id IS NULL)
-              OR (? = 'cluster' AND (m.id = ? OR m.thread_root_id = ?))
-            )
+            AND ${streamScopePredicate('m.')}
           ORDER BY m.seq ASC
           LIMIT ?`,
       )
-      .all(conversationId, afterSeq, ...this.scopeParams(scope), limit);
+      .all(conversationId, afterSeq, ...streamScopeParams(scope), limit);
   }
 
   /** Fetch a single row by id, scoped to one conversation. Returns
@@ -933,13 +925,9 @@ export class MessageRepo {
            LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
           WHERE m.conversation_id = ?
             AND m.id = ?
-            AND (
-              ? = 'all'
-              OR (? = 'main' AND m.thread_root_id IS NULL)
-              OR (? = 'cluster' AND (m.id = ? OR m.thread_root_id = ?))
-            )`,
+            AND ${streamScopePredicate('m.')}`,
       )
-      .get(conversationId, messageId, ...this.scopeParams(scope));
+      .get(conversationId, messageId, ...streamScopeParams(scope));
     return row ?? null;
   }
 
@@ -965,13 +953,9 @@ export class MessageRepo {
       >(
         `SELECT seq FROM messages
           WHERE conversation_id = ? AND id = ?
-            AND (
-              ? = 'all'
-              OR (? = 'main' AND thread_root_id IS NULL)
-              OR (? = 'cluster' AND (id = ? OR thread_root_id = ?))
-            )`,
+            AND ${streamScopePredicate()}`,
       )
-      .get(conversationId, messageId, ...this.scopeParams(scope));
+      .get(conversationId, messageId, ...streamScopeParams(scope));
     return row?.seq ?? null;
   }
 
@@ -987,19 +971,11 @@ export class MessageRepo {
       op === '<'
         ? `SELECT 1 AS found FROM messages
             WHERE conversation_id = ? AND seq < ?
-              AND (
-                ? = 'all'
-                OR (? = 'main' AND thread_root_id IS NULL)
-                OR (? = 'cluster' AND (id = ? OR thread_root_id = ?))
-              )
+              AND ${streamScopePredicate()}
             LIMIT 1`
         : `SELECT 1 AS found FROM messages
             WHERE conversation_id = ? AND seq > ?
-              AND (
-                ? = 'all'
-                OR (? = 'main' AND thread_root_id IS NULL)
-                OR (? = 'cluster' AND (id = ? OR thread_root_id = ?))
-              )
+              AND ${streamScopePredicate()}
             LIMIT 1`;
     return (
       this.db
@@ -1015,21 +991,8 @@ export class MessageRepo {
           ],
           { found: 1 }
         >(sql)
-        .get(conversationId, pivot, ...this.scopeParams(scope)) !== undefined
+        .get(conversationId, pivot, ...streamScopeParams(scope)) !== undefined
     );
-  }
-
-  private scopeParams(
-    scope: WindowScope,
-  ): [
-    WindowScopeMode,
-    WindowScopeMode,
-    WindowScopeMode,
-    string | null,
-    string | null,
-  ] {
-    const threadRootId = scope.mode === 'cluster' ? scope.threadRootId : null;
-    return [scope.mode, scope.mode, scope.mode, threadRootId, threadRootId];
   }
 
   getById(id: string): MessageDto | null {

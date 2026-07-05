@@ -8,6 +8,12 @@ import type {
   SearchWorkspaceRef,
 } from '@silverhand/shared';
 import { messageRowToDto } from './message-repo.js';
+import { likeNeedle } from './sql-like.js';
+import {
+  streamScopePredicate,
+  streamScopeParams,
+  type WindowScope,
+} from './message-stream-scope.js';
 
 type SqlValue = string | number | null;
 
@@ -46,14 +52,6 @@ type MessageSearchRow = MessageRow & {
   workspace_kind: SearchWorkspaceKind;
   agent_name: string | null;
 };
-
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, ch => `\\${ch}`);
-}
-
-function likeNeedle(query: string): string {
-  return `%${escapeLike(query)}%`;
-}
 
 function workspaceRef(row: {
   workspace_id: string;
@@ -98,7 +96,15 @@ export interface SearchOptions {
 export class SearchRepo {
   constructor(private readonly db: Db) {}
 
-  search(input: SearchQueryInput, opts: SearchOptions = {}): SearchResultDto[] {
+  /** Returns matched entities plus the message-match `total` (before the
+   *  result cap) and whether the returned message list was `truncated`.
+   *  `total` / `truncated` describe MESSAGE matches only — the named-entity
+   *  (workspace / conversation) results are discovery sugar and excluded from
+   *  the count that drives the inline "N / M" counter. */
+  search(
+    input: SearchQueryInput,
+    opts: SearchOptions = {},
+  ): { results: SearchResultDto[]; total: number; truncated: boolean } {
     const query = input.q.trim();
     const hasAuthorFilter = !!input.user_id || !!input.agent_id;
     const hasSearchIntent =
@@ -111,11 +117,15 @@ export class SearchRepo {
       input.from !== undefined ||
       input.to !== undefined;
 
-    if (!hasSearchIntent) return [];
+    if (!hasSearchIntent) return { results: [], total: 0, truncated: false };
 
     const limit = input.limit;
     const results: SearchResultDto[] = [];
-    const includeNamedEntities = query.length > 0 && !hasAuthorFilter;
+    // Conversation-scoped search (the header inline find) is messages-only:
+    // workspace / conversation discovery results would be noise inside one
+    // conversation and would also compete for the result cap.
+    const includeNamedEntities =
+      query.length > 0 && !hasAuthorFilter && !input.conversation_id;
 
     if (includeNamedEntities) {
       results.push(
@@ -124,8 +134,13 @@ export class SearchRepo {
       );
     }
 
-    results.push(...this.searchMessages(input, query, limit, opts));
-    return results.slice(0, limit);
+    const messages = this.searchMessages(input, query, limit, opts);
+    results.push(...messages.results);
+    return {
+      results: results.slice(0, limit),
+      total: messages.total,
+      truncated: messages.truncated,
+    };
   }
 
   private searchWorkspaces(
@@ -197,7 +212,7 @@ export class SearchRepo {
   ): SearchResultDto[] {
     const where: string[] = [`conv.title LIKE ? ESCAPE '\\'`];
     const params: SqlValue[] = [likeNeedle(query)];
-    applyConversationScopeFilters(where, params, input, 'conv', 'root', 'w');
+    applyConversationScopeFilters(where, params, input, 'conv', 'w');
     applyTimeFilters(where, params, input, 'conv.created_at');
     applyConversationUserVisibility(where, params, opts, 'conv');
     params.push(limit);
@@ -234,14 +249,30 @@ export class SearchRepo {
     query: string,
     limit: number,
     opts: SearchOptions,
-  ): SearchResultDto[] {
+  ): { results: SearchResultDto[]; total: number; truncated: boolean } {
     const where: string[] = [];
     const params: SqlValue[] = [];
     if (query.length > 0) {
       where.push(`m.content LIKE ? ESCAPE '\\'`);
       params.push(likeNeedle(query));
     }
-    applyConversationScopeFilters(where, params, input, 'conv', 'root', 'w');
+    applyConversationScopeFilters(where, params, input, 'conv', 'w');
+    // Stream scope (#task:1334): narrow to one renderable stream via the
+    // SAME predicate the message-window read-model uses, so a hit is always
+    // materializable in the panel that scoped it. `all` adds no filter (the
+    // historical cross-stream behaviour). The schema guarantees a
+    // conversation_id accompanies any non-`all` stream, and the route has
+    // already normalized a reply id to its thread root.
+    const streamScope: WindowScope | null =
+      input.stream === 'mainline'
+        ? { mode: 'main' }
+        : input.stream === 'thread' && input.thread_root_id
+          ? { mode: 'cluster', threadRootId: input.thread_root_id }
+          : null;
+    if (streamScope) {
+      where.push(streamScopePredicate('m.'));
+      params.push(...streamScopeParams(streamScope));
+    }
     applyTimeFilters(where, params, input, 'm.created_at');
     applyConversationUserVisibility(where, params, opts, 'conv');
     if (input.user_id) {
@@ -260,9 +291,16 @@ export class SearchRepo {
       where.push(`m.from_agent_id = ?`);
       params.push(input.agent_id);
     }
-    params.push(limit);
+    // Probe one past the cap so we can report `truncated` without a second
+    // COUNT query. seq_asc keeps the earliest matches; recency_desc the most
+    // recent — either way prev/next spans exactly the returned set.
+    params.push(limit + 1);
 
     const whereSql = where.length > 0 ? where.join(' AND ') : '1 = 1';
+    const orderSql =
+      input.order === 'seq_asc'
+        ? 'ORDER BY m.seq ASC'
+        : 'ORDER BY m.created_at DESC, m.seq DESC';
     const rows = this.db
       .prepare(
         `SELECT
@@ -281,18 +319,24 @@ export class SearchRepo {
            JOIN workspaces w ON w.id = conv.workspace_id
            LEFT JOIN agents a ON a.id = m.from_agent_id
           WHERE ${whereSql}
-          ORDER BY m.created_at DESC, m.seq DESC
+          ${orderSql}
           LIMIT ?`,
       )
       .all(...params) as MessageSearchRow[];
 
-    return rows.map(row => ({
-      type: 'message',
-      workspace: workspaceRef(row),
-      conversation: conversationRef(row),
-      message: messageRowToDto(row),
-      agent_name: row.agent_name,
-    }));
+    const truncated = rows.length > limit;
+    const capped = truncated ? rows.slice(0, limit) : rows;
+    return {
+      results: capped.map(row => ({
+        type: 'message',
+        workspace: workspaceRef(row),
+        conversation: conversationRef(row),
+        message: messageRowToDto(row),
+        agent_name: row.agent_name,
+      })),
+      total: capped.length,
+      truncated,
+    };
   }
 }
 
@@ -334,7 +378,6 @@ function applyConversationScopeFilters(
   params: SqlValue[],
   input: SearchQueryInput,
   conversationAlias: string,
-  rootAlias: string,
   workspaceAlias: string,
 ): void {
   if (input.scope === 'regular') {
@@ -347,8 +390,13 @@ function applyConversationScopeFilters(
     params.push(input.workspace_id);
   }
   if (input.conversation_id) {
-    where.push(`(${rootAlias}.id = ? OR ${conversationAlias}.id = ?)`);
-    params.push(input.conversation_id, input.conversation_id);
+    // A thread's replies share the channel's conversation_id (thread =
+    // reply-cluster, not a separate conversation), so a single equality
+    // scopes the whole channel including its threads. (The prior
+    // `root.id = ? OR conv.id = ?` referenced a `root` alias that no query
+    // here joins — dead/broken since the reply-cluster cutover.)
+    where.push(`${conversationAlias}.id = ?`);
+    params.push(input.conversation_id);
   }
 }
 

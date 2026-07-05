@@ -979,6 +979,29 @@ export function createConversationRuntimeApp(
       Object.fromEntries(new URL(c.req.url).searchParams.entries()),
     );
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+    // Thread-scoped search: normalize the anchor to the thread's ROOT message
+    // id (a reply id resolves to its root) and confirm it belongs to the
+    // scoped conversation — mirroring the message-window route so the search
+    // predicate and the render window agree on the stream. The schema
+    // guarantees thread scope carries both conversation_id and thread_root_id.
+    if (parsed.data.stream === 'thread') {
+      const rootMessage = parsed.data.thread_root_id
+        ? messages.getById(parsed.data.thread_root_id)
+        : null;
+      if (
+        !rootMessage ||
+        rootMessage.conversation_id !== parsed.data.conversation_id
+      ) {
+        return c.json(
+          {
+            error: 'thread root message not found in this conversation',
+            code: 'thread_root_not_found',
+          },
+          404,
+        );
+      }
+      parsed.data.thread_root_id = rootMessage.thread_root_id ?? rootMessage.id;
+    }
     // Legacy `messages.from_user_id IS NULL` rows predate the principal
     // middleware. The renderer treats them as authored by the current
     // viewer, so when the search filter targets the viewer we widen the
@@ -987,11 +1010,11 @@ export function createConversationRuntimeApp(
     const viewerUserId = requireViewerUserId(c);
     const includeNullAuthor =
       parsed.data.user_id !== undefined && parsed.data.user_id === viewerUserId;
-    const results = search.search(parsed.data, {
+    const { results, total, truncated } = search.search(parsed.data, {
       includeNullAuthor,
       visibleUserId: viewerUserId,
     });
-    return c.json({ query: parsed.data, results });
+    return c.json({ query: parsed.data, results, total, truncated });
   });
 
   app.post('/api/channels/:id/agents/:aid/start', async c => {

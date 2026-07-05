@@ -301,21 +301,58 @@ const SearchOptionalMillisSchema = z.preprocess(
 export const SearchScopeSchema = z.enum(['all', 'regular', 'dm']);
 export type SearchScope = z.infer<typeof SearchScopeSchema>;
 
+// Stream scope for message search (#task:1334). `all` searches both the
+// mainline and every thread of the matched conversation(s) — the historical
+// behaviour. `mainline` / `thread` narrow to a single renderable stream of
+// ONE conversation, backing the header inline find: the filter uses the same
+// predicate as the message-window read-model, so a hit is always
+// materializable in the panel that issued it ("搜到必可见").
+export const SearchStreamSchema = z.enum(['all', 'mainline', 'thread']);
+export type SearchStream = z.infer<typeof SearchStreamSchema>;
+
+// Result ordering. `recency_desc` (default) is discovery order. `seq_asc`
+// is conversation order for inline prev/next navigation — only meaningful
+// within a single conversation, so it is gated on `conversation_id`.
+export const SearchOrderSchema = z.enum(['recency_desc', 'seq_asc']);
+export type SearchOrder = z.infer<typeof SearchOrderSchema>;
+
 export const SearchQueryInputSchema = z
   .object({
     q: z.string().trim().max(200).optional().default(''),
     scope: SearchScopeSchema.optional().default('all'),
+    stream: SearchStreamSchema.optional().default('all'),
     workspace_id: SearchOptionalStringSchema,
     conversation_id: SearchOptionalStringSchema,
+    thread_root_id: SearchOptionalStringSchema,
     user_id: SearchOptionalStringSchema,
     agent_id: SearchOptionalStringSchema,
     from: SearchOptionalMillisSchema,
     to: SearchOptionalMillisSchema,
-    limit: z.coerce.number().int().positive().max(200).optional().default(80),
+    order: SearchOrderSchema.optional().default('recency_desc'),
+    // Cap raised to 500 so inline find can return a complete single-stream
+    // match set for prev/next; advanced search callers keep the 80 default.
+    limit: z.coerce.number().int().positive().max(500).optional().default(80),
   })
   .refine(v => !(v.user_id && v.agent_id), {
     message: 'user_id and agent_id cannot both be set',
     path: ['user_id'],
+  })
+  // A stream only exists within a conversation; narrowing to one requires
+  // naming which conversation.
+  .refine(v => v.stream === 'all' || !!v.conversation_id, {
+    message: 'stream filter requires conversation_id',
+    path: ['stream'],
+  })
+  // Thread scope needs the anchoring root message id.
+  .refine(v => v.stream !== 'thread' || !!v.thread_root_id, {
+    message: 'stream=thread requires thread_root_id',
+    path: ['thread_root_id'],
+  })
+  // seq is per-conversation; ordering by it across conversations is
+  // meaningless, so seq_asc is gated on a single-conversation scope.
+  .refine(v => v.order !== 'seq_asc' || !!v.conversation_id, {
+    message: 'order=seq_asc requires conversation_id',
+    path: ['order'],
   });
 export type SearchQueryInput = z.infer<typeof SearchQueryInputSchema>;
 
@@ -364,6 +401,14 @@ export type SearchResultDto = z.infer<typeof SearchResultDtoSchema>;
 export const SearchDtoSchema = z.object({
   query: SearchQueryInputSchema,
   results: z.array(SearchResultDtoSchema),
+  // Total message matches for the query BEFORE the result cap, and whether
+  // the returned list was truncated to `limit`. Drives the inline find
+  // "2 / 7" (exact) vs "2 / 200+" (truncated) counter and tells the
+  // renderer prev/next only spans the returned set. Named-entity
+  // (workspace/conversation) results are not counted here — this is the
+  // message-match total. (#task:1334)
+  total: z.number(),
+  truncated: z.boolean(),
 });
 export type SearchDto = z.infer<typeof SearchDtoSchema>;
 

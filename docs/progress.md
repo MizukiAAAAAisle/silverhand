@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-07-05 — 消息搜索：stream scope 升级 `/api/search`（#task:1334 backend，未 push）
+
+header inline 搜索(#task:1335 Norman 前端)需要「只搜当前 panel 的 stream」——channel 主线搜索**不含 thread replies**、thread 搜索只含该 cluster,否则会「DB 有命中但 UI 永远加载不出」。三方讨论后**不新开专用端点**、而是**升级现有 `/api/search`**(高级搜索面板后续也要区分 mainline/thread,stream-awareness 是它本来要长的能力,另起端点=两套 search contract 违 DRY)。
+
+- **shared 契约(`api/message.ts`)** — `SearchQueryInputSchema` 加三个 optional(带默认、对现有 advanced search + agent `search_messages` 零影响):`stream: all|mainline|thread`、`thread_root_id`、`order: recency_desc|seq_asc`;`limit` max 200→500(inline 要完整单-stream 命中集供 prev/next)。`SearchDto` 加 `total` + `truncated`(inline「2/7」/「N/500+」计数)。**fail-loud refine**:`stream≠all` 与 `order=seq_asc` 都必须带 `conversation_id`(seq 是 per-conversation、跨会话排序无意义)、`stream=thread` 必须带 `thread_root_id`——非法组合 400、不静默。
+- **护栏:stream 谓词单一定义(`repos/message-stream-scope.ts`)** — 抽出 `streamScopePredicate`/`streamScopeParams`(mainline=`thread_root_id IS NULL`、thread cluster=`(id=root OR thread_root_id=root)`)为**唯一真相源**,message-window read-model(`message-repo.ts` 六处 fetch)与 search filter 共用。**gate「搜到必可见」by construction**:search 命中谓词 ≡ 渲染窗口谓词,off-window 命中可 jump/prime materialize、永不返回当前 panel 看不到的 stream。行为保持:backend 全量 **1680 pass**(window 套件零回归)。
+- **顺带修潜伏 bug** — `applyConversationScopeFilters` 旧 `conversation_id` scope 引用了没 JOIN 的 `root` 别名(reply-cluster cutover 后死代码/坏),改为 `conv.id = ?`(thread replies 共享 channel conversation_id、单等式即覆盖含 thread)。`escapeLike`/`likeNeedle` 抽到 `repos/sql-like.ts` 供 SearchRepo 共用。
+- **route(`routes/conversations.ts` `GET /api/search`)** — `stream=thread` 时把 `thread_root_id`(可传 reply id)归一到 thread root、校验属于 `conversation_id`(reply→root 同 window 路由;不属→404 `thread_root_not_found`),返回补 `total`/`truncated`。
+- **前端消费(Norman #1335)**:`GET /api/search?q=&conversation_id=&stream=mainline|thread[&thread_root_id]&order=seq_asc` → `{results(seq ASC), total, truncated}`,每条 message hit DTO 带 `thread_root_id`(=stream identity,不加平行字段);游标 + prev/next + 对 `message_id` 调 `requestJump`。
+- 验证:`pnpm -r typecheck` 全绿;backend search.test.ts **13 例**(9 新:mainline 排除 reply / thread 含 root+reply / reply-id 归一 / 跨会话 404 / conversation scope 修复 / 三条 refine 400 / truncated);shared api-export-drift snapshot 重生(+`SearchStreamSchema`/`SearchOrderSchema`);`pnpm build` 通过。**未 push**(binding:dogfood 前不 push)。
+
+---
+
 ## 2026-07-01 — Favorites：rail STARRED 升为全局收藏入口（#task:1252 backend，未 push）
 
 左 rail 的 `STARRED` 从「只装 starred workspace」升成**全局 Favorites**：viewer-scoped 的扁平列表，跨所有 `list_key` UNION 同一 `user_sort_entry.starred_at` 事实（workspace / DM / channel）。**纯读侧投影、零新存储**，star 仍走原 per-entity 端点。canonical `docs/list-sort-v1.md`（三方 review PASS：Alice=契约/后端、Cindy=终审+`dm_channel` 收窄、Norman=consumer 字段）。
