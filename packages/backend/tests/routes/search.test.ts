@@ -321,6 +321,30 @@ describe('GET /api/search — stream scope (#task:1334)', () => {
     const body = await res.json() as any;
     expect(body.results.length).toBe(2);
     expect(body.truncated).toBe(true);
-    expect(body.total).toBe(2);
+    // total is the true match count over the same WHERE (3 mainline matches),
+    // not the returned count — that's the whole point of the field name.
+    expect(body.total).toBe(3);
+  });
+
+  it('returns empty (not a 404 existence oracle) for thread search in an invisible conversation', async () => {
+    t = buildTestApp();
+    const f = await seedStreamFixture(t);
+    // Drop the viewer's membership so the conversation is no longer visible.
+    t.ctx.db
+      .prepare(
+        `DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = 'local'`,
+      )
+      .run(f.channelId);
+    // A real, correctly-belonging root — but the viewer can't see the
+    // conversation. Must look identical to "no matches" (200 empty), never a
+    // 404 that would confirm the root exists in that conversation.
+    const res = await http(t).get(
+      `/api/search?q=zqkw&conversation_id=${f.channelId}&stream=thread&thread_root_id=${f.rootId}`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.results).toEqual([]);
+    expect(body.total).toBe(0);
+    expect(body.truncated).toBe(false);
   });
 });

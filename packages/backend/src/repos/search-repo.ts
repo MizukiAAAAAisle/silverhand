@@ -291,12 +291,27 @@ export class SearchRepo {
       where.push(`m.from_agent_id = ?`);
       params.push(input.agent_id);
     }
-    // Probe one past the cap so we can report `truncated` without a second
-    // COUNT query. seq_asc keeps the earliest matches; recency_desc the most
-    // recent — either way prev/next spans exactly the returned set.
-    params.push(limit + 1);
-
     const whereSql = where.length > 0 ? where.join(' AND ') : '1 = 1';
+    // `total` is the true message-match count over the SAME WHERE, so the
+    // inline counter and the future advanced panel can show "2 / 7" honestly
+    // and `truncated` (total > limit) means "there are matches past the cap".
+    // The COUNT is a deliberate second query: this is a user-initiated search,
+    // not a hot path, and an honest count that matches the field name beats
+    // saving one scan. (The agents LEFT JOIN never filters, so COUNT omits it.)
+    const total = (
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS n
+             FROM messages m
+             JOIN conversations conv ON conv.id = m.conversation_id
+             JOIN workspaces w ON w.id = conv.workspace_id
+            WHERE ${whereSql}`,
+        )
+        .get(...params) as { n: number }
+    ).n;
+
+    // seq_asc keeps the earliest matches; recency_desc the most recent —
+    // either way prev/next spans exactly the returned set.
     const orderSql =
       input.order === 'seq_asc'
         ? 'ORDER BY m.seq ASC'
@@ -322,20 +337,18 @@ export class SearchRepo {
           ${orderSql}
           LIMIT ?`,
       )
-      .all(...params) as MessageSearchRow[];
+      .all(...params, limit) as MessageSearchRow[];
 
-    const truncated = rows.length > limit;
-    const capped = truncated ? rows.slice(0, limit) : rows;
     return {
-      results: capped.map(row => ({
+      results: rows.map(row => ({
         type: 'message',
         workspace: workspaceRef(row),
         conversation: conversationRef(row),
         message: messageRowToDto(row),
         agent_name: row.agent_name,
       })),
-      total: capped.length,
-      truncated,
+      total,
+      truncated: total > limit,
     };
   }
 }

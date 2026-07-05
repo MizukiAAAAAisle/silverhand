@@ -985,6 +985,20 @@ export function createConversationRuntimeApp(
     // predicate and the render window agree on the stream. The schema
     // guarantees thread scope carries both conversation_id and thread_root_id.
     if (parsed.data.stream === 'thread') {
+      // Visibility gate BEFORE the existence check. The SQL main path only
+      // ever returns an empty result for a conversation the viewer cannot
+      // see; if we 404'd here on "root not in this conversation" while
+      // returning 200-empty otherwise, an attacker passing conversation_id +
+      // thread_root_id could distinguish "this message exists and belongs to
+      // that conversation" from "it doesn't" — an existence/ownership oracle
+      // the search path must not introduce. So: invisible conversation →
+      // empty result (indistinguishable from no matches), never a 404. A bad
+      // root inside a conversation the viewer CAN already see may 404 — that
+      // leaks nothing new, the viewer can enumerate that conversation anyway.
+      const convId = parsed.data.conversation_id;
+      if (!convId || !canViewConversation(ctx, getUserPrincipal(c), convId)) {
+        return c.json({ query: parsed.data, results: [], total: 0, truncated: false });
+      }
       const rootMessage = parsed.data.thread_root_id
         ? messages.getById(parsed.data.thread_root_id)
         : null;
