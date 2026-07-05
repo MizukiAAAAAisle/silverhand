@@ -52,6 +52,22 @@ files:
   - "!**/{tsconfig*.json,*.tsbuildinfo}"
   - "!**/node_modules/*/{README.md,readme.md,*.d.ts,LICENSE*,license*}"
   - "!**/node_modules/**/test/**"
+  # better-sqlite3 is unpacked for its native binding, but its package ships
+  # compile-time sqlite sources and object trees that are never read at runtime.
+  # Exclude them at file-selection time so both app.asar and app.asar.unpacked
+  # have a coherent view of the shipped package.
+  - "!node_modules/better-sqlite3/deps/**"
+  - "!node_modules/better-sqlite3/src/**"
+  - "!node_modules/better-sqlite3/build/deps/**"
+  - "!node_modules/better-sqlite3/build/Makefile"
+  - "!node_modules/better-sqlite3/build/*.mk"
+  - "!node_modules/better-sqlite3/build/*.gypi"
+  - "!node_modules/better-sqlite3/build/gyp-mac-tool"
+  - "!node_modules/better-sqlite3/build/Release/.deps/**"
+  - "!node_modules/better-sqlite3/build/Release/obj/**"
+  - "!node_modules/better-sqlite3/build/Release/obj.target/**"
+  - "!node_modules/better-sqlite3/build/Release/sqlite3.a"
+  - "!node_modules/better-sqlite3/build/Release/test_extension.node"
 
 # better-sqlite3's .node binary cannot live inside the asar — Node's
 # dlopen needs a real path on disk. The glob unpacks the whole package

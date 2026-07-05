@@ -274,6 +274,23 @@ describe('desktop protocol purity catalogue', () => {
     expect(workspaceRuntimeDeps).toEqual([]);
   });
 
+  it('keeps packaged runtime dependencies limited to main/backend requires', () => {
+    // electron-builder copies production dependencies into app.asar. Renderer
+    // libraries are Vite-bundled into out/renderer, and build plugins run before
+    // packaging; listing either as runtime dependencies ships duplicate dead
+    // node_modules and inflates the DMG.
+    expect(Object.keys(desktopPackage.dependencies).sort()).toEqual([
+      '@hono/node-server',
+      '@node-rs/argon2',
+      'better-sqlite3',
+      'hono',
+      'zod',
+    ]);
+    expect(desktopPackage.devDependencies).toHaveProperty('mermaid');
+    expect(desktopPackage.devDependencies).toHaveProperty('@tailwindcss/vite');
+    expect(desktopPackage.devDependencies).toHaveProperty('lucide-react');
+  });
+
   it('keeps main IPC handlers in sync with the protocol-purity catalogue', () => {
     const channels = sourceFiles(mainRoot, new Set(['.ts']))
       .flatMap(source =>
