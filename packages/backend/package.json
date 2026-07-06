@@ -19,7 +19,7 @@
     "@node-rs/argon2": "^2.0.2",
     "@silverhand/host": "workspace:*",
     "@silverhand/shared": "workspace:*",
-    "better-sqlite3": "^11.3.0",
+    "better-sqlite3": "^12.11.1",
     "cron-parser": "^4.9.0",
     "hono": "^4.6.5",
     "ws": "^8.20.0",

@@ -58,6 +58,9 @@
 import { runDaemon } from './run.js';
 import { Supervisor } from './supervisor/index.js';
 import { runConnectCommand } from './connect-command.js';
+import { enableNodeSystemCa } from '../node-system-ca.js';
+
+enableNodeSystemCa();
 
 interface ParsedArgv {
   socketPath: string;

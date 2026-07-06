@@ -26,6 +26,7 @@ export {
 } from './client/index.js';
 export { SocketTransport } from './client/socket-transport.js';
 export type { Transport, TransportEvents, DecodedFrame } from './client/transport.js';
+export { enableNodeSystemCa, type NodeSystemCaActivation } from './node-system-ca.js';
 export {
   spawnDaemonChild,
   type DaemonLauncher,

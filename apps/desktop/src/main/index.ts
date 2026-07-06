@@ -43,6 +43,7 @@ import {
   PACKAGED_DEFAULT_SERVER_URL,
 } from '../build-flags.js';
 import {
+  enableNodeSystemCa,
   HostClient,
   HostClientError,
   spawnDaemonChild,
@@ -126,6 +127,8 @@ import {
   registerSurfaceIpcHandlers,
   type ActiveConversationInfo,
 } from './ipc/surface-ipc.js';
+
+const nodeSystemCaActivation = enableNodeSystemCa();
 
 /**
  * D4.a Commit 5d — typed union of the two boot-time backend
@@ -1825,6 +1828,7 @@ async function bootstrap(): Promise<void> {
         agentLogFile: loggers.agent.filePath,
         cliLogFile: loggers.cli.filePath,
         pathPatch: pathResult,
+        nodeSystemCa: nodeSystemCaActivation,
       },
       'logger initialized',
     );
