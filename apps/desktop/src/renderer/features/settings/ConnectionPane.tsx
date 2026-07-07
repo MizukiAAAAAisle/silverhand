@@ -59,6 +59,7 @@ import {
   describeSaveServerUrlOutcome,
   type SaveServerUrlBanner,
 } from './describe-save-server-url-outcome';
+import { saveServerConnectionProfileWithSettingsRetry } from './save-server-url-retry';
 import { validateServerUrlDraft } from './server-url-validation';
 
 function formatTimestamp(value: number | null): string {
@@ -252,7 +253,10 @@ export function ConnectionPane(): JSX.Element {
       if (backendInfoQuery.data?.mode === 'remote') {
         return {
           source: 'profile',
-          result: await window.agentHub.saveServerConnectionProfile({ serverUrl }),
+          result: await saveServerConnectionProfileWithSettingsRetry({
+            serverUrl,
+            save: input => window.agentHub.saveServerConnectionProfile(input),
+          }),
         };
       }
       return {
