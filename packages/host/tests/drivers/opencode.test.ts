@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SILVERHAND_OPENCODE_AGENT } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 
 import type { DriverIO, DriverSpawnContext } from '../../src/drivers/index.js';
@@ -140,13 +141,33 @@ describe('OpenCodeDriver ACP handshake', () => {
             result: { sessionId: 'ses_1' },
           }),
         ),
+      ).toEqual([]);
+      expect(parseLast(io)).toMatchObject({
+        id: 3,
+        method: 'session/set_config_option',
+        params: {
+          sessionId: 'ses_1',
+          configId: 'mode',
+          value: SILVERHAND_OPENCODE_AGENT,
+        },
+      });
+      expect(d.readyToEncode()).toBe(false);
+
+      expect(
+        d.parseLine(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: 3,
+            result: { configOptions: [] },
+          }),
+        ),
       ).toEqual([{ kind: 'session_init', sessionId: 'ses_1' }]);
       expect(d.readyToEncode()).toBe(true);
 
       const encoded = d.encodeStdinMessage('hello', null);
       expect(JSON.parse(encoded!)).toMatchObject({
         jsonrpc: '2.0',
-        id: 3,
+        id: 4,
         method: 'session/prompt',
         params: {
           sessionId: 'ses_1',
@@ -159,7 +180,7 @@ describe('OpenCodeDriver ACP handshake', () => {
         d.parseLine(
           JSON.stringify({
             jsonrpc: '2.0',
-            id: 3,
+            id: 4,
             result: { stopReason: 'end_turn' },
           }),
         ),
@@ -170,7 +191,7 @@ describe('OpenCodeDriver ACP handshake', () => {
     }
   });
 
-  it('resumes existing sessions and waits for model config before session_init', async () => {
+  it('resumes existing sessions and waits for mode and model config before session_init', async () => {
     const { ctx, cleanup } = makeSpawnCtx({
       cliSessionId: 'ses_existing',
       model: 'opencode/deepseek-v4-flash-free',
@@ -206,6 +227,26 @@ describe('OpenCodeDriver ACP handshake', () => {
         method: 'session/set_config_option',
         params: {
           sessionId: 'ses_existing',
+          configId: 'mode',
+          value: SILVERHAND_OPENCODE_AGENT,
+        },
+      });
+      expect(d.readyToEncode()).toBe(false);
+
+      expect(
+        d.parseLine(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: 3,
+            result: { configOptions: [] },
+          }),
+        ),
+      ).toEqual([]);
+      expect(parseLast(io)).toMatchObject({
+        id: 4,
+        method: 'session/set_config_option',
+        params: {
+          sessionId: 'ses_existing',
           configId: 'model',
           value: 'opencode/deepseek-v4-flash-free',
         },
@@ -216,7 +257,7 @@ describe('OpenCodeDriver ACP handshake', () => {
         d.parseLine(
           JSON.stringify({
             jsonrpc: '2.0',
-            id: 3,
+            id: 4,
             result: { configOptions: [] },
           }),
         ),

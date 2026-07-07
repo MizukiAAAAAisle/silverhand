@@ -1,14 +1,15 @@
+import { SILVERHAND_OPENCODE_AGENT } from '@silverhand/shared';
+import {
+  AcpClient,
+  type AcpPermissionPolicy,
+  type AcpRuntimeAdapter,
+} from './acp.js';
 import {
   type Driver,
   type DriverIO,
   type DriverSpawnContext,
   type ParsedEvent,
 } from './index.js';
-import {
-  AcpClient,
-  type AcpPermissionPolicy,
-  type AcpRuntimeAdapter,
-} from './acp.js';
 
 const OPENCODE_PERMISSION_POLICY: AcpPermissionPolicy = {
   // Match the rest of Silverhand's agent runtimes: the runtime process is
@@ -56,14 +57,21 @@ class OpenCodeAcpAdapter implements AcpRuntimeAdapter {
     ctx: DriverSpawnContext,
     sessionId: string,
   ): Array<Record<string, unknown>> {
-    if (!ctx.model) return [];
-    return [
+    const requests: Array<Record<string, unknown>> = [
       {
+        sessionId,
+        configId: 'mode',
+        value: SILVERHAND_OPENCODE_AGENT,
+      },
+    ];
+    if (ctx.model) {
+      requests.push({
         sessionId,
         configId: 'model',
         value: ctx.model,
-      },
-    ];
+      });
+    }
+    return requests;
   }
 }
 
