@@ -3,7 +3,17 @@
 import { z } from 'zod';
 import {
   HostKindSchema,
+  HostProvisioningSourceSchema,
+  RuntimeKindSchema,
 } from '../db/schema.js';
+
+export const HostLifecycleStatusSchema = z.enum([
+  'pending',
+  'attached',
+  'active',
+  'revoked',
+]);
+export type HostLifecycleStatus = z.infer<typeof HostLifecycleStatusSchema>;
 
 //
 // Single source-of-truth shape for every host the user owns. Both the
@@ -24,6 +34,23 @@ export const HostDtoSchema = z.object({
   /** Last claim-or-create touch timestamp. Null only for legacy /
    *  migration-seeded hosts that have not been claimed yet. */
   last_seen_at: z.number().nullable(),
+  /** First successful authenticated daemon attach. NULL means pending;
+   *  non-null alone is not enough for placement until finalized_at is set. */
+  activated_at: z.number().nullable().optional().default(null),
+  /** User confirmed the Add computer flow. NULL means the row is still a
+   *  setup draft, even if a daemon has already attached. */
+  finalized_at: z.number().nullable().optional().default(null),
+  /** Diagnostic-only live attachment name from the currently connected daemon.
+   *  This is availability metadata, never identity or dedupe input. */
+  connected_host_name: z.string().nullable().optional().default(null),
+  /** Lifecycle/origin metadata for copy/badges/recovery messaging only. */
+  provisioning_source: HostProvisioningSourceSchema.optional().default('system'),
+  /** Stable lifecycle display state. Renderer uses this for rail/modal
+   *  bucketing instead of deriving lifecycle states from raw timestamps. */
+  status: HostLifecycleStatusSchema.optional().default('pending'),
+  /** Backend-owned placement readiness predicate. Frontend pickers consume this
+   *  boolean directly instead of re-deriving eligibility from lifecycle fields. */
+  placeable: z.boolean().optional().default(false),
   /** User that claimed/created this computer row. Renderer uses this
    *  to gate host-local controls such as daemon proxy config. Optional
    *  receive-side default keeps older dev backends parseable. */
@@ -91,6 +118,24 @@ export const HostAvailabilitySchema = z.enum([
   'revoked',
 ]);
 export type HostAvailability = z.infer<typeof HostAvailabilitySchema>;
+
+/** WS event kind published on `viewer:{ownerUserId}` when the backend's
+ *  outbound host-attachment registry changes. The event is an invalidation
+ *  signal only: consumers refetch `/api/hosts/:id/status` for the authoritative
+ *  availability projection instead of trusting a delta payload. */
+export const HOST_CONNECTION_CHANGED_EVENT = 'host_connection_changed';
+
+export const HOST_WS_CLOSE_REASON_REVOKED = 'host_revoked';
+export const HOST_WS_CLOSE_REASON_DISCONNECTED = 'host_disconnected';
+
+export const HostConnectionChangedEventSchema = z
+  .object({
+    host_id: z.string(),
+  })
+  .strict();
+export type HostConnectionChangedEvent = z.infer<
+  typeof HostConnectionChangedEventSchema
+>;
 
 export const HostUnreachableReasonSchema = z.enum([
   'daemon_unreachable',
@@ -234,6 +279,34 @@ export const HostStatusResponseSchema = z.discriminatedUnion('availability', [
 ]);
 export type HostStatusResponse = z.infer<typeof HostStatusResponseSchema>;
 
+export const HostProxyConfigSchema = z
+  .object({
+    proxy_url: z.string().nullable(),
+    proxy_runtimes: z.array(RuntimeKindSchema),
+  });
+export type HostProxyConfig = z.infer<typeof HostProxyConfigSchema>;
+
+export const HostProxyConfigResponseSchema = z
+  .object({
+    config: HostProxyConfigSchema,
+  })
+  .strict();
+export type HostProxyConfigResponse = z.infer<
+  typeof HostProxyConfigResponseSchema
+>;
+
+export const HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE = 'computer_offline';
+
+export const HostProxyConfigOfflineResponseSchema = z
+  .object({
+    error: z.string(),
+    error_code: z.literal(HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE),
+  })
+  .strict();
+export type HostProxyConfigOfflineResponse = z.infer<
+  typeof HostProxyConfigOfflineResponseSchema
+>;
+
 export const HostClaimOrCreateInputSchema = z.object({
   installation_id: z.string().uuid(),
   label: z.string().trim().min(1).max(128).optional(),
@@ -257,6 +330,97 @@ export const HostListResponseSchema = z.object({
   hosts: z.array(HostDtoSchema),
 });
 export type HostListResponse = z.infer<typeof HostListResponseSchema>;
+
+/** `POST /api/hosts` user-managed computer create. Naming happens after the
+ *  first successful daemon connect; creation only mints the reveal-once
+ *  connect command and leaves the host pending. */
+export const HostCreateInputSchema = z.object({}).strict();
+export type HostCreateInput = z.infer<typeof HostCreateInputSchema>;
+
+export const HostCreateResponseSchema = z.object({
+  host_id: z.string(),
+  host: HostDtoSchema,
+  server_url: z.string().url(),
+  connect_token: z.string().min(1),
+  daemon_command: z.string().min(1),
+});
+export type HostCreateResponse = z.infer<typeof HostCreateResponseSchema>;
+
+/** `GET /api/hosts/connect-token/resolve` daemon bootstrap. The copied command
+ *  carries only a connect token; the daemon resolves this id at runtime and
+ *  still uses the same token as the websocket bearer credential. */
+export const HostConnectTokenResolveResponseSchema = z.object({
+  host_id: z.string().min(1),
+});
+export type HostConnectTokenResolveResponse = z.infer<
+  typeof HostConnectTokenResolveResponseSchema
+>;
+
+/** `GET /api/hosts/{id}` owner-scoped host read. Unlike the bulk list, this
+ *  may return a modal-scoped setup draft so the Add computer flow can observe
+ *  `pending → attached → active` without exposing drafts in the sidebar. */
+export const HostGetResponseSchema = z.object({
+  host: HostDtoSchema,
+});
+export type HostGetResponse = z.infer<typeof HostGetResponseSchema>;
+
+/** `DELETE /api/hosts/{id}` user-managed computer delete. The same route covers
+ *  unfinalized Add-computer drafts and finalized empty computers. Non-empty
+ *  computers are rejected with `has_dependents`; the row is never soft-revoked
+ *  by this user-facing delete action. */
+export const HostCancelPendingResponseSchema = z.object({
+  host_id: z.string(),
+  deleted: z.literal(true),
+});
+export type HostCancelPendingResponse = z.infer<
+  typeof HostCancelPendingResponseSchema
+>;
+export const HostDeleteResponseSchema = HostCancelPendingResponseSchema;
+export type HostDeleteResponse = HostCancelPendingResponse;
+
+export const HostDeleteInputSchema = z
+  .object({
+    cascade_agents: z.boolean().optional().default(false),
+  })
+  .optional()
+  .default({});
+export type HostDeleteInput = z.infer<typeof HostDeleteInputSchema>;
+
+export const HostDeleteDependentsSchema = z.object({
+  agents: z.number().int().nonnegative(),
+  workspaces: z.number().int().nonnegative(),
+});
+export type HostDeleteDependents = z.infer<typeof HostDeleteDependentsSchema>;
+
+export const HostDeleteDependentAgentSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  display_name: z.string(),
+  runtime: RuntimeKindSchema,
+});
+export type HostDeleteDependentAgent = z.infer<
+  typeof HostDeleteDependentAgentSchema
+>;
+
+export const HostDeleteBlockedResponseSchema = z.object({
+  error: z.string(),
+  error_code: z.literal('has_dependents'),
+  dependents: HostDeleteDependentsSchema,
+  agents: z.array(HostDeleteDependentAgentSchema).optional().default([]),
+  can_cascade_agents: z.boolean().optional().default(false),
+});
+export type HostDeleteBlockedResponse = z.infer<
+  typeof HostDeleteBlockedResponseSchema
+>;
+
+export const HostDeletePendingAgentsResponseSchema = z.object({
+  error: z.string(),
+  error_code: z.literal('has_pending_agents'),
+  pending_agents: z.number().int().positive(),
+});
+export type HostDeletePendingAgentsResponse = z.infer<
+  typeof HostDeletePendingAgentsResponseSchema
+>;
 
 /** `POST /api/hosts/{id}/revoke` response. Returns the updated DTO so
  *  the caller can refresh local UI without a follow-up GET. */
@@ -289,9 +453,30 @@ export const HostRotateTokenStandaloneResponseSchema = z.object({
   status: z.literal('rotated'),
 });
 
+/** User-managed connect-token rotation response. Cleartext is reveal-once and
+ *  is intentionally returned to the renderer for the command card. */
+export const HostRotateTokenUserManagedResponseSchema = z.object({
+  host_id: z.string(),
+  host: HostDtoSchema,
+  status: z.literal('rotated'),
+  connect_token: z.string().min(1),
+  daemon_command: z.string().min(1),
+});
+
+/** `POST /api/hosts/{id}/disconnect` user-managed connection kick. This only
+ *  affects the live availability axis: credentials and lifecycle fields are not
+ *  changed, so the same connection command can reconnect later. */
+export const HostDisconnectResponseSchema = z.object({
+  host_id: z.string(),
+  host: HostDtoSchema,
+  disconnected: z.boolean(),
+});
+export type HostDisconnectResponse = z.infer<typeof HostDisconnectResponseSchema>;
+
 export const HostRotateTokenResponseSchema = z.union([
   HostRotateTokenEmbeddedResponseSchema,
   HostRotateTokenStandaloneResponseSchema,
+  HostRotateTokenUserManagedResponseSchema,
 ]);
 export type HostRotateTokenResponse = z.infer<
   typeof HostRotateTokenResponseSchema

@@ -521,6 +521,55 @@ export const migrations: Migration[] = [
         ON conversations(workspace_id) WHERE archived_at IS NOT NULL;
     `,
   },
+  {
+    version: 55,
+    name: 'host_activation_and_provisioning_source',
+    up: `
+      -- User-managed computers split host lifecycle from provisioning source:
+      -- activated_at is the readiness marker (NULL = pending attach),
+      -- while provisioning_source is lifecycle metadata only. Runtime
+      -- placement/ACL must compose owner scope with activated/not-revoked and
+      -- never branch on provisioning_source.
+      ALTER TABLE hosts ADD COLUMN activated_at INTEGER;
+      ALTER TABLE hosts ADD COLUMN provisioning_source TEXT NOT NULL DEFAULT 'system'
+        CHECK (provisioning_source IN ('app_install', 'user_invite', 'system'));
+
+      -- Existing desktop-claimed installs are app-managed. Unclaimed bootstrap
+      -- placeholders and standalone/system rows intentionally remain system.
+      UPDATE hosts
+         SET provisioning_source = 'app_install'
+       WHERE user_id IS NOT NULL
+         AND installation_id IS NOT NULL;
+
+      -- Existing active user-owned local hosts predate the pending lifecycle;
+      -- treat them as activated so current desktop placement continues to work.
+      -- Revoked rows and unowned/system placeholders stay NULL.
+      UPDATE hosts
+         SET activated_at = COALESCE(last_seen_at, created_at)
+       WHERE user_id IS NOT NULL
+         AND kind = 'local'
+         AND revoked_at IS NULL;
+    `,
+  },
+  {
+    version: 56,
+    name: 'host_finalization_lifecycle',
+    up: `
+      -- User-invited computers are setup drafts until the user confirms the
+      -- Add computer modal. activated_at only proves daemon attachment;
+      -- finalized_at is the boundary for host list / placement eligibility.
+      ALTER TABLE hosts ADD COLUMN finalized_at INTEGER;
+
+      -- Existing app-managed active hosts predate the finalize boundary and
+      -- are already formal computers. User-invite rows are left NULL so any
+      -- in-flight setup remains modal-scoped until explicit finalization.
+      UPDATE hosts
+         SET finalized_at = activated_at
+       WHERE activated_at IS NOT NULL
+         AND revoked_at IS NULL
+         AND provisioning_source != 'user_invite';
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

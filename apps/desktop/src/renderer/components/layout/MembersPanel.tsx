@@ -1,8 +1,14 @@
-import { Plus, User, Users } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { useAgents, useAgentsPresence } from '@/features/agents/hooks';
+import { Monitor, Plus, User, Users } from 'lucide-react';
+import { Fragment, useMemo, useState } from 'react';
+import type { AgentDto, HostDto } from '@silverhand/shared';
+import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { CreateAgentDialog } from '@/features/agents/CreateAgentDialog';
+import { useAgentOnlineByHost, useHostsQuery } from '@/features/hosts/hooks';
+import {
+  hostDisplayName,
+  UNKNOWN_COMPUTER_LABEL,
+} from '@/features/hosts/host-display';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
@@ -43,8 +49,68 @@ export function MembersPanel({
   // definition shared with the CLI and every other consumer.
   const { data: agents = [] } = useAgents({ scope: 'owned' });
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
-  const agentIds = useMemo(() => agents.map(a => a.id), [agents]);
-  const agentPresence = useAgentsPresence(agentIds);
+  // Rail groups agents by the computer they run on (`agent.host_id`). The
+  // name comes from the host DTO via the shared resolver — never from `kind`
+  // or provisioning. Computers the viewer no longer owns (deleted / revoked)
+  // collapse into one restrained "Unknown computer" group at the end.
+  const hostsQuery = useHostsQuery();
+  const hostsById = useMemo(
+    () => new Map((hostsQuery.data?.hosts ?? []).map(h => [h.id, h] as const)),
+    [hostsQuery.data],
+  );
+  // Rail dot = whether the agent's daemon runtime is live on its computer,
+  // read from that computer's `/status.agents[].online` (host live status) —
+  // NOT the conversation `/runtime-state`, which only reports mid-turn
+  // activity and shows a chattable daemon agent as offline (#task:1361).
+  const agentHostIds = useMemo(
+    () => [...new Set(agents.map(a => a.host_id).filter(id => hostsById.has(id)))],
+    [agents, hostsById],
+  );
+  const agentOnline = useAgentOnlineByHost(agentHostIds);
+  const agentGroups = useMemo(() => {
+    const known = new Map<string, { host: HostDto; agents: AgentDto[] }>();
+    const unknown: AgentDto[] = [];
+    for (const a of agents) {
+      const host = hostsById.get(a.host_id);
+      if (host) {
+        const group = known.get(host.id);
+        if (group) group.agents.push(a);
+        else known.set(host.id, { host, agents: [a] });
+      } else {
+        unknown.push(a);
+      }
+    }
+    const groups = [...known.values()]
+      .map(g => ({ key: g.host.id, name: hostDisplayName(g.host), agents: g.agents }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    if (unknown.length > 0) {
+      groups.push({ key: '__unknown__', name: UNKNOWN_COMPUTER_LABEL, agents: unknown });
+    }
+    return groups;
+  }, [agents, hostsById]);
+  // Only group once it's meaningful (≥2 computers). A single computer would
+  // just add a redundant header, so those agents render flat as before.
+  const showGroups = agentGroups.length >= 2;
+
+  const renderAgentRow = (a: AgentDto): JSX.Element => (
+    <SidebarRow
+      key={a.id}
+      className="h-[32px]"
+      icon={
+        <AgentAvatar
+          runtime={a.runtime}
+          size={16}
+          avatarObjectUrl={agentAvatarUrls.get(a.id) ?? null}
+          alt={a.display_name || a.name}
+        />
+      }
+      title={a.display_name || a.name}
+      subtitle={<span data-agent-runtime>{a.runtime}</span>}
+      status={agentOnline.get(a.id) ? 'active' : 'idle'}
+      selected={selectedAgentId === a.id}
+      onClick={onSelectAgent ? () => onSelectAgent(a.id) : undefined}
+    />
+  );
   const viewerQuery = useViewerUser();
   const viewerAvatarObjectUrl = useViewerAvatarObjectUrl();
   const viewer =
@@ -93,26 +159,21 @@ export function MembersPanel({
           <li className="px-2 py-2 text-xs text-text-muted">
             还没有 agent。点 + 创建一个。
           </li>
-        ) : (
-          agents.map(a => (
-            <SidebarRow
-              key={a.id}
-              className="h-[32px]"
-              icon={
-                <AgentAvatar
-                  runtime={a.runtime}
-                  size={16}
-                  avatarObjectUrl={agentAvatarUrls.get(a.id) ?? null}
-                  alt={a.display_name || a.name}
-                />
-              }
-              title={a.display_name || a.name}
-              subtitle={<span data-agent-runtime>{a.runtime}</span>}
-              status={agentPresence.get(a.id) ?? 'idle'}
-              selected={selectedAgentId === a.id}
-              onClick={onSelectAgent ? () => onSelectAgent(a.id) : undefined}
-            />
+        ) : showGroups ? (
+          agentGroups.map(group => (
+            <Fragment key={group.key}>
+              <li
+                data-agent-group-header
+                className="flex items-center gap-1.5 px-2 pb-0.5 pt-2 text-[11px] font-medium text-text-muted"
+              >
+                <Monitor className="size-3 shrink-0" />
+                <span className="truncate">{group.name}</span>
+              </li>
+              {group.agents.map(renderAgentRow)}
+            </Fragment>
           ))
+        ) : (
+          agents.map(renderAgentRow)
         )}
       </SidebarSection>
 

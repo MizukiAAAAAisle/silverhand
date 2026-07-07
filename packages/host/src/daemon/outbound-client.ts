@@ -13,6 +13,8 @@ import { WebSocket, type RawData } from 'ws';
 import {
   DAEMON_HOST_CONFIG_FILENAME,
   DaemonHostConfigSchema,
+  HOST_WS_CLOSE_REASON_DISCONNECTED,
+  HOST_WS_CLOSE_REASON_REVOKED,
   apiPaths,
   classifyServerUrl,
   type DaemonHostConfig,
@@ -49,7 +51,12 @@ import {
 import type { DaemonLogger } from './logger.js';
 
 export interface OutboundDaemonClientOptions {
-  configPath: string;
+  /** Atomic daemon-config path used by app-managed desktop installs. */
+  configPath?: string;
+  /** In-memory config used by `silverhand-daemon connect`. The copied command
+   *  carries the connect token every time, so the daemon must not persist a
+   *  hidden local credential just to open the websocket. */
+  config?: DaemonHostConfig;
   logger: DaemonLogger;
   readyEvent: () => Extract<EventFrame, { event: 'ready' }>;
   configPollMs?: number;
@@ -123,6 +130,7 @@ export class OutboundDaemonClient {
   private pongTimer: NodeJS.Timeout | null = null;
   private ws: WebSocket | null = null;
   private desiredConfig: ActiveConfig | null = null;
+  private terminalCloseConfigKey: string | null = null;
   private reconnectAttempt = 0;
   private started = false;
   private stopping = false;
@@ -145,7 +153,7 @@ export class OutboundDaemonClient {
     this.started = true;
     this.stopping = false;
     this.pollConfig();
-    if (this.configPollMs > 0) {
+    if (!this.opts.config && this.configPollMs > 0) {
       this.configTimer = setInterval(() => this.pollConfig(), this.configPollMs);
       this.configTimer.unref?.();
     }
@@ -218,14 +226,14 @@ export class OutboundDaemonClient {
 
   private pollConfig(): void {
     if (this.stopping) return;
-    const next = readHostConfig(this.opts.configPath);
+    const next = this.readConfig();
     if (!next.ok) {
       if (this.desiredConfig !== null || this.ws !== null) {
         this.opts.logger.warn(
           {
             kind: 'outbound_ws',
             action: 'config_unavailable',
-            config_path: redactConfigPath(this.opts.configPath),
+            config_path: this.configLabel(),
             reason: next.reason,
           },
           'daemon outbound config unavailable; disconnecting',
@@ -246,7 +254,7 @@ export class OutboundDaemonClient {
         {
           kind: 'outbound_ws',
           action: 'config_invalid',
-          config_path: redactConfigPath(this.opts.configPath),
+          config_path: this.configLabel(),
           reason: (err as Error).message,
         },
         'daemon outbound config rejected',
@@ -258,6 +266,9 @@ export class OutboundDaemonClient {
 
     const key = configKey(next.config);
     if (this.desiredConfig?.key === key) {
+      if (this.terminalCloseConfigKey === key) {
+        return;
+      }
       if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
         this.scheduleReconnect('config_poll');
       }
@@ -265,6 +276,7 @@ export class OutboundDaemonClient {
     }
 
     this.desiredConfig = { raw: next.config, key, wsUrl };
+    this.terminalCloseConfigKey = null;
     this.reconnectAttempt = 0;
     this.opts.logger.info(
       {
@@ -338,6 +350,7 @@ export class OutboundDaemonClient {
     ws.on('close', (code, reason) => {
       this.clearHeartbeatTimers();
       this.writeBuffer.reset();
+      const reasonText = reason.toString();
       const wasCurrent = this.ws === ws;
       if (wasCurrent) {
         this.ws = null;
@@ -347,7 +360,7 @@ export class OutboundDaemonClient {
           kind: 'outbound_ws',
           action: 'closed',
           code,
-          reason: reason.toString(),
+          reason: reasonText,
           close_class: closeClass(code),
           host_id: config.raw.host_id,
         },
@@ -355,6 +368,20 @@ export class OutboundDaemonClient {
       );
       if (this.stopping) return;
       if (!wasCurrent) return;
+      if (isTerminalServerCloseReason(reasonText)) {
+        this.terminalCloseConfigKey = config.key;
+        this.clearReconnectTimer();
+        this.opts.logger.info(
+          {
+            kind: 'outbound_ws',
+            action: 'reconnect_suppressed',
+            reason: reasonText,
+            host_id: config.raw.host_id,
+          },
+          'daemon outbound ws reconnect suppressed after terminal close',
+        );
+        return;
+      }
       this.scheduleReconnect(`close_${closeClass(code)}`);
     });
   }
@@ -391,7 +418,8 @@ export class OutboundDaemonClient {
   ): Promise<void> {
     const dispatcher = this.opts.dispatchCommand ?? defaultCommandDispatcher;
     const startedAt = this.now();
-    this.opts.logger.info(
+    const successLevel = command.kind === 'host_status' ? 'debug' : 'info';
+    this.opts.logger[successLevel](
       {
         kind: 'outbound_ws',
         action: 'command_received',
@@ -471,7 +499,7 @@ export class OutboundDaemonClient {
       return;
     }
     ws.send(encoded, err => {
-      this.opts.logger[err ? 'warn' : 'info'](
+      this.opts.logger[err ? 'warn' : successLevel](
         {
           kind: 'outbound_ws',
           action: err ? 'command_response_send_failed' : 'command_response_sent',
@@ -519,6 +547,9 @@ export class OutboundDaemonClient {
     }
 
     try {
+      if (!this.opts.configPath) {
+        throw new Error('static connect command config cannot be rewritten');
+      }
       this.writeHostConfig(this.opts.configPath, parsed.data);
     } catch (err) {
       this.opts.logger.warn(
@@ -556,6 +587,18 @@ export class OutboundDaemonClient {
       host_id: parsed.data.host_id,
       config_refreshed_at: this.now(),
     };
+  }
+
+  private readConfig():
+    | { ok: true; config: DaemonHostConfig }
+    | { ok: false; reason: ReadHostConfigFailureReason } {
+    if (this.opts.config) return { ok: true, config: this.opts.config };
+    if (!this.opts.configPath) return { ok: false, reason: 'missing' };
+    return readHostConfig(this.opts.configPath);
+  }
+
+  private configLabel(): string {
+    return this.opts.configPath ? redactConfigPath(this.opts.configPath) : '<memory>';
   }
 
   private handleHeartbeat(frame: OutboundHeartbeatFrame): void {
@@ -960,6 +1003,13 @@ function closeClass(code: number): 'normal' | 'going_away' | 'abnormal' | 'other
   if (code === 1001) return 'going_away';
   if (code === 1006) return 'abnormal';
   return 'other';
+}
+
+function isTerminalServerCloseReason(reason: string): boolean {
+  return (
+    reason === HOST_WS_CLOSE_REASON_REVOKED ||
+    reason === HOST_WS_CLOSE_REASON_DISCONNECTED
+  );
 }
 
 function redactConfigPath(path: string): string {

@@ -5,10 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   BASELINE_SCHEMA_VERSION,
+} from '@silverhand/shared/db/baseline-schema';
+import {
   CURRENT_SCHEMA_VERSION,
   MIN_SUPPORTED_SCHEMA_VERSION,
   migrations,
-} from '@silverhand/shared';
+} from '@silverhand/shared/db/migrations';
 import { runMigrations } from '../src/db.js';
 
 /**

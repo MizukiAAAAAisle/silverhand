@@ -366,7 +366,6 @@ function ActiveChannelView({
   const restartAgents = useCallback(async () => {
     if (agentActionDisabled) return;
     for (const agent of channelAgents) {
-      if (agent.status !== 'active' && agent.status !== 'starting') continue;
       await stopAgent.mutateAsync({ agentId: agent.agent_id, mode: 'hard' });
     }
     try {
@@ -525,13 +524,11 @@ function ActiveChannelView({
               data-conversation-title
               className="min-w-0 truncate font-serif text-base font-semibold text-text-primary"
             >
-              {/* All themes render the channel `#` as this lucide icon; each
-                  theme paints it via `[data-conversation-hash-icon]` (forza6 =
-                  hero poster sticker, warm/slack = coloured glyph). */}
-              <Hash
-                data-conversation-hash-icon
-                className="size-4 shrink-0 align-[-0.15em]"
-              />
+              {/* A thread is a reply-cluster, not a channel: the
+                  `CornerDownRight` above is its identity glyph, so the
+                  channel `#` (`[data-conversation-hash-icon]`) does NOT
+                  belong here — only true channel/DM headers carry it
+                  (shiki, #task:1373). */}
               {parentTitle ?? conversation.title}
             </span>
             {memberStrip}
@@ -558,13 +555,18 @@ function ActiveChannelView({
               data-conversation-title
               className="min-w-0 truncate font-serif text-base font-semibold text-text-primary"
             >
-              {conversation.kind === 'channel' ||
-              conversation.kind === 'dm_channel' ? (
-                <Hash
-                  data-conversation-hash-icon
-                  className="size-4 shrink-0 align-[-0.15em]"
-                />
-              ) : null}
+              {/* Every conversation header carries the channel `#` — a
+                  channel-like conversation always earns it, so there's no
+                  branch: this else-branch is the main channel/DM header and
+                  `conversation` is always `channel` | `dm_channel`. (Threads
+                  take the showThreadHeader branch above, which shows the
+                  `CornerDownRight` reply glyph instead — no `#`.) Painted per
+                  theme via `[data-conversation-hash-icon]` (shiki: "只要是
+                  channel 都需要 # icon,逻辑上不需要分支", #task:1373). */}
+              <Hash
+                data-conversation-hash-icon
+                className="size-4 shrink-0 align-[-0.15em]"
+              />
               {conversation.title}
             </span>
             {memberStrip}

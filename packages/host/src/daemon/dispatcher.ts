@@ -58,6 +58,7 @@ import {
   type HostProxyConfigGetResult,
   type HostProxyConfigSetParams,
   type HostProxyConfigSetResult,
+  type HostRuntimeCatalogParams,
   type IntentName,
   type ResponseError,
   type ResponseFrame,
@@ -73,6 +74,7 @@ import {
   type WorkspaceProvisionParams,
   type WorkspaceProvisionResult,
 } from '../protocol.js';
+import { detectRuntimeCatalog } from '../runtimes.js';
 import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
 import { composeHostOs, hostOsArch } from './host-os.js';
 import type { DaemonLogger } from './logger.js';
@@ -699,6 +701,10 @@ export class IntentDispatcher {
               )
             : [],
         };
+      }
+      case 'host_runtime_catalog': {
+        const p = params as HostRuntimeCatalogParams;
+        return detectRuntimeCatalog({ force: p.force === true });
       }
       case 'conversation_log_debug': {
         const p = params as ConversationLogDebugParams;

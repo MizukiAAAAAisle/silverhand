@@ -267,6 +267,11 @@
   --success-soft: rgba(46, 187, 133, 0.14);
   --warning: #ECB22E;             /* amber — 9.4:1 AAA */
   --warning-soft: rgba(236, 178, 46, 0.14);
+  /* #task:1380 — soft warning CALLOUT surface (delete-cascade impact block).
+     On the dark dialog a pale opaque yellow would glare, so this stays a
+     translucent amber veil (the theme's clean amber, not a brown) — a gentle
+     caution tint that sits on #2C2D30 without shouting (shiki 2026-07-07). */
+  --warning-surface: rgba(236, 178, 46, 0.15);
   --error: #E01E5A;               /* Slack mention red — 4.8:1 AA */
   --error-soft: rgba(224, 30, 90, 0.14);
 

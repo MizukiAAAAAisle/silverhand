@@ -41,7 +41,8 @@ export interface DeleteWorkspaceCommand {
 
 export type DeleteWorkspaceResult =
   | { kind: 'deleted' } //                         → 204
-  | { kind: 'idempotentNoop' } //                  unknown id / workspace_kind !== 'regular' → 204
+  | { kind: 'idempotentNoop' } //                  unknown id → 204
+  | { kind: 'notDeletableKind' } //                existing non-regular workspace → 409
   | { kind: 'forbidden' } //                       owner-gate → 403
   | { kind: 'placementRejected'; err: unknown }; // → route maps via placementErrorResponse
 
@@ -52,8 +53,11 @@ export async function deleteWorkspace(
   const { ctx, workspaces, conversations } = deps;
 
   const workspace = workspaces.get(cmd.workspaceId);
-  if (!workspace || workspace.workspace_kind !== 'regular') {
+  if (!workspace) {
     return { kind: 'idempotentNoop' };
+  }
+  if (workspace.workspace_kind !== 'regular') {
+    return { kind: 'notDeletableKind' };
   }
   const principal: UserPrincipal = { kind: 'user', userId: cmd.requesterUserId };
   if (!canGovernWorkspace(ctx, principal, workspace.id, 'owner')) {
@@ -83,7 +87,17 @@ export async function deleteWorkspace(
   for (const conversation of workspaceConversations) {
     ctx.runtimeHost.resolveConversationRuns(conversation.id, 'conversation_closed');
     for (const ca of conversations.listAgents(conversation.id)) {
-      void ctx.runtimeHost.stop(conversation.id, ca.agent_id, 'hard');
+      void ctx.runtimeHost.stop(conversation.id, ca.agent_id, 'hard').catch(err =>
+        ctx.logger.warn(
+          {
+            workspaceId: workspace.id,
+            conversationId: conversation.id,
+            agentId: ca.agent_id,
+            err,
+          },
+          'delete workspace: runtime stop failed (continuing)',
+        ),
+      );
     }
   }
   // Sweep physical attachment blobs for every top-level channel before dropping

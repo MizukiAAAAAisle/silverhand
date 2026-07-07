@@ -3,13 +3,12 @@ import { Power } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { NavRail } from '@/components/layout/NavRail';
 import { ComputersPanel } from '@/components/layout/ComputersPanel';
+import { NewComputerDialog } from '@/features/hosts/NewComputerDialog';
 import { HostDetailView } from '@/features/hosts/HostDetailView';
 import {
   useBackendInfoSnapshot,
   useHostsQuery,
-  useHostStatusQuery,
 } from '@/features/hosts/hooks';
-import { isLocalHostAttached } from '@/features/hosts/connection-state';
 import { MembersPanel } from '@/components/layout/MembersPanel';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { ChannelsSidebar } from '@/components/layout/ChannelsSidebar';
@@ -250,6 +249,7 @@ function RegisteredAppShell(): JSX.Element {
   const channelSidebarVisible = channelSidebarPane.visible;
 
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
+  const [newComputerOpen, setNewComputerOpen] = useState(false);
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
   const [tasksDrawerOpen, setTasksDrawerOpen] = useState(false);
@@ -689,31 +689,12 @@ function RegisteredAppShell(): JSX.Element {
   const computerHosts = hostsQuery.data?.hosts ?? [];
   const localHostIdForComputers =
     backendInfoQuery.data?.local_host_id ?? null;
-  const localHostStatusForComputers =
-    backendInfoQuery.data?.local_host_status ?? 'unclaimed';
-  const localHostAttachedAt =
-    backendInfoQuery.data?.local_host_ws_attached_at ?? null;
-  // #task:1132 — in a remote-server deployment `local_host_ws_attached_at`
-  // is structurally null (the attachment registry lives in the remote
-  // backend, not in this desktop process), so the embedded attach
-  // timestamp never lands and the COMPUTERS sidebar showed the local
-  // computer as `idle` (offline) even when the daemon is genuinely
-  // attached. Mirror the ConnectionPane fix (#task:1010): consult the
-  // remote backend's host-status — `availability === 'available'` is the
-  // same authority every other remote-mode fact flows through — but ONLY
-  // in the ambiguous window (`claimed` + no local attach timestamp). In
-  // embedded mode `attachedAt` lands fast, so this probe disables almost
-  // immediately and never adds traffic.
-  const needsLocalRemoteAttachProbe =
-    localHostStatusForComputers === 'claimed' && localHostAttachedAt === null;
-  const localHostStatusQuery = useHostStatusQuery(localHostIdForComputers, {
-    enabled: needsLocalRemoteAttachProbe && localHostIdForComputers !== null,
-    pollUntilAvailable: true,
-  });
-  const localHostAttached = isLocalHostAttached({
-    attachedAt: localHostAttachedAt,
-    remoteAvailable: localHostStatusQuery.data?.availability === 'available',
-  });
+  // The COMPUTERS rail derives each row's availability (including the
+  // app-managed local computer) from the per-host status query inside
+  // `ComputerRow`, the SAME predicate the detail-view pill uses — so no
+  // local-only attach probe is threaded here anymore (that fork read as
+  // an inconsistency: the local row had a pip, user-added rows didn't).
+  // Liveness is push-based via host-connection-sync, so no polling.
   useEffect(() => {
     if (computerHosts.length === 0) return;
     // Drop a stale selection (e.g. the host was revoked from another
@@ -1745,19 +1726,15 @@ function RegisteredAppShell(): JSX.Element {
                 <ComputersPanel
                   hosts={computerHosts}
                   localHostId={localHostIdForComputers}
-                  localAttached={localHostAttached}
                   isLoading={hostsQuery.isLoading}
                   selectedHostId={selectedHostId}
                   onSelectHost={setSelectedHostId}
+                  onAddComputer={() => setNewComputerOpen(true)}
                 />
               </nav>
             </aside>
             {selectedHost ? (
-              <HostDetailView
-                key={selectedHost.id}
-                host={selectedHost}
-                localHostId={localHostIdForComputers}
-              />
+              <HostDetailView key={selectedHost.id} host={selectedHost} />
             ) : (
               <main
                 className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
@@ -2044,6 +2021,11 @@ function RegisteredAppShell(): JSX.Element {
         onCreated={({ workspaceId, channelId }) =>
           nav.toChannel(workspaceId, channelId)
         }
+      />
+      <NewComputerDialog
+        open={newComputerOpen}
+        onOpenChange={setNewComputerOpen}
+        onCreated={hostId => setSelectedHostId(hostId)}
       />
       <CreateChannelDialog
         open={createChannelOpen}

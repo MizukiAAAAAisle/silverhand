@@ -1337,47 +1337,6 @@ describe('POST /api/agents/:id/stop', () => {
   });
 });
 
-describe('GET /api/agents/:id/delete-impact', () => {
-  let t: TestApp | null = null;
-  afterEach(() => { t?.cleanup(); t = null; });
-
-  it('summarizes DM channel + regular channel membership (no host-local fs paths)', async () => {
-    t = buildTestApp();
-    const created = await (
-      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
-    ).json() as any;
-    // join alice to a regular workspace
-    const ws = await (
-      await http(t).post('/api/workspaces', {
-        name: 'engineering',
-        member_agent_ids: [created.agent.id],
-      })
-    ).json() as any;
-
-    const res = await (
-      await http(t).get(`/api/agents/${created.agent.id}/delete-impact`)
-    ).json() as any;
-    expect(res.impact.agent_name).toBe('alice');
-    expect(res.impact.dm_channel.name).toBe('Onboarding');
-    expect(res.impact.dm_channel.conversation_count).toBe(1);
-    expect(res.impact.owned_home.workspace_kind).toBe('agent_home');
-    expect(res.impact.owned_home.owner_agent_id).toBe(created.agent.id);
-    expect(res.impact.regular_workspaces).toEqual([{ id: ws.workspace.id, name: 'engineering' }]);
-    expect(res.impact.regular_memberships).toEqual([{ id: ws.workspace.id, name: 'engineering' }]);
-    // D4.e-4: l1_path / l2_paths are gone from the impact DTO — host-local fs
-    // paths are never derived backend-side (I1/I6). The L2-dir count is
-    // `regular_memberships.length`.
-    expect(res.impact.l1_path).toBeUndefined();
-    expect(res.impact.l2_paths).toBeUndefined();
-    expect(res.impact.regular_memberships).toHaveLength(1);
-    // P1-2: owned_home is a narrow window — it must NOT carry the owned
-    // workspace's host-local `workspace_path` (or any other host-resolution
-    // field). The daemon owns path resolution (I6).
-    expect(res.impact.owned_home.workspace_path).toBeUndefined();
-    expect(res.impact.owned_home.workspace_host_id).toBeUndefined();
-  });
-});
-
 describe('DELETE /api/agents/:id (full flow)', () => {
   let t: TestApp | null = null;
   afterEach(() => { t?.cleanup(); t = null; });

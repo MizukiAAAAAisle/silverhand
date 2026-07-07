@@ -36,9 +36,9 @@ export interface BackendLogger {
  * file so events from different concerns can be queried separately:
  *
  *   - `system`: HTTP server, scheduler, ws, auth, DB.
- *   - `agent`:  agent runtime spawn / drain / exit / compaction (now
- *               owned by silverhand-daemon and surfaced through
- *               `DaemonAgentRuntimeHost` + `RuntimeEventHandler`).
+ *   - `agent`:  agent runtime spawn / drain / exit / compaction, owned
+ *               by silverhand-daemon and surfaced through the outbound
+ *               runtime projection.
  *   - `cli`:    every CLI invocation + CLI-side pre-flight failures.
  *
  * Existing call sites keep using `ctx.logger` (the historical "system"
@@ -71,19 +71,18 @@ export interface BackendContext {
     migrationsApplied: boolean;
     listenReady: boolean;
     /**
-     * Standalone-only: flips `true` once the
+     * Flips `true` once the
      * `OutboundRuntimeEventFanout` is constructed and registered as the
      * `HostWsServer`'s `eventSink`. Strictly a **backend-side wiring
      * indicator** — not a signal that any daemon host has connected
      * over the outbound WebSocket. The daemon-side connection lifecycle
      * is reported through `HostWsServerController.getAttachment(...)`
-     * (added in D3.a Commit 1) and is independent of this flag.
+     * and is independent of this flag.
      *
-     * Embedded mode intentionally never wires this fanout (runtime
-     * events flow over Unix-socket IPC) and therefore must NOT include
-     * this check in `/readyz`; including it would deadlock embedded
-     * readiness forever. `readinessResponse` switches on
-     * `deploymentMode` for that reason.
+     * Embedded mode still omits this from `/readyz`: the app-managed
+     * co-located host uses the local Unix-socket transport, while
+     * user-managed daemon computers attach over WS. Readiness should not
+     * imply that either transport has an attached daemon.
      */
     outboundEventFanoutInstalled: boolean;
   };
@@ -159,7 +158,7 @@ export interface BackendContext {
   authSessions: AuthSessionService;
   /** Shared B.3 host-placement guard for create, membership, and runtime intent paths. */
   placement: RuntimeHostPlacementControl;
-  /** Late-bound outbound host WebSocket controller for standalone daemon transport. */
+  /** Late-bound outbound host WebSocket controller for user-managed daemon transport. */
   hostWsController?: () => HostWsServerController | null;
   /**
    * The EXACT host id that shares the backend's own disk. Set ONLY in
@@ -179,10 +178,10 @@ export interface BackendContext {
    * D5.a-3 P1-3 — late-bound formal server↔daemon dispatch port. Routes
    * that send commands (POST /api/agents materialize, retry) go through
    * this accessor so they never branch on deployment mode. Standalone
-   * resolves to a `StandaloneOutboundFrameAdapter` (WSS-backed); embedded
-   * to an `EmbeddedUnixOutboundFrameAdapter` (local Unix socket). Distinct
-   * from `hostWsController`, which stays for WS-only lifecycle
-   * (revoke/disconnect) and is `null` in embedded mode.
+   * resolves to a WSS-backed adapter; embedded resolves to a composite
+   * adapter (co-located app-managed host over Unix socket + user-managed
+   * computers over WSS). Distinct from `hostWsController`, which remains
+   * the WS lifecycle/control port for user-managed computers.
    */
   outboundFrameAdapter?: () => OutboundFrameAdapter | null;
   /**
@@ -202,9 +201,9 @@ export interface BackendContext {
    * routes route every spawn / stop / wake / clearSession / inbox
    * delivery / run-state read through this single interface.
    *
-   * Embedded mode uses `DaemonAgentRuntimeHost` (silverhand-daemon
-   * over `RuntimeBridge`). Standalone mode uses a fail-loud
-   * control-plane-only implementation until D2 daemon outbound exists.
+   * Both embedded and standalone use `OutboundAgentRuntimeHost`; the
+   * deployment-specific adapter underneath chooses the attached host
+   * transport by host id.
    */
   runtimeHost: AgentRuntimeHost;
 }

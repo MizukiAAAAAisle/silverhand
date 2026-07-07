@@ -10,12 +10,14 @@
 //      promote a half-installed deployment to "ready".
 //
 //   2. Embedded backends *must not* be gated on the fanout flag.
-//      Embedded mode never constructs `OutboundRuntimeEventFanout`
-//      (runtime events flow over Unix-socket IPC). Including the
-//      check there would deadlock embedded `/readyz` at 503 forever.
-//      The `outbound_event_fanout_installed` field is therefore
-//      *omitted* from the embedded checks payload — not included as
-//      `true` — so the mode boundary is obvious from the JSON.
+//      Embedded mode may construct `OutboundRuntimeEventFanout`, but it
+//      has two transports: the co-located local host uses Unix socket
+//      and user-managed daemon computers use WS. Including the fanout
+//      check would misstate boot readiness as daemon attachment
+//      readiness. The `outbound_event_fanout_installed` field is
+//      therefore *omitted* from the embedded checks payload — not
+//      included as `true` — so the mode boundary is obvious from the
+//      JSON.
 //
 // The flag is a **backend-side wiring indicator** and intentionally
 // independent of any daemon-side WebSocket attachment. Daemon
@@ -57,7 +59,7 @@ describe('/readyz mode-aware readiness gate', () => {
     expect('outbound_event_fanout_installed' in body.checks).toBe(false);
   });
 
-  it('embedded mode: readiness unaffected by outboundEventFanoutInstalled being false (fanout is never wired in embedded)', async () => {
+  it('embedded mode: readiness unaffected by outboundEventFanoutInstalled being false', async () => {
     t = buildTestApp({ deploymentMode: 'embedded' });
     // Force the underlying field to false — embedded should still be
     // 200 because the check isn't part of the embedded gate at all.

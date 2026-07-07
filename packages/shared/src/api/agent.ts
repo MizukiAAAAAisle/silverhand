@@ -265,51 +265,6 @@ export const AgentRuntimeStateDtoSchema = z.object({
 });
 export type AgentRuntimeStateDto = z.infer<typeof AgentRuntimeStateDtoSchema>;
 
-// GET /api/agents/:id/delete-impact — drives the destructive
-// confirmation dialog. Counts the user actually needs to see before
-// agreeing to a permanent delete.
-export const AgentDeleteImpactDtoSchema = z.object({
-  agent_id: z.string(),
-  agent_name: z.string(),
-  agent_display_name: z.string(),
-  dm_channel: z
-    .object({
-      id: z.string(),
-      name: z.string(),
-      conversation_count: z.number(),
-      message_count: z.number(),
-    })
-    .nullable(),
-  regular_workspaces: z.array(
-    z.object({ id: z.string(), name: z.string() }),
-  ),
-  regular_memberships: z.array(
-    z.object({ id: z.string(), name: z.string() }),
-  ),
-  // D4.e-4 (P1-2): a NARROW window of the owned agent-home workspace, not the
-  // full WorkspaceDto. The delete-impact must NOT carry any host-local path
-  // (`workspace_path`) or other host-resolution fields (I6) — the daemon owns
-  // path resolution. `computeDeleteImpact` explicitly maps these fields rather
-  // than returning the repo DTO, so a future WorkspaceDto field can never leak
-  // a host path back into this payload.
-  owned_home: z
-    .object({
-      id: z.string(),
-      name: z.string(),
-      workspace_kind: WorkspaceKindSchema,
-      owner_agent_id: z.string().nullable(),
-    })
-    .nullable(),
-  attachments_count: z.number(),
-  running_conversation_agents: z.array(AgentRuntimeConversationSchema),
-  pending_inbox_count: z.number(),
-  // D4.e-4: host-local L1/L2 fs paths are NO LONGER part of the delete
-  // impact. The daemon resolves and removes them via `agent_files_purge`
-  // (I1/I6) — the backend never derives an agent-host path. The number of
-  // L2 dirs equals `regular_memberships.length`; render from that.
-});
-export type AgentDeleteImpactDto = z.infer<typeof AgentDeleteImpactDtoSchema>;
-
 export const DeleteAgentInputSchema = z.object({
   confirm: z.literal(true),
 });

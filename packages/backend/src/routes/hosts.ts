@@ -1,10 +1,19 @@
 // Host CRUD surface:
 //   - GET  /api/hosts                  list the session user's hosts
+//   - POST /api/hosts                  create pending user-managed computer
+//   - GET  /api/hosts/connect-token/resolve daemon resolves copied token to host id
+//   - GET  /api/hosts/:id              owner-scoped host read (incl. setup draft)
+//   - DELETE /api/hosts/:id            delete empty user-managed computer/setup
 //   - POST /api/hosts/claim_or_create  desktop main registers + mints host_token
 //   - POST /api/hosts/:id/revoke       soft-delete (delegates to revokeHost use case)
 //   - POST /api/hosts/:id/rotate-token long-lived token rotation
+//   - POST /api/hosts/:id/connect-token/rotate user-managed connect-token rotation
+//   - POST /api/hosts/:id/disconnect  disconnect live user-managed daemon
 //   - PATCH /api/hosts/:id             rename (display_label)
 //   - GET  /api/hosts/:id/status       dynamic host snapshot (daemon dispatch)
+//   - GET  /api/hosts/:id/runtime-catalog host-local runtime availability
+//   - GET  /api/hosts/:id/proxy-config host-local proxy config (daemon dispatch)
+//   - PUT  /api/hosts/:id/proxy-config host-local proxy config update
 //
 // NOT in scope: GET /api/hosts/connect (the daemon WS-upgrade transport) stays
 // in routes.ts — it is a transport concern, not host CRUD, and is separated
@@ -20,15 +29,26 @@
 import { Hono, type Context } from 'hono';
 import {
   apiPaths,
+  HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE,
+  HOST_WS_CLOSE_REASON_DISCONNECTED,
+  HostCreateInputSchema,
   HostClaimOrCreateInputSchema,
+  HostDeleteInputSchema,
+  HostProxyConfigSchema,
+  type HostProxyConfigOfflineResponse,
   UpdateHostInputSchema,
   type AgentOnHostDto,
+  type HostProxyConfigResponse,
+  type RuntimeCatalogResponse,
   type HostStatusResponse,
 } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
 import type { AppEnv } from '../auth/principal.js';
 import { HostRepo } from '../repos/host-repo.js';
 import { AgentRepo } from '../repos/agent-repo.js';
+import type { WorkspaceRepo } from '../repos/workspace-repo.js';
+import type { ConversationRepo } from '../repos/conversation-repo.js';
+import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import { HostCredentialIssueError, HostTokenService } from '../auth/host-token.js';
 import { HostWsCommandTransportError } from '../ws/host-ws-server.js';
 import {
@@ -36,14 +56,31 @@ import {
   HostTokenRotationError,
 } from '../ws/host-token-rotation.js';
 import { dispatchHostStatus } from '../runtime/host-status-dispatch.js';
+import {
+  dispatchHostRuntimeCatalog,
+  type HostRuntimeCatalogOutcome,
+} from '../runtime/host-runtime-catalog-dispatch.js';
+import {
+  dispatchHostProxyConfigGet,
+  dispatchHostProxyConfigSet,
+  type HostProxyConfigOutcome,
+} from '../runtime/host-proxy-config-dispatch.js';
+import { resolveOutboundForHost } from '../runtime/workspace-data-plane.js';
 import { revokeHost } from '../application/revoke-host.js';
+import { deleteAgentControlPlaneOnly } from '../application/delete-agent.js';
 import { hostRuntimeDisabledResponse } from './responses.js';
+
+const DEFAULT_DAEMON_NPM_SPEC = '@silverhand-ai/daemon@latest';
+const DAEMON_NPM_SPEC_ENV = 'SILVERHAND_DAEMON_NPM_SPEC';
 
 export interface HostRouteDeps {
   ctx: BackendContext;
   hosts: HostRepo;
   hostTokens: HostTokenService;
   agents: AgentRepo;
+  workspaces: WorkspaceRepo;
+  conversations: ConversationRepo;
+  conversationInboxes: ConversationInboxRepo;
   /**
    * Injected session-bearer resolver (port). Verbatim signature from routes.ts
    * so handlers call it unchanged; returns the user id or a 401 Response.
@@ -59,12 +96,257 @@ export interface HostRouteDeps {
  */
 export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { ctx, hosts, hostTokens, agents, requireSessionBearerUser, standaloneMode } = deps;
+  const {
+    ctx,
+    hosts,
+    hostTokens,
+    agents,
+    workspaces,
+    conversations,
+    conversationInboxes,
+    requireSessionBearerUser,
+    standaloneMode,
+  } = deps;
 
   app.get(apiPaths.hosts, c => {
     const userId = requireSessionBearerUser(c, ctx);
     if (userId instanceof Response) return userId;
     return c.json({ hosts: hosts.listForUser(userId) });
+  });
+
+  app.post(apiPaths.hosts, async c => {
+    const userId = requireSessionBearerUser(c, ctx);
+    if (userId instanceof Response) return userId;
+
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = HostCreateInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+
+    const created = ctx.db.transaction(() => {
+      const host = hosts.createUserInvite({ userId });
+      const issued = hostTokens.issueHostToken({ hostId: host.id });
+      return { host, connectToken: issued.hostToken };
+    })();
+
+    return c.json({
+      host_id: created.host.id,
+      host: hosts.toDto(created.host),
+      server_url: ctx.serverConfig.url,
+      connect_token: created.connectToken,
+      daemon_command: buildConnectCommand(ctx.serverConfig.url, created.connectToken),
+    });
+  });
+
+  // GET /api/hosts/connect-token/resolve — daemon bootstrap for copied
+  // user-managed connection commands. The command itself intentionally carries
+  // no host id; the daemon proves possession of the connect token here, learns
+  // the server-side host id for local data-root/config namespacing, and then
+  // still uses the same token as the websocket bearer credential.
+  app.get(apiPaths.hostConnectTokenResolve, c => {
+    const token = bearerToken(c.req.header('authorization'));
+    if (!token) {
+      return c.json({ error: 'unauthorized', error_code: 'unauthorized' }, 401);
+    }
+    const verified = hostTokens.verifyHostToken(token);
+    if (!verified.ok) {
+      return c.json({ error: 'unauthorized', error_code: 'unauthorized' }, 401);
+    }
+    const host = hosts.get(verified.hostId);
+    if (
+      !host ||
+      host.kind !== 'remote' ||
+      host.provisioning_source !== 'user_invite' ||
+      host.user_id === null ||
+      host.revoked_at !== null
+    ) {
+      return c.json({ error: 'forbidden', error_code: 'forbidden' }, 403);
+    }
+    return c.json({ host_id: verified.hostId });
+  });
+
+  // GET /api/hosts/:id — owner-scoped by-id host read. The bulk list hides
+  // unfinalized user-invite drafts so they never appear in the rail; this
+  // endpoint intentionally returns them to the Add computer modal that minted
+  // the draft and needs to observe pending → attached → active.
+  app.get(apiPaths.host(':id'), c => {
+    const userId = requireSessionBearerUser(c, ctx);
+    if (userId instanceof Response) return userId;
+
+    const hostId = c.req.param('id') ?? '';
+    if (!hostId) {
+      return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
+    }
+    const host = hosts.get(hostId);
+    if (!host || host.user_id !== userId) {
+      return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
+    }
+    const wsController = ctx.hostWsController?.();
+    const attachment = wsController ? wsController.getAttachment(hostId) : null;
+    return c.json({
+      host: {
+        ...hosts.toDto(host),
+        connected_host_name: attachment?.hostname ?? null,
+      },
+    });
+  });
+
+  // DELETE /api/hosts/:id — delete an empty user-managed computer/setup.
+  // This is intentionally a hard-delete, not the normal revoke lifecycle.
+  // The DB already has RESTRICT foreign keys from agents/workspaces to hosts;
+  // this route pre-counts those dependencies so the UI gets a typed 409 with
+  // counts instead of an opaque SQLite constraint error. Pending setup drafts
+  // naturally have zero dependents and use the same path.
+  app.delete(apiPaths.hostDelete(':id'), async c => {
+    const userId = requireSessionBearerUser(c, ctx);
+    if (userId instanceof Response) return userId;
+
+    const hostId = c.req.param('id') ?? '';
+    if (!hostId) {
+      return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
+    }
+    const host = hosts.get(hostId);
+    if (!host || host.user_id !== userId) {
+      return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
+    }
+    if (host.provisioning_source !== 'user_invite' || host.kind !== 'remote') {
+      return c.json(
+        {
+          error: 'delete is only supported for user-managed computers',
+          error_code: 'provisioning_source_not_supported',
+        },
+        409,
+      );
+    }
+
+    const parsedBody = HostDeleteInputSchema.safeParse(
+      await c.req.json().catch(() => ({})),
+    );
+    if (!parsedBody.success) {
+      return c.json({ error: 'invalid input', issues: parsedBody.error.issues }, 400);
+    }
+
+    const dependents = hosts.countDeleteDependents(hostId);
+    const hostAgents = agents.listByHost(hostId);
+    const hostDeleteAgents = hostAgents.map(agent => ({
+      id: agent.id,
+      name: agent.name,
+      display_name: agent.display_name,
+      runtime: agent.runtime,
+    }));
+    const pendingAgents = hostAgents.filter(
+      agent => agent.materialization_status === 'pending_materialization',
+    ).length;
+    const canCascadeAgents =
+      dependents.agents > 0 && dependents.workspaces === 0 && pendingAgents === 0;
+    if (dependents.workspaces === 0 && pendingAgents > 0) {
+      return c.json(
+        {
+          error:
+            'computer has agents whose creation is still in progress; try again after creation finishes',
+          error_code: 'has_pending_agents',
+          pending_agents: pendingAgents,
+        },
+        409,
+      );
+    }
+    if (dependents.workspaces > 0 || (dependents.agents > 0 && !parsedBody.data.cascade_agents)) {
+      return c.json(
+        {
+          error: 'computer has dependent resources',
+          error_code: 'has_dependents',
+          dependents,
+          agents: hostDeleteAgents,
+          can_cascade_agents: canCascadeAgents,
+        },
+        409,
+      );
+    }
+
+    try {
+      if (dependents.agents > 0) {
+        if (!canCascadeAgents) {
+          return c.json(
+            {
+              error: 'computer has dependent resources',
+              error_code: 'has_dependents',
+              dependents,
+              agents: hostDeleteAgents,
+              can_cascade_agents: false,
+            },
+            409,
+          );
+        }
+        const outbound = resolveOutboundForHost(
+          ctx.outboundFrameAdapter?.() ?? null,
+          hostId,
+        );
+        const purgeHostLocal = outbound.kind === 'ok';
+        for (const agent of hostAgents) {
+          const deletedAgent = await deleteAgentControlPlaneOnly(
+            { ctx, agents, workspaces, conversations, conversationInboxes },
+            agent.id,
+            { reason: 'computer_delete_cascade', purgeHostLocal },
+          );
+          if (deletedAgent.kind === 'pendingInFlight') {
+            return c.json(
+              {
+                error:
+                  'computer has agents whose creation is still in progress; try again after creation finishes',
+                error_code: 'has_pending_agents',
+                pending_agents: 1,
+              },
+              409,
+            );
+          }
+          if (deletedAgent.kind === 'failClosed') {
+            return c.json(
+              { error: deletedAgent.error, code: deletedAgent.code },
+              deletedAgent.status,
+            );
+          }
+        }
+      }
+
+      const deleted = hosts.deleteOwnedUserInvite({ hostId, userId });
+      if (!deleted) {
+        return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
+      }
+    } catch (err) {
+      if (isForeignKeyConstraintError(err)) {
+        return c.json(
+          {
+            error: 'computer has dependent resources',
+            error_code: 'has_dependents',
+            dependents: hosts.countDeleteDependents(hostId),
+            agents: agents.listByHost(hostId).map(agent => ({
+              id: agent.id,
+              name: agent.name,
+              display_name: agent.display_name,
+              runtime: agent.runtime,
+            })),
+            can_cascade_agents: false,
+          },
+          409,
+        );
+      }
+      throw err;
+    }
+
+    const wsController = ctx.hostWsController?.();
+    if (wsController) {
+      try {
+        wsController.disconnectHost(hostId);
+      } catch (err) {
+        ctx.logger.warn(
+          { err, hostId, action: 'user_managed_delete_disconnect' },
+          'user-managed computer delete disconnect failed (non-blocking)',
+        );
+      }
+    }
+
+    return c.json({ host_id: hostId, deleted: true });
   });
 
   app.post(apiPaths.hostClaimOrCreate, async c => {
@@ -134,20 +416,36 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
     return c.json(response);
   });
 
-  // POST /api/hosts/:id/revoke — Stage B.4 soft-delete. Owner-only,
+  // POST /api/hosts/:id/revoke — Stage B.4 app-managed soft-delete. Owner-only,
   // 404 on cross-user/missing (no enumeration), idempotent. The host-row
   // revoke + credential sweep run as a single transaction; the post-commit
   // best-effort WS disconnect and all other orchestration live in the
   // `revokeHost` use case (`application/revoke-host.ts`). Does NOT cascade-
   // delete agents / workspaces / conversations — runtime placement is the
-  // boundary that fails closed afterwards.
+  // boundary that fails closed afterwards. User-managed computers intentionally
+  // do not expose a revoke half-state: rotate handles credential emergencies;
+  // delete handles empty-computer removal and blocks when dependents exist.
   app.post('/api/hosts/:id/revoke', async c => {
     const userId = requireSessionBearerUser(c, ctx);
     if (userId instanceof Response) return userId;
+    const hostId = c.req.param('id') ?? '';
+    const host = hosts.get(hostId);
+    if (!host || host.user_id !== userId) {
+      return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
+    }
+    if (host.provisioning_source === 'user_invite' && host.kind === 'remote') {
+      return c.json(
+        {
+          error: 'revoke is not supported for user-managed computers',
+          error_code: 'provisioning_source_not_supported',
+        },
+        409,
+      );
+    }
 
     const result = revokeHost(
       { ctx, hosts, hostTokens },
-      { hostId: c.req.param('id'), requesterUserId: userId },
+      { hostId, requesterUserId: userId },
     );
     switch (result.kind) {
       case 'revoked':
@@ -174,7 +472,10 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
     const userId = requireSessionBearerUser(c, ctx);
     if (userId instanceof Response) return userId;
 
-    const hostId = c.req.param('id');
+    const hostId = c.req.param('id') ?? '';
+    if (!hostId) {
+      return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
+    }
     const host = hosts.get(hostId);
     if (!host || host.user_id !== userId) {
       return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
@@ -279,8 +580,227 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
     });
   });
 
-  // PATCH /api/hosts/:id — rename. Only `display_label` is mutable; `name`
-  // stays the stable identifier set at claim time.
+  // POST /api/hosts/:id/connect-token/rotate — user-managed computer
+  // reveal-once rotation. This route intentionally does NOT reuse the
+  // desktop app-managed rotate-token semantics: no daemon-config write,
+  // no grace window, no Electron-main token stripping. The fresh
+  // connect-token is returned to the renderer exactly once so the UI can
+  // show the new command card; the old token is immediately revoked and
+  // any live daemon socket is force-dropped.
+  app.post(apiPaths.hostRotateConnectToken(':id'), async c => {
+    const userId = requireSessionBearerUser(c, ctx);
+    if (userId instanceof Response) return userId;
+
+    const hostId = c.req.param('id');
+    if (!hostId) {
+      return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
+    }
+    const host = hosts.get(hostId);
+    if (!host || host.user_id !== userId) {
+      return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
+    }
+    if (host.revoked_at !== null) {
+      return c.json(
+        {
+          error: 'host has been revoked',
+          error_code: 'host_revoked',
+        },
+        409,
+      );
+    }
+    if (host.provisioning_source !== 'user_invite' || host.kind !== 'remote') {
+      return c.json(
+        {
+          error: 'connect-token rotation is only supported for user-managed computers',
+          error_code: 'provisioning_source_not_supported',
+        },
+        409,
+      );
+    }
+
+    let issued: ReturnType<HostTokenService['rotateHostTokenImmediate']>;
+    try {
+      issued = hostTokens.rotateHostTokenImmediate({ hostId });
+    } catch (err) {
+      if (err instanceof HostCredentialIssueError && err.code === 'host_revoked') {
+        return c.json(
+          {
+            error: 'host has been revoked',
+            error_code: 'host_revoked',
+          },
+          409,
+        );
+      }
+      throw err;
+    }
+
+    const wsController = ctx.hostWsController?.();
+    if (wsController) {
+      try {
+        wsController.disconnectHost(hostId);
+      } catch (err) {
+        ctx.logger.warn(
+          { err, hostId, action: 'connect_token_rotate_disconnect' },
+          'connect-token rotate disconnect failed (non-blocking)',
+        );
+      }
+    }
+
+    const refreshed = hosts.get(hostId);
+    if (!refreshed) {
+      throw new Error(`HostRepo.get returned null for rotated host ${hostId}`);
+    }
+    return c.json({
+      host_id: hostId,
+      host: hosts.toDto(refreshed),
+      status: 'rotated',
+      connect_token: issued.hostToken,
+      daemon_command: buildConnectCommand(ctx.serverConfig.url, issued.hostToken),
+    });
+  });
+
+  // POST /api/hosts/:id/disconnect — availability-axis only. This force-drops
+  // the current live websocket for a finalized user-managed computer, but
+  // deliberately leaves credentials and lifecycle timestamps untouched so the
+  // same connection command can reconnect later. Unlike rotate/revoke, this is
+  // a benign no-op when no daemon is currently attached.
+  app.post(apiPaths.hostDisconnect(':id'), c => {
+    const userId = requireSessionBearerUser(c, ctx);
+    if (userId instanceof Response) return userId;
+
+    const hostId = c.req.param('id');
+    if (!hostId) {
+      return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
+    }
+    const host = hosts.get(hostId);
+    if (!host || host.user_id !== userId) {
+      return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
+    }
+    if (host.revoked_at !== null) {
+      return c.json(
+        {
+          error: 'host has been revoked',
+          error_code: 'host_revoked',
+        },
+        409,
+      );
+    }
+    if (host.provisioning_source !== 'user_invite' || host.kind !== 'remote') {
+      return c.json(
+        {
+          error: 'disconnect is only supported for active user-managed computers',
+          error_code: 'provisioning_source_not_supported',
+        },
+        409,
+      );
+    }
+    if (host.finalized_at === null) {
+      return c.json(
+        {
+          error: 'host is not active',
+          error_code: 'host_not_active',
+        },
+        409,
+      );
+    }
+
+    let disconnected = false;
+    const wsController = ctx.hostWsController?.();
+    if (wsController) {
+      try {
+        disconnected = wsController.disconnectHost(
+          hostId,
+          HOST_WS_CLOSE_REASON_DISCONNECTED,
+        );
+      } catch (err) {
+        ctx.logger.warn(
+          { err, hostId, action: 'user_managed_disconnect' },
+          'user-managed disconnect failed',
+        );
+        return c.json(
+          {
+            error: 'disconnect failed',
+            error_code: 'disconnect_failed',
+          },
+          502,
+        );
+      }
+    }
+
+    const refreshed = hosts.get(hostId);
+    if (!refreshed) {
+      throw new Error(`HostRepo.get returned null for disconnected host ${hostId}`);
+    }
+    return c.json({
+      host_id: hostId,
+      host: hosts.toDto(refreshed),
+      disconnected,
+    });
+  });
+
+  // GET/PUT /api/hosts/:id/proxy-config — host-local network proxy config.
+  // The backend owns only authz and dispatch; the proxy bytes live on the
+  // target computer and are read/written by its daemon. Offline therefore
+  // fail-closes for both read and write with a typed `computer_offline`.
+  app.get(apiPaths.hostProxyConfig(':id'), async c => {
+    const userId = requireSessionBearerUser(c, ctx);
+    if (userId instanceof Response) return userId;
+
+    const hostId = c.req.param('id') ?? '';
+    const gate = gateHostDataPlane(hosts, userId, hostId);
+    if (gate) return gate(c);
+
+    const outcome = await dispatchHostProxyConfigGet(
+      ctx.outboundFrameAdapter?.() ?? null,
+      hostId,
+    );
+    return renderHostProxyConfigOutcome(c, outcome);
+  });
+
+  app.put(apiPaths.hostProxyConfig(':id'), async c => {
+    const userId = requireSessionBearerUser(c, ctx);
+    if (userId instanceof Response) return userId;
+
+    const hostId = c.req.param('id') ?? '';
+    const gate = gateHostDataPlane(hosts, userId, hostId);
+    if (gate) return gate(c);
+
+    const body = await c.req.json().catch(() => null);
+    const parsed = HostProxyConfigSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+
+    const outcome = await dispatchHostProxyConfigSet(
+      ctx.outboundFrameAdapter?.() ?? null,
+      hostId,
+      parsed.data,
+    );
+    return renderHostProxyConfigOutcome(c, outcome);
+  });
+
+  // GET /api/hosts/:id/runtime-catalog — host-local runtime availability.
+  // Backend owns only authz and dispatch; the target daemon probes the same
+  // resolver spawn uses. `force=1` bypasses the short host resolver cache.
+  app.get(apiPaths.hostRuntimeCatalog(':id'), async c => {
+    const userId = requireSessionBearerUser(c, ctx);
+    if (userId instanceof Response) return userId;
+
+    const hostId = c.req.param('id') ?? '';
+    const gate = gateHostDataPlane(hosts, userId, hostId);
+    if (gate) return gate(c);
+
+    const outcome = await dispatchHostRuntimeCatalog(
+      ctx.outboundFrameAdapter?.() ?? null,
+      hostId,
+      { force: parseBooleanQuery(c.req.query('force')) },
+    );
+    return renderHostRuntimeCatalogOutcome(c, outcome);
+  });
+
+  // PATCH /api/hosts/:id — rename, and finalizes a user-managed setup after
+  // first daemon attach. Only `display_label` is mutable; `name` stays the
+  // stable identifier set at claim time.
   // Owner-only; 404 on cross-user / missing (no enumeration); the route
   // also refuses revoked hosts so a renamed-then-revoked workflow can't
   // silently mutate audit history. Body validation is loose (256-char
@@ -321,7 +841,39 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
       );
     }
 
-    const updated = hosts.updateDisplayLabel(hostId, parsed.data.display_label);
+    const finalizingUserInvite =
+      host.provisioning_source === 'user_invite' &&
+      host.kind === 'remote' &&
+      host.finalized_at === null;
+    if (finalizingUserInvite) {
+      if (host.activated_at === null) {
+        return c.json(
+          {
+            error: 'host has not completed its first daemon attachment',
+            error_code: 'host_pending_attach',
+          },
+          409,
+        );
+      }
+      if (parsed.data.display_label === null || parsed.data.display_label.trim() === '') {
+        return c.json(
+          {
+            error: 'computer name is required',
+            error_code: 'display_label_required',
+          },
+          400,
+        );
+      }
+    }
+
+    const updated = ctx.db.transaction(() => {
+      const renamed = hosts.updateDisplayLabel(hostId, parsed.data.display_label);
+      if (!renamed) return null;
+      if (finalizingUserInvite) {
+        return hosts.markFinalized(hostId);
+      }
+      return renamed;
+    })();
     if (!updated) {
       // Unreachable: SELECT immediately after the UPDATE we just ran on
       // a row we know exists. Surface as 500 if it ever happens so the
@@ -456,4 +1008,106 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
   });
 
   return app;
+}
+
+type HostDataPlaneGate = (c: Context) => Response;
+
+function gateHostDataPlane(
+  hosts: HostRepo,
+  userId: string,
+  hostId: string | undefined,
+): HostDataPlaneGate | null {
+  if (!hostId) {
+    return c =>
+      c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
+  }
+  const host = hosts.get(hostId);
+  if (!host || host.user_id !== userId) {
+    return c =>
+      c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
+  }
+  if (host.revoked_at !== null) {
+    return c =>
+      c.json({ error: 'host has been revoked', error_code: 'host_revoked' }, 409);
+  }
+  if (host.finalized_at === null) {
+    return c =>
+      c.json({ error: 'host is not active', error_code: 'host_not_active' }, 409);
+  }
+  return null;
+}
+
+function parseBooleanQuery(value: string | undefined): boolean {
+  return value === '1' || value === 'true';
+}
+
+function renderHostRuntimeCatalogOutcome(
+  c: Context,
+  outcome: HostRuntimeCatalogOutcome,
+): Response {
+  if (outcome.kind === 'ok') {
+    return c.json(outcome.catalog satisfies RuntimeCatalogResponse);
+  }
+  if (outcome.code === 'host_attach_pending') {
+    return c.json(
+      { error: 'computer is offline', error_code: 'computer_offline' },
+      503,
+    );
+  }
+  return c.json(
+    { error: outcome.message, error_code: outcome.code },
+    outcome.status,
+  );
+}
+
+function renderHostProxyConfigOutcome(
+  c: Context,
+  outcome: HostProxyConfigOutcome,
+): Response {
+  if (outcome.kind === 'ok') {
+    return c.json({ config: outcome.config } satisfies HostProxyConfigResponse);
+  }
+  if (outcome.code === 'host_attach_pending') {
+    return c.json(
+      {
+        error: 'computer is offline',
+        error_code: HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE,
+      } satisfies HostProxyConfigOfflineResponse,
+      503,
+    );
+  }
+  return c.json(
+    { error: outcome.message, error_code: outcome.code },
+    outcome.status,
+  );
+}
+
+function buildConnectCommand(serverUrl: string, connectToken: string): string {
+  return [
+    'npx',
+    daemonNpmSpec(),
+    'connect',
+    '--server-url',
+    shellQuote(serverUrl),
+    '--connect-token',
+    shellQuote(connectToken),
+  ].join(' ');
+}
+
+function daemonNpmSpec(): string {
+  return process.env[DAEMON_NPM_SPEC_ENV]?.trim() || DEFAULT_DAEMON_NPM_SPEC;
+}
+
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_/:.@%+=,-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function bearerToken(header: string | undefined): string | null {
+  const match = header?.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || null;
+}
+
+function isForeignKeyConstraintError(err: unknown): boolean {
+  return err instanceof Error && /FOREIGN KEY constraint failed/.test(err.message);
 }

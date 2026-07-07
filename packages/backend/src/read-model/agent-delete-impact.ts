@@ -1,4 +1,4 @@
-import type { AgentDeleteImpactDto } from '@silverhand/shared';
+import type { AgentRuntimeConversation, WorkspaceKind } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
@@ -6,14 +6,37 @@ import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 
 /**
- * Read-model for the agent delete-impact summary (#task:982 — P11a).
+ * Read-model for the agent delete impact summary (#task:982 — P11a).
  *
- * Moved verbatim out of `routes.ts` so the GET `/api/agents/:id/delete-impact`
- * preview route and the `deleteAgent` use case call ONE function and can never
- * drift (the DELETE flow must sweep exactly what the preview promised). Pure
- * read — DB + filesystem-derived counts only, no mutation. The dependencies it
- * previously closed over in the route factory are now an explicit deps object.
+ * This is an INTERNAL delete orchestration read model, not a public API DTO.
+ * The old GET `/api/agents/:id/delete-impact` preview endpoint was removed
+ * when the product copy stopped surfacing detailed impact counts, but the
+ * DELETE flow still needs one computed target set for stop / purge / teardown.
+ * Pure read — DB-derived counts only, no mutation.
  */
+export interface AgentDeleteImpact {
+  agent_id: string;
+  agent_name: string;
+  agent_display_name: string;
+  dm_channel: {
+    id: string;
+    name: string;
+    conversation_count: number;
+    message_count: number;
+  } | null;
+  regular_workspaces: Array<{ id: string; name: string }>;
+  regular_memberships: Array<{ id: string; name: string }>;
+  owned_home: {
+    id: string;
+    name: string;
+    workspace_kind: WorkspaceKind;
+    owner_agent_id: string | null;
+  } | null;
+  attachments_count: number;
+  running_conversation_agents: AgentRuntimeConversation[];
+  pending_inbox_count: number;
+}
+
 export interface DeleteImpactDeps {
   ctx: BackendContext;
   agents: AgentRepo;
@@ -23,14 +46,13 @@ export interface DeleteImpactDeps {
 }
 
 /**
- * Build the AgentDeleteImpactDto from current DB + filesystem
- * state. Pure read — used both by the GET preview endpoint and by
- * the DELETE handler so the two stay in lock-step.
+ * Build the delete target set from current DB state. Pure read — used by the
+ * DELETE handler so stop / purge / teardown share one target set.
  */
 export function computeDeleteImpact(
   deps: DeleteImpactDeps,
   agentId: string,
-): AgentDeleteImpactDto {
+): AgentDeleteImpact {
   const { ctx, agents, workspaces, conversations, conversationInboxes } = deps;
   const agent = agents.get(agentId);
   if (!agent) throw new Error('agent not found'); // guarded by callers
@@ -43,7 +65,7 @@ export function computeDeleteImpact(
     : conversations.listDmChannelsForAgent(agentId);
   const dm = dmChannels[0] ?? null;
 
-  let dmChannel: AgentDeleteImpactDto['dm_channel'] = null;
+  let dmChannel: AgentDeleteImpact['dm_channel'] = null;
   let attachmentsCount = 0;
   if (dm) {
     const rootIds = dmChannels.map(c => c.id);

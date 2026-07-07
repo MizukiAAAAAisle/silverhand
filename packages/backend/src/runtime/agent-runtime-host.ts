@@ -1,15 +1,13 @@
 /**
  * `AgentRuntimeHost` — the backend-side facade for agent runtime
  * lifecycle (start/stop/wake/clear-session/inbox delivery/run-state).
- * Embedded mode uses `DaemonAgentRuntimeHost`, which delegates to
- * `silverhand-daemon` over `RuntimeBridge` and reads passive run-state
- * from `RunStateCache` (events flow back through `RuntimeEventHandler`).
- * Standalone mode uses a fail-loud control-plane-only implementation
- * until D2 daemon outbound exists.
+ * Both embedded and standalone use `OutboundAgentRuntimeHost`, which delegates
+ * to the shared outbound event fanout; the transport underneath is selected by
+ * host id.
  *
  * **NOT related to workspace host identity.** The `host_id` column on
  * agents / workspaces and the `HostRepo` row identify a physical host
- * (currently always `'local'`). `AgentRuntimeHost` is a runtime-side
+ * (local app-managed or user-managed). `AgentRuntimeHost` is a runtime-side
  * dispatch boundary for "who actually owns the child process" — the
  * silverhand-daemon.
  *
@@ -38,10 +36,8 @@ export interface StartOptions {
  * Per `RuntimeStopParamsSchema.superRefine` (`packages/host/src/protocol.ts`):
  * `mode='soft'` REQUIRES `soft_directive`; "backend MUST supply the
  * directive bytes (default phrasing is backend's responsibility)".
- * Both `DaemonAgentRuntimeHost` (embedded) and
- * `OutboundRuntimeEventFanout` (standalone) must mirror this default so
- * the protocol contract holds across deployment modes (R4 — same wire
- * envelope, transport-only divergence). Hard stops MUST omit
+ * `OutboundRuntimeEventFanout` must mirror this default across every
+ * attached daemon transport. Hard stops MUST omit
  * `soft_directive`; this constant is irrelevant there.
  */
 export const DEFAULT_SOFT_DIRECTIVE =

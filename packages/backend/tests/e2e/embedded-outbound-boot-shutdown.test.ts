@@ -340,7 +340,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     );
   });
 
-  it('does not wire host-ws runtime event fanout in embedded mode', async () => {
+  it('wires host-ws runtime event fanout in embedded mode for user-managed daemon computers', async () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'sh-nohostws-'));
     const socketPath = join(tmpDir, 'daemon-outbound.sock');
 
@@ -373,11 +373,11 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
       },
     });
 
-    // Embedded has a real OutboundRuntimeEventFanout for the local
-    // daemon-outbound Unix socket, but host-ws must NOT be wired to it.
-    // If host-ws events enter the fanout, their `hostws-*` connection id
-    // races the authoritative `embedded-unix-*` command/event namespace
-    // and can either poison runtime_wake or drop live runtime events.
-    expect(wrappedReal).toBeUndefined();
+    // Embedded has two transports now: the co-located app-managed host
+    // uses the local Unix socket, while user-managed daemon computers
+    // attach over host-ws. Host-ws therefore needs the real fanout
+    // wired; host-ws itself filters the co-located local host so it
+    // cannot poison the `embedded-unix-*` namespace.
+    expect(wrappedReal).toBeDefined();
   });
 });

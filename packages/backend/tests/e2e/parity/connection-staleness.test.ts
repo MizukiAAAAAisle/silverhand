@@ -10,15 +10,11 @@
  * constructs those late frames explicitly, at the boundary that actually
  * enforces the guarantee for each transport:
  *
- *   - STANDALONE (real WS server + real fanout): a daemon reconnect with
- *     the same host token triggers `closeForReplacement` on the old WS,
- *     which sets `cleanedUp` so the old connection's `handleMessage`
- *     becomes a no-op. We send a real `runtime_parsed_event` on the
- *     REPLACED socket and assert the fanout does NOT project it, then send
- *     the SAME event on the LIVE socket and assert it DOES — isolating the
- *     difference to connection identity, not event content. The in-flight
- *     arm: a command dispatched on the old connection rejects on
- *     replacement and a late response on the dead socket cannot resolve it.
+ *   - STANDALONE (real WS server + real fanout): user-managed computers now
+ *     reject a concurrent second daemon instead of replacing the incumbent.
+ *     These tests pin the new default-protect behavior: the incumbent remains
+ *     the live connection, events still project, and in-flight commands still
+ *     resolve after the rejected attach.
  *
  *   - EMBEDDED (real EmbeddedUnixOutboundFrameAdapter + a controllable
  *     fake Unix daemon): the adapter mints the `connectionId` per socket
@@ -236,7 +232,7 @@ describe('D5.a-4 — standalone connection staleness (real WS replacement)', () 
     fix = null;
   });
 
-  it('a late event on a REPLACED connection is not projected; the live connection still projects', async () => {
+  it('rejects a concurrent second daemon without replacing the incumbent; the live connection still projects', async () => {
     fix = await makeStandaloneStalenessFixture();
 
     // Daemon #1 attaches.
@@ -247,41 +243,23 @@ describe('D5.a-4 — standalone connection staleness (real WS replacement)', () 
       label: 'daemon #1 connectionId',
     });
 
-    // Daemon #2 attaches with the same host token → server replaces #1.
-    const d2 = await connectRawDaemon(fix.url, fix.hostToken);
-    sockets.push(d2.ws);
-    d2.ws.send(encodeOutboundFrame(readyEvent(102)));
-    const c2 = await waitFor(
-      () => {
-        const cid = fix!.controller.connectionIdForHost(fix!.hostId);
-        return cid && cid !== c1 ? cid : null;
-      },
-      { label: 'daemon #2 fresh connectionId' },
+    // Daemon #2 uses the same host token → server rejects it and keeps #1.
+    await expect(connectRawDaemon(fix.url, fix.hostToken)).rejects.toThrow(
+      /Unexpected server response: 409/,
     );
-    expect(c2).not.toBe(c1);
+    expect(fix.controller.connectionIdForHost(fix.hostId)).toBe(c1);
 
-    // The replaced connection (#1) gets a LATE session_init. Because
-    // replacement set `cleanedUp` on #1's server connection, handleMessage
-    // is a no-op — the fanout must NOT project it.
+    // The incumbent connection still handles live events.
     d1.ws.send(
-      encodeOutboundFrame(sessionInitEvent(fix.conversationId, fix.agentId, 'STALE-from-old-conn')),
+      encodeOutboundFrame(sessionInitEvent(fix.conversationId, fix.agentId, 'LIVE-from-incumbent')),
     );
-    await settle();
-    expect(fix.cliSessionId()).not.toBe('STALE-from-old-conn');
-    expect(fix.cliSessionId()).toBeNull();
-
-    // The SAME event on the LIVE connection (#2) IS projected — isolating
-    // the difference to connection identity, not event content.
-    d2.ws.send(
-      encodeOutboundFrame(sessionInitEvent(fix.conversationId, fix.agentId, 'LIVE-from-new-conn')),
-    );
-    await waitFor(() => (fix!.cliSessionId() === 'LIVE-from-new-conn' ? true : null), {
+    await waitFor(() => (fix!.cliSessionId() === 'LIVE-from-incumbent' ? true : null), {
       label: 'live-connection session_init projected',
     });
-    expect(fix.cliSessionId()).toBe('LIVE-from-new-conn');
+    expect(fix.cliSessionId()).toBe('LIVE-from-incumbent');
   });
 
-  it('an in-flight command on a replaced connection rejects; a late response on the dead socket cannot resolve it', async () => {
+  it('a concurrent rejected daemon does not disconnect the incumbent or its in-flight command', async () => {
     fix = await makeStandaloneStalenessFixture();
 
     const d1 = await connectRawDaemon(fix.url, fix.hostToken);
@@ -291,33 +269,27 @@ describe('D5.a-4 — standalone connection staleness (real WS replacement)', () 
       label: 'daemon #1 connectionId',
     });
 
-    // Dispatch a command on #1 and DON'T answer it.
+    // Dispatch a command on #1 and DON'T answer it yet.
     const pending = fix.controller.sendCommand(
       fix.hostId,
       'runtime_status',
       {},
       { timeoutMs: 3_000, expectedConnectionId: c1 },
     );
-    const settled = expect(pending).rejects.toMatchObject({ code: 'transport_disconnected' });
 
-    // Capture the command frame #1 received so we can craft a (doomed) late
-    // response for its id after replacement.
+    // Capture the command frame #1 received.
     const cmd = await waitFor(
       () => d1.frames.find(f => f.type === 'command' && f.kind === 'runtime_status') ?? null,
       { label: 'runtime_status command on #1' },
     );
 
-    // Daemon #2 replaces #1 → in-flight on #1 rejects transport_disconnected.
-    const d2 = await connectRawDaemon(fix.url, fix.hostToken);
-    sockets.push(d2.ws);
-    d2.ws.send(encodeOutboundFrame(readyEvent(202)));
-    await settled;
+    // Daemon #2 is rejected. The incumbent connectionId and in-flight command
+    // remain live, so the command can still be answered on #1.
+    await expect(connectRawDaemon(fix.url, fix.hostToken)).rejects.toThrow(
+      /Unexpected server response: 409/,
+    );
+    expect(fix.controller.connectionIdForHost(fix.hostId)).toBe(c1);
 
-    // A LATE response for the in-flight id, sent on the now-replaced #1,
-    // must not resolve anything (the connection is cleanedUp). The promise
-    // is already rejected; sending this must not flip it to resolved. Sent
-    // as raw JSON (not the typed encoder) because it is a deliberate
-    // injection on a connection the server has already torn down.
     d1.ws.send(
       JSON.stringify({
         direction: 'daemon_to_server',
@@ -327,8 +299,7 @@ describe('D5.a-4 — standalone connection staleness (real WS replacement)', () 
         result: { runtimes: [] },
       }),
     );
-    await settle();
-    await expect(pending).rejects.toMatchObject({ code: 'transport_disconnected' });
+    await expect(pending).resolves.toEqual({ runtimes: [] });
   });
 });
 

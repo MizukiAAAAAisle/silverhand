@@ -336,9 +336,7 @@ function AgentManagementActions({
   };
   const restart = async (): Promise<void> => {
     if (pending) return;
-    if (row.status === 'active' || row.status === 'starting') {
-      await stop.mutateAsync({ agentId: agent.id, mode: 'hard' });
-    }
+    await stop.mutateAsync({ agentId: agent.id, mode: 'hard' });
     try {
       await start.mutateAsync(agent.id);
     } catch {

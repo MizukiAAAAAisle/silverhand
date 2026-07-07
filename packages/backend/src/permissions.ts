@@ -393,15 +393,6 @@ export function canViewAgentFiles(
  *                                                 reach pending → 409
  *                                                 and failed → 204)
  *
- * `GET /api/agents/:id/delete-impact` is intentionally kept at the
- * default `['active']` (Cindy `f0JxEM9nMhsVfLIo` refinement). The
- * management view's affordances on failed / pending rows are
- * `Delete` + `Retry`, not a destructive impact preview — a
- * "this delete will sweep N conversations" panel on a row with
- * zero dependents would be actively misleading. 404 for non-active
- * is the correct surface; do NOT widen this route to opt in
- * without a corresponding UI design pass.
- *
  * System principals bypass the status filter — mirrors `canEditAgent`'s
  * "system unconditional" pattern. Agent principals are status-gated
  * because in practice they only exist for active rows (the runtime

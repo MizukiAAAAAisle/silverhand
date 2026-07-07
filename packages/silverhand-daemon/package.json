@@ -1,0 +1,26 @@
+{
+  "name": "@silverhand-ai/daemon",
+  "version": "0.0.1-alpha.8",
+  "private": false,
+  "type": "module",
+  "description": "Silverhand user-managed computer daemon",
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "bin": {
+    "silverhand-daemon": "dist/daemon.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "pnpm --filter @silverhand/host exec esbuild src/daemon/entry.ts --bundle --platform=node --format=esm --target=node20 --outfile=../silverhand-daemon/dist/daemon.js --minify=${SILVERHAND_MINIFY:-false} --define:__SILVERHAND_DAEMON_VERSION__=\\\"${npm_package_version:-0.0.0-dev}\\\" --banner:js='import{createRequire}from\"node:module\";const require=createRequire(import.meta.url);' && pnpm --filter @silverhand/cli exec esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=../silverhand-daemon/dist/cli.js --minify=${SILVERHAND_MINIFY:-false} --define:__SILVERHAND_DAEMON_VERSION__=\\\"${npm_package_version:-0.0.0-dev}\\\" --banner:js='import{createRequire}from\"node:module\";const require=createRequire(import.meta.url);'",
+    "build:publish": "SILVERHAND_MINIFY=true pnpm run build",
+    "pack:dry": "npm pack --dry-run",
+    "publish:check": "pnpm --filter @silverhand/host run test:publish-guards",
+    "verify:publish-build": "test -f dist/daemon.js && test -f dist/cli.js && node -e \"const fs=require('fs');const pkg=require('./package.json');const daemon=fs.readFileSync('dist/daemon.js','utf8');if(!daemon.includes(pkg.version)){throw new Error('dist/daemon.js does not include package version '+pkg.version)}\"",
+    "prepack": "pnpm run build:publish",
+    "prepublishOnly": "pnpm run publish:check && pnpm run build:publish && pnpm run verify:publish-build"
+  }
+}

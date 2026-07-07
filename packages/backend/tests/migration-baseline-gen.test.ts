@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { type Migration, migrations } from '@silverhand/shared';
+import { type Migration, migrations } from '@silverhand/shared/db/migrations';
 
 /**
  * ONE-SHOT generator for the #task:1213 baseline compaction (design:

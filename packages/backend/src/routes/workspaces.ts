@@ -246,6 +246,14 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
       case 'deleted':
       case 'idempotentNoop':
         return c.body(null, 204);
+      case 'notDeletableKind':
+        return c.json(
+          {
+            error: 'workspace kind cannot be deleted via workspace endpoint',
+            code: 'workspace_not_deletable',
+          },
+          409,
+        );
       case 'forbidden':
         return c.json({ error: 'forbidden' }, 403);
       case 'placementRejected': {

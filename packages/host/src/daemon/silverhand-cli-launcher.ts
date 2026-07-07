@@ -22,19 +22,11 @@ export function chooseSilverhandCliLauncher(args: {
   serverLauncher: SilverhandCliLauncher | null;
   localLauncher: SilverhandCliLauncher | null;
 }): SilverhandCliLauncher {
-  if (!args.serverLauncher) {
-    if (args.localLauncher) return args.localLauncher;
-    throw new Error(
-      'runtime_start: no silverhand CLI launcher supplied by server and no daemon-local launcher was resolved',
-    );
-  }
-  if (
-    args.localLauncher &&
-    isFallbackSilverhandCliLauncher(args.serverLauncher)
-  ) {
-    return args.localLauncher;
-  }
-  return args.serverLauncher;
+  if (args.localLauncher) return args.localLauncher;
+  if (args.serverLauncher) return args.serverLauncher;
+  throw new Error(
+    'runtime_start: no silverhand CLI launcher supplied by server and no daemon-local launcher was resolved',
+  );
 }
 
 export function resolveLocalSilverhandCliLauncher(input: {
@@ -46,23 +38,26 @@ export function resolveLocalSilverhandCliLauncher(input: {
   const hostExecPath = input.execPath ?? process.execPath;
   const exists = input.exists ?? existsSync;
   const entryDir = dirname(fileURLToPath(entryUrl));
-  const candidates = [
+  const candidates: Array<{ entry: string; env?: Record<string, string> }> = [
+    // NPM package layout:
+    //   node_modules/@silverhand-ai/daemon/dist/daemon.js
+    //   node_modules/@silverhand-ai/daemon/dist/cli.js
+    { entry: resolve(entryDir, 'cli.js') },
     // Release layout:
     //   Resources/silverhand-daemon/daemon.mjs
     //   Resources/silverhand-cli/cli.mjs
-    resolve(entryDir, '..', 'silverhand-cli', 'cli.mjs'),
-    // Dev bundle layout:
-    //   packages/host/dist/daemon.js
-    //   packages/cli/dist/cli.js
-    resolve(entryDir, '..', '..', 'cli', 'dist', 'cli.js'),
+    {
+      entry: resolve(entryDir, '..', 'silverhand-cli', 'cli.mjs'),
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    },
   ];
 
-  const entry = candidates.find(candidate => exists(candidate));
-  if (!entry) return null;
+  const candidate = candidates.find(item => exists(item.entry));
+  if (!candidate) return null;
 
   return {
     command: hostExecPath,
-    args: [entry],
-    env: { ELECTRON_RUN_AS_NODE: '1' },
+    args: [candidate.entry],
+    ...(candidate.env ? { env: candidate.env } : {}),
   };
 }

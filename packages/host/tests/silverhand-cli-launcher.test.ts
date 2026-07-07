@@ -29,7 +29,7 @@ describe('daemon silverhand CLI launcher', () => {
     ).toBe(false);
   });
 
-  it('uses the daemon-local launcher only for backend fallback input', () => {
+  it('prefers the daemon-local launcher over server-supplied launchers', () => {
     const local = {
       command: '/Electron',
       args: ['/Resources/silverhand-cli/cli.mjs'],
@@ -55,6 +55,16 @@ describe('daemon silverhand CLI launcher', () => {
       chooseSilverhandCliLauncher({
         serverLauncher: explicit,
         localLauncher: local,
+      }),
+    ).toBe(local);
+  });
+
+  it('uses the server launcher when no daemon-local launcher exists', () => {
+    const explicit = { command: '/explicit-node', args: ['/explicit-cli.js'] };
+    expect(
+      chooseSilverhandCliLauncher({
+        serverLauncher: explicit,
+        localLauncher: null,
       }),
     ).toBe(explicit);
   });
@@ -95,7 +105,31 @@ describe('daemon silverhand CLI launcher', () => {
     }
   });
 
-  it('resolves the repo dev bundle sibling CLI', () => {
+  it('resolves the npm package sibling CLI bundle', () => {
+    const root = mkdtempSync(join(tmpdir(), 'silverhand-cli-npm-'));
+    try {
+      const distDir = join(root, 'node_modules', '@silverhand-ai', 'daemon', 'dist');
+      mkdirSync(distDir, { recursive: true });
+      const daemonEntry = join(distDir, 'daemon.js');
+      const cliEntry = join(distDir, 'cli.js');
+      writeFileSync(daemonEntry, '');
+      writeFileSync(cliEntry, '');
+
+      expect(
+        resolveLocalSilverhandCliLauncher({
+          entryUrl: pathToFileURL(daemonEntry).href,
+          execPath: '/node',
+        }),
+      ).toEqual({
+        command: '/node',
+        args: [cliEntry],
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not resolve the repo dev bundle sibling CLI', () => {
     const root = mkdtempSync(join(tmpdir(), 'silverhand-cli-dev-'));
     try {
       const daemonDir = join(root, 'packages', 'host', 'dist');
@@ -112,11 +146,7 @@ describe('daemon silverhand CLI launcher', () => {
           entryUrl: pathToFileURL(daemonEntry).href,
           execPath: '/node',
         }),
-      ).toEqual({
-        command: '/node',
-        args: [cliEntry],
-        env: { ELECTRON_RUN_AS_NODE: '1' },
-      });
+      ).toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

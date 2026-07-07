@@ -114,6 +114,39 @@ describe('§3.4 — typed helpers stamp the right `kind` discriminator', () => {
     logProcess(logger, { action: 'sigkill', pid: 1234 });
     expect(lines[0]!.level).toBe('warn');
   });
+
+  it('logDaemon cli_launcher_unavailable is warn-level', () => {
+    const { lines, logger } = capturingLogger();
+    logDaemon(logger, { action: 'cli_launcher_unavailable', pid: 1234 });
+    expect(lines[0]!.level).toBe('warn');
+    expect(lines[0]!.obj).toMatchObject({
+      kind: 'daemon',
+      action: 'cli_launcher_unavailable',
+    });
+  });
+
+  it('logIntent host_status success logs are debug-level poll diagnostics', () => {
+    const { lines, logger } = capturingLogger();
+    logIntent(logger, {
+      intent: 'host_status',
+      request_id: 'r1',
+      status: 'received',
+    });
+    logIntent(logger, {
+      intent: 'host_status',
+      request_id: 'r1',
+      status: 'ok',
+      duration_ms: 1,
+    });
+    logIntent(logger, {
+      intent: 'host_status',
+      request_id: 'r1',
+      status: 'error',
+      error_code: 'internal_error',
+    });
+
+    expect(lines.map(line => line.level)).toEqual(['debug', 'debug', 'warn']);
+  });
 });
 
 describe('§3.4 — forbidden field names never reach the log line', () => {

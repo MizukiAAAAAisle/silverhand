@@ -590,7 +590,13 @@ describe('OutboundRuntimeEventFanout', () => {
         fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
       ).resolves.toBe(true);
       expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
-      expect(fix.inbox.countInFlightForPair(fix.channelId, fix.agentId)).toBe(1);
+      expect(
+        fix.inbox.countInFlightForPairOwner(
+          fix.channelId,
+          fix.agentId,
+          'conn-1',
+        ),
+      ).toBe(1);
 
       fix.fanout.onEvent(
         fix.hostId,
@@ -607,7 +613,13 @@ describe('OutboundRuntimeEventFanout', () => {
         'conn-1',
       );
 
-      expect(fix.inbox.countInFlightForPair(fix.channelId, fix.agentId)).toBe(0);
+      expect(
+        fix.inbox.countInFlightForPairOwner(
+          fix.channelId,
+          fix.agentId,
+          'conn-1',
+        ),
+      ).toBe(0);
       expect(fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId))
         .toEqual([delivery.inboxId]);
     } finally {
@@ -923,6 +935,37 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  it('reclaims stale in-flight rows before treating explicit start as idempotent success', async () => {
+    const fix = makeFixture({ runtime: 'codex' });
+    try {
+      const delivery = enqueueMessage(fix, 'stuck behind old owner');
+      fix.inbox.claimPending(fix.channelId, fix.agentId, 'old-conn');
+
+      await expect(
+        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
+      ).resolves.toBe(true);
+
+      const start = fix.transport.calls.find(c => c.kind === 'runtime_start');
+      expect(start).toBeDefined();
+      expect(start?.opts?.expectedConnectionId).toBe('conn-1');
+      expect(start?.params).toMatchObject({
+        startup_delivery: {
+          delivery_ids: [delivery.inboxId],
+        },
+      });
+      expect(fix.inbox.listInFlightForOwner('old-conn')).toEqual([]);
+      expect(
+        fix.inbox.countInFlightForPairOwner(
+          fix.channelId,
+          fix.agentId,
+          'conn-1',
+        ),
+      ).toBe(1);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   it('explicit start with an empty pending inbox dispatches runtime_start without startup_delivery', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
@@ -956,6 +999,45 @@ describe('OutboundRuntimeEventFanout', () => {
       ).not.toHaveProperty('server_url');
     } finally {
       fix.cleanup();
+    }
+  });
+
+  it('sends the server silverhand CLI launcher only to the co-located host', async () => {
+    const colocated = makeFixture({ runtime: 'codex' });
+    const remote = makeFixture({ runtime: 'codex', coLocatedHostId: null });
+    try {
+      await expect(
+        colocated.fanout.start(colocated.channelId, colocated.agentId),
+      ).resolves.toBeUndefined();
+      const colocatedStart = colocated.transport.calls.find(
+        c => c.kind === 'runtime_start',
+      );
+      expect(colocatedStart).toBeDefined();
+      expect(
+        (
+          colocatedStart!.params as {
+            options: { env_policy: Record<string, unknown> };
+          }
+        ).options.env_policy,
+      ).toHaveProperty('silverhand_cli');
+
+      await expect(
+        remote.fanout.start(remote.channelId, remote.agentId),
+      ).resolves.toBeUndefined();
+      const remoteStart = remote.transport.calls.find(
+        c => c.kind === 'runtime_start',
+      );
+      expect(remoteStart).toBeDefined();
+      expect(
+        (
+          remoteStart!.params as {
+            options: { env_policy: Record<string, unknown> };
+          }
+        ).options.env_policy,
+      ).not.toHaveProperty('silverhand_cli');
+    } finally {
+      colocated.cleanup();
+      remote.cleanup();
     }
   });
 
@@ -1692,6 +1774,7 @@ function makeFixture(
       transport: FakeTransport;
       workspaces: WorkspaceRepo;
     }) => WorkspaceRegistryBackfiller;
+    coLocatedHostId?: string | null;
   } = {},
 ): Fixture {
   const { db, viewerUserId, localHostId } = openTestDb();
@@ -1736,6 +1819,9 @@ function makeFixture(
     logger: opts.logger ?? SILENT_LOGGER,
     workspacesRoot,
     silverhandCli: { command: 'silverhand', args: [] },
+    ...(opts.coLocatedHostId === null
+      ? {}
+      : { coLocatedHostId: opts.coLocatedHostId ?? localHostId }),
     agentTokens: new AgentTokenStore(),
     activityLog: null,
     ...(backfiller ? { workspaceRegistryBackfiller: backfiller } : {}),

@@ -808,7 +808,6 @@ export function ThreadPanel({
             }}
             workspaceId={workspaceId}
             channelTitle={channelMeta.title}
-            channelKind={channelMeta.kind}
           />
           <div
             ref={scrollRef}

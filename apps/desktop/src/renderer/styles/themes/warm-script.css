@@ -293,6 +293,12 @@
   --success-soft: #5A7A3D15;
   --warning: #B07820;
   --warning-soft: #B0782015;
+  /* #task:1380 — soft warning CALLOUT surface (delete-cascade impact block).
+     Distinct from `--warning-soft`: that is `--warning` (a brown-gold) at ~8%
+     over the ground, which muddies into a dirty tan when used as a large fill.
+     This is a clean, pale warm goose-yellow that reads as a gentle caution on
+     the white dialog without the brown cast (shiki 2026-07-07). */
+  --warning-surface: #FBF1CE;
   --error: #9A4434;
   --error-soft: #9A443415;
 

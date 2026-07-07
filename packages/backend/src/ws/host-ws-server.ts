@@ -17,7 +17,13 @@ import {
   type OutboundServerCommandResult,
   type ResponseError,
 } from '@silverhand/host';
-import { apiPaths } from '@silverhand/shared';
+import {
+  HOST_CONNECTION_CHANGED_EVENT,
+  HOST_WS_CLOSE_REASON_DISCONNECTED,
+  HOST_WS_CLOSE_REASON_REVOKED,
+  apiPaths,
+  type HostConnectionChangedEvent,
+} from '@silverhand/shared';
 import { HostTokenService } from '../auth/host-token.js';
 import type { BackendContext, BackendDeploymentMode } from '../context.js';
 import { HostRepo } from '../repos/host-repo.js';
@@ -46,6 +52,9 @@ export interface HostWsAttachment {
    *  attachment being usable (sendCommand will find the connection)
    *  the moment they observe a non-null snapshot. */
   attachedAt: number;
+  /** Diagnostic-only daemon-reported name from the ready event. Never used for
+   *  identity, routing, or dedupe. */
+  hostname: string | null;
 }
 
 export interface HostWsServerController {
@@ -59,9 +68,8 @@ export interface HostWsServerController {
    * **Independent of `eventSink`**: this registry tracks the underlying
    * websocket lifecycle. It updates on authenticated upgrade and on
    * connection close, regardless of whether an `eventSink` is wired —
-   * which makes it the correct readiness signal in embedded mode (where
-   * `eventSink` is intentionally unwired and runtime events flow over
-   * Unix-socket IPC, not WS).
+   * which makes it the correct readiness signal when event projection is
+   * intentionally ignored for the co-located embedded local host.
    *
    * **Replacement-safe**: when a new connection replaces an existing
    * one for the same host, the previous connection's `close` cleanup
@@ -78,30 +86,22 @@ export interface HostWsServerController {
     opts?: { timeoutMs?: number; expectedConnectionId?: string },
   ): Promise<OutboundServerCommandResult<K>>;
   /**
-   * D4.c C2 — close the live outbound websocket for `hostId`
-   * because the host's credentials were revoked. Returns `true`
-   * when an attached connection existed and was kicked, `false`
-   * when no live connection was registered (idempotent — the
-   * route can call this without first checking attachment state;
-   * the credential revoke and DB row mutation are the
-   * authoritative effect, this is the optimistic UX flip).
+   * Close the live outbound websocket for `hostId`. Returns `true` when an
+   * attached connection existed and was kicked, `false` when no live connection
+   * was registered (idempotent).
    *
-   * The implementation routes through the connection's
-   * `closeForRevoke()` which uses close code 1008 +
-   * `host_revoked` reason. The current daemon outbound client
-   * reconnects on every close code (see
-   * `packages/host/src/daemon/outbound-client.ts:349`); the
-   * reconnect attempt fails at upgrade-auth because the
-   * credential is already revoked. Branching on
-   * `host_revoked` to suppress reconnect is a follow-up (D3.e /
-   * D4.d) — what this call buys today is **immediate
-   * disconnect**, so the renderer's BackendInfo flips on the
-   * next attachment heartbeat instead of waiting for the
-   * daemon to lose its current socket on its own.
+   * `HOST_WS_CLOSE_REASON_REVOKED` is used after credentials are revoked.
+   * `HOST_WS_CLOSE_REASON_DISCONNECTED` is an availability-axis kick that
+   * preserves credentials; the daemon treats both reasons as terminal for the
+   * current config so it does not immediately reconnect with the same token.
    */
-  disconnectHost(hostId: string): boolean;
+  disconnectHost(hostId: string, reason?: HostWsDisconnectReason): boolean;
   close(): Promise<void>;
 }
+
+export type HostWsDisconnectReason =
+  | typeof HOST_WS_CLOSE_REASON_REVOKED
+  | typeof HOST_WS_CLOSE_REASON_DISCONNECTED;
 
 export interface HostWsEventSink {
   onEvent(
@@ -176,12 +176,13 @@ export function installHostWebSocketServer(
   const connections = new Map<WebSocket, HostWsConnection>();
   const connectionsByHost = new Map<string, HostWsConnection>();
   // Lifecycle registry, intentionally independent of `opts.eventSink`.
-  // Embedded backend wires no event sink (runtime events flow over IPC),
-  // so callers cannot rely on a `ready`-event-driven signal to know the
-  // outbound websocket is live. `attachmentsByHost` is updated in the
-  // upgrade handler the same tick as `connectionsByHost`, and cleared
-  // in the `close` listener only when the captured `connectionId` is
-  // still the registered one (replacement-safe).
+  // The co-located embedded local host projects runtime events over the
+  // Unix-socket transport, so callers cannot rely on a host-ws
+  // `ready` event to know that attachment is live. `attachmentsByHost`
+  // is updated in the upgrade handler the same tick as
+  // `connectionsByHost`, and cleared in the `close` listener only when
+  // the captured `connectionId` is still the registered one
+  // (replacement-safe).
   const attachmentsByHost = new Map<string, HostWsAttachment>();
   const commandIdPrefix = `hostws-${randomUUID()}`;
   let commandSeq = 0;
@@ -205,10 +206,17 @@ export function installHostWebSocketServer(
       rejectUpgrade(socket, auth.statusCode, auth.reason);
       return;
     }
+    const existing = attachmentsByHost.get(auth.host.hostId);
+    if (existing) {
+      rejectUpgrade(socket, 409, 'Conflict', {
+        error: 'computer already connected',
+        error_code: 'computer_already_connected',
+        connected_host_name: existing.hostname,
+      });
+      return;
+    }
 
     wss.handleUpgrade(req, socket, head, ws => {
-      const previous = connectionsByHost.get(auth.host.hostId);
-      previous?.closeForReplacement();
       const connectionId = `${commandIdPrefix}-conn-${++connectionSeq}`;
       const connection = new HostWsConnection(ws, ctx, auth.host, {
         connectionId,
@@ -218,6 +226,14 @@ export function installHostWebSocketServer(
         nextCommandId: () => `${commandIdPrefix}-${++commandSeq}`,
         eventSink: opts.eventSink,
         deploymentMode: ctx.deploymentMode,
+        updateAttachmentHostname: hostname => {
+          const current = attachmentsByHost.get(auth.host.hostId);
+          if (!current || current.connectionId !== connectionId) return;
+          attachmentsByHost.set(auth.host.hostId, {
+            ...current,
+            hostname,
+          });
+        },
       });
       connections.set(ws, connection);
       connectionsByHost.set(auth.host.hostId, connection);
@@ -230,6 +246,11 @@ export function installHostWebSocketServer(
         hostId: auth.host.hostId,
         connectionId,
         attachedAt,
+        hostname: null,
+      });
+      new HostRepo(ctx.db).markActivated(auth.host.hostId, attachedAt);
+      publishHostConnectionChanged(ctx, auth.host.userId, {
+        host_id: auth.host.hostId,
       });
       ws.on('close', () => {
         connections.delete(ws);
@@ -242,6 +263,9 @@ export function installHostWebSocketServer(
         const current = attachmentsByHost.get(auth.host.hostId);
         if (current && current.connectionId === connectionId) {
           attachmentsByHost.delete(auth.host.hostId);
+          publishHostConnectionChanged(ctx, auth.host.userId, {
+            host_id: auth.host.hostId,
+          });
         }
       });
       wss.emit('connection', ws, req);
@@ -285,10 +309,14 @@ export function installHostWebSocketServer(
       }
       return connection.sendCommand(kind, params, commandOpts);
     },
-    disconnectHost: hostId => {
+    disconnectHost: (hostId, reason = HOST_WS_CLOSE_REASON_REVOKED) => {
       const connection = connectionsByHost.get(hostId);
       if (!connection) return false;
-      connection.closeForRevoke();
+      if (reason === HOST_WS_CLOSE_REASON_DISCONNECTED) {
+        connection.closeForDisconnect();
+      } else {
+        connection.closeForRevoke();
+      }
       // The `close` listener registered in the upgrade handler
       // (line ~209) will clean `connectionsByHost` and
       // `attachmentsByHost` on the same tick the underlying
@@ -320,6 +348,18 @@ export function installHostWebSocketServer(
       await new Promise<void>(resolve => wss.close(() => resolve()));
     },
   };
+}
+
+function publishHostConnectionChanged(
+  ctx: BackendContext,
+  ownerUserId: string,
+  payload: HostConnectionChangedEvent,
+): void {
+  ctx.events.publishToScope(
+    `viewer:${ownerUserId}`,
+    HOST_CONNECTION_CHANGED_EVENT,
+    payload,
+  );
 }
 
 interface PendingCommand {
@@ -355,6 +395,7 @@ class HostWsConnection {
       nextCommandId: () => string;
       eventSink?: HostWsEventSink;
       deploymentMode: BackendDeploymentMode;
+      updateAttachmentHostname: (hostname: string) => void;
     },
   ) {
     this.connectionId = opts.connectionId;
@@ -364,9 +405,11 @@ class HostWsConnection {
     this.nextCommandId = opts.nextCommandId;
     this.eventSink = opts.eventSink;
     this.deploymentMode = opts.deploymentMode;
+    this.updateAttachmentHostname = opts.updateAttachmentHostname;
   }
 
   private readonly eventSink?: HostWsEventSink;
+  private readonly updateAttachmentHostname: (hostname: string) => void;
 
   start(): void {
     this.ws.on('message', data => this.handleMessage(data));
@@ -437,7 +480,26 @@ class HostWsConnection {
       this.ws.readyState === WebSocket.OPEN ||
       this.ws.readyState === WebSocket.CONNECTING
     ) {
-      this.ws.close(1008, 'host_revoked');
+      this.ws.close(1008, HOST_WS_CLOSE_REASON_REVOKED);
+    }
+  }
+
+  /**
+   * Availability-axis disconnect: the server intentionally releases the current
+   * live attachment while keeping credentials valid. The daemon must not
+   * immediately reconnect with the same config, but a later manual command or a
+   * changed app-managed config may reconnect.
+   */
+  closeForDisconnect(): void {
+    this.rejectPendingDisconnected(
+      `host ${this.host.hostId} websocket was disconnected by server request`,
+    );
+    this.cleanup();
+    if (
+      this.ws.readyState === WebSocket.OPEN ||
+      this.ws.readyState === WebSocket.CONNECTING
+    ) {
+      this.ws.close(1000, HOST_WS_CLOSE_REASON_DISCONNECTED);
     }
   }
 
@@ -596,18 +658,36 @@ class HostWsConnection {
     this.rejectPendingDisconnected(
       `host ${this.host.hostId} websocket disconnected`,
     );
-    this.eventSink?.onDisconnect?.(this.host.hostId, this.connectionId);
+    if (!this.shouldIgnoreEventSink()) {
+      this.eventSink?.onDisconnect?.(this.host.hostId, this.connectionId);
+    }
   }
 
   private handleDaemonEvent(frame: OutboundDaemonToServerEventFrame): void {
+    if (frame.kind === 'ready') {
+      this.updateAttachmentHostname(frame.host_descriptor.name);
+    }
+    if (this.shouldIgnoreEventSink()) {
+      if (!this.loggedNoEventSink) {
+        this.loggedNoEventSink = true;
+        this.ctx.logger.info(
+          {
+            hostId: this.host.hostId,
+            connectionId: this.connectionId,
+            eventKind: frame.kind,
+            deploymentMode: this.deploymentMode,
+            coLocatedHostId: this.ctx.coLocatedHostId,
+          },
+          'host-ws: outbound event ignored (embedded co-located host uses local outbound socket)',
+        );
+      }
+      return;
+    }
     if (!this.eventSink) {
-      // Embedded backend intentionally wires no eventSink: runtime
-      // events flow over Unix-socket IPC, the outbound WS is reserved
-      // for control/config frames (e.g. D2.f token rotation). Logging
-      // "may be misconfigured" there is misleading — the dropped event
-      // is the architecture, not a bug. Standalone backend, on the
-      // other hand, has no IPC channel so a missing sink IS a config
-      // error (and /readyz now fail-loud-blocks via Stage D3.a Commit 2).
+      // Production boot wires the shared fanout into host-ws. If a test
+      // or custom bootstrap omits it, warn in standalone where WS is the
+      // only event ingress; embedded uses the co-located guard above for
+      // the one host that must stay on the Unix-socket path.
       if (!this.loggedNoEventSink) {
         this.loggedNoEventSink = true;
         if (this.deploymentMode === 'embedded') {
@@ -618,7 +698,7 @@ class HostWsConnection {
               eventKind: frame.kind,
               deploymentMode: this.deploymentMode,
             },
-            'host-ws: outbound event ignored (embedded: runtime events flow via IPC; WS reserved for control)',
+            'host-ws: outbound event ignored (no fanout sink configured)',
           );
         } else {
           this.ctx.logger.warn(
@@ -647,6 +727,13 @@ class HostWsConnection {
       );
       this.ws.close(1011, 'event_fanout_failed');
     }
+  }
+
+  private shouldIgnoreEventSink(): boolean {
+    return (
+      this.deploymentMode === 'embedded' &&
+      this.ctx.coLocatedHostId === this.host.hostId
+    );
   }
 
   private handleCommandResponse(
@@ -799,11 +886,14 @@ function authenticateHost(req: IncomingMessage, ctx: BackendContext): HostAuthRe
   if (!host) {
     return { ok: false, statusCode: 401, reason: 'Unauthorized' };
   }
-  if (host.kind !== 'local') {
+  const userManagedRemote =
+    host.kind === 'remote' &&
+    host.provisioning_source === 'user_invite' &&
+    host.user_id !== null;
+  if (host.kind !== 'local' && !userManagedRemote) {
     return { ok: false, statusCode: 403, reason: 'Forbidden' };
   }
 
-  hosts.touchLastSeen(host.id);
   return {
     ok: true,
     host: {
@@ -853,8 +943,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function rejectUpgrade(socket: Duplex, statusCode: number, reason: string): void {
-  socket.write(`HTTP/1.1 ${statusCode} ${reason}\r\nConnection: close\r\n\r\n`);
+function rejectUpgrade(
+  socket: Duplex,
+  statusCode: number,
+  reason: string,
+  body?: Record<string, unknown>,
+): void {
+  if (!body) {
+    socket.write(`HTTP/1.1 ${statusCode} ${reason}\r\nConnection: close\r\n\r\n`);
+    socket.destroy();
+    return;
+  }
+  const payload = JSON.stringify(body);
+  socket.write(
+    `HTTP/1.1 ${statusCode} ${reason}\r\n` +
+      `Connection: close\r\n` +
+      `Content-Type: application/json\r\n` +
+      `Content-Length: ${Buffer.byteLength(payload)}\r\n` +
+      `\r\n` +
+      payload,
+  );
   socket.destroy();
 }
 

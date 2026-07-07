@@ -57,6 +57,7 @@
  */
 import { runDaemon } from './run.js';
 import { Supervisor } from './supervisor/index.js';
+import { runConnectCommand } from './connect-command.js';
 
 interface ParsedArgv {
   socketPath: string;
@@ -67,6 +68,7 @@ interface ParsedArgv {
   runtimePidRootDir: string | null;
   agentHomeRootDir: string | null;
   proxyConfigPath: string | null;
+  legacyProxyConfigPath: string | null;
   controlPlaneServerUrlPath: string | null;
   alsoStderr: boolean;
 }
@@ -80,6 +82,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   let runtimePidRootDir: string | null = null;
   let agentHomeRootDir: string | null = null;
   let proxyConfigPath: string | null = null;
+  let legacyProxyConfigPath: string | null = null;
   let controlPlaneServerUrlPath: string | null = null;
   let alsoStderr = false;
   for (let i = 0; i < argv.length; i++) {
@@ -108,6 +111,9 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
         break;
       case '--proxy-config-path':
         proxyConfigPath = argv[++i] ?? null;
+        break;
+      case '--legacy-proxy-config-path':
+        legacyProxyConfigPath = argv[++i] ?? null;
         break;
       case '--control-plane-server-url-path':
         controlPlaneServerUrlPath = argv[++i] ?? null;
@@ -141,6 +147,12 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
     return { error: '--proxy-config-path must be absolute' };
   }
   if (
+    legacyProxyConfigPath !== null &&
+    !legacyProxyConfigPath.startsWith('/')
+  ) {
+    return { error: '--legacy-proxy-config-path must be absolute' };
+  }
+  if (
     controlPlaneServerUrlPath !== null &&
     !controlPlaneServerUrlPath.startsWith('/')
   ) {
@@ -155,13 +167,20 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
     runtimePidRootDir,
     agentHomeRootDir,
     proxyConfigPath,
+    legacyProxyConfigPath,
     controlPlaneServerUrlPath,
     alsoStderr,
   };
 }
 
 async function main(): Promise<void> {
-  const parsed = parseArgv(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  if (argv[0] === 'connect') {
+    const exitCode = await runConnectCommand(argv.slice(1));
+    if (exitCode !== null) process.exit(exitCode);
+    return;
+  }
+  const parsed = parseArgv(argv);
   if ('error' in parsed) {
     process.stderr.write(`silverhand-daemon: ${parsed.error}\n`);
     process.exit(1);
@@ -176,6 +195,7 @@ async function main(): Promise<void> {
       runtimePidRootDir: parsed.runtimePidRootDir ?? undefined,
       agentHomeRootDir: parsed.agentHomeRootDir ?? undefined,
       proxyConfigPath: parsed.proxyConfigPath ?? undefined,
+      legacyProxyConfigPath: parsed.legacyProxyConfigPath ?? undefined,
       controlPlaneServerUrlPath:
         parsed.controlPlaneServerUrlPath ?? undefined,
       installSignals: true,

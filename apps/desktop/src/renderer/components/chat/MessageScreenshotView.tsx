@@ -54,7 +54,6 @@ export function MessageScreenshotView({
   viewer,
   viewerAvatarObjectUrl,
   channelTitle,
-  channelKind,
   mermaidSvgByCode,
 }: {
   messages: readonly MessageDto[];
@@ -69,7 +68,6 @@ export function MessageScreenshotView({
   viewer?: UserDto;
   viewerAvatarObjectUrl?: string | null;
   channelTitle?: string | null;
-  channelKind?: 'channel' | 'dm' | null;
   /** Mermaid diagrams pre-rendered to SVG before capture (#task:1322), keyed
    *  by trimmed source. Threaded into each row's Markdown so the export shows
    *  rendered diagrams; a diagram absent here falls back to source. */
@@ -85,25 +83,21 @@ export function MessageScreenshotView({
     >
       {safeChannelTitle ? (
         <div className="border-b border-border-subtle pb-2 text-sm font-semibold">
-          {channelKind === 'dm' ? (
-            <span
-              data-conversation-title
-              className="inline-flex items-center font-serif text-base font-semibold text-text-primary"
-            >
-              {safeChannelTitle}
-            </span>
-          ) : (
-            <span
-              data-conversation-title
-              className="inline-flex items-center font-serif text-base font-semibold text-text-primary"
-            >
-              <Hash
-                data-conversation-hash-icon
-                className="size-4 shrink-0 align-[-0.15em]"
-              />
-              {safeChannelTitle}
-            </span>
-          )}
+          {/* Every conversation header carries the channel `#` — channel and DM
+              alike (matching the live header, #task:1179). No branch: a
+              channel-like conversation always earns it (#task:1373). Painted per
+              theme via `[data-conversation-hash-icon]` (forza6 = poster
+              sticker). */}
+          <span
+            data-conversation-title
+            className="inline-flex items-center font-serif text-base font-semibold text-text-primary"
+          >
+            <Hash
+              data-conversation-hash-icon
+              className="size-4 shrink-0 align-[-0.15em]"
+            />
+            {safeChannelTitle}
+          </span>
         </div>
       ) : null}
       {messages.map(m => (

@@ -1157,12 +1157,10 @@ export function createConversationRuntimeApp(
       { conversationId, agentId },
       'api: clear agent session requested',
     );
-    // The standalone fanout's
-    // `clearSession` dispatches `runtime_clear_session` over the outbound WS,
-    // bounded-waits for the resulting `runtime_exit` projection
-    // landed, then atomically clears `cli_session_id` + writes the
-    // audit row in one DB tx — same wire shape as embedded
-    // `DaemonAgentRuntimeHost.clearSession` (R4 envelope invariant).
+    // The outbound fanout's `clearSession` dispatches
+    // `runtime_clear_session`, bounded-waits for the resulting
+    // `runtime_exit` projection to land, then atomically clears
+    // `cli_session_id` + writes the audit row in one DB tx.
     //
     // Two route-local typed errors that are NOT in the placement
     // taxonomy:

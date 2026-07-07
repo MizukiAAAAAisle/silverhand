@@ -34,6 +34,8 @@ import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { canEditAgentProfile } from './permissions';
 import { EditableAgentAvatar } from './EditableAgentAvatar';
 import { isBackendUnreachable, useViewerUser } from '@/features/me/hooks';
+import { useHostsQuery } from '@/features/hosts/hooks';
+import { resolveComputerName } from '@/features/hosts/host-display';
 
 // codex feature flag `fast_mode`. Tri-state so the user can pin
 // either side or fall back to the catalog default (currently `true`).
@@ -54,7 +56,7 @@ interface AgentProfileCardProps {
  *
  *   Identity      → avatar + display name + handle (editable in place)
  *   Capabilities  → runtime + model + description (+ codex extras)
- *   Metadata      → host id + created/updated + agent id
+ *   Metadata      → computer + created/updated + agent id
  *
  * Sections are bordered cards; fields inside each section stack
  * label-on-top in a 2-column wrap grid rather than the previous
@@ -77,6 +79,13 @@ export function AgentProfileCard({
   const canEdit = canEditAgentProfile(viewerForPermissions, agent);
   const update = useUpdateAgent(agent.id);
   const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
+  // Computer this agent runs on, resolved through the shared host-name helper
+  // (same source the rail uses) so the two never drift. Deleted / unowned
+  // computers fall back to the restrained "Unknown computer" label.
+  const hostsQuery = useHostsQuery();
+  const computerName = resolveComputerName(
+    (hostsQuery.data?.hosts ?? []).find(h => h.id === agent.host_id),
+  );
 
   // Local drafts; commit on blur for text fields, immediately for selects.
   // Avoids fighting React Query's optimistic re-renders if the user types
@@ -306,7 +315,7 @@ export function AgentProfileCard({
       <ProfileSection title="Metadata" muted>
         <MetadataList
           items={[
-            { label: 'Host', value: agent.host_id, mono: true },
+            { label: 'Computer', value: computerName },
             {
               label: 'Created',
               value: dayjs(agent.created_at).format('YYYY-MM-DD'),

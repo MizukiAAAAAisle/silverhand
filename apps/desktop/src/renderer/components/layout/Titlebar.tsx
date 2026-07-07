@@ -94,7 +94,7 @@ export function Titlebar({
 }: TitlebarProps): JSX.Element {
   const hasWorkspace = workspaceName !== null;
   const showManageMembers = hasWorkspace && workspaceKind !== 'dm' && !!workspaceId;
-  const showSettings = hasWorkspace && !!onOpenWorkspaceSettings;
+  const showSettings = hasWorkspace && workspaceKind !== 'dm' && !!onOpenWorkspaceSettings;
   const showTasks = hasWorkspace && !!onOpenTasks;
   const isArchived = workspaceArchivedAt !== null;
   const chromeWidth = `calc(var(--nav-rail-width) + ${

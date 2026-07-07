@@ -11,9 +11,9 @@
  *                     1. InlineRename'able display label,
  *                     2. lightweight status (colored dot + uppercase
  *                        text) + Refresh button,
- *                     3. meta line (`host.name` only; kind is conveyed
- *                        by the badge icon — Monitor=local /
- *                        Globe=remote).
+ *                     3. meta line (`host.name` only). Every computer
+ *                        wears the same Monitor glyph — kind never swaps
+ *                        the identity icon.
  *                   The state row sits in the middle so the visual
  *                   order reads "name → live state → identifiers"
  *                   (shiki dogfood `hLEODapuI_dHuCPz`).
@@ -52,20 +52,22 @@
  * editable when this Desktop can reach the physical daemon for `host.id`;
  * the server must not carry proxy bytes.
  *
- * Manual-refresh contract: `useHostStatusQuery` pins
- * `staleTime: Infinity` + no focus/interval refetch. The Refresh button
- * invalidates the query key on click.
+ * Freshness contract: the detail pane itself stays manual-refresh-only
+ * (`staleTime: Infinity`). Out-of-band attach/detach changes are reconciled
+ * by the app-shell host connection sync, which invalidates this query from
+ * viewer-scoped WS events / `snapshot_required`; no per-view poll loop needed.
  */
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Check,
   CheckCircle2,
   Cpu,
-  Globe,
   Loader2,
   Monitor,
   RefreshCw,
   Save,
+  Trash2,
+  Unplug,
 } from 'lucide-react';
 import {
   useEffect,
@@ -77,6 +79,8 @@ import {
 } from 'react';
 import type {
   AgentOnHostDto,
+  HostDeleteDependentAgent,
+  HostDeleteDependents,
   HostDto,
   HostStatusResponse,
   RuntimeKind,
@@ -91,14 +95,29 @@ import {
 } from '@/features/me/hooks';
 import { useNav } from '@/router';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { cn } from '@/lib/cn';
 import {
   hostStatusKey,
+  useAgentOnlineByHost,
   useHostProxyConfigQuery,
   useHostStatusQuery,
+  useDeleteComputerMutation,
+  useDisconnectHostMutation,
+  useRotateConnectTokenMutation,
   useSaveHostProxyConfigMutation,
   useUpdateHostMutation,
+  isHostProxyOfflineError,
+  ComputerHasDependentsError,
+  ComputerHasPendingAgentsError,
   type HostProxyConfig,
 } from './hooks';
 import {
@@ -107,6 +126,8 @@ import {
   type HostStatusTone,
 } from './host-status-presentation';
 import { InlineRename } from './InlineRename';
+import { ConnectionCommandCard } from './ConnectionCommandCard';
+import { computerCopy } from './computer-copy';
 import { formatOsShort } from './format-os';
 
 /**
@@ -144,10 +165,9 @@ const PROXY_RUNTIMES: readonly RuntimeKind[] = RUNTIME_ORDER_LIST;
 
 export interface HostDetailViewProps {
   host: HostDto;
-  localHostId: string | null;
 }
 
-export function HostDetailView({ host, localHostId }: HostDetailViewProps): JSX.Element {
+export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
   const qc = useQueryClient();
   const viewer = useViewerUser();
   const statusQuery = useHostStatusQuery(host.id);
@@ -179,10 +199,26 @@ export function HostDetailView({ host, localHostId }: HostDetailViewProps): JSX.
       : null;
   const canEditHostLocalConfig =
     viewerId !== null && host.creator_user_id === viewerId;
-  const isLocalSelf = host.id === localHostId;
+  // The Connection section (generate command / disconnect) is only
+  // meaningful for a user-managed computer the viewer owns and hasn't
+  // revoked. The local app-managed computer has no user-facing connect
+  // command at all, so gating on `provisioning_source` here is legitimate
+  // provenance use (connect-recovery flow), NOT a capability fork (Alice
+  // §3.1). A revoked computer is terminal — nothing to reconnect.
+  const showConnectionSection =
+    canEditHostLocalConfig &&
+    host.provisioning_source === 'user_invite' &&
+    host.status !== 'revoked';
+  // Delete is the single computer-level removal verb (#task:1354). Scoped to
+  // a user-managed computer the viewer owns — the local app-managed computer
+  // has its own lifecycle and is not user-deletable here (Alice §gate-scope).
+  // Unlike Connection, Delete stays available in every lifecycle/availability
+  // state (you delete an offline computer too), so it is NOT gated on status.
+  const showDeleteSection =
+    canEditHostLocalConfig && host.provisioning_source === 'user_invite';
 
   return (
-    <main className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-bg-base">
+    <main className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-bg-floating">
       <HostHero
         host={host}
         showStableName={showStableName}
@@ -196,16 +232,20 @@ export function HostDetailView({ host, localHostId }: HostDetailViewProps): JSX.
         }}
       />
 
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-6">
+      <div className="mx-auto flex w-full max-w-2xl flex-col px-6">
         {statusQuery.isLoading ? (
-          <SectionSkeleton label="Loading host status…" />
+          <div className="py-6">
+            <SectionSkeleton label="Loading host status…" />
+          </div>
         ) : statusQuery.isError ? (
-          <Banner tone="error">
-            Could not load this computer&rsquo;s status.
-            {statusQuery.error instanceof Error
-              ? ` (${statusQuery.error.message})`
-              : ''}
-          </Banner>
+          <div className="py-6">
+            <Banner tone="error">
+              Could not load this computer&rsquo;s status.
+              {statusQuery.error instanceof Error
+                ? ` (${statusQuery.error.message})`
+                : ''}
+            </Banner>
+          </div>
         ) : statusQuery.data ? (
           <>
             {statusQuery.data.availability === 'available' ? (
@@ -213,27 +253,457 @@ export function HostDetailView({ host, localHostId }: HostDetailViewProps): JSX.
             ) : (
               <OfflineSection status={statusQuery.data} />
             )}
-            {canEditHostLocalConfig ? (
-              <ProxySection hostId={host.id} isLocalSelf={isLocalSelf} />
+            {showConnectionSection ? (
+              <ConnectionSection
+                host={host}
+                availability={statusQuery.data.availability}
+              />
             ) : null}
-            <RegisteredAgentsSection agents={statusQuery.data.agents} />
+            {canEditHostLocalConfig ? (
+              <ProxySection
+                hostId={host.id}
+                availability={statusQuery.data.availability}
+              />
+            ) : null}
+            <RegisteredAgentsSection
+              hostId={host.id}
+              agents={statusQuery.data.agents}
+            />
           </>
         ) : null}
+        {showDeleteSection ? <DeleteComputerSection host={host} /> : null}
       </div>
     </main>
   );
 }
 
-/* ─── Proxy (daemon-host local) ─────────────────────────────────── */
+/* ─── Connection (user-managed connect / disconnect) ────────────── */
 
+/**
+ * #task:1348 — the target-page Connection section for a user-managed
+ * computer. Deliberately minimal (shiki): the user only needs to know how
+ * to connect and how to disconnect — no rules prose. Two buttons:
+ *
+ *   - **Generate connection command** (rotate the credential) — mints a
+ *     fresh reveal-once command; the backend invalidates the previous token
+ *     and force-drops any machine currently using it. The connect /
+ *     re-pair / lost-command / move-machine path.
+ *   - **Disconnect** — credential-preserving: drops the live WS without
+ *     touching the token, so the same command reconnects. Shown ONLY while
+ *     the computer is actually connected (`availability === 'available'`);
+ *     nothing to drop otherwise. It is "disconnect for now", not a
+ *     permanent off-switch — if the machine itself restarts it reconnects
+ *     with its still-valid credential. Permanently removing a computer is
+ *     Delete, a computer-level action that lives OUTSIDE this section
+ *     (#task:1354).
+ *
+ * The rotate cleartext is reveal-once: it lands in local state (`minted`)
+ * for the shared `ConnectionCommandCard` and is discarded on unmount —
+ * never cached, never logged.
+ */
+function ConnectionSection({
+  host,
+  availability,
+}: {
+  host: HostDto;
+  availability: HostStatusResponse['availability'];
+}): JSX.Element {
+  const rotate = useRotateConnectTokenMutation(host.id);
+  const disconnect = useDisconnectHostMutation(host.id);
+  const [minted, setMinted] = useState<{
+    command: string;
+    token: string;
+  } | null>(null);
+  const [rotateError, setRotateError] = useState(false);
+  const [disconnectError, setDisconnectError] = useState(false);
+
+  const handleGenerate = async (): Promise<void> => {
+    setRotateError(false);
+    try {
+      const res = await rotate.mutateAsync();
+      setMinted({ command: res.daemon_command, token: res.connect_token });
+    } catch {
+      setRotateError(true);
+    }
+  };
+
+  const handleDisconnect = async (): Promise<void> => {
+    setDisconnectError(false);
+    try {
+      await disconnect.mutateAsync();
+      // On success availability flips to `disconnected` → the button hides.
+    } catch {
+      setDisconnectError(true);
+    }
+  };
+
+  return (
+    <HostSection title={computerCopy.connectionSectionTitle}>
+      <div className="flex flex-col gap-3">
+        {minted ? (
+          <ConnectionCommandCard
+            daemonCommand={minted.command}
+            connectToken={minted.token}
+          />
+        ) : null}
+
+        <div className="flex flex-col items-start gap-2">
+          <Button
+            size="sm"
+            onClick={() => void handleGenerate()}
+            disabled={rotate.isPending}
+            className="gap-2"
+          >
+            {rotate.isPending ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="size-3.5" />
+            )}
+            {computerCopy.generateCommand}
+          </Button>
+
+          {availability === 'available' ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void handleDisconnect()}
+              disabled={disconnect.isPending}
+              className="gap-2"
+            >
+              {disconnect.isPending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Unplug className="size-3.5" />
+              )}
+              {computerCopy.disconnectCurrent}
+            </Button>
+          ) : null}
+        </div>
+
+        {rotateError ? (
+          <p className="text-xs text-error">{computerCopy.rotateFailed}</p>
+        ) : null}
+        {disconnectError ? (
+          <p className="text-xs text-error">{computerCopy.disconnectFailed}</p>
+        ) : null}
+      </div>
+    </HostSection>
+  );
+}
+
+/* ─── Delete (computer-level removal) ───────────────────────────── */
+
+/**
+ * #task:1354 / #task:1380 — the single computer-level removal verb. Deliberately
+ * lives OUTSIDE the Connection section (shiki: "delete 不应该在 connection 中,在别
+ * 的地方") as a quiet danger action at the page footer, not a loud red box —
+ * the error tone + the confirm dialog carry the warning, so the trigger stays
+ * an outline button (the saturated fill is reserved for the actual commit
+ * inside the dialog).
+ *
+ * Three dialog phases, no upfront dependency probe:
+ *   - **confirm** — one line of consequence + a destructive Delete. On an
+ *     empty computer this hard-deletes; the row leaves `computerHosts` and the
+ *     app-shell auto-clears the detail selection (no explicit nav here).
+ *   - **cascade** (#task:1380) — reached when the first DELETE is refused with
+ *     `409 has_dependents` AND `can_cascade_agents === true` (an agent-only
+ *     dependency set). Shows "also deletes its N agents" + a destructive Delete
+ *     that re-issues DELETE with `{ cascade_agents: true }`. The flag is an
+ *     intent confirmation, not a bypass: the backend re-checks its own truth,
+ *     so this re-issue can itself come back blocked (Alice invariant) — we fall
+ *     through to the block state rather than assume success.
+ *   - **blocked** — reached when the backend refuses with `409 has_dependents`
+ *     and it is NOT agent-cascade-able (a regular workspace still pins this
+ *     computer). Shows how many agents / workspaces remain so the user clears
+ *     those in their own context first. Nothing was deleted.
+ */
+function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
+  const del = useDeleteComputerMutation(host.id);
+  const [open, setOpen] = useState(false);
+  const [blocked, setBlocked] = useState<HostDeleteDependents | null>(null);
+  const [cascade, setCascade] = useState<HostDeleteDependentAgent[] | null>(
+    null,
+  );
+  const [pending, setPending] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  const resetPhase = (): void => {
+    setBlocked(null);
+    setCascade(null);
+    setPending(false);
+    setFailed(false);
+  };
+
+  const openConfirm = (): void => {
+    resetPhase();
+    setOpen(true);
+  };
+
+  const handleDelete = async (cascadeAgents: boolean): Promise<void> => {
+    setFailed(false);
+    try {
+      await del.mutateAsync(cascadeAgents ? { cascadeAgents: true } : undefined);
+      // Success: the deleted row drops out of the host list, which clears the
+      // selection app-side. Close the dialog; this view will unmount/remount.
+      setOpen(false);
+    } catch (err) {
+      if (err instanceof ComputerHasPendingAgentsError) {
+        // Transient: an agent is still materializing. Off the cascade/block
+        // axis — a wait-and-retry hint, not a confirm (Alice invariant).
+        setPending(true);
+        setBlocked(null);
+        setCascade(null);
+      } else if (err instanceof ComputerHasDependentsError) {
+        // Backend truth decides the branch — an agent-only set is cascade-able
+        // (offer the confirm); anything else is a hard block. This also covers
+        // the cascade re-issue coming back blocked (a regular workspace
+        // appeared / the flag was ignored server-side): we degrade to block.
+        setPending(false);
+        if (err.canCascadeAgents) {
+          setCascade(err.agents);
+          setBlocked(null);
+        } else {
+          setBlocked(err.dependents);
+          setCascade(null);
+        }
+      } else {
+        setFailed(true);
+      }
+    }
+  };
+
+  const label = host.display_label?.trim() || host.name;
+
+  return (
+    <section className="flex flex-col border-t border-border-subtle py-6 first:border-t-0">
+      <Button
+        variant="outline"
+        onClick={openConfirm}
+        className="gap-2 self-start border-error/40 text-error hover:border-error hover:bg-error/10"
+      >
+        <Trash2 className="size-3.5" />
+        {computerCopy.deleteComputer}
+      </Button>
+
+      <Dialog
+        open={open}
+        onOpenChange={next => {
+          // Reset transient state whenever the dialog fully closes so a
+          // re-open always starts from the confirm phase.
+          setOpen(next);
+          if (!next) resetPhase();
+        }}
+      >
+        <DialogContent className="max-w-md">
+          {blocked ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>{computerCopy.deleteBlockedTitle}</DialogTitle>
+                <DialogDescription>
+                  {computerCopy.deleteBlockedBody(
+                    blocked.agents,
+                    blocked.workspaces,
+                  )}
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setOpen(false)}>
+                  {computerCopy.deleteBlockedDismiss}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : pending ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>{computerCopy.deletePendingTitle}</DialogTitle>
+                <DialogDescription>
+                  {computerCopy.deletePendingBody}
+                </DialogDescription>
+              </DialogHeader>
+              {failed ? (
+                <p className="text-xs text-error">{computerCopy.deleteFailed}</p>
+              ) : null}
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setOpen(false)}
+                  disabled={del.isPending}
+                >
+                  {computerCopy.cancel}
+                </Button>
+                <Button
+                  onClick={() => void handleDelete(false)}
+                  disabled={del.isPending}
+                  className="gap-2"
+                >
+                  {del.isPending ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : null}
+                  {computerCopy.deletePendingRetry}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : cascade ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>{computerCopy.deleteConfirmTitle}</DialogTitle>
+                {/* shiki interaction gate (2026-07-07): the cascade confirm
+                    does NOT replace the standard delete copy — it keeps it and
+                    adds the impact block below, so the user reads the same base
+                    consequence plus exactly who else goes. */}
+                <DialogDescription>
+                  {computerCopy.deleteConfirmBody}
+                </DialogDescription>
+              </DialogHeader>
+              <CascadeImpact agents={cascade} />
+              {failed ? (
+                <p className="text-xs text-error">{computerCopy.deleteFailed}</p>
+              ) : null}
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setOpen(false)}
+                  disabled={del.isPending}
+                >
+                  {computerCopy.cancel}
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={() => void handleDelete(true)}
+                  disabled={del.isPending}
+                  className="gap-2"
+                  aria-label={`${computerCopy.deleteComputer}: ${label}`}
+                >
+                  {del.isPending ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="size-3.5" />
+                  )}
+                  {del.isPending
+                    ? computerCopy.deleting
+                    : computerCopy.deleteConfirm}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle>{computerCopy.deleteConfirmTitle}</DialogTitle>
+                <DialogDescription>
+                  {computerCopy.deleteConfirmBody}
+                </DialogDescription>
+              </DialogHeader>
+              {failed ? (
+                <p className="text-xs text-error">{computerCopy.deleteFailed}</p>
+              ) : null}
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setOpen(false)}
+                  disabled={del.isPending}
+                >
+                  {computerCopy.cancel}
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={() => void handleDelete(false)}
+                  disabled={del.isPending}
+                  className="gap-2"
+                  aria-label={`${computerCopy.deleteComputer}: ${label}`}
+                >
+                  {del.isPending ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="size-3.5" />
+                  )}
+                  {del.isPending
+                    ? computerCopy.deleting
+                    : computerCopy.deleteConfirm}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+    </section>
+  );
+}
+
+/**
+ * #task:1380 — cascade impact block. shiki interaction gate (2026-07-07):
+ * shown UNDER the standard delete confirm (never replacing it) as a pale-amber
+ * callout that names the consequence ("Agents will be removed") and lists the
+ * exact agents that go with the computer.
+ *
+ * The `--warning-surface` fill is a per-theme soft caution tint (a clean pale
+ * goose-yellow on the light themes, a translucent amber veil on slack-dark) —
+ * distinct from `--warning-soft`, which is the brown-gold `--warning` at low
+ * alpha and muddies into a dirty tan when used as a large fill (shiki
+ * 2026-07-07). Radius follows `--control-radius` (forza6 = 0 poster corners,
+ * warm = rounded), matching the other in-dialog blocks.
+ *
+ * The list is the backend's DB delete-set (409 `agents`), so it stays populated
+ * and accurate even when the computer is offline — the primary case for this
+ * flow (Alice #task:1380: never source it from the daemon host-status view).
+ * Each row reuses `AgentAvatar` (runtime tint) so the identities read in the
+ * same visual vocab as "Agents on this machine" above.
+ */
+function CascadeImpact({
+  agents,
+}: {
+  agents: HostDeleteDependentAgent[];
+}): JSX.Element {
+  return (
+    <div className="rounded-[var(--control-radius)] bg-[var(--warning-surface)] px-3 py-2.5">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--warning)]">
+        {computerCopy.deleteCascadeImpactTitle}
+      </p>
+      <ul className="mt-2 flex flex-col gap-1.5" aria-label="Agents to be removed">
+        {agents.map(agent => {
+          const knownRuntime = RuntimeKindSchema.safeParse(agent.runtime);
+          return (
+            <li key={agent.id} className="flex items-center gap-2">
+              {knownRuntime.success ? (
+                <AgentAvatar
+                  runtime={knownRuntime.data as RuntimeKind}
+                  size={20}
+                  alt={agent.display_name}
+                />
+              ) : (
+                <span
+                  className="inline-flex size-5 shrink-0 items-center justify-center rounded-none bg-bg-elevated text-text-muted"
+                  aria-hidden
+                >
+                  <Cpu className="size-3" />
+                </span>
+              )}
+              <span className="min-w-0 flex-1 truncate text-sm text-text-primary">
+                {agent.display_name}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+/* ─── Proxy (daemon-host local) ─────────────────────────────────── */
 function ProxySection({
   hostId,
-  isLocalSelf,
+  availability,
 }: {
   hostId: string;
-  isLocalSelf: boolean;
+  availability: HostStatusResponse['availability'];
 }): JSX.Element {
-  const query = useHostProxyConfigQuery(hostId, { enabled: isLocalSelf });
+  // Proxy config is host-local truth: the backend can only read/write it by
+  // dispatching to a *live* daemon, so the section is editable strictly on
+  // the availability axis (NOT the old kind/`isLocalSelf` axis — a remote
+  // user-managed computer edits its own proxy just fine while online). When
+  // offline, read and write are both unavailable, so we collapse to a single
+  // short hint rather than showing a stale/locked form.
+  const online = availability === 'available';
+  const query = useHostProxyConfigQuery(hostId, { enabled: online });
   const saveMutation = useSaveHostProxyConfigMutation(hostId);
   const [proxyUrl, setProxyUrl] = useState('');
   const [proxyRuntimes, setProxyRuntimes] = useState<Set<RuntimeKind>>(
@@ -247,20 +717,17 @@ function ProxySection({
   // another window writes the file (a rare path; renderer is the only
   // writer today, but the snapshot is shared so we still react to it).
   useEffect(() => {
-    if (!query.data?.ok) return;
-    setProxyUrl(query.data.config.proxy_url ?? '');
-    setProxyRuntimes(new Set(query.data.config.proxy_runtimes));
+    if (!query.data) return;
+    setProxyUrl(query.data.proxy_url ?? '');
+    setProxyRuntimes(new Set(query.data.proxy_runtimes));
     setError(null);
     setSaved(false);
   }, [query.data]);
 
-  if (!isLocalSelf) {
+  if (!online) {
     return (
-      <HostSection title="Proxy" muted>
-        <p className="text-sm text-text-muted">
-          Proxy settings are stored on this computer. Open Silverhand on the
-          physical machine that owns this host to edit them.
-        </p>
+      <HostSection title={computerCopy.proxyTitle}>
+        <p className="text-sm text-text-muted">{computerCopy.proxyOfflineHint}</p>
       </HostSection>
     );
   }
@@ -293,12 +760,23 @@ function ProxySection({
       proxy_url: proxyUrl.trim() ? proxyUrl.trim() : null,
       proxy_runtimes: orderedRuntimes,
     };
-    const result = await saveMutation.mutateAsync(config);
-    if (result.ok) {
+    try {
+      await saveMutation.mutateAsync(config);
       setSaved(true);
       window.setTimeout(() => setSaved(false), 1500);
-    } else {
-      setError(result.message ?? `Could not save proxy (${result.code}).`);
+    } catch (err) {
+      // config-or-throw: a raced `computer_offline` rejects here (went offline
+      // between load and save) — show the same connect hint once, without
+      // caching offline anywhere. Any other failure surfaces inline.
+      if (isHostProxyOfflineError(err)) {
+        setError(computerCopy.proxyOfflineHint);
+      } else {
+        setError(
+          err instanceof Error && err.message
+            ? `Could not save proxy settings. (${err.message})`
+            : 'Could not save proxy settings. Please try again.',
+        );
+      }
     }
   };
 
@@ -306,24 +784,26 @@ function ProxySection({
   const saving = saveMutation.isPending;
 
   return (
-    <HostSection title="Proxy">
-      <p className="mb-4 text-xs leading-relaxed text-text-muted">
-        Proxy configuration is injected only into newly spawned agent processes.
-      </p>
+    <HostSection title={computerCopy.proxyTitle}>
       {settingsLoading ? (
         <div className="flex items-center gap-2 text-sm text-text-muted">
           <Loader2 className="size-4 animate-spin" aria-hidden />
           <span>Loading proxy settings…</span>
         </div>
       ) : query.isError ? (
-        <Banner tone="error">
-          Could not load proxy settings.
-          {query.error instanceof Error ? ` (${query.error.message})` : ''}
-        </Banner>
-      ) : query.data && !query.data.ok ? (
-        <Banner tone={query.data.code === 'not_local_host' ? 'muted' : 'error'}>
-          {query.data.message ?? `Could not load proxy (${query.data.code}).`}
-        </Banner>
+        // config-or-throw: a raced `computer_offline` (went unreachable
+        // between the availability gate and the GET landing) propagates as a
+        // query error — classify it and show the same short connect hint;
+        // any other failure is a real load error. Durable offline is the
+        // availability gate above, not this branch.
+        isHostProxyOfflineError(query.error) ? (
+          <Banner tone="muted">{computerCopy.proxyOfflineHint}</Banner>
+        ) : (
+          <Banner tone="error">
+            Could not load proxy settings.
+            {query.error instanceof Error ? ` (${query.error.message})` : ''}
+          </Banner>
+        )
       ) : (
         <form onSubmit={handleSubmit} className="grid gap-5">
           <div className="grid gap-2">
@@ -344,16 +824,9 @@ function ProxySection({
                 setSaved(false);
                 setError(null);
               }}
-              placeholder="127.0.0.1:7897 / http://... / socks5://..."
+              placeholder="http://127.0.0.1:7897"
               disabled={settingsLoading}
             />
-            <p className="text-xs leading-relaxed text-text-muted">
-              Expands into <code>http_proxy</code>, <code>https_proxy</code>,
-              and <code>all_proxy</code> for selected runtimes. A bare
-              host:port or <code>http://</code> value is treated as a
-              mixed-port proxy; <code>socks5://</code> only sets{' '}
-              <code>all_proxy</code>.
-            </p>
           </div>
 
           <div className="grid gap-2">
@@ -460,11 +933,7 @@ function ProxySection({
                   <CheckCircle2 className="size-3.5" />
                   Saved
                 </span>
-              ) : (
-                <span className="text-text-muted">
-                  Proxy changes save to this computer.
-                </span>
-              )}
+              ) : null}
             </div>
             <Button
               type="submit"
@@ -508,7 +977,7 @@ function HostHero({
 }): JSX.Element {
   return (
     <header className="flex shrink-0 items-start gap-4 border-b border-border-subtle bg-bg-floating px-6 py-4">
-      <HostBadge kind={host.kind} />
+      <HostBadge />
 
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <div className="font-serif text-lg font-semibold leading-tight text-text-primary">
@@ -563,8 +1032,7 @@ function HostHero({
             underlying name. Otherwise the title (which falls back to
             `host.name` itself) would repeat the same string here —
             "two local" déjà-vu (shiki `CEq57Kisu3w2d-Pl` /
-            Cindy `Fjg86GQM5qwoEjl7`). Host kind is conveyed by the
-            left badge icon (Monitor=local, Globe=remote). */}
+            Cindy `Fjg86GQM5qwoEjl7`). */}
         {showStableName ? (
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
             <span className="font-mono">{host.name}</span>
@@ -585,8 +1053,12 @@ function HostHero({
  * identity instead of looking dwarfed beside the lg/serif title —
  * shiki dogfood `hLEODapuI_dHuCPz`.
  */
-function HostBadge({ kind }: { kind: HostDto['kind'] }): JSX.Element {
-  const Icon = kind === 'local' ? Monitor : Globe;
+function HostBadge(): JSX.Element {
+  // Every computer wears the same Monitor glyph — provenance/availability
+  // is conveyed elsewhere, never by swapping the identity icon (shiki
+  // dogfood: a network glyph made user-added computers read as a different
+  // kind of thing). Kept in sync with the sidebar row's icon rule.
+  const Icon = Monitor;
   return (
     <span
       data-host-hero
@@ -713,7 +1185,7 @@ function OfflineSection({
 }): JSX.Element {
   const view = describeHostStatus(status);
   return (
-    <HostSection title="System" muted>
+    <HostSection title="System">
       <Banner tone={view.tone}>
         <span className="font-medium">{view.label}.</span>{' '}
         {view.detail ??
@@ -726,11 +1198,23 @@ function OfflineSection({
 /* ─── Registered agents ─────────────────────────────────────────── */
 
 function RegisteredAgentsSection({
+  hostId,
   agents,
 }: {
+  hostId: string;
   agents: AgentOnHostDto[];
 }): JSX.Element {
   const nav = useNav();
+  // Agent-on-computer liveness (layer-2) is the SAME fact the rail dot
+  // reads. The detail's `useHostStatusQuery` freezes its snapshot
+  // (`staleTime: Infinity`, no interval) so the availability card stays
+  // stable — but that also froze these agent pips. Read liveness from
+  // the shared `useAgentOnlineByHost` (5s poll on the same
+  // `hostStatusKey`) so the pip converges within ≤5s, single-source
+  // with the rail dot. Falls back to the frozen snapshot's `online`
+  // until the first live sample lands. Do NOT source layer-3
+  // conversation status here — this list's subject is the computer.
+  const liveOnlineByHost = useAgentOnlineByHost([hostId]);
   // shiki dogfood `DXVl5tEBshVT2LqF` #2: route avatar uploads through
   // the shared object-URL cache so cards show the user-picked image
   // instead of the runtime tint fallback. Memoize the source list so
@@ -758,14 +1242,20 @@ function RegisteredAgentsSection({
           className="flex flex-col gap-2"
           aria-label="Agents on this machine"
         >
-          {agents.map(agent => (
-            <AgentCard
-              key={agent.agent_id}
-              agent={agent}
-              avatarObjectUrl={avatarUrls.get(agent.agent_id) ?? null}
-              onOpen={() => nav.toMembers(agent.agent_id)}
-            />
-          ))}
+          {agents.map(agent => {
+            const live = liveOnlineByHost.get(agent.agent_id);
+            const online: 'online' | 'offline' =
+              live === undefined ? agent.online : live ? 'online' : 'offline';
+            return (
+              <AgentCard
+                key={agent.agent_id}
+                agent={agent}
+                online={online}
+                avatarObjectUrl={avatarUrls.get(agent.agent_id) ?? null}
+                onOpen={() => nav.toMembers(agent.agent_id)}
+              />
+            );
+          })}
         </ul>
       )}
     </HostSection>
@@ -775,66 +1265,45 @@ function RegisteredAgentsSection({
 /* ─── HostSection (local) ───────────────────────────────────────── */
 
 /**
- * Section card used by this surface. Solid `bg-bg-floating` (forza6 +
- * warm both resolve to `#FFFFFF`) so the card reads as a real white
- * tile instead of the half-transparent wash `ProfileSection` uses.
- * Radius is driven by `--floating-radius` (forza6 = 0, warm =
- * `var(--radius-md)`) — `--card-radius` would be 6px in forza6, which
- * fights the theme's hard-cut poster aesthetic. shiki dogfood
- * `aF5e0z_kHXo1Omv7`: "forza6 主题下是 0 才对". Inline radius beats
- * the `[data-panel-card='profile-section']` global rule (CSS
- * specificity 1000 vs ~10), so opting into that hook for border
- * vocabulary does NOT change radius.
+ * Section primitive for this surface. shiki #task:1360 redesign: the
+ * previous version wrapped each section's body in a solid white card
+ * (`data-panel-card="profile-section"` border + `bg-bg-floating` tile +
+ * `p-4` + hover border, amplified to a 2px frame in forza6). Multiple
+ * equal-weight boxes read as "obvious boxes" and diluted the hierarchy —
+ * the loudness budget went to containers instead of content.
  *
- * Border vocabulary mirrors `ProfileSection` per shiki #task:883
- * "border 改成和 agent pane 一样,即默认主题灰,hover 主题黑,
- * forza6 2px": baseline `border-border-subtle` gray, hover transitions
- * to the stronger `border-border` ink; forza6 amplifies that into a
- * 2px structural frame + near-black hover via the
- * `[data-theme='forza6'] [data-panel-card='profile-section']` rule
- * in `themes/forza6-components.css`. Reusing that hook (rather than
- * cloning a `host-section` selector) keeps a single forza6
- * amplification spec for both surfaces.
+ * Now a section is just a **title + flush-left content**, separated from
+ * the previous section by a single hairline (`border-t border-border-subtle`,
+ * skipped on the first child). No box, no inner padding inset, so the title
+ * and its content share one left edge and the whole pane reads as one
+ * continuous document rather than an admin dashboard. Controls inside a
+ * section (proxy input, runtime tiles, agent row cards) keep their own
+ * borders — they are controls, not section boxes.
  *
- * Intentionally NOT reusing the shared `ProfileSection`: shiki dogfood
- * asked for a heavier white treatment here (solid `bg-bg-floating`,
- * not the `/50` half-transparent wash) and we don't want that ripple
- * to other profile cards (`AgentProfileCard` / `HumanProfileCard`)
- * unless asked.
+ * The title stays a quiet uppercase caps label (the box was the noise, not
+ * the title). Vertical rhythm is `py-6` per section; the hairline lands in
+ * the gap between two sections.
  */
 function HostSection({
   title,
-  muted = false,
   children,
 }: {
   /** ReactNode so the caller can compose inline trailing content
    *  (e.g. an agent count number after the title text). Per shiki
    *  dogfood `6QIZeGVS8u8yJ137`: no right-aligned headerSlot for
    *  this surface — counts read better attached to the title than
-   *  floating at the far edge of the card. */
+   *  floating at the far edge. */
   title: ReactNode;
-  muted?: boolean;
   children: ReactNode;
 }): JSX.Element {
   return (
-    <section className="flex flex-col">
-      <header className="mb-2">
-        <h3
-          className={cn(
-            'font-serif text-[13px] font-semibold uppercase tracking-wider',
-            muted ? 'text-text-muted' : 'text-text-secondary',
-          )}
-        >
+    <section className="flex flex-col border-t border-border-subtle py-6 first:border-t-0">
+      <header className="mb-3.5">
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-muted">
           {title}
         </h3>
       </header>
-      <div
-        data-panel-card="profile-section"
-        className="border border-border-subtle bg-bg-floating p-4 transition-colors duration-150 hover:border-border"
-        style={{ borderRadius: 'var(--floating-radius)' }}
-      >
-        {children}
-      </div>
+      <div>{children}</div>
     </section>
   );
 }
@@ -867,10 +1336,12 @@ function HostSection({
  */
 function AgentCard({
   agent,
+  online,
   avatarObjectUrl,
   onOpen,
 }: {
   agent: AgentOnHostDto;
+  online: 'online' | 'offline';
   avatarObjectUrl: string | null;
   onOpen: () => void;
 }): JSX.Element {
@@ -913,7 +1384,7 @@ function AgentCard({
             <span className="uppercase tracking-wide">{agent.runtime}</span>
           </span>
         </div>
-        <AgentStatusPip online={agent.online} />
+        <AgentStatusPip online={online} />
       </button>
     </li>
   );

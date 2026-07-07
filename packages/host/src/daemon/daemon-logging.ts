@@ -74,7 +74,7 @@ export interface IntentLog {
 
 export function logIntent(logger: DaemonLogger, entry: IntentLog): void {
   const { status, intent } = entry;
-  const level = status === 'error' ? 'warn' : 'info';
+  const level = status === 'error' ? 'warn' : intent === 'host_status' ? 'debug' : 'info';
   logger[level]({ kind: 'intent', ...entry }, `intent ${intent} ${status}`);
 }
 
@@ -131,15 +131,26 @@ export function logProcess(logger: DaemonLogger, entry: ProcessLog): void {
  * Daemon-process boot / shutdown / pid-file events.
  */
 export interface DaemonLifecycleLog {
-  action: 'boot' | 'shutting_down' | 'pid_claim' | 'pid_reclaim';
+  action:
+    | 'boot'
+    | 'shutting_down'
+    | 'pid_claim'
+    | 'pid_reclaim'
+    | 'connect_ready'
+    | 'cli_launcher_resolved'
+    | 'cli_launcher_unavailable';
   pid: number;
   socket_path?: string;
   pid_file_path?: string;
   conflict_pid?: number;
+  host_id?: string;
+  data_root?: string;
+  log_dir?: string;
 }
 
 export function logDaemon(logger: DaemonLogger, entry: DaemonLifecycleLog): void {
-  logger.info({ kind: 'daemon', ...entry }, `daemon ${entry.action}`);
+  const level = entry.action === 'cli_launcher_unavailable' ? 'warn' : 'info';
+  logger[level]({ kind: 'daemon', ...entry }, `daemon ${entry.action}`);
 }
 
 // ── Backpressure ───────────────────────────────────────────────────

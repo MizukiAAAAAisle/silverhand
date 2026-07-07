@@ -84,4 +84,9 @@ pnpm --filter @silverhand/cli build
 # before every dev run. esbuild step is ~20ms — same cost as the CLI
 # build above.
 pnpm --filter @silverhand/host build
+# User-managed computer dogfood: backend-generated connection commands should
+# run before the public npm package exists. In dev, point npx at the local file
+# package; production keeps the default @silverhand-ai/daemon@latest spec.
+pnpm --filter @silverhand-ai/daemon build
+export SILVERHAND_DAEMON_NPM_SPEC="file:$ROOT_DIR/packages/silverhand-daemon"
 exec pnpm --filter @silverhand/desktop dev

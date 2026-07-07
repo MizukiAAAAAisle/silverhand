@@ -131,6 +131,17 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'host_status' },
   },
   {
+    name: 'request/host_runtime_catalog',
+    description:
+      '#task:1375 — force-refresh per-host runtime catalog probe; daemon answers with one explicit state per selectable runtime.',
+    frame: enc({
+      id: 'req-host-runtime-catalog',
+      intent: 'host_runtime_catalog',
+      params: { force: true },
+    }),
+    kind: { kind: 'request', intent: 'host_runtime_catalog' },
+  },
+  {
     name: 'request/conversation_log_debug-enable',
     description:
       'Conversation log debug toggle — enabled arm carries expires_at.',
@@ -648,6 +659,44 @@ const RESPONSES_SUCCESS: WireFixture[] = [
       },
     }),
     kind: { kind: 'response_success', intent: 'host_status' },
+  },
+  {
+    name: 'response/host_runtime_catalog',
+    description:
+      '#task:1375 — explicit per-selectable-runtime availability states from the host-side resolver.',
+    frame: enc({
+      id: 'req-host-runtime-catalog',
+      result: {
+        detected_at: TS,
+        runtimes: [
+          {
+            kind: 'claude',
+            state: 'present',
+            reason: 'resolved',
+            installed: true,
+            binary: '/usr/local/bin/claude',
+            version: '1.2.3',
+          },
+          {
+            kind: 'codex',
+            state: 'present_unverified',
+            reason: 'version_unavailable',
+            installed: true,
+            binary: '/usr/local/bin/codex',
+            version: null,
+          },
+          {
+            kind: 'qoder',
+            state: 'absent',
+            reason: 'not_found',
+            installed: false,
+            binary: null,
+            version: null,
+          },
+        ],
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'host_runtime_catalog' },
   },
   {
     name: 'response/conversation_log_debug-enabled',

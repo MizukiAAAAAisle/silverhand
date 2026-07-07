@@ -5,6 +5,11 @@ import {
   describeUnreachableReason,
   formatUptime,
 } from './host-status-presentation';
+import { computerCopy } from './computer-copy';
+import {
+  describeConnectionState,
+  type LocalHostStatus,
+} from './connection-state';
 
 /**
  * #task:808 slice 4 — pure mapper tests for `HostStatusResponse` →
@@ -22,7 +27,7 @@ function aHost(hostId = 'host-1'): {
 }
 
 describe('describeHostStatus', () => {
-  it('maps `available` to Ready + success tone', () => {
+  it('maps `available` to Connected + success tone', () => {
     const view = describeHostStatus({
       ...aHost(),
       availability: 'available',
@@ -36,7 +41,7 @@ describe('describeHostStatus', () => {
       agents: [],
     } as HostStatusResponse);
     expect(view).toEqual({
-      label: 'Ready',
+      label: 'Connected',
       tone: 'success',
       detail: null,
     });
@@ -77,13 +82,13 @@ describe('describeHostStatus', () => {
     expect(view.detail).toBe(describeUnreachableReason('daemon_unreachable'));
   });
 
-  it('maps `revoked` to Removed + muted tone (no `reason` is leaked)', () => {
+  it('maps `revoked` to Revoked + muted tone (no `reason` is leaked)', () => {
     const view = describeHostStatus({
       ...aHost(),
       availability: 'revoked',
       agents: [],
     } as HostStatusResponse);
-    expect(view.label).toBe('Removed');
+    expect(view.label).toBe('Revoked');
     expect(view.tone).toBe('muted');
     // Detail tells the user how to recover — Re-add language.
     expect(view.detail).toContain('Re-add');
@@ -137,4 +142,151 @@ describe('formatUptime', () => {
   it('clamps negative inputs to 0s rather than throwing or returning NaN', () => {
     expect(formatUptime(-1000)).toBe('0s');
   });
+});
+
+/**
+ * Copy-gate — §7.1 (line 820): internal concepts (`host` / `daemon` /
+ * `remote` / `connect-token` / bare `token`) must NEVER appear in
+ * user-facing prose, only inside the literal connection-command string.
+ *
+ * The prior guard only checked `describeUnreachableReason` labels, so
+ * jargon could (and did) leak into `detail` prose and the `computerCopy`
+ * lexicon untested (Alice: "测有洞 → 漏进 prose 测不出、还会 regress").
+ * This sweeps EVERY user-facing string — the whole `computerCopy` single
+ * source (including its function-valued entries), every
+ * `describeHostStatus` label + detail, AND every `describeConnectionState`
+ * label + detail (the local supervisor pill — a separate context that
+ * shares the same word source) — so a future jargon leak fails here
+ * instead of shipping. This is the production-path guard for the §7.1
+ * rule, not a spot-check.
+ */
+describe('copy-gate: no internal jargon in user-facing prose (§7.1)', () => {
+  const JARGON: Array<{ name: string; re: RegExp }> = [
+    { name: 'host', re: /\bhosts?\b/i },
+    { name: 'daemon', re: /\bdaemons?\b/i },
+    { name: 'remote', re: /\bremote\b/i },
+    { name: 'connect-token', re: /connect-tokens?/i },
+    { name: 'token', re: /\btokens?\b/i },
+  ];
+
+  // Representative hostname sample for function-valued copy — deliberately
+  // free of jargon substrings so a leak in the TEMPLATE (not the value)
+  // is what trips the gate.
+  const SAMPLE_HOST = 'MacStudio';
+
+  function collectUserFacingCopy(): Array<{ label: string; text: string }> {
+    const out: Array<{ label: string; text: string }> = [];
+
+    for (const [key, value] of Object.entries(computerCopy)) {
+      if (typeof value === 'string') {
+        out.push({ label: `computerCopy.${key}`, text: value });
+      }
+    }
+    // Function-valued copy: exercise every branch that produces prose.
+    out.push({
+      label: 'computerCopy.connectedTo',
+      text: computerCopy.connectedTo(SAMPLE_HOST),
+    });
+    out.push({
+      label: 'computerCopy.alreadyConnected(name)',
+      text: computerCopy.alreadyConnected(SAMPLE_HOST),
+    });
+    out.push({
+      label: 'computerCopy.alreadyConnected(null)',
+      text: computerCopy.alreadyConnected(null),
+    });
+
+    // Status-presentation prose: label + detail for every arm.
+    const arms = [
+      {
+        ...aHost(),
+        availability: 'available',
+        snapshot: {
+          os: 'macOS 14.5',
+          daemon_pid: 1,
+          daemon_version: '0.1.0',
+          started_at: 1,
+          uptime_ms: 1,
+        },
+        agents: [],
+      },
+      { ...aHost(), availability: 'disconnected', agents: [] },
+      { ...aHost(), availability: 'unreachable', reason: 'timeout', agents: [] },
+      {
+        ...aHost(),
+        availability: 'unreachable',
+        reason: 'daemon_unreachable',
+        agents: [],
+      },
+      {
+        ...aHost(),
+        availability: 'unreachable',
+        reason: 'protocol_error',
+        agents: [],
+      },
+      { ...aHost(), availability: 'revoked', agents: [] },
+    ] as HostStatusResponse[];
+    for (const arm of arms) {
+      const view = describeHostStatus(arm);
+      out.push({
+        label: `describeHostStatus(${arm.availability}).label`,
+        text: view.label,
+      });
+      if (view.detail) {
+        out.push({
+          label: `describeHostStatus(${arm.availability}).detail`,
+          text: view.detail,
+        });
+      }
+    }
+
+    // Local embedded-host supervisor pill (`connection-state.ts`): a
+    // separate bounded context, but its shared words are the SAME single
+    // source, so its prose must clear the same gate (Alice: the old gate
+    // didn't cover this file → jargon here would regress untested). Sweep
+    // every arm, including the `claimed` attach/remote branches.
+    const localArms: LocalHostStatus[] = [
+      'unclaimed',
+      'claimed',
+      'revoked',
+      'error',
+      'failed',
+    ];
+    const NOW = 1_700_000_100_000;
+    for (const status of localArms) {
+      for (const attachedAt of [null, 1_700_000_000_000] as const) {
+        for (const remoteAttached of [false, true] as const) {
+          const view = describeConnectionState(status, attachedAt, NOW, {
+            remoteAttached,
+          });
+          const suffix = `${status}/attach=${attachedAt !== null}/remote=${remoteAttached}`;
+          if (view.label) {
+            out.push({
+              label: `describeConnectionState(${suffix}).label`,
+              text: view.label,
+            });
+          }
+          if (view.detail) {
+            out.push({
+              label: `describeConnectionState(${suffix}).detail`,
+              text: view.detail,
+            });
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  it.each(collectUserFacingCopy())(
+    '$label has no internal jargon',
+    ({ label, text }) => {
+      for (const { name, re } of JARGON) {
+        expect(
+          re.test(text),
+          `${label} = "${text}" leaks internal term "${name}"`,
+        ).toBe(false);
+      }
+    },
+  );
 });

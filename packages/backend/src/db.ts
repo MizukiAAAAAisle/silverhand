@@ -14,8 +14,8 @@ import {
   CURRENT_SCHEMA_VERSION,
   MIN_SUPPORTED_SCHEMA_VERSION,
   migrations as defaultMigrations,
-} from '@silverhand/shared';
-import type { Migration } from '@silverhand/shared';
+} from '@silverhand/shared/db/migrations';
+import type { Migration } from '@silverhand/shared/db/migrations';
 
 export interface OpenDatabaseOptions {
   busyTimeoutMs?: number;

@@ -147,6 +147,69 @@ describe('HostRepo', () => {
     ).toEqual([a.id]);
   });
 
+  it('createUserInvite creates a pending user-managed remote host and ready placement excludes it until activation', () => {
+    const { db, viewerUserId } = openTestDb();
+    const repo = new HostRepo(db);
+
+    const pending = repo.createUserInvite({ userId: viewerUserId });
+
+    expect(pending).toMatchObject({
+      kind: 'remote',
+      user_id: viewerUserId,
+      installation_id: null,
+      activated_at: null,
+      finalized_at: null,
+      provisioning_source: 'user_invite',
+      revoked_at: null,
+    });
+    expect(repo.toDto(pending)).toMatchObject({
+      status: 'pending',
+      placeable: false,
+    });
+    expect(repo.listOwnedReadyForPlacement(viewerUserId).map(h => h.id)).not.toContain(
+      pending.id,
+    );
+
+    const activated = repo.markActivated(pending.id, 1_700_000_000_000);
+    expect(activated?.activated_at).toBe(1_700_000_000_000);
+    expect(activated?.finalized_at).toBeNull();
+    expect(activated?.last_seen_at).toBe(1_700_000_000_000);
+    expect(repo.toDto(activated!)).toMatchObject({
+      status: 'attached',
+      placeable: false,
+    });
+    expect(repo.listOwnedReadyForPlacement(viewerUserId).map(h => h.id)).not.toContain(
+      pending.id,
+    );
+
+    const finalized = repo.markFinalized(pending.id, 1_700_000_000_100);
+    expect(finalized?.finalized_at).toBe(1_700_000_000_100);
+    expect(repo.toDto(finalized!)).toMatchObject({
+      status: 'active',
+      placeable: true,
+    });
+    expect(repo.listOwnedReadyForPlacement(viewerUserId).map(h => h.id)).toContain(
+      pending.id,
+    );
+  });
+
+  it('claimOrCreateLocal marks desktop hosts as app_install and activated', () => {
+    const { db, viewerUserId } = openTestDb();
+    const repo = new HostRepo(db);
+    const claimed = repo.claimOrCreateLocal({
+      userId: viewerUserId,
+      installationId: 'install-app',
+    }).host;
+
+    expect(claimed.provisioning_source).toBe('app_install');
+    expect(claimed.activated_at).toEqual(expect.any(Number));
+    expect(claimed.finalized_at).toEqual(claimed.activated_at);
+    expect(repo.toDto(claimed)).toMatchObject({
+      status: 'active',
+      placeable: true,
+    });
+  });
+
   // Stage B.4: re-claim after revoke must succeed under the active-only
   // partial UNIQUE. The lookup path filters revoked rows so
   // `claimOrCreateLocal` reaches its `create` branch with a fresh row.

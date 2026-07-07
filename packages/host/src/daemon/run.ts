@@ -27,6 +27,7 @@ import {
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
+import type { DaemonHostConfig } from '@silverhand/shared';
 import { IntentDispatcher } from './dispatcher.js';
 import { DaemonServer } from './server.js';
 import { createDaemonLogger, type DaemonLogger } from './logger.js';
@@ -39,10 +40,14 @@ import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
 import { logDaemon } from './daemon-logging.js';
 import {
   defaultDaemonIdentityPath,
+  type DaemonIdentity,
   readOrCreateDaemonIdentity,
 } from './identity.js';
 import { OutboundSupervisor } from './outbound-supervisor.js';
-import type { OutboundCommandDispatcher } from './outbound-client.js';
+import {
+  OutboundDaemonClient,
+  type OutboundCommandDispatcher,
+} from './outbound-client.js';
 import { LocalOutboundFrameServer } from './local-outbound-frame-server.js';
 import {
   AgentMaterializeError,
@@ -81,9 +86,11 @@ import {
 } from './runtime-pidfiles.js';
 import type { SupervisorContract } from './supervisor-contract.js';
 import {
+  migrateLegacyDaemonProxyConfig,
   readDaemonProxyConfig,
   writeDaemonProxyConfig,
 } from './proxy-config.js';
+import { computerProxyConfigPath } from './computer-profile.js';
 import {
   resolveLocalSilverhandCliLauncher,
   type SilverhandCliLauncher,
@@ -103,6 +110,12 @@ export interface RunDaemonOptions {
    * only.
    */
   hostConfigPath?: string | null;
+  /**
+   * In-memory outbound host config for the public `connect` command. Unlike
+   * `hostConfigPath`, this does not write the connect token into daemon-owned
+   * config; the token lives in the user's copied command / service unit.
+   */
+  hostConfig?: DaemonHostConfig | null;
   /** Install SIGTERM/SIGINT handlers. Defaults to true. Tests pass
    *  false so a daemon running in-process doesn't intercept the test
    *  runner's own signal handling. */
@@ -131,11 +144,19 @@ export interface RunDaemonOptions {
    */
   agentHomeRootDir?: string | null;
   /**
-   * Daemon-local proxy config file. This is host-local truth: Desktop
-   * main edits it through host_proxy_config_* IPC and runtime spawn reads
-   * it locally. Backend/runtime_start never carries proxy bytes.
+   * Explicit daemon-local proxy config file. Standalone `connect --data-root`
+   * uses this to keep every runtime artifact under its chosen data root.
+   * Embedded desktop leaves it null so the daemon resolves the file from the
+   * current computer binding under `<silverhand>/computers/<profile>/`.
    */
   proxyConfigPath?: string | null;
+  /**
+   * Legacy app-managed proxy file (`<silverhand>/daemon/proxy-config.json`).
+   * When `proxyConfigPath` is null and a per-computer path can be resolved,
+   * daemon migrates this file once, then renames the legacy file aside. Runtime
+   * reads never permanently fall back to this path.
+   */
+  legacyProxyConfigPath?: string | null;
   /**
    * Host-local control-plane URL file for embedded desktop boots. Desktop
    * writes the finalized loopback URL after the embedded backend starts;
@@ -169,6 +190,10 @@ export interface RunDaemonOptions {
    * different file before boot.
    */
   daemonIdentityPath?: string | null;
+  /** Explicit process identity for public `connect` launches. This lets the
+   *  ready event report the target machine hostname as diagnostic metadata
+   *  without creating a desktop-style identity file. */
+  daemonIdentity?: DaemonIdentity | null;
   /**
    * D5.a-2 — optional local outbound frame socket path. When set
    * (non-null), the daemon starts a {@link LocalOutboundFrameServer} on
@@ -229,7 +254,7 @@ export interface RunDaemonOptions {
          * workspace registry; the factory threads them into `Supervisor`.
          */
         runtimeStartResolveDeps: RuntimeStartResolveDeps;
-        proxyConfigPath: string | null;
+        proxyConfigPath: () => string | null;
         localSilverhandCliLauncher: SilverhandCliLauncher | null;
         controlPlaneServerUrl: () => string | null;
       }) => SupervisorContract)
@@ -329,6 +354,32 @@ function readControlPlaneServerUrl(
   }
 }
 
+function resolveControlPlaneServerUrl(input: {
+  registryBinding: RegistryBinding | null;
+  controlPlaneServerUrlPath: string | null | undefined;
+  logger: DaemonLogger;
+}): string | null {
+  const daemonLocalUrl = readControlPlaneServerUrl(
+    input.controlPlaneServerUrlPath,
+    input.logger,
+  );
+  if (daemonLocalUrl) return daemonLocalUrl;
+
+  const origin = input.registryBinding?.server_origin ?? null;
+  if (!origin) return null;
+  try {
+    const url = new URL(origin);
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      return url.origin;
+    }
+  } catch {
+    // `local-embedded` is a workspace-registry namespace, not an HTTP
+    // control-plane origin. It must never reach SILVERHAND_SERVER_URL or
+    // daemon-side backend fetch URLs.
+  }
+  return null;
+}
+
 export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> {
   const startedAt = Date.now();
   const daemonInstanceId = buildDaemonInstanceId(startedAt);
@@ -341,9 +392,11 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
       ? defaultDaemonIdentityPath(runtimePidRootDir)
       : opts.daemonIdentityPath;
   const daemonIdentity =
-    daemonIdentityPath === null
-      ? undefined
-      : readOrCreateDaemonIdentity(daemonIdentityPath);
+    opts.daemonIdentity !== undefined
+      ? opts.daemonIdentity ?? undefined
+      : daemonIdentityPath === null
+        ? undefined
+        : readOrCreateDaemonIdentity(daemonIdentityPath);
   const helloResult = createDaemonHelloResult(daemonInstanceId, daemonIdentity);
   const readyEvent = (): Extract<EventFrame, { event: 'ready' }> => ({
     event: 'ready',
@@ -361,18 +414,15 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     });
   const localSilverhandCliLauncher = resolveLocalSilverhandCliLauncher();
   if (localSilverhandCliLauncher) {
-    logger.info(
-      {
-        command: localSilverhandCliLauncher.command,
-        args: localSilverhandCliLauncher.args,
-      },
-      'daemon local silverhand CLI launcher resolved',
-    );
+    logDaemon(logger, {
+      action: 'cli_launcher_resolved',
+      pid: process.pid,
+    });
   } else if (opts.supervisorFactory) {
-    logger.warn(
-      {},
-      'daemon local silverhand CLI launcher unavailable; server fallback launcher may be used',
-    );
+    logDaemon(logger, {
+      action: 'cli_launcher_unavailable',
+      pid: process.pid,
+    });
   }
 
   const claim = claimPidFile(opts.pidFilePath);
@@ -455,6 +505,12 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     readyEvent,
     dispatchCommand: command => commandForwarder(command),
   });
+  const directOutboundBinding = opts.hostConfig
+    ? {
+        server_origin: new URL(opts.hostConfig.server_url).origin,
+        host_id: opts.hostConfig.host_id,
+      }
+    : null;
   // D4.e-1 — workspace registry wiring. The registry is the daemon's
   // sole authority for host-local workspace paths (invariant I1). It is
   // namespaced per control-plane binding `{server_origin, host_id}`:
@@ -462,10 +518,13 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   //     the registry follows exactly the control plane the daemon is
   //     attached to. Before attach there is no binding → fail-closed.
   //   - Embedded (local outbound socket present): a fixed
-  //     `local-embedded` origin + the daemon's own identity id, since an
-  //     embedded daemon never attaches a WSS outbound client.
-  // The registry is built lazily per command because the standalone
-  // binding is only known after `host_outbound_attach`.
+  //     `local-embedded` origin, but the host id comes from the live
+  //     `daemon-config.json` binding once desktop has claimed the real
+  //     app-managed host. Before that attach lands we fall back to the
+  //     daemon bootstrap id (`local`) only as a pre-login placeholder.
+  // The registry is built lazily per command because the binding is only
+  // known after `host_outbound_attach` on both desktop and standalone
+  // late-attach paths.
   const workspaceRegistryStateDir =
     opts.testHooks?.workspaceRegistryStateDir ??
     (daemonIdentityPath !== null
@@ -482,14 +541,42 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     opts.testHooks?.silverhandStateRoot ?? dirname(workspaceRegistryStateDir);
   const legacyWorkspacesRoot = join(silverhandStateRoot, 'workspaces');
   const agentHomeRootDir = opts.agentHomeRootDir ?? undefined;
+  const fallbackEmbeddedHostId = daemonIdentity?.daemon_id ?? 'local';
+  const liveOutboundBinding = (): RegistryBinding | null =>
+    directOutboundBinding ?? outboundSupervisor.currentBinding();
   const resolveRegistryBinding = (): RegistryBinding | null => {
     if (localOutboundServer != null) {
       return {
         server_origin: 'local-embedded',
-        host_id: daemonIdentity?.daemon_id ?? 'local',
+        host_id: liveOutboundBinding()?.host_id ?? fallbackEmbeddedHostId,
       };
     }
-    return outboundSupervisor.currentBinding();
+    return liveOutboundBinding();
+  };
+  const resolveProxyConfigPath = (): string | null => {
+    if (opts.proxyConfigPath) return opts.proxyConfigPath;
+    const binding = resolveRegistryBinding();
+    if (binding == null) return null;
+    const targetPath = computerProxyConfigPath(binding, silverhandStateRoot);
+    if (
+      localOutboundServer != null &&
+      binding.host_id !== fallbackEmbeddedHostId
+    ) {
+      migrateLegacyDaemonProxyConfig({
+        legacyPath: computerProxyConfigPath(
+          { host_id: fallbackEmbeddedHostId },
+          silverhandStateRoot,
+        ),
+        targetPath,
+        logger,
+      });
+    }
+    migrateLegacyDaemonProxyConfig({
+      legacyPath: opts.legacyProxyConfigPath,
+      targetPath,
+      logger,
+    });
+    return targetPath;
   };
   // D4.e-6 — runtime_start path resolution deps. The wire options are
   // semantic-only; the supervisor resolves regular-workspace paths via the
@@ -540,11 +627,14 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         runtimePidRootDir,
         daemonSocketPath: opts.socketPath,
         runtimeStartResolveDeps,
-        proxyConfigPath: opts.proxyConfigPath ?? null,
+        proxyConfigPath: resolveProxyConfigPath,
         localSilverhandCliLauncher,
         controlPlaneServerUrl: () =>
-          outboundSupervisor.currentBinding()?.server_origin ??
-          readControlPlaneServerUrl(opts.controlPlaneServerUrlPath, logger),
+          resolveControlPlaneServerUrl({
+            registryBinding: resolveRegistryBinding(),
+            controlPlaneServerUrlPath: opts.controlPlaneServerUrlPath,
+            logger,
+          }),
       })
     : undefined;
   const dispatcher = new IntentDispatcher({
@@ -556,14 +646,15 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     hostOutboundDetachHandler: () => outboundSupervisor.detach(),
     hostOutboundReloadHandler: () => outboundSupervisor.reload(),
     hostProxyConfigGetHandler: () => ({
-      config: readDaemonProxyConfig(opts.proxyConfigPath ?? null, logger),
+      config: readDaemonProxyConfig(resolveProxyConfigPath(), logger),
     }),
     hostProxyConfigSetHandler: params => {
-      if (!opts.proxyConfigPath) {
+      const proxyConfigPath = resolveProxyConfigPath();
+      if (!proxyConfigPath) {
         throw new Error('host proxy config path is not configured');
       }
       return {
-        config: writeDaemonProxyConfig(opts.proxyConfigPath, params),
+        config: writeDaemonProxyConfig(proxyConfigPath, params),
       };
     },
     // D4.d D2 — server↔daemon formal semantics. `materializeAgent`
@@ -757,6 +848,14 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // and standalone are one dispatch path, not two protocols. Constructed
   // only when a socket path is supplied (embedded mode); standalone and
   // protocol-only tests leave it null.
+  const directOutboundClient = opts.hostConfig
+    ? new OutboundDaemonClient({
+        config: opts.hostConfig,
+        logger,
+        readyEvent,
+        dispatchCommand: command => commandForwarder(command),
+      })
+    : null;
   const localOutboundServer =
     opts.localOutboundSocketPath != null
       ? new LocalOutboundFrameServer({
@@ -773,6 +872,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   broadcaster = event => {
     server.broadcast(event);
     outboundSupervisor.sendEvent(event);
+    directOutboundClient?.sendEvent(event);
     localOutboundServer?.broadcast(event);
   };
 
@@ -855,6 +955,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
       );
     }
   }
+  directOutboundClient?.start();
 
   let stopped = false;
   const stop = async (reason: string): Promise<void> => {
@@ -863,6 +964,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     logDaemon(logger, { action: 'shutting_down', pid: process.pid });
     outboundSupervisor.sendEvent({ event: 'shutting_down', reason });
     outboundSupervisor.stop(reason);
+    directOutboundClient?.stop(reason);
     if (localOutboundServer) {
       try {
         await localOutboundServer.stop();

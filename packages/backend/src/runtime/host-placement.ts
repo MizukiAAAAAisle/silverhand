@@ -1,6 +1,6 @@
 import type { HostRow } from '@silverhand/shared';
 import type { AgentRepo } from '../repos/agent-repo.js';
-import type { HostRepo } from '../repos/host-repo.js';
+import { isHostReadyForPlacement, type HostRepo } from '../repos/host-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import { RuntimeHostPlacementError } from '../host-placement-errors.js';
 
@@ -11,6 +11,7 @@ export interface RuntimeHostPlacement {
 
 export interface RuntimeHostPlacementControl extends RuntimeHostPlacement {
   assertOwnedActiveHost(hostId: string, userId: string): HostRow;
+  resolveOwnedReadyForPlacement(userId: string): HostRow;
   resolveOwnedLocalForUser(userId: string): HostRow;
   /**
    * D4.c C1 — enumeration of active local hosts owned by a user
@@ -46,6 +47,12 @@ export class RuntimeHostPlacementResolver implements RuntimeHostPlacementControl
       throw new RuntimeHostPlacementError(
         'host_revoked',
         `host ${hostId} has been revoked`,
+      );
+    }
+    if (!isHostReadyForPlacement(host)) {
+      throw new RuntimeHostPlacementError(
+        'host_pending_attach',
+        `host ${hostId} has not completed its first daemon attachment`,
       );
     }
     return host;
@@ -100,6 +107,23 @@ export class RuntimeHostPlacementResolver implements RuntimeHostPlacementControl
     return hosts[0]!;
   }
 
+  resolveOwnedReadyForPlacement(userId: string): HostRow {
+    const hosts = this.deps.hosts.listOwnedReadyForPlacement(userId);
+    if (hosts.length === 0) {
+      throw new RuntimeHostPlacementError(
+        'local_host_unbound',
+        `user ${userId} has no active host`,
+      );
+    }
+    if (hosts.length > 1) {
+      throw new RuntimeHostPlacementError(
+        'local_host_ambiguous',
+        `user ${userId} has ${hosts.length} active hosts; caller must pick one explicitly`,
+      );
+    }
+    return hosts[0]!;
+  }
+
   listOwnedActiveLocalForUser(userId: string): HostRow[] {
     return this.deps.hosts.listOwnedActiveLocalForUser(userId);
   }
@@ -149,6 +173,10 @@ export class DisabledRuntimeHostPlacement implements RuntimeHostPlacementControl
 
   resolveOwnedLocalForUser(userId: string): HostRow {
     throw disabled(`user ${userId} has no local runtime host in standalone mode`);
+  }
+
+  resolveOwnedReadyForPlacement(userId: string): HostRow {
+    throw disabled(`user ${userId} has no runtime host in standalone mode`);
   }
 
   listOwnedActiveLocalForUser(_userId: string): HostRow[] {

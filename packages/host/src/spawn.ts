@@ -210,6 +210,8 @@ export interface SpawnDaemonOptions {
   agentHomeRootDir?: string | null;
   /** Daemon-local runtime proxy config file. */
   proxyConfigPath?: string | null;
+  /** Legacy app-managed proxy config file to migrate into the per-computer profile. */
+  legacyProxyConfigPath?: string | null;
   /** Host-local control-plane URL file for runtime CLI env injection. */
   controlPlaneServerUrlPath?: string | null;
   /** Mirror daemon log lines to stderr too. Default true in dev. */
@@ -388,6 +390,9 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
         : []),
       ...(opts.proxyConfigPath
         ? ['--proxy-config-path', opts.proxyConfigPath]
+        : []),
+      ...(opts.legacyProxyConfigPath
+        ? ['--legacy-proxy-config-path', opts.legacyProxyConfigPath]
         : []),
       ...(opts.controlPlaneServerUrlPath
         ? ['--control-plane-server-url-path', opts.controlPlaneServerUrlPath]

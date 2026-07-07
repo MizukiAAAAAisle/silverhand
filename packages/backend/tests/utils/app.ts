@@ -121,6 +121,8 @@ export class FakeConversationManager implements AgentRuntimeHost {
 
   /** Override to make `.start` reject. */
   startError: Error | null = null;
+  /** Override to make `.stop` reject after recording the attempted stop. */
+  stopError: Error | null = null;
   /**
    * D4.d D3 round-1 P1.4 — inject a thrown error from
    * `deliverMessage` to exercise the route's post-commit
@@ -173,6 +175,7 @@ export class FakeConversationManager implements AgentRuntimeHost {
     directive?: string,
   ): Promise<void> {
     this.stops.push({ conversationId, agentId, mode, directive });
+    if (this.stopError) throw this.stopError;
   }
   async clearSession(
     conversationId: string,

@@ -476,6 +476,12 @@
   --warning: #8A5A00;             /* deep amber — ~5.56:1 on bg-base, AA
                                      (was `#B07820` at only 3.55:1 — fail) */
   --warning-soft: rgba(138, 90, 0, 0.16);
+  /* #task:1380 — soft warning CALLOUT surface (delete-cascade impact block).
+     `--warning-soft` is the deep-amber `--warning` at 16% over the ground,
+     which reads as a muddy olive when used as a large fill. This is a clean,
+     pale poster yellow that stays a gentle caution on the white dialog
+     (shiki 2026-07-07). */
+  --warning-surface: #FDF3C2;
   --error: #C8003C;               /* deep red — ~5.4:1 on bg-base, AA */
   --error-soft: rgba(200, 0, 60, 0.16);
 

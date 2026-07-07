@@ -138,6 +138,36 @@ export class HostTokenService {
     );
   }
 
+  rotateHostTokenImmediate(input: {
+    hostId: string;
+    now?: number;
+  }): IssuedHostToken {
+    const now = input.now ?? Date.now();
+    this.assertHostCanReceiveCredential(input.hostId);
+    return this.db.transaction(() => {
+      this.assertHostCanReceiveCredential(input.hostId);
+      const issued = this.insertHostToken({
+        hostId: input.hostId,
+        hostToken: randomBytes(32).toString('base64url'),
+        kind: 'long_lived',
+        expiresAt: null,
+        consumedAt: null,
+      });
+      this.db
+        .prepare(
+          `UPDATE host_credentials
+              SET revoked_at = ?,
+                  consumed_at = COALESCE(consumed_at, ?)
+            WHERE host_id = ?
+              AND id <> ?
+              AND kind = 'long_lived'
+              AND revoked_at IS NULL`,
+        )
+        .run(now, now, input.hostId, issued.credential.id);
+      return issued;
+    })();
+  }
+
   revokeCredential(credentialId: string, revokedAt = Date.now()): boolean {
     const result = this.db
       .prepare(

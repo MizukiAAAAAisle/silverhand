@@ -77,7 +77,7 @@ function readinessResponse(ctx: BackendContext): {
       listen_ready: boolean;
       db_writable: boolean;
       /**
-       * Standalone-only check: present only when
+       * Standalone readiness check: present only when
        * `deployment_mode === 'standalone'`. Reports whether the
        * backend's `OutboundRuntimeEventFanout` was constructed and
        * registered as the `HostWsServer.eventSink`. This is a
@@ -86,10 +86,11 @@ function readinessResponse(ctx: BackendContext): {
        * Daemon-side attachment is reported through
        * `HostWsServerController.getAttachment(hostId)` (D3.a Commit 1).
        *
-       * Embedded mode never wires this fanout (runtime events flow
-       * over Unix-socket IPC) and the field is OMITTED from `checks`
-       * to avoid the false impression that embedded readiness depends
-       * on it.
+       * Embedded also constructs the fanout, but has two transports:
+       * the co-located app-managed host uses Unix socket while
+       * user-managed daemon computers attach over WS. The field is
+       * OMITTED from embedded `checks` to avoid implying daemon
+       * attachment is a boot-readiness gate.
        */
       outbound_event_fanout_installed?: boolean;
     };
@@ -108,11 +109,9 @@ function readinessResponse(ctx: BackendContext): {
   // wired before they can correctly route daemon events to clients;
   // missing it is a config bug, not a transient condition, so /readyz
   // must fail-loud at 503 to keep orchestrators from rolling forward.
-  // Embedded backends intentionally never construct this fanout
-  // (runtime events flow over Unix-socket IPC), so the check is OMITTED
-  // for embedded mode rather than included-and-defaulted-true — keeping
-  // it out of the response makes the mode boundary explicit to anyone
-  // reading the JSON.
+  // Embedded mode also constructs the shared fanout, but readiness must
+  // not be read as daemon attachment for either the local Unix-socket
+  // host or user-managed WS hosts, so the check remains omitted there.
   const checks: typeof baseChecks & { outbound_event_fanout_installed?: boolean } =
     ctx.deploymentMode === 'standalone'
       ? {
@@ -277,7 +276,11 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   installPublicBearerMiddleware(app, ctx, {
     // Liveness probe stays open so a process supervisor can health-check
     // without holding a user session token. `/readyz` is outside `/api/*`.
-    allowlist: [apiPaths.health, apiPaths.serverInfo],
+    allowlist: [
+      apiPaths.health,
+      apiPaths.serverInfo,
+      apiPaths.hostConnectTokenResolve,
+    ],
   });
   installPublicPrincipalMiddleware(app);
   // Registration gate: after the public bearer middleware authenticates
@@ -418,6 +421,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       hosts,
       hostTokens,
       agents,
+      workspaces,
+      conversations,
+      conversationInboxes,
       requireSessionBearerUser,
       standaloneMode,
     }),

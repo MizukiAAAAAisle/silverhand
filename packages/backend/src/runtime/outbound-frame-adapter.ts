@@ -153,3 +153,62 @@ export class StandaloneOutboundFrameAdapter implements OutboundFrameAdapter {
     // design; ownership stays with the bootstrap.
   }
 }
+
+/**
+ * Composite adapter for deployments that can have more than one outbound
+ * transport live at the same time. Embedded desktop now has exactly this shape:
+ * the app-managed default computer is reached through the local Unix adapter,
+ * while user-managed computers launched by `silverhand-daemon connect` attach
+ * to the same backend over WS. Callers must still see one
+ * {@link OutboundFrameAdapter} port and route by host id, not by provisioning
+ * source.
+ */
+export class CompositeOutboundFrameAdapter implements OutboundFrameAdapter {
+  constructor(private readonly adapters: readonly OutboundFrameAdapter[]) {}
+
+  activeConnectionCount(): number {
+    return this.adapters.reduce(
+      (count, adapter) => count + adapter.activeConnectionCount(),
+      0,
+    );
+  }
+
+  connectedHostIds(): string[] {
+    return [...new Set(this.adapters.flatMap(adapter => adapter.connectedHostIds()))];
+  }
+
+  connectionIdForHost(hostId: string): string | null {
+    return this.findLiveAdapter(hostId)?.connectionIdForHost(hostId) ?? null;
+  }
+
+  getAttachment(hostId: string): HostWsAttachment | null {
+    return this.findLiveAdapter(hostId)?.getAttachment(hostId) ?? null;
+  }
+
+  sendCommand<K extends OutboundServerCommandKind>(
+    hostId: string,
+    kind: K,
+    params: OutboundServerCommandParams<K>,
+    opts?: { timeoutMs?: number; expectedConnectionId?: string },
+  ): Promise<OutboundServerCommandResult<K>> {
+    const adapter = this.findLiveAdapter(hostId);
+    if (!adapter) {
+      return Promise.reject(
+        new HostWsCommandTransportError(
+          'transport_no_connection',
+          `no outbound transport is connected for host ${hostId}`,
+          { hostId, commandKind: kind },
+        ),
+      );
+    }
+    return adapter.sendCommand(hostId, kind, params, opts);
+  }
+
+  async close(): Promise<void> {
+    await Promise.all(this.adapters.map(adapter => adapter.close()));
+  }
+
+  private findLiveAdapter(hostId: string): OutboundFrameAdapter | null {
+    return this.adapters.find(adapter => adapter.connectionIdForHost(hostId) !== null) ?? null;
+  }
+}

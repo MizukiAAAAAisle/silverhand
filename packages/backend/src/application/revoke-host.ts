@@ -12,7 +12,8 @@ import type { HostTokenService } from '../auth/host-token.js';
  * soft-deletes the host row (only when not already revoked, so a re-revoke does
  * not advance the tombstone) and ALWAYS sweeps the host's active credentials
  * (reconciling a half-failed prior run), a post-commit refetch, and the
- * post-commit best-effort WS disconnect. It does NOT cascade-delete agents /
+ * post-commit best-effort daemon disconnect when the host is on the WS
+ * transport. It does NOT cascade-delete agents /
  * workspaces / conversations — runtime placement is the boundary that fails
  * closed afterwards.
  *
@@ -23,9 +24,11 @@ import type { HostTokenService } from '../auth/host-token.js';
  * The disconnect is a post-commit, best-effort effect (spec §2/§2.1): it runs
  * AFTER the commit so the credential is already revoked when the daemon's
  * reconnect reaches upgrade-auth, and a failure is logged + swallowed — it is
- * optimistic UX, never the authoritative revoke effect. It is a WS-only concern
- * (deliberately NOT part of `OutboundFrameAdapter`); in embedded mode there is
- * no outbound WS attachment, so `disconnectHost` is a harmless no-op.
+ * optimistic UX, never the authoritative revoke effect. It is deliberately NOT
+ * part of `OutboundFrameAdapter`: revoke is credential/lifecycle control, while
+ * the adapter is the command/data-plane port. Co-located app-managed embedded
+ * hosts have no host-WS connection to close; user-managed revoke is rejected at
+ * the route before reaching this use case.
  *
  * A post-commit refetch returning null is treated as a defensive invariant
  * breach — a soft-delete is an UPDATE, so the row is always present — and throws
@@ -86,9 +89,9 @@ export function revokeHost(
     throw new Error(`HostRepo.get returned null for revoked host ${cmd.hostId}`);
   }
 
-  // Post-commit best-effort WS disconnect (spec §2.1): runs AFTER the commit so
+  // Post-commit best-effort daemon disconnect (spec §2.1): runs AFTER the commit so
   // the credential is already revoked when the daemon's reconnect arrives at
-  // upgrade-auth. WS-only (embedded has no outbound attachment → no-op). Never
+  // upgrade-auth. Only WS-attached hosts have a live connection to close; never
   // the authoritative revoke effect — log and swallow.
   const wsController = ctx.hostWsController?.();
   if (wsController) {

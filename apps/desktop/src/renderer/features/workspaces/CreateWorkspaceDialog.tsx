@@ -4,7 +4,6 @@ import type { AgentDto, CreateWorkspaceInput, UserDto } from '@silverhand/shared
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -12,7 +11,13 @@ import {
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { describeApiError } from '@/lib/api-error-message';
-import { useHostProvenanceGate, useHostsQuery } from '@/features/hosts/hooks';
+import {
+  useHostAvailabilityMap,
+  useHostProvenanceGate,
+  useHostsQuery,
+} from '@/features/hosts/hooks';
+import { isComputerAvailable } from '@/features/hosts/host-display';
+import { ComputerPicker } from '@/features/hosts/ComputerPicker';
 import { useAgents } from '@/features/agents/hooks';
 import {
   isBackendUnreachable,
@@ -27,18 +32,6 @@ interface CreateWorkspaceDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated?: (created: { workspaceId: string; channelId: string }) => void;
-}
-
-const CHIP_BASE =
-  'rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs transition-colors ';
-
-function chipClass(isSelected: boolean): string {
-  return (
-    CHIP_BASE +
-    (isSelected
-      ? 'border-text-primary bg-[var(--bg-row-selected)] text-text-primary'
-      : 'border-border-subtle text-text-primary hover:border-border')
-  );
 }
 
 export function CreateWorkspaceDialog({
@@ -68,29 +61,41 @@ export function CreateWorkspaceDialog({
   const hostProvenance = useHostProvenanceGate();
   const hostsQuery = useHostsQuery();
 
-  // Active local hosts are the only valid workspace storage targets. The
-  // backend's fallback uses the same 0/1/N set; when N>=2 it fails with
-  // `local_host_ambiguous`, so the UI must carry the chosen host explicitly.
-  const activeLocalHosts = useMemo(
-    () =>
-      (hostsQuery.data?.hosts ?? []).filter(
-        host => host.kind === 'local' && host.revoked_at === null,
-      ),
+  // Placement candidates come straight from the backend's `placeable`
+  // predicate — one kind-independent eligibility source (doc §5.4). The picker
+  // is a Select dropdown shown whenever any placeable computer exists.
+  const placeableHosts = useMemo(
+    () => (hostsQuery.data?.hosts ?? []).filter(host => host.placeable),
     [hostsQuery.data],
   );
-  const showHostPicker = activeLocalHosts.length >= 2;
+  const placeableHostIds = useMemo(
+    () => placeableHosts.map(host => host.id),
+    [placeableHosts],
+  );
+  // Second placement axis: a `placeable` computer can only store a workspace if
+  // its daemon is online right now. Probe live availability per candidate;
+  // offline/unreachable ones stay visible but disabled in the picker, and only
+  // `available` computers count toward the default + submit check (#task:1359).
+  const { availabilityById, allSettled } = useHostAvailabilityMap(placeableHostIds);
+  const availableHosts = useMemo(
+    () =>
+      placeableHosts.filter(host =>
+        isComputerAvailable(availabilityById.get(host.id)),
+      ),
+    [placeableHosts, availabilityById],
+  );
+  // The computer picker is always present (0 available → nothing to pick,
+  // 1 → preselected, several → no default so the user must choose). Gate the
+  // default on `allSettled` (Cindy P1): staggered probe resolution must not
+  // auto-select a transient single `available`.
   const defaultHostId =
-    hostProvenance.currentLocalHost &&
-    hostProvenance.currentLocalHost.kind === 'local' &&
-    hostProvenance.currentLocalHost.revoked_at === null
-      ? hostProvenance.currentLocalHost.id
+    allSettled && availableHosts.length === 1
+      ? (availableHosts[0]?.id ?? null)
       : null;
 
-  // Decoupled from picker visibility: send the chosen host when the picker is
-  // shown, else the current desktop host's id (when known). Omitted only for a
-  // pure-remote client with no bound local host, where the backend's 0/1/N
-  // fallback remains the source of truth.
-  const effectiveHostId = showHostPicker ? selectedHostId : defaultHostId;
+  // The picker is the single source of the chosen host; when no placeable
+  // computer exists `selectedHostId` stays null and the backend resolves.
+  const effectiveHostId = selectedHostId;
 
   // Local desktop host → the user can pick a real folder on this machine.
   // Another host → no native picker; default to that daemon's managed path,
@@ -103,8 +108,13 @@ export function CreateWorkspaceDialog({
       previousHostIdRef.current = undefined;
       return;
     }
-    setSelectedHostId(prev => prev ?? defaultHostId);
-  }, [open, defaultHostId]);
+    // Preselect the sole available host; drop a prior pick that dropped offline
+    // while the dialog is open, falling back to the default.
+    const availableIds = new Set(availableHosts.map(host => host.id));
+    setSelectedHostId(prev =>
+      prev && availableIds.has(prev) ? prev : defaultHostId,
+    );
+  }, [open, defaultHostId, availableHosts]);
 
   useEffect(() => {
     if (!open) return;
@@ -196,9 +206,19 @@ export function CreateWorkspaceDialog({
       setError('Please enter a Workspace name');
       return;
     }
-    if (showHostPicker && !selectedHostId) {
-      setError('Please choose which computer stores this workspace');
-      return;
+    if (placeableHosts.length > 0) {
+      if (!allSettled) {
+        setError('Checking which computers are online…');
+        return;
+      }
+      if (availableHosts.length === 0) {
+        setError('No computer is online right now. Connect one and try again.');
+        return;
+      }
+      if (!selectedHostId || !availableHosts.some(h => h.id === selectedHostId)) {
+        setError('Please choose an online computer to store this workspace');
+        return;
+      }
     }
     try {
       const input: CreateWorkspaceInput = {
@@ -227,17 +247,30 @@ export function CreateWorkspaceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>New Workspace</DialogTitle>
-          <DialogDescription>
-            A shared space backed by a local project directory.
-          </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ch-name">Name</Label>
+            <Label htmlFor="ch-host" required className="font-semibold">
+              Stored on
+            </Label>
+            <ComputerPicker
+              id="ch-host"
+              hosts={placeableHosts}
+              availabilityById={availabilityById}
+              value={selectedHostId}
+              onChange={setSelectedHostId}
+              ariaLabel="Stored on"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="ch-name" required className="font-semibold">
+              Name
+            </Label>
             <Input
               id="ch-name"
               value={name}
@@ -247,32 +280,10 @@ export function CreateWorkspaceDialog({
             />
           </div>
 
-          {showHostPicker ? (
-            <div className="flex flex-col gap-1.5">
-              <Label>Stored on</Label>
-              <div className="flex flex-wrap gap-2">
-                {activeLocalHosts.map(host => {
-                  const isSelected = selectedHostId === host.id;
-                  return (
-                    <button
-                      key={host.id}
-                      type="button"
-                      onClick={() => setSelectedHostId(host.id)}
-                      className={chipClass(isSelected)}
-                    >
-                      {host.display_label ?? host.name}
-                    </button>
-                  );
-                })}
-              </div>
-              <span className="text-xs text-text-muted">
-                Initial agents must live on the same computer as the workspace.
-              </span>
-            </div>
-          ) : null}
-
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ch-path">Working directory (optional)</Label>
+            <Label htmlFor="ch-path" className="font-semibold">
+              Working directory (optional)
+            </Label>
             {canPickLocalFolder ? (
               // Local host: native folder picker is the primary affordance;
               // the typed input mirrors the picked path and stays editable.
@@ -284,7 +295,7 @@ export function CreateWorkspaceDialog({
                   id="ch-path"
                   value={workspacePath}
                   onChange={e => setWorkspacePath(e.target.value)}
-                  placeholder="Leave empty to let this host's daemon create it automatically under its managed directory"
+                  placeholder="/path/to/project"
                   className="font-mono text-xs"
                 />
                 <Button
@@ -309,29 +320,23 @@ export function CreateWorkspaceDialog({
                     className="self-start text-xs text-text-muted underline underline-offset-2"
                     onClick={() => setShowAdvancedPath(true)}
                   >
-                    Use host-managed directory (default) · Advanced: specify a path manually
+                    Set a path manually
                   </button>
                 ) : (
-                  <>
-                    <Input
-                      id="ch-path"
-                      value={workspacePath}
-                      onChange={e => setWorkspacePath(e.target.value)}
-                      placeholder="Absolute path on this host (validated by its daemon)"
-                      className="font-mono text-xs"
-                    />
-                    <span className="text-xs text-text-muted">
-                      Remote / sandbox hosts can't be browsed with the local
-                      picker; leave empty to use the daemon-managed directory.
-                    </span>
-                  </>
+                  <Input
+                    id="ch-path"
+                    value={workspacePath}
+                    onChange={e => setWorkspacePath(e.target.value)}
+                    placeholder="Absolute path on this host"
+                    className="font-mono text-xs"
+                  />
                 )}
               </>
             )}
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ch-add-member">
+            <Label htmlFor="ch-add-member" className="font-semibold">
               Initial members
               <span className="ml-1 text-text-muted">
                 ({selectedMembers.length} / {memberCandidates.length})
@@ -339,8 +344,7 @@ export function CreateWorkspaceDialog({
             </Label>
             {memberCandidates.length === 0 ? (
               <span className="text-xs text-text-muted">
-                No members available to add yet. You can add them later from the
-                Members panel.
+                No members available yet.
               </span>
             ) : (
               <MemberPicker
@@ -374,6 +378,7 @@ export function CreateWorkspaceDialog({
                 createWorkspace.isPending
                 || hostsQuery.isLoading
                 || hostProvenance.isLoading
+                || (placeableHosts.length > 0 && !allSettled)
               }
             >
               {createWorkspace.isPending ? 'Creating…' : 'Create'}

@@ -623,7 +623,7 @@ export async function createAgent(
   try {
     resolvedHostId = input.host_id
       ? ctx.placement.assertOwnedActiveHost(input.host_id, creatorUserId).id
-      : ctx.placement.resolveOwnedLocalForUser(creatorUserId).id;
+      : ctx.placement.resolveOwnedReadyForPlacement(creatorUserId).id;
   } catch (err) {
     return { kind: 'placementError', err };
   }

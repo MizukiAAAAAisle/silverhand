@@ -70,9 +70,9 @@ export function Combobox({
       <Popover.Anchor asChild>
         <div
           className={cn(
-            'flex items-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-transparent bg-transparent transition-colors',
-            'hover:border-border-subtle hover:bg-bg-base/40',
-            'focus-within:border-border focus-within:bg-bg-floating focus-within:ring-2 focus-within:ring-border-focus',
+            'flex items-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating transition-colors',
+            'hover:border-[color:var(--border-control-hover)]',
+            'focus-within:border-border-focus',
             className,
           )}
         >

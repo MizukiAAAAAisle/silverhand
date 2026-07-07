@@ -9,6 +9,9 @@
     ".": "./src/index.ts",
     "./api": "./src/api/index.ts",
     "./db": "./src/db/index.ts",
+    "./db/baseline-schema": "./src/db/baseline-schema.ts",
+    "./db/migrations": "./src/db/migrations.ts",
+    "./db/schema": "./src/db/schema.ts",
     "./driver": "./src/driver/index.ts"
   },
   "scripts": {

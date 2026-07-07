@@ -11,6 +11,11 @@ export const apiPaths = {
    *  presents `Authorization: Bearer <host_token>` during upgrade;
    *  this is host-token auth, not a user-session route. */
   hostConnect: '/api/hosts/connect',
+  /** Resolve a reveal-once user-managed connect token to the server-side host
+   *  id. The id is not present in the copied command; the daemon calls this
+   *  with `Authorization: Bearer <connect-token>` before opening the outbound
+   *  websocket, then still authenticates the websocket with the same token. */
+  hostConnectTokenResolve: '/api/hosts/connect-token/resolve',
   hostClaimOrCreate: '/api/hosts/claim-or-create',
   /** Soft-delete a host the caller owns (Stage B.4). Sets
    *  `hosts.revoked_at` and bulk-revokes every active row in
@@ -29,14 +34,37 @@ export const apiPaths = {
    *  proxy, and the desktop IPC strips the token from any value that
    *  crosses back to the renderer. */
   hostRotateToken: (id: string) => `/api/hosts/${id}/rotate-token`,
+  /** User-managed computer connect-token rotation. This is renderer-visible:
+   *  the cleartext connect token is reveal-once in the response and must never
+   *  be recoverable later. Desktop app-managed hosts continue using
+   *  `hostRotateToken`, whose cleartext host_token belongs to Electron main. */
+  hostRotateConnectToken: (id: string) => `/api/hosts/${id}/connect-token/rotate`,
+  /** Disconnect the currently live daemon connection for a user-managed
+   *  computer without rotating or revoking its credential. The same
+   *  connection command remains valid and can reconnect later. */
+  hostDisconnect: (id: string) => `/api/hosts/${id}/disconnect`,
   /** v36 (#task:808): rename a host the caller owns. Body =
    *  `UpdateHostInput { display_label }`. Only `display_label` is
    *  mutable today; `name` is the stable identifier set at claim time. */
   host: (id: string) => `/api/hosts/${id}`,
+  /** Delete an empty user-managed computer. Non-empty computers are rejected
+   *  with `has_dependents`; unfinalized Add-computer drafts are naturally empty
+   *  and use this same hard-delete path. */
+  hostDelete: (id: string) => `/api/hosts/${id}`,
+  /** Legacy alias for the Add-computer modal cancel path. */
+  hostCancelPending: (id: string) => `/api/hosts/${id}`,
   /** v36 (#task:808): dynamic host snapshot (OS / daemon version /
    *  registered agents + online state). Always HTTP 200 with tagged
    *  `availability` once owner ACL passes. 404 for missing / cross-user. */
   hostStatus: (id: string) => `/api/hosts/${id}/status`,
+  /** Per-computer runtime availability catalog. The target daemon probes its
+   *  own host-local resolver; server only dispatches and returns the result.
+   *  `?force=1` bypasses the short resolver cache for manual refresh and
+   *  create-time hard-block checks. */
+  hostRuntimeCatalog: (id: string) => `/api/hosts/${id}/runtime-catalog`,
+  /** Host-local proxy config. Server never stores proxy bytes; it dispatches
+   *  get/set to the live daemon for the target computer. */
+  hostProxyConfig: (id: string) => `/api/hosts/${id}/proxy-config`,
 
   // agents
   agents: '/api/agents',
@@ -70,7 +98,6 @@ export const apiPaths = {
   agentProfileMcpProbe: (id: string) => `/api/agents/${id}/profile/mcp/probe`,
   agentRuntimeState: (id: string) => `/api/agents/${id}/runtime-state`,
   agentStop: (id: string) => `/api/agents/${id}/stop`,
-  agentDeleteImpact: (id: string) => `/api/agents/${id}/delete-impact`,
   /** Public avatar fetch for any agent. Returns the blob bytes with a
    *  long immutable Cache-Control header (cache-busted via the
    *  `?v=updated_at` query param baked into `AgentDto.avatar_url`).

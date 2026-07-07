@@ -5,15 +5,21 @@ import {
 } from '../protocol.js';
 import { DEFAULT_DAEMON_IDENTITY, type DaemonIdentity } from './identity.js';
 
+declare const __SILVERHAND_DAEMON_VERSION__: string | undefined;
+
 /**
  * The version label baked into daemon liveness and handshake responses.
  * Protocol compatibility is gated by HOST_PROTOCOL_VERSION; this string
  * is diagnostic release/build identity.
  *
- * Kept in its own module so daemon entry, dispatcher, and spawn paths
- * import the same literal without one pulling in another daemon module.
+ * Published daemon bundles inject this from the `@silverhand-ai/daemon`
+ * package version at build time. Dev/test runs fall back to an explicit
+ * dev label rather than a stale hand-written release number.
  */
-export const DAEMON_VERSION = '0.1.0';
+export const DAEMON_VERSION =
+  typeof __SILVERHAND_DAEMON_VERSION__ === 'string'
+    ? __SILVERHAND_DAEMON_VERSION__
+    : '0.0.0-dev';
 
 /**
  * Construct a `HelloResult` payload bound to a specific daemon

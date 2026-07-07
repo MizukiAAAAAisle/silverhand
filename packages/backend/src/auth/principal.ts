@@ -51,6 +51,7 @@ function skipsPublicSetupGates(path: string): boolean {
   return (
     path === apiPaths.health
     || path === apiPaths.serverInfo
+    || path === apiPaths.hostConnectTokenResolve
     || path === probePaths.readyz
     || path.startsWith('/auth/')
   );

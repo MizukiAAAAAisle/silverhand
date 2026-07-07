@@ -35,10 +35,20 @@
  *   |------------|------------|--------------------|----------|
  *   | unclaimed  | (n/a)      | (no pill rendered) | hidden   |
  *   | claimed    | null       | Connecting…        | accent   |
- *   | claimed    | number     | Ready              | success  |
- *   | revoked    | (n/a)      | Removed            | muted    |
+ *   | claimed    | number     | Connected          | success  |
+ *   | revoked    | (n/a)      | Revoked            | muted    |
  *   | error      | (n/a)      | Offline            | warning  |
  *   | failed     | (n/a)      | Stopped            | error    |
+ *
+ * Shared availability/lifecycle words (Connected / Offline / Revoked)
+ * come from the single-source `computerCopy` lexicon — this is the local
+ * embedded-host supervisor pill, but the Unified Computer model forbids it
+ * from source-forking the vocabulary the user-managed /status surface uses
+ * (Alice §7.1: local "Ready" vs remote "Connected" for the same
+ * availability fact is the banned fork). `Connecting…` and `Stopped` stay
+ * literal here — they're supervisor-lifecycle states unique to this
+ * bounded context (claimed-not-yet-attached / restart-budget exhausted),
+ * with no §7.1 availability equivalent, so they must NOT be mapped away.
  *
  * Why `error` is "Offline" (warning) but `failed` is "Stopped"
  * (error): `error` is a transient claim-side failure (network blip
@@ -49,6 +59,7 @@
  * labels so the two different user actions don't read identically.
  */
 import type { BackendInfoSnapshot } from './hooks';
+import { computerCopy } from './computer-copy';
 
 export type ConnectionTone =
   | 'hidden'
@@ -100,7 +111,7 @@ export interface DescribeConnectionOpts {
   /**
    * Remote-mode readiness signal. In an embedded deployment the
    * outbound WS attachment is observable in-process and surfaces as
-   * `attachedAt` (a number) — that's the primary "Ready" proof. But in
+   * `attachedAt` (a number) — that's the primary "Connected" proof. But in
    * a remote-server deployment the attachment registry
    * (`HostWsServerController`) lives in the *remote* backend process,
    * so desktop main's in-process `getEmbeddedHostWsController()` returns
@@ -112,7 +123,7 @@ export interface DescribeConnectionOpts {
    * This flag is that second source: the caller derives it from the
    * remote backend's HTTP host-status (`availability === 'available'`),
    * the same authority every other remote-mode fact flows through. When
-   * `true` we promote a `claimed + attachedAt===null` host to "Ready" —
+   * `true` we promote a `claimed + attachedAt===null` host to "Connected" —
    * but with `detail: null`, since `availability` carries no attach
    * timestamp to render a "since X" string. The embedded `attachedAt`
    * path still wins when present (keeps "since").
@@ -158,11 +169,11 @@ export function describeConnectionState(
       if (attachedAt === null) {
         // Remote mode: no local `attachedAt`, but the remote backend
         // confirmed the outbound attachment via host-status. Promote to
-        // Ready (no "since" — `availability` has no attach timestamp).
+        // Connected (no "since" — `availability` has no attach timestamp).
         if (opts?.remoteAttached) {
           return {
             visible: true,
-            label: 'Ready',
+            label: computerCopy.availabilityConnected,
             tone: 'success',
             detail: null,
           };
@@ -176,21 +187,21 @@ export function describeConnectionState(
       }
       return {
         visible: true,
-        label: 'Ready',
+        label: computerCopy.availabilityConnected,
         tone: 'success',
         detail: `since ${formatAttachedSince(attachedAt, nowMs)}`,
       };
     case 'revoked':
       return {
         visible: true,
-        label: 'Removed',
+        label: computerCopy.lifecycleRevoked,
         tone: 'muted',
         detail: null,
       };
     case 'error':
       return {
         visible: true,
-        label: 'Offline',
+        label: computerCopy.availabilityOffline,
         tone: 'warning',
         detail: null,
       };

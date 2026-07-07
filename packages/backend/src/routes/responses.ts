@@ -39,6 +39,7 @@ const placementErrorStatusMap: Record<
   host_mismatch: 409,
   host_missing: 404,
   host_not_owned: 403,
+  host_pending_attach: 409,
   host_runtime_disabled: 409,
   host_revoked: 409,
   local_host_unbound: 409,

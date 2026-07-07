@@ -3,6 +3,7 @@ export type RuntimeHostPlacementErrorCode =
   | 'host_mismatch'
   | 'host_missing'
   | 'host_not_owned'
+  | 'host_pending_attach'
   | 'host_runtime_disabled'
   | 'host_revoked'
   | 'local_host_unbound'

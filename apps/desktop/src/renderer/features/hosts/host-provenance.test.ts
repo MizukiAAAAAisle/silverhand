@@ -10,6 +10,24 @@ function host(partial: Partial<HostDto> & Pick<HostDto, 'id'>): HostDto {
     created_at: partial.created_at ?? 1,
     revoked_at: partial.revoked_at ?? null,
     last_seen_at: partial.last_seen_at ?? 2,
+    activated_at: partial.activated_at ?? 1,
+    finalized_at: partial.finalized_at ?? 1,
+    connected_host_name: partial.connected_host_name ?? null,
+    provisioning_source: partial.provisioning_source ?? 'app_install',
+    status:
+      partial.status ??
+      ((partial.revoked_at ?? null) !== null
+        ? 'revoked'
+        : partial.activated_at === null
+          ? 'pending'
+          : partial.finalized_at === null
+            ? 'attached'
+            : 'active'),
+    placeable:
+      partial.placeable ??
+      ((partial.revoked_at ?? null) === null &&
+        (partial.activated_at ?? 1) !== null &&
+        (partial.finalized_at ?? 1) !== null),
     creator_user_id: partial.creator_user_id ?? 'viewer',
     display_label: partial.display_label ?? null,
   };

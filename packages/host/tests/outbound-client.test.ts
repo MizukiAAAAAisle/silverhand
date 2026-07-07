@@ -5,7 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
-import { apiPaths, DAEMON_HOST_CONFIG_FILENAME } from '@silverhand/shared';
+import {
+  apiPaths,
+  DAEMON_HOST_CONFIG_FILENAME,
+  HOST_WS_CLOSE_REASON_DISCONNECTED,
+  HOST_WS_CLOSE_REASON_REVOKED,
+} from '@silverhand/shared';
 import {
   KNOWN_CAPABILITIES_V1,
   type EventFrame,
@@ -156,6 +161,65 @@ describe('outbound daemon websocket client', () => {
     );
   });
 
+  it('suppresses reconnect after host_disconnected until config changes', async () => {
+    const server = await FakeOutboundServer.start();
+    cleanup.push(() => server.close());
+    const { client, logger, dir } = startClient(server.url, {
+      configPollMs: 10,
+      backoff: { minDelayMs: 10, maxDelayMs: 10, factor: 2, jitterRatio: 0 },
+    });
+    cleanup.push(() => client.stop('test_done'));
+
+    const first = await server.waitForConnectionCount(1);
+    setTimeout(() => first.ws.close(1000, HOST_WS_CLOSE_REASON_DISCONNECTED), 5);
+
+    await server.waitForCloseCount(1);
+    await delay(50);
+    expect(server.connections).toHaveLength(1);
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: 'info',
+        action: 'reconnect_suppressed',
+        reason: HOST_WS_CLOSE_REASON_DISCONNECTED,
+      }),
+    );
+
+    writeFileSync(
+      join(dir, DAEMON_HOST_CONFIG_FILENAME),
+      JSON.stringify({
+        server_url: server.url,
+        host_id: 'host-1',
+        host_token: 'new-host-token',
+      }),
+    );
+
+    const second = await server.waitForConnectionCount(2);
+    expect(second.request.headers.authorization).toBe('Bearer new-host-token');
+  });
+
+  it('suppresses reconnect after host_revoked terminal close', async () => {
+    const server = await FakeOutboundServer.start();
+    cleanup.push(() => server.close());
+    const { client, logger } = startClient(server.url, {
+      backoff: { minDelayMs: 10, maxDelayMs: 10, factor: 2, jitterRatio: 0 },
+    });
+    cleanup.push(() => client.stop('test_done'));
+
+    const first = await server.waitForConnectionCount(1);
+    setTimeout(() => first.ws.close(1008, HOST_WS_CLOSE_REASON_REVOKED), 5);
+
+    await server.waitForCloseCount(1);
+    await delay(40);
+    expect(server.connections).toHaveLength(1);
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: 'info',
+        action: 'reconnect_suppressed',
+        reason: HOST_WS_CLOSE_REASON_REVOKED,
+      }),
+    );
+  });
+
   it('closes and reconnects after daemon heartbeat timeout', async () => {
     const server = await FakeOutboundServer.start();
     cleanup.push(() => server.close());
@@ -238,6 +302,53 @@ describe('outbound daemon websocket client', () => {
       kind: 'runtime_status',
       result: { runtimes: [] },
     });
+  });
+
+  it('logs routine host_status command round trips at debug level', async () => {
+    const server = await FakeOutboundServer.start();
+    cleanup.push(() => server.close());
+    const { client, logger } = startClient(server.url, {
+      dispatchCommand: async command => ({
+        id: command.id,
+        result: {
+          os: 'macOS 15.0',
+          daemon_pid: 123,
+          daemon_version: '0.0.0-test',
+          started_at: 1700000000000,
+          uptime_ms: 1,
+          active_agent_ids: [],
+        },
+      }),
+    });
+    cleanup.push(() => client.stop('test_done'));
+
+    const first = await server.waitForConnectionCount(1);
+    first.ws.send(encodeOutboundFrame({
+      direction: 'server_to_daemon',
+      type: 'command',
+      id: 'status-1',
+      kind: 'host_status',
+      params: {},
+    }));
+
+    await server.waitForFrame(frame =>
+      frame.type === 'command_response' && frame.id === 'status-1',
+    );
+
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: 'debug',
+        action: 'command_received',
+        command_kind: 'host_status',
+      }),
+    );
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: 'debug',
+        action: 'command_response_sent',
+        command_kind: 'host_status',
+      }),
+    );
   });
 
   it('handles rotate_token by refreshing config, memory token, and next reconnect auth', async () => {

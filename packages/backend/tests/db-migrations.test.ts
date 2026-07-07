@@ -14,10 +14,12 @@ import { describe, expect, it } from 'vitest';
 import {
   BASELINE_SCHEMA_SQL,
   BASELINE_SCHEMA_VERSION,
+} from '@silverhand/shared/db/baseline-schema';
+import {
   CURRENT_SCHEMA_VERSION,
   MIN_SUPPORTED_SCHEMA_VERSION,
   migrations,
-} from '@silverhand/shared';
+} from '@silverhand/shared/db/migrations';
 import {
   backupDataDirBeforeMigration,
   currentSchemaVersion,
@@ -1730,6 +1732,150 @@ describe('database migrations', () => {
             )
             .get(),
         ).toEqual({ parent_conversation_id: 'c_channel' });
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  describe('v55 host_activation_and_provisioning_source', () => {
+    it('backfills app-install source only for install-bound user hosts and activates existing owned local hosts', () => {
+      const db = openDbAt(54);
+      try {
+        const now = 1_700_000_000_000;
+        db.exec(`
+          INSERT INTO users (id, name, display_name, avatar_storage_key, avatar_content_type, created_at, updated_at, email, last_seen_at)
+          VALUES ('u1', 'u1', 'User One', NULL, NULL, ${now}, ${now}, NULL, NULL);
+
+          INSERT INTO hosts (id, name, kind, created_at, user_id, installation_id, last_seen_at, revoked_at, display_label)
+          VALUES
+            ('h_app', 'h-app', 'local', ${now}, 'u1', 'install-1', ${now + 1}, NULL, NULL),
+            ('h_revoked', 'h-revoked', 'local', ${now}, 'u1', 'install-revoked', ${now + 2}, ${now + 3}, NULL),
+            ('h_user_no_install', 'h-user-no-install', 'local', ${now}, 'u1', NULL, ${now + 4}, NULL, NULL),
+            ('h_remote_user', 'h-remote-user', 'remote', ${now}, 'u1', NULL, ${now + 5}, NULL, NULL),
+            ('h_system', 'h-system', 'remote', ${now}, NULL, NULL, NULL, NULL, NULL);
+        `);
+
+        applyMigrationsThrough(db, 55);
+
+        const rows = db
+          .prepare<
+            [],
+            {
+              id: string;
+              provisioning_source: string;
+              activated_at: number | null;
+            }
+          >(
+            `SELECT id, provisioning_source, activated_at
+               FROM hosts
+              WHERE id LIKE 'h_%'
+              ORDER BY id`,
+          )
+          .all();
+        expect(rows).toEqual([
+          {
+            id: 'h_app',
+            provisioning_source: 'app_install',
+            activated_at: now + 1,
+          },
+          {
+            id: 'h_remote_user',
+            provisioning_source: 'system',
+            activated_at: null,
+          },
+          {
+            id: 'h_revoked',
+            provisioning_source: 'app_install',
+            activated_at: null,
+          },
+          {
+            id: 'h_system',
+            provisioning_source: 'system',
+            activated_at: null,
+          },
+          {
+            id: 'h_user_no_install',
+            provisioning_source: 'system',
+            activated_at: now + 4,
+          },
+        ]);
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  describe('v56 host_finalization_lifecycle', () => {
+    it('backfills finalized_at only for already-formal non-user-invite active hosts', () => {
+      const db = openDbAt(55);
+      try {
+        const now = 1_700_000_100_000;
+        db.exec(`
+          INSERT INTO users (id, name, display_name, avatar_storage_key, avatar_content_type, created_at, updated_at, email, last_seen_at)
+          VALUES ('u1', 'u1', 'User One', NULL, NULL, ${now}, ${now}, NULL, NULL);
+
+          INSERT INTO hosts
+            (id, name, kind, created_at, user_id, installation_id, last_seen_at,
+             revoked_at, display_label, activated_at, provisioning_source)
+          VALUES
+            ('h_app', 'h-app-v56', 'local', ${now}, 'u1', 'install-1', ${now + 1}, NULL, NULL, ${now + 1}, 'app_install'),
+            ('h_system_active', 'h-system-active-v56', 'local', ${now}, 'u1', NULL, ${now + 2}, NULL, NULL, ${now + 2}, 'system'),
+            ('h_invite_pending', 'h-invite-pending-v56', 'remote', ${now}, 'u1', NULL, NULL, NULL, NULL, NULL, 'user_invite'),
+            ('h_invite_attached', 'h-invite-attached-v56', 'remote', ${now}, 'u1', NULL, ${now + 3}, NULL, NULL, ${now + 3}, 'user_invite'),
+            ('h_revoked', 'h-revoked-v56', 'local', ${now}, 'u1', 'install-revoked', ${now + 4}, ${now + 5}, NULL, ${now + 4}, 'app_install');
+        `);
+
+        applyMigrationsThrough(db, 56);
+
+        const rows = db
+          .prepare<
+            [],
+            {
+              id: string;
+              activated_at: number | null;
+              finalized_at: number | null;
+              provisioning_source: string;
+            }
+          >(
+            `SELECT id, activated_at, finalized_at, provisioning_source
+               FROM hosts
+              WHERE id LIKE 'h_%'
+              ORDER BY id`,
+          )
+          .all();
+        expect(rows).toEqual([
+          {
+            id: 'h_app',
+            activated_at: now + 1,
+            finalized_at: now + 1,
+            provisioning_source: 'app_install',
+          },
+          {
+            id: 'h_invite_attached',
+            activated_at: now + 3,
+            finalized_at: null,
+            provisioning_source: 'user_invite',
+          },
+          {
+            id: 'h_invite_pending',
+            activated_at: null,
+            finalized_at: null,
+            provisioning_source: 'user_invite',
+          },
+          {
+            id: 'h_revoked',
+            activated_at: now + 4,
+            finalized_at: null,
+            provisioning_source: 'app_install',
+          },
+          {
+            id: 'h_system_active',
+            activated_at: now + 2,
+            finalized_at: now + 2,
+            provisioning_source: 'system',
+          },
+        ]);
       } finally {
         db.close();
       }

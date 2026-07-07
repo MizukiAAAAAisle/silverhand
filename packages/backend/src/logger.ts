@@ -93,9 +93,8 @@ export function createFileLogger(opts: FileLoggerOptions): FileLogger {
  *
  *   - `system`: backend HTTP server lifecycle, scheduler, ws, auth, DB.
  *     Writes `backend-<utc>.log` (historical name preserved).
- *   - `agent`:  agent runtime spawn / drain / exit / compaction (now
- *     owned by silverhand-daemon and surfaced through
- *     `DaemonAgentRuntimeHost` + `RuntimeEventHandler`).
+ *   - `agent`:  agent runtime spawn / drain / exit / compaction, owned by
+ *     silverhand-daemon and surfaced through the outbound runtime projection.
  *     Writes `agent-<utc>.log`.
  *   - `cli`:    every `silverhand` CLI invocation (success + failure)
  *     plus pre-flight failures reported by the CLI itself. These are

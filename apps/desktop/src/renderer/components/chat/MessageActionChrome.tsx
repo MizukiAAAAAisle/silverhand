@@ -33,13 +33,11 @@ export function MessageActionChrome({
   renderCtx,
   workspaceId,
   channelTitle,
-  channelKind,
 }: {
   surface: MessageActionSurface;
   renderCtx: MessageActionChromeRenderContext;
   workspaceId: string | null;
   channelTitle: string | null;
-  channelKind: 'channel' | 'dm' | null;
 }): ReactElement {
   return (
     <>
@@ -58,7 +56,6 @@ export function MessageActionChrome({
         messages={surface.previewSnapshots}
         workspaceId={workspaceId}
         channelTitle={channelTitle}
-        channelKind={channelKind}
         agentsById={renderCtx.agentsById}
         agentsByName={renderCtx.agentsByName}
         humansByName={renderCtx.humansByName}

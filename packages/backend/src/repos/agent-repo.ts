@@ -525,7 +525,7 @@ export class AgentRepo {
   /**
    * Every (conversation, agent) pair this agent participates in, joined to
    * workspace/channel/thread metadata. Single SQL — drives both the agent
-   * profile "where it runs" table and the delete-impact preview.
+   * profile "where it runs" table and the delete use-case impact calculation.
    * Includes closed conversations so the UI can show full history; the
    * caller filters by `closed_at` if needed.
    */

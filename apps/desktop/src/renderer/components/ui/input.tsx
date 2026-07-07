@@ -34,12 +34,23 @@ Textarea.displayName = 'Textarea';
 
 export function Label({
   className,
+  required,
+  children,
   ...props
-}: React.LabelHTMLAttributes<HTMLLabelElement>): JSX.Element {
+}: React.LabelHTMLAttributes<HTMLLabelElement> & {
+  required?: boolean;
+}): JSX.Element {
   return (
     <label
       className={cn('text-xs font-medium text-text-secondary', className)}
       {...props}
-    />
+    >
+      {children}
+      {required ? (
+        <span aria-hidden className="ml-0.5 text-error">
+          *
+        </span>
+      ) : null}
+    </label>
   );
 }

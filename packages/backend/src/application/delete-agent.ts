@@ -14,7 +14,10 @@ import {
   resolveOutboundForHost,
   type DataPlaneHttpStatus,
 } from '../runtime/workspace-data-plane.js';
-import { computeDeleteImpact } from '../read-model/agent-delete-impact.js';
+import {
+  computeDeleteImpact,
+  type AgentDeleteImpact,
+} from '../read-model/agent-delete-impact.js';
 
 /**
  * DeleteAgent use case (#task:982 — P11a spec).
@@ -71,6 +74,16 @@ export interface DeleteAgentCommand {
   body: unknown;
 }
 
+export interface DeleteAgentControlPlaneOnlyOptions {
+  reason: string;
+  purgeHostLocal?: boolean;
+}
+
+export type DeleteAgentControlPlaneOnlyResult =
+  | { kind: 'deleted' }
+  | { kind: 'pendingInFlight' }
+  | { kind: 'failClosed'; error: string; code: string; status: DataPlaneHttpStatus };
+
 /**
  * Named result — no HTTP status policy. The route maps kind → status/body with
  * an exhaustive `switch` + `never` fallback. The four fail-closed sources
@@ -118,15 +131,7 @@ export async function deleteAgent(
     return { kind: 'pendingInFlight' };
   }
   if (agent.materialization_status === 'failed') {
-    agents.delete(id);
-    ctx.logger.info(
-      {
-        agentId: id,
-        agentName: agent.name,
-        failedCode: agent.materialization_failed_code,
-      },
-      'failed agent row deleted (D5: row-only, no dependents)',
-    );
+    deleteFailedAgentRowOnly(ctx, agents, agent);
     return { kind: 'deleted' };
   }
 
@@ -161,6 +166,122 @@ export async function deleteAgent(
   //    can't be bound — otherwise the purge would report it as
   //    `skipped_unprovisioned` and silently leave the L2 tree on disk while we
   //    delete the DB row.
+  const purge = await purgeAgentHostLocalFiles(deps, agent, impact);
+  if (purge.kind === 'failClosed') return purge;
+
+  // 3. Purge acked — commit the DB teardown. The same control-plane teardown is
+  //    reused by delete-computer's explicit agent cascade after the user has
+  //    chosen to remove the whole computer; that path may skip host-local purge
+  //    when the daemon is permanently unreachable, but the DB teardown stays one
+  //    source of truth.
+  await teardownAgentControlPlane(deps, id, impact);
+
+  ctx.logger.info(
+    {
+      agentId: id,
+      agentName: agent.name,
+      dmChannelId: impact.dm_channel?.id ?? null,
+      regularWorkspaces: impact.regular_memberships.length,
+      stoppedConversations: impact.running_conversation_agents.length,
+      purgedCount: purge.purgedCount,
+      skippedUnprovisioned: purge.skippedUnprovisioned,
+    },
+    'agent deleted',
+  );
+  return { kind: 'deleted' };
+}
+
+/**
+ * Delete an agent's control-plane rows without requiring host-local purge.
+ *
+ * This is intentionally NOT used by the normal `DELETE /api/agents/:id` route:
+ * direct agent deletion remains fail-closed so a temporarily disconnected
+ * computer does not silently retain host-local agent files. It is only for the
+ * delete-computer cascade, where the user explicitly removes the whole
+ * computer and accepts that unreachable host-local files cannot be cleaned
+ * remotely.
+ */
+export async function deleteAgentControlPlaneOnly(
+  deps: DeleteAgentDeps,
+  agentId: string,
+  options: DeleteAgentControlPlaneOnlyOptions,
+): Promise<DeleteAgentControlPlaneOnlyResult> {
+  const { ctx, agents } = deps;
+  const agent = agents.get(agentId);
+  if (!agent) return { kind: 'deleted' };
+  if (agent.materialization_status === 'pending_materialization') {
+    return { kind: 'pendingInFlight' };
+  }
+  if (agent.materialization_status === 'failed') {
+    deleteFailedAgentRowOnly(ctx, agents, agent);
+    return { kind: 'deleted' };
+  }
+
+  const impact = computeDeleteImpact(deps, agentId);
+  for (const live of impact.running_conversation_agents) {
+    await ctx.runtimeHost
+      .stop(live.conversation_id, agentId, 'hard')
+      .catch(err =>
+        ctx.logger.warn(
+          { conversationId: live.conversation_id, agentId, err },
+          'delete computer cascade: stop failed (continuing)',
+        ),
+      );
+  }
+
+  let purgedCount: number | null = null;
+  let skippedUnprovisioned: number | null = null;
+  if (options.purgeHostLocal) {
+    const purge = await purgeAgentHostLocalFiles(deps, agent, impact);
+    if (purge.kind === 'failClosed') return purge;
+    purgedCount = purge.purgedCount;
+    skippedUnprovisioned = purge.skippedUnprovisioned;
+  }
+
+  await teardownAgentControlPlane(deps, agentId, impact);
+  ctx.logger.info(
+    {
+      agentId,
+      agentName: agent.name,
+      hostId: agent.host_id,
+      reason: options.reason,
+      dmChannelId: impact.dm_channel?.id ?? null,
+      regularWorkspaces: impact.regular_memberships.length,
+      stoppedConversations: impact.running_conversation_agents.length,
+      hostLocalPurge: options.purgeHostLocal ? 'purged' : 'skipped',
+      purgedCount,
+      skippedUnprovisioned,
+    },
+    'agent control-plane deleted during computer cascade',
+  );
+  return { kind: 'deleted' };
+}
+
+function deleteFailedAgentRowOnly(
+  ctx: BackendContext,
+  agents: AgentRepo,
+  agent: NonNullable<ReturnType<AgentRepo['get']>>,
+): void {
+  agents.delete(agent.id);
+  ctx.logger.info(
+    {
+      agentId: agent.id,
+      agentName: agent.name,
+      failedCode: agent.materialization_failed_code,
+    },
+    'failed agent row deleted (D5: row-only, no dependents)',
+  );
+}
+
+async function purgeAgentHostLocalFiles(
+  deps: DeleteAgentDeps,
+  agent: NonNullable<ReturnType<AgentRepo['get']>>,
+  impact: AgentDeleteImpact,
+): Promise<
+  | { kind: 'purged'; purgedCount: number; skippedUnprovisioned: number }
+  | { kind: 'failClosed'; error: string; code: string; status: DataPlaneHttpStatus }
+> {
+  const { ctx, workspaces } = deps;
   const backfillRows: { id: string; workspace_path: string }[] = [];
   for (const ws of impact.regular_memberships) {
     const w = workspaces.get(ws.id);
@@ -201,7 +322,7 @@ export async function deleteAgent(
     agent.host_id,
     outbound.connectionId,
     {
-      agent_id: id,
+      agent_id: agent.id,
       scope: 'all',
       workspace_ids: impact.regular_memberships.map(ws => ws.id),
     },
@@ -225,52 +346,49 @@ export async function deleteAgent(
       status: 503,
     };
   }
+  return {
+    kind: 'purged',
+    purgedCount: purge.result.purged_count,
+    skippedUnprovisioned: purge.result.skipped_unprovisioned,
+  };
+}
 
-  // 3. Purge acked — commit the DB teardown. Remove from every regular workspace
-  //    and its conversations.
+async function teardownAgentControlPlane(
+  deps: DeleteAgentDeps,
+  agentId: string,
+  impact: AgentDeleteImpact,
+): Promise<void> {
+  const { ctx, agents, workspaces, conversations } = deps;
+
+  // Remove from every regular workspace and its conversations.
   for (const ws of impact.regular_memberships) {
     const workspace = workspaces.get(ws.id);
     if (!workspace) continue;
     for (const conversation of conversations.list()) {
       if (conversation.workspace_id === workspace.id) {
-        conversations.removeAgent(conversation.id, id);
+        conversations.removeAgent(conversation.id, agentId);
       }
     }
-    workspaces.removeMember(workspace.id, id);
+    workspaces.removeMember(workspace.id, agentId);
   }
 
-  // 4. Sweep DM blobs before deleting the agent. DB rows cascade through
-  //    agent -> agent_home -> conversations, but physical files need an explicit
-  //    pass. Best-effort — must not block the 204.
+  // Sweep DM blobs before deleting the agent. DB rows cascade through
+  // agent -> agent_home -> conversations, but physical files need an explicit
+  // pass. Best-effort — must not block the 204.
   const dmChannels = impact.owned_home
     ? conversations.listAllDmChannelsForWorkspace(impact.owned_home.id)
     : [];
   for (const dm of dmChannels) {
     await ctx.attachmentService.sweepForChannel(dm.id).catch(err =>
       ctx.logger.warn(
-        { agentId: id, conversationId: dm.id, err },
+        { agentId, conversationId: dm.id, err },
         'delete agent: DM attachment sweep failed (continuing)',
       ),
     );
   }
 
-  // 5. Drop the agent. owner_agent_id ON DELETE CASCADE removes its agent_home
-  //    subtree; regular conversation history keeps deleted sender rows via SET
-  //    NULL on messages.from_agent_id. Host-local L1/L2 files were already
-  //    removed by the daemon purge in step 2.
-  agents.delete(id);
-
-  ctx.logger.info(
-    {
-      agentId: id,
-      agentName: agent.name,
-      dmChannelId: impact.dm_channel?.id ?? null,
-      regularWorkspaces: impact.regular_memberships.length,
-      stoppedConversations: impact.running_conversation_agents.length,
-      purgedCount: purge.result.purged_count,
-      skippedUnprovisioned: purge.result.skipped_unprovisioned,
-    },
-    'agent deleted',
-  );
-  return { kind: 'deleted' };
+  // Drop the agent. owner_agent_id ON DELETE CASCADE removes its agent_home
+  // subtree; regular conversation history keeps deleted sender rows via SET
+  // NULL on messages.from_agent_id.
+  agents.delete(agentId);
 }

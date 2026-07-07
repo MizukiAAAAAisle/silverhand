@@ -30,7 +30,7 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
     expect(res.status).toBe(204);
   });
 
-  it('agent_home / DM workspace → 204 no-op, row NOT deleted (non-regular branch)', async () => {
+  it('agent_home / DM workspace → 409, row NOT deleted (delete the owning agent instead)', async () => {
     t = buildTestApp();
     // Creating an agent auto-provisions its agent_home (DM) workspace.
     await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' });
@@ -42,9 +42,13 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
     expect(home).toBeDefined();
 
     const res = await http(t).del(`/api/workspaces/${home!.id}`);
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({
+      code: 'workspace_not_deletable',
+    });
 
-    // Non-regular workspaces are an idempotent no-op — the row survives.
+    // agent_home workspaces are deleted through DELETE /api/agents/:id, not
+    // the generic workspace endpoint — the row survives.
     const still = t.ctx.db
       .prepare<[string], { id: string }>('SELECT id FROM workspaces WHERE id = ?')
       .get(home!.id);
@@ -168,5 +172,58 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
       )
       .get(ws.workspace.id);
     expect(wuRow).toBeUndefined();
+  });
+
+  it('runtime stop failure is best-effort and does not block workspace delete', async () => {
+    t = buildTestApp();
+    const ws = (await (
+      await http(t).post('/api/workspaces', { name: 'stop-failure', member_agent_ids: [] })
+    ).json()) as any;
+    const channelId = ws.onboarding_channel_id as string;
+    const hostId = ws.workspace.workspace_host_id as string;
+
+    const agentId = `stop-failure-agent-${Date.now()}`;
+    const now = Date.now();
+    t.ctx.db
+      .prepare(
+        `INSERT INTO agents (id, name, runtime, host_id, created_by_user_id, created_at, updated_at)
+         VALUES (?, ?, 'claude', ?, 'local', ?, ?)`,
+      )
+      .run(agentId, 'stop-failure-agent', hostId, now, now);
+    t.ctx.db
+      .prepare(
+        `INSERT INTO conversation_agents (conversation_id, agent_id, status, joined_at)
+         VALUES (?, ?, 'idle', ?)`,
+      )
+      .run(channelId, agentId, now);
+
+    const stopErr = new Error('daemon offline');
+    t.fake.stopError = stopErr;
+    const warnSpy = vi.spyOn(t.ctx.logger, 'warn');
+
+    const res = await http(t).del(`/api/workspaces/${ws.workspace.id}`);
+    expect(res.status).toBe(204);
+
+    await Promise.resolve();
+    expect(t.fake.stops).toContainEqual({
+      conversationId: channelId,
+      agentId,
+      mode: 'hard',
+      directive: undefined,
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: ws.workspace.id,
+        conversationId: channelId,
+        agentId,
+        err: stopErr,
+      }),
+      'delete workspace: runtime stop failed (continuing)',
+    );
+
+    const wsRow = t.ctx.db
+      .prepare<[string], { id: string }>('SELECT id FROM workspaces WHERE id = ?')
+      .get(ws.workspace.id);
+    expect(wsRow).toBeUndefined();
   });
 });

@@ -36,6 +36,7 @@ function makeAttachment(over: Partial<HostWsAttachment> = {}): HostWsAttachment 
     hostId: 'host-local-1',
     connectionId: 'conn-A',
     attachedAt: 1_000_000,
+    hostname: null,
     ...over,
   };
 }

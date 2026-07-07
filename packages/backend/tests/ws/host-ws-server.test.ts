@@ -8,7 +8,12 @@ import {
   encodeOutboundFrame,
   type OutboundServerCommandKind,
 } from '@silverhand/host';
-import { apiPaths } from '@silverhand/shared';
+import {
+  HOST_CONNECTION_CHANGED_EVENT,
+  HOST_WS_CLOSE_REASON_DISCONNECTED,
+  HOST_WS_CLOSE_REASON_REVOKED,
+  apiPaths,
+} from '@silverhand/shared';
 import { HostTokenService } from '../../src/auth/host-token.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import {
@@ -104,7 +109,7 @@ describe('host outbound WebSocket server', () => {
     );
   });
 
-  it('rejects non-local hosts even with a valid host token', async () => {
+  it('rejects non-user-managed remote hosts even with a valid host token', async () => {
     t = buildTestApp();
     server = await openServer(t);
     const remote = new HostRepo(t.ctx.db).create('future-remote', 'remote', {
@@ -118,6 +123,81 @@ describe('host outbound WebSocket server', () => {
     await expect(connectHost(server.url, issued.hostToken)).rejects.toThrow(
       /unexpected response 403/,
     );
+  });
+
+  it('accepts a user-managed remote host token and activates on attach', async () => {
+    t = buildTestApp();
+    server = await openServer(t);
+    const hosts = new HostRepo(t.ctx.db);
+    const remote = hosts.createUserInvite({ userId: 'local' });
+    expect(remote).toMatchObject({
+      kind: 'remote',
+      provisioning_source: 'user_invite',
+      activated_at: null,
+      finalized_at: null,
+    });
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: remote.id,
+    });
+
+    const before = Date.now();
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+    await waitFor(() => server!.controller.getAttachment(remote.id) !== null);
+
+    const activated = hosts.get(remote.id);
+    expect(activated?.activated_at).toEqual(expect.any(Number));
+    expect(activated?.finalized_at).toBeNull();
+    expect(activated!.activated_at!).toBeGreaterThanOrEqual(before);
+    expect(activated?.last_seen_at).toBe(activated?.activated_at);
+    expect(hosts.toDto(activated!)).toMatchObject({
+      status: 'attached',
+      placeable: false,
+    });
+  });
+
+  it('publishes owner-scoped host connection changed events on attach and detach', async () => {
+    t = buildTestApp();
+    server = await openServer(t);
+    const hosts = new HostRepo(t.ctx.db);
+    const remote = hosts.createUserInvite({ userId: t.viewerUserId });
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: remote.id,
+    });
+    const ownerEvents: Array<{ kind: string; payload: unknown }> = [];
+    const teammateEvents: Array<{ kind: string; payload: unknown }> = [];
+    const unsubOwner = t.ctx.events.subscribeScope(
+      `viewer:${t.viewerUserId}`,
+      event => ownerEvents.push({ kind: event.kind, payload: event.payload }),
+    );
+    const unsubTeammate = t.ctx.events.subscribeScope(
+      'viewer:teammate',
+      event => teammateEvents.push({ kind: event.kind, payload: event.payload }),
+    );
+
+    try {
+      const ws = await connectHost(server.url, issued.hostToken);
+      sockets.push(ws);
+
+      await waitFor(() => ownerEvents.length === 1);
+      expect(ownerEvents[0]).toEqual({
+        kind: HOST_CONNECTION_CHANGED_EVENT,
+        payload: { host_id: remote.id },
+      });
+      expect(teammateEvents).toEqual([]);
+
+      ws.close();
+      await waitForClose(ws);
+      await waitFor(() => ownerEvents.length === 2);
+      expect(ownerEvents[1]).toEqual({
+        kind: HOST_CONNECTION_CHANGED_EVENT,
+        payload: { host_id: remote.id },
+      });
+      expect(teammateEvents).toEqual([]);
+    } finally {
+      unsubOwner();
+      unsubTeammate();
+    }
   });
 
   it('gates daemon-to-server frame shape after authentication', async () => {
@@ -157,7 +237,7 @@ describe('host outbound WebSocket server', () => {
   });
 
   it('forwards authenticated daemon event frames to the configured fanout sink once', async () => {
-    t = buildTestApp();
+    t = buildTestApp({ deploymentMode: 'standalone' });
     const events: Array<{ hostId: string; kind: string; connectionId: string }> = [];
     server = await openServer(t, {
       eventSink: {
@@ -192,6 +272,122 @@ describe('host outbound WebSocket server', () => {
         hostId: host.id,
         kind: 'ready',
         connectionId: server.controller.connectionIdForHost(host.id),
+      },
+    ]);
+  });
+
+  it('ignores embedded co-located host-ws daemon events even when a fanout sink is configured', async () => {
+    t = buildTestApp();
+    const events: Array<{ hostId: string; kind: string; connectionId: string }> = [];
+    const disconnects: Array<{ hostId: string; connectionId: string }> = [];
+    const infos: Array<{ meta: Record<string, unknown>; msg: string }> = [];
+    t.ctx.logger = {
+      info: (meta, msg) =>
+        infos.push({
+          meta: meta as Record<string, unknown>,
+          msg: String(msg),
+        }),
+      warn() {},
+      error() {},
+    };
+    server = await openServer(t, {
+      pingIntervalMs: 0,
+      eventSink: {
+        onEvent: (hostId, event, connectionId) =>
+          events.push({ hostId, kind: event.kind, connectionId }),
+        onDisconnect: (hostId, connectionId) =>
+          disconnects.push({ hostId, connectionId }),
+      },
+    });
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    expect(t.ctx.coLocatedHostId).toBe(host.id);
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+
+    ws.send(JSON.stringify({
+      direction: 'daemon_to_server',
+      type: 'event',
+      kind: 'ready',
+      protocol_version: OUTBOUND_PROTOCOL_VERSION,
+      daemon_version: '0.0.0-test',
+      daemon_id: 'local',
+      instance_id: 'instance-1',
+      host_descriptor: { name: 'local', kind: 'local' },
+      capabilities: [...KNOWN_CAPABILITIES_V1],
+      daemon_pid: 123,
+      started_at: 1700000000000,
+    }));
+    ws.send(JSON.stringify({
+      direction: 'daemon_to_server',
+      type: 'event',
+      kind: 'runtime_output_paused',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+    }));
+
+    const ignoredLogs = () =>
+      infos.filter(line =>
+        line.msg.startsWith('host-ws: outbound event ignored'),
+      );
+    await waitFor(() => ignoredLogs().length === 1);
+    expect(ignoredLogs()[0]).toMatchObject({
+      meta: {
+        hostId: host.id,
+        eventKind: 'ready',
+        deploymentMode: 'embedded',
+        coLocatedHostId: host.id,
+      },
+      msg: 'host-ws: outbound event ignored (embedded co-located host uses local outbound socket)',
+    });
+    expect(ignoredLogs()).toHaveLength(1);
+    expect(events).toEqual([]);
+
+    ws.close();
+    await waitForClose(ws);
+    expect(disconnects).toEqual([]);
+  });
+
+  it('forwards embedded user-managed daemon events to the configured fanout sink', async () => {
+    t = buildTestApp();
+    const events: Array<{ hostId: string; kind: string; connectionId: string }> = [];
+    server = await openServer(t, {
+      eventSink: {
+        onEvent: (hostId, event, connectionId) =>
+          events.push({ hostId, kind: event.kind, connectionId }),
+      },
+    });
+    const hosts = new HostRepo(t.ctx.db);
+    const remote = hosts.createUserInvite({ userId: 'local' });
+    expect(remote.id).not.toBe(t.ctx.coLocatedHostId);
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: remote.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+
+    ws.send(JSON.stringify({
+      direction: 'daemon_to_server',
+      type: 'event',
+      kind: 'ready',
+      protocol_version: OUTBOUND_PROTOCOL_VERSION,
+      daemon_version: '0.0.0-test',
+      daemon_id: 'remote-1',
+      instance_id: 'instance-1',
+      host_descriptor: { name: 'remote', kind: 'remote' },
+      capabilities: [...KNOWN_CAPABILITIES_V1],
+      daemon_pid: 123,
+      started_at: 1700000000000,
+    }));
+
+    await waitFor(() => events.length === 1);
+    expect(events).toEqual([
+      {
+        hostId: remote.id,
+        kind: 'ready',
+        connectionId: server.controller.connectionIdForHost(remote.id),
       },
     ]);
   });
@@ -255,7 +451,7 @@ describe('host outbound WebSocket server', () => {
         eventKind: 'ready',
         deploymentMode: 'embedded',
       },
-      msg: 'host-ws: outbound event ignored (embedded: runtime events flow via IPC; WS reserved for control)',
+      msg: 'host-ws: outbound event ignored (embedded co-located host uses local outbound socket)',
     });
     expect(droppedLogs()).toHaveLength(1);
     // Embedded mode must NOT warn — that semantics is reserved for
@@ -319,9 +515,9 @@ describe('host outbound WebSocket server', () => {
   // ── Attachment registry (D3.a Commit 1) ──────────────────────────
   // The controller exposes `getAttachment(hostId)` so D3.a phase-2
   // boot can wait for daemon outbound WS attached without relying on
-  // `eventSink.onEvent('ready', ...)`. Embedded backend has no event
-  // sink wired, so this registry must update from the connection
-  // lifecycle alone.
+  // `eventSink.onEvent('ready', ...)`. Co-located embedded hosts ignore
+  // host-ws runtime events, so this registry must update from the
+  // connection lifecycle alone.
 
   it('exposes a non-null attachment snapshot for connected hosts (no eventSink wired)', async () => {
     t = buildTestApp();
@@ -367,13 +563,7 @@ describe('host outbound WebSocket server', () => {
     expect(server.controller.getAttachment(host.id)).toBeNull();
   });
 
-  it('replacement-safe: stale close from the replaced connection does not wipe the fresh attachment', async () => {
-    // Regression contract: when conn B replaces conn A for the same
-    // host, A's deferred `close` handler must compare its captured
-    // `connectionId` against the registry and skip the delete when
-    // the slot has moved on to B. Without this, the replaced
-    // connection's cleanup could erase the live attachment record
-    // moments after it was created.
+  it('rejects a concurrent second connection without replacing the incumbent', async () => {
     t = buildTestApp();
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
@@ -386,30 +576,26 @@ describe('host outbound WebSocket server', () => {
     await waitFor(() => server!.controller.getAttachment(host.id) !== null);
     const firstAttachment = server.controller.getAttachment(host.id)!;
 
-    const firstClosed = waitForClose(first);
-    const second = await connectHost(server.url, issued.hostToken);
-    sockets.push(second);
-    // The replacement-safe assertion: by the time the second connection
-    // is open the controller's snapshot must already point at the new
-    // connection id (not null, not the old id).
-    await waitFor(() => {
-      const cur = server!.controller.getAttachment(host.id);
-      return cur !== null && cur.connectionId !== firstAttachment.connectionId;
+    first.send(JSON.stringify(readyFrame({ hostName: 'Studio Mac' })));
+    await waitFor(
+      () => server!.controller.getAttachment(host.id)?.hostname === 'Studio Mac',
+    );
+
+    await expect(connectHostRejected(server.url, issued.hostToken)).resolves.toEqual({
+      statusCode: 409,
+      body: {
+        error: 'computer already connected',
+        error_code: 'computer_already_connected',
+        connected_host_name: 'Studio Mac',
+      },
     });
-    const secondAttachment = server.controller.getAttachment(host.id)!;
-    expect(secondAttachment.connectionId).not.toBe(firstAttachment.connectionId);
 
-    // Wait for the displaced first connection to finish closing so its
-    // deferred `close` handler runs; if the handler isn't connectionId-
-    // guarded, this is exactly when it would erase B's entry.
-    await firstClosed;
-    // Give the close listener a couple of ticks to actually execute.
-    await new Promise(resolve => setTimeout(resolve, 10));
-
-    const after = server.controller.getAttachment(host.id);
-    expect(after).not.toBeNull();
-    expect(after!.connectionId).toBe(secondAttachment.connectionId);
-    expect(after!.attachedAt).toBe(secondAttachment.attachedAt);
+    expect(first.readyState).toBe(WebSocket.OPEN);
+    expect(server.controller.getAttachment(host.id)).toMatchObject({
+      connectionId: firstAttachment.connectionId,
+      attachedAt: firstAttachment.attachedAt,
+      hostname: 'Studio Mac',
+    });
   });
 
   it('returns null from getAttachment for hosts that never connected', async () => {
@@ -418,7 +604,7 @@ describe('host outbound WebSocket server', () => {
     expect(server.controller.getAttachment('never-connected-host')).toBeNull();
   });
 
-  it('notifies the fanout sink of a replaced connection disconnect once', async () => {
+  it('does not notify the fanout sink when a concurrent connection is rejected', async () => {
     t = buildTestApp();
     const disconnects: string[] = [];
     server = await openServer(t, {
@@ -434,28 +620,30 @@ describe('host outbound WebSocket server', () => {
     const first = await connectHost(server.url, issued.hostToken);
     sockets.push(first);
 
-    const firstClosed = waitForClose(first);
-    const second = await connectHost(server.url, issued.hostToken);
-    sockets.push(second);
-    await expect(firstClosed).resolves.toMatchObject({
-      code: 1000,
-      reason: 'host_connection_replaced',
+    await expect(connectHostRejected(server.url, issued.hostToken)).resolves.toEqual({
+      statusCode: 409,
+      body: {
+        error: 'computer already connected',
+        error_code: 'computer_already_connected',
+        connected_host_name: null,
+      },
     });
 
-    expect(disconnects).toEqual([host.id]);
+    expect(first.readyState).toBe(WebSocket.OPEN);
+    expect(disconnects).toEqual([]);
   });
 
   // D4.c C2 — `disconnectHost` is the controller-level primitive
-  // the host-revoke route uses to kick a daemon's outbound WS the
-  // moment its credential is revoked. Three behaviors to pin:
+  // host lifecycle routes use to kick a daemon's outbound WS. Three
+  // revoke-default behaviors to pin:
   //   1. With a live attachment: returns true, socket sees close
-  //      code 1008 + reason `host_revoked`, attachment registry
+  //      code 1008 + reason `HOST_WS_CLOSE_REASON_REVOKED`, attachment registry
   //      clears on the same tick the close listener fires.
   //   2. With no attachment: returns false (idempotent — route
   //      can call this without checking attachment state first).
   //   3. After replacement: only the current connection is
   //      affected (registry replacement-safe).
-  it('disconnectHost kicks the live attachment with code 1008 / host_revoked (D4.c C2)', async () => {
+  it('disconnectHost defaults to the revoke close reason', async () => {
     t = buildTestApp();
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
@@ -476,7 +664,7 @@ describe('host outbound WebSocket server', () => {
 
     await expect(closed).resolves.toMatchObject({
       code: 1008,
-      reason: 'host_revoked',
+      reason: HOST_WS_CLOSE_REASON_REVOKED,
     });
     // D4.c C9-1: server-side cleanup is asynchronous (the
     // controller's `'close'` listener clears
@@ -503,6 +691,34 @@ describe('host outbound WebSocket server', () => {
     expect(server.controller.disconnectHost(host.id)).toBe(false);
     // And on hosts that never attached at all.
     expect(server.controller.disconnectHost('phantom-host')).toBe(false);
+  });
+
+  it('disconnectHost can send the availability-axis disconnect close reason', async () => {
+    t = buildTestApp();
+    server = await openServer(t);
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+    expect(server.controller.getAttachment(host.id)).not.toBeNull();
+
+    const closed = waitForClose(ws);
+    expect(
+      server.controller.disconnectHost(host.id, HOST_WS_CLOSE_REASON_DISCONNECTED),
+    ).toBe(true);
+
+    await expect(closed).resolves.toMatchObject({
+      code: 1000,
+      reason: HOST_WS_CLOSE_REASON_DISCONNECTED,
+    });
+    await waitFor(
+      () =>
+        server!.controller.activeConnectionCount() === 0 &&
+        server!.controller.getAttachment(host.id) === null &&
+        server!.controller.connectionIdForHost(host.id) === null,
+    );
   });
 
   it('responds to app-level daemon heartbeat pings', async () => {
@@ -820,6 +1036,69 @@ async function connectHost(url: string, token: string | null): Promise<WebSocket
     ws.once('unexpected-response', onUnexpectedResponse);
   });
   return ws;
+}
+
+async function connectHostRejected(
+  url: string,
+  token: string | null,
+): Promise<{ statusCode: number; body: unknown }> {
+  const headers: Record<string, string> = {};
+  if (token !== null) headers.Authorization = `Bearer ${token}`;
+  const ws = new WebSocket(url, { headers });
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      ws.off('open', onOpen);
+      ws.off('error', onError);
+      ws.off('unexpected-response', onUnexpectedResponse);
+    };
+    const onOpen = () => {
+      cleanup();
+      ws.close();
+      reject(new Error('expected websocket upgrade to be rejected'));
+    };
+    const onError = (err: Error) => {
+      cleanup();
+      reject(err);
+    };
+    const onUnexpectedResponse = (
+      _req: unknown,
+      res: NodeJS.ReadableStream & { statusCode?: number },
+    ) => {
+      const chunks: Buffer[] = [];
+      res.on('data', chunk => chunks.push(Buffer.from(chunk)));
+      res.on('end', () => {
+        cleanup();
+        const raw = Buffer.concat(chunks).toString('utf8');
+        resolve({
+          statusCode: res.statusCode ?? 0,
+          body: raw ? JSON.parse(raw) as unknown : null,
+        });
+      });
+      res.on('error', err => {
+        cleanup();
+        reject(err);
+      });
+    };
+    ws.once('open', onOpen);
+    ws.once('error', onError);
+    ws.once('unexpected-response', onUnexpectedResponse);
+  });
+}
+
+function readyFrame(opts: { hostName: string }): unknown {
+  return {
+    direction: 'daemon_to_server',
+    type: 'event',
+    kind: 'ready',
+    protocol_version: OUTBOUND_PROTOCOL_VERSION,
+    daemon_version: '0.0.0-test',
+    daemon_id: opts.hostName,
+    instance_id: 'instance-1',
+    host_descriptor: { name: opts.hostName, kind: 'local' },
+    capabilities: [...KNOWN_CAPABILITIES_V1],
+    daemon_pid: 123,
+    started_at: 1700000000000,
+  };
 }
 
 async function waitForClose(ws: WebSocket): Promise<{ code: number; reason: string }> {

@@ -99,8 +99,8 @@ export async function createWorkspace(
   const requestedPath = cmd.workspacePath?.trim() || undefined;
 
   // Placement (pure decision, may throw the placement layer's typed errors).
-  // Caller host → assertOwnedActiveHost; omitted → resolveOwnedLocalForUser
-  // (0/1/N policy). Member agents must all match the owning host. Order is
+  // Caller host → assertOwnedActiveHost; omitted → resolveOwnedReadyForPlacement
+  // (0/1/N policy across every ready computer). Member agents must all match the owning host. Order is
   // load-bearing — keep the resolve → member-filter → assert sequence verbatim.
   let workspaceHostId: string;
   let memberAgents: AgentDto[];
@@ -108,7 +108,7 @@ export async function createWorkspace(
   try {
     workspaceHostId = cmd.workspaceHostId
       ? ctx.placement.assertOwnedActiveHost(cmd.workspaceHostId, cmd.viewerUserId).id
-      : ctx.placement.resolveOwnedLocalForUser(cmd.viewerUserId).id;
+      : ctx.placement.resolveOwnedReadyForPlacement(cmd.viewerUserId).id;
     memberAgents = cmd.memberAgentIds
       .map(id => agents.get(id))
       .filter((agent): agent is AgentDto => agent !== null);

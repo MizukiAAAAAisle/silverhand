@@ -148,9 +148,9 @@ describe('D4.e-1 3b-1 — workspace-create dispatches workspace_provision', () =
     // An owned, active REMOTE host (passes assertOwnedActiveHost; kind!=local).
     db.prepare(
       `INSERT INTO hosts
-        (id, name, kind, user_id, installation_id, last_seen_at, revoked_at, created_at)
-        VALUES (?, ?, 'remote', ?, ?, ?, NULL, ?)`,
-    ).run('host-remote-1', 'remote-1', userId, 'inst-1', now, now);
+        (id, name, kind, user_id, installation_id, last_seen_at, revoked_at, created_at, activated_at, finalized_at, provisioning_source)
+        VALUES (?, ?, 'remote', ?, ?, ?, NULL, ?, ?, ?, 'user_invite')`,
+    ).run('host-remote-1', 'remote-1', userId, 'inst-1', now, now, now, now);
     // An agent on that remote host — survives the member filter + host-equality
     // check, so the request reaches the daemon-mediated seed.
     const agentId = 'agent-on-remote';
@@ -204,9 +204,9 @@ describe('D4.e-1 3b-1 — workspace-create dispatches workspace_provision', () =
     const now = Date.now();
     db.prepare(
       `INSERT INTO hosts
-        (id, name, kind, user_id, installation_id, last_seen_at, revoked_at, created_at)
-        VALUES (?, ?, 'remote', ?, ?, ?, NULL, ?)`,
-    ).run('host-remote-2', 'remote-2', userId, 'inst-2', now, now);
+        (id, name, kind, user_id, installation_id, last_seen_at, revoked_at, created_at, activated_at, finalized_at, provisioning_source)
+        VALUES (?, ?, 'remote', ?, ?, ?, NULL, ?, ?, ?, 'user_invite')`,
+    ).run('host-remote-2', 'remote-2', userId, 'inst-2', now, now, now, now);
     const agentId = 'agent-seed-fails';
     db.prepare(
       `INSERT INTO agents

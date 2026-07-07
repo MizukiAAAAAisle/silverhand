@@ -1,7 +1,5 @@
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
-  AgentDeleteImpactDto,
   AgentDto,
   AgentRuntimeStateDto,
   AgentWorkspaceFileRead,
@@ -51,7 +49,6 @@ const agentWorkspaceTreeKey = (id: string, scope: string) =>
 const agentWorkspaceFileKey = (id: string, scope: string, path: string) =>
   ['agents', id, 'workspace', 'file', scope, path] as const;
 const agentRuntimeStateKey = (id: string) => ['agents', id, 'runtime-state'] as const;
-const agentDeleteImpactKey = (id: string) => ['agents', id, 'delete-impact'] as const;
 const agentSchedulesKey = (id: string, status: ScheduleListStatusFilter) =>
   ['agents', id, 'schedules', status] as const;
 /**
@@ -360,77 +357,6 @@ export function useStopAgent(agentId: string | null) {
       if (!agentId) return;
       qc.invalidateQueries({ queryKey: agentRuntimeStateKey(agentId) });
     },
-  });
-}
-
-/** Aggregate online presence for a single agent. "online" === the
- *  agent has at least one (conversation, agent) child process in
- *  `starting` / `active` — the exact predicate AgentHeader uses for its
- *  presence pill + Stop button. Everything else (idle rows, crashed
- *  rows, no rows, query in-flight) reads as offline so the members-panel
- *  dot stays a clean binary signal rather than a four-state diagnostic. */
-export type AgentPresence = 'active' | 'idle';
-
-function presenceFromRuntimeState(
-  state: AgentRuntimeStateDto | undefined,
-): AgentPresence {
-  const online = (state?.conversation_agents ?? []).some(
-    s => s.status === 'starting' || s.status === 'active',
-  );
-  return online ? 'active' : 'idle';
-}
-
-/**
- * Batched presence for a list of agents — drives the AGENTS rows' status
- * dot in the Members panel. Each agent's `/runtime-state` is polled in
- * parallel on the same 5s cadence + query key as `useAgentRuntimeState`,
- * so a row that's also open in the agent pane shares one cache entry
- * instead of double-fetching. Returns a `Map<agentId, AgentPresence>`;
- * agents whose query hasn't resolved default to `idle`.
- */
-export function useAgentsPresence(
-  agentIds: string[],
-): Map<string, AgentPresence> {
-  const results = useQueries({
-    queries: agentIds.map(id => ({
-      queryKey: agentRuntimeStateKey(id),
-      queryFn: async () =>
-        api<AgentRuntimeStateDto>(`/api/agents/${id}/runtime-state`),
-      staleTime: 2_000,
-      refetchInterval: 5_000,
-    })),
-  });
-  // Recompute only when an actual presence flips, not on every poll that
-  // returns identical data — keying the memo on a compact signature keeps
-  // the returned Map referentially stable across no-op refetches.
-  const signature = agentIds
-    .map((id, i) => `${id}:${presenceFromRuntimeState(results[i]?.data)}`)
-    .join('|');
-  return useMemo(() => {
-    const map = new Map<string, AgentPresence>();
-    agentIds.forEach((id, i) => {
-      map.set(id, presenceFromRuntimeState(results[i]?.data));
-    });
-    return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signature]);
-}
-
-export function useAgentDeleteImpact(agentId: string | null, enabled = true) {
-  return useQuery({
-    queryKey: agentId
-      ? agentDeleteImpactKey(agentId)
-      : ['agents', 'none', 'delete-impact'],
-    enabled: !!agentId && enabled,
-    queryFn: async () => {
-      const res = await api<{ impact: AgentDeleteImpactDto }>(
-        `/api/agents/${agentId}/delete-impact`,
-      );
-      return res.impact;
-    },
-    // Always refetch when the dialog opens — counts are user-facing
-    // and we want them current.
-    staleTime: 0,
   });
 }
 

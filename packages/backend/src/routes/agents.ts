@@ -1,6 +1,6 @@
 // Public `/api/agents` surface: list / create / get / patch / avatar
 // workspace-fs (tree·file) / runtime-state / schedules (list·cancel) / stop /
-// delete-impact / delete. The destructive DELETE cascade already delegates to
+// delete. The destructive DELETE cascade already delegates to
 // the `deleteAgent` use case; `stop` is a runtime-adapter aggregation with no
 // DB/UoW, so it stays in the route layer.
 import {
@@ -26,9 +26,6 @@ import {
   canViewAgentFiles,
   canViewWorkspace,
 } from '../permissions.js';
-import {
-  computeDeleteImpact,
-} from '../read-model/agent-delete-impact.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
@@ -927,24 +924,6 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
       return c.json({ stopped: 0, error: msg }, 500);
     }
     return c.json({ stopped: successCount });
-  });
-
-  // GET /delete-impact — drives the destructive-confirm dialog.
-  // Default-active only: the management view's affordances on failed / pending rows are
-  // `Delete` + `Retry`, NOT a destructive impact preview. Returning
-  // 404 here for failed/pending avoids the misleading "this delete
-  // will sweep N conversations" panel on a row that has zero
-  // dependents to begin with.
-  app.get('/api/agents/:id/delete-impact', c => {
-    const agent = agents.get(c.req.param('id'));
-    if (!agent) return c.json({ error: 'agent not found' }, 404);
-    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
-      return c.json({ error: 'agent not found' }, 404);
-    }
-    if (!canEditAgent(ctx, getUserPrincipal(c), agent.id)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    return c.json({ impact: computeDeleteImpact({ ctx, agents, workspaces, conversations, conversationInboxes }, agent.id) });
   });
 
   // DELETE /api/agents/:id — destructive cascade. The full saga

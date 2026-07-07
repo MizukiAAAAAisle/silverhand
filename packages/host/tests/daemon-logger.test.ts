@@ -1,8 +1,9 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDaemonLogControl, createDaemonLogger } from '../src/daemon/logger.js';
+import { SILVERHAND_LOG_LEVEL_ENV } from '@silverhand/shared';
 
 const dirs: string[] = [];
 
@@ -20,12 +21,58 @@ function readLines(filePath: string): Array<Record<string, unknown>> {
 
 describe('daemon file logger levels', () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     while (dirs.length) {
       rmSync(dirs.pop()!, { recursive: true, force: true });
     }
   });
 
-  it('filters info by default and lifts a single conversation during debug window', async () => {
+  it('writes info by default so daemon lifecycle diagnostics land on disk', async () => {
+    const previous = process.env[SILVERHAND_LOG_LEVEL_ENV];
+    delete process.env[SILVERHAND_LOG_LEVEL_ENV];
+    try {
+      const logger = createDaemonLogger({ dir: tempDir() });
+
+      logger.info({ action: 'ready' }, 'daemon ready');
+      await logger.close();
+
+      const [line] = readLines(logger.filePath);
+      expect(line?.msg).toBe('daemon ready');
+      expect(typeof line?.ts).toBe('string');
+      expect(line?.ts).toMatch(
+        /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{2}:\d{2}$/,
+      );
+      expect(typeof line?.ts_unix_ms).toBe('number');
+    } finally {
+      if (previous === undefined) {
+        delete process.env[SILVERHAND_LOG_LEVEL_ENV];
+      } else {
+        process.env[SILVERHAND_LOG_LEVEL_ENV] = previous;
+      }
+    }
+  });
+
+  it('mirrors the exact JSONL line to stderr when requested', async () => {
+    const writes: string[] = [];
+    vi.spyOn(process.stderr, 'write').mockImplementation(chunk => {
+      writes.push(String(chunk));
+      return true;
+    });
+    const logger = createDaemonLogger({
+      dir: tempDir(),
+      alsoStderr: true,
+      logControl: createDaemonLogControl('info'),
+    });
+
+    logger.warn({ action: 'diagnostic' }, 'daemon diagnostic');
+    await logger.close();
+
+    const diskLine = readFileSync(logger.filePath, 'utf8').trim();
+    expect(writes).toEqual([`${diskLine}\n`]);
+    expect(writes[0]).not.toContain('[daemon warn]');
+  });
+
+  it('filters info at warn level and lifts a single conversation during debug window', async () => {
     const control = createDaemonLogControl('warn');
     const logger = createDaemonLogger({
       dir: tempDir(),

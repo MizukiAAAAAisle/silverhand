@@ -76,19 +76,23 @@ export function WorkspaceSettingsDialog({
 
   const isDm = workspaceKind === 'dm';
   const isArchived = archivedAt !== null;
+  const visibleNavItems = isDm
+    ? NAV_ITEMS.filter(item => item.id === 'general')
+    : NAV_ITEMS;
+  const activeSection = isDm && section !== 'general' ? 'general' : section;
 
   // Reset every time the dialog reopens for a (potentially different)
   // workspace.
   useEffect(() => {
     if (open) {
-      setSection(initialSection);
+      setSection(isDm ? 'general' : initialSection);
       setPermTab('agents');
       setName(workspaceName ?? '');
       setRenameError(null);
       setCopied(false);
       setConfirmingDelete(false);
     }
-  }, [open, workspaceName, initialSection]);
+  }, [open, workspaceName, initialSection, isDm]);
 
   const handleRename = async (e: FormEvent) => {
     e.preventDefault();
@@ -162,8 +166,8 @@ export function WorkspaceSettingsDialog({
 
         <div className="flex h-[32rem] gap-5">
           <nav className="flex w-40 shrink-0 flex-col gap-0.5">
-            {NAV_ITEMS.map(item => {
-              const active = section === item.id;
+            {visibleNavItems.map(item => {
+              const active = activeSection === item.id;
               const Icon = item.icon;
               return (
                 <button
@@ -186,7 +190,7 @@ export function WorkspaceSettingsDialog({
           </nav>
 
           <div className="scrollbar-hide min-w-0 flex-1 overflow-y-auto pr-1">
-            {section === 'general' ? (
+            {activeSection === 'general' ? (
               <GeneralSection
                 isDm={isDm}
                 isArchived={isArchived}
@@ -354,79 +358,83 @@ function GeneralSection({
         </div>
       ) : null}
 
-      <div className="flex items-center justify-between gap-3 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-elevated/40 p-3 transition-colors hover:border-[color:var(--border-control-hover)]">
-        <div className="flex flex-col gap-0.5">
-          <span className="text-sm font-medium text-text-primary">
-            {isArchived ? 'Archived' : 'Archive workspace'}
-          </span>
-          <span className="text-xs text-text-muted">
-            {isArchived
-              ? 'Collapsed into the sidebar Archived group; still accessible.'
-              : 'Collapse into the sidebar Archived group, keep all content, restore anytime.'}
-          </span>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={onToggleArchive}
-          disabled={!workspaceId || archivePending}
-        >
-          {isArchived ? (
-            <>
-              <ArchiveRestore className="mr-1.5 size-3.5" />
-              {archivePending ? 'Working…' : 'Unarchive'}
-            </>
-          ) : (
-            <>
-              <Archive className="mr-1.5 size-3.5" />
-              {archivePending ? 'Working…' : 'Archive'}
-            </>
-          )}
-        </Button>
-      </div>
+      {!isDm ? (
+        <>
+          <div className="flex items-center justify-between gap-3 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-elevated/40 p-3 transition-colors hover:border-[color:var(--border-control-hover)]">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-sm font-medium text-text-primary">
+                {isArchived ? 'Archived' : 'Archive workspace'}
+              </span>
+              <span className="text-xs text-text-muted">
+                {isArchived
+                  ? 'Collapsed into the sidebar Archived group; still accessible.'
+                  : 'Collapse into the sidebar Archived group, keep all content, restore anytime.'}
+              </span>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onToggleArchive}
+              disabled={!workspaceId || archivePending}
+            >
+              {isArchived ? (
+                <>
+                  <ArchiveRestore className="mr-1.5 size-3.5" />
+                  {archivePending ? 'Working…' : 'Unarchive'}
+                </>
+              ) : (
+                <>
+                  <Archive className="mr-1.5 size-3.5" />
+                  {archivePending ? 'Working…' : 'Archive'}
+                </>
+              )}
+            </Button>
+          </div>
 
-      <div className="flex flex-col gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-error/30 bg-error/5 p-3">
-        <div className="flex flex-col gap-0.5">
-          <span className="text-sm font-medium text-text-primary">
-            Delete workspace
-          </span>
-          <span className="text-xs text-text-muted">
-            All channels, threads, and messages are removed permanently and
-            cannot be recovered.
-          </span>
-        </div>
-        {confirmingDelete ? (
-          <div className="flex items-center justify-end gap-2">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => setConfirmingDelete(false)}
-              disabled={deletePending}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="danger"
-              onClick={onDelete}
-              disabled={deletePending}
-            >
-              {deletePending ? 'Deleting…' : 'Confirm delete'}
-            </Button>
+          <div className="flex flex-col gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-error/30 bg-error/5 p-3">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-sm font-medium text-text-primary">
+                Delete workspace
+              </span>
+              <span className="text-xs text-text-muted">
+                All channels, threads, and messages are removed permanently and
+                cannot be recovered.
+              </span>
+            </div>
+            {confirmingDelete ? (
+              <div className="flex items-center justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setConfirmingDelete(false)}
+                  disabled={deletePending}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="danger"
+                  onClick={onDelete}
+                  disabled={deletePending}
+                >
+                  {deletePending ? 'Deleting…' : 'Confirm delete'}
+                </Button>
+              </div>
+            ) : (
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  variant="danger"
+                  onClick={() => setConfirmingDelete(true)}
+                  disabled={!workspaceId}
+                >
+                  Delete workspace
+                </Button>
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="flex justify-end">
-            <Button
-              type="button"
-              variant="danger"
-              onClick={() => setConfirmingDelete(true)}
-              disabled={!workspaceId}
-            >
-              Delete workspace
-            </Button>
-          </div>
-        )}
-      </div>
+        </>
+      ) : null}
     </div>
   );
 }

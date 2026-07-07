@@ -28,6 +28,15 @@ export type FastMode = z.infer<typeof FastModeSchema>;
 export const HostKindSchema = z.enum(['local', 'remote']);
 export type HostKind = z.infer<typeof HostKindSchema>;
 
+export const HostProvisioningSourceSchema = z.enum([
+  'app_install',
+  'user_invite',
+  'system',
+]);
+export type HostProvisioningSource = z.infer<
+  typeof HostProvisioningSourceSchema
+>;
+
 export const HostCredentialKindSchema = z.enum(['long_lived', 'bootstrap']);
 export type HostCredentialKind = z.infer<typeof HostCredentialKindSchema>;
 
@@ -115,6 +124,17 @@ export interface HostRow {
   last_seen_at: number | null;
   revoked_at: number | null;
   created_at: number;
+  /** User-managed computer lifecycle marker. NULL means pending attach;
+   *  non-null means this host has completed at least one authenticated daemon
+   *  attachment. */
+  activated_at: number | null;
+  /** User confirmation marker. User-invited computers stay setup drafts until
+   *  the modal finalizes them; runtime readiness composes this with
+   *  activated_at, revoked_at, and owner ACL. */
+  finalized_at: number | null;
+  /** Lifecycle/origin metadata only. Must not gate runtime capability,
+   *  placement, routing, or ACL decisions. */
+  provisioning_source: HostProvisioningSource;
   /** v36 (#task:808): user-facing rename target for the ComputerPane
    *  / host registry view. `name` stays the stable normalized identifier
    *  used by `claimOrCreateLocal` and future ref resolvers. Renderer

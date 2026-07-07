@@ -198,7 +198,7 @@ export interface SupervisorOptions {
    *  null/undefined to disable filesystem pidfiles. */
   daemonInstanceId?: string;
   runtimePidRootDir?: string | null;
-  proxyConfigPath?: string | null;
+  proxyConfigPath?: string | null | (() => string | null);
   /**
    * Host-local launcher for the `silverhand` CLI shim exposed to runtimes.
    * Standalone backend cannot know packaged/host-local paths, so the
@@ -403,7 +403,7 @@ export class Supervisor implements SupervisorContract {
   private readonly sigkillTimeoutMs: number;
   private readonly daemonInstanceId: string | null;
   private readonly runtimePidRootDir: string | null;
-  private readonly proxyConfigPath: string | null;
+  private readonly proxyConfigPath: () => string | null;
   private readonly localSilverhandCliLauncher: SilverhandCliLauncher | null;
   private readonly controlPlaneServerUrl: () => string | null;
   private readonly daemonSocketPath: string | null;
@@ -443,7 +443,11 @@ export class Supervisor implements SupervisorContract {
     this.sigkillTimeoutMs = opts.sigkillTimeoutMs ?? DEFAULT_SIGKILL_TIMEOUT_MS;
     this.daemonInstanceId = opts.daemonInstanceId ?? null;
     this.runtimePidRootDir = opts.runtimePidRootDir ?? null;
-    this.proxyConfigPath = opts.proxyConfigPath ?? null;
+    const proxyConfigPath = opts.proxyConfigPath ?? null;
+    this.proxyConfigPath =
+      typeof proxyConfigPath === 'function'
+        ? proxyConfigPath
+        : () => proxyConfigPath;
     this.localSilverhandCliLauncher = opts.localSilverhandCliLauncher ?? null;
     this.controlPlaneServerUrl = opts.controlPlaneServerUrl ?? (() => null);
     this.daemonSocketPath = opts.daemonSocketPath ?? null;
@@ -1212,7 +1216,7 @@ export class Supervisor implements SupervisorContract {
       lastDeliveredSeqPath: spawnPrep.lastDeliveredSeqPath,
       binDir: spawnPrep.binDir,
       controlPlaneServerUrl: this.controlPlaneServerUrl(),
-      proxyConfig: readDaemonProxyConfig(this.proxyConfigPath, this.logger),
+      proxyConfig: readDaemonProxyConfig(this.proxyConfigPath(), this.logger),
     });
     const startedAt = this.now();
 
@@ -3674,26 +3678,28 @@ function trimActivitySnippet(text: string): string | undefined {
 
 /**
  * Default binary resolver — wraps `detectRuntimes()` from
- * `packages/host/src/runtimes.ts`. Cached per-instance because
- * `detectRuntimes` shells out to `which` and version-probes each
- * binary; once per supervisor boot is enough.
+ * `packages/host/src/runtimes.ts`. The detector has a short cache, but a
+ * miss is force-refreshed so installing a runtime after daemon boot does not
+ * require a daemon restart before spawn can find it.
  */
-let detectedBinariesPromise: Promise<Map<RuntimeKind, string>> | null = null;
+async function detectedBinaries(force = false): Promise<Map<RuntimeKind, string>> {
+  const infos = await detectRuntimes({ force });
+  const m = new Map<RuntimeKind, string>();
+  for (const info of infos) {
+    if (info.installed && info.binary) m.set(info.kind, info.binary);
+  }
+  return m;
+}
+
 async function defaultResolveBinary(
   kind: RuntimeKind,
   _fallback: string,
 ): Promise<string | null> {
-  if (!detectedBinariesPromise) {
-    detectedBinariesPromise = detectRuntimes().then(infos => {
-      const m = new Map<RuntimeKind, string>();
-      for (const info of infos) {
-        if (info.installed && info.binary) m.set(info.kind, info.binary);
-      }
-      return m;
-    });
-  }
-  const m = await detectedBinariesPromise;
-  return m.get(kind) ?? null;
+  const cached = await detectedBinaries(false);
+  const found = cached.get(kind);
+  if (found) return found;
+  const fresh = await detectedBinaries(true);
+  return fresh.get(kind) ?? null;
 }
 
 export type { RuntimeHandle, RuntimePhase };

@@ -1,9 +1,39 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
-import type { HostDto, HostKind, HostRow } from '@silverhand/shared';
+import type {
+  HostDto,
+  HostKind,
+  HostLifecycleStatus,
+  HostProvisioningSource,
+  HostRow,
+} from '@silverhand/shared';
 
 function newId(): string {
   return randomBytes(12).toString('base64url');
+}
+
+export const HOST_READY_FOR_PLACEMENT_SQL =
+  'activated_at IS NOT NULL AND finalized_at IS NOT NULL AND revoked_at IS NULL';
+
+// Keep this TS predicate in lockstep with HOST_READY_FOR_PLACEMENT_SQL above.
+// SQL query paths use the constant; in-memory/assertion paths use this helper.
+export function isHostReadyForPlacement(
+  row: Pick<HostRow, 'activated_at' | 'finalized_at' | 'revoked_at'>,
+): boolean {
+  return (
+    row.activated_at !== null &&
+    row.finalized_at !== null &&
+    row.revoked_at === null
+  );
+}
+
+export function getHostLifecycleStatus(
+  row: Pick<HostRow, 'activated_at' | 'finalized_at' | 'revoked_at'>,
+): HostLifecycleStatus {
+  if (row.revoked_at !== null) return 'revoked';
+  if (isHostReadyForPlacement(row)) return 'active';
+  if (row.activated_at !== null) return 'attached';
+  return 'pending';
 }
 
 function rowToDto(row: HostRow): HostDto {
@@ -14,6 +44,12 @@ function rowToDto(row: HostRow): HostDto {
     created_at: row.created_at,
     revoked_at: row.revoked_at,
     last_seen_at: row.last_seen_at,
+    activated_at: row.activated_at,
+    finalized_at: row.finalized_at,
+    connected_host_name: null,
+    provisioning_source: row.provisioning_source,
+    status: getHostLifecycleStatus(row),
+    placeable: isHostReadyForPlacement(row),
     creator_user_id: row.user_id,
     display_label: row.display_label,
   };
@@ -30,11 +66,19 @@ export interface CreateHostOptions {
    *  `hosts.display_label`; the renderer reads `display_label ?? name`.
    *  `name` is independently the normalized stable identifier. */
   displayLabel?: string | null;
+  activatedAt?: number | null;
+  finalizedAt?: number | null;
+  provisioningSource?: HostProvisioningSource;
 }
 
 export interface ClaimLocalHostResult {
   host: HostRow;
   created: boolean;
+}
+
+export interface HostDeleteDependents {
+  agents: number;
+  workspaces: number;
 }
 
 export class HostRepo {
@@ -55,6 +99,10 @@ export class HostRepo {
       .prepare<[string], HostRow>(
         `SELECT * FROM hosts
           WHERE user_id = ?
+            AND NOT (
+              provisioning_source = 'user_invite'
+              AND finalized_at IS NULL
+            )
           ORDER BY (CASE WHEN revoked_at IS NULL THEN 0 ELSE 1 END) ASC,
                    created_at ASC`,
       )
@@ -84,11 +132,28 @@ export class HostRepo {
   create(name: string, kind: HostKind, opts: CreateHostOptions = {}): HostRow {
     const id = newId();
     const now = Date.now();
+    const activatedAt =
+      opts.activatedAt !== undefined
+        ? opts.activatedAt
+        : opts.userId && kind === 'local'
+          ? opts.lastSeenAt ?? now
+          : null;
+    const finalizedAt =
+      opts.finalizedAt !== undefined
+        ? opts.finalizedAt
+        : opts.userId && kind === 'local'
+          ? activatedAt
+          : null;
+    const provisioningSource =
+      opts.provisioningSource ??
+      (opts.userId && kind === 'local' && opts.installationId
+        ? 'app_install'
+        : 'system');
     this.db
       .prepare(
         `INSERT INTO hosts
-           (id, name, kind, user_id, installation_id, last_seen_at, revoked_at, created_at, display_label)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+           (id, name, kind, user_id, installation_id, last_seen_at, revoked_at, created_at, display_label, activated_at, finalized_at, provisioning_source)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -99,6 +164,9 @@ export class HostRepo {
         opts.lastSeenAt ?? null,
         now,
         normalizeDisplayLabel(opts.displayLabel),
+        activatedAt,
+        finalizedAt,
+        provisioningSource,
       );
     const row = this.get(id);
     if (!row) throw new Error('insert failed');
@@ -170,24 +238,42 @@ export class HostRepo {
       .all(userId);
   }
 
+  listOwnedReadyForPlacement(userId: string): HostRow[] {
+    return this.db
+      .prepare<[string], HostRow>(
+        `SELECT * FROM hosts
+          WHERE user_id = ?
+            AND ${HOST_READY_FOR_PLACEMENT_SQL}
+          ORDER BY COALESCE(last_seen_at, activated_at, created_at) DESC,
+                   created_at DESC`,
+      )
+      .all(userId);
+  }
+
   bindToUserInstallation(input: {
     hostId: string;
     userId: string;
     installationId: string;
     lastSeenAt?: number;
   }): HostRow {
+    const lastSeenAt = input.lastSeenAt ?? Date.now();
     this.db
       .prepare(
         `UPDATE hosts
             SET user_id = ?,
                 installation_id = ?,
-                last_seen_at = ?
+                last_seen_at = ?,
+                activated_at = COALESCE(activated_at, ?),
+                finalized_at = COALESCE(finalized_at, ?),
+                provisioning_source = 'app_install'
           WHERE id = ?`,
       )
       .run(
         input.userId,
         input.installationId,
-        input.lastSeenAt ?? Date.now(),
+        lastSeenAt,
+        lastSeenAt,
+        lastSeenAt,
         input.hostId,
       );
     const row = this.get(input.hostId);
@@ -275,6 +361,61 @@ export class HostRepo {
     return result.changes > 0;
   }
 
+  markActivated(id: string, activatedAt = Date.now()): HostRow | null {
+    this.db
+      .prepare(
+        `UPDATE hosts
+            SET activated_at = COALESCE(activated_at, ?),
+                last_seen_at = ?
+          WHERE id = ?`,
+      )
+      .run(activatedAt, activatedAt, id);
+    return this.get(id);
+  }
+
+  markFinalized(id: string, finalizedAt = Date.now()): HostRow | null {
+    this.db
+      .prepare(
+        `UPDATE hosts
+            SET finalized_at = COALESCE(finalized_at, ?)
+          WHERE id = ?`,
+      )
+      .run(finalizedAt, id);
+    return this.get(id);
+  }
+
+  countDeleteDependents(hostId: string): HostDeleteDependents {
+    const agents =
+      this.db
+        .prepare<[string], { c: number }>(
+          `SELECT COUNT(*) AS c FROM agents WHERE host_id = ?`,
+        )
+        .get(hostId)?.c ?? 0;
+    const workspaces =
+      this.db
+        .prepare<[string], { c: number }>(
+          `SELECT COUNT(*) AS c
+             FROM workspaces
+            WHERE workspace_host_id = ?
+              AND workspace_kind = 'regular'`,
+        )
+        .get(hostId)?.c ?? 0;
+    return { agents, workspaces };
+  }
+
+  deleteOwnedUserInvite(input: { hostId: string; userId: string }): boolean {
+    const result = this.db
+      .prepare(
+        `DELETE FROM hosts
+          WHERE id = ?
+            AND user_id = ?
+            AND kind = 'remote'
+            AND provisioning_source = 'user_invite'`,
+      )
+      .run(input.hostId, input.userId);
+    return result.changes > 0;
+  }
+
   revoke(id: string, revokedAt = Date.now()): boolean {
     const result = this.db
       .prepare(
@@ -300,6 +441,22 @@ export class HostRepo {
     const existing = this.getByName(STANDALONE_SERVER_HOST_NAME);
     if (existing) return existing;
     return this.create(STANDALONE_SERVER_HOST_NAME, 'remote');
+  }
+
+  createUserInvite(input: { userId: string }): HostRow {
+    for (let i = 0; i < 8; i++) {
+      const name = `computer-${randomBytes(4).toString('hex')}`;
+      if (this.getByName(name)) continue;
+      return this.create(name, 'remote', {
+        userId: input.userId,
+        installationId: null,
+        lastSeenAt: null,
+        activatedAt: null,
+        provisioningSource: 'user_invite',
+        displayLabel: null,
+      });
+    }
+    throw new Error('HostRepo.createUserInvite: unable to allocate host name');
   }
 
   private getUnclaimedLocal(): HostRow | null {

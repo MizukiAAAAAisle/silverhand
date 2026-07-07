@@ -99,9 +99,10 @@ export class HostRuntimeDisabledError extends Error {
  *
  * D5.a-3 unified embedded and standalone onto ONE host: both modes wire
  * `new OutboundAgentRuntimeHost(logger, () => outboundFanout)`, and the
- * fanout's `transport` is the deployment-specific `OutboundFrameAdapter`
- * (standalone = WSS-backed; embedded = local Unix socket). The host owns
- * no runtime state itself — every method delegates to the
+ * fanout's `transport` is a deployment-specific `OutboundFrameAdapter`
+ * (standalone = WSS-backed; embedded = composite: local Unix for the
+ * co-located app-managed host plus WSS for user-managed computers). The
+ * host owns no runtime state itself — every method delegates to the
  * {@link OutboundAgentRuntimeProjection} (the fanout). When no daemon is
  * attached the projection's dispatch path throws a typed
  * `transport_no_connection`, which routes map to 503 `host_attach_pending`.

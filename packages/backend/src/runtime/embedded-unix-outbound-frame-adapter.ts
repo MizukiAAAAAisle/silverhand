@@ -178,6 +178,7 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
       hostId: this.hostId,
       connectionId: this.connectionId,
       attachedAt: this.attachedAt ?? 0,
+      hostname: null,
     };
   }
 

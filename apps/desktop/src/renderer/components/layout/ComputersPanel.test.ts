@@ -23,6 +23,12 @@ function host(input: {
     creator_user_id: 'viewer',
     created_at: 1,
     last_seen_at: null,
+    activated_at: 1,
+    finalized_at: 1,
+    connected_host_name: null,
+    provisioning_source: input.kind === 'local' ? 'app_install' : 'system',
+    status: 'active',
+    placeable: true,
     revoked_at: null,
   };
 }

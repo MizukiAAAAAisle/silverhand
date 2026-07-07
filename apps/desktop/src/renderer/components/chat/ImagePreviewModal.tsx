@@ -197,7 +197,6 @@ export function ImagePreviewModal({
   messages,
   workspaceId,
   channelTitle,
-  channelKind,
   agentsById,
   agentsByName,
   humansByName,
@@ -218,7 +217,6 @@ export function ImagePreviewModal({
   messages: readonly MessageDto[];
   workspaceId?: string | null;
   channelTitle: string | null;
-  channelKind: 'channel' | 'dm' | null;
   agentsById: ReadonlyMap<string, AgentDto>;
   agentsByName: ReadonlyMap<string, AgentDto>;
   humansByName?: ReadonlyMap<string, UserDto>;
@@ -470,7 +468,6 @@ export function ImagePreviewModal({
               <MessageScreenshotView
                 messages={messages}
                 channelTitle={channelTitle}
-                channelKind={channelKind}
                 agentsById={agentsById}
                 agentsByName={agentsByName}
                 humansByName={humansByName}

@@ -7,10 +7,12 @@ import {
   AuthSessionResponseSchema,
   EMBEDDED_BOOTSTRAP_FILENAME,
   EVENT_WS_SESSION_COOKIE,
+  HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE,
   HostClaimOrCreateResponseSchema,
+  HostProxyConfigResponseSchema,
+  HostProxyConfigSchema,
   HostRevokeResponseSchema,
   HostRotateTokenEmbeddedResponseSchema,
-  RuntimeKindSchema,
   X_SILVERHAND_LEGACY_USER_ID_HEADER,
   X_SILVERHAND_PRINCIPAL_HEADER,
   apiPaths,
@@ -22,7 +24,7 @@ import {
   type AuthLoginInput,
   type AuthSignupInput,
   type HostDto,
-  type RuntimeKind,
+  type HostProxyConfig,
   type ServerConnectionProfile,
   type ServerConnectionProfileView,
   type ServerInfo,
@@ -143,10 +145,7 @@ type BackendHandle =
   | { readonly kind: 'embedded'; readonly running: RunningBackend }
   | RemoteBackendHandle;
 
-interface DesktopHostProxyConfig {
-  proxy_url: string | null;
-  proxy_runtimes: RuntimeKind[];
-}
+type DesktopHostProxyConfig = HostProxyConfig;
 
 type DesktopHostProxyConfigResult =
   | { ok: true; config: DesktopHostProxyConfig }
@@ -154,6 +153,11 @@ type DesktopHostProxyConfigResult =
       ok: false;
       code:
         | 'not_local_host'
+        | 'unauthorized'
+        | 'host_not_found'
+        | 'host_not_active'
+        | 'host_revoked'
+        | typeof HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE
         | 'daemon_unavailable'
         | 'daemon_error'
         | 'invalid_input';
@@ -487,7 +491,7 @@ interface DaemonPaths {
   runtimePidRootDir: string;
   agentHomeRootDir: string;
   hostConfigPath: string;
-  proxyConfigPath: string;
+  legacyProxyConfigPath: string;
   controlPlaneServerUrlPath: string;
   /** Local outbound frame socket — the daemon binds it and the embedded
    *  backend dials it for the D5.a R4-unified outbound envelope. */
@@ -507,7 +511,7 @@ function daemonPaths(): DaemonPaths {
     runtimePidRootDir: join(runDir, 'runtime-pids'),
     agentHomeRootDir: join(silverhandDir(), 'agents'),
     hostConfigPath: daemonHostConfigPath(silverhandDir()),
-    proxyConfigPath: join(silverhandDir(), 'daemon', 'proxy-config.json'),
+    legacyProxyConfigPath: join(silverhandDir(), 'daemon', 'proxy-config.json'),
     controlPlaneServerUrlPath: join(runDir, 'control-plane-server-url'),
     localOutboundSocketPath: join(runDir, 'daemon-outbound.sock'),
   };
@@ -1401,86 +1405,133 @@ async function revokeHost(
 function normalizeDesktopHostProxyConfig(
   input: unknown,
 ): DesktopHostProxyConfig | null {
-  if (!input || typeof input !== 'object') return null;
-  const obj = input as {
-    proxy_url?: unknown;
-    proxy_runtimes?: unknown;
-  };
-  const rawUrl = obj.proxy_url;
-  if (rawUrl !== null && typeof rawUrl !== 'string') return null;
-  const proxy_url =
-    typeof rawUrl === 'string' && rawUrl.trim().length > 0
-      ? rawUrl.trim()
-      : null;
-  if (!Array.isArray(obj.proxy_runtimes)) return null;
-  const proxy_runtimes: RuntimeKind[] = [];
-  const seen = new Set<string>();
-  for (const value of obj.proxy_runtimes) {
-    const parsed = RuntimeKindSchema.safeParse(value);
-    if (!parsed.success || seen.has(parsed.data)) continue;
-    seen.add(parsed.data);
-    proxy_runtimes.push(parsed.data);
-  }
-  return { proxy_url, proxy_runtimes };
+  const parsed = HostProxyConfigSchema.safeParse(input);
+  return parsed.success ? parsed.data : null;
 }
 
 async function getHostProxyConfig(
   hostId: string,
 ): Promise<DesktopHostProxyConfigResult> {
-  if (!hostId || localHostClaim.status !== 'claimed' || hostId !== localHostClaim.hostId) {
-    return { ok: false, code: 'not_local_host' };
+  const token = userSessionToken;
+  if (!token || !backend) {
+    return { ok: false, code: 'unauthorized' };
   }
-  if (!hostClient || !hostClient.isConnected()) {
-    return { ok: false, code: 'daemon_unavailable' };
+  if (!hostId) {
+    return { ok: false, code: 'host_not_found', message: 'missing host id' };
   }
+
+  let res: Response;
   try {
-    const result = await hostClient.hostProxyConfigGet();
-    return { ok: true, config: result.config };
+    res = await fetch(backendUrl(apiPaths.hostProxyConfig(hostId)), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
   } catch (err) {
     logger?.warn(
       { err: err instanceof Error ? err.message : String(err), hostId },
-      'host proxy config get failed',
+      'host proxy config get request failed',
     );
+    return { ok: false, code: 'daemon_error', message: networkErrorMessage(err) };
+  }
+
+  const body = parseJson(await res.text());
+  if (res.status === 401) {
+    await clearUserSessionAfterUnauthorized('host proxy config get');
+    return { ok: false, code: 'unauthorized' };
+  }
+  if (!res.ok) {
+    return hostProxyConfigErrorResult(body, res.status, res.statusText);
+  }
+
+  const parsed = HostProxyConfigResponseSchema.safeParse(body);
+  if (!parsed.success) {
     return {
       ok: false,
-      code:
-        err instanceof HostClientError && err.code === 'disconnected'
-          ? 'daemon_unavailable'
-          : 'daemon_error',
-      message: err instanceof Error ? err.message : String(err),
+      code: 'daemon_error',
+      message: 'invalid proxy config response',
     };
   }
+  return { ok: true, config: parsed.data.config };
 }
 
 async function saveHostProxyConfig(input: {
   hostId: string;
   config: unknown;
 }): Promise<DesktopHostProxyConfigResult> {
-  if (!input.hostId || localHostClaim.status !== 'claimed' || input.hostId !== localHostClaim.hostId) {
-    return { ok: false, code: 'not_local_host' };
+  const token = userSessionToken;
+  if (!token || !backend) {
+    return { ok: false, code: 'unauthorized' };
+  }
+  if (!input.hostId) {
+    return { ok: false, code: 'host_not_found', message: 'missing host id' };
   }
   const config = normalizeDesktopHostProxyConfig(input.config);
   if (!config) return { ok: false, code: 'invalid_input' };
-  if (!hostClient || !hostClient.isConnected()) {
-    return { ok: false, code: 'daemon_unavailable' };
-  }
+
+  let res: Response;
   try {
-    const result = await hostClient.hostProxyConfigSet(config);
-    return { ok: true, config: result.config };
+    res = await fetch(backendUrl(apiPaths.hostProxyConfig(input.hostId)), {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(config),
+    });
   } catch (err) {
     logger?.warn(
       { err: err instanceof Error ? err.message : String(err), hostId: input.hostId },
-      'host proxy config set failed',
+      'host proxy config set request failed',
     );
+    return { ok: false, code: 'daemon_error', message: networkErrorMessage(err) };
+  }
+
+  const body = parseJson(await res.text());
+  if (res.status === 401) {
+    await clearUserSessionAfterUnauthorized('host proxy config set');
+    return { ok: false, code: 'unauthorized' };
+  }
+  if (!res.ok) {
+    return hostProxyConfigErrorResult(body, res.status, res.statusText);
+  }
+
+  const parsed = HostProxyConfigResponseSchema.safeParse(body);
+  if (!parsed.success) {
     return {
       ok: false,
-      code:
-        err instanceof HostClientError && err.code === 'disconnected'
-          ? 'daemon_unavailable'
-          : 'daemon_error',
-      message: err instanceof Error ? err.message : String(err),
+      code: 'daemon_error',
+      message: 'invalid proxy config response',
     };
   }
+  return { ok: true, config: parsed.data.config };
+}
+
+function hostProxyConfigErrorResult(
+  body: unknown,
+  status: number,
+  statusText: string,
+): DesktopHostProxyConfigResult {
+  const error = body && typeof body === 'object' ? body as Record<string, unknown> : {};
+  const code = typeof error.error_code === 'string' ? error.error_code : null;
+  const message =
+    typeof error.error === 'string' ? error.error : `${status} ${statusText}`;
+  switch (code) {
+    case 'host_not_found':
+      return { ok: false, code: 'host_not_found', message };
+    case 'host_not_active':
+      return { ok: false, code: 'host_not_active', message };
+    case 'host_revoked':
+      return { ok: false, code: 'host_revoked', message };
+    case HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE:
+      return { ok: false, code: HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE, message };
+    case 'invalid_input':
+      return { ok: false, code: 'invalid_input', message };
+    default:
+      return { ok: false, code: 'daemon_error', message };
+  }
+}
+
+function networkErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**
@@ -1932,7 +1983,8 @@ async function bootstrap(): Promise<void> {
       logDir: paths.logDir,
       runtimePidRootDir: paths.runtimePidRootDir,
       agentHomeRootDir: paths.agentHomeRootDir,
-      proxyConfigPath: paths.proxyConfigPath,
+      proxyConfigPath: null,
+      legacyProxyConfigPath: paths.legacyProxyConfigPath,
       controlPlaneServerUrlPath:
         startupPlan.mode === 'embedded'
           ? paths.controlPlaneServerUrlPath

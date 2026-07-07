@@ -1,12 +1,19 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { apiPaths } from '@silverhand/shared';
+import {
+  HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE,
+  HOST_WS_CLOSE_REASON_DISCONNECTED,
+  HOST_WS_CLOSE_REASON_REVOKED,
+  apiPaths,
+} from '@silverhand/shared';
 import type {
   OutboundServerCommandKind,
   OutboundServerCommandParams,
   OutboundServerCommandResult,
 } from '@silverhand/host';
 import { HostTokenService, hashHostToken } from '../../src/auth/host-token.js';
+import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
+import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import type { HostWsServerController } from '../../src/ws/host-ws-server.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
@@ -254,6 +261,675 @@ describe('host routes', () => {
     });
   });
 
+  // ── POST /api/hosts — user-managed computer create ─────────────
+  describe('POST /api/hosts', () => {
+    it('creates a pending user-managed computer and returns a reveal-once connect command', async () => {
+      const previousSpec = process.env.SILVERHAND_DAEMON_NPM_SPEC;
+      delete process.env.SILVERHAND_DAEMON_NPM_SPEC;
+      try {
+        t = buildTestApp();
+        const userToken = t.ctx.authSessions.issueSession({
+          userId: t.viewerUserId,
+        }).userToken;
+
+        const res = await sessionHttp(t, userToken).post(apiPaths.hosts, {});
+
+        expect(res.status).toBe(200);
+        const body = await res.json() as any;
+        expect(body).toMatchObject({
+          host_id: expect.any(String),
+          host: {
+            id: body.host_id,
+            kind: 'remote',
+            activated_at: null,
+            finalized_at: null,
+            provisioning_source: 'user_invite',
+            status: 'pending',
+            placeable: false,
+            revoked_at: null,
+          },
+          server_url: t.ctx.serverConfig.url,
+          connect_token: expect.any(String),
+          daemon_command: expect.stringContaining('--connect-token'),
+        });
+        expect(body.daemon_command).toContain(body.connect_token);
+        expect(body.daemon_command).toContain(
+          'npx @silverhand-ai/daemon@latest connect --server-url',
+        );
+        expect(body.daemon_command).not.toContain(body.host_id);
+
+        const host = new HostRepo(t.ctx.db).get(body.host_id);
+        expect(host).toMatchObject({
+          user_id: t.viewerUserId,
+          kind: 'remote',
+          installation_id: null,
+          activated_at: null,
+          finalized_at: null,
+          provisioning_source: 'user_invite',
+        });
+        const credential = t.ctx.db
+          .prepare<[string], { token_hash: string; kind: string; revoked_at: number | null }>(
+            `SELECT token_hash, kind, revoked_at FROM host_credentials WHERE host_id = ?`,
+          )
+          .get(body.host_id);
+        expect(credential).toEqual({
+          token_hash: hashHostToken(body.connect_token),
+          kind: 'long_lived',
+          revoked_at: null,
+        });
+        expect(credential!.token_hash).not.toBe(body.connect_token);
+        expect(new HostTokenService(t.ctx.db).verifyHostToken(body.connect_token))
+          .toMatchObject({
+            ok: true,
+            hostId: body.host_id,
+            userId: t.viewerUserId,
+          });
+      } finally {
+        if (previousSpec === undefined) {
+          delete process.env.SILVERHAND_DAEMON_NPM_SPEC;
+        } else {
+          process.env.SILVERHAND_DAEMON_NPM_SPEC = previousSpec;
+        }
+      }
+    });
+
+    it('uses the daemon package spec from the environment when building the copied command', async () => {
+      const previousSpec = process.env.SILVERHAND_DAEMON_NPM_SPEC;
+      process.env.SILVERHAND_DAEMON_NPM_SPEC = 'file:/repo/packages/silverhand-daemon';
+      try {
+        t = buildTestApp();
+        const userToken = t.ctx.authSessions.issueSession({
+          userId: t.viewerUserId,
+        }).userToken;
+
+        const res = await sessionHttp(t, userToken).post(apiPaths.hosts, {});
+
+        expect(res.status).toBe(200);
+        const body = await res.json() as any;
+        expect(body.daemon_command).toContain(
+          'npx file:/repo/packages/silverhand-daemon connect --server-url',
+        );
+        expect(body.daemon_command).toContain('--connect-token');
+        expect(body.daemon_command).toContain(body.connect_token);
+        expect(body.daemon_command).not.toContain(body.host_id);
+      } finally {
+        if (previousSpec === undefined) {
+          delete process.env.SILVERHAND_DAEMON_NPM_SPEC;
+        } else {
+          process.env.SILVERHAND_DAEMON_NPM_SPEC = previousSpec;
+        }
+      }
+    });
+  });
+
+  // ── GET /api/hosts/connect-token/resolve — daemon command bootstrap ──
+  describe('GET /api/hosts/connect-token/resolve', () => {
+    it('resolves a user-managed connect-token to its host id without exposing the id in the copied command', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+
+      const res = await http(t, {
+        authorization: `Bearer ${created.connect_token}`,
+      }).get(apiPaths.hostConnectTokenResolve);
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ host_id: created.host_id });
+      expect(created.daemon_command).not.toContain(created.host_id);
+    });
+
+    it('rejects invalid connect-token resolve attempts', async () => {
+      t = buildTestApp();
+
+      const res = await http(t, {
+        authorization: 'Bearer not-a-real-token',
+      }).get(apiPaths.hostConnectTokenResolve);
+
+      expect(res.status).toBe(401);
+      expect(await res.json()).toMatchObject({ error_code: 'unauthorized' });
+    });
+  });
+
+  // ── GET /api/hosts/:id — by-id host read (includes setup drafts) ──
+  describe('GET /api/hosts/:id', () => {
+    it('lets the modal read an unfinalized draft while the bulk host list hides it', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+
+      const listBeforeAttach = await h.json<{ hosts: any[] }>(h.get(apiPaths.hosts));
+      expect(listBeforeAttach.hosts.map(host => host.id)).not.toContain(
+        created.host_id,
+      );
+
+      const pending = await h.json<any>(h.get(apiPaths.host(created.host_id)));
+      expect(pending.host).toMatchObject({
+        id: created.host_id,
+        status: 'pending',
+        placeable: false,
+      });
+
+      new HostRepo(t.ctx.db).markActivated(created.host_id, 1_700_000_000_000);
+      const attached = await h.json<any>(h.get(apiPaths.host(created.host_id)));
+      expect(attached.host).toMatchObject({
+        id: created.host_id,
+        status: 'attached',
+        placeable: false,
+      });
+      const listAfterAttach = await h.json<{ hosts: any[] }>(h.get(apiPaths.hosts));
+      expect(listAfterAttach.hosts.map(host => host.id)).not.toContain(
+        created.host_id,
+      );
+    });
+
+    it('adds diagnostic connected_host_name from the live attachment only', async () => {
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({
+        hostWsController: () => controller,
+      });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      controller = new FakeHostWsController(async () => ({}), {
+        hostId: created.host_id,
+        hostname: 'build-macbook.local',
+      });
+
+      const body = await h.json<any>(h.get(apiPaths.host(created.host_id)));
+
+      expect(body.host).toMatchObject({
+        id: created.host_id,
+        connected_host_name: 'build-macbook.local',
+      });
+      expect(body.host.name).not.toBe('build-macbook.local');
+    });
+
+    it('returns 404 for cross-user host reads', async () => {
+      t = buildTestApp({ ownedLocalHostUserIds: ['alice', 'bob'] });
+      const aliceToken = t.ctx.authSessions.issueSession({ userId: 'alice' }).userToken;
+      const bobHost = new HostRepo(t.ctx.db).getOwnedLocalForUser('bob');
+      expect(bobHost).not.toBeNull();
+
+      const res = await sessionHttp(t, aliceToken).get(apiPaths.host(bobHost!.id));
+
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({ error_code: 'host_not_found' });
+    });
+  });
+
+  // ── DELETE /api/hosts/:id — delete empty user-managed computer/setup ──
+  describe('DELETE /api/hosts/:id', () => {
+    it('hard-deletes a pending user-managed computer setup and invalidates its connect-token', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const token = created.connect_token as string;
+
+      const res = await h.del(apiPaths.hostCancelPending(created.host_id));
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        host_id: created.host_id,
+        deleted: true,
+      });
+      expect(new HostRepo(t.ctx.db).get(created.host_id)).toBeNull();
+      expect(
+        t.ctx.db
+          .prepare<[string], { c: number }>(
+            `SELECT COUNT(*) AS c FROM host_credentials WHERE host_id = ?`,
+          )
+          .get(created.host_id)?.c,
+      ).toBe(0);
+      expect(new HostTokenService(t.ctx.db).verifyHostToken(token)).toMatchObject({
+        ok: false,
+        code: 'missing',
+      });
+      const list = await h.json<{ hosts: any[] }>(h.get(apiPaths.hosts));
+      expect(list.hosts.map(host => host.id)).not.toContain(created.host_id);
+    });
+
+    it('hard-deletes an attached-but-unfinalized setup and disconnects its live daemon', async () => {
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({
+        hostWsController: () => controller,
+      });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      new HostRepo(t.ctx.db).markActivated(created.host_id, 1_700_000_000_000);
+      controller = new FakeHostWsController(async () => {
+        throw new Error('cancel must not dispatch commands');
+      });
+
+      const res = await h.del(apiPaths.hostCancelPending(created.host_id));
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        host_id: created.host_id,
+        deleted: true,
+      });
+      expect(controller.disconnects).toEqual([created.host_id]);
+      expect(new HostRepo(t.ctx.db).get(created.host_id)).toBeNull();
+      expect(
+        new HostTokenService(t.ctx.db).verifyHostToken(created.connect_token),
+      ).toMatchObject({
+        ok: false,
+        code: 'missing',
+      });
+    });
+
+    it('hard-deletes a finalized empty user-managed computer and invalidates its connect-token', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+
+      const res = await h.del(apiPaths.hostCancelPending(created.host_id));
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        host_id: created.host_id,
+        deleted: true,
+      });
+      expect(repo.get(created.host_id)).toBeNull();
+      expect(
+        new HostTokenService(t.ctx.db).verifyHostToken(created.connect_token),
+      ).toMatchObject({
+        ok: false,
+        code: 'missing',
+      });
+    });
+
+    it('rejects delete for user-managed computers with dependent agents/workspaces', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+      const agentId = insertTestAgent(t, {
+        name: 'agent-dependent',
+        displayName: 'Agent Dependent',
+        runtime: 'codex',
+        hostId: created.host_id,
+      });
+      new WorkspaceRepo(t.ctx.db, { workspacesRoot: t.ctx.workspacesRoot }).insert({
+        name: 'Dependent Workspace',
+        description: null,
+        workspacePath: '/tmp/dependent-workspace',
+        workspaceHostId: created.host_id,
+      });
+
+      const res = await h.del(apiPaths.hostCancelPending(created.host_id));
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: 'computer has dependent resources',
+        error_code: 'has_dependents',
+        dependents: {
+          agents: 1,
+          workspaces: 1,
+        },
+        agents: [
+          {
+            id: agentId,
+            name: 'agent-dependent',
+            display_name: 'Agent Dependent',
+            runtime: 'codex',
+          },
+        ],
+        can_cascade_agents: false,
+      });
+      expect(repo.get(created.host_id)).not.toBeNull();
+      expect(
+        new HostTokenService(t.ctx.db).verifyHostToken(created.connect_token),
+      ).toMatchObject({
+        ok: true,
+        hostId: created.host_id,
+      });
+    });
+
+    it('returns a cascadable dependency block for agent-only computers', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+      const agentId = insertTestAgent(t, {
+        name: 'agent-only-dependent',
+        displayName: 'Agent Only Dependent',
+        runtime: 'codex',
+        hostId: created.host_id,
+      });
+      const agent = new AgentRepo(t.ctx.db).get(agentId);
+      expect(agent).not.toBeNull();
+      new WorkspaceRepo(t.ctx.db, {
+        workspacesRoot: t.ctx.workspacesRoot,
+      }).insertAgentHome({
+        agent: agent!,
+        workspacePath: `/tmp/${agentId}`,
+      });
+
+      const res = await h.del(apiPaths.hostCancelPending(created.host_id));
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: 'computer has dependent resources',
+        error_code: 'has_dependents',
+        dependents: {
+          agents: 1,
+          workspaces: 0,
+        },
+        agents: [
+          {
+            id: agentId,
+            name: 'agent-only-dependent',
+            display_name: 'Agent Only Dependent',
+            runtime: 'codex',
+          },
+        ],
+        can_cascade_agents: true,
+      });
+      expect(repo.get(created.host_id)).not.toBeNull();
+    });
+
+    it('returns a transient pending-agent block before offering agent cascade', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+      const agentId = insertTestAgent(t, {
+        name: 'pending-agent-dependent',
+        displayName: 'Pending Agent Dependent',
+        runtime: 'codex',
+        hostId: created.host_id,
+        materializationStatus: 'pending_materialization',
+      });
+
+      const res = await h.del(apiPaths.hostCancelPending(created.host_id), {
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cascade_agents: true }),
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error:
+          'computer has agents whose creation is still in progress; try again after creation finishes',
+        error_code: 'has_pending_agents',
+        pending_agents: 1,
+      });
+      expect(repo.get(created.host_id)).not.toBeNull();
+      expect(new AgentRepo(t.ctx.db).get(agentId)).not.toBeNull();
+      expect(t.fakeHostWs!.calls).toHaveLength(0);
+    });
+
+    it('deletes an agent-only computer when cascade_agents is confirmed', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+      const agentId = insertTestAgent(t, {
+        name: 'agent-cascade-dependent',
+        displayName: 'Agent Cascade Dependent',
+        runtime: 'codex',
+        hostId: created.host_id,
+      });
+      const agent = new AgentRepo(t.ctx.db).get(agentId);
+      expect(agent).not.toBeNull();
+      const workspaces = new WorkspaceRepo(t.ctx.db, {
+        workspacesRoot: t.ctx.workspacesRoot,
+      });
+      const home = workspaces.insertAgentHome({
+        agent: agent!,
+        workspacePath: `/tmp/${agentId}`,
+      });
+
+      const res = await h.del(apiPaths.hostCancelPending(created.host_id), {
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cascade_agents: true }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        host_id: created.host_id,
+        deleted: true,
+      });
+      expect(repo.get(created.host_id)).toBeNull();
+      expect(new AgentRepo(t.ctx.db).get(agentId)).toBeNull();
+      expect(workspaces.get(home.id)).toBeNull();
+      expect(
+        t.fakeHostWs!.calls.filter(call => call.kind === 'agent_files_purge'),
+      ).toEqual([
+        {
+          hostId: created.host_id,
+          kind: 'agent_files_purge',
+          params: {
+            agent_id: agentId,
+            scope: 'all',
+            workspace_ids: [],
+          },
+        },
+      ]);
+    });
+
+    it('deletes an agent-only computer while offline by skipping host-local purge', async () => {
+      t = buildTestApp();
+      t.fakeHostWs!.connectionIdForHostOverride = () => null;
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+      const agentId = insertTestAgent(t, {
+        name: 'offline-agent-cascade-dependent',
+        displayName: 'Offline Agent Cascade Dependent',
+        runtime: 'codex',
+        hostId: created.host_id,
+      });
+      const agent = new AgentRepo(t.ctx.db).get(agentId);
+      expect(agent).not.toBeNull();
+      const workspaces = new WorkspaceRepo(t.ctx.db, {
+        workspacesRoot: t.ctx.workspacesRoot,
+      });
+      const home = workspaces.insertAgentHome({
+        agent: agent!,
+        workspacePath: `/tmp/${agentId}`,
+      });
+
+      const res = await h.del(apiPaths.hostCancelPending(created.host_id), {
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cascade_agents: true }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        host_id: created.host_id,
+        deleted: true,
+      });
+      expect(repo.get(created.host_id)).toBeNull();
+      expect(new AgentRepo(t.ctx.db).get(agentId)).toBeNull();
+      expect(workspaces.get(home.id)).toBeNull();
+      expect(
+        t.fakeHostWs!.calls.some(call => call.kind === 'agent_files_purge'),
+      ).toBe(false);
+    });
+
+    it('row-deletes failed agents during computer cascade without host-local purge', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+      const agentId = insertTestAgent(t, {
+        name: 'failed-agent-cascade-dependent',
+        displayName: 'Failed Agent Cascade Dependent',
+        runtime: 'codex',
+        hostId: created.host_id,
+        materializationStatus: 'failed',
+      });
+
+      const res = await h.del(apiPaths.hostCancelPending(created.host_id), {
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cascade_agents: true }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        host_id: created.host_id,
+        deleted: true,
+      });
+      expect(repo.get(created.host_id)).toBeNull();
+      expect(new AgentRepo(t.ctx.db).get(agentId)).toBeNull();
+      expect(
+        t.fakeHostWs!.calls.some(call => call.kind === 'agent_files_purge'),
+      ).toBe(false);
+    });
+
+    it('does not let cascade_agents bypass regular workspace dependents', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+      const agentId = insertTestAgent(t, {
+        name: 'agent-with-workspace-dependent',
+        displayName: 'Agent With Workspace Dependent',
+        runtime: 'codex',
+        hostId: created.host_id,
+      });
+      new WorkspaceRepo(t.ctx.db, { workspacesRoot: t.ctx.workspacesRoot }).insert({
+        name: 'Dependent Workspace',
+        description: null,
+        workspacePath: '/tmp/dependent-workspace',
+        workspaceHostId: created.host_id,
+      });
+
+      const res = await h.del(apiPaths.hostCancelPending(created.host_id), {
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cascade_agents: true }),
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: 'computer has dependent resources',
+        error_code: 'has_dependents',
+        dependents: {
+          agents: 1,
+          workspaces: 1,
+        },
+        agents: [
+          {
+            id: agentId,
+            name: 'agent-with-workspace-dependent',
+            display_name: 'Agent With Workspace Dependent',
+            runtime: 'codex',
+          },
+        ],
+        can_cascade_agents: false,
+      });
+      expect(repo.get(created.host_id)).not.toBeNull();
+    });
+
+    it('hard-deletes a revoked empty user-managed row rather than exposing a second user-facing remove verb', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      repo.revoke(created.host_id);
+
+      const res = await h.del(apiPaths.hostCancelPending(created.host_id));
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        host_id: created.host_id,
+        deleted: true,
+      });
+      expect(repo.get(created.host_id)).toBeNull();
+    });
+
+    it('rejects delete for non-user-managed rows', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const systemPending = new HostRepo(t.ctx.db).create('system-pending', 'remote', {
+        userId: t.viewerUserId,
+        activatedAt: null,
+        provisioningSource: 'system',
+      });
+
+      const res = await h.del(apiPaths.hostCancelPending(systemPending.id));
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        error_code: 'provisioning_source_not_supported',
+      });
+      expect(new HostRepo(t.ctx.db).get(systemPending.id)).not.toBeNull();
+
+      const appManaged = await h.json<any>(
+        h.post(apiPaths.hostClaimOrCreate, {
+          installation_id: '60000000-1111-4111-8111-111111111111',
+        }),
+      );
+      const appManagedRes = await h.del(apiPaths.hostCancelPending(appManaged.host_id));
+      expect(appManagedRes.status).toBe(409);
+      expect(await appManagedRes.json()).toMatchObject({
+        error_code: 'provisioning_source_not_supported',
+      });
+      expect(new HostRepo(t.ctx.db).get(appManaged.host_id)).not.toBeNull();
+    });
+  });
+
   // ── GET /api/hosts viewer filter (Stage B.4) ─────────────────
   describe('GET /api/hosts viewer filter', () => {
     it('returns only hosts owned by the session bearer (Alice cannot see Bob\'s host)', async () => {
@@ -367,6 +1043,31 @@ describe('host routes', () => {
           .prepare<[], { c: number }>(`SELECT COUNT(*) AS c FROM workspaces`)
           .get()?.c ?? 0,
       ).toBe(workspaceCountBefore);
+    });
+
+    it('rejects user-managed computers because Delete/Rotate are the user-facing lifecycle actions', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+
+      const res = await h.post(apiPaths.hostRevoke(created.host_id));
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        error_code: 'provisioning_source_not_supported',
+      });
+      expect(new HostRepo(t.ctx.db).get(created.host_id)).toMatchObject({
+        revoked_at: null,
+      });
+      expect(
+        new HostTokenService(t.ctx.db).verifyHostToken(created.connect_token),
+      ).toMatchObject({
+        ok: true,
+        hostId: created.host_id,
+      });
     });
 
     it('is idempotent and still sweeps a half-failed credential row', async () => {
@@ -841,6 +1542,209 @@ describe('host routes', () => {
       expect(await res.json()).toMatchObject({ error_code: 'kind_not_supported' });
     });
 
+    it('user-managed connect-token rotate returns cleartext once, invalidates old token immediately, and disconnects live WS', async () => {
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({
+        hostWsController: () => controller,
+      });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const oldToken = created.connect_token as string;
+      controller = new FakeHostWsController(async () => {
+        throw new Error('user-managed rotate must not dispatch rotate_token');
+      });
+
+      const res = await h.post(apiPaths.hostRotateConnectToken(created.host_id));
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as any;
+      expect(body).toMatchObject({
+        host_id: created.host_id,
+        status: 'rotated',
+        connect_token: expect.any(String),
+        daemon_command: expect.stringContaining('--connect-token'),
+      });
+      expect(body.connect_token).not.toBe(oldToken);
+      expect(body.daemon_command).toContain(body.connect_token);
+      expect(body.daemon_command).not.toContain(created.host_id);
+      expect(controller!.calls).toEqual([]);
+      expect(controller!.disconnects).toEqual([created.host_id]);
+      expect(controller!.disconnectReasons).toEqual([
+        { hostId: created.host_id, reason: HOST_WS_CLOSE_REASON_REVOKED },
+      ]);
+
+      const verifier = new HostTokenService(t.ctx.db);
+      expect(verifier.verifyHostToken(oldToken)).toMatchObject({
+        ok: false,
+        code: 'credential_expired',
+      });
+      expect(verifier.verifyHostToken(body.connect_token)).toMatchObject({
+        ok: true,
+        hostId: created.host_id,
+        userId: t.viewerUserId,
+      });
+    });
+
+    it('user-managed connect-token rotate rejects app-managed hosts', async () => {
+      t = buildTestApp({ ownedLocalHostUserIds: [] });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const claimed = await h.json<any>(
+        h.post(apiPaths.hostClaimOrCreate, {
+          installation_id: '50000005-1111-4111-8111-111111111111',
+        }),
+      );
+
+      const res = await h.post(apiPaths.hostRotateConnectToken(claimed.host_id));
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        error_code: 'provisioning_source_not_supported',
+      });
+    });
+
+    it('user-managed disconnect drops live WS but leaves credentials and lifecycle unchanged', async () => {
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({
+        hostWsController: () => controller,
+      });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const connectToken = created.connect_token as string;
+      const repo = new HostRepo(t.ctx.db);
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+      const before = repo.get(created.host_id)!;
+      controller = new FakeHostWsController(async () => {
+        throw new Error('disconnect must not dispatch a host command');
+      });
+
+      const res = await h.post(apiPaths.hostDisconnect(created.host_id));
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as any;
+      expect(body).toMatchObject({
+        host_id: created.host_id,
+        disconnected: true,
+        host: {
+          id: created.host_id,
+          status: 'active',
+          revoked_at: null,
+          activated_at: before.activated_at,
+          finalized_at: before.finalized_at,
+        },
+      });
+      expect(controller!.calls).toEqual([]);
+      expect(controller!.disconnects).toEqual([created.host_id]);
+      expect(controller!.disconnectReasons).toEqual([
+        { hostId: created.host_id, reason: HOST_WS_CLOSE_REASON_DISCONNECTED },
+      ]);
+
+      const after = repo.get(created.host_id)!;
+      expect(after.revoked_at).toBeNull();
+      expect(after.activated_at).toBe(before.activated_at);
+      expect(after.finalized_at).toBe(before.finalized_at);
+      expect(new HostTokenService(t.ctx.db).verifyHostToken(connectToken)).toMatchObject({
+        ok: true,
+        hostId: created.host_id,
+        userId: t.viewerUserId,
+      });
+    });
+
+    it('user-managed disconnect is a benign no-op when no live WS exists', async () => {
+      class OfflineController extends FakeHostWsController {
+        constructor() {
+          super(async () => ({}));
+        }
+        override disconnectHost(
+          hostId: string,
+          reason = HOST_WS_CLOSE_REASON_REVOKED,
+        ): boolean {
+          this.disconnects.push(hostId);
+          this.disconnectReasons.push({ hostId, reason });
+          return false;
+        }
+      }
+      let controller: OfflineController | null = null;
+      t = buildTestApp({
+        hostWsController: () => controller,
+      });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+      controller = new OfflineController();
+
+      const res = await h.post(apiPaths.hostDisconnect(created.host_id));
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        host_id: created.host_id,
+        disconnected: false,
+        host: {
+          id: created.host_id,
+          status: 'active',
+        },
+      });
+      expect(controller!.disconnects).toEqual([created.host_id]);
+    });
+
+    it('user-managed disconnect rejects drafts, app-managed hosts, and cross-user hosts', async () => {
+      t = buildTestApp({ ownedLocalHostUserIds: [] });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const draft = await h.json<any>(h.post(apiPaths.hosts, {}));
+
+      const draftRes = await h.post(apiPaths.hostDisconnect(draft.host_id));
+      expect(draftRes.status).toBe(409);
+      expect(await draftRes.json()).toMatchObject({
+        error_code: 'host_not_active',
+      });
+
+      const claimed = await h.json<any>(
+        h.post(apiPaths.hostClaimOrCreate, {
+          installation_id: '50000005-1111-4111-8111-111111111112',
+        }),
+      );
+      const appManagedRes = await h.post(apiPaths.hostDisconnect(claimed.host_id));
+      expect(appManagedRes.status).toBe(409);
+      expect(await appManagedRes.json()).toMatchObject({
+        error_code: 'provisioning_source_not_supported',
+      });
+
+      const bobToken = t.ctx.authSessions.issueSession({ userId: 'bob' }).userToken;
+      const bobHost = new HostRepo(t.ctx.db).create('bob-daemon', 'remote', {
+        userId: 'bob',
+        provisioningSource: 'user_invite',
+        activatedAt: 1_700_000_000_000,
+        finalizedAt: 1_700_000_000_100,
+      });
+      const crossUserRes = await sessionHttp(t, userToken).post(
+        apiPaths.hostDisconnect(bobHost.id),
+      );
+      expect(crossUserRes.status).toBe(404);
+      expect(await crossUserRes.json()).toMatchObject({
+        error_code: 'host_not_found',
+      });
+
+      const bobRes = await sessionHttp(t, bobToken).post(apiPaths.hostDisconnect(bobHost.id));
+      expect(bobRes.status).toBe(200);
+    });
+
     it('rejects retired server-config bearer', async () => {
       t = buildTestApp();
       const res = await legacyServerAuthHttp(t).post(apiPaths.hostRotateToken('whatever'));
@@ -851,6 +1755,72 @@ describe('host routes', () => {
 
   // ─── v36 (#task:808) — PATCH /api/hosts/:id rename ──────────────────
   describe('PATCH /api/hosts/:id', () => {
+    it('finalizes an attached user-managed draft when the modal submits a name', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      new HostRepo(t.ctx.db).markActivated(created.host_id, 1_700_000_000_000);
+
+      const res = await h.patch(apiPaths.host(created.host_id), {
+        display_label: 'Build Mac',
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as any;
+      expect(body.host).toMatchObject({
+        id: created.host_id,
+        display_label: 'Build Mac',
+        status: 'active',
+        placeable: true,
+        activated_at: 1_700_000_000_000,
+        finalized_at: expect.any(Number),
+      });
+      const list = await h.json<{ hosts: any[] }>(h.get(apiPaths.hosts));
+      expect(list.hosts.map(host => host.id)).toContain(created.host_id);
+    });
+
+    it('rejects finalizing a user-managed draft before daemon attach', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+
+      const res = await h.patch(apiPaths.host(created.host_id), {
+        display_label: 'Build Mac',
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        error_code: 'host_pending_attach',
+      });
+      expect(new HostRepo(t.ctx.db).get(created.host_id)?.finalized_at).toBeNull();
+    });
+
+    it('requires a name when finalizing a user-managed draft', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      new HostRepo(t.ctx.db).markActivated(created.host_id, 1_700_000_000_000);
+
+      const res = await h.patch(apiPaths.host(created.host_id), {
+        display_label: '   ',
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({
+        error_code: 'display_label_required',
+      });
+      expect(new HostRepo(t.ctx.db).get(created.host_id)?.finalized_at).toBeNull();
+    });
+
     it('renames a host the caller owns and exposes display_label on the DTO', async () => {
       t = buildTestApp();
       const userToken = t.ctx.authSessions.issueSession({
@@ -964,6 +1934,140 @@ describe('host routes', () => {
       );
       expect(res.status).toBe(409);
       expect(await res.json()).toMatchObject({ error_code: 'host_revoked' });
+    });
+  });
+
+  describe('GET/PUT /api/hosts/:id/proxy-config', () => {
+    it('dispatches get through the host adapter for app-managed and user-managed computers', async () => {
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({ hostWsController: () => controller });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const repo = new HostRepo(t.ctx.db);
+      const localHost = repo.getOwnedLocalForUser(t.viewerUserId);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+      const calls: Array<{ hostId: string; kind: string; params: unknown }> = [];
+      controller = new FakeHostWsController(async call => {
+        calls.push(call);
+        expect(call.kind).toBe('host_proxy_config_get');
+        expect(call.params).toEqual({});
+        return {
+          config: {
+            proxy_url: `http://proxy-for-${call.hostId}`,
+            proxy_runtimes: ['codex'],
+          },
+        };
+      });
+
+      const localRes = await h.get(apiPaths.hostProxyConfig(localHost!.id));
+      const remoteRes = await h.get(apiPaths.hostProxyConfig(created.host_id));
+
+      expect(localRes.status).toBe(200);
+      expect(remoteRes.status).toBe(200);
+      expect(await localRes.json()).toEqual({
+        config: {
+          proxy_url: `http://proxy-for-${localHost!.id}`,
+          proxy_runtimes: ['codex'],
+        },
+      });
+      expect(await remoteRes.json()).toEqual({
+        config: {
+          proxy_url: `http://proxy-for-${created.host_id}`,
+          proxy_runtimes: ['codex'],
+        },
+      });
+      expect(calls.map(call => call.hostId)).toEqual([
+        localHost!.id,
+        created.host_id,
+      ]);
+    });
+
+    it('dispatches set with the symmetric proxy config DTO and strips unknown fields', async () => {
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({ hostWsController: () => controller });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const repo = new HostRepo(t.ctx.db);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+      controller = new FakeHostWsController(async call => {
+        expect(call.hostId).toBe(created.host_id);
+        expect(call.kind).toBe('host_proxy_config_set');
+        expect(call.params).toEqual({
+          proxy_url: 'http://user:pass@127.0.0.1:7890',
+          proxy_runtimes: ['codex'],
+        });
+        return { config: call.params };
+      });
+
+      const res = await h.put(apiPaths.hostProxyConfig(created.host_id), {
+        proxy_url: 'http://user:pass@127.0.0.1:7890',
+        proxy_runtimes: ['codex'],
+        ignored: true,
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        config: {
+          proxy_url: 'http://user:pass@127.0.0.1:7890',
+          proxy_runtimes: ['codex'],
+        },
+      });
+    });
+
+    it('returns typed computer_offline when no daemon is attached', async () => {
+      t = buildTestApp({ hostWsController: () => null });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const repo = new HostRepo(t.ctx.db);
+      const host = repo.getOwnedLocalForUser(t.viewerUserId);
+
+      const getRes = await sessionHttp(t, userToken).get(
+        apiPaths.hostProxyConfig(host!.id),
+      );
+      const putRes = await sessionHttp(t, userToken).put(
+        apiPaths.hostProxyConfig(host!.id),
+        { proxy_url: null, proxy_runtimes: [] },
+      );
+
+      expect(getRes.status).toBe(503);
+      expect(await getRes.json()).toMatchObject({
+        error_code: HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE,
+      });
+      expect(putRes.status).toBe(503);
+      expect(await putRes.json()).toMatchObject({
+        error_code: HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE,
+      });
+    });
+
+    it('rejects unfinalized drafts and cross-user hosts', async () => {
+      t = buildTestApp();
+      const aliceToken = t.ctx.authSessions.issueSession({ userId: 'alice' }).userToken;
+      const bobToken = t.ctx.authSessions.issueSession({ userId: 'bob' }).userToken;
+      const aliceHttp = sessionHttp(t, aliceToken);
+      const created = await aliceHttp.json<any>(aliceHttp.post(apiPaths.hosts, {}));
+
+      const draftRes = await aliceHttp.get(apiPaths.hostProxyConfig(created.host_id));
+      const crossUserRes = await sessionHttp(t, bobToken).get(
+        apiPaths.hostProxyConfig(created.host_id),
+      );
+
+      expect(draftRes.status).toBe(409);
+      expect(await draftRes.json()).toMatchObject({
+        error_code: 'host_not_active',
+      });
+      expect(crossUserRes.status).toBe(404);
+      expect(await crossUserRes.json()).toMatchObject({
+        error_code: 'host_not_found',
+      });
     });
   });
 
@@ -1231,7 +2335,13 @@ describe('host routes', () => {
  */
 function insertTestAgent(
   t: TestApp,
-  input: { hostId: string; name: string; displayName: string; runtime: string },
+  input: {
+    hostId: string;
+    name: string;
+    displayName: string;
+    runtime: string;
+    materializationStatus?: 'pending_materialization' | 'active' | 'failed';
+  },
 ): string {
   const id = `agent-${input.name}-${Math.floor(Math.random() * 1_000_000)}`;
   const now = Date.now();
@@ -1241,7 +2351,7 @@ function insertTestAgent(
          (id, name, display_name, runtime, model, reasoning_effort, fast_mode,
           host_id, description, created_by_user_id,
           materialization_status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, NULL, ?, 'active', ?, ?)`,
+       VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, NULL, ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -1250,6 +2360,7 @@ function insertTestAgent(
       input.runtime,
       input.hostId,
       t.viewerUserId,
+      input.materializationStatus ?? 'active',
       now,
       now,
     );
@@ -1271,6 +2382,7 @@ class FakeHostWsController implements HostWsServerController {
     params: any;
   }> = [];
   readonly disconnects: string[] = [];
+  readonly disconnectReasons: Array<{ hostId: string; reason: string | undefined }> = [];
 
   constructor(
     private readonly handler: (call: {
@@ -1278,6 +2390,7 @@ class FakeHostWsController implements HostWsServerController {
       kind: OutboundServerCommandKind;
       params: any;
     }) => Promise<unknown>,
+    private readonly attachment: { hostId: string; hostname: string | null } | null = null,
   ) {}
 
   activeConnectionCount(): number {
@@ -1292,10 +2405,14 @@ class FakeHostWsController implements HostWsServerController {
     return 'conn-1';
   }
 
-  getAttachment(): null {
-    // Route tests don't exercise the attachment registry; D3.a's
-    // boot-readiness invariant is covered in host-ws-server tests.
-    return null;
+  getAttachment(hostId: string) {
+    if (!this.attachment || this.attachment.hostId !== hostId) return null;
+    return {
+      hostId,
+      connectionId: 'conn-1',
+      attachedAt: 1_700_000_000_000,
+      hostname: this.attachment.hostname,
+    };
   }
 
   async sendCommand<K extends OutboundServerCommandKind>(
@@ -1312,8 +2429,9 @@ class FakeHostWsController implements HostWsServerController {
   // revoke route invoked it. Returns true unconditionally; the
   // route's contract is "best-effort, log and swallow", so the
   // value isn't load-bearing for the route side.
-  disconnectHost(hostId: string): boolean {
+  disconnectHost(hostId: string, reason = HOST_WS_CLOSE_REASON_REVOKED): boolean {
     this.disconnects.push(hostId);
+    this.disconnectReasons.push({ hostId, reason });
     return true;
   }
 

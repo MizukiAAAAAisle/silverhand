@@ -142,6 +142,11 @@ interface RowProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onClic
   status?: 'active' | 'idle' | 'crashed' | null;
   /** Unread count pill on the right edge. Falsy / 0 hides it. */
   badge?: number;
+  /** Two-line layout: title on top, subtitle stacked below (instead of
+   *  inline beside it). Used by richer rows (COMPUTERS: name + lifecycle
+   *  label + badge) that don't fit on one line. Default `false` keeps the
+   *  compact single-line row every other sidebar relies on. */
+  stacked?: boolean;
   onClick?: () => void;
 }
 
@@ -158,6 +163,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
   selected,
   status,
   badge,
+  stacked,
   onClick,
   className,
   ...buttonProps
@@ -177,7 +183,10 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
           // the title text on subtly different vertical centers
           // (#task:912 review round 5: shiki measured icon-wrapper 16×20
           // vs avatar 16×16, name height 17.5 → ~2px misalignment).
-          'sidebar-row-border flex w-full items-center gap-2 border px-2 py-1.5 text-left text-sm leading-[16px] transition-colors ' +
+          // `stacked` rows are two lines, so they need more vertical
+          // padding than the compact single-line default.
+          'sidebar-row-border flex w-full items-center gap-2 border px-2 text-left text-sm leading-[16px] transition-colors ' +
+          (stacked ? 'py-2 ' : 'py-1.5 ') +
           (selected
             ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
             : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary') +
@@ -193,11 +202,24 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
           <span className="inline-flex shrink-0 items-center leading-none text-text-muted">{icon}</span>
         ) : null}
         <span className={
-          'flex min-w-0 flex-1 gap-1.5 ' +
+          'flex min-w-0 flex-1 ' +
+          (stacked ? 'flex-col gap-0.5 ' : 'gap-1.5 ') +
           (badge && badge > 0 && !selected ? 'font-semibold text-text-primary' : '')
         }>
           <span className="truncate">{title}</span>
-          {subtitle ? (
+          {stacked ? (
+            // Stacked rows ALWAYS reserve the subtitle line so every row in
+            // the group is the same height — a computer with no lifecycle
+            // label (an active user-added one; per the two-axis lexicon
+            // "active carries no standalone label") must not collapse to a
+            // shorter single-line row beside the local "this computer" row
+            // (shiki dogfood: inconsistent heights). The nbsp holds the
+            // line box when there's no subtitle; this is also the slot
+            // per-row availability (Online / Offline) fills once enabled.
+            <span className="truncate text-xs text-text-muted">
+              {subtitle ?? ' '}
+            </span>
+          ) : subtitle ? (
             <span className="truncate text-xs text-text-muted">{subtitle}</span>
           ) : null}
         </span>

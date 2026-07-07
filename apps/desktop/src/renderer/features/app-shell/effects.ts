@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useViewerWorkspacesSync } from '@/features/workspaces/hooks';
 import { usePresenceSync } from '@/features/presence/hooks';
 import { useAgentSync } from '@/features/agents/agent-sync';
+import { useHostConnectionSync } from '@/features/hosts/host-connection-sync';
 import { useConversationIngestor } from '@/features/realtime/conversation-ingestor';
 import { useViewerUnreadIngestor } from '@/features/realtime/viewer-unread-ingestor';
 import { cleanupAllComposerDrafts } from '@/lib/composer-draft-cache';
@@ -12,7 +13,7 @@ import { cleanupAllComposerDrafts } from '@/lib/composer-draft-cache';
 // pure boundary extractions, no behavior change.
 
 /**
- * Global, mount-once realtime/visibility sync. All five are independent of any
+ * Global, mount-once realtime/visibility sync. These hooks are independent of any
  * view or selection state and are mounted ONCE post-auth so their app-scope WS
  * consumers stay live regardless of which surface is reading their caches.
  * See the per-hook docs at their definitions.
@@ -30,6 +31,10 @@ export function useAppShellGlobalSync(): void {
   // global `agent_changed` event invalidates the ['agents'] query tree
   // regardless of who made the edit. See #task:1178.
   useAgentSync();
+  // Keep owner-scoped host availability/list/detail caches live on daemon
+  // attach/detach and WS replay gaps. The event is an invalidation signal; the
+  // authoritative state is still `/api/hosts/:id/status`.
+  useHostConnectionSync();
   // Stage-2 central conversation ingestor (#task:1255) — the single `onWsFrame`
   // consumer for `conversation:<id>`-scope main-stream cache writes. Views are
   // pure readers of the caches it fills. See docs/renderer-event-ingestion-v1.md.

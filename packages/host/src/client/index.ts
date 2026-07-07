@@ -60,6 +60,7 @@ import {
   type AgentStaleResolveParams,
   type AgentStreamObservedParams,
   type HostOutboundAttachParams,
+  type HostRuntimeCatalogParams,
   type HostProxyConfigSetParams,
 } from '../protocol.js';
 import type { DecodedFrame, Transport } from './transport.js';
@@ -495,6 +496,12 @@ export class HostClient {
     params: HostProxyConfigSetParams,
   ): Promise<IntentResult<'host_proxy_config_set'>> {
     return this.call('host_proxy_config_set', params);
+  }
+
+  hostRuntimeCatalog(
+    params: HostRuntimeCatalogParams = {},
+  ): Promise<IntentResult<'host_runtime_catalog'>> {
+    return this.call('host_runtime_catalog', params);
   }
 
   /**

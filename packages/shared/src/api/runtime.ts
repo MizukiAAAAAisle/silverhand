@@ -55,10 +55,40 @@ export const AgentRunStatesDtoSchema = z.object({
 });
 export type AgentRunStatesDto = z.infer<typeof AgentRunStatesDtoSchema>;
 
+export const RuntimeAvailabilityStateSchema = z.enum([
+  'present',
+  'present_unverified',
+  'absent',
+  'unknown',
+]);
+export type RuntimeAvailabilityState = z.infer<
+  typeof RuntimeAvailabilityStateSchema
+>;
+
+export const RuntimeDetectionReasonSchema = z.enum([
+  'resolved',
+  'version_unavailable',
+  'not_found',
+  'probe_failed',
+]);
+export type RuntimeDetectionReason = z.infer<
+  typeof RuntimeDetectionReasonSchema
+>;
+
 export const RuntimeInfoSchema = z.object({
   kind: RuntimeKindSchema,
+  state: RuntimeAvailabilityStateSchema,
+  reason: RuntimeDetectionReasonSchema,
   installed: z.boolean(),
   binary: z.string().nullable(),
   version: z.string().nullable(),
 });
 export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>;
+
+export const RuntimeCatalogResponseSchema = z.object({
+  runtimes: z.array(RuntimeInfoSchema),
+  detected_at: z.number(),
+});
+export type RuntimeCatalogResponse = z.infer<
+  typeof RuntimeCatalogResponseSchema
+>;

@@ -25,7 +25,7 @@ export const FILTER_SELECT_CONTENT_CLASS =
   'z-[60] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-[var(--select-content-radius)] border border-border bg-bg-floating shadow-popover';
 
 export const FILTER_SELECT_ITEM_CLASS =
-  'relative flex cursor-default select-none items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1.5 pr-7 text-xs text-text-primary outline-none data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary';
+  'relative flex cursor-default select-none items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1.5 pr-7 text-xs text-text-primary outline-none data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary data-[disabled]:cursor-not-allowed data-[disabled]:text-text-muted data-[disabled]:opacity-60 data-[disabled]:data-[highlighted]:bg-transparent';
 
 /** Label-above-control layout for one filter dimension. */
 export function FilterBlock({
@@ -46,20 +46,28 @@ export function FilterBlock({
 }
 
 /** One option row inside a `Select.Viewport`. `icon` is optional — dimensions
- *  without a natural per-row glyph (e.g. workspaces) render without one. */
+ *  without a natural per-row glyph (e.g. workspaces) render without one.
+ *  `disabled` renders the row greyed + non-selectable (Radix skips it in
+ *  keyboard nav); pair it with `suffix` to say why (e.g. "Offline"). */
 export function FilterSelectItem({
   value,
   icon,
   suffix,
+  disabled,
   children,
 }: {
   value: string;
   icon?: JSX.Element;
   suffix?: string;
+  disabled?: boolean;
   children: ReactNode;
 }): JSX.Element {
   return (
-    <Select.Item value={value} className={FILTER_SELECT_ITEM_CLASS}>
+    <Select.Item
+      value={value}
+      disabled={disabled}
+      className={FILTER_SELECT_ITEM_CLASS}
+    >
       {icon ? <span className="shrink-0 text-text-muted">{icon}</span> : null}
       <Select.ItemText>
         <span className="truncate">{children}</span>

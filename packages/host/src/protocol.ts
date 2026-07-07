@@ -62,12 +62,14 @@ import {
   AgentWorkspaceFileReadSchema,
   AgentWorkspaceTreeSchema,
   ConversationKindSchema,
+  HostProxyConfigSchema as SharedHostProxyConfigSchema,
   HostKindSchema,
   McpProbeResultSchema,
   MemberDtoSchema,
   ParsedEventKindSchema,
   ParsedEventSchema,
   ReasoningEffortSchema,
+  RuntimeCatalogResponseSchema,
   RuntimeKindSchema,
   SendMessageTargetSchema,
   WorkspaceKindSchema,
@@ -254,6 +256,27 @@ export const HostStatusResultSchema = z
   })
   .strict();
 export type HostStatusResult = z.infer<typeof HostStatusResultSchema>;
+
+// ── host_runtime_catalog (outbound command, #task:1375) ─────────────
+//
+// Server → daemon RPC powering per-computer runtime availability. This
+// deliberately runs on the target host and uses the same host-side resolver
+// as spawn, so "present" means the daemon can resolve the exact executable
+// path it will later spawn. `force` bypasses the short resolver cache for
+// manual refresh, create-time hard-block checks, and spawn-miss recovery.
+export const HostRuntimeCatalogParamsSchema = z
+  .object({
+    force: z.boolean().optional(),
+  })
+  .strict();
+export type HostRuntimeCatalogParams = z.infer<
+  typeof HostRuntimeCatalogParamsSchema
+>;
+
+export const HostRuntimeCatalogResultSchema = RuntimeCatalogResponseSchema;
+export type HostRuntimeCatalogResult = z.infer<
+  typeof HostRuntimeCatalogResultSchema
+>;
 
 // ── conversation_log_debug ─────────────────────────────────────────
 
@@ -1241,17 +1264,11 @@ export type HostOutboundReloadResult = z.infer<
 // ── host_proxy_config_* (daemon-host local truth) ──────────────────
 //
 // Proxy configuration is daemon-host local truth: it lives in a file on
-// the physical computer that spawns runtimes. The server must not read,
-// persist, or forward the URL. Desktop main calls these IPC intents only
-// for the current local daemon; renderer gates editability on both host
-// ownership and local reachability.
+// the physical computer that spawns runtimes. The server owns authz and
+// dispatch only; it does not persist proxy bytes. The URL is an opaque
+// host-local value and is intentionally not parsed for credentials.
 
-export const HostProxyConfigSchema = z
-  .object({
-    proxy_url: z.string().nullable(),
-    proxy_runtimes: z.array(RuntimeKindSchema),
-  })
-  .strict();
+export const HostProxyConfigSchema = SharedHostProxyConfigSchema;
 export type HostProxyConfig = z.infer<typeof HostProxyConfigSchema>;
 
 export const HostProxyConfigGetParamsSchema = z.object({}).strict();
@@ -2111,6 +2128,10 @@ export const intentSchemas = {
   host_status: {
     params: HostStatusParamsSchema,
     result: HostStatusResultSchema,
+  },
+  host_runtime_catalog: {
+    params: HostRuntimeCatalogParamsSchema,
+    result: HostRuntimeCatalogResultSchema,
   },
   conversation_log_debug: {
     params: ConversationLogDebugParamsSchema,

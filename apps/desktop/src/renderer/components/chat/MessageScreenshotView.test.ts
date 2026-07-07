@@ -103,7 +103,6 @@ function msg(
 function render(
   messages: MessageDto[],
   options: {
-    channelKind?: 'channel' | 'dm';
     channelTitle?: string;
     agentsByName?: ReadonlyMap<string, AgentDto>;
     humansByName?: ReadonlyMap<string, UserDto>;
@@ -127,7 +126,6 @@ function render(
         humansByName: options.humansByName,
         channelsByName: options.channelsByName,
         channelTitle: options.channelTitle ?? 'design',
-        channelKind: options.channelKind ?? ('channel' as const),
         conversationRefsById: options.conversationRefsById,
         taskRefsByNumber: options.taskRefsByNumber,
         attachmentImageUrls: options.attachmentImageUrls,
@@ -148,13 +146,14 @@ describe('MessageScreenshotView — non-interactive contract', () => {
     expect(html).toContain('design');
   });
 
-  it('does not apply the channel hash hook to DM export headers', () => {
+  it('header always carries the channel hash — no per-kind branch (#task:1373)', () => {
+    // DM share-images used to drop the `#`; now every conversation kind renders
+    // it, matching the live header (#task:1179). No channelKind prop to branch on.
     const html = render([msg('m1', 1, 'hello')], {
-      channelKind: 'dm',
       channelTitle: 'Alice',
     });
     expect(html).toContain('data-conversation-title');
-    expect(html).not.toContain('data-conversation-hash-icon');
+    expect(html).toContain('data-conversation-hash-icon');
     expect(html).toContain('Alice');
   });
 

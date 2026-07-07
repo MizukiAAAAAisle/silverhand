@@ -118,6 +118,11 @@ export type DesktopHostProxyConfigResult =
       ok: false;
       code:
         | 'not_local_host'
+        | 'unauthorized'
+        | 'host_not_found'
+        | 'host_not_active'
+        | 'host_revoked'
+        | 'computer_offline'
         | 'daemon_unavailable'
         | 'daemon_error'
         | 'invalid_input';

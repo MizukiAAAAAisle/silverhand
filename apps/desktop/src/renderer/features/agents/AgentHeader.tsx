@@ -8,6 +8,7 @@ import {
   PersonHero,
   PresencePill,
 } from '@/features/common/PersonHero';
+import { useAgentOnlineByHost } from '@/features/hosts/hooks';
 import { useStopAgent } from './hooks';
 import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { DeleteAgentDialog } from './DeleteAgentDialog';
@@ -33,9 +34,16 @@ export function AgentHeader({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const stopAgent = useStopAgent(agent.id);
   const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
-  // Hero presence == AgentSettings Stop predicate: count both
-  // `starting` and `active` so an agent mid-spawn doesn't disappear
-  // from the Hero between exec and first message.
+  // Hero status = agent-on-computer liveness (is the agent's runtime live on
+  // its computer), read from the same host-status source as the members rail
+  // (#task:1362). The Agent page is the agent's global profile, not a
+  // conversation — a resident-but-idle agent must read as Online here, else
+  // users mistake a live runtime for "no runtime".
+  const onlineByAgent = useAgentOnlineByHost([agent.host_id]);
+  const online = onlineByAgent.get(agent.id) ?? false;
+  // Stop targets conversation-running work, so it keeps the conversation
+  // runtime-state predicate: count both `starting` and `active` so an agent
+  // mid-spawn doesn't slip past the Stop button between exec and first message.
   const running = (runtimeState?.conversation_agents ?? []).filter(
     s => s.status === 'starting' || s.status === 'active',
   );
@@ -65,7 +73,7 @@ export function AgentHeader({
               </>
             ) : null}
             <HeroDot />
-            <PresencePill runningCount={runningCount} />
+            <PresencePill online={online} />
           </>
         }
         bio={agent.description}

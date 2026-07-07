@@ -46,6 +46,12 @@ import {
   McpProbeErrorCodeSchema,
   McpProbeParamsSchema,
   HelloResultSchema,
+  HostProxyConfigGetParamsSchema,
+  HostProxyConfigGetResultSchema,
+  HostProxyConfigSetParamsSchema,
+  HostProxyConfigSetResultSchema,
+  HostRuntimeCatalogParamsSchema,
+  HostRuntimeCatalogResultSchema,
   HostStatusParamsSchema,
   HostStatusResultSchema,
   MAX_FRAME_BYTES,
@@ -111,6 +117,12 @@ export {
   AgentProfileMcpWriteParamsSchema,
   AgentProfileMcpWriteResultSchema,
   AgentProfileMcpErrorCodeSchema,
+  HostProxyConfigGetParamsSchema,
+  HostProxyConfigGetResultSchema,
+  HostProxyConfigSetParamsSchema,
+  HostProxyConfigSetResultSchema,
+  HostRuntimeCatalogParamsSchema,
+  HostRuntimeCatalogResultSchema,
   RuntimeStartErrorCodeSchema,
   type WorkspaceProvisionParams,
   type WorkspaceProvisionResult,
@@ -129,6 +141,12 @@ export {
   type AgentProfileMcpWriteParams,
   type AgentProfileMcpWriteResult,
   type AgentProfileMcpErrorCode,
+  type HostProxyConfigGetParams,
+  type HostProxyConfigGetResult,
+  type HostProxyConfigSetParams,
+  type HostProxyConfigSetResult,
+  type HostRuntimeCatalogParams,
+  type HostRuntimeCatalogResult,
   type RuntimeStartErrorCode,
 } from './protocol.js';
 
@@ -474,6 +492,23 @@ export const outboundServerCommandSchemas = {
   host_status: {
     params: HostStatusParamsSchema,
     result: HostStatusResultSchema,
+    error: ResponseErrorSchema,
+  },
+  /** #task:1375 — per-computer runtime availability catalog. The daemon
+   *  probes the same host-side resolver spawn uses; backend only dispatches. */
+  host_runtime_catalog: {
+    params: HostRuntimeCatalogParamsSchema,
+    result: HostRuntimeCatalogResultSchema,
+    error: ResponseErrorSchema,
+  },
+  host_proxy_config_get: {
+    params: HostProxyConfigGetParamsSchema,
+    result: HostProxyConfigGetResultSchema,
+    error: ResponseErrorSchema,
+  },
+  host_proxy_config_set: {
+    params: HostProxyConfigSetParamsSchema,
+    result: HostProxyConfigSetResultSchema,
     error: ResponseErrorSchema,
   },
 } as const;

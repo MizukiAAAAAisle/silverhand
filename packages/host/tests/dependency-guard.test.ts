@@ -37,11 +37,13 @@
  * src import would.
  */
 import { describe, expect, it } from 'vitest';
+import { build } from 'esbuild';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const HOST_ROOT = resolve(__dirname, '..');
 const REPO_ROOT = resolve(HOST_ROOT, '..', '..');
+const CLI_ROOT = resolve(REPO_ROOT, 'packages/cli');
 
 /**
  * Resolved absolute paths to package roots that must never be
@@ -161,6 +163,33 @@ const RULES: Rule[] = [
   },
 ];
 
+const CLI_RULES: Rule[] = [
+  {
+    name: 'forbidden CLI package import: @silverhand/backend',
+    test: spec =>
+      spec === '@silverhand/backend' || spec.startsWith('@silverhand/backend/'),
+  },
+  {
+    name: 'forbidden CLI package import: better-sqlite3',
+    test: spec => spec === 'better-sqlite3' || spec.startsWith('better-sqlite3/'),
+  },
+  {
+    name: 'forbidden CLI relative import: escapes into packages/backend, packages/host, or apps/desktop',
+    test: (spec, fromFile) => {
+      if (!spec.startsWith('.') && !isAbsolute(spec)) return false;
+      const resolved = isAbsolute(spec) ? spec : resolve(dirname(fromFile), spec);
+      const forbiddenRoots = [
+        resolve(REPO_ROOT, 'packages/backend'),
+        resolve(REPO_ROOT, 'packages/host'),
+        resolve(REPO_ROOT, 'apps/desktop'),
+      ];
+      return forbiddenRoots.some(root => {
+        return resolved === root || resolved.startsWith(root + sep);
+      });
+    },
+  },
+];
+
 function* walkTsFiles(dir: string): Generator<string> {
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
@@ -214,7 +243,10 @@ function stripComments(source: string): string[] {
   return out;
 }
 
-function scanForViolations(scanRoots: string[]): ForbiddenHit[] {
+function scanForViolations(
+  scanRoots: string[],
+  rules: Rule[] = RULES,
+): ForbiddenHit[] {
   const hits: ForbiddenHit[] = [];
   for (const root of scanRoots) {
     for (const file of walkTsFiles(root)) {
@@ -227,7 +259,7 @@ function scanForViolations(scanRoots: string[]): ForbiddenHit[] {
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i] ?? '';
         for (const spec of specifiersOf(line)) {
-          for (const rule of RULES) {
+          for (const rule of rules) {
             if (rule.test(spec, file)) {
               hits.push({
                 file: relative(REPO_ROOT, file).split(sep).join('/'),
@@ -262,6 +294,25 @@ describe('host package dependency guard (Cindy `vqDWkLFF6pAeIE5t` + `ecQq2DydBJG
           'and must not relative-escape into backend / cli / desktop packages. ' +
           'If you need data from backend, route it through the runtime_* protocol ' +
           '(`packages/host/src/protocol.ts`) instead.',
+      );
+    }
+    expect(hits).toEqual([]);
+  });
+
+  it('no file in packages/cli/{src,tests} imports backend/sqlite/desktop or relative-escapes into host/backend', () => {
+    const scanRoots = [join(CLI_ROOT, 'src'), join(CLI_ROOT, 'tests')];
+    const hits = scanForViolations(scanRoots, CLI_RULES);
+    if (hits.length > 0) {
+      const formatted = hits
+        .map(
+          h =>
+            `  ${h.file}:${h.line} — ${h.matchedRule}\n    specifier: ${h.specifier}\n    > ${h.text}`,
+        )
+        .join('\n');
+      expect.fail(
+        `found ${hits.length} forbidden import(s) in packages/cli:\n${formatted}\n\n` +
+          'CLI may use published protocol/client package surfaces, but must not depend on ' +
+          'backend internals, sqlite, desktop code, or relative-escape into host/backend.',
       );
     }
     expect(hits).toEqual([]);
@@ -390,5 +441,77 @@ describe('host package dependency guard (Cindy `vqDWkLFF6pAeIE5t` + `ecQq2DydBJG
       const fired = specs.some(spec => RULES.some(rule => rule.test(spec, fromFile)));
       expect(fired, `rule should NOT fire for allowed ${JSON.stringify(line)}`).toBe(false);
     }
+  });
+
+  it('daemon bundle does not pull backend-only shared DB migrations', async () => {
+    const result = await build({
+      absWorkingDir: HOST_ROOT,
+      entryPoints: ['src/daemon/entry.ts'],
+      bundle: true,
+      platform: 'node',
+      format: 'esm',
+      target: 'node20',
+      outfile: 'daemon.js',
+      write: false,
+      minify: true,
+      metafile: true,
+      logLevel: 'silent',
+      banner: {
+        js: 'import{createRequire}from"node:module";const require=createRequire(import.meta.url);',
+      },
+    });
+
+    const inputs = Object.keys(result.metafile.inputs).map(p =>
+      p.split(sep).join('/'),
+    );
+    const forbidden = inputs.filter(
+      p =>
+        p.endsWith('/packages/shared/src/db/baseline-schema.ts') ||
+        p.endsWith('/packages/shared/src/db/migrations.ts') ||
+        p.endsWith('../shared/src/db/baseline-schema.ts') ||
+        p.endsWith('../shared/src/db/migrations.ts'),
+    );
+    expect(forbidden).toEqual([]);
+
+    const bundleText = result.outputFiles[0]?.text ?? '';
+    expect(bundleText).not.toContain('CREATE TABLE hosts (');
+    expect(bundleText).not.toContain('host_credentials');
+  });
+
+  it('CLI bundle does not pull backend packages, sqlite, or backend-only shared DB migrations', async () => {
+    const result = await build({
+      absWorkingDir: CLI_ROOT,
+      entryPoints: ['src/cli.ts'],
+      bundle: true,
+      platform: 'node',
+      format: 'esm',
+      target: 'node20',
+      outfile: 'cli.js',
+      write: false,
+      minify: true,
+      metafile: true,
+      logLevel: 'silent',
+      banner: {
+        js: 'import{createRequire}from"node:module";const require=createRequire(import.meta.url);',
+      },
+    });
+
+    const inputs = Object.keys(result.metafile.inputs).map(p =>
+      p.split(sep).join('/'),
+    );
+    const forbidden = inputs.filter(
+      p =>
+        p.includes('/packages/backend/') ||
+        p.includes('/node_modules/better-sqlite3/') ||
+        p.endsWith('/packages/shared/src/db/baseline-schema.ts') ||
+        p.endsWith('/packages/shared/src/db/migrations.ts') ||
+        p.endsWith('../shared/src/db/baseline-schema.ts') ||
+        p.endsWith('../shared/src/db/migrations.ts'),
+    );
+    expect(forbidden).toEqual([]);
+
+    const bundleText = result.outputFiles[0]?.text ?? '';
+    expect(bundleText).not.toContain('CREATE TABLE hosts (');
+    expect(bundleText).not.toContain('host_credentials');
   });
 });

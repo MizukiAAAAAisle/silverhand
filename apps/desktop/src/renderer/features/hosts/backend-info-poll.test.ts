@@ -44,7 +44,7 @@ describe('connectingRefetchIntervalMs — only polls inside the connecting windo
   });
 
   it('claimed + attached_at===number → stops polling (already connected)', () => {
-    // Anti-spam pin: once the pill flips to "Ready" we MUST
+    // Anti-spam pin: once the pill flips to "Connected" we MUST
     // stop polling. Otherwise ConnectionPane sits open hammering
     // backend:info every 1.5s indefinitely.
     expect(
@@ -122,7 +122,7 @@ describe('hostStatusFreshnessPolicy — pollUntilAvailable must not trust the ma
     // the shared cache indefinitely. If the pill inherited that policy
     // it would read the stale `available` on mount and (because
     // refetchInterval stops as soon as it sees `available`) NEVER
-    // re-probe — showing "Ready" while the daemon is actually
+    // re-probe — showing "Connected" while the daemon is actually
     // disconnected. The pill consumer must therefore re-validate.
     const policy = hostStatusFreshnessPolicy(true);
     expect(policy.staleTime).toBe(0);

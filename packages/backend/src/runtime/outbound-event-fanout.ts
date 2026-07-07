@@ -72,6 +72,7 @@ export interface OutboundRuntimeEventFanoutOptions {
   logger: BackendLogger;
   workspacesRoot: string;
   silverhandCli: SilverhandCliLauncher | null;
+  coLocatedHostId?: string;
   agentTokens: AgentTokenStore;
   /**
    * D4.e-6 — bounded lazy backfill of the daemon workspace registry before
@@ -421,9 +422,9 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
    *   - `mode='hard'` MUST omit `soft_directive`.
    *   - `mode='soft'` REQUIRES a `soft_directive`. When the caller
    *     doesn't pass one we substitute `DEFAULT_SOFT_DIRECTIVE`,
-   *     mirroring `DaemonAgentRuntimeHost.stop` so both deployment
-   *     adapters land the same default phrasing on the wire (R4 —
-   *     same envelope, transport-only divergence). Sending soft
+   *     mirroring the single outbound runtime-host contract so every
+   *     attached daemon transport lands the same default phrasing on the wire.
+   *     Sending soft
    *     without a directive would otherwise hit
    *     `daemon → runtime_stop_params_invalid` and fail the user.
    */
@@ -573,10 +574,9 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   }
 
   /**
-   * D4.c C7 — standalone-side `clearSession`.
+   * D4.c C7 — clearSession over the outbound daemon transport.
    *
-   * Mirrors `DaemonAgentRuntimeHost.clearSession` (embedded path)
-   * with one architectural addition: a bounded wait for the
+   * Uses a bounded wait for the
    * `runtime_exit` event to land in projection BEFORE we touch the
    * DB, so the audit row + `cli_session_id=null` write sees a
    * coherent post-exit state and the renderer's `agent_status` SSE
@@ -792,11 +792,9 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   }
 
   /**
-   * D4.c C7 — mirrors `DaemonAgentRuntimeHost.insertSessionClearedAuditMessage`
-   * (`daemon-agent-runtime-host.ts:679-705`). Lifted inline rather
-   * than shared because the embedded path is the legacy duplicate;
-   * once D4 is fully cut over the standalone version is the single
-   * implementation. R4 invariant: same audit row shape on both
+   * D4.c C7 — insert the clear-session audit message. Kept inline here
+   * because the outbound fanout is now the single projection path.
+   * R4 invariant: same audit row shape on every
    * deployment adapters.
    */
   private insertSessionClearedAuditMessage(params: {
@@ -836,6 +834,26 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     conversationId: string,
     agentId: string,
   ): Promise<boolean> {
+    const hostId = this.hostIdForAgent(agentId);
+    const connectionId = this.connectedConnectionId(hostId, 'runtime_start');
+    const staleInFlight = this.inboxRepo.rollbackInFlightForPairExceptOwner(
+      conversationId,
+      agentId,
+      connectionId,
+    );
+    if (staleInFlight > 0) {
+      this.opts.logger.warn(
+        {
+          kind: 'inbox',
+          action: 'stale_in_flight_reclaimed_before_start',
+          hostId,
+          conversationId,
+          agent_id: agentId,
+          reclaimed_count: staleInFlight,
+        },
+        'outbound start reclaimed stale inbox rows claimed by an old host connection',
+      );
+    }
     if (this.inboxRepo.listPending(conversationId, agentId).length === 0) {
       // Idempotency guard for concurrent claimants. A pending row can
       // already be in-flight when an explicit `runtimeHost.start` / HTTP
@@ -850,17 +868,22 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       // drain") and the route would return a generic 400 — strictly
       // worse UX than an idempotent success.
       //
-      // We treat "any in-flight row for this pair" as proof that
-      // the runtime is being started, and return success. The
-      // already-in-flight dispatch will land the same wake/spawn;
-      // the second caller is a benign no-op.
-      if (this.inboxRepo.countInFlightForPair(conversationId, agentId) > 0) {
+      // We treat rows claimed by this live connection as proof that
+      // the runtime is being started, and return success. Rows claimed
+      // by old connection ids are stale leases and were reclaimed
+      // above; they must not make an explicit restart/start look
+      // successful while dispatching nothing.
+      if (
+        this.inboxRepo.countInFlightForPairOwner(
+          conversationId,
+          agentId,
+          connectionId,
+        ) > 0
+      ) {
         return true;
       }
       return false;
     }
-    const hostId = this.hostIdForAgent(agentId);
-    const connectionId = this.connectedConnectionId(hostId, 'runtime_start');
     const state = this.stateForHost(hostId);
     const entry = this.cacheEntryForLiveConnection(
       state,
@@ -887,7 +910,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     );
     if (claimed.length === 0) return false;
     const batch = this.pendingBatch(conversationId, agentId, claimed);
-    const options = this.runtimeStartOptions(conversationId, agentId);
+    const options = this.runtimeStartOptions(hostId, conversationId, agentId);
     // D4.e-6 — I4 host-equality gate (Cindy P1-2). BEFORE any backfill/dispatch
     // side effect, verify every workspace this start references is owned by the
     // dispatch host. A corrupt conversation row or workspace membership that
@@ -1003,13 +1026,14 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       {
         conversation_id: conversationId,
         agent_id: agentId,
-        options: this.runtimeStartOptions(conversationId, agentId),
+        options: this.runtimeStartOptions(hostId, conversationId, agentId),
       } satisfies RuntimeStartParams,
       { timeoutMs: 60_000, expectedConnectionId: connectionId },
     );
   }
 
   private runtimeStartOptions(
+    hostId: string,
     conversationId: string,
     agentId: string,
   ): RuntimeStartParams['options'] {
@@ -1034,7 +1058,8 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       sessionAgent,
       members: this.membership.listMembers(conversation.id),
       workspacesForAgent: this.workspaces.listForAgent(agent.id),
-      silverhandCli: this.opts.silverhandCli,
+      silverhandCli:
+        this.opts.coLocatedHostId === hostId ? this.opts.silverhandCli : null,
       agentToken: this.opts.agentTokens.issue(conversationId, agentId),
     });
   }

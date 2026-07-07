@@ -32,6 +32,7 @@ import type {
   HostStatusResponse,
   HostUnreachableReason,
 } from '@silverhand/shared';
+import { computerCopy } from './computer-copy';
 
 export type HostStatusTone =
   | 'accent'
@@ -42,7 +43,7 @@ export type HostStatusTone =
 
 export interface HostStatusView {
   /** Short product label rendered as a pill next to the host name.
-   *  Speaks user terms ("Ready", "Offline", "Removed") rather than
+   *  Speaks user terms ("Connected", "Offline", "Revoked") rather than
    *  daemon/RPC terms. */
   label: string;
   /** Optional secondary line — currently used to surface the typed
@@ -66,11 +67,11 @@ export function describeUnreachableReason(
 ): string {
   switch (reason) {
     case 'timeout':
-      return 'The host took too long to answer. Try refreshing.';
+      return 'The computer took too long to answer. Try refreshing.';
     case 'daemon_unreachable':
-      return 'Could not reach the host helper. Make sure it is running.';
+      return 'Could not reach this computer. Make sure it is connected.';
     case 'protocol_error':
-      return 'The host answered with an unexpected response.';
+      return 'This computer sent an unexpected response.';
     default: {
       // Exhaustive — adding a new reason on the schema side fails the
       // typecheck here loud-and-early rather than rendering an empty
@@ -93,28 +94,28 @@ export function describeHostStatus(
   switch (status.availability) {
     case 'available':
       return {
-        label: 'Ready',
+        label: computerCopy.availabilityConnected,
         detail: null,
         tone: 'success',
       };
     case 'disconnected':
       return {
-        label: 'Offline',
+        label: computerCopy.availabilityOffline,
         detail:
-          'The host is not connected right now. Registered agents are shown but cannot run.',
+          'This computer is not connected right now. Registered agents are shown but cannot run.',
         tone: 'muted',
       };
     case 'unreachable':
       return {
-        label: 'Unreachable',
+        label: computerCopy.availabilityUnreachable,
         detail: describeUnreachableReason(status.reason),
         tone: 'warning',
       };
     case 'revoked':
       return {
-        label: 'Removed',
+        label: computerCopy.lifecycleRevoked,
         detail:
-          'This host has been removed. Re-add it from this computer to use it again.',
+          'This computer has been revoked. Re-add it to use it again.',
         tone: 'muted',
       };
     default: {

@@ -47,6 +47,7 @@ import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import { OutboundAgentRuntimeHost } from './runtime/outbound-agent-runtime-host.js';
 import { OutboundRuntimeEventFanout } from './runtime/outbound-event-fanout.js';
 import {
+  CompositeOutboundFrameAdapter,
   StandaloneOutboundFrameAdapter,
   type OutboundFrameAdapter,
 } from './runtime/outbound-frame-adapter.js';
@@ -298,8 +299,9 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   let hostWs: HostWsServerController | null = null;
   // D5.a-3 — the deployment-specific outbound transport the fanout
   // dispatches through (standalone = WSS-backed adapter wrapping
-  // `hostWs`; embedded = local Unix-socket adapter). Installed once the
-  // HTTP server binds; the fanout reads it via `() => outboundAdapter`.
+  // `hostWs`; embedded = composite local Unix + WS adapter). Installed
+  // once the HTTP server binds; the fanout reads it via
+  // `() => outboundAdapter`.
   let outboundAdapter: OutboundFrameAdapter | null = null;
   // Embedded local-Unix adapter kept here so the server-close path can
   // close the connection it owns (the standalone adapter only *views* a
@@ -383,8 +385,8 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     hostWsController: () => hostWs,
     // D5.a-3 P1-3 — the formal server↔daemon dispatch port. Routes that
     // send commands (POST /api/agents materialize, retry) go through this
-    // accessor so they never branch on deployment mode; `hostWsController`
-    // stays for WS-only lifecycle (revoke/disconnect) in standalone.
+    // accessor so they never branch on deployment mode. `hostWsController`
+    // stays as the WS lifecycle/control port for user-managed computers.
     outboundFrameAdapter: () => outboundAdapter,
     // Filled immediately below when the daemon runtime host is constructed.
     runtimeHost: undefined as unknown as AgentRuntimeHost,
@@ -393,10 +395,10 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   // D5.a-3 — embedded and standalone are ONE runtime host over the
   // outbound frame transport. The host delegates to the
   // `OutboundRuntimeEventFanout` projection; the deployment-specific
-  // `OutboundFrameAdapter` (standalone = WSS-backed; embedded = local
-  // Unix socket) is installed below once the HTTP server binds. The
-  // `() => outboundFanout` thunk defers the projection lookup so this
-  // assignment can precede the fanout construction (which needs the
+  // `OutboundFrameAdapter` (standalone = WSS-backed; embedded =
+  // composite local Unix + WS) is installed below once the HTTP server
+  // binds. The `() => outboundFanout` thunk defers the projection lookup
+  // so this assignment can precede the fanout construction (which needs the
   // bound server / finalized `serverConfig.url`).
   ctx.runtimeHost = new OutboundAgentRuntimeHost(logger, () => outboundFanout);
   logger.info(
@@ -630,22 +632,18 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
         logger,
         workspacesRoot,
         silverhandCli: ctx.silverhandCliLauncher,
+        ...(ctx.coLocatedHostId ? { coLocatedHostId: ctx.coLocatedHostId } : {}),
         agentTokens: ctx.agentTokens,
         logDir: ctx.logDir,
         workspaceRegistryBackfiller: ctx.workspaceRegistryBackfiller,
       });
       ctx.readiness.outboundEventFanoutInstalled = true;
     }
+    const hostWsEventSink = outboundFanout ?? undefined;
     hostWs = installHostWebSocketServer(server as HttpServer, ctx, {
       eventSink: opts.testHooks?.wrapHostWsEventSink
-        ? opts.testHooks.wrapHostWsEventSink(
-            opts.mode === 'standalone'
-              ? outboundFanout ?? undefined
-              : undefined,
-          )
-        : opts.mode === 'standalone'
-          ? outboundFanout ?? undefined
-          : undefined,
+        ? opts.testHooks.wrapHostWsEventSink(hostWsEventSink)
+        : hostWsEventSink,
     });
     // Construct the deployment-specific outbound transport. This runs
     // synchronously before the listen callback fires, so `outboundAdapter`
@@ -672,7 +670,15 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
         logger,
       });
       embeddedOutboundAdapter = adapter;
-      outboundAdapter = adapter;
+      // Embedded desktop can now host both transport families at once:
+      // the app-managed default computer uses the local Unix adapter,
+      // while user-managed `silverhand-daemon connect` instances dial
+      // the same embedded backend over WS. Keep one backend dispatch
+      // port and route by host id at the transport layer.
+      outboundAdapter = new CompositeOutboundFrameAdapter([
+        adapter,
+        new StandaloneOutboundFrameAdapter(() => hostWs),
+      ]);
       // Defer the connect to the listen callback (P1-1): construct now so
       // `outboundAdapter` is wired, but dial only after the bound URL is
       // finalized. Fire-and-forget once triggered (mirrors the standalone
@@ -752,7 +758,7 @@ export { resolveAuthRuntimeConfig } from './auth/config.js';
 export {
   CURRENT_SCHEMA_VERSION,
   MIN_SUPPORTED_SCHEMA_VERSION,
-} from '@silverhand/shared';
+} from '@silverhand/shared/db/migrations';
 export {
   DatabaseMigrationError,
   currentSchemaVersion,

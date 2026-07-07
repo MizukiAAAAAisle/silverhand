@@ -9,10 +9,10 @@
  *  1. Filename prefix is `daemon` so `~/.silverhand/logs/` cleanly
  *     groups daemon boots alongside `backend-*` / `agent-*` / `cli-*`.
  *  2. The daemon process may run headless (no Electron). When
- *     `alsoStderr` is true, lines also mirror to stderr so a parent
- *     `silverhand-daemon` invocation prints them where the operator
- *     can see them. We use stderr (not stdout) because stdout is
- *     reserved for the `ready` handshake line.
+ *     `alsoStderr` is true, the exact JSONL line also mirrors to stderr
+ *     so terminal output and disk logs share one format. We use stderr
+ *     (not stdout) because stdout is reserved for the `ready` handshake
+ *     line.
  *  3. No `child(bindings)`. The daemon doesn't have many concerns to
  *     subdivide; if we need scoping later, lift the backend logger
  *     into shared and use it instead.
@@ -20,6 +20,7 @@
 import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs';
 import { join } from 'node:path';
 import {
+  SILVERHAND_LOG_LEVELS,
   parseSilverhandLogLevel,
   sanitizeLogFields,
   SILVERHAND_LOG_LEVEL_ENV,
@@ -68,7 +69,7 @@ export function createDaemonLogger(opts: DaemonLoggerOptions): DaemonLogger {
   const stream = createWriteStream(filePath, { flags: 'a' });
   const alsoStderr = opts.alsoStderr ?? false;
   const base: Record<string, unknown> = { pid: process.pid, ...(opts.base ?? {}) };
-  const logControl = opts.logControl ?? createDaemonLogControl();
+  const logControl = opts.logControl ?? createDaemonLogControl(defaultDaemonLogLevel());
   const safeBase = sanitizeLogFields(base);
 
   const write = (level: LogEventLevel, obj: unknown, msg?: string) => {
@@ -77,8 +78,10 @@ export function createDaemonLogger(opts: DaemonLoggerOptions): DaemonLogger {
         ? (obj as Record<string, unknown>)
         : { data: serializeUnknown(obj) };
     const fields = sanitizeLogFields(rawFields);
+    const now = new Date();
     const line = {
-      ts: new Date().toISOString(),
+      ts: formatLocalTimestamp(now),
+      ts_unix_ms: now.getTime(),
       level,
       msg: msg ?? '',
       ...safeBase,
@@ -88,7 +91,7 @@ export function createDaemonLogger(opts: DaemonLoggerOptions): DaemonLogger {
     const encoded = safeStringify(line);
     stream.write(encoded + '\n');
     if (alsoStderr) {
-      process.stderr.write(`[daemon ${level}] ${msg ?? ''} ${encoded}\n`);
+      process.stderr.write(encoded + '\n');
     }
   };
 
@@ -104,6 +107,34 @@ export function createDaemonLogger(opts: DaemonLoggerOptions): DaemonLogger {
         stream.end(() => resolve());
       }),
   };
+}
+
+function formatLocalTimestamp(date: Date): string {
+  const tzOffsetMinutes = -date.getTimezoneOffset();
+  const sign = tzOffsetMinutes >= 0 ? '+' : '-';
+  const absOffset = Math.abs(tzOffsetMinutes);
+  return (
+    `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ` +
+    `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}.` +
+    `${pad3(date.getMilliseconds())} ${sign}${pad2(Math.floor(absOffset / 60))}:` +
+    `${pad2(absOffset % 60)}`
+  );
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function pad3(value: number): string {
+  return String(value).padStart(3, '0');
+}
+
+function defaultDaemonLogLevel(): SilverhandLogLevel {
+  const raw = process.env[SILVERHAND_LOG_LEVEL_ENV];
+  if (raw === undefined) return 'info';
+  return SILVERHAND_LOG_LEVELS.includes(raw as SilverhandLogLevel)
+    ? (raw as SilverhandLogLevel)
+    : parseSilverhandLogLevel(raw);
 }
 
 export function createDaemonLogControl(

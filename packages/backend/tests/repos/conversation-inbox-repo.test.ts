@@ -155,6 +155,39 @@ describe('ConversationInboxRepo', () => {
     expect(inbox.listInFlightForOwner('conn-1')).toEqual([]);
   });
 
+  it('reclaims stale in-flight rows for a pair without touching the live owner', () => {
+    const { channel, messages, inbox, agentA } = bootstrap();
+    const m1 = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      content: 'old',
+    });
+    const m2 = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      content: 'live',
+    });
+    inbox.enqueue(channel.id, agentA, m1.id);
+    inbox.enqueue(channel.id, agentA, m2.id);
+
+    const [oldClaim, liveClaim] = inbox.claimPending(channel.id, agentA, 'old-conn');
+    inbox.rollbackInFlight([liveClaim!.inboxId], 'old-conn');
+    inbox.claimPending(channel.id, agentA, 'conn-1');
+
+    expect(
+      inbox.rollbackInFlightForPairExceptOwner(channel.id, agentA, 'conn-1'),
+    ).toBe(1);
+    expect(inbox.listPending(channel.id, agentA).map(row => row.inboxId)).toEqual([
+      oldClaim!.inboxId,
+    ]);
+    expect(inbox.listInFlightForOwner('conn-1').map(row => row.inboxId)).toEqual([
+      liveClaim!.inboxId,
+    ]);
+    expect(
+      inbox.countInFlightForPairOwner(channel.id, agentA, 'conn-1'),
+    ).toBe(1);
+  });
+
   it('hasUndeliveredForPair includes pending and in-flight rows but excludes delivered rows', () => {
     const { channel, messages, inbox, agentA } = bootstrap();
     const m = messages.insertForConversation({

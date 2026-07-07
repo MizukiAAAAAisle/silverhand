@@ -1,8 +1,16 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  migrateLegacyDaemonProxyConfig,
   readDaemonProxyConfig,
   writeDaemonProxyConfig,
 } from '../src/daemon/proxy-config.js';
@@ -31,20 +39,58 @@ describe('daemon proxy config', () => {
     });
   });
 
-  it('normalizes and persists daemon-local proxy config', () => {
+  it('deduplicates runtimes and persists proxy URL as an opaque string', () => {
     const path = tempPath();
 
     const written = writeDaemonProxyConfig(path, {
-      proxy_url: '  http://127.0.0.1:7890  ',
+      proxy_url: 'http://user:pass@127.0.0.1:7890',
       proxy_runtimes: ['codex', 'codex', 'claude'],
     });
 
     expect(written).toEqual({
-      proxy_url: 'http://127.0.0.1:7890',
+      proxy_url: 'http://user:pass@127.0.0.1:7890',
       proxy_runtimes: ['codex', 'claude'],
     });
     expect(readDaemonProxyConfig(path)).toEqual(written);
     expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual(written);
+  });
+
+  it('strips unknown fields when reading config files', () => {
+    const path = tempPath();
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        proxy_url: 'socks5://127.0.0.1:1080',
+        proxy_runtimes: ['codex'],
+        ignored: true,
+      }),
+      'utf8',
+    );
+
+    expect(readDaemonProxyConfig(path)).toEqual({
+      proxy_url: 'socks5://127.0.0.1:1080',
+      proxy_runtimes: ['codex'],
+    });
+  });
+
+  it('migrates the legacy global proxy config into the per-computer profile once', () => {
+    const legacyPath = tempPath();
+    const targetPath = join(dir!, 'computers', 'host-1', 'proxy-config.json');
+    mkdirSync(dirname(legacyPath), { recursive: true });
+    writeDaemonProxyConfig(legacyPath, {
+      proxy_url: 'http://127.0.0.1:7890',
+      proxy_runtimes: ['codex'],
+    });
+
+    migrateLegacyDaemonProxyConfig({ legacyPath, targetPath });
+
+    expect(readDaemonProxyConfig(targetPath)).toEqual({
+      proxy_url: 'http://127.0.0.1:7890',
+      proxy_runtimes: ['codex'],
+    });
+    expect(existsSync(legacyPath)).toBe(false);
+    expect(existsSync(`${legacyPath}.migrated`)).toBe(true);
   });
 
   it('logs corrupt local config and falls back without crashing', () => {

@@ -385,7 +385,8 @@ export class LocalOutboundFrameServer {
     socket: Socket,
     command: OutboundServerToDaemonCommandFrame,
   ): Promise<void> {
-    this.logger.info(
+    const successLevel = command.kind === 'host_status' ? 'debug' : 'info';
+    this.logger[successLevel](
       {
         kind: 'local_outbound',
         action: 'command_received',

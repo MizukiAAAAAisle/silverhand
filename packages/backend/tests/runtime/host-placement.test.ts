@@ -53,6 +53,25 @@ describe('RuntimeHostPlacementResolver', () => {
     );
   });
 
+  it('does not treat attached-but-unfinalized user-managed hosts as active placement targets', () => {
+    const t = makeResolver();
+    const host = t.hosts.createUserInvite({ userId: t.viewerUserId });
+    t.hosts.markActivated(host.id, 1_700_000_000_000);
+
+    expect(() => t.placement.assertActiveHost(host.id)).toThrowError(
+      expect.objectContaining({ code: 'host_pending_attach' }),
+    );
+    expect(() =>
+      t.placement.resolveOwnedReadyForPlacement(t.viewerUserId),
+    ).toThrowError(expect.objectContaining({ code: 'local_host_unbound' }));
+
+    t.hosts.markFinalized(host.id, 1_700_000_000_100);
+    expect(t.placement.assertActiveHost(host.id).id).toBe(host.id);
+    expect(t.placement.resolveOwnedReadyForPlacement(t.viewerUserId).id).toBe(
+      host.id,
+    );
+  });
+
   it('requires explicit placement hosts to be owned by the current user', () => {
     const t = makeResolver();
     const otherHost = t.hosts.create('other-local', 'local', {

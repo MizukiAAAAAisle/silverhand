@@ -93,66 +93,58 @@ export function HeroDot(): JSX.Element {
 }
 
 export interface PresencePillProps {
-  /** Count of conversations the agent is `starting` or `active` in.
-   *  Zero collapses the pill to plain muted text — empty pills read as
-   *  "broken status" on first glance. */
-  runningCount: number;
-  /** Override label. Defaults to `${runningCount} running/starting`
-   *  which intentionally mentions both states so `starting` doesn't
-   *  silently vanish from the Hero between spawn and first message. */
+  /** Agent-on-computer liveness — whether the agent's runtime is live on
+   *  its computer (`/hosts/:id/status.agents[].online`). Online → solid
+   *  success pill, offline → outline pill. This is the agent-global
+   *  liveness axis; it is deliberately NOT conversation activity (an agent
+   *  can be live-but-idle: its CLI stays resident between turns). Per-
+   *  conversation running/idle belongs on conversation surfaces, never
+   *  here (#task:1362). */
+  online: boolean;
+  /** Override label. Defaults to Online / Offline. */
   label?: string;
 }
 
 /**
- * Presence indicator. When the agent has any starting/active conversation
- * we render a HUD-style state tag — solid `bg-success` tile + on-color
- * dot + uppercase tracking-wider caps — matching the Activity / Schedule
- * status pill vocabulary. Idle falls back to muted text-only so the Hero
- * doesn't carry a state chip when there's no live work. Mirrors the
- * AgentHeader Stop button's `starting || active` predicate so the Hero
- * count never disagrees with what Stop targets.
+ * Presence indicator for the agent-global Hero. Renders a HUD-style state
+ * tag — solid `bg-success` tile + on-color dot for online, outline form
+ * (transparent bg + border + muted text + dot) for offline — the same
+ * geometry across both states so online/offline read as one indicator
+ * family at different states, matching the Activity / Schedule pill
+ * vocabulary.
+ *
+ * Reads liveness, NOT conversation activity: the Agent page is the agent's
+ * global profile (not a conversation), so an alive-but-idle agent must read
+ * as Online here, otherwise users mistake a resident runtime for "no
+ * runtime" (shiki #task:1362). Conversation running/idle lives on
+ * conversation surfaces + the Stop button, never in this pill.
  */
 export function PresencePill({
-  runningCount,
+  online,
   label,
 }: PresencePillProps): JSX.Element {
-  if (runningCount <= 0) {
-    // v6.8 (#task:917, shiki "状态文字裸排不行, 升级成 status pill"):
-    // idle used to fall back to plain muted text, which read like a
-    // description rather than a state. Now renders as a structural
-    // pill mirroring the active branch's geometry (same px/py/font-
-    // size/uppercase/dot pattern) so active vs idle are clearly the
-    // SAME kind of indicator at different states.
-    //
-    // v6.8.1: outline form (transparent bg + border + muted text).
-    // First attempt used `bg-bg-elevated`, which in forza6 resolves
-    // to pale-lime — same colour as the selected sidebar row ground,
-    // so the IDLE pill read like a "selected" indicator instead of an
-    // "off" state (shiki review screenshot). Outline form is theme-
-    // safe: it conveys "off" via the absent fill, never collides
-    // with any theme's elevated surface, and reads as the same
-    // indicator family as the active pill (matched geometry, swapped
-    // fill).
+  if (!online) {
+    // Outline form (transparent bg + border + muted text). Theme-safe:
+    // conveys "off" via the absent fill, never collides with any theme's
+    // elevated surface, and reads as the same indicator family as the
+    // online pill (matched geometry, swapped fill). See #task:917 history.
     return (
       <span
-        data-panel-pill="presence-idle"
+        data-panel-pill="presence-offline"
         className="inline-flex items-center gap-1.5 border border-border-subtle bg-transparent px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted"
       >
         <span className="size-1.5 rounded-full bg-text-muted/60" />
-        {label ?? 'Idle'}
+        {label ?? 'Offline'}
       </span>
     );
   }
-  const shown =
-    label ??
-    `${runningCount} running/starting`;
   return (
     <span
       data-panel-pill="presence"
       className="inline-flex items-center gap-1.5 bg-success px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-on-success"
     >
       <span className="size-1.5 rounded-full bg-text-on-success/90" />
-      {shown}
+      {label ?? 'Online'}
     </span>
   );
 }

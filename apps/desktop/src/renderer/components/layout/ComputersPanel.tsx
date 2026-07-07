@@ -14,46 +14,66 @@
  * master/detail split, no double React Query subscription, no comment
  * needed about deduping.
  *
- * Per-row status pip is intentionally absent in v1: pre-fetching every
- * host's `/status` would burn N concurrent RPCs on mount with no
- * benefit (the user clicks a row to drill in, where the detail view
- * does its own fetch). The local host is the only exception — we read
- * its attachment state from the already-loaded backend-info snapshot
- * and surface `active | idle` so the user can see "the local helper is
- * running" without opening detail. Other hosts will pick up the same
- * affordance when `useHostStatusQuery` is opt-in batched (deferred —
- * Q7.b).
+ * **One availability path for every row.** Each row reads live
+ * availability from `GET /api/hosts/:id/status` via `describeHostStatus`
+ * — the SAME mapper the detail-view hero pill uses — so the rail's
+ * pip/label and the detail pill never disagree (shiki dogfood: "online
+ * status ... 没有完全一致"). The app-managed local computer goes through
+ * the identical path; provenance is a badge, never a separate pip source.
+ * Liveness is push-based (`host-connection-sync` invalidates the
+ * `host-status` cache on connect/disconnect frames), so no polling — the
+ * per-row fetch is one cheap request on mount, then event-driven.
  */
 import type { JSX } from 'react';
-import { Globe, Monitor } from 'lucide-react';
+import { Monitor, Plus } from 'lucide-react';
 import type { HostDto } from '@silverhand/shared';
+import { Button } from '@/components/ui/button';
+import { computerCopy } from '@/features/hosts/computer-copy';
+import { useHostStatusQuery } from '@/features/hosts/hooks';
+import {
+  describeHostStatus,
+  type HostStatusTone,
+} from '@/features/hosts/host-status-presentation';
 import { SidebarRow, SidebarSection } from './sidebar-shared';
 
 export interface ComputersPanelProps {
   hosts: HostDto[];
   localHostId: string | null;
-  /** Whether the local-host websocket is currently attached. Drives the
-   *  local row's status pip (`active` vs `idle`). During the brief
-   *  backend-info loading window the parent passes `false`, which
-   *  collapses to `idle` — acceptable since the query resolves on app
-   *  boot and the flicker is invisible in practice. */
-  localAttached: boolean;
   /** True while the hosts query has not yet resolved. Drives the
    *  empty-state copy. */
   isLoading: boolean;
   selectedHostId: string | null;
   onSelectHost: (id: string) => void;
+  /** Opens the Add-computer flow. Rendered as the `+` action on the
+   *  COMPUTERS header (shiki: header-right icon, not a full row). */
+  onAddComputer?: () => void;
 }
 
 export function ComputersPanel({
   hosts,
   localHostId,
-  localAttached,
   isLoading,
   selectedHostId,
   onSelectHost,
+  onAddComputer,
 }: ComputersPanelProps): JSX.Element {
-  const sorted = sortHostsForSidebar(hosts, localHostId);
+  // The rail shows only FINALIZED computers. A computer is a modal-scoped
+  // draft until the user confirms creation (names + Done → `finalized_at`);
+  // its whole pre-finalize lifecycle — `pending` (minted, not yet
+  // connected) and `attached` (daemon connected, not yet finalized) — lives
+  // inside the Add-computer dialog (shiki 2026-07-06: "那个只在 Modal 确认
+  // create 了之后才出现"; Alice's finalized_at three-state model). The
+  // backend GET list already excludes un-finalized drafts, so this is
+  // belt-and-braces + forward-compatible: it stays correct when the
+  // `attached` state lands in the enum, and keeps a draft trivially
+  // unplaceable at the UI layer. Rail = `active` (finalized) + `revoked`
+  // (audit history).
+  const sorted = sortHostsForSidebar(
+    hosts.filter(
+      host => host.status === 'active' || host.status === 'revoked',
+    ),
+    localHostId,
+  );
 
   return (
     // v6.9 #task:917: SidebarSection now accepts a leading `icon` slot
@@ -62,60 +82,128 @@ export function ComputersPanel({
     // reads as "computers live here" with one visual anchor. forza6 paints
     // it as a small muted ink mark via `data-sidebar-section-icon`; other
     // themes pass it through as plain lucide.
+    // #task:1348: the `+` action on the right mints a new computer. Use
+    // a custom `action` with an h-6 icon button (matching the CHANNELS
+    // header precedent) rather than the default `onAdd` — the default's
+    // `size="icon"` is h-8/32px and would stretch the 24px header.
     <SidebarSection
       label="COMPUTERS"
       icon={<Monitor className="size-3.5" />}
       count={sorted.length}
+      action={
+        onAddComputer ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            onClick={onAddComputer}
+            aria-label={computerCopy.addComputer}
+            title={computerCopy.addComputer}
+          >
+            <Plus className="size-3.5" />
+          </Button>
+        ) : undefined
+      }
     >
       {sorted.length === 0 ? (
         <li className="px-2 py-1.5 text-xs text-text-muted">
           {isLoading ? 'Loading…' : 'No computers yet.'}
         </li>
       ) : (
-        sorted.map(host => {
-          const isLocal = host.id === localHostId;
-          const Icon = isLocal ? Monitor : Globe;
-          return (
-            <SidebarRow
-              key={host.id}
-              icon={<Icon className="size-3.5" />}
-              title={host.display_label ?? host.name}
-              // Subtitle by row:
-              //   • viewer's own host → friendly prose ("this computer")
-              //   • every other host → the kind enum (`local` for a
-              //     non-self local-process host, `remote` for a server-
-              //     backed one). v6.9 #task:917: the raw lowercase enum
-              //     looked like body text. Wrap it as a small HUD tag
-              //     (data-host-kind-tag) so the kind reads as a chip,
-              //     parallel to the v6.8 `data-agent-runtime` tag on the
-              //     Members AGENTS rows. shiki: "local tag 是 host 的
-              //     kind, 分为 local 和 沙箱两种" — the enum may grow,
-              //     this rendering scales with it (any future kind value
-              //     drops in uppercase automatically).
-              subtitle={
-                isLocal ? (
-                  'this computer'
-                ) : (
-                  <span data-host-kind-tag>{host.kind}</span>
-                )
-              }
-              selected={host.id === selectedHostId}
-              // Cheap local-only signal — full per-host status pip lives
-              // in the detail view's pill. Other hosts get no pip in v1
-              // to avoid N status RPCs on mount.
-              status={
-                isLocal
-                  ? localAttached
-                    ? 'active'
-                    : 'idle'
-                  : null
-              }
-              onClick={() => onSelectHost(host.id)}
-            />
-          );
-        })
+        sorted.map(host => (
+          <ComputerRow
+            key={host.id}
+            host={host}
+            isSelected={host.id === selectedHostId}
+            onSelect={() => onSelectHost(host.id)}
+          />
+        ))
       )}
     </SidebarSection>
+  );
+}
+
+/**
+ * Tone → sidebar status-pip color. The detail view maps the same
+ * `HostStatusTone` to its own dot palette (`TONE_DOT_CLASS`); the rail
+ * only has the three-color pip vocabulary (`active`/`idle`/`crashed`), so
+ * collapse onto it: online is green (`active`), offline is muted (`idle`),
+ * and a connected-but-unreachable/errored host is red (`crashed`) —
+ * something is wrong and worth a glance.
+ */
+const TONE_TO_PIP: Record<HostStatusTone, 'active' | 'idle' | 'crashed'> = {
+  accent: 'active',
+  success: 'active',
+  warning: 'crashed',
+  error: 'crashed',
+  muted: 'idle',
+};
+
+/**
+ * One computer row. Availability comes from the shared per-host status
+ * query + `describeHostStatus`, identical to the detail-view hero, so the
+ * two surfaces never show different words for the same state. Revoked
+ * computers skip the live query (no daemon to ask) and show the terminal
+ * lifecycle label with no pip.
+ */
+function ComputerRow({
+  host,
+  isSelected,
+  onSelect,
+}: {
+  host: HostDto;
+  isSelected: boolean;
+  onSelect: () => void;
+}): JSX.Element {
+  // Lifecycle bucketing reads the backend-owned `status` enum; never
+  // re-derive it from raw timestamps. Pending is filtered out upstream
+  // (modal-scoped draft), so a row is either `active` or `revoked` here.
+  const isRevoked = host.status === 'revoked';
+  const isAppManaged = host.provisioning_source === 'app_install';
+
+  // Live availability — one request on mount, then event-driven via
+  // host-connection-sync. Disabled for revoked (terminal, nothing live).
+  const statusQuery = useHostStatusQuery(host.id, { enabled: !isRevoked });
+  const view = statusQuery.data ? describeHostStatus(statusQuery.data) : null;
+
+  // Subtitle carries the AVAILABILITY word (Ready / Offline / …) for
+  // active computers, or the terminal lifecycle word for revoked ones —
+  // never the internal `kind` enum. The nbsp fallback holds the line box
+  // while the first status request is in flight so the row height is
+  // stable (matches SidebarRow's stacked reserve).
+  const availabilityLabel = isRevoked
+    ? computerCopy.lifecycleRevoked
+    : (view?.label ?? null);
+  const pip = isRevoked ? null : view ? TONE_TO_PIP[view.tone] : null;
+
+  return (
+    <SidebarRow
+      stacked
+      icon={<Monitor className="size-3.5" />}
+      title={host.display_label ?? host.name}
+      subtitle={
+        <span className="inline-flex min-w-0 items-center gap-1.5">
+          <span className="truncate">{availabilityLabel ?? ' '}</span>
+          {isAppManaged ? <AppManagedBadge /> : null}
+        </span>
+      }
+      selected={isSelected}
+      status={pip}
+      onClick={onSelect}
+    />
+  );
+}
+
+/** Small HUD tag marking the app-provisioned default computer. Theme-
+ *  neutral tokens; forza6 renders it as a 0-radius ink chip. */
+function AppManagedBadge(): JSX.Element {
+  return (
+    <span
+      data-computer-app-managed
+      className="rounded-[var(--control-radius)] border border-border-subtle px-1 text-[9px] font-semibold uppercase tracking-wide text-text-muted"
+    >
+      {computerCopy.appManaged}
+    </span>
   );
 }
 

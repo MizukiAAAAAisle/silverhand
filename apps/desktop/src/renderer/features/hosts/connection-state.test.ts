@@ -37,18 +37,18 @@ describe('describeConnectionState — six-arm presentation matrix (D3.d)', () =>
     expect(v.detail).toBeNull();
   });
 
-  it('claimed + attached_at===number → "Ready" + since X (success tone)', () => {
+  it('claimed + attached_at===number → "Connected" + since X (success tone)', () => {
     const v = describeConnectionState('claimed', NOW - 5 * ONE_MIN, NOW);
     expect(v.visible).toBe(true);
-    expect(v.label).toBe('Ready');
+    expect(v.label).toBe('Connected');
     expect(v.tone).toBe('success');
     expect(v.detail).toBe('since 5m ago');
   });
 
-  it('revoked → "Removed" (muted tone — server-side terminal, not connection error)', () => {
+  it('revoked → "Revoked" (muted tone — server-side terminal, not connection error)', () => {
     const v = describeConnectionState('revoked', null, NOW);
     expect(v.visible).toBe(true);
-    expect(v.label).toBe('Removed');
+    expect(v.label).toBe('Revoked');
     expect(v.tone).toBe('muted');
     expect(v.detail).toBeNull();
   });
@@ -86,14 +86,14 @@ describe('describeConnectionState — anti-collapse pins (Cindy gate 1)', () => 
     expect(failed.tone).not.toBe(revoked.tone);
   });
 
-  it('claimed without attached_at NEVER promotes to "Ready" via the mapper', () => {
+  it('claimed without attached_at NEVER promotes to "Connected" via the mapper', () => {
     // `attached_at===null` is the entire signal that the WS hasn't
     // landed. If a future refactor reads `attached_at ?? someDefault`
     // somewhere upstream we want this test to fail before the user
-    // sees a green "Ready" pill on a daemon that isn't actually
+    // sees a green "Connected" pill on a daemon that isn't actually
     // attached.
     const v = describeConnectionState('claimed', null, NOW);
-    expect(v.label).not.toBe('Ready');
+    expect(v.label).not.toBe('Connected');
     expect(v.tone).not.toBe('success');
   });
 
@@ -101,13 +101,13 @@ describe('describeConnectionState — anti-collapse pins (Cindy gate 1)', () => 
     // Even if the backend snapshot accidentally carries an
     // `attached_at` number on a `revoked` / `failed` host (it
     // shouldn't, but `BackendInfo` doesn't structurally exclude it),
-    // the mapper must NOT silently render "Ready".
+    // the mapper must NOT silently render "Connected".
     const revokedWithStaleAttach = describeConnectionState(
       'revoked',
       NOW - ONE_MIN,
       NOW,
     );
-    expect(revokedWithStaleAttach.label).toBe('Removed');
+    expect(revokedWithStaleAttach.label).toBe('Revoked');
     const failedWithStaleAttach = describeConnectionState(
       'failed',
       NOW - ONE_MIN,
@@ -118,16 +118,16 @@ describe('describeConnectionState — anti-collapse pins (Cindy gate 1)', () => 
 });
 
 describe('describeConnectionState — remoteAttached (remote-mode readiness, #task:1010)', () => {
-  it('claimed + attached_at===null + remoteAttached → "Ready" (no "since")', () => {
+  it('claimed + attached_at===null + remoteAttached → "Connected" (no "since")', () => {
     // Remote-server deployment: the in-process attachment registry is
     // absent so attached_at is structurally null, but the remote
     // backend confirms the outbound attach via host-status. The pill
-    // must read Ready, not a permanent "Connecting…".
+    // must read Connected, not a permanent "Connecting…".
     const v = describeConnectionState('claimed', null, NOW, {
       remoteAttached: true,
     });
     expect(v.visible).toBe(true);
-    expect(v.label).toBe('Ready');
+    expect(v.label).toBe('Connected');
     expect(v.tone).toBe('success');
     // No attach timestamp available from `availability`, so no "since".
     expect(v.detail).toBeNull();
@@ -135,7 +135,7 @@ describe('describeConnectionState — remoteAttached (remote-mode readiness, #ta
 
   it('claimed + attached_at===null + remoteAttached===false → still "Connecting…"', () => {
     // The genuine connecting case (daemon not yet/never attached). The
-    // opt defaulting to false must NOT promote to Ready.
+    // opt defaulting to false must NOT promote to Connected.
     const v = describeConnectionState('claimed', null, NOW, {
       remoteAttached: false,
     });
@@ -150,7 +150,7 @@ describe('describeConnectionState — remoteAttached (remote-mode readiness, #ta
     const v = describeConnectionState('claimed', NOW - 5 * ONE_MIN, NOW, {
       remoteAttached: true,
     });
-    expect(v.label).toBe('Ready');
+    expect(v.label).toBe('Connected');
     expect(v.detail).toBe('since 5m ago');
   });
 
@@ -160,7 +160,7 @@ describe('describeConnectionState — remoteAttached (remote-mode readiness, #ta
     expect(
       describeConnectionState('revoked', null, NOW, { remoteAttached: true })
         .label,
-    ).toBe('Removed');
+    ).toBe('Revoked');
     expect(
       describeConnectionState('failed', null, NOW, { remoteAttached: true })
         .label,

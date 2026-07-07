@@ -337,6 +337,8 @@ importers:
         specifier: ^2.1.5
         version: 2.1.9(@types/node@22.19.17)(lightningcss@1.32.0)
 
+  packages/silverhand-daemon: {}
+
 packages:
 
   7zip-bin@5.2.0:

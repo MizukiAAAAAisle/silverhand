@@ -204,6 +204,25 @@ export class ConversationInboxRepo {
     ).run(inFlightOwner);
   }
 
+  rollbackInFlightForPairExceptOwner(
+    conversationId: string,
+    agentId: string,
+    currentOwner: string,
+  ): number {
+    const result = this.db.prepare(
+      `UPDATE conversation_inboxes
+          SET in_flight_owner = NULL,
+              in_flight_at = NULL
+        WHERE conversation_id = ?
+          AND agent_id = ?
+          AND in_flight_owner IS NOT NULL
+          AND in_flight_owner != ?
+          AND delivered_at IS NULL
+          AND failed_at IS NULL`,
+    ).run(conversationId, agentId, currentOwner);
+    return result.changes;
+  }
+
   listInFlightForOwner(inFlightOwner: string): ConversationDeliveryRecord[] {
     const rows = this.db
       .prepare<[string], DeliveryRow>(
@@ -237,25 +256,26 @@ export class ConversationInboxRepo {
 
   /**
    * D4.b P1-2 idempotency helper: number of inbox rows currently
-   * claimed (`in_flight_owner` non-null) for a given (conv, agent)
-   * pair, regardless of which connection owns the claim. Used by
-   * `OutboundRuntimeEventFanout.startDeliveryBacked` to detect the
-   * race window between auto-drain claiming a pending row and the
-   * explicit `runtimeHost.start` call landing — both want to start
-   * the runtime, but only one needs to dispatch `runtime_start`.
+   * claimed by the live connection for a given (conv, agent) pair.
+   * Claims from old connection ids are stale leases; they must not
+   * make a later explicit start look successful.
    */
-  countInFlightForPair(conversationId: string, agentId: string): number {
+  countInFlightForPairOwner(
+    conversationId: string,
+    agentId: string,
+    inFlightOwner: string,
+  ): number {
     const row = this.db
-      .prepare<[string, string], { c: number }>(
+      .prepare<[string, string, string], { c: number }>(
         `SELECT COUNT(*) AS c
            FROM conversation_inboxes
           WHERE conversation_id = ?
             AND agent_id = ?
-            AND in_flight_owner IS NOT NULL
+            AND in_flight_owner = ?
             AND delivered_at IS NULL
             AND failed_at IS NULL`,
       )
-      .get(conversationId, agentId);
+      .get(conversationId, agentId, inFlightOwner);
     return row?.c ?? 0;
   }
 
