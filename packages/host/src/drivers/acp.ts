@@ -195,10 +195,13 @@ export class AcpClient {
 
     if (message.id === this.sessionRequestId) {
       this.sessionRequestId = null;
-      const sessionId = message.result?.sessionId;
+      const ctx = this.io?.spawnCtx;
+      const sessionId =
+        typeof message.result?.sessionId === 'string'
+          ? message.result.sessionId
+          : ctx?.cliSessionId;
       if (typeof sessionId === 'string') {
         this.sessionId = sessionId;
-        const ctx = this.io?.spawnCtx;
         this.pendingSessionConfigRequests =
           ctx && this.adapter.buildSessionConfigRequests
             ? [...this.adapter.buildSessionConfigRequests(ctx, sessionId)]

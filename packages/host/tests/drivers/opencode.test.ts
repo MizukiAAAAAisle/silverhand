@@ -120,6 +120,13 @@ describe('OpenCodeDriver ACP handshake', () => {
         params: {
           protocolVersion: 1,
           clientInfo: { name: 'silverhand' },
+          clientCapabilities: {
+            fs: {
+              readTextFile: false,
+              writeTextFile: false,
+            },
+            terminal: false,
+          },
         },
       });
       expect(d.readyToEncode()).toBe(false);
@@ -218,7 +225,9 @@ describe('OpenCodeDriver ACP handshake', () => {
           JSON.stringify({
             jsonrpc: '2.0',
             id: 2,
-            result: { sessionId: 'ses_existing' },
+            // OpenCode 1.17.14 returns only configOptions on session/resume.
+            // The requested cliSessionId remains the authoritative session id.
+            result: { configOptions: [] },
           }),
         ),
       ).toEqual([]);

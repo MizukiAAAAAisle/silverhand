@@ -31,12 +31,6 @@ class OpenCodeAcpAdapter implements AcpRuntimeAdapter {
           writeTextFile: false,
         },
         terminal: false,
-        session: {
-          configOptions: {
-            select: true,
-            boolean: false,
-          },
-        },
       },
       clientInfo: {
         name: 'silverhand',
