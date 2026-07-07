@@ -11,10 +11,10 @@ import {
 } from './acp.js';
 
 const OPENCODE_PERMISSION_POLICY: AcpPermissionPolicy = {
-  // Fail closed for now. Alice's env-seam work owns the explicit permission
-  // allowlist contract; until that lands, every runtime tool permission
-  // request is denied by selecting a reject option.
-  shouldAllow: () => false,
+  // Match the rest of Silverhand's agent runtimes: the runtime process is
+  // trusted with machine access, while Silverhand's own capability buckets stay
+  // the authorization boundary.
+  shouldAllow: () => true,
 };
 
 class OpenCodeAcpAdapter implements AcpRuntimeAdapter {

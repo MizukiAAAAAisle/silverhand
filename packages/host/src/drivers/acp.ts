@@ -34,10 +34,10 @@ type JsonRpcMessage = JsonRpcRequest | JsonRpcNotification | JsonRpcResponse;
 
 export interface AcpPermissionPolicy {
   /**
-   * Runtime-tool permissions are a separate authorization plane from
-   * Silverhand roles/capabilities. The ACP core stays fail-closed: adapters
-   * may explicitly allow a request, otherwise the core selects a reject option
-   * (or returns `cancelled` when no reject option exists).
+   * ACP runtime-tool permission prompts are owned by the concrete runtime
+   * adapter. They are not Silverhand's role/capability authorization boundary,
+   * so adapters should align this policy with their runtime's existing
+   * full-access or feature-dedup posture.
    */
   shouldAllow(params: unknown): boolean;
 }

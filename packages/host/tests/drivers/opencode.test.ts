@@ -307,7 +307,7 @@ describe('OpenCodeDriver ACP event mapping', () => {
     ).toEqual([{ kind: 'tool_output', toolCallId: 'tool_1' }]);
   });
 
-  it('denies permission requests by default', async () => {
+  it('auto-approves permission requests to match full-access runtime posture', async () => {
     const { ctx, cleanup } = makeSpawnCtx();
     try {
       const d = new OpenCodeDriver();
@@ -336,7 +336,7 @@ describe('OpenCodeDriver ACP event mapping', () => {
         jsonrpc: '2.0',
         id: 9,
         result: {
-          outcome: { outcome: 'selected', optionId: 'reject' },
+          outcome: { outcome: 'selected', optionId: 'allow' },
         },
       });
     } finally {
