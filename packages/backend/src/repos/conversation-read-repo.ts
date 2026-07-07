@@ -427,8 +427,8 @@ export class ConversationReadRepo {
 
 /**
  * Roll-up unread predicate (#task:1226 §3.5). A message `m` is unread for
- * `@viewer` when it is neither a system message nor the viewer's own, AND
- * either:
+ * `@viewer` when it is neither a system message nor the viewer's own, AND its
+ * conversation is not ARCHIVED, AND either:
  *   - it is a MAINLINE message past the viewer's mainline cursor, OR
  *   - it is a reply in a thread the viewer FOLLOWS (`thread_followers`,
  *     principal_kind='human'), past that thread's own cursor.
@@ -437,12 +437,25 @@ export class ConversationReadRepo {
  * per-conversation cursor any more. References `m.conversation_id` and `@viewer`,
  * so every caller must alias the messages table `m` and bind `@viewer`.
  *
+ * ARCHIVED EXCLUSION (#task:1403): archiving a channel ends its lifecycle — it is
+ * no longer visible, so its unread must not count toward ANY badge (sidebar /
+ * workspace / global). Baked into the predicate itself (not each caller) so all
+ * consumers — the workspace-scoped aggregates, the per-conversation counts, and
+ * the favorites row — agree by construction that "unread" excludes archived
+ * conversations; there is no second place to keep in sync. `setArchived` emits a
+ * viewer-scoped `unread_updated` so already-cached badges drop in place without a
+ * refetch (both archive AND unarchive — the predicate re-includes on restore).
+ *
  * NOTE: `thread_followers` is the DELIVERY / agent-wake subscription contract
  * (#task:1226 invariant 4). It is only READ here to derive the followed/all
  * distinction; this module never writes it.
  */
 const ROLLUP_UNREAD = `
-  m.from_kind != 'system'
+  NOT EXISTS (
+    SELECT 1 FROM conversations arch
+     WHERE arch.id = m.conversation_id AND arch.archived_at IS NOT NULL
+  )
+  AND m.from_kind != 'system'
   AND NOT (m.from_kind = 'user' AND (m.from_user_id = @viewer OR m.from_user_id IS NULL))
   AND (
     (

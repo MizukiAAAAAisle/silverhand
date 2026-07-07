@@ -9,9 +9,11 @@ import type { BackendLogger } from '../context.js';
 import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo, RepoError } from '../repos/conversation-repo.js';
+import type { ConversationReadRepo } from '../repos/conversation-read-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
+import { publishUnreadUpdatedToConversationViewers } from '../viewer-scope.js';
 import type { AgentPrincipal, UserPrincipal } from '../auth/principal.js';
 
 /**
@@ -161,6 +163,7 @@ export class SeedError extends Error {
 export interface ChannelServiceOptions {
   db: Db;
   conversations: ConversationRepo;
+  conversationReads: ConversationReadRepo;
   workspaces: WorkspaceRepo;
   agents: AgentRepo;
   messages: MessageRepo;
@@ -179,6 +182,7 @@ interface CreateChannelTxResult {
 export class ChannelService {
   private readonly db: Db;
   private readonly conversations: ConversationRepo;
+  private readonly conversationReads: ConversationReadRepo;
   private readonly workspaces: WorkspaceRepo;
   private readonly agents: AgentRepo;
   private readonly messages: MessageRepo;
@@ -189,6 +193,7 @@ export class ChannelService {
   constructor(opts: ChannelServiceOptions) {
     this.db = opts.db;
     this.conversations = opts.conversations;
+    this.conversationReads = opts.conversationReads;
     this.workspaces = opts.workspaces;
     this.agents = opts.agents;
     this.messages = opts.messages;
@@ -475,6 +480,21 @@ export class ChannelService {
 
     this.publishWorkspaceChannelsChanged(
       updated.workspace_id,
+      updated.id,
+    );
+    // Archiving/unarchiving flips whether this channel's unread counts toward the
+    // viewer badges (ROLLUP_UNREAD excludes archived — #task:1403). The rollup is
+    // authoritative the instant `archived_at` commits, but the already-cached
+    // sidebar/global badges are patched in place from `unread_updated`, not
+    // refetched (#task:1284) — so without this emit an archived channel's unread
+    // would linger until the next snapshot. Post-commit + symmetric: archive
+    // decrements every affected viewer's badge, unarchive restores it (the
+    // predicate re-includes the channel). Per-viewer absolutes ride the
+    // `viewer:<id>` scope, so no broadcast-invariant risk.
+    publishUnreadUpdatedToConversationViewers(
+      this.events,
+      this.conversations,
+      this.conversationReads,
       updated.id,
     );
     return { channel: updated };

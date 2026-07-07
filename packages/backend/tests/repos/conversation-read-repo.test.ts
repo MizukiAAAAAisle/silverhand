@@ -235,6 +235,48 @@ describe('ConversationReadRepo', () => {
     });
   });
 
+  it('excludes archived conversations from every unread rollup, symmetric on unarchive (#task:1403)', () => {
+    const { workspace, db, messages, reads, channel, otherChannel } = bootstrap();
+    const conversations = new ConversationRepo(db);
+
+    messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      content: 'a',
+    });
+    messages.insertForConversation({
+      conversationId: otherChannel.id,
+      fromKind: 'agent',
+      content: 'b',
+    });
+
+    // Baseline: both channels' unread counts everywhere.
+    expect(reads.unreadCountForConversation(channel.id, 'local')).toBe(1);
+    expect(reads.unreadCountForWorkspace(workspace.id, 'local')).toBe(2);
+
+    // Archiving ends the channel's lifecycle → its unread leaves the
+    // per-conversation count, the workspace rollups, and the by-conversation map.
+    conversations.setArchived(channel.id, true);
+    expect(reads.unreadCountForConversation(channel.id, 'local')).toBe(0);
+    expect(reads.latestUnreadForConversation(channel.id, 'local')).toBeNull();
+    expect(reads.unreadCountForWorkspace(workspace.id, 'local')).toBe(1);
+    expect(
+      reads.unreadCountsByConversationForWorkspace(workspace.id, 'local')
+        .by_conversation,
+    ).toEqual({ [otherChannel.id]: 1 });
+    expect(reads.unreadCountsByWorkspace('local')).toEqual({ [workspace.id]: 1 });
+    expect(reads.unreadCountsByWorkspaceSidebar('local')).toEqual({
+      [workspace.id]: 1,
+    });
+
+    // Unarchiving restores it — the predicate re-includes the channel, so the
+    // emission on unarchive can rebuild the badge from the same authoritative
+    // rollup.
+    conversations.setArchived(channel.id, false);
+    expect(reads.unreadCountForConversation(channel.id, 'local')).toBe(1);
+    expect(reads.unreadCountForWorkspace(workspace.id, 'local')).toBe(2);
+  });
+
   it('advances the mainline cursor monotonically and never moves it backward', () => {
     const { messages, reads, channel } = bootstrap();
     const m1 = messages.insertForConversation({

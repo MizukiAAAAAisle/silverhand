@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { readChannelContextMetadata } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
@@ -65,6 +66,7 @@ function bootstrap() {
   const agents = new AgentRepo(db);
   const workspaces = new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot });
   const conversations = new ConversationRepo(db);
+  const conversationReads = new ConversationReadRepo(db);
   const messages = new MessageRepo(db);
   const events = new ScopeEventBus('test-epoch');
   const fake = new FakeConversationManager();
@@ -76,6 +78,7 @@ function bootstrap() {
   const service = new ChannelService({
     db,
     conversations,
+    conversationReads,
     workspaces,
     agents,
     messages,
@@ -444,6 +447,59 @@ describe('ChannelService.setArchived', () => {
         'workspace_channels_changed',
         'workspace_channels_changed',
       ]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('emits viewer-scoped unread_updated on archive and unarchive so cached badges drop then restore (#task:1403)', async () => {
+    const t = bootstrap();
+    try {
+      // The 'local' human viewer is a member of `source`; give them one unread
+      // agent message so archiving has a badge to drop.
+      t.messages.insertForConversation({
+        conversationId: t.source.id,
+        fromKind: 'agent',
+        content: 'unread work',
+      });
+
+      const frames: Array<{
+        conversation_id?: string;
+        conversation_unread_count?: number;
+        workspace_unread_count?: number;
+        latest_unread?: unknown;
+      }> = [];
+      const unsub = t.events.subscribeScope('viewer:local', e => {
+        if (e.kind === 'unread_updated') {
+          frames.push(
+            e.payload as {
+              conversation_id?: string;
+              conversation_unread_count?: number;
+              workspace_unread_count?: number;
+              latest_unread?: unknown;
+            },
+          );
+        }
+      });
+
+      await t.service.setArchived({ channelId: t.source.id, archived: true });
+      await t.service.setArchived({ channelId: t.source.id, archived: false });
+      unsub();
+
+      // Both frames are message-variant (carry conversation_id) so the #1284
+      // ingestor patches the badge in place: archive → 0, unarchive → restored.
+      expect(frames).toHaveLength(2);
+      expect(frames[0]).toMatchObject({
+        conversation_id: t.source.id,
+        conversation_unread_count: 0,
+        workspace_unread_count: 0,
+        latest_unread: null,
+      });
+      expect(frames[1]).toMatchObject({
+        conversation_id: t.source.id,
+        conversation_unread_count: 1,
+        workspace_unread_count: 1,
+      });
     } finally {
       t.cleanup();
     }

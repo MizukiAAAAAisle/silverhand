@@ -418,6 +418,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   ctx.channelService = new ChannelService({
     db,
     conversations: new ConversationRepo(db),
+    conversationReads: new ConversationReadRepo(db),
     workspaces: new WorkspaceRepo(db, { workspacesRoot }),
     agents: new AgentRepo(db),
     messages: new MessageRepo(db),
