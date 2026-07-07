@@ -38,10 +38,22 @@ export const routes = {
       : '/chat/search',
   chatSaved: () => '/chat/saved',
   chatArchived: () => '/chat/archived',
-  chatActivity: () => '/chat/activity',
   chatWorkspace: (workspaceId: string) => `/chat/w/${workspaceId}`,
   chatChannel: (workspaceId: string, channelId: string) =>
     `/chat/w/${workspaceId}/c/${channelId}`,
+  // Activity is a top-level NavRail section (peer to chat, #task:1394). It has
+  // exactly TWO states, both a pure projection of the route: bare `/activity`
+  // (no workspace, no channel — the full-width global list) and the selected
+  // state `/activity/w/:wid/c/:cid` (a specific channel, opened from a list
+  // item). There is deliberately NO workspace-only `/activity/w/:wid` route:
+  // the workspace is always derived from the selected channel, so a workspace
+  // with no channel would be a third selection state with a titlebar/ws-scoped
+  // queries but no Activity item behind it (Cindy, #task:1394 review). Secondary
+  // panes (`?thread=<root>`) ride the shared query helpers, which operate on the
+  // current pathname and thus stay in-section automatically.
+  activity: () => '/activity',
+  activityChannel: (workspaceId: string, channelId: string) =>
+    `/activity/w/${workspaceId}/c/${channelId}`,
   members: () => '/members',
   membersAgent: (agentId: string) => `/members/${agentId}`,
   // Distinct prefix for users so a user id can never collide with the
@@ -61,8 +73,9 @@ export const routePatterns = {
   chatArchived: '/chat/archived',
   chatSearch: '/chat/search',
   chatSaved: '/chat/saved',
-  chatActivity: '/chat/activity',
   chat: '/chat',
+  activityChannel: '/activity/w/:workspaceId/c/:channelId',
+  activity: '/activity',
   membersAgent: '/members/:agentId',
   membersUser: '/members/u/:userId',
   members: '/members',
@@ -71,7 +84,7 @@ export const routePatterns = {
   settings: '/settings',
 } as const;
 
-export type ChatView = 'channel' | 'saved' | 'search' | 'archived' | 'activity';
+export type ChatView = 'channel' | 'saved' | 'search' | 'archived';
 
 /**
  * Resolved view of the current URL. Components read this instead of
@@ -142,7 +155,18 @@ export interface RouteState {
  * separate avoids spinning up a router in tests.
  */
 export function parseRouteState(pathname: string, search: string): RouteState {
-  const mChannel = matchPath(routePatterns.chatChannel, pathname);
+  // Both chat and activity carry the same `/w/:workspaceId/c/:channelId`
+  // shape (activity just under a different prefix), so try both channel
+  // patterns — workspaceId/channelId then populate identically for either
+  // section, and the section itself is decided by the pathname prefix below.
+  const mChannel =
+    matchPath(routePatterns.chatChannel, pathname) ??
+    matchPath(routePatterns.activityChannel, pathname);
+  // Workspace-only is CHAT-only: activity has no `/activity/w/:wid` route (a
+  // workspace with no channel would be a third selection state with no Activity
+  // item behind it — #task:1394). A hand-typed `/activity/w/foo` therefore
+  // matches no pattern here and resolves to activity section + no workspace/no
+  // channel (the full-width list), never a phantom workspace selection.
   const mWorkspace = matchPath(routePatterns.chatWorkspace, pathname);
   // Order matters: the user route is more specific (`/members/u/:userId`,
   // three segments) than the agent route (`/members/:agentId`, two
@@ -200,6 +224,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   else if (pathname.startsWith('/computers')) section = 'computers';
   else if (pathname.startsWith('/tasks')) section = 'tasks';
   else if (pathname.startsWith('/settings')) section = 'settings';
+  else if (pathname.startsWith('/activity')) section = 'activity';
 
   const chatView: ChatView = pathname.startsWith('/chat/saved')
     ? 'saved'
@@ -207,9 +232,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
       ? 'search'
       : pathname.startsWith('/chat/archived')
         ? 'archived'
-        : pathname.startsWith('/chat/activity')
-          ? 'activity'
-          : 'channel';
+        : 'channel';
 
   return {
     section,
@@ -608,7 +631,7 @@ export function useNav(): {
   toChatSearch: (query?: string) => void;
   toChatSaved: () => void;
   toChatArchived: () => void;
-  toChatActivity: () => void;
+  toActivity: () => void;
   toWorkspace: (workspaceId: string) => void;
   toChannel: (workspaceId: string, channelId: string) => void;
   toMembers: (agentId?: string) => void;
@@ -751,7 +774,7 @@ export function useNav(): {
   );
   const toChatSaved = useCallback(() => go(routes.chatSaved()), [go]);
   const toChatArchived = useCallback(() => go(routes.chatArchived()), [go]);
-  const toChatActivity = useCallback(() => go(routes.chatActivity()), [go]);
+  const toActivity = useCallback(() => go(routes.activity()), [go]);
   const toWorkspace = useCallback((id: string) => go(routes.chatWorkspace(id)), [go]);
   const toChannel = useCallback(
     (wid: string, cid: string) => go(routes.chatChannel(wid, cid)),
@@ -776,7 +799,7 @@ export function useNav(): {
     toChatSearch,
     toChatSaved,
     toChatArchived,
-    toChatActivity,
+    toActivity,
     toWorkspace,
     toChannel,
     toMembers,
@@ -801,7 +824,7 @@ export function useNav(): {
     toChatSearch,
     toChatSaved,
     toChatArchived,
-    toChatActivity,
+    toActivity,
     toWorkspace,
     toChannel,
     toMembers,

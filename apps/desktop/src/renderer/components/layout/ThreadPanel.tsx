@@ -82,11 +82,6 @@ interface ThreadPanelProps {
   /** Called once the jump completes (flashed) or is given up (target not in
    *  the loaded window). App clears the jump target on this. */
   onJumped?: () => void;
-  /** Render as an Activity DOCKED SOURCE VIEWER (#task:1227): identity + exit
-   *  header only. The Follow/Unfollow control (a delivery/attention management
-   *  op) is suppressed — the user manages following from the original thread.
-   *  Keeps `Open in conversation` + close. See `ChannelView.sourceViewer`. */
-  sourceViewer?: boolean;
   /** In-conversation header find (#task:1335), scoped to THIS thread stream.
    *  When provided, the thread header shows a search-toggle icon. The callback
    *  navigates to a prev/next match via App's shared jump/prime path (carrying
@@ -130,7 +125,6 @@ export function ThreadPanel({
   jumpMessageId,
   jumpPhase = null,
   onJumped,
-  sourceViewer,
   onJumpToMessage,
   onOpenAdvancedSearch,
 }: ThreadPanelProps): JSX.Element {
@@ -352,7 +346,7 @@ export function ThreadPanel({
   // `findRootRef` is declared before `inlineFindNavigate` so the local locate can
   // scope its node lookup to THIS pane (see below).
   const findRootRef = useRef<HTMLElement>(null);
-  const findEnabled = !sourceViewer && !!onJumpToMessage;
+  const findEnabled = !!onJumpToMessage;
   const inlineFindNavigate = useCallback(
     (messageId: string) => {
       const inWindow =
@@ -719,7 +713,7 @@ export function ThreadPanel({
               <Search className="size-4" />
             </button>
           ) : null}
-          {!sourceViewer && followers.data ? (
+          {followers.data ? (
             <button
               type="button"
               aria-label={viewerFollowing ? 'Unfollow thread' : 'Follow thread'}

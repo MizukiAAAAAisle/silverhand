@@ -1,10 +1,9 @@
 import { useMemo } from 'react';
-import { Activity, Archive, Bookmark, Plus, Search } from 'lucide-react';
+import { Archive, Bookmark, Plus, Search } from 'lucide-react';
 import type { AgentDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { Button } from '@/components/ui/button';
 import { useHostProvenanceGate } from '@/features/hosts/hooks';
-import { useActivity } from '@/features/attention/hooks';
 import {
   useAgentAvatarObjectUrls,
   type AgentAvatarSource,
@@ -46,9 +45,6 @@ interface SidebarProps {
   /** Dedicated global search view under the chat section. */
   searchActive: boolean;
   onSelectSearch: () => void;
-  /** The human's Activity list (#task:1227) — "queue waiting on me". */
-  activityActive: boolean;
-  onSelectActivity: () => void;
   /** Live count from the saved-messages query cache. Pass undefined
    *  on first paint (before the query resolves) so the badge stays
    *  hidden instead of flashing 0. */
@@ -69,14 +65,6 @@ function railGroupKeyOf(workspace: WorkspaceItem): RailGroup {
 
 export function Sidebar(props: SidebarProps): JSX.Element {
   const hostProvenance = useHostProvenanceGate();
-  // Activity badge = number of distinct items waiting (`items.length`), NOT a raw
-  // message-unread sum or Σ unread_count — a thread with 5 replies is ONE item
-  // (its row shows "5 new"). Same source as the list (`useActivity`), reusing the
-  // viewer-scoped `unread_updated` / `notification` invalidation; no second
-  // scorer (Cindy contract). Lives here so the badge stays live even when the
-  // Activity view itself is unmounted.
-  const { data: activityData } = useActivity();
-  const activityCount = activityData?.items.length ?? 0;
   // Home rail groups by KIND (DM / regular), plus archived. STARRED is NOT a rail
   // partition — it is the global Favorites overlay (#task:1253/#task:1254). Under
   // the EXCLUSIVE model a starred (non-archived) workspace/DM is MOVED into
@@ -145,16 +133,12 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     onReorder,
   });
 
-  // While the Saved view is active, suppress workspace highlighting so
-  // the Saved entry visually owns selection.
-  // Activity, like Saved / Search / Archived, is a top-level view (not a
-  // workspace) — suppress the workspace-row highlight so the nav doesn't show a
-  // workspace AND a top-level view both selected (Cindy review).
+  // Saved / Search / Archived are top-level views (not a workspace) — suppress
+  // the workspace-row highlight so the nav doesn't show a workspace AND a
+  // top-level view both selected (Cindy review). (Activity is now its own
+  // NavRail section, no longer a chat-sidebar entry — #task:1394.)
   const topLevelViewActive =
-    props.savedActive ||
-    props.searchActive ||
-    props.archivedActive ||
-    props.activityActive;
+    props.savedActive || props.searchActive || props.archivedActive;
   const workspaceHighlight = topLevelViewActive ? null : props.selectedWorkspaceId;
 
   return (
@@ -179,28 +163,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           * fading a discrete committed state is the flicker (#task:1162). Keeps
           * all three sidebar row classes (rail / channel / tool) one row-language. */}
         <div className="mb-3 space-y-0.5">
-          <button
-            type="button"
-            onClick={props.onSelectActivity}
-            className={cn(
-              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm',
-              props.activityActive
-                ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-                : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
-            )}
-          >
-            <Activity className="size-4" />
-            <span>Activity</span>
-            {activityCount > 0 ? (
-              <span
-                data-sidebar-unread
-                className="ml-auto shrink-0 min-w-[16px] rounded-full bg-accent px-1 text-center text-[9px] font-semibold leading-[16px] text-text-on-accent"
-              >
-                {activityCount > 99 ? '99+' : activityCount}
-              </span>
-            ) : null}
-          </button>
-
           <button
             type="button"
             onClick={props.onSelectSearch}

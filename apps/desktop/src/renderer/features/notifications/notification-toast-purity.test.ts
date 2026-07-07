@@ -53,24 +53,18 @@ describe('notification toast surface — surfaced ≠ eliminated', () => {
 // Guard #2 (#task:1244): conversation FOCUS is also a passive surface, so it
 // must not drain notification read_at either. The old focus-effect bug wrote
 // `read_at` for the focused conversation on focus alone (no cursor advance),
-// silently evicting cursor-unread @me mentions. We fence both ends of that
-// wiring at source level (node test env, no RTL):
-//   - the activity-source hook (`features/app-shell/activity-source.ts`, split
-//     out of App.tsx in #task:1291) must keep EXACTLY ONE
-//     `markConversationNotificationsRead.mutate` call — the active
-//     activity-source-open (paired with a cursor→head advance, self-consistent).
-//   - App.tsx must never call the drain DIRECTLY — it only threads the mutation
-//     into the hook. A re-introduced focus-drain in the shell would show up here.
+// silently evicting cursor-unread @me mentions. Under the #task:1394 Activity
+// rail the notification drain lives ONLY on an ACTIVE Activity intent — the
+// row's on-click / hover-✓ routing through `activityItemSource`
+// (`clearItem.mutate`) — never on a passive focus/open path. We fence both
+// remaining ends of the old wiring at source level (node test env, no RTL):
+//   - App.tsx must never call the drain DIRECTLY. A re-introduced focus-drain
+//     in the shell would show up here (the parallel docked-source hook that
+//     once owned this call was deleted in #task:1394).
 //   - the focus selector (`secondary-pane.ts`) must never wire that mutation.
 describe('conversation focus surface — must not drain notification read_at', () => {
   const appSource = readFileSync(
     fileURLToPath(new URL('../../App.tsx', import.meta.url)),
-    'utf8',
-  );
-  const activitySourceHook = readFileSync(
-    fileURLToPath(
-      new URL('../app-shell/activity-source.ts', import.meta.url),
-    ),
     'utf8',
   );
   const focusSelectorSource = readFileSync(
@@ -79,18 +73,11 @@ describe('conversation focus surface — must not drain notification read_at', (
   );
   const DRAIN_CALL = 'markConversationNotificationsRead.mutate';
 
-  it('the activity-source hook invokes the notification drain exactly once — the active source-open', () => {
-    const calls =
-      activitySourceHook.match(/markConversationNotificationsRead\.mutate\(/g) ?? [];
-    expect(calls).toHaveLength(1);
-    // The sole survivor must be the cursor→head-paired activity-source-open, not
-    // a focus-keyed call. If this literal changes, re-verify it is still active.
-    expect(activitySourceHook).toContain(`${DRAIN_CALL}(activitySourceReadChannelId)`);
-  });
-
   it('App.tsx never invokes the notification drain directly (no focus-drain)', () => {
-    // The shell threads the mutation into useActivitySource as a prop but must
-    // never call `.mutate` itself — a re-introduced focus-drain lands here.
+    // The Activity rail's channel/thread panes are the SAME route-driven
+    // ChannelView/ThreadPanel as chat; notification clearing is an explicit
+    // Activity-row action, not a shell effect. A re-introduced focus-drain
+    // lands here.
     expect(appSource).not.toContain(`${DRAIN_CALL}(`);
   });
 

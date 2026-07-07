@@ -7,7 +7,6 @@ import {
   useState,
 } from 'react';
 import {
-  ArrowUpRight,
   CornerDownRight,
   Hash,
   Maximize2,
@@ -112,23 +111,6 @@ interface ChannelViewProps {
    *  thread panes, `'关闭侧栏'` for `?side=<channel>` panes. Ignored
    *  when `onCloseChild` is undefined. */
   closeLabel?: string;
-  /** When set, renders an "open in conversation" button in the header that
-   *  calls this back. Used by the Activity source pane (#task:1227): the side
-   *  panel is a real working conversation view, and this button leaves Activity
-   *  to land in the full channel. Pure navigation — it carries NO clearing
-   *  semantics (the live source's own read path does that). */
-  onOpenInConversation?: () => void;
-  /** Render this view as an Activity DOCKED SOURCE VIEWER (#task:1227): a
-   *  convenience pane, NOT full conversation chrome. The header collapses to
-   *  identity + exit only — the SAME themed `#` channel identity the full header
-   *  uses (the `data-conversation-hash-icon` lucide glyph, so forza6 paints its
-   *  `#` poster sticker), title, member strip, and on the right `Open in conversation`
-   *  + close. All management/structural controls (settings/archive-rename,
-   *  channel attention pref, threads-list toggle, fullscreen, agent restart/stop,
-   *  add-member) are suppressed: those belong in the original conversation. The
-   *  message stream below is the same live, working surface — only the chrome
-   *  changes, so this is a header variant, not a forked component. */
-  sourceViewer?: boolean;
   /** "View in channel" handler — for thread panes, jumps the parent
    *  pane to the original anchor message. Receives the original
    *  message id (which lives in the thread_anchor system message). */
@@ -236,8 +218,6 @@ function ActiveChannelView({
   threadsListActive = false,
   onCloseChild,
   closeLabel = '关闭 Thread',
-  onOpenInConversation,
-  sourceViewer,
   onJumpToOriginal,
   onThreadAnchorResolved,
   highlightedMessageId,
@@ -467,7 +447,7 @@ function ActiveChannelView({
   //   • match off the loaded window → App's jump/prime path materialises it.
   // Offered only when the pane supports being jumped into (`onJumpToMessage`
   // present) — secondary `?side` panes don't, so they show no find affordance.
-  const findEnabled = !sourceViewer && !!onJumpToMessage;
+  const findEnabled = !!onJumpToMessage;
   const loadedMessageIds = useMemo(
     () => new Set(visibleMessages.map(m => m.id)),
     [visibleMessages],
@@ -570,7 +550,7 @@ function ActiveChannelView({
               {conversation.title}
             </span>
             {memberStrip}
-            {!sourceViewer && canAddMember(conversation, closed) ? (
+            {canAddMember(conversation, closed) ? (
               <AddConversationMemberPopover
                 workspaceId={conversation.workspace_id}
                 conversationId={conversation.id}
@@ -613,7 +593,7 @@ function ActiveChannelView({
               <Search className="size-4" />
             </button>
           ) : null}
-          {!sourceViewer && onToggleThreadsList ? (
+          {onToggleThreadsList ? (
             <button
               type="button"
               onClick={onToggleThreadsList}
@@ -630,7 +610,7 @@ function ActiveChannelView({
               <CornerUpLeft className="size-4" />
             </button>
           ) : null}
-          {!sourceViewer && canManageAllChannelAgents ? (
+          {canManageAllChannelAgents ? (
             <>
               <button
                 type="button"
@@ -654,7 +634,7 @@ function ActiveChannelView({
               </button>
             </>
           ) : null}
-          {!sourceViewer && (canRenameChannel || canToggleArchive) ? (
+          {canRenameChannel || canToggleArchive ? (
             <button
               type="button"
               onClick={() => setSettingsOpen(true)}
@@ -665,7 +645,7 @@ function ActiveChannelView({
               <Settings className="size-4" />
             </button>
           ) : null}
-          {!sourceViewer && onToggleFullscreen ? (
+          {onToggleFullscreen ? (
             <button
               type="button"
               onClick={onToggleFullscreen}
@@ -678,17 +658,6 @@ function ActiveChannelView({
               ) : (
                 <Maximize2 className="size-4" />
               )}
-            </button>
-          ) : null}
-          {onOpenInConversation ? (
-            <button
-              type="button"
-              onClick={onOpenInConversation}
-              aria-label="Open in conversation"
-              title="Open in conversation"
-              className="flex size-7 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
-            >
-              <ArrowUpRight className="size-4" />
             </button>
           ) : null}
           {onCloseChild ? (

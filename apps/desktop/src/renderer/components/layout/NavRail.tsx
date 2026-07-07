@@ -1,5 +1,12 @@
 import { type JSX, type ReactNode } from 'react';
-import { CheckSquare, MessagesSquare, Monitor, Settings, Users } from 'lucide-react';
+import {
+  Activity,
+  CheckSquare,
+  MessagesSquare,
+  Monitor,
+  Settings,
+  Users,
+} from 'lucide-react';
 import { cn } from '@/lib/cn';
 
 /**
@@ -10,7 +17,13 @@ import { cn } from '@/lib/cn';
  * than the main rail, but it still participates in section selection
  * so the bottom button can highlight when its route is active.
  */
-export type AppSection = 'chat' | 'tasks' | 'members' | 'computers' | 'settings';
+export type AppSection =
+  | 'chat'
+  | 'activity'
+  | 'tasks'
+  | 'members'
+  | 'computers'
+  | 'settings';
 
 interface NavRailProps {
   current: AppSection;
@@ -25,6 +38,7 @@ interface NavItem {
 
 const ITEMS: NavItem[] = [
   { id: 'chat', label: 'Chat', icon: <MessagesSquare className="size-4" /> },
+  { id: 'activity', label: 'Activity', icon: <Activity className="size-4" /> },
   { id: 'tasks', label: 'Tasks', icon: <CheckSquare className="size-4" /> },
   { id: 'members', label: 'Members', icon: <Users className="size-4" /> },
   { id: 'computers', label: 'Computers', icon: <Monitor className="size-4" /> },

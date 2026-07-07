@@ -85,6 +85,42 @@ describe('parseRouteState — chat URL matrix', () => {
     expect(r.userId).toBe('u-1');
     expect(r.agentId).toBeNull();
   });
+
+  it('parses bare /activity into the activity section with no channel', () => {
+    const r = parseRouteState('/activity', '');
+    expect(r.section).toBe('activity');
+    expect(r.workspaceId).toBeNull();
+    expect(r.channelId).toBeNull();
+  });
+
+  it('parses /activity/w/:wid/c/:cid — same channel shape as chat, activity section', () => {
+    const r = parseRouteState('/activity/w/w-1/c/c-a', '');
+    expect(r).toMatchObject({
+      section: 'activity',
+      workspaceId: 'w-1',
+      channelId: 'c-a',
+    });
+  });
+
+  it('parses ?thread on an activity channel route (secondary pane shared with chat)', () => {
+    const r = parseRouteState('/activity/w/w-1/c/c-a', '?thread=root-1');
+    expect(r.section).toBe('activity');
+    expect(r.workspaceId).toBe('w-1');
+    expect(r.channelId).toBe('c-a');
+    expect(r.threadRootId).toBe('root-1');
+  });
+
+  it('workspace-only /activity/w/:wid yields NO workspace selection (no third state)', () => {
+    // Activity has exactly two states: bare `/activity` (full-width list) and
+    // `/activity/w/:wid/c/:cid` (selected). There is no `/activity/w/:wid`
+    // route, so a hand-typed one must NOT resolve a phantom workspace — that
+    // would show a titlebar / fire ws-scoped queries for a workspace not
+    // derived from any selected Activity item (#task:1394 review).
+    const r = parseRouteState('/activity/w/w-1', '');
+    expect(r.section).toBe('activity');
+    expect(r.workspaceId).toBeNull();
+    expect(r.channelId).toBeNull();
+  });
 });
 
 describe('withSideQuery — URL writer for openSide / closeSide', () => {

@@ -96,12 +96,22 @@ export function useDockBadge(
  * Global Cmd+\ / Cmd+Shift+\ shortcut to toggle the channel / workspace
  * sidebars. Ignores modifier-混入 combos (ctrl/alt) so it never hijacks other
  * chords.
+ *
+ * `enabled` scopes the chord to the section that actually owns these two browse
+ * sidebars (chat). Activity has no workspace/channel sidebar — its visible
+ * toggles are hidden — so the keyboard path must share that same boundary,
+ * otherwise the chord silently mutates the (hidden) chat sidebar preference from
+ * Activity and the layout jumps on return to chat (#task:1394 review, Cindy). We
+ * gate registration rather than early-returning inside the handler so a disabled
+ * section also leaves the chord free (no stray `preventDefault`).
  */
 export function useLayoutKeyboardShortcuts(
   toggleWorkspaceSidebar: () => void,
   toggleChannelSidebar: () => void,
+  enabled: boolean,
 ): void {
   useEffect(() => {
+    if (!enabled) return;
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (!event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.code !== 'Backslash') return;
@@ -114,7 +124,7 @@ export function useLayoutKeyboardShortcuts(
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleChannelSidebar, toggleWorkspaceSidebar]);
+  }, [enabled, toggleChannelSidebar, toggleWorkspaceSidebar]);
 }
 
 /**

@@ -57,7 +57,6 @@ import {
   useSettingsMenuNav,
 } from '@/features/app-shell/effects';
 import { useSecondaryPaneModel } from '@/features/app-shell/secondary-pane-model';
-import { useActivitySource } from '@/features/app-shell/activity-source';
 import { useSelectionPersistenceEffects } from '@/features/app-shell/selection-persistence';
 import {
   useWorkspaces,
@@ -77,7 +76,6 @@ import {
   useUnreadCounts,
 } from '@/features/notifications/hooks';
 import {
-  useMarkConversationNotificationsRead,
   useMarkMessageChannelRead,
   useMessageUnreadCounts,
   useMessageUnreadSummary,
@@ -226,6 +224,20 @@ function RegisteredAppShell(): JSX.Element {
     max: 400,
     cssVar: '--channels-sidebar-width',
   });
+  // Activity-section list width — its OWN resizable column (#task:1394,
+  // shiki). Deliberately NOT the chat `--sidebar-width` rail slot: reusing it
+  // would leak chat browse state into Activity (Cindy/Alice invariant #2). Its
+  // own `--activity-list-width` var is the SINGLE width source — the Titlebar
+  // offset reads the same var so a drag stays in sync with zero extra wiring
+  // (no second computed offset). `min` guarantees a row's three lines + count
+  // token stay legible when the list is a narrow column.
+  const activityList = useResizableWidth({
+    storageKey: 'silverhand.layout.activity-list-width',
+    defaultWidth: 360,
+    min: 280,
+    max: 560,
+    cssVar: '--activity-list-width',
+  });
 
   const route = useRouteState();
   const nav = useNav();
@@ -268,7 +280,16 @@ function RegisteredAppShell(): JSX.Element {
     primePhaseFor,
   } = useMessageJumpController();
 
-  useLayoutKeyboardShortcuts(toggleWorkspaceSidebar, toggleChannelSidebar);
+  // Chat-only: the ⌘\ / ⌘⇧\ chords toggle the workspace/channel browse
+  // sidebars, which exist only in chat. Gating on `appSection === 'chat'` keeps
+  // the keyboard path on the same section boundary as the (hidden-in-activity)
+  // titlebar toggles, so Activity has no browse-sidebar control path at all
+  // (#task:1394, Cindy review).
+  useLayoutKeyboardShortcuts(
+    toggleWorkspaceSidebar,
+    toggleChannelSidebar,
+    appSection === 'chat',
+  );
 
   // App menu's "Settings…" item (Cmd+,) — main process focuses the window and
   // pushes this; renderer just navigates.
@@ -433,9 +454,6 @@ function RegisteredAppShell(): JSX.Element {
       selectedWorkspaceId,
       routeFullscreen,
     });
-  // Conversation notification-badge cleanup (mention/agent-failure alerts) —
-  // read_at-only, includes anchorless `agent_start_failed`. NOT a read cursor.
-  const markConversationNotificationsRead = useMarkConversationNotificationsRead();
   // Message-unread read cursor — advances conversation_reads on navigation.
   const markMessageChannelRead = useMarkMessageChannelRead();
   // In-app + system notifications for new mentions and agent failures.
@@ -516,6 +534,11 @@ function RegisteredAppShell(): JSX.Element {
   // workspace), restore the last-viewed channel, fall back to the first one.
   // Wait for `channels` to populate so we don't race the empty placeholder.
   useEffect(() => {
+    // Chat-only: this restore drives `/chat/w/.../c/...` paths. The Activity
+    // section is a peer navigator whose right pane stays empty until the user
+    // picks a row (no auto-select) — restoring a channel here would hijack
+    // `/activity/...` back into chat (#task:1394).
+    if (appSection !== 'chat') return;
     if (!selectedWorkspaceId) return;
     // The precedence (honored jump > remembered-channel open > default
     // fallback) lives in the pure `resolveRestoreNavigation`; this effect only
@@ -576,6 +599,7 @@ function RegisteredAppShell(): JSX.Element {
         return;
     }
   }, [
+    appSection,
     selectedWorkspaceId,
     selectedChannelId,
     channels,
@@ -779,7 +803,9 @@ function RegisteredAppShell(): JSX.Element {
   // window doesn't keep highlighting a stale row after the user
   // navigates to Members/Tasks/Settings.
   const focusedActive =
-    appSection === 'chat' && view === 'channel' ? focusedConversation : null;
+    (appSection === 'chat' && view === 'channel') || appSection === 'activity'
+      ? focusedConversation
+      : null;
   useEffect(() => {
     void window.agentHub.setActiveConversation({
       workspaceId: focusedActive?.workspaceId ?? null,
@@ -824,9 +850,9 @@ function RegisteredAppShell(): JSX.Element {
   // evicted cursor-unread @me mentions from Activity. Anchored `mention_self`
   // clears via visible-read observe (cursor crossing its seq); anchorless
   // `agent_start_failed` clears only via its explicit paths (Activity ✓ /
-  // clicking the notification). The active activity-source-open effect below
-  // still clears, because it is paired with a cursor→head advance (self-
-  // consistent), and opening a source IS an eliminate intent.
+  // clicking the notification). Under the #task:1394 Activity rail, an Activity
+  // row's on-click / hover-✓ is the active eliminate intent (it clears through
+  // `activityItemSource` in ActivityView), so no shell effect drains here.
 
   const handleSelectWorkspace = (id: string): void => {
     // If the workspace has unread mentions, jump straight to the latest
@@ -956,6 +982,12 @@ function RegisteredAppShell(): JSX.Element {
     if (params.preserveSidePanel && !params.threadRootId) return;
     const wid = resolveNavWorkspaceId(params.workspaceId, params.channelId);
     if (!wid) return;
+    // Section-aware base path: an Activity-list jump stays in `/activity/...`
+    // (the channel/thread panes are the SAME components, just under the
+    // activity route so the workspace axis + titlebar switch with the
+    // selection); every other section lands in chat (#task:1394).
+    const channelPath =
+      appSection === 'activity' ? routes.activityChannel : routes.chatChannel;
     // Reply-cluster target (new model): the message lives in the parent
     // channel; open the cluster pane to its root and let ThreadPanel
     // scroll-locate the message (requestJump already primed the channel).
@@ -965,13 +997,13 @@ function RegisteredAppShell(): JSX.Element {
     if (params.threadRootId) {
       nav.go(
         withThreadQuery(
-          routes.chatChannel(wid, params.channelId),
+          channelPath(wid, params.channelId),
           '',
           params.threadRootId,
         ),
       );
     } else {
-      nav.toChannel(wid, params.channelId);
+      nav.go(channelPath(wid, params.channelId));
     }
   };
 
@@ -1234,31 +1266,6 @@ function RegisteredAppShell(): JSX.Element {
     [primePhaseFor, threadJumpMessageId, selectedChannelId],
   );
 
-  // ── Activity source pane (#task:1227 point 2) ─────────────────────────
-  // State + resolution for the working side panel docked inside the Activity
-  // view. See features/app-shell/activity-source.ts. The pane's JSX stays in the
-  // shell below (it wires many shell handlers).
-  const {
-    activitySource,
-    openActivitySource,
-    closeActivitySource,
-    openActivitySourceConversation,
-    activitySourceRef,
-    activitySourceDescriptor,
-    activitySourceViewInputs,
-    activityChannelJumpTarget,
-    activityChannelJumpPrimePending,
-    activityThreadJumpMessageId,
-    activityThreadJumpPhase,
-  } = useActivitySource({
-    view,
-    requestJump,
-    isPrimePendingFor,
-    primePhaseFor,
-    markMessageChannelRead,
-    markConversationNotificationsRead,
-  });
-
   // Parent-message highlight only renders alongside an open thread
   // (channel-typed sides aren't anchored to a parent message). Side
   // threads from PR-3 sigil clicks will fire `onThreadAnchorResolved`
@@ -1457,116 +1464,6 @@ function RegisteredAppShell(): JSX.Element {
     );
   }
 
-  // Activity source pane (#task:1227 point 2). Mirrors the secondary / thread
-  // render shapes, but driven by `activitySource` state instead of the
-  // `?side`/`?thread` route, so it composes into the Activity view's own
-  // SplitPane without touching channel-view selection. A thread item
-  // (thread_root_id != null) renders the live ThreadPanel; everything else
-  // renders the live ChannelView. Reading clears through the source's own path;
-  // the Activity layer writes nothing.
-  let activitySourcePane: JSX.Element | null = null;
-  if (activitySource) {
-    if (activitySource.threadRootId) {
-      const sourceWorkspaceId =
-        activitySource.workspaceId ?? activitySourceRef.ref?.workspace_id ?? null;
-      if (sourceWorkspaceId) {
-        const threadChannelId = activitySource.channelId;
-        const threadRoot = activitySource.threadRootId;
-        const threadWorkspaceId = sourceWorkspaceId;
-        activitySourcePane = (
-          <ThreadPanel
-            channelId={threadChannelId}
-            workspaceId={threadWorkspaceId}
-            rootMessageId={threadRoot}
-            parentTitle={activitySourceRef.ref?.title ?? null}
-            closed={activitySourceRef.ref?.closed_at != null}
-            archived={activitySourceRef.ref?.archived_at != null}
-            onClose={closeActivitySource}
-            onViewInChannel={() => {
-              // "Go back to the original conversation": full-nav to the
-              // channel + reply cluster, then drop the in-Activity pane.
-              handleJumpToMessage({
-                workspaceId: threadWorkspaceId,
-                channelId: threadChannelId,
-                threadRootId: threadRoot,
-                messageId: activityThreadJumpMessageId ?? threadRoot,
-              });
-              closeActivitySource();
-            }}
-            conversationRefsById={conversationRefsById}
-            onOpenConversationRef={openActivitySourceConversation}
-            onOpenChannelRef={handleOpenChannelByName}
-            onOpenTask={handleOpenTask}
-            jumpMessageId={activityThreadJumpMessageId}
-            jumpPhase={activityThreadJumpPhase}
-            onJumped={handleJumped}
-            sourceViewer
-          />
-        );
-      }
-    } else if (
-      activitySourceDescriptor?.source === 'side' &&
-      activitySourceDescriptor.status !== 'resolved'
-    ) {
-      activitySourcePane = (
-        <SideUnresolvedPlaceholder
-          conversationId={activitySourceDescriptor.id}
-          status={activitySourceDescriptor.status}
-          onClose={closeActivitySource}
-        />
-      );
-    } else if (activitySourceViewInputs.conversationDescriptor) {
-      activitySourcePane = (
-        <ChannelView
-          channelKind={activitySourceViewInputs.channelKind}
-          conversation={activitySourceViewInputs.conversationDescriptor}
-          parentTitle={null}
-          jumpTarget={activityChannelJumpTarget}
-          jumpPrimePending={activityChannelJumpPrimePending}
-          onJumped={handleJumped}
-          onCloseChild={closeActivitySource}
-          closeLabel="关闭侧栏"
-          // Activity docked source = convenience viewer, not full conversation
-          // chrome: header collapses to identity + exit, all management controls
-          // (settings/archive-rename, attention pref, threads toggle, fullscreen,
-          // agent control, add-member) are suppressed — those live in the
-          // original conversation (shiki + Cindy + Alice, 2026-06-25). The
-          // archive/rename cross-ws callbacks are deleted, not hidden.
-          sourceViewer
-          // "Go back to the original conversation" — leaves Activity for the
-          // full channel. Anchored source → message-jump; anchorless (`#conv`
-          // opened in-panel) → plain channel nav, NO empty-messageId jump-prime
-          // (Cindy review blocker 3). Pure nav, no clearing (the live source
-          // already marked read while docked).
-          onOpenInConversation={() => {
-            if (activitySource.messageId) {
-              handleJumpToMessage({
-                workspaceId: activitySource.workspaceId,
-                channelId: activitySource.channelId,
-                threadRootId: activitySource.threadRootId,
-                messageId: activitySource.messageId,
-              });
-            } else {
-              const wid =
-                activitySource.workspaceId ??
-                activitySourceViewInputs.archiveWorkspaceId ??
-                activitySourceRef.ref?.workspace_id ??
-                undefined;
-              if (wid) nav.toChannel(wid, activitySource.channelId);
-            }
-            closeActivitySource();
-          }}
-          isFullscreen={false}
-          conversationRefsById={conversationRefsById}
-          onOpenConversationRef={openActivitySourceConversation}
-          onOpenChannelRef={handleOpenChannelByName}
-          onOpenTask={handleOpenTask}
-          onOpenThread={undefined}
-        />
-      );
-    }
-  }
-
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden">
       <Titlebar
@@ -1579,7 +1476,15 @@ function RegisteredAppShell(): JSX.Element {
           selectedWorkspace ? () => setWorkspaceSettingsOpen(true) : undefined
         }
         onOpenTasks={
-          appSection === 'chat' && view === 'channel' && selectedWorkspace
+          // Workspace task drawer is workspace-scoped, not chat-scoped: enable it
+          // wherever a workspace is selected AND we're viewing a channel — chat's
+          // `channel` view, or Activity's selected state (its right pane is the
+          // full ChannelView). `selectedWorkspace` is null on bare `/activity`
+          // (workspace derives from the selected channel), so `appSection ===
+          // 'activity'` alone already means "a channel is selected" (#task:1394).
+          selectedWorkspace &&
+          ((appSection === 'chat' && view === 'channel') ||
+            appSection === 'activity')
             ? () => setTasksDrawerOpen(true)
             : undefined
         }
@@ -1588,6 +1493,7 @@ function RegisteredAppShell(): JSX.Element {
         channelSidebarVisible={channelSidebarVisible}
         onToggleWorkspaceSidebar={toggleWorkspaceSidebar}
         onToggleChannelSidebar={toggleChannelSidebar}
+        chromeMode={appSection === 'activity' ? 'activity' : 'chat'}
       />
       <div
         className="flex min-w-0 flex-1 overflow-hidden"
@@ -1608,6 +1514,7 @@ function RegisteredAppShell(): JSX.Element {
           current={appSection}
           onChange={section => {
             if (section === 'chat') nav.toChat();
+            else if (section === 'activity') nav.toActivity();
             else if (section === 'tasks') nav.toTasks();
             else if (section === 'members') nav.toMembers();
             else if (section === 'settings') nav.toSettings();
@@ -1752,6 +1659,82 @@ function RegisteredAppShell(): JSX.Element {
           </>
           </SectionLayer>
         )}
+        {/* ACTIVITY: NavRail top-level section (#task:1394). Three columns:
+          * Activity-list navigator | full ChannelView | full ThreadPanel. The
+          * browse sidebars are intentionally absent — the Activity list column
+          * replaces them (the "省下一个 sidebar"). Mounts/unmounts on
+          * `deferredSection` like the other non-chat sections. */}
+        {deferredSection === 'activity' && (
+          <SectionLayer visible={appSection !== 'chat'}>
+          <>
+            {/* Activity list column — the global attention navigator: selection
+              * / sort / filter only, owns NO message or thread rendering. Two
+              * layout states, both a pure projection of the route (#task:1394,
+              * shiki): with NO channel in the route (bare `/activity`, incl. the
+              * caught-up empty state) it fills the whole content area — no right
+              * pane, no ChannelView/SplitPane, so we never carry back an implicit
+              * "unselected but a conversation surface exists" state. Once a row is
+              * clicked the route gains `/w/:wid/c/:cid` and it collapses to a
+              * resizable left column beside the reused ChannelView — the SAME
+              * progressive-disclosure primitive as chat's ChannelView→ThreadPanel
+              * (app-layout.md §1). Width is its OWN `--activity-list-width` (never
+              * chat's `--sidebar-width`) with an independent min/max clamp +
+              * persisted pref. */}
+            <aside
+              data-sidebar="activity"
+              className={
+                selectedChannelId != null
+                  ? 'flex h-full w-[var(--activity-list-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]'
+                  : 'flex h-full min-w-0 flex-1 flex-col bg-[var(--bg-channels-sidebar)]'
+              }
+              style={{
+                borderRadius: 'var(--card-radius, 0)',
+                boxShadow: 'var(--card-shadow, none)',
+                overflow: 'hidden',
+              }}
+            >
+              <ActivityView
+                workspaceRefById={workspaceRefById}
+                agentsById={agentsById}
+                onJump={handleJumpToMessageStable}
+              />
+            </aside>
+            {/* Split appears ONLY once the route carries a channel. The divider
+              * resizes the Activity list against the conversation column (clamp
+              * owned by the `activityList` hook). Right side = the SAME
+              * `parentView` / `secondaryView` chat renders — route-driven reuse is
+              * what makes "无条件自动同步" structural (composer / thread /
+              * inline-search / jump-prime / mark-read all inherit from the one
+              * ChannelView). Gated on URGENT `appSection === 'activity'` (not just
+              * the deferred mount): during an activity↔chat transition both blocks
+              * are briefly mounted, so this ensures only ONE renders the shared
+              * ChannelView, avoiding a transient double-mount of its effects; the
+              * hidden side shows the skeleton. */}
+            {selectedChannelId != null ? (
+              <>
+                <VerticalSplitter
+                  onPointerDown={activityList.startResize}
+                  active={activityList.isDragging}
+                />
+                {appSection === 'activity' ? (
+                  secondaryView &&
+                  shouldSecondaryFullscreen(secondaryDescriptor, routeFullscreen) ? (
+                    secondaryView
+                  ) : (
+                    <SplitPane
+                      left={parentView}
+                      right={secondaryView}
+                      storageKey="silverhand.layout.activity-split-ratio"
+                    />
+                  )
+                ) : (
+                  <ConversationViewSkeleton />
+                )}
+              </>
+            ) : null}
+          </>
+          </SectionLayer>
+        )}
         {/* CHAT: the cheap shell (workspace + channel sidebars + their
           * splitters) mounts on URGENT `appSection` so a rail click paints it
           * immediately (~5ms render, Alice CDP). It is mounted while EITHER
@@ -1816,8 +1799,6 @@ function RegisteredAppShell(): JSX.Element {
                     onSelectArchived={() => nav.toChatArchived()}
                     searchActive={view === 'search'}
                     onSelectSearch={() => nav.toChatSearch()}
-                    activityActive={view === 'activity'}
-                    onSelectActivity={() => nav.toChatActivity()}
                     savedCount={savedItems?.length}
                   />
                 </div>
@@ -1836,27 +1817,7 @@ function RegisteredAppShell(): JSX.Element {
                 active={sidebar.isDragging}
               />
             ) : null}
-            {view === 'activity' ? (
-              activitySourcePane ? (
-                <SplitPane
-                  left={
-                    <ActivityView
-                      workspaceRefById={workspaceRefById}
-                      agentsById={agentsById}
-                      onJump={params => openActivitySource(params)}
-                    />
-                  }
-                  right={activitySourcePane}
-                  storageKey="silverhand.layout.activity-split-ratio"
-                />
-              ) : (
-                <ActivityView
-                  workspaceRefById={workspaceRefById}
-                  agentsById={agentsById}
-                  onJump={params => openActivitySource(params)}
-                />
-              )
-            ) : view === 'saved' ? (
+            {view === 'saved' ? (
               <SavedListView
                 workspaces={workspaces}
                 filter={savedFilter}

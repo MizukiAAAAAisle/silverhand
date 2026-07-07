@@ -31,6 +31,7 @@ Owner: 脊柱(数据模型/生命周期/领域分层)=Alice · UI 表面节=Norm
 9. **answerability 测试**(§5.3):每个 item 必须有一条 **eliminate route**,且 source_ref-in(产生)= source_ref-out(消除);v1 所有 item 都 read-cleared → 统一走 `observe()`(委派 cursor / `notifications.read_at`)。答不上 = 凭空状态。
 10. **read ⊥ triage**(§11):v1 只 read(source-routed);triage(done/snooze/archive)是唯一可被 Activity 拥有的 durable state,**仅 v2**,且命名为 triage 不叫 read。
 11. **surfaced ≠ eliminated**(§5.3.1):anchored directed claim(`mention_self`)的 `read_at` 只能由 **active eliminate intent** 写,**绝不由 passive surface(toast render/auto-hide、conversation focus)写**。passive 写 = 凭空消除(#task:1243 根因)。
+12. **Activity section 右侧 = 复用 chat 的完整 `ChannelView`/`ThreadPanel`,不复制**(§13.7,#1394):Activity 是 NavRail 顶层 rail(非 chat-sidebar 快捷版);唯一 selection SoT = `(workspace, channel, optional thread)`,workspace 从 conversation 派生。「无条件自动同步」= 单一组件权威的结构保证;需在 Activity 单独补一遍某能力 = 结构没改对。
 
 ---
 
@@ -265,7 +266,7 @@ Activity 是 **viewer-scoped read-model**,所以它的失效信号统一收敛�
 
 ### 13.2 全局 Activity 列表(v1)
 
-- **入口**:sidebar、Search 之上(shiki)。**v1 UI = global**(shiki 拍 2026-06-25「这里是用户所有要关注的入口」):一个 human 跨所有可见 workspace 的「等我处理」总队列,`GET /api/activity` 不带 `workspace_id`。`workspace_id` 仍是**可选** filter(数据模型本就全局,UI 日后若要 per-workspace 视图直接传)。global 的完整性三件套:①失效全 viewer-scoped(§10;v1 两源 = `unread_updated` / `notification` —— task_changed viewer-fan 已删,§5.1/§10);②列表行显示 workspace context(DTO 已带 `workspace_id`,renderer 用 workspace map 补 name,跨 ws 同名 channel 可区分,纯展示不放宽可见性);③跳源跨 workspace 稳定(DTO `workspace_id` + onJump 已支持)。
+- **入口**:**NavRail 顶层 `activity` section**(#1394——从早期的 chat-sidebar 折叠版升级为独立 rail;选中一条后右侧**复用完整 `ChannelView`/`ThreadPanel`、无 lite 路径**,布局与选中态契约见 `app-layout.md §1.1` 与本节 §13.7)。**v1 UI = global**(shiki 拍 2026-06-25「这里是用户所有要关注的入口」):一个 human 跨所有可见 workspace 的「等我处理」总队列,`GET /api/activity` 不带 `workspace_id`。`workspace_id` 仍是**可选** filter(数据模型本就全局,UI 日后若要 per-workspace 视图直接传)。global 的完整性三件套:①失效全 viewer-scoped(§10;v1 两源 = `unread_updated` / `notification` —— task_changed viewer-fan 已删,§5.1/§10);②列表行显示 workspace context(DTO 已带 `workspace_id`,renderer 用 workspace map 补 name,跨 ws 同名 channel 可区分,纯展示不放宽可见性);③跳源跨 workspace 稳定(DTO `workspace_id` + onJump 已支持)。
 - **收**:`enter() == true`(§6)= DM · @我(notification-backed directed,§5.1a)· followed-thread ambient(**父 channel pref==`所有消息`**,§6 aggregate-floor)· `所有消息` channel 的 ambient。（task-needs-action = v2,§5.1，v1 不进。）
 - **每条 item(行结构,shiki 拍 2026-06-26)**:**row1 where** = 源 icon + 来源标识(workspace 名前 `WorkspaceIcon`、channel/DM 名前复用现有主题化 identity primitive,不另造裸 icon)+ 相对时间;**row2 subject** = thread item 在 `thread_root_preview` 前加低响度 thread glyph(标识这是 root message,不改 row1 source 语义),非 thread item 则是 `preview`;**row3 reply** = `<sender avatar> <display_name>: <preview>`,sender 由 `listActivity` 从触发 item 的 **anchor message** server-resolve 出 `preview_sender:{kind,id,display_name,avatar_url}`(global 跨 workspace 列表拿不到 per-workspace member cache,**不能**让 renderer 回 message cache 拼 sender;`avatar_url`=与 `UserDto`/`AgentDto` 同款相对 cache-busted 路径,renderer 按 URL 经现有 avatar hook 解析)。**`preview_sender` 是 additive display-only 字段:不带 source_ref、不参与 §5.3 清除语义;`agent_failed`(无 message anchor)= null。** v1 暂不加 root sender。**salience 分级**(§5.2)directed 视觉强于 ambient;**per-(viewer, message) 去重、取最高 salience**(§7)→ @我显示成 mention + 上下文、**不再**显示成 ambient 未读。
 - **`+N new` 未读计数 = quiet count token(row1 meta,shiki 拍 2026-06-26)**:某条流的 ambient 未读数。形态 = 中性墨色(`text-text-secondary`,**不开 accent tier**——否则 count 会比真 directed 信号还跳、偷 salience 预算)+ 极弱 hairline outline 成组(纯描边无 fill,与 sidebar 实心 unread badge 清晰区隔),**非裸散文字 / 非 badge / 非 button**。**纯展示**:不是独立 hit target(无 onClick/role/hover/tooltip),整行才是唯一点击区;不带 source_ref、不参与清除。与 §13.1 channel 流内 `#1226` reply chip 的 ink-text 呈现不同 = **同语义、不同宿主密度**:reply chip 在 inline 低密度行(已有 bordered 容器)、墨字足够;此处 row1 同时扛 workspace·channel·title·time,密度高 → 需 hairline 成组才扫得出是一个 count。
@@ -300,6 +301,16 @@ Activity 是 **viewer-scoped read-model**,所以它的失效信号统一收敛�
 ### 13.6 实现序(见 §12)
 
 不重述时序:additive(列表读 `listActivity` + channel pref 控件)doc 过后可起;客户端 **`observe()` 坍缩 `ThreadPanel.tsx` 两条 mark-read = 我 lane**,**必须等 `#1226` dogfood 过 + 关 task**(§12 step-3)。
+
+### 13.7 Activity section = NavRail 顶层（#1394 terminal state）
+
+Activity 从「chat sidebar 里的折叠/快捷版」升级为 **NavRail 顶层 section**(与 `chat` 平级)。**这不是换入口,是纠正模型 + 删一层重复渲染**:把 §13.0「表面 = 同一 scorer 的纯投影、无自有状态」贯彻到底——旧的快捷版是一条违反该不变量的第二渲染路径。自适应布局(未选中=list 占满 / 选中=分屏三栏,由 route 派生非独立 flag;browse sidebar 隐藏、Activity list 取代且宽度独立可拖拽)见 `app-layout.md §1.1`。契约:
+
+- **右侧复用 chat 的真正 `ChannelView` / `ThreadPanel`(同一组件同一 hooks,不复制)。** 所有 chat 能力(composer / thread / inline-search / jump-prime / mark-read / attachment / message-actions)经同一路径继承 → chat 改动**无条件自动同步**到 Activity。**这是单一组件权威的结构性保证,不是纪律要求。** 证伪器(Cindy review 锚):任何能力需在 Activity 里单独补一遍 = 结构没改对。
+- **选中态 SoT = `(workspace, channel, optional thread)`,workspace 从选中 conversation 派生。** Activity 是跨 workspace global(§13.2),而 `ChannelView` / titlebar(ws name/path) / 所有 ws-scoped hooks 单 ws 作用域 → Activity section 复用 chat 的 channel/thread 路由参数形并**加 workspace 段**:`/activity/w/:wid/c/:cid?thread=<root>`。titlebar 与 ws-scoped hooks 读同一 route workspace → 跨 ws 选一条 activity,右侧 pane + workspace context 一起切,不留 desync。chat 与 Activity = 同一 selection SoT 的两个 navigator。
+- **删除两条隐藏分支(重构的实质)**:① `sourceViewer` 降级 chrome;② `useActivitySource` 平行 docked-source 机。二者是旧快捷版的载体,改对后**不存在**(是删除,非被新分支替换)。
+- **后端 / 读模型零改动预期**:`listActivity` 本就 global、DTO 带 `workspace_id`、跨 ws jump 稳定(§13.2 / §9),channel/thread 数据走既有 chat endpoints;`observe()` 清除因复用同一 `ChannelView` 而 **correct-by-construction** 与 chat 同路(§5.3 / §13.0),不需在 Activity 侧重对齐。实现中若发现缺 DTO 字段再补(owner: Alice)。
+- **不变的**:§13.1 三呈现表面的聚合精度分工(§8)、§13.3 控件表面边界、§13.4 观察保真度、§13.5 命名 全部照旧。本节只改**「全局 Activity 列表」这一表面的宿主形态(sidebar → NavRail rail)+ 选中后右侧复用完整 surface**。
 
 ---
 
