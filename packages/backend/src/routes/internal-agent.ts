@@ -38,6 +38,9 @@ import {
   WorkspaceRepo,
 } from '../repos/workspace-repo.js';
 import {
+  ChannelAttentionPreferenceRepo,
+} from '../repos/channel-attention-preference-repo.js';
+import {
   requireAgentCapability,
 } from './capability.js';
 import {
@@ -68,6 +71,7 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
   const reactions = new MessageReactionRepo(ctx.db);
   const workspaces = new WorkspaceRepo(ctx.db, { workspacesRoot: ctx.workspacesRoot });
   const users = new UserRepo(ctx.db);
+  const channelAttentionPrefs = new ChannelAttentionPreferenceRepo(ctx.db);
   const membership = new MembershipService({ agents, users, conversations });
   const deps: InternalRouteDeps = {
     ctx,
@@ -127,6 +131,7 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
       workspaces,
       conversations,
       messages,
+      channelAttentionPrefs,
       membership,
       requireAgentCapability,
     }),

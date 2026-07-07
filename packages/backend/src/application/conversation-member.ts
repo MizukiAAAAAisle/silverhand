@@ -11,6 +11,7 @@ import type { UserRepo } from '../repos/user-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
+import type { ChannelAttentionPreferenceRepo } from '../repos/channel-attention-preference-repo.js';
 import type { MembershipService } from '../services/membership-service.js';
 import { canAddConversationMember, canEditAgent, canGovernWorkspace, canViewConversation } from '../permissions.js';
 import { addWorkspaceAgentMember } from './add-workspace-agent-member.js';
@@ -65,6 +66,7 @@ export type AddConversationMemberDeps = {
   workspaces: WorkspaceRepo;
   conversations: ConversationRepo;
   messages: MessageRepo;
+  channelAttentionPrefs: ChannelAttentionPreferenceRepo;
   membership: MembershipService;
 };
 
@@ -215,6 +217,17 @@ export async function addConversationMember(
       let message: ReturnType<MessageRepo['insertForConversation']> | null = null;
       if (!alreadyMember) {
         deps.conversations.addUser(conversation.id, user.id);
+        // A human pulled into an existing channel should not inherit the noisy
+        // channel default (`all`). This is membership-event policy, not a
+        // channel default: initial channel members keep the default; only a
+        // later add seeds an explicit mention-only preference. Insert-only
+        // semantics keep a viewer's existing explicit choice if they are
+        // removed and later re-added.
+        deps.channelAttentionPrefs.insertIfAbsent({
+          viewerUserId: user.id,
+          conversationId: conversation.id,
+          mode: 'mentions',
+        });
         message = deps.messages.insertForConversation({
           conversationId: conversation.id,
           fromKind: 'system',

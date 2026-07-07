@@ -41,6 +41,7 @@ import { UserRepo } from '../repos/user-repo.js';
 import { WorkspaceRepo } from '../repos/workspace-repo.js';
 import { ConversationRepo } from '../repos/conversation-repo.js';
 import { MessageRepo } from '../repos/message-repo.js';
+import { ChannelAttentionPreferenceRepo } from '../repos/channel-attention-preference-repo.js';
 import { MembershipService } from '../services/membership-service.js';
 import { addWorkspaceAgentMember } from '../application/add-workspace-agent-member.js';
 import {
@@ -65,6 +66,7 @@ export interface MembershipRouteDeps {
   workspaces: WorkspaceRepo;
   conversations: ConversationRepo;
   messages: MessageRepo;
+  channelAttentionPrefs: ChannelAttentionPreferenceRepo;
   membership: MembershipService;
 }
 
@@ -566,7 +568,16 @@ export function createConversationMembershipApp(
   deps: MembershipRouteDeps,
 ): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { ctx, agents, users, workspaces, conversations, messages, membership } = deps;
+  const {
+    ctx,
+    agents,
+    users,
+    workspaces,
+    conversations,
+    messages,
+    channelAttentionPrefs,
+    membership,
+  } = deps;
 
   app.get(apiPaths.conversationMembers(':id'), c => {
     const id = c.req.param('id');
@@ -595,6 +606,7 @@ export function createConversationMembershipApp(
       workspaces,
       conversations,
       messages,
+      channelAttentionPrefs,
       membership,
     }, {
       conversationId: id,
@@ -688,6 +700,7 @@ export function createInternalMembershipApp(
     workspaces,
     conversations,
     messages,
+    channelAttentionPrefs,
     membership,
     requireAgentCapability,
   } = deps;
@@ -711,6 +724,7 @@ export function createInternalMembershipApp(
       workspaces,
       conversations,
       messages,
+      channelAttentionPrefs,
       membership,
     }, {
       conversationId: principal.conversationId,

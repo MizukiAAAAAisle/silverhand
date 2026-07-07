@@ -324,6 +324,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     workspaces,
     conversations,
     messages,
+    channelAttentionPrefs,
     membership,
   };
 

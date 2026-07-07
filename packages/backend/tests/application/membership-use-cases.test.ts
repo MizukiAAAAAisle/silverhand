@@ -9,6 +9,7 @@ import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
+import { ChannelAttentionPreferenceRepo } from '../../src/repos/channel-attention-preference-repo.js';
 import { MembershipService } from '../../src/services/membership-service.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
@@ -72,8 +73,18 @@ function conversationDeps(t: TestApp) {
   });
   const conversations = new ConversationRepo(t.ctx.db);
   const messages = new MessageRepo(t.ctx.db);
+  const channelAttentionPrefs = new ChannelAttentionPreferenceRepo(t.ctx.db);
   const membership = new MembershipService({ agents, users, conversations });
-  return { ctx: t.ctx, agents, users, workspaces, conversations, messages, membership };
+  return {
+    ctx: t.ctx,
+    agents,
+    users,
+    workspaces,
+    conversations,
+    messages,
+    channelAttentionPrefs,
+    membership,
+  };
 }
 
 function workspaceAgentDeps(t: TestApp) {
@@ -345,6 +356,9 @@ describe('AddConversationMemberUseCase (application layer)', () => {
     expect(result.ok).toBe(true);
     expect(deps.workspaces.isUserMember(ws, 'teammate')).toBe(true);
     expect(deps.conversations.getUser(channelId, 'teammate')).not.toBeNull();
+    expect(deps.channelAttentionPrefs.get('teammate', channelId)?.mode).toBe(
+      'mentions',
+    );
     expect(viewerEvents).toContainEqual({
       kind: 'viewer_workspaces_changed',
       payload: {
@@ -358,6 +372,95 @@ describe('AddConversationMemberUseCase (application layer)', () => {
       'conversation_members_changed',
       'workspace_channels_changed',
     ]);
+  });
+
+  it('defaults later-added human channel members to mention-only attention', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const ws = await createRegularWorkspace(t, 'human-mention-default', [alice]);
+    const channelId = await createChannel(t, ws, 'room', [alice]);
+    const deps = conversationDeps(t);
+    t.ctx.db
+      .prepare(`DELETE FROM workspace_users WHERE workspace_id = ? AND user_id = ?`)
+      .run(ws, 'teammate');
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?`)
+      .run(channelId, 'teammate');
+
+    // Channel creation / initial membership keeps absence-as-default (`all`);
+    // only a later explicit add writes the mention-only preference.
+    expect(deps.channelAttentionPrefs.get('local', channelId)).toBeUndefined();
+    expect(
+      deps.channelAttentionPrefs.getEffectiveMode('local', channelId),
+    ).toBe('all');
+
+    const result = await addConversationMember(deps, {
+      conversationId: channelId,
+      principal: LOCAL_USER,
+      member: { kind: 'human', user_id: 'teammate' },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(deps.conversations.getUser(channelId, 'teammate')).not.toBeNull();
+    expect(
+      deps.channelAttentionPrefs.getEffectiveMode('teammate', channelId),
+    ).toBe('mentions');
+  });
+
+  it('does not rewrite attention preference when re-adding an existing human member', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const ws = await createRegularWorkspace(t, 'human-duplicate-pref', [alice]);
+    const channelId = await createChannel(t, ws, 'room', [alice]);
+    const deps = conversationDeps(t);
+    deps.conversations.addUser(channelId, 'teammate');
+    deps.channelAttentionPrefs.upsert({
+      viewerUserId: 'teammate',
+      conversationId: channelId,
+      mode: 'all',
+    });
+
+    const result = await addConversationMember(deps, {
+      conversationId: channelId,
+      principal: LOCAL_USER,
+      member: { kind: 'human', user_id: 'teammate' },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(
+      deps.channelAttentionPrefs.getEffectiveMode('teammate', channelId),
+    ).toBe('all');
+  });
+
+  it('does not overwrite an existing preference when a human is re-added after removal', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const ws = await createRegularWorkspace(t, 'human-readd-pref', [alice]);
+    const channelId = await createChannel(t, ws, 'room', [alice]);
+    const deps = conversationDeps(t);
+    t.ctx.db
+      .prepare(`DELETE FROM workspace_users WHERE workspace_id = ? AND user_id = ?`)
+      .run(ws, 'teammate');
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?`)
+      .run(channelId, 'teammate');
+    deps.channelAttentionPrefs.upsert({
+      viewerUserId: 'teammate',
+      conversationId: channelId,
+      mode: 'all',
+    });
+
+    const result = await addConversationMember(deps, {
+      conversationId: channelId,
+      principal: LOCAL_USER,
+      member: { kind: 'human', user_id: 'teammate' },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(deps.conversations.getUser(channelId, 'teammate')).not.toBeNull();
+    expect(
+      deps.channelAttentionPrefs.getEffectiveMode('teammate', channelId),
+    ).toBe('all');
   });
 
   it('lets workspace admins auto-provision non-workspace humans', async () => {

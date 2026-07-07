@@ -69,4 +69,31 @@ export class ChannelAttentionPreferenceRepo {
     if (!row) throw new Error('channel attention preference upsert failed');
     return row;
   }
+
+  /**
+   * Seed an implicit default when a product event creates a new membership.
+   * This is deliberately NOT PUT/upsert semantics: if the viewer already has a
+   * stored preference for this channel, keep their explicit choice.
+   */
+  insertIfAbsent(params: {
+    viewerUserId: string;
+    conversationId: string;
+    mode: ChannelAttentionMode;
+  }): ChannelAttentionPreferenceRow {
+    const { viewerUserId, conversationId, mode } = params;
+    const now = Date.now();
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO channel_attention_preferences
+           (user_id, conversation_id, mode, updated_at)
+         VALUES (@viewer, @conv, @mode, @now)`,
+      )
+      .run({ viewer: viewerUserId, conv: conversationId, mode, now });
+
+    const row = this.get(viewerUserId, conversationId);
+    if (!row) {
+      throw new Error('channel attention preference insert-if-absent failed');
+    }
+    return row;
+  }
 }
