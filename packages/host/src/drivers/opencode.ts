@@ -52,16 +52,18 @@ class OpenCodeAcpAdapter implements AcpRuntimeAdapter {
     };
   }
 
-  buildSetModelParams(
+  buildSessionConfigRequests(
     ctx: DriverSpawnContext,
     sessionId: string,
-  ): Record<string, unknown> | null {
-    if (!ctx.model) return null;
-    return {
-      sessionId,
-      configId: 'model',
-      value: ctx.model,
-    };
+  ): Array<Record<string, unknown>> {
+    if (!ctx.model) return [];
+    return [
+      {
+        sessionId,
+        configId: 'model',
+        value: ctx.model,
+      },
+    ];
   }
 }
 

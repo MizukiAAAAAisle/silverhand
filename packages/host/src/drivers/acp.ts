@@ -48,10 +48,10 @@ export interface AcpRuntimeAdapter {
 
   buildInitializeParams(ctx: DriverSpawnContext): Record<string, unknown>;
   buildSessionParams(ctx: DriverSpawnContext): Record<string, unknown>;
-  buildSetModelParams?(
+  buildSessionConfigRequests?(
     ctx: DriverSpawnContext,
     sessionId: string,
-  ): Record<string, unknown> | null;
+  ): Array<Record<string, unknown>>;
 }
 
 /**
@@ -66,7 +66,8 @@ export class AcpClient {
   private requestId = 0;
   private initializeRequestId: JsonRpcId | null = null;
   private sessionRequestId: JsonRpcId | null = null;
-  private modelRequestId: JsonRpcId | null = null;
+  private activeSessionConfigRequestId: JsonRpcId | null = null;
+  private pendingSessionConfigRequests: Array<Record<string, unknown>> = [];
   private activePromptRequestId: JsonRpcId | null = null;
   private sessionId: string | null = null;
   private sessionAnnounced = false;
@@ -156,8 +157,8 @@ export class AcpClient {
     if (!message || typeof message !== 'object') return null;
     // ACP session-ready is owned by parseLine emitting `session_init`, not this
     // pure classifier. A concrete runtime may need additional post-session
-    // setup (OpenCode sets the model via `session/set_config_option`) before
-    // it is safe for the supervisor to drain the first inbox row.
+    // config (`session/set_config_option`) before it is safe for the supervisor
+    // to drain the first inbox row.
     return message.jsonrpc === '2.0' ? 'protocol_ready' : null;
   }
 
@@ -198,25 +199,18 @@ export class AcpClient {
       if (typeof sessionId === 'string') {
         this.sessionId = sessionId;
         const ctx = this.io?.spawnCtx;
-        const modelParams =
-          ctx && this.adapter.buildSetModelParams
-            ? this.adapter.buildSetModelParams(ctx, sessionId)
-            : null;
-        if (modelParams) {
-          this.modelRequestId = this.sendRequest(
-            'session/set_config_option',
-            modelParams,
-          );
-        } else {
-          this.announceSession(events);
-        }
+        this.pendingSessionConfigRequests =
+          ctx && this.adapter.buildSessionConfigRequests
+            ? [...this.adapter.buildSessionConfigRequests(ctx, sessionId)]
+            : [];
+        this.sendNextSessionConfigOrAnnounce(events);
       }
       return events;
     }
 
-    if (message.id === this.modelRequestId) {
-      this.modelRequestId = null;
-      this.announceSession(events);
+    if (message.id === this.activeSessionConfigRequestId) {
+      this.activeSessionConfigRequestId = null;
+      this.sendNextSessionConfigOrAnnounce(events);
       return events;
     }
 
@@ -232,7 +226,23 @@ export class AcpClient {
   private clearPendingForResponse(id: JsonRpcId): void {
     if (id === this.initializeRequestId) this.initializeRequestId = null;
     if (id === this.sessionRequestId) this.sessionRequestId = null;
-    if (id === this.modelRequestId) this.modelRequestId = null;
+    if (id === this.activeSessionConfigRequestId) {
+      this.activeSessionConfigRequestId = null;
+      this.pendingSessionConfigRequests = [];
+    }
+  }
+
+  private sendNextSessionConfigOrAnnounce(events: ParsedEvent[]): void {
+    if (this.activeSessionConfigRequestId !== null) return;
+    const next = this.pendingSessionConfigRequests.shift();
+    if (next) {
+      this.activeSessionConfigRequestId = this.sendRequest(
+        'session/set_config_option',
+        next,
+      );
+      return;
+    }
+    this.announceSession(events);
   }
 
   private announceSession(events: ParsedEvent[]): void {
