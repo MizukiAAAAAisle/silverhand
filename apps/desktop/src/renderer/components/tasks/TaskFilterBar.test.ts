@@ -4,12 +4,13 @@ import {
   buildChannelFilterOptions,
   type ChannelFilterCandidate,
 } from './TaskFilterBar';
-import { workspaceChannelCandidates } from '@/features/tasks/useTaskChannelOptions';
+import { workspaceChannelCandidates } from '@/features/tasks/useTaskFilterOptions';
 
 function candidate(
   over: Partial<ChannelFilterCandidate> & { id: string },
 ): ChannelFilterCandidate {
   return {
+    workspaceId: 'ws-default',
     title: `title-${over.id}`,
     kind: 'channel',
     archived_at: null,
@@ -23,7 +24,7 @@ describe('buildChannelFilterOptions', () => {
       candidate({ id: 'c1', title: 'General' }),
     ]);
     expect(out).toEqual([
-      { id: 'c1', label: 'General', group: 'workspace' },
+      { id: 'c1', workspaceId: 'ws-default', label: 'General', group: 'workspace' },
     ]);
   });
 
@@ -41,8 +42,22 @@ describe('buildChannelFilterOptions', () => {
       candidate({ id: 'c1', title: 'Second', sublabel: 'ws-b' }),
     ]);
     expect(out).toEqual([
-      { id: 'c1', label: 'First', group: 'workspace', sublabel: 'ws-a' },
+      {
+        id: 'c1',
+        workspaceId: 'ws-default',
+        label: 'First',
+        group: 'workspace',
+        sublabel: 'ws-a',
+      },
     ]);
+  });
+
+  it('carries the owning workspaceId through for the cascade (#task:1387)', () => {
+    const out = buildChannelFilterOptions([
+      candidate({ id: 'c1', workspaceId: 'ws-eng' }),
+      candidate({ id: 'c2', workspaceId: 'ws-design' }),
+    ]);
+    expect(out.map(o => o.workspaceId)).toEqual(['ws-eng', 'ws-design']);
   });
 
   it('puts a dm_channel in the dm group', () => {
@@ -84,11 +99,12 @@ describe('workspaceChannelCandidates — channel picker label/subtitle rule', ()
 
   it('regular channel: title is the label, workspace name is the subtitle', () => {
     const out = workspaceChannelCandidates(
-      { name: 'Engineering', kind: 'regular' },
+      { id: 'ws-eng', name: 'Engineering', kind: 'regular' },
       [ch('c1', 'general')],
     );
     expect(out[0]).toMatchObject({
       id: 'c1',
+      workspaceId: 'ws-eng',
       title: 'general',
       sublabel: 'Engineering',
       fromDmWorkspace: false,
@@ -99,7 +115,7 @@ describe('workspaceChannelCandidates — channel picker label/subtitle rule', ()
     // Alice/Cindy/Norman each own `Mentions` + `Onboarding`; before the fix
     // both rendered as the same `@Alice` label. Now the channel title is the
     // label, `@agent` the subtitle — so the rows are distinguishable.
-    const out = workspaceChannelCandidates({ name: 'dm-Alice', kind: 'dm' }, [
+    const out = workspaceChannelCandidates({ id: 'ws-alice', name: 'dm-Alice', kind: 'dm' }, [
       ch('c1', 'Mentions', { kind: 'dm_channel' }),
       ch('c2', 'Onboarding', { kind: 'dm_channel' }),
     ]);
@@ -113,7 +129,7 @@ describe('workspaceChannelCandidates — channel picker label/subtitle rule', ()
   });
 
   it('a single-channel DM still carries the `@agent` subtitle', () => {
-    const out = workspaceChannelCandidates({ name: 'dm-Judy', kind: 'dm' }, [
+    const out = workspaceChannelCandidates({ id: 'ws-judy', name: 'dm-Judy', kind: 'dm' }, [
       ch('c1', 'Onboarding', { kind: 'dm_channel' }),
     ]);
     expect(out[0]).toMatchObject({ title: 'Onboarding', sublabel: '@Judy' });

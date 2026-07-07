@@ -9,7 +9,7 @@ import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
 import { useKanbanColumnCollapse } from '@/features/tasks/useKanbanColumnCollapse';
-import { useTaskChannelOptions } from '@/features/tasks/useTaskChannelOptions';
+import { useTaskFilterOptions } from '@/features/tasks/useTaskFilterOptions';
 import {
   applyTaskFilters,
   collectAssignees,
@@ -54,10 +54,12 @@ export const TasksSection = memo(function TasksSection({
 }: TasksSectionProps): JSX.Element {
   const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
   const updateStatus = useUpdateTaskStatus();
-  // Channel options + scope ids come from the SAME hook the drawer uses
-  // (#task:1165) so the two surfaces' dropdowns can't drift — DM + regular
-  // workspace channels, grouped by data source.
-  const { channelOptions, workspaceScopeIds } = useTaskChannelOptions();
+  // Workspace + channel options + scope ids come from the SAME hook the
+  // drawer uses (#task:1165) so the two surfaces' dropdowns can't drift — DM +
+  // regular workspace channels, grouped by data source; regular workspaces for
+  // the upstream cascade axis (#task:1387).
+  const { workspaceOptions, channelOptions, workspaceScopeIds } =
+    useTaskFilterOptions();
 
   // Fetch broadly across every workspace scope (all statuses, incl.
   // closed — it's just the 5th column). Channel / assignee / creator are
@@ -129,6 +131,7 @@ export const TasksSection = memo(function TasksSection({
           filters={filters}
           onChange={setFilters}
           baselineFilters={DEFAULT_TASK_FILTERS}
+          workspaceOptions={workspaceOptions}
           channelOptions={channelOptions}
           allChannelsLabel="ALL"
           assigneeOptions={assigneeOptions}

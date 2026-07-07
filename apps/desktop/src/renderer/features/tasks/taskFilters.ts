@@ -32,6 +32,13 @@ export type PersonFilter =
   | { kind: 'person'; person: PersonRef };
 
 export interface TaskFilters {
+  /** Workspace id to narrow to — the UPSTREAM axis of the workspace→channel
+   *  cascade (shiki #task:1387). null = no workspace narrowing. The channel
+   *  filter's option set is scoped to this workspace, and switching workspace
+   *  drops a channel selection that no longer belongs to it (see
+   *  `applyWorkspaceCascade`). Matched directly by `task.workspace_id` — no
+   *  surface predicate needed, workspace identity isn't thread-aware. */
+  workspaceId: string | null;
   /** Conversation id to narrow to — a channel id (matches that channel and
    *  all its threads) or a thread id (matches only that thread). null = no
    *  channel narrowing. Both the global pane and the drawer now match by
@@ -45,6 +52,7 @@ export interface TaskFilters {
 }
 
 export const DEFAULT_TASK_FILTERS: TaskFilters = {
+  workspaceId: null,
   channelId: null,
   assignee: { kind: 'any' },
   creator: { kind: 'any' },
@@ -54,10 +62,40 @@ export const DEFAULT_TASK_FILTERS: TaskFilters = {
  *  from baseline" check (show Clear, reset target). */
 export function taskFiltersEqual(a: TaskFilters, b: TaskFilters): boolean {
   return (
+    a.workspaceId === b.workspaceId &&
     a.channelId === b.channelId &&
     personFilterKey(a.assignee) === personFilterKey(b.assignee) &&
     personFilterKey(a.creator) === personFilterKey(b.creator)
   );
+}
+
+/**
+ * Workspace→channel cascade (shiki #task:1387). When the workspace filter
+ * changes, a channel selection that no longer belongs to the new workspace is
+ * dropped back to "all channels" — never leave an orphan channel that would
+ * yield an empty board (Cindy invariant). Selecting "All workspaces"
+ * (`nextWorkspaceId === null`) keeps any channel, since the channel filter is
+ * then unconstrained.
+ *
+ * `channelWorkspaceId` resolves a channel id to its owning workspace id (null
+ * if unknown). Pure so the cascade is unit-testable without the option source.
+ */
+export function applyWorkspaceCascade(
+  filters: TaskFilters,
+  nextWorkspaceId: string | null,
+  channelWorkspaceId: (channelId: string) => string | null,
+): TaskFilters {
+  if (nextWorkspaceId === null) {
+    return { ...filters, workspaceId: null };
+  }
+  const keepChannel =
+    filters.channelId !== null &&
+    channelWorkspaceId(filters.channelId) === nextWorkspaceId;
+  return {
+    ...filters,
+    workspaceId: nextWorkspaceId,
+    channelId: keepChannel ? filters.channelId : null,
+  };
 }
 
 function matchPerson(
@@ -71,14 +109,14 @@ function matchPerson(
 }
 
 /**
- * Apply the client-side dimensions (channel / assignee / creator) to a
- * task list.
+ * Apply the client-side dimensions (workspace / channel / assignee / creator)
+ * to a task list.
  *
  * `matchChannel` is supplied by each surface so channel semantics stay
  * surface-controlled. Both the global pane and the drawer match a channel
  * (plus all its threads) by `task.channel_id === channelId`; the predicate
  * stays a parameter so a future surface can refine the match without
- * touching this core.
+ * touching this core. Workspace matches directly on `task.workspace_id`.
  */
 export function applyTaskFilters(
   tasks: TaskSummaryDto[],
@@ -86,6 +124,9 @@ export function applyTaskFilters(
   matchChannel: (task: TaskSummaryDto, channelId: string) => boolean,
 ): TaskSummaryDto[] {
   return tasks.filter(task => {
+    if (filters.workspaceId && task.workspace_id !== filters.workspaceId) {
+      return false;
+    }
     if (filters.channelId && !matchChannel(task, filters.channelId)) {
       return false;
     }

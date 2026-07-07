@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { TaskSummaryDto } from '@silverhand/shared';
 import {
   applyTaskFilters,
+  applyWorkspaceCascade,
   collectAssignees,
   collectCreators,
   DEFAULT_TASK_FILTERS,
@@ -51,6 +52,13 @@ describe('applyTaskFilters', () => {
     expect(applyTaskFilters(tasks, f, byWorkspace).map(t => t.message_id)).toEqual([
       'a',
       'c',
+    ]);
+  });
+
+  it('filters by workspace directly on task.workspace_id (#task:1387)', () => {
+    const f: TaskFilters = { ...DEFAULT_TASK_FILTERS, workspaceId: 'ws2' };
+    expect(applyTaskFilters(tasks, f, byWorkspace).map(t => t.message_id)).toEqual([
+      'b',
     ]);
   });
 
@@ -124,5 +132,60 @@ describe('taskFiltersEqual (Clear / baseline comparison)', () => {
         assignee: { kind: 'person', person: { type: 'agent', id: 'a' } },
       }),
     ).toBe(false);
+  });
+
+  it('distinguishes the workspace dimension', () => {
+    expect(
+      taskFiltersEqual(DEFAULT_TASK_FILTERS, {
+        ...DEFAULT_TASK_FILTERS,
+        workspaceId: 'ws1',
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('applyWorkspaceCascade (#task:1387 workspace→channel)', () => {
+  // channel c-eng belongs to ws-eng; c-design belongs to ws-design.
+  const channelWorkspaceId = (id: string): string | null =>
+    ({ 'c-eng': 'ws-eng', 'c-design': 'ws-design' })[id] ?? null;
+
+  it('selecting a workspace drops a channel that belongs to another workspace', () => {
+    const before: TaskFilters = {
+      ...DEFAULT_TASK_FILTERS,
+      workspaceId: null,
+      channelId: 'c-design',
+    };
+    const after = applyWorkspaceCascade(before, 'ws-eng', channelWorkspaceId);
+    expect(after.workspaceId).toBe('ws-eng');
+    expect(after.channelId).toBeNull(); // orphan channel cleared
+  });
+
+  it('keeps a channel that belongs to the newly selected workspace', () => {
+    const before: TaskFilters = {
+      ...DEFAULT_TASK_FILTERS,
+      channelId: 'c-eng',
+    };
+    const after = applyWorkspaceCascade(before, 'ws-eng', channelWorkspaceId);
+    expect(after).toMatchObject({ workspaceId: 'ws-eng', channelId: 'c-eng' });
+  });
+
+  it('selecting "All workspaces" keeps any channel (channel filter unconstrained)', () => {
+    const before: TaskFilters = {
+      ...DEFAULT_TASK_FILTERS,
+      workspaceId: 'ws-eng',
+      channelId: 'c-eng',
+    };
+    const after = applyWorkspaceCascade(before, null, channelWorkspaceId);
+    expect(after).toMatchObject({ workspaceId: null, channelId: 'c-eng' });
+  });
+
+  it('preserves the non-cascaded dimensions (assignee / creator)', () => {
+    const before: TaskFilters = {
+      ...DEFAULT_TASK_FILTERS,
+      channelId: 'c-design',
+      assignee: { kind: 'person', person: { type: 'agent', id: 'a1' } },
+    };
+    const after = applyWorkspaceCascade(before, 'ws-eng', channelWorkspaceId);
+    expect(after.assignee).toEqual(before.assignee);
   });
 });

@@ -17,9 +17,14 @@ import {
   Search,
   User,
 } from 'lucide-react';
+import type { AgentDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
+import { WorkspaceIcon } from '@/components/WorkspaceIcon';
+import { useAgents } from '@/features/agents/hooks';
+import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useRovingList } from '@/features/tasks/taskFilterKeyboard';
 import {
+  applyWorkspaceCascade,
   personFilterKey,
   taskFiltersEqual,
   type PersonFilter,
@@ -43,6 +48,10 @@ import {
  */
 export interface ChannelOption {
   id: string;
+  /** Owning workspace id — the workspace→channel cascade scopes and clears
+   *  channel options by this (shiki #task:1387). Presentation still groups by
+   *  data source (`group`), not by this id. */
+  workspaceId: string;
   /** Primary line — always the channel TITLE. This is a channel picker, so
    *  the row reads as the channel; the source (workspace / DM agent) goes in
    *  `sublabel` (shiki #task:1165). */
@@ -59,10 +68,27 @@ export interface ChannelOption {
   sublabel?: string;
 }
 
+/** A workspace offered by the upstream workspace filter (#task:1387). Both
+ *  regular workspaces and DMs are selectable (shiki review: match the
+ *  message-search workspace filter, which lists DMs too). `kind` + `dmAgentId`
+ *  drive the canonical {@link WorkspaceIcon} — a serif "W" for a regular
+ *  workspace, the bound agent's avatar for a DM. */
+export interface WorkspaceOption {
+  id: string;
+  label: string;
+  kind: 'regular' | 'dm';
+  /** The bound agent for a DM workspace (icon renders that agent's avatar);
+   *  null for a regular workspace. */
+  dmAgentId: string | null;
+}
+
 /** A conversation considered for the channel-filter dropdown, normalized
  *  from whatever read model the caller has on hand. */
 export interface ChannelFilterCandidate {
   id: string;
+  /** Owning workspace id — carried through to `ChannelOption.workspaceId`
+   *  for the workspace→channel cascade (#task:1387). */
+  workspaceId: string;
   title: string;
   kind: 'channel' | 'dm_channel';
   archived_at: number | null;
@@ -95,6 +121,7 @@ export function buildChannelFilterOptions(
     const isDm = c.fromDmWorkspace || c.kind === 'dm_channel';
     byId.set(c.id, {
       id: c.id,
+      workspaceId: c.workspaceId,
       label: c.title,
       group: isDm ? 'dm' : 'workspace',
       ...(c.sublabel !== undefined ? { sublabel: c.sublabel } : {}),
@@ -116,11 +143,14 @@ export interface TaskFilterBarProps {
   filters: TaskFilters;
   onChange: (next: TaskFilters) => void;
   /** Reset target. Clear shows only when `filters` differ from this and
-   *  resets every dimension (channel / assignee / creator) back to it.
-   *  Global passes DEFAULT_TASK_FILTERS; the drawer passes its
+   *  resets every dimension (workspace / channel / assignee / creator) back
+   *  to it. Global passes DEFAULT_TASK_FILTERS; the drawer passes its
    *  current-channel default, so Clear restores the drawer's entry
    *  context rather than jumping to All (Cindy review). */
   baselineFilters: TaskFilters;
+  /** Upstream cascade axis (#task:1387). Empty → the workspace filter hides,
+   *  so a single-workspace deployment doesn't grow a pointless control. */
+  workspaceOptions: WorkspaceOption[];
   channelOptions: ChannelOption[];
   /** Label for the "no channel filter" row, e.g. "All channels". */
   allChannelsLabel: string;
@@ -137,6 +167,7 @@ export function TaskFilterBar({
   filters,
   onChange,
   baselineFilters,
+  workspaceOptions,
   channelOptions,
   allChannelsLabel,
   assigneeOptions,
@@ -146,13 +177,38 @@ export function TaskFilterBar({
 }: TaskFilterBarProps): JSX.Element {
   const dirty = !taskFiltersEqual(filters, baselineFilters);
 
+  // Cascade (#task:1387): the channel filter shows only channels of the
+  // selected workspace; at "All workspaces" it shows the full grouped set
+  // (current behaviour). Selecting a workspace also drops a channel that no
+  // longer belongs to it — never an orphan channel that yields an empty board.
+  const visibleChannelOptions = useMemo(
+    () =>
+      filters.workspaceId
+        ? channelOptions.filter(o => o.workspaceId === filters.workspaceId)
+        : channelOptions,
+    [channelOptions, filters.workspaceId],
+  );
+  const channelWorkspaceId = useMemo(() => {
+    const byId = new Map(channelOptions.map(o => [o.id, o.workspaceId]));
+    return (channelId: string): string | null => byId.get(channelId) ?? null;
+  }, [channelOptions]);
+
   return (
     <div
       data-task-filter-bar
       className={cn('flex flex-wrap items-center gap-1.5', className)}
     >
+      {workspaceOptions.length > 0 ? (
+        <WorkspaceFilter
+          options={workspaceOptions}
+          value={filters.workspaceId}
+          onChange={workspaceId =>
+            onChange(applyWorkspaceCascade(filters, workspaceId, channelWorkspaceId))
+          }
+        />
+      ) : null}
       <ChannelFilter
-        options={channelOptions}
+        options={visibleChannelOptions}
         allChannelsLabel={allChannelsLabel}
         value={filters.channelId}
         onChange={channelId => onChange({ ...filters, channelId })}
@@ -386,9 +442,12 @@ function ChannelFilter({
         (o.sublabel?.toLowerCase().includes(q) ?? false),
     );
   }, [options, query]);
-  // Split the (already group-then-alpha sorted) options into their data-
-  // source sections so each gets a header. Order is fixed: Workspaces then
-  // DMs (#task:1165). The ALL row stays ungrouped at the top.
+  // Order the options — regular-workspace channels first, then DMs — so the
+  // flat list reads in a stable grouping. No section HEADERS: each row's
+  // sublabel already names its source (workspace / @agent), so a "Workspaces"
+  // header over channel rows was both redundant and semantically wrong
+  // (shiki #task:1387 review — the label named workspaces but the rows are
+  // channels). The ALL row stays at the top.
   const sections = useMemo(
     () =>
       [
@@ -516,14 +575,7 @@ function ChannelFilter({
             >
               {allChannelsLabel}
             </OptionRow>
-            {sections.map(section => (
-              <div key={section.key}>
-                <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-text-muted">
-                  {section.label}
-                </div>
-                {section.items.map(renderOption)}
-              </div>
-            ))}
+            {flatOptions.map(renderOption)}
             {filtered.length === 0 ? (
               <p className="px-2 py-3 text-center text-[11px] italic text-text-muted">
                 No matches
@@ -532,6 +584,141 @@ function ChannelFilter({
           </div>
         </Popover.Content>
       </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+// ── Workspace (upstream cascade axis) ──────────────────────────────
+
+function WorkspaceFilter({
+  options,
+  value,
+  onChange,
+}: {
+  options: WorkspaceOption[];
+  value: string | null;
+  onChange: (id: string | null) => void;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  // Agent context for the DM branch of WorkspaceIcon — a DM workspace reads as
+  // its bound agent's avatar (same as the message-search workspace filter and
+  // the rail, #task:1192). Fetched here in the leaf so neither task surface has
+  // to plumb agent data through.
+  const { data: agents = [] } = useAgents();
+  const agentsById = useMemo<ReadonlyMap<string, AgentDto>>(
+    () => new Map(agents.map(a => [a.id, a])),
+    [agents],
+  );
+  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
+
+  // Grouped like the search workspace filter (#task:1387 shiki review):
+  // regular Workspaces first, then DMs. Both kinds are selectable — the
+  // cascade matches on `task.workspace_id`, so a DM workspace filters exactly
+  // like a regular one.
+  const sections = useMemo(
+    () =>
+      [
+        { key: 'regular' as const, label: 'Workspaces' },
+        { key: 'dm' as const, label: 'DMs' },
+      ]
+        .map(s => ({ ...s, items: options.filter(o => o.kind === s.key) }))
+        .filter(s => s.items.length > 0),
+    [options],
+  );
+  const flatOptions = useMemo(() => sections.flatMap(s => s.items), [sections]);
+  const optionIndex = useMemo(() => {
+    const m = new Map<string, number>();
+    flatOptions.forEach((o, i) => m.set(o.id, i + 1)); // +1: ALL occupies 0
+    return m;
+  }, [flatOptions]);
+
+  const listId = useId();
+  const optionId = (index: number): string => `${listId}-opt-${index}`;
+  const roving = useRovingList({
+    count: flatOptions.length + 1,
+    open,
+    onSelect: index => {
+      if (index === 0) onChange(null);
+      else {
+        const o = flatOptions[index - 1];
+        if (o) onChange(o.id);
+      }
+      setOpen(false);
+    },
+  });
+
+  const selected = value ? flatOptions.find(o => o.id === value) ?? null : null;
+  const iconFor = (o: WorkspaceOption): JSX.Element => (
+    <WorkspaceIcon
+      kind={o.kind}
+      dmAgentId={o.dmAgentId}
+      agentsById={agentsById}
+      dmAgentAvatarUrls={agentAvatarUrls}
+    />
+  );
+
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        <FilterTrigger
+          // Resting/ALL: the generic workspace glyph (serif "W"); a selection:
+          // that workspace's own icon (avatar for a DM).
+          icon={selected ? iconFor(selected) : <WorkspaceIcon kind="regular" dmAgentId={null} />}
+          active={value !== null}
+          aria-label="Workspace"
+        >
+          {selected?.label ?? 'ALL'}
+        </FilterTrigger>
+      </Popover.Trigger>
+      <FilterPanel
+        id={listId}
+        activeDescendant={optionId(roving.activeIndex)}
+        onKeyDown={roving.onKeyDown}
+      >
+        <OptionRow
+          selected={value === null}
+          neutral
+          active={roving.activeIndex === 0}
+          id={optionId(0)}
+          optionRef={el => roving.registerItem(0, el)}
+          onHover={() => roving.setActiveIndex(0)}
+          onSelect={() => {
+            onChange(null);
+            setOpen(false);
+          }}
+        >
+          ALL
+        </OptionRow>
+        {sections.map(section => (
+          <div key={section.key}>
+            <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-text-muted">
+              {section.label}
+            </div>
+            {section.items.map(o => {
+              const index = optionIndex.get(o.id) ?? -1;
+              return (
+                <OptionRow
+                  key={o.id}
+                  selected={value === o.id}
+                  active={roving.activeIndex === index}
+                  id={optionId(index)}
+                  optionRef={el => roving.registerItem(index, el)}
+                  onHover={() => roving.setActiveIndex(index)}
+                  onSelect={() => {
+                    onChange(o.id);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="shrink-0">{iconFor(o)}</span>
+                    <span className="truncate">{o.label}</span>
+                  </span>
+                </OptionRow>
+              );
+            })}
+          </div>
+        ))}
+      </FilterPanel>
     </Popover.Root>
   );
 }

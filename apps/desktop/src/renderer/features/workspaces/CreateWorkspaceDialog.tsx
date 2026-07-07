@@ -12,6 +12,10 @@ import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { describeApiError } from '@/lib/api-error-message';
 import {
+  NameAvailabilityHint,
+  useNameAvailability,
+} from '@/features/naming/useNameAvailability';
+import {
   useHostAvailabilityMap,
   useHostProvenanceGate,
   useHostsQuery,
@@ -58,6 +62,9 @@ export function CreateWorkspaceDialog({
       ? viewer.data.id
       : null;
   const createWorkspace = useCreateWorkspace();
+  // onBlur name validation — format (shared EntityNameSchema) + uniqueness
+  // (regular workspaces, global; server probe). Mirrors CreateAgentDialog.
+  const nameCheck = useNameAvailability('workspace', name);
   const hostProvenance = useHostProvenanceGate();
   const hostsQuery = useHostsQuery();
 
@@ -206,6 +213,12 @@ export function CreateWorkspaceDialog({
       setError('Please enter a Workspace name');
       return;
     }
+    // Final format pass — arms the inline hint even on a field never blurred.
+    // Uniqueness is left to create (the authoritative backstop).
+    if (!nameCheck.formatValid) {
+      nameCheck.markTouched();
+      return;
+    }
     if (placeableHosts.length > 0) {
       if (!allSettled) {
         setError('Checking which computers are online…');
@@ -275,9 +288,12 @@ export function CreateWorkspaceDialog({
               id="ch-name"
               value={name}
               onChange={e => setName(e.target.value)}
+              onBlur={nameCheck.markTouched}
+              aria-invalid={nameCheck.blocking || undefined}
               placeholder="my-frontend"
               autoFocus
             />
+            <NameAvailabilityHint check={nameCheck} />
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -379,6 +395,7 @@ export function CreateWorkspaceDialog({
                 || hostsQuery.isLoading
                 || hostProvenance.isLoading
                 || (placeableHosts.length > 0 && !allSettled)
+                || nameCheck.blocking
               }
             >
               {createWorkspace.isPending ? 'Creating…' : 'Create'}

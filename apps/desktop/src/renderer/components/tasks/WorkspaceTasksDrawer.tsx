@@ -18,7 +18,7 @@ import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
 import { useKanbanColumnCollapse } from '@/features/tasks/useKanbanColumnCollapse';
-import { useTaskChannelOptions } from '@/features/tasks/useTaskChannelOptions';
+import { useTaskFilterOptions } from '@/features/tasks/useTaskFilterOptions';
 import {
   applyTaskFilters,
   collectAssignees,
@@ -262,12 +262,14 @@ export function WorkspaceTasksDrawer({
     return () => document.removeEventListener('keydown', handler);
   }, [open, closeDrawer]);
 
-  // Channel options + scope ids come from the SAME hook the global Tasks
-  // pane uses (#task:1165), so both surfaces' dropdowns list the identical
-  // grouped set (DM + regular workspace channels) and can't drift. The
-  // drawer is the same board, just pre-focused on the current channel via
-  // `defaultConversationId` (the baseline below).
-  const { channelOptions, workspaceScopeIds } = useTaskChannelOptions();
+  // Workspace + channel options + scope ids come from the SAME hook the global
+  // Tasks pane uses (#task:1165), so both surfaces' dropdowns list the
+  // identical set and can't drift. The drawer is the same board, just
+  // pre-focused on the current channel via `defaultConversationId` (the
+  // baseline below); the workspace filter defaults to ALL there too
+  // (#task:1387).
+  const { workspaceOptions, channelOptions, workspaceScopeIds } =
+    useTaskFilterOptions();
 
   // Fetch the cross-workspace list (all statuses, incl. closed — it's just
   // the 5th column). The drawer is now the global board with a default
@@ -470,6 +472,7 @@ export function WorkspaceTasksDrawer({
               filters={filters}
               onChange={setFilters}
               baselineFilters={baselineFilters}
+              workspaceOptions={workspaceOptions}
               channelOptions={channelOptions}
               allChannelsLabel="ALL"
               assigneeOptions={assigneeOptions}

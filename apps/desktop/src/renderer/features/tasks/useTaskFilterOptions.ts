@@ -8,29 +8,38 @@ import {
   buildChannelFilterOptions,
   type ChannelFilterCandidate,
   type ChannelOption,
+  type WorkspaceOption,
 } from '@/components/tasks/TaskFilterBar';
 
 /**
- * Shared channel-filter source for BOTH task surfaces — the global Tasks
+ * Shared filter-option source for BOTH task surfaces — the global Tasks
  * pane (`TasksSection`) and the floating workspace drawer
  * (`WorkspaceTasksDrawer`). They are the same product concept (a task
- * board filtered by channel); the only thing that used to differ was the
- * candidate scope — the pane spanned every workspace while the drawer was
- * limited to its own. That divergence is the bug shiki flagged (#task:1165:
+ * board filtered by workspace + channel); the only thing that used to differ
+ * was the candidate scope — the pane spanned every workspace while the drawer
+ * was limited to its own. That divergence is the bug shiki flagged (#task:1165:
  * the pane's dropdown listed DM channels, the drawer's didn't). Single-
  * sourcing the option set here is the fix; the drawer just passes a
  * `defaultConversationId` to pre-focus a channel.
  *
- * This is a CHANNEL picker, not an agent picker (shiki #task:1165): the
- * filter value is a single channel id (`task.channel_id === channelId`), so
- * every row's primary label is the channel TITLE and the SUBTITLE carries
- * the source — the workspace name for a regular channel, `@<agent>` for a
- * DM channel. That's why an agent with multiple DM channels (e.g.
- * `Mentions` + `Onboarding`) shows as distinct rows that no longer collide
- * on a single `@agent` label. Rows are still GROUPED by data source
- * (`group: 'workspace' | 'dm'`) for the section split.
+ * This yields both the WORKSPACE options (the upstream cascade axis — regular
+ * workspaces AND DMs, each tagged with its `kind`/`dmAgentId` for the canonical
+ * WorkspaceIcon) and the CHANNEL options (each tagged with its owning
+ * `workspaceId` so the workspace→channel cascade can scope + clear them,
+ * #task:1387).
+ *
+ * The channel picker is a CHANNEL picker, not an agent picker (shiki
+ * #task:1165): the filter value is a single channel id
+ * (`task.channel_id === channelId`), so every row's primary label is the
+ * channel TITLE and the SUBTITLE carries the source — the workspace name for a
+ * regular channel, `@<agent>` for a DM channel. That's why an agent with
+ * multiple DM channels (e.g. `Mentions` + `Onboarding`) shows as distinct rows
+ * that no longer collide on a single `@agent` label. Rows are still GROUPED by
+ * data source (`group: 'workspace' | 'dm'`) for the section split.
  */
-export interface TaskChannelOptions {
+export interface TaskFilterOptions {
+  /** Upstream cascade axis — regular workspaces and DMs, sorted by name. */
+  workspaceOptions: WorkspaceOption[];
   channelOptions: ChannelOption[];
   /** Union of every member workspace's scope ids — feeds `useTasks`'
    *  workspace-level SSE subscription so the cross-workspace board
@@ -51,14 +60,16 @@ interface MappableChannel {
  * so the label/subtitle rule is unit-testable without a query client.
  *
  * Primary label = the channel title (always). Subtitle = the source: the
- * workspace name for a regular channel, `@<agent>` for a DM channel. Because
- * the filter value is a channel id, an agent that owns multiple DM channels
- * surfaces as multiple rows — distinct by their channel titles, all sharing
- * the `@<agent>` subtitle — instead of N identical `@agent` rows (the bug
- * shiki flagged in #task:1165).
+ * workspace name for a regular channel, `@<agent>` for a DM channel. Each
+ * candidate carries `workspaceId` so the workspace→channel cascade can scope
+ * and clear channel options (#task:1387). Because the filter value is a
+ * channel id, an agent that owns multiple DM channels surfaces as multiple
+ * rows — distinct by their channel titles, all sharing the `@<agent>`
+ * subtitle — instead of N identical `@agent` rows (the bug shiki flagged in
+ * #task:1165).
  */
 export function workspaceChannelCandidates(
-  workspace: { name: string; kind: 'regular' | 'dm' },
+  workspace: { id: string; name: string; kind: 'regular' | 'dm' },
   channels: MappableChannel[],
 ): ChannelFilterCandidate[] {
   const isDm = workspace.kind === 'dm';
@@ -67,6 +78,7 @@ export function workspaceChannelCandidates(
     : workspaceDisplayName({ name: workspace.name, kind: workspace.kind });
   return channels.map(conv => ({
     id: conv.id,
+    workspaceId: workspace.id,
     title: conv.title,
     kind: conv.kind,
     archived_at: conv.archived_at,
@@ -75,7 +87,7 @@ export function workspaceChannelCandidates(
   }));
 }
 
-export function useTaskChannelOptions(): TaskChannelOptions {
+export function useTaskFilterOptions(): TaskFilterOptions {
   const { data: workspaces = [] } = useWorkspaces();
   const channelLists = useChannelsAcrossWorkspaces(
     useMemo(() => workspaces.map(w => w.id), [workspaces]),
@@ -83,6 +95,25 @@ export function useTaskChannelOptions(): TaskChannelOptions {
 
   const workspaceScopeIds = useMemo(
     () => [...new Set(workspaces.flatMap(w => w.workspace_scope_ids))],
+    [workspaces],
+  );
+
+  // Workspace filter offers BOTH regular workspaces and DMs — the upstream
+  // cascade axis (shiki #task:1387 review: match the message-search workspace
+  // filter, which lists DMs too). Each option carries `kind` + `dmAgentId` so
+  // the dropdown can render the canonical WorkspaceIcon (serif "W" for regular,
+  // the bound agent's avatar for a DM). The cascade matches on
+  // `task.workspace_id`, so a DM workspace filters exactly like a regular one.
+  const workspaceOptions = useMemo<WorkspaceOption[]>(
+    () =>
+      workspaces
+        .map(w => ({
+          id: w.id,
+          label: workspaceDisplayName({ name: w.name, kind: w.kind }),
+          kind: w.kind,
+          dmAgentId: w.dm_agent_id,
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
     [workspaces],
   );
 
@@ -94,7 +125,7 @@ export function useTaskChannelOptions(): TaskChannelOptions {
     // the pure `workspaceChannelCandidates`.
     const candidates: ChannelFilterCandidate[] = workspaces.flatMap((w, i) =>
       workspaceChannelCandidates(
-        { name: w.name, kind: w.kind },
+        { id: w.id, name: w.name, kind: w.kind },
         channelLists[i]?.data ?? [],
       ),
     );
@@ -108,5 +139,5 @@ export function useTaskChannelOptions(): TaskChannelOptions {
     });
   }, [workspaces, channelLists]);
 
-  return { channelOptions, workspaceScopeIds };
+  return { workspaceOptions, channelOptions, workspaceScopeIds };
 }

@@ -29,6 +29,10 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
 import { describeApiError } from '@/lib/api-error-message';
 import {
+  NameAvailabilityHint,
+  useNameAvailability,
+} from '@/features/naming/useNameAvailability';
+import {
   useHostAvailabilityMap,
   useHostRuntimeCatalog,
   useHostsQuery,
@@ -106,6 +110,9 @@ export function CreateAgentDialog({
   const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const createAgent = useCreateAgent();
+  // onBlur name validation — format (shared EntityNameSchema) + uniqueness
+  // (agents ∪ users, server probe). See features/naming/useNameAvailability.
+  const nameCheck = useNameAvailability('agent', name);
 
   const modelSuggestions = runtimeCatalogEntry(runtime).modelSuggestions;
 
@@ -199,6 +206,12 @@ export function CreateAgentDialog({
       setError('Please enter an agent name');
       return;
     }
+    // Final format pass — arms the inline hint even on a field never blurred.
+    // Uniqueness is left to create (the authoritative backstop).
+    if (!nameCheck.formatValid) {
+      nameCheck.markTouched();
+      return;
+    }
     if (placeableHosts.length > 0) {
       if (!allSettled) {
         // Probes still landing — the Create button is disabled meanwhile, but
@@ -272,9 +285,12 @@ export function CreateAgentDialog({
               id="ag-name"
               value={name}
               onChange={e => setName(e.target.value)}
+              onBlur={nameCheck.markTouched}
+              aria-invalid={nameCheck.blocking || undefined}
               placeholder="alice"
               autoFocus
             />
+            <NameAvailabilityHint check={nameCheck} />
           </div>
 
           <RuntimePicker
@@ -318,6 +334,7 @@ export function CreateAgentDialog({
                 || hostsQuery.isLoading
                 || (placeableHosts.length > 0 && !allSettled)
                 || runtimeGate.allAbsent
+                || nameCheck.blocking
               }
             >
               {createAgent.isPending ? 'Creating…' : 'Create'}
