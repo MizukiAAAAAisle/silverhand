@@ -229,9 +229,10 @@ export type StreamUnreadDto = z.infer<typeof StreamUnreadDtoSchema>;
  *  client. The reply chip and the Threads list both read this (keyed by root),
  *  so the same server-scored fact never lives in two caches that drift. Unread
  *  is server-scored (the client can't optimistically derive it), so this lives
- *  OUTSIDE the optimistically-patched message-window cache and is refreshed
- *  ONLY by the viewer-scoped `unread_updated` WS signal. `threads` is sparse:
- *  it carries ONLY roots with unread > 0 (a missing root means 0). */
+ *  OUTSIDE the optimistically-patched message-window cache and is settled from
+ *  REST after viewer-scoped `unread_updated` frames or local observe() success.
+ *  `threads` is sparse: it carries ONLY roots with unread > 0 (a missing root
+ *  means 0). */
 export const ConversationStreamUnreadDtoSchema = z.object({
   /** Mainline (non-thread) unread for the viewer. */
   mainline: StreamUnreadDtoSchema,

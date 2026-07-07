@@ -248,8 +248,9 @@ function ActiveChannelView({
 
   // Per-viewer server-scored unread for this conversation's reply-clusters
   // (#task:1226). The SINGLE source of the chip's "N new" + first-unread —
-  // sparse (only roots with unread > 0). Refreshed only by `unread_updated`;
-  // the message-window summary no longer carries unread.
+  // sparse (only roots with unread > 0). Settled from REST after
+  // `unread_updated` or this client's successful observe(); the message-window
+  // summary no longer carries unread.
   const threadUnreadByRoot = useConversationUnread(conversation.id).data?.threads;
 
   // Advance the message read cursor as the visible mainline tail advances

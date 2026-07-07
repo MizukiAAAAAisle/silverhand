@@ -290,10 +290,11 @@ export const conversationUnreadKey = (conversationId: string) =>
  * (absent root ⇒ 0).
  *
  * Unread is server-scored — the client can't optimistically derive it — so this
- * is refreshed ONLY by the viewer-scoped `unread_updated` WS signal, NEVER
- * inferred from message events. Scoped to THIS conversation so an unrelated
- * conversation's unread change doesn't refetch it. Human-attention read path
- * only; it never reads or writes `thread_followers` / delivery / wake.
+ * is settled from REST: remotely by the viewer-scoped `unread_updated` WS signal
+ * and locally by successful observe() calls that changed this conversation.
+ * It is NEVER inferred from message events. Scoped to THIS conversation so an
+ * unrelated conversation's unread change doesn't refetch it. Human-attention
+ * read path only; it never reads or writes `thread_followers` / delivery / wake.
  */
 export function useConversationUnread(conversationId: string | null) {
   const qc = useQueryClient();

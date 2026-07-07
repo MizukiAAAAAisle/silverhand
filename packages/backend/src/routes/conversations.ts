@@ -508,7 +508,8 @@ export function createConversationMessagingApp(
   // first-unread — both read this (keyed by root), so the same server-scored
   // fact never lives in two caches that drift. Unread can't be optimistically
   // derived on the client, so it lives OUTSIDE the message-window cache and is
-  // refreshed ONLY by the viewer-scoped `unread_updated` WS signal. Human
+  // settled from REST after the viewer-scoped `unread_updated` WS signal or a
+  // local observe() success. Human
   // viewer-scoped; reads `thread_followers` for nothing here (display is
   // follow-agnostic) and never writes follow/delivery (attention ⊥ delivery).
   app.get(apiPaths.conversationUnread(':id'), c => {

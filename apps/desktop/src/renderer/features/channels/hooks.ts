@@ -36,6 +36,7 @@ import {
 } from '@/features/channels/pending-message';
 import { api, ApiError } from '@/lib/api';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
+import { conversationUnreadKey } from '@/features/channels/message-unread';
 import { getCurrentUserId } from '@/lib/current-user';
 import { useInterest } from '@/features/realtime/interest-registry';
 import {
@@ -1313,9 +1314,17 @@ export function useMarkThreadRead() {
       // patch via the viewer-unread ingestor (#task:1284) — NO invalidate here
       // (it would force a whole-list refetch and defeat the projection).
       // The fallback above is gated to event-WS outage only.
+      //
+      // The root reply chip / Threads list are a different read-model:
+      // per-stream, follow-agnostic `GET /api/conversations/:id/unread`.
+      // They are not carried by the enriched `unread_updated` payload (that
+      // payload is the sidebar/workspace roll-up), so a successful local
+      // observe must settle this one conversation from REST. This is narrow:
+      // one channel's stream-unread only, never the global message-unread maps.
+      void qc.invalidateQueries({ queryKey: conversationUnreadKey(params.channelId) });
       // The Threads-list is a SEPARATE read-model: it only invalidates on stream
-      // message / connected, never on `unread_updated`, so its per-thread
-      // sticker/dot still needs this explicit invalidate.
+      // message / connected, never on `unread_updated`, so its thread metadata
+      // still needs this explicit invalidate.
       qc.invalidateQueries({ queryKey: channelThreadsKey(params.channelId) });
     },
   });

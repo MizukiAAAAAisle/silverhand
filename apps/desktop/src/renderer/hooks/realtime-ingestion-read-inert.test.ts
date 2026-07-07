@@ -276,13 +276,14 @@ describe('channels/hooks.ts — registry-migrated hooks / body-scoped deny (#tas
 });
 
 // #task:1284 — the mark-read mutations advance the read cursor via `observe`; the
-// message-unread badge is then cleared by observe's post-commit enriched
-// `unread_updated` patch (the viewer-unread ingestor), NOT by a client-side
-// invalidate. A re-introduced `invalidateMessageUnreadQueries` here forces a
-// whole-list refetch and defeats the projection — the dogfood FAIL that pulled
-// #1284 back (arrival patched, then the focused-channel auto-read refetched).
-// Lock it out; keep the SEPARATE Threads-list read-model invalidate.
-describe('mark-read mutations — badge rides the WS clear patch, no refetch (#task:1284)', () => {
+// global/sidebar message-unread badge is then cleared by observe's post-commit
+// enriched `unread_updated` patch (the viewer-unread ingestor), NOT by a
+// client-side whole-list invalidate. A re-introduced
+// `invalidateMessageUnreadQueries` here forces a global refetch and defeats the
+// projection — the dogfood FAIL that pulled #1284 back (arrival patched, then
+// the focused-channel auto-read refetched). Lock it out; separate read-models
+// may still settle narrowly.
+describe('mark-read mutations — global badges ride the WS clear patch, no whole-list refetch (#task:1284)', () => {
   const source = readFileSync(
     fileURLToPath(new URL('../features/channels/hooks.ts', import.meta.url)),
     'utf8',
@@ -293,11 +294,14 @@ describe('mark-read mutations — badge rides the WS clear patch, no refetch (#t
     expect(body).not.toContain('invalidateMessageUnreadQueries(');
   });
 
-  it('useMarkThreadRead drops message-unread invalidate, keeps the Threads-list read-model', () => {
+  it('useMarkThreadRead drops message-unread invalidate, keeps narrow read-model settles', () => {
     const body = sliceFunctionBody(source, 'export function useMarkThreadRead(');
     expect(body).not.toContain('invalidateMessageUnreadQueries(');
-    // channelThreadsKey is a DIFFERENT read-model (per-thread sticker/dot) that
-    // never rides `unread_updated`, so it legitimately still invalidates.
+    // conversationUnreadKey is the per-stream reply-chip / Threads-list "N new"
+    // read-model. It is one channel only, not the global message-unread maps.
+    expect(body).toContain('conversationUnreadKey(');
+    // channelThreadsKey is a DIFFERENT read-model (per-thread metadata) that
+    // still legitimately invalidates.
     expect(body).toContain('channelThreadsKey(');
   });
 });
