@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import type { NameAvailabilityDto } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 // #task:1388 — name-availability probe endpoints backing the create-form
@@ -66,7 +67,8 @@ describe('GET /api/agents/name-availability', () => {
     t = buildTestApp();
     const res = await http(t).get('/api/agents/name-availability?name=freshbot');
     expect(res.status).toBe(200);
-    expect((await res.json()).reason).toBe('available');
+    const body = (await res.json()) as NameAvailabilityDto;
+    expect(body.reason).toBe('available');
   });
 });
 

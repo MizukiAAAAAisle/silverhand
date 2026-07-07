@@ -29,11 +29,20 @@ export type NameAvailabilityReason = z.infer<
 /** Response of `GET /api/{agents,workspaces}/name-availability?name=`.
  *  A create-form onBlur probe: the endpoint shares ONE uniqueness predicate
  *  with the matching create path, so the form can never report `available`
- *  for a name that create would reject. */
+ *  for a name that create would reject.
+ *
+ *  The `available ⇔ reason === 'available'` invariant is enforced here in the
+ *  shared schema, not left to route discipline: as a wire DTO this is the
+ *  boundary both producer and consumer trust, so a contradictory pair like
+ *  `{ available: true, reason: 'taken' }` must be structurally unrepresentable
+ *  rather than merely "not produced today". */
 export const NameAvailabilityDtoSchema = z
   .object({
     available: z.boolean(),
     reason: NameAvailabilityReasonSchema,
   })
-  .strict();
+  .strict()
+  .refine(dto => dto.available === (dto.reason === 'available'), {
+    message: "available must be true iff reason === 'available'",
+  });
 export type NameAvailabilityDto = z.infer<typeof NameAvailabilityDtoSchema>;
