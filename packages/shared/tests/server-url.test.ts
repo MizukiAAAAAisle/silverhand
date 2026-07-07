@@ -184,14 +184,15 @@ describe('classifyServerUrl — V1 acceptance policy', () => {
     expectReject('ftp://localhost', 'unsupported_scheme');
   });
 
-  it('rejects non-loopback hostnames over http without dev flag (the "use https or set the flag" case)', () => {
+  it('rejects non-loopback hostnames over http without opt-in (the "use https or explicitly allow" case)', () => {
     // D4.a Commit 1 widened the classifier: non-loopback http used to
     // be `non_loopback_host`; under D4.a it is
     // `insecure_remote_http_disallowed`. Same wire effect (rejection)
     // but the new reason points the operator at the two valid escape
-    // routes (use https, or set SILVERHAND_ALLOW_INSECURE_REMOTE=1).
+    // routes (use https, or opt in at the caller boundary).
     const msg = expectReject('http://api.example.com', 'insecure_remote_http_disallowed');
-    expect(msg).toMatch(/SILVERHAND_ALLOW_INSECURE_REMOTE/);
+    expect(msg).toMatch(/Use https:\/\//);
+    expect(msg).toMatch(/explicitly allow insecure remote HTTP/);
   });
 
   it('rejects LAN IP over http without dev flag — the most common typo when someone copies their dev box IP', () => {
