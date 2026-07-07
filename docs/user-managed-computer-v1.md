@@ -275,6 +275,88 @@ Same aggregate, same terminal `active` shape. `claim-or-create` is a
 idempotent-by-`installation_id`), not a parallel universe. This framing is what
 prevents the app-managed special-case branches from metastasizing.
 
+### 4.2 Host-touching partition semantics — declare before rendering
+
+User-managed computers make Silverhand a distributed system: the backend owns
+control-plane truth, while the target computer owns host-local truth. Any
+operation that touches host-local truth must explicitly declare what happens
+when that computer is offline, unreachable, or in a transient setup state.
+
+This declaration is a **backend / shared-contract property**, not a renderer
+guess. The renderer consumes the declared semantics and renders the matching
+copy/affordance; it must not re-derive partition behavior from `kind`,
+`provisioning_source`, status-query freshness, cached host rows, or local
+knowledge of a specific endpoint. This is the same rule as placement readiness:
+the backend owns the predicate, the renderer displays it.
+
+Every host-touching operation must fit one of these buckets:
+
+| partition semantics | Meaning | UI consequence |
+|---|---|---|
+| `offline-completable` | Pure control-plane mutation. The operation does not require live host-local state. | Allow while offline. Do not disable on daemon liveness. |
+| `best-effort` | The control-plane operation may complete even if host-local cleanup / notification fails. | Allow, and surface only real control-plane failure. Log host-local misses for diagnostics. |
+| `requires-connection` | Correctness requires the target daemon to answer now. | Disable or fail with a product error that says to connect the computer first. |
+| `cascade-with-residue` | A higher-level aggregate delete is allowed to proceed while host-local residue may remain. | Require explicit consequence confirmation; do not pretend host-local wipe happened. |
+| `retry-later` | A transient lifecycle state is in progress; neither success nor structural cascade is correct yet. | Show a retry-later state. Do not collapse into a structural `has_dependents` / cascade flow. |
+
+Canonical examples:
+
+- Runtime catalog detection and proxy editing are `requires-connection`: the
+  target computer is the source of truth.
+- Workspace deletion is `offline-completable` plus `best-effort` runtime cleanup:
+  a disconnected computer must not make a regular workspace undeletable.
+- Direct delete-agent is `requires-connection` for active agents because
+  fail-closed host-local purge protects files/secrets from being orphaned on a
+  temporarily disconnected computer.
+- Delete-computer can be `cascade-with-residue` for its own agents because
+  "remove this computer" is the aggregate-level decommission intent; the backend
+  must still recompute dependents and keep regular workspaces as hard blockers.
+- Pending materialization is `retry-later`: it is not a structural dependent set
+  the user can confirm through.
+
+Initial classification for the current user-facing surface:
+
+| operation | partition semantics | Notes |
+|---|---|---|
+| Create user-managed computer draft / cancel unfinalized draft | `offline-completable` | Pure control-plane setup lifecycle. If a draft happened to attach, live disconnect is best-effort cleanup. |
+| Finalize Add-computer flow | `retry-later` until attached, then control-plane commit | Naming/finalize is not valid until the daemon has attached at least once. |
+| Runtime catalog detection | `requires-connection` | The target computer owns PATH, installed runtimes, and version checks. |
+| Agent creation/materialization on a target computer | `requires-connection`; `retry-later` while materialization is pending | Host-local agent home and runtime setup live on the target computer. |
+| Runtime start/stop/restart/clear-session commands | `requires-connection` | They address a live runtime host. |
+| Proxy get/set | `requires-connection` | Proxy config is host-local runtime configuration, not backend desired state. |
+| Disconnect current computer connection | `best-effort` | Drops the current live attachment if present; already-offline is a benign no-op. |
+| Rotate/revoke computer credentials | `offline-completable` plus best-effort live disconnect | Credential invalidation is control-plane authoritative and must work while the computer is offline; live socket drop is immediate when available and non-blocking when not. |
+| Delete a regular workspace | `offline-completable` plus best-effort runtime cleanup | A disconnected computer must not make a control-plane workspace undeletable. |
+| Delete an agent | `requires-connection` for active host-local purge | Direct agent deletion is fail-closed to avoid orphaning files/secrets on a temporarily disconnected computer. |
+| Delete an empty user-managed computer | `offline-completable` plus best-effort live disconnect | The computer row/credentials are the authority; a running daemon process may outlive the row but cannot stay attached. |
+| Delete a user-managed computer with only agent dependents | `cascade-with-residue` | The computer is the aggregate-level decommission intent; backend must recompute dependents and show the delete-set. |
+| Delete a user-managed computer with regular workspace dependents | hard block, not a partition bucket | Regular workspaces are structural dependents and must be cleared in their own context first. |
+
+Renderer copy should come from a small semantic vocabulary keyed by the bucket,
+not from one-off endpoint prose. The contract owns the template **shape**; the
+renderer owns final product wording:
+
+- `offline-completable`: no offline-specific copy. Silent success is the right
+  UX; do not add "worked while offline" notices.
+- `best-effort`: no user-visible warning for host-local misses. Report only real
+  control-plane failure; best-effort host-local misses belong in diagnostics.
+- `requires-connection`: name the unavailable computer authority and give one
+  recovery action.
+- `retry-later`: say the operation is temporarily unavailable and invite retry.
+- `cascade-with-residue`: name the consequence and render the backend-provided
+  delete-set, not a daemon status snapshot. Do not surface host-file residue in
+  the confirm copy; that is internal cleanup semantics, not the user-facing
+  consequence.
+
+The same declaration also feeds any future Computer health / diagnostics
+surface. The health page is an aggregation of operation semantics and host-local
+facts; it is not the authority that decides whether an operation is allowed.
+
+Review rule: when adding or changing any operation that touches a computer,
+first classify its partition semantics. If the operation cannot be classified,
+the model is incomplete and the implementation should stop before adding UI or
+fallback behavior.
+
 ---
 
 ## 5. Backend — activate remote provisioning, simplified to one reusable token
