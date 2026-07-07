@@ -893,7 +893,7 @@ describe('PATCH /api/channels/:id/archive', () => {
     t = null;
   });
 
-  it('archives and unarchives a regular channel without touching status, closed_at, or agent lifecycle', async () => {
+  it('archives and unarchives a regular channel without touching status or closed_at', async () => {
     t = buildTestApp();
     const aliceId = await makeAgent(t, 'alice');
     const workspace = await (
@@ -941,7 +941,9 @@ describe('PATCH /api/channels/:id/archive', () => {
       'workspace_channels_changed',
       'workspace_channels_changed',
     ]);
-    // Archive must not nudge agent runtime — no fresh start/deliver calls.
+    // Archive stops agent runtime (#task:1398) but never *starts* or delivers —
+    // no fresh start/deliver calls. (The hard-stop path is asserted in the
+    // channel-service unit tests.)
     expect(t.fake.starts).toEqual([]);
     expect(t.fake.delivered).toEqual([]);
   });

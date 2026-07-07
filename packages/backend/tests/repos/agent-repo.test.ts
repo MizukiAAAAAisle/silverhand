@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { join } from 'node:path';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
-import { openTestDb } from '../utils/db.js';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
+import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
 
 describe('AgentRepo', () => {
   it('create defaults to provided host_id when input omits it', () => {
@@ -127,5 +130,73 @@ describe('AgentRepo', () => {
     expect(() =>
       repo.create({ name: 'orphan', runtime: 'claude' }, localHostId, 'no-such-user'),
     ).toThrow(/FOREIGN KEY/i);
+  });
+});
+
+describe('AgentRepo.listRuntimeConversations — archived scoping (#task:1398)', () => {
+  // `excludeArchived` is a DISPLAY-only scope (the agent Activity roster hides
+  // archived channels). The default (no flag) must stay COMPLETE so control-plane
+  // callers — Stop-all + delete-agent purge — can still reach a runtime left in
+  // an archived channel (archive-stop is best-effort/async, may fail when the
+  // host is offline). This test locks both halves of that contract.
+  function seed() {
+    const { db, localHostId } = openTestDb();
+    const tmp = makeTempSilverhandDir();
+    const repo = new AgentRepo(db);
+    const conversations = new ConversationRepo(db);
+    const workspaces = new WorkspaceRepo(db, {
+      workspacesRoot: tmp.workspacesRoot,
+    });
+    const agent = repo.create(
+      { name: 'alice', runtime: 'claude' },
+      localHostId,
+      'local',
+    );
+    const workspacePath = join(tmp.workspacesRoot, 'eng');
+    const workspace = workspaces.insert({
+      name: 'eng',
+      description: null,
+      workspacePath,
+      workspaceHostId: localHostId,
+    });
+    workspaces.insertMembership(workspace.id, agent.id);
+    const live = conversations.insertChannel({
+      workspaceId: workspace.id,
+      workspacePath,
+      title: 'live',
+    });
+    const archived = conversations.insertChannel({
+      workspaceId: workspace.id,
+      workspacePath,
+      title: 'archived',
+    });
+    conversations.addAgent(live.id, agent.id);
+    conversations.addAgent(archived.id, agent.id);
+    conversations.setArchived(archived.id, true);
+    return { repo, agent, live, archived, cleanup: tmp.cleanup };
+  }
+
+  it('default view includes archived channels (control-plane completeness)', () => {
+    const t = seed();
+    try {
+      const ids = t.repo
+        .listRuntimeConversations(t.agent.id)
+        .map(r => r.conversation_id);
+      expect(new Set(ids)).toEqual(new Set([t.live.id, t.archived.id]));
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('excludeArchived drops archived channels (display roster)', () => {
+    const t = seed();
+    try {
+      const ids = t.repo
+        .listRuntimeConversations(t.agent.id, { excludeArchived: true })
+        .map(r => r.conversation_id);
+      expect(ids).toEqual([t.live.id]);
+    } finally {
+      t.cleanup();
+    }
   });
 });

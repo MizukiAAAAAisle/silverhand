@@ -257,8 +257,24 @@ export type AgentRuntimeConversation = z.infer<
   typeof AgentRuntimeConversationSchema
 >;
 
+// Two projections of the SAME agent-runtime data at two scopes — the split is
+// load-bearing, not cosmetic (#task:1398):
+//
+//   `conversation_agents`         — COMPLETE control view. Includes archived
+//     channels. Consumed by the Header Stop button / runningCount and the
+//     AgentView `inThisChannel` membership gate. Archive-stop is best-effort/
+//     async (the host may be offline), so a straggler runtime can linger
+//     `active` in an archived channel; the Stop control must still see it or
+//     the user cannot reach `/agents/:id/stop` for it. Filtering this array
+//     would gate a control-plane entry on display scope — a fail-closed leak.
+//
+//   `visible_conversation_agents` — DISPLAY roster. Excludes archived channels.
+//     Consumed ONLY by the Activity roster (AgentActivityPane). The backend
+//     owns this scope; the renderer renders it verbatim and must NOT re-derive
+//     archived-ness client-side.
 export const AgentRuntimeStateDtoSchema = z.object({
   conversation_agents: z.array(AgentRuntimeConversationSchema),
+  visible_conversation_agents: z.array(AgentRuntimeConversationSchema),
 });
 export type AgentRuntimeStateDto = z.infer<typeof AgentRuntimeStateDtoSchema>;
 

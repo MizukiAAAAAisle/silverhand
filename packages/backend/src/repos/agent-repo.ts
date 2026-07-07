@@ -529,7 +529,10 @@ export class AgentRepo {
    * Includes closed conversations so the UI can show full history; the
    * caller filters by `closed_at` if needed.
    */
-  listRuntimeConversations(agentId: string): AgentRuntimeConversation[] {
+  listRuntimeConversations(
+    agentId: string,
+    opts?: { excludeArchived?: boolean },
+  ): AgentRuntimeConversation[] {
     type Row = {
       conversation_id: string;
       workspace_id: string;
@@ -542,6 +545,14 @@ export class AgentRepo {
       pid: number | null;
       closed_at: number | null;
     };
+    // `excludeArchived` is a DISPLAY-only scope (the agent Activity roster hides
+    // archived channels). It must NOT be the default: control-plane callers
+    // (Stop-all, delete-agent purge) rely on the COMPLETE view so a runtime left
+    // running in an archived channel — archive-stop is best-effort/async and can
+    // fail when the host is offline — stays reachable to stop/purge. (#task:1398)
+    const archivedFilter = opts?.excludeArchived
+      ? 'AND c.archived_at IS NULL'
+      : '';
     const rows = this.db
       .prepare<[string], Row>(
         `SELECT
@@ -558,7 +569,7 @@ export class AgentRepo {
          FROM conversation_agents ca
          JOIN conversations c ON c.id = ca.conversation_id
          JOIN workspaces w ON w.id = c.workspace_id
-         WHERE ca.agent_id = ?
+         WHERE ca.agent_id = ? ${archivedFilter}
          ORDER BY c.closed_at IS NULL DESC, c.updated_at DESC`,
       )
       .all(agentId);

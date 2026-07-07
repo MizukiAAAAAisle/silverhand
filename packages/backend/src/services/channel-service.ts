@@ -453,6 +453,26 @@ export class ChannelService {
       throw repoError('not_found', 'channel not found');
     }
 
+    // Archiving a channel terminates its agent runtime: an agent still working
+    // in an archived channel is doing meaningless work. Stop is best-effort and
+    // async (the host may be offline), so "archived ⇒ no runtime" is an eventual
+    // state, not an instant invariant — which is exactly why the runtime-state
+    // *control-plane* callers (Stop-all, delete-agent purge) keep the COMPLETE
+    // conversation view (`listRuntimeConversations` without `excludeArchived`):
+    // a straggler runtime left here must still be reachable to stop/purge. Only
+    // the display roster excludes archived (see agent-repo). (#task:1398)
+    if (input.archived) {
+      this.runtimeHost.resolveConversationRuns(updated.id, 'conversation_closed');
+      for (const ca of this.conversations.listAgents(updated.id)) {
+        void this.runtimeHost.stop(updated.id, ca.agent_id, 'hard').catch(err =>
+          this.logger.warn(
+            { channelId: updated.id, agentId: ca.agent_id, err },
+            'archive channel: runtime stop failed (continuing)',
+          ),
+        );
+      }
+    }
+
     this.publishWorkspaceChannelsChanged(
       updated.workspace_id,
       updated.id,

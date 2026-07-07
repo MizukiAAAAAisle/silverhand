@@ -36,11 +36,17 @@ class FakeConversationManager {
   }
 
   resolveRun(): void {}
-  resolveConversationRuns(): void {}
+  resolvedConversations: Array<{ conversationId: string; reason?: string }> = [];
+  resolveConversationRuns(conversationId: string, reason?: string): void {
+    this.resolvedConversations.push({ conversationId, reason });
+  }
   getAgentRunStates(): never[] {
     return [];
   }
-  async stop(): Promise<void> {}
+  stops: Array<{ conversationId: string; agentId: string; mode: string }> = [];
+  async stop(conversationId: string, agentId: string, mode: string): Promise<void> {
+    this.stops.push({ conversationId, agentId, mode });
+  }
   async stopAll(): Promise<void> {}
   reconcileOnBoot(): void {}
   isRunning(): boolean {
@@ -449,6 +455,44 @@ describe('ChannelService.setArchived', () => {
       await expect(
         t.service.setArchived({ channelId: 'missing', archived: true }),
       ).rejects.toMatchObject({ code: 'not_found' });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('archiving stops the runtime of every agent in the channel (#task:1398)', async () => {
+    // Domain decision: an agent working in an archived channel is doing
+    // meaningless work, so archive terminates its runtime. source has alice+bob.
+    const t = bootstrap();
+    try {
+      await t.service.setArchived({ channelId: t.source.id, archived: true });
+      expect(t.fake.resolvedConversations).toEqual([
+        { conversationId: t.source.id, reason: 'conversation_closed' },
+      ]);
+      // hard-stop issued for both agents in the channel (order-independent).
+      expect(t.fake.stops).toHaveLength(2);
+      expect(t.fake.stops.every(s => s.conversationId === t.source.id)).toBe(true);
+      expect(t.fake.stops.every(s => s.mode === 'hard')).toBe(true);
+      expect(new Set(t.fake.stops.map(s => s.agentId))).toEqual(
+        new Set([t.alice.id, t.bob.id]),
+      );
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('unarchiving does NOT start or stop any runtime (#task:1398)', async () => {
+    // Unarchive is a pure visibility flip — it must not touch agent lifecycle
+    // (no auto-restart of the agents archive stopped, no spurious stop).
+    const t = bootstrap();
+    try {
+      await t.service.setArchived({ channelId: t.source.id, archived: true });
+      t.fake.stops.length = 0;
+      t.fake.resolvedConversations.length = 0;
+      await t.service.setArchived({ channelId: t.source.id, archived: false });
+      expect(t.fake.stops).toEqual([]);
+      expect(t.fake.resolvedConversations).toEqual([]);
+      expect(t.fake.starts).toEqual([]);
     } finally {
       t.cleanup();
     }

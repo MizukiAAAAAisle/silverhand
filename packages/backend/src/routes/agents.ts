@@ -802,7 +802,20 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
       return c.json({ error: 'agent not found' }, 404);
     }
-    return c.json({ conversation_agents: agents.listRuntimeConversations(agent.id) });
+    // Two scopes of the same runtime data (#task:1398):
+    //  - `conversation_agents` = COMPLETE control view (includes archived).
+    //    The Header Stop button + AgentView membership gate read this, so a
+    //    best-effort-stop straggler in an archived channel stays reachable.
+    //  - `visible_conversation_agents` = DISPLAY roster (excludes archived),
+    //    read only by the Activity pane. Filtering the *whole* response would
+    //    gate the Stop control on display scope — a fail-closed leak.
+    // Stop-all (below) and delete-agent purge also use the complete view.
+    return c.json({
+      conversation_agents: agents.listRuntimeConversations(agent.id),
+      visible_conversation_agents: agents.listRuntimeConversations(agent.id, {
+        excludeArchived: true,
+      }),
+    });
   });
 
   // Schedules — user-facing read & cancel for the per-agent panel.

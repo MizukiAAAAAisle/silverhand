@@ -75,7 +75,7 @@ export function AgentActivityPane({
   state,
   onOpenConversation,
 }: AgentActivityPaneProps): JSX.Element {
-  const rows = state?.conversation_agents ?? [];
+  const rows = state?.visible_conversation_agents ?? [];
   const groups = useMemo(() => partitionRoster(rows), [rows]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);

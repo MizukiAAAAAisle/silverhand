@@ -1238,12 +1238,52 @@ describe('GET /api/agents/:id/runtime-state', () => {
     ).json() as any;
     expect(Array.isArray(res.conversation_agents)).toBe(true);
     expect(res.conversation_agents.length).toBeGreaterThan(0);
+    expect(Array.isArray(res.visible_conversation_agents)).toBe(true);
     const dm = res.conversation_agents.find(
       (s: any) => s.conversation_kind === 'dm_channel',
     );
     expect(dm.workspace_kind).toBe('agent_home');
     expect(dm.channel_title).toBe('Onboarding');
     expect(dm.status).toBe('idle'); // FakeConversationManager doesn't flip status
+  });
+
+  it('conversation_agents keeps archived channels (control view) while visible_conversation_agents drops them (#task:1398)', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
+    ).json() as any;
+    const agentId: string = created.agent.id;
+    const workspace = await (
+      await http(t).post('/api/workspaces', {
+        name: 'archscope',
+        member_agent_ids: [agentId],
+      })
+    ).json() as any;
+    const channel = await (
+      await http(t).post(
+        `/api/workspaces/${workspace.workspace.id}/channels`,
+        { title: 'planning', member_agent_ids: [agentId] },
+      )
+    ).json() as any;
+    const channelId: string = channel.channel.id;
+
+    await http(t).patch(`/api/channels/${channelId}/archive`, {
+      archived: true,
+    });
+
+    const res = await (
+      await http(t).get(`/api/agents/${agentId}/runtime-state`)
+    ).json() as any;
+    const inControl = res.conversation_agents.some(
+      (s: any) => s.conversation_id === channelId,
+    );
+    const inVisible = res.visible_conversation_agents.some(
+      (s: any) => s.conversation_id === channelId,
+    );
+    // Control view must still reach the archived channel's runtime (best-effort
+    // stop may leave a straggler); the display roster must not show it.
+    expect(inControl).toBe(true);
+    expect(inVisible).toBe(false);
   });
 });
 
