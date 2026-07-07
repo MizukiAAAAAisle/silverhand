@@ -1198,26 +1198,33 @@ export class Supervisor implements SupervisorContract {
     // Profile MCP (#task:1135): append the subject's additive MCP layer.
     // Keyed by runtime, drops the whole layer (loud) on a bad file but never
     // blocks spawn. Appended after buildArgs — both runtimes parse these flags
-    // regardless of position.
+    // regardless of position. opencode (#task:1405) returns its layer via
+    // `env` (OPENCODE_CONFIG_CONTENT) instead of argv.
     const mcpSpawn = await buildProfileMcpSpawnArgs({
       runtimeKind,
       agentHomeDir: resolvedOptions.agent.home_dir,
       spawnDir: spawnPrep.dir,
+      systemPromptPath: spawnPrep.systemPromptPath,
       agentId: params.agent_id,
       logger: this.logger,
     });
-    args.push(...mcpSpawn.args);
-    const env = buildDaemonSpawnEnv({
-      driver,
-      options: startOptions,
-      conversationId: params.conversation_id,
-      agentId: params.agent_id,
-      daemonSocketPath: this.daemonSocketPath ?? undefined,
-      lastDeliveredSeqPath: spawnPrep.lastDeliveredSeqPath,
-      binDir: spawnPrep.binDir,
-      controlPlaneServerUrl: this.controlPlaneServerUrl(),
-      proxyConfig: readDaemonProxyConfig(this.proxyConfigPath(), this.logger),
-    });
+    args.push(...(mcpSpawn.args ?? []));
+    const env = {
+      ...buildDaemonSpawnEnv({
+        driver,
+        options: startOptions,
+        conversationId: params.conversation_id,
+        agentId: params.agent_id,
+        daemonSocketPath: this.daemonSocketPath ?? undefined,
+        lastDeliveredSeqPath: spawnPrep.lastDeliveredSeqPath,
+        binDir: spawnPrep.binDir,
+        controlPlaneServerUrl: this.controlPlaneServerUrl(),
+        proxyConfig: readDaemonProxyConfig(this.proxyConfigPath(), this.logger),
+      }),
+      // The profile-MCP env layer (opencode's OPENCODE_CONFIG_CONTENT) is
+      // authoritative for its own keys — spread last so it wins on conflict.
+      ...(mcpSpawn.env ?? {}),
+    };
     const startedAt = this.now();
 
     const child = this.spawnFn(binary, args, {

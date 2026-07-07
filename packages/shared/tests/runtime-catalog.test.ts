@@ -94,7 +94,7 @@ describe('runtime catalog (shared source of truth)', () => {
   it('enables profile MCP for runtimes with spawn adapters', () => {
     expect(
       RUNTIME_CATALOG.filter(e => e.supportsProfileMcp).map(e => e.kind),
-    ).toEqual(['claude', 'codex', 'qoder']);
+    ).toEqual(['claude', 'codex', 'qoder', 'opencode']);
   });
 
   it('title-cases reasoning labels for display while values stay lowercase', () => {

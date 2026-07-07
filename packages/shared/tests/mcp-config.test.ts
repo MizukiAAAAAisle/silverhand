@@ -7,6 +7,7 @@ import {
   serializeTomlValue,
   toClaudeMcpConfig,
   toCodexMcpOverrides,
+  toOpencodeMcpConfig,
 } from '../src/mcp-config.js';
 
 describe('parseMcpConfig', () => {
@@ -155,6 +156,64 @@ describe('toCodexMcpOverrides', () => {
 
   it('returns [] when there are no servers', () => {
     expect(toCodexMcpOverrides(EMPTY_MCP_CONFIG)).toEqual([]);
+  });
+});
+
+describe('toOpencodeMcpConfig', () => {
+  it('projects a stdio server to a local launcher, command+args folded, env→environment', () => {
+    const config = {
+      mcpServers: {
+        fs: { command: 'npx', args: ['-y', 'server-fs'], env: { TOK: 'v' } },
+      },
+    };
+    expect(toOpencodeMcpConfig(config)).toEqual({
+      mcp: {
+        silverhand_profile__fs: {
+          type: 'local',
+          command: ['npx', '-y', 'server-fs'],
+          environment: { TOK: 'v' },
+        },
+      },
+    });
+  });
+
+  it('projects a stdio server with no args/env to a bare command array', () => {
+    const config = {
+      mcpServers: { fs: { type: 'stdio' as const, command: 'npx' } },
+    };
+    expect(toOpencodeMcpConfig(config)).toEqual({
+      mcp: { silverhand_profile__fs: { type: 'local', command: ['npx'] } },
+    });
+  });
+
+  it('projects http/sse servers to the remote form (url + headers, no type leakage)', () => {
+    const config = {
+      mcpServers: {
+        remote: {
+          type: 'http' as const,
+          url: 'https://example.com/mcp',
+          headers: { Authorization: 'Bearer x' },
+        },
+        stream: { type: 'sse' as const, url: 'https://example.com/sse' },
+      },
+    };
+    expect(toOpencodeMcpConfig(config)).toEqual({
+      mcp: {
+        silverhand_profile__remote: {
+          type: 'remote',
+          url: 'https://example.com/mcp',
+          headers: { Authorization: 'Bearer x' },
+        },
+        silverhand_profile__stream: {
+          type: 'remote',
+          url: 'https://example.com/sse',
+        },
+      },
+    });
+  });
+
+  it('returns null when there are no servers', () => {
+    expect(toOpencodeMcpConfig(EMPTY_MCP_CONFIG)).toBeNull();
   });
 });
 

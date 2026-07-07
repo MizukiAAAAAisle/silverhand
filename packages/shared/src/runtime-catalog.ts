@@ -104,7 +104,10 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     cliLabel: 'OpenCode',
     selectable: true,
     reasoningEffortOptions: [],
-    supportsProfileMcp: false,
+    // Profile MCP rides the deep-merged OPENCODE_CONFIG_CONTENT env seam
+    // (#task:1405) — the same additive layer claude/codex/qoder get, so
+    // opencode reaches parity rather than shipping uniquely weaker.
+    supportsProfileMcp: true,
     modelSuggestions: [],
   },
   cursor: {

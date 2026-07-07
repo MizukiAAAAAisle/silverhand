@@ -41,9 +41,11 @@ function captureLogger(): { logger: DaemonLogger; warns: unknown[][] } {
 }
 
 const AGENT_ID = 'aid-mcp-spawn';
+const STANDING_PROMPT = 'STANDING PROMPT — platform manual + memory';
 
 let homeDir = '';
 let spawnDir = '';
+let systemPromptPath = '';
 afterEach(() => {
   for (const d of [homeDir, spawnDir]) {
     try {
@@ -56,6 +58,10 @@ afterEach(() => {
 beforeEach(() => {
   homeDir = mkdtempSync(join(tmpdir(), 'mcp-home-'));
   spawnDir = mkdtempSync(join(tmpdir(), 'mcp-spawn-'));
+  // The materialized standing prompt the daemon writes per spawn. The argv
+  // runtimes ignore it here; opencode reads it into OPENCODE_CONFIG_CONTENT.
+  systemPromptPath = join(spawnDir, 'system-prompt.md');
+  writeFileSync(systemPromptPath, STANDING_PROMPT);
 });
 
 describe('buildProfileMcpSpawnArgs', () => {
@@ -65,6 +71,7 @@ describe('buildProfileMcpSpawnArgs', () => {
       runtimeKind: 'claude',
       agentHomeDir: homeDir,
       spawnDir,
+      systemPromptPath,
       agentId: AGENT_ID,
       logger,
     });
@@ -79,6 +86,7 @@ describe('buildProfileMcpSpawnArgs', () => {
       runtimeKind: 'codex',
       agentHomeDir: homeDir,
       spawnDir,
+      systemPromptPath,
       agentId: AGENT_ID,
       logger,
     });
@@ -100,12 +108,13 @@ describe('buildProfileMcpSpawnArgs', () => {
       runtimeKind: 'claude',
       agentHomeDir: homeDir,
       spawnDir,
+      systemPromptPath,
       agentId: AGENT_ID,
       logger,
     });
-    expect(r.args[0]).toBe('--mcp-config');
+    expect(r.args![0]).toBe('--mcp-config');
     expect(r.args).not.toContain('--strict-mcp-config');
-    const outPath = r.args[1]!;
+    const outPath = r.args![1]!;
     expect(outPath).toBe(join(spawnDir, 'profile-mcp.json'));
     const written = JSON.parse(readFileSync(outPath, 'utf-8'));
     // Names are namespaced so they never shadow the user's own servers.
@@ -131,12 +140,13 @@ describe('buildProfileMcpSpawnArgs', () => {
       runtimeKind: 'qoder',
       agentHomeDir: homeDir,
       spawnDir,
+      systemPromptPath,
       agentId: AGENT_ID,
       logger,
     });
-    expect(r.args[0]).toBe('--mcp-config');
+    expect(r.args![0]).toBe('--mcp-config');
     expect(r.args).not.toContain('--strict-mcp-config');
-    const outPath = r.args[1]!;
+    const outPath = r.args![1]!;
     expect(outPath).toBe(join(spawnDir, 'profile-mcp.json'));
     const written = JSON.parse(readFileSync(outPath, 'utf-8'));
     expect(Object.keys(written.mcpServers).sort()).toEqual([
@@ -163,14 +173,15 @@ describe('buildProfileMcpSpawnArgs', () => {
       runtimeKind: 'codex',
       agentHomeDir: homeDir,
       spawnDir,
+      systemPromptPath,
       agentId: AGENT_ID,
       logger,
     });
     // Two servers → two `-c <override>` pairs.
-    const flags = r.args.filter(a => a === '-c');
+    const flags = r.args!.filter(a => a === '-c');
     expect(flags).toHaveLength(2);
     expect(r.args).toHaveLength(4);
-    const overrides = r.args.filter(a => a !== '-c');
+    const overrides = r.args!.filter(a => a !== '-c');
     for (const o of overrides) {
       expect(o.startsWith('mcp_servers.silverhand_profile__')).toBe(true);
     }
@@ -189,6 +200,7 @@ describe('buildProfileMcpSpawnArgs', () => {
       runtimeKind: 'claude',
       agentHomeDir: homeDir,
       spawnDir,
+      systemPromptPath,
       agentId: AGENT_ID,
       logger,
     });
@@ -206,6 +218,7 @@ describe('buildProfileMcpSpawnArgs', () => {
       runtimeKind: 'cursor',
       agentHomeDir: homeDir,
       spawnDir,
+      systemPromptPath,
       agentId: AGENT_ID,
       logger,
     });
@@ -224,6 +237,7 @@ describe('buildProfileMcpSpawnArgs', () => {
         runtimeKind: 'claude',
         agentHomeDir: homeDir,
         spawnDir,
+        systemPromptPath,
         agentId: AGENT_ID,
         logger,
       });
@@ -232,5 +246,84 @@ describe('buildProfileMcpSpawnArgs', () => {
     } finally {
       chmodSync(filePath, 0o644);
     }
+  });
+
+  it('opencode: injects the standing prompt into OPENCODE_CONFIG_CONTENT even with NO mcp.json', async () => {
+    const { logger, warns } = captureLogger();
+    const r = await buildProfileMcpSpawnArgs({
+      runtimeKind: 'opencode',
+      agentHomeDir: homeDir,
+      spawnDir,
+      systemPromptPath,
+      agentId: AGENT_ID,
+      logger,
+    });
+    // No argv layer; the whole layer rides the config env.
+    expect(r.args).toBeUndefined();
+    const content = JSON.parse(r.env!.OPENCODE_CONFIG_CONTENT!);
+    // Standing prompt injected as the custom agent's prompt (the ACP driver
+    // then selects `mode = silverhand`).
+    expect(content.agent.silverhand.prompt).toBe(STANDING_PROMPT);
+    // No MCP configured → no `mcp` key (nothing to deep-merge over user config).
+    expect(content.mcp).toBeUndefined();
+    expect(warns).toEqual([]); // absent mcp is silent
+  });
+
+  it('opencode: deep-merge fragment carries BOTH the standing prompt and prefixed MCP servers', async () => {
+    writeFileSync(
+      join(homeDir, 'mcp.json'),
+      JSON.stringify({
+        mcpServers: {
+          fs: { command: 'npx', args: ['-y', 'server-fs'], env: { TOK: 'v' } },
+          remote: {
+            type: 'http',
+            url: 'https://example.com/mcp',
+            headers: { Authorization: 'Bearer x' },
+          },
+        },
+      }),
+    );
+    const { logger } = captureLogger();
+    const r = await buildProfileMcpSpawnArgs({
+      runtimeKind: 'opencode',
+      agentHomeDir: homeDir,
+      spawnDir,
+      systemPromptPath,
+      agentId: AGENT_ID,
+      logger,
+    });
+    expect(r.args).toBeUndefined();
+    const content = JSON.parse(r.env!.OPENCODE_CONFIG_CONTENT!);
+    expect(content.agent.silverhand.prompt).toBe(STANDING_PROMPT);
+    // Servers are domain-prefixed (never shadow the user's own) and projected
+    // to opencode's native local/remote shape.
+    expect(Object.keys(content.mcp).sort()).toEqual([
+      'silverhand_profile__fs',
+      'silverhand_profile__remote',
+    ]);
+    expect(content.mcp.silverhand_profile__fs).toEqual({
+      type: 'local',
+      command: ['npx', '-y', 'server-fs'],
+      environment: { TOK: 'v' },
+    });
+    expect(content.mcp.silverhand_profile__remote).toEqual({
+      type: 'remote',
+      url: 'https://example.com/mcp',
+      headers: { Authorization: 'Bearer x' },
+    });
+  });
+
+  it('opencode: a missing standing-prompt file fails loud (spawn precondition, not an MCP drop)', async () => {
+    const { logger } = captureLogger();
+    await expect(
+      buildProfileMcpSpawnArgs({
+        runtimeKind: 'opencode',
+        agentHomeDir: homeDir,
+        spawnDir,
+        systemPromptPath: join(spawnDir, 'does-not-exist.md'),
+        agentId: AGENT_ID,
+        logger,
+      }),
+    ).rejects.toThrow();
   });
 });

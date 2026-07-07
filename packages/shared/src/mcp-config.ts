@@ -229,6 +229,70 @@ export function toCodexServerConfig(
 }
 
 /**
+ * One opencode `mcp.<name>` server. Mirrors opencode's config schema
+ * (`McpLocalConfig` / `McpRemoteConfig`, verified against
+ * https://opencode.ai/config.json for opencode 1.17.14): a `local` stdio
+ * launcher folds command+args into a single `command` array and carries env
+ * under `environment`; a `remote` server is a url endpoint with optional
+ * `headers`. `additionalProperties:false` on both arms of the opencode schema,
+ * so we emit ONLY these keys.
+ */
+export type OpencodeMcpServer =
+  | { type: 'local'; command: string[]; environment?: Record<string, string> }
+  | { type: 'remote'; url: string; headers?: Record<string, string> };
+
+/**
+ * Project one canonical server into opencode's native `mcp.<name>` shape:
+ *  - stdio   → `{ type:'local', command:[command, ...args], environment? }`
+ *    (opencode's `command` is a single argv array, and env is `environment`).
+ *  - http/sse→ `{ type:'remote', url, headers? }` (both canonical remote
+ *    variants map to the url-based `remote` form; the transport is opencode's
+ *    concern, and we never pre-check connectivity — same rule as codex).
+ */
+export function toOpencodeServerConfig(
+  server: McpServerConfig,
+): OpencodeMcpServer {
+  // The union isn't TS-discriminated (stdio's `type` is optional); narrow on
+  // the structural `url` marker like {@link toCodexServerConfig}.
+  if ('url' in server) {
+    return {
+      type: 'remote',
+      url: server.url,
+      ...(server.headers ? { headers: server.headers } : {}),
+    };
+  }
+  return {
+    type: 'local',
+    command: server.args ? [server.command, ...server.args] : [server.command],
+    ...(server.env ? { environment: server.env } : {}),
+  };
+}
+
+/**
+ * Canonical → opencode `{ mcp: { <prefixed>: {...} } }` config fragment, every
+ * server key rewritten to its domain-prefixed runtime name. Returns `null`
+ * when there are no servers. Unlike claude/codex (which pass argv), opencode
+ * has no additive `--mcp-config` flag — this fragment is deep-merged into the
+ * subject's config via `OPENCODE_CONFIG_CONTENT` (opencode merges it over the
+ * user's on-disk config; the domain prefix keeps our servers from colliding
+ * with the user's own).
+ */
+export function toOpencodeMcpConfig(
+  config: McpConfig,
+  scope: McpScope = 'profile',
+): { mcp: Record<string, OpencodeMcpServer> } | null {
+  const names = Object.keys(config.mcpServers);
+  if (names.length === 0) return null;
+  const mcp: Record<string, OpencodeMcpServer> = {};
+  for (const name of names) {
+    mcp[runtimeMcpServerName(scope, name)] = toOpencodeServerConfig(
+      config.mcpServers[name]!,
+    );
+  }
+  return { mcp };
+}
+
+/**
  * Serialize a JSON-ish value to a TOML value literal (inline table / array /
  * string / number / boolean). Used to build codex `-c` override values
  * safely. Strings use TOML basic-string escaping; objects become inline

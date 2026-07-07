@@ -7,6 +7,7 @@ export * from './config.js';
 export * from './logging.js';
 export * from './mcp-config.js';
 export * from './mime.js';
+export * from './opencode-config.js';
 export * from './platform-prompt.js';
 export * from './proxy-env.js';
 export * from './runtime-catalog.js';
