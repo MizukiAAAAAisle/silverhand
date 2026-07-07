@@ -218,7 +218,13 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
     canEditHostLocalConfig && host.provisioning_source === 'user_invite';
 
   return (
-    <main className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-bg-floating">
+    <main
+      className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-bg-floating"
+      style={{
+        borderRadius: 'var(--card-radius, 0)',
+        boxShadow: 'var(--card-shadow, none)',
+      }}
+    >
       <HostHero
         host={host}
         showStableName={showStableName}
