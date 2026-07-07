@@ -326,6 +326,10 @@ verify_packaged_better_sqlite3() {
   local expected_abi="$2"
   local electron_bin
   electron_bin="$(node -p "require('path').join(require('path').dirname(require.resolve('electron/package.json', { paths: ['./apps/desktop'] })), 'dist/Electron.app/Contents/MacOS/Electron')" 2>/dev/null || true)"
+  if [[ -n "$electron_bin" && ! -x "$electron_bin" ]]; then
+    echo "[package] Electron runtime missing from node_modules; materializing it for native smoke"
+    ( cd "$ROOT_DIR/apps/desktop" && env -u ELECTRON_RUN_AS_NODE pnpm exec electron --version >/dev/null )
+  fi
   if [[ -z "$electron_bin" || ! -x "$electron_bin" ]]; then
     echo "[package] could not resolve Electron binary for native smoke" >&2
     return 1
