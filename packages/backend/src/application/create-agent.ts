@@ -11,11 +11,13 @@ import type { AgentRepo } from '../repos/agent-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
+import type { UserRepo } from '../repos/user-repo.js';
 import type { OutboundFrameAdapter } from '../runtime/outbound-frame-adapter.js';
 import {
   HostWsCommandResponseError,
   HostWsCommandTransportError,
 } from '../ws/host-ws-server.js';
+import { isAgentNameAvailable } from './name-availability.js';
 import type { PostCommitEffect } from './post-commit.js';
 
 /**
@@ -48,6 +50,7 @@ export type CreateAgentDeps = {
   workspaces: WorkspaceRepo;
   conversations: ConversationRepo;
   messages: MessageRepo;
+  users: UserRepo;
 };
 
 export type CreateAgentCommand = {
@@ -571,7 +574,7 @@ export async function createAgent(
   deps: CreateAgentDeps,
   cmd: CreateAgentCommand,
 ): Promise<CreateAgentResult> {
-  const { ctx, agents } = deps;
+  const { ctx, agents, users } = deps;
   const { idempotencyKey, retry, creatorUserId } = cmd;
   const input = normalizeCreateAgentInput(cmd.input);
 
@@ -628,8 +631,12 @@ export async function createAgent(
     return { kind: 'placementError', err };
   }
 
-  // Name uniqueness check (preserved from pre-D4.d).
-  if (agents.getByName(input.name)) {
+  // Name uniqueness check — SHARED predicate with the name-availability probe
+  // endpoint (`isAgentNameAvailable`): agent names are the global @-handle
+  // namespace shared with human users, so this rejects a name colliding with a
+  // user handle too (previously only `agents` was checked and a user-collision
+  // tripped the DB trigger instead of returning a clean `nameTaken`).
+  if (!isAgentNameAvailable({ agents, users }, input.name)) {
     return { kind: 'nameTaken', message: 'agent name already exists' };
   }
 

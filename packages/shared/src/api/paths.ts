@@ -68,6 +68,9 @@ export const apiPaths = {
 
   // agents
   agents: '/api/agents',
+  /** Create-form onBlur uniqueness probe. Static segment — MUST be
+   *  registered before `agent(:id)` so it is not shadowed by the param route. */
+  agentNameAvailability: '/api/agents/name-availability',
   agent: (id: string) => `/api/agents/${id}`,
   /** #task:811/#1190 — flat tree of every visible file/directory under the
    *  agent home dir by default, or under the agent's per-workspace L2 memory
@@ -121,6 +124,9 @@ export const apiPaths = {
 
   // workspaces / conversations (new workspace -> channel -> thread model)
   workspaces: '/api/workspaces',
+  /** Create-form onBlur uniqueness probe. Static segment — MUST be
+   *  registered before `workspace(:id)` so it is not shadowed. */
+  workspaceNameAvailability: '/api/workspaces/name-availability',
   workspace: (id: string) => `/api/workspaces/${id}`,
   /** Personal ⭐ star toggle for the workspace rail (#task:1209). POST = star,
    *  DELETE = unstar. Viewer-scoped (writes the caller's sort state), gated by

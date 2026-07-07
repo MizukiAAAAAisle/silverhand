@@ -7,6 +7,7 @@ import {
 } from '../db/schema.js';
 import { AgentDtoSchema } from './agent.js';
 import { UserDtoSchema } from './user.js';
+import { EntityNameSchema } from './name.js';
 
 //
 // New naming model for workspace -> channel/dm_channel/thread. The
@@ -91,11 +92,7 @@ export const UpdateAgentCapabilitiesInputSchema = z.object({
 export type UpdateAgentCapabilitiesInput = z.infer<typeof UpdateAgentCapabilitiesInputSchema>;
 
 export const CreateWorkspaceInputSchema = z.object({
-  name: z
-    .string()
-    .min(1)
-    .max(64)
-    .regex(/^[a-zA-Z0-9_\-]+$/, 'name must be alphanumeric / dash / underscore'),
+  name: EntityNameSchema,
   description: z.string().optional(),
   workspace_path: z.string().optional(),
   workspace_host_id: z.string().optional(),
@@ -107,12 +104,7 @@ export const CreateWorkspaceInputSchema = z.object({
 export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceInputSchema>;
 
 export const UpdateWorkspaceInputSchema = z.object({
-  name: z
-    .string()
-    .min(1)
-    .max(64)
-    .regex(/^[a-zA-Z0-9_\-]+$/, 'name must be alphanumeric / dash / underscore')
-    .optional(),
+  name: EntityNameSchema.optional(),
   description: z.string().nullable().optional(),
 }).refine(v => Object.keys(v).length > 0, { message: 'no fields to update' });
 export type UpdateWorkspaceInput = z.infer<typeof UpdateWorkspaceInputSchema>;

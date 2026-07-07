@@ -23,8 +23,10 @@ import {
   ArchivedChannelsQueryInputSchema,
   CreateConversationChannelInputSchema,
   CreateWorkspaceInputSchema,
+  EntityNameSchema,
   UpdateWorkspaceInputSchema,
   systemSubtype,
+  type NameAvailabilityDto,
 } from '@silverhand/shared';
 import type { AppEnv } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
@@ -39,6 +41,7 @@ import { canGovernWorkspace, canViewWorkspace } from '../permissions.js';
 import { timedRouteSpan } from '../observability/route-span.js';
 import { createWorkspace } from '../application/create-workspace.js';
 import { deleteWorkspace } from '../application/delete-workspace.js';
+import { isWorkspaceNameAvailable } from '../application/name-availability.js';
 import { assertWorkspaceAgentsMatchHost } from '../application/workspace-placement.js';
 import { AgentHomeChannelError } from '../services/channel-service.js';
 import { channelServiceErrorResponse, placementErrorResponse } from './responses.js';
@@ -73,6 +76,27 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
         visible.filter(w => w.archived_at == null).map(w => w.id),
       ),
     });
+  });
+
+  // GET /api/workspaces/name-availability?name= — create-form onBlur uniqueness
+  // probe. Registered BEFORE `/api/workspaces/:id` so the static segment is not
+  // shadowed. Shares ONE predicate with the create path
+  // (`isWorkspaceNameAvailable`, regular-workspace scoped) so the form can never
+  // report "available" for a name create would reject.
+  app.get(apiPaths.workspaceNameAvailability, c => {
+    getUserPrincipal(c); // authed-user gate (parity with sibling routes)
+    const parsed = EntityNameSchema.safeParse(c.req.query('name') ?? '');
+    if (!parsed.success) {
+      return c.json({
+        available: false,
+        reason: 'invalid',
+      } satisfies NameAvailabilityDto);
+    }
+    const available = isWorkspaceNameAvailable({ workspaces }, parsed.data);
+    return c.json({
+      available,
+      reason: available ? 'available' : 'taken',
+    } satisfies NameAvailabilityDto);
   });
 
   app.post(apiPaths.workspaces, async c => {

@@ -12,6 +12,7 @@ import {
   dispatchWorkspaceProvision,
 } from '../runtime/workspace-data-plane.js';
 import { seedMemberAgentL2 } from './agent-l2-seed.js';
+import { isWorkspaceNameAvailable } from './name-availability.js';
 
 /**
  * CreateWorkspace provisioning saga.
@@ -89,8 +90,9 @@ export async function createWorkspace(
 ): Promise<CreateWorkspaceResult> {
   const { ctx, agents, users, workspaces, conversations, messages } = deps;
 
-  // Domain rule: workspace names are unique.
-  if (workspaces.getByName(cmd.name)) {
+  // Domain rule: workspace names are unique (among regular workspaces).
+  // SHARED predicate with the name-availability probe endpoint.
+  if (!isWorkspaceNameAvailable({ workspaces }, cmd.name)) {
     return { kind: 'nameTaken' };
   }
 

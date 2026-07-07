@@ -11,6 +11,7 @@ import {
   WorkspaceKindSchema,
 } from '../db/schema.js';
 import { DisplayNameSchema } from './user.js';
+import { EntityNameSchema } from './name.js';
 import { reasoningEffortValidForRuntime } from '../runtime-catalog.js';
 
 export const AgentDtoSchema = z.object({
@@ -64,11 +65,7 @@ export type AgentDto = z.infer<typeof AgentDtoSchema>;
 
 export const CreateAgentInputSchema = z
   .object({
-    name: z
-      .string()
-      .min(1)
-      .max(64)
-      .regex(/^[a-zA-Z0-9_\-]+$/, 'name must be alphanumeric / dash / underscore'),
+    name: EntityNameSchema,
     runtime: RuntimeKindSchema,
     model: z.string().optional(),
     reasoning_effort: ReasoningEffortSchema.optional(),

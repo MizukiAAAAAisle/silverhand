@@ -7,6 +7,7 @@ import {
   createAgent,
   type AgentMaterializeFailureCode,
 } from '../application/create-agent.js';
+import { isAgentNameAvailable } from '../application/name-availability.js';
 import {
   deleteAgent,
 } from '../application/delete-agent.js';
@@ -30,6 +31,7 @@ import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
+import type { UserRepo } from '../repos/user-repo.js';
 import {
   type WorkspaceRepo,
   agentHomeWorkspaceId,
@@ -49,12 +51,14 @@ import {
 } from '../runtime/workspace-data-plane.js';
 import {
   CreateAgentInputSchema,
+  EntityNameSchema,
   McpProbeRequestSchema,
   ScheduleListInputSchema,
   UpdateAgentInputSchema,
   apiPaths,
   type AgentDto,
   type AgentMaterializationStatus,
+  type NameAvailabilityDto,
 } from '@silverhand/shared';
 import {
   Hono,
@@ -67,6 +71,7 @@ export interface AgentsRouteDeps {
   conversations: ConversationRepo;
   messages: MessageRepo;
   conversationInboxes: ConversationInboxRepo;
+  users: UserRepo;
 }
 
 // ── POST /api/agents — Idempotency-Key parsing (route-side, pure) ──
@@ -209,7 +214,7 @@ function resolveAgentWorkspaceScope(params: {
 
 export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { ctx, agents, workspaces, conversations, messages, conversationInboxes } = deps;
+  const { ctx, agents, workspaces, conversations, messages, conversationInboxes, users } = deps;
 
   app.get(apiPaths.agents, c => {
     const principal = getUserPrincipal(c);
@@ -253,6 +258,28 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     });
   });
 
+  // GET /api/agents/name-availability?name= — create-form onBlur uniqueness
+  // probe. Registered BEFORE `/api/agents/:id` so the static segment is not
+  // shadowed by the param route. Shares ONE predicate with the create path
+  // (`isAgentNameAvailable`) so the form can never report "available" for a
+  // name create would reject. Agent names are the GLOBAL @-handle namespace
+  // shared with human users → the predicate checks agents ∪ users.
+  app.get(apiPaths.agentNameAvailability, c => {
+    getUserPrincipal(c); // authed-user gate (parity with sibling routes)
+    const parsed = EntityNameSchema.safeParse(c.req.query('name') ?? '');
+    if (!parsed.success) {
+      return c.json({
+        available: false,
+        reason: 'invalid',
+      } satisfies NameAvailabilityDto);
+    }
+    const available = isAgentNameAvailable({ agents, users }, parsed.data);
+    return c.json({
+      available,
+      reason: available ? 'available' : 'taken',
+    } satisfies NameAvailabilityDto);
+  });
+
   /**
    * `POST /api/agents` — create-agent provisioning saga (thin route).
    *
@@ -294,7 +321,7 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     }
 
     const result = await createAgent(
-      { ctx, agents, workspaces, conversations, messages },
+      { ctx, agents, workspaces, conversations, messages, users },
       {
         input: parsed.data,
         idempotencyKey: keyParse.key,

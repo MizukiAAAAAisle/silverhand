@@ -515,7 +515,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   // Public agent routes.
   app.route(
     '/',
-    createAgentsApp({ ctx, agents, workspaces, conversations, messages, conversationInboxes }),
+    createAgentsApp({ ctx, agents, workspaces, conversations, messages, conversationInboxes, users }),
   );
   // Current viewer, user directory, and avatar routes.
   app.route('/', createUsersApp({ ctx }));

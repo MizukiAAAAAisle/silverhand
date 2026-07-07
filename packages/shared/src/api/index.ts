@@ -4,6 +4,7 @@ export * from './user.js';
 export * from './server.js';
 export * from './agent.js';
 export * from './workspace.js';
+export * from './name.js';
 export * from './conversation.js';
 export * from './runtime.js';
 export * from './attachment.js';
