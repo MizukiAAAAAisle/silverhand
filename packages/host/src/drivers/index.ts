@@ -147,6 +147,7 @@ export interface Driver {
 import { ClaudeDriver } from './claude.js';
 import { CodexDriver } from './codex.js';
 import { CursorDriver } from './cursor.js';
+import { OpenCodeDriver } from './opencode.js';
 import { QoderDriver } from './qoder.js';
 
 /** Per-spawn factory: codex/cursor hold per-handle state (threadId,
@@ -155,6 +156,7 @@ const FACTORIES: Partial<Record<RuntimeKind, () => Driver>> = {
   claude: () => new ClaudeDriver(),
   codex: () => new CodexDriver(),
   cursor: () => new CursorDriver(),
+  opencode: () => new OpenCodeDriver(),
   qoder: () => new QoderDriver(),
 };
 

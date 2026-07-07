@@ -36,10 +36,10 @@ describe('runtime catalog (shared source of truth)', () => {
   });
 
   it('only offers spawnable runtimes: selectable is a strict subset per product curation', () => {
-    // claude/codex/qoder are the offered set today; cursor/gemini are
+    // claude/codex/qoder/opencode are the offered set today; cursor/gemini are
     // roadmap. The host-side test asserts selectable ⇒ hasDriver.
     const selectable = RUNTIME_CATALOG.filter(e => e.selectable).map(e => e.kind);
-    expect(selectable).toEqual(['claude', 'codex', 'qoder']);
+    expect(selectable).toEqual(['claude', 'codex', 'qoder', 'opencode']);
   });
 
   it('keeps every reasoning option inside the shared ReasoningEffort enum', () => {
@@ -86,7 +86,7 @@ describe('runtime catalog (shared source of truth)', () => {
       runtimeDefaultModel('qoder'),
     );
 
-    for (const kind of ['claude', 'codex', 'cursor', 'gemini'] as const) {
+    for (const kind of ['claude', 'codex', 'opencode', 'cursor', 'gemini'] as const) {
       expect(runtimeDefaultModel(kind)).toBeNull();
     }
   });

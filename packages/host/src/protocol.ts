@@ -100,6 +100,7 @@ export const KNOWN_CAPABILITIES_V1 = [
   'runtime.claude',
   'runtime.codex',
   'runtime.cursor',
+  'runtime.opencode',
   'runtime.qoder',
   'transport.unix_socket',
   'fs.local',

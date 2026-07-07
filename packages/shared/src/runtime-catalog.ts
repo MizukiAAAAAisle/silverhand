@@ -98,6 +98,15 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     modelSuggestions: ['Auto', 'Ultimate', 'Performance', 'Efficient', 'Lite'],
     defaultModel: 'Ultimate',
   },
+  opencode: {
+    kind: 'opencode',
+    label: 'OpenCode',
+    cliLabel: 'OpenCode',
+    selectable: true,
+    reasoningEffortOptions: [],
+    supportsProfileMcp: false,
+    modelSuggestions: [],
+  },
   cursor: {
     kind: 'cursor',
     label: 'Cursor',
@@ -128,6 +137,7 @@ const RUNTIME_ORDER: readonly RuntimeKind[] = [
   'claude',
   'codex',
   'qoder',
+  'opencode',
   'cursor',
   'gemini',
 ];

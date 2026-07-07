@@ -128,7 +128,7 @@ describe('protocol — hello handshake', () => {
   it('advertises exactly the runtimes that have a driver (runtime.* ⟺ hasDriver)', () => {
     // The hello capabilities are the daemon's promise of what it can
     // spawn — so `runtime.<kind>` must be present iff a driver exists.
-    // qoder shipped a driver, so it must be advertised; gemini has none.
+    // qoder/opencode shipped drivers, so they must be advertised; gemini has none.
     const advertised = new Set(
       KNOWN_CAPABILITIES_V1.filter(c => c.startsWith('runtime.')).map(c =>
         c.slice('runtime.'.length),
@@ -138,6 +138,7 @@ describe('protocol — hello handshake', () => {
       expect(advertised.has(kind)).toBe(hasDriver(kind));
     }
     expect(advertised.has('qoder')).toBe(true);
+    expect(advertised.has('opencode')).toBe(true);
   });
 });
 

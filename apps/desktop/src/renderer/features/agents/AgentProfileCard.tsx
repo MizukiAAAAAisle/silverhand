@@ -512,5 +512,7 @@ function runtimeHint(runtime: RuntimeKind): string {
       return 'e.g. gemini-2.5-pro';
     case 'qoder':
       return 'e.g. Auto · Qwen3.7-Max · GLM-5.2 (or leave blank)';
+    case 'opencode':
+      return 'e.g. opencode/big-pickle · anthropic/claude-sonnet-4';
   }
 }

@@ -67,6 +67,21 @@ export function GeminiIcon(props: SVGProps<SVGSVGElement>): JSX.Element {
   );
 }
 
+export function OpenCodeIcon(props: SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+      {...props}
+    >
+      <path
+        fill="currentColor"
+        d="M4 4h16v16H4V4Zm4.25 4.25v7.5h7.5v-7.5h-7.5Zm2.35 2.35h2.8v2.8h-2.8v-2.8Z"
+      />
+    </svg>
+  );
+}
+
 /**
  * Qoder's official brand mark. Unlike the other runtime icons (monochrome
  * vector paths tinted via `currentColor`), Qoder ships a full-color raster
@@ -75,4 +90,3 @@ export function GeminiIcon(props: SVGProps<SVGSVGElement>): JSX.Element {
  */
 export const QODER_LOGO_DATA_URI =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAALQAAAC0CAMAAAAKE/YAAAAAyVBMVEURERMq21z///8hj0Hh4eGmpqYgICLw8PAkqEqIiInDw8QnwlMvLzFNTU4UKhx5eXopzlgedjg+Pj8THhgbXS9qamyXl5jk+uoXRCWv8cIWNyEfgzx66JlbW121tbXy/fUZUCoUKxwkqUpF33DX+OAcaTMYRCZra2wcajPS0tOlpaZS4ns33WZcXF0mtU9f5IRt5o/J9taU7a0aXS4ySDpEcFIltU5Q1XYnwVMfgjy89Myi77giLSYukUt7hn+T4KlF33F8koPI6dKlvz6KAAAD3ElEQVR42u3c13biMBCAYUkIjAsYMB1CSUjfTdvey/s/1BI2ARIEyJLwjM+Z/zIXPl8UWTLGDmMURVEURVEURVEURVEURVGU+xpH7VFwKWUwaseVUh7AceCJ9bwgxu0+KkqhyPPRsiO1GDO7EoidIWRHe8gI2VFRaOW18JhbUugm3+ZrmJ8KKhjWZSlSBs+OhUHAbF+YVYzgzG1hXBtq/bsSFgEt21ZmIHZbWJc52xcukplukufCUTK79S/yhLOyWrZLUrgsG3ZbOC5oHP6KX7jv0Juk48nx3GHXP7eTYzy77z02Gx9y2W64A8++3V3zZb+Hv34eih04GuGvwxO+0acPiM/C3i3fUjjBOdAd1RivKlfxDXRnyPdUu0A20NIv8/3V3a7R9nuIDpoX8FyRLq5EtdBOx9rq6u5ysVXroR2qrU5D//8xNNG8i2EHj1k6dJiAzw5veRtPF82/OPrAYm5eXTBro7mbTSZ2YE6BdrPuFU3R6x9M9NFuhtr06v+cmaEvALdDnxmiQ7jL/ytmiuZ9B98Tmu3dJXP0KdDi4b2+O5AGXQa6WoqZBboGs4kHzAbNpyDLdGSHPoNA+8wO3QRAe4r7GDdp0HUAdKw4SogcLZktupA9WjXQrIYbrZrRLOG40b7qIH3kaOUt0CZudKA8yAA3Wv0d4TFqtKe+QV5DjR4pj9HlqNHKRZrVcaMjB1M6a7RyC0+5tWSOHrmYHVmj1VP6Bjf6yMHakTk6cnAaZo5WbS1VjhytOkABAN22XPHSD7QDtG+JPoZAx3boLodAH9mhQxB0xQpd5yDokg26z2HQ7NIcnXyEQhfN0QMOhW4Zo99xMHRkiu7X4NBsZIauhhwQ3TJCm5vdfGkrDdAWZjfoVnq0jdnR1+MyLdrK7AjdSom2M7t6AKuYCn1R4xjQkUyBHnCOAq35PoC0nxpOn89reHroOud40OxcQy2bIUeF1nkLscM5MrTGm8AI0fMPuV4O0azke/lD72GPkaJ3v8qMFr3rjLzGi97+XxDuMKO3sR9wo9Xse+xo1T9EGONHK3ab2xygN5btXh7Qr9mdfKAf2WvqYU7QLzbJTm7Q84vtwOFQZ4VeLdudPKGX7IdcoefsxW5zYouus2x73CQ7tupmxujFsj17o/1QuvKHCWMA7J6mulDtluFnxzP7r446XDyRvsEOEwZT6c/ezzDhcuZW6+uzJOwzsL7/2P1ayIuTLVmxwyqD7P3W9wDCwoYsOS3XNn4XkLoDxepQPt32959OGYqS7uDz2lpWHkwSlouS/qQ5b3I2ZRRFURRFURRFURRFURRFURT11D+KvFuepijo0gAAAABJRU5ErkJggg==';
-

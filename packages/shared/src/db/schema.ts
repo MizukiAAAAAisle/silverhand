@@ -1,6 +1,13 @@
 import { z } from 'zod';
 
-export const RuntimeKindSchema = z.enum(['claude', 'codex', 'cursor', 'gemini', 'qoder']);
+export const RuntimeKindSchema = z.enum([
+  'claude',
+  'codex',
+  'cursor',
+  'gemini',
+  'qoder',
+  'opencode',
+]);
 export type RuntimeKind = z.infer<typeof RuntimeKindSchema>;
 
 // Canonical reasoning-effort values. `none/xhigh/max` beyond the classic

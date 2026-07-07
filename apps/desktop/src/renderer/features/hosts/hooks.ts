@@ -882,7 +882,7 @@ export function useDeleteComputerMutation(hostId: string) {
 /**
  * Per-host runtime-detection catalog (#task:1376). Asks the *target*
  * computer's daemon (composite dispatch by hostId — not app-local
- * `/api/runtimes`) which offerable runtimes (`selectable`: claude/codex/qoder)
+ * `/api/runtimes`) which offerable runtimes (catalog `selectable`)
  * are installed, returning an explicit state per runtime.
  *
  * - `enabled` gates the probe on the caller's availability check: an offline

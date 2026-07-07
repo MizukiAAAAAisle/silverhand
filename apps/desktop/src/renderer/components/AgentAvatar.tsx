@@ -4,6 +4,7 @@ import {
   CodexIcon,
   CursorIcon,
   GeminiIcon,
+  OpenCodeIcon,
   QODER_LOGO_DATA_URI,
 } from '@/icons/agents';
 import { cn } from '@/lib/cn';
@@ -42,6 +43,7 @@ const ICONS: Partial<
 > = {
   claude: ClaudeIcon,
   codex: CodexIcon,
+  opencode: OpenCodeIcon,
   cursor: CursorIcon,
   gemini: GeminiIcon,
 };
@@ -59,6 +61,7 @@ const BRAND_LOGOS: Partial<Record<RuntimeKind, string>> = {
 const TINTS: Partial<Record<RuntimeKind, { bg: string; fg: string }>> = {
   claude: { bg: 'bg-[#fdf3ec]', fg: 'text-[#d97757]' },
   codex: { bg: 'bg-[#1f1f1f]', fg: 'text-white' },
+  opencode: { bg: 'bg-[#111111]', fg: 'text-[#f2f2f2]' },
   cursor: { bg: 'bg-[#0f0f0f]', fg: 'text-white' },
   gemini: { bg: 'bg-[#e8f0fe]', fg: 'text-[#1a73e8]' },
 };
