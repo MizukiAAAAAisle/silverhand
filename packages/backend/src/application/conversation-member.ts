@@ -16,7 +16,6 @@ import type { ChannelAttentionPreferenceRepo } from '../repos/channel-attention-
 import type { MembershipService } from '../services/membership-service.js';
 import { canAddConversationMember, canEditAgent, canGovernWorkspace, canViewConversation } from '../permissions.js';
 import { addWorkspaceAgentMember } from './add-workspace-agent-member.js';
-import { buildUnreadUpdatedMessagePayload } from '../viewer-scope.js';
 import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
 
 /**
@@ -236,6 +235,22 @@ export async function addConversationMember(
           content: conversationMemberAddedContent({ actor, member: memberSnap }),
           metadata: conversationMemberAddedMetadata({ actor, member: memberSnap }),
         });
+        // IM convention: joining a channel sets the unread baseline at the join
+        // point — prior history is NOT unread, only messages posted AFTER the
+        // join count (shiki/Cindy ruling on #task:1404). Seed the mainline read
+        // cursor to the current stream head (which now includes the member-added
+        // system message) so the roll-up starts at 0 for the new member instead
+        // of inheriting all history. Followed threads accrue only after an
+        // explicit follow (that leg emits its own unread_updated). Transactional,
+        // not post-commit: the baseline is part of the join write. markRead is
+        // monotonic max(), so a remove-then-re-add advances to the re-join head
+        // rather than resurrecting the first stint's history as unread.
+        new ConversationReadRepo(deps.ctx.db).markRead({
+          viewerUserId: user.id,
+          conversationId: conversation.id,
+          threadRootId: null,
+          seq: deps.messages.streamHeadLatestSeq(conversation.id, null),
+        });
       }
       return { workspaceMember, message };
     })();
@@ -252,26 +267,6 @@ export async function addConversationMember(
     const message = write.message;
     if (message) {
       effects.push(() => publishMemberAdded(deps.ctx, conversation, message));
-      // The new member's roll-up now includes this channel's history — their
-      // conversation_reads cursor starts at 0, so every prior non-system,
-      // non-own message is unread for them. Emit so their badge reflects it live
-      // instead of only on the next refetch (#task:1404). Only the added viewer
-      // is affected (existing members' counts don't change when someone joins),
-      // so this is a single viewer-scoped frame. Post-commit; #1284 ingestor
-      // patches the badge in place.
-      const reads = new ConversationReadRepo(deps.ctx.db);
-      effects.push(() =>
-        deps.ctx.events.publishToScope(
-          `viewer:${user.id}`,
-          'unread_updated',
-          buildUnreadUpdatedMessagePayload(
-            reads,
-            conversation.id,
-            conversation.workspace_id,
-            user.id,
-          ),
-        ),
-      );
     }
   }
   await runPostCommitEffects(effects, deps.ctx.logger);
