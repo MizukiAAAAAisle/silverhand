@@ -106,6 +106,7 @@ export {
   messageUnreadSummaryKey,
   patchMessageUnreadByConversation,
   patchMessageUnreadSummary,
+  removeWorkspaceFromMessageUnread,
   useChannelUnreadCounts,
   useMessageUnreadCounts,
   useMessageUnreadSummary,

@@ -25,7 +25,8 @@ import type {
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
-import { favoritesKey } from '@/features/favorites/hooks';
+import { favoritesKey, removeWorkspaceFromFavorites } from '@/features/favorites/hooks';
+import { removeWorkspaceFromMessageUnread } from '@/features/channels/message-unread';
 import { onWsFrame, subscribeWsScope, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
 
 export type WorkspaceListItem = {
@@ -206,6 +207,27 @@ export function decideViewerSyncInvalidations(
 }
 
 /**
+ * The workspace_id whose cached message-unread must be PURGED for this frame, or
+ * null. Only a `viewer_workspaces_changed` `removed` event qualifies — the viewer
+ * lost access (removed / workspace deleted), so that workspace's unread
+ * contribution has to drop locally (#task:1404).
+ *
+ * Kept pure and SEPARATE from {@link decideViewerSyncInvalidations} because it
+ * drives a targeted cache PURGE (consume the event's workspace_id, no refetch of
+ * a now-gone workspace) — a different mechanism than that fn's query
+ * invalidations. The `['workspaces']` list refetch (from the sibling) drops the
+ * row, but the message-unread summary / by_conversation caches are separate
+ * queries it never touches — that gap is the ghost unread this closes. Caller
+ * gates `isCurrentViewerScope(frame.scope)` first, same as the sibling.
+ */
+export function viewerRemovedWorkspaceId(frame: ViewerSyncFrame): string | null {
+  if (frame.type !== 'event') return null;
+  if (frame.kind !== 'viewer_workspaces_changed') return null;
+  if (!isViewerWorkspacesChangedPayload(frame.payload)) return null;
+  return frame.payload.change === 'removed' ? frame.payload.workspace_id : null;
+}
+
+/**
  * Live-sync the viewer's workspace list when their cross-workspace
  * membership/role changes from ANY source — added to / removed from a
  * workspace, or role changed. See `docs/viewer-visibility-sync-v1.md`.
@@ -222,9 +244,14 @@ export function decideViewerSyncInvalidations(
  * because the governance `viewerRole` is sourced from the members endpoint
  * (`useWorkspaceMemberLists`), not from the workspace list.
  *
- * Safe-downgrade on removal needs no handling here: App's existing
- * "selected workspace no longer exists → bounce to /chat" effect fires
- * reactively once the refetched list drops the row.
+ * Safe-downgrade on removal: App's existing "selected workspace no longer
+ * exists → bounce to /chat" effect fires reactively once the refetched list
+ * drops the row. Removal additionally PURGES the gone workspace's other
+ * viewer-local projections ({@link viewerRemovedWorkspaceId} →
+ * `removeWorkspaceFromMessageUnread` + `removeWorkspaceFromFavorites`): the
+ * `['workspaces']` refetch above rebuilds the list but never touches the separate
+ * message-unread caches or the favorites list, so without this the deleted
+ * workspace lingers as a ghost unread badge and a dead favorite row (#task:1404).
  *
  * Mount ONCE in `RegisteredAppShell`: must be alive post-auth and
  * independent of any workspace selection (the sidebar may not be mounted
@@ -243,6 +270,19 @@ export function useViewerWorkspacesSync(): void {
       }
       for (const queryKey of decideViewerSyncInvalidations(frame)) {
         void qc.invalidateQueries({ queryKey });
+      }
+      // #task:1404: removal is the ONE change where the `['workspaces']` refetch
+      // above is not enough — the same "viewer lost this workspace" fact has THREE
+      // viewer-local projections beyond the list. Consume the event's workspace_id
+      // (no refetch of a deleted workspace) and purge the other two:
+      //   - message-unread summary (`by_workspace`) + the gone workspace's
+      //     `by_conversation` map (else a ghost unread badge);
+      //   - favorites list rows (else a starred workspace/DM lingers as a dead row).
+      // `added` / `role_changed` need no purge (nothing removed).
+      const removedWorkspaceId = viewerRemovedWorkspaceId(frame);
+      if (removedWorkspaceId) {
+        removeWorkspaceFromMessageUnread(qc, removedWorkspaceId);
+        removeWorkspaceFromFavorites(qc, removedWorkspaceId);
       }
     });
     return () => {

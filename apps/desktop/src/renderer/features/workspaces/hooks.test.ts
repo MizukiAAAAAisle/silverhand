@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import type {
   ChannelConversationDto,
+  FavoriteRowDto,
+  ListFavoritesDto,
   ViewerSortStateDto,
   WorkspaceHumanMemberDto,
   WorkspaceMembersResponse,
@@ -15,10 +17,16 @@ import {
   setStarredOptimistic,
   sortCacheAdapter,
   sortConversationList,
+  viewerRemovedWorkspaceId,
   type ChannelListItem,
   type ViewerSyncFrame,
 } from './hooks';
-import { favoritesKey } from '../favorites/hooks';
+import { favoritesKey, removeWorkspaceFromFavorites } from '../favorites/hooks';
+import {
+  messageUnreadByConversationKey,
+  messageUnreadSummaryKey,
+  removeWorkspaceFromMessageUnread,
+} from '../channels/message-unread';
 
 function channel(
   id: string,
@@ -375,6 +383,162 @@ describe('decideViewerSyncInvalidations', () => {
       [],
     );
     expect(decideViewerSyncInvalidations(frame({ type: 'ping' }))).toEqual([]);
+  });
+});
+
+// #task:1404 — delete-workspace ghost unread. The `['workspaces']` refetch above
+// rebuilds the list but never touches the SEPARATE message-unread caches, so the
+// removed workspace's slice lingers as a ghost badge. `viewerRemovedWorkspaceId`
+// is the pure decision (which frames trigger the purge); `removeWorkspaceFromMessageUnread`
+// is the targeted cache op — tested directly since the node env can't render the hook.
+describe('viewerRemovedWorkspaceId (#task:1404)', () => {
+  const frame = (over: Partial<ViewerSyncFrame>): ViewerSyncFrame => ({
+    type: 'event',
+    scope: 'viewer:u-1',
+    ...over,
+  });
+
+  it('returns the workspace_id only for a removed viewer_workspaces_changed event', () => {
+    expect(
+      viewerRemovedWorkspaceId(
+        frame({
+          kind: 'viewer_workspaces_changed',
+          payload: { change: 'removed', workspace_id: 'w-1' },
+        }),
+      ),
+    ).toBe('w-1');
+  });
+
+  it('returns null for added / role_changed (nothing removed)', () => {
+    for (const change of ['added', 'role_changed'] as const) {
+      expect(
+        viewerRemovedWorkspaceId(
+          frame({
+            kind: 'viewer_workspaces_changed',
+            payload: { change, workspace_id: 'w-1' },
+          }),
+        ),
+      ).toBeNull();
+    }
+  });
+
+  it('returns null for snapshot_required, other kinds, and malformed payloads', () => {
+    expect(viewerRemovedWorkspaceId(frame({ type: 'snapshot_required' }))).toBeNull();
+    expect(
+      viewerRemovedWorkspaceId(
+        frame({ kind: 'unread_updated', payload: { conversation_id: 'c-1' } }),
+      ),
+    ).toBeNull();
+    expect(
+      viewerRemovedWorkspaceId(
+        frame({ kind: 'viewer_workspaces_changed', payload: { change: 'nope' } }),
+      ),
+    ).toBeNull();
+    expect(
+      viewerRemovedWorkspaceId(
+        frame({ kind: 'viewer_workspaces_changed', payload: null }),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('removeWorkspaceFromMessageUnread (#task:1404)', () => {
+  it('drops the removed workspace slice from the by_workspace summary, keeps the rest', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(messageUnreadSummaryKey, {
+      by_workspace: { 'w-1': 3, 'w-2': 5 },
+    });
+    removeWorkspaceFromMessageUnread(qc, 'w-1');
+    expect(qc.getQueryData(messageUnreadSummaryKey)).toEqual({
+      by_workspace: { 'w-2': 5 },
+    });
+  });
+
+  it('removes the workspace by_conversation query (both partitions), not refetch', () => {
+    const qc = new QueryClient();
+    for (const kind of ['regular', 'dm'] as const) {
+      qc.setQueryData(messageUnreadByConversationKey('w-1', kind), {
+        by_conversation: { 'c-1': 2 },
+        latest_by_conversation: {},
+        total: 2,
+      });
+    }
+    // An unrelated workspace's by_conversation must survive.
+    qc.setQueryData(messageUnreadByConversationKey('w-2', 'regular'), {
+      by_conversation: { 'c-9': 1 },
+      latest_by_conversation: {},
+      total: 1,
+    });
+    removeWorkspaceFromMessageUnread(qc, 'w-1');
+    for (const kind of ['regular', 'dm'] as const) {
+      expect(qc.getQueryData(messageUnreadByConversationKey('w-1', kind))).toBeUndefined();
+    }
+    expect(
+      qc.getQueryData(messageUnreadByConversationKey('w-2', 'regular')),
+    ).toEqual({ by_conversation: { 'c-9': 1 }, latest_by_conversation: {}, total: 1 });
+  });
+
+  it('is idempotent: absent summary key / unloaded by_conversation is a no-op', () => {
+    const qc = new QueryClient();
+    // Summary loaded but the removed workspace is not present → left untouched.
+    qc.setQueryData(messageUnreadSummaryKey, { by_workspace: { 'w-2': 5 } });
+    expect(() => removeWorkspaceFromMessageUnread(qc, 'w-1')).not.toThrow();
+    expect(qc.getQueryData(messageUnreadSummaryKey)).toEqual({
+      by_workspace: { 'w-2': 5 },
+    });
+  });
+});
+
+// #task:1404 — favorites is the THIRD viewer-local projection of the same
+// `viewer_workspaces_changed(removed)` fact (Cindy elevated this from a flag to
+// blocking): a starred workspace/DM must drop its row, else "list gone + unread
+// gone + favorites still there" becomes the next ghost. Row membership only, no
+// refetch.
+describe('removeWorkspaceFromFavorites (#task:1404)', () => {
+  const favRow = (workspaceId: string): FavoriteRowDto => ({
+    kind: 'workspace',
+    favorite_key: `workspace:${workspaceId}`,
+    entity_id: workspaceId,
+    workspace_id: workspaceId, // a workspace/DM row's workspace_id === entity_id
+    title: workspaceId,
+    icon_url: null,
+    runtime: null,
+    starred_at: 1,
+    created_at: 1,
+    unread_count: 3,
+  });
+
+  it('drops the matching favorite row, keeps others and viewer_sort untouched', () => {
+    const qc = new QueryClient();
+    const viewer_sort: ViewerSortStateDto = {
+      list_key: 'favorites',
+      modes: {},
+      entries: [],
+    };
+    qc.setQueryData<ListFavoritesDto>(favoritesKey, {
+      items: [favRow('w-1'), favRow('w-2')],
+      viewer_sort,
+    });
+    removeWorkspaceFromFavorites(qc, 'w-1');
+    const next = qc.getQueryData<ListFavoritesDto>(favoritesKey);
+    expect(next?.items.map(i => i.workspace_id)).toEqual(['w-2']);
+    // viewer_sort is left byte-identical (orphan rank entries are harmless).
+    expect(next?.viewer_sort).toBe(viewer_sort);
+  });
+
+  it('is idempotent: list not loaded / no matching row → no write', () => {
+    const qc = new QueryClient();
+    // Not loaded → no-op, no throw.
+    expect(() => removeWorkspaceFromFavorites(qc, 'w-1')).not.toThrow();
+    expect(qc.getQueryData(favoritesKey)).toBeUndefined();
+    // Loaded but no matching row → the cached object is left in place (no write).
+    const loaded: ListFavoritesDto = {
+      items: [favRow('w-2')],
+      viewer_sort: { list_key: 'favorites', modes: {}, entries: [] },
+    };
+    qc.setQueryData<ListFavoritesDto>(favoritesKey, loaded);
+    removeWorkspaceFromFavorites(qc, 'w-1');
+    expect(qc.getQueryData(favoritesKey)).toBe(loaded);
   });
 });
 

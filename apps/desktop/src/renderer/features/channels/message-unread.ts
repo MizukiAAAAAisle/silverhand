@@ -164,6 +164,35 @@ export function patchMessageUnreadSummary(
   return count > 0 ? 'patched' : 'cleared';
 }
 
+/** Drop a whole workspace's message-unread contribution when the viewer loses
+ *  access to it — removed from it, or the workspace is deleted (#task:1404). The
+ *  viewer-scoped `viewer_workspaces_changed` `removed` event carries only the
+ *  workspace_id; we consume THAT (no local recount, no refetch of a now-gone
+ *  workspace — a REST refetch of its `by_conversation` would 404):
+ *    - delete its slice from the global `by_workspace` summary, so the rail badge
+ *      and the global unread total drop in place (the workspace-list refetch does
+ *      NOT touch this separate query — that gap is the ghost unread #task:1404);
+ *    - drop its per-workspace `by_conversation` query entirely (either partition)
+ *      — the workspace is gone, so there is no authoritative snapshot to refetch;
+ *      removing the cached query is cleaner than patching it to an empty map.
+ *  Mirrors the #task:1284 in-place-patch discipline (targeted slice, never a
+ *  whole-list invalidate). Idempotent: an absent summary key is left untouched
+ *  and removing an unloaded by_conversation query is a no-op. */
+export function removeWorkspaceFromMessageUnread(
+  qc: QueryClient,
+  workspaceId: string,
+): void {
+  const prev = qc.getQueryData<MessageUnreadSummaryDto>(messageUnreadSummaryKey);
+  if (prev && workspaceId in prev.by_workspace) {
+    const by_workspace = { ...prev.by_workspace };
+    delete by_workspace[workspaceId];
+    qc.setQueryData<MessageUnreadSummaryDto>(messageUnreadSummaryKey, { by_workspace });
+  }
+  for (const kind of ['regular', 'dm'] as const) {
+    qc.removeQueries({ queryKey: messageUnreadByConversationKey(workspaceId, kind) });
+  }
+}
+
 /**
  * Notification-backed unread counts per channel. Invalidated by WS
  * viewer-scoped `unread_updated` events — no polling.

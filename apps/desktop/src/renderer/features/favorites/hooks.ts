@@ -71,6 +71,28 @@ export function patchFavoritesUnread(
   return 'patched';
 }
 
+/** Drop every favorite row for a workspace the viewer lost access to — removed
+ *  from it, or the workspace deleted (#task:1404). The same
+ *  `viewer_workspaces_changed(removed)` fact that drops the `['workspaces']` row
+ *  and purges message-unread ALSO invalidates this row's membership: favorites is
+ *  the THIRD viewer-local projection of that fact, and a starred workspace/DM
+ *  would otherwise linger as a dead row (a row's `workspace_id === entity_id`, so
+ *  the deleted workspace's own row is the match). Consume the event's workspace_id,
+ *  no refetch: filter out the matching `items`, leave `viewer_sort` untouched (an
+ *  orphan rank entry is harmless — it only re-applies if the entity ever returns).
+ *  PRESENT-ONLY / idempotent, mirroring {@link patchFavoritesUnread}: list not
+ *  loaded → no-op; no matching row → no write. */
+export function removeWorkspaceFromFavorites(
+  qc: QueryClient,
+  workspaceId: string,
+): void {
+  const prev = qc.getQueryData<ListFavoritesDto>(favoritesKey);
+  if (!prev) return; // list not loaded → no-op
+  const items = prev.items.filter(it => it.workspace_id !== workspaceId);
+  if (items.length === prev.items.length) return; // no matching row → no write
+  qc.setQueryData<ListFavoritesDto>(favoritesKey, { ...prev, items });
+}
+
 /**
  * The viewer's GLOBAL favorites (`GET /api/favorites`, no workspace filter).
  * Returns `{ items, viewer_sort }`: rows fully access/archive filtered (the
