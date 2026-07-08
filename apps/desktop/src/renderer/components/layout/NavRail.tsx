@@ -28,6 +28,16 @@ export type AppSection =
 interface NavRailProps {
   current: AppSection;
   onChange: (section: AppSection) => void;
+  /**
+   * Per-section "has new content" flags — a section whose value is `true` gets a
+   * single attention dot (no count) on its rail button. Presentational only: the
+   * bools are derived upstream from the existing viewer read-models (Chat = the
+   * message-unread summary; Activity = the unattended-items list) and clear
+   * naturally as that content is observed. The dot rides `--accent` — the app's
+   * one unread/brand hue — so it reads as the same "unread" signal the sidebar n
+   * badge already uses, not a second colour language (#task:1408).
+   */
+  dots?: Partial<Record<AppSection, boolean>>;
 }
 
 interface NavItem {
@@ -44,7 +54,32 @@ const ITEMS: NavItem[] = [
   { id: 'computers', label: 'Computers', icon: <Monitor className="size-4" /> },
 ];
 
-export function NavRail({ current, onChange }: NavRailProps): JSX.Element {
+/**
+ * Derive the two nav-rail attention dots from the viewer read-models (#task:1408).
+ * Pure so the "has new content" contract is testable without a render harness.
+ *
+ * - `chat` = ANY workspace has unread. Reads the message-unread summary's
+ *   `by_workspace` map straight — archived channels are already excluded at the
+ *   rollup source (#1403-A), so there is deliberately NO archived re-filter here
+ *   (re-filtering would fork a second unread-rule in the renderer).
+ * - `activity` = the unattended-items list is non-empty. Activity's `observe()`
+ *   drops handled items, so a non-empty list already means "has new" — no
+ *   per-item `is_new` needed.
+ *
+ * Both inputs may be `undefined` while their query is cold → dot off (no false
+ * positive before data lands).
+ */
+export function deriveNavRailDots(input: {
+  workspaceUnread: Record<string, number> | undefined;
+  activityItemCount: number | undefined;
+}): { chat: boolean; activity: boolean } {
+  return {
+    chat: Object.values(input.workspaceUnread ?? {}).some(count => count > 0),
+    activity: (input.activityItemCount ?? 0) > 0,
+  };
+}
+
+export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element {
   const settingsSelected = current === 'settings';
   return (
     <nav
@@ -58,6 +93,7 @@ export function NavRail({ current, onChange }: NavRailProps): JSX.Element {
     >
       {ITEMS.map(item => {
         const selected = item.id === current;
+        const hasDot = dots?.[item.id] === true;
         return (
           <button
             key={item.id}
@@ -70,13 +106,24 @@ export function NavRail({ current, onChange }: NavRailProps): JSX.Element {
               // Row-radius routed via `--row-radius` token (#task:912 review
               // round 2). warm/forza6 = 0 (square poster/scan-line); slack-dark
               // = 6px (Slack-style rounded nav button).
-              'flex size-9 items-center justify-center rounded-[var(--row-radius)] border-2 transition-colors',
+              'relative flex size-9 items-center justify-center rounded-[var(--row-radius)] border-2 transition-colors',
               selected
                 ? 'border-accent bg-bg-selected text-text-on-selected'
                 : 'border-transparent text-[var(--text-nav-rail,var(--text-secondary))] hover:border-accent hover:bg-[var(--bg-nav-rail-hover,rgba(255,255,255,0.7))] hover:text-[var(--text-nav-rail-hover,var(--text-primary))]',
             )}
           >
             {item.icon}
+            {hasDot && (
+              // Attention dot: no count, top-right corner (icon is centred, so
+              // the corner is empty). `--accent` = the app's unread/brand hue.
+              // `data-nav-unread-dot` lets a theme reshape it (e.g. forza6's
+              // square-sticker language) without touching this layout.
+              <span
+                data-nav-unread-dot
+                aria-hidden
+                className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-accent"
+              />
+            )}
           </button>
         );
       })}

@@ -1,7 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { Power } from 'lucide-react';
 import { Toaster } from 'sonner';
-import { NavRail } from '@/components/layout/NavRail';
+import { NavRail, deriveNavRailDots } from '@/components/layout/NavRail';
 import { ComputersPanel } from '@/components/layout/ComputersPanel';
 import { NewComputerDialog } from '@/features/hosts/NewComputerDialog';
 import { HostDetailView } from '@/features/hosts/HostDetailView';
@@ -80,6 +80,7 @@ import {
   useMessageUnreadCounts,
   useMessageUnreadSummary,
 } from '@/features/channels/hooks';
+import { useActivity } from '@/features/attention/hooks';
 import {
   useMessageJumpController,
   type MessageJumpTarget,
@@ -438,6 +439,19 @@ function RegisteredAppShell(): JSX.Element {
     selectedWorkspace?.kind ?? null,
   );
   const channelUnreadCounts = messageUnreadData?.by_conversation;
+
+  // ── Nav-rail attention dots (#task:1408) ───────────────────────────────
+  // A single no-count dot per rail section that has new content, derived from
+  // the existing viewer read-models (zero new query/state). Chat = any unread
+  // in the message-unread summary (archived already excluded at source by the
+  // rollup, #1403-A — no re-filter here). Activity = the unattended-items list
+  // is non-empty (observe drops handled items, so a non-empty list *is* "has
+  // new"). Both clear naturally as the section's content is observed.
+  const { data: activityData } = useActivity();
+  const navRailDots = deriveNavRailDots({
+    workspaceUnread: messageUnreadSummary?.by_workspace,
+    activityItemCount: activityData?.items.length,
+  });
 
   // ── Dock badge sync ────────────────────────────────────────────────────
   // macOS dock icon shows total unread messages across every workspace.
@@ -1512,6 +1526,7 @@ function RegisteredAppShell(): JSX.Element {
       >
         <NavRail
           current={appSection}
+          dots={navRailDots}
           onChange={section => {
             if (section === 'chat') nav.toChat();
             else if (section === 'activity') nav.toActivity();
