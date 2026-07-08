@@ -25,9 +25,8 @@ import type {
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
-import { favoritesKey, removeWorkspaceFromFavorites } from '@/features/favorites/hooks';
-import { removeWorkspaceFromMessageUnread } from '@/features/channels/message-unread';
-import { removeWorkspaceFromActivity } from '@/features/attention/hooks';
+import { favoritesKey } from '@/features/favorites/hooks';
+import { handleViewerWorkspaceRemoved } from './viewer-removal-contract';
 import { onWsFrame, subscribeWsScope, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
 
 export type WorkspaceListItem = {
@@ -247,12 +246,13 @@ export function viewerRemovedWorkspaceId(frame: ViewerSyncFrame): string | null 
  *
  * Safe-downgrade on removal: App's existing "selected workspace no longer
  * exists → bounce to /chat" effect fires reactively once the refetched list
- * drops the row. Removal additionally PURGES the gone workspace's other
- * viewer-local projections ({@link viewerRemovedWorkspaceId} →
- * `removeWorkspaceFromMessageUnread` + `removeWorkspaceFromFavorites`): the
+ * drops the row. Removal additionally settles the gone workspace's other
+ * viewer-local projections through the removal-contract inventory
+ * ({@link viewerRemovedWorkspaceId} → {@link handleViewerWorkspaceRemoved}): the
  * `['workspaces']` refetch above rebuilds the list but never touches the separate
- * message-unread caches or the favorites list, so without this the deleted
- * workspace lingers as a ghost unread badge and a dead favorite row (#task:1404).
+ * message-unread / favorites / Activity caches, so without this the deleted
+ * workspace lingers as a ghost badge, dead favorite row, or stale Activity item
+ * (#task:1404 / #task:1409, unified under the #task:1411 contract).
  *
  * Mount ONCE in `RegisteredAppShell`: must be alive post-auth and
  * independent of any workspace selection (the sidebar may not be mounted
@@ -272,22 +272,20 @@ export function useViewerWorkspacesSync(): void {
       for (const queryKey of decideViewerSyncInvalidations(frame)) {
         void qc.invalidateQueries({ queryKey });
       }
-      // #task:1404 / #task:1409: removal is the ONE change where the
+      // #task:1404 / #task:1409 / #task:1411: removal is the ONE change where the
       // `['workspaces']` refetch above is not enough — the same "viewer lost this
-      // workspace" fact has FOUR viewer-local projections beyond the list.
-      // Consume the event's workspace_id (no refetch of a deleted workspace) and
-      // purge each:
-      //   - message-unread summary (`by_workspace`) + the gone workspace's
-      //     `by_conversation` map (else a ghost unread badge);
-      //   - favorites list rows (else a starred workspace/DM lingers as a dead row);
-      //   - the global Activity list's items for that workspace (#task:1409 — else
-      //     ghost Activity items that also keep the #task:1408 rail dot lit).
+      // workspace" fact has further viewer-local caches a refetch never touches
+      // (the `['workspaces', wsId, *]` keyed family + the item-scoped Activity /
+      // favorites / message-unread-summary caches). All are settled through the
+      // removal-contract chokepoint. NOTE — two distinct guarantees, don't conflate:
+      // the contract makes a newly-DECLARED projection cleaned automatically
+      // (handler-completeness); it does NOT by itself catch a cache never added to
+      // the contract at all — that inventory-completeness half is the source-fence
+      // / classification layer in `viewer-removal-contract` (+ future DTO marker).
       // `added` / `role_changed` need no purge (nothing removed).
       const removedWorkspaceId = viewerRemovedWorkspaceId(frame);
       if (removedWorkspaceId) {
-        removeWorkspaceFromMessageUnread(qc, removedWorkspaceId);
-        removeWorkspaceFromFavorites(qc, removedWorkspaceId);
-        removeWorkspaceFromActivity(qc, removedWorkspaceId);
+        handleViewerWorkspaceRemoved(qc, removedWorkspaceId);
       }
     });
     return () => {
