@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import type {
+  ActivityItemDto,
   ChannelConversationDto,
   FavoriteRowDto,
+  ListActivityDto,
   ListFavoritesDto,
   ViewerSortStateDto,
   WorkspaceHumanMemberDto,
@@ -22,6 +24,7 @@ import {
   type ViewerSyncFrame,
 } from './hooks';
 import { favoritesKey, removeWorkspaceFromFavorites } from '../favorites/hooks';
+import { activityKey, removeWorkspaceFromActivity } from '../attention/hooks';
 import {
   messageUnreadByConversationKey,
   messageUnreadSummaryKey,
@@ -539,6 +542,59 @@ describe('removeWorkspaceFromFavorites (#task:1404)', () => {
     qc.setQueryData<ListFavoritesDto>(favoritesKey, loaded);
     removeWorkspaceFromFavorites(qc, 'w-1');
     expect(qc.getQueryData(favoritesKey)).toBe(loaded);
+  });
+});
+
+describe('removeWorkspaceFromActivity (#task:1409)', () => {
+  // Activity is the FOURTH viewer-local projection of a workspace-removed fact
+  // (after list / message-unread / favorites). Items carry workspace_id, so a
+  // removed workspace's items are filtered out locally (no refetch → no reorder
+  // reflow of survivors).
+  const activityItem = (id: string, workspaceId: string): ActivityItemDto => ({
+    id,
+    kind: 'unread',
+    salience: 'ambient',
+    workspace_id: workspaceId,
+    conversation_id: `c-${id}`,
+    thread_root_id: null,
+    message_id: `m-${id}`,
+    notification_id: null,
+    conversation_kind: 'channel',
+    title: `#${id}`,
+    thread_root_preview: null,
+    preview: null,
+    preview_sender: null,
+    timestamp: 1,
+    unread_count: 2,
+  });
+
+  it('drops every item of the removed workspace, keeps survivors in order', () => {
+    const qc = new QueryClient();
+    qc.setQueryData<ListActivityDto>(activityKey(), {
+      items: [
+        activityItem('a', 'w-1'),
+        activityItem('b', 'w-2'),
+        activityItem('c', 'w-1'),
+        activityItem('d', 'w-3'),
+      ],
+    });
+    removeWorkspaceFromActivity(qc, 'w-1');
+    const next = qc.getQueryData<ListActivityDto>(activityKey());
+    // Both w-1 items gone; w-2 / w-3 survivors keep their relative server order.
+    expect(next?.items.map(i => i.id)).toEqual(['b', 'd']);
+  });
+
+  it('is idempotent: list not loaded / no matching item → no write', () => {
+    const qc = new QueryClient();
+    // Not loaded → no-op, no throw.
+    expect(() => removeWorkspaceFromActivity(qc, 'w-1')).not.toThrow();
+    expect(qc.getQueryData(activityKey())).toBeUndefined();
+    // Loaded but no matching item → the cached object is left in place (no write),
+    // so a whole-list refetch/reorder is never triggered for an unaffected delete.
+    const loaded: ListActivityDto = { items: [activityItem('b', 'w-2')] };
+    qc.setQueryData<ListActivityDto>(activityKey(), loaded);
+    removeWorkspaceFromActivity(qc, 'w-1');
+    expect(qc.getQueryData(activityKey())).toBe(loaded);
   });
 });
 

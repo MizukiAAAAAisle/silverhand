@@ -197,6 +197,12 @@ export function listActivity(
        WHERE n.user_id = @viewer
          AND n.read_at IS NULL
          AND n.kind IN ('mention_self', 'agent_start_failed')
+         -- Directed Activity items are conversation-backed: mentions need a
+         -- message anchor and agent failures are message-anchorless, but still
+         -- emitted for a concrete conversation. Lifecycle-ended conversations
+         -- (archived/deleted) are not visible Activity.
+         AND c.id IS NOT NULL
+         AND c.archived_at IS NULL
          AND (@ws IS NULL OR COALESCE(n.workspace_id, c.workspace_id) = @ws)
        ORDER BY n.created_at DESC`,
     )

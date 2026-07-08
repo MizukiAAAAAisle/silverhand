@@ -5,6 +5,7 @@
 // distinct from messaging/channels. Canonical: docs/activity-lifecycle-v1.md.
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import type {
   ActivityItemDto,
@@ -112,6 +113,37 @@ export function useSetChannelAttentionPreference(channelId: string | null) {
  *  human's whole "queue waiting on me" across every workspace), so there is one
  *  cache entry; `['activity']` is its prefix for broad invalidation. */
 export const activityKey = () => ['activity', 'all'] as const;
+
+/** Drop every Activity item for a workspace the viewer lost access to — removed
+ *  from it, or the workspace deleted (#task:1409). Activity is the FOURTH
+ *  viewer-local projection of the single `viewer_workspaces_changed(removed)`
+ *  fact (after #task:1404's workspaces list / message-unread / favorites): each
+ *  item carries `workspace_id`, so a removed workspace's items must drop or they
+ *  linger as ghosts (and keep the #task:1408 rail dot falsely lit). Consume the
+ *  event's `workspace_id` and filter in place — NOT a refetch: the list is
+ *  GLOBAL (`['activity','all']`, so a refetch wouldn't 404), but a whole-list
+ *  refetch re-scores and re-orders every SURVIVING item — a needless reflow for
+ *  a pure membership drop. This is a straight membership filter, never a
+ *  re-score, so it stays a pure projection: survivors keep their server order.
+ *  PRESENT-ONLY / idempotent, mirroring the sibling `removeWorkspaceFrom*`
+ *  cleanups: list not loaded → no-op; no matching item → no write.
+ *
+ *  Archive is deliberately NOT handled here — an archived channel stays
+ *  visible-to-owner and its directed items self-heal via the existing
+ *  `unread_updated` → refetch path once the backend `enter()` filter excludes
+ *  archived (#task:1409 axis 1). Only workspace REMOVAL (a visibility-loss fact
+ *  the Activity subscription does not otherwise observe) needs this local
+ *  settle. */
+export function removeWorkspaceFromActivity(
+  qc: QueryClient,
+  workspaceId: string,
+): void {
+  const prev = qc.getQueryData<ListActivityDto>(activityKey());
+  if (!prev) return; // list not loaded → no-op
+  const items = prev.items.filter(it => it.workspace_id !== workspaceId);
+  if (items.length === prev.items.length) return; // no matching item → no write
+  qc.setQueryData<ListActivityDto>(activityKey(), { ...prev, items });
+}
 
 /**
  * The viewer's GLOBAL Activity list (`GET /api/activity` with NO `workspace_id`,

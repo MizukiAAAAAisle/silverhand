@@ -393,6 +393,26 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     expect(mention?.id).not.toBe(mention?.notification_id);
   });
 
+  it('drops directed mention items from archived channels (#task:1409)', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t);
+    const sender = (await firstChannelAgent(t, channelId))!;
+    const msgId = await sendAsAgent(t, channelId, sender, 'archived ping @local-test');
+
+    expect(
+      (await getActivity(t)).some(i => i.kind === 'mention' && i.message_id === msgId),
+    ).toBe(true);
+
+    const archived = await http(t).patch(`/api/channels/${channelId}/archive`, {
+      archived: true,
+    });
+    expect(archived.status).toBe(200);
+
+    const items = await getActivity(t);
+    expect(items.some(i => i.kind === 'mention' && i.message_id === msgId)).toBe(false);
+    expect(items.some(i => i.conversation_id === channelId)).toBe(false);
+  });
+
   it('an agent_start_failed notification enters as a directed agent_failed item with notification_id', async () => {
     t = buildTestApp();
     const { workspaceId, channelId } = await createWorkspaceChannel(t);
@@ -429,6 +449,75 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     });
     // Preview surfaces the failure summary from the payload.
     expect(failed!.preview).toContain('beth');
+  });
+
+  it('drops agent_start_failed items from archived channels (#task:1409)', async () => {
+    t = buildTestApp();
+    const { workspaceId, channelId } = await createWorkspaceChannel(t);
+    t.ctx.db
+      .prepare(
+        `INSERT INTO notifications
+           (id, kind, user_id, agent_id, workspace_id, conversation_id,
+            message_id, payload, read_at, created_at)
+         VALUES (@id, 'agent_start_failed', 'local', NULL, @ws, @conv,
+            NULL, @payload, NULL, @now)`,
+      )
+      .run({
+        id: 'notif-af-archived',
+        ws: workspaceId,
+        conv: channelId,
+        payload: JSON.stringify({
+          reason: 'runtime_start_failed',
+          error: 'spawn ENOENT',
+          agent_name: 'beth',
+        }),
+        now: Date.now(),
+      });
+
+    expect(
+      (await getActivity(t)).some(
+        i => i.kind === 'agent_failed' && i.notification_id === 'notif-af-archived',
+      ),
+    ).toBe(true);
+
+    const archived = await http(t).patch(`/api/channels/${channelId}/archive`, {
+      archived: true,
+    });
+    expect(archived.status).toBe(200);
+
+    expect(
+      (await getActivity(t)).some(
+        i => i.kind === 'agent_failed' && i.notification_id === 'notif-af-archived',
+      ),
+    ).toBe(false);
+  });
+
+  it('drops orphaned directed notifications with no live conversation (#task:1409)', async () => {
+    t = buildTestApp();
+    const { workspaceId } = await createWorkspaceChannel(t);
+    t.ctx.db
+      .prepare(
+        `INSERT INTO notifications
+           (id, kind, user_id, agent_id, workspace_id, conversation_id,
+            message_id, payload, read_at, created_at)
+         VALUES (@id, 'agent_start_failed', 'local', NULL, @ws, NULL,
+            NULL, @payload, NULL, @now)`,
+      )
+      .run({
+        id: 'notif-af-anchorless',
+        ws: workspaceId,
+        payload: JSON.stringify({
+          reason: 'runtime_start_failed',
+          error: 'spawn ENOENT',
+          agent_name: 'beth',
+        }),
+        now: Date.now(),
+      });
+
+    const failed = (await getActivity(t)).find(
+      i => i.kind === 'agent_failed' && i.notification_id === 'notif-af-anchorless',
+    );
+    expect(failed).toBeUndefined();
   });
 
   it('anchorless agent_start_failed exits Activity via explicit observe(notification)', async () => {
