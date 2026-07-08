@@ -57,6 +57,23 @@ export interface ListActivityParams {
 
 const PREVIEW_MAX = 140;
 
+/**
+ * The single lifecycle gate every Activity source composes: an item is visible
+ * ONLY while its conversation is live — the row EXISTS and is NOT archived.
+ * Defining it once (instead of re-typing `c.archived_at IS NULL` per query) is
+ * the structural fix behind #task:1409 — that bug was one assembly path (the
+ * directed query) silently missing the filter the other path (positional) had.
+ * A new Activity source that references the conversation as `c` interpolates
+ * THIS, and `activity-lifecycle-conformance.test.ts` fails the archived/orphan
+ * matrix if any source omits it.
+ *
+ * `c.id IS NOT NULL` is load-bearing only for a LEFT JOIN (the directed query):
+ * it drops notifications whose conversation was deleted → `conversation_id` set
+ * NULL by `ON DELETE SET NULL`, i.e. orphans. On an INNER JOIN (the positional
+ * query) it is a harmless tautology, kept so both sources read ONE predicate.
+ */
+export const LIVE_CONVERSATION_PREDICATE = `c.id IS NOT NULL AND c.archived_at IS NULL`;
+
 function preview(text: string | null | undefined): string | null {
   if (!text) return null;
   const compact = text.replace(/\s+/g, ' ').trim();
@@ -200,9 +217,9 @@ export function listActivity(
          -- Directed Activity items are conversation-backed: mentions need a
          -- message anchor and agent failures are message-anchorless, but still
          -- emitted for a concrete conversation. Lifecycle-ended conversations
-         -- (archived/deleted) are not visible Activity.
-         AND c.id IS NOT NULL
-         AND c.archived_at IS NULL
+         -- (archived/deleted) are not visible Activity — see
+         -- LIVE_CONVERSATION_PREDICATE (the shared gate).
+         AND ${LIVE_CONVERSATION_PREDICATE}
          AND (@ws IS NULL OR COALESCE(n.workspace_id, c.workspace_id) = @ws)
        ORDER BY n.created_at DESC`,
     )
@@ -314,7 +331,7 @@ export function listActivity(
          JOIN conversation_users cu
            ON cu.conversation_id = c.id AND cu.user_id = @viewer
         WHERE c.kind IN ('channel', 'dm_channel')
-          AND c.archived_at IS NULL
+          AND ${LIVE_CONVERSATION_PREDICATE}
           AND (@ws IS NULL OR c.workspace_id = @ws)
           AND m.from_kind != 'system'
           AND NOT (m.from_kind = 'user'
