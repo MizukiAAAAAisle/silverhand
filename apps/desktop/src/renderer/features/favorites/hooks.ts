@@ -78,19 +78,40 @@ export function patchFavoritesUnread(
  *  the THIRD viewer-local projection of that fact, and a starred workspace/DM
  *  would otherwise linger as a dead row (a row's `workspace_id === entity_id`, so
  *  the deleted workspace's own row is the match). Consume the event's workspace_id,
- *  no refetch: filter out the matching `items`, leave `viewer_sort` untouched (an
- *  orphan rank entry is harmless — it only re-applies if the entity ever returns).
+ *  no refetch: filter out the matching `items` AND drop their orphan
+ *  `viewer_sort.entries` (for the favorites list an entry's `entity_id` IS the
+ *  row's `favorite_key` = `<kind>:<entity_id>`; a legacy bare workspace id is
+ *  tolerated). Leaving the sort entry behind would let the removed id survive in
+ *  cache — the whole-cache removal invariant it violates is why #task:1412 fixed
+ *  it (Cindy). Local-only: on re-visibility a refetch restores authoritative order.
  *  PRESENT-ONLY / idempotent, mirroring {@link patchFavoritesUnread}: list not
- *  loaded → no-op; no matching row → no write. */
+ *  loaded → no-op; nothing matched → no write. */
 export function removeWorkspaceFromFavorites(
   qc: QueryClient,
   workspaceId: string,
 ): void {
   const prev = qc.getQueryData<ListFavoritesDto>(favoritesKey);
   if (!prev) return; // list not loaded → no-op
+  // Collect the removed rows' sort identities BEFORE filtering, so their orphan
+  // sort entries can be dropped too.
+  const removedKeys = new Set(
+    prev.items
+      .filter(it => it.workspace_id === workspaceId)
+      .map(it => it.favorite_key),
+  );
   const items = prev.items.filter(it => it.workspace_id !== workspaceId);
-  if (items.length === prev.items.length) return; // no matching row → no write
-  qc.setQueryData<ListFavoritesDto>(favoritesKey, { ...prev, items });
+  const entries = prev.viewer_sort.entries.filter(
+    e => !removedKeys.has(e.entity_id) && e.entity_id !== workspaceId,
+  );
+  const changed =
+    items.length !== prev.items.length ||
+    entries.length !== prev.viewer_sort.entries.length;
+  if (!changed) return; // nothing matched → no write
+  qc.setQueryData<ListFavoritesDto>(favoritesKey, {
+    ...prev,
+    items,
+    viewer_sort: { ...prev.viewer_sort, entries },
+  });
 }
 
 /**

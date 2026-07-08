@@ -1,4 +1,4 @@
-// Viewer-local projection removal contract (#task:1411 — Class B hardening).
+// Viewer-local projection removal contract (#task:1411 → #task:1412 hardening).
 //
 // BUG CLASS this closes: a single "viewer lost visibility of workspace X"
 // domain fact (`viewer_workspaces_changed(removed)`) fans out to MULTIPLE
@@ -7,125 +7,177 @@
 // its cleanup list, forgetting one cache is SILENT: exactly the regression hit
 // twice (#task:1404 missed favorites, #task:1409 missed Activity).
 //
-// The hard rule shiki asked for is "add a projection without wiring it → the
-// test goes RED". That needs TWO independent completeness layers, because they
-// fail in different ways:
+// #task:1412 turns the completeness net from a runtime source-text scan into a
+// TYPE-CLOSED registry chokepoint. Three enforcement layers, each a distinct
+// failure mode:
 //
-//   LAYER 1 — settle every WORKSPACE-KEYED cache by FORM, not by name.
-//     Any cache whose key is `['workspaces', wsId, …]` (the by_conversation
-//     unread map, plus channels / members / capabilities / archived lists in
-//     workspaces/hooks.ts) is dropped by ONE predicate sweep below. Zero
-//     enumeration: a new workspace-keyed cache is covered the moment it exists,
-//     nothing to register. This is the cheap, un-forgettable majority.
+//   1. FORM-BY-CONSTRUCTION — workspace-KEYED caches (`['workspaces', wsId, …]`:
+//      by_conversation unread + channels / members / capabilities / archived in
+//      workspaces/hooks.ts) are dropped by ONE predicate sweep. Zero enumeration:
+//      a new workspace-keyed cache is covered the moment it exists.
 //
-//   LAYER 2 — INVENTORY the residue: global-key caches whose `workspace_id`
-//     lives INSIDE the payload (`['message-unread','summary']` map, favorites
-//     items, Activity items). A key sweep cannot find these, so each is declared
-//     in {@link PROJECTIONS} with an id-consuming filter, and the handler loops
-//     the inventory. Three compile/behaviour guards keep the inventory honest:
-//       (a) `Record<ProjectionId, …>` → a declared id with no cleanup fails to
-//           compile;
-//       (b) the contract test's seed map is also `Record<ProjectionId, …>` →
-//           a declared id with no test seed fails to compile;
-//       (c) the whole-cache invariant test → a wrong/partial cleanup goes red.
+//   2. TYPED REGISTRY — global-key caches whose `workspace_id` lives in the
+//      PAYLOAD are declared in {@link VIEWER_LOCAL_READ_MODELS} through
+//      registration helpers whose types make `cleanup` MANDATORY:
+//        - {@link itemScopedList} takes `entry: TData extends ItemScopedListData
+//          ? Entry : never`. Because TS is STRUCTURAL, a DTO that already carries
+//          `workspace_id` (ActivityItemDto, FavoriteRowDto) satisfies the guard
+//          with no shared `extends`; a NON-attributed DTO — OR omitting the type
+//          param — collapses the param to `never`, and `cleanup` is required. So a
+//          new `{ items: WorkspaceAttributed[] }` cache CANNOT be registered
+//          without a removal cleanup, and attribution can never be defaulted-away
+//          (proven by the `@ts-expect-error` fixtures in the type-test).
+//        - {@link recordKeyedSummary} tags the one Record-keyed cache
+//          (`{ by_workspace: Record<wsId, …> }`) — structurally undetectable, so
+//          the form is explicit and `cleanup` is required by the signature.
+//      The removal handler dispatches over `form` with an EXHAUSTIVE `never`
+//      check, so a 4th form that skips a branch fails to compile (the symmetric
+//      lesson to #task:1410's source-registry `never`).
 //
-//   THE 4th FAILURE MODE (a cache never added to the inventory AT ALL) is caught
-//   by {@link VIEWER_LOCAL_KEY_CLASSIFICATION} + the source-fence test: it reads
-//   the read-model files and asserts EVERY exported query key is classified —
-//   cleaned (has a handler), or exempt with a stated reason (sweep-covered /
-//   not workspace-attributed). A new exported `*Key` in those files that is
-//   neither → RED. That is the structural rule; the inventory alone would just
-//   relocate the forget-point.
+//   3. SOURCE BACKSTOP (non-critical smoke) — the only hole types cannot close
+//      is a cache defined with a raw `useQuery` that never flows through the
+//      registry. `VIEWER_LOCAL_KEY_CLASSIFICATION` + the smoke test cross-check
+//      that every exported query key in the read-model files is registry-handled
+//      or explicitly exempt. This REPLACES #task:1411's regex fence: the
+//      "cleaned" set is now DERIVED from the registry (consistency test), not a
+//      parallel hand-list that could drift.
 //
-// RESIDUAL (flagged, not hidden — mirrors Alice's #task:1410 note): the fence
-// covers the read-model files where item-scoped caches live, and the sweep
-// covers workspace-keyed caches anywhere. A NEW *global-key* viewer-local cache
-// added OUTSIDE those fenced files would still escape. Closing that fully needs
-// a `WorkspaceAttributed { workspace_id }` DTO marker so attribution is a type,
-// not a naming convention — the next increment.
-import type { QueryClient } from '@tanstack/react-query';
-import { removeWorkspaceFromActivity } from '@/features/attention/hooks';
-import { removeWorkspaceFromFavorites } from '@/features/favorites/hooks';
-import { removeWorkspaceFromMessageUnread } from '@/features/channels/message-unread';
+// RESIDUAL (flagged, not hidden — mirrors Alice's #task:1410 note): this is a
+// CLEANUP-DECLARATION chokepoint, NOT a QUERY-DEFINITION chokepoint. The query
+// KEYS still live in their feature files; the registry references them, it does
+// not own them. So a cache defined with a raw `useQuery` that never flows through
+// the registry is a hole types cannot close in any language — and layer 3 is a
+// text smoke over a FIXED file list, so a global-key cache added in a NEW file
+// escapes it too. Moving key definitions INTO the registry (a real
+// query-definition chokepoint) is a cross-module refactor deliberately DEFERRED
+// (#task:1412 consensus): layer-3 smoke + the whole-cache invariant test (the
+// form-agnostic behavioural backstop that scans the entire cache for any
+// surviving wsId) already cover the off-registry residue for the current files.
+import type { QueryClient, QueryKey } from '@tanstack/react-query';
+import type {
+  ListActivityDto,
+  ListFavoritesDto,
+} from '@silverhand/shared';
+import { activityKey, removeWorkspaceFromActivity } from '@/features/attention/hooks';
+import { favoritesKey, removeWorkspaceFromFavorites } from '@/features/favorites/hooks';
+import {
+  messageUnreadSummaryKey,
+  removeWorkspaceFromMessageUnread,
+} from '@/features/channels/message-unread';
 
-/** How a viewer-local cache carries workspace attribution — determines which
- *  completeness layer settles it. */
+/** Structural marker: a value that belongs to exactly one workspace. Renderer-
+ *  local BY DESIGN — TS is structural, so any DTO that already has
+ *  `workspace_id: string` satisfies it with no shared `extends` (a shared marker
+ *  would be a decorative re-declaration of an existing field, #task:1412). NOTE
+ *  the field is REQUIRED: a DTO with `workspace_id?: string` would NOT match, so
+ *  the conditional cleanup guard would silently stop firing — the type-test
+ *  pins the current DTOs as attributed to catch that regression (Alice ①). */
+export type WorkspaceAttributed = { workspace_id: string };
+
+/** The one payload shape whose attribution TS can PROVE: a list of attributed
+ *  items. Drives the mandatory-cleanup constraint in {@link itemScopedList}. */
+export type ItemScopedListData = { items: WorkspaceAttributed[] };
+
+/** How a viewer-local cache carries a workspace — each settles differently on
+ *  removal. Exhaustive: a 4th member must also gain a dispatch branch in
+ *  {@link handleViewerWorkspaceRemoved} or the `never` check fails to compile. */
 export type ProjectionForm =
-  /** `workspace_id` is a segment of the query KEY (`['workspaces', wsId, …]`) →
-   *  settled by the predicate sweep in {@link handleViewerWorkspaceRemoved}. No
-   *  inventory entry needed. */
+  /** key = `['workspaces', wsId, …]` → predicate sweep (layer 1). */
   | 'workspace-keyed'
-  /** Key is global; `workspace_id` lives INSIDE the payload (a map entry or list
-   *  items) → cleaned by an in-place filter that consumes the id (inventory). */
-  | 'global-item-scoped';
+  /** global key, data = `{ by_workspace: Record<wsId, …> }` → delete map entry. */
+  | 'record-keyed-summary'
+  /** global key, data = `{ items: WorkspaceAttributed[] }` → filter items. */
+  | 'item-scoped-list';
 
-/** Every GLOBAL-key viewer-local projection needing targeted removal cleanup
- *  (Layer 2). Adding a member here forces {@link PROJECTIONS} to grow
- *  (compile-time completeness). Workspace-keyed caches are NOT listed — the
- *  sweep covers them by form. */
-export type ProjectionId = 'message-unread' | 'favorites' | 'activity';
+type CleanupFn = (qc: QueryClient, workspaceId: string) => void;
 
-export interface ViewerLocalProjection {
-  /** The cache form(s) this projection spans — documentation + fence
-   *  classification. */
-  form: ProjectionForm | ProjectionForm[];
-  /** Settle this projection for a removed workspace. Consumes the id; NEVER
-   *  refetches (a deleted workspace's scoped query 404s). Idempotent + no-op
-   *  when the cache is cold. */
-  cleanup: (qc: QueryClient, workspaceId: string) => void;
+/** A viewer-local read model that needs targeted (non-sweep) removal cleanup. */
+export interface RegisteredReadModel {
+  readonly id: string;
+  readonly form: ProjectionForm;
+  readonly key: QueryKey;
+  readonly cleanup: CleanupFn;
 }
 
-// Exhaustive by construction: `Record<ProjectionId, …>` means a new ProjectionId
-// with no entry FAILS TO COMPILE — the compile-time half of Layer 2.
-const PROJECTIONS: Record<ProjectionId, ViewerLocalProjection> = {
-  // Spans TWO caches: the `by_conversation` per-workspace map (workspace-KEYED,
-  // also caught by the Layer-1 sweep) and the global `by_workspace` summary (a
-  // map keyed by workspace_id inside a GLOBAL cache — sweep can't reach it).
-  // `removeWorkspaceFromMessageUnread` settles both; the summary is why it must
-  // stay in the inventory.
-  'message-unread': {
-    form: ['workspace-keyed', 'global-item-scoped'],
-    cleanup: removeWorkspaceFromMessageUnread,
-  },
-  favorites: {
-    form: 'global-item-scoped',
-    cleanup: removeWorkspaceFromFavorites,
-  },
-  activity: {
-    form: 'global-item-scoped',
-    cleanup: removeWorkspaceFromActivity,
-  },
-};
+/** The registration entry for an item-scoped list. */
+interface ItemScopedListEntry {
+  id: string;
+  key: QueryKey;
+  cleanup: CleanupFn;
+}
 
-/** The inventory as an array (stable order for iteration + test enumeration). */
-export const VIEWER_LOCAL_PROJECTIONS: ReadonlyArray<
-  { id: ProjectionId } & ViewerLocalProjection
-> = (Object.keys(PROJECTIONS) as ProjectionId[]).map(id => ({
-  id,
-  ...PROJECTIONS[id],
-}));
+/**
+ * Register an ITEM-SCOPED list read model. Attribution is proven at the type
+ * level: the entry param is `TData extends ItemScopedListData ? Entry : never`,
+ * so `TData` MUST be passed explicitly (`itemScopedList<ListActivityDto>({…})`)
+ * AND the DTO must genuinely carry `workspace_id`:
+ *   - a NON-attributed DTO → the conditional resolves to `never` → the object
+ *     literal is rejected;
+ *   - OMITTING the type param → `TData` defaults to `unknown ⊄ ItemScopedListData`
+ *     → also `never` (this is why the constraint is on the param, not a phantom
+ *     `<TData extends …>` that silently skips when the arg is omitted — Alice ②:
+ *     attribution is checked by construction, never merely by convention);
+ *   - `cleanup` is a required field, so registration without a removal cleanup
+ *     cannot compile.
+ * All three are pinned by `@ts-expect-error` fixtures in the type-test.
+ */
+export function itemScopedList<TData>(
+  entry: TData extends ItemScopedListData ? ItemScopedListEntry : never,
+): RegisteredReadModel {
+  // The conditional param proved attribution; narrow back for the runtime value
+  // (TData is compile-time only — nothing to read at runtime).
+  return { ...(entry as ItemScopedListEntry), form: 'item-scoped-list' };
+}
+
+/**
+ * Register the Record-keyed summary read model (`{ by_workspace: Record<wsId,…> }`).
+ * A `Record<string, …>` is structurally any object, so attribution is NOT
+ * type-detectable — the form is explicit and `cleanup` is required by signature.
+ */
+export function recordKeyedSummary(entry: ItemScopedListEntry): RegisteredReadModel {
+  return { ...entry, form: 'record-keyed-summary' };
+}
+
+/**
+ * THE registry: every global-key viewer-local read model needing targeted
+ * cleanup. Workspace-KEYED caches are NOT here — layer 1's sweep covers them by
+ * form. Add a member and its cleanup is mandatory by construction (see helpers).
+ */
+export const VIEWER_LOCAL_READ_MODELS: readonly RegisteredReadModel[] = [
+  itemScopedList<ListActivityDto>({
+    id: 'activity',
+    key: activityKey(),
+    cleanup: removeWorkspaceFromActivity,
+  }),
+  itemScopedList<ListFavoritesDto>({
+    id: 'favorites',
+    key: favoritesKey,
+    cleanup: removeWorkspaceFromFavorites,
+  }),
+  recordKeyedSummary({
+    id: 'message-unread-summary',
+    key: messageUnreadSummaryKey,
+    // Also drops the workspace-keyed `by_conversation` map (belt-and-suspenders
+    // with the layer-1 sweep, both idempotent); the summary map delete is the
+    // part only this cleanup does.
+    cleanup: removeWorkspaceFromMessageUnread,
+  }),
+];
 
 /**
  * Classification of EVERY exported query key in the viewer-local read-model
  * files (`attention/hooks`, `favorites/hooks`, `channels/message-unread`). The
- * source-fence test asserts each exported `*Key` there is listed here — a new,
- * unclassified key goes RED. This is the 4th-failure-mode net: it stops a cache
- * from being added without a conscious "cleaned or why-exempt" decision.
- *
- * `cleaned` — workspace-attributed GLOBAL-key caches; each has an inventory
- *   handler (its symbol maps 1:1 to a {@link ProjectionId}).
- * `exempt`  — everything else, WITH a reason: workspace-keyed (Layer-1 sweep) or
- *   not workspace-attributed at all (conversation-scoped).
+ * smoke test asserts each exported `*Key` there is listed — an unclassified new
+ * key goes RED (layer 3, the chokepoint-bypass backstop). `cleaned` is kept in
+ * lockstep with {@link VIEWER_LOCAL_READ_MODELS} by a consistency test, so it is
+ * not a hand-list that can drift from the registry.
  */
 export const VIEWER_LOCAL_KEY_CLASSIFICATION = {
-  cleaned: [
-    'messageUnreadSummaryKey',
-    'favoritesKey',
-    'activityKey',
-  ] as const,
+  /** Workspace-attributed global-key caches — each maps to a registry entry. */
+  cleaned: ['messageUnreadSummaryKey', 'favoritesKey', 'activityKey'] as const,
   exempt: {
     messageUnreadByConversationKey:
-      'workspace-keyed (["workspaces", wsId, …]) → Layer-1 predicate sweep',
+      'workspace-keyed (["workspaces", wsId, …]) → layer-1 predicate sweep',
     conversationUnreadKey:
       'conversation-scoped, not workspace-attributed (per-stream unread; conversation removal is a different fact)',
     channelAttentionPreferenceKey:
@@ -144,14 +196,19 @@ function isWorkspaceKeyed(queryKey: unknown, workspaceId: string): boolean {
   );
 }
 
+function assertNever(x: never): never {
+  throw new Error(`unhandled viewer-local projection form: ${String(x)}`);
+}
+
 /**
  * Settle EVERY viewer-local projection for a removed workspace — the single
  * chokepoint the `viewer_workspaces_changed(removed)` handler funnels through.
  *
  * Layer 1: one predicate sweep drops all workspace-keyed caches (by form, no
- * enumeration). Layer 2: loop the inventory for the global-key residue. The
- * `['workspaces']` root list is settled separately (refetch-authoritative) by
- * the general invalidation loop in `useViewerWorkspacesSync`.
+ * enumeration). Layer 2: dispatch each registered read model by `form`, with an
+ * exhaustive `never` so a new form cannot skip a branch. The `['workspaces']`
+ * root list is settled separately (refetch-authoritative) by the general
+ * invalidation loop in `useViewerWorkspacesSync`.
  */
 export function handleViewerWorkspaceRemoved(
   qc: QueryClient,
@@ -162,8 +219,19 @@ export function handleViewerWorkspaceRemoved(
   qc.removeQueries({
     predicate: query => isWorkspaceKeyed(query.queryKey, workspaceId),
   });
-  // Layer 2 — global-key residue whose workspace_id lives in the payload.
-  for (const projection of VIEWER_LOCAL_PROJECTIONS) {
-    projection.cleanup(qc, workspaceId);
+  // Layer 2 — registered global-key read models, dispatched by form.
+  for (const rm of VIEWER_LOCAL_READ_MODELS) {
+    switch (rm.form) {
+      case 'workspace-keyed':
+        // Covered by the layer-1 sweep; no registered entry uses this form
+        // today, but the branch keeps the dispatch exhaustive + documents it.
+        break;
+      case 'record-keyed-summary':
+      case 'item-scoped-list':
+        rm.cleanup(qc, workspaceId);
+        break;
+      default:
+        assertNever(rm.form);
+    }
   }
 }

@@ -574,7 +574,7 @@ function RegisteredAppShell(): JSX.Element {
     const action = resolveRestoreNavigation({
       workspaceId: selectedWorkspaceId,
       selectedChannelId,
-      channels,
+      allChannels: channels,
       activeTopLevel: activeChannels,
       jumpTargetChannelId: jumpTarget?.channelId ?? null,
       excludeId,
