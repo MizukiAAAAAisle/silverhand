@@ -138,6 +138,7 @@ PR / 设计稿 review 时按以下顺序检查：
 5. 涉及数据模型 → 同时过 `core-design.md` §2
 6. 涉及 spawn / 子进程 / runtime 生命周期 → 同时过 §9 AgentHost runtime boundary
 7. 涉及 compat / legacy / fallback / 迁移过渡 shim → 过 §11 退出条件三件套（守哪个具名契约 / 删除触发条件 / owner）
+8. 涉及 unread / workspace / channel / dm 的 visibility / projection / restore 改动 → 过 §12 可见性完整性 checklist(10 项)+ 每条 falsifier + §12.2 边界条款
 
 ---
 
@@ -254,10 +255,63 @@ agent 授权是 capability-based（见 `graded-permissions-v1.md`）。新增 ca
 
 **失败模式（不钉这条会怎样）：** shim 加进来时没记录守什么、何时能删 → 半年后审计者面对一堆 compat 分支，分不清哪个是死化石、哪个还守着活契约，只能逐个 DB probe + 全链路 grep 重新考古（正是 #1301/#1303/#1311/#1312 花掉的力气）。退出条件把这份成本从「每次审计 O(n) 考古」降到「加入时 O(1) 写清楚」。
 
-## 12. 历史
+## 12. 可见性丧失 / 派生投影完整性（unread / workspace / channel / dm / archive / delete 域）
+
+> **一条「可见性丧失」是跨派生面的领域事实,而非单一 surface 的属性。** archive、soft-delete、workspace-delete、membership 移除、dm-hide 均会 fan-out 至多张派生投影。正确修法为:一条领域事实 → 枚举全部 consumer → 各 consumer 按其语义清除或排除;不得仅在触发该事实的 surface 上打补丁。
+>
+> 本节是该域任何改动的**合入 gate**。§12.1 checklist 每条附一个 **falsifier**(用以证明该项未产生误判通过 / false-positive pass)。机制细节见 `activity-lifecycle-v1.md` 与 `core-design.md`(CQRS);本节只规定不变量与可机械核对的判据。(provenance:#1398/#1400/#1402/#1403/#1404/#1409/#1410/#1411/#1412/#1413。)
+
+### 12.1 设计期 checklist(该域强制,每条附 falsifier)
+
+| # | 检查项 | 通过条件 = falsifier(如何证明未误判通过) |
+|---|--------|---------|
+| 1 | **bounded context 归位** | 缺陷必须修在其归属层:lifecycle、projection-membership(favorites/roster)、read-attention(unread/Activity)、UI-cache、navigation-restore 各自独立。falsifier:若为修复一个 navigation 缺陷而改动 unread 清扫逻辑,即为归错层(见 #1413:archive 且存在 unread 只是触发条件,非缺陷归属层)。**CQRS 强约束:workspace-scoped 查询对 regular 与 DM 两 collection 不得 union**(唯一例外为全局 archived 恢复索引)。 |
+| 2 | **改动任一投影前,须先枚举全部 consumer** | 对已知投影清单逐个裁定「排除或保留」:badge/rollup(含 `by_conversation`)、Activity 列表(含其 bool 投影,如 rail dot)、favorites 行(含 `viewer_sort.entries` 等嵌套)、roster、search、nav auto-restore 候选。falsifier:一条删除 / 归档事实后,以一个 whole-cache 断言证明该 id 在每张投影中均不残留;matcher 必须使用 delimited-segment(见 §12.1#10),不得使用 exact-only——exact-only 无法检测复合 id `workspace:<wsId>`(见 #1404 遗漏 favorites、#1409 遗漏 Activity 的 mention 路径)。 |
+| 3 | **清除方式须按 query scope 分档**(独立于「枚举」的另一半) | 枚举完成后,清除方式分两档:**scoped query**(删除后将 404,如 per-ws `by_conversation`)必须 `removeQueries`,不得 refetch;**global query**(删除后不 404,如 favorites/Activity)必须使用本地 membership filter,不得 invalidate 整表(重量级 server-scored / ordered list 的整表 refetch 会 re-score 并 reflow 幸存项)。falsifier:删除后幸存项的顺序与身份保持不变(不止「被删项消失」)(见 #1404/#1409)。 |
+| 4 | **consumer-split,不得就地收窄** | 同一 source list 的多个消费面各自读取独立投影,不得塌缩为单一开关:**auto(default/remembered/fallback)↔ explicit(jump/search/deeplink)**、**display ↔ control-plane**、**active ↔ union**。falsifier:控制面与显式面均不受 display scope 门控(见 #1398:Stop 按钮 enablement 曾被 display filter 门控,构成 fail-closed 缺陷)。 |
+| 5 | **语义不同的轴不得混用**(同族三类,各有 incident) | 语义不同的两个概念不得塌进同一个门:**① `archive ≠ delete`**——archived 必须同时满足「显式可达」与「自动不可达」,两方向均须测试(见 #1413);**② `freshness(isFetching)≠ fact`**——背景 refetch 期间 `isFetching` 为真,不得据此驱动「最后 settled 事实」的展示门,falsifier:mock 一次背景 refetch,断言已 settled 值不被瞬时抹为 loading/undefined(见 #1376);**③ `advisory ≠ correctness`**——best-effort / 可自愈信号(如 mark-read epoch)不得升格为渲染门或 correctness 门,falsifier:该信号判定错误时,渲染与定位仍有界退出、不死锁(见 #1317)。 |
+| 6 | **读路径校验为权威,写路径清理仅作 belt-and-suspenders** | 指向已隐藏对象的 stale pointer(`lastChannelByWorkspace` / cursor / cache)由读路径校验治理(读取时校验 active),不得依赖 archive 时的顺带 clear。falsifier:模拟一个未被清除或跨设备的 stale pointer,证明读路径将其拦截;若仅有 clear-on-write 而无读路径校验,则不通过(见 #1413)。 |
+| 7 | **每个改动派生聚合的状态迁移必须 emit** | 任何改动 `ROLLUP_UNREAD`(或任一缓存聚合)的迁移都必须发出递减 / 更新事件。falsifier:逐条状态迁移断言其 emit;遗漏一条,则 in-place badge cache 只能在下次 refetch 时自愈(见 #1284/#1404;逐点补漏 anti-pattern)。 |
+| 8 | **完整性网须选对档**(见 §12.3) | 按「载体形态 × blast-radius」选择,既不得一律采用 registry,也不得一律依赖命名约定。 |
+| 9 | **不得夸大 chokepoint 的层级** | 必须准确声明其实际守护范围:cleanup-declaration chokepoint(强制「进入 registry 者必带 cleanup」)≠ query-definition chokepoint(key 由 registry 拥有、无法绕过)。falsifier:裸写 `useQuery` 而从不进入 registry 是否可绕过?若可,则它不是 definition chokepoint,注释与 residual 必须如实写明(见 #1412)。 |
+| 10 | **测试保真度** | whole-cache / route conformance 测试必须 seed 真实嵌套字段与 composite id(如 favorites `viewer_sort.entries[].entity_id`、`workspace:<wsId>`);matcher 必须使用 delimited-segment(`split(/[:/]/).includes(id)`),不得使用 exact-only(遗漏复合 id)或 substring(误吃 preview)。falsifier:禁用被测的 cleanup,测试必须转红(以证其非误判通过,见 #1412/#1413)。 |
+
+### 12.2 边界条款(不得违反)
+
+1. **consumer-split:不得就地收窄共享 list。** 当一份 list 同时被自动入口与显式入口、或展示面与控制面消费时,过滤必须实现为每个消费者独立的投影(如 `activeTopLevel` 对 `allChannels`、`visible_*` 字段),不得在原 list 上就地收窄——否则控制面 / 显式面将被 display scope 门控,fail-closed 缺陷在上一层重现(见 #1398/#1413)。
+2. **`archive ≠ delete`。** archived 对 owner 仍为一等可见对象:显式入口(jump/search/deeplink/Archived 面板)必须保持可达;自动落地(default/remembered/fallback/auto-select)必须排除。两者均为硬约束,缺任一条即为缺陷。
+3. **一条领域事实 → 单一 handler 枚举清除全部 viewer-local 投影,不新增事件。** 反模式为:为每张投影发一个专用事件(导致耦合爆炸)。正解为:后端发出一条领域事实(如 `viewer_workspaces_changed(removed)`),renderer 以单一 handler 枚举所有受影响投影并逐个本地 cleanup(id-consuming filter,不 refetch、不重排幸存项)(见 #1404/#1409)。
+4. **读路径校验为权威边界。** 见 §12.1#6。与 §12.1#1 的 absence / `?? 0` onset 语义治理同源:absence / stale 并非中性状态,而是一个被默认选中的语义,必须在读边界显式定义。
+
+### 12.3 完整性网档次判据(载体形态 × blast-radius)
+
+「防止遗漏一条 source / 投影」包含两半,不得将第二半视为已解决:①**declared → 必登记、必测**(穷尽 `switch{…default:never}` 或 `satisfies Record<Id,…>` 在新增 declared 值时编译失败)——此半可由类型层焊死;②**全新 same-kind source / projection 从未登记**——穷尽 switch 无法覆盖(其 key 落在已声明的 id 上)。堵住②的唯一方式,是将不变量做进构造并配以可枚举 registry。
+
+**完整性网的强度取决于「归属」信息的载体形态:类型(编译期 `satisfies` / registry)> 源码 scan > 命名约定。** 选档判据如下:
+
+| 缺口形态 | 正解档 | 例 |
+|---|---|---|
+| 一条事实 fan-out 至 N 个分散 carrier(多 cache,或单一读模型的多条组装路) | chokepoint / registry + 类型闭环 + whole-cache 不变量(新增一条未登记即编译或测试转红) | 见 #1410(Activity source registry)、#1412(viewer-local projection registry) |
+| 单一漏斗 + 小型 pure fn + 少量分支,或 by-construction 版本将扰动一个既有 hardened 不变量 | 共享谓词 + falsification 测试 + 显式 residual(以命名将模型刻入变量,如 `channels`→`allChannels`) | 见 #1413(navigation restore resolver,其 precedence 被 #1082/#1145/#1300 锁定) |
+
+**blast-radius 判据:** 当 by-construction 为零风险的 additive 层(新建 registry / 类型,不改动既有代码)时,即使成本相当或更低也应采用;当 by-construction 需重构一个既有 hardened 不变量(如 precedence-lock)时,将引入回归风险,应维持在 convention-floor 层级。不得为了防范尚未出现的分支而重构既有硬不变量。无论选择哪一档,residual 必须显式写在注释与测试中——不得使 by-convention 的代码呈现为 by-construction,以免后续读者误以为第二半已消除。
+
+### 12.4 失败模式(未遵循本节的后果)
+
+- **跨分散投影的逐点补漏(anti-pattern)**:仅修复触发该 feature 的一张投影,favorites / Activity / roster 各自残留(见 #1404/#1409)。
+- **单个读模型内部多条组装路的逐点补漏**:`listActivity` 的 positional 路径有 `archived` 过滤而 directed 路径没有 → archive 后 ambient 项掉出但 @mention 残留(见 #1409)。审计粒度必须是「每条产生可见项的 query / assembly 路径」,而非「文件」。
+- **误判通过(false-positive pass)的测试**:seed 遗漏真实嵌套字段(favorites `viewer_sort`),或 matcher 使用 exact-only / substring → 该字段或复合 id 误判通过「NOWHERE」断言(见 #1412/#1413)。
+- **夸大 chokepoint**:将 cleanup-declaration 声称为 query-definition,使后续读者误以为 raw `useQuery` 亦被拦截(见 #1412)。
+
+> **Review 时**:该域改动必须按 §12.1 十项逐条通过,且不得命中 §12.2 四条边界;新增 source / projection 必须能被 §12.3 的登记 / 测试机制在编译期或测试期捕获漏项;无法捕获者,应在加入 UI 前停止。
+
+---
+
+## 13. 历史
 
 - 2026-05-04 ~ 05-05：mcp system 频道下 thread `bbUBIrwJO5ZNY1ww`（"统一 human/agent 共用业务到 application service 层"）通过 PR-1 ~ PR-6 完成首轮落地
 - 2026-05-07：`permissions.md` 锁版 Slice A'/B/C/D 计划，task #125 是 Slice A' 实施
 - 2026-05-09：本 doc 创建，把"同构"提升为后端设计期强制规则
 - 2026-07-01：IM-终态三方架构 review 后加 §10（transport/cursor 不变量 + 单一 fanout 源非目标 + seq id-space 命名规则 + capability 桶判据）
 - 2026-07-04：#1301 legacy 审计（#1303/#1304/#1305/#1310/#1311/#1312）收官后加 §11——把审计时事后用的 A/B/C 退役判据前置成合入 gate（compat/legacy/fallback shim 必带「退出条件三件套」）
+- 2026-07-08:unread / archive / delete 加固 arc(#1398/#1400/#1402/#1403/#1404/#1409/#1410/#1411/#1412/#1413)收官后新增 §12——可见性丧失 / 派生投影完整性(checklist + 每条 falsifier + consumer-split、archive≠delete + 完整性网档次的 blast-radius 判据);依 shiki 裁定「文档仅作提醒不足,须有结构性硬规则」,各 agent L2 仅保留指向本节的硬触发器、不各自存摘要以防 drift。
