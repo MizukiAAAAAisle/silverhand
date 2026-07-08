@@ -960,19 +960,54 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         { timeoutMs: 60_000, expectedConnectionId: connectionId },
       );
       if (result.started && result.startup_delivery_accepted !== true) {
-        this.opts.logger.warn(
+        // The daemon reports the handle was ALREADY alive: `runtime_start`
+        // is idempotent and deliberately does NOT consume a startup_delivery
+        // against an existing handle ("start is not a wake substitute" —
+        // supervisor). Rolling back and returning here would ORPHAN the rows:
+        // `runtime_ready_for_drain` is one-shot (already fired for a live
+        // runtime) and no wake was issued, so nothing re-drives them and the
+        // agent silently never receives the message. Honor the daemon's own
+        // contract — "callers wanting to push a new batch after start must use
+        // runtime_wake" — by converging on the live wake path. This keys off
+        // the daemon's AUTHORITATIVE "already alive" reply, so it also
+        // self-heals a backend cache whose `phase` had desynced from 'ready'
+        // (the reason `deliverMessage` routed here instead of waking).
+        this.opts.logger.info(
           {
             kind: 'inbox',
-            action: 'startup_delivery_not_accepted_after_start',
+            action: 'startup_delivery_rerouted_to_wake',
             hostId,
             conversationId,
             agent_id: agentId,
             delivery_ids: batch.deliveryIds,
             result: summarizeStartupDeliveryResult(result),
           },
-          'outbound startup delivery was not accepted after runtime_start reported started; rows remain pending',
+          'runtime_start reported an already-live handle; rerouting pending rows to runtime_wake',
         );
         this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
+        // Heal the projection before rerouting. The wake path
+        // (`deliverLivePendingForAgent` → coordinator) gates on the SHARED
+        // cache; a desynced entry (absent / non-'ready') is exactly why we
+        // landed on the start path, so it would also refuse the wake. The
+        // daemon just told us authoritatively the handle is alive, and a live
+        // handle's true phase is 'ready' (daemon only moves ready→draining→
+        // exited), so correct the cache to 'ready'. The coordinator then
+        // applies its normal busy-state gating (turn_end already fired, so
+        // this is a safe boundary). Stamp with the cache's OWN current daemon
+        // key (not a reconstructed one — the two derivations differ in format)
+        // so `acceptDaemonKey` admits the patch; if the cache has latched no
+        // daemon yet there is nothing live to wake and the reroute rolls the
+        // rows back to pending, unchanged from before.
+        const daemonKey = state.cache.daemonInstanceKey;
+        if (daemonKey) {
+          state.cache.applyPhase(daemonKey, conversationId, agentId, 'ready');
+        }
+        await this.deliverLivePendingForAgent(
+          hostId,
+          connectionId,
+          conversationId,
+          agentId,
+        );
       } else if (!result.started) {
         this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
       }

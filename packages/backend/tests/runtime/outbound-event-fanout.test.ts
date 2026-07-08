@@ -363,6 +363,55 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  it('reroutes to runtime_wake when runtime_start hits an already-live handle (no orphaned pending row)', async () => {
+    // Regression (opencode Lio #task:1415/#task:1416): the SECOND message to
+    // a live runtime whose backend cache `phase` had desynced from 'ready'
+    // routes through `startDeliveryBacked`. The daemon's `runtime_start` is
+    // idempotent — it reports `started:true` but does NOT consume the
+    // startup_delivery against an existing handle. Pre-fix, backend rolled the
+    // claimed rows back to pending and returned `true`, ORPHANING them
+    // (ready_for_drain is one-shot; no wake was ever issued) → the agent
+    // silently never received the message. The fix converges on the live wake
+    // path, keyed off the daemon's authoritative reply. Runtime-agnostic; codex
+    // stands in for opencode here.
+    const fix = makeFixture({ runtime: 'codex' });
+    try {
+      // Daemon is connected (currentDaemonKey set) but the runtime_status
+      // hydrate reports an EMPTY snapshot, so the backend cache has no entry
+      // for this pair — the desync that makes deliverMessage route to
+      // startDeliveryBacked instead of the live wake path.
+      fix.transport.snapshot = { runtimes: [] };
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      await waitFor(() =>
+        fix.transport.calls.some(call => call.kind === 'runtime_status'),
+      );
+
+      const msg = fix.messages.insertForConversation({
+        conversationId: fix.channelId,
+        fromKind: 'user',
+        content: 'second message to a live-but-uncached runtime',
+      });
+      const delivery = fix.inbox.ensureDelivery(fix.channelId, fix.agentId, msg.id);
+
+      // Daemon already has the handle alive: start is idempotent, refuses the
+      // startup_delivery.
+      fix.transport.rejectNextStartupDelivery();
+
+      await fix.fanout.deliverMessage(fix.channelId, fix.agentId, msg.id);
+
+      // Exactly one start attempt, then a reroute to runtime_wake carrying the
+      // same row — and the row is NOT left orphaned in pending.
+      expect(fix.transport.startCalls()).toHaveLength(1);
+      expect(fix.transport.wakeCalls()).toHaveLength(1);
+      expect(fix.transport.wakeCalls()[0]!.params).toMatchObject({
+        delivery_ids: [delivery.inboxId],
+      });
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   it('claims replay rows FIFO and does not issue concurrent wakes for repeated ready_for_drain', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
@@ -1935,6 +1984,7 @@ class FakeTransport implements HostWsServerController {
         reason: 'driver_not_ready';
       }
     | null = null;
+  private nextStartRejectsStartupDelivery = false;
   private nextClearResult: { cleared: boolean } | null = null;
   private nextStopError: Error | null = null;
   private deferredStop:
@@ -2008,6 +2058,17 @@ class FakeTransport implements HostWsServerController {
       }) as Promise<OutboundServerCommandResult<K>>;
     }
     if (kind === 'runtime_start') {
+      // Model an ALREADY-ALIVE handle: `runtime_start` is idempotent and
+      // reports `started:true` but deliberately does NOT consume the
+      // startup_delivery (start is not a wake substitute). One-shot.
+      if (this.nextStartRejectsStartupDelivery) {
+        this.nextStartRejectsStartupDelivery = false;
+        return Promise.resolve({
+          started: true,
+          pid: 123,
+          started_at: 1700000000000,
+        }) as Promise<OutboundServerCommandResult<K>>;
+      }
       return Promise.resolve({
         started: true,
         pid: 123,
@@ -2113,6 +2174,17 @@ class FakeTransport implements HostWsServerController {
 
   refuseNextWake(reason: 'driver_not_ready'): void {
     this.nextWakeRefusal = { reason };
+  }
+
+  /** Next `runtime_start` reports `started:true` WITHOUT
+   *  `startup_delivery_accepted` — models an already-alive, idempotent
+   *  handle that refuses to treat start as a wake. */
+  rejectNextStartupDelivery(): void {
+    this.nextStartRejectsStartupDelivery = true;
+  }
+
+  startCalls(): Array<{ params: Record<string, unknown> }> {
+    return this.calls.filter(call => call.kind === 'runtime_start');
   }
 
   // D4.c C2 — fanout-coordinator tests don't drive the revoke route.
