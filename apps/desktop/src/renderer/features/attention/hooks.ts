@@ -16,7 +16,10 @@ import type {
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
 import { activityItemSource, postObserve } from './observe';
-import { reconcileUnreadAfterObserveIfRealtimeUnavailable } from './observe-cache-fallback';
+import {
+  reconcileUnreadAfterObserveIfRealtimeUnavailable,
+  settleStreamUnreadAfterObserve,
+} from './observe-cache-fallback';
 import {
   onWsFrame,
   subscribeViewerScope,
@@ -173,8 +176,15 @@ export function useClearActivityItem() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (source: ObserveSource) => postObserve([source]),
-    onSuccess: result => {
+    onSuccess: (result, source) => {
       reconcileUnreadAfterObserveIfRealtimeUnavailable(qc, result);
+      // A cleared stream item (mainline / thread / DM positional) changes this
+      // conversation's per-stream `conversationUnread` — settle it via the single
+      // seam so a co-visible channel chip re-settles at once, not on the async
+      // `unread_updated` round-trip (#task:1402: same window as #task:1400, from
+      // the Activity entry point). Notification-kind sources are ignored by the
+      // seam. #task:1284 global maps are untouched.
+      settleStreamUnreadAfterObserve(qc, [source], result);
       void qc.invalidateQueries({ queryKey: ['activity'] });
       void qc.invalidateQueries({ queryKey: ['notifications'] });
     },
@@ -207,8 +217,16 @@ export function useMarkActivityAllRead() {
       if (sources.length === 0) return { changed: false };
       return postObserve(sources);
     },
-    onSuccess: result => {
+    onSuccess: (result, items) => {
       reconcileUnreadAfterObserveIfRealtimeUnavailable(qc, result);
+      // Settle every distinct stream conversation this batch cleared via the
+      // single seam (#task:1402) — dedup + `changed`-gated inside it. Rebuild the
+      // sources from `items` (pure routing) since onSuccess gets the variables,
+      // not the mutationFn's local sources. #task:1284 global maps untouched.
+      const sources = items
+        .map(activityItemSource)
+        .filter((s): s is ObserveSource => s != null);
+      settleStreamUnreadAfterObserve(qc, sources, result);
       void qc.invalidateQueries({ queryKey: ['activity'] });
       void qc.invalidateQueries({ queryKey: ['notifications'] });
     },

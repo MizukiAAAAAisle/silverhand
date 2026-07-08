@@ -36,7 +36,6 @@ import {
 } from '@/features/channels/pending-message';
 import { api, ApiError } from '@/lib/api';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
-import { conversationUnreadKey } from '@/features/channels/message-unread';
 import { getCurrentUserId } from '@/lib/current-user';
 import { useInterest } from '@/features/realtime/interest-registry';
 import {
@@ -51,7 +50,10 @@ import {
   postObserve,
   streamSourceAtSeq,
 } from '@/features/attention/observe';
-import { reconcileUnreadAfterObserveIfRealtimeUnavailable } from '@/features/attention/observe-cache-fallback';
+import {
+  reconcileUnreadAfterObserveIfRealtimeUnavailable,
+  settleStreamUnreadAfterObserve,
+} from '@/features/attention/observe-cache-fallback';
 
 // ─── Split-module imports (#task:1292) ───────────────────────────────────────
 import {
@@ -1262,8 +1264,15 @@ export function useMarkMessageChannelRead() {
       const channelId = typeof params === 'string' ? params : params.id;
       return postObserve([mainlineStreamSourceHead(channelId)]);
     },
-    onSuccess: result => {
+    onSuccess: (result, params) => {
       reconcileUnreadAfterObserveIfRealtimeUnavailable(qc, result);
+      // Settle this client's per-stream `conversationUnread` at once via the
+      // single seam (#task:1402) — symmetric with the thread path. Today no
+      // surface renders `conversationUnread.mainline`, so this is a narrow no-op
+      // settle of the same key, not UI built for mainline; if one ever does, it
+      // inherits the immediate settle for free instead of the #task:1400 window.
+      const channelId = typeof params === 'string' ? params : params.id;
+      settleStreamUnreadAfterObserve(qc, [mainlineStreamSourceHead(channelId)], result);
     },
     // No onSuccess message-unread invalidate while event WS is connected
     // (#task:1284). observe's post-commit enriched `unread_updated` message
@@ -1310,21 +1319,23 @@ export function useMarkThreadRead() {
     onSuccess: (result, params) => {
       reconcileUnreadAfterObserveIfRealtimeUnavailable(qc, result);
       // message-unread badge (sidebar + global roll-up, incl. followed-thread
-      // unread) is now cleared by observe's post-commit enriched `unread_updated`
+      // unread) is cleared by observe's post-commit enriched `unread_updated`
       // patch via the viewer-unread ingestor (#task:1284) — NO invalidate here
       // (it would force a whole-list refetch and defeat the projection).
-      // The fallback above is gated to event-WS outage only.
       //
-      // The root reply chip / Threads list are a different read-model:
-      // per-stream, follow-agnostic `GET /api/conversations/:id/unread`.
-      // They are not carried by the enriched `unread_updated` payload (that
-      // payload is the sidebar/workspace roll-up), so a successful local
-      // observe must settle this one conversation from REST. This is narrow:
-      // one channel's stream-unread only, never the global message-unread maps.
-      void qc.invalidateQueries({ queryKey: conversationUnreadKey(params.channelId) });
-      // The Threads-list is a SEPARATE read-model: it only invalidates on stream
-      // message / connected, never on `unread_updated`, so its thread metadata
-      // still needs this explicit invalidate.
+      // The root reply chip / Threads-list "N new" are a DIFFERENT read-model:
+      // per-stream `conversationUnread`, not carried by the enriched
+      // `unread_updated` roll-up. Settle it locally via the single seam so this
+      // client's chip re-settles from REST at once (#task:1400 window, absorbed
+      // into the #task:1402 seam — do not hand-write the invalidate here).
+      settleStreamUnreadAfterObserve(
+        qc,
+        [streamSourceAtSeq(params.channelId, params.threadRootId, params.snapshotSeq)],
+        result,
+      );
+      // The Threads-list thread METADATA (reply count etc.) is a SEPARATE
+      // read-model that only invalidates on stream message / connected, never on
+      // `unread_updated`, so it still needs this explicit invalidate.
       qc.invalidateQueries({ queryKey: channelThreadsKey(params.channelId) });
     },
   });

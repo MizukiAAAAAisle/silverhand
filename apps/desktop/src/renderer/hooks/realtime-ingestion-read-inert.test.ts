@@ -289,21 +289,67 @@ describe('mark-read mutations — global badges ride the WS clear patch, no whol
     'utf8',
   );
 
-  it('useMarkMessageChannelRead does not invalidate message-unread', () => {
+  it('useMarkMessageChannelRead does not invalidate message-unread, settles per-stream via the seam', () => {
     const body = sliceFunctionBody(source, 'export function useMarkMessageChannelRead(');
     expect(body).not.toContain('invalidateMessageUnreadQueries(');
+    // #task:1402 — mainline mark-read settles per-stream conversationUnread through
+    // the single seam (symmetric with the thread path), never a hand-written
+    // conversationUnreadKey invalidate.
+    expect(body).toContain('settleStreamUnreadAfterObserve(');
+    expect(body).not.toContain('conversationUnreadKey(');
   });
 
-  it('useMarkThreadRead drops message-unread invalidate, keeps narrow read-model settles', () => {
+  it('useMarkThreadRead drops message-unread invalidate, settles per-stream via the seam', () => {
     const body = sliceFunctionBody(source, 'export function useMarkThreadRead(');
     expect(body).not.toContain('invalidateMessageUnreadQueries(');
-    // conversationUnreadKey is the per-stream reply-chip / Threads-list "N new"
-    // read-model. It is one channel only, not the global message-unread maps.
-    expect(body).toContain('conversationUnreadKey(');
+    // #task:1402 — the per-stream reply-chip / Threads-list "N new"
+    // (conversationUnread) is settled through the single seam, never a
+    // hand-written conversationUnreadKey invalidate at this caller (#task:1400's
+    // inline patch is absorbed into the seam).
+    expect(body).toContain('settleStreamUnreadAfterObserve(');
+    expect(body).not.toContain('conversationUnreadKey(');
     // channelThreadsKey is a DIFFERENT read-model (per-thread metadata) that
     // still legitimately invalidates.
     expect(body).toContain('channelThreadsKey(');
   });
+});
+
+// #task:1402 — the audit's ACTUAL red point was the Activity entry point:
+// `useClearActivityItem` (per-row hover-✓ / on-open directed dismiss) and
+// `useMarkActivityAllRead` cleared a stream item's unread but did NOT locally
+// settle the per-stream `conversationUnread`, so a co-visible channel chip sat
+// stale until the async `unread_updated` round-trip — the same #task:1400 window,
+// one entry point over. The fix routes BOTH through the single seam. This fence
+// is the anti-regression Cindy gated #1402 on: the root cause was "ThreadPanel
+// patched, Activity missed", so the fence must pin the Activity callers too —
+// otherwise a future edit can slide back to a single-point patch. The desktop
+// test env is `node` (no jsdom/RTL), so we statically fence the source in the
+// spirit of the #1251/#1255/#1284 fences above.
+describe('Activity mark-read callers — settle per-stream via the seam, no single-point patch (#task:1402)', () => {
+  const source = readFileSync(
+    fileURLToPath(new URL('../features/attention/hooks.ts', import.meta.url)),
+    'utf8',
+  );
+
+  for (const decl of [
+    'export function useClearActivityItem(',
+    'export function useMarkActivityAllRead(',
+  ]) {
+    const name = decl.replace('export function ', '').replace('(', '');
+    const body = sliceFunctionBody(source, decl);
+
+    it(`${name} settles per-stream conversationUnread through the single seam`, () => {
+      expect(body).toContain('settleStreamUnreadAfterObserve(');
+    });
+
+    it(`${name} keeps no single-point patch (no bare conversationUnreadKey / global refetch)`, () => {
+      // The whole point of the seam: no caller hand-writes the per-stream
+      // invalidate, and none re-introduces the #task:1284 global whole-list
+      // refetch (that rides the enriched unread_updated ingestor patch).
+      expect(body).not.toContain('conversationUnreadKey(');
+      expect(body).not.toContain('invalidateMessageUnreadQueries(');
+    });
+  }
 });
 
 // #task:1255 P1c — the remaining conversation-scope onEvent consumers move into
