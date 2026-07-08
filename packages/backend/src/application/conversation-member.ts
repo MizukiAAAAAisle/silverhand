@@ -237,20 +237,26 @@ export async function addConversationMember(
         });
         // IM convention: joining a channel sets the unread baseline at the join
         // point — prior history is NOT unread, only messages posted AFTER the
-        // join count (shiki/Cindy ruling on #task:1404). Seed the mainline read
-        // cursor to the current stream head (which now includes the member-added
-        // system message) so the roll-up starts at 0 for the new member instead
-        // of inheriting all history. Followed threads accrue only after an
-        // explicit follow (that leg emits its own unread_updated). Transactional,
-        // not post-commit: the baseline is part of the join write. markRead is
+        // join count (shiki/Cindy ruling on #task:1404). Seed the read cursor
+        // for EVERY stream — the mainline (now including the member-added system
+        // message) AND every existing thread — to that stream's current head.
+        // Mainline alone is insufficient: the thread-chip read model
+        // (streamUnreadForConversation) is follow-agnostic, so a member with no
+        // thread cursors would see every pre-join thread's replies as `+n new`
+        // (Cindy blocking review). Followed-thread ROLLUP membership is a
+        // separate axis handled by the follow leg. Transactional, not
+        // post-commit: the baseline is part of the join write. markRead is
         // monotonic max(), so a remove-then-re-add advances to the re-join head
         // rather than resurrecting the first stint's history as unread.
-        new ConversationReadRepo(deps.ctx.db).markRead({
-          viewerUserId: user.id,
-          conversationId: conversation.id,
-          threadRootId: null,
-          seq: deps.messages.streamHeadLatestSeq(conversation.id, null),
-        });
+        const reads = new ConversationReadRepo(deps.ctx.db);
+        for (const head of deps.messages.listStreamHeads(conversation.id)) {
+          reads.markRead({
+            viewerUserId: user.id,
+            conversationId: conversation.id,
+            threadRootId: head.threadRootId,
+            seq: head.latestSeq,
+          });
+        }
       }
       return { workspaceMember, message };
     })();

@@ -336,7 +336,7 @@ describe('POST /api/conversations/:id/members', () => {
     });
   });
 
-  it('seeds the join-time unread baseline: prior history is NOT unread, only post-join messages count (#task:1404)', async () => {
+  it('seeds the join-time unread baseline across ALL streams: prior mainline + thread history is NOT unread, only post-join messages count (#task:1404)', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const reg = await createRegularWorkspace(t, 'add-unread', [alice.agentId]);
@@ -344,14 +344,32 @@ describe('POST /api/conversations/:id/members', () => {
       alice.agentId,
     ]);
     const messages = new MessageRepo(t.ctx.db);
-    // Channel history that predates the join. IM convention: the new member
-    // must NOT inherit any of this as unread — joining sets the baseline.
+    // Mainline history that predates the join.
     for (let i = 0; i < 3; i++) {
       messages.insertForConversation({
         conversationId: channelId,
         fromKind: 'agent',
         fromAgentId: alice.agentId,
-        content: `said something before you joined #${i}`,
+        content: `mainline before you joined #${i}`,
+      });
+    }
+    // A thread with replies that also predates the join. The thread-chip read
+    // model is follow-agnostic, so these must NOT surface as `+n new` for the
+    // new member — seeding only the mainline cursor would miss this (Cindy
+    // blocking review). Root is a mainline message; its replies form a thread.
+    const root = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: alice.agentId,
+      content: 'thread root before join',
+    });
+    for (let i = 0; i < 2; i++) {
+      messages.insertForConversation({
+        conversationId: channelId,
+        fromKind: 'agent',
+        fromAgentId: alice.agentId,
+        content: `reply before you joined #${i}`,
+        threadRootId: root.id,
       });
     }
     // Ensure 'teammate' is not yet a conversation member (so the add is real).
@@ -379,21 +397,36 @@ describe('POST /api/conversations/:id/members', () => {
     expect(add.status).toBe(200);
 
     const reads = new ConversationReadRepo(t.ctx.db);
-    // Baseline seeded at the join head → zero inherited unread over all history.
+    // Baseline seeded across every stream → zero inherited unread anywhere:
+    // roll-up (mainline) AND the follow-agnostic thread-chip read model.
     expect(reads.unreadCountForStream(channelId, null, 'teammate')).toBe(0);
-    // No whole-history unread_updated on join (the old behavior this fixes),
-    // and existing members are untouched.
+    const atJoin = reads.streamUnreadForConversation(channelId, 'teammate');
+    expect(atJoin.mainline.unread_count).toBe(0);
+    expect(Object.keys(atJoin.threads)).toHaveLength(0);
+    // No whole-history unread_updated on join, and existing members untouched.
     expect(teammateFrames).toHaveLength(0);
     expect(localFrames).toHaveLength(0);
 
-    // A message posted AFTER the join is the first thing that counts.
+    // A mainline message posted AFTER join is the first thing that counts there.
     messages.insertForConversation({
       conversationId: channelId,
       fromKind: 'agent',
       fromAgentId: alice.agentId,
-      content: 'posted after you joined',
+      content: 'mainline after you joined',
     });
     expect(reads.unreadCountForStream(channelId, null, 'teammate')).toBe(1);
+
+    // A reply posted AFTER join is the first thing that counts in that thread —
+    // pre-join replies stay read, so the chip shows exactly the new one.
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: alice.agentId,
+      content: 'reply after you joined',
+      threadRootId: root.id,
+    });
+    const afterReply = reads.streamUnreadForConversation(channelId, 'teammate');
+    expect(afterReply.threads[root.id]?.unread_count).toBe(1);
   });
 
   it('adds an existing workspace human by handle', async () => {

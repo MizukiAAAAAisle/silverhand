@@ -1238,6 +1238,25 @@ export class MessageRepo {
     return row?.latest_seq ?? 0;
   }
 
+  /** Every stream head in a conversation — the mainline row (`thread_root_id`
+   *  NULL) plus one row per thread that has messages. Used to seed a new
+   *  member's per-stream read baseline across ALL streams at join time
+   *  (#task:1404): the mainline roll-up cursor is not enough because the
+   *  thread-chip read model (`streamUnreadForConversation`) is follow-agnostic
+   *  and would surface pre-join thread replies as `+n new` for a member with no
+   *  thread cursors. */
+  listStreamHeads(
+    conversationId: string,
+  ): Array<{ threadRootId: string | null; latestSeq: number }> {
+    return this.db
+      .prepare<[string], { thread_root_id: string | null; latest_seq: number }>(
+        `SELECT thread_root_id, latest_seq FROM conversation_stream_heads
+          WHERE conversation_id = ?`,
+      )
+      .all(conversationId)
+      .map(r => ({ threadRootId: r.thread_root_id, latestSeq: r.latest_seq }));
+  }
+
   /** Unconditionally advance a stream's head to `newSeq` (the largest seq
    *  by construction — the global allocator just minted it). UPDATE-or-INSERT
    *  with no ON CONFLICT target, which sidesteps the partial-index
