@@ -985,19 +985,25 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           'runtime_start reported an already-live handle; rerouting pending rows to runtime_wake',
         );
         this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
-        // Heal the projection before rerouting. The wake path
-        // (`deliverLivePendingForAgent` → coordinator) gates on the SHARED
+        // Patch a temporary wake-ROUTING projection before rerouting. The wake
+        // path (`deliverLivePendingForAgent` → coordinator) gates on the SHARED
         // cache; a desynced entry (absent / non-'ready') is exactly why we
         // landed on the start path, so it would also refuse the wake. The
-        // daemon just told us authoritatively the handle is alive, and a live
-        // handle's true phase is 'ready' (daemon only moves ready→draining→
-        // exited), so correct the cache to 'ready'. The coordinator then
-        // applies its normal busy-state gating (turn_end already fired, so
-        // this is a safe boundary). Stamp with the cache's OWN current daemon
-        // key (not a reconstructed one — the two derivations differ in format)
-        // so `acceptDaemonKey` admits the patch; if the cache has latched no
-        // daemon yet there is nothing live to wake and the reroute rolls the
-        // rows back to pending, unchanged from before.
+        // daemon's reply proves the handle is alive but NOT which phase it is in
+        // — `runtime_start` returns started=true idempotently for
+        // spawning/startup_pending/ready/draining alike (supervisor
+        // 1097-1104). We stamp 'ready' ONLY to route this delivery to the wake
+        // path; the AUTHORITATIVE gate remains the daemon's `runtime_wake`. So
+        // if the handle is actually not-yet / no-longer drainable, the worst
+        // case is one wake the daemon safely refuses →
+        // `deliverLivePendingForAgent` rolls the rows back to pending
+        // (retriable; recovered by the one-shot ready_for_drain or
+        // respawn-on-exit). The transient inaccuracy self-corrects on the next
+        // runtime_status hydrate / runtime_state. Stamp with the cache's OWN
+        // current daemon key (not a reconstructed one — the two derivations
+        // differ in format) so `acceptDaemonKey` admits the patch; if the cache
+        // has latched no daemon yet there is nothing live to wake and the
+        // reroute rolls the rows back to pending, unchanged from before.
         const daemonKey = state.cache.daemonInstanceKey;
         if (daemonKey) {
           state.cache.applyPhase(daemonKey, conversationId, agentId, 'ready');

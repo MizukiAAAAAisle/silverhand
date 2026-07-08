@@ -2060,13 +2060,18 @@ class FakeTransport implements HostWsServerController {
     if (kind === 'runtime_start') {
       // Model an ALREADY-ALIVE handle: `runtime_start` is idempotent and
       // reports `started:true` but deliberately does NOT consume the
-      // startup_delivery (start is not a wake substitute). One-shot.
+      // startup_delivery — the real daemon returns
+      // `startup_delivery_accepted:false` when a batch WAS supplied (supervisor
+      // 1097-1104; "start is not a wake substitute"). One-shot.
       if (this.nextStartRejectsStartupDelivery) {
         this.nextStartRejectsStartupDelivery = false;
         return Promise.resolve({
           started: true,
           pid: 123,
           started_at: 1700000000000,
+          ...((params as { startup_delivery?: unknown }).startup_delivery
+            ? { startup_delivery_accepted: false }
+            : {}),
         }) as Promise<OutboundServerCommandResult<K>>;
       }
       return Promise.resolve({
