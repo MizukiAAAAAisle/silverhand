@@ -52,7 +52,7 @@ describe('normalizeRuntimeTuning — reasoning valid for the agent runtime', () 
     expect(
       normalizeRuntimeTuning(row({ runtime: 'codex' }), { reasoning_effort: 'high' }),
     ).toEqual({ reasoning_effort: 'high' });
-    // qoder takes the full canonical set.
+    // qoder takes its full allowed set.
     for (const v of ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
       expect(
         normalizeRuntimeTuning(row({ runtime: 'qoder' }), { reasoning_effort: v }),

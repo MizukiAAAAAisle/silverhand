@@ -8,7 +8,7 @@ import {
 } from '@silverhand/shared';
 
 describe('agent reasoning_effort validation', () => {
-  it('accepts every canonical reasoning effort value in the shared enum', () => {
+  it('accepts every known reasoning effort value in the shared registry', () => {
     // Union of codex (low/medium/high/xhigh) and qoder (none/…/max); the
     // per-runtime catalog gates which subset each picker offers.
     for (const effort of ['none', 'low', 'medium', 'high', 'xhigh', 'max']) {
@@ -43,7 +43,7 @@ describe('agent reasoning_effort validation', () => {
     }
   });
 
-  it('accepts qoder create with any of its six canonical reasoning values', () => {
+  it('accepts qoder create with any of its six allowed reasoning values', () => {
     for (const effort of ['none', 'low', 'medium', 'high', 'xhigh', 'max']) {
       expect(
         CreateAgentInputSchema.safeParse({

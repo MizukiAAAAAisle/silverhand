@@ -73,10 +73,12 @@ export const CreateAgentInputSchema = z
     host_id: z.string().optional(), // defaults to the current user's owned local host
     description: z.string().optional(),
   })
-  // reasoning_effort must be valid for the chosen runtime — the shared enum
-  // is the union across runtimes, so a value like qoder's `max` would parse
-  // structurally but be meaningless for codex. Both fields are present in the
-  // create payload, so this closes at the schema (route + CLI get it free).
+  // reasoning_effort must be valid for the chosen runtime. `ReasoningEffortSchema`
+  // is only a known-value registry (the union across closed-set runtimes), not a
+  // standard — so a value like qoder's `max` parses structurally but is
+  // meaningless for codex. This per-runtime check is the authoritative gate; both
+  // fields are present in the create payload, so it closes at the schema (route +
+  // CLI get it free).
   .superRefine((val, ctx) => {
     if (!reasoningEffortValidForRuntime(val.runtime, val.reasoning_effort)) {
       ctx.addIssue({

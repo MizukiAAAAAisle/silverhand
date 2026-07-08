@@ -10,12 +10,16 @@ export const RuntimeKindSchema = z.enum([
 ]);
 export type RuntimeKind = z.infer<typeof RuntimeKindSchema>;
 
-// Canonical reasoning-effort values. `none/xhigh/max` beyond the classic
-// low/medium/high come from qoder's canonical set (verified from the
-// qodercli binary). Stored/sent verbatim (lowercase); per-runtime which
-// subset is user-facing lives in the runtime catalog. `null` (unset) is
-// distinct from `'none'` (explicitly disabled) — unset means the driver
-// doesn't pass `--reasoning-effort` at all.
+// Known reasoning-effort values across the CLOSED-SET drivers (codex/qoder).
+// Reasoning effort has NO cross-vendor standard — the value namespace belongs
+// to each runtime/driver, not a global enum. This is a known-value registry
+// (a union) for typing + drift guards, NOT the field's semantic standard and
+// NOT the authoritative write gate: that is per-runtime
+// (`reasoningEffortValidForRuntime`; the values a runtime actually allows live
+// in the runtime catalog). `none/xhigh/max` beyond the classic low/medium/high
+// come from qoder's set (verified from the qodercli binary). Stored/sent
+// verbatim (lowercase). `null` (unset) is distinct from `'none'` (explicitly
+// disabled) — unset means the driver doesn't pass `--reasoning-effort` at all.
 export const ReasoningEffortSchema = z.enum([
   'none',
   'low',

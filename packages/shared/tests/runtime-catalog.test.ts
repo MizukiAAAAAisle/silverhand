@@ -111,7 +111,7 @@ describe('runtime catalog (shared source of truth)', () => {
     expect(reasoningEffortValidForRuntime('codex', 'high')).toBe(true);
     expect(reasoningEffortValidForRuntime('codex', 'max')).toBe(false);
     expect(reasoningEffortValidForRuntime('codex', 'none')).toBe(false);
-    // qoder accepts the full canonical set.
+    // qoder accepts its full allowed set.
     for (const v of ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
       expect(reasoningEffortValidForRuntime('qoder', v)).toBe(true);
     }

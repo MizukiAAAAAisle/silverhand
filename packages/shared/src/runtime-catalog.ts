@@ -33,11 +33,14 @@ export interface RuntimeCatalogEntry {
   selectable: boolean;
   /**
    * User-facing reasoning-effort options for this runtime, in display
-   * order (empty = no Reasoning control). Values are the canonical
-   * lowercase tokens stored + passed to the driver verbatim; kept
-   * PER-RUNTIME so widening the shared `ReasoningEffortSchema` (e.g.
-   * qoder's `none`/`max`) can't leak into another runtime's picker —
-   * codex stays `low/medium/high/xhigh`, qoder gets the full set.
+   * order (empty = no Reasoning control). These are the per-runtime
+   * allowed values (lowercase tokens) stored + passed to the driver
+   * verbatim — the authoritative source of what this runtime accepts.
+   * The shared `ReasoningEffortSchema` is only a known-value registry
+   * (union) for typing/drift, NOT a standard: keeping the allowed set
+   * PER-RUNTIME means widening that union (e.g. qoder's `none`/`max`)
+   * can't leak into another runtime's picker — codex stays
+   * `low/medium/high/xhigh`, qoder gets the full set.
    */
   reasoningEffortOptions: readonly ReasoningEffort[];
   /**
@@ -89,7 +92,7 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     label: 'Qoder',
     cliLabel: 'Qoder',
     selectable: true,
-    // qoder's full canonical set from the qodercli binary.
+    // qoder's full allowed set (known from the qodercli binary).
     reasoningEffortOptions: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     supportsProfileMcp: true,
     // The five capability tiers from `qodercli --list-models`. Specific
