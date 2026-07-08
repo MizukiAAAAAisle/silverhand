@@ -719,7 +719,14 @@ export class ConversationMessageService {
     rootMessageId: string;
     userId: string;
   }): { threadRootId: string; changed: boolean } {
-    return this.threadFollow.followHumanThread(params);
+    const result = this.threadFollow.followHumanThread(params);
+    // Following a thread adds its unread replies to the viewer's roll-up
+    // (ROLLUP_UNREAD counts followed threads), so the badge must refresh
+    // (#task:1404). Only on a real state change — an idempotent re-follow moves
+    // nothing. Emits per-viewer authoritative absolutes; non-follower viewers'
+    // counts are unchanged, so the #1284 ingestor patches nothing for them.
+    if (result.changed) this.delivery.publishUnreadUpdated(params.conversationId);
+    return result;
   }
 
   unfollowHumanThread(params: {
@@ -727,6 +734,11 @@ export class ConversationMessageService {
     rootMessageId: string;
     userId: string;
   }): { threadRootId: string; changed: boolean } {
-    return this.threadFollow.unfollowHumanThread(params);
+    const result = this.threadFollow.unfollowHumanThread(params);
+    // Symmetric to follow: unfollowing drops that thread's unread from the
+    // viewer's roll-up, so the badge must decrement (#task:1404). Only on a real
+    // removal.
+    if (result.changed) this.delivery.publishUnreadUpdated(params.conversationId);
+    return result;
   }
 }

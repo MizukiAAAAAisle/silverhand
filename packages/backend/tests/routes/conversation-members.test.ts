@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { AGENT_CAPABILITIES, conversationSideScope, internalPaths } from '@silverhand/shared';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { MessageRepo } from '../../src/repos/message-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 /**
@@ -332,6 +333,59 @@ describe('POST /api/conversations/:id/members', () => {
         member_name: 'teammate-test',
       },
     });
+  });
+
+  it('emits a single viewer-scoped unread_updated to the newly-added human so their badge reflects channel history live (#task:1404)', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const reg = await createRegularWorkspace(t, 'add-unread', [alice.agentId]);
+    const channelId = await createChannel(t, reg.workspaceId, 'history-room', [
+      alice.agentId,
+    ]);
+    // Prior history the new member will inherit as unread: a non-system,
+    // not-own message. Their conversation_reads cursor starts at 0, so this
+    // counts the moment they join.
+    new MessageRepo(t.ctx.db).insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: alice.agentId,
+      content: 'said something before you joined',
+    });
+    // Ensure 'teammate' is not yet a conversation member (so the add is real).
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?`)
+      .run(channelId, 'teammate');
+
+    // Only the ADDED viewer should learn a new count — existing members' counts
+    // are unchanged when someone joins. Subscribe both scopes to prove that.
+    const teammateFrames: Array<{
+      conversation_id?: string;
+      conversation_unread_count?: number;
+    }> = [];
+    const localFrames: unknown[] = [];
+    const offTeammate = t.ctx.events.subscribeScope('viewer:teammate', e => {
+      if (e.kind === 'unread_updated') teammateFrames.push(e.payload as never);
+    });
+    const offLocal = t.ctx.events.subscribeScope('viewer:local', e => {
+      if (e.kind === 'unread_updated') localFrames.push(e.payload);
+    });
+
+    const add = await http(t).post(membersPath(channelId), {
+      kind: 'human',
+      user_id: 'teammate',
+    });
+    offTeammate();
+    offLocal();
+    expect(add.status).toBe(200);
+
+    // Exactly one frame, for this conversation, counting the inherited history.
+    // (The member-added system message is authored during the add but system
+    // messages never count toward the rollup, so the count is 1, not 2.)
+    const forThisConv = teammateFrames.filter(f => f.conversation_id === channelId);
+    expect(forThisConv).toHaveLength(1);
+    expect(forThisConv[0]!.conversation_unread_count).toBe(1);
+    // The join did not perturb existing members' badges.
+    expect(localFrames).toHaveLength(0);
   });
 
   it('adds an existing workspace human by handle', async () => {

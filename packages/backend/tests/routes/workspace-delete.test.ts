@@ -30,6 +30,30 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
     expect(res.status).toBe(204);
   });
 
+  it('emits viewer_workspaces_changed(removed) to each viewer member so their UI drops the workspace + its unread (#task:1404)', async () => {
+    t = buildTestApp();
+    const ws = (await (
+      await http(t).post('/api/workspaces', { name: 'notify-on-delete', member_agent_ids: [] })
+    ).json()) as { workspace: { id: string } };
+    const wsId = ws.workspace.id;
+
+    const frames: Array<{ change?: string; workspace_id?: string }> = [];
+    const unsub = t.ctx.events.subscribeScope('viewer:local', e => {
+      if (e.kind === 'viewer_workspaces_changed') {
+        frames.push(e.payload as { change?: string; workspace_id?: string });
+      }
+    });
+
+    const res = await http(t).del(`/api/workspaces/${wsId}`);
+    unsub();
+    expect(res.status).toBe(204);
+
+    // 'local' is the owner/user-member; deletion must tell them the workspace is
+    // gone so the sidebar row AND its unread contribution drop (renderer half of
+    // #task:1404). Previously delete-workspace emitted nothing → phantom badge.
+    expect(frames).toContainEqual({ change: 'removed', workspace_id: wsId });
+  });
+
   it('agent_home / DM workspace → 409, row NOT deleted (delete the owning agent instead)', async () => {
     t = buildTestApp();
     // Creating an agent auto-provisions its agent_home (DM) workspace.

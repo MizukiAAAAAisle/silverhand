@@ -170,6 +170,51 @@ describe('human thread follower routes', () => {
     });
   });
 
+  it('emits unread_updated on follow AND unfollow (changed only), so the badge picks up / drops the thread (#task:1404)', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const messages = new MessageRepo(t.ctx.db);
+    const root = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'root',
+    });
+    // An agent reply in the thread → unread for 'local' once (and only once)
+    // they follow the thread. Without following, the reply is invisible to the
+    // rollup, so the follow itself is the state change the badge must learn.
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: agentIds.alice!,
+      content: 'reply',
+      threadRootId: root.id,
+    });
+
+    // Subscribe AFTER setup so only follow/unfollow emissions are captured.
+    const frames: Array<{ conversation_id?: string }> = [];
+    const unsub = t.ctx.events.subscribeScope('viewer:local', e => {
+      if (e.kind === 'unread_updated') {
+        frames.push(e.payload as { conversation_id?: string });
+      }
+    });
+
+    // Follow (changed=true) → one emission carrying this conversation.
+    await http(t).post(apiPaths.channelThreadFollow(channelId, root.id));
+    // Idempotent re-follow (changed=false) → MUST NOT emit again.
+    await http(t).post(apiPaths.channelThreadFollow(channelId, root.id));
+    // Unfollow (changed=true) → emits again so the badge drops the thread.
+    await http(t).del(apiPaths.channelThreadFollow(channelId, root.id));
+    // Idempotent re-unfollow (changed=false) → MUST NOT emit.
+    await http(t).del(apiPaths.channelThreadFollow(channelId, root.id));
+    unsub();
+
+    // Exactly two frames — follow + unfollow. The two no-ops emit nothing:
+    // emission is gated on `changed`, not on the request arriving.
+    const forThisConv = frames.filter(f => f.conversation_id === channelId);
+    expect(forThisConv).toHaveLength(2);
+  });
+
   it('does not make follow a permission backdoor', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t, ['alice'], [

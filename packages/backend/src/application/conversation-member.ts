@@ -10,11 +10,13 @@ import type { AgentRepo } from '../repos/agent-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
+import { ConversationReadRepo } from '../repos/conversation-read-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { ChannelAttentionPreferenceRepo } from '../repos/channel-attention-preference-repo.js';
 import type { MembershipService } from '../services/membership-service.js';
 import { canAddConversationMember, canEditAgent, canGovernWorkspace, canViewConversation } from '../permissions.js';
 import { addWorkspaceAgentMember } from './add-workspace-agent-member.js';
+import { buildUnreadUpdatedMessagePayload } from '../viewer-scope.js';
 import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
 
 /**
@@ -250,6 +252,26 @@ export async function addConversationMember(
     const message = write.message;
     if (message) {
       effects.push(() => publishMemberAdded(deps.ctx, conversation, message));
+      // The new member's roll-up now includes this channel's history — their
+      // conversation_reads cursor starts at 0, so every prior non-system,
+      // non-own message is unread for them. Emit so their badge reflects it live
+      // instead of only on the next refetch (#task:1404). Only the added viewer
+      // is affected (existing members' counts don't change when someone joins),
+      // so this is a single viewer-scoped frame. Post-commit; #1284 ingestor
+      // patches the badge in place.
+      const reads = new ConversationReadRepo(deps.ctx.db);
+      effects.push(() =>
+        deps.ctx.events.publishToScope(
+          `viewer:${user.id}`,
+          'unread_updated',
+          buildUnreadUpdatedMessagePayload(
+            reads,
+            conversation.id,
+            conversation.workspace_id,
+            user.id,
+          ),
+        ),
+      );
     }
   }
   await runPostCommitEffects(effects, deps.ctx.logger);

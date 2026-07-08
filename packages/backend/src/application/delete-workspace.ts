@@ -68,6 +68,11 @@ export async function deleteWorkspace(
     .list()
     .filter(conversation => conversation.workspace_id === workspace.id);
 
+  // Capture viewer members BEFORE the cascade delete — afterwards the
+  // `workspace_users` rows are gone, so we could no longer address them. Used to
+  // emit `viewer_workspaces_changed(removed)` post-commit (#task:1404).
+  const viewerUserIds = workspaces.listUserMemberIds(workspace.id);
+
   // D4.c C3 — replaced the standalone-mode `host_runtime_disabled` short-circuit
   // with an explicit placement preflight that runs in both deployment modes. This
   // MUST run before any side effect: `runtimeHost.resolveConversationRuns`,
@@ -117,5 +122,22 @@ export async function deleteWorkspace(
     }
   }
   workspaces.delete(workspace.id);
+
+  // The workspace is gone — tell every viewer member so their UI drops it whole,
+  // list AND unread contribution (#task:1404). delete-workspace previously
+  // emitted NOTHING to viewers, so a viewer with unread in the deleted workspace
+  // kept a phantom workspace/total badge (the #1284 summary cache is patched in
+  // place, never refetched, until this signal or a manual reload). Post-commit,
+  // per-viewer on the `viewer:<id>` scope, mirroring conversation-member's
+  // `viewer_workspaces_changed` shape (change/workspace_id; the wire stays
+  // `unknown` and each side validates independently —
+  // docs/viewer-visibility-sync-v1.md). The renderer half (#task:1404) drops the
+  // removed workspace's unread contribution from the summary on this same event.
+  for (const userId of viewerUserIds) {
+    ctx.events.publishToScope(`viewer:${userId}`, 'viewer_workspaces_changed', {
+      change: 'removed',
+      workspace_id: workspace.id,
+    });
+  }
   return { kind: 'deleted' };
 }
