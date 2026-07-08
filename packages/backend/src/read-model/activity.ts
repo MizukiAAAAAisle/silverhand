@@ -170,17 +170,48 @@ interface PositionalStreamRow extends SenderColumns {
 }
 
 /**
- * Project the viewer's Activity list. Pure read; returns a DTO the client
- * renders as-is (already filtered, deduped, salience-sorted).
+ * The ORDERED registry of Activity sources — the chokepoint (#task:1410, Cindy
+ * review). Every visible Activity item is produced by exactly one of these
+ * sources, and `listActivity` assembles the list by looping THIS list: a source
+ * not registered here emits nothing, so a new SQL source cannot reach the output
+ * without a registry id. `activity-lifecycle-conformance.test.ts` derives its
+ * lifecycle matrix from these ids via `satisfies Record<ActivitySourceId, …>`,
+ * so a new id with no live/archived/orphan case fails to compile.
+ *
+ * Ordering is LOAD-BEARING: a source may read what earlier sources claimed via
+ * the shared `ActivityAssemblyContext` (positional subtracts the directed
+ * message ids, §8 `positional \ directed`), so `directed_notification` MUST
+ * precede `positional_stream`.
  */
-export function listActivity(
-  ctx: BackendContext,
-  params: ListActivityParams,
-): ListActivityDto {
-  const { viewerUserId, workspaceId } = params;
-  const wsFilter = workspaceId ?? null;
+export const ACTIVITY_SOURCE_IDS = [
+  'directed_notification',
+  'positional_stream',
+] as const;
+export type ActivitySourceId = (typeof ACTIVITY_SOURCE_IDS)[number];
 
-  // ── 1. directed notifications (mention_self + agent_start_failed) ──────────
+/** Threaded through the ordered sources so a later source can react to what an
+ *  earlier one claimed. The only shared state today is `directedMessageIds`
+ *  (§8): directed sources ADD the message ids they claim; positional sources
+ *  SUBTRACT them so an ambient row never anchors on a message already shown as a
+ *  mention. */
+interface ActivityAssemblyContext {
+  ctx: BackendContext;
+  viewerUserId: string;
+  wsFilter: string | null;
+  directedMessageIds: Set<string>;
+}
+
+/** An Activity source: given the assembly context, produce this source's items.
+ *  A source that reads a conversation MUST express liveness through
+ *  LIVE_CONVERSATION_PREDICATE (the single gate) — never a hand-written
+ *  `archived_at` / existence filter, or the #1409 drift reopens. */
+type ActivitySource = (ac: ActivityAssemblyContext) => ActivityItemDto[];
+
+/** Directed notifications (mention_self + agent_start_failed). Claims at most one
+ *  item per message (§7) and records the claimed message ids into the shared
+ *  context so the positional source can subtract them. */
+const assembleDirectedNotifications: ActivitySource = ac => {
+  const { ctx, viewerUserId, wsFilter } = ac;
   // `stream_cursor` lets us drop a mention the viewer has already read
   // positionally (§7: cursor-passed ⇒ directed cleared) without storing it.
   const notifRows = ctx.db
@@ -290,7 +321,20 @@ export function listActivity(
     }
   }
 
-  // ── 3. positional streams (ambient/DM unread), enter()-filtered in SQL ─────
+  // Record the claimed message ids so the positional source can subtract them
+  // (§8 `positional \ directed`). agent_start_failed has no anchor message, so
+  // only mentions (the directed-by-message map) contribute.
+  for (const mid of directedByMessage.keys()) ac.directedMessageIds.add(mid);
+
+  return [...directedByMessage.values(), ...agentFailedItems];
+};
+
+/** Positional streams (ambient channel / DM / followed-thread unread),
+ *  enter()-filtered in SQL. Subtracts the directed message ids the directed
+ *  source claimed (§8), so both the count and the first-unread anchor are over
+ *  NON-directed messages. */
+const assemblePositionalStreams: ActivitySource = ac => {
+  const { ctx, viewerUserId, wsFilter } = ac;
   // Mirrors the #1226 per-stream scorer (window functions, first-unread + count
   // per (conversation, thread_root_id)). §8 `positional \ directed` is done IN
   // this query by excluding the distinct directed message ids, so both the count
@@ -298,7 +342,7 @@ export function listActivity(
   // ambient row to a message already shown as a mention). The positional base
   // already drops system / the viewer's own messages, so excluding a directed
   // message that wouldn't be ambient is a harmless no-op.
-  const excludedJson = JSON.stringify([...directedByMessage.keys()]);
+  const excludedJson = JSON.stringify([...ac.directedMessageIds]);
   const positionalRows = ctx.db
     .prepare<
       {
@@ -410,12 +454,8 @@ export function listActivity(
       channelDefaultMode: DEFAULT_CHANNEL_ATTENTION_MODE,
     });
 
-  // ── assemble ────────────────────────────────────────────────────────────
-  const items: ActivityItemDto[] = [
-    ...directedByMessage.values(),
-    ...agentFailedItems,
-  ];
-
+  // ── map positional rows to items ──────────────────────────────────────────
+  const items: ActivityItemDto[] = [];
   for (const s of positionalRows) {
     // DM unread is positional by mechanism but directed-grade by salience.
     const salience: ActivitySalience =
@@ -437,6 +477,40 @@ export function listActivity(
       timestamp: s.first_unread_created_at,
       unread_count: s.unread_count,
     });
+  }
+  return items;
+};
+
+/** The chokepoint registry. `satisfies` forces one assembler per declared
+ *  ActivitySourceId, and `listActivity`'s loop is the ONLY assembly path — the
+ *  structural guarantee that a new visible source must be registered here (and
+ *  lifecycle-tested) rather than smuggled in as inline SQL. */
+const ACTIVITY_SOURCES = {
+  directed_notification: assembleDirectedNotifications,
+  positional_stream: assemblePositionalStreams,
+} satisfies Record<ActivitySourceId, ActivitySource>;
+
+/**
+ * Project the viewer's Activity list. Pure read; returns a DTO the client
+ * renders as-is (already filtered, deduped, salience-sorted). Assembly loops
+ * ACTIVITY_SOURCES in ACTIVITY_SOURCE_IDS order — every item comes from a
+ * registered source, and later sources see what earlier ones claimed via the
+ * shared context (§8).
+ */
+export function listActivity(
+  ctx: BackendContext,
+  params: ListActivityParams,
+): ListActivityDto {
+  const ac: ActivityAssemblyContext = {
+    ctx,
+    viewerUserId: params.viewerUserId,
+    wsFilter: params.workspaceId ?? null,
+    directedMessageIds: new Set(),
+  };
+
+  const items: ActivityItemDto[] = [];
+  for (const id of ACTIVITY_SOURCE_IDS) {
+    items.push(...ACTIVITY_SOURCES[id](ac));
   }
 
   // §13.2 v1 sort: directed tier first, most-recent-first within each tier.
