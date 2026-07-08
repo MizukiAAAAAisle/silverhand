@@ -48,6 +48,7 @@ import {
   OutboundDaemonClient,
   type OutboundCommandDispatcher,
 } from './outbound-client.js';
+import type { OwnerCleanup } from './outbound-frame-mapping.js';
 import { LocalOutboundFrameServer } from './local-outbound-frame-server.js';
 import {
   AgentMaterializeError,
@@ -218,7 +219,7 @@ export interface RunDaemonOptions {
    *
    * Two legitimate shapes:
    *   - `(deps) => new Supervisor(deps)` — production wire
-   *     (`entry.ts`). Anything that owns spawn/wake/stop lifecycle.
+   *     (`entry.ts`). Anything that owns spawn/deliver/stop lifecycle.
    *   - `(deps) => new FakeSupervisor({...})` — protocol/e2e tests
    *     validating the full intent → supervisor → broadcast →
    *     HostClient.subscribe path without a real CLI child.
@@ -500,10 +501,15 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
       'outbound dispatchCommand invoked before dispatcher was wired',
     );
   };
+  // Late-bound like `commandForwarder` (the dispatcher is created below): the
+  // owner-scoped deferred-queue cleanup an outbound ingress fires on its
+  // connection drop (#task:1417 Stage 3, §11.4.1).
+  let ownerCleanup: OwnerCleanup = () => {};
   const outboundSupervisor = new OutboundSupervisor({
     logger,
     readyEvent,
-    dispatchCommand: command => commandForwarder(command),
+    dispatchCommand: (command, ctx) => commandForwarder(command, ctx),
+    cleanupDeferredForOwner: owner => ownerCleanup(owner),
   });
   const directOutboundBinding = opts.hostConfig
     ? {
@@ -835,8 +841,9 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         agentHomeRootDir,
       }),
   });
-  commandForwarder = command =>
-    dispatcher.dispatch(command.id, String(command.kind), command.params);
+  commandForwarder = (command, ctx) =>
+    dispatcher.dispatch(command.id, String(command.kind), command.params, ctx);
+  ownerCleanup = owner => dispatcher.cleanupDeferredForOwner(owner);
   const server = new DaemonServer({
     socketPath: opts.socketPath,
     dispatcher,
@@ -853,14 +860,16 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         config: opts.hostConfig,
         logger,
         readyEvent,
-        dispatchCommand: command => commandForwarder(command),
+        dispatchCommand: (command, ctx) => commandForwarder(command, ctx),
+        cleanupDeferredForOwner: owner => ownerCleanup(owner),
       })
     : null;
   const localOutboundServer =
     opts.localOutboundSocketPath != null
       ? new LocalOutboundFrameServer({
           socketPath: opts.localOutboundSocketPath,
-          dispatchCommand: command => commandForwarder(command),
+          dispatchCommand: (command, ctx) => commandForwarder(command, ctx),
+          cleanupDeferredForOwner: owner => ownerCleanup(owner),
           logger,
           // Same handshake the standalone WSS client sends on connect
           // (`outbound-client.ts` → `sendEvent(readyEvent())`). The

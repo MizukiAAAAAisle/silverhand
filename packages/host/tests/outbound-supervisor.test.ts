@@ -108,6 +108,7 @@ function makeFixture(): SupervisorFixture {
     logger: silentLogger(),
     readyEvent,
     dispatchCommand: async () => ({ id: 'unused', result: {} } as ResponseFrame),
+    cleanupDeferredForOwner: () => {},
     outboundClientFactory: (configPath) => {
       const fake = makeFakeClient(configPath);
       spawned.push(fake);

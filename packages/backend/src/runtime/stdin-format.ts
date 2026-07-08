@@ -1,6 +1,6 @@
 /**
  * Stdin-message formatters used by every (conv, agent) delivery path —
- * live wakes, inbox drain at spawn, gated/combined batches, and the
+ * live deliveries, inbox drain at spawn, gated/combined batches, and the
  * soft-stop directive. Lifted out of the (now-removed)
  * `conversation-manager.ts` during the daemon cutover so both runtime
  * paths used byte-identical wire format. The legacy CM runtime was
@@ -185,7 +185,7 @@ export function formatStdinTimestamp(epochMs: number): string {
   );
 }
 
-/** Single-message live-wake form: one message addressed at one
+/** Single-message live-delivery form: one message addressed at one
  *  recipient agent, optionally @-mentioning them. */
 export function formatLiveMessage(
   message: MessageLite,
@@ -228,21 +228,6 @@ export function formatAttachmentSuffix(
       ? '[1 attachment — the label (e.g. `Image #1`) is how the sender refers to it; use `silverhand file view --attachment-id <id>` with the id below to read it]'
       : `[${attachments.length} attachments — the label (e.g. \`Image #1\`) is how the sender refers to each; use \`silverhand file view --attachment-id <id>\` with each id below to read them]`;
   return `\n\n${header}\n${lines.join('\n')}`;
-}
-
-/** When multiple gated deliveries pile up between safe boundaries, we
- *  flush as one combined user message so claude sees them in order. */
-export function combineGatedBatch(
-  messages: readonly string[],
-  sendMessageTool: string,
-): string {
-  return (
-    `You have ${messages.length} new messages that arrived while you were busy ` +
-    `(oldest first):\n\n${messages.join('\n\n---\n\n')}\n\n` +
-    `Review all messages above. If any user message or direct mention expects ` +
-    `a visible response, call \`${sendMessageTool}\` before stopping. ` +
-    `Complete ALL your work before stopping.`
-  );
 }
 
 /** Append a directive line at the end of the stdin payload that tells

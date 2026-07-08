@@ -60,6 +60,8 @@ import {
   RuntimeClearSessionResultSchema,
   RuntimeCloseActivityLogParamsSchema,
   RuntimeCloseActivityLogResultSchema,
+  RuntimeDeliverParamsSchema,
+  RuntimeDeliverResultSchema,
   RuntimeOutputPauseParamsSchema,
   RuntimeOutputPauseResultSchema,
   RuntimeOutputResumeParamsSchema,
@@ -73,8 +75,6 @@ import {
   RuntimeStopAllResultSchema,
   RuntimeStopParamsSchema,
   RuntimeStopResultSchema,
-  RuntimeWakeParamsSchema,
-  RuntimeWakeResultSchema,
   WorkspaceProvisionErrorCodeSchema,
   WorkspaceProvisionParamsSchema,
   WorkspaceProvisionResultSchema,
@@ -158,7 +158,36 @@ const FrameIdSchema = z.string().min(1);
 // `deliveries` wire field. A v1 standalone daemon would strict-reject the
 // extra key, so this transport's version bumps in lock-step with
 // HOST_PROTOCOL_VERSION to fail loud at attach instead of on the command.
-export const OUTBOUND_PROTOCOL_VERSION = 2;
+//
+// v3 (#task:1417, daemon-authoritative delivery Stage 1): the shared
+// `RuntimeStartResultSchema` reply gained a required `phase` on its
+// `started:true` arm. The reply is `.strict()` and travels over this transport
+// too, so a version-mismatched standalone daemon must fail loud at attach
+// rather than send a reply the new backend rejects. Bumps alongside
+// HOST_PROTOCOL_VERSION (3→4).
+//
+// v4 (#task:1417, daemon-authoritative delivery Stage 2a): the new
+// `runtime_deliver` command and its unified `runtime_delivery_consumed` /
+// `runtime_delivery_failed` event frames joined this transport's strict
+// surface. A version-mismatched standalone daemon lacks the command handler /
+// event kinds, so it must fail loud at attach. Bumps alongside
+// HOST_PROTOCOL_VERSION (4→5).
+//
+// v5 (#task:1417, daemon-authoritative delivery Stage 2c): the retired
+// delivery surfaces were DELETED from this transport too — the `runtime_wake`
+// command, the legacy `runtime_startup_delivery_consumed`/`_failed` event
+// frames, and `runtime_start`'s `startup_delivery` param + `phase` /
+// `startup_delivery_accepted` result fields (all shared from the local-socket
+// schemas). A version-mismatched standalone daemon would send / expect the
+// deleted shapes, so it must fail loud at attach. Bumps alongside
+// HOST_PROTOCOL_VERSION (5→6).
+//
+// v6 (#task:1417, daemon-authoritative delivery Stage 3): `runtime_deliver`
+// gains a fourth `deferred` disposition arm (daemon-held mid-turn queue). The
+// result shape changed, so a version-mismatched standalone daemon would send /
+// expect a disposition space the peer cannot parse — fail loud at attach. Bumps
+// alongside HOST_PROTOCOL_VERSION (6→7).
+export const OUTBOUND_PROTOCOL_VERSION = 6;
 
 // ── server → daemon command catalogue ──────────────────────────────
 
@@ -385,9 +414,11 @@ export const outboundServerCommandSchemas = {
     result: RuntimeStopResultSchema,
     error: ResponseErrorSchema,
   },
-  runtime_wake: {
-    params: RuntimeWakeParamsSchema,
-    result: RuntimeWakeResultSchema,
+  runtime_deliver: {
+    // #task:1417 Stage 2 — daemon-authoritative delivery over the outbound
+    // transport. Params/result single-sourced from `protocol.js`.
+    params: RuntimeDeliverParamsSchema,
+    result: RuntimeDeliverResultSchema,
     error: ResponseErrorSchema,
   },
   runtime_status: {
@@ -697,11 +728,11 @@ export const OutboundRuntimeReadyForDrainEventFrameSchema = z
   })
   .strict();
 
-export const OutboundRuntimeStartupDeliveryConsumedEventFrameSchema = z
+export const OutboundRuntimeDeliveryConsumedEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_startup_delivery_consumed'),
+    kind: z.literal('runtime_delivery_consumed'),
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
     delivery_ids: z.array(z.number().int()).min(1),
@@ -709,11 +740,11 @@ export const OutboundRuntimeStartupDeliveryConsumedEventFrameSchema = z
   })
   .strict();
 
-export const OutboundRuntimeStartupDeliveryFailedEventFrameSchema = z
+export const OutboundRuntimeDeliveryFailedEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_startup_delivery_failed'),
+    kind: z.literal('runtime_delivery_failed'),
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
     delivery_ids: z.array(z.number().int()).min(1),
@@ -850,8 +881,8 @@ export const OutboundDaemonToServerEventFrameSchema = z.discriminatedUnion('kind
   OutboundRuntimeOutputEventFrameSchema,
   OutboundRuntimeExitEventFrameSchema,
   OutboundRuntimeReadyForDrainEventFrameSchema,
-  OutboundRuntimeStartupDeliveryConsumedEventFrameSchema,
-  OutboundRuntimeStartupDeliveryFailedEventFrameSchema,
+  OutboundRuntimeDeliveryConsumedEventFrameSchema,
+  OutboundRuntimeDeliveryFailedEventFrameSchema,
   OutboundRuntimeInitTimeoutEventFrameSchema,
   OutboundRuntimeInitRetryingEventFrameSchema,
   OutboundRuntimeInitCooldownEventFrameSchema,

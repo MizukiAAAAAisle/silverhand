@@ -20,10 +20,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { KNOWN_CAPABILITIES_V1, splitNdjson } from '@silverhand/host';
+import { OUTBOUND_PROTOCOL_VERSION } from '@silverhand/host';
 import type { ServerConfig } from '@silverhand/shared';
 import { startBackend, type RunningBackend } from '../../src/index.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
-import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 
 interface ReceivedCommand {
   id: string;
@@ -81,7 +81,7 @@ class FakeOutboundDaemon {
       direction: 'daemon_to_server',
       type: 'event',
       kind: 'ready',
-      protocol_version: 2,
+      protocol_version: OUTBOUND_PROTOCOL_VERSION,
       daemon_version: '0.0.0-fake',
       daemon_id: 'local',
       instance_id: 'instance-fake-1',
@@ -143,7 +143,6 @@ class FakeOutboundDaemon {
         started: true,
         pid: 9001,
         started_at: 2,
-        startup_delivery_accepted: true,
       });
     } else if (cmd.kind === 'runtime_stop_all') {
       this.respondResult(cmd, { stopped_count: 0 });
@@ -300,7 +299,6 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
          content, metadata, seq, created_at)
         VALUES (?, ?, 'user', NULL, NULL, ?, NULL, 1, ?)`,
     ).run(messageId, conversationId, 'hello agent', now);
-    new ConversationInboxRepo(db).enqueue(conversationId, agentId, messageId);
 
     // The backend has dialed by now (connect fired from the listen
     // callback). Release `ready` so the backend hydrates the cache.
@@ -310,9 +308,12 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
       label: 'runtime_status hydrate after ready',
     });
 
-    // Activation trigger: an explicit start (the embedded analogue of
-    // the user sending into this conversation). Boot no longer
-    // auto-spawns the backlog, so this is what dispatches runtime_start.
+    // #task:1417 Stage 2b — activation trigger. `runtime_start` is the
+    // pure-lifecycle spawn (no message): `start()` on an idle pair with an
+    // EMPTY inbox takes the `deliverPending → false → startDirect` path and
+    // dispatches `runtime_start`. (The pending-message → activation path is
+    // `runtime_deliver` spawn-with-batch, covered in the fanout suite; here
+    // we keep this test focused on the pure `runtime_start` env_policy.)
     await running.context.runtimeHost.start(conversationId, agentId);
 
     await waitFor(() => !!daemon!.find('runtime_start'), {

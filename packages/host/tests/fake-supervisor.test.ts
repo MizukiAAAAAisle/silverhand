@@ -68,7 +68,6 @@ describe('FakeSupervisor — start without startup_delivery', () => {
     });
     assertStarted(r);
     expect(r.pid).toBeGreaterThan(0);
-    expect(r.startup_delivery_accepted).toBeUndefined();
     expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>(
       'spawning',
     );
@@ -122,20 +121,18 @@ describe('FakeSupervisor — start without startup_delivery', () => {
   });
 });
 
-describe('FakeSupervisor — start with startup_delivery (happy path)', () => {
-  it('emits state(starting) → consumed → state(idle) → ready_for_drain and pins delivery_ids verbatim', () => {
+describe('FakeSupervisor — deliver spawn-with-batch (happy path)', () => {
+  it('no live runtime → spawning; emits state → consumed → state → ready_for_drain, pinning delivery_ids', () => {
     const h = makeHarness();
-    const r = h.supervisor.start({
+    const r = h.supervisor.deliver({
       conversation_id: 'c1',
       agent_id: 'a1',
-      options: testStartOptions(),
-      startup_delivery: {
-        delivery_ids: [101, 102, 103],
-        text: 'hi',
-      },
+      delivery_ids: [101, 102, 103],
+      kind: 'message',
+      text: 'hi',
+      spawn_options: testStartOptions(),
     });
-    assertStarted(r);
-    expect(r.startup_delivery_accepted).toBe(true);
+    expect(r.disposition).toBe('spawning');
     expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>(
       'startup_pending',
     );
@@ -148,25 +145,27 @@ describe('FakeSupervisor — start with startup_delivery (happy path)', () => {
     expect(h.events.map(e => e.event)).toEqual([
       'runtime_state',
       'runtime_state',
-      'runtime_startup_delivery_consumed',
+      'runtime_delivery_consumed',
       'runtime_ready_for_drain',
     ]);
     const consumed = h.events[2];
-    if (!consumed || consumed.event !== 'runtime_startup_delivery_consumed') {
+    if (!consumed || consumed.event !== 'runtime_delivery_consumed') {
       throw new Error('discriminant mismatch');
     }
     expect(consumed.delivery_ids).toEqual([101, 102, 103]);
   });
 });
 
-describe('FakeSupervisor — start with startup_delivery (failure path)', () => {
-  it('emits state + failed + exit; runtime is left in exited state; no ready_for_drain', () => {
+describe('FakeSupervisor — deliver spawn-with-batch (failure path)', () => {
+  it('emits state + failed + exit; runtime left exited; no ready_for_drain', () => {
     const h = makeHarness({ failStartupDelivery: true });
-    h.supervisor.start({
+    h.supervisor.deliver({
       conversation_id: 'c1',
       agent_id: 'a1',
-      options: testStartOptions(),
-      startup_delivery: { delivery_ids: [1, 2], text: 'stub' },
+      delivery_ids: [1, 2],
+      kind: 'message',
+      text: 'stub',
+      spawn_options: testStartOptions(),
     });
     h.flush();
     expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>(
@@ -175,7 +174,7 @@ describe('FakeSupervisor — start with startup_delivery (failure path)', () => 
     expect(h.events.map(e => e.event)).toEqual([
       'runtime_state', // initial starting
       'runtime_state', // exited (terminalReason=crashed)
-      'runtime_startup_delivery_failed',
+      'runtime_delivery_failed',
       'runtime_exit',
     ]);
     // Terminal state line carries the terminalReason for the exit.
@@ -184,7 +183,7 @@ describe('FakeSupervisor — start with startup_delivery (failure path)', () => 
     expect(terminal.state.terminalReason).toBe('crashed');
 
     const failed = h.events[2];
-    if (!failed || failed.event !== 'runtime_startup_delivery_failed') {
+    if (!failed || failed.event !== 'runtime_delivery_failed') {
       throw new Error('discriminant mismatch');
     }
     expect(failed.delivery_ids).toEqual([1, 2]);
@@ -192,24 +191,22 @@ describe('FakeSupervisor — start with startup_delivery (failure path)', () => 
   });
 });
 
-describe('FakeSupervisor — wake (state-machine reasons per §3.2.1)', () => {
-  it('returns not_running when no start has been issued', () => {
+describe('FakeSupervisor — deliver (custody dispositions per §10.3)', () => {
+  it('no live runtime → spawning (custody transferred, no sync ack)', () => {
     const h = makeHarness();
-    const r = h.supervisor.wake({
+    const r = h.supervisor.deliver({
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
       text: 'stub',
+      spawn_options: testStartOptions(),
     });
-    expect(r).toEqual({
-      delivered: false,
-      reason: 'not_running',
-      delivery_ids: [42],
-    });
+    expect(r.disposition).toBe('spawning');
+    if (r.disposition === 'spawning') expect(r.pid).toBeGreaterThan(0);
   });
 
-  it('returns not_initialized while phase=spawning', () => {
+  it('refused startup_pending while phase=spawning', () => {
     const h = makeHarness();
     h.supervisor.start({
       conversation_id: 'c1',
@@ -217,40 +214,42 @@ describe('FakeSupervisor — wake (state-machine reasons per §3.2.1)', () => {
       options: testStartOptions(),
     });
     // Do NOT flush — runtime is still in spawning.
-    const r = h.supervisor.wake({
+    const r = h.supervisor.deliver({
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
       text: 'stub',
+      spawn_options: testStartOptions(),
     });
-    expect(r).toEqual({
-      delivered: false,
-      reason: 'not_initialized',
-      delivery_ids: [42],
-    });
+    expect(r.disposition).toBe('refused');
+    if (r.disposition === 'refused') expect(r.reason).toBe('startup_pending');
   });
 
-  it('returns startup_pending while a startup_delivery is in flight', () => {
+  it('refused startup_pending while a spawn-with-batch is still settling', () => {
     const h = makeHarness();
-    h.supervisor.start({
+    h.supervisor.deliver({
       conversation_id: 'c1',
       agent_id: 'a1',
-      options: testStartOptions(),
-      startup_delivery: { delivery_ids: [1], text: 'stub' },
+      delivery_ids: [1],
+      kind: 'message',
+      text: 'stub',
+      spawn_options: testStartOptions(),
     });
-    const r = h.supervisor.wake({
+    // Do NOT flush — the spawned runtime is still in startup_pending.
+    const r = h.supervisor.deliver({
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
       text: 'stub',
+      spawn_options: testStartOptions(),
     });
-    expect(r.delivered).toBe(false);
-    if (r.delivered === false) expect(r.reason).toBe('startup_pending');
+    expect(r.disposition).toBe('refused');
+    if (r.disposition === 'refused') expect(r.reason).toBe('startup_pending');
   });
 
-  it('returns delivered=true with delivery_ids round-tripped on ready phase', () => {
+  it('admitted with async runtime_delivery_consumed on ready phase', () => {
     const h = makeHarness();
     h.supervisor.start({
       conversation_id: 'c1',
@@ -258,17 +257,24 @@ describe('FakeSupervisor — wake (state-machine reasons per §3.2.1)', () => {
       options: testStartOptions(),
     });
     h.flush();
-    const r = h.supervisor.wake({
+    const r = h.supervisor.deliver({
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [10, 11, 12],
       kind: 'message',
       text: 'stub',
+      spawn_options: testStartOptions(),
     });
-    expect(r).toEqual({ delivered: true, delivery_ids: [10, 11, 12] });
+    expect(r.disposition).toBe('admitted');
+    h.flush();
+    const consumed = h.events.find(e => e.event === 'runtime_delivery_consumed');
+    if (!consumed || consumed.event !== 'runtime_delivery_consumed') {
+      throw new Error('expected a runtime_delivery_consumed ack');
+    }
+    expect(consumed.delivery_ids).toEqual([10, 11, 12]);
   });
 
-  it('returns draining once stop has begun but exit has not yet fired', () => {
+  it('refused draining once stop has begun but exit has not yet fired', () => {
     const h = makeHarness();
     h.supervisor.start({
       conversation_id: 'c1',
@@ -281,18 +287,19 @@ describe('FakeSupervisor — wake (state-machine reasons per §3.2.1)', () => {
       agent_id: 'a1',
       mode: 'hard',
     });
-    const r = h.supervisor.wake({
+    const r = h.supervisor.deliver({
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
       text: 'stub',
+      spawn_options: testStartOptions(),
     });
-    expect(r.delivered).toBe(false);
-    if (r.delivered === false) expect(r.reason).toBe('draining');
+    expect(r.disposition).toBe('refused');
+    if (r.disposition === 'refused') expect(r.reason).toBe('draining');
   });
 
-  it('returns not_running once exit has fired', () => {
+  it('exited runtime → re-spawns (spawning), not refused', () => {
     const h = makeHarness();
     h.supervisor.start({
       conversation_id: 'c1',
@@ -306,15 +313,16 @@ describe('FakeSupervisor — wake (state-machine reasons per §3.2.1)', () => {
       mode: 'hard',
     });
     h.flush();
-    const r = h.supervisor.wake({
+    const r = h.supervisor.deliver({
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
       text: 'stub',
+      spawn_options: testStartOptions(),
     });
-    expect(r.delivered).toBe(false);
-    if (r.delivered === false) expect(r.reason).toBe('not_running');
+    // A dead handle is gone; deliver spawns-with-batch rather than refusing.
+    expect(r.disposition).toBe('spawning');
   });
 });
 

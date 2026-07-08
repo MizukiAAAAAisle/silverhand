@@ -131,7 +131,7 @@ describe('OutputBackpressure — non-droppable events', () => {
         ts: 0,
       },
       {
-        event: 'runtime_startup_delivery_consumed',
+        event: 'runtime_delivery_consumed',
         conversation_id: 'c1',
         agent_id: 'a1',
         delivery_ids: [1],

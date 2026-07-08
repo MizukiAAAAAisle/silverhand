@@ -146,7 +146,7 @@ describe('e2e — real Unix socket', () => {
     const SECRET = 'LEAK-FROM-MALFORMED-FRAME-AAAAA';
     // Craft a line that's syntactically invalid JSON (trailing `}` →
     // `{`) but carries the secret in the payload position.
-    const bad = `{"id":"x","intent":"runtime_wake","params":{"payload":"${SECRET}"}{\n`;
+    const bad = `{"id":"x","intent":"runtime_deliver","params":{"payload":"${SECRET}"}{\n`;
     await new Promise<void>((resolve, reject) => {
       const sock = createConnection(f.socketPath);
       const timer = setTimeout(() => {

@@ -102,8 +102,8 @@ export class SocketTransport implements Transport {
       // rejected with `disconnected`. The daemon still answered, but
       // the client treated the (now legitimately late) response as a
       // duplicate to drop — so the caller saw a phantom failure on a
-      // request that actually succeeded. PR-2's larger payloads
-      // (`runtime_wake`, `runtime_start.startup_delivery`) would tip
+      // request that actually succeeded. The larger delivery payloads
+      // (`runtime_deliver` batches) would tip
       // into this corner constantly.
       //
       // True failure modes are still surfaced:

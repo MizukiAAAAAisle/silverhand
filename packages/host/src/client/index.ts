@@ -52,7 +52,7 @@ import {
   type RequestFrame,
   type RuntimeStartParams,
   type RuntimeStopParams,
-  type RuntimeWakeParams,
+  type RuntimeDeliverParams,
   type RuntimeStatusParams,
   type RuntimeClearSessionParams,
   type ConversationLogDebugParams,
@@ -396,10 +396,20 @@ export class HostClient {
     return this.call('runtime_stop', params);
   }
 
-  runtimeWake(
-    params: RuntimeWakeParams,
-  ): Promise<IntentResult<'runtime_wake'>> {
-    return this.call('runtime_wake', params);
+  /**
+   * Daemon-authoritative delivery — the sole message-delivery command
+   * (#task:1417 Stage 2c retired `runtime_wake` + `runtime_start`-with-batch).
+   * The daemon inspects the REAL handle and spawns / admits / refuses itself;
+   * the sync disposition transfers or refuses custody only — `delivered_at`
+   * flips solely on the async `runtime_delivery_consumed` event. Production
+   * delivery routes through the outbound fanout bridge, not this local
+   * helper; the wrapper exists so the local-socket surface stays symmetric
+   * with the protocol's `runtime_deliver` command and typo-safe.
+   */
+  runtimeDeliver(
+    params: RuntimeDeliverParams,
+  ): Promise<IntentResult<'runtime_deliver'>> {
+    return this.call('runtime_deliver', params);
   }
 
   runtimeStatus(

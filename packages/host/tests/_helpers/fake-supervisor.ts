@@ -10,17 +10,17 @@
  *
  * State machine (matches design doc §3.2.1):
  *
- *   ┌───────┐  start (no startup_delivery)
- *   │ idle  │ ───────────────────────────►  ready
- *   └───────┘                                ▲
- *       │  start (with startup_delivery)     │  consumed
- *       ▼                                    │
- *   startup_pending ─────────────────────────┤
- *       │                                    │
- *       │  failed                            │
- *       ▼                                    │
- *     exited                                 │
- *                                            │
+ *   ┌───────┐  runtime_start (pure lifecycle)
+ *   │ idle  │ ───────────────────────────►  spawning ──► ready
+ *   └───────┘
+ *       │  runtime_deliver (no live runtime → spawn-with-batch)
+ *       ▼
+ *   startup_pending ──── consumed ────►  ready
+ *       │
+ *       │  failed
+ *       ▼
+ *     exited
+ *
  *   ready ── stop / runtime_exit ──► draining ──► exited
  *
  * Events the fake emits, in the order a real driver would emit them:
@@ -28,8 +28,9 @@
  *  - `runtime_state` after every phase change (mirrors the
  *    AgentRunState transitions a real driver parses out of CLI
  *    output).
- *  - `runtime_startup_delivery_consumed` once the simulated driver
- *    "consumes" a startup_delivery batch.
+ *  - `runtime_delivery_consumed` once the simulated driver
+ *    "consumes" a `runtime_deliver` batch (spawn-with-batch or the
+ *    ready-write arm).
  *  - `runtime_ready_for_drain` once the runtime is live-drainable.
  *  - `runtime_exit` on stop / SIGKILL / simulated crash.
  *
@@ -51,6 +52,8 @@ import type {
   RuntimeClearSessionResult,
   RuntimeCloseActivityLogParams,
   RuntimeCloseActivityLogResult,
+  RuntimeDeliverParams,
+  RuntimeDeliverResult,
   RuntimeOutputPauseParams,
   RuntimeOutputPauseResult,
   RuntimeOutputResumeParams,
@@ -64,9 +67,8 @@ import type {
   RuntimeStopAllResult,
   RuntimeStopParams,
   RuntimeStopResult,
-  RuntimeWakeParams,
-  RuntimeWakeResult,
 } from '../../src/protocol.js';
+import type { DeliveryOwnerContext } from '../../src/daemon/supervisor-contract.js';
 
 export type FakeSupervisorPhase =
   | 'idle'
@@ -105,10 +107,10 @@ export interface FakeSupervisorOptions {
    */
   schedule?: (cb: () => void) => void;
   /**
-   * Whether the supervisor's simulated driver consumes
-   * startup_delivery successfully. Production fake always succeeds
-   * (deterministic happy path); tests flip this to exercise the
-   * `runtime_startup_delivery_failed` arm without needing a real
+   * Whether the supervisor's simulated driver consumes a
+   * `runtime_deliver` spawn-with-batch successfully. Production fake
+   * always succeeds (deterministic happy path); tests flip this to
+   * exercise the `runtime_delivery_failed` arm without needing a real
    * watchdog.
    */
   failStartupDelivery?: boolean;
@@ -174,16 +176,15 @@ export class FakeSupervisor {
     const k = key(params.conversation_id, params.agent_id);
     // Idempotent on (conv, agent) — second start while running is a
     // no-op that returns the existing pid + started_at, matching CM
-    // today.
+    // today. #task:1417 Stage 2c: `runtime_start` is pure lifecycle —
+    // the result is a bare `{started, pid, started_at}` (no `phase` /
+    // `startup_delivery_accepted`), and there is no startup batch here.
     const existing = this.runtimes.get(k);
     if (existing && existing.phase !== 'exited') {
       return {
         started: true,
         pid: existing.pid,
         started_at: existing.started_at,
-        ...(params.startup_delivery
-          ? { startup_delivery_accepted: false }
-          : {}),
       };
     }
     const pid = this.nextPid++;
@@ -192,9 +193,8 @@ export class FakeSupervisor {
       conversation_id: params.conversation_id,
       agent_id: params.agent_id,
       pid,
-      phase: params.startup_delivery ? 'startup_pending' : 'spawning',
+      phase: 'spawning',
       started_at: startedAt,
-      pending_startup_delivery_ids: params.startup_delivery?.delivery_ids,
       output_paused: false,
     };
     this.runtimes.set(k, rt);
@@ -204,28 +204,18 @@ export class FakeSupervisor {
     // integrations rely on them.
     this.emitState(rt);
 
-    if (params.startup_delivery) {
-      // Startup-pending path: simulate driver consuming the batch
-      // (or refusing it if the test asks for the failure arm), then
-      // transition to ready and emit ready_for_drain.
-      this.scheduleStartupSettle(rt, params.startup_delivery.delivery_ids);
-    } else {
-      // No startup_delivery: simulate the driver coming up directly
-      // ready (matches kickoffMode='requires_first_message' empty
-      // inbox — no spawn-time stdin write). For claude-family this
-      // still means session_init waits for the first runtime_wake;
-      // the fake collapses that gap to "ready immediately" since
-      // nothing about the wire contract requires the wait.
-      this.scheduleReady(rt);
-    }
+    // Pure lifecycle spawn: the driver comes up directly ready (matches
+    // an empty-inbox start — no spawn-time stdin write). For
+    // claude-family this still means session_init waits for the first
+    // `runtime_deliver`; the fake collapses that gap to "ready
+    // immediately" since nothing about the wire contract requires the
+    // wait. A batch arrives only via `runtime_deliver`.
+    this.scheduleReady(rt);
 
     return {
       started: true,
       pid,
       started_at: startedAt,
-      ...(params.startup_delivery
-        ? { startup_delivery_accepted: true }
-        : {}),
     };
   }
 
@@ -271,41 +261,63 @@ export class FakeSupervisor {
     return { mode: 'hard', stopped: true, exit_code: exitCode };
   }
 
-  // ── runtime_wake ───────────────────────────────────────────────
+  // ── runtime_deliver (#task:1417 Stage 2) ───────────────────────
+  //
+  // Daemon-authoritative delivery. Mirrors the real supervisor's three
+  // arms: SPAWN (no live runtime) → `spawning` + async
+  // `runtime_delivery_consumed`; WRITE (ready) → `admitted` + async
+  // `runtime_delivery_consumed`; REFUSE (draining / still coming up) →
+  // `refused`. The disposition transfers/refuses custody only; the DB
+  // ack rides the async unified event.
 
-  wake(params: RuntimeWakeParams): RuntimeWakeResult {
+  deliver(params: RuntimeDeliverParams, _ctx?: DeliveryOwnerContext): RuntimeDeliverResult {
     const k = key(params.conversation_id, params.agent_id);
     const rt = this.runtimes.get(k);
-    if (!rt || rt.phase === 'exited' || rt.phase === 'idle') {
-      return {
-        delivered: false,
-        reason: 'not_running',
-        delivery_ids: params.delivery_ids,
+
+    // SPAWN arm — no live runtime.
+    if (!rt || rt.phase === 'exited') {
+      const pid = this.nextPid++;
+      const startedAt = this.now();
+      const next: FakeRuntime = {
+        conversation_id: params.conversation_id,
+        agent_id: params.agent_id,
+        pid,
+        phase: 'startup_pending',
+        started_at: startedAt,
+        pending_startup_delivery_ids: [...params.delivery_ids],
+        output_paused: false,
       };
+      this.runtimes.set(k, next);
+      this.emitState(next);
+      this.scheduleDeliverySettle(next, [...params.delivery_ids]);
+      return { disposition: 'spawning', pid, started_at: startedAt };
     }
-    if (rt.phase === 'spawning') {
-      return {
-        delivered: false,
-        reason: 'not_initialized',
-        delivery_ids: params.delivery_ids,
-      };
-    }
-    if (rt.phase === 'startup_pending') {
-      return {
-        delivered: false,
-        reason: 'startup_pending',
-        delivery_ids: params.delivery_ids,
-      };
-    }
+
+    // REFUSE arms.
     if (rt.phase === 'draining') {
-      return {
-        delivered: false,
-        reason: 'draining',
-        delivery_ids: params.delivery_ids,
-      };
+      return { disposition: 'refused', reason: 'draining' };
     }
-    // phase === 'ready' — happy path.
-    return { delivered: true, delivery_ids: params.delivery_ids };
+    if (rt.phase === 'spawning' || rt.phase === 'startup_pending') {
+      return { disposition: 'refused', reason: 'startup_pending' };
+    }
+
+    // WRITE arm — phase === 'ready'. Custody transferred; consumed ack
+    // fires async.
+    this.schedule(() => {
+      if (rt.phase !== 'ready') return;
+      this.emit({
+        event: 'runtime_delivery_consumed',
+        conversation_id: rt.conversation_id,
+        agent_id: rt.agent_id,
+        delivery_ids: [...params.delivery_ids],
+        ts: this.now(),
+      });
+    });
+    return {
+      disposition: 'admitted',
+      pid: rt.pid,
+      started_at: rt.started_at,
+    };
   }
 
   // ── runtime_status ─────────────────────────────────────────────
@@ -423,29 +435,31 @@ export class FakeSupervisor {
     return { resumed: true };
   }
 
+  cleanupDeferredForOwner(_owner: string): void {}
+
   // ── private scheduling helpers ─────────────────────────────────
 
   /**
-   * Schedule the "driver consumed startup_delivery" transition.
-   * On `failStartupDelivery=true`, emit
-   * `runtime_startup_delivery_failed` instead and move the runtime
-   * to `exited` (the real driver would tear down on init failure).
+   * Schedule the "driver consumed the batch" transition for a
+   * `runtime_deliver` spawn-with-batch (#task:1417 Stage 2). Settles onto
+   * the unified `runtime_delivery_consumed`/`_failed` family — the fake's
+   * counterpart to the real supervisor's spawn-with-batch consume path.
+   * On `failStartupDelivery=true`, emit `runtime_delivery_failed` instead
+   * and move the runtime to `exited` (the real driver would tear down on
+   * init failure).
    */
-  private scheduleStartupSettle(
+  private scheduleDeliverySettle(
     rt: FakeRuntime,
     deliveryIds: number[],
   ): void {
     this.schedule(() => {
-      // Defensive: another intent may have already moved us out of
-      // startup_pending (e.g. concurrent stop). Don't emit settle
-      // events on a runtime that no longer exists.
       if (rt.phase !== 'startup_pending') return;
       if (this.failStartupDelivery) {
         rt.phase = 'exited';
         rt.pending_startup_delivery_ids = undefined;
         this.emitState(rt, /* terminalReason */ 'crashed');
         this.emit({
-          event: 'runtime_startup_delivery_failed',
+          event: 'runtime_delivery_failed',
           conversation_id: rt.conversation_id,
           agent_id: rt.agent_id,
           delivery_ids: deliveryIds,
@@ -462,12 +476,11 @@ export class FakeSupervisor {
         });
         return;
       }
-      // Happy path: consumed → ready → ready_for_drain.
       rt.phase = 'ready';
       rt.pending_startup_delivery_ids = undefined;
       this.emitState(rt);
       this.emit({
-        event: 'runtime_startup_delivery_consumed',
+        event: 'runtime_delivery_consumed',
         conversation_id: rt.conversation_id,
         agent_id: rt.agent_id,
         delivery_ids: deliveryIds,

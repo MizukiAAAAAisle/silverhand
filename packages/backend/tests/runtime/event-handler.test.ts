@@ -9,8 +9,8 @@
  *     `cache.clearAll()` + hydrate.
  *   - Daemon-pid change: a `ready` event with a new pid wipes cache
  *     and re-hydrates under the new key.
- *   - Inbox ack timing: `runtime_startup_delivery_consumed` →
- *     `inboxAck.markDelivered`; `_failed` → `markUndelivered(reason)`.
+ *   - Inbox ack timing: `runtime_delivery_consumed` →
+ *     `inboxAck.markDelivered`; `runtime_delivery_failed` → `markUndelivered(reason)`.
  *   - Event routing: `runtime_state` → cache + SSE `agent_activity`;
  *     `runtime_exit` → cache + SSE `agent_status` with `intentional`-derived
  *     status; `runtime_init_*` → SSE projection without cache mutation.
@@ -450,7 +450,7 @@ describe('RuntimeEventHandler — daemon pid change (daemon swap)', () => {
 });
 
 describe('RuntimeEventHandler — inbox ack timing', () => {
-  it('startup_delivery_consumed → markDelivered(ids)', async () => {
+  it('runtime_delivery_consumed → markDelivered(ids)', async () => {
     const cache = new RunStateCache();
     const { client, emit } = makeFakeClient();
     const { bridge } = makeBridge({ runtimes: [] });
@@ -465,7 +465,7 @@ describe('RuntimeEventHandler — inbox ack timing', () => {
     });
     await handler.start();
     emit({
-      event: 'runtime_startup_delivery_consumed',
+      event: 'runtime_delivery_consumed',
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [10, 11, 12],
@@ -474,7 +474,7 @@ describe('RuntimeEventHandler — inbox ack timing', () => {
     expect(delivered).toEqual([[10, 11, 12]]);
   });
 
-  it('startup_delivery_failed → markUndelivered(ids, reason)', async () => {
+  it('runtime_delivery_failed → markUndelivered(ids, reason)', async () => {
     const cache = new RunStateCache();
     const { client, emit } = makeFakeClient();
     const { bridge } = makeBridge({ runtimes: [] });
@@ -489,7 +489,7 @@ describe('RuntimeEventHandler — inbox ack timing', () => {
     });
     await handler.start();
     emit({
-      event: 'runtime_startup_delivery_failed',
+      event: 'runtime_delivery_failed',
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [42],
@@ -1492,7 +1492,7 @@ describe('RuntimeEventHandler — cache-not-ready safety', () => {
 
 describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () => {
   // Cindy `3l4bZ5vaMvlC9DVS`: EventHandler hooks ONLY forward events;
-  // they must NOT hold queues or call wake. These tests pin the
+  // they must NOT hold queues or issue deliveries. These tests pin the
   // forward-only contract for `onParsedEvent` and `onRuntimeExit`.
 
   function setup(opts: { withCallbacks?: boolean } = {}): {

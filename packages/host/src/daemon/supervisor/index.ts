@@ -41,6 +41,8 @@ import {
   type RuntimeCloseActivityLogParams,
   type RuntimeCloseActivityLogResult,
   type RuntimeOutputPauseParams,
+  type RuntimeDeliverParams,
+  type RuntimeDeliverResult,
   type RuntimeOutputPauseResult,
   type RuntimeOutputResumeParams,
   type RuntimeOutputResumeResult,
@@ -54,8 +56,6 @@ import {
   type RuntimeStopParams,
   type RuntimeStopResult,
   type RuntimeDelivery,
-  type RuntimeWakeParams,
-  type RuntimeWakeResult,
 } from '../../protocol.js';
 import type { DaemonLogger } from '../logger.js';
 import { buildPromptContextFromRuntimeStartOptions } from '../prompt-context.js';
@@ -79,15 +79,21 @@ import {
 } from '../spawn-prep.js';
 import { buildProfileMcpSpawnArgs } from '../mcp-spawn.js';
 import { chooseSilverhandCliLauncher } from '../silverhand-cli-launcher.js';
-import type { SupervisorContract } from '../supervisor-contract.js';
+import type {
+  DeliveryOwnerContext,
+  SupervisorContract,
+} from '../supervisor-contract.js';
 import type {
   ActivitySnippetKind,
+  DeferredEntry,
   DefaultReplyTarget,
   InitTimeoutReason,
   PendingStaleEvent,
   RuntimeHandle,
   RuntimePhase,
+  StartupDeliveryState,
 } from './handle.js';
+import { combineGatedBatch, SEND_MESSAGE_TOOL } from './gated-combine.js';
 
 // ── Configurable timing knobs ──────────────────────────────────────
 //
@@ -248,6 +254,58 @@ function key(conversationId: string, agentId: string): string {
   return `${conversationId}\x00${agentId}`;
 }
 
+/** Safe-boundary predicate for the daemon mid-turn queue (#task:1417
+ *  Stage 3, §11.3). Byte-for-byte the coordinator's retired `isSafeBoundary`:
+ *  no outstanding tool uses and not compacting. The daemon already tracks
+ *  `handle.busy` in `updateRunStateFromParsed`, so this reads local truth. */
+function handleAtSafeBoundary(handle: RuntimeHandle): boolean {
+  return handle.busy.outstandingToolUses === 0 && !handle.busy.compacting;
+}
+
+/** Idempotency key for a deferred batch: the delivery-id SET (order-
+ *  independent). Mirrors the coordinator's `dedupKey` so a re-submit of the
+ *  same batch cannot double-queue (§11.4). */
+function deferredDedupKey(ids: readonly number[]): string {
+  return [...ids].sort((a, b) => a - b).join(',');
+}
+
+/** Fold a drained deferred batch into a single `StartupDeliveryState` for the
+ *  shared consume path (#task:1417 Stage 3, §11.4). `gated` multi-entry
+ *  batches combine their texts into one turn (`combineGatedBatch`); a single
+ *  entry (always the case for `direct` FIFO, or a lone gated entry) keeps its
+ *  text verbatim. delivery_ids concatenate so the one `consumed` covers the
+ *  whole batch; per-delivery stream metadata flattens only when EVERY entry
+ *  carries it (else fall back to the scalar `deliveredUpToSeq` high-water). */
+function combineDeferredBatch(
+  batch: readonly DeferredEntry[],
+  gated: boolean,
+): StartupDeliveryState {
+  const deliveryIds = batch.flatMap(e => [...e.deliveryIds]);
+  const texts = batch.map(e => e.text);
+  // `batch` is non-empty by contract (flushDeferred only calls this after
+  // checking the queue has entries), so `texts[0]` is always present; the
+  // `?? ''` satisfies the compiler's index-widening without masking a real
+  // empty text.
+  const text =
+    gated && texts.length > 1
+      ? combineGatedBatch(texts, SEND_MESSAGE_TOOL)
+      : (texts[0] ?? '');
+  const allHaveDeliveries = batch.every(e => e.deliveries !== undefined);
+  const deliveries = allHaveDeliveries
+    ? batch.flatMap(e => [...(e.deliveries ?? [])])
+    : undefined;
+  const seqs = batch
+    .map(e => e.deliveredUpToSeq)
+    .filter((s): s is number => s !== undefined);
+  const deliveredUpToSeq = seqs.length > 0 ? Math.max(...seqs) : undefined;
+  return {
+    deliveryIds,
+    ...(deliveredUpToSeq !== undefined ? { deliveredUpToSeq } : {}),
+    ...(deliveries ? { deliveries } : {}),
+    text,
+  };
+}
+
 function safeSeq(value: number | undefined): number | null {
   return Number.isSafeInteger(value) && value !== undefined && value > 0
     ? value
@@ -273,6 +331,24 @@ type EffectiveMessageTarget =
   | { kind: 'legacy'; target: AgentMessageSendParams['target'] };
 
 const CHANNEL_DEFAULT_REPLY_TARGET: DefaultReplyTarget = { kind: 'channel' };
+
+/**
+ * Internal spawn input for {@link Supervisor.startUnlocked}. Stage 2c made the
+ * wire `runtime_start` command pure lifecycle ({@link RuntimeStartParams} — no
+ * delivery), so the ONLY source of a spawn-time startup batch is
+ * `runtime_deliver`'s SPAWN arm, which passes one here. A plain
+ * `RuntimeStartParams` (from `start()` / retry respawn) is assignable — its
+ * `startup_delivery` is simply absent. This shape is daemon-internal and never
+ * crosses the wire.
+ */
+type StartUnlockedParams = RuntimeStartParams & {
+  startup_delivery?: {
+    delivery_ids: number[];
+    delivered_up_to_seq?: number;
+    deliveries?: RuntimeDelivery[];
+    text: string;
+  };
+};
 
 function uniqueSortedStreamKeys(streamKeys: readonly string[]): string[] {
   return [...new Set(streamKeys)].sort();
@@ -416,7 +492,7 @@ export class Supervisor implements SupervisorContract {
   /** Per-(conv, agent) lifecycle serialization (Cindy plan v2 issue
    *  #6 + tightening `ixAq6GPTn4fVSpCF`). Each entry is the tail
    *  promise for the *most recent* lifecycle operation on that key;
-   *  new ops queue behind it. wake/soft-stop intentionally DO NOT
+   *  new ops queue behind it. delivery/soft-stop intentionally DO NOT
    *  participate — they gate via `handle.startupDelivery` / `phase`
    *  instead. */
   private readonly lifecycleTails = new Map<string, Promise<void>>();
@@ -1075,32 +1151,32 @@ export class Supervisor implements SupervisorContract {
   }
 
   private async startUnlocked(
-    params: RuntimeStartParams,
+    params: StartUnlockedParams,
     initAttempt: number,
   ): Promise<RuntimeStartResult> {
     const k = key(params.conversation_id, params.agent_id);
-    const hasStartupDelivery = !!params.startup_delivery;
 
     // Idempotent on (conv, agent) — second start while running
     // returns the existing pid + started_at, matching CM today.
     // A dead handle (phase === 'exited') is treated as gone; we
     // re-spawn. The repeat call's `startup_delivery` (if any) is
     // ignored: the original startup batch is the authoritative one
-    // (start is not a wake substitute). Callers wanting to push a
-    // new batch after start must use `runtime_wake`.
+    // (start is not a delivery substitute). Callers wanting to push a
+    // new batch after start must use `runtime_deliver`.
     //
-    // `startup_delivery_accepted` (Cindy `YW2BGWryWjfymPkU` nit):
-    // protocol comment says "Absent when `startup_delivery` was not
-    // provided in params". We surface it ONLY when the caller actually
-    // supplied a batch — false on repeat (the batch was not used),
-    // true on the first call that consumed it.
+    // v6 (#task:1417 Stage 2c): `runtime_start` is pure lifecycle — its
+    // result is a bare `{started, pid, started_at}`, no `phase` /
+    // `startup_delivery_accepted`. Delivery custody is transferred solely
+    // by `runtime_deliver`'s sync disposition + async
+    // `runtime_delivery_{consumed,failed}`; `startup_delivery` survives
+    // only as the daemon-internal spawn-with-batch seam threaded here from
+    // `deliver()`'s SPAWN arm.
     const existing = this.handles.get(k);
     if (existing && existing.phase !== 'exited') {
       return {
         started: true,
         pid: existing.pid,
         started_at: existing.startedAt,
-        ...(hasStartupDelivery ? { startup_delivery_accepted: false } : {}),
       };
     }
     if (existing && existing.phase === 'exited') {
@@ -1334,11 +1410,13 @@ export class Supervisor implements SupervisorContract {
       runState: null,
       activitySnippetBuffer: null,
       busy: { outstandingToolUses: 0, compacting: false },
+      deferredQueue: [],
+      flushingDeferred: false,
       // 3c-b additions
       // Strip `startup_delivery` from the cached params so an internal
       // retry respawn doesn't try to replay a payload the previous
       // attempt already consumed (or already failed). Backend re-pumps
-      // pending inbox rows via `runtime_wake` against the new handle.
+      // pending inbox rows via `runtime_deliver` against the new handle.
       spawnParams: {
         conversation_id: params.conversation_id,
         agent_id: params.agent_id,
@@ -1436,7 +1514,8 @@ export class Supervisor implements SupervisorContract {
     //     their startup protocol and should emit session-ready without
     //     any user stdin.
     //   - `requires_first_message`: defer until the FIRST successful
-    //     stdin write (`startup_delivery` or `runtime_wake`). Claude
+    //     stdin write (a `runtime_deliver` batch — at spawn or into a
+    //     ready handle). Claude
     //     Code does not emit `system.init` merely because the process
     //     spawned; it emits only after accepting a real user turn. A
     //     spawn-time watchdog therefore kills legitimate idle Claude
@@ -1453,8 +1532,8 @@ export class Supervisor implements SupervisorContract {
     // asynchronously; until it settles, `maybeEmitReadyForDrain` is
     // gated by `handle.startupDelivery !== null` and will not emit.
     // (Cindy `_JjyK8UrpcmYA5Iu`: pending startup batch keeps
-    // ready_for_drain bottled up; `runtime_wake` returns
-    // `startup_pending` during the same window.)
+    // ready_for_drain bottled up; a concurrent `runtime_deliver` is
+    // sync-refused `startup_pending` during the same window.)
     setImmediate(() => {
       if (handle.phase !== 'spawning' && handle.phase !== 'startup_pending') {
         return;
@@ -1471,7 +1550,7 @@ export class Supervisor implements SupervisorContract {
     //      `thread/started`)
     //   2. encode raw text via `driver.encodeStdinMessage(text, cliSessionId)`
     //   3. write encoded line to stdin (or fail)
-    //   4. emit `runtime_startup_delivery_consumed` OR `_failed`
+    //   4. emit `runtime_delivery_consumed` OR `_failed`
     //   5. clear `handle.startupDelivery = null`
     //   6. THEN re-evaluate ready_for_drain
     // We don't `await` here — start() must return promptly so backend
@@ -1484,7 +1563,6 @@ export class Supervisor implements SupervisorContract {
       started: true,
       pid,
       started_at: startedAt,
-      ...(hasStartupDelivery ? { startup_delivery_accepted: true } : {}),
     };
   }
 
@@ -1499,8 +1577,8 @@ export class Supervisor implements SupervisorContract {
     //     For codex, `readyToEncode = threadId !== null`. The deferred
     //     consume kicks back in from `updateRunStateFromParsed` after
     //     `session_init` (claude) or `handleThreadReady` (codex) flips
-    //     state. The gate stays closed across the defer so
-    //     `runtime_wake` and `runtime_ready_for_drain` keep their
+    //     state. The gate stays closed across the defer so a concurrent
+    //     `runtime_deliver` and `runtime_ready_for_drain` keep their
     //     blocking behavior.
     //   - encode returns null AFTER ready → fail with `driver_refused`
     //     (config/programming error; fail loud per Cindy
@@ -1602,14 +1680,14 @@ export class Supervisor implements SupervisorContract {
     // no-op.
     this.ensureInitWatchdogArmed(handle);
 
-    // Write succeeded. For `requires_first_message` drivers we must
-    // defer the consumed emit until `session_init` confirms the
+    // Write succeeded. For `requires_first_message` drivers (claude) we
+    // must defer the consumed emit until `session_init` confirms the
     // runtime actually accepted the turn — `startupAwaitingInit`
     // marks this sub-state. The gate (`startupDelivery !== null`)
-    // stays closed, so wake → `startup_pending` and
+    // stays closed, so delivery → `startup_pending` and
     // `runtime_ready_for_drain` remain blocked until session_init.
-    // For `self_inits` drivers (claude), or when initObserved is
-    // already true (e.g. resume path), settle now.
+    // For self-init drivers (kickoffMode !== 'requires_first_message'),
+    // or when initObserved is already true (e.g. resume path), settle now.
     if (
       handle.driver.kickoffMode === 'requires_first_message' &&
       !handle.initObserved
@@ -1657,14 +1735,27 @@ export class Supervisor implements SupervisorContract {
   private clearStartupGate(handle: RuntimeHandle): void {
     handle.startupDelivery = null;
     handle.startupAwaitingInit = false;
+    // Post-write re-drive (#task:1417 Stage 3, §11.4): the single delivery
+    // slot just freed, so a queued deferred batch may now be admissible.
+    // Guarded + lock-serialized inside; a no-op while a flush is active
+    // (that path re-drives from its own `finally`).
+    this.maybeScheduleDeferredFlush(handle);
   }
 
+  /**
+   * Emit the "batch consumed" ack for `handle`'s current startup batch.
+   * Every startup batch now arrives via `runtime_deliver` (Stage 2c retired
+   * `runtime_start`'s batch + `runtime_wake`), so this always settles onto
+   * the unified `runtime_delivery_consumed`. It is `delivery_ids`-keyed and
+   * is backend's `markDelivered` trigger — the ONLY thing that flips
+   * `delivered_at`.
+   */
   private emitStartupDeliveryConsumed(
     handle: RuntimeHandle,
     deliveryIds: readonly number[],
   ): void {
     this.emit({
-      event: 'runtime_startup_delivery_consumed',
+      event: 'runtime_delivery_consumed',
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
       delivery_ids: [...deliveryIds],
@@ -1672,13 +1763,17 @@ export class Supervisor implements SupervisorContract {
     });
   }
 
+  /** Mirror of {@link emitStartupDeliveryConsumed} for the failure ack.
+   *  Always the unified `runtime_delivery_failed`; backend rolls the batch
+   *  back to pending (retriable reasons) or marks it failed
+   *  (`driver_refused` programming error). */
   private emitStartupDeliveryFailed(
     handle: RuntimeHandle,
     deliveryIds: readonly number[],
     reason: 'child_exit' | 'write_failed' | 'driver_refused' | 'init_watchdog',
   ): void {
     this.emit({
-      event: 'runtime_startup_delivery_failed',
+      event: 'runtime_delivery_failed',
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
       delivery_ids: [...deliveryIds],
@@ -1766,7 +1861,7 @@ export class Supervisor implements SupervisorContract {
    * Pre-`readyToEncode()` mapping: Cindy explicitly opted to NOT extend
    * the soft `reason` enum with a new `driver_not_ready` arm — soft
    * stop pre-handshake is rare and the directive can't be retried by
-   * backend the way a wake can, so the encode-null pre-ready case maps
+   * backend the way a delivery can, so the encode-null pre-ready case maps
    * to the existing `driver_refused`. Logged distinctly so operators
    * can tell the two arms apart on inspection.
    *
@@ -1970,147 +2065,315 @@ export class Supervisor implements SupervisorContract {
     return exitPromise;
   }
 
-  // ── runtime_wake ───────────────────────────────────────────────
+  // ── runtime_deliver (Stage 3, #task:1417) ──────────────────────
 
-  async wake(params: RuntimeWakeParams): Promise<RuntimeWakeResult> {
-    // Wake gating (Cindy `_JjyK8UrpcmYA5Iu` + Option A v2
-    // `UMGu36zoTDVuKWXi`):
-    //   - no handle / exited        → not_running
-    //   - startup_delivery in flight → startup_pending
-    //   - draining (hard stop in flight) → draining
-    //   - driver not ready to encode → driver_not_ready (backend
-    //     keeps DB row pending; next `runtime_ready_for_drain` will
-    //     re-trigger drain)
-    //   - encode returned null while ready → driver_refused (driver
-    //     bug; fail loudly per Cindy `0G5uJBydO_4qt_2r`)
-    //   - write failed              → driver_refused
-    //   - otherwise                 → delivered
-    //
-    // 3b deliberately does NOT gate on `initObserved` / driver
-    // kickoff mode (Cindy: `not_initialized` arm exists in the
-    // reason enum but its policy lives with 3c's init-watchdog
-    // awareness). For self_inits drivers like claude the FIRST
-    // write IS what makes session_init come back, so a pre-init
-    // gate would deadlock the deferred-init flow. The new
-    // `driver_not_ready` arm only fires when the driver itself
-    // says it can't encode yet (codex pre-`thread/started`); for
-    // claude `readyToEncode()` is always true so this arm is never
-    // hit on the deferred-init path.
+  /**
+   * Daemon-authoritative delivery — the single command that subsumes the
+   * backend start-vs-wake fork. Backend claims the pending batch in-flight
+   * then hands it here; the daemon, sole owner of runtime-lifecycle truth,
+   * picks spawn / write / defer / refuse against the REAL handle rather than
+   * the backend's desyncable `RunStateCache` (the #task:1416 bug class).
+   * Canonical: docs/daemon-authoritative-delivery-v1.md §11.
+   *
+   * LOAD-BEARING (§11): the synchronous result transfers or refuses CUSTODY
+   * only — it never acks the DB. `delivered_at` flips solely on the async
+   * `runtime_delivery_consumed` this path ultimately emits (or rolls back on
+   * `runtime_delivery_failed`). "Sent to daemon" ≠ ack. This holds for every
+   * arm, including `deferred`.
+   *
+   * Four arms, all under the per-(conv,agent) lifecycle lock so a concurrent
+   * stop / start / retry-respawn cannot race the handle read:
+   *   - SPAWN — no live handle (absent or exited) → `startUnlocked` with the
+   *     batch as its startup delivery. `spawning`, or `refused{cooldown}`
+   *     when the init-failure cooldown gate is active.
+   *   - REFUSE — draining (hard stop in flight) → `refused{draining}`; or a
+   *     startup-phase / live-oneShot handle (still spawning/startup_pending,
+   *     driver not ready to encode, or a oneShot that drains its inbox only
+   *     at spawn) → `refused{startup_pending}`. These are DELIBERATELY not
+   *     folded into the deferred queue (§11.2): each has a lossless DB-backed
+   *     re-drive (`runtime_ready_for_drain`, or exit→respawn-with-batch), so
+   *     volatile daemon custody would be strictly worse on crash-safety.
+   *   - DEFER — a ready, encode-ready, non-oneShot handle that cannot take
+   *     the write RIGHT NOW (§11.3): a `gated` driver caught mid-turn
+   *     (boundary closed), or a prior write still in flight. Custody moves
+   *     into the per-handle deferred queue keyed by the injected owner and is
+   *     flushed at the next safe boundary / when the in-flight write clears.
+   *     `deferred`.
+   *   - ADMIT — a ready handle safe to write now → place the batch on the
+   *     handle and drive it through the SAME `consumeStartupDelivery` machine
+   *     the spawn path uses (init-proof deferral for `requires_first_message`
+   *     drivers, encode, write, seq flush, consumed/failed emit). `admitted`
+   *     the instant custody sits on the handle.
+   */
+  async deliver(
+    params: RuntimeDeliverParams,
+    ctx: DeliveryOwnerContext,
+  ): Promise<RuntimeDeliverResult> {
     const k = key(params.conversation_id, params.agent_id);
-    const handle = this.handles.get(k);
-    const passthroughDeliveryIds = [...params.delivery_ids];
-    this.assertDeliveryMetadataConsistent(
-      params.conversation_id,
-      params.agent_id,
-      params.delivery_ids,
-      params.deliveries,
-      'runtime_wake',
-    );
-    if (!handle || handle.phase === 'exited') {
-      return {
-        delivered: false,
-        reason: 'not_running',
-        delivery_ids: passthroughDeliveryIds,
-      };
-    }
-    if (handle.startupDelivery !== null) {
-      return {
-        delivered: false,
-        reason: 'startup_pending',
-        delivery_ids: passthroughDeliveryIds,
-      };
-    }
-    if (handle.phase === 'draining') {
-      return {
-        delivered: false,
-        reason: 'draining',
-        delivery_ids: passthroughDeliveryIds,
-      };
-    }
-    // Option A v2: daemon owns encode. Driver instance held by handle
-    // carries the per-(conv,agent) protocol state (codex threadId etc).
-    if (!driverReadyToEncode(handle.driver)) {
-      this.logger.info(
-        {
-          kind: 'process',
-          action: 'wake_driver_not_ready',
-          pid: handle.pid,
-          conversationId: handle.conversationId,
-          agent_id: handle.agentId,
-          delivery_ids: passthroughDeliveryIds,
-        },
-        'wake refused: driver not ready to encode (backend keeps pending)',
-      );
-      return {
-        delivered: false,
-        reason: 'driver_not_ready',
-        delivery_ids: passthroughDeliveryIds,
-      };
-    }
-    const encoded = handle.driver.encodeStdinMessage(params.text, handle.cliSessionId);
-    if (encoded === null) {
-      this.logger.warn(
-        {
-          kind: 'process',
-          action: 'wake_driver_refused',
-          pid: handle.pid,
-          conversationId: handle.conversationId,
-          agent_id: handle.agentId,
-          delivery_ids: passthroughDeliveryIds,
-          text_bytes: params.text.length,
-        },
-        'wake encode returned null after driver claimed ready (driver bug?)',
-      );
-      return {
-        delivered: false,
-        reason: 'driver_refused',
-        delivery_ids: passthroughDeliveryIds,
-      };
-    }
-    const admitNow = this.shouldAdmitDeliveryImmediately(handle);
-    try {
-      await this.writeStdinPayload(handle, encoded);
-      this.admitDeliveryBatch(
-        handle,
+    return this.withLifecycleLock(k, async () => {
+      // Fail loud on a drifted batch before any custody decision — the
+      // same consistency contract the spawn-time startup batch enforces.
+      this.assertDeliveryMetadataConsistent(
+        params.conversation_id,
+        params.agent_id,
+        params.delivery_ids,
         params.deliveries,
-        params.delivered_up_to_seq,
-        admitNow,
-        admitNow ? 'wake_delivery_admitted' : 'wake_delivery_deferred',
+        'runtime_deliver',
       );
-      await this.writeLastDeliveredSeq(handle, params.delivered_up_to_seq);
-    } catch (err) {
-      this.logger.warn(
-        {
-          kind: 'process',
-          action: 'wake_write_failed',
+
+      const handle = this.handles.get(k);
+
+      // ── SPAWN arm: no live handle ──────────────────────────────
+      if (!handle || handle.phase === 'exited') {
+        const result = await this.startUnlocked(
+          {
+            conversation_id: params.conversation_id,
+            agent_id: params.agent_id,
+            options: params.spawn_options,
+            startup_delivery: {
+              delivery_ids: [...params.delivery_ids],
+              ...(params.delivered_up_to_seq !== undefined
+                ? { delivered_up_to_seq: params.delivered_up_to_seq }
+                : {}),
+              ...(params.deliveries ? { deliveries: params.deliveries } : {}),
+              text: params.text,
+            },
+          },
+          0,
+        );
+        if (result.started) {
+          return {
+            disposition: 'spawning',
+            pid: result.pid,
+            started_at: result.started_at,
+          };
+        }
+        // The only non-started `startUnlocked` result is the init-failure
+        // cooldown gate. Custody stays with backend (retriable).
+        return {
+          disposition: 'refused',
+          reason: 'cooldown',
+          cooldown_until: result.cooldown_until,
+        };
+      }
+
+      // ── REFUSE arms: draining / startup-phase / live oneShot ────
+      if (handle.phase === 'draining') {
+        return { disposition: 'refused', reason: 'draining' };
+      }
+      if (
+        handle.driver.oneShot ||
+        handle.phase === 'spawning' ||
+        handle.phase === 'startup_pending' ||
+        !driverReadyToEncode(handle.driver)
+      ) {
+        // Startup-phase or live oneShot — DELIBERATELY NOT folded into the
+        // daemon deferred queue (§11.2). Each already has a lossless
+        // DB-backed re-drive: `runtime_ready_for_drain` once the handle is
+        // ready + its startup batch consumed (spawning/startup_pending/
+        // not-ready-to-encode), or exit→respawn-with-batch for a live
+        // oneShot. Taking volatile daemon custody here would be strictly
+        // worse on crash-safety for zero benefit, so we refuse and let the
+        // backend keep the rows pending and resubmit.
+        return { disposition: 'refused', reason: 'startup_pending' };
+      }
+
+      // Here: phase === 'ready', driver ready to encode, not oneShot.
+      const gated = handle.driver.busyDeliveryMode === 'gated';
+      const writeInFlight = handle.startupDelivery !== null;
+      const boundaryOpen = handleAtSafeBoundary(handle);
+
+      // ── DEFER arm: ready, but cannot take the write RIGHT NOW (§11.3) ──
+      // Two custody-into-daemon-queue cases, both keep the rows in-flight:
+      //   - `gated` driver caught mid-turn (boundary closed) — flushed at
+      //     the next `turn_end`;
+      //   - a prior write still in flight (the single `startupDelivery`
+      //     slot is busy) — the consecutive-delivery window, re-driven
+      //     after that write's consumed clears the slot.
+      // `deferred` is a custody transfer, NOT an ack — `delivered_at` still
+      // moves only on the async `runtime_delivery_consumed` the eventual
+      // flush emits.
+      if (writeInFlight || (gated && !boundaryOpen)) {
+        this.enqueueDeferred(handle, params, ctx.owner);
+        return {
+          disposition: 'deferred',
           pid: handle.pid,
-          conversationId: handle.conversationId,
-          agent_id: handle.agentId,
-          delivery_ids: passthroughDeliveryIds,
-          error_message: (err as Error).message,
-        },
-        'wake stdin write failed',
-      );
-      return {
-        delivered: false,
-        reason: 'driver_refused',
-        delivery_ids: passthroughDeliveryIds,
+          started_at: handle.startedAt,
+        };
+      }
+
+      // ── ADMIT arm: ready handle, safe to write now ─────────────
+      // Route the batch through the same consume machine the spawn path
+      // uses (init-proof deferral, encode, write, admit, seq flush,
+      // consumed/failed emit). Custody transfers the instant the batch
+      // sits on the handle; the async ack settles `delivered_at`.
+      handle.startupDelivery = {
+        deliveryIds: [...params.delivery_ids],
+        ...(params.delivered_up_to_seq !== undefined
+          ? { deliveredUpToSeq: params.delivered_up_to_seq }
+          : {}),
+        ...(params.deliveries ? { deliveries: params.deliveries } : {}),
+        text: params.text,
       };
+      void this.consumeStartupDelivery(handle);
+      return {
+        disposition: 'admitted',
+        pid: handle.pid,
+        started_at: handle.startedAt,
+      };
+    });
+  }
+
+  /**
+   * Owner-scoped deferred-queue cleanup (#task:1417 Stage 3, §11.4.1).
+   * Called by an ingress when its connection drops (control-socket close,
+   * local-outbound socket close, or outbound-WS close/reconnect/stop):
+   * discard ONLY the deferred (unwritten) batches this owner enqueued,
+   * across every handle, emitting NOTHING. The backend rolls the matching
+   * in-flight rows back to `pending` on its own disconnect handler and
+   * reconnect replay re-drives them, so a `consumed`/`failed` here would be
+   * wrong (nothing was written) and a double-delivery risk. Never touches
+   * another owner's entries; idempotent.
+   */
+  cleanupDeferredForOwner(owner: string): void {
+    let discarded = 0;
+    for (const handle of this.handles.values()) {
+      if (handle.deferredQueue.length === 0) continue;
+      const before = handle.deferredQueue.length;
+      handle.deferredQueue = handle.deferredQueue.filter(
+        entry => entry.owner !== owner,
+      );
+      discarded += before - handle.deferredQueue.length;
     }
-    // 3c-b deferred-init arm: the first real stdin write to a
-    // `requires_first_message` driver (claude) is what makes the
-    // runtime ultimately emit `session_init`. The watchdog was NOT
-    // armed at spawn time for empty-inbox starts (see
-    // `deferInitWatchdog` in startUnlocked); arm it NOW so a runtime
-    // that accepts the write but never reaches init still gets the
-    // same silence/pre-protocol/post-protocol coverage. `ensureInitWatchdog`
-    // is a no-op if a watchdog is already armed or init was already
-    // observed, so this is safe to call unconditionally on every wake.
-    this.ensureInitWatchdogArmed(handle);
-    return {
-      delivered: true,
-      delivery_ids: passthroughDeliveryIds,
-    };
+    if (discarded > 0) {
+      this.logger.info(
+        { kind: 'process', action: 'deferred_owner_cleanup', owner, discarded },
+        'discarded deferred deliveries for dropped connection owner',
+      );
+    }
+  }
+
+  /** Idempotent enqueue into the daemon mid-turn queue. Dedups by the
+   *  delivery-id set so a re-submit of the same batch does not double-queue
+   *  (§11.4), mirroring the backend coordinator's `dedupKey`. Owner-aware
+   *  (Cindy P1): a same-id-set re-submit under a DIFFERENT owner is a
+   *  reconnect/reclaim race — the backend rolled the row off the old
+   *  connection and re-drove it under the new one, and that re-drive can
+   *  reach the daemon BEFORE the old connection's cleanup. Rebind the queued
+   *  entry to the CURRENT owner (which matches the DB's latest in-flight
+   *  owner) so the old owner's cleanup can no longer discard custody the DB
+   *  now attributes to the new connection; otherwise the entry is dropped
+   *  and the row orphaned in-flight with no daemon custody. */
+  private enqueueDeferred(
+    handle: RuntimeHandle,
+    params: RuntimeDeliverParams,
+    owner: string,
+  ): void {
+    const dedupKey = deferredDedupKey(params.delivery_ids);
+    const existingIdx = handle.deferredQueue.findIndex(
+      entry => deferredDedupKey(entry.deliveryIds) === dedupKey,
+    );
+    if (existingIdx !== -1) {
+      const existing = handle.deferredQueue[existingIdx]!;
+      if (existing.owner !== owner) {
+        // Rebind in place (preserving FIFO position for direct mode) with
+        // the current owner and the latest payload. DeferredEntry is
+        // readonly, so replace the element rather than mutate it.
+        handle.deferredQueue[existingIdx] = {
+          deliveryIds: [...params.delivery_ids],
+          ...(params.delivered_up_to_seq !== undefined
+            ? { deliveredUpToSeq: params.delivered_up_to_seq }
+            : {}),
+          ...(params.deliveries ? { deliveries: params.deliveries } : {}),
+          text: params.text,
+          owner,
+        };
+        this.logger.info(
+          {
+            kind: 'process',
+            action: 'deferred_owner_rebind',
+            conversation_id: handle.conversationId,
+            agent_id: handle.agentId,
+            from_owner: existing.owner,
+            to_owner: owner,
+          },
+          'rebound deferred delivery to current owner (reconnect/reclaim race)',
+        );
+      }
+      return;
+    }
+    handle.deferredQueue.push({
+      deliveryIds: [...params.delivery_ids],
+      ...(params.delivered_up_to_seq !== undefined
+        ? { deliveredUpToSeq: params.delivered_up_to_seq }
+        : {}),
+      ...(params.deliveries ? { deliveries: params.deliveries } : {}),
+      text: params.text,
+      owner,
+    });
+  }
+
+  /**
+   * Flush the daemon mid-turn queue at a safe boundary (#task:1417 Stage 3,
+   * §11.4). Scheduled (never awaited by its caller) from the two triggers:
+   * a boundary reopen in `updateRunStateFromParsed`, and a post-write
+   * re-drive when a prior write settles. Takes the lifecycle lock so it
+   * cannot race a concurrent `deliver`/`stop`/exit, and re-checks every
+   * precondition against the LIVE handle before touching it.
+   *
+   * Split by driver mode (Cindy P1-2):
+   *   - `gated`: drain the WHOLE queue, combine into ONE write → one
+   *     `consumed` covering every delivery_id (one-turn semantics).
+   *   - `direct`: flush ONE entry FIFO, no combine; the post-write re-drive
+   *     picks up the next once this write's `consumed` clears the slot.
+   *
+   * Custody stays the daemon's until `consumeStartupDelivery` emits the
+   * async `runtime_delivery_consumed`; the flush never acks the DB.
+   */
+  private async flushDeferred(handle: RuntimeHandle): Promise<void> {
+    const k = key(handle.conversationId, handle.agentId);
+    await this.withLifecycleLock(k, async () => {
+      const live = this.handles.get(k);
+      // Handle may have been replaced (respawn) or torn down since the
+      // flush was scheduled — only act on the exact same live handle.
+      if (!live || live !== handle) return;
+      if (live.flushingDeferred) return;
+      if (live.deferredQueue.length === 0) return;
+      if (live.phase !== 'ready' || !driverReadyToEncode(live.driver)) return;
+      // A write is still in flight — the post-write re-drive will retry once
+      // the slot clears. Never stomp a batch mid-consume.
+      if (live.startupDelivery !== null) return;
+      const gated = live.driver.busyDeliveryMode === 'gated';
+      // Still mid-turn for a gated driver — wait for the next boundary.
+      if (gated && !handleAtSafeBoundary(live)) return;
+
+      live.flushingDeferred = true;
+      try {
+        const batch = gated
+          ? live.deferredQueue.splice(0) // drain all
+          : live.deferredQueue.splice(0, 1); // FIFO one
+        if (batch.length === 0) return;
+        live.startupDelivery = combineDeferredBatch(batch, gated);
+        await this.consumeStartupDelivery(live);
+      } finally {
+        live.flushingDeferred = false;
+        // FIFO continuation for `direct`: the just-consumed entry cleared
+        // the slot synchronously, so re-drive to pick up the next queued
+        // entry. Guarded (no-op if the queue is empty or a write deferred
+        // its ack via `requires_first_message`).
+        this.maybeScheduleDeferredFlush(live);
+      }
+    });
+  }
+
+  /** Schedule a deferred-queue flush if there is anything to flush. Cheap
+   *  fast-path guard so the hot parsed-event path doesn't spawn a lock
+   *  acquisition on every event. The real preconditions are re-checked
+   *  under the lock inside `flushDeferred`. */
+  private maybeScheduleDeferredFlush(handle: RuntimeHandle): void {
+    if (handle.deferredQueue.length === 0) return;
+    if (handle.flushingDeferred) return;
+    void this.flushDeferred(handle);
   }
 
   private async writeLastDeliveredSeq(
@@ -2179,7 +2442,7 @@ export class Supervisor implements SupervisorContract {
     // 3a semantics (per Cindy `OQCA05pivtB8nSTC` clarification note):
     // `cleared: true` here means **the host-side runtime was hard-
     // stopped** — the runtime handle is gone, so any subsequent
-    // `wake` would have to re-spawn. It does NOT mean the
+    // `runtime_deliver` would have to re-spawn. It does NOT mean the
     // backend-owned resume-state / cli_session_id projection has
     // been wiped; that is downstream of this call. Backend treats
     // `cleared: true` as a signal to nullify its own resume bookkeeping
@@ -2298,7 +2561,7 @@ export class Supervisor implements SupervisorContract {
     child.on('error', err => {
       // `error` fires for ENOENT / EACCES on spawn (rare here since
       // resolveBinary already verified existence) and for stdin write
-      // failures (3b will tolerate those when it lands wake()). Log
+      // failures (tolerated on the `runtime_deliver` write path). Log
       // for triage; the exit event still drives state transitions.
       this.logger.warn(
         {
@@ -2334,7 +2597,7 @@ export class Supervisor implements SupervisorContract {
     // The raw stream is unbounded: a single tool invocation can print
     // megabytes of stdout/stderr, and forwarding that as
     // `runtime_output` duplicates data that backend does not consume
-    // for correctness. UI state, wake gates, delivery ack, and DB
+    // for correctness. UI state, delivery gates, delivery ack, and DB
     // projection are all driven by bounded structured events
     // (`runtime_parsed_event` / `runtime_state`) below. Keeping raw
     // tool output daemon-local prevents large `cat`/`grep`/shell
@@ -2359,7 +2622,7 @@ export class Supervisor implements SupervisorContract {
     // Parse fanout only feeds off stdout — stderr is treated as raw
     // diagnostic output (CM same). Even when output is paused, we
     // continue to feed parseLine because parsed events drive
-    // host-internal AgentRunState and the wake gate, which are
+    // host-internal AgentRunState and the delivery gate, which are
     // not droppable concerns. (`runtime_parsed_event` may still be
     // skipped at the broadcaster's discretion — but that's frame-level
     // backpressure, not pause semantics.)
@@ -2535,7 +2798,7 @@ export class Supervisor implements SupervisorContract {
    * not execution-plane).
    *
    * `session_init` is special: it flips `initObserved` (drives the
-   * 3c wake gate) and updates `cliSessionId`. No run-state change
+   * 3c delivery gate) and updates `cliSessionId`. No run-state change
    * here — run-state lifecycle starts when the agent actually does
    * something (text/thinking/tool_call/turn_end).
    */
@@ -2600,6 +2863,13 @@ export class Supervisor implements SupervisorContract {
     if (!handle.inputTurnActive && parsedStartsTurn(parsed)) {
       this.admitPendingSeqForNewTurn(handle, 'queued_delivery_admitted_on_activity');
     }
+
+    // Boundary-reopen trigger for the daemon mid-turn queue (#task:1417
+    // Stage 3, §11.4). Capture the safe-boundary state BEFORE the busy
+    // transition; if this event reopens the boundary, flush any deferred
+    // batch — symmetric to the retired coordinator's
+    // `if (!wasSafe && nowSafe && pending.length) flush()`.
+    const wasSafeBoundary = handleAtSafeBoundary(handle);
 
     switch (parsed.kind) {
       case 'thinking':
@@ -2683,6 +2953,13 @@ export class Supervisor implements SupervisorContract {
       case 'unknown':
         // No-op; backend may decide what to do with it.
         break;
+    }
+
+    // If the busy transition just reopened a safe boundary, drive the
+    // daemon mid-turn queue (#task:1417 Stage 3, §11.4). Guarded/no-op when
+    // the queue is empty or a flush is already running.
+    if (!wasSafeBoundary && handleAtSafeBoundary(handle)) {
+      this.maybeScheduleDeferredFlush(handle);
     }
   }
 
@@ -3050,7 +3327,7 @@ export class Supervisor implements SupervisorContract {
     // If a startup batch was still pending at exit, settle it as
     // `child_exit` so backend's startup_delivery handler isn't left
     // hanging. (Cindy: failed settle must still clear the gate so
-    // run-state / wake gating stays coherent.) `clearStartupGate`
+    // run-state / delivery gating stays coherent.) `clearStartupGate`
     // wipes both `startupDelivery` and `startupAwaitingInit` in the
     // same critical section so no `(null, true)` interleaving
     // appears.
@@ -3061,6 +3338,19 @@ export class Supervisor implements SupervisorContract {
         handle.initTimedOut ? 'init_watchdog' : 'child_exit',
       );
       this.clearStartupGate(handle);
+    }
+
+    // Any batches the daemon was holding in its mid-turn queue (#task:1417
+    // Stage 3, §11.4/§11.6) die with the runtime — settle each as
+    // `child_exit` so the backend rolls the rows back to pending
+    // (oneShot respawn-with-batch or `ready_for_drain` replay re-drives).
+    // No orphan: the DB rows were never acked. Emitted per-entry so each
+    // owner's rollback is independent.
+    if (handle.deferredQueue.length > 0) {
+      for (const entry of handle.deferredQueue) {
+        this.emitStartupDeliveryFailed(handle, entry.deliveryIds, 'child_exit');
+      }
+      handle.deferredQueue = [];
     }
 
     // 3c-b retry branch (Cindy plan v2 issue #3 + override precedence
@@ -3233,7 +3523,7 @@ export class Supervisor implements SupervisorContract {
 
   /** Arm both the silence-tier and the pre-protocol-cap timer for
    *  this handle. Idempotent: clears any prior timers first so retries
-   *  / wake-driven deferred arming don't pile up. */
+   *  / delivery-driven deferred arming don't pile up. */
   private startInitWatchdog(handle: RuntimeHandle): void {
     this.clearInitWatchdog(handle);
     handle.initWatchdogArmed = true;
@@ -3337,7 +3627,8 @@ export class Supervisor implements SupervisorContract {
   }
 
   /** Deferred-init arming for `requires_first_message` drivers. Called
-   *  from `wake()` after a successful stdin write. No-op if watchdog
+   *  from `consumeStartupDelivery` after a successful first stdin write.
+   *  No-op if watchdog
    *  already armed, init already observed, or init already timed out. */
   private ensureInitWatchdogArmed(handle: RuntimeHandle): void {
     if (handle.initWatchdogArmed || handle.initObserved || handle.initTimedOut) return;
@@ -3365,9 +3656,9 @@ export class Supervisor implements SupervisorContract {
     handle.initTimedOut = true;
     handle.initTimeoutReason = reason;
     // Cindy `HyC05fC-FEs94uoZ` B3: flip to `draining` + emit state so
-    // the wake gate (`handle.phase === 'draining' → reason:'draining'`)
+    // the delivery gate (`handle.phase === 'draining' → reason:'draining'`)
     // covers the SIGTERM→SIGKILL kill window. Without this, backend
-    // could `runtime_wake` between the timer firing and the child
+    // could `runtime_deliver` between the timer firing and the child
     // actually exiting, and the daemon would write stdin + markDelivered
     // a message to a process that's already being killed. We do NOT
     // touch `intentionalExit` — the watchdog kill is daemon-initiated,
@@ -3507,7 +3798,7 @@ export class Supervisor implements SupervisorContract {
    * #6 + tightening `ixAq6GPTn4fVSpCF`:
    *
    *   - Covers ONLY lifecycle mutations: start, hard stop, clearSession,
-   *     internal retry respawn. wake/soft-stop/output-pause go around.
+   *     internal retry respawn. delivery/soft-stop/output-pause go around.
    *   - Per-key, not global — different (conv, agent) ops parallelize.
    *   - Survives previous-op failure: a rejected predecessor must not
    *     wedge the queue. We swallow the previous tail's rejection at
@@ -3621,13 +3912,13 @@ function phaseToStatus(phase: RuntimePhase): AgentRunState['status'] {
  * Read `driver.readyToEncode()` with a default-true fallback for
  * drivers that don't implement the optional method. Stateless drivers
  * (claude) typically omit it; stateful drivers (codex) MUST implement
- * so the daemon's `ready_for_drain` gate, the wake `driver_not_ready`
- * arm, and the startup_delivery defer-pre-encode path (Option A v2 —
- * Cindy `UMGu36zoTDVuKWXi`) all key off the right state.
+ * so the daemon's `ready_for_drain` gate, the `runtime_deliver`
+ * `driver_not_ready` refuse arm, and the startup_delivery defer-pre-encode
+ * path (Option A v2 — Cindy `UMGu36zoTDVuKWXi`) all key off the right state.
  *
  * Lifted to a module-level helper rather than an instance method so
  * `consumeStartupDelivery` / `tryConsumeStartupDelivery` /
- * `maybeEmitReadyForDrain` / `wake` / `softStopHandle` can call it
+ * `maybeEmitReadyForDrain` / `deliver` / `softStopHandle` can call it
  * without re-establishing `this` binding.
  */
 function driverReadyToEncode(driver: Driver): boolean {

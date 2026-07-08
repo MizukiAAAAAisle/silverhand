@@ -198,7 +198,7 @@ export interface BackendContext {
   workspaceRegistryBackfiller?: WorkspaceRegistryBackfiller;
   /**
    * Backend-side facade for agent runtime lifecycle. Services and
-   * routes route every spawn / stop / wake / clearSession / inbox
+   * routes route every spawn / stop / deliver / clearSession / inbox
    * delivery / run-state read through this single interface.
    *
    * Both embedded and standalone use `OutboundAgentRuntimeHost`; the

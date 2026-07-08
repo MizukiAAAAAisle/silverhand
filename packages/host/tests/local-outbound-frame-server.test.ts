@@ -2,7 +2,7 @@ import { Socket } from 'node:net';
 import { existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   OutboundDaemonToServerCommandResponseFrameSchema,
   OutboundDaemonToServerEventFrameSchema,
@@ -93,6 +93,7 @@ async function makeHarness(
   opts?: {
     writeBuffer?: { maxFrames?: number; maxBytes?: number };
     readyEvent?: () => Extract<EventFrame, { event: 'ready' }>;
+    cleanupDeferredForOwner?: (owner: string) => void;
   },
 ): Promise<Harness> {
   const socketPath = join(tmpdir(), `sh-d5a-server-${process.pid}-${++socketSeq}.sock`);
@@ -102,6 +103,7 @@ async function makeHarness(
     socketPath,
     dispatchCommand: dispatch,
     logger,
+    cleanupDeferredForOwner: opts?.cleanupDeferredForOwner ?? (() => {}),
     writeBuffer: opts?.writeBuffer,
     ...(opts?.readyEvent ? { readyEvent: opts.readyEvent } : {}),
   });
@@ -524,6 +526,34 @@ describe('LocalOutboundFrameServer', () => {
     expect(parsed).toMatchObject({ kind: 'ready' });
     // No second handshake frame queued for this socket.
     await expect(second.nextFrame(60)).rejects.toThrow(/no frame/i);
+  });
+
+  it('calls cleanupDeferredForOwner with the connection’s minted owner on socket close (#task:1417 Stage 3)', async () => {
+    // Ingress wiring gate: when this connection drops, the server must
+    // discard exactly this connection's deferred entries — keyed by the
+    // SAME owner token it injected into the delivery context. The owner is
+    // minted per-socket and dispatcher-injected (unspoofable); we capture
+    // it off a real dispatch, then assert the close cleanup uses it.
+    let dispatchedOwner: string | null = null;
+    const cleaned: string[] = [];
+    const { client } = await makeHarness(
+      async (command, ctx?: { owner: string }) => {
+        if (ctx) dispatchedOwner = ctx.owner;
+        return { id: command.id, result: { runtimes: [] } };
+      },
+      { cleanupDeferredForOwner: owner => cleaned.push(owner) },
+    );
+
+    client.sendCommand(runtimeStatusCommand('cmd-owner'));
+    await client.nextFrame();
+    expect(dispatchedOwner).toMatch(/^local:/);
+
+    // Drop the connection → cleanup fires once with this socket's owner.
+    client.destroy();
+    await vi.waitFor(() => {
+      expect(cleaned).toContain(dispatchedOwner);
+    });
+    expect(cleaned).toEqual([dispatchedOwner]);
   });
 });
 

@@ -4,7 +4,7 @@
  *
  * 3a scope: spawn / output / hard-stop / exit. 3b adds parse-fanout
  * state (line buffer + per-handle AgentRunState), startup-delivery
- * step-0 gating, and the `initObserved` flag the wake gate keys off.
+ * step-0 gating, and the `initObserved` flag the delivery gate keys off.
  * 3c-b adds the init-watchdog timers, retry/cooldown bookkeeping,
  * and the compaction watchdog. The lifecycle-lock lives on the
  * supervisor (`lifecycleTails: Map<key, Promise<void>>`) rather than
@@ -37,18 +37,18 @@ export type RuntimePhase =
  * Step-0 startup-delivery gating state. Presence of this object is
  * the SINGLE source of truth for "this runtime has a startup batch
  * still in flight" — `null` means no batch pending (whether because
- * `start()` was called without `startup_delivery`, or because the
- * batch settled and the supervisor cleared this field).
+ * `start()` was called without a startup batch (pure lifecycle spawn),
+ * or because the batch settled and the supervisor cleared this field).
  *
  * Cindy `_JjyK8UrpcmYA5Iu` + `wuiwdLKrLFyGip_s`: keep this a
  * separate, explicit field (not derived from a `Set<number>` of
  * delivery ids) so the state machine bit and the idempotency-ids
  * cannot drift. Settle order is fixed:
  *   1. stdin write resolves (success or failure determined)
- *   2. emit `runtime_startup_delivery_consumed` OR `_failed`
+ *   2. emit `runtime_delivery_consumed` OR `_failed`
  *   3. set `startupDelivery = null`
  *   4. only NOW can `maybeEmitReadyForDrain` fire
- * This prevents a stray `runtime_wake` from sneaking past the gate
+ * This prevents a stray `runtime_deliver` from sneaking past the gate
  * between "consumed/failed event sent" and "pending cleared".
  */
 export interface StartupDeliveryState {
@@ -74,6 +74,31 @@ export interface StartupDeliveryState {
    * consume immediately.
    */
   readonly text: string;
+}
+
+/**
+ * A batch the daemon accepted into its per-handle mid-turn queue
+ * (#task:1417 Stage 3, §11.4). Distinct from the single `startupDelivery`
+ * slot: the queue holds batches that arrived at a ready handle which could
+ * not take the write *right now* — mid-turn (`gated` driver) or behind a
+ * write already in flight. Each is flushed through the SAME
+ * `consumeStartupDelivery` machine at the next safe boundary.
+ *
+ * The DB rows stay `in_flight` (owner=conn) the whole time — a `deferred`
+ * disposition is a custody transfer to this queue, NOT an ack. On the
+ * owning connection's drop the entry is discarded (owner-scoped cleanup,
+ * §11.4.1) with no `consumed`/`failed`, because nothing was written and the
+ * backend rolls the rows back to pending on its own disconnect handler.
+ */
+export interface DeferredEntry {
+  readonly deliveryIds: readonly number[];
+  readonly deliveredUpToSeq?: number;
+  readonly deliveries?: readonly RuntimeDelivery[];
+  readonly text: string;
+  /** Delivery-owner token (§11.4.1) — the connection this batch arrived
+   *  on. Stamped by `deliver()` from the injected `DeliveryOwnerContext`;
+   *  the sole key for owner-scoped cleanup on that connection's drop. */
+  readonly owner: string;
 }
 
 export type ActivitySnippetKind = 'thinking' | 'text';
@@ -184,7 +209,7 @@ export interface RuntimeHandle {
    *  confirms via `session_init` (mirrors CM's
    *  `initPendingInboxIds` defer-markDelivered path for
    *  `requires_first_message` drivers). NOT a second source of
-   *  truth — `runtime_wake` / `maybeEmitReadyForDrain` still gate
+   *  truth — `runtime_deliver` / `maybeEmitReadyForDrain` still gate
    *  ONLY on `startupDelivery !== null`. Cleared in the same
    *  critical section as `startupDelivery` via `clearStartupGate`,
    *  so the `(null, true)` interleaving is impossible. */
@@ -194,11 +219,11 @@ export interface RuntimeHandle {
    *  re-spawn resets via a fresh handle. */
   readyForDrainEmitted: boolean;
   /** True once a parsed `session_init` event has been observed.
-   *  Drives the wake gate's `not_initialized` arm and the future
+   *  Drives the delivery gate's `not_initialized` arm and the future
    *  3c init-watchdog cancellation. */
   initObserved: boolean;
   /** Cached cli session id from the latest `session_init`. Backend
-   *  re-uses it on resume; daemon holds it so wake/soft-stop can
+   *  re-uses it on resume; daemon holds it so delivery/soft-stop can
    *  surface its presence (3c gating). */
   cliSessionId: string | null;
   /** Residue from line-splitting stdout chunks. The daemon hands
@@ -217,6 +242,18 @@ export interface RuntimeHandle {
   /** Per-handle tool-call bookkeeping so `tool_output` knows when to
    *  drop status back to `thinking`. Mirrors CM's `handle.busy`. */
   busy: { outstandingToolUses: number; compacting: boolean };
+  /** Daemon-held mid-turn delivery queue (#task:1417 Stage 3, §11.4).
+   *  Batches accepted at a ready handle that could not take the write now
+   *  (mid-turn `gated`, or a write already in flight). Flushed through
+   *  `consumeStartupDelivery` at the next safe boundary — `gated` drains
+   *  the whole queue combined into one write, `direct` flushes FIFO one at
+   *  a time. Volatile by contract: discarded on the owning connection's
+   *  drop (owner-scoped) and failed on runtime exit. */
+  deferredQueue: DeferredEntry[];
+  /** True while a `flushDeferred` is in flight for this handle. Prevents a
+   *  second boundary-reopen / post-write cascade from racing a flush.
+   *  Mirrors the backend coordinator's `flushing` guard. */
+  flushingDeferred: boolean;
 
   // ── 3c-b additions ───────────────────────────────────────────────
 
@@ -226,14 +263,15 @@ export interface RuntimeHandle {
    *  (conv, agent). startup_delivery is intentionally NOT carried —
    *  the original payload was either consumed or failed before the
    *  timeout fired, and the daemon cannot reliably replay it. Backend's
-   *  inbox path handles redelivery via `runtime_wake` on the new
+   *  inbox path handles redelivery via `runtime_deliver` on the new
    *  handle. */
   spawnParams: RuntimeStartParams;
 
   /** Init watchdog state — three timers (silence / pre-protocol cap /
    *  post-protocol) plus the cross-cutting bookkeeping. `armed`
    *  protects against double-arming on the deferred-init path
-   *  (claude empty-inbox: arm only when wake actually writes). All
+   *  (claude empty-inbox: arm only when the first `runtime_deliver`
+   *  actually writes). All
    *  three timers are independently cleared once `initObserved` flips
    *  (session_init parsed). */
   initWatchdogArmed: boolean;

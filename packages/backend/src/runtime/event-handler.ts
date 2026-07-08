@@ -10,7 +10,7 @@
  * ## Module boundary (Cindy `KMJFmcS4hf_tJ5hj`)
  *
  *   - Command side:    `RuntimeBridge` (this file does NOT call
- *                      `bridge.runtimeStart/Stop/Wake/etc.` directly —
+ *                      `bridge.runtimeStart/Stop/Deliver/etc.` directly —
  *                      callers do; the handler only invokes
  *                      `bridge.runtimeStatus` for hydrate, which is a
  *                      pure read)
@@ -41,22 +41,16 @@
  * confirmed identity with would risk projecting stale state onto a
  * brand-new daemon.
  *
- * ## Inbox-ack timing (Cindy `KMJFmcS4hf_tJ5hj` boundary 6)
+ * ## Inbox-ack timing (#task:1417 Stage 2b)
  *
- *   - **Startup delivery** (spawn-time inbox drain): backend marks
- *     rows delivered ONLY after `runtime_startup_delivery_consumed`
- *     fires for those `delivery_ids`. The daemon's
- *     `runtime_start` reply's `startup_delivery_accepted` flag is
- *     "accepted for attempt", NOT "consumed" — backend MUST NOT mark
- *     delivered on the reply alone.
- *   - **Live delivery** (running runtime wake): the caller (CM-style
- *     drain coordinator) marks rows delivered on the
- *     `runtime_wake` success result `{delivered: true, delivery_ids}`.
- *     The handler does NOT touch live-delivery ack — that path is
- *     synchronous via the bridge.
- *   - **Failure**: `runtime_startup_delivery_failed` carries a typed
- *     reason. Handler hands rows back to the inbox sink so the next
- *     spawn replays them.
+ *   - **Sole production ack**: `delivered_at` moves ONLY on the async
+ *     `runtime_delivery_consumed{delivery_ids}` event (→ `markDelivered`).
+ *     The sync `runtime_deliver` disposition (`spawning`/`admitted`/
+ *     `refused`) carries NO ack — "sent to daemon" ≠ ack. This is the sole
+ *     `delivered_at` mover on the production fanout/coordinator path.
+ *   - **Failure**: `runtime_delivery_failed{delivery_ids, reason}` hands
+ *     rows back to the inbox sink (rollback to pending) so a later deliver
+ *     replays them.
  */
 import type { EventFrame, RuntimeStatusResult } from '@silverhand/host';
 import type {
@@ -66,6 +60,7 @@ import type {
   ParsedEventKind,
 } from '@silverhand/shared';
 import type { ActivityLogWriter } from './activity-log-writer.js';
+import { makeDaemonInstanceKey } from './daemon-instance-key.js';
 import type { RunStateCache } from './run-state-cache.js';
 import { sanitizeParsedEventForBroadcast } from './event-sanitize.js';
 import { NOOP_STATUS_PROJECTOR, type RuntimeStatusProjector } from './status-projector.js';
@@ -126,7 +121,7 @@ export interface RuntimeEventSource {
  * loop (post-flip: a thin CM successor; commit-4 default: undefined).
  *
  * `null` return means "no rows pending"; a handle return means "the
- * caller has scheduled a drain and will issue `bridge.runtimeWake`".
+ * caller has scheduled a drain and will issue `bridge.runtimeDeliver`".
  * We do NOT do drain ourselves because the cache+inbox state needed
  * to decide what to send lives outside this module.
  */
@@ -140,7 +135,7 @@ export type ReadyForDrainHandler = (conversationId: string, agentId: string) => 
  * outstanding tool_uses is a delivery boundary).
  *
  * Hook contract is "forward only" — the handler MUST NOT keep its own
- * queue or call `bridge.runtimeWake` (Cindy `3l4bZ5vaMvlC9DVS`).
+ * queue or call `bridge.runtimeDeliver` (Cindy `3l4bZ5vaMvlC9DVS`).
  */
 export type ParsedEventHandler = (conversationId: string, agentId: string, event: ParsedEvent) => void;
 
@@ -173,8 +168,8 @@ export type RuntimeExitHandler = (
 ) => void;
 
 /** Init-timeout forwarder. Used by the daemon-mode delivery coordinator
- * to cancel live-wake stuck watchdogs when startup failure supersedes
- * the pending-wake window. */
+ * to cancel live-delivery stuck watchdogs when startup failure supersedes
+ * the pending-delivery window. */
 export type RuntimeInitTimeoutHandler = (conversationId: string, agentId: string) => void;
 
 export interface ConversationActivitySink {
@@ -245,7 +240,7 @@ export interface RuntimeEventHandlerDeps {
    *  `RuntimeExitHandler` for the contract. */
   onRuntimeExit?: RuntimeExitHandler;
   /** Fires on runtime init-timeout/cooldown paths so the delivery
-   *  coordinator can clear any live-wake stuck indicator. */
+   *  coordinator can clear any live-delivery stuck indicator. */
   onInitTimeout?: RuntimeInitTimeoutHandler;
   /**
    * D4.b P1-2 (Cindy round-2 `0Hd5ComnzYxHJ6Rk` P1): fires AFTER a
@@ -254,7 +249,7 @@ export interface RuntimeEventHandlerDeps {
    * `OutboundRuntimeEventFanout` to drive automatic drain of
    * pending inbox rows on daemon reattach — deferring the drain
    * to post-hydrate is required so the per-pair `startDeliveryBacked`
-   * sees the right cache phase (`ready` → wake path; absent → spawn
+   * sees the right cache phase (`ready` → delivery path; absent → spawn
    * path). Firing on `ready` (pre-hydrate) would race the hydrate
    * and take the wrong branch.
    *
@@ -274,15 +269,6 @@ export interface RuntimeEventHandlerDeps {
    *  published as `conversation_activity` on the conversation scope. */
   conversationActivity?: ConversationActivitySink;
   logger?: RuntimeEventHandlerLogger;
-}
-
-/**
- * Build a daemon-instance key from a `ready` event. Both fields are
- * required to disambiguate "same pid recycled across restarts" — pid
- * alone is not unique enough on long-lived hosts.
- */
-function makeDaemonInstanceKey(daemonPid: number, startedAt: number): string {
-  return `pid:${daemonPid}@${startedAt}`;
 }
 
 function activityBlockKey(conversationId: string, agentId: string): string {
@@ -478,10 +464,15 @@ export class RuntimeEventHandler {
       case 'runtime_ready_for_drain':
         this.onReadyForDrainEvent(frame);
         return;
-      case 'runtime_startup_delivery_consumed':
+      // #task:1417 Stage 2b — unified delivery ack family for
+      // `runtime_deliver`. This is the SOLE production mover of
+      // `delivered_at`. `consumed` → markDelivered; `failed` → roll the
+      // batch back to pending (retriable) or mark failed
+      // (`driver_refused`), exactly as `markUndelivered` classifies.
+      case 'runtime_delivery_consumed':
         this.inboxAck.markDelivered(frame.delivery_ids);
         return;
-      case 'runtime_startup_delivery_failed':
+      case 'runtime_delivery_failed':
         this.inboxAck.markUndelivered(frame.delivery_ids, frame.reason);
         this.logger.warn(
           {
@@ -491,7 +482,7 @@ export class RuntimeEventHandler {
             reason: frame.reason,
             delivery_ids: frame.delivery_ids,
           },
-          'startup delivery failed',
+          'delivery failed',
         );
         return;
       case 'runtime_init_timeout':
@@ -623,7 +614,7 @@ export class RuntimeEventHandler {
         // Forward the RAW parsed event to the coordinator (Cindy
         // `BYHZJI9ALSVmmlFr` pin b — busy tracker reads raw, not
         // sanitized). Hook contract is forward-only: the callback MUST
-        // NOT hold queues or issue wakes; that lives in the
+        // NOT hold queues or issue deliveries; that lives in the
         // coordinator. Try/catch keeps a buggy hook from poisoning the
         // SSE projection.
         if (this.onParsedEventCb) {

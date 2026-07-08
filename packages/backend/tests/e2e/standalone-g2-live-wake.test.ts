@@ -1,23 +1,24 @@
 /**
- * D4.b-3 — Standalone G2 live-wake + inbox delivery marker e2e.
+ * D4.b-3 — Standalone G2 live-deliver + inbox delivery marker e2e.
  *
  * Builds on B2's spawn-to-session_init substrate. Once the runtime
- * is `ready`, a new inbox row triggers `runtime_wake` (not
- * `runtime_start`), the daemon writes the message to the child's
- * stdin via `driver.encodeStdinMessage`, and the backend records
- * the inbox row as delivered.
+ * is `ready`, a new inbox row triggers `runtime_deliver` on the live
+ * handle (the WRITE / `admitted` arm, not a fresh spawn), the daemon
+ * writes the message to the child's stdin via
+ * `driver.encodeStdinMessage`, and the backend records the inbox row
+ * as delivered on the async `runtime_delivery_consumed` ack.
  *
  * **What this test pins (Cindy `Pe0E7hK0du-S_vYC` boundary
  * tightening — "查 DB 行 (`delivered_at` / `in_flight_owner` /
- * dedupe)，不只 assert wake result")**:
+ * dedupe)，不只 assert deliver result")**:
  *
- *   1. **Delivery marker projection** — after a live wake,
+ *   1. **Delivery marker projection** — after a live deliver,
  *      `conversation_inboxes.delivered_at` for the new inbox row
  *      flips from `NULL` to a real timestamp, AND `in_flight_owner`
  *      / `in_flight_at` are cleared. This is the durable observable
- *      that proves the wake response reached the backend's
- *      `inboxAck.markDelivered(...)` sink (not just the daemon's
- *      stdin write).
+ *      that proves the deliver ack (`runtime_delivery_consumed`)
+ *      reached the backend's `inboxAck.markDelivered(...)` sink (not
+ *      just the daemon's stdin write).
  *   2. **Dedupe** — calling `deliverMessage(...)` a second time for
  *      the same inbox row is a no-op:
  *        - `delivered_at` is unchanged (no rewrite, no race
@@ -26,10 +27,10 @@
  *          the duplicate deliver attempt (the dedupe guard fired at
  *          the `delivery.deliveredAt !== null` short-circuit in
  *          `OutboundRuntimeEventFanout.deliverMessage`).
- *   3. **wake takes the live-runtime path, not start** — the
- *      session_init projection from B2's spawn is still the latest
- *      one; no new `session_init` parsed event lands after the
- *      wake (i.e. the runtime was NOT re-spawned).
+ *   3. **deliver takes the live-runtime WRITE arm, not a spawn** —
+ *      the session_init projection from B2's spawn is still the
+ *      latest one; no new `session_init` parsed event lands after the
+ *      deliver (i.e. the runtime was NOT re-spawned).
  *
  * **R4 (this IPC is local supervisor/control, not server↔daemon
  * formal semantics)**: same as B1/B2 — daemon's Unix socket isn't
@@ -60,8 +61,9 @@ const SESSION_PREFIX = '__G2_SESSION_INIT__:';
 
 /**
  * Same driver shape as B2: `kickoffMode: 'self_inits'` means the
- * supervisor's `wake()` ack flows straight back to
- * `markDelivered(...)` (no `requires_first_message` B3 gate). Tests
+ * supervisor's `deliver()` consumed ack (`runtime_delivery_consumed`)
+ * flows straight back to `markDelivered(...)` (no
+ * `requires_first_message` B3 gate). Tests
  * for the `requires_first_message` claude-style gate live elsewhere
  * (`packages/host/tests/supervisor.test.ts` covers it at the
  * supervisor unit level; D4 e2e doesn't re-derive that contract).
@@ -104,7 +106,7 @@ interface InboxRow {
   in_flight_at: number | null;
 }
 
-describe('Standalone G2 — live wake + inbox delivery marker', () => {
+describe('Standalone G2 — live deliver + inbox delivery marker', () => {
   let harness: G2Harness | null = null;
   let daemon: DaemonWithSupervisorHandle | null = null;
 
@@ -121,7 +123,7 @@ describe('Standalone G2 — live wake + inbox delivery marker', () => {
     }
   });
 
-  it('a second inbox row for an already-ready runtime takes the live-wake path, flips delivered_at, and is dedupe-safe on re-deliver', async () => {
+  it('a second inbox row for an already-ready runtime takes the live-deliver (WRITE) path, flips delivered_at, and is dedupe-safe on re-deliver', async () => {
     harness = await bootG2Harness();
     const { db } = harness.backend.context;
 
@@ -204,9 +206,9 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
 
     // Spawn the runtime + wait for session_init to land in DB (this
     // is exactly the B2 happy path; we re-use it as the precondition
-    // for the live-wake assertion below). After this, phase=ready in
+    // for the live-deliver assertion below). After this, phase=ready in
     // the backend's per-host cache, so the next inbox row takes the
-    // `runtime_wake` path, not `runtime_start`.
+    // `runtime_deliver` WRITE arm, not a fresh spawn.
     await harness.backend.context.runtimeHost.start(conversationId, agentId);
     await waitFor(
       () => {
@@ -222,20 +224,20 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
       { timeoutMs: 10_000, label: 'session_init projection (precondition)' },
     );
     // Record the count of session_init events at this point so the
-    // post-wake assertion can prove the runtime was NOT respawned
+    // post-deliver assertion can prove the runtime was NOT respawned
     // (a respawn would emit a new session_init).
-    const sessionInitsBeforeWake = harness.events.filter(
+    const sessionInitsBeforeDeliver = harness.events.filter(
       e =>
         e.frame.kind === 'runtime_parsed_event' &&
         e.frame.parsed.kind === 'session_init',
     ).length;
 
-    // Second message — this is the live-wake test substrate. We
-    // also seed the body so the wake's stdin write contains a
+    // Second message — this is the live-deliver test substrate. We
+    // also seed the body so the deliver's stdin write contains a
     // unique substring we can grep for in the fixture's STDIN:
-    // echo (proves the live-wake actually reached the runtime).
+    // echo (proves the live deliver actually reached the runtime).
     const secondMessageId = 'msg-g2-b3-second';
-    const secondBody = `live-wake-payload-${now}`;
+    const secondBody = `live-deliver-payload-${now}`;
     db.prepare(
       `INSERT INTO messages
         (id, conversation_id, from_kind, from_agent_id, from_user_id,
@@ -243,7 +245,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
         VALUES (?, ?, 'user', NULL, ?, ?, NULL, 2, ?)`,
     ).run(secondMessageId, conversationId, harness.userId, secondBody, now);
 
-    // First deliver call: enqueues + triggers live wake.
+    // First deliver call: enqueues + triggers the live WRITE arm.
     await harness.backend.context.runtimeHost.deliverMessage(
       conversationId,
       agentId,
@@ -252,8 +254,8 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
 
     // Observable #1 (load-bearing — Cindy P1 boundary): the inbox
     // row's `delivered_at` flips from NULL to a real timestamp via
-    // `inboxAck.markDelivered(...)` on the wake response. Also
-    // verify `in_flight_owner` / `in_flight_at` were cleared by
+    // `inboxAck.markDelivered(...)` on the async `runtime_delivery_consumed`
+    // ack. Also verify `in_flight_owner` / `in_flight_at` were cleared by
     // the same `markDelivered` write — a stale in-flight lease
     // would prevent later replays from claiming the row.
     const deliveredRow = await waitFor(
@@ -269,7 +271,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
         if (row.delivered_at === null) return null;
         return row;
       },
-      { timeoutMs: 10_000, label: 'inbox delivered_at projection (live wake)' },
+      { timeoutMs: 10_000, label: 'inbox delivered_at projection (live deliver)' },
     );
     expect(deliveredRow.delivered_at).toBeGreaterThan(0);
     expect(deliveredRow.delivered_at).toBeLessThanOrEqual(Date.now());
@@ -281,7 +283,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     // same inbox row hits the `delivery.deliveredAt !== null`
     // short-circuit at the top of
     // `OutboundRuntimeEventFanout.deliverMessage` and returns without
-    // dispatching a second `runtime_wake`. Two durable checks:
+    // dispatching a second `runtime_deliver`. Two durable checks:
     //   (a) the DB row's `delivered_at` is unchanged (no rewrite).
     //   (b) `in_flight_owner` / `in_flight_at` stay null (no
     //       transient re-claim that could race a parallel start).
@@ -309,17 +311,17 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     expect(reCheckRow!.in_flight_owner).toBeNull();
     expect(reCheckRow!.in_flight_at).toBeNull();
 
-    // Observable #3: the live-wake did NOT respawn the runtime — a
+    // Observable #3: the live deliver did NOT respawn the runtime — a
     // respawn would emit a fresh session_init parsed event. The
     // count of session_init events recorded since boot is the same
-    // before and after the wake, so the runtime kept its existing
-    // process / cli_session_id and the wake went through the
-    // `phase === 'ready'` path (not `idle` / `exited`).
-    const sessionInitsAfterWake = harness.events.filter(
+    // before and after the deliver, so the runtime kept its existing
+    // process / cli_session_id and the deliver went through the
+    // ready WRITE arm (not the SPAWN arm).
+    const sessionInitsAfterDeliver = harness.events.filter(
       e =>
         e.frame.kind === 'runtime_parsed_event' &&
         e.frame.parsed.kind === 'session_init',
     ).length;
-    expect(sessionInitsAfterWake).toBe(sessionInitsBeforeWake);
+    expect(sessionInitsAfterDeliver).toBe(sessionInitsBeforeDeliver);
   });
 });

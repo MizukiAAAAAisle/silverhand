@@ -63,6 +63,7 @@ import {
   type OutboundServerCommandResult,
   type RuntimeStatusResult,
 } from '@silverhand/host';
+import { OUTBOUND_PROTOCOL_VERSION } from '@silverhand/host';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
@@ -233,12 +234,11 @@ class FakeTransport implements HostWsServerController {
     if (kind === 'runtime_status') {
       return Promise.resolve(this.snapshot) as Promise<OutboundServerCommandResult<K>>;
     }
-    if (kind === 'runtime_wake') {
+    if (kind === 'runtime_deliver') {
       return Promise.resolve({
-        delivered: true,
-        delivery_ids: [
-          ...((params as { delivery_ids?: number[] }).delivery_ids ?? []),
-        ],
+        disposition: 'admitted',
+        pid: 1234,
+        started_at: 1700000000000,
       }) as Promise<OutboundServerCommandResult<K>>;
     }
     return Promise.resolve({}) as Promise<OutboundServerCommandResult<K>>;
@@ -256,7 +256,7 @@ function readyEvent(): OutboundDaemonToServerEventFrame {
     direction: 'daemon_to_server',
     type: 'event',
     kind: 'ready',
-    protocol_version: 2,
+    protocol_version: OUTBOUND_PROTOCOL_VERSION,
     daemon_version: '0.0.0-test',
     daemon_id: 'local',
     instance_id: 'instance-1',

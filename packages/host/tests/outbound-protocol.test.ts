@@ -21,6 +21,7 @@ import {
   encodeOutboundFrame,
   outboundServerCommandSchemas,
 } from '../src/outbound-protocol.js';
+import { testStartOptions } from './_helpers/runtime-start-options.js';
 
 const RUN_STATE = {
   runId: 'r1',
@@ -51,13 +52,13 @@ describe('outbound protocol — command catalogue', () => {
       'rotate_token',
       'runtime_clear_session',
       'runtime_close_activity_log',
+      'runtime_deliver',
       'runtime_output_pause',
       'runtime_output_resume',
       'runtime_start',
       'runtime_status',
       'runtime_stop',
       'runtime_stop_all',
-      'runtime_wake',
       'workspace_provision',
     ]);
 
@@ -74,11 +75,11 @@ describe('outbound protocol — command catalogue', () => {
     expect(outboundServerCommandSchemas.runtime_start.result).toBe(
       intentSchemas.runtime_start.result,
     );
-    expect(outboundServerCommandSchemas.runtime_wake.params).toBe(
-      intentSchemas.runtime_wake.params,
+    expect(outboundServerCommandSchemas.runtime_deliver.params).toBe(
+      intentSchemas.runtime_deliver.params,
     );
-    expect(outboundServerCommandSchemas.runtime_wake.result).toBe(
-      intentSchemas.runtime_wake.result,
+    expect(outboundServerCommandSchemas.runtime_deliver.result).toBe(
+      intentSchemas.runtime_deliver.result,
     );
   });
 
@@ -98,13 +99,14 @@ describe('outbound protocol — command catalogue', () => {
       direction: 'server_to_daemon',
       type: 'command',
       id: 'cmd-1',
-      kind: 'runtime_wake',
+      kind: 'runtime_deliver',
       params: {
         conversation_id: 'c1',
         agent_id: 'a1',
         delivery_ids: [1, 2],
         kind: 'message',
         text: 'hello',
+        spawn_options: testStartOptions(),
       },
     });
 
@@ -136,8 +138,8 @@ describe('outbound protocol — command catalogue', () => {
       direction: 'daemon_to_server',
       type: 'command_response',
       id: 'cmd-1',
-      kind: 'runtime_wake',
-      result: { delivered: true, delivery_ids: [1] },
+      kind: 'runtime_deliver',
+      result: { disposition: 'admitted', pid: 123, started_at: 1_700_000_000_000 },
     });
     expect(ok.success).toBe(true);
 
@@ -145,7 +147,7 @@ describe('outbound protocol — command catalogue', () => {
       direction: 'daemon_to_server',
       type: 'command_response',
       id: 'cmd-2',
-      kind: 'runtime_wake',
+      kind: 'runtime_deliver',
       error: { code: 'internal_error', message: 'boom' },
     });
     expect(err.success).toBe(true);
@@ -398,6 +400,8 @@ describe('outbound protocol — daemon event catalogue', () => {
     expect([...OUTBOUND_DAEMON_EVENT_KINDS].sort()).toEqual([
       'ready',
       'runtime_compaction_stale',
+      'runtime_delivery_consumed',
+      'runtime_delivery_failed',
       'runtime_exit',
       'runtime_init_cooldown',
       'runtime_init_retrying',
@@ -409,8 +413,6 @@ describe('outbound protocol — daemon event catalogue', () => {
       'runtime_parsed_event',
       'runtime_parsed_event_dropped',
       'runtime_ready_for_drain',
-      'runtime_startup_delivery_consumed',
-      'runtime_startup_delivery_failed',
       'runtime_state',
       'shutting_down',
     ]);

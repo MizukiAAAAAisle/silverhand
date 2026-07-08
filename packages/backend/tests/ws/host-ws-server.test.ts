@@ -939,7 +939,7 @@ describe('host outbound WebSocket server', () => {
     await expect(
       server.controller.sendCommand(
         host.id,
-        'runtime_wake',
+        'runtime_deliver',
         {
           conversation_id: 'c1',
           agent_id: 'a1',
@@ -1201,15 +1201,16 @@ function commandCases(hostId: string): CommandCase[] {
       result: { mode: 'hard', stopped: true, exit_code: 0 },
     },
     {
-      kind: 'runtime_wake',
+      kind: 'runtime_deliver',
       params: {
         conversation_id: 'c1',
         agent_id: 'a1',
         delivery_ids: [1],
         kind: 'message',
         text: 'hello',
+        spawn_options: runtimeStartOptions(),
       },
-      result: { delivered: true, delivery_ids: [1] },
+      result: { disposition: 'admitted', pid: 123, started_at: 1700000000000 },
     },
     {
       kind: 'runtime_status',

@@ -64,13 +64,13 @@ import {
   type ResponseFrame,
   type RuntimeClearSessionParams,
   type RuntimeCloseActivityLogParams,
+  type RuntimeDeliverParams,
   type RuntimeOutputPauseParams,
   type RuntimeOutputResumeParams,
   type RuntimeStartParams,
   type RuntimeStatusParams,
   type RuntimeStopAllParams,
   type RuntimeStopParams,
-  type RuntimeWakeParams,
   type WorkspaceProvisionParams,
   type WorkspaceProvisionResult,
 } from '../protocol.js';
@@ -78,7 +78,10 @@ import { detectRuntimeCatalog } from '../runtimes.js';
 import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
 import { composeHostOs, hostOsArch } from './host-os.js';
 import type { DaemonLogger } from './logger.js';
-import type { SupervisorContract } from './supervisor-contract.js';
+import type {
+  DeliveryOwnerContext,
+  SupervisorContract,
+} from './supervisor-contract.js';
 import { logIntent } from './daemon-logging.js';
 import { DaemonTypedError } from './typed-error.js';
 
@@ -403,6 +406,7 @@ export class IntentDispatcher {
     requestId: string,
     intent: string,
     rawParams: unknown,
+    ctx: DeliveryOwnerContext,
   ): Promise<ResponseFrame> {
     const startedAtMs = this.now();
     // Extract conversationId / agent_id from params (when present) for the log
@@ -466,7 +470,7 @@ export class IntentDispatcher {
     }
     this.intentCount += 1;
     try {
-      const result = await this.runHandler(intent as IntentName, parsed.data);
+      const result = await this.runHandler(intent as IntentName, parsed.data, ctx);
       // Validate the handler's own result against the declared schema
       // BEFORE sending it on the wire. If a handler ever drifts from
       // the contract (e.g. a refactor accidentally drops a field, or
@@ -632,6 +636,7 @@ export class IntentDispatcher {
   protected async runHandler(
     intent: IntentName,
     params: unknown,
+    ctx: DeliveryOwnerContext,
   ): Promise<unknown> {
     switch (intent) {
       case 'hello':
@@ -672,7 +677,7 @@ export class IntentDispatcher {
         //
         // Phase whitelist (Cindy `oJ-mzKP7kbXtHUTe` slice-1 review P1 #2):
         // backend's outbound-event-fanout already treats `idle || exited`
-        // as non-live (wake / start gates). The first cut here only
+        // as non-live (delivery / start gates). The first cut here only
         // excluded `exited`, which would have let a future `idle` handle
         // light up ComputerPane's "online" pip incorrectly. Express the
         // contract as a whitelist of active phases so a NEW phase added
@@ -737,8 +742,16 @@ export class IntentDispatcher {
         return this.requireSupervisor().start(params as RuntimeStartParams);
       case 'runtime_stop':
         return this.requireSupervisor().stop(params as RuntimeStopParams);
-      case 'runtime_wake':
-        return this.requireSupervisor().wake(params as RuntimeWakeParams);
+      case 'runtime_deliver':
+        // #task:1417 — daemon-authoritative delivery. Result transfers/
+        // refuses/defers custody only; the DB ack rides the async
+        // `runtime_delivery_consumed`/`_failed` events. `ctx.owner` (Stage 3,
+        // §11.4.1) is the connection identity injected by the ingress — the
+        // supervisor stamps it onto any `deferred` queue entry.
+        return this.requireSupervisor().deliver(
+          params as RuntimeDeliverParams,
+          ctx,
+        );
       case 'runtime_status':
         return this.requireSupervisor().status(
           params as RuntimeStatusParams,
@@ -879,6 +892,17 @@ export class IntentDispatcher {
       );
     }
     return this.supervisor;
+  }
+
+  /**
+   * Owner-scoped deferred-queue cleanup (#task:1417 Stage 3, §11.4.1).
+   * An ingress calls this when its connection drops so the daemon discards
+   * only that connection's queued (unwritten) deliveries. No-op when no
+   * supervisor is wired. Never throws — a cleanup on a torn-down connection
+   * must not surface an error.
+   */
+  cleanupDeferredForOwner(owner: string): void {
+    this.supervisor?.cleanupDeferredForOwner(owner);
   }
 
   private requireHostOutboundAttachHandler(): (

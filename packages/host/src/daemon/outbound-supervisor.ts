@@ -79,11 +79,16 @@ import {
   type OutboundCommandDispatcher,
 } from './outbound-client.js';
 import type { DaemonLogger } from './logger.js';
+import type { OwnerCleanup } from './outbound-frame-mapping.js';
 
 export interface OutboundSupervisorDeps {
   logger: DaemonLogger;
   readyEvent: () => Extract<EventFrame, { event: 'ready' }>;
   dispatchCommand: OutboundCommandDispatcher;
+  /** Owner-scoped deferred-queue cleanup (#task:1417 Stage 3, §11.4.1),
+   *  threaded into the outbound WS client so a WS close/reconnect/stop
+   *  discards that generation's queued deliveries. */
+  cleanupDeferredForOwner: OwnerCleanup;
   /**
    * Test seam — overridden in unit tests to inject a fake
    * `OutboundDaemonClient`. Production callers leave it undefined to
@@ -95,6 +100,7 @@ export interface OutboundSupervisorDeps {
     logger: DaemonLogger;
     readyEvent: () => Extract<EventFrame, { event: 'ready' }>;
     dispatchCommand: OutboundCommandDispatcher;
+    cleanupDeferredForOwner: OwnerCleanup;
   }) => OutboundClientLike;
 }
 
@@ -541,6 +547,7 @@ export class OutboundSupervisor {
         logger: this.deps.logger,
         readyEvent: this.deps.readyEvent,
         dispatchCommand: this.deps.dispatchCommand,
+        cleanupDeferredForOwner: this.deps.cleanupDeferredForOwner,
       });
     }
     return new OutboundDaemonClient({
@@ -548,6 +555,7 @@ export class OutboundSupervisor {
       logger: this.deps.logger,
       readyEvent: this.deps.readyEvent,
       dispatchCommand: this.deps.dispatchCommand,
+      cleanupDeferredForOwner: this.deps.cleanupDeferredForOwner,
     });
   }
 }

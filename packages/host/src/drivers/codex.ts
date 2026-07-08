@@ -150,7 +150,7 @@ export class CodexDriver implements Driver {
    * `encodeStdinMessage` returns null and the daemon's
    * `ready_for_drain` gate (Option A v2 — Cindy `UMGu36zoTDVuKWXi`)
    * keeps `runtime_ready_for_drain` bottled up so backend doesn't
-   * `runtime_wake` into a null-encode dead-end.
+   * `runtime_deliver` into a null-encode dead-end.
    */
   readyToEncode(): boolean {
     return this.threadId !== null;

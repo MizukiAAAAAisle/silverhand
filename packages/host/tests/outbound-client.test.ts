@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import {
   apiPaths,
@@ -553,6 +553,47 @@ describe('outbound daemon websocket client', () => {
     await delay(40);
 
     expect(server.connections).toHaveLength(1);
+  });
+
+  it('calls cleanupDeferredForOwner with the WS generation’s owner on close (#task:1417 Stage 3)', async () => {
+    // Standalone-ingress wiring gate: each WS connection mints its own
+    // delivery-owner token (`outbound:N`), dispatcher-injected so a peer
+    // cannot spoof it. When the socket drops, the daemon must discard
+    // exactly THAT generation's deferred entries. We capture the owner off
+    // a real dispatch, then close the WS and assert the same owner is
+    // cleaned up.
+    const server = await FakeOutboundServer.start();
+    cleanup.push(() => server.close());
+    let dispatchedOwner: string | null = null;
+    const cleaned: string[] = [];
+    const { client } = startClient(server.url, {
+      dispatchCommand: async (command, ctx) => {
+        dispatchedOwner = ctx.owner;
+        return { id: command.id, result: { runtimes: [] } };
+      },
+      cleanupDeferredForOwner: owner => cleaned.push(owner),
+      // Do not reconnect — we want a single clean close observation.
+      backoff: { minDelayMs: 100_000, maxDelayMs: 100_000, factor: 1, jitterRatio: 0 },
+    });
+    cleanup.push(() => client.stop('test_done'));
+
+    const first = await server.waitForConnectionCount(1);
+    first.ws.send(encodeOutboundFrame({
+      direction: 'server_to_daemon',
+      type: 'command',
+      id: 'cmd-owner',
+      kind: 'runtime_status',
+      params: {},
+    }));
+    await server.waitForFrame(
+      frame => frame.type === 'command_response' && frame.id === 'cmd-owner',
+    );
+    expect(dispatchedOwner).toMatch(/^outbound:/);
+
+    first.ws.close(1001, 'drop_for_cleanup');
+    await vi.waitFor(() => {
+      expect(cleaned).toContain(dispatchedOwner);
+    });
   });
 });
 

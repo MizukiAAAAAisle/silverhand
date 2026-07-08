@@ -16,12 +16,13 @@ const UNAVAILABLE_REASON =
 
 export interface OutboundAgentRuntimeProjection {
   /**
-   * User/API requested start. Uses pending inbox rows as startup_delivery
-   * when available, but still dispatches a direct runtime_start when the
-   * runtime is crashed/stopped and there is no new message to drain.
+   * User/API requested start. Drains pending inbox rows via
+   * `runtime_deliver` (spawns-with-batch) when available; falls back to a
+   * lifecycle `runtime_start` when the runtime is crashed/stopped and there
+   * is no new message to drain.
    */
   start(conversationId: string, agentId: string): Promise<void>;
-  startDeliveryBacked(conversationId: string, agentId: string): Promise<boolean>;
+  deliverPending(conversationId: string, agentId: string): Promise<boolean>;
   /**
    * D4.b-4: dispatch `runtime_stop` to the daemon over the outbound
    * WS. The standalone server owns the projection of the resulting

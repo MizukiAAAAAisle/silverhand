@@ -22,7 +22,7 @@ function silentLogger(): DaemonLogger {
 describe('IntentDispatcher', () => {
   it('handles hello with protocol version and capabilities', async () => {
     const d = new IntentDispatcher({ logger: silentLogger() });
-    const r = await d.dispatch('hello-1', 'hello', {});
+    const r = await d.dispatch('hello-1', 'hello', {}, { owner: 'test-owner' });
     expect('result' in r).toBe(true);
     if (!('result' in r)) return;
     expect(r.result).toEqual({
@@ -37,7 +37,7 @@ describe('IntentDispatcher', () => {
 
   it('handles ping with the daemon pid + version', async () => {
     const d = new IntentDispatcher({ logger: silentLogger(), startedAt: 1_700_000_000_000 });
-    const r = await d.dispatch('req-1', 'ping', {});
+    const r = await d.dispatch('req-1', 'ping', {}, { owner: 'test-owner' });
     expect('result' in r).toBe(true);
     if (!('result' in r)) return;
     expect(r.result).toMatchObject({
@@ -49,7 +49,7 @@ describe('IntentDispatcher', () => {
 
   it('handles echo round-trip', async () => {
     const d = new IntentDispatcher({ logger: silentLogger() });
-    const r = await d.dispatch('req-2', 'echo', { message: 'hi' });
+    const r = await d.dispatch('req-2', 'echo', { message: 'hi' }, { owner: 'test-owner' });
     expect('result' in r).toBe(true);
     if ('result' in r) expect(r.result).toEqual({ echoed: 'hi' });
   });
@@ -65,7 +65,7 @@ describe('IntentDispatcher', () => {
       startedAt: 1_700_000_000_000,
       now: () => 1_700_000_001_500,
     });
-    const r = await d.dispatch('req-host-status', 'host_status', {});
+    const r = await d.dispatch('req-host-status', 'host_status', {}, { owner: 'test-owner' });
     expect('result' in r).toBe(true);
     if (!('result' in r)) return;
     expect(r.result).toMatchObject({
@@ -109,7 +109,7 @@ describe('IntentDispatcher', () => {
     supervisor.stop({ conversation_id: 'c4', agent_id: 'a3', mode: 'hard' });
 
     const d = new IntentDispatcher({ logger: silentLogger(), supervisor });
-    const r = await d.dispatch('req-host-status-2', 'host_status', {});
+    const r = await d.dispatch('req-host-status-2', 'host_status', {}, { owner: 'test-owner' });
     expect('result' in r).toBe(true);
     if (!('result' in r)) return;
     const ids = (r.result as { active_agent_ids: string[] }).active_agent_ids
@@ -122,7 +122,7 @@ describe('IntentDispatcher', () => {
     // The dispatcher's filter is a WHITELIST of active phases
     // (`spawning | startup_pending | ready | draining`), not a denylist
     // of `exited`. A handle parked in `idle` (the protocol phase for
-    // "alive but no live work" — backend's wake/start gates treat
+    // "alive but no live work" — backend's delivery/start gates treat
     // `idle || exited` identically as non-live) must NOT appear in
     // `active_agent_ids`, or ComputerPane would mark the agent
     // online. FakeSupervisor never exposes `idle` itself, so drive the
@@ -144,7 +144,7 @@ describe('IntentDispatcher', () => {
       async stop() {
         throw new Error('not used');
       },
-      async wake() {
+      async deliver() {
         throw new Error('not used');
       },
       async status() {
@@ -174,12 +174,13 @@ describe('IntentDispatcher', () => {
       async resumeOutput() {
         throw new Error('not used');
       },
+      cleanupDeferredForOwner() {},
     };
     const d = new IntentDispatcher({
       logger: silentLogger(),
       supervisor: stubSupervisor,
     });
-    const r = await d.dispatch('req-host-status-idle', 'host_status', {});
+    const r = await d.dispatch('req-host-status-idle', 'host_status', {}, { owner: 'test-owner' });
     expect('result' in r).toBe(true);
     if (!('result' in r)) return;
     const ids = (r.result as { active_agent_ids: string[] }).active_agent_ids
@@ -203,7 +204,7 @@ describe('IntentDispatcher', () => {
       conversation_id: 'c1',
       enabled: true,
       expires_at: expiresAt,
-    });
+    }, { owner: 'test-owner' });
     expect(opened).toEqual({
       id: 'req-debug-open',
       result: { ok: true, enabled: true, expires_at: expiresAt },
@@ -216,7 +217,7 @@ describe('IntentDispatcher', () => {
     const closed = await d.dispatch('req-debug-close', 'conversation_log_debug', {
       conversation_id: 'c1',
       enabled: false,
-    });
+    }, { owner: 'test-owner' });
     expect(closed).toEqual({
       id: 'req-debug-close',
       result: { ok: true, enabled: false, expires_at: null },
@@ -229,7 +230,7 @@ describe('IntentDispatcher', () => {
 
   it('rejects unknown intents', async () => {
     const d = new IntentDispatcher({ logger: silentLogger() });
-    const r = await d.dispatch('req-3', 'not_a_real_intent', {});
+    const r = await d.dispatch('req-3', 'not_a_real_intent', {}, { owner: 'test-owner' });
     expect('error' in r).toBe(true);
     if ('error' in r) {
       expect(r.error.code).toBe('unknown_intent');
@@ -239,7 +240,7 @@ describe('IntentDispatcher', () => {
 
   it('rejects malformed params', async () => {
     const d = new IntentDispatcher({ logger: silentLogger() });
-    const r = await d.dispatch('req-4', 'echo', { wrong_field: 1 });
+    const r = await d.dispatch('req-4', 'echo', { wrong_field: 1 }, { owner: 'test-owner' });
     expect('error' in r).toBe(true);
     if ('error' in r) expect(r.error.code).toBe('invalid_params');
   });
@@ -247,7 +248,7 @@ describe('IntentDispatcher', () => {
   it('refuses intents once marked as shutting_down', async () => {
     const d = new IntentDispatcher({ logger: silentLogger() });
     d.markShuttingDown();
-    const r = await d.dispatch('req-5', 'ping', {});
+    const r = await d.dispatch('req-5', 'ping', {}, { owner: 'test-owner' });
     expect('error' in r).toBe(true);
     if ('error' in r) expect(r.error.code).toBe('shutting_down');
   });
@@ -259,10 +260,10 @@ describe('IntentDispatcher', () => {
       startedAt: 0,
       now: () => now,
     });
-    await d.dispatch('req-a', 'ping', {});
-    await d.dispatch('req-b', 'echo', { message: 'x' });
+    await d.dispatch('req-a', 'ping', {}, { owner: 'test-owner' });
+    await d.dispatch('req-b', 'echo', { message: 'x' }, { owner: 'test-owner' });
     now = 5_000;
-    const r = await d.dispatch('req-c', 'status', {});
+    const r = await d.dispatch('req-c', 'status', {}, { owner: 'test-owner' });
     expect('result' in r).toBe(true);
     if (!('result' in r)) return;
     expect(r.result).toMatchObject({
@@ -275,10 +276,10 @@ describe('IntentDispatcher', () => {
   it('does NOT increment intent_count on validation failure', async () => {
     let now = 1_000;
     const d = new IntentDispatcher({ logger: silentLogger(), startedAt: 0, now: () => now });
-    await d.dispatch('req-x', 'unknown', {});
-    await d.dispatch('req-y', 'echo', { wrong: 1 });
+    await d.dispatch('req-x', 'unknown', {}, { owner: 'test-owner' });
+    await d.dispatch('req-y', 'echo', { wrong: 1 }, { owner: 'test-owner' });
     // intent_count should still be 0; reading via status increments it.
-    const r = await d.dispatch('req-z', 'status', {});
+    const r = await d.dispatch('req-z', 'status', {}, { owner: 'test-owner' });
     if (!('result' in r)) return;
     expect(r.result).toMatchObject({ intent_count: 1 });
   });
@@ -295,16 +296,17 @@ describe('IntentDispatcher', () => {
           ? string
           : never,
         params: unknown,
+        ctx: Parameters<IntentDispatcher['dispatch']>[3],
       ): Promise<unknown> {
         if (intent === 'echo') return { wrong_field: 1 };
         // Cast back to the wider union the parent expects; we
         // narrowed only to express "any registered intent name" in
         // a test-only subclass.
-        return super.runHandler(intent as never, params);
+        return super.runHandler(intent as never, params, ctx);
       }
     }
     const d = new DriftingDispatcher({ logger: silentLogger() });
-    const r = await d.dispatch('req-drift', 'echo', { message: 'hi' });
+    const r = await d.dispatch('req-drift', 'echo', { message: 'hi' }, { owner: 'test-owner' });
     expect('error' in r).toBe(true);
     if ('error' in r) {
       expect(r.error.code).toBe('internal_error');
@@ -330,7 +332,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
       conversation_id: 'c1',
       agent_id: 'a1',
       options: testStartOptions(),
-    });
+    }, { owner: 'test-owner' });
     expect('result' in r).toBe(true);
     if ('result' in r) {
       expect(r.result).toMatchObject({ started: true, started_at: 1_000 });
@@ -338,7 +340,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
     }
   });
 
-  it('routes runtime_wake → fake supervisor → returns batch result', async () => {
+  it('routes runtime_deliver → fake supervisor → returns admitted disposition', async () => {
     const queue: Array<() => void> = [];
     const supervisor = new FakeSupervisor({
       emit: () => {},
@@ -352,21 +354,20 @@ describe('IntentDispatcher — runtime_* routing', () => {
       conversation_id: 'c1',
       agent_id: 'a1',
       options: testStartOptions(),
-    });
+    }, { owner: 'test-owner' });
     while (queue.length) queue.shift()!(); // flush to ready
-    const r = await d.dispatch('w', 'runtime_wake', {
+    const r = await d.dispatch('w', 'runtime_deliver', {
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [101, 102],
       kind: 'message',
       text: 'hi',
-    });
+      spawn_options: testStartOptions(),
+    }, { owner: 'test-owner' });
     expect('result' in r).toBe(true);
     if ('result' in r) {
-      expect(r.result).toEqual({
-        delivered: true,
-        delivery_ids: [101, 102],
-      });
+      const result = r.result as { disposition: string };
+      expect(result.disposition).toBe('admitted');
     }
   });
 
@@ -384,9 +385,9 @@ describe('IntentDispatcher — runtime_* routing', () => {
       conversation_id: 'c1',
       agent_id: 'a1',
       options: testStartOptions(),
-    });
+    }, { owner: 'test-owner' });
     while (queue.length) queue.shift()!();
-    const r = await d.dispatch('q', 'runtime_status', {});
+    const r = await d.dispatch('q', 'runtime_status', {}, { owner: 'test-owner' });
     expect('result' in r).toBe(true);
     if ('result' in r) {
       const result = r.result as { runtimes: Array<{ phase: string }> };
@@ -401,7 +402,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
       conversation_id: 'c1',
       agent_id: 'a1',
       options: testStartOptions(),
-    });
+    }, { owner: 'test-owner' });
     expect('error' in r).toBe(true);
     if ('error' in r) {
       expect(r.error.code).toBe('internal_error');
@@ -419,7 +420,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
       conversation_id: 'c1',
       agent_id: 'a1',
       env_patch: {},
-    });
+    }, { owner: 'test-owner' });
     expect('error' in r).toBe(true);
     if ('error' in r) expect(r.error.code).toBe('unknown_intent');
   });
@@ -440,7 +441,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
     const pauseUnknown = await d.dispatch('p1', 'runtime_output_pause', {
       conversation_id: 'no-such',
       agent_id: 'no-such',
-    });
+    }, { owner: 'test-owner' });
     expect('result' in pauseUnknown).toBe(true);
     if ('result' in pauseUnknown) {
       expect(pauseUnknown.result).toEqual({ paused: false });
@@ -454,7 +455,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
     const pauseLive = await d.dispatch('p2', 'runtime_output_pause', {
       conversation_id: 'c1',
       agent_id: 'a1',
-    });
+    }, { owner: 'test-owner' });
     expect('result' in pauseLive).toBe(true);
     if ('result' in pauseLive) expect(pauseLive.result).toEqual({ paused: true });
     expect(events.filter(e => e.event === 'runtime_output_paused')).toHaveLength(1);
@@ -462,7 +463,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
     const resumeLive = await d.dispatch('r2', 'runtime_output_resume', {
       conversation_id: 'c1',
       agent_id: 'a1',
-    });
+    }, { owner: 'test-owner' });
     expect('result' in resumeLive).toBe(true);
     if ('result' in resumeLive) expect(resumeLive.result).toEqual({ resumed: true });
     expect(events.filter(e => e.event === 'runtime_output_resumed')).toHaveLength(1);
@@ -482,9 +483,9 @@ describe('IntentDispatcher — runtime_* routing', () => {
       conversation_id: 'c1',
       agent_id: 'a1',
       options: testStartOptions(),
-    });
+    }, { owner: 'test-owner' });
     while (queue.length) queue.shift()!();
-    const r = await d.dispatch('q', 'status', {});
+    const r = await d.dispatch('q', 'status', {}, { owner: 'test-owner' });
     expect('result' in r).toBe(true);
     if ('result' in r) {
       const result = r.result as { runtimes: unknown[] };

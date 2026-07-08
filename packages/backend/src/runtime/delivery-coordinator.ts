@@ -5,51 +5,62 @@
  * ## Why this exists as its own module
  *
  * Cindy `SG1-ZTOUKLvs1A6G` rejected my first sub-2b plan that piled
- * busy-tracking + pending queue + wake dispatch into `RuntimeEventHandler`
+ * busy-tracking + pending queue + delivery dispatch into `RuntimeEventHandler`
  * (would have made it a mini-CM). The four-module split for daemon-mode
  * runtime is:
  *
- *   - `RuntimeBridge`      — command side (typed proxy over `runtimeWake`,
+ *   - `RuntimeBridge`      — command side (typed proxy over `runtimeDeliver`,
  *                            `runtimeStart`, …; no state)
  *   - `RuntimeEventHandler`— event fan-out (subscribes to daemon events,
  *                            updates cache + SSE; narrow callbacks for
  *                            anything beyond the projection — does NOT
- *                            hold queues or issue wakes)
+ *                            hold queues or issue deliveries)
  *   - `RunStateCache`      — passive projection of daemon-reported state
  *   - **THIS FILE**         — delivery decisions: when to call
- *                            `bridge.runtimeWake`, when to queue, when to
+ *                            `bridge.runtimeDeliver`, when to queue, when to
  *                            mark inbox rows delivered, when to ask
  *                            DaemonHost to respawn a dead oneShot
  *
- * Putting the wake / mark / queue / respawn logic here keeps each of the
+ * Putting the deliver / mark / queue / respawn logic here keeps each of the
  * other three modules unaware of inbox state and driver policy. Tests
  * here run against a mock bridge + mock inbox sink without any DB.
  *
  * ## What the coordinator owns
  *
- *   1. **Busy tracker** per (conv, agent). Read from RAW `ParsedEvent`
- *      (Cindy `BYHZJI9ALSVmmlFr` pin b — the sanitized agent_event drops
- *      input bytes, but `outstandingToolUses` only needs `kind` so either
- *      would work; using raw matches CM's source of truth and avoids
- *      coupling delivery semantics to the UI sanitizer).
+ *   1. **Delivery dispatch** via `bridge.runtimeDeliver` (#task:1417
+ *      Stage 2b — the SOLE message delivery command). The sync result is
+ *      a custody DISPOSITION (`spawning`/`admitted`/`deferred`/`refused`)
+ *      that carries NO ack: the coordinator NEVER moves `delivered_at`.
+ *      `dispatched` (spawning/admitted/deferred) transfers custody to the
+ *      daemon and rows stay in-flight until the async
+ *      `runtime_delivery_consumed` lands (event-handler acks); `refused` /
+ *      oneShot-live roll back to pending.
  *
- *   2. **Pending-delivery queue** per (conv, agent) for `gated` drivers
- *      caught mid-turn. Flushes when the boundary reopens
- *      (`outstandingToolUses === 0 && !compacting`) — same predicate as
- *      CM's `isSafeBoundary`.
- *
- *   3. **Live wake dispatch** via `bridge.runtimeWake`. Inbox-ack timing
- *      is locked here: `markDelivered` runs ONLY on
- *      `{delivered: true}`; refused / busy / queued paths leave rows
- *      pending so the next safe boundary or next `start()` re-tries.
- *
- *   4. **oneShot auto-respawn** on `runtime_exit`. Gated by the trio
+ *   2. **oneShot auto-respawn** on `runtime_exit`. Gated by the trio
  *      Cindy `BYHZJI9ALSVmmlFr` pin c: `intentional === false` AND
  *      exit was not init_timeout / fatal AND `hasPendingInbox` is true.
- *      Respawn goes through DaemonHost's `start()` callback, NEVER via a
- *      direct wake — the rationale is that startup_delivery is the only
- *      path that can drain pending rows before the runtime advances
- *      past its init phase.
+ *      Respawn goes through the fanout's `deliverPending` callback (a
+ *      spawn-with-batch `runtime_deliver`), NEVER a bare lifecycle start —
+ *      the fresh runtime must drain the pending inbox in its init phase.
+ *
+ *   3. **P2 live-delivery stuck watchdog.** After an immediate write
+ *      (`admitted`/`spawning`), if no parsed event arrives within the
+ *      threshold, publish a synthetic `thinking` run state so the UI does
+ *      not look idle. This is projection, not delivery scheduling.
+ *
+ * ## Retired here (#task:1417 Stage 3, §11.8/§11.9)
+ *
+ *   - The **busy tracker** and the **mid-turn pending-delivery queue**
+ *     moved INTO the daemon, which owns the runtime handle and already
+ *     tracks `handle.busy` byte-for-byte. The coordinator no longer gates
+ *     on a safe boundary or holds a volatile queue: every submit dispatches
+ *     `runtime_deliver` unconditionally and the daemon answers `deferred`
+ *     when it enqueues mid-turn. This removes the second queue Cindy's
+ *     Stage 3 gate 6 forbids.
+ *   - **Gated-batch combining** moved with the queue (`combineGatedBatch`
+ *     now lives in the host's `combineDeferredBatch`). Backend submit paths
+ *     pre-combine claimed rows into ONE `text`, so the coordinator ships a
+ *     single text and never combines.
  *
  * ## What the coordinator does NOT own
  *
@@ -67,19 +78,24 @@
  *   - Issuing `runtime_start`. DaemonHost owns `start()`; coordinator
  *     calls back into a `respawn` function to ask for one.
  *
- *   - General SSE / DB writes. EventHandler owns daemon-projected SSE;
+ *   - General SSE / DB writes. EventHandler owns daemon-projected SSE and
+ *     the sole inbox ack (`runtime_delivery_consumed` → `markDelivered`);
  *     clearSession-style DB writes live in `AgentService`. The
- *     coordinator only touches inbox-ack (`markDelivered`) plus the P2
+ *     coordinator touches NO inbox state — it only publishes the P2
  *     synthetic stuck indicator via an injected `publishActivity`
  *     callback.
  *
- * ## Test scope (sub-2b-i, Cindy `3l4bZ5vaMvlC9DVS`)
+ * ## Test scope (Cindy `3l4bZ5vaMvlC9DVS`)
  *
- * Tests in `delivery-coordinator.test.ts` cover the 7-case matrix with
- * mock-bridge + mock-inbox-sink + synthetic ParsedEvents. No DaemonHost
- * integration in 2b-i — that's 2b-ii.
+ * Tests in `delivery-coordinator.test.ts` cover the delivery matrix with a
+ * mock `runtimeDeliver` bridge + synthetic ParsedEvents. No fanout
+ * integration here — the fanout owns fs guards, spawn_options, and inbox
+ * custody rollback.
  */
-import type { RuntimeWakeResult } from '@silverhand/host';
+import type {
+  RuntimeDeliverResult,
+  RuntimeDeliverRefusedReason,
+} from '@silverhand/host';
 import type {
   AgentRunState,
   AgentRunStatus,
@@ -111,15 +127,15 @@ export interface DriverDeliveryView {
    *  the runtime has received its first user message; B3 gate defers
    *  inbox `markDelivered` until that parsed `session_init` is observed)
    *  or `self_inits` (codex / cursor — daemon-side init proves the
-   *  runtime is alive before backend issues any wake; ack on
+   *  runtime is alive before backend issues any delivery; ack on
    *  `{delivered:true}` is safe). */
   kickoffMode: 'self_inits' | 'requires_first_message';
 }
 
 /**
  * A live-delivery request. DaemonHost builds these after
- * `inboxes.ensureDelivery`. The coordinator decides whether to call
- * `wake`, queue, or refuse.
+ * `inboxes.ensureDelivery`. The coordinator decides whether to
+ * `deliver`, queue, or refuse.
  *
  * # Daemon owns encode (Option A v2 — Cindy `UMGu36zoTDVuKWXi`)
  *
@@ -130,28 +146,31 @@ export interface DriverDeliveryView {
  * just before writing to stdin. Backend MUST NOT pre-encode: doing so
  * would spin up a STATELESS driver instance whose `encodeStdinMessage`
  * returns null for codex (no `threadId` yet), silently killing every
- * wake. This was the codex daemon-mode delivery blocker (see commit
+ * delivery. This was the codex daemon-mode delivery blocker (see commit
  * 2b-iii log).
  *
- * # Combine-before-encode invariant (still holds)
+ * # Combine-before-encode invariant (still holds; combine now daemon-side)
  *
- * Combination still happens BEFORE the daemon encodes. The coordinator
- * combines multiple `text` fields via `combineGated` when batch.length
- * > 1 and ships ONE combined text to the daemon. The daemon then
- * encodes once. Feeding encoded JSON lines through `combineGated`
- * would produce a payload that is not a legal driver stdin line
- * (claude's `--input-format stream-json` would see malformed input).
+ * Combination still happens BEFORE encode. #task:1417 Stage 3 moved the
+ * combining itself into the daemon (`combineDeferredBatch` folds a deferred
+ * batch, calling `combineGatedBatch` for gated multi-entry batches). The
+ * backend submit paths pre-combine their claimed rows into ONE `text`, so
+ * a `LiveDeliveryRequest` batch reaching the coordinator carries exactly
+ * one request; the coordinator ships that single un-encoded text and the
+ * daemon encodes once. Feeding encoded JSON lines through the combiner
+ * would produce a payload that is not a legal driver stdin line (claude's
+ * `--input-format stream-json` would see malformed input) — which is why
+ * combine stays on un-encoded text on the daemon side.
  *
  * # Atomic delivery groups (`deliveryIds`)
  *
  * Most requests cover a single inbox row → `deliveryIds = [inboxId]`.
  * For caller pre-combined groups (e.g. `DaemonHost.drainPending` using
- * `formatInboxBatch` because the inbox-drain wrapper differs from the
- * gated-busy wrapper) `text` is already the combined text and
+ * `formatInboxBatch`) `text` is already the combined text and
  * `deliveryIds` carries every inbox row the combined text covers.
  * Coordinator treats them as one atomic ack group.
  */
-/** Per-delivery wire metadata carried alongside a wake / startup batch so
+/** Per-delivery wire metadata carried alongside a delivery / startup batch so
  *  the daemon can maintain a per-stream observed boundary and resolve
  *  `--reply-to` targets it has seen (§6.4). One entry per delivered inbox
  *  row. `thread_root_id === null` ⇒ the message lives on the main line. */
@@ -180,55 +199,58 @@ export interface LiveDeliveryRequest {
   deliveries?: readonly RuntimeDelivery[];
   /** Stable dedup key. For singleton groups, the row's message id; for
    *  pre-combined groups, an arbitrary key the caller picks (typically
-   *  the first row's message id). Coordinator's enqueue skips a new
-   *  request whose key already exists in the pending queue. */
+   *  the first row's message id). Carried on the request for parity with
+   *  the daemon-side dedup, which now owns mid-turn de-duplication. */
   dedupKey: string;
-  /** Un-encoded human-readable text. Combined with sibling requests
-   *  via `combineGated` before the daemon encodes when batch.length > 1. */
+  /** Un-encoded human-readable text. The daemon encodes once (and combines
+   *  deferred entries) — the coordinator ships this verbatim. */
   text: string;
   driver: DriverDeliveryView;
 }
 
 /**
- * Outcome of a `submitLiveDelivery` call. Returned so DaemonHost can
- * log the route taken; coordinator already advanced the state /
- * inbox-ack as needed.
+ * Outcome of a `submitLiveDelivery` call. Returned so the fanout can
+ * decide inbox custody; the coordinator has already dispatched as needed.
  *
- *   - `wake_dispatched`     — bridge.runtimeWake returned
- *                             `{delivered: true}`; markDelivered ran.
- *   - `wake_refused`        — bridge.runtimeWake returned
- *                             `{delivered: false, reason}`; row left
- *                             pending.
- *   - `queued_mid_turn`     — gated driver caught mid-turn; payload
- *                             pushed to pending queue, flush will fire
- *                             on next safe boundary.
- *   - `noop_oneshot_live`   — driver.busyDeliveryMode === 'none' and
- *                             runtime is live; pending row will be
- *                             picked up on next respawn.
- *   - `noop_phase`          — phase is startup_pending / draining /
- *                             exited; daemon-side path will deliver
- *                             via startup_delivery on next start.
- *   - `noop_no_runtime`     — no cache entry at all; DaemonHost is
- *                             responsible for calling `start()` upstream
- *                             when first delivery arrives for an idle
- *                             agent.
+ * #task:1417 custody contract — the fanout rolls the batch back to pending
+ * ONLY on `refused` (and on a thrown dispatch). `dispatched` KEEPS the rows
+ * in-flight (owner=connection): custody is with the daemon (ack awaits the
+ * async `runtime_delivery_consumed`), whether the daemon wrote now
+ * (`admitted`/`spawning`) or holds the batch in its own mid-turn queue
+ * (`deferred`). A disconnect rolls in-flight rows back via
+ * `rollbackInFlightForOwner` (paired with the daemon's owner-scoped
+ * `cleanupDeferredForOwner`).
+ *
+ * The coordinator no longer short-circuits oneShot (`busyDeliveryMode
+ * === 'none'`) locally: after Stage 2b removed the cache lifecycle
+ * projection the coordinator has NO live proof, so a oneShot batch is
+ * dispatched like any non-gated driver and the daemon decides —
+ * spawn-with-batch when there is no live handle, sync `refused` when a
+ * live oneShot handle can't take stdin. The retired `noop_oneshot_live`
+ * decision (a coordinator-local guess with no live proof) would have
+ * made a no-live oneShot never spawn.
+ *
+ *   - `dispatched`          — daemon accepted custody (`spawning`,
+ *                             `admitted`, or `deferred`). Rows stay
+ *                             in-flight; ack is the async
+ *                             `runtime_delivery_consumed`.
+ *   - `refused`             — daemon took nothing (`startup_pending` /
+ *                             `draining` / `cooldown`, incl. a live
+ *                             oneShot that can't take stdin). Roll back
+ *                             to pending (retriable); a oneShot drains
+ *                             on its next respawn-with-batch.
+ *
+ * #task:1417 Stage 3 — the retired `queued_mid_turn` decision (and the
+ * whole coordinator-side busy tracker / pending queue / flush) moved to
+ * the daemon (§11.8/§11.9). Every submit now dispatches unconditionally;
+ * the daemon returns `deferred` when it enqueues the batch in its OWN
+ * per-handle mid-turn queue. `deferred` is a custody transfer exactly like
+ * `admitted`/`spawning`, so from the fanout's custody view it collapses to
+ * `dispatched`.
  */
 export type LiveDeliveryDecision =
-  | { kind: 'wake_dispatched'; deliveryIds: readonly number[] }
-  | {
-      kind: 'wake_refused';
-      reason:
-        | 'not_running'
-        | 'not_initialized'
-        | 'startup_pending'
-        | 'draining'
-        | 'driver_not_ready'
-        | 'driver_refused';
-    }
-  | { kind: 'queued_mid_turn'; pendingCount: number }
-  | { kind: 'noop_oneshot_live' }
-  | { kind: 'noop_phase'; phase: RuntimePhase }
-  | { kind: 'noop_no_runtime' };
+  | { kind: 'dispatched'; deliveryIds: readonly number[] }
+  | { kind: 'refused'; reason: RuntimeDeliverRefusedReason };
 
 /**
  * Metadata accompanying the `onRuntimeExit` callback. EventHandler
@@ -252,15 +274,25 @@ export interface RuntimeExitMeta {
 
 /**
  * Bridge subset the coordinator needs. Kept narrow so tests can pass
- * an `{ runtimeWake: vi.fn() }` literal without instantiating
- * `RuntimeBridge`.
+ * an `{ runtimeDeliver: vi.fn() }` literal without instantiating the
+ * fanout.
  *
  * `text` is the unencoded message text the daemon will hand to its
  * in-process driver's `encodeStdinMessage(text, cliSessionId)` (Option
  * A v2 — Cindy `UMGu36zoTDVuKWXi`). Backend NEVER pre-encodes.
+ *
+ * #task:1417 Stage 2b — this is `runtime_deliver`, the SOLE message
+ * delivery command. `spawn_options` is NOT part of this signature: the
+ * fanout's bridge closure injects it (it needs conversation/workspace
+ * lookups) and runs the fs guards (host-consistency + registry
+ * backfill) before dispatch, because the daemon owns the spawn-vs-admit
+ * decision and any deliver may spawn. The sync result is a custody
+ * DISPOSITION (`spawning`/`admitted`/`refused`) that carries NO ack —
+ * `delivered_at` moves ONLY on the async `runtime_delivery_consumed`
+ * event.
  */
 export interface CoordinatorBridge {
-  runtimeWake(params: {
+  runtimeDeliver(params: {
     conversation_id: string;
     agent_id: string;
     delivery_ids: number[];
@@ -268,16 +300,7 @@ export interface CoordinatorBridge {
     deliveries?: RuntimeDelivery[];
     kind: 'message' | 'schedule_fire';
     text: string;
-  }): Promise<RuntimeWakeResult>;
-}
-
-/**
- * Inbox ack sink — narrow on purpose so tests can supply a literal.
- * Coordinator calls `markDelivered` only on a successful wake; failure
- * paths leave rows pending so the inbox replay handles them.
- */
-export interface CoordinatorInboxSink {
-  markDelivered(deliveryIds: readonly number[]): void;
+  }): Promise<RuntimeDeliverResult>;
 }
 
 /**
@@ -305,23 +328,9 @@ export interface CoordinatorCallbacks {
    *  rows exist before auto-respawning. DaemonHost wires this to
    *  `ConversationInboxRepo.listPending(conv, agent).length > 0`. */
   hasPendingInbox?(conversationId: string, agentId: string): boolean;
-  /** Called when the coordinator must combine multiple un-encoded
-   *  message texts into one gated-batch text BEFORE the per-driver
-   *  encode step. DaemonHost wires this to `combineGatedBatch(texts,
-   *  'silverhand message send')`. Without it the coordinator cannot
-   *  produce a semantically-equivalent batch text, and silently
-   *  degrading to `texts.join(...)` would violate the "no silent
-   *  degradation" contract (Cindy `rrF2L1RmWq5JFH3m` B3 /
-   *  `0G5uJBydO_4qt_2r`). When omitted, multi-text batches throw at
-   *  flush/dispatch time and the rows stay pending; single-text paths
-   *  still work. Note the critical contract (Cindy `Mqf1h-FKudtEbH1O`):
-   *  the input is un-encoded message text, NOT driver-encoded stdin
-   *  lines — daemon encodes once after the combined text crosses the
-   *  wire. */
-  combineGated?(texts: readonly string[]): string;
   /** Optional backend-side `agent_activity` publisher. Used only for
-   *  the P2 live-wake stuck indicator: after daemon accepted a live
-   *  wake, if no parsed event arrives within the threshold, publish a
+   *  the P2 live-delivery stuck indicator: after daemon accepted a live
+   *  delivery, if no parsed event arrives within the threshold, publish a
    *  synthetic `thinking` run state so the UI doesn't look idle while
    *  the child process is stuck before its first observable event. */
   publishActivity?(state: AgentRunState): void;
@@ -342,77 +351,27 @@ const NOOP_LOGGER: CoordinatorLogger = {
 export interface RuntimeDeliveryCoordinatorDeps {
   bridge: CoordinatorBridge;
   cache: CoordinatorCacheView;
-  inboxAck: CoordinatorInboxSink;
   callbacks?: CoordinatorCallbacks;
   logger?: CoordinatorLogger;
-  /** Wake→first-parsed watchdog threshold. Defaults to 30s, per P2
+  /** Delivery→first-parsed watchdog threshold. Defaults to 30s, per P2
    *  review. Set <=0 to disable in tests. */
-  wakeStuckMs?: number;
+  deliveryWatchdogMs?: number;
   /** Test seam for deterministic timestamps. Production uses Date.now. */
   now?: () => number;
 }
 
-interface BusyState {
-  outstandingToolUses: number;
-  compacting: boolean;
-}
-
-interface PendingDelivery {
-  /** Inbox row ids covered by this pending request. Singleton for most
-   *  enqueued requests; multi for caller pre-combined groups. */
-  deliveryIds: readonly number[];
-  deliveredUpToSeq?: number;
-  /** Per-delivery stream metadata must survive gated mid-turn queueing;
-   *  otherwise the safe-boundary flush falls back to scalar high-water
-   *  and can write a thread seq into the main observed boundary. */
-  deliveries?: readonly RuntimeDelivery[];
-  dedupKey: string;
-  /** Un-encoded human-readable text. Combined with sibling pendings at
-   *  flush time via `combineGated` (when length > 1); daemon encodes. */
-  text: string;
-  /** The driver capability the request was submitted under. Stored so
-   *  the flush path can pick the right routing (in practice a single
-   *  agent's driver doesn't change mid-session, but storing per-row
-   *  removes a class of "what if driver flipped" footguns). */
-  driver: DriverDeliveryView;
-}
-
 interface PerAgentState {
-  busy: BusyState;
-  pending: PendingDelivery[];
-  /** True iff a flush is currently in-flight for this (conv, agent).
-   *  Prevents a second `tool_output → turn_end` cascade from racing
-   *  itself when wake's await yields. CM serializes via `drainChain`;
-   *  we use a simpler boolean because the coordinator never reads from
-   *  the daemon side post-wake (no second-leg event to interleave). */
-  flushing: boolean;
   /**
-   * B3 (Cindy `usjxj8AxX4AvJ5E-`): set when we observe a parsed
-   * `session_init` for this (conv, agent). Cleared on `runtime_exit`
-   * via `state.delete`. Used to gate `markDelivered` for live wakes
-   * dispatched against `kickoffMode='requires_first_message'` runtimes
-   * that haven't surfaced `session_init` yet. Pre-B3 the daemon
-   * reporting `{delivered:true}` on the wake was treated as proof of
-   * delivery — but for claude the wake landing in stdin only proves
-   * the BYTES were written; the child must then parse it and emit
-   * `system.init` to prove it's actually consuming input. If the child
-   * dies in the window between "stdin written" and "session_init
-   * parsed", we'd have marked the row delivered while the message was
-   * lost.
+   * #task:1417 Stage 3 — the coordinator no longer holds a busy tracker
+   * or pending queue. Mid-turn deferral moved into the daemon
+   * (§11.8/§11.9), so the ONLY per-agent state left here is the P2
+   * live-delivery stuck watchdog (a projection concern, not delivery
+   * scheduling).
    */
-  initObserved: boolean;
-  /**
-   * Wake delivery IDs that were accepted by the daemon (`delivered:true`)
-   * but NOT yet acked to the inbox because `initObserved` was false
-   * at wake-time. Marked delivered on `session_init`; cleared (without
-   * marking) on `runtime_exit` so the rows replay via
-   * `startup_delivery` on the next spawn.
-   */
-  initPendingDeliveryIds: number[];
-  wakeWatchdog: WakeWatchdogState | null;
+  deliveryWatchdog: DeliveryWatchdogState | null;
 }
 
-interface WakeWatchdogState {
+interface DeliveryWatchdogState {
   timer: ReturnType<typeof setTimeout> | null;
   token: number;
   baseRunId: string;
@@ -421,38 +380,28 @@ interface WakeWatchdogState {
   syntheticState: AgentRunState | null;
 }
 
-const DEFAULT_WAKE_STUCK_MS = 30_000;
+const DEFAULT_DELIVERY_WATCHDOG_MS = 30_000;
 
 function key(conversationId: string, agentId: string): string {
   return `${conversationId}|${agentId}`;
 }
 
-function makeBusy(): BusyState {
-  return { outstandingToolUses: 0, compacting: false };
-}
-
-function isSafeBoundary(busy: BusyState): boolean {
-  return busy.outstandingToolUses === 0 && !busy.compacting;
-}
-
 export class RuntimeDeliveryCoordinator {
   private readonly bridge: CoordinatorBridge;
   private readonly cache: CoordinatorCacheView;
-  private readonly inboxAck: CoordinatorInboxSink;
   private readonly callbacks: CoordinatorCallbacks;
   private readonly logger: CoordinatorLogger;
-  private readonly wakeStuckMs: number;
+  private readonly deliveryWatchdogMs: number;
   private readonly now: () => number;
   private readonly state = new Map<string, PerAgentState>();
-  private nextWakeWatchdogToken = 0;
+  private nextDeliveryWatchdogToken = 0;
 
   constructor(deps: RuntimeDeliveryCoordinatorDeps) {
     this.bridge = deps.bridge;
     this.cache = deps.cache;
-    this.inboxAck = deps.inboxAck;
     this.callbacks = deps.callbacks ?? {};
     this.logger = deps.logger ?? NOOP_LOGGER;
-    this.wakeStuckMs = deps.wakeStuckMs ?? DEFAULT_WAKE_STUCK_MS;
+    this.deliveryWatchdogMs = deps.deliveryWatchdogMs ?? DEFAULT_DELIVERY_WATCHDOG_MS;
     this.now = deps.now ?? (() => Date.now());
   }
 
@@ -479,51 +428,41 @@ export class RuntimeDeliveryCoordinator {
   }
 
   /**
-   * Batch sibling of `submitLiveDelivery`. Two callers:
-   *
-   *   1. **`DaemonHost.drainPending`** (Cindy `nKFVSvx4CyBLxPNq` blocker 2):
-   *      multi-row inbox drain on `runtime_ready_for_drain`. The caller
-   *      pre-combines via `formatInboxBatch` and submits ONE request
-   *      with multi `deliveryIds`; coordinator dispatches once and acks
-   *      all ids atomically.
-   *   2. **Mid-turn gated flush** (internal): single-message requests
-   *      enqueued via `submitLiveDelivery` get re-collected by `flush`
-   *      when the safe boundary reopens; if multiple are pending the
-   *      coordinator combines their `text` fields via `combineGated`
-   *      (Cindy `Mqf1h-FKudtEbH1O`: combine BEFORE encode — feeding
-   *      encoded JSON lines through `combineGated` would produce
-   *      malformed claude stdin).
+   * Batch sibling of `submitLiveDelivery`. Callers pre-combine their
+   * claimed inbox rows into ONE request (`formatInboxBatch`) with a multi
+   * `deliveryIds` group; the coordinator dispatches once and the daemon
+   * acks all ids atomically via the async `runtime_delivery_consumed`.
+   * (#task:1417 Stage 3 retired the internal mid-turn gated flush that used
+   * to submit its own multi-request batch — the daemon owns that queue and
+   * its combining now.)
    *
    * Ack contract — all-or-nothing across the batch:
-   *   - on `{delivered:true}` → `markDelivered` runs once with EVERY id
-   *     across the entire batch (or the entire batch is stashed into
-   *     `initPendingDeliveryIds` for the B3 init gate; that stash also
-   *     flushes as one ack);
-   *   - on `{delivered:false}` or throw → NO ids are acked; every row
-   *     stays pending so the next ready_for_drain (or live arrival)
-   *     replays the whole batch.
+   *   - custody transfer (`dispatched`, i.e. admitted/spawning/deferred) →
+   *     rows stay in-flight; `delivered_at` moves once, for EVERY id, only
+   *     when the daemon emits `runtime_delivery_consumed`;
+   *   - `refused` or a thrown dispatch → NO ids are acked; every row stays
+   *     pending so the next ready_for_drain (or live arrival) replays the
+   *     whole batch.
    *
    * Per-row `deliverMessage` looping would change the agent's visible
-   * turn boundary (one wake per row → claude treats each as its own
+   * turn boundary (one delivery per row → claude treats each as its own
    * user turn) and would degrade batch ack into partial-success — both
    * forbidden by Cindy's contract.
    *
    * Invariants the caller must uphold:
    *   1. All requests share the same (conv, agent) → same driver +
-   *      same daemon-owned driver state. The coordinator reads
-   *      `driver` from `batch[0]` after the empty check.
+   *      same daemon-owned driver state.
    *   2. The batch is non-empty. Empty batches throw — callers should
    *      no-op upstream when their listPending returned nothing.
    *   3. Each `req` already passed `inboxes.ensureDelivery` (so every
    *      `inboxId` in `deliveryIds` is a fresh, not-yet-delivered row).
+   *   4. The batch carries exactly one request (callers pre-combine). A
+   *      multi-request batch throws in `combineText` — combining moved to
+   *      the daemon.
    *
-   * Decision semantics for the batch return value (since the function
-   * returns a single decision rather than per-row):
-   *   - `wake_dispatched` carries every `result.delivery_ids` from the
-   *     single wake.
-   *   - `wake_refused` / `noop_*` apply to the batch uniformly.
-   *   - `queued_mid_turn.pendingCount` reflects the queue size after
-   *     enqueuing the entire batch.
+   * Decision semantics for the batch return value:
+   *   - `dispatched` carries every `deliveryIds` from the single dispatch;
+   *   - `refused` applies to the batch uniformly.
    */
   async submitLiveDeliveryBatch(
     conversationId: string,
@@ -536,84 +475,29 @@ export class RuntimeDeliveryCoordinator {
           'listPending is empty rather than calling through with [].',
       );
     }
-    const deliveryIds = batch.flatMap(item => [...item.deliveryIds]);
-    const head = batch[0]!;
-    const entry = this.cache.get(conversationId, agentId);
-    if (!entry) {
-      this.logger.info(
-        { conversationId, agentId, deliveryIds, batchSize: batch.length },
-        'deliver: no cache entry; rows stay pending until next start',
-      );
-      return { kind: 'noop_no_runtime' };
-    }
 
-    if (
-      entry.phase === 'startup_pending' ||
-      entry.phase === 'draining' ||
-      entry.phase === 'exited'
-    ) {
-      this.logger.info(
-        {
-          conversationId,
-          agentId,
-          deliveryIds,
-          batchSize: batch.length,
-          phase: entry.phase,
-        },
-        'deliver: runtime not in ready phase; rows stay pending',
-      );
-      return { kind: 'noop_phase', phase: entry.phase };
-    }
-
-    // From here, phase is `idle` or `ready`. Daemon side only emits
-    // ready_for_drain / accepts wakes once `ready`; `idle` here means
-    // we have a stale projection (rare — would imply backend issued
-    // start but daemon hasn't ack-fired `runtime_state` yet). We still
-    // route by driver policy so the test matrix doesn't have to enumerate
-    // every transient phase variant.
-
-    if (head.driver.busyDeliveryMode === 'none') {
-      // oneShot live: never push via wake. Rows stay pending; the
-      // next respawn (on runtime_exit) drains via startup_delivery.
-      this.logger.info(
-        { conversationId, agentId, deliveryIds, batchSize: batch.length },
-        'deliver: oneShot driver live, rows queued for next respawn',
-      );
-      return { kind: 'noop_oneshot_live' };
-    }
-
-    const st = this.ensureState(conversationId, agentId);
-
-    if (head.driver.busyDeliveryMode === 'direct' || isSafeBoundary(st.busy)) {
-      return this.dispatchWake(conversationId, agentId, [...batch]);
-    }
-
-    // Gated driver mid-turn. Enqueue every row; flush will fire when
-    // outstandingToolUses returns to 0 + compacting clears, and will
-    // combine texts via `combineGated` then encode once.
-    for (const req of batch) {
-      this.enqueue(st, req);
-    }
-    this.logger.info(
-      {
-        conversationId,
-        agentId,
-        deliveryIds,
-        batchSize: batch.length,
-        pendingCount: st.pending.length,
-        outstandingToolUses: st.busy.outstandingToolUses,
-        compacting: st.busy.compacting,
-      },
-      'deliver: gated driver busy, batch queued for next safe boundary',
-    );
-    return { kind: 'queued_mid_turn', pendingCount: st.pending.length };
+    // #task:1417 Stage 3 — NO cache read AND no busy check for the delivery
+    // decision. Every submit dispatches `runtime_deliver` unconditionally;
+    // the daemon owns spawn-vs-admit-vs-defer-vs-refuse:
+    //   - spawns when there is no live handle (batch = startup delivery);
+    //   - admits when the handle is ready and can take the write now;
+    //   - `deferred` when a `gated` handle is mid-turn OR a prior write is
+    //     still in flight — the daemon enqueues in its OWN per-handle
+    //     mid-turn queue and flushes at the next safe boundary;
+    //   - refuses while initializing / draining / cooldown (or a live
+    //     oneShot that can't take stdin).
+    // The coordinator-side busy tracker + volatile pending queue are gone
+    // (§11.8): the daemon holds the only mid-turn queue, so there is no
+    // second queue here and no gated fork. `deferred` collapses to
+    // `dispatched` for the fanout's custody view (rows stay in-flight).
+    return this.dispatchDeliver(conversationId, agentId, [...batch]);
   }
 
   /**
    * Replay DB-owned inbox rows after daemon emitted `runtime_ready_for_drain`.
    * This path intentionally bypasses the coordinator's process-local gated
    * pending queue: the durable DB claim already owns ordering/idempotency, and
-   * ready_for_drain is the daemon's explicit signal that a wake may be sent.
+   * ready_for_drain is the daemon's explicit signal that a delivery may be sent.
    */
   async submitReadyForDrainDeliveryBatch(
     conversationId: string,
@@ -626,128 +510,36 @@ export class RuntimeDeliveryCoordinator {
           'when listPending is empty rather than calling through with [].',
       );
     }
-    const deliveryIds = batch.flatMap(item => [...item.deliveryIds]);
-    const head = batch[0]!;
-    const entry = this.cache.get(conversationId, agentId);
-    if (!entry) {
-      this.logger.info(
-        { conversationId, agentId, deliveryIds, batchSize: batch.length },
-        'deliver: ready_for_drain replay saw no cache entry; rows stay pending',
-      );
-      return { kind: 'noop_no_runtime' };
-    }
-    if (entry.phase !== 'ready') {
-      this.logger.info(
-        {
-          conversationId,
-          agentId,
-          deliveryIds,
-          batchSize: batch.length,
-          phase: entry.phase,
-        },
-        'deliver: ready_for_drain replay saw non-ready phase; rows stay pending',
-      );
-      return { kind: 'noop_phase', phase: entry.phase };
-    }
-    if (head.driver.busyDeliveryMode === 'none') {
-      this.logger.info(
-        { conversationId, agentId, deliveryIds, batchSize: batch.length },
-        'deliver: oneShot driver ready_for_drain replay refused; rows stay pending',
-      );
-      return { kind: 'noop_oneshot_live' };
-    }
-    return this.dispatchWake(conversationId, agentId, [...batch]);
+    // #task:1417 Stage 2b — no cache read. This path is entered from the
+    // daemon's own `runtime_ready_for_drain` (or a reattach re-drive of a
+    // hydrated-live runtime), so the handle is drainable; `runtime_deliver`
+    // admits it, or refuses if the daemon has since moved on (rows roll
+    // back to pending, retriable). oneShot is not special-cased here either:
+    // a oneShot has no live stdin, so the daemon sync-refuses and the rows
+    // roll back for the next respawn-with-batch.
+    return this.dispatchDeliver(conversationId, agentId, [...batch]);
   }
 
   /**
    * Parsed-event hook called by EventHandler on every
-   * `runtime_parsed_event`. Updates busy tracker; if the boundary
-   * just reopened, schedules a flush.
+   * `runtime_parsed_event`. #task:1417 Stage 3 — the busy tracker and
+   * safe-boundary flush moved to the daemon (§11.8), so this hook's ONLY
+   * remaining job is to cancel the P2 live-delivery stuck watchdog: any parsed
+   * signal proves the child moved past the silent delivery→first-event window.
    *
-   * MUST be called with the RAW `ParsedEvent` from
-   * `frame.parsed`, NOT the sanitized agent_event payload (Cindy
-   * `BYHZJI9ALSVmmlFr` pin b).
+   * `ev` is unused for delivery now, but the hook stays wired (and keeps
+   * receiving the RAW `ParsedEvent`) so the watchdog clears on the very
+   * first sign of life.
    */
   onParsedEvent(
     conversationId: string,
     agentId: string,
-    ev: ParsedEvent,
+    _ev: ParsedEvent,
   ): void {
-    const st = this.ensureState(conversationId, agentId);
     // Any parsed signal means the child has moved past the silent
-    // wake→first-event window. Cancel the P2 watchdog before applying
-    // busy-state transitions; if the synthetic bubble already fired,
+    // delivery→first-event window. If the synthetic bubble already fired,
     // clear it unless a real runtime_state has already superseded it.
-    this.clearWakeWatchdog(conversationId, agentId, 'replaced');
-    const wasSafe = isSafeBoundary(st.busy);
-    switch (ev.kind) {
-      case 'tool_call':
-        st.busy.outstandingToolUses += 1;
-        break;
-      case 'tool_output':
-        st.busy.outstandingToolUses = Math.max(
-          0,
-          st.busy.outstandingToolUses - 1,
-        );
-        break;
-      case 'turn_end':
-        // CM clamps to 0 on turn_end to recover from any drift (e.g.
-        // tool_call without matching tool_output, which we occasionally
-        // observed on claude pre-PR-A). Same here.
-        st.busy.outstandingToolUses = 0;
-        break;
-      case 'compaction_started':
-        st.busy.compacting = true;
-        break;
-      case 'compaction_finished':
-        st.busy.compacting = false;
-        break;
-      case 'session_init':
-        // B3 (Cindy `usjxj8AxX4AvJ5E-`): claude's `system.init` is the
-        // proof that the runtime has parsed our first user message and
-        // is actively consuming input. Pre-init wakes that landed in
-        // `initPendingDeliveryIds` are now safe to ack.
-        //
-        // Idempotence: claude emits `system.init` at the start of every
-        // turn. The first observation latches `initObserved` and
-        // flushes the queue; subsequent observations find an empty
-        // queue and are no-ops. We deliberately leave `initObserved`
-        // sticky for the lifetime of this runtime (until
-        // `runtime_exit` clears state.delete) so a later wake landing
-        // before the NEXT turn's `system.init` doesn't get deferred.
-        if (!st.initObserved) {
-          st.initObserved = true;
-          if (st.initPendingDeliveryIds.length > 0) {
-            const ids = st.initPendingDeliveryIds.splice(0);
-            this.inboxAck.markDelivered(ids);
-            this.logger.info(
-              {
-                conversationId,
-                agentId,
-                deliveryIds: ids,
-              },
-              'deliver: session_init observed, flushing init-pending acks',
-            );
-          }
-        }
-        return;
-      case 'thinking':
-      case 'text':
-      case 'error':
-      case 'unknown':
-        return;
-      default: {
-        // Exhaustiveness check: if shared `ParsedEvent` gains a variant
-        // and we forgot to handle it, this branch flags at typecheck.
-        const _exhaustive: never = ev;
-        void _exhaustive;
-        return;
-      }
-    }
-    const nowSafe = isSafeBoundary(st.busy);
-    if (!wasSafe && nowSafe && st.pending.length > 0) {
-      void this.flush(conversationId, agentId);
-    }
+    this.clearDeliveryWatchdog(conversationId, agentId, 'replaced');
   }
 
   /**
@@ -756,7 +548,7 @@ export class RuntimeDeliveryCoordinator {
    * respawn.
    *
    * Pin c gate: `intentional === false` AND NOT init-timeout AND NOT
-   * fatal AND pending inbox exists. Direct wake is NEVER used here —
+   * fatal AND pending inbox exists. Direct delivery is NEVER used here —
    * the only correct path for oneShot redelivery is `start()` +
    * startup_delivery, because the new daemon-side runtime drains the
    * inbox in its init phase.
@@ -766,7 +558,7 @@ export class RuntimeDeliveryCoordinator {
     agentId: string,
     meta: RuntimeExitMeta,
   ): void {
-    this.clearWakeWatchdog(
+    this.clearDeliveryWatchdog(
       conversationId,
       agentId,
       meta.initTimedOut
@@ -777,9 +569,13 @@ export class RuntimeDeliveryCoordinator {
             ? 'stopped'
             : 'crashed',
     );
-    // Clear per-agent state regardless of whether we respawn — any
-    // queue state belongs to the dead runtime; a fresh start owns its
-    // own queue.
+    // #task:1417 Stage 3 — the coordinator no longer holds a volatile
+    // queue, so there is nothing to roll back here. Mid-turn deferred rows
+    // now live in the DAEMON's per-handle queue; on child exit the daemon
+    // emits `runtime_delivery_failed{child_exit}` for each queued entry and
+    // the backend's failed-delivery handler returns those rows to pending
+    // (the same path any `runtime_delivery_failed` takes). We only drop the
+    // coordinator's own per-agent state (the P2 watchdog bookkeeping).
     this.state.delete(key(conversationId, agentId));
 
     if (meta.intentional) return;
@@ -811,215 +607,57 @@ export class RuntimeDeliveryCoordinator {
   }
 
   /**
-   * Clear the live-wake stuck watchdog for a single runtime. Used by
+   * Clear the live-delivery stuck watchdog for a single runtime. Used by
    * EventHandler's init-timeout path and DaemonHost.clearSession. Does
-   * NOT clear pending deliveries or busy state; use `clearRuntime` for
-   * full session teardown.
+   * NOT tear down the full per-agent state; use `clearRuntime` for full
+   * session teardown.
    */
-  clearWakeWatchdog(
+  clearDeliveryWatchdog(
     conversationId: string,
     agentId: string,
     reason: AgentRunTerminalReason = 'replaced',
   ): void {
     const st = this.state.get(key(conversationId, agentId));
-    if (!st?.wakeWatchdog) return;
-    const watchdog = st.wakeWatchdog;
+    if (!st?.deliveryWatchdog) return;
+    const watchdog = st.deliveryWatchdog;
     if (watchdog.timer) clearTimeout(watchdog.timer);
-    st.wakeWatchdog = null;
+    st.deliveryWatchdog = null;
     if (!watchdog.fired) return;
     this.publishSyntheticClear(conversationId, agentId, watchdog, reason);
   }
 
   /** Clear every coordinator-owned bit for a runtime. This is the
    * clearSession-side equivalent of `onRuntimeExit`: cancel the stuck
-   * watchdog, remove busy/pending state, and leave DB inbox rows as
-   * the durable source of truth. */
+   * watchdog and drop the per-agent state, leaving DB inbox rows as the
+   * durable source of truth. #task:1417 Stage 3 — no volatile queue lives
+   * here anymore, so there is nothing to roll back (the daemon owns the
+   * mid-turn queue and fails its entries on exit / discards them on
+   * disconnect via owner-scoped cleanup). */
   clearRuntime(
     conversationId: string,
     agentId: string,
     reason: AgentRunTerminalReason = 'stopped',
   ): void {
-    this.clearWakeWatchdog(conversationId, agentId, reason);
+    this.clearDeliveryWatchdog(conversationId, agentId, reason);
     this.state.delete(key(conversationId, agentId));
   }
 
   // ── test inspection ──────────────────────────────────────────────
 
   /** Read-only view of the pending queue. Test-only convenience. */
-  pendingCount(conversationId: string, agentId: string): number {
-    return this.state.get(key(conversationId, agentId))?.pending.length ?? 0;
-  }
-
-  /** Read-only view of the busy tracker. Test-only convenience. */
-  busySnapshot(
-    conversationId: string,
-    agentId: string,
-  ): { outstandingToolUses: number; compacting: boolean } {
-    const st = this.state.get(key(conversationId, agentId));
-    return {
-      outstandingToolUses: st?.busy.outstandingToolUses ?? 0,
-      compacting: st?.busy.compacting ?? false,
-    };
-  }
-
   // ── internals ────────────────────────────────────────────────────
 
   private ensureState(conversationId: string, agentId: string): PerAgentState {
     const k = key(conversationId, agentId);
     let st = this.state.get(k);
     if (!st) {
-      st = {
-        busy: makeBusy(),
-        pending: [],
-        flushing: false,
-        initObserved: false,
-        initPendingDeliveryIds: [],
-        wakeWatchdog: null,
-      };
+      st = { deliveryWatchdog: null };
       this.state.set(k, st);
     }
     return st;
   }
 
-  private enqueue(st: PerAgentState, req: LiveDeliveryRequest): void {
-    // Idempotent push — re-delivery of the same dedupKey at the same
-    // boundary should not double-write.
-    if (st.pending.some(item => item.dedupKey === req.dedupKey)) return;
-    st.pending.push({
-      deliveryIds: req.deliveryIds,
-      deliveredUpToSeq: req.deliveredUpToSeq,
-      deliveries: req.deliveries,
-      dedupKey: req.dedupKey,
-      text: req.text,
-      driver: req.driver,
-    });
-  }
-
-  private async flush(conversationId: string, agentId: string): Promise<void> {
-    const st = this.state.get(key(conversationId, agentId));
-    if (!st) return;
-    if (st.flushing) return;
-    if (st.pending.length === 0) return;
-    if (!isSafeBoundary(st.busy)) return;
-    st.flushing = true;
-    const batch = st.pending.splice(0);
-    try {
-      let text: string;
-      try {
-        text = this.combineText(batch);
-      } catch (err) {
-        // No combineGated callback for a multi-text flush. Push the
-        // rows back and rethrow — silent degradation is forbidden
-        // (Cindy `rrF2L1RmWq5JFH3m` B3 / `0G5uJBydO_4qt_2r`;
-        // `Mqf1h-FKudtEbH1O` combine-before-encode is preserved by the
-        // coordinator combining text BEFORE shipping to daemon).
-        st.pending.unshift(...batch);
-        this.logger.error(
-          {
-            conversationId,
-            agentId,
-            batchSize: batch.length,
-            err: (err as Error).message,
-          },
-          'deliver: flush combine refused; rows remain queued',
-        );
-        throw err;
-      }
-      const deliveryIds = batch.flatMap(item => [...item.deliveryIds]);
-      const deliveries = batch.flatMap(item => [...(item.deliveries ?? [])]);
-      const result = await this.bridge.runtimeWake({
-        conversation_id: conversationId,
-        agent_id: agentId,
-        delivery_ids: deliveryIds,
-        delivered_up_to_seq: maxDeliveredUpToSeq(batch),
-        ...(deliveries.length > 0 ? { deliveries } : {}),
-        kind: 'message',
-        text,
-      });
-      if (result.delivered) {
-        this.startWakeWatchdog(conversationId, agentId, batch[0]!.driver);
-        // B3: same gate as dispatchWake — defer ack for
-        // requires_first_message + !initObserved. Flush only fires for
-        // gated drivers (busyDeliveryMode === 'gated'), and `gated`
-        // implies claude — so kickoffMode='requires_first_message' is
-        // the common case. Re-check on `batch[0]` for symmetry; all
-        // rows in a flushed batch share the same agent → same driver.
-        const initGated =
-          batch[0]!.driver.kickoffMode === 'requires_first_message' &&
-          !st.initObserved;
-        if (initGated) {
-          st.initPendingDeliveryIds.push(...result.delivery_ids);
-          this.logger.info(
-            {
-              conversationId,
-              agentId,
-              batchSize: batch.length,
-              deliveryIds: result.delivery_ids,
-            },
-            'deliver: flushed batch, ack deferred until session_init (B3 gate)',
-          );
-        } else {
-          this.inboxAck.markDelivered(result.delivery_ids);
-          this.logger.info(
-            {
-              conversationId,
-              agentId,
-              batchSize: batch.length,
-              deliveryIds: result.delivery_ids,
-            },
-            'deliver: flushed pending batch at safe boundary',
-          );
-        }
-      } else {
-        // Refused. Push the batch back at the head so a later flush
-        // can re-try. Order preserved because we used splice(0); items
-        // go back in their original positions.
-        st.pending.unshift(...batch);
-        this.logger.warn(
-          {
-            conversationId,
-            agentId,
-            reason: result.reason,
-            deliveryIds: result.delivery_ids,
-          },
-          'deliver: flush refused; rows remain queued',
-        );
-      }
-    } catch (err) {
-      // Transport / internal_error path. Push the batch back so a
-      // future safe boundary can retry — without this the in-memory
-      // queue would silently leak (Cindy `rrF2L1RmWq5JFH3m` B4). DB
-      // rows are still pending (no markDelivered ran) so a fresh
-      // `start()` or `ready_for_drain` would also redeliver, but the
-      // in-memory queue is the path that fires on the NEXT in-process
-      // safe boundary — losing it would mean a transport blip turns a
-      // mid-turn defer into "wait for the next runtime restart".
-      //
-      // Guard the unshift so the combine/encode branch (which already
-      // unshifted before rethrowing) doesn't double-push.
-      const k = key(conversationId, agentId);
-      const stNow = this.state.get(k);
-      if (
-        stNow &&
-        !stNow.pending.some(item => item.dedupKey === batch[0]?.dedupKey)
-      ) {
-        stNow.pending.unshift(...batch);
-      }
-      this.logger.error(
-        {
-          conversationId,
-          agentId,
-          batchSize: batch.length,
-          err: (err as Error).message,
-        },
-        'deliver: flush threw; rows remain queued',
-      );
-    } finally {
-      st.flushing = false;
-    }
-  }
-
-  private async dispatchWake(
+  private async dispatchDeliver(
     conversationId: string,
     agentId: string,
     batch: LiveDeliveryRequest[],
@@ -1029,11 +667,11 @@ export class RuntimeDeliveryCoordinator {
     // Flatten per-delivery metadata across the (possibly pre-combined) batch
     // so the daemon advances observed per stream, not from the scalar high-
     // water. Kept consistent with `deliveryIds` — the daemon hard-rejects a
-    // wake whose id sets disagree.
+    // deliver whose id sets disagree.
     const deliveries = batch.flatMap(item => [...(item.deliveries ?? [])]);
-    let result: RuntimeWakeResult;
+    let result: RuntimeDeliverResult;
     try {
-      result = await this.bridge.runtimeWake({
+      result = await this.bridge.runtimeDeliver({
         conversation_id: conversationId,
         agent_id: agentId,
         delivery_ids: deliveryIds,
@@ -1050,88 +688,105 @@ export class RuntimeDeliveryCoordinator {
           deliveryIds,
           err: (err as Error).message,
         },
-        'deliver: runtimeWake threw; row stays pending',
+        'deliver: runtimeDeliver threw; row stays pending',
       );
-      // Transport / internal_error fail loudly per Cindy's contract on
-      // clearSession — same posture applies here: don't pretend
-      // delivered, don't mutate inbox. Re-throw so DaemonHost surfaces.
+      // Transport / fs-guard / internal_error fail loudly. Don't pretend
+      // delivered, don't mutate inbox. Re-throw so the fanout rolls the
+      // in-flight rows back to pending.
       throw err;
     }
-    if (result.delivered) {
-      this.startWakeWatchdog(conversationId, agentId, batch[0]!.driver);
-      // B3 (Cindy `usjxj8AxX4AvJ5E-`): for `requires_first_message`
-      // drivers (claude), `delivered:true` from the daemon only proves
-      // the bytes hit stdin — the child may still die before parsing
-      // them. Defer the ack until the parsed `session_init` proves
-      // consumption. Other kickoffMode='self_inits' drivers
-      // (codex/cursor) prove init via daemon-side phase=ready before
-      // any wake reaches them, so the ack on `delivered:true` is safe.
-      const initGated =
-        batch[0]!.driver.kickoffMode === 'requires_first_message' &&
-        !this.ensureState(conversationId, agentId).initObserved;
-      if (initGated) {
-        const st = this.ensureState(conversationId, agentId);
-        st.initPendingDeliveryIds.push(...result.delivery_ids);
-        this.logger.info(
-          {
-            conversationId,
-            agentId,
-            deliveryIds: result.delivery_ids,
-            batchSize: batch.length,
-          },
-          'deliver: wake dispatched, ack deferred until session_init (B3 gate)',
-        );
-      } else {
-        this.inboxAck.markDelivered(result.delivery_ids);
-        this.logger.info(
-          {
-            conversationId,
-            agentId,
-            deliveryIds: result.delivery_ids,
-            batchSize: batch.length,
-          },
-          'deliver: wake dispatched, rows marked delivered',
-        );
-      }
-      return { kind: 'wake_dispatched', deliveryIds: result.delivery_ids };
+    if (
+      result.disposition === 'spawning' ||
+      result.disposition === 'admitted'
+    ) {
+      // #task:1417 Stage 2b — the daemon accepted custody (spawned with
+      // this batch, or wrote it to a ready handle). NO ack here: the sync
+      // disposition transfers ownership only; `delivered_at` moves solely
+      // on the async `runtime_delivery_consumed`. Rows stay in-flight
+      // (owner=conn) until then; a `runtime_delivery_failed` or a
+      // disconnect rolls them back.
+      //
+      // `spawning`/`admitted` mean the write happened NOW (or will on
+      // spawn), so arming the delivery watchdog is honest — a stuck child that
+      // produces no parsed event within the threshold gets the synthetic
+      // "waiting" bubble.
+      this.startDeliveryWatchdog(conversationId, agentId, batch[0]!.driver);
+      this.logger.info(
+        {
+          conversationId,
+          agentId,
+          deliveryIds,
+          batchSize: batch.length,
+          disposition: result.disposition,
+        },
+        'deliver: dispatched via runtime_deliver; custody transferred, ack awaits consumed',
+      );
+      return { kind: 'dispatched', deliveryIds };
+    }
+    if (result.disposition === 'deferred') {
+      // #task:1417 Stage 3 — the daemon holds a ready handle but could not
+      // take the write right now (mid-turn `gated`, or a prior write still
+      // in flight). It enqueued the batch in its OWN per-handle mid-turn
+      // queue and will flush at the next safe boundary. Custody transferred
+      // to the daemon exactly like `admitted` (rows stay in-flight; ack
+      // awaits the async `runtime_delivery_consumed`; a
+      // `runtime_delivery_failed{child_exit}` on exit, or the daemon's
+      // owner-scoped cleanup on disconnect, rolls them back).
+      //
+      // We deliberately do NOT arm the delivery watchdog here: the stdin write
+      // is deferred to the daemon's flush, which the backend cannot time,
+      // so a watchdog armed now would fire spuriously during a legitimate
+      // long turn. Stuck-turn observability for deferred writes belongs to
+      // the daemon-side #1416(b) work, not this backend heuristic.
+      this.logger.info(
+        {
+          conversationId,
+          agentId,
+          deliveryIds,
+          batchSize: batch.length,
+          disposition: result.disposition,
+        },
+        'deliver: deferred by daemon mid-turn queue; custody transferred, ack awaits consumed',
+      );
+      return { kind: 'dispatched', deliveryIds };
     }
     this.logger.warn(
       {
         conversationId,
         agentId,
         reason: result.reason,
-        deliveryIds: result.delivery_ids,
+        deliveryIds,
       },
-      'deliver: wake refused, row stays pending',
+      'deliver: runtime_deliver refused, row rolls back to pending',
     );
-    return { kind: 'wake_refused', reason: result.reason };
+    return { kind: 'refused', reason: result.reason };
   }
 
-  private startWakeWatchdog(
+  private startDeliveryWatchdog(
     conversationId: string,
     agentId: string,
     driver: DriverDeliveryView,
   ): void {
-    if (this.wakeStuckMs <= 0) return;
+    if (this.deliveryWatchdogMs <= 0) return;
     if (!this.callbacks.publishActivity) return;
     const base = this.cache.get(conversationId, agentId)?.runState;
     if (!base) {
       this.logger.info(
         { conversationId, agentId },
-        'deliver: wake stuck watchdog skipped; no base runState',
+        'deliver: delivery stuck watchdog skipped; no base runState',
       );
       return;
     }
     const st = this.ensureState(conversationId, agentId);
-    // Reset to the latest delivered wake. If an older synthetic bubble
+    // Reset to the latest delivery. If an older synthetic bubble
     // had already fired, explicitly tombstone it before starting the
     // next window; otherwise the stale "waiting" row can remain visible.
-    this.clearWakeWatchdog(conversationId, agentId, 'replaced');
-    const token = ++this.nextWakeWatchdogToken;
+    this.clearDeliveryWatchdog(conversationId, agentId, 'replaced');
+    const token = ++this.nextDeliveryWatchdogToken;
     const timer = setTimeout(() => {
-      this.fireWakeWatchdog(conversationId, agentId, token, driver);
-    }, this.wakeStuckMs);
-    st.wakeWatchdog = {
+      this.fireDeliveryWatchdog(conversationId, agentId, token, driver);
+    }, this.deliveryWatchdogMs);
+    st.deliveryWatchdog = {
       timer,
       token,
       baseRunId: base.runId,
@@ -1141,26 +796,26 @@ export class RuntimeDeliveryCoordinator {
     };
   }
 
-  private fireWakeWatchdog(
+  private fireDeliveryWatchdog(
     conversationId: string,
     agentId: string,
     token: number,
     driver: DriverDeliveryView,
   ): void {
     const st = this.state.get(key(conversationId, agentId));
-    const watchdog = st?.wakeWatchdog;
+    const watchdog = st?.deliveryWatchdog;
     if (!watchdog || watchdog.token !== token) return;
     watchdog.timer = null;
     const current = this.cache.get(conversationId, agentId)?.runState;
     if (!current || current.runId !== watchdog.baseRunId) {
-      st.wakeWatchdog = null;
+      st.deliveryWatchdog = null;
       return;
     }
-    // A real runtime_state already arrived after the wake. The parsed
+    // A real runtime_state already arrived after the delivery. The parsed
     // hook should normally have cancelled us first; this guard keeps
     // timer ordering from publishing a stale synthetic bubble.
     if (current.updatedAt > watchdog.baseUpdatedAt) {
-      st.wakeWatchdog = null;
+      st.deliveryWatchdog = null;
       return;
     }
 
@@ -1169,7 +824,7 @@ export class RuntimeDeliveryCoordinator {
     const synthetic: AgentRunState = {
       ...base,
       status: 'thinking',
-      activitySnippet: waitingSnippet(driver, this.wakeStuckMs),
+      activitySnippet: waitingSnippet(driver, this.deliveryWatchdogMs),
       updatedAt: now,
       lastActivityAt: now,
     };
@@ -1181,16 +836,16 @@ export class RuntimeDeliveryCoordinator {
         conversationId,
         agentId,
         runId: synthetic.runId,
-        thresholdMs: this.wakeStuckMs,
+        thresholdMs: this.deliveryWatchdogMs,
       },
-      'deliver: wake accepted but no parsed event observed before watchdog threshold',
+      'deliver: first parsed event not observed before UI placeholder watchdog threshold',
     );
   }
 
   private publishSyntheticClear(
     conversationId: string,
     agentId: string,
-    watchdog: WakeWatchdogState,
+    watchdog: DeliveryWatchdogState,
     reason: AgentRunTerminalReason,
   ): void {
     const current = this.cache.get(conversationId, agentId)?.runState;
@@ -1218,47 +873,37 @@ export class RuntimeDeliveryCoordinator {
   }
 
   /**
-   * Combine un-encoded message texts BEFORE the daemon encodes (Cindy
-   * `Mqf1h-FKudtEbH1O` + Option A v2 `UMGu36zoTDVuKWXi`: combine BEFORE
-   * encode is preserved by the coordinator never encoding at all —
-   * combination happens here on text, the daemon's in-process driver
-   * instance encodes once after receiving the combined text). Feeding
-   * encoded JSON lines through `combineGated` would yield a payload
-   * that is not a valid driver stdin line — claude's
-   * `--input-format stream-json` parses it as malformed.
+   * Resolve the single un-encoded text a submit ships to the daemon.
    *
-   * Single-request batches return the text verbatim; multi-request
-   * batches combine via `combineGated` (DaemonHost wires this to
-   * `combineGatedBatch`).
+   * #task:1417 Stage 3 — gated-batch COMBINING moved to the daemon
+   * (`combineDeferredBatch` → `combineGatedBatch`, §11.9): the daemon owns
+   * the mid-turn queue, so it is the only place multiple messages pile up
+   * and need combining. Every backend submit path (`deliverMessage`,
+   * `drainPending`, `ready_for_drain`) claims its rows and PRE-COMBINES
+   * them into ONE `text` via `formatInboxBatch` before calling the
+   * coordinator, so a submitted batch always carries exactly one request.
    *
-   * Throws if:
-   *   - batch is empty;
-   *   - multi-text batch was submitted without a `combineGated`
-   *     callback wired on the coordinator.
-   *
-   * The "encode returned null" failure mode no longer exists at this
-   * layer — the daemon's `runtimeWake` decides between `driver_not_ready`
-   * (recoverable; row stays pending) and `driver_refused` (driver bug;
-   * fail loudly). Both arms keep the inbox row pending.
+   * This therefore expects a singleton batch and returns its text verbatim
+   * (the daemon's in-process driver encodes once after the text crosses the
+   * wire — Option A v2 `UMGu36zoTDVuKWXi`). A multi-request batch is a
+   * caller bug now that no coordinator-side combine exists: fail LOUD
+   * rather than silently drop or mis-join.
    */
   private combineText(batch: readonly { text: string }[]): string {
     if (batch.length === 0) {
       throw new Error('combineText: empty batch');
     }
-    if (batch.length === 1) {
-      return batch[0]!.text;
-    }
-    if (!this.callbacks.combineGated) {
+    if (batch.length > 1) {
       throw new Error(
-        'RuntimeDeliveryCoordinator: combineGated callback is required ' +
-          'for multi-text batches (received ' +
+        'RuntimeDeliveryCoordinator: multi-request batch reached the ' +
+          'coordinator (received ' +
           batch.length +
-          ' texts). Silent join-fallback is forbidden — DaemonHost ' +
-          'must provide a CM-equivalent combineGatedBatch formatter ' +
-          'when wiring the coordinator.',
+          '). Since #task:1417 Stage 3 the coordinator no longer combines — ' +
+          'callers must pre-combine into one request (the daemon combines ' +
+          'deferred entries at flush). Silent join-fallback is forbidden.',
       );
     }
-    return this.callbacks.combineGated(batch.map(item => item.text));
+    return batch[0]!.text;
   }
 }
 

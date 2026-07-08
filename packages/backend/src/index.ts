@@ -504,7 +504,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   });
   // Boot recovery (daemon hydrate from `runtime_status` then diff
   // stale DB rows). Scheduling waits until reconcile lands so any
-  // handles brought back are visible to the first wake delivery.
+  // handles brought back are visible to the first live delivery.
   await ctx.runtimeHost.reconcileOnBoot();
   ctx.scheduleService.start();
   ctx.idleReaperService.start();

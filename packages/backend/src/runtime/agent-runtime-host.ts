@@ -1,6 +1,6 @@
 /**
  * `AgentRuntimeHost` — the backend-side facade for agent runtime
- * lifecycle (start/stop/wake/clear-session/inbox delivery/run-state).
+ * lifecycle (start/stop/deliver/clear-session/inbox delivery/run-state).
  * Both embedded and standalone use `OutboundAgentRuntimeHost`, which delegates
  * to the shared outbound event fanout; the transport underneath is selected by
  * host id.
@@ -70,7 +70,7 @@ export interface ReapIdleRuntimesResult {
  * `clearSession` blocks on the post-`runtime_clear_session`
  * `runtime_exit` event landing in projection.
  *
- * 10s mirrors `runtime_wake`'s round-trip ceiling and is the
+ * 10s mirrors `runtime_deliver`'s round-trip ceiling and is the
  * largest "user-explicit" interactive action we want to make a
  * caller block on. Bigger and the renderer's spinner becomes
  * indistinguishable from a hang; smaller and a healthy daemon
@@ -202,7 +202,7 @@ export interface AgentRuntimeHost {
   // ── delivery ────────────────────────────────────────────────────
   /**
    * Hand a message to the (conv, agent) runtime. Persists to inbox if
-   * the runtime is offline; injects via `runtime_wake` if running.
+   * the runtime is offline; injects via `runtime_deliver` if running.
    */
   deliverMessage(
     conversationId: string,

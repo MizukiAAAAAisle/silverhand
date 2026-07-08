@@ -16,7 +16,7 @@
  * the instant a daemon attached (29 procs / 8GB observed in dogfood).
  *
  * The fix scopes the reattach re-drive to runtimes the daemon reports
- * as ALREADY ALIVE in its `runtime_status` hydrate snapshot (wake-only,
+ * as ALREADY ALIVE in its `runtime_status` hydrate snapshot (live-delivery-only,
  * never spawn). A cold daemon's snapshot is empty, so a cold reattach
  * spawns NOTHING from the DB pending set — activation happens only when
  * a real send lands. This test is rewritten to that contract.
@@ -286,10 +286,10 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     // so it sits in `in_flight_owner = oldConnectionId` /
     // `delivered_at = null` / `in_flight_at = <now>`. This is the
     // exact state a row would be in if the backend had dispatched
-    // a wake on it and the daemon disconnected before the wake
+    // a delivery on it and the daemon disconnected before the delivery
     // response landed.
     //
-    // (We don't trigger the wake itself — calling
+    // (We don't trigger the delivery itself — calling
     // `runtimeHost.deliverMessage` here would land delivered_at
     // before we get a chance to disconnect. Direct repo
     // `claimPending` keeps the test deterministic and matches the
@@ -392,7 +392,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     //
     // The killed daemon took its runtime with it, so the fresh
     // daemon's `runtime_status` hydrate snapshot is EMPTY. The
-    // scoped reattach replay (`replayPendingForHost` — wake-only,
+    // scoped reattach replay (`replayPendingForHost` — live-delivery-only,
     // live-runtimes-only) must therefore do nothing: it must NOT
     // derive a `runtime_start` from the DB pending set. Pre-fix this
     // is exactly where the 29-process herd was born.

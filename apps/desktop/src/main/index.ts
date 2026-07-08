@@ -2007,7 +2007,7 @@ async function bootstrap(): Promise<void> {
       );
     }
     // Spawn silverhand-daemon and connect a HostClient. Daemon is the
-    // only supported runtime path; backend routes every spawn / wake
+    // only supported runtime path; backend routes every spawn / deliver
     // / inbox delivery through this client. On connect failure we
     // tear down what we partially created and re-throw — there is no
     // runtime fallback (#task:512 cleanup Commit B deleted the

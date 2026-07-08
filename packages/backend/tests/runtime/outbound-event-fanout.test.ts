@@ -13,6 +13,7 @@ import {
   type OutboundServerCommandResult,
   type RuntimeStatusResult,
 } from '@silverhand/host';
+import { OUTBOUND_PROTOCOL_VERSION } from '@silverhand/host';
 import type { AgentRunState, RuntimeKind } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationEventRepo } from '../../src/repos/conversation-event-repo.js';
@@ -80,7 +81,7 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('marks startup delivery consumed rows delivered from outbound events', () => {
+  it('marks delivery consumed rows delivered from outbound events', () => {
     const fix = makeFixture();
     try {
       const msg = fix.messages.insertForConversation({
@@ -93,7 +94,7 @@ describe('OutboundRuntimeEventFanout', () => {
       fix.fanout.onEvent(fix.hostId, {
         direction: 'daemon_to_server',
         type: 'event',
-        kind: 'runtime_startup_delivery_consumed',
+        kind: 'runtime_delivery_consumed',
         conversation_id: fix.channelId,
         agent_id: fix.agentId,
         delivery_ids: [delivery.inboxId],
@@ -106,7 +107,7 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('leaves startup delivery failed rows pending for backend retry policy', () => {
+  it('leaves delivery failed rows pending for backend retry policy', () => {
     const fix = makeFixture();
     try {
       const msg = fix.messages.insertForConversation({
@@ -119,7 +120,7 @@ describe('OutboundRuntimeEventFanout', () => {
       fix.fanout.onEvent(fix.hostId, {
         direction: 'daemon_to_server',
         type: 'event',
-        kind: 'runtime_startup_delivery_failed',
+        kind: 'runtime_delivery_failed',
         conversation_id: fix.channelId,
         agent_id: fix.agentId,
         delivery_ids: [delivery.inboxId],
@@ -210,7 +211,7 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('drops stale ready_for_drain events and does not pin a live wake to the old connection', async () => {
+  it('drops stale ready_for_drain events and does not pin a live delivery to the old connection', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
       fix.transport.snapshot = {
@@ -228,12 +229,12 @@ describe('OutboundRuntimeEventFanout', () => {
 
       // The transport has accepted a newer attachment, but an old
       // socket/frame delivers a late ready_for_drain. It must not write
-      // state.currentConnectionId back to conn-1 or dispatch a wake
+      // state.currentConnectionId back to conn-1 or dispatch a delivery
       // pinned to that dead connection.
       fix.transport.connectionId = 'conn-2';
       fix.fanout.onEvent(fix.hostId, readyForDrainEvent(fix), 'conn-1');
       await wait(25);
-      expect(fix.transport.wakeCalls()).toHaveLength(0);
+      expect(fix.transport.deliverCalls()).toHaveLength(0);
 
       const msg = fix.messages.insertForConversation({
         conversationId: fix.channelId,
@@ -242,10 +243,10 @@ describe('OutboundRuntimeEventFanout', () => {
       });
       await fix.fanout.deliverMessage(fix.channelId, fix.agentId, msg.id);
       await waitFor(() =>
-        fix.transport.calls.some(call => call.kind === 'runtime_start'),
+        fix.transport.calls.some(call => call.kind === 'runtime_deliver'),
       );
-      const start = fix.transport.calls.find(call => call.kind === 'runtime_start');
-      expect(start?.opts?.expectedConnectionId).toBe('conn-2');
+      const deliver = fix.transport.deliverCalls()[0];
+      expect(deliver?.opts?.expectedConnectionId).toBe('conn-2');
     } finally {
       fix.cleanup();
     }
@@ -293,13 +294,13 @@ describe('OutboundRuntimeEventFanout', () => {
 
       fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
       await waitFor(() => fix.transport.calls.some(call => call.kind === 'runtime_status'));
-      expect(fix.transport.calls.some(call => call.kind === 'runtime_wake')).toBe(false);
+      expect(fix.transport.calls.some(call => call.kind === 'runtime_deliver')).toBe(false);
 
       fix.fanout.onEvent(fix.hostId, readyForDrainEvent(fix), 'conn-1');
-      await waitFor(() => fix.transport.calls.some(call => call.kind === 'runtime_wake'));
+      await waitFor(() => fix.transport.calls.some(call => call.kind === 'runtime_deliver'));
 
-      const wake = fix.transport.calls.find(call => call.kind === 'runtime_wake');
-      expect(wake?.params).toMatchObject({
+      const deliver = fix.transport.deliverCalls()[0];
+      expect(deliver?.params).toMatchObject({
         delivery_ids: [delivery.inboxId],
       });
       expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
@@ -335,17 +336,17 @@ describe('OutboundRuntimeEventFanout', () => {
       await wait(25);
 
       // Root-cause invariant: no live runtime in the snapshot ⇒ NOTHING
-      // derived from DB pending. Neither a spawn nor a wake.
+      // derived from DB pending. Neither a spawn nor a deliver.
       expect(
         fix.transport.calls.some(call => call.kind === 'runtime_start'),
       ).toBe(false);
-      expect(fix.transport.wakeCalls()).toHaveLength(0);
+      expect(fix.transport.deliverCalls()).toHaveLength(0);
       // The backlog stays a durable pending inbox, untouched.
       expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toHaveLength(1);
 
       // The user actually sends into this conversation. THAT — and only
-      // that — is the activation trigger: exactly one runtime_start for
-      // this one pair (the backlog drains with it via startup_delivery).
+      // that — is the activation trigger: exactly one runtime_deliver for
+      // this one pair (the daemon spawns-with-batch to drain the backlog).
       const live = fix.messages.insertForConversation({
         conversationId: fix.channelId,
         fromKind: 'user',
@@ -353,33 +354,26 @@ describe('OutboundRuntimeEventFanout', () => {
       });
       await fix.fanout.deliverMessage(fix.channelId, fix.agentId, live.id);
       await waitFor(() =>
-        fix.transport.calls.some(call => call.kind === 'runtime_start'),
+        fix.transport.calls.some(call => call.kind === 'runtime_deliver'),
       );
-      expect(
-        fix.transport.calls.filter(call => call.kind === 'runtime_start'),
-      ).toHaveLength(1);
+      expect(fix.transport.deliverCalls()).toHaveLength(1);
     } finally {
       fix.cleanup();
     }
   });
 
-  it('reroutes to runtime_wake when runtime_start hits an already-live handle (no orphaned pending row)', async () => {
-    // Regression (opencode Lio #task:1415/#task:1416): the SECOND message to
-    // a live runtime whose backend cache `phase` had desynced from 'ready'
-    // routes through `startDeliveryBacked`. The daemon's `runtime_start` is
-    // idempotent — it reports `started:true` but does NOT consume the
-    // startup_delivery against an existing handle. Pre-fix, backend rolled the
-    // claimed rows back to pending and returned `true`, ORPHANING them
-    // (ready_for_drain is one-shot; no wake was ever issued) → the agent
-    // silently never received the message. The fix converges on the live wake
-    // path, keyed off the daemon's authoritative reply. Runtime-agnostic; codex
-    // stands in for opencode here.
+  it('delivers a live message via a single runtime_deliver even when the backend cache has no entry (daemon owns spawn-vs-admit)', async () => {
+    // #task:1417 Stage 2b — the SOLE delivery command is `runtime_deliver`,
+    // and the coordinator no longer reads the desyncable cache to route
+    // (root #1416 fix). The old "runtime_start → reroute-to-wake" dance for a
+    // live-but-uncached handle is gone: deliverMessage claims the row and
+    // dispatches ONE runtime_deliver; the daemon admits (or spawns). The row
+    // is never orphaned. Runtime-agnostic; codex stands in for opencode.
     const fix = makeFixture({ runtime: 'codex' });
     try {
-      // Daemon is connected (currentDaemonKey set) but the runtime_status
-      // hydrate reports an EMPTY snapshot, so the backend cache has no entry
-      // for this pair — the desync that makes deliverMessage route to
-      // startDeliveryBacked instead of the live wake path.
+      // Daemon connected, but the hydrate reported an EMPTY snapshot so the
+      // backend cache has no entry for this pair — the exact desync that used
+      // to wedge #1416. In Stage 2b it no longer matters: no cache read.
       fix.transport.snapshot = { runtimes: [] };
       fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
       await waitFor(() =>
@@ -393,17 +387,14 @@ describe('OutboundRuntimeEventFanout', () => {
       });
       const delivery = fix.inbox.ensureDelivery(fix.channelId, fix.agentId, msg.id);
 
-      // Daemon already has the handle alive: start is idempotent, refuses the
-      // startup_delivery.
-      fix.transport.rejectNextStartupDelivery();
-
+      // Daemon has the handle alive → admits the batch.
+      fix.transport.setNextDeliverDisposition('admitted');
       await fix.fanout.deliverMessage(fix.channelId, fix.agentId, msg.id);
 
-      // Exactly one start attempt, then a reroute to runtime_wake carrying the
-      // same row — and the row is NOT left orphaned in pending.
-      expect(fix.transport.startCalls()).toHaveLength(1);
-      expect(fix.transport.wakeCalls()).toHaveLength(1);
-      expect(fix.transport.wakeCalls()[0]!.params).toMatchObject({
+      // Exactly one runtime_deliver carrying the row — not orphaned in pending
+      // (rows stay in-flight until the async runtime_delivery_consumed).
+      expect(fix.transport.deliverCalls()).toHaveLength(1);
+      expect(fix.transport.deliverCalls()[0]!.params).toMatchObject({
         delivery_ids: [delivery.inboxId],
       });
       expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
@@ -412,7 +403,107 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('claims replay rows FIFO and does not issue concurrent wakes for repeated ready_for_drain', async () => {
+  it('delivers via runtime_deliver even while the hydrate is still in flight (cache not latched)', async () => {
+    // Stage 2b: because delivery no longer consults the cache, the
+    // ready→hydrate race window that used to need a `runtime_start` reroute
+    // is a non-issue — deliverMessage dispatches runtime_deliver regardless of
+    // whether the cache has latched a daemon key.
+    const fix = makeFixture({ runtime: 'codex' });
+    try {
+      // Hold the hydrate open so the cache NEVER latches a daemon key.
+      fix.transport.deferNextStatus();
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      await waitFor(() =>
+        fix.transport.calls.some(call => call.kind === 'runtime_status'),
+      );
+
+      const msg = fix.messages.insertForConversation({
+        conversationId: fix.channelId,
+        fromKind: 'user',
+        content: 'message in the ready→hydrate window',
+      });
+      const delivery = fix.inbox.ensureDelivery(fix.channelId, fix.agentId, msg.id);
+
+      fix.transport.setNextDeliverDisposition('admitted');
+      await fix.fanout.deliverMessage(fix.channelId, fix.agentId, msg.id);
+
+      expect(fix.transport.deliverCalls()).toHaveLength(1);
+      expect(fix.transport.deliverCalls()[0]!.params).toMatchObject({
+        delivery_ids: [delivery.inboxId],
+      });
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
+
+      // Let the deferred hydrate settle so teardown doesn't leave a dangling
+      // promise.
+      fix.transport.resolveDeferredStatus({ runtimes: [] });
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('keeps rows pending when runtime_deliver is refused (startup_pending / cooldown)', async () => {
+    // Stage 2b: a refused disposition means the daemon took nothing (handle
+    // still coming up). Backend rolls the claimed rows back to pending
+    // (retriable); the daemon's own ready_for_drain re-drives later.
+    for (const reason of ['startup_pending', 'cooldown'] as const) {
+      const fix = makeFixture({ runtime: 'codex' });
+      try {
+        fix.transport.snapshot = { runtimes: [] };
+        fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+        await waitFor(() =>
+          fix.transport.calls.some(call => call.kind === 'runtime_status'),
+        );
+
+        const msg = fix.messages.insertForConversation({
+          conversationId: fix.channelId,
+          fromKind: 'user',
+          content: `message while ${reason}`,
+        });
+        const delivery = fix.inbox.ensureDelivery(fix.channelId, fix.agentId, msg.id);
+
+        fix.transport.refuseNextDeliver(reason);
+        await fix.fanout.deliverMessage(fix.channelId, fix.agentId, msg.id);
+
+        // Exactly one deliver attempt, row rolled back to pending.
+        expect(fix.transport.deliverCalls()).toHaveLength(1);
+        const pending = fix.inbox.listPending(fix.channelId, fix.agentId);
+        expect(pending).toHaveLength(1);
+        expect(pending[0]?.inboxId).toBe(delivery.inboxId);
+      } finally {
+        fix.cleanup();
+      }
+    }
+  });
+
+  it('keeps rows pending when runtime_deliver is refused (draining)', async () => {
+    const fix = makeFixture({ runtime: 'codex' });
+    try {
+      fix.transport.snapshot = { runtimes: [] };
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      await waitFor(() =>
+        fix.transport.calls.some(call => call.kind === 'runtime_status'),
+      );
+
+      const msg = fix.messages.insertForConversation({
+        conversationId: fix.channelId,
+        fromKind: 'user',
+        content: 'message while draining',
+      });
+      const delivery = fix.inbox.ensureDelivery(fix.channelId, fix.agentId, msg.id);
+
+      fix.transport.refuseNextDeliver('draining');
+      await fix.fanout.deliverMessage(fix.channelId, fix.agentId, msg.id);
+
+      expect(fix.transport.deliverCalls()).toHaveLength(1);
+      const pending = fix.inbox.listPending(fix.channelId, fix.agentId);
+      expect(pending).toHaveLength(1);
+      expect(pending[0]?.inboxId).toBe(delivery.inboxId);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('claims replay rows FIFO and does not issue concurrent deliveries for repeated ready_for_drain', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
       const first = enqueueMessage(fix, 'first');
@@ -427,31 +518,47 @@ describe('OutboundRuntimeEventFanout', () => {
           }),
         ],
       };
-      fix.transport.deferNextWake();
+      fix.transport.deferNextDeliver();
 
       fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
       await waitFor(() => fix.transport.calls.some(call => call.kind === 'runtime_status'));
       fix.fanout.onEvent(fix.hostId, readyForDrainEvent(fix), 'conn-1');
-      await waitFor(() => fix.transport.wakeCalls().length === 1);
+      await waitFor(() => fix.transport.deliverCalls().length === 1);
       fix.fanout.onEvent(fix.hostId, readyForDrainEvent(fix), 'conn-1');
       await new Promise(resolve => setTimeout(resolve, 25));
 
-      expect(fix.transport.wakeCalls()).toHaveLength(1);
-      expect(fix.transport.wakeCalls()[0]!.params).toMatchObject({
+      expect(fix.transport.deliverCalls()).toHaveLength(1);
+      expect(fix.transport.deliverCalls()[0]!.params).toMatchObject({
         delivery_ids: [first.inboxId, second.inboxId],
       });
 
-      fix.transport.resolveDeferredWake({
-        delivered: true,
-        delivery_ids: [first.inboxId, second.inboxId],
+      fix.transport.resolveDeferredDeliver({
+        disposition: 'admitted',
+        pid: 123,
+        started_at: 1700000000000,
       });
+      // Ack the batch so the in-flight rows clear (dispatched keeps rows
+      // in-flight until the async runtime_delivery_consumed).
+      fix.fanout.onEvent(
+        fix.hostId,
+        {
+          direction: 'daemon_to_server',
+          type: 'event',
+          kind: 'runtime_delivery_consumed',
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          delivery_ids: [first.inboxId, second.inboxId],
+          ts: 1700000002000,
+        },
+        'conn-1',
+      );
       await waitFor(() => fix.inbox.listPending(fix.channelId, fix.agentId).length === 0);
     } finally {
       fix.cleanup();
     }
   });
 
-  it('rolls in-flight replay rows back to pending when wake dispatch fails', async () => {
+  it('rolls in-flight replay rows back to pending when delivery dispatch fails', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
       const delivery = enqueueMessage(fix, 'retry after timeout');
@@ -465,7 +572,7 @@ describe('OutboundRuntimeEventFanout', () => {
           }),
         ],
       };
-      fix.transport.rejectNextWake(new Error('transport_timeout'));
+      fix.transport.rejectNextDeliver(new Error('transport_timeout'));
 
       fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
       await waitFor(() => fix.transport.calls.some(call => call.kind === 'runtime_status'));
@@ -479,7 +586,7 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('keeps replay rows pending when daemon refuses wake delivery', async () => {
+  it('keeps replay rows pending when daemon refuses delivery', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
       const delivery = enqueueMessage(fix, 'driver not ready');
@@ -493,7 +600,7 @@ describe('OutboundRuntimeEventFanout', () => {
           }),
         ],
       };
-      fix.transport.refuseNextWake('driver_not_ready');
+      fix.transport.refuseNextDeliver('startup_pending');
 
       fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
       await waitFor(() => fix.transport.calls.some(call => call.kind === 'runtime_status'));
@@ -540,8 +647,8 @@ describe('OutboundRuntimeEventFanout', () => {
       }, 'conn-1');
       fix.fanout.onEvent(fix.hostId, readyForDrainEvent(fix), 'conn-1');
 
-      await waitFor(() => fix.transport.wakeCalls().length === 1);
-      expect(fix.transport.wakeCalls()[0]!.params).toMatchObject({
+      await waitFor(() => fix.transport.deliverCalls().length === 1);
+      expect(fix.transport.deliverCalls()[0]!.params).toMatchObject({
         delivery_ids: [delivery.inboxId],
       });
     } finally {
@@ -563,23 +670,23 @@ describe('OutboundRuntimeEventFanout', () => {
           }),
         ],
       };
-      fix.transport.deferNextWake();
+      fix.transport.deferNextDeliver();
 
       fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
       await waitFor(() => fix.transport.calls.some(call => call.kind === 'runtime_status'));
       fix.fanout.onEvent(fix.hostId, readyForDrainEvent(fix), 'conn-1');
-      await waitFor(() => fix.transport.wakeCalls().length === 1);
+      await waitFor(() => fix.transport.deliverCalls().length === 1);
       expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
 
       fix.fanout.onDisconnect(fix.hostId, 'conn-1');
       fix.transport.connectionId = 'conn-2';
-      fix.transport.rejectDeferredWake(new Error('transport_disconnected'));
+      fix.transport.rejectDeferredDeliver(new Error('transport_disconnected'));
       fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-2');
       await waitFor(() => fix.transport.calls.filter(call => call.kind === 'runtime_status').length >= 2);
       fix.fanout.onEvent(fix.hostId, readyForDrainEvent(fix), 'conn-2');
 
-      await waitFor(() => fix.transport.wakeCalls().length === 2);
-      expect(fix.transport.wakeCalls()[1]!.params).toMatchObject({
+      await waitFor(() => fix.transport.deliverCalls().length === 2);
+      expect(fix.transport.deliverCalls()[1]!.params).toMatchObject({
         delivery_ids: [delivery.inboxId],
       });
     } finally {
@@ -587,46 +694,149 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('uses startup_delivery when no runtime exists and wake when the runtime is ready', async () => {
+  it('spawns-with-batch via runtime_deliver when no runtime exists, and admits via runtime_deliver when ready', async () => {
     const startFix = makeFixture({ runtime: 'codex' });
     try {
       const delivery = enqueueMessage(startFix, 'start me');
       await expect(
-        startFix.fanout.startDeliveryBacked(startFix.channelId, startFix.agentId),
+        startFix.fanout.deliverPending(startFix.channelId, startFix.agentId),
       ).resolves.toBe(true);
-      expect(startFix.transport.calls.find(call => call.kind === 'runtime_start')?.params)
-        .toMatchObject({
-          startup_delivery: {
-            delivery_ids: [delivery.inboxId],
-          },
-        });
+      expect(startFix.transport.deliverCalls()[0]?.params).toMatchObject({
+        delivery_ids: [delivery.inboxId],
+      });
+      // No bare runtime_start — delivery goes through the deliver plane.
+      expect(
+        startFix.transport.calls.some(call => call.kind === 'runtime_start'),
+      ).toBe(false);
     } finally {
       startFix.cleanup();
     }
 
-    const wakeFix = makeFixture({ runtime: 'codex' });
+    const deliveryFix = makeFixture({ runtime: 'codex' });
     try {
-      const delivery = enqueueMessage(wakeFix, 'wake me');
-      wakeFix.transport.snapshot = {
+      const delivery = enqueueMessage(deliveryFix, 'wake me');
+      deliveryFix.transport.snapshot = {
         runtimes: [
-          runtimeDto(wakeFix.channelId, wakeFix.agentId, 'ready', {
+          runtimeDto(deliveryFix.channelId, deliveryFix.agentId, 'ready', {
             ...RUN_STATE,
-            conversationId: wakeFix.channelId,
-            agentId: wakeFix.agentId,
+            conversationId: deliveryFix.channelId,
+            agentId: deliveryFix.agentId,
             status: 'idle',
           }),
         ],
       };
-      wakeFix.fanout.onEvent(wakeFix.hostId, readyEvent(), 'conn-1');
-      await waitFor(() => wakeFix.transport.calls.some(call => call.kind === 'runtime_status'));
-      wakeFix.fanout.onEvent(wakeFix.hostId, readyForDrainEvent(wakeFix), 'conn-1');
-      await waitFor(() => wakeFix.transport.wakeCalls().length === 1);
-      expect(wakeFix.transport.wakeCalls()[0]!.params).toMatchObject({
+      deliveryFix.fanout.onEvent(deliveryFix.hostId, readyEvent(), 'conn-1');
+      await waitFor(() => deliveryFix.transport.calls.some(call => call.kind === 'runtime_status'));
+      deliveryFix.fanout.onEvent(deliveryFix.hostId, readyForDrainEvent(deliveryFix), 'conn-1');
+      await waitFor(() => deliveryFix.transport.deliverCalls().length === 1);
+      expect(deliveryFix.transport.deliverCalls()[0]!.params).toMatchObject({
         delivery_ids: [delivery.inboxId],
       });
-      expect(wakeFix.transport.calls.some(call => call.kind === 'runtime_start')).toBe(false);
+      expect(deliveryFix.transport.calls.some(call => call.kind === 'runtime_start')).toBe(false);
     } finally {
-      wakeFix.cleanup();
+      deliveryFix.cleanup();
+    }
+  });
+
+  it('oneShot (cursor) with no live handle spawns-with-batch via runtime_deliver (deliverPending AND deliverMessage)', async () => {
+    // #task:1417 Stage 2b (Cindy review #2) — the coordinator no longer
+    // short-circuits oneShot to a fake `noop_oneshot_live`. A oneShot with
+    // no live handle MUST reach the daemon as a `runtime_deliver`, which
+    // spawns-with-batch; the pre-fix short-circuit stranded a no-live
+    // oneShot in a pending↔rollback loop that never spawned. Both entry
+    // points (deliverPending, deliverMessage) share this delivery plane.
+    const pendingFix = makeFixture({ runtime: 'cursor' });
+    try {
+      const delivery = enqueueMessage(pendingFix, 'spawn me, one-shot');
+      await expect(
+        pendingFix.fanout.deliverPending(pendingFix.channelId, pendingFix.agentId),
+      ).resolves.toBe(true);
+      expect(pendingFix.transport.deliverCalls()).toHaveLength(1);
+      expect(pendingFix.transport.deliverCalls()[0]!.params).toMatchObject({
+        delivery_ids: [delivery.inboxId],
+      });
+      // Delivery plane only — no bare lifecycle runtime_start.
+      expect(
+        pendingFix.transport.calls.some(call => call.kind === 'runtime_start'),
+      ).toBe(false);
+      // Rows stay in-flight (custody with the daemon) until the async ack.
+      expect(
+        pendingFix.inbox.listPending(pendingFix.channelId, pendingFix.agentId),
+      ).toEqual([]);
+    } finally {
+      pendingFix.cleanup();
+    }
+
+    const msgFix = makeFixture({ runtime: 'cursor' });
+    try {
+      const msg = msgFix.messages.insertForConversation({
+        conversationId: msgFix.channelId,
+        fromKind: 'user',
+        content: 'deliver me, one-shot',
+      });
+      const delivery = msgFix.inbox.ensureDelivery(
+        msgFix.channelId,
+        msgFix.agentId,
+        msg.id,
+      );
+      await msgFix.fanout.deliverMessage(msgFix.channelId, msgFix.agentId, msg.id);
+      expect(msgFix.transport.deliverCalls()).toHaveLength(1);
+      expect(msgFix.transport.deliverCalls()[0]!.params).toMatchObject({
+        delivery_ids: [delivery.inboxId],
+      });
+      expect(
+        msgFix.transport.calls.some(call => call.kind === 'runtime_start'),
+      ).toBe(false);
+    } finally {
+      msgFix.cleanup();
+    }
+  });
+
+  it('a live oneShot (cursor) is daemon-refused without an ack; backend rolls back pending, then a non-fatal exit respawns to drain via runtime_deliver', async () => {
+    // #task:1417 Stage 2b (Cindy review #2) — a LIVE oneShot can never take a
+    // stdin delivery, so the daemon SYNC-refuses (`startup_pending`) rather
+    // than `admitted` then async `driver_refused` (which is reserved for a
+    // genuine driver programming error). Backend rolls the row back to
+    // pending with NO `delivered_at` ack; the oneShot drains on its next
+    // `runtime_exit` → respawn-with-batch.
+    const fix = makeFixture({ runtime: 'cursor' });
+    try {
+      const delivery = enqueueMessage(fix, 'refuse then drain');
+
+      // 1. Live oneShot refuses the delivery synchronously (no ack emitted).
+      fix.transport.refuseNextDeliver('startup_pending');
+      await expect(
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
+      ).resolves.toBe(true);
+      expect(fix.transport.deliverCalls()).toHaveLength(1);
+      // Row rolled back to pending — custody returned to the DB, not acked.
+      expect(
+        fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId),
+      ).toEqual([delivery.inboxId]);
+
+      // 2. A non-fatal exit with the row still pending re-drives the drain
+      //    via a fresh spawn-with-batch runtime_deliver (default disposition).
+      fix.fanout.onEvent(
+        fix.hostId,
+        {
+          direction: 'daemon_to_server',
+          type: 'event',
+          kind: 'runtime_exit',
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          code: 1,
+          intentional: false,
+          ts: 1700000010000,
+        },
+        'conn-1',
+      );
+
+      await waitFor(() => fix.transport.deliverCalls().length === 2);
+      expect(fix.transport.deliverCalls()[1]!.params).toMatchObject({
+        delivery_ids: [delivery.inboxId],
+      });
+    } finally {
+      fix.cleanup();
     }
   });
 
@@ -636,7 +846,7 @@ describe('OutboundRuntimeEventFanout', () => {
       const delivery = enqueueMessage(fix, 'do not lose me');
 
       await expect(
-        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
       ).resolves.toBe(true);
       expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
       expect(
@@ -652,7 +862,7 @@ describe('OutboundRuntimeEventFanout', () => {
         {
           direction: 'daemon_to_server',
           type: 'event',
-          kind: 'runtime_startup_delivery_failed',
+          kind: 'runtime_delivery_failed',
           conversation_id: fix.channelId,
           agent_id: fix.agentId,
           delivery_ids: [delivery.inboxId],
@@ -682,11 +892,9 @@ describe('OutboundRuntimeEventFanout', () => {
       const delivery = enqueueMessage(fix, 'wake after idle');
 
       await expect(
-        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
       ).resolves.toBe(true);
-      const initialStarts = fix.transport.calls.filter(
-        call => call.kind === 'runtime_start',
-      ).length;
+      const initialDelivers = fix.transport.deliverCalls().length;
 
       fix.fanout.onEvent(
         fix.hostId,
@@ -711,7 +919,7 @@ describe('OutboundRuntimeEventFanout', () => {
         {
           direction: 'daemon_to_server',
           type: 'event',
-          kind: 'runtime_startup_delivery_failed',
+          kind: 'runtime_delivery_failed',
           conversation_id: fix.channelId,
           agent_id: fix.agentId,
           delivery_ids: [delivery.inboxId],
@@ -741,9 +949,8 @@ describe('OutboundRuntimeEventFanout', () => {
       expect(fix.row().status).toBe('crashed');
       expect(fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId))
         .toEqual([delivery.inboxId]);
-      expect(
-        fix.transport.calls.filter(call => call.kind === 'runtime_start'),
-      ).toHaveLength(initialStarts);
+      // Respawn suppressed (fatalError) → no additional runtime_deliver.
+      expect(fix.transport.deliverCalls()).toHaveLength(initialDelivers);
     } finally {
       fix.cleanup();
     }
@@ -755,8 +962,8 @@ describe('OutboundRuntimeEventFanout', () => {
     // inbox logged "no respawn callback wired" and never drained. The
     // coordinator's onRuntimeExit gate (intentional===false AND !initTimedOut
     // AND !fatalError AND hasPendingInbox) must auto-respawn via
-    // `startDeliveryBacked` — the ONLY correct redelivery path for an exited
-    // runtime (a fresh runtime_start + startup_delivery; a direct wake cannot
+    // `deliverPending` — the ONLY correct redelivery path for an exited
+    // runtime (a `runtime_deliver` with no live handle spawns-with-batch to
     // drain a dead child). The gate is driver-agnostic, so codex stands in.
     const fix = makeFixture({ runtime: 'codex' });
     try {
@@ -781,20 +988,12 @@ describe('OutboundRuntimeEventFanout', () => {
       );
 
       // respawn fires on a microtask (Promise.resolve().then in the
-      // coordinator); the spawn path dispatches a fresh runtime_start.
-      await waitFor(() =>
-        fix.transport.calls.some(call => call.kind === 'runtime_start'),
-      );
-      const start = fix.transport.calls.find(
-        call => call.kind === 'runtime_start',
-      )!.params;
-      // It drains the still-pending row via startup_delivery, not a wake.
-      expect(start).toMatchObject({
-        startup_delivery: { delivery_ids: [delivery.inboxId] },
+      // coordinator); the spawn path dispatches a fresh runtime_deliver.
+      await waitFor(() => fix.transport.deliverCalls().length === 1);
+      // It drains the still-pending row via spawn-with-batch runtime_deliver.
+      expect(fix.transport.deliverCalls()[0]!.params).toMatchObject({
+        delivery_ids: [delivery.inboxId],
       });
-      expect(fix.transport.calls.some(call => call.kind === 'runtime_wake')).toBe(
-        false,
-      );
     } finally {
       fix.cleanup();
     }
@@ -811,6 +1010,7 @@ describe('OutboundRuntimeEventFanout', () => {
       // Give any errant microtask-scheduled respawn a chance to run.
       await new Promise(resolve => setImmediate(resolve));
       await new Promise(resolve => setImmediate(resolve));
+      expect(fix.transport.deliverCalls()).toHaveLength(0);
       expect(
         fix.transport.calls.some(call => call.kind === 'runtime_start'),
       ).toBe(false);
@@ -823,7 +1023,127 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('D4.e-6 — re-binds a legacy regular workspace (workspace_provision) BEFORE runtime_start, and the runtime_start frame carries NO host paths', async () => {
+  it('mid-turn is NOT special at the backend: deliver dispatches (daemon defers); a bare runtime_exit does NOT roll back — rollback is daemon-driven via runtime_delivery_failed (#task:1417 Stage 3)', async () => {
+    // Stage 3 moved the mid-turn queue AND the child-exit rollback INTO the
+    // daemon. So at the backend the mid-turn distinction disappears: a live
+    // deliver while the runtime is mid-turn dispatches a single
+    // `runtime_deliver` exactly like any other, and the daemon reports
+    // `deferred` (it parked the write in its own queue). The row stays
+    // in-flight. Critically, a bare `runtime_exit` no longer triggers a
+    // backend rollback+respawn — the daemon owns that queue, so it is the
+    // daemon's `runtime_delivery_failed{child_exit}` that returns the row to
+    // pending. This test pins both halves of the cutover.
+    const fix = makeFixture({ runtime: 'claude' });
+    try {
+      fix.transport.snapshot = {
+        runtimes: [
+          runtimeDto(fix.channelId, fix.agentId, 'ready', {
+            ...RUN_STATE,
+            conversationId: fix.channelId,
+            agentId: fix.agentId,
+            status: 'thinking',
+          }),
+        ],
+      };
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      await waitFor(() =>
+        fix.transport.calls.some(call => call.kind === 'runtime_status'),
+      );
+
+      // Drive the runtime mid-turn (outstanding tool use → not a safe
+      // boundary). Under Stage 2b this queued in the backend; under Stage 3
+      // it is irrelevant to the backend's dispatch decision.
+      fix.fanout.onEvent(
+        fix.hostId,
+        {
+          direction: 'daemon_to_server',
+          type: 'event',
+          kind: 'runtime_parsed_event',
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          parsed: {
+            kind: 'tool_call',
+            name: 'shell',
+            input: { cmd: 'sleep' },
+            toolCallId: 'tool-1',
+          },
+          ts: 1700000000000,
+        },
+        'conn-1',
+      );
+
+      // The daemon will report `deferred` (it parked the write mid-turn).
+      fix.transport.setNextDeliverDisposition('deferred');
+      const msg = fix.messages.insertForConversation({
+        conversationId: fix.channelId,
+        fromKind: 'user',
+        content: 'delivered mid-turn',
+      });
+      const delivery = fix.inbox.ensureDelivery(
+        fix.channelId,
+        fix.agentId,
+        msg.id,
+      );
+      await fix.fanout.deliverMessage(fix.channelId, fix.agentId, msg.id);
+
+      // Stage 3: mid-turn dispatches ONE runtime_deliver (not queued at the
+      // backend), and the `deferred` disposition keeps the row in-flight —
+      // NOT pending.
+      await waitFor(() => fix.transport.deliverCalls().length === 1);
+      expect(fix.transport.deliverCalls()[0]!.params).toMatchObject({
+        conversation_id: fix.channelId,
+        agent_id: fix.agentId,
+      });
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
+
+      // A bare non-fatal child exit: the backend must NOT roll back or
+      // respawn — the daemon owns the deferred queue now.
+      fix.fanout.onEvent(
+        fix.hostId,
+        {
+          direction: 'daemon_to_server',
+          type: 'event',
+          kind: 'runtime_exit',
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          code: 1,
+          intentional: false,
+          ts: 1700000010000,
+        },
+        'conn-1',
+      );
+      await wait(30);
+      // No respawn-driven second deliver, and the row is still in-flight
+      // (backend did not roll it back on exit).
+      expect(fix.transport.deliverCalls()).toHaveLength(1);
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
+
+      // Rollback is daemon-driven: the daemon's onChildExit emits
+      // `runtime_delivery_failed{child_exit}` for the queued entry, which the
+      // backend applies by returning the row to durable pending.
+      fix.fanout.onEvent(
+        fix.hostId,
+        {
+          direction: 'daemon_to_server',
+          type: 'event',
+          kind: 'runtime_delivery_failed',
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          delivery_ids: [delivery.inboxId],
+          reason: 'child_exit',
+          ts: 1700000011000,
+        },
+        'conn-1',
+      );
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toMatchObject([
+        { inboxId: delivery.inboxId },
+      ]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('D4.e-6 — re-binds a legacy regular workspace (workspace_provision) BEFORE runtime_deliver, and the runtime_deliver spawn_options carry NO host paths', async () => {
     const fix = makeFixture({
       runtime: 'codex',
       workspaceRegistryBackfiller: ({ transport, workspaces }) =>
@@ -836,15 +1156,17 @@ describe('OutboundRuntimeEventFanout', () => {
     try {
       enqueueMessage(fix, 'start me');
       await expect(
-        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
       ).resolves.toBe(true);
 
       const kinds = fix.transport.calls.map(c => c.kind);
       const provIdx = kinds.indexOf('workspace_provision');
-      const startIdx = kinds.indexOf('runtime_start');
-      // The legacy regular workspace is re-bound FIRST, then runtime_start.
+      const deliverIdx = kinds.indexOf('runtime_deliver');
+      // The legacy regular workspace is re-bound FIRST, then runtime_deliver.
+      // #task:1417 Stage 2b — the bridge closure runs the same backfill the
+      // old delivery-backed start ran, before dispatching runtime_deliver.
       expect(provIdx).toBeGreaterThanOrEqual(0);
-      expect(startIdx).toBeGreaterThan(provIdx);
+      expect(deliverIdx).toBeGreaterThan(provIdx);
 
       // The provision forwards the stored path as `requested_path` (the
       // backfiller never assembles a path) — this is a provision/backfill
@@ -853,20 +1175,20 @@ describe('OutboundRuntimeEventFanout', () => {
       expect(prov).toMatchObject({ kind: 'regular' });
       expect(typeof prov.requested_path).toBe('string');
 
-      // But the runtime_start frame is SEMANTIC-only: no path/home_dir
-      // anywhere in the options tree (carve-out revoked, D4.e-6).
-      const start = fix.transport.calls[startIdx]!.params;
-      const json = JSON.stringify(start);
-      expect(json).not.toMatch(/"path"/);
-      expect(json).not.toMatch(/"home_dir"/);
-      const options = start.options as {
+      // But the runtime_deliver spawn_options are SEMANTIC-only: no
+      // path/home_dir anywhere in the options tree (carve-out revoked).
+      const deliver = fix.transport.calls[deliverIdx]!.params;
+      const spawnOptions = deliver.spawn_options as {
         workspace: Record<string, unknown>;
         agent: Record<string, unknown>;
         workspace_memory_index: Record<string, unknown>[];
       };
-      expect(Object.keys(options.workspace).sort()).toEqual(['id', 'kind', 'name']);
-      expect(Object.keys(options.agent).sort()).toEqual(['id', 'name']);
-      for (const entry of options.workspace_memory_index) {
+      const json = JSON.stringify(spawnOptions);
+      expect(json).not.toMatch(/"path"/);
+      expect(json).not.toMatch(/"home_dir"/);
+      expect(Object.keys(spawnOptions.workspace).sort()).toEqual(['id', 'kind', 'name']);
+      expect(Object.keys(spawnOptions.agent).sort()).toEqual(['id', 'name']);
+      for (const entry of spawnOptions.workspace_memory_index) {
         expect(Object.keys(entry).sort()).toEqual(['id', 'kind', 'name']);
       }
     } finally {
@@ -874,7 +1196,7 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('D4.e-6 — a failed backfill BLOCKS runtime_start and keeps the rows pending for retry', async () => {
+  it('D4.e-6 — a failed backfill BLOCKS runtime_deliver and keeps the rows pending for retry', async () => {
     const fix = makeFixture({
       runtime: 'codex',
       workspaceRegistryBackfiller: () =>
@@ -896,12 +1218,15 @@ describe('OutboundRuntimeEventFanout', () => {
     });
     try {
       const delivery = enqueueMessage(fix, 'start me');
-      // No registry binding ⇒ do NOT dispatch runtime_start (would jam the
-      // daemon-side fail-closed); bail and keep the rows pending.
+      // #task:1417 Stage 2b — the backfill guard now lives in the bridge's
+      // runtime_deliver closure and THROWS on failure (vs the old
+      // return-false). deliverPending rolls the claimed rows back and rethrows;
+      // either way the rows stay a durable retry anchor and NO runtime_deliver
+      // reaches the daemon (it would jam the daemon-side fail-closed).
       await expect(
-        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
-      ).resolves.toBe(false);
-      expect(fix.transport.calls.some(c => c.kind === 'runtime_start')).toBe(false);
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
+      ).rejects.toThrow(/backfill/);
+      expect(fix.transport.deliverCalls()).toHaveLength(0);
       // The claimed rows are rolled back to pending: a retry anchor, not a loss.
       expect(
         fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId),
@@ -911,7 +1236,7 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('D4.e-6 — fails closed (I4) when a referenced workspace is owned by a different host: no workspace_provision, no runtime_start', async () => {
+  it('D4.e-6 — fails closed (I4) when a referenced workspace is owned by a different host: no workspace_provision, no runtime_deliver', async () => {
     const fix = makeFixture({
       runtime: 'codex',
       workspaceRegistryBackfiller: ({ transport, workspaces }) =>
@@ -924,18 +1249,19 @@ describe('OutboundRuntimeEventFanout', () => {
     try {
       const delivery = enqueueMessage(fix, 'start me');
       // Forge an I4 violation: the conversation's (only) workspace now claims a
-      // DIFFERENT (real) host than the agent's. The host-equality gate must
-      // fire BEFORE the backfill, so neither workspace_provision nor
-      // runtime_start is dispatched, and the rows stay pending.
+      // DIFFERENT (real) host than the agent's. The host-equality gate fires
+      // BEFORE the backfill inside the runtime_deliver closure and throws, so
+      // neither workspace_provision nor runtime_deliver is dispatched, and the
+      // rows stay pending.
       const otherHostId = new HostRepo(fix.db).create('host-other', 'local').id;
       fix.db
         .prepare(`UPDATE workspaces SET workspace_host_id = ?`)
         .run(otherHostId);
       await expect(
-        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
-      ).resolves.toBe(false);
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
+      ).rejects.toThrow(/different host/);
       expect(fix.transport.calls.some(c => c.kind === 'workspace_provision')).toBe(false);
-      expect(fix.transport.calls.some(c => c.kind === 'runtime_start')).toBe(false);
+      expect(fix.transport.deliverCalls()).toHaveLength(0);
       expect(
         fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId),
       ).toEqual([delivery.inboxId]);
@@ -951,7 +1277,7 @@ describe('OutboundRuntimeEventFanout', () => {
       new HostRepo(fix.db).revoke(fix.hostId);
 
       await expect(
-        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
       ).rejects.toThrow(/revoked/);
       expect(fix.transport.calls).toEqual([]);
     } finally {
@@ -972,11 +1298,11 @@ describe('OutboundRuntimeEventFanout', () => {
   // runtime_start arm is covered by 'uses startup_delivery when no
   // runtime exists …' above. Pre-D5.a the embedded path could spawn on
   // an empty inbox; both modes now agree on "no pending ⇒ no dispatch".
-  it('startDeliveryBacked with an empty pending inbox dispatches nothing (delivery-backed; identical embedded/standalone)', async () => {
+  it('deliverPending with an empty pending inbox dispatches nothing (delivery-backed; identical embedded/standalone)', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
       await expect(
-        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
       ).resolves.toBe(false);
       expect(fix.transport.calls).toEqual([]);
     } finally {
@@ -991,16 +1317,14 @@ describe('OutboundRuntimeEventFanout', () => {
       fix.inbox.claimPending(fix.channelId, fix.agentId, 'old-conn');
 
       await expect(
-        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
       ).resolves.toBe(true);
 
-      const start = fix.transport.calls.find(c => c.kind === 'runtime_start');
-      expect(start).toBeDefined();
-      expect(start?.opts?.expectedConnectionId).toBe('conn-1');
-      expect(start?.params).toMatchObject({
-        startup_delivery: {
-          delivery_ids: [delivery.inboxId],
-        },
+      const deliver = fix.transport.deliverCalls()[0];
+      expect(deliver).toBeDefined();
+      expect(deliver?.opts?.expectedConnectionId).toBe('conn-1');
+      expect(deliver?.params).toMatchObject({
+        delivery_ids: [delivery.inboxId],
       });
       expect(fix.inbox.listInFlightForOwner('old-conn')).toEqual([]);
       expect(
@@ -1030,21 +1354,21 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('runtime_start options never carry server_url; the daemon injects host-local URL', async () => {
+  it('runtime_deliver spawn_options never carry server_url; the daemon injects host-local URL', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
       enqueueMessage(fix, 'start me');
       await expect(
-        fix.fanout.startDeliveryBacked(fix.channelId, fix.agentId),
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
       ).resolves.toBe(true);
-      const start = fix.transport.calls.find(c => c.kind === 'runtime_start');
-      expect(start).toBeDefined();
+      const deliver = fix.transport.deliverCalls()[0];
+      expect(deliver).toBeDefined();
       expect(
         (
-          start!.params as {
-            options: { env_policy: { silverhand: Record<string, unknown> } };
+          deliver!.params as {
+            spawn_options: { env_policy: { silverhand: Record<string, unknown> } };
           }
-        ).options.env_policy.silverhand,
+        ).spawn_options.env_policy.silverhand,
       ).not.toHaveProperty('server_url');
     } finally {
       fix.cleanup();
@@ -1972,22 +2296,38 @@ class FakeTransport implements HostWsServerController {
   }> = [];
   snapshot: RuntimeStatusResult = { runtimes: [] };
   connectionId = 'conn-1';
-  private deferredWake:
+  private deferredDeliver:
     | {
         resolve: (value: unknown) => void;
         reject: (err: Error) => void;
       }
     | null = null;
-  private nextWakeError: Error | null = null;
-  private nextWakeRefusal:
+  private nextDeliverError: Error | null = null;
+  private nextDeliverRefusal:
     | {
-        reason: 'driver_not_ready';
+        reason: 'startup_pending' | 'draining' | 'cooldown';
+        cooldownUntil?: number;
       }
     | null = null;
-  private nextStartRejectsStartupDelivery = false;
+  // When set, the next `runtime_deliver` returns this custody disposition
+  // instead of the default `spawning`. `admitted` models a live handle that
+  // accepted the batch; `spawning` models a fresh spawn-with-batch. Both are
+  // `dispatched` to the backend (rows stay in-flight until the async
+  // `runtime_delivery_consumed`).
+  private nextDeliverDisposition: 'spawning' | 'admitted' | 'deferred' | null = null;
   private nextClearResult: { cleared: boolean } | null = null;
   private nextStopError: Error | null = null;
   private deferredStop:
+    | {
+        resolve: (value: unknown) => void;
+        reject: (err: Error) => void;
+      }
+    | null = null;
+  // When set, the next `runtime_status` reply hangs until `resolveDeferredStatus`
+  // — models the fire-and-forget ready→hydrate window during which the daemon is
+  // connected (`currentDaemonKey` set) but `RunStateCache` has NOT yet latched a
+  // daemon key. Lets a test drive a `runtime_start` reply into that exact gap.
+  private deferredStatus:
     | {
         resolve: (value: unknown) => void;
         reject: (err: Error) => void;
@@ -2027,60 +2367,62 @@ class FakeTransport implements HostWsServerController {
       ...(opts ? { opts: { expectedConnectionId: opts.expectedConnectionId } } : {}),
     });
     if (kind === 'runtime_status') {
-      return Promise.resolve(this.snapshot) as Promise<OutboundServerCommandResult<K>>;
-    }
-    if (kind === 'runtime_wake') {
-      if (this.nextWakeError) {
-        const err = this.nextWakeError;
-        this.nextWakeError = null;
-        return Promise.reject(err);
-      }
-      if (this.nextWakeRefusal) {
-        const refusal = this.nextWakeRefusal;
-        this.nextWakeRefusal = null;
-        return Promise.resolve({
-          delivered: false,
-          delivery_ids: [...((params as { delivery_ids: number[] }).delivery_ids)],
-          reason: refusal.reason,
-        }) as Promise<OutboundServerCommandResult<K>>;
-      }
-      if (this.deferredWake) {
+      if (this.deferredStatus) {
         return new Promise<OutboundServerCommandResult<K>>((resolve, reject) => {
-          this.deferredWake = {
+          this.deferredStatus = {
             resolve: value => resolve(value as OutboundServerCommandResult<K>),
             reject,
           };
         });
       }
+      return Promise.resolve(this.snapshot) as Promise<OutboundServerCommandResult<K>>;
+    }
+    if (kind === 'runtime_deliver') {
+      // #task:1417 Stage 2b — `runtime_deliver` is the SOLE message delivery
+      // command. Its sync result is a custody DISPOSITION; the daemon owns
+      // spawn-vs-admit-vs-refuse. The async ack is `runtime_delivery_consumed`.
+      if (this.nextDeliverError) {
+        const err = this.nextDeliverError;
+        this.nextDeliverError = null;
+        return Promise.reject(err);
+      }
+      if (this.nextDeliverRefusal) {
+        const refusal = this.nextDeliverRefusal;
+        this.nextDeliverRefusal = null;
+        return Promise.resolve(
+          refusal.reason === 'cooldown'
+            ? {
+                disposition: 'refused',
+                reason: 'cooldown',
+                cooldown_until: refusal.cooldownUntil ?? 9_999_999,
+              }
+            : { disposition: 'refused', reason: refusal.reason },
+        ) as Promise<OutboundServerCommandResult<K>>;
+      }
+      if (this.deferredDeliver) {
+        return new Promise<OutboundServerCommandResult<K>>((resolve, reject) => {
+          this.deferredDeliver = {
+            resolve: value => resolve(value as OutboundServerCommandResult<K>),
+            reject,
+          };
+        });
+      }
+      const disposition = this.nextDeliverDisposition ?? 'spawning';
+      this.nextDeliverDisposition = null;
       return Promise.resolve({
-        delivered: true,
-        delivery_ids: [...((params as { delivery_ids: number[] }).delivery_ids)],
+        disposition,
+        pid: 123,
+        started_at: 1700000000000,
       }) as Promise<OutboundServerCommandResult<K>>;
     }
     if (kind === 'runtime_start') {
-      // Model an ALREADY-ALIVE handle: `runtime_start` is idempotent and
-      // reports `started:true` but deliberately does NOT consume the
-      // startup_delivery — the real daemon returns
-      // `startup_delivery_accepted:false` when a batch WAS supplied (supervisor
-      // 1097-1104; "start is not a wake substitute"). One-shot.
-      if (this.nextStartRejectsStartupDelivery) {
-        this.nextStartRejectsStartupDelivery = false;
-        return Promise.resolve({
-          started: true,
-          pid: 123,
-          started_at: 1700000000000,
-          ...((params as { startup_delivery?: unknown }).startup_delivery
-            ? { startup_delivery_accepted: false }
-            : {}),
-        }) as Promise<OutboundServerCommandResult<K>>;
-      }
+      // #task:1417 Stage 2b — `runtime_start` is now a PURE lifecycle spawn
+      // (no `startup_delivery`; delivery goes through `runtime_deliver`). Used
+      // only by `startDirect` for an explicit start with an empty inbox.
       return Promise.resolve({
         started: true,
         pid: 123,
         started_at: 1700000000000,
-        ...((params as { startup_delivery?: unknown }).startup_delivery
-          ? { startup_delivery_accepted: true }
-          : {}),
       }) as Promise<OutboundServerCommandResult<K>>;
     }
     if (kind === 'workspace_provision') {
@@ -2126,8 +2468,8 @@ class FakeTransport implements HostWsServerController {
     return this.calls.filter(call => call.kind === 'runtime_clear_session');
   }
 
-  wakeCalls(): Array<{ params: Record<string, unknown> }> {
-    return this.calls.filter(call => call.kind === 'runtime_wake');
+  deliverCalls(): Array<{ params: Record<string, unknown>; opts?: { expectedConnectionId?: string } }> {
+    return this.calls.filter(call => call.kind === 'runtime_deliver');
   }
 
   stopCalls(): Array<{
@@ -2137,27 +2479,27 @@ class FakeTransport implements HostWsServerController {
     return this.calls.filter(call => call.kind === 'runtime_stop');
   }
 
-  deferNextWake(): void {
-    this.deferredWake = {
+  deferNextDeliver(): void {
+    this.deferredDeliver = {
       resolve: () => {},
       reject: () => {},
     };
   }
 
-  resolveDeferredWake(value: unknown): void {
-    const deferred = this.deferredWake;
-    this.deferredWake = null;
+  resolveDeferredDeliver(value: unknown): void {
+    const deferred = this.deferredDeliver;
+    this.deferredDeliver = null;
     deferred?.resolve(value);
   }
 
-  rejectDeferredWake(err: Error): void {
-    const deferred = this.deferredWake;
-    this.deferredWake = null;
+  rejectDeferredDeliver(err: Error): void {
+    const deferred = this.deferredDeliver;
+    this.deferredDeliver = null;
     deferred?.reject(err);
   }
 
-  rejectNextWake(err: Error): void {
-    this.nextWakeError = err;
+  rejectNextDeliver(err: Error): void {
+    this.nextDeliverError = err;
   }
 
   rejectNextStop(err: Error): void {
@@ -2177,15 +2519,38 @@ class FakeTransport implements HostWsServerController {
     deferred?.resolve(value);
   }
 
-  refuseNextWake(reason: 'driver_not_ready'): void {
-    this.nextWakeRefusal = { reason };
+  deferNextStatus(): void {
+    this.deferredStatus = {
+      resolve: () => {},
+      reject: () => {},
+    };
   }
 
-  /** Next `runtime_start` reports `started:true` WITHOUT
-   *  `startup_delivery_accepted` — models an already-alive, idempotent
-   *  handle that refuses to treat start as a wake. */
-  rejectNextStartupDelivery(): void {
-    this.nextStartRejectsStartupDelivery = true;
+  resolveDeferredStatus(value: unknown): void {
+    const deferred = this.deferredStatus;
+    this.deferredStatus = null;
+    deferred?.resolve(value);
+  }
+
+  /** Next `runtime_deliver` refuses custody with this reason (rows roll
+   *  back to pending, retriable). `cooldown` carries a future epoch ms. */
+  refuseNextDeliver(
+    reason: 'startup_pending' | 'draining' | 'cooldown',
+    cooldownUntil?: number,
+  ): void {
+    this.nextDeliverRefusal = { reason, ...(cooldownUntil !== undefined ? { cooldownUntil } : {}) };
+  }
+
+  /** Next `runtime_deliver` reports this disposition (`admitted` = live
+   *  handle accepted; `spawning` = fresh spawn-with-batch; `deferred` = live
+   *  handle parked the write in its own mid-turn queue, #task:1417 Stage 3).
+   *  All three are `dispatched` at the backend (row stays in-flight until the
+   *  async `runtime_delivery_consumed` / `runtime_delivery_failed`). Defaults
+   *  to `spawning`. */
+  setNextDeliverDisposition(
+    disposition: 'spawning' | 'admitted' | 'deferred',
+  ): void {
+    this.nextDeliverDisposition = disposition;
   }
 
   startCalls(): Array<{ params: Record<string, unknown> }> {
@@ -2233,7 +2598,7 @@ function readyEvent(): OutboundDaemonToServerEventFrame {
     direction: 'daemon_to_server',
     type: 'event',
     kind: 'ready',
-    protocol_version: 2,
+    protocol_version: OUTBOUND_PROTOCOL_VERSION,
     daemon_version: '0.0.0-test',
     daemon_id: 'local',
     instance_id: 'instance-1',
@@ -2307,7 +2672,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
         agent_id: 'a1',
         ts: 1700000000000,
       };
-    case 'runtime_startup_delivery_consumed':
+    case 'runtime_delivery_consumed':
       return {
         direction: 'daemon_to_server',
         type: 'event',
@@ -2317,7 +2682,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
         delivery_ids: [1],
         ts: 1700000000000,
       };
-    case 'runtime_startup_delivery_failed':
+    case 'runtime_delivery_failed':
       return {
         direction: 'daemon_to_server',
         type: 'event',

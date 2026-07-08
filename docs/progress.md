@@ -4,7 +4,44 @@
 
 ---
 
-## 2026-07-05 — 消息搜索：stream scope 升级 `/api/search`（#task:1334 backend，未 push）
+## 2026-07-09 — daemon-authoritative delivery Stage 3a：mid-turn 队列下沉 daemon（#task:1417，未 push）
+
+Stage 2c 把 `runtime_deliver` 收成唯一投递面后,3a 把 **safe-boundary gated mid-turn 队列 + child-exit 回滚从 backend `RuntimeDeliveryCoordinator` 下沉进 daemon**,引入 `deferred` custody disposition。canonical `docs/daemon-authoritative-delivery-v1.md §11`。Cindy 两轮 review-clean。
+
+- **daemon(`supervisor/index.ts`)** — `deliver()` 加 DEFER arm=`writeInFlight ∨ (gated ∧ !boundaryOpen)`,仅对 ready+encode-ready+inited+non-oneShot 活 handle;startup/spawning/not-ready/live-oneShot **一律 refuse{startup_pending}**(各有 DB-backed 无损 re-drive)。flush 按 driver 分叉:**gated=drain 全队 combine-all 一 write 一 consumed;direct=FIFO 一条不 combine**。onChildExit 对 queued entry emit `failed{child_exit}`→backend 退 pending。boundary-reopen(turn_end)/startup-gate clear 触发 flush。
+- **owner-scoped crash-safety** — 每 deferred entry 带 `DeliveryOwnerContext{owner}`(dispatcher 注入、不上 wire、不可伪造);三 ingress 各 mint owner + close→cleanup(control `control:N` / local-outbound `local:N` / outbound-WS `outbound:N`)。**owner 是 load-bearing custody key**:缺失走单一 chokepoint `resolveDeliveryOwner` fail-loud(无 sentinel),control drop 连接、outbound 两路 catch→internal_error。**deferred dedup owner-aware**:同 id-set 命中时同 owner 幂等、不同 owner rebind 到 current owner(保 FIFO)——闭合 reconnect/reclaim(B replay 先于 A cleanup)孤儿竞态。
+- **backend** — `RuntimeDeliveryCoordinator` 缩到 submit+projection:删 busy tracker / 第二队列 / combineGated/rollbackInFlight callback / `queued_mid_turn` decision;`onRuntimeExit` 不再回滚(改由 daemon `failed{child_exit}` 驱动)。`deferred` disposition 视作 dispatched(行留 in-flight)。`combineGatedBatch` 权威副本迁 host `supervisor/gated-combine.ts`,backend `stdin-format.ts` 死副本已删(3b)。
+- **breaking protocol upgrade** — `HOST_PROTOCOL_VERSION 6→7` + `OUTBOUND_PROTOCOL_VERSION 5→6`,fail-loud 无 shim(standalone daemon 未发布、零用户)。
+- **commit** — `f9cc380`(机制+cutover)+ `106a3d3`(Cindy 第一轮:owner fail-loud chokepoint + owner-aware rebind + §11 四臂注释)。**未 push**。
+- **验证** — `pnpm -r typecheck` 全绿;全套 test gate 6 scope 全过。新增 daemon 测试:gated-combine / direct-FIFO / owner-scoped cleanup / child-exit fail / reconnect-reclaim rebind / same-owner 幂等 + `delivery-owner-guard`(anti-sentinel);local+outbound ingress owner-cleanup wiring;backend `mid-turn is NOT special` + daemon-driven 回滚。
+- **Stage 3b(本轮收尾 commit)** — 删 backend `stdin-format.ts` 死 `combineGatedBatch`(权威副本已在 host `gated-combine.ts`)+ canonical §11 status 改 shipped + 本进度段。至此 #1417 daemon-authoritative delivery 全 stage 落地(未 push)。
+
+---
+
+## 2026-07-09 — daemon-authoritative delivery Stage 2c：wire/daemon 退役（#task:1417，未 push）
+
+Stage 2a/2b 已让 `runtime_deliver` 成唯一投递面、daemon 权威决 spawn/admit/refuse。2c 退役 now-dead 表面（standalone daemon 未发布、零用户，直接 fail-loud 版本 bump、不留过渡窗）：
+
+- **删整个 `runtime_wake` 命令**（params/result/reason）、删 legacy `runtime_startup_delivery_{consumed,failed}` 事件族（已被统一 `runtime_delivery_{consumed,failed}` 取代）、`runtime_start` 收窄为纯 lifecycle（删 `startup_delivery` 参数 + Stage 1 的 `phase`/`startup_delivery_accepted` result 字段，成功 arm 只剩 `{started,pid,started_at}`）、collapse `startupAckFamily`。SPAWN-with-batch 走 `runtime_deliver` SPAWN arm；daemon 内部 `startUnlocked` 仍私有接 batch（`StartUnlockedParams`），wire 面不再暴露。
+- **breaking protocol upgrade** — `HOST_PROTOCOL_VERSION 5→6` + `OUTBOUND_PROTOCOL_VERSION 4→5`，hello/attach fail-loud、无 shim。
+- **测试（Cindy 条件 4：删覆盖必补等价 `runtime_deliver` + unified-event 覆盖）** — host `supervisor.test`（20 处 wake→deliver + 5 处 start-with-batch→deliver SPAWN；删 8 个测 wake-only 语义或已随 wake 代码路径消失的 mid-turn deferral 用例）/ `e2e-supervisor` / `fake-supervisor` / `dispatcher` / `daemon-logging` / wire fixtures 全迁；backend `event-handler` / `outbound-event-fanout`(+perimeter) / `outbound-command-dispatcher` / `host-ws-server` / embedded-boot e2e 全迁。语义变更点：deliver 对无/exited handle **spawns-with-batch**（不再 `not_running` no-op）；driver-not-ready 归入 `refused{startup_pending}`。
+- **docs** — `daemon-outbound-protocol.md`（命令/事件表 + 投递流全改 daemon-authoritative `runtime_deliver`）、`silverhand-daemon.md` 命令列表更新。canonical `daemon-authoritative-delivery-v1.md` 为退役 spec、保留。
+- 验证:`pnpm -r typecheck` 全绿;全套 test gate 6 scope 全过(shared 263 / backend 1763 / server 12 / host 1043 / cli 184 / desktop 1626)。**未 push**。**下一步 Stage 3** = safe-boundary 队列下沉 daemon（`deferred` disposition + mid-turn inputTurnActive-aware admission，单独设计门 + 独立验证 bar）。
+
+---
+
+## 2026-07-08 — daemon-authoritative delivery Stage 1：start-vs-wake 决策移交 daemon（#task:1417，`fb9309a`，未 push）
+
+根治 #1416 bug 类:投递决策从 backend 会 desync 的 `RunStateCache` 移给拥有真相的 daemon。canonical `docs/daemon-authoritative-delivery-v1.md §7`(Cindy 5 条 clause 签)。前置 `ac0cf38`+`2e99aa6` = daemon-instance-key 单源(纯 hygiene,`makeDaemonInstanceKey` `pid:<pid>@<ts>`)。
+
+- **schema(`packages/host/src/protocol.ts`)** — hoist `RuntimePhaseSchema` 为单源(`runtime_status` DTO 与 `runtime_start` reply 共用同一 6-member enum,不漂);`RuntimeStartResultSchema` 的 `started:true` arm 加 **required** `phase`。缺/未知 phase 在 zod 层 reject,无运行时 fallback。
+- **backend 决策(`outbound-event-fanout.ts` `startDeliveryBacked`)** — 删 #1416 无条件 `applyPhase(...,'ready')` 盲治桥。`started:true && startup_delivery_accepted !== true` 分支:rollbackInFlight → 用 `result.phase` 对齐投影 → **exhaustive switch**:`ready`→reroute `runtime_wake`;`spawning`/`startup_pending`→留 pending 等 `ready_for_drain`;`draining`→留 pending 等 exit→respawn;`idle`/`exited`→`logger.warn` 不变量违背。末尾 `const _exhaustive: never = result.phase` 编译墙。决策源 = daemon reply,cache 只作投影/快路径,消 desync bug 类。DB/ack 语义不变。
+- **breaking protocol upgrade** — `HOST_PROTOCOL_VERSION 3→4`(local socket)+ `OUTBOUND_PROTOCOL_VERSION 2→3`(standalone WS),lock-step,mismatch 在 hello/attach fail-loud(旧 daemon 须同升)。supervisor idempotent/fresh 两返回补 phase。
+- **测试** — byte-level wire fixture(hello/ready `protocol_version`、runtime_start-success 两条)手改(clause 4 例外);其余 fake/fixture reply 补 phase;新增 fanout 用例覆盖 spawning/startup_pending/draining 三条 defer 路径;#1416 ready-reroute 回归绿。
+- **P1 amend(`75e8308`,Cindy review)** — `phase:'ready'` reroute 在「ready 已处理、`currentDaemonKey` 已置、但 fire-and-forget `runtime_status` hydrate 未 latch cache」窗口会 noop_no_runtime 孤儿化 row。reconcile 的 seed key 改 `state.cache.daemonInstanceKey ?? state.currentDaemonKey`(连接级权威 key 兜底;`acceptDaemonKey` 仍拒覆盖不同 latched key、`expectedConnectionId` 守连接归属)。复用 `ready_for_drain` 分支既有 seed 先例。新增 `deferNextStatus` 挂起 hydrate 精确造窗口的回归测试(验过撤 fallback 即 fail)。
+- 验证:`pnpm -r typecheck` 全绿;全套 test gate 6 scope 全过(shared 13 / backend 152 / server 3 / host 50 / cli 13 / desktop 119);`pnpm build` 通过。**未 push**(dogfood 前不 push)。下一步 Stage 2 = 单 `runtime_deliver` 命令 + consumed 事件 ack。
+
+---
 
 header inline 搜索(#task:1335 Norman 前端)需要「只搜当前 panel 的 stream」——channel 主线搜索**不含 thread replies**、thread 搜索只含该 cluster,否则会「DB 有命中但 UI 永远加载不出」。三方讨论后**不新开专用端点**、而是**升级现有 `/api/search`**(高级搜索面板后续也要区分 mainline/thread,stream-awareness 是它本来要长的能力,另起端点=两套 search contract 违 DRY)。
 

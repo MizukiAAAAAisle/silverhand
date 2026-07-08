@@ -37,6 +37,7 @@ import {
   encodeOutboundFrame,
   type OutboundDaemonToServerEventFrame,
 } from '@silverhand/host';
+import { OUTBOUND_PROTOCOL_VERSION } from '@silverhand/host';
 import type { BackendLogger } from '../../../src/context.js';
 import { HostTokenService } from '../../../src/auth/host-token.js';
 import { AgentRepo } from '../../../src/repos/agent-repo.js';
@@ -76,7 +77,7 @@ function readyEvent(daemonPid: number): OutboundDaemonToServerEventFrame {
     direction: 'daemon_to_server',
     type: 'event',
     kind: 'ready',
-    protocol_version: 2,
+    protocol_version: OUTBOUND_PROTOCOL_VERSION,
     daemon_version: '0.0.0-test',
     daemon_id: 'local',
     instance_id: `instance-${daemonPid}`,

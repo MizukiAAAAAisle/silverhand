@@ -7,6 +7,7 @@ import {
   type OutboundServerToDaemonCommandFrame,
 } from '../outbound-protocol.js';
 import type { EventFrame } from '../protocol.js';
+import type { DeliveryOwnerContext } from './supervisor-contract.js';
 
 /**
  * D5.a — shared server↔daemon outbound frame mapping.
@@ -38,7 +39,13 @@ export type OutboundDispatcherResponse =
 
 export type OutboundCommandDispatcher = (
   command: OutboundServerToDaemonCommandFrame,
+  ctx: DeliveryOwnerContext,
 ) => Promise<OutboundDispatcherResponse>;
+
+/** Owner-scoped deferred-queue cleanup callback (#task:1417 Stage 3,
+ *  §11.4.1). An outbound ingress invokes this on its connection's drop so
+ *  the daemon discards only that connection's queued deliveries. */
+export type OwnerCleanup = (owner: string) => void;
 
 /**
  * Build a typed `command_response` frame from a dispatcher response,

@@ -23,8 +23,8 @@ function makeSpyProjection(): {
     start: async (...a) => {
       calls.push(`start:${a.join(',')}`);
     },
-    startDeliveryBacked: async (...a) => {
-      calls.push(`startDeliveryBacked:${a.join(',')}`);
+    deliverPending: async (...a) => {
+      calls.push(`deliverPending:${a.join(',')}`);
       return true;
     },
     stop: async (...a) => {

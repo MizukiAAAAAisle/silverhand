@@ -238,7 +238,7 @@ describe.each(registryIntentCases)(
         id,
         testCase.intent,
         testCase.params as never,
-      );
+      { owner: 'test-owner' });
 
       expect(r).toEqual({ id, result: testCase.result });
       expect(observed).toEqual(testCase.params);
@@ -256,7 +256,7 @@ describe.each(registryIntentCases)(
             `${testCase.requestPrefix}-typed`,
             testCase.intent,
             testCase.params as never,
-          ),
+          { owner: 'test-owner' }),
           code,
         );
       },
@@ -273,7 +273,7 @@ describe.each(registryIntentCases)(
           `${testCase.requestPrefix}-foreign`,
           testCase.intent,
           testCase.params as never,
-        ),
+        { owner: 'test-owner' }),
         'internal_error',
       );
     });
@@ -289,7 +289,7 @@ describe.each(registryIntentCases)(
             `${testCase.requestPrefix}-bare`,
             testCase.intent,
             testCase.params as never,
-          ),
+          { owner: 'test-owner' }),
           'internal_error',
         );
       });
@@ -309,7 +309,7 @@ describe.each(registryIntentCases)(
             `${testCase.requestPrefix}-bad`,
             testCase.intent,
             testCase.malformedParams as never,
-          ),
+          { owner: 'test-owner' }),
           'invalid_params',
         );
         expect(called).toBe(false);
@@ -324,7 +324,7 @@ describe.each(registryIntentCases)(
           `${testCase.requestPrefix}-unwired`,
           testCase.intent,
           testCase.params as never,
-        ),
+        { owner: 'test-owner' }),
         'internal_error',
       );
       expect(r.error.message).toContain(testCase.intent);
@@ -349,7 +349,7 @@ describe('IntentDispatcher.workspace_provision extras', () => {
       requested_path: '/Users/alice/work/ws',
     };
 
-    await d.dispatch('req-wp-path', 'workspace_provision', withPath);
+    await d.dispatch('req-wp-path', 'workspace_provision', withPath, { owner: 'test-owner' });
 
     expect(observed).toEqual(withPath);
   });
@@ -366,7 +366,7 @@ describe('IntentDispatcher.workspace_provision extras', () => {
         workspace_id: 'ws_1',
         kind: 'regular',
         requested_path: 123,
-      }),
+      }, { owner: 'test-owner' }),
       'invalid_params',
     );
     expect(called).toBe(false);
@@ -384,7 +384,7 @@ describe('IntentDispatcher.agent_l2_seed extras', () => {
     await d.dispatch('req-l2s-default', 'agent_l2_seed', {
       agent_id: 'aid_member',
       workspace_id: 'ws_1',
-    });
+    }, { owner: 'test-owner' });
 
     expect((observed as AgentL2SeedParams | null)?.template_choice).toBe('default');
   });
@@ -401,7 +401,7 @@ describe('IntentDispatcher.agent_l2_seed extras', () => {
         agent_id: 'aid_member',
         workspace_id: 'ws_1',
         template_choice: 'bogus',
-      }),
+      }, { owner: 'test-owner' }),
       'invalid_params',
     );
     expect(called).toBe(false);
@@ -423,7 +423,7 @@ describe('IntentDispatcher.agent_files_purge extras', () => {
     await d.dispatch('req-afp-default', 'agent_files_purge', {
       agent_id: 'aid_member',
       scope: 'all',
-    });
+    }, { owner: 'test-owner' });
 
     expect((observed as AgentFilesPurgeParams | null)?.workspace_ids).toEqual([]);
   });
@@ -440,7 +440,7 @@ describe('IntentDispatcher.agent_files_purge extras', () => {
         agent_id: 'aid_member',
         scope: 'bogus',
         workspace_ids: ['ws_1'],
-      }),
+      }, { owner: 'test-owner' }),
       'invalid_params',
     );
     expect(called).toBe(false);

@@ -14,35 +14,32 @@ describe('OutboundRuntimeCommandDispatcher', () => {
   it('resolves agent placement before sending an outbound runtime command', async () => {
     const transport = new FakeTransport();
     const placement = new FakePlacement({ hostId: 'host-1' });
-    const delivered: number[][] = [];
     const dispatcher = new OutboundRuntimeCommandDispatcher({
       transport,
       placement,
-      inboxAck: { markDelivered: ids => delivered.push([...ids]) },
     });
 
+    // A per-agent runtime command resolves the agent's host via placement
+    // before the wire send. (The retired `runtime_wake` passthrough used to
+    // exercise this; `runtime_deliver` now flows through the fanout bridge,
+    // so `runtimeStop` is the representative per-agent command here.)
     await expect(
-      dispatcher.runtimeWake({
+      dispatcher.runtimeStop({
         conversation_id: 'c1',
         agent_id: 'a1',
-        delivery_ids: [1],
-        kind: 'message',
-        text: 'hello',
+        mode: 'hard',
       }),
-    ).resolves.toEqual({ delivered: true, delivery_ids: [1] });
+    ).resolves.toEqual({ mode: 'hard', stopped: true, exit_code: 0 });
 
     expect(placement.resolveCalls).toEqual(['a1']);
-    expect(delivered).toEqual([[1]]);
     expect(transport.calls).toEqual([
       {
         hostId: 'host-1',
-        kind: 'runtime_wake',
+        kind: 'runtime_stop',
         params: {
           conversation_id: 'c1',
           agent_id: 'a1',
-          delivery_ids: [1],
-          kind: 'message',
-          text: 'hello',
+          mode: 'hard',
         },
       },
     ]);
@@ -113,10 +110,12 @@ class FakeTransport implements HostWsServerController {
     params: OutboundServerCommandParams<K>,
   ): Promise<OutboundServerCommandResult<K>> {
     this.calls.push({ hostId, kind, params });
-    if (kind === 'runtime_wake') {
-      return Promise.resolve({ delivered: true, delivery_ids: [1] }) as Promise<
-        OutboundServerCommandResult<K>
-      >;
+    if (kind === 'runtime_stop') {
+      return Promise.resolve({
+        mode: 'hard',
+        stopped: true,
+        exit_code: 0,
+      }) as Promise<OutboundServerCommandResult<K>>;
     }
     if (kind === 'runtime_stop_all') {
       return Promise.resolve({ stopped_count: 0 }) as Promise<

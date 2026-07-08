@@ -1,42 +1,50 @@
 /**
- * Sub-2b-i tests for `RuntimeDeliveryCoordinator`.
+ * #task:1417 tests for `RuntimeDeliveryCoordinator`.
  *
- * Cindy `3l4bZ5vaMvlC9DVS` scope: review **coordinator boundary + 7
- * delivery cases**; DaemonHost integration is not in scope for 2b-i.
- * EventHandler hooks are pure forwarders here — these tests do not go
- * through EventHandler; they call coordinator methods directly with
- * synthetic ParsedEvents / cache entries to keep each case independent.
+ * Stage 2b made delivery go through ONE command, `bridge.runtimeDeliver`,
+ * whose sync result is a custody DISPOSITION. Stage 3 then moved the
+ * mid-turn queue INTO the daemon, so this suite reflects the reduced
+ * coordinator:
  *
- * The 7 cases (locked with Cindy `BYHZJI9ALSVmmlFr`):
+ *   - Delivery goes through `bridge.runtimeDeliver`; the sync result is a
+ *     custody DISPOSITION (`spawning` / `admitted` / `deferred` /
+ *     `refused`) — the daemon owns spawn-vs-admit-vs-defer-vs-refuse.
+ *   - The coordinator NO LONGER reads the cache, NO LONGER tracks busy /
+ *     safe-boundary, holds NO pending queue, and NEVER combines. Every
+ *     submit dispatches unconditionally. `deferred` (daemon enqueued in its
+ *     own mid-turn queue) collapses to `dispatched` from the fanout's
+ *     custody view.
+ *   - The coordinator NO LONGER acks the inbox; `delivered_at` moves solely
+ *     on the async `runtime_delivery_consumed` (event-handler's job).
+ *   - `LiveDeliveryDecision` is `dispatched` | `refused`. The fanout maps
+ *     these to inbox custody (keep-in-flight vs rollback); that mapping is
+ *     tested in `outbound-event-fanout.test.ts`, not here.
  *
- *   1. runtime not running (no cache entry)
- *   2. startup_pending (no wake; row stays pending; daemon side will
- *      drive a `runtime_ready_for_drain` later)
- *   3. draining (no wake; row stays pending; next `start()` consumes
- *      via startup_delivery)
- *   4. ready + driver `direct` (immediate wake → markDelivered)
- *   5. ready + driver `gated` + busy mid-turn (enqueue → safe-boundary
- *      flush wakes)
- *   6. ready + driver `none` (oneShot live; never push via wake)
- *   7. oneShot exit auto-respawn (intentional=false ∧ ¬initTimedOut ∧
- *      ¬fatalError ∧ hasPendingInbox → respawn callback fires)
- *
- * Additional coverage:
- *   - Idempotent enqueue (same messageId pushed twice → queue length 1)
- *   - Wake refused (delivered:false, reason) → no markDelivered, row
- *     stays pending
- *   - Transport throw → propagates, no markDelivered
- *   - Init-timeout / fatal-error / no-pending suppress oneShot respawn
- *   - State scoped per (conv, agent) — events on c1/a1 don't poison c2/a2
+ * Coverage:
+ *   - direct driver, ready → dispatched (spawning + admitted arms)
+ *   - refused arms (startup_pending / draining / cooldown) → refused
+ *   - gated driver mid-turn → still dispatched (no coordinator busy gate)
+ *   - daemon `deferred` → dispatched; does NOT arm the delivery watchdog
+ *   - multi-request batch → throws (combining moved to the daemon)
+ *   - oneShot (`none`) → dispatched like any non-gated driver (no local
+ *     short-circuit); the daemon decides spawn-with-batch vs sync-refuse
+ *   - transport throw → propagates (fanout rolls back)
+ *   - submitReadyForDrainDeliveryBatch dispatches unconditionally
+ *   - oneShot exit auto-respawn matrix (no coordinator-side rollback)
+ *   - empty batch throws
+ *   - state scoped per (conv, agent)
+ *   - delivery stuck watchdog fires / is cancelled by a parsed event
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeWakeResult } from '@silverhand/host';
+import type {
+  RuntimeDeliverResult,
+  RuntimeDeliverRefusedReason,
+} from '@silverhand/host';
 import type { AgentRunState, ParsedEvent } from '@silverhand/shared';
 import {
   RuntimeDeliveryCoordinator,
   type CoordinatorBridge,
   type CoordinatorCacheView,
-  type CoordinatorInboxSink,
   type DriverDeliveryView,
   type LiveDeliveryRequest,
   type RuntimeDelivery,
@@ -49,25 +57,63 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+interface CoordinatorBridgeCall {
+  conversationId: string;
+  agentId: string;
+  deliveryIds: number[];
+  deliveries?: RuntimeDelivery[];
+  deliveredUpToSeq?: number;
+  kind: 'message' | 'schedule_fire';
+  text: string;
+}
+
+/** Custody-disposition result builders (Stage 2b wire shape). */
+function admitted(): RuntimeDeliverResult {
+  return { disposition: 'admitted', pid: 4242, started_at: 1_000 };
+}
+function spawning(): RuntimeDeliverResult {
+  return { disposition: 'spawning', pid: 4242, started_at: 1_000 };
+}
+function deferredResult(): RuntimeDeliverResult {
+  return { disposition: 'deferred', pid: 4242, started_at: 1_000 };
+}
+function refusedResult(
+  reason: RuntimeDeliverRefusedReason,
+  cooldownUntil?: number,
+): RuntimeDeliverResult {
+  if (reason === 'cooldown') {
+    return {
+      disposition: 'refused',
+      reason: 'cooldown',
+      cooldown_until: cooldownUntil ?? 9_999_999,
+    };
+  }
+  return { disposition: 'refused', reason };
+}
+
 function makeBridge(
-  results: RuntimeWakeResult | RuntimeWakeResult[] | ((call: CoordinatorBridgeCall) => RuntimeWakeResult | Error),
+  results:
+    | RuntimeDeliverResult
+    | RuntimeDeliverResult[]
+    | ((call: CoordinatorBridgeCall) => RuntimeDeliverResult | Error),
 ): {
   bridge: CoordinatorBridge;
   calls: CoordinatorBridgeCall[];
 } {
   const calls: CoordinatorBridgeCall[] = [];
-  const resultQueue: RuntimeWakeResult[] = Array.isArray(results)
+  const resultQueue: RuntimeDeliverResult[] = Array.isArray(results)
     ? [...results]
     : typeof results === 'function'
-    ? []
-    : [results];
+      ? []
+      : [results];
   const bridge: CoordinatorBridge = {
-    runtimeWake: vi.fn(async params => {
+    runtimeDeliver: vi.fn(async params => {
       const call: CoordinatorBridgeCall = {
         conversationId: params.conversation_id,
         agentId: params.agent_id,
         deliveryIds: [...params.delivery_ids],
-        deliveries: params.deliveries?.map((delivery: RuntimeDelivery) => ({ ...delivery })),
+        deliveries: params.deliveries?.map((d: RuntimeDelivery) => ({ ...d })),
+        deliveredUpToSeq: params.delivered_up_to_seq,
         kind: params.kind,
         text: params.text,
       };
@@ -78,21 +124,14 @@ function makeBridge(
         return r;
       }
       if (resultQueue.length === 0) {
-        throw new Error(`runtimeWake called more times than results queued; call #${calls.length}`);
+        throw new Error(
+          `runtimeDeliver called more times than results queued; call #${calls.length}`,
+        );
       }
       return resultQueue.shift()!;
     }),
   };
   return { bridge, calls };
-}
-
-interface CoordinatorBridgeCall {
-  conversationId: string;
-  agentId: string;
-  deliveryIds: number[];
-  deliveries?: RuntimeDelivery[];
-  kind: 'message' | 'schedule_fire';
-  text: string;
 }
 
 function makeCacheView(
@@ -101,33 +140,20 @@ function makeCacheView(
     agent: string;
     phase: RuntimePhase;
     runState?: AgentRunState | null;
-  }>,
+  }> = [],
 ): CoordinatorCacheView {
-  const map = new Map<string, { phase: RuntimePhase; runState?: AgentRunState | null }>();
+  const map = new Map<
+    string,
+    { phase: RuntimePhase; runState?: AgentRunState | null }
+  >();
   for (const e of entries) {
-    map.set(`${e.conv}|${e.agent}`, {
-      phase: e.phase,
-      runState: e.runState ?? null,
-    });
+    map.set(`${e.conv}|${e.agent}`, { phase: e.phase, runState: e.runState ?? null });
   }
   return {
     get(conv, agent) {
       return map.get(`${conv}|${agent}`);
     },
   };
-}
-
-function makeInboxSink(): {
-  sink: CoordinatorInboxSink;
-  delivered: number[][];
-} {
-  const delivered: number[][] = [];
-  const sink: CoordinatorInboxSink = {
-    markDelivered(ids) {
-      delivered.push([...ids]);
-    },
-  };
-  return { sink, delivered };
 }
 
 const DRIVER_DIRECT: DriverDeliveryView = {
@@ -140,11 +166,7 @@ const DRIVER_GATED: DriverDeliveryView = {
   runtime: 'claude',
   busyDeliveryMode: 'gated',
   oneShot: false,
-  // claude is gated AND requires_first_message — but most legacy tests
-  // in this file predate B3 and assert immediate ack on `delivered:true`.
-  // Use `self_inits` here so existing assertions stay valid. B3-specific
-  // tests below use a per-test driver with `requires_first_message`.
-  kickoffMode: 'self_inits',
+  kickoffMode: 'requires_first_message',
 };
 const DRIVER_NONE: DriverDeliveryView = {
   runtime: 'cursor',
@@ -167,14 +189,8 @@ function runState(overrides: Partial<AgentRunState> = {}): AgentRunState {
 }
 
 /**
- * Build a `LiveDeliveryRequest` with the Option A v2 shape (Cindy
- * `UMGu36zoTDVuKWXi` — daemon encodes via in-process driver; backend
- * ships raw text). Legacy-style `inboxId` / `messageId` / `payload`
- * overrides are translated for test brevity:
- *   - `inboxId: N` → `deliveryIds: [N]`
- *   - `messageId: 'm'` → `dedupKey: 'm'`
- *   - `payload: 'X'` → `text: 'X'` (renamed; daemon now owns encode
- *     so the test fixture no longer needs an identity-encode closure)
+ * Build a `LiveDeliveryRequest`. `inboxId` → `deliveryIds: [N]`,
+ * `messageId` → `dedupKey`, `payload` → `text`.
  */
 function req(
   overrides: Partial<LiveDeliveryRequest> & {
@@ -218,1312 +234,463 @@ function parsed(kind: ParsedEvent['kind']): ParsedEvent {
   }
 }
 
-// ── case 1 — runtime not running ───────────────────────────────────
+// ── the coordinator has NO ack sink at all in Stage 2b ─────────────
+//
+// `RuntimeDeliveryCoordinatorDeps` is `{ bridge, cache, callbacks?, ... }`.
+// There is no `inboxAck` field; the type below is a compile-time pin that
+// the coordinator can be constructed with exactly those deps.
+function makeCoordinator(
+  bridge: CoordinatorBridge,
+  cache: CoordinatorCacheView = makeCacheView(),
+  extra: {
+    callbacks?: ConstructorParameters<
+      typeof RuntimeDeliveryCoordinator
+    >[0]['callbacks'];
+    deliveryWatchdogMs?: number;
+    now?: () => number;
+  } = {},
+): RuntimeDeliveryCoordinator {
+  return new RuntimeDeliveryCoordinator({ bridge, cache, ...extra });
+}
 
-describe('case 1: runtime not running (no cache entry)', () => {
-  it('noop_no_runtime; no wake, no markDelivered', async () => {
-    const { bridge, calls } = makeBridge([]);
-    const cache = makeCacheView([]); // empty cache
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
+// ── direct driver, ready → dispatched ──────────────────────────────
 
-    const decision = await c.submitLiveDelivery('c1', 'a1', req());
+describe('direct driver ready → dispatched (no ack)', () => {
+  it('admitted disposition → dispatched with delivery ids', async () => {
+    const { bridge, calls } = makeBridge(admitted());
+    const c = makeCoordinator(bridge);
 
-    expect(decision).toEqual({ kind: 'noop_no_runtime' });
-    expect(calls).toHaveLength(0);
-    expect(delivered).toHaveLength(0);
-  });
-});
+    const decision = await c.submitLiveDelivery(
+      'c1',
+      'a1',
+      req({ inboxId: 7, driver: DRIVER_DIRECT }),
+    );
 
-// ── case 2 — startup_pending ───────────────────────────────────────
-
-describe('case 2: phase=startup_pending', () => {
-  it('noop_phase; row stays pending', async () => {
-    const { bridge, calls } = makeBridge([]);
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'startup_pending' }]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-
-    const decision = await c.submitLiveDelivery('c1', 'a1', req());
-
-    expect(decision).toEqual({ kind: 'noop_phase', phase: 'startup_pending' });
-    expect(calls).toHaveLength(0);
-    expect(delivered).toHaveLength(0);
-  });
-});
-
-// ── case 3 — draining ──────────────────────────────────────────────
-
-describe('case 3: phase=draining', () => {
-  it('noop_phase; row stays pending for next start', async () => {
-    const { bridge, calls } = makeBridge([]);
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'draining' }]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-
-    const decision = await c.submitLiveDelivery('c1', 'a1', req());
-
-    expect(decision).toEqual({ kind: 'noop_phase', phase: 'draining' });
-    expect(calls).toHaveLength(0);
-    expect(delivered).toHaveLength(0);
-  });
-
-  it('also noop on phase=exited (stale cache projection)', async () => {
-    const { bridge, calls } = makeBridge([]);
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'exited' }]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-
-    const decision = await c.submitLiveDelivery('c1', 'a1', req());
-
-    expect(decision).toEqual({ kind: 'noop_phase', phase: 'exited' });
-    expect(calls).toHaveLength(0);
-    expect(delivered).toHaveLength(0);
-  });
-});
-
-// ── case 4 — ready + direct driver ─────────────────────────────────
-
-describe('case 4: phase=ready + driver=direct (immediate wake)', () => {
-  it('wake_dispatched; markDelivered on success', async () => {
-    const { bridge, calls } = makeBridge({
-      delivered: true,
-      delivery_ids: [42],
-    });
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-
-    const decision = await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 42, driver: DRIVER_DIRECT }));
-
-    expect(decision).toEqual({
-      kind: 'wake_dispatched',
-      deliveryIds: [42],
-    });
+    expect(decision).toEqual({ kind: 'dispatched', deliveryIds: [7] });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
       conversationId: 'c1',
       agentId: 'a1',
-      deliveryIds: [42],
+      deliveryIds: [7],
       kind: 'message',
     });
-    expect(delivered).toEqual([[42]]);
   });
 
-  it('wake_refused; NO markDelivered, NO row mutation', async () => {
-    const { bridge, calls } = makeBridge({
-      delivered: false,
-      reason: 'driver_refused',
-      delivery_ids: [42],
-    });
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
+  it('spawning disposition → dispatched', async () => {
+    const { bridge, calls } = makeBridge(spawning());
+    const c = makeCoordinator(bridge);
 
-    const decision = await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 42, driver: DRIVER_DIRECT }));
-
-    expect(decision).toEqual({
-      kind: 'wake_refused',
-      reason: 'driver_refused',
-    });
-    expect(calls).toHaveLength(1);
-    expect(delivered).toHaveLength(0);
-  });
-
-  it('bridge throws (transport error) → no markDelivered, propagates', async () => {
-    const { bridge, calls } = makeBridge(() => new Error('socket closed'));
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-
-    await expect(c.submitLiveDelivery('c1', 'a1', req({ inboxId: 42, driver: DRIVER_DIRECT }))).rejects.toThrow(
-      /socket closed/,
+    const decision = await c.submitLiveDelivery(
+      'c1',
+      'a1',
+      req({ inboxId: 9, driver: DRIVER_DIRECT }),
     );
 
+    expect(decision).toEqual({ kind: 'dispatched', deliveryIds: [9] });
     expect(calls).toHaveLength(1);
-    expect(delivered).toHaveLength(0);
-  });
-});
-
-// ── case 5 — ready + gated + busy ──────────────────────────────────
-
-describe('case 5: phase=ready + driver=gated + busy mid-turn', () => {
-  it('queued_mid_turn; no wake until safe boundary; flush wakes', async () => {
-    const { bridge, calls } = makeBridge({
-      delivered: true,
-      delivery_ids: [7],
-    });
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-
-    // Simulate a tool_call to drive busy → 1.
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    expect(c.busySnapshot('c1', 'a1')).toEqual({
-      outstandingToolUses: 1,
-      compacting: false,
-    });
-
-    const decision = await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 7, driver: DRIVER_GATED }));
-
-    expect(decision).toEqual({ kind: 'queued_mid_turn', pendingCount: 1 });
-    expect(calls).toHaveLength(0); // no wake yet
-    expect(delivered).toHaveLength(0);
-    expect(c.pendingCount('c1', 'a1')).toBe(1);
-
-    // Tool output closes the call; busy → 0 → safe boundary opens →
-    // flush scheduled. Wait a microtask for the async flush.
-    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ deliveryIds: [7] });
-    expect(delivered).toEqual([[7]]);
-    expect(c.pendingCount('c1', 'a1')).toBe(0);
   });
 
-  it('preserves per-delivery stream metadata through gated queue flush', async () => {
-    const { bridge, calls } = makeBridge({
-      delivered: true,
-      delivery_ids: [17],
-    });
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
+  it('forwards deliveries + delivered_up_to_seq to the daemon', async () => {
+    const { bridge, calls } = makeBridge(admitted());
+    const c = makeCoordinator(bridge);
+
     const deliveries: RuntimeDelivery[] = [
       {
-        delivery_id: 17,
-        message_id: 'reply-17',
-        seq: 2453,
-        thread_root_id: 'root-1',
+        delivery_id: 3,
+        message_id: 'm3',
+        seq: 42,
+        thread_root_id: null,
         delivery_kind: 'turn',
       },
     ];
-
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    await c.submitLiveDelivery('c1', 'a1', req({
-      inboxId: 17,
-      deliveredUpToSeq: 2453,
-      deliveries,
-      driver: DRIVER_GATED,
-    }));
-
-    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({
-      deliveryIds: [17],
-      deliveries,
-    });
-  });
-
-  it('compaction blocks flush even when outstandingToolUses=0', async () => {
-    const { bridge, calls } = makeBridge({
-      delivered: true,
-      delivery_ids: [9],
-    });
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-
-    // Compaction without any outstanding tool uses → still not a safe
-    // boundary; submit should queue.
-    c.onParsedEvent('c1', 'a1', parsed('compaction_started'));
-
-    const decision = await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 9, driver: DRIVER_GATED }));
-    expect(decision.kind).toBe('queued_mid_turn');
-    expect(calls).toHaveLength(0);
-
-    // Finish compaction → flush.
-    c.onParsedEvent('c1', 'a1', parsed('compaction_finished'));
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(calls).toHaveLength(1);
-    expect(delivered).toEqual([[9]]);
-  });
-
-  it('turn_end flushes (clamps outstandingToolUses to 0)', async () => {
-    const { bridge, calls } = makeBridge({
-      delivered: true,
-      delivery_ids: [11],
-    });
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-
-    // Drive busy → 2 (two tool_calls), then queue, then turn_end.
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 11, driver: DRIVER_GATED }));
-    expect(calls).toHaveLength(0);
-
-    c.onParsedEvent('c1', 'a1', parsed('turn_end'));
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(calls).toHaveLength(1);
-    expect(delivered).toEqual([[11]]);
-    expect(c.busySnapshot('c1', 'a1').outstandingToolUses).toBe(0);
-  });
-
-  it('multiple queued items flush as one batch via combineGated', async () => {
-    const { bridge, calls } = makeBridge({
-      delivered: true,
-      delivery_ids: [1, 2],
-    });
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const combineGated = vi.fn((payloads: readonly string[]) => payloads.join('|'));
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      callbacks: { combineGated },
-    });
-
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 1, messageId: 'm-a', payload: 'A', driver: DRIVER_GATED }));
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 2, messageId: 'm-b', payload: 'B', driver: DRIVER_GATED }));
-    expect(c.pendingCount('c1', 'a1')).toBe(2);
-
-    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({
-      deliveryIds: [1, 2],
-      text: 'A|B',
-    });
-    expect(combineGated).toHaveBeenCalledTimes(1);
-    expect(delivered).toEqual([[1, 2]]);
-  });
-
-  it('idempotent enqueue: same messageId twice → pending stays 1', async () => {
-    const { bridge } = makeBridge([]);
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    const r = req({ inboxId: 5, driver: DRIVER_GATED });
-    await c.submitLiveDelivery('c1', 'a1', r);
-    await c.submitLiveDelivery('c1', 'a1', r);
-
-    expect(c.pendingCount('c1', 'a1')).toBe(1);
-  });
-
-  it('flush refused: rows pushed back onto the queue, no markDelivered', async () => {
-    const { bridge, calls } = makeBridge({
-      delivered: false,
-      reason: 'driver_refused',
-      delivery_ids: [13],
-    });
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 13, driver: DRIVER_GATED }));
-    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(calls).toHaveLength(1);
-    expect(delivered).toHaveLength(0);
-    expect(c.pendingCount('c1', 'a1')).toBe(1);
-  });
-});
-
-// ── case 6 — ready + driver=none (oneShot live) ────────────────────
-
-describe('case 6: phase=ready + driver=none (oneShot live)', () => {
-  it('noop_oneshot_live; never wakes', async () => {
-    const { bridge, calls } = makeBridge([]);
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-
-    const decision = await c.submitLiveDelivery('c1', 'a1', req({ driver: DRIVER_NONE }));
-
-    expect(decision).toEqual({ kind: 'noop_oneshot_live' });
-    expect(calls).toHaveLength(0);
-    expect(delivered).toHaveLength(0);
-  });
-});
-
-// ── case 7 — oneShot exit auto-respawn ─────────────────────────────
-
-describe('case 7: oneShot exit auto-respawn (intentional=false, no failure, pending)', () => {
-  function setup({ hasPending }: { hasPending: boolean }) {
-    const { bridge } = makeBridge([]);
-    const cache = makeCacheView([]);
-    const { sink } = makeInboxSink();
-    const respawn = vi.fn(() => Promise.resolve());
-    const hasPendingInbox = vi.fn(() => hasPending);
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      callbacks: { respawn, hasPendingInbox },
-    });
-    return { c, respawn, hasPendingInbox };
-  }
-
-  it('respawns on intentional=false, no init/fatal, hasPendingInbox=true', async () => {
-    const { c, respawn } = setup({ hasPending: true });
-
-    c.onRuntimeExit('c1', 'a1', {
-      intentional: false,
-      code: 0,
-      initTimedOut: false,
-      fatalError: false,
-    });
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(respawn).toHaveBeenCalledWith('c1', 'a1');
-  });
-
-  it('does NOT respawn when intentional=true', async () => {
-    const { c, respawn, hasPendingInbox } = setup({ hasPending: true });
-
-    c.onRuntimeExit('c1', 'a1', {
-      intentional: true,
-      code: 0,
-      initTimedOut: false,
-      fatalError: false,
-    });
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(respawn).not.toHaveBeenCalled();
-    expect(hasPendingInbox).not.toHaveBeenCalled(); // short-circuit
-  });
-
-  it('does NOT respawn when initTimedOut=true', async () => {
-    const { c, respawn } = setup({ hasPending: true });
-
-    c.onRuntimeExit('c1', 'a1', {
-      intentional: false,
-      code: 1,
-      initTimedOut: true,
-      fatalError: false,
-    });
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(respawn).not.toHaveBeenCalled();
-  });
-
-  it('does NOT respawn when fatalError=true', async () => {
-    const { c, respawn } = setup({ hasPending: true });
-
-    c.onRuntimeExit('c1', 'a1', {
-      intentional: false,
-      code: 1,
-      initTimedOut: false,
-      fatalError: true,
-    });
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(respawn).not.toHaveBeenCalled();
-  });
-
-  it('does NOT respawn when no pending inbox', async () => {
-    const { c, respawn, hasPendingInbox } = setup({ hasPending: false });
-
-    c.onRuntimeExit('c1', 'a1', {
-      intentional: false,
-      code: 0,
-      initTimedOut: false,
-      fatalError: false,
-    });
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(hasPendingInbox).toHaveBeenCalledWith('c1', 'a1');
-    expect(respawn).not.toHaveBeenCalled();
-  });
-
-  it('respawn callback throws → logged but swallowed', async () => {
-    const { bridge } = makeBridge([]);
-    const cache = makeCacheView([]);
-    const { sink } = makeInboxSink();
-    const respawn = vi.fn(() => Promise.reject(new Error('start refused')));
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      callbacks: { respawn, hasPendingInbox: () => true },
-      logger,
-    });
-
-    c.onRuntimeExit('c1', 'a1', {
-      intentional: false,
-      code: 0,
-      initTimedOut: false,
-      fatalError: false,
-    });
-    // Wait for the Promise.resolve().then(...) microtask + the
-    // subsequent rejection .catch to run.
-    await new Promise(resolve => setImmediate(resolve));
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(respawn).toHaveBeenCalledOnce();
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.objectContaining({
-        conversationId: 'c1',
-        agentId: 'a1',
-        err: 'start refused',
+    await c.submitLiveDelivery(
+      'c1',
+      'a1',
+      req({
+        inboxId: 3,
+        driver: DRIVER_DIRECT,
+        deliveredUpToSeq: 42,
+        deliveries,
       }),
-      expect.stringContaining('oneShot auto-respawn failed'),
     );
-  });
 
-  it('clears per-agent state on exit (busy + pending dropped)', async () => {
-    const { bridge } = makeBridge([]);
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-
-    // Build up some state.
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    c.onParsedEvent('c1', 'a1', parsed('compaction_started'));
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 99, driver: DRIVER_GATED }));
-    expect(c.pendingCount('c1', 'a1')).toBe(1);
-    expect(c.busySnapshot('c1', 'a1')).toEqual({
-      outstandingToolUses: 1,
-      compacting: true,
-    });
-
-    c.onRuntimeExit('c1', 'a1', {
-      intentional: true, // suppress respawn so we isolate the state-clear assertion
-      code: 0,
-      initTimedOut: false,
-      fatalError: false,
-    });
-
-    expect(c.pendingCount('c1', 'a1')).toBe(0);
-    expect(c.busySnapshot('c1', 'a1')).toEqual({
-      outstandingToolUses: 0,
-      compacting: false,
-    });
+    expect(calls[0]).toMatchObject({ deliveredUpToSeq: 42, deliveries });
   });
 });
 
-// ── cross-(conv,agent) isolation ───────────────────────────────────
+// ── refused arms ───────────────────────────────────────────────────
 
-describe('per-(conv,agent) isolation', () => {
-  it('busy state on (c1,a1) does not affect (c2,a2)', async () => {
-    const { bridge, calls } = makeBridge({
-      delivered: true,
-      delivery_ids: [200],
-    });
+describe('refused disposition → refused decision (row rolls back)', () => {
+  it.each([
+    ['startup_pending' as const],
+    ['draining' as const],
+  ])('%s', async reason => {
+    const { bridge, calls } = makeBridge(refusedResult(reason));
+    const c = makeCoordinator(bridge);
+
+    const decision = await c.submitLiveDelivery(
+      'c1',
+      'a1',
+      req({ driver: DRIVER_DIRECT }),
+    );
+
+    expect(decision).toEqual({ kind: 'refused', reason });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('cooldown', async () => {
+    const { bridge } = makeBridge(refusedResult('cooldown', 5_000));
+    const c = makeCoordinator(bridge);
+
+    const decision = await c.submitLiveDelivery(
+      'c1',
+      'a1',
+      req({ driver: DRIVER_DIRECT }),
+    );
+
+    // The refused decision carries only `reason`; the fanout does not need
+    // cooldown_until at the coordinator layer (rollback is the same).
+    expect(decision).toEqual({ kind: 'refused', reason: 'cooldown' });
+  });
+});
+
+// ── gated driver dispatches unconditionally (daemon owns the queue) ──
+
+describe('gated driver → dispatched unconditionally (Stage 3)', () => {
+  it('dispatches even mid-turn — NO coordinator busy gate anymore', async () => {
+    const { bridge, calls } = makeBridge(admitted());
+    const c = makeCoordinator(bridge);
+
+    // A tool_call used to raise the coordinator's busy tracker and defer
+    // the delivery. Stage 3 removed that tracker: onParsedEvent is now a
+    // pure watchdog-clear no-op for delivery, so the submit still
+    // dispatches immediately and the DAEMON decides whether to defer.
+    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
+
+    const decision = await c.submitLiveDelivery(
+      'c1',
+      'a1',
+      req({ inboxId: 11, driver: DRIVER_GATED }),
+    );
+
+    expect(decision).toEqual({ kind: 'dispatched', deliveryIds: [11] });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ deliveryIds: [11], kind: 'message' });
+  });
+
+  it('daemon `deferred` disposition collapses to `dispatched` (custody transferred, no ack)', async () => {
+    const { bridge, calls } = makeBridge(deferredResult());
+    const c = makeCoordinator(bridge);
+
+    // The daemon held a ready handle but could not take the write now
+    // (mid-turn gated, or a prior write in flight) and enqueued it in its
+    // OWN queue. Custody is with the daemon exactly like `admitted`: the
+    // fanout keeps the rows in-flight; ack awaits the async consumed event.
+    const decision = await c.submitLiveDelivery(
+      'c1',
+      'a1',
+      req({ inboxId: 12, driver: DRIVER_GATED }),
+    );
+
+    expect(decision).toEqual({ kind: 'dispatched', deliveryIds: [12] });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('deferred does NOT arm the delivery watchdog (write deferred to daemon)', async () => {
+    vi.useFakeTimers();
+    const { bridge } = makeBridge(deferredResult());
+    const published: AgentRunState[] = [];
     const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-      { conv: 'c2', agent: 'a2', phase: 'ready' },
+      { conv: 'c1', agent: 'a1', phase: 'ready', runState: runState() },
     ]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-
-    // (c1, a1) goes busy.
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-
-    // (c2, a2) is still at safe boundary → direct wake fires.
-    const decision = await c.submitLiveDelivery('c2', 'a2', req({ inboxId: 200, driver: DRIVER_GATED }));
-
-    expect(decision.kind).toBe('wake_dispatched');
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({
-      conversationId: 'c2',
-      agentId: 'a2',
+    const c = makeCoordinator(bridge, cache, {
+      deliveryWatchdogMs: 1_000,
+      now: () => 5_000,
+      callbacks: { publishActivity: s => published.push(s) },
     });
-    expect(delivered).toEqual([[200]]);
+
+    await c.submitLiveDelivery('c1', 'a1', req({ driver: DRIVER_GATED }));
+    // A deferred write has no known write moment on the backend side, so
+    // arming a delivery watchdog would fire spuriously during a legit long
+    // turn. Advancing past the threshold must publish NOTHING.
+    vi.advanceTimersByTime(5_000);
+    expect(published).toHaveLength(0);
   });
 
-  it('exit on (c1,a1) does not clear (c2,a2) busy state', async () => {
-    const { bridge } = makeBridge([]);
-    const cache = makeCacheView([
-      { conv: 'c1', agent: 'a1', phase: 'ready' },
-      { conv: 'c2', agent: 'a2', phase: 'ready' },
-    ]);
-    const { sink } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
+  it('multi-request batch throws — combining moved to the daemon', async () => {
+    const { bridge } = makeBridge(admitted());
+    const c = makeCoordinator(bridge);
 
-    c.onParsedEvent('c2', 'a2', parsed('tool_call'));
-    expect(c.busySnapshot('c2', 'a2').outstandingToolUses).toBe(1);
-
-    c.onRuntimeExit('c1', 'a1', {
-      intentional: true,
-      code: 0,
-      initTimedOut: false,
-      fatalError: false,
-    });
-
-    expect(c.busySnapshot('c2', 'a2').outstandingToolUses).toBe(1);
-  });
-});
-
-// ── busy tracker invariants ────────────────────────────────────────
-
-describe('busy tracker', () => {
-  it('tool_output below 0 clamps to 0', () => {
-    const { bridge } = makeBridge([]);
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-
-    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
-    expect(c.busySnapshot('c1', 'a1').outstandingToolUses).toBe(0);
-
-    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
-    expect(c.busySnapshot('c1', 'a1').outstandingToolUses).toBe(0);
-  });
-
-  it('session_init / thinking / text / error / unknown are noops', () => {
-    const { bridge } = makeBridge([]);
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    c.onParsedEvent('c1', 'a1', parsed('session_init'));
-    c.onParsedEvent('c1', 'a1', parsed('thinking'));
-    c.onParsedEvent('c1', 'a1', parsed('text'));
-    c.onParsedEvent('c1', 'a1', parsed('error'));
-    c.onParsedEvent('c1', 'a1', parsed('unknown'));
-    // tool_call set it to 1; no other event should have moved it.
-    expect(c.busySnapshot('c1', 'a1').outstandingToolUses).toBe(1);
-    expect(c.busySnapshot('c1', 'a1').compacting).toBe(false);
-  });
-
-  it('boundary re-open does NOT flush when queue is empty', async () => {
-    const { bridge, calls } = makeBridge([]);
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(calls).toHaveLength(0);
-  });
-});
-
-// ── Cindy `rrF2L1RmWq5JFH3m` B3: combineGated fail-loud ────────────
-
-describe('B3: multi-payload batch without combineGated fails loudly', () => {
-  it('flush with 2 pending and no combineGated throws + no markDelivered + rows back in queue', async () => {
-    const { bridge, calls } = makeBridge([]); // wake never reached
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const errorLogs: string[] = [];
-    const logger = {
-      info: () => {},
-      warn: () => {},
-      error: (_meta: object, msg: string) => errorLogs.push(msg),
-    };
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      // NO combineGated
-      logger,
-    });
-
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 1, messageId: 'a', payload: 'A', driver: DRIVER_GATED }));
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 2, messageId: 'b', payload: 'B', driver: DRIVER_GATED }));
-    expect(c.pendingCount('c1', 'a1')).toBe(2);
-
-    // Tool output reopens boundary → flush is scheduled. With 2
-    // payloads and no combineGated, flush must throw and leave rows
-    // in the queue.
-    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
-    await new Promise(resolve => setImmediate(resolve));
-    // Two microtasks needed because flush is `void this.flush(...)`
-    // and the throw inside .catch happens one tick later.
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(calls).toHaveLength(0); // bridge.runtimeWake never called
-    expect(delivered).toHaveLength(0); // no inbox row mutated
-    expect(c.pendingCount('c1', 'a1')).toBe(2); // queue restored
-    expect(errorLogs.some(m => m.includes('flush combine refused'))).toBe(true);
-  });
-
-  it('flush with 2 pending AND combineGated wakes successfully', async () => {
-    // Sanity check: the failure above is purely the missing callback,
-    // not a regression in the happy path.
-    const { bridge, calls } = makeBridge({
-      delivered: true,
-      delivery_ids: [1, 2],
-    });
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const combineGated = vi.fn((p: readonly string[]) => p.join('|'));
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      callbacks: { combineGated },
-    });
-
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 1, messageId: 'a', payload: 'A', driver: DRIVER_GATED }));
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 2, messageId: 'b', payload: 'B', driver: DRIVER_GATED }));
-    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(calls).toHaveLength(1);
-    expect(combineGated).toHaveBeenCalledOnce();
-    expect(delivered).toEqual([[1, 2]]);
-    expect(c.pendingCount('c1', 'a1')).toBe(0);
-  });
-});
-
-// ── Cindy `rrF2L1RmWq5JFH3m` B4: flush transport throw restores queue
-
-describe('B4: flush transport throw must NOT lose the in-memory queue', () => {
-  it('bridge.runtimeWake throws on flush → rows pushed back, next boundary retries', async () => {
-    let callIdx = 0;
-    const bridge: CoordinatorBridge = {
-      runtimeWake: vi.fn(async params => {
-        callIdx += 1;
-        if (callIdx === 1) throw new Error('socket closed');
-        return {
-          delivered: true as const,
-          delivery_ids: [...params.delivery_ids],
-        };
-      }),
-    };
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const errorLogs: string[] = [];
-    const logger = {
-      info: () => {},
-      warn: () => {},
-      error: (_meta: object, msg: string) => errorLogs.push(msg),
-    };
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      logger,
-    });
-
-    // Build up queue.
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 77, driver: DRIVER_GATED }));
-    expect(c.pendingCount('c1', 'a1')).toBe(1);
-
-    // First boundary reopen → flush throws. Queue must be restored.
-    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
-    await new Promise(resolve => setImmediate(resolve));
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(callIdx).toBe(1); // first attempt happened
-    expect(delivered).toHaveLength(0); // nothing marked
-    expect(c.pendingCount('c1', 'a1')).toBe(1); // queue preserved
-    expect(errorLogs.some(m => m.includes('flush threw'))).toBe(true);
-
-    // Now simulate another mid-turn cycle so a fresh safe-boundary
-    // flush can retry. tool_call → busy=1 → tool_output → flush.
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
-    await new Promise(resolve => setImmediate(resolve));
-    await new Promise(resolve => setImmediate(resolve));
-
-    expect(callIdx).toBe(2); // retry happened
-    expect(delivered).toEqual([[77]]);
-    expect(c.pendingCount('c1', 'a1')).toBe(0);
-  });
-});
-
-// ── B3: init-observed gate for requires_first_message drivers ──────
-//
-// Cindy `usjxj8AxX4AvJ5E-` B3: claude's daemon `delivered:true` only
-// proves bytes hit stdin, not that the child consumed them. If the
-// child dies in the window between "stdin written" and parsed
-// `session_init`, marking the row delivered would lose the message.
-// For `kickoffMode='requires_first_message'`:
-//   1. wake success defers markDelivered; ids stash into
-//      initPendingDeliveryIds
-//   2. parsed `session_init` flushes the queue + clears
-//   3. runtime exit before session_init drops the queue WITHOUT
-//      marking — rows replay via startup_delivery on next spawn
-// `kickoffMode='self_inits'` drivers (codex/cursor) get the legacy
-// behavior: ack on `delivered:true`.
-
-const DRIVER_GATED_REQUIRES_FIRST: DriverDeliveryView = {
-  busyDeliveryMode: 'gated',
-  oneShot: false,
-  kickoffMode: 'requires_first_message',
-};
-const DRIVER_DIRECT_REQUIRES_FIRST: DriverDeliveryView = {
-  busyDeliveryMode: 'direct',
-  oneShot: false,
-  kickoffMode: 'requires_first_message',
-};
-
-describe('B3: requires_first_message init-observed gate', () => {
-  it('wake before session_init → delivered:true does NOT mark delivered (deferred)', async () => {
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { bridge, calls } = makeBridge({
-      delivered: true,
-      delivery_ids: [10],
-    });
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-    const decision = await c.submitLiveDelivery('c1', 'a1', {
-      ...req({ inboxId: 10 }),
-      driver: DRIVER_DIRECT_REQUIRES_FIRST,
-    });
-    expect(decision.kind).toBe('wake_dispatched');
-    expect(calls.length).toBe(1);
-    // CRITICAL: row NOT yet marked delivered — gate held the ack.
-    expect(delivered).toEqual([]);
-  });
-
-  it('parsed session_init after deferred wake → flushes ack', async () => {
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { bridge } = makeBridge([
-      { delivered: true, delivery_ids: [10] },
-      { delivered: true, delivery_ids: [11] },
-    ]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-    await c.submitLiveDelivery('c1', 'a1', {
-      ...req({ inboxId: 10 }),
-      driver: DRIVER_DIRECT_REQUIRES_FIRST,
-    });
-    await c.submitLiveDelivery('c1', 'a1', {
-      ...req({ inboxId: 11, messageId: 'm2' }),
-      driver: DRIVER_DIRECT_REQUIRES_FIRST,
-    });
-    expect(delivered).toEqual([]); // both deferred
-    c.onParsedEvent('c1', 'a1', parsed('session_init'));
-    // session_init flushes the entire queue in one markDelivered call.
-    expect(delivered).toEqual([[10, 11]]);
-  });
-
-  it('runtime_exit before session_init → init-pending dropped, NOT marked (rows replay via startup_delivery)', async () => {
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { bridge } = makeBridge({
-      delivered: true,
-      delivery_ids: [10],
-    });
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-    await c.submitLiveDelivery('c1', 'a1', {
-      ...req({ inboxId: 10 }),
-      driver: DRIVER_DIRECT_REQUIRES_FIRST,
-    });
-    expect(delivered).toEqual([]); // deferred
-    // Runtime dies before session_init lands. State is wiped; the
-    // init-pending IDs are dropped WITHOUT marking. The inbox row
-    // stays pending in DB so the next spawn picks it up via
-    // startup_delivery — coordinator does NOT pretend it was
-    // delivered (Cindy `0G5uJBydO_4qt_2r` "fail loudly / preserve
-    // pending").
-    c.onRuntimeExit('c1', 'a1', {
-      intentional: false,
-      code: 1,
-      initTimedOut: false,
-      fatalError: false,
-    });
-    expect(delivered).toEqual([]);
-  });
-
-  it('post-init wake (initObserved already set) → immediate markDelivered', async () => {
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { bridge } = makeBridge([
-      { delivered: true, delivery_ids: [10] }, // pre-init
-      { delivered: true, delivery_ids: [11] }, // post-init
-    ]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-    await c.submitLiveDelivery('c1', 'a1', {
-      ...req({ inboxId: 10 }),
-      driver: DRIVER_DIRECT_REQUIRES_FIRST,
-    });
-    c.onParsedEvent('c1', 'a1', parsed('session_init'));
-    expect(delivered).toEqual([[10]]); // queued one flushed
-    await c.submitLiveDelivery('c1', 'a1', {
-      ...req({ inboxId: 11, messageId: 'm2' }),
-      driver: DRIVER_DIRECT_REQUIRES_FIRST,
-    });
-    // Second wake post-init takes the legacy path: immediate ack.
-    expect(delivered).toEqual([[10], [11]]);
-  });
-
-  it('self_inits driver → wake success immediately marks delivered (gate does NOT engage)', async () => {
-    // Codex/cursor: daemon-side init proves the runtime is alive
-    // BEFORE any wake; the deferred-ack gate is claude-specific.
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { bridge } = makeBridge({
-      delivered: true,
-      delivery_ids: [10],
-    });
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-    await c.submitLiveDelivery('c1', 'a1', {
-      ...req({ inboxId: 10 }),
-      driver: DRIVER_DIRECT, // kickoffMode: 'self_inits'
-    });
-    expect(delivered).toEqual([[10]]);
-  });
-
-  it('gated flush before session_init → batch ack deferred until session_init', async () => {
-    // Gated + requires_first_message (the actual claude shape).
-    // Build up a pending queue mid-turn, then trigger safe-boundary
-    // flush. The flush wake succeeds but ack is deferred. session_init
-    // afterwards releases the ack.
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { bridge } = makeBridge({
-      delivered: true,
-      delivery_ids: [20, 21],
-    });
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      callbacks: {
-        combineGated: payloads => payloads.join('\n'),
-      },
-    });
-    // Push agent into busy state.
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    // Enqueue two while busy.
-    await c.submitLiveDelivery('c1', 'a1', {
-      ...req({ inboxId: 20 }),
-      driver: DRIVER_GATED_REQUIRES_FIRST,
-    });
-    await c.submitLiveDelivery('c1', 'a1', {
-      ...req({ inboxId: 21, messageId: 'm2' }),
-      driver: DRIVER_GATED_REQUIRES_FIRST,
-    });
-    expect(c.pendingCount('c1', 'a1')).toBe(2);
-    // Safe boundary reopens → flush fires.
-    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
-    // Allow the async flush microtask to run.
-    await Promise.resolve();
-    await Promise.resolve();
-    // Wake dispatched but ack deferred (initObserved still false).
-    expect(delivered).toEqual([]);
-    // session_init releases the deferred ack.
-    c.onParsedEvent('c1', 'a1', parsed('session_init'));
-    expect(delivered).toEqual([[20, 21]]);
-  });
-});
-
-// ── B2 batch-native submitLiveDeliveryBatch (Cindy `nKFVSvx4CyBLxPNq`) ──
-//
-// DaemonHost.drainPending calls `submitLiveDeliveryBatch` directly so a
-// multi-row drain produces ONE wake carrying all delivery_ids with
-// all-or-nothing ack semantics. These tests pin the batch surface
-// independently of DaemonHost wiring.
-
-describe('B2: submitLiveDeliveryBatch — batch-native one wake all-or-nothing', () => {
-  it('empty batch throws (caller must no-op upstream)', async () => {
-    const { bridge } = makeBridge({ delivered: true, delivery_ids: [] });
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({ bridge, cache, inboxAck: sink });
-    await expect(c.submitLiveDeliveryBatch('c1', 'a1', [])).rejects.toThrow(/empty batch/);
-  });
-
-  it('multi-row direct driver → ONE wake with all delivery_ids; ack all on success', async () => {
-    const { bridge, calls } = makeBridge({
-      delivered: true,
-      delivery_ids: [10, 11, 12],
-    });
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      callbacks: { combineGated: payloads => payloads.join('\n') },
-    });
-    const decision = await c.submitLiveDeliveryBatch('c1', 'a1', [
-      req({ inboxId: 10, messageId: 'mA', driver: DRIVER_DIRECT }),
-      req({ inboxId: 11, messageId: 'mB', driver: DRIVER_DIRECT }),
-      req({ inboxId: 12, messageId: 'mC', driver: DRIVER_DIRECT }),
-    ]);
-    expect(decision).toEqual({
-      kind: 'wake_dispatched',
-      deliveryIds: [10, 11, 12],
-    });
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.deliveryIds).toEqual([10, 11, 12]);
-    expect(delivered).toEqual([[10, 11, 12]]);
-  });
-
-  it('multi-row bridge throw → NO markDelivered for any row; propagates', async () => {
-    const { bridge, calls } = makeBridge(() => new Error('socket closed'));
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      callbacks: { combineGated: payloads => payloads.join('\n') },
-    });
+    // Callers must pre-combine into ONE request; a multi-request batch is a
+    // caller bug now that the coordinator no longer combines (the daemon
+    // combines deferred entries at flush). Fail LOUD, never silently join.
     await expect(
       c.submitLiveDeliveryBatch('c1', 'a1', [
-        req({ inboxId: 10, messageId: 'mA', driver: DRIVER_DIRECT }),
-        req({ inboxId: 11, messageId: 'mB', driver: DRIVER_DIRECT }),
+        req({ inboxId: 1, messageId: 'm1', payload: 'first', driver: DRIVER_GATED }),
+        req({ inboxId: 2, messageId: 'm2', payload: 'second', driver: DRIVER_GATED }),
       ]),
-    ).rejects.toThrow(/socket closed/);
-    expect(calls).toHaveLength(1);
-    // All-or-nothing: NO partial markDelivered for either row.
-    expect(delivered).toHaveLength(0);
-  });
-
-  it('multi-row wake_refused → NO ack; rows would remain pending in the inbox', async () => {
-    const { bridge, calls } = makeBridge({
-      delivered: false,
-      reason: 'driver_refused',
-      delivery_ids: [10, 11],
-    });
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      callbacks: { combineGated: payloads => payloads.join('\n') },
-    });
-    const decision = await c.submitLiveDeliveryBatch('c1', 'a1', [
-      req({ inboxId: 10, messageId: 'mA', driver: DRIVER_DIRECT }),
-      req({ inboxId: 11, messageId: 'mB', driver: DRIVER_DIRECT }),
-    ]);
-    expect(decision).toEqual({
-      kind: 'wake_refused',
-      reason: 'driver_refused',
-    });
-    expect(calls).toHaveLength(1);
-    expect(delivered).toHaveLength(0);
-  });
-
-  it('multi-row requires_first_message + init not observed → entire batch stashed; flushed as one ack on session_init', async () => {
-    // The B3 gate must preserve batch atomicity: every id from the
-    // batch lands in initPendingDeliveryIds, then a single
-    // markDelivered fires on session_init carrying all of them.
-    const { bridge, calls } = makeBridge({
-      delivered: true,
-      delivery_ids: [50, 51, 52],
-    });
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      callbacks: { combineGated: payloads => payloads.join('\n') },
-    });
-    const decision = await c.submitLiveDeliveryBatch('c1', 'a1', [
-      req({
-        inboxId: 50,
-        messageId: 'mA',
-        driver: DRIVER_DIRECT_REQUIRES_FIRST,
-      }),
-      req({
-        inboxId: 51,
-        messageId: 'mB',
-        driver: DRIVER_DIRECT_REQUIRES_FIRST,
-      }),
-      req({
-        inboxId: 52,
-        messageId: 'mC',
-        driver: DRIVER_DIRECT_REQUIRES_FIRST,
-      }),
-    ]);
-    expect(decision).toEqual({
-      kind: 'wake_dispatched',
-      deliveryIds: [50, 51, 52],
-    });
-    expect(calls).toHaveLength(1);
-    // Init gate deferred — ack pending until session_init.
-    expect(delivered).toEqual([]);
-    // session_init releases the entire batch as ONE markDelivered call.
-    c.onParsedEvent('c1', 'a1', parsed('session_init'));
-    expect(delivered).toEqual([[50, 51, 52]]);
-  });
-
-  it('multi-row gated mid-turn → entire batch queued; flush combines into one wake', async () => {
-    const { bridge, calls } = makeBridge({
-      delivered: true,
-      delivery_ids: [60, 61],
-    });
-    const cache = makeCacheView([{ conv: 'c1', agent: 'a1', phase: 'ready' }]);
-    const { sink, delivered } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      callbacks: { combineGated: payloads => payloads.join('\n') },
-    });
-    // Push into busy state.
-    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
-    const decision = await c.submitLiveDeliveryBatch('c1', 'a1', [
-      req({ inboxId: 60, messageId: 'mA', driver: DRIVER_GATED }),
-      req({ inboxId: 61, messageId: 'mB', driver: DRIVER_GATED }),
-    ]);
-    expect(decision).toEqual({ kind: 'queued_mid_turn', pendingCount: 2 });
-    expect(calls).toHaveLength(0);
-    expect(c.pendingCount('c1', 'a1')).toBe(2);
-    // Safe boundary opens → flush wakes once with both ids.
-    c.onParsedEvent('c1', 'a1', parsed('tool_output'));
-    await new Promise(resolve => setImmediate(resolve));
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.deliveryIds).toEqual([60, 61]);
-    expect(delivered).toEqual([[60, 61]]);
+    ).rejects.toThrow(/multi-request batch/);
   });
 });
 
-// ── P2 wake→first-parsed watchdog ─────────────────────────────────
+// ── oneShot (`none`) dispatches; daemon decides ────────────────────
 
-describe('P2: live-wake stuck watchdog', () => {
-  it('publishes a synthetic thinking activity after delivered wake stays silent for threshold', async () => {
-    vi.useFakeTimers();
-    let now = 10_000;
-    const published: AgentRunState[] = [];
-    const { bridge } = makeBridge({ delivered: true, delivery_ids: [10] });
-    const cache = makeCacheView([
-      {
-        conv: 'c1',
-        agent: 'a1',
-        phase: 'ready',
-        runState: runState({ updatedAt: 9_000, lastActivityAt: 9_000 }),
-      },
-    ]);
-    const { sink } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      wakeStuckMs: 30_000,
-      now: () => now,
-      callbacks: {
-        publishActivity: state => published.push(state),
-      },
-    });
+describe('oneShot driver → dispatched (no local short-circuit)', () => {
+  it('no live handle → daemon spawns-with-batch → dispatched', async () => {
+    const { bridge, calls } = makeBridge(spawning());
+    const c = makeCoordinator(bridge);
 
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 10, driver: DRIVER_GATED }));
-    expect(published).toHaveLength(0);
-    now = 40_000;
-    vi.advanceTimersByTime(30_000);
+    const decision = await c.submitLiveDelivery(
+      'c1',
+      'a1',
+      req({ inboxId: 7, driver: DRIVER_NONE }),
+    );
 
-    expect(published).toHaveLength(1);
-    expect(published[0]).toMatchObject({
-      runId: 'run-1',
-      status: 'thinking',
-      activitySnippet: 'Waiting for claude response (30s+)',
-      updatedAt: 40_000,
-      lastActivityAt: 40_000,
-    });
-    vi.useRealTimers();
+    // The coordinator no longer guesses `noop_oneshot_live`: it has no
+    // live proof, so it dispatches and the daemon spawns-with-batch.
+    expect(decision).toEqual({ kind: 'dispatched', deliveryIds: [7] });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.deliveryIds).toEqual([7]);
   });
 
-  it('cancels before firing when any parsed event arrives', async () => {
-    vi.useFakeTimers();
-    let now = 10_000;
-    const published: AgentRunState[] = [];
-    const { bridge } = makeBridge({ delivered: true, delivery_ids: [10] });
-    const cache = makeCacheView([
-      {
-        conv: 'c1',
-        agent: 'a1',
-        phase: 'ready',
-        runState: runState({ updatedAt: 9_000 }),
-      },
+  it('live oneShot → daemon sync-refuses (startup_pending) → refused', async () => {
+    const { bridge, calls } = makeBridge(refusedResult('startup_pending'));
+    const c = makeCoordinator(bridge);
+
+    const decision = await c.submitLiveDelivery(
+      'c1',
+      'a1',
+      req({ inboxId: 7, driver: DRIVER_NONE }),
+    );
+
+    // A live oneShot can't take stdin; the daemon refuses SYNC (no async
+    // admitted→driver_refused). The fanout rolls the rows back to pending;
+    // the respawn-on-exit path drains them.
+    expect(decision).toEqual({ kind: 'refused', reason: 'startup_pending' });
+    expect(calls).toHaveLength(1);
+  });
+});
+
+// ── transport throw propagates ─────────────────────────────────────
+
+describe('transport / fs-guard throw', () => {
+  it('propagates so the fanout rolls the in-flight rows back', async () => {
+    const { bridge } = makeBridge(() => new Error('transport_no_connection'));
+    const c = makeCoordinator(bridge);
+
+    await expect(
+      c.submitLiveDelivery('c1', 'a1', req({ driver: DRIVER_DIRECT })),
+    ).rejects.toThrow('transport_no_connection');
+  });
+});
+
+// ── ready_for_drain replay bypasses the busy tracker ───────────────
+
+describe('submitReadyForDrainDeliveryBatch', () => {
+  it('dispatches unconditionally (no coordinator busy gate)', async () => {
+    const { bridge, calls } = makeBridge(admitted());
+    const c = makeCoordinator(bridge);
+
+    // A prior parsed tool_call no longer changes anything on the backend
+    // side (Stage 3 removed the busy tracker); this path always dispatches.
+    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
+
+    const decision = await c.submitReadyForDrainDeliveryBatch('c1', 'a1', [
+      req({ inboxId: 21, driver: DRIVER_GATED }),
     ]);
-    const { sink } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      wakeStuckMs: 30_000,
-      now: () => now,
-      callbacks: {
-        publishActivity: state => published.push(state),
-      },
-    });
 
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 10, driver: DRIVER_GATED }));
-    now = 20_000;
-    vi.advanceTimersByTime(10_000);
-    c.onParsedEvent('c1', 'a1', parsed('thinking'));
-    now = 50_000;
-    vi.advanceTimersByTime(30_000);
-
-    expect(published).toHaveLength(0);
-    vi.useRealTimers();
+    expect(decision).toEqual({ kind: 'dispatched', deliveryIds: [21] });
+    expect(calls).toHaveLength(1);
   });
 
-  it('resets to the latest delivered wake', async () => {
-    vi.useFakeTimers();
-    let now = 10_000;
-    const published: AgentRunState[] = [];
-    const { bridge } = makeBridge([
-      { delivered: true, delivery_ids: [10] },
-      { delivered: true, delivery_ids: [11] },
-    ]);
-    const cache = makeCacheView([
-      {
-        conv: 'c1',
-        agent: 'a1',
-        phase: 'ready',
-        runState: runState({ updatedAt: 9_000 }),
-      },
-    ]);
-    const { sink } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      wakeStuckMs: 30_000,
-      now: () => now,
-      callbacks: {
-        publishActivity: state => published.push(state),
-      },
-    });
+  it('oneShot driver on ready_for_drain → dispatched (daemon decides)', async () => {
+    const { bridge, calls } = makeBridge(spawning());
+    const c = makeCoordinator(bridge);
 
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 10, messageId: 'm10', driver: DRIVER_GATED }));
-    now = 30_000;
-    vi.advanceTimersByTime(20_000);
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 11, messageId: 'm11', driver: DRIVER_GATED }));
-    now = 59_000;
-    vi.advanceTimersByTime(29_000);
-    expect(published).toHaveLength(0);
-    now = 60_000;
-    vi.advanceTimersByTime(1_000);
-    expect(published).toHaveLength(1);
-    expect(published[0]!.updatedAt).toBe(60_000);
-    vi.useRealTimers();
+    const decision = await c.submitReadyForDrainDeliveryBatch('c1', 'a1', [
+      req({ inboxId: 31, driver: DRIVER_NONE }),
+    ]);
+
+    // No local oneShot short-circuit here either — dispatch and let the
+    // daemon spawn-with-batch (or sync-refuse a still-live oneShot).
+    expect(decision).toEqual({ kind: 'dispatched', deliveryIds: [31] });
+    expect(calls).toHaveLength(1);
   });
 
-  it('explicitly tombstones a fired synthetic bubble on runtime_exit when no real state superseded it', async () => {
-    vi.useFakeTimers();
-    let now = 10_000;
-    const published: AgentRunState[] = [];
-    const { bridge } = makeBridge({ delivered: true, delivery_ids: [10] });
-    const cache = makeCacheView([
-      {
-        conv: 'c1',
-        agent: 'a1',
-        phase: 'ready',
-        runState: runState({ updatedAt: 9_000 }),
-      },
-    ]);
-    const { sink } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      wakeStuckMs: 30_000,
-      now: () => now,
-      callbacks: {
-        publishActivity: state => published.push(state),
-      },
-    });
+  it('empty batch throws', async () => {
+    const { bridge } = makeBridge([]);
+    const c = makeCoordinator(bridge);
 
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 10, driver: DRIVER_GATED }));
-    now = 40_000;
-    vi.advanceTimersByTime(30_000);
-    now = 41_000;
-    c.onRuntimeExit('c1', 'a1', {
+    await expect(
+      c.submitReadyForDrainDeliveryBatch('c1', 'a1', []),
+    ).rejects.toThrow(/empty batch/);
+  });
+});
+
+describe('submitLiveDeliveryBatch empty', () => {
+  it('throws', async () => {
+    const { bridge } = makeBridge([]);
+    const c = makeCoordinator(bridge);
+    await expect(
+      c.submitLiveDeliveryBatch('c1', 'a1', []),
+    ).rejects.toThrow(/empty batch/);
+  });
+});
+
+// ── oneShot exit auto-respawn matrix ───────────────────────────────
+
+describe('oneShot exit auto-respawn', () => {
+  function meta(overrides: Partial<Parameters<RuntimeDeliveryCoordinator['onRuntimeExit']>[2]> = {}) {
+    return {
       intentional: false,
-      code: 137,
+      code: 1,
       initTimedOut: false,
       fatalError: false,
+      ...overrides,
+    };
+  }
+
+  it('fires respawn when intentional=false ∧ ¬initTimedOut ∧ ¬fatal ∧ hasPendingInbox', async () => {
+    const { bridge } = makeBridge([]);
+    const respawn = vi.fn(async () => {});
+    const c = makeCoordinator(bridge, makeCacheView(), {
+      callbacks: { respawn, hasPendingInbox: () => true },
     });
 
-    expect(published).toHaveLength(2);
-    expect(published[1]).toMatchObject({
-      runId: 'run-1',
-      status: 'failed',
-      terminalReason: 'crashed',
-      updatedAt: 41_000,
-    });
-    vi.useRealTimers();
+    c.onRuntimeExit('c1', 'a1', meta());
+    await vi.waitFor(() => expect(respawn).toHaveBeenCalledWith('c1', 'a1'));
   });
 
-  it('does not tombstone when a real runtime_state already superseded the synthetic bubble', async () => {
-    vi.useFakeTimers();
-    let now = 10_000;
-    const published: AgentRunState[] = [];
-    const entry = {
-      phase: 'ready' as RuntimePhase,
-      runState: runState({ updatedAt: 9_000 }),
-    };
-    const cache: CoordinatorCacheView = {
-      get: () => entry,
-    };
-    const { bridge } = makeBridge({ delivered: true, delivery_ids: [10] });
-    const { sink } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      wakeStuckMs: 30_000,
-      now: () => now,
-      callbacks: {
-        publishActivity: state => published.push(state),
-      },
+  type ExitMeta = ReturnType<typeof meta>;
+  it.each([
+    ['intentional', (m: ExitMeta) => ({ ...m, intentional: true })],
+    ['initTimedOut', (m: ExitMeta) => ({ ...m, initTimedOut: true })],
+    ['fatalError', (m: ExitMeta) => ({ ...m, fatalError: true })],
+  ] as const)('suppressed when %s', async (_label, mutate) => {
+    const { bridge } = makeBridge([]);
+    const respawn = vi.fn(async () => {});
+    const c = makeCoordinator(bridge, makeCacheView(), {
+      callbacks: { respawn, hasPendingInbox: () => true },
     });
 
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 10, driver: DRIVER_GATED }));
-    now = 40_000;
-    vi.advanceTimersByTime(30_000);
-    entry.runState = runState({
-      status: 'thinking',
-      activitySnippet: 'real content',
-      updatedAt: 40_500,
-      lastActivityAt: 40_500,
-    });
-    now = 41_000;
-    c.onParsedEvent('c1', 'a1', parsed('thinking'));
-
-    expect(published).toHaveLength(1);
-    expect(published[0]!.activitySnippet).toBe('Waiting for claude response (30s+)');
-    vi.useRealTimers();
+    c.onRuntimeExit('c1', 'a1', mutate(meta()));
+    await new Promise(r => setTimeout(r, 0));
+    expect(respawn).not.toHaveBeenCalled();
   });
 
-  it('clearWakeWatchdog cancels init-timeout path before firing', async () => {
+  it('suppressed when no pending inbox', async () => {
+    const { bridge } = makeBridge([]);
+    const respawn = vi.fn(async () => {});
+    const c = makeCoordinator(bridge, makeCacheView(), {
+      callbacks: { respawn, hasPendingInbox: () => false },
+    });
+
+    c.onRuntimeExit('c1', 'a1', meta());
+    await new Promise(r => setTimeout(r, 0));
+    expect(respawn).not.toHaveBeenCalled();
+  });
+
+  it('does NOT roll back on exit — the daemon owns the mid-turn queue now', async () => {
+    // #task:1417 Stage 3. The coordinator no longer holds a volatile queue,
+    // so `onRuntimeExit` has nothing to roll back. Mid-turn deferred rows
+    // live in the DAEMON's per-handle queue; on child exit the daemon emits
+    // `runtime_delivery_failed{child_exit}` and the backend's failed-delivery
+    // handler (not the coordinator) returns those rows to pending. Exit here
+    // only tears down the coordinator's own per-agent (watchdog) state and
+    // runs the respawn gate.
+    const { bridge, calls } = makeBridge(deferredResult());
+    const respawn = vi.fn(async () => {});
+    const c = makeCoordinator(bridge, makeCacheView(), {
+      callbacks: { respawn, hasPendingInbox: () => true },
+    });
+
+    c.onParsedEvent('c1', 'a1', parsed('tool_call'));
+    const decision = await c.submitLiveDelivery(
+      'c1',
+      'a1',
+      req({ inboxId: 5, driver: DRIVER_GATED }),
+    );
+    // Dispatched to the daemon (deferred → dispatched); the daemon holds it.
+    expect(decision.kind).toBe('dispatched');
+    expect(calls).toHaveLength(1);
+
+    c.onRuntimeExit('c1', 'a1', meta());
+    // Respawn gate still fires; no coordinator-side rollback happens.
+    await vi.waitFor(() => expect(respawn).toHaveBeenCalledWith('c1', 'a1'));
+  });
+});
+
+// ── state is scoped per (conv, agent) ──────────────────────────────
+
+describe('state scoping', () => {
+  it('a parsed event on c1/a1 does not affect c2/a2 dispatch', async () => {
+    const { bridge, calls } = makeBridge([admitted(), admitted()]);
+    const c = makeCoordinator(bridge);
+
+    c.onParsedEvent('c1', 'a1', parsed('tool_call')); // watchdog-clear only
+
+    // Both pairs dispatch unconditionally now (no busy gate anywhere in the
+    // coordinator). The point of this test post-Stage-3 is simply that
+    // per-(conv,agent) watchdog state stays isolated and neither dispatch
+    // interferes with the other.
+    const d = await c.submitLiveDelivery(
+      'c2',
+      'a2',
+      req({ inboxId: 99, driver: DRIVER_GATED }),
+    );
+    expect(d).toEqual({ kind: 'dispatched', deliveryIds: [99] });
+
+    const d2 = await c.submitLiveDelivery(
+      'c1',
+      'a1',
+      req({ inboxId: 1, driver: DRIVER_GATED }),
+    );
+    expect(d2).toEqual({ kind: 'dispatched', deliveryIds: [1] });
+    expect(calls).toHaveLength(2);
+  });
+});
+
+// ── delivery stuck watchdog ────────────────────────────────────────────
+
+describe('delivery stuck watchdog', () => {
+  it('publishes a synthetic thinking state when no parsed event arrives', async () => {
     vi.useFakeTimers();
-    let now = 10_000;
+    const { bridge } = makeBridge(admitted());
     const published: AgentRunState[] = [];
-    const { bridge } = makeBridge({ delivered: true, delivery_ids: [10] });
     const cache = makeCacheView([
-      {
-        conv: 'c1',
-        agent: 'a1',
-        phase: 'ready',
-        runState: runState({ updatedAt: 9_000 }),
-      },
+      { conv: 'c1', agent: 'a1', phase: 'ready', runState: runState() },
     ]);
-    const { sink } = makeInboxSink();
-    const c = new RuntimeDeliveryCoordinator({
-      bridge,
-      cache,
-      inboxAck: sink,
-      wakeStuckMs: 30_000,
-      now: () => now,
-      callbacks: {
-        publishActivity: state => published.push(state),
-      },
+    const c = makeCoordinator(bridge, cache, {
+      deliveryWatchdogMs: 1_000,
+      now: () => 5_000,
+      callbacks: { publishActivity: s => published.push(s) },
     });
 
-    await c.submitLiveDelivery('c1', 'a1', req({ inboxId: 10, driver: DRIVER_GATED }));
-    c.clearWakeWatchdog('c1', 'a1', 'timeout');
-    now = 40_000;
-    vi.advanceTimersByTime(30_000);
+    await c.submitLiveDelivery('c1', 'a1', req({ driver: DRIVER_DIRECT }));
+    expect(published).toHaveLength(0);
+
+    vi.advanceTimersByTime(1_000);
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({ status: 'thinking' });
+  });
+
+  it('is cancelled by an incoming parsed event', async () => {
+    vi.useFakeTimers();
+    const { bridge } = makeBridge(admitted());
+    const published: AgentRunState[] = [];
+    const cache = makeCacheView([
+      { conv: 'c1', agent: 'a1', phase: 'ready', runState: runState() },
+    ]);
+    const c = makeCoordinator(bridge, cache, {
+      deliveryWatchdogMs: 1_000,
+      now: () => 5_000,
+      callbacks: { publishActivity: s => published.push(s) },
+    });
+
+    await c.submitLiveDelivery('c1', 'a1', req({ driver: DRIVER_DIRECT }));
+    c.onParsedEvent('c1', 'a1', parsed('thinking')); // real signal → cancel
+    vi.advanceTimersByTime(2_000);
 
     expect(published).toHaveLength(0);
-    vi.useRealTimers();
   });
 });

@@ -14,7 +14,7 @@
  *     interfaces; the runtime guard `findForbiddenFields` is a
  *     belt-and-suspenders check the test exercises.
  *  3. End-to-end: dispatch a real intent through `IntentDispatcher`
- *     with a `payload`-bearing param (e.g. `runtime_wake`) and assert
+ *     with a `payload`-bearing param (e.g. `runtime_deliver`) and assert
  *     the log line emitted by `logIntent` does NOT carry the payload
  *     value or the field name. This is the primary "did we leak
  *     stdin bytes through the log layer" test.
@@ -33,6 +33,7 @@ import {
 import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
 import { IntentDispatcher } from '../src/daemon/dispatcher.js';
 import type { SupervisorContract } from '../src/daemon/supervisor-contract.js';
+import { testStartOptions } from './_helpers/runtime-start-options.js';
 
 interface CapturedLine {
   level: 'debug' | 'info' | 'warn' | 'error';
@@ -181,7 +182,7 @@ describe('§3.4 — forbidden field names never reach the log line', () => {
   it('every typed helper emits a line whose top-level keys are forbidden-free', () => {
     const { lines, logger } = capturingLogger();
     logIntent(logger, {
-      intent: 'runtime_wake',
+      intent: 'runtime_deliver',
       request_id: 'r1',
       status: 'received',
       conversationId: 'c1',
@@ -222,7 +223,7 @@ describe('§3.4 — forbidden field names never reach the log line', () => {
 });
 
 describe('§3.4 — IntentDispatcher payload redaction', () => {
-  /** Stub supervisor that resolves wake successfully so the dispatch
+  /** Stub supervisor that resolves deliver successfully so the dispatch
    *  exercises the full received → ok path. */
   const stubSupervisor: SupervisorContract = {
     agentMessageSend: async () => ({
@@ -238,26 +239,28 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
     agentStreamObserved: async () => ({ ok: true }),
     start: async () => ({ started: true, pid: 1, started_at: 0 }),
     stop: async () => ({ mode: 'hard', stopped: true, exit_code: 0 }),
-    wake: async params => ({ delivered: true, delivery_ids: params.delivery_ids }),
+    deliver: async () => ({ disposition: 'admitted', pid: 1, started_at: 0 }),
     status: async () => ({ runtimes: [] }),
     clearSession: async () => ({ cleared: true }),
     stopAll: async () => ({ stopped_count: 0 }),
     closeActivityLog: async () => ({ flushed: true }),
     pauseOutput: async () => ({ paused: true }),
     resumeOutput: async () => ({ resumed: true }),
+    cleanupDeferredForOwner: () => {},
   };
 
-  it('runtime_wake dispatch logs received + ok lines that omit `text` (Option A v2)', async () => {
+  it('runtime_deliver dispatch logs received + ok lines that omit `text` (Option A v2)', async () => {
     const { lines, logger } = capturingLogger();
     const d = new IntentDispatcher({ logger, supervisor: stubSupervisor });
     const SECRET_TEXT = 'VERY-CONFIDENTIAL-USER-INPUT-XYZ';
-    await d.dispatch('req-1', 'runtime_wake', {
+    await d.dispatch('req-1', 'runtime_deliver', {
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
       text: SECRET_TEXT,
-    });
+      spawn_options: testStartOptions(),
+    }, { owner: 'test-owner' });
     // §3.4: NO log line may carry the text value or the field name.
     // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): `text` replaces the old
     // pre-encoded `payload`; `FORBIDDEN_LOG_FIELDS` covers both.
@@ -274,7 +277,7 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
     expect(ok).toHaveLength(1);
     expect(ok[0]!.obj).toMatchObject({
       kind: 'intent',
-      intent: 'runtime_wake',
+      intent: 'runtime_deliver',
       request_id: 'req-1',
       status: 'ok',
       conversationId: 'c1',
@@ -286,13 +289,14 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
   it('invalid_params dispatch still emits an `error` log line without text leakage', async () => {
     const { lines, logger } = capturingLogger();
     const d = new IntentDispatcher({ logger, supervisor: stubSupervisor });
-    // Pass a malformed wake — missing delivery_ids → invalid_params.
-    await d.dispatch('req-2', 'runtime_wake', {
+    // Pass a malformed deliver — missing delivery_ids → invalid_params.
+    await d.dispatch('req-2', 'runtime_deliver', {
       conversation_id: 'c1',
       agent_id: 'a1',
       kind: 'message',
       text: 'LEAK-ATTEMPT',
-    });
+      spawn_options: testStartOptions(),
+    }, { owner: 'test-owner' });
     for (const line of lines) {
       const flat = JSON.stringify(line.obj);
       expect(flat).not.toContain('LEAK-ATTEMPT');
@@ -302,7 +306,7 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
     const errLine = lines.find(l => (l.obj as { status?: string }).status === 'error');
     expect(errLine?.obj).toMatchObject({
       kind: 'intent',
-      intent: 'runtime_wake',
+      intent: 'runtime_deliver',
       status: 'error',
       error_code: 'invalid_params',
     });
@@ -312,13 +316,14 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
     const { lines, logger } = capturingLogger();
     const d = new IntentDispatcher({ logger, supervisor: stubSupervisor });
     d.markShuttingDown();
-    await d.dispatch('req-3', 'runtime_wake', {
+    await d.dispatch('req-3', 'runtime_deliver', {
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
       text: 'POST-SHUTDOWN-LEAK',
-    });
+      spawn_options: testStartOptions(),
+    }, { owner: 'test-owner' });
     for (const line of lines) {
       const flat = JSON.stringify(line.obj);
       expect(flat).not.toContain('POST-SHUTDOWN-LEAK');

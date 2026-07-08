@@ -197,7 +197,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     // Note: `conversation_agents.pid` is NOT populated by
     // `sessionInit()` in the current daemon wiring (see
     // `status-projector.ts:120-133`). pid is only ever written as
-    // `NULL` on exit / init-retry / wake-failure projections. So
+    // `NULL` on exit / init-retry / delivery-failure projections. So
     // we don't assert pid pre-stop; the post-stop `pid IS NULL`
     // assertion below is a coupling check that the runtimeExit
     // projection executed the explicit `pid: null` write (the

@@ -43,6 +43,7 @@ import {
 } from '../protocol.js';
 import type { IntentDispatcher } from './dispatcher.js';
 import type { DaemonLogger } from './logger.js';
+import { resolveDeliveryOwner } from './supervisor-contract.js';
 import {
   OutputBackpressure,
   type OutputBackpressureOptions,
@@ -65,6 +66,15 @@ export class DaemonServer {
   private readonly logger: DaemonLogger;
   private readonly server: Server;
   private readonly liveSockets = new Set<Socket>();
+  /**
+   * One delivery-owner token per accepted control connection (#task:1417
+   * Stage 3, §11.4.1). Minted on accept, threaded into every dispatched
+   * command's {@link DeliveryOwnerContext}, and handed to the dispatcher's
+   * owner-scoped deferred cleanup on close. Non-wire / dispatcher-injected
+   * so a peer cannot spoof another connection's owner.
+   */
+  private readonly socketOwners = new WeakMap<Socket, string>();
+  private ownerSeq = 0;
   private readonly backpressure: OutputBackpressure;
 
   constructor(opts: DaemonServerOptions) {
@@ -182,6 +192,10 @@ export class DaemonServer {
 
   private handleConnection(socket: Socket): void {
     this.liveSockets.add(socket);
+    // Mint this connection's delivery-owner token (#task:1417 Stage 3,
+    // §11.4.1); threaded into every dispatch ctx and used to scope
+    // deferred-queue cleanup on close.
+    this.socketOwners.set(socket, `control:${++this.ownerSeq}`);
     let buffer = '';
     socket.setEncoding('utf8');
     socket.on('data', chunk => {
@@ -208,6 +222,15 @@ export class DaemonServer {
     socket.on('close', () => {
       this.liveSockets.delete(socket);
       this.backpressure.forgetSocket(socket);
+      // Owner-scoped deferred cleanup (#task:1417 Stage 3, §11.4.1): drop
+      // only this connection's queued deliveries; the backend rolls the
+      // matching in-flight rows back to pending so a reconnect replay
+      // re-drives them, duplicate-free.
+      const owner = this.socketOwners.get(socket);
+      if (owner) {
+        this.socketOwners.delete(socket);
+        this.dispatcher.cleanupDeferredForOwner(owner);
+      }
     });
     // Emit a `ready`-shaped event per connection so a fresh client
     // can confirm protocol version without a round trip. The spawn
@@ -276,10 +299,36 @@ export class DaemonServer {
       return;
     }
     const request = validated.data;
+    // Thread this connection's owner into the delivery context so a
+    // `deferred` disposition is attributed to the right connection and
+    // cleaned up if it drops (#task:1417 Stage 3, §11.4.1). Owner is minted
+    // at accept before any command is read; a missing owner is a broken-
+    // connection invariant, not a normal case. `owner` is a load-bearing
+    // custody key, not logging metadata — dispatching under a guessed
+    // sentinel would enqueue a `deferred` entry this socket's close cleanup
+    // can never reclaim, orphaning the DB row in-flight forever. Fail loud:
+    // drop the connection rather than guess an owner.
+    let owner: string;
+    try {
+      owner = resolveDeliveryOwner(this.socketOwners.get(socket), 'control');
+    } catch (err) {
+      this.logger.error(
+        {
+          kind: 'connection',
+          action: 'owner_missing',
+          id: request.id,
+          err: (err as Error).message,
+        },
+        'control command with no minted delivery owner; closing connection',
+      );
+      socket.destroy();
+      return;
+    }
     const response: ResponseFrame = await this.dispatcher.dispatch(
       request.id,
       request.intent,
       request.params,
+      { owner },
     );
     try {
       socket.write(encodeFrame(response));

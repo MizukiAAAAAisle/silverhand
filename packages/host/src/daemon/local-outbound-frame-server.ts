@@ -56,6 +56,7 @@ import {
   toOutboundCommandResponse,
   toOutboundEventFrame,
   type OutboundCommandDispatcher,
+  type OwnerCleanup,
 } from './outbound-frame-mapping.js';
 import {
   DEFAULT_OUTBOUND_WRITE_BUFFER,
@@ -64,6 +65,7 @@ import {
   unixSocketFrameWriter,
   type OutboundWriteBufferOptions,
 } from './outbound-write-buffer.js';
+import { resolveDeliveryOwner } from './supervisor-contract.js';
 
 /**
  * Default local outbound socket path: `~/.silverhand/run/daemon-outbound.sock`
@@ -84,6 +86,15 @@ export interface LocalOutboundFrameServerOptions {
    */
   dispatchCommand: OutboundCommandDispatcher;
   logger: DaemonLogger;
+  /**
+   * Owner-scoped deferred-queue cleanup (#task:1417 Stage 3, §11.4.1).
+   * Invoked with this connection's minted owner token on socket close so
+   * the daemon discards ONLY this connection's queued deferred deliveries
+   * (the backend rolls the matching in-flight rows back to pending;
+   * reconnect replay re-drives them, duplicate-free because nothing was
+   * written). One owner per accepted socket — see {@link socketOwners}.
+   */
+  cleanupDeferredForOwner: OwnerCleanup;
   /**
    * D5.a-3 P1-1 — connection-scoped handshake. When set, the server
    * writes ONE `ready` event to each NEW connection immediately on
@@ -111,6 +122,7 @@ export interface LocalOutboundFrameServerOptions {
 export class LocalOutboundFrameServer {
   private readonly socketPath: string;
   private readonly dispatchCommand: OutboundCommandDispatcher;
+  private readonly cleanupDeferredForOwner: OwnerCleanup;
   private readonly logger: DaemonLogger;
   private readonly readyEvent?: () => Extract<EventFrame, { event: 'ready' }>;
   private readonly server: Server;
@@ -122,11 +134,22 @@ export class LocalOutboundFrameServer {
    * accounting, forgotten on close.
    */
   private readonly writeBuffers = new WeakMap<Socket, OutboundWriteBuffer>();
+  /**
+   * One delivery-owner token per accepted connection (#task:1417 Stage 3,
+   * §11.4.1). Minted on accept, threaded into every dispatched command's
+   * {@link DeliveryOwnerContext}, and handed to
+   * {@link cleanupDeferredForOwner} on close so the daemon discards only
+   * this connection's queued deferred deliveries. Non-wire and
+   * dispatcher-injected — a peer cannot spoof another connection's owner.
+   */
+  private readonly socketOwners = new WeakMap<Socket, string>();
+  private ownerSeq = 0;
   private readonly writeBufferOptions: OutboundWriteBufferOptions;
 
   constructor(opts: LocalOutboundFrameServerOptions) {
     this.socketPath = opts.socketPath;
     this.dispatchCommand = opts.dispatchCommand;
+    this.cleanupDeferredForOwner = opts.cleanupDeferredForOwner;
     this.logger = opts.logger;
     this.readyEvent = opts.readyEvent;
     this.writeBufferOptions = {
@@ -264,6 +287,11 @@ export class LocalOutboundFrameServer {
 
   private handleConnection(socket: Socket): void {
     this.liveSockets.add(socket);
+    // Mint this connection's delivery-owner token (#task:1417 Stage 3,
+    // §11.4.1). Threaded into every dispatched command's ctx and used to
+    // scope deferred-queue cleanup on close.
+    const owner = `local:${++this.ownerSeq}`;
+    this.socketOwners.set(socket, owner);
     this.writeBuffers.set(
       socket,
       new OutboundWriteBuffer(this.writeBufferOptions, 'local_outbound'),
@@ -317,6 +345,15 @@ export class LocalOutboundFrameServer {
       // Forget per-socket buffer state on close (the WeakMap entry would be
       // GC'd anyway once the socket is unreferenced; delete eagerly).
       this.writeBuffers.delete(socket);
+      // Owner-scoped deferred cleanup (#task:1417 Stage 3, §11.4.1): the
+      // daemon discards only THIS connection's queued deliveries; the
+      // backend rolls the matching in-flight rows back to pending so a
+      // reconnect replay re-drives them, duplicate-free.
+      const owner = this.socketOwners.get(socket);
+      if (owner) {
+        this.socketOwners.delete(socket);
+        this.cleanupDeferredForOwner(owner);
+      }
     });
   }
 
@@ -397,7 +434,19 @@ export class LocalOutboundFrameServer {
     );
     let response: OutboundDaemonToServerCommandResponseFrame;
     try {
-      const dispatched = await this.dispatchCommand(command);
+      // Thread this connection's owner into the delivery context so a
+      // `deferred` disposition is attributed to the right connection and
+      // cleaned up if it drops (#task:1417 Stage 3, §11.4.1). Owner is
+      // minted at accept before any command is read; a missing owner is a
+      // broken-connection invariant, so `resolveDeliveryOwner` throws
+      // rather than guess a sentinel that close cleanup could never
+      // reclaim — the catch below maps it to internal_error and
+      // dispatchCommand is never called under a bad owner.
+      const owner = resolveDeliveryOwner(
+        this.socketOwners.get(socket),
+        'local_outbound',
+      );
+      const dispatched = await this.dispatchCommand(command, { owner });
       const mapped = toOutboundCommandResponse(command, dispatched);
       response = mapped.frame;
       if (mapped.drift) {

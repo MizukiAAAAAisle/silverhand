@@ -379,52 +379,43 @@ describe('HostClient — runtime_* typed helpers (PR-2 step 1)', () => {
       id: peer.received[0]!.id,
       result: { started: true, pid: 4242, started_at: 1_700_000_000_000 },
     });
-    await expect(promise).resolves.toMatchObject({ started: true, pid: 4242, started_at: 1_700_000_000_000 });
+    await expect(promise).resolves.toMatchObject({
+      started: true,
+      pid: 4242,
+      started_at: 1_700_000_000_000,
+    });
     await client.close();
   });
 
-  it('runtimeWake sends batch delivery_ids and returns delivered=true result', async () => {
+  it('runtimeDeliver sends runtime_deliver with params and resolves on the disposition result', async () => {
     const { transport, peer } = createFakeTransportPair();
     const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
     await client.connect();
-    const promise = client.runtimeWake({
+    const promise = client.runtimeDeliver({
       conversation_id: 'conv1',
       agent_id: 'agent1',
-      delivery_ids: [10, 11, 12],
+      delivery_ids: [101, 102],
       kind: 'message',
-      text: 'hi',
+      text: 'hello',
+      spawn_options: testStartOptions(),
     });
     await new Promise(setImmediate);
-    expect(peer.received[0]!.intent).toBe('runtime_wake');
-    expect((peer.received[0]!.params as { delivery_ids: number[] }).delivery_ids).toEqual([10, 11, 12]);
-    peer.send({
-      id: peer.received[0]!.id,
-      result: { delivered: true, delivery_ids: [10, 11, 12] },
-    });
-    await expect(promise).resolves.toEqual({ delivered: true, delivery_ids: [10, 11, 12] });
-    await client.close();
-  });
-
-  it('runtimeWake delivered=false branch carries a reason', async () => {
-    const { transport, peer } = createFakeTransportPair();
-    const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
-    await client.connect();
-    const promise = client.runtimeWake({
+    expect(peer.received).toHaveLength(1);
+    expect(peer.received[0]!.intent).toBe('runtime_deliver');
+    expect(peer.received[0]!.params).toMatchObject({
       conversation_id: 'conv1',
       agent_id: 'agent1',
-      delivery_ids: [42],
+      delivery_ids: [101, 102],
       kind: 'message',
-      text: 'stub',
     });
-    await new Promise(setImmediate);
     peer.send({
       id: peer.received[0]!.id,
-      result: { delivered: false, delivery_ids: [42], reason: 'not_running' },
+      result: { disposition: 'admitted', pid: 4242, started_at: 1_700_000_000_000 },
     });
     await expect(promise).resolves.toEqual({
-      delivered: false,
-      delivery_ids: [42],
-      reason: 'not_running',
+      disposition: 'admitted',
+      pid: 4242,
+      started_at: 1_700_000_000_000,
     });
     await client.close();
   });

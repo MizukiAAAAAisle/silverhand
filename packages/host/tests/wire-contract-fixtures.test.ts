@@ -13,8 +13,8 @@ import {
   RuntimeStartResultSchema,
   RuntimeStopParamsSchema,
   RuntimeStopResultSchema,
-  RuntimeWakeReasonSchema,
-  RuntimeWakeResultSchema,
+  RuntimeDeliverResultSchema,
+  RuntimeDeliverRefusedResultSchema,
   type IntentName,
 } from '../src/protocol.js';
 import {
@@ -523,61 +523,66 @@ describe('wire contract — fixture catalogue invariants', () => {
     ).toEqual([]);
   });
 
-  it('runtime_wake.result covers every `delivered` arm (true/false)', () => {
-    const arms = RuntimeWakeResultSchema.options.map((o) =>
-      String(literalValue(o.shape.delivered)),
-    );
-    const missing = arms.filter(
-      (arm) =>
+  it('runtime_deliver.result covers every `disposition` arm (spawning/admitted/refused)', () => {
+    // #task:1417 Stage 2c — `runtime_deliver` is the sole delivery command
+    // (absorbed the retired `runtime_wake` coverage). The outer result is a
+    // z.union([spawning, admitted, refusedUnion]); a new top-level
+    // disposition must land a fixture or this fails.
+    const dispositions = ['spawning', 'admitted', 'refused'];
+    const missing = dispositions.filter(
+      (disposition) =>
         !wireFixtures.some((f) => {
           if (
             f.kind.kind !== 'response_success' ||
-            f.kind.intent !== 'runtime_wake'
+            f.kind.intent !== 'runtime_deliver'
           )
             return false;
           const parsed = JSON.parse(f.frame) as {
-            result?: { delivered?: boolean };
+            result?: { disposition?: string };
           };
-          return String(parsed.result?.delivered) === arm;
+          return parsed.result?.disposition === disposition;
         }),
     );
     expect(
       missing,
-      `runtime_wake delivered arms missing fixture: ${missing.join(', ')}`,
+      `runtime_deliver disposition arms missing fixture: ${missing.join(', ')}`,
     ).toEqual([]);
   });
 
-  it('runtime_wake.result covers every `reason` enum slot (delivered:false)', () => {
-    // Derived from RuntimeWakeReasonSchema directly — single source of
-    // truth. Adding a new reason in protocol.ts fails this test until
-    // a fixture lands (Cindy: this was the most-likely silent-drift axis).
-    const reasons = RuntimeWakeReasonSchema.options;
+  it('runtime_deliver.result covers every refused `reason` enum slot', () => {
+    // Derived from RuntimeDeliverRefusedResultSchema directly — single
+    // source of truth. Adding a new refuse reason in protocol.ts fails this
+    // test until a fixture lands (this is the most-likely silent-drift axis,
+    // inherited from the retired `runtime_wake` reason-coverage guard).
+    const reasons = RuntimeDeliverRefusedResultSchema.options.map((o) =>
+      String(literalValue(o.shape.reason)),
+    );
     const missing = reasons.filter(
       (reason) =>
         !wireFixtures.some((f) => {
           if (
             f.kind.kind !== 'response_success' ||
-            f.kind.intent !== 'runtime_wake'
+            f.kind.intent !== 'runtime_deliver'
           )
             return false;
           const parsed = JSON.parse(f.frame) as {
-            result?: { delivered?: boolean; reason?: string };
+            result?: { disposition?: string; reason?: string };
           };
           return (
-            parsed.result?.delivered === false &&
+            parsed.result?.disposition === 'refused' &&
             parsed.result?.reason === reason
           );
         }),
     );
     expect(
       missing,
-      `runtime_wake reasons missing fixture: ${missing.join(', ')}`,
+      `runtime_deliver refused reasons missing fixture: ${missing.join(', ')}`,
     ).toEqual([]);
   });
 
   // ── host_outbound_reload arm coverage (D3.c Commit 2) ────────────
   //
-  // Mirrors the runtime_wake reason-derived test: arms / reasons are
+  // Mirrors the runtime_deliver reason-derived test: arms / reasons are
   // pulled directly from the protocol schema so a new arm or failure
   // reason added in protocol.ts immediately fails this test until a
   // fixture lands. Cindy's Commit 2 review explicitly named

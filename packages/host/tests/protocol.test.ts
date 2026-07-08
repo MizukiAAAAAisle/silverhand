@@ -12,10 +12,10 @@ import {
   HelloResultSchema,
   RuntimeStartParamsSchema,
   RuntimeStartResultSchema,
+  RuntimeDeliverParamsSchema,
+  RuntimeDeliverResultSchema,
   RuntimeStopParamsSchema,
   RuntimeStopResultSchema,
-  RuntimeWakeParamsSchema,
-  RuntimeWakeResultSchema,
   RuntimeStartErrorCodeSchema,
   encodeFrame,
   intentSchemas,
@@ -203,7 +203,7 @@ describe('protocol — runtime_* registry', () => {
     const expected = [
       'runtime_start',
       'runtime_stop',
-      'runtime_wake',
+      'runtime_deliver',
       'runtime_status',
       'runtime_clear_session',
       'runtime_stop_all',
@@ -224,8 +224,11 @@ describe('protocol — runtime_* registry', () => {
     );
   });
 
-  it('runtime_start accepts optional startup_delivery batch', () => {
-    const ok = RuntimeStartParamsSchema.safeParse({
+  it('runtime_start is pure lifecycle — no startup_delivery batch (Stage 2c)', () => {
+    // #task:1417 Stage 2c: `runtime_start` carries no delivery batch;
+    // delivery is `runtime_deliver`-only. The strict schema rejects a
+    // stray `startup_delivery`.
+    const rejected = RuntimeStartParamsSchema.safeParse({
       conversation_id: 'c1',
       agent_id: 'a1',
       options: testStartOptions(),
@@ -234,7 +237,7 @@ describe('protocol — runtime_* registry', () => {
         text: 'hello',
       },
     });
-    expect(ok.success).toBe(true);
+    expect(rejected.success).toBe(false);
 
     const okNoDelivery = RuntimeStartParamsSchema.safeParse({
       conversation_id: 'c1',
@@ -332,6 +335,8 @@ describe('protocol — runtime_* registry', () => {
   });
 
   it('runtime_start rejects empty startup_delivery.delivery_ids', () => {
+    // #task:1417 Stage 2c: `runtime_start` is pure lifecycle — a
+    // `startup_delivery` key is rejected outright regardless of shape.
     const r = RuntimeStartParamsSchema.safeParse({
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -339,125 +344,6 @@ describe('protocol — runtime_* registry', () => {
       startup_delivery: { delivery_ids: [], text: 'x' },
     });
     expect(r.success).toBe(false);
-  });
-
-  it('runtime_wake is batch-native — delivery_ids must be non-empty', () => {
-    const ok = RuntimeWakeParamsSchema.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      delivery_ids: [42],
-      kind: 'message',
-      text: 'hi',
-    });
-    expect(ok.success).toBe(true);
-
-    const empty = RuntimeWakeParamsSchema.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      delivery_ids: [],
-      kind: 'message',
-      text: 'hi',
-    });
-    expect(empty.success).toBe(false);
-  });
-
-  it('runtime_wake REJECTS missing text and empty text (Option A v2 — Cindy `UMGu36zoTDVuKWXi` + `wYjG20JdGjLpwq8K`)', () => {
-    // The step-0 contract says delivery_ids MUST NOT reach the daemon
-    // without accompanying message text — daemon encodes via its
-    // in-process driver instance. `.min(1)` rejects both missing and
-    // empty-string, so every backend call site must yield non-empty
-    // text or fail loudly at schema validation rather than at stdin
-    // encode (Cindy `wYjG20JdGjLpwq8K`).
-    const missing = RuntimeWakeParamsSchema.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      delivery_ids: [1],
-      kind: 'message',
-    });
-    expect(missing.success).toBe(false);
-
-    const empty = RuntimeWakeParamsSchema.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      delivery_ids: [1],
-      kind: 'message',
-      text: '',
-    });
-    expect(empty.success).toBe(false);
-
-    // Any non-empty string is valid; the daemon owns interpretation
-    // (driver-side `encodeStdinMessage(text, cliSessionId)`).
-    const ok = RuntimeWakeParamsSchema.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      delivery_ids: [1],
-      kind: 'message',
-      text: ' ',
-    });
-    expect(ok.success).toBe(true);
-  });
-
-  it('runtime_start.startup_delivery REJECTS missing text and empty text (Option A v2)', () => {
-    const missing = RuntimeStartParamsSchema.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      options: testStartOptions(),
-      startup_delivery: { delivery_ids: [101] },
-    });
-    expect(missing.success).toBe(false);
-
-    const empty = RuntimeStartParamsSchema.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      options: testStartOptions(),
-      startup_delivery: { delivery_ids: [101], text: '' },
-    });
-    expect(empty.success).toBe(false);
-  });
-
-  it('runtime_wake result is all-or-nothing — success carries delivery_ids back', () => {
-    const success = RuntimeWakeResultSchema.safeParse({
-      delivered: true,
-      delivery_ids: [1, 2, 3],
-    });
-    expect(success.success).toBe(true);
-
-    const failure = RuntimeWakeResultSchema.safeParse({
-      delivered: false,
-      reason: 'startup_pending',
-      delivery_ids: [1, 2, 3],
-    });
-    expect(failure.success).toBe(true);
-
-    // partial-mark would be a contract violation: success without
-    // delivery_ids should not parse.
-    const partial = RuntimeWakeResultSchema.safeParse({ delivered: true });
-    expect(partial.success).toBe(false);
-
-    // Failure must carry a typed reason.
-    const noReason = RuntimeWakeResultSchema.safeParse({
-      delivered: false,
-      delivery_ids: [1],
-    });
-    expect(noReason.success).toBe(false);
-  });
-
-  it('runtime_wake reason enum covers the §3.2.1 state-machine paths', () => {
-    const reasons = [
-      'not_running',
-      'not_initialized',
-      'startup_pending',
-      'draining',
-      'driver_refused',
-    ] as const;
-    for (const reason of reasons) {
-      const r = RuntimeWakeResultSchema.safeParse({
-        delivered: false,
-        reason,
-        delivery_ids: [1],
-      });
-      expect(r.success).toBe(true);
-    }
   });
 });
 
@@ -560,14 +446,14 @@ describe('protocol — runtime_* events', () => {
         ts: 1,
       },
       {
-        event: 'runtime_startup_delivery_consumed',
+        event: 'runtime_delivery_consumed',
         conversation_id: 'c1',
         agent_id: 'a1',
         delivery_ids: [1, 2],
         ts: 1,
       },
       {
-        event: 'runtime_startup_delivery_failed',
+        event: 'runtime_delivery_failed',
         conversation_id: 'c1',
         agent_id: 'a1',
         delivery_ids: [1],
@@ -599,9 +485,9 @@ describe('protocol — runtime_* events', () => {
     }
   });
 
-  it('rejects runtime_startup_delivery_failed with unknown reason', () => {
+  it('rejects runtime_delivery_failed with unknown reason', () => {
     const r = EventFrameSchema.safeParse({
-      event: 'runtime_startup_delivery_failed',
+      event: 'runtime_delivery_failed',
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [1],
@@ -928,13 +814,13 @@ describe('protocol — runtime_init lifecycle events (Cindy `vqDWkLFF6pAeIE5t`)'
     expect(r.success).toBe(true);
   });
 
-  it('runtime_startup_delivery_failed stays narrow — no cooldown_until field', () => {
+  it('runtime_delivery_failed stays narrow — no cooldown_until field', () => {
     // Cindy's blocker: init cooldown semantics must NOT be conflated
     // with "this batch of delivery_ids was not consumed". Confirm the
     // delivery-failed event schema does not silently accept cooldown
     // fields it doesn't model.
     const r = EventFrameSchema.safeParse({
-      event: 'runtime_startup_delivery_failed',
+      event: 'runtime_delivery_failed',
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [1],
@@ -1161,32 +1047,40 @@ describe('protocol — runtime_start result discriminated union (Cindy `-pdNvRYO
   // Pre-3c the result was a flat `{pid, started_at, startup_delivery_accepted?}`.
   // 3c added a cooldown-blocked arm so backend can project init cooldown
   // to UI as a business state instead of swallowing it as `internal_error`.
-  // The shape MUST be a `started`-discriminated union so backend's
-  // RuntimeBridge can `switch (res.started)` cleanly.
+  // #task:1417 Stage 2c narrowed the success arm to pure lifecycle
+  // `{started, pid, started_at}` — no `phase`, no `startup_delivery_accepted`
+  // (delivery custody is `runtime_deliver`-only). The shape MUST stay a
+  // `started`-discriminated union so backend's RuntimeBridge can
+  // `switch (res.started)` cleanly.
 
-  it('success arm parses with started:true + pid + started_at + optional startup_delivery_accepted', () => {
+  it('success arm parses with exactly started:true + pid + started_at (pure lifecycle)', () => {
     const r1 = RuntimeStartResultSchema.safeParse({
       started: true,
       pid: 12345,
       started_at: 1_700_000_000_000,
     });
     expect(r1.success).toBe(true);
+  });
 
-    const r2 = RuntimeStartResultSchema.safeParse({
+  it('success arm REJECTS the retired phase / startup_delivery_accepted fields (Stage 2c strict)', () => {
+    // #task:1417 Stage 2c: `runtime_start` is pure lifecycle. The strict
+    // success arm rejects the retired `phase` and `startup_delivery_accepted`
+    // keys outright — they moved to `runtime_deliver`'s disposition.
+    const withPhase = RuntimeStartResultSchema.safeParse({
+      started: true,
+      pid: 12345,
+      started_at: 1_700_000_000_000,
+      phase: 'ready',
+    });
+    expect(withPhase.success).toBe(false);
+
+    const withAccepted = RuntimeStartResultSchema.safeParse({
       started: true,
       pid: 12345,
       started_at: 1_700_000_000_000,
       startup_delivery_accepted: true,
     });
-    expect(r2.success).toBe(true);
-
-    const r3 = RuntimeStartResultSchema.safeParse({
-      started: true,
-      pid: 12345,
-      started_at: 1_700_000_000_000,
-      startup_delivery_accepted: false,
-    });
-    expect(r3.success).toBe(true);
+    expect(withAccepted.success).toBe(false);
   });
 
   it('cooldown arm parses with started:false + reason:init_cooldown + positive cooldown_until', () => {
@@ -1251,6 +1145,157 @@ describe('protocol — runtime_start result discriminated union (Cindy `-pdNvRYO
       cooldown_until: 1_700_000_300_000,
     });
     expect(r.success).toBe(false);
+  });
+});
+
+describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', () => {
+  const spawnOptions = testStartOptions();
+
+  it('params parse with delivery_ids, kind, unencoded text, and spawn_options', () => {
+    const r = RuntimeDeliverParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [1, 2, 3],
+      delivered_up_to_seq: 3,
+      kind: 'message',
+      text: 'hi',
+      spawn_options: spawnOptions,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('params are batch-native — delivery_ids must be non-empty', () => {
+    // Absorbs the retired `runtime_wake` batch-native contract.
+    const empty = RuntimeDeliverParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [],
+      kind: 'message',
+      text: 'hi',
+      spawn_options: spawnOptions,
+    });
+    expect(empty.success).toBe(false);
+  });
+
+  it('params REJECT missing text and empty text (Option A v2 — daemon owns encode)', () => {
+    // Absorbs the retired `runtime_wake` / `runtime_start.startup_delivery`
+    // text contract (Cindy `UMGu36zoTDVuKWXi` + `wYjG20JdGjLpwq8K`):
+    // delivery_ids MUST NOT reach the daemon without non-empty message
+    // text — `.min(1)` rejects both missing and empty-string.
+    const missing = RuntimeDeliverParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [1],
+      kind: 'message',
+      spawn_options: spawnOptions,
+    });
+    expect(missing.success).toBe(false);
+
+    const empty = RuntimeDeliverParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [1],
+      kind: 'message',
+      text: '',
+      spawn_options: spawnOptions,
+    });
+    expect(empty.success).toBe(false);
+
+    // Any non-empty string is valid; the daemon owns interpretation.
+    const ok = RuntimeDeliverParamsSchema.safeParse({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [1],
+      kind: 'message',
+      text: ' ',
+      spawn_options: spawnOptions,
+    });
+    expect(ok.success).toBe(true);
+  });
+
+  it('result: spawning / admitted arms carry pid + started_at', () => {
+    expect(
+      RuntimeDeliverResultSchema.safeParse({
+        disposition: 'spawning',
+        pid: 123,
+        started_at: 1_700_000_000_000,
+      }).success,
+    ).toBe(true);
+    expect(
+      RuntimeDeliverResultSchema.safeParse({
+        disposition: 'admitted',
+        pid: 123,
+        started_at: 1_700_000_000_000,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('result: refused+cooldown REQUIRES a positive cooldown_until (Cindy P1)', () => {
+    // Legal cooldown arm.
+    expect(
+      RuntimeDeliverResultSchema.safeParse({
+        disposition: 'refused',
+        reason: 'cooldown',
+        cooldown_until: 1_700_000_300_000,
+      }).success,
+    ).toBe(true);
+
+    // Illegal #1: cooldown WITHOUT the deadline. The old flat schema with
+    // an optional cooldown_until accepted this; the split arms reject it at
+    // the wire layer instead of leaving a handler to explain the absence.
+    expect(
+      RuntimeDeliverResultSchema.safeParse({
+        disposition: 'refused',
+        reason: 'cooldown',
+      }).success,
+    ).toBe(false);
+
+    // Non-positive cooldown_until is a contract violation.
+    for (const cooldown_until of [0, -1]) {
+      expect(
+        RuntimeDeliverResultSchema.safeParse({
+          disposition: 'refused',
+          reason: 'cooldown',
+          cooldown_until,
+        }).success,
+        `cooldown_until=${cooldown_until}`,
+      ).toBe(false);
+    }
+  });
+
+  it('result: refused+startup_pending / draining REJECT a leaked cooldown_until (Cindy P1)', () => {
+    // Legal non-cooldown refusals — no deadline field.
+    expect(
+      RuntimeDeliverResultSchema.safeParse({
+        disposition: 'refused',
+        reason: 'startup_pending',
+      }).success,
+    ).toBe(true);
+    expect(
+      RuntimeDeliverResultSchema.safeParse({
+        disposition: 'refused',
+        reason: 'draining',
+      }).success,
+    ).toBe(true);
+
+    // Illegal #2: cooldown_until leaking onto a non-cooldown reason. The
+    // flat schema accepted this cross-reason leak; the strict per-reason
+    // arms reject it.
+    expect(
+      RuntimeDeliverResultSchema.safeParse({
+        disposition: 'refused',
+        reason: 'startup_pending',
+        cooldown_until: 1_700_000_300_000,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('result: rejects `deferred` disposition (Stage 3, not defined in Stage 2)', () => {
+    expect(
+      RuntimeDeliverResultSchema.safeParse({
+        disposition: 'deferred',
+      }).success,
+    ).toBe(false);
   });
 });
 

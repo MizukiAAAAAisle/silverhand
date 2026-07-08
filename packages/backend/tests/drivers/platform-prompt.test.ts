@@ -330,7 +330,7 @@ describe('buildPlatformPrompt', () => {
     //   3. Follow/unfollow controls inbox delivery. Channel creation policy
     //      lives under Channels, not in this section.
     //
-    // We deliberately do NOT teach runtime delivery semantics (wake /
+    // We deliberately do NOT teach runtime delivery semantics (delivery /
     // auto-start). The agent default-assumes "the message reaches the
     // target" and need not reason about runtime state.
     const text = prompt();

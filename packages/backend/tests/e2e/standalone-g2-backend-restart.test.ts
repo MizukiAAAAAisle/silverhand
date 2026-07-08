@@ -285,7 +285,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     //
     // The original runtime is still spawned (the daemon never
     // restarted); the supervisor sees the original handle and
-    // wakes that runtime rather than respawning. To prove the
+    // delivers to that runtime rather than respawning. To prove the
     // post-restart backend can ALSO dispatch a brand-new spawn,
     // first stop the existing runtime, then seed a fresh inbox
     // message + start. The new session_init projection lands in

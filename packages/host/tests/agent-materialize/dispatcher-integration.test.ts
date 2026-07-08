@@ -66,7 +66,7 @@ describe('IntentDispatcher.agent_materialize slot', () => {
       },
     });
 
-    const r = await d.dispatch('req-am-1', 'agent_materialize', validParams());
+    const r = await d.dispatch('req-am-1', 'agent_materialize', validParams(), { owner: 'test-owner' });
     expect(r).toEqual({ id: 'req-am-1', result: handlerResult });
     expect(observed).toEqual(validParams());
   });
@@ -82,7 +82,7 @@ describe('IntentDispatcher.agent_materialize slot', () => {
       },
     });
 
-    const r = await d.dispatch('req-am-collision', 'agent_materialize', validParams());
+    const r = await d.dispatch('req-am-collision', 'agent_materialize', validParams(), { owner: 'test-owner' });
     expect('error' in r).toBe(true);
     if (!('error' in r)) return;
     // Typed code surfaces verbatim — NOT 'internal_error'.
@@ -108,7 +108,7 @@ describe('IntentDispatcher.agent_materialize slot', () => {
         throw new AgentMaterializeError(code, `seeded ${code}`);
       },
     });
-    const r = await d.dispatch('req-am', 'agent_materialize', validParams());
+    const r = await d.dispatch('req-am', 'agent_materialize', validParams(), { owner: 'test-owner' });
     expect('error' in r).toBe(true);
     if (!('error' in r)) return;
     expect((r.error as { code: string }).code).toBe(code);
@@ -127,7 +127,7 @@ describe('IntentDispatcher.agent_materialize slot', () => {
         throw err;
       },
     });
-    const r = await d.dispatch('req-am-bare', 'agent_materialize', validParams());
+    const r = await d.dispatch('req-am-bare', 'agent_materialize', validParams(), { owner: 'test-owner' });
     expect('error' in r).toBe(true);
     if (!('error' in r)) return;
     expect(r.error.code).toBe('internal_error');
@@ -153,7 +153,7 @@ describe('IntentDispatcher.agent_materialize slot', () => {
       agent_id: 'aid_bad',
       name: 'X',
       runtime: 'claude',
-    });
+    }, { owner: 'test-owner' });
     expect('error' in r).toBe(true);
     if (!('error' in r)) return;
     expect(r.error.code).toBe('invalid_params');
@@ -166,7 +166,7 @@ describe('IntentDispatcher.agent_materialize slot', () => {
     // crash. This is what tests of the PR-1 protocol-only surface
     // see if they accidentally dispatch the intent.
     const d = new IntentDispatcher({ logger: silentLogger() });
-    const r = await d.dispatch('req-am-unwired', 'agent_materialize', validParams());
+    const r = await d.dispatch('req-am-unwired', 'agent_materialize', validParams(), { owner: 'test-owner' });
     expect('error' in r).toBe(true);
     if (!('error' in r)) return;
     expect(r.error.code).toBe('internal_error');

@@ -28,12 +28,13 @@
 import { describe, expect, it } from 'vitest';
 import { bootG2Harness, makeRecordingSink } from './g2-harness.js';
 import type { OutboundDaemonToServerEventFrame } from '@silverhand/host';
+import { OUTBOUND_PROTOCOL_VERSION } from '@silverhand/host';
 
 const fakeReadyFrame: OutboundDaemonToServerEventFrame = {
   direction: 'daemon_to_server',
   type: 'event',
   kind: 'ready',
-  protocol_version: 2,
+  protocol_version: OUTBOUND_PROTOCOL_VERSION,
   daemon_version: 'test',
   daemon_id: 'local',
   instance_id: '__harness_pin__',

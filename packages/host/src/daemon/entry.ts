@@ -204,7 +204,7 @@ async function main(): Promise<void> {
       installSignals: true,
       writeStdoutHandshake: true,
       alsoStderr: parsed.alsoStderr,
-      // Production wire: Supervisor owns spawn/wake/stop and the
+      // Production wire: Supervisor owns spawn/deliver/stop and the
       // per-(conv, agent) AgentRunState lifecycle. Without this factory
       // `runDaemon` boots a PR-1 surface (ping/status/echo) only, and
       // every `runtime_*` intent returns `internal_error: runtime_*

@@ -38,6 +38,7 @@ import {
   toOutboundEventFrame,
   type OutboundCommandDispatcher,
   type OutboundDispatcherResponse,
+  type OwnerCleanup,
 } from './outbound-frame-mapping.js';
 import {
   DEFAULT_OUTBOUND_WRITE_BUFFER,
@@ -49,6 +50,7 @@ import {
   type SendResult,
 } from './outbound-write-buffer.js';
 import type { DaemonLogger } from './logger.js';
+import { resolveDeliveryOwner } from './supervisor-contract.js';
 
 export interface OutboundDaemonClientOptions {
   /** Atomic daemon-config path used by app-managed desktop installs. */
@@ -64,6 +66,14 @@ export interface OutboundDaemonClientOptions {
   heartbeat?: Partial<HeartbeatOptions>;
   buffer?: Partial<OutboundWriteBufferOptions>;
   dispatchCommand?: OutboundCommandDispatcher;
+  /**
+   * Owner-scoped deferred-queue cleanup (#task:1417 Stage 3, §11.4.1).
+   * Invoked with a WS-generation owner token when that connection closes
+   * so the daemon discards only that connection's queued deferred
+   * deliveries; the backend rolls the matching in-flight rows back to
+   * pending and a reconnect replay re-drives them, duplicate-free.
+   */
+  cleanupDeferredForOwner?: OwnerCleanup;
   writeHostConfig?: HostConfigWriter;
   random?: () => number;
   now?: () => number;
@@ -134,6 +144,16 @@ export class OutboundDaemonClient {
   private reconnectAttempt = 0;
   private started = false;
   private stopping = false;
+  /**
+   * Delivery-owner token for the CURRENT WS generation (#task:1417 Stage
+   * 3, §11.4.1). Minted fresh on each `ws.open`, threaded into every
+   * dispatched command's ctx, and passed to
+   * {@link OutboundDaemonClientOptions.cleanupDeferredForOwner} on that
+   * generation's close. A reconnect gets a NEW owner, so deferred entries
+   * never straddle connection generations.
+   */
+  private currentOwner: string | null = null;
+  private ownerSeq = 0;
 
   constructor(private readonly opts: OutboundDaemonClientOptions) {
     this.configPollMs = opts.configPollMs ?? DEFAULT_CONFIG_POLL_MS;
@@ -304,6 +324,11 @@ export class OutboundDaemonClient {
     }
 
     this.clearReconnectTimer();
+    // Mint this WS generation's delivery-owner token (#task:1417 Stage 3,
+    // §11.4.1). Captured by the open/close closures below so a deferred
+    // delivery is attributed to this generation and cleaned up when it
+    // closes.
+    const owner = `outbound:${++this.ownerSeq}`;
     const ws = new WebSocket(config.wsUrl, {
       headers: {
         Authorization: `Bearer ${config.raw.host_token}`,
@@ -322,6 +347,7 @@ export class OutboundDaemonClient {
 
     ws.on('open', () => {
       this.reconnectAttempt = 0;
+      this.currentOwner = owner;
       this.writeBuffer.reset();
       this.opts.logger.info(
         {
@@ -350,6 +376,14 @@ export class OutboundDaemonClient {
     ws.on('close', (code, reason) => {
       this.clearHeartbeatTimers();
       this.writeBuffer.reset();
+      // Owner-scoped deferred cleanup (#task:1417 Stage 3, §11.4.1): this
+      // WS generation is gone — discard only its queued deferred
+      // deliveries. The backend rolls the matching in-flight rows back to
+      // pending; a reconnect replay re-drives them, duplicate-free. Each
+      // generation cleans its own owner regardless of whether it was still
+      // current.
+      if (this.currentOwner === owner) this.currentOwner = null;
+      this.opts.cleanupDeferredForOwner?.(owner);
       const reasonText = reason.toString();
       const wasCurrent = this.ws === ws;
       if (wasCurrent) {
@@ -439,7 +473,19 @@ export class OutboundDaemonClient {
           result: this.handleRotateToken(command.params),
         } as OutboundDaemonToServerCommandResponseFrame;
       } else {
-        const dispatched = await dispatcher(command);
+        // Thread this generation's owner into the delivery context so a
+        // `deferred` disposition is attributed to this WS and cleaned up
+        // if it drops (#task:1417 Stage 3, §11.4.1). Owner is set on WS
+        // open before any command is handled; a missing owner is a
+        // broken-connection invariant, so `resolveDeliveryOwner` throws
+        // rather than guess a sentinel that close cleanup could never
+        // reclaim — the catch below maps it to internal_error and the
+        // dispatcher is never called under a bad owner.
+        const owner = resolveDeliveryOwner(
+          this.currentOwner ?? undefined,
+          'outbound_ws',
+        );
+        const dispatched = await dispatcher(command, { owner });
         const mapped = toOutboundCommandResponse(command, dispatched);
         response = mapped.frame;
         if (mapped.drift) {

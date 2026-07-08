@@ -284,7 +284,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
       // Observable #2: the DB projection landed. This is the
       // load-bearing assertion for backend-visible state (Cindy
       // boundary #3) — without this row update the renderer /
-      // future wake paths can't know the runtime is live.
+      // future delivery paths can't know the runtime is live.
       const sessionRow = await waitFor(
         () => {
           const row = db

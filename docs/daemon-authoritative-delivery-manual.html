@@ -1,0 +1,880 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Daemon-Authoritative Message Delivery Manual</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f8;
+      --paper: #ffffff;
+      --ink: #111827;
+      --muted: #5f6b7a;
+      --line: #d7dde5;
+      --line-strong: #aab4c2;
+      --blue: #2563eb;
+      --blue-soft: #eff6ff;
+      --green: #15803d;
+      --green-soft: #f0fdf4;
+      --orange: #c2410c;
+      --orange-soft: #fff7ed;
+      --red: #b91c1c;
+      --red-soft: #fef2f2;
+      --purple: #6d28d9;
+      --purple-soft: #f5f3ff;
+      --slate-soft: #f8fafc;
+      --shadow: 0 18px 52px rgba(17, 24, 39, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background:
+        linear-gradient(90deg, rgba(17, 24, 39, 0.035) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(17, 24, 39, 0.035) 1px, transparent 1px),
+        var(--bg);
+      background-size: 32px 32px;
+      color: var(--ink);
+      font-family: "Inter", "Helvetica Neue", Helvetica, "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.65;
+    }
+
+    main {
+      width: min(1180px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 36px 0 56px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 24px;
+      align-items: end;
+      padding-bottom: 22px;
+      border-bottom: 1px solid rgba(17, 24, 39, 0.12);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(30px, 4vw, 48px);
+      line-height: 1.05;
+      letter-spacing: 0;
+      font-weight: 820;
+    }
+
+    h2 {
+      margin: 0 0 8px;
+      font-size: 21px;
+      line-height: 1.25;
+      font-weight: 780;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 16px;
+      line-height: 1.35;
+      font-weight: 760;
+    }
+
+    p {
+      margin: 0 0 10px;
+    }
+
+    code {
+      font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+      background: #f3f5f8;
+      border: 1px solid #e3e7ed;
+      border-radius: 5px;
+      padding: 1px 5px;
+    }
+
+    .subtitle {
+      max-width: 850px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .stamp {
+      display: grid;
+      gap: 3px;
+      min-width: 190px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.76);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .stamp strong {
+      color: var(--ink);
+      font-size: 13px;
+    }
+
+    .toc {
+      margin: 18px 0 0;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .toc a {
+      display: block;
+      min-height: 48px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.78);
+      padding: 10px 12px;
+      color: #334155;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .toc a span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 500;
+      margin-top: 2px;
+    }
+
+    section {
+      margin-top: 22px;
+    }
+
+    .panel {
+      margin-top: 14px;
+      border: 1px solid rgba(17, 24, 39, 0.12);
+      background: var(--paper);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      gap: 18px;
+      padding: 18px 20px 13px;
+      border-bottom: 1px solid rgba(17, 24, 39, 0.08);
+      background: rgba(248, 250, 252, 0.65);
+    }
+
+    .panel-note {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      max-width: 820px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      border: 1px solid #cbd5e1;
+      background: #f8fafc;
+      border-radius: 6px;
+      padding: 4px 8px;
+      color: #475569;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .diagram {
+      overflow-x: auto;
+      padding: 18px;
+    }
+
+    .mermaid {
+      min-width: 760px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .grid.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .callout {
+      border: 1px solid var(--line);
+      border-left-width: 4px;
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px 16px;
+    }
+
+    .callout.blue {
+      border-left-color: var(--blue);
+      background: var(--blue-soft);
+    }
+
+    .callout.green {
+      border-left-color: var(--green);
+      background: var(--green-soft);
+    }
+
+    .callout.orange {
+      border-left-color: var(--orange);
+      background: var(--orange-soft);
+    }
+
+    .callout.red {
+      border-left-color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .callout h3 {
+      margin-bottom: 6px;
+    }
+
+    .callout p:last-child {
+      margin-bottom: 0;
+    }
+
+    .matrix {
+      display: grid;
+      grid-template-columns: 1.15fr 1.35fr 1.35fr;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--line);
+    }
+
+    .cell {
+      min-height: 66px;
+      background: #fff;
+      padding: 13px 15px;
+      font-size: 13px;
+    }
+
+    .cell.head {
+      background: #f8fafc;
+      color: #334155;
+      font-weight: 760;
+    }
+
+    .cell b {
+      color: var(--ink);
+    }
+
+    .rules {
+      display: grid;
+      gap: 9px;
+      counter-reset: rule;
+      margin-top: 14px;
+    }
+
+    .rule {
+      display: grid;
+      grid-template-columns: 36px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.84);
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-size: 13.5px;
+    }
+
+    .rule::before {
+      counter-increment: rule;
+      content: counter(rule);
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--ink);
+      color: #fff;
+      font-weight: 760;
+      font-size: 12px;
+    }
+
+    .footer {
+      margin-top: 28px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(17, 24, 39, 0.12);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 880px) {
+      header {
+        grid-template-columns: 1fr;
+      }
+
+      .toc,
+      .grid.two {
+        grid-template-columns: 1fr;
+      }
+
+      .matrix {
+        grid-template-columns: 1fr;
+      }
+
+      .cell.head:not(:first-child) {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Daemon-Authoritative Message Delivery Manual</h1>
+      <p class="subtitle">
+        本手册定义下一代消息投递架构的责任边界、确认语义和迁移路线。目标是移除 backend 对易失 runtime cache 的生命周期决策依赖，同时保持数据库 inbox、去重、排序和 ack 语义仍由 backend 统一持有。
+      </p>
+    </div>
+    <div class="stamp">
+      <strong>Draft Architecture</strong>
+      <span>Scope: runtime delivery</span>
+      <span>Owner: Alice implementation, Cindy review</span>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="目录">
+    <a href="#summary">1. Executive Summary<span>目标模型与不变量</span></a>
+    <a href="#current">2. Current Mechanism<span>现有 backend/daemon 双层判断</span></a>
+    <a href="#target">3. Target Architecture<span>daemon-authoritative delivery</span></a>
+    <a href="#migration">4. Migration Plan<span>分阶段落地和测试矩阵</span></a>
+  </nav>
+
+  <section id="summary">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>1. Executive Summary</h2>
+          <p class="panel-note">
+            目标不是把消息持久化责任迁入 daemon，而是把 runtime lifecycle 相关的具体投递动作迁入 daemon。Backend 仍是 durable inbox 的唯一写入者和 ack authority。
+          </p>
+        </div>
+        <span class="tag">Normative</span>
+      </div>
+      <div class="diagram">
+        <div class="grid two">
+          <div class="callout green">
+            <h3>保持不变的责任</h3>
+            <p>Backend 继续拥有 <code>conversation_inbox</code>、delivery claim、排序、去重、in-flight rollback、<code>delivered_at</code> 写入和 message stale/conflict 语义。</p>
+          </div>
+          <div class="callout blue">
+            <h3>迁移的责任</h3>
+            <p>Daemon 成为 runtime lifecycle 和 driver readiness 的权威，决定具体投递动作：start、wake、defer、refuse 或等待 exit/respawn。</p>
+          </div>
+          <div class="callout orange">
+            <h3>Ack 规则</h3>
+            <p>发送到 daemon 不等于 ack。只有 daemon 明确发出 <code>runtime_delivery_consumed</code> 后，backend 才能写 <code>delivered_at</code>。</p>
+          </div>
+          <div class="callout red">
+            <h3>故障规则</h3>
+            <p>Daemon crash、transport disconnect、runtime refusal、driver not ready 和 timeout 都不得丢消息。未确认 delivery row 必须回到 pending，可由后续事件或用户消息重试。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="current">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>2. Current Mechanism</h2>
+          <p class="panel-note">
+            当前机制由 backend 先根据本地 cache 选择 start 或 wake，再由 daemon 决定 wake 是否真正写入 runtime。该模型在 cache projection 与 daemon reality 脱节时存在错误路由风险。
+          </p>
+        </div>
+        <span class="tag">Existing System</span>
+      </div>
+      <div class="diagram">
+        <pre class="mermaid">
+flowchart LR
+  subgraph B[Backend]
+    MSG[User message]
+    INBOX[(conversation_inbox)]
+    CLAIM[claim pending rows]
+    CACHE[RunStateCache projection]
+    COORD[RuntimeDeliveryCoordinator]
+    ACK[mark delivered_at]
+  end
+
+  subgraph D[Daemon]
+    SUP[Supervisor]
+    HANDLE[Runtime handle]
+    DRIVER[Driver state]
+  end
+
+  subgraph R[Agent runtime]
+    STDIN[stdin / ACP prompt]
+  end
+
+  MSG --> INBOX
+  INBOX --> CLAIM
+  CLAIM --> CACHE
+  CACHE -- phase ready --> COORD
+  CACHE -- missing or exited --> START[runtime_start + startup_delivery]
+  COORD --> WAKE[runtime_wake]
+  START --> SUP
+  WAKE --> SUP
+  SUP --> HANDLE
+  HANDLE --> DRIVER
+  DRIVER --> STDIN
+  SUP -- delivered true / consumed event --> ACK
+  SUP -- refused / disconnected --> PENDING[row remains pending]
+        </pre>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>2.1 Failure Mode Exposed by Live Runtime Cache Desync</h2>
+          <p class="panel-note">
+            The defect is runtime-agnostic. OpenCode triggered the condition, but the incorrect assumption belongs to the common delivery path.
+          </p>
+        </div>
+        <span class="tag">Incident Pattern</span>
+      </div>
+      <div class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant U as User
+  participant B as Backend
+  participant C as RunStateCache
+  participant D as Daemon Supervisor
+  participant R as Agent Runtime
+
+  U->>B: send second message
+  B->>B: create inbox row, claim delivery id
+  B->>C: read phase for (conversation, agent)
+  C-->>B: missing or non-ready projection
+  B->>D: runtime_start(startup_delivery)
+  D-->>B: started=true, startup_delivery_accepted=false
+  Note over D,R: Handle is already alive; start is not a wake substitute.
+  B->>B: rollback row to pending
+  Note over B: Old behavior returned here. Row remains pending, but no event will redrive it.
+  R-->>B: no further delivery observed
+        </pre>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>2.2 Current Short-Term Fix</h2>
+          <p class="panel-note">
+            The bounded hotfix changes only the dead-end branch. It does not rewrite normal ready wake, first spawn, ready-for-drain replay, or respawn-on-exit.
+          </p>
+        </div>
+        <span class="tag">Bounded Bugfix</span>
+      </div>
+      <div class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant B as Backend
+  participant C as RunStateCache
+  participant D as Daemon Supervisor
+  participant R as Agent Runtime
+
+  B->>D: runtime_start(startup_delivery)
+  D-->>B: started=true, startup_delivery_accepted=false
+  B->>B: rollback claimed delivery ids to pending
+  B->>C: patch temporary wake-routing projection
+  B->>D: runtime_wake(delivery ids, text)
+  alt daemon handle is ready and driver accepts
+    D->>R: write stdin or send ACP prompt
+    D-->>B: delivered=true, delivery_ids
+    B->>B: mark delivered_at
+  else daemon handle is startup_pending, draining, or driver not ready
+    D-->>B: delivered=false, reason
+    B->>B: row remains pending
+  end
+        </pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="target">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>3. Target Architecture</h2>
+          <p class="panel-note">
+            The target architecture gives the daemon authority over runtime lifecycle decisions while preserving backend authority over durable message state.
+          </p>
+        </div>
+        <span class="tag">Target Model</span>
+      </div>
+      <div class="diagram">
+        <pre class="mermaid">
+flowchart LR
+  subgraph B[Backend - durable authority]
+    MSG[message accepted]
+    INBOX[(conversation_inbox)]
+    CLAIM[claim delivery ids]
+    SUBMIT[runtime_deliver]
+    ACK[mark delivered_at]
+    ROLLBACK[rollback to pending]
+  end
+
+  subgraph D[Daemon - runtime authority]
+    SUB[Delivery admission]
+    PHASE{real handle phase}
+    QUEUE[volatile safe-boundary queue]
+    START[start new runtime with startup batch]
+    WAKE[wake existing runtime]
+    WAIT[defer or refuse with reason]
+    CONSUMED[delivery consumed proof]
+  end
+
+  subgraph R[Runtime]
+    DRIVER[driver ready state]
+    BOUNDARY[safe boundary]
+    INPUT[stdin / ACP prompt]
+  end
+
+  MSG --> INBOX --> CLAIM --> SUBMIT --> SUB
+  SUB --> PHASE
+  PHASE -- no handle --> START
+  PHASE -- ready --> QUEUE
+  PHASE -- startup_pending --> WAIT
+  PHASE -- draining --> WAIT
+  QUEUE --> BOUNDARY --> DRIVER --> WAKE --> INPUT
+  START --> DRIVER
+  INPUT --> CONSUMED
+  CONSUMED --> ACK
+  WAIT --> ROLLBACK
+        </pre>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>3.1 Command Semantics</h2>
+          <p class="panel-note">
+            The target command is <code>runtime_deliver</code>. It transfers a delivery intent to the daemon, but it does not by itself acknowledge the database row.
+          </p>
+        </div>
+        <span class="tag">Protocol Contract</span>
+      </div>
+      <div class="diagram">
+        <div class="matrix">
+          <div class="cell head">Disposition / Event</div>
+          <div class="cell head">Meaning</div>
+          <div class="cell head">Backend action</div>
+
+          <div class="cell"><b>spawning</b></div>
+          <div class="cell">Daemon has no live handle and starts a runtime with this batch as startup delivery.</div>
+          <div class="cell">Do not mark delivered. Keep row in-flight until consumed or failed.</div>
+
+          <div class="cell"><b>admitted</b></div>
+          <div class="cell">Daemon took the bytes toward stdin or ACP prompt. Runtime-specific consumed proof has not necessarily been observed.</div>
+          <div class="cell">Do not mark delivered. Keep row in-flight until consumed or failed.</div>
+
+          <div class="cell"><b>deferred</b></div>
+          <div class="cell">Daemon queued the delivery behind init or a gated-driver safe boundary.</div>
+          <div class="cell">Do not mark delivered. Keep row in-flight; disconnect or ack-timeout rolls it back to pending.</div>
+
+          <div class="cell"><b>refused</b></div>
+          <div class="cell">Daemon cannot take custody for a typed reason such as draining, cooldown, invalid metadata, or fatal driver refusal.</div>
+          <div class="cell">Rollback to pending or surface a typed fatal failure. Never ack.</div>
+
+          <div class="cell"><b>runtime_delivery_consumed</b></div>
+          <div class="cell">Daemon observed the runtime-specific proof that these delivery ids were consumed.</div>
+          <div class="cell">Mark exactly those delivery ids delivered and clear their in-flight ownership.</div>
+
+          <div class="cell"><b>runtime_delivery_failed</b></div>
+          <div class="cell">Daemon accepted custody but later failed before consumed proof.</div>
+          <div class="cell">Rollback to pending when retriable; surface typed fatal failure when not retriable.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>3.2 Ack Discipline</h2>
+          <p class="panel-note">
+            The following sequence is the key data-loss prevention rule. A daemon queue is volatile; the database row remains the durable source of truth.
+          </p>
+        </div>
+        <span class="tag">No-Loss Rule</span>
+      </div>
+      <div class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant B as Backend DB owner
+  participant D as Daemon queue owner
+  participant R as Runtime process
+
+  B->>B: claim pending delivery ids
+  B->>D: runtime_deliver(ids, text, metadata, spawn_options)
+  D-->>B: spawning / admitted / deferred
+  Note over B: No delivered_at write yet.
+  D->>D: hold in volatile queue until safe boundary
+  D->>R: write stdin / ACP prompt
+  alt runtime delivery succeeds
+    D-->>B: runtime_delivery_consumed(ids)
+    B->>B: mark delivered_at for ids
+  else daemon exits before consumed
+    D-xB: transport disconnect
+    B->>B: rollback in-flight ids to pending
+  else runtime refuses
+    D-->>B: runtime_delivery_failed(ids, reason)
+    B->>B: rollback ids to pending or surface typed failure
+  end
+        </pre>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>3.3 Responsibility Matrix</h2>
+          <p class="panel-note">
+            This matrix is the review baseline. Any implementation that moves DB ack authority into daemon violates the model.
+          </p>
+        </div>
+        <span class="tag">Boundary</span>
+      </div>
+      <div class="diagram">
+        <div class="matrix">
+          <div class="cell head">Concern</div>
+          <div class="cell head">Backend</div>
+          <div class="cell head">Daemon</div>
+
+          <div class="cell"><b>Message acceptance</b></div>
+          <div class="cell">Validates caller, applies stale/conflict rules, creates message and inbox rows.</div>
+          <div class="cell">No authority.</div>
+
+          <div class="cell"><b>Delivery ordering</b></div>
+          <div class="cell">Claims pending rows FIFO and passes structured delivery metadata.</div>
+          <div class="cell">Preserves the order of the batch it receives. Does not reorder across backend batches unless protocol explicitly permits it.</div>
+
+          <div class="cell"><b>Runtime lifecycle</b></div>
+          <div class="cell">May hold a projection for UI and optimization, but it is not authoritative.</div>
+          <div class="cell">Owns real handle phase, driver readiness, process lifecycle, and safe-boundary visibility.</div>
+
+          <div class="cell"><b>Safe-boundary queue</b></div>
+          <div class="cell">May remain in backend during transition. If moved, backend treats daemon acceptance as non-ack custody.</div>
+          <div class="cell">May hold a volatile queue only. Queue loss must be recoverable from backend pending rows.</div>
+
+          <div class="cell"><b>Ack</b></div>
+          <div class="cell">Only component allowed to write <code>delivered_at</code>.</div>
+          <div class="cell">Reports <code>runtime_delivery_consumed</code> / <code>runtime_delivery_failed</code>; never writes DB.</div>
+
+          <div class="cell"><b>Recovery</b></div>
+          <div class="cell">Rolls back in-flight ids on disconnect, timeout, refusal, or command failure.</div>
+          <div class="cell">Reports typed refusal and emits lifecycle events. Does not silently drop queued ids.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="migration">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>4. Migration Plan</h2>
+          <p class="panel-note">
+            The change should be staged. Each stage removes one false authority without changing every delivery subsystem at once.
+          </p>
+        </div>
+        <span class="tag">Staged</span>
+      </div>
+      <div class="diagram">
+        <pre class="mermaid">
+flowchart TD
+  S0[Stage 0: hotfix dead-end branch] --> S1[Stage 1: runtime_start idempotent response includes real phase]
+  S1 --> S2[Stage 2: introduce runtime_deliver command and consumed events]
+  S2 --> S3[Stage 3: move gated safe-boundary queue into daemon]
+  S3 --> S4[Stage 4: retire backend start-vs-wake fork and cache authority]
+
+  S0:::done
+  S1:::next
+  S2:::next
+  S3:::target
+  S4:::target
+
+  classDef done fill:#f0fdf4,stroke:#15803d,color:#14532d;
+  classDef next fill:#eff6ff,stroke:#2563eb,color:#1e3a8a;
+  classDef target fill:#f5f3ff,stroke:#6d28d9,color:#4c1d95;
+  classDef optional fill:#fff7ed,stroke:#c2410c,color:#7c2d12;
+        </pre>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>4.1 Review Invariants</h2>
+          <p class="panel-note">
+            These invariants should be asserted in code review and covered by tests on the authoritative path.
+          </p>
+        </div>
+        <span class="tag">Checklist</span>
+      </div>
+      <div class="diagram">
+        <div class="rules">
+          <div class="rule">
+            <div>Backend must not mark a delivery row delivered merely because a command was sent to daemon or admitted/deferred into a daemon queue.</div>
+          </div>
+          <div class="rule">
+            <div>Every daemon refusal or transport failure must preserve or restore pending retryability for the affected delivery ids.</div>
+          </div>
+          <div class="rule">
+            <div>Daemon lifecycle state must override backend cache projection when they conflict.</div>
+          </div>
+          <div class="rule">
+            <div>Structured delivery metadata must match delivery ids exactly; daemon should reject mismatches as backend bugs.</div>
+          </div>
+          <div class="rule">
+            <div>Requires-first-message runtimes must retain their consumed-proof gate; initial stdin write alone is not necessarily sufficient for ack.</div>
+          </div>
+          <div class="rule">
+            <div>Cold daemon hydrate must not spawn historical backlog. Recovery should target live runtimes or explicit user-triggered delivery.</div>
+          </div>
+          <div class="rule">
+            <div>Tests must cover ready, startup_pending, draining, not_running, daemon disconnect while queued, driver_refused, and init-gated delivery.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>4.2 Required Test Matrix</h2>
+          <p class="panel-note">
+            A technically complete implementation is not review-clean until these cases are covered without runtime-specific special cases.
+          </p>
+        </div>
+        <span class="tag">Test Plan</span>
+      </div>
+      <div class="diagram">
+        <div class="matrix">
+          <div class="cell head">Case</div>
+          <div class="cell head">Expected daemon decision</div>
+          <div class="cell head">Expected backend state</div>
+
+          <div class="cell"><b>Ready live handle</b></div>
+          <div class="cell">Deliver immediately or enqueue until safe boundary, then report delivered.</div>
+          <div class="cell">Mark delivered after daemon proof only.</div>
+
+          <div class="cell"><b>Startup pending</b></div>
+          <div class="cell">Defer/refuse with startup_pending or retain custody under explicit protocol.</div>
+          <div class="cell">No ack. Row remains retryable until ready-for-drain or terminal result.</div>
+
+          <div class="cell"><b>Draining</b></div>
+          <div class="cell">Refuse with draining or wait for exit under explicit protocol.</div>
+          <div class="cell">No ack. Pending row later drains through respawn path.</div>
+
+          <div class="cell"><b>No handle</b></div>
+          <div class="cell">Start a runtime with startup delivery or return not_running if policy forbids spawn.</div>
+          <div class="cell">Ack only after startup delivery consumed proof.</div>
+
+          <div class="cell"><b>Daemon disconnect after admitted/deferred</b></div>
+          <div class="cell">No terminal consumed event.</div>
+          <div class="cell">Rollback in-flight ids to pending.</div>
+
+          <div class="cell"><b>Driver refused</b></div>
+          <div class="cell">Return typed refusal with same delivery ids.</div>
+          <div class="cell">No ack. Surface failure where appropriate; preserve retryability unless refusal is terminal policy.</div>
+
+          <div class="cell"><b>Requires-first-message init</b></div>
+          <div class="cell">May write stdin but must emit consumed proof after session_init.</div>
+          <div class="cell">Defer ack until proof. No premature delivered_at.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>4.3 Open Decisions</h2>
+          <p class="panel-note">
+            These decisions should be resolved before implementation proceeds beyond the bounded hotfix.
+          </p>
+        </div>
+        <span class="tag">Decision Gate</span>
+      </div>
+      <div class="diagram">
+        <div class="matrix">
+          <div class="cell head">Decision</div>
+          <div class="cell head">Recommended resolution</div>
+          <div class="cell head">Rationale</div>
+
+          <div class="cell"><b>Stage 1 shape</b></div>
+          <div class="cell">Extend idempotent <code>runtime_start</code> responses with the current daemon phase.</div>
+          <div class="cell">Smallest correct step. It removes the cache-heal bridge before the larger command consolidation.</div>
+
+          <div class="cell"><b>Daemon instance key</b></div>
+          <div class="cell">Converge all daemon key construction through one shared function before phase stamping.</div>
+          <div class="cell">A single authority identifier is required before backend uses daemon responses to correct projection state.</div>
+
+          <div class="cell"><b>Ack-timeout value</b></div>
+          <div class="cell">Treat as an empirical tuning parameter. Do not hardcode a value before measuring legitimate long mid-turn holds.</div>
+          <div class="cell">A timeout that is too short creates duplicate work; a timeout that is too long delays recovery.</div>
+
+          <div class="cell"><b>Stage 3 scope</b></div>
+          <div class="cell">Land Stage 1 and Stage 2 first. Move the gated safe-boundary queue only behind a separate crash-safety review gate.</div>
+          <div class="cell">Queue movement is the highest-risk part because it introduces daemon-held volatile custody.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <p class="footer">
+    Manual intent: establish the target model before implementation. The exact command name and staged wire shape may change, but the authority split and ack discipline are normative.
+  </p>
+</main>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({
+    startOnLoad: true,
+    securityLevel: "strict",
+    theme: "base",
+    themeVariables: {
+      fontFamily: "Inter, Helvetica Neue, Helvetica, PingFang SC, Microsoft YaHei, sans-serif",
+      primaryColor: "#eff6ff",
+      primaryTextColor: "#111827",
+      primaryBorderColor: "#2563eb",
+      lineColor: "#64748b",
+      secondaryColor: "#f5f3ff",
+      tertiaryColor: "#f8fafc",
+      noteBkgColor: "#fff7ed",
+      noteTextColor: "#7c2d12",
+      noteBorderColor: "#fed7aa",
+      actorBkg: "#f8fafc",
+      actorBorder: "#cbd5e1",
+      actorTextColor: "#111827",
+      signalColor: "#334155",
+      signalTextColor: "#111827"
+    }
+  });
+</script>
+</body>
+</html>

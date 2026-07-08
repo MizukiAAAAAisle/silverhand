@@ -12,7 +12,7 @@
  *      `session_init` projection in DB exactly the same way the
  *      direct `runtimeHost.start` call did in B2.
  *   2. **POST `/api/channels/:id/messages`** writes the user
- *      message and triggers a live wake — `conversation_inboxes`
+ *      message and triggers a live delivery — `conversation_inboxes`
  *      `delivered_at` is non-null and `in_flight_owner` cleared.
  *   3. **POST `/api/channels/:id/agents/:aid/stop`** dispatches a
  *      hard stop, lands `runtime_exit`, and updates the row to
@@ -221,7 +221,7 @@ describe('Standalone G2 — route-level runtime path (D4.b P1-1)', () => {
     }
   });
 
-  it('HTTP start → session_init projection; HTTP send → live wake delivered_at; HTTP stop → runtime_exit (all via real routes)', async () => {
+  it('HTTP start → session_init projection; HTTP send → live delivery delivered_at; HTTP stop → runtime_exit (all via real routes)', async () => {
     harness = await bootG2Harness();
     const env = seedRouteEnv(harness, 'happy');
     const { db } = harness.backend.context;
@@ -288,13 +288,13 @@ describe('Standalone G2 — route-level runtime path (D4.b P1-1)', () => {
       { timeoutMs: 10_000, label: 'HTTP start → session_init projection' },
     );
 
-    // ── Phase 2: HTTP POST messages → live wake ─────────────────
+    // ── Phase 2: HTTP POST messages → live delivery ─────────────────
     //
     // The lifted send-to-agent-backed route enters
     // `conversationMessageService.sendMessage` which calls
     // `runtimeHost.deliverMessage` per agent (best-effort). With
-    // the daemon attached, deliverMessage's `live wake` path runs:
-    // claim pending inbox → submit live wake batch → daemon writes
+    // the daemon attached, deliverMessage's `live delivery` path runs:
+    // claim pending inbox → submit live delivery batch → daemon writes
     // to stdin → fixture echoes back. The DB observable Cindy
     // boundary #3 requires is `conversation_inboxes.delivered_at`
     // non-null + `in_flight_owner` cleared. We assert exactly

@@ -93,8 +93,48 @@ import {
 // identity object (`{kind:'channel'}` / `{kind:'thread', message_id}`).
 // Older v2 daemons would strict-reject the new object at business-command time,
 // so this must also fail loud during hello.
+//
+// v4 (#task:1417, daemon-authoritative delivery Stage 1): the `runtime_start`
+// reply's `started:true` arm gained a REQUIRED `phase`, so backend can act on
+// the daemon's authoritative handle phase instead of guessing from its own
+// (desyncable) `RunStateCache`. The reply schema is `.strict()` and shared by
+// both the local-socket and outbound-WS transports, so this is wire-breaking in
+// both directions (an old backend strict-rejects the extra key; a new backend
+// rejects the missing required key). It MUST fail loud at hello — a standalone
+// server and its daemon have to upgrade in lock-step. `OUTBOUND_PROTOCOL_VERSION`
+// bumps alongside (2→3) for the same reason.
+//
+// v5 (#task:1417, daemon-authoritative delivery Stage 2a): the new
+// `runtime_deliver` command joined the strict command surface and its unified
+// ack pair (`runtime_delivery_consumed` / `runtime_delivery_failed`) joined
+// `EventFrameSchema`. A v4 daemon has no handler for the command; a v4 backend
+// has no exhaustiveness case for the events — both are wire-breaking, so the
+// version gates at hello. `OUTBOUND_PROTOCOL_VERSION` bumps alongside (3→4).
+// The change is purely additive (the legacy `runtime_start`/`runtime_wake`
+// surface is untouched until Stage 2b), but the surface still changed, so a
+// mismatched pair must fail loud rather than silently ignore the new frames.
+//
+// v6 (#task:1417, daemon-authoritative delivery Stage 2c): the retired
+// delivery surfaces are DELETED now that `runtime_deliver` is the sole message
+// path. Gone: the whole `runtime_wake` command (params/result/reason), the
+// legacy `runtime_startup_delivery_consumed`/`_failed` event pair (subsumed by
+// the unified `runtime_delivery_*` family), and `runtime_start`'s
+// delivery-carrying surface — its `startup_delivery` param and the Stage 1
+// `phase` / `startup_delivery_accepted` result fields. `runtime_start` is now a
+// pure lifecycle spawn. Every deletion is `.strict()`-schema-breaking in both
+// directions, so it MUST fail loud at hello. `OUTBOUND_PROTOCOL_VERSION` bumps
+// alongside (4→5). No shim / dual-support window — the standalone daemon is
+// unreleased (zero deployments), so this is an internal wire change.
+//
+// v7 (#task:1417, daemon-authoritative delivery Stage 3): `runtime_deliver`
+// gains a fourth `deferred` disposition arm — a ready handle held mid-turn
+// (`gated`) or behind a write-in-flight is enqueued in the daemon's own
+// per-handle queue and flushed at the next safe boundary, moving the
+// safe-boundary hold out of the backend coordinator. A v6 peer has no
+// `deferred` arm in its result union, so the shape is wire-breaking and gates
+// at hello. `OUTBOUND_PROTOCOL_VERSION` bumps alongside (5→6). No shim.
 
-export const HOST_PROTOCOL_VERSION = 3;
+export const HOST_PROTOCOL_VERSION = 7;
 
 export const KNOWN_CAPABILITIES_V1 = [
   'runtime.claude',
@@ -453,8 +493,8 @@ export type AgentStreamObservedResult = z.infer<
 /**
  * Live-delivery text — the unencoded message text the daemon will
  * hand to its in-process driver's `encodeStdinMessage(text, ...)`
- * just before writing to stdin. Used by `runtime_wake.text` /
- * `runtime_start.startup_delivery.text` / `runtime_stop.soft_directive`.
+ * just before writing to stdin. Used by `runtime_deliver.text` /
+ * `runtime_stop.soft_directive`.
  *
  * Why text and not pre-encoded stream-json bytes (Option A v2 — Cindy
  * `UMGu36zoTDVuKWXi`): stateful drivers (codex) carry `threadId` /
@@ -615,6 +655,24 @@ export const StartOptionsSchema = z
   );
 export type StartOptions = z.infer<typeof StartOptionsSchema>;
 
+/**
+ * Where a supervised runtime is in its lifecycle (§3.2.1 startup/live
+ * exclusivity state machine). Single source for the `runtime_status` DTO's
+ * phase field. (The daemon's own `RuntimeHandle.phase` in
+ * `supervisor/handle.ts` is the narrower live subset — it excludes `idle`,
+ * since a real handle is always at least `spawning`.) The Stage 1
+ * `runtime_start` reply phase was retired in Stage 2c — `runtime_start` is a
+ * pure lifecycle spawn now, and delivery lifecycle is the daemon's call.
+ */
+export const RuntimePhaseSchema = z.enum([
+  'idle',
+  'spawning',
+  'startup_pending',
+  'ready',
+  'draining',
+  'exited',
+]);
+
 /** A single (conversation, agent) supervised runtime as the daemon
  *  reports it via `runtime_status`. Mirrors the run-state DTO that
  *  backend already publishes to renderers. */
@@ -626,14 +684,7 @@ export const RuntimeStateDtoSchema = z.object({
    *  enum mirrors the §3.2.1 startup/live exclusivity state machine
    *  so the operator can read intent vs implementation off one
    *  field. */
-  phase: z.enum([
-    'idle',
-    'spawning',
-    'startup_pending',
-    'ready',
-    'draining',
-    'exited',
-  ]),
+  phase: RuntimePhaseSchema,
   /** Last known AgentRunState; null until the driver emits its first
    *  run-state transition. */
   run_state: AgentRunStateSchema.nullable(),
@@ -644,14 +695,14 @@ export type RuntimeStateDto = z.infer<typeof RuntimeStateDtoSchema>;
 // ── runtime_start ───────────────────────────────────────────────────
 
 /**
- * Per-delivery wire metadata attached to a startup/wake batch so the
+ * Per-delivery wire metadata attached to a `runtime_deliver` batch so the
  * daemon can maintain a PER-STREAM observed boundary and resolve
  * `--reply-to` targets it has seen (reply-cluster §6.4). One entry per
  * delivered inbox row; the entry set MUST match the batch's
  * `delivery_ids` exactly (daemon hard-rejects a mismatch — text and
  * metadata must not drift). `thread_root_id === null` ⇒ the message lives
  * on the main line. `delivery_kind` is decided at delivery creation and is
- * per-delivery, never batch-level (a startup batch can mix historical
+ * per-delivery, never batch-level (a spawn-with-batch can mix historical
  * `observe` rows with the current `turn` row). The scalar
  * `delivered_up_to_seq` stays as a legacy/diagnostic high-water; observed
  * authority is this array, advanced per stream.
@@ -672,21 +723,6 @@ export const RuntimeStartParamsSchema = z
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
     options: StartOptionsSchema,
-    /** Optional spawn-time inbox drain, replacing CM's drainInbox().
-     *  Carries unencoded text (Option A v2); daemon encodes on its
-     *  side via the in-process driver instance whose state is the
-     *  authoritative one. Ack is async via
-     *  runtime_startup_delivery_consumed | _failed events. See
-     *  design doc §3.1 + §3.2.1. */
-    startup_delivery: z
-      .object({
-        delivery_ids: z.array(z.number().int()).min(1),
-        delivered_up_to_seq: z.number().int().nonnegative().optional(),
-        deliveries: z.array(RuntimeDeliverySchema).optional(),
-        text: RuntimeMessageTextSchema,
-      })
-      .strict()
-      .optional(),
   })
   .strict();
 export type RuntimeStartParams = z.infer<typeof RuntimeStartParamsSchema>;
@@ -698,11 +734,6 @@ export const RuntimeStartResultSchema = z
         started: z.literal(true),
         pid: z.number().int(),
         started_at: z.number().int(),
-        /** True iff daemon accepted the startup_delivery payload for
-         *  attempt. NOT a "consumed" signal — that's the async
-         *  runtime_startup_delivery_consumed event. Absent when
-         *  `startup_delivery` was not provided in params. */
-        startup_delivery_accepted: z.boolean().optional(),
       })
       .strict(),
     /**
@@ -852,82 +883,215 @@ export const RuntimeStopResultSchema = z
   });
 export type RuntimeStopResult = z.infer<typeof RuntimeStopResultSchema>;
 
-// ── runtime_wake ────────────────────────────────────────────────────
+// ── runtime_deliver (Stage 2, #task:1417) ───────────────────────────
+//
+// The single delivery command that subsumes the backend start-vs-wake
+// fork. Backend claims the pending batch in-flight (`owner=connectionId`),
+// then submits `runtime_deliver`; the daemon inspects the REAL handle and
+// picks the action — spawn / write / refuse. Backend prescribes none of
+// that, which kills the #task:1416 bug class (backend guessing runtime
+// lifecycle truth from its desyncable `RunStateCache`).
+//
+// Canonical: docs/daemon-authoritative-delivery-v1.md §10 (authoritative
+// for Stage 2; §3–5 describe the post-Stage-3 end-state and are NOT what
+// this ships).
+//
+// Fully wired (Stage 2a/2b): the command is in the command catalogues, its
+// consumed/failed events are in `EventFrameSchema` (forcing the
+// event-handler exhaustiveness cases), and it is the SOLE message-delivery
+// command. Stage 2c retired the legacy `runtime_wake` command and the
+// `runtime_startup_delivery_*` event pair; `HOST_PROTOCOL_VERSION` /
+// `OUTBOUND_PROTOCOL_VERSION` were bumped with each wire-behavior change.
 
-/**
- * Live-delivery primitive. BATCH-NATIVE — single-row delivery is
- * `delivery_ids: [id]`. Backend owns the inbox; daemon never reads
- * or writes inbox rows. See design doc §3.1.
- *
- * Result is all-or-nothing: success returns the same `delivery_ids`
- * caller passed in (so the response carries enough context to
- * `markDelivered` even if the request was retried over a reconnect).
- * Failure carries a typed `reason` and the same `delivery_ids` so
- * the caller keeps every row pending — no partial mark.
- */
-export const RuntimeWakeParamsSchema = z
+export const RuntimeDeliverParamsSchema = z
   .object({
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
     delivery_ids: z.array(z.number().int()).min(1),
     delivered_up_to_seq: z.number().int().nonnegative().optional(),
     deliveries: z.array(RuntimeDeliverySchema).optional(),
+    /** Distinguishes a normal message from a schedule fire, exactly as
+     *  the retired `runtime_wake` did — the daemon's driver needs it to
+     *  frame the payload. Spawn-time startup delivery had no `kind`
+     *  because it was always message-shaped; unifying the command makes
+     *  it explicit. */
     kind: z.enum(['message', 'schedule_fire']),
-    /** Unencoded message text (Option A v2). Daemon's
-     *  `Supervisor.wake()` calls
-     *  `handle.driver.encodeStdinMessage(text, handle.cliSessionId)`
-     *  using its in-process driver instance whose runtime state
-     *  (codex threadId / activeTurnId etc.) was set during spawn /
-     *  bindIO. backend MUST NOT pre-encode — see
-     *  RuntimeMessageTextSchema doc for the why. */
+    /** Unencoded message text (Option A v2). The daemon encodes via its
+     *  in-process driver instance whose state is authoritative; backend
+     *  MUST NOT pre-encode. */
     text: RuntimeMessageTextSchema,
+    /** Consulted ONLY when the daemon must spawn (no live handle). Same
+     *  StartOptions the retired `runtime_start` carried. */
+    spawn_options: StartOptionsSchema,
   })
   .strict();
-export type RuntimeWakeParams = z.infer<typeof RuntimeWakeParamsSchema>;
+export type RuntimeDeliverParams = z.infer<typeof RuntimeDeliverParamsSchema>;
 
-export const RuntimeWakeReasonSchema = z.enum([
-  'not_running',
-  'not_initialized',
-  'startup_pending',
-  'draining',
-  /**
-   * Option A v2 (Cindy `UMGu36zoTDVuKWXi`): driver's
-   * `encodeStdinMessage` returned null AND `driver.readyToEncode()`
-   * was false (e.g. codex pre-`thread/started`). Distinct from
-   * `driver_refused` (encode null AFTER ready) because backend's
-   * response is different: `driver_not_ready` is recoverable —
-   * backend keeps the DB row pending and waits for the daemon's next
-   * `runtime_ready_for_drain` to re-attempt; `driver_refused` is a
-   * config / programming error and warrants a louder backend signal.
-   *
-   * Daemon explicitly does NOT keep its own re-delivery queue here:
-   * the DB inbox is the single durable source of truth (Cindy
-   * `UMGu36zoTDVuKWXi`). Avoiding a second queue prevents
-   * crash-loses-memory, ready_for_drain-replays-duplicate, and ack-
-   * race-with-DB classes of bugs that a daemon-side queue would
-   * introduce.
-   */
-  'driver_not_ready',
+/**
+ * Refused-custody result. Split into three STRICT arms discriminated on
+ * `reason` so the WIRE SCHEMA itself enforces the cross-constraint between
+ * `reason` and `cooldown_until` (Cindy P1) — not left to a handler to
+ * interpret. `cooldown_until` is present iff `reason === 'cooldown'`, and
+ * can never leak onto another reason.
+ *
+ * Every reason means "the daemon wrote nothing; backend rolls the rows
+ * back to pending" — all retriable. The fatal programming-error case (a
+ * driver refusing AFTER a write attempt) is a terminal async
+ * `runtime_delivery_failed{reason:'driver_refused'}`, NOT a sync refusal.
+ *
+ * `deferred` is a fourth disposition (Stage 3): a ready handle that cannot
+ * take the write *right now* — mid-turn (`gated` driver) or a prior write
+ * still in flight — is enqueued in the daemon's per-handle mid-turn queue
+ * and flushed at the next safe boundary. It transfers custody to the daemon
+ * queue (rows stay in-flight, owner=conn), it is NOT a refusal and NOT an
+ * ack. Startup-phase handles (`spawning`/`startup_pending`/not-ready-to-
+ * encode/live-oneShot) are still `refused{startup_pending}` — they already
+ * have a lossless DB-backed re-drive via `ready_for_drain`, so the daemon
+ * never takes volatile custody there. Canonical §11.
+ */
+export const RuntimeDeliverRefusedResultSchema = z.discriminatedUnion('reason', [
+  z
+    .object({
+      disposition: z.literal('refused'),
+      reason: z.literal('startup_pending'),
+    })
+    .strict(),
+  z
+    .object({
+      disposition: z.literal('refused'),
+      reason: z.literal('draining'),
+    })
+    .strict(),
+  z
+    .object({
+      disposition: z.literal('refused'),
+      reason: z.literal('cooldown'),
+      /** Wall-clock epoch ms at which the init cooldown expires. Must be
+       *  strictly in the future at emit time. Required on this arm ONLY. */
+      cooldown_until: z.number().int().positive(),
+    })
+    .strict(),
+]);
+export type RuntimeDeliverRefusedResult = z.infer<
+  typeof RuntimeDeliverRefusedResultSchema
+>;
+/** Why the daemon refused custody. Derived from the refused arms
+ *  (single source), so consumers can `switch` exhaustively without a
+ *  second enum drifting from the schema. */
+export type RuntimeDeliverRefusedReason = RuntimeDeliverRefusedResult['reason'];
+
+/**
+ * Synchronous custody disposition. `spawning`/`admitted` are single strict
+ * arms; `refused` fans out over `reason` (RuntimeDeliverRefusedResultSchema).
+ *
+ * Outer combinator is `z.union`, NOT `discriminatedUnion('disposition')`:
+ * the refused arm needs its own `reason` discriminator to express the
+ * `cooldown_until` cross-constraint, and zod cannot nest a discriminated
+ * union inside a discriminatedUnion arm. With only three top-level shapes
+ * the union's parse cost is trivial, and it expresses the cross-constraint
+ * that a flat optional field could not.
+ *
+ * LOAD-BEARING INVARIANT (§10.3): this carries NO ack / `delivered_at`
+ * semantics. It transfers or refuses OWNERSHIP, it does not confirm
+ * delivery. "Sent to daemon" ≠ ack.
+ *   - `spawning` — daemon spawned; this batch is the startup delivery
+ *     (the EXISTING startup-delivery mechanism, not a new queue). Rows
+ *     stay in-flight (owner=conn) until an async `consumed` lands.
+ *   - `admitted` — handle was ready; daemon encoded + wrote stdin. Rows
+ *     stay in-flight until an async `consumed` lands.
+ *   - `deferred` — handle was ready but could not take the write now
+ *     (mid-turn `gated`, or a prior write still in flight); daemon
+ *     enqueued the batch in its per-handle mid-turn queue and will flush
+ *     at the next safe boundary. Rows stay in-flight (owner=conn) until an
+ *     async `consumed` lands — custody transfer, NOT an ack (§11).
+ *   - `refused` — daemon took nothing. Backend rolls the batch back to
+ *     pending immediately (retriable).
+ */
+export const RuntimeDeliverResultSchema = z.union([
+  z
+    .object({
+      disposition: z.literal('spawning'),
+      pid: z.number().int(),
+      started_at: z.number().int(),
+    })
+    .strict(),
+  z
+    .object({
+      disposition: z.literal('admitted'),
+      pid: z.number().int(),
+      started_at: z.number().int(),
+    })
+    .strict(),
+  z
+    .object({
+      disposition: z.literal('deferred'),
+      pid: z.number().int(),
+      started_at: z.number().int(),
+    })
+    .strict(),
+  RuntimeDeliverRefusedResultSchema,
+]);
+export type RuntimeDeliverResult = z.infer<typeof RuntimeDeliverResultSchema>;
+
+// ── unified delivery ack events (Stage 2, #task:1417) ───────────────
+//
+// The SINGLE async ack/rollback family, keyed by `delivery_ids`. It
+// subsumed the retired `runtime_startup_delivery_consumed`/`_failed` pair
+// AND the old `runtime_wake {delivered:true}` synchronous ack into one
+// family (both deleted in Stage 2c), regardless of whether delivery went
+// via spawn or ready-write.
+//
+//   consumed → backend `markDelivered` (flips `delivered_at`).
+//   failed   → backend rolls back to pending (retriable) or marks failed
+//              (fatal, e.g. `driver_refused` programming error).
+//
+// These are the ONLY things that move `delivered_at`. Stage 2 consumed
+// sources: startup init-proof (`session_init` for `requires_first_message`
+// drivers, preserving the B3 gate; write success for self-init drivers) and
+// ready-write success on the `admitted` path. See §10.4.
+//
+// Wired (Stage 2a): these are in `EventFrameSchema` below and the daemon
+// emits them via `deliver()`'s consume path; the backend event-handler has
+// its exhaustiveness cases. Stage 2c retired the legacy
+// `runtime_startup_delivery_*` pair — this unified family is now the ONLY
+// delivery-ack surface.
+
+export const RuntimeDeliveryConsumedEventSchema = z
+  .object({
+    event: z.literal('runtime_delivery_consumed'),
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    delivery_ids: z.array(z.number().int()).min(1),
+    ts: z.number().int(),
+  })
+  .strict();
+export type RuntimeDeliveryConsumedEvent = z.infer<
+  typeof RuntimeDeliveryConsumedEventSchema
+>;
+
+export const RuntimeDeliveryFailedReasonSchema = z.enum([
+  'child_exit',
+  'init_watchdog',
+  'write_failed',
   'driver_refused',
 ]);
-export type RuntimeWakeReason = z.infer<typeof RuntimeWakeReasonSchema>;
+export type RuntimeDeliveryFailedReason = z.infer<
+  typeof RuntimeDeliveryFailedReasonSchema
+>;
 
-export const RuntimeWakeResultSchema = z.union([
-  z
-    .object({
-      delivered: z.literal(true),
-      delivery_ids: z.array(z.number().int()).min(1),
-    })
-    .strict(),
-  z
-    .object({
-      delivered: z.literal(false),
-      reason: RuntimeWakeReasonSchema,
-      delivery_ids: z.array(z.number().int()).min(1),
-    })
-    .strict(),
-]);
-export type RuntimeWakeResult = z.infer<typeof RuntimeWakeResultSchema>;
+export const RuntimeDeliveryFailedEventSchema = z
+  .object({
+    event: z.literal('runtime_delivery_failed'),
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    delivery_ids: z.array(z.number().int()).min(1),
+    reason: RuntimeDeliveryFailedReasonSchema,
+    ts: z.number().int(),
+  })
+  .strict();
+export type RuntimeDeliveryFailedEvent = z.infer<
+  typeof RuntimeDeliveryFailedEventSchema
+>;
 
 // ── runtime_status ──────────────────────────────────────────────────
 
@@ -2165,9 +2329,12 @@ export const intentSchemas = {
     params: RuntimeStopParamsSchema,
     result: RuntimeStopResultSchema,
   },
-  runtime_wake: {
-    params: RuntimeWakeParamsSchema,
-    result: RuntimeWakeResultSchema,
+  runtime_deliver: {
+    // #task:1417 Stage 2 — daemon-authoritative delivery command. Result
+    // transfers/refuses custody only; `delivered_at` moves solely on the
+    // async `runtime_delivery_consumed`/`_failed` events below.
+    params: RuntimeDeliverParamsSchema,
+    result: RuntimeDeliverResultSchema,
   },
   runtime_status: {
     params: RuntimeStatusParamsSchema,
@@ -2431,7 +2598,9 @@ export type LooseResponseFrame = z.infer<typeof LooseResponseFrameSchema>;
  *  PR-2 step 1 surface (matches design doc §3.2):
  *
  *  - `runtime_state` / `runtime_output` / `runtime_exit` / `runtime_ready_for_drain`
- *  - `runtime_startup_delivery_consumed` / `runtime_startup_delivery_failed`
+ *  - `runtime_delivery_consumed` / `runtime_delivery_failed` (the unified
+ *    ack family; the legacy `runtime_startup_delivery_*` pair was retired
+ *    in Stage 2c)
  *  - `runtime_output_dropped` / `runtime_output_paused` / `runtime_output_resumed`
  *
  *  PR-2 step 2 surface (Cindy `vqDWkLFF6pAeIE5t`):
@@ -2498,32 +2667,23 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
     agent_id: z.string().min(1),
     ts: z.number().int(),
   }),
-  z.object({
-    event: z.literal('runtime_startup_delivery_consumed'),
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
-    delivery_ids: z.array(z.number().int()).min(1),
-    ts: z.number().int(),
-  }),
-  z.object({
-    event: z.literal('runtime_startup_delivery_failed'),
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
-    delivery_ids: z.array(z.number().int()).min(1),
-    reason: z.enum([
-      'child_exit',
-      'init_watchdog',
-      'write_failed',
-      'driver_refused',
-    ]),
-    ts: z.number().int(),
-  }).strict(),
+  // ── unified delivery ack events (Stage 2, #task:1417) ───────────
+  //
+  // The single async ack/rollback family for `runtime_deliver`, keyed by
+  // `delivery_ids`. Adding them here is what forces the backend
+  // event-handler exhaustiveness case (`_exhaustive`), so the ingestion
+  // wiring lands with this. Stage 2c retired the legacy
+  // `runtime_startup_delivery_consumed`/`_failed` pair these subsumed —
+  // this is now the ONLY delivery-ack family. Shapes are single-sourced
+  // from the standalone schemas defined above.
+  RuntimeDeliveryConsumedEventSchema,
+  RuntimeDeliveryFailedEventSchema,
   // ── runtime init lifecycle (locked by Cindy `vqDWkLFF6pAeIE5t`) ──
   //
   // These three events surface the daemon-internal init watchdog +
   // retry loop to backend. Init lifecycle is ORTHOGONAL to
-  // `runtime_startup_delivery_*`: empty-inbox and self-init paths
-  // have no startup_delivery to attach to but still get watchdog
+  // delivery acks (`runtime_delivery_*`): empty-inbox and self-init paths
+  // have no delivery batch to attach to but still get watchdog
   // timeouts / retries / cooldown. Backend doesn't own retry — daemon
   // does — but backend translates each event into UI / DB projection
   // (`agent_status` SSE, `updateAgentRuntime` columns, crash
@@ -2737,9 +2897,8 @@ export type LooseAnyFrame = z.infer<typeof LooseAnyFrameSchema>;
 /** Hard cap on one frame's encoded size. Guards both directions from
  *  pathological payloads and gives us a clean error to surface
  *  instead of letting the splitter buffer grow without bound.
- *  1 MiB is generous for PR-2's intent surface — `runtime_wake` and
- *  `runtime_start.startup_delivery` carry one stream-json line each,
- *  which is well under the cap in practice. */
+ *  1 MiB is generous for PR-2's intent surface — `runtime_deliver`
+ *  carries one stream-json line, which is well under the cap in practice. */
 export const MAX_FRAME_BYTES = 1 * 1024 * 1024;
 
 /** Encode an outgoing frame to its NDJSON wire form (single line +

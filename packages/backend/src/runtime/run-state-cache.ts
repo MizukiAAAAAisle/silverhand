@@ -19,7 +19,7 @@
  *
  *   - `phase` — daemon-side lifecycle (idle/spawning/startup_pending/
  *     ready/draining/exited). Only daemon knows this authoritatively;
- *     backend uses it to gate wake (`ready` only) and decide
+ *     backend uses it to gate delivery (`ready` only) and decide
  *     hydrate-vs-spawn (`exited` means we may spawn fresh).
  *   - `runState` — the rich `AgentRunState` DTO the renderer needs
  *     (status / activitySnippet / toolCallCounts / compaction). Daemon
@@ -36,12 +36,11 @@
  *
  * If backend reconnects to a NEW daemon (different `daemon_pid`), the
  * old cache is stale — that daemon's runtimes no longer exist. Callers
- * pass `daemonInstanceKey` (a `${daemon_pid}@${started_at}` string built
- * by `RuntimeEventHandler` from the daemon's `ready` event) on every
- * apply; the cache wipes entries from a different key before applying
- * new ones. This keeps the "old daemon's last known state" from
- * persisting after a daemon swap, which would otherwise mislead the
- * UI and the inbox-drain decisions.
+ * pass `daemonInstanceKey` (minted by `makeDaemonInstanceKey()` from the
+ * daemon's `ready` event) on every apply; the cache wipes entries from a
+ * different key before applying new ones. This keeps the "old daemon's
+ * last known state" from persisting after a daemon swap, which would
+ * otherwise mislead the UI and the inbox-drain decisions.
  *
  * ## Why no event emission
  *
@@ -96,7 +95,7 @@ export interface CachedRuntimeEntry {
   pid: number | null;
   startedAt: number | null;
   runState: AgentRunState | null;
-  /** Daemon instance key (`${daemon_pid}@${started_at}`) that owns
+  /** Daemon instance key (see `makeDaemonInstanceKey()`) that owns
    *  this entry. Lets callers detect stale data on hydrate. */
   daemonInstanceKey: string;
   /** Wall-clock ms of last cache mutation; cache-local, not from daemon. */

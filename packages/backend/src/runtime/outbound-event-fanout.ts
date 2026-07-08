@@ -35,6 +35,7 @@ import {
 } from './outbound-frame-adapter.js';
 import { singleConversationViewerUserId } from '../viewer-scope.js';
 import { JsonlActivityLogWriter, type ActivityLogWriter } from './activity-log-writer.js';
+import { makeDaemonInstanceKey } from './daemon-instance-key.js';
 import {
   CLEAR_SESSION_EXIT_TIMEOUT_MS,
   ClearSessionInProgressError,
@@ -53,7 +54,6 @@ import {
 } from './event-handler.js';
 import { RunStateCache, type CachedRuntimeEntry } from './run-state-cache.js';
 import {
-  combineGatedBatch,
   formatInboxBatch,
   sendMessageToolName,
 } from './stdin-format.js';
@@ -202,8 +202,8 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     // buffered frames in flight after the backend has accepted a newer
     // outbound connection for the same host. Those stale frames must
     // not write `currentConnectionId` back to the old value: otherwise
-    // a late `runtime_ready_for_drain` can immediately issue
-    // `runtime_wake` pinned to a dead connection and leave rows
+    // a late `runtime_ready_for_drain` can immediately issue a
+    // `runtime_deliver` pinned to a dead connection and leave rows
     // pending behind `transport_disconnected`. The command side already
     // has an `expectedConnectionId` guard; mirror that boundary on the
     // event side before any state mutation.
@@ -256,7 +256,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     const state = this.stateForHost(hostId);
     state.currentConnectionId = connectionId;
     if (event.kind === 'ready') {
-      state.currentDaemonKey = daemonKeyFromReady(
+      state.currentDaemonKey = makeDaemonInstanceKey(
         event.daemon_pid,
         event.started_at,
       );
@@ -267,7 +267,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       // that fetches the daemon's `runtime_status` snapshot and
       // populates the cache; only after that does `replayPendingForHost`
       // re-drive the runtimes the snapshot reports as ALREADY ALIVE
-      // (`phase === 'ready'`), wake-only. It never derives a spawn from
+      // (`phase === 'ready'`), live-delivery-only. It never derives a spawn from
       // the DB pending set — that was the boot-herd bug. Firing on
       // `ready` itself would race the hydrate and act on a stale cache.
     } else if (
@@ -391,26 +391,17 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     );
     if (delivery.deliveredAt !== null) return;
     const hostId = this.hostIdForAgent(agentId);
-    const connectionId = this.connectedConnectionId(hostId, 'runtime_wake');
-    const state = this.stateForHost(hostId);
-    const entry = this.cacheEntryForLiveConnection(
-      state,
+    // #task:1417 Stage 2b — no cache-phase fork. Claim pending + submit a
+    // live `runtime_deliver`; the daemon decides spawn-vs-admit-vs-refuse.
+    // The desyncable cache projection no longer gates delivery (root #1416
+    // fix). The connection is resolved under the `runtime_deliver` label.
+    const connectionId = this.connectedConnectionId(hostId, 'runtime_deliver');
+    await this.deliverLivePendingForAgent(
+      hostId,
       connectionId,
       conversationId,
       agentId,
     );
-    if (!entry || entry.phase === 'idle' || entry.phase === 'exited') {
-      await this.startDeliveryBacked(conversationId, agentId);
-      return;
-    }
-    if (entry.phase === 'ready') {
-      await this.deliverLivePendingForAgent(
-        hostId,
-        connectionId,
-        conversationId,
-        agentId,
-      );
-    }
   }
 
   /**
@@ -619,7 +610,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
    *        had no handle; skip wait. Covers `cleared:false` /
    *        already-exited / orphan-row clears.
    *   7. `coordinator.clearRuntime` mirrors the embedded path's
-   *      delivery-state cleanup (cancel wake watchdog, drop
+   *      delivery-state cleanup (cancel delivery watchdog, drop
    *      pending/busy markers).
    *   8. DB transaction (Cindy `szDHSdeKwtEUlxZb` P3): the
    *      `updateAgentRuntime(cliSessionId: null)` write AND the
@@ -830,12 +821,22 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     });
   }
 
-  async startDeliveryBacked(
+  /**
+   * #task:1417 Stage 2b — drain the pending inbox for a (conv, agent) via
+   * `runtime_deliver` (the SOLE delivery command). Spawns-with-batch when
+   * the daemon has no live handle, admits when ready — the daemon decides.
+   * Renamed from `startDeliveryBacked`: "start" (lifecycle) and "deliver"
+   * (message) are now separate planes, and this one carries a message, so
+   * it lives on the delivery plane. Returns true iff there was pending work
+   * to dispatch (or an in-flight claim already owns it); false when the
+   * inbox was empty (caller falls back to a lifecycle `startDirect`).
+   */
+  async deliverPending(
     conversationId: string,
     agentId: string,
   ): Promise<boolean> {
     const hostId = this.hostIdForAgent(agentId);
-    const connectionId = this.connectedConnectionId(hostId, 'runtime_start');
+    const connectionId = this.connectedConnectionId(hostId, 'runtime_deliver');
     const staleInFlight = this.inboxRepo.rollbackInFlightForPairExceptOwner(
       conversationId,
       agentId,
@@ -861,7 +862,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       // scoped reattach re-drive of a LIVE runtime
       // (`replayPendingForHost`), a per-pair `ready_for_drain` replay,
       // or another in-flight start. The racing caller then sees an empty
-      // `listPending` even though a `runtime_start`/wake dispatch is
+      // `listPending` even though a `runtime_start`/delivery dispatch is
       // already in flight (the winner transitioned the rows to
       // `in_flight_owner = <conn>`). Without this guard the explicit
       // start would throw `HostRuntimeDisabledError` ("nothing to
@@ -884,25 +885,10 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       }
       return false;
     }
-    const state = this.stateForHost(hostId);
-    const entry = this.cacheEntryForLiveConnection(
-      state,
-      connectionId,
-      conversationId,
-      agentId,
-    );
-    if (entry && entry.phase !== 'idle' && entry.phase !== 'exited') {
-      if (entry.phase === 'ready') {
-        await this.replayPendingForAgent(
-          hostId,
-          connectionId,
-          conversationId,
-          agentId,
-        );
-      }
-      return true;
-    }
-
+    // #task:1417 Stage 2b — NO cache-entry-live fork. We claim pending and
+    // submit `runtime_deliver`; the daemon decides spawn-vs-admit. The
+    // ready-for-drain submit path runs the fs guards + injects
+    // `spawn_options` in the coordinator's bridge closure.
     const claimed = this.inboxRepo.claimPending(
       conversationId,
       agentId,
@@ -910,122 +896,45 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     );
     if (claimed.length === 0) return false;
     const batch = this.pendingBatch(conversationId, agentId, claimed);
-    const options = this.runtimeStartOptions(hostId, conversationId, agentId);
-    // D4.e-6 — I4 host-equality gate (Cindy P1-2). BEFORE any backfill/dispatch
-    // side effect, verify every workspace this start references is owned by the
-    // dispatch host. A corrupt conversation row or workspace membership that
-    // points at ANOTHER host's workspace must never make us forward that host's
-    // `workspace_path` as a `requested_path` to this daemon (fs binding) or
-    // dispatch `runtime_start` against it. This mirrors the inbound-event
-    // `assertEventOwnership` perimeter; on the start path the blast radius is
-    // larger (daemon-side binding/spawn), so it fails closed here too.
-    if (!this.runtimeStartHostsConsistent(hostId, conversationId, agentId)) {
-      this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
-      return false;
-    }
-    // D4.e-6 — bounded lazy backfill before dispatch. `runtime_start` carries
-    // semantic refs only; the daemon resolves regular-workspace paths from its
-    // registry and fails closed on a legacy row it never provisioned. A
-    // cold-start / hydrate→pending-replay can reach here with no prior
-    // read-path having backfilled the registry, so re-bind the regular
-    // workspaces this start references first (Cindy `2A_y70Aue5X1SlOr`). On a
-    // partial/failed backfill we do NOT dispatch: roll the claimed rows back
-    // to pending (preserving the retry anchor) and bail — the daemon-side
-    // fail-closed remains the final boundary if we proceed anyway.
-    const backfillOk = await this.backfillRuntimeStartWorkspaces(
-      hostId,
-      conversationId,
-      agentId,
-    );
-    if (!backfillOk) {
-      this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
-      return false;
-    }
-    const transport = this.requireTransport();
     try {
-      const result = await transport.sendCommand(
+      const decision = await this.stateForHost(
         hostId,
-        'runtime_start',
+      ).coordinator.submitReadyForDrainDeliveryBatch(conversationId, agentId, [
         {
-          conversation_id: conversationId,
-          agent_id: agentId,
-          options,
-          startup_delivery: {
-            delivery_ids: batch.deliveryIds,
-            delivered_up_to_seq: batch.deliveredUpToSeq,
-            deliveries: batch.deliveries,
-            text: batch.text,
+          deliveryIds: batch.deliveryIds,
+          deliveredUpToSeq: batch.deliveredUpToSeq,
+          deliveries: batch.deliveries,
+          dedupKey: claimed[0]!.message.id,
+          text: batch.text,
+          driver: {
+            runtime: batch.agentRuntime,
+            oneShot: batch.driver.oneShot,
+            busyDeliveryMode: batch.driver.busyDeliveryMode,
+            kickoffMode: batch.driver.kickoffMode,
           },
-        } satisfies RuntimeStartParams,
-        { timeoutMs: 60_000, expectedConnectionId: connectionId },
-      );
-      if (result.started && result.startup_delivery_accepted !== true) {
-        // The daemon reports the handle was ALREADY alive: `runtime_start`
-        // is idempotent and deliberately does NOT consume a startup_delivery
-        // against an existing handle ("start is not a wake substitute" —
-        // supervisor). Rolling back and returning here would ORPHAN the rows:
-        // `runtime_ready_for_drain` is one-shot (already fired for a live
-        // runtime) and no wake was issued, so nothing re-drives them and the
-        // agent silently never receives the message. Honor the daemon's own
-        // contract — "callers wanting to push a new batch after start must use
-        // runtime_wake" — by converging on the live wake path. This keys off
-        // the daemon's AUTHORITATIVE "already alive" reply, so it also
-        // self-heals a backend cache whose `phase` had desynced from 'ready'
-        // (the reason `deliverMessage` routed here instead of waking).
-        this.opts.logger.info(
-          {
-            kind: 'inbox',
-            action: 'startup_delivery_rerouted_to_wake',
-            hostId,
-            conversationId,
-            agent_id: agentId,
-            delivery_ids: batch.deliveryIds,
-            result: summarizeStartupDeliveryResult(result),
-          },
-          'runtime_start reported an already-live handle; rerouting pending rows to runtime_wake',
-        );
-        this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
-        // Patch a temporary wake-ROUTING projection before rerouting. The wake
-        // path (`deliverLivePendingForAgent` → coordinator) gates on the SHARED
-        // cache; a desynced entry (absent / non-'ready') is exactly why we
-        // landed on the start path, so it would also refuse the wake. The
-        // daemon's reply proves the handle is alive but NOT which phase it is in
-        // — `runtime_start` returns started=true idempotently for
-        // spawning/startup_pending/ready/draining alike (supervisor
-        // 1097-1104). We stamp 'ready' ONLY to route this delivery to the wake
-        // path; the AUTHORITATIVE gate remains the daemon's `runtime_wake`. So
-        // if the handle is actually not-yet / no-longer drainable, the worst
-        // case is one wake the daemon safely refuses →
-        // `deliverLivePendingForAgent` rolls the rows back to pending
-        // (retriable; recovered by the one-shot ready_for_drain or
-        // respawn-on-exit). The transient inaccuracy self-corrects on the next
-        // runtime_status hydrate / runtime_state. Stamp with the cache's OWN
-        // current daemon key (not a reconstructed one — the two derivations
-        // differ in format) so `acceptDaemonKey` admits the patch; if the cache
-        // has latched no daemon yet there is nothing live to wake and the
-        // reroute rolls the rows back to pending, unchanged from before.
-        const daemonKey = state.cache.daemonInstanceKey;
-        if (daemonKey) {
-          state.cache.applyPhase(daemonKey, conversationId, agentId, 'ready');
-        }
-        await this.deliverLivePendingForAgent(
-          hostId,
-          connectionId,
-          conversationId,
-          agentId,
-        );
-      } else if (!result.started) {
+        },
+      ]);
+      // Custody: `dispatched` transfers to the daemon (rows stay in-flight,
+      // ack awaits async `runtime_delivery_consumed`). Anything else
+      // (`refused`, incl. a live oneShot the daemon sync-refuses) took
+      // nothing → roll back to pending. A thrown dispatch (transport /
+      // fs-guard) rolls back below.
+      if (decision.kind !== 'dispatched') {
         this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
       }
-      return true;
     } catch (err) {
       this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
       throw err;
     }
+    return true;
   }
 
   async start(conversationId: string, agentId: string): Promise<void> {
-    if (await this.startDeliveryBacked(conversationId, agentId)) return;
+    // #task:1417 Stage 2b — two planes. If there is pending inbox work,
+    // drain it via the delivery plane (`deliverPending` → `runtime_deliver`,
+    // which spawns-with-batch). Otherwise spawn a bare lifecycle runtime
+    // (`startDirect` → `runtime_start`, no message).
+    if (await this.deliverPending(conversationId, agentId)) return;
     await this.startDirect(conversationId, agentId);
   }
 
@@ -1345,50 +1254,85 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     };
     const coordinator = new RuntimeDeliveryCoordinator({
       bridge: {
-        runtimeWake: params => {
-          const connectionId = state.currentConnectionId;
-          if (!connectionId) {
-            return Promise.reject(
-              new Error('outbound connection changed before runtime_wake'),
+        // #task:1417 Stage 2b — `runtime_deliver` is the SOLE message
+        // delivery command. The daemon owns spawn-vs-admit, so ANY deliver
+        // may spawn: run the same fs guards the old delivery-backed start
+        // ran (host-equality fail-closed + registry backfill) and inject
+        // `spawn_options` BEFORE dispatch. Backfill is memoized
+        // (`WorkspaceRegistryBackfiller.settled`), so the ready-admit hot
+        // path pays only an in-memory set lookup after the first bind.
+        runtimeDeliver: async params => {
+          // Pin the deliver to the SAME connection the caller resolved and
+          // claimed rows under. During event dispatch (respawn / drain
+          // replay) that is `dispatchConnectionId` (the event's connection,
+          // already staleness-gated at ingress). For a route-driven deliver
+          // there is no dispatch context, so fall back to the transport's
+          // CURRENT connection — NOT `currentConnectionId`, which is only
+          // seeded by a processed `ready` and is legitimately null/stale in
+          // the reconnect window (new socket attached, its `ready` not yet
+          // processed). `connectedConnectionId` throws a typed
+          // `transport_no_connection` when the host has no live connection.
+          const connectionId =
+            state.dispatchConnectionId ??
+            this.connectedConnectionId(hostId, 'runtime_deliver');
+          if (
+            !this.runtimeStartHostsConsistent(
+              hostId,
+              params.conversation_id,
+              params.agent_id,
+            )
+          ) {
+            throw new Error(
+              'runtime_deliver blocked: a referenced workspace is owned by a different host',
             );
           }
+          const backfillOk = await this.backfillRuntimeStartWorkspaces(
+            hostId,
+            params.conversation_id,
+            params.agent_id,
+          );
+          if (!backfillOk) {
+            throw new Error(
+              'runtime_deliver blocked: workspace registry backfill incomplete',
+            );
+          }
+          if (
+            (this.opts.transport()?.connectionIdForHost(hostId) ?? null) !==
+            connectionId
+          ) {
+            throw new Error('outbound connection changed during runtime_deliver guards');
+          }
+          const spawn_options = this.runtimeStartOptions(
+            hostId,
+            params.conversation_id,
+            params.agent_id,
+          );
           const transport = this.requireTransport();
-          return transport.sendCommand(hostId, 'runtime_wake', params, {
-            timeoutMs: 10_000,
-            expectedConnectionId: connectionId,
-          });
+          return transport.sendCommand(
+            hostId,
+            'runtime_deliver',
+            { ...params, spawn_options },
+            { timeoutMs: 60_000, expectedConnectionId: connectionId },
+          );
         },
       },
       cache,
-      inboxAck: {
-        markDelivered: ids => this.inboxRepo.markDelivered([...ids]),
-      },
       callbacks: {
         // Auto-respawn-to-drain on non-fatal runtime exit with pending
         // inbox. The coordinator's `onRuntimeExit` gate
         // (intentional===false AND !initTimedOut AND !fatalError AND
         // hasPendingInbox) is the ONLY correct redelivery path for a
         // runtime that exited while inbox rows are still pending: a
-        // fresh `runtime_start` + `startup_delivery` lets the new
-        // daemon-side runtime drain the inbox during its init phase (a
-        // direct `runtime_wake` cannot — there is no live child).
-        // `startDeliveryBacked` is idempotent (in-flight guard + atomic
-        // claim) so a spurious or duplicate call is a benign no-op.
-        //
-        // Regression fix: the D5.a-3 unification onto
-        // OutboundRuntimeEventFanout dropped this wiring — the old
-        // embedded DaemonHost bound `respawn` to its own start, but the
-        // unified fanout constructed the coordinator without it, so a
-        // runtime that exited with pending inbox logged "no respawn
-        // callback wired" and never drained. Mapped to `Promise<void>`
-        // so any rejection still reaches the coordinator's best-effort
+        // `runtime_deliver` with no live handle spawns a fresh runtime
+        // that drains the batch in its init phase. `deliverPending` is
+        // idempotent (in-flight guard + atomic claim) so a spurious or
+        // duplicate call is a benign no-op. Mapped to `Promise<void>` so
+        // any rejection still reaches the coordinator's best-effort
         // `.catch`.
         respawn: (cid, aid) =>
-          this.startDeliveryBacked(cid, aid).then(() => undefined),
+          this.deliverPending(cid, aid).then(() => undefined),
         hasPendingInbox: (cid, aid) =>
           this.inboxRepo.listPending(cid, aid).length > 0,
-        combineGated: texts =>
-          combineGatedBatch(texts, 'silverhand message send'),
         publishActivity: runState => {
           this.opts.events.publishSide(runState.conversationId, {
             kind: 'agent_activity',
@@ -1422,7 +1366,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         coordinator.onRuntimeExit(cid, aid, meta);
       },
       onInitTimeout: (cid, aid) =>
-        coordinator.clearWakeWatchdog(cid, aid, 'timeout'),
+        coordinator.clearDeliveryWatchdog(cid, aid, 'timeout'),
       onReadyForDrain: (cid, aid) => {
         const connectionId = state.currentConnectionId;
         if (!connectionId) {
@@ -1437,7 +1381,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       // Reattach re-drive. Fires AFTER the daemon's `runtime_status`
       // snapshot has hydrated the cache, scoped (in
       // `replayPendingForHost`) to runtimes the snapshot reports as
-      // ALREADY ALIVE — wake-only, never spawn. We dispatch via
+      // ALREADY ALIVE — live-delivery-only, never spawn. We dispatch via
       // `queueMicrotask` so the hydrate code path returns first (the
       // dispatch awaits the WS round-trip and we don't want to nest
       // that inside the hydrate callback).
@@ -1490,7 +1434,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
    * every historical inbox.
    *
    * New contract: only runtimes the daemon reports as alive (`phase ===
-   * 'ready'`) in the hydrate snapshot are re-driven, via the wake-only
+   * 'ready'`) in the hydrate snapshot are re-driven, via the live-delivery-only
    * `replayPendingForAgent` path (it submits a ready-for-drain batch to
    * an existing runtime and can never `runtime_start`). This handles the
    * real reattach concern — a live runtime whose in-flight delivery got
@@ -1515,7 +1459,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     // Live runtimes only — derived from the hydrated cache, NOT from the
     // DB pending set. `phase === 'ready'` is the only drainable-live
     // phase (a 'starting' runtime drains on its own ready_for_drain
-    // event; 'draining'/'exited'/'idle' are not wakeable here).
+    // event; 'draining'/'exited'/'idle' are not deliverable here).
     const liveReady = state.cache
       .list()
       .filter(entry => entry.phase === 'ready');
@@ -1589,7 +1533,12 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           },
         }],
       );
-      if (decision.kind !== 'wake_dispatched') {
+      // #task:1417 Stage 2b — `dispatched` transfers custody to the daemon
+      // (rows stay in-flight, ack awaits `runtime_delivery_consumed`).
+      // ready-for-drain never queues mid-turn, so anything else (`refused`,
+      // incl. a live oneShot the daemon sync-refuses) took nothing → roll
+      // back.
+      if (decision.kind !== 'dispatched') {
         this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
       }
     } catch (err) {
@@ -1647,7 +1596,15 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           },
         }],
       );
-      if (decision.kind !== 'wake_dispatched') {
+      // #task:1417 Stage 3 custody — roll back ONLY when the batch found no
+      // owner: `refused` (daemon took nothing, incl. a live oneShot it
+      // sync-refuses; that oneShot drains on its next respawn-with-batch).
+      // `dispatched` covers `admitted`/`spawning` AND the daemon's
+      // `deferred` (held in the daemon's own mid-turn queue) — all keep the
+      // rows in-flight (owner=conn). A disconnect rolls those back via
+      // `rollbackInFlightForOwner` (paired with the daemon's owner-scoped
+      // `cleanupDeferredForOwner`); a thrown dispatch rolls back below.
+      if (decision.kind === 'refused') {
         this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
       }
     } catch (err) {
@@ -1774,33 +1731,10 @@ function noopRuntimeEventSource(): RuntimeEventSource {
   };
 }
 
-function daemonKeyFromReady(daemonPid: number, startedAt: number): string {
-  return `${daemonPid}@${startedAt}`;
-}
-
 function clearSessionKey(conversationId: string, agentId: string): string {
   return `${conversationId}|${agentId}`;
 }
 
 function idleReapRuntimeEnabled(_runtime: RuntimeKind): boolean {
   return true;
-}
-
-function summarizeStartupDeliveryResult(result: {
-  started: boolean;
-  startup_delivery_accepted?: boolean;
-  pid?: number | null;
-  started_at?: number;
-  error?: unknown;
-}): Record<string, unknown> {
-  return {
-    started: result.started,
-    startup_delivery_accepted: result.startup_delivery_accepted,
-    pid: result.pid,
-    started_at: result.started_at,
-    error:
-      result.error && typeof result.error === 'object' && !Array.isArray(result.error)
-        ? Object.keys(result.error as Record<string, unknown>).slice(0, 10)
-        : result.error,
-  };
 }

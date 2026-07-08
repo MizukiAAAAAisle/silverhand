@@ -15,7 +15,7 @@
  *    dispatcher → supervisor.start() → emit() → server.broadcast() →
  *    backpressure → live socket → HostClient.handleFrame →
  *    eventHandlers.
- *  - Each step-1 intent (start, wake, status, stop) returns its
+ *  - Each step-1 intent (start, deliver, status, stop) returns its
  *    declared shape and produces the expected event sequence.
  *  - Two HostClient connections to the same daemon both receive the
  *    same broadcast events.
@@ -119,7 +119,6 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     assertStarted(r);
     expect(r.pid).toBeGreaterThan(0);
     expect(typeof r.started_at).toBe('number');
-    expect(r.startup_delivery_accepted).toBeUndefined();
 
     // FakeSupervisor schedules ready_for_drain via setImmediate.
     const ready = await waitForEvent(
@@ -130,7 +129,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     expect(ready.agent_id).toBe('agent-1');
   });
 
-  it('runtime_start with startup_delivery emits runtime_startup_delivery_consumed on success', async () => {
+  it('runtime_deliver SPAWN arm emits runtime_delivery_consumed on success', async () => {
     const f = await setupFixture();
     fixtures.push(f);
     const client = new HostClient({ socketPath: f.socketPath });
@@ -139,28 +138,26 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     const events: EventFrame[] = [];
     client.subscribe(e => events.push(e));
 
-    const r = await client.runtimeStart({
+    const r = await client.runtimeDeliver({
       conversation_id: 'conv-2',
       agent_id: 'agent-2',
-      options: testStartOptions(),
-      startup_delivery: {
-        delivery_ids: [101, 102],
-        text: 'hello',
-      },
+      delivery_ids: [101, 102],
+      kind: 'message',
+      text: 'hello',
+      spawn_options: testStartOptions(),
     });
-    assertStarted(r);
-    expect(r.startup_delivery_accepted).toBe(true);
+    expect(r.disposition).toBe('spawning');
 
     const consumed = await waitForEvent(
       events,
-      (e): e is Extract<EventFrame, { event: 'runtime_startup_delivery_consumed' }> =>
-        e.event === 'runtime_startup_delivery_consumed',
+      (e): e is Extract<EventFrame, { event: 'runtime_delivery_consumed' }> =>
+        e.event === 'runtime_delivery_consumed',
     );
     expect(consumed.delivery_ids).toEqual([101, 102]);
     expect(consumed.conversation_id).toBe('conv-2');
   });
 
-  it('runtime_start with startup_delivery emits runtime_startup_delivery_failed when driver refuses', async () => {
+  it('runtime_deliver SPAWN arm emits runtime_delivery_failed when driver refuses', async () => {
     const f = await setupFixture({ failStartupDelivery: true });
     fixtures.push(f);
     const client = new HostClient({ socketPath: f.socketPath });
@@ -169,16 +166,18 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     const events: EventFrame[] = [];
     client.subscribe(e => events.push(e));
 
-    await client.runtimeStart({
+    await client.runtimeDeliver({
       conversation_id: 'conv-3',
       agent_id: 'agent-3',
-      options: testStartOptions(),
-      startup_delivery: { delivery_ids: [200], text: 'stub' },
+      delivery_ids: [200],
+      kind: 'message',
+      text: 'stub',
+      spawn_options: testStartOptions(),
     });
     const failed = await waitForEvent(
       events,
-      (e): e is Extract<EventFrame, { event: 'runtime_startup_delivery_failed' }> =>
-        e.event === 'runtime_startup_delivery_failed',
+      (e): e is Extract<EventFrame, { event: 'runtime_delivery_failed' }> =>
+        e.event === 'runtime_delivery_failed',
     );
     expect(failed.delivery_ids).toEqual([200]);
     expect(['child_exit', 'init_watchdog', 'write_failed', 'driver_refused']).toContain(
@@ -186,7 +185,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     );
   });
 
-  it('runtime_wake to a ready runtime returns delivered=true with original delivery_ids', async () => {
+  it('runtime_deliver WRITE arm to a ready runtime returns admitted + settles on runtime_delivery_consumed', async () => {
     const f = await setupFixture();
     fixtures.push(f);
     const client = new HostClient({ socketPath: f.socketPath });
@@ -205,34 +204,40 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       (e): e is Extract<EventFrame, { event: 'runtime_ready_for_drain' }> =>
         e.event === 'runtime_ready_for_drain' && e.conversation_id === 'conv-4',
     );
-    const r = await client.runtimeWake({
+    const r = await client.runtimeDeliver({
       conversation_id: 'conv-4',
       agent_id: 'agent-4',
       delivery_ids: [50, 51, 52],
       kind: 'message',
       text: 'batch',
+      spawn_options: testStartOptions(),
     });
-    expect(r).toEqual({ delivered: true, delivery_ids: [50, 51, 52] });
+    expect(r.disposition).toBe('admitted');
+    const consumed = await waitForEvent(
+      events,
+      (e): e is Extract<EventFrame, { event: 'runtime_delivery_consumed' }> =>
+        e.event === 'runtime_delivery_consumed' && e.conversation_id === 'conv-4',
+    );
+    expect(consumed.delivery_ids).toEqual([50, 51, 52]);
   });
 
-  it('runtime_wake to non-existent runtime returns delivered=false reason=not_running', async () => {
+  it('runtime_deliver to a non-existent runtime spawns-with-batch (SPAWN arm), not a no-op', async () => {
     const f = await setupFixture();
     fixtures.push(f);
     const client = new HostClient({ socketPath: f.socketPath });
     clients.push(client);
     await client.connect();
-    const r = await client.runtimeWake({
+    const r = await client.runtimeDeliver({
       conversation_id: 'no-such-conv',
       agent_id: 'no-such-agent',
       delivery_ids: [1],
       kind: 'message',
       text: 'stub',
+      spawn_options: testStartOptions(),
     });
-    expect(r).toEqual({
-      delivered: false,
-      reason: 'not_running',
-      delivery_ids: [1],
-    });
+    // Unlike the retired `runtime_wake` (which refused not_running), the
+    // unified deliver command spawns a fresh runtime with the batch.
+    expect(r.disposition).toBe('spawning');
   });
 
   it('runtime_status snapshot reflects all live runtimes', async () => {
@@ -357,7 +362,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     expect(final[3]?.state.terminalReason).toBe('stopped');
   });
 
-  it('runtime_state on startup_delivery failure carries terminalReason=crashed', async () => {
+  it('runtime_state on deliver-spawn failure carries terminalReason=crashed', async () => {
     // Failure path of blocker 3: the terminal `runtime_state` line for
     // an init-failed runtime must encode `terminalReason: 'crashed'`
     // so backend snapshots reconcile to the correct AgentRunState.
@@ -369,11 +374,13 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     const events: EventFrame[] = [];
     client.subscribe(e => events.push(e));
 
-    await client.runtimeStart({
+    await client.runtimeDeliver({
       conversation_id: 'c-crash',
       agent_id: 'ag-crash',
-      options: testStartOptions(),
-      startup_delivery: { delivery_ids: [1], text: 'stub' },
+      delivery_ids: [1],
+      kind: 'message',
+      text: 'stub',
+      spawn_options: testStartOptions(),
     });
     await waitForEvent(
       events,

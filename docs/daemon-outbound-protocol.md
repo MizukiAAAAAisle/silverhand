@@ -114,11 +114,10 @@ shape rather than treating the default as product policy:
 | Command | Recommended timeout | Reason |
 | --- | ---: | --- |
 | `runtime_status` | 5s | read-only snapshot; used for reconnect hydrate |
-| `runtime_wake` | 10s | stdin write / driver refusal should settle quickly |
+| `runtime_deliver` | 10s | spawn/admit/refuse custody decision; consumed ack is still async |
 | `runtime_stop` hard | 10s | signal dispatch ack, not full process-drain guarantee |
 | `runtime_stop` soft | 15s | directive encode + stdin write |
-| `runtime_start` without `startup_delivery` | 30s | spawn acceptance and pid report |
-| `runtime_start` with `startup_delivery` | 60s | spawn plus first delivery acceptance; consumed ack is still async |
+| `runtime_start` | 30s | pure lifecycle spawn acceptance and pid report (no batch) |
 | `runtime_clear_session` | 15s | hard-stop + session reset ack |
 | `runtime_stop_all` / `runtime_close_activity_log` | 30s | shutdown/drain control path |
 | `runtime_output_pause` / `runtime_output_resume` | 5s | local daemon bookkeeping |
@@ -143,7 +142,7 @@ The D2 command catalogue reuses the current runtime schemas from
 
 - `runtime_start`
 - `runtime_stop`
-- `runtime_wake`
+- `runtime_deliver`
 - `runtime_status`
 - `runtime_clear_session`
 - `runtime_stop_all`
@@ -207,8 +206,8 @@ renamed to envelope `kind`:
 - `runtime_output`
 - `runtime_exit`
 - `runtime_ready_for_drain`
-- `runtime_startup_delivery_consumed`
-- `runtime_startup_delivery_failed`
+- `runtime_delivery_consumed`
+- `runtime_delivery_failed`
 - `runtime_init_timeout`
 - `runtime_init_retrying`
 - `runtime_init_cooldown`
@@ -263,34 +262,40 @@ row id in a SQL transaction:
 1. `pending -> in_flight`: rows with `delivered_at IS NULL`,
    `failed_at IS NULL`, and no `in_flight_owner` are claimed for the current
    host WebSocket connection id.
-2. Server dispatches one `runtime_wake` with the claimed `delivery_ids` in row
-   order.
-3. `{ delivered: true, delivery_ids }` is the only ack that marks rows
-   delivered.
-4. `{ delivered: false, reason }`, timeout, send failure, or disconnect rolls
+2. Server dispatches one `runtime_deliver` with the claimed `delivery_ids` in
+   row order plus `spawn_options` (consulted only if the daemon must spawn).
+3. The synchronous `runtime_deliver` disposition transfers or refuses **custody
+   only** — it never acks the DB. `spawning`/`admitted` keep the rows in flight;
+   the async `runtime_delivery_consumed{delivery_ids}` is the only ack that marks
+   rows delivered.
+4. A `refused{reason}` disposition, timeout, send failure, or disconnect rolls
    rows back to pending so the next ready-for-drain can retry.
+   `runtime_delivery_failed{delivery_ids, reason}` likewise rolls the batch back.
 
 Repeated ready-for-drain events while a row is in flight do not double-send
 that row. When a host WebSocket disconnects or is replaced, server sweeps rows
 owned by that connection id back to pending before the next connection can
 claim them.
 
-Startup delivery uses the same inbox rows but chooses command shape by current
-daemon status:
+`runtime_deliver` is daemon-authoritative: the daemon inspects the REAL handle
+and chooses spawn / admit / refuse itself, so server no longer forks command
+shape by cached phase.
 
-- Existing runtime with phase `ready`: replay as `runtime_wake`.
-- No runtime, `idle`, or `exited`: send `runtime_start` with
-  `startup_delivery`. The D2.e implementation does not ship
+- No live handle (absent or `exited`): the daemon spawns with the batch as its
+  startup delivery → `spawning`. The D2.e implementation does not ship
   daemon-local absolute workspace or spawn-prep paths in this command; the full
   workspace/session/profile bundles remain the D2.0 contract for later
   materialization work.
-- `startup_pending`, `spawning`, or `draining`: leave rows pending until daemon
-  emits ready-for-drain or a later status snapshot shows a fresh start is
-  needed.
+- `ready` + driver ready to encode: the daemon writes stdin → `admitted`.
+- `startup_pending`, `spawning`, a live oneShot, a batch already in flight, or a
+  driver not yet ready to encode → `refused{startup_pending}`; a hard stop in
+  flight → `refused{draining}`; the init-failure cooldown gate → `refused{cooldown}`.
+  Rows stay pending until the daemon emits the next ready-for-drain (or, for a
+  live oneShot, its next exit → respawn-with-batch).
 
 Non-delivery controls remain fail-fast. A disconnected in-flight
 `runtime_status`, `runtime_stop`, `rotate_token`, `runtime_clear_session`, or
-delivery-less `runtime_start` is rejected to the caller and is not retried on
+lifecycle `runtime_start` is rejected to the caller and is not retried on
 reconnect.
 
 ## Durability
@@ -301,12 +306,12 @@ non-durable.
 
 On disconnect or backpressure:
 
-- Delivery-backed `runtime_wake` and startup-delivery `runtime_start` leave
-  their inbox rows pending on transport failure. Reconnect plus
-  `runtime_ready_for_drain` replays through DB claim/rollback and
-  `RuntimeDeliveryCoordinator`, not an in-memory transport queue.
+- Delivery-backed `runtime_deliver` leaves its inbox rows pending on transport
+  failure. Reconnect plus `runtime_ready_for_drain` replays through DB
+  claim/rollback and `RuntimeDeliveryCoordinator`, not an in-memory transport
+  queue.
 - Non-delivery controls (`runtime_status`, `runtime_stop`, `rotate_token`,
-  delivery-less `runtime_start`, etc.) fail fast to the caller with an explicit
+  lifecycle `runtime_start`, etc.) fail fast to the caller with an explicit
   transport reason. The server and daemon must not fabricate an off-DB pending
   queue for these commands.
 

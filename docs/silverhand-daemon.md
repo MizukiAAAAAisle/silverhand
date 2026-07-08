@@ -205,8 +205,9 @@ The follow-up PR will:
 
 1. Move `ConversationManager` (spawn / inbox-drain / run-state) into
    the daemon.
-2. Add `runtime_start` / `runtime_stop` / `runtime_wake` /
-   `runtime_inject_env` intents.
+2. Add `runtime_start` / `runtime_stop` / `runtime_deliver`
+   intents (the daemon-authoritative delivery command; `runtime_deliver`
+   subsumed the retired `runtime_wake` + `runtime_start`-with-batch fork).
 3. Add runtime-event streaming (`runtime_state`, `runtime_output`)
    as unsolicited events the backend subscribes to.
 4. Make `hostClient` required.

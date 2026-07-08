@@ -175,22 +175,6 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'runtime_start' },
   },
   {
-    name: 'request/runtime_start-with-startup-delivery',
-    description:
-      'runtime_start with batched startup_delivery — daemon encodes (Option A v2).',
-    frame: enc({
-      id: 'req-start-2',
-      intent: 'runtime_start',
-      params: {
-        conversation_id: C,
-        agent_id: A,
-        options: RUNTIME_START_OPTIONS,
-        startup_delivery: { delivery_ids: DELIVERY_IDS, text: 'queued user message' },
-      },
-    }),
-    kind: { kind: 'request', intent: 'runtime_start' },
-  },
-  {
     name: 'request/runtime_stop-hard',
     description: 'Hard stop — SIGTERM 5s → SIGKILL cascade. No directive.',
     frame: enc({
@@ -216,36 +200,40 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'runtime_stop' },
   },
   {
-    name: 'request/runtime_wake-message',
-    description: 'Live-delivery wake — kind=message, batch of delivery_ids.',
+    name: 'request/runtime_deliver-message',
+    description:
+      '#task:1417 Stage 2 daemon-authoritative delivery — kind=message, batch of delivery_ids, carries spawn_options for the no-handle spawn arm.',
     frame: enc({
-      id: 'req-wake-1',
-      intent: 'runtime_wake',
+      id: 'req-deliver-1',
+      intent: 'runtime_deliver',
       params: {
         conversation_id: C,
         agent_id: A,
         delivery_ids: DELIVERY_IDS,
         kind: 'message',
         text: 'hi',
+        spawn_options: RUNTIME_START_OPTIONS,
       },
     }),
-    kind: { kind: 'request', intent: 'runtime_wake' },
+    kind: { kind: 'request', intent: 'runtime_deliver' },
   },
   {
-    name: 'request/runtime_wake-schedule_fire',
-    description: 'Live-delivery wake — kind=schedule_fire (timer-driven).',
+    name: 'request/runtime_deliver-schedule_fire',
+    description:
+      '#task:1417 Stage 2 delivery — kind=schedule_fire (timer-driven).',
     frame: enc({
-      id: 'req-wake-2',
-      intent: 'runtime_wake',
+      id: 'req-deliver-2',
+      intent: 'runtime_deliver',
       params: {
         conversation_id: C,
         agent_id: A,
         delivery_ids: [201],
         kind: 'schedule_fire',
-        text: 'scheduled wake',
+        text: 'scheduled delivery',
+        spawn_options: RUNTIME_START_OPTIONS,
       },
     }),
-    kind: { kind: 'request', intent: 'runtime_wake' },
+    kind: { kind: 'request', intent: 'runtime_deliver' },
   },
   {
     name: 'request/runtime_status-no-filters',
@@ -584,11 +572,11 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   {
     name: 'response/hello',
     description:
-      'v3 hello result — protocol_version + daemon identity + capabilities.',
+      'v7 hello result — protocol_version + daemon identity + capabilities.',
     frame: enc({
       id: 'req-hello',
       result: {
-        protocol_version: 3,
+        protocol_version: 7,
         daemon_version: '0.1.0',
         daemon_id: 'local',
         instance_id: 'inst-fixture',
@@ -750,25 +738,10 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   },
   {
     name: 'response/runtime_start-success',
-    description: 'runtime_start success arm — started:true + pid + ts.',
+    description: 'runtime_start success arm — pure lifecycle: started:true + pid + started_at.',
     frame: enc({
       id: 'req-start-1',
       result: { started: true, pid: PID, started_at: TS },
-    }),
-    kind: { kind: 'response_success', intent: 'runtime_start' },
-  },
-  {
-    name: 'response/runtime_start-success-with-delivery-accepted',
-    description:
-      'runtime_start success arm — startup_delivery_accepted=true (delivery batch will land).',
-    frame: enc({
-      id: 'req-start-2',
-      result: {
-        started: true,
-        pid: PID,
-        started_at: TS,
-        startup_delivery_accepted: true,
-      },
     }),
     kind: { kind: 'response_success', intent: 'runtime_start' },
   },
@@ -854,96 +827,57 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     kind: { kind: 'response_success', intent: 'runtime_stop' },
   },
   {
-    name: 'response/runtime_wake-delivered',
+    name: 'response/runtime_deliver-spawning',
     description:
-      'Live-delivery success — same delivery_ids returned for markDelivered.',
+      '#task:1417 Stage 2 — no live handle: daemon spawned, batch is the startup delivery. Custody transferred (no ack).',
     frame: enc({
-      id: 'req-wake-1',
-      result: { delivered: true, delivery_ids: DELIVERY_IDS },
+      id: 'req-deliver-1',
+      result: { disposition: 'spawning', pid: PID, started_at: TS },
     }),
-    kind: { kind: 'response_success', intent: 'runtime_wake' },
+    kind: { kind: 'response_success', intent: 'runtime_deliver' },
   },
   {
-    name: 'response/runtime_wake-not_running',
-    description: 'Wake refused — runtime not live; row stays pending.',
-    frame: enc({
-      id: 'req-wake-nr',
-      result: {
-        delivered: false,
-        reason: 'not_running',
-        delivery_ids: DELIVERY_IDS,
-      },
-    }),
-    kind: { kind: 'response_success', intent: 'runtime_wake' },
-  },
-  {
-    name: 'response/runtime_wake-not_initialized',
+    name: 'response/runtime_deliver-admitted',
     description:
-      'Wake refused — runtime live but pre-init (e.g. claude pre-system_init).',
+      '#task:1417 Stage 2 — ready handle: daemon encoded + wrote stdin. Custody transferred; delivered_at rides the async runtime_delivery_consumed.',
     frame: enc({
-      id: 'req-wake-ni',
-      result: {
-        delivered: false,
-        reason: 'not_initialized',
-        delivery_ids: DELIVERY_IDS,
-      },
+      id: 'req-deliver-1',
+      result: { disposition: 'admitted', pid: PID, started_at: TS },
     }),
-    kind: { kind: 'response_success', intent: 'runtime_wake' },
+    kind: { kind: 'response_success', intent: 'runtime_deliver' },
   },
   {
-    name: 'response/runtime_wake-startup_pending',
+    name: 'response/runtime_deliver-refused-startup_pending',
     description:
-      'Wake refused — startup_delivery still draining; daemon serializes after.',
+      '#task:1417 Stage 2 — handle not yet drainable (pending startup batch / still spawning / driver not ready). Backend keeps rows pending, retries on ready_for_drain.',
     frame: enc({
-      id: 'req-wake-sp',
-      result: {
-        delivered: false,
-        reason: 'startup_pending',
-        delivery_ids: DELIVERY_IDS,
-      },
+      id: 'req-deliver-1',
+      result: { disposition: 'refused', reason: 'startup_pending' },
     }),
-    kind: { kind: 'response_success', intent: 'runtime_wake' },
+    kind: { kind: 'response_success', intent: 'runtime_deliver' },
   },
   {
-    name: 'response/runtime_wake-draining',
-    description: 'Wake refused — runtime is in draining phase, no new writes.',
+    name: 'response/runtime_deliver-refused-draining',
+    description: '#task:1417 Stage 2 — handle draining (hard stop in flight).',
     frame: enc({
-      id: 'req-wake-dr',
-      result: {
-        delivered: false,
-        reason: 'draining',
-        delivery_ids: DELIVERY_IDS,
-      },
+      id: 'req-deliver-1',
+      result: { disposition: 'refused', reason: 'draining' },
     }),
-    kind: { kind: 'response_success', intent: 'runtime_wake' },
+    kind: { kind: 'response_success', intent: 'runtime_deliver' },
   },
   {
-    name: 'response/runtime_wake-driver_not_ready',
+    name: 'response/runtime_deliver-refused-cooldown',
     description:
-      'Wake refused — recoverable: driver readyToEncode()=false (Option A v2).',
+      '#task:1417 Stage 2 — spawn arm hit the init-failure cooldown gate; cooldown_until present ONLY on this reason.',
     frame: enc({
-      id: 'req-wake-dnr',
+      id: 'req-deliver-1',
       result: {
-        delivered: false,
-        reason: 'driver_not_ready',
-        delivery_ids: DELIVERY_IDS,
+        disposition: 'refused',
+        reason: 'cooldown',
+        cooldown_until: TS,
       },
     }),
-    kind: { kind: 'response_success', intent: 'runtime_wake' },
-  },
-  {
-    name: 'response/runtime_wake-driver_refused',
-    description:
-      'Wake refused — fail-loud: encodeStdinMessage returned null AFTER ready.',
-    frame: enc({
-      id: 'req-wake-drr',
-      result: {
-        delivered: false,
-        reason: 'driver_refused',
-        delivery_ids: DELIVERY_IDS,
-      },
-    }),
-    kind: { kind: 'response_success', intent: 'runtime_wake' },
+    kind: { kind: 'response_success', intent: 'runtime_deliver' },
   },
   {
     name: 'response/runtime_status-empty',
@@ -2187,7 +2121,7 @@ const EVENTS: WireFixture[] = [
       'Daemon socket bound — handshake mirror. Carries the same identity fields as hello result plus socket_path / daemon_pid / started_at.',
     frame: enc({
       event: 'ready',
-      protocol_version: 3,
+      protocol_version: 7,
       daemon_version: '0.1.0',
       daemon_id: 'local',
       instance_id: 'inst-fixture',
@@ -2291,11 +2225,11 @@ const EVENTS: WireFixture[] = [
     kind: { kind: 'event' },
   },
   {
-    name: 'event/runtime_startup_delivery_consumed',
+    name: 'event/runtime_delivery_consumed',
     description:
-      'Daemon successfully wrote the startup_delivery batch to stdin; backend may markDelivered.',
+      '#task:1417 Stage 2 — unified delivery ack: daemon wrote a runtime_deliver batch to stdin (init-proven for requires_first_message). Backend markDelivered. Sole mover of delivered_at.',
     frame: enc({
-      event: 'runtime_startup_delivery_consumed',
+      event: 'runtime_delivery_consumed',
       conversation_id: C,
       agent_id: A,
       delivery_ids: DELIVERY_IDS,
@@ -2304,11 +2238,11 @@ const EVENTS: WireFixture[] = [
     kind: { kind: 'event' },
   },
   {
-    name: 'event/runtime_startup_delivery_failed-child_exit',
+    name: 'event/runtime_delivery_failed-child_exit',
     description:
-      'Startup delivery batch lost because the child exited before drain completed.',
+      '#task:1417 Stage 2 — unified delivery rollback: child exited before the runtime_deliver batch drained. Backend rolls rows back to pending.',
     frame: enc({
-      event: 'runtime_startup_delivery_failed',
+      event: 'runtime_delivery_failed',
       conversation_id: C,
       agent_id: A,
       delivery_ids: DELIVERY_IDS,
@@ -2318,11 +2252,11 @@ const EVENTS: WireFixture[] = [
     kind: { kind: 'event' },
   },
   {
-    name: 'event/runtime_startup_delivery_failed-init_watchdog',
+    name: 'event/runtime_delivery_failed-init_watchdog',
     description:
-      'Init watchdog fired before the driver became ready; batch released.',
+      '#task:1417 Stage 2 — unified delivery rollback: init watchdog fired before the driver proved the turn landed (mirrors the legacy startup_delivery init_watchdog arm; kept so consumers see every reason variant).',
     frame: enc({
-      event: 'runtime_startup_delivery_failed',
+      event: 'runtime_delivery_failed',
       conversation_id: C,
       agent_id: A,
       delivery_ids: DELIVERY_IDS,
@@ -2332,10 +2266,11 @@ const EVENTS: WireFixture[] = [
     kind: { kind: 'event' },
   },
   {
-    name: 'event/runtime_startup_delivery_failed-write_failed',
-    description: 'Batch was being written but stdin write failed.',
+    name: 'event/runtime_delivery_failed-write_failed',
+    description:
+      '#task:1417 Stage 2 — unified delivery rollback: stdin write failed mid-batch.',
     frame: enc({
-      event: 'runtime_startup_delivery_failed',
+      event: 'runtime_delivery_failed',
       conversation_id: C,
       agent_id: A,
       delivery_ids: DELIVERY_IDS,
@@ -2345,11 +2280,11 @@ const EVENTS: WireFixture[] = [
     kind: { kind: 'event' },
   },
   {
-    name: 'event/runtime_startup_delivery_failed-driver_refused',
+    name: 'event/runtime_delivery_failed-driver_refused',
     description:
-      'Driver refused the encoded payload (config / programming error, not transport).',
+      '#task:1417 Stage 2 — unified delivery fatal: driver refused the encoded payload after claiming ready (programming error).',
     frame: enc({
-      event: 'runtime_startup_delivery_failed',
+      event: 'runtime_delivery_failed',
       conversation_id: C,
       agent_id: A,
       delivery_ids: DELIVERY_IDS,
