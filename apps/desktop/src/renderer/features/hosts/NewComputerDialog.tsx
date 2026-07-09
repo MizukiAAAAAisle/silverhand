@@ -44,8 +44,8 @@ type Phase = 'creating' | 'waiting' | 'naming' | 'error';
  * `ConnectionCommandCard` from the recipe (`daemon_npm_spec`), this desktop's
  * connected server URL, and `connect_token` — the reveal-once credential that
  * lives in local state only, discarded on unmount, never written to the query
- * cache or logged. The deprecated `daemon_command` / `server_url` in the
- * response are migration-bridge fields we no longer consume.
+ * cache or logged. The server contributes no reach URL: the command's
+ * `--server-url` is always this desktop's connected origin.
  *
  * **Draft lifecycle**: a pending computer is a modal-scoped DRAFT (shiki:
  * "这个连接只是一个临时的生命周期，而不是永久的"). Closing the dialog before the
@@ -275,7 +275,6 @@ export function NewComputerDialog({
               daemonNpmSpec={created.daemon_npm_spec}
               connectToken={created.connect_token}
               connectedServerUrl={backendInfo.data?.url ?? ''}
-              advertisedOriginOverride={created.advertised_origin_override}
             />
 
             <div className="mt-1 flex items-center gap-2 border border-dashed border-border px-3 py-2.5 text-sm text-text-secondary">

@@ -324,7 +324,6 @@ function ConnectionSection({
   const [minted, setMinted] = useState<{
     daemonNpmSpec: string;
     connectToken: string;
-    advertisedOriginOverride: string | null;
   } | null>(null);
   const [rotateError, setRotateError] = useState(false);
   const [disconnectError, setDisconnectError] = useState(false);
@@ -336,7 +335,6 @@ function ConnectionSection({
       setMinted({
         daemonNpmSpec: res.daemon_npm_spec,
         connectToken: res.connect_token,
-        advertisedOriginOverride: res.advertised_origin_override,
       });
     } catch {
       setRotateError(true);
@@ -361,7 +359,6 @@ function ConnectionSection({
             daemonNpmSpec={minted.daemonNpmSpec}
             connectToken={minted.connectToken}
             connectedServerUrl={backendInfo.data?.url ?? ''}
-            advertisedOriginOverride={minted.advertisedOriginOverride}
           />
         ) : null}
 

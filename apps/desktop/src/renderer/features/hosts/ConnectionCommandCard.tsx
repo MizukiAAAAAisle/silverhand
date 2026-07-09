@@ -13,13 +13,9 @@ interface ConnectionCommandCardProps {
    *  masked view. Never persisted, never cached. */
   connectToken: string;
   /** This desktop's OWN connected server URL (`BackendInfo.url`) — the
-   *  proven-reachable origin it already talks to. Used as the daemon's reach
-   *  URL unless the server pinned a split-horizon override. */
+   *  proven-reachable origin it already talks to, and the SOLE source of the
+   *  daemon's reach URL. Never the server's bind address. */
   connectedServerUrl: string;
-  /** Server-declared reach origin for split-horizon deploys, or null. When
-   *  non-null it WINS over `connectedServerUrl` (the server is pinning where
-   *  the daemon must dial back). Never the server's bind address. */
-  advertisedOriginOverride: string | null;
   /** Header-bar label. Defaults to "Connection command". */
   label?: string;
 }
@@ -36,11 +32,12 @@ interface ConnectionCommandCardProps {
  * it is actually connected to — a proven-reachable origin — while the server,
  * behind a reverse proxy / NAT, only ever saw its own bind address (the old
  * bug: a plausible-but-wrong `http://<bind-ip>` command). So the server now
- * ships only identity + recipe (token + `daemonNpmSpec` + optional
- * `advertisedOriginOverride`); we join it with our own connected URL. The
- * arg-name format is NOT re-spelled here — `assembleConnectCommand` is the
- * single source (symmetric with the daemon's `parseConnectArgv`), so this card
- * carries zero command-format knowledge.
+ * ships only identity + recipe (token + `daemonNpmSpec`); the reach URL is
+ * ALWAYS this desktop's own connected server URL — server-origin input is fully
+ * out of the connect-command path (no split-horizon override). The arg-name
+ * format is NOT re-spelled here — `assembleConnectCommand` is the single source
+ * (symmetric with the daemon's `parseConnectArgv`), so this card carries zero
+ * command-format knowledge.
  *
  * **Reveal-once discipline is unchanged** — the security property rides the
  * TOKEN, not the string. Copy ALWAYS writes the locally-assembled verbatim
@@ -63,7 +60,6 @@ export function ConnectionCommandCard({
   daemonNpmSpec,
   connectToken,
   connectedServerUrl,
-  advertisedOriginOverride,
   label = computerCopy.connectionCommandLabel,
 }: ConnectionCommandCardProps): JSX.Element {
   const [revealed, setRevealed] = useState(false);
@@ -75,15 +71,17 @@ export function ConnectionCommandCard({
     return () => window.clearTimeout(t);
   }, [copied]);
 
-  // Precedence, in ONE place so the two callers can never diverge: a
-  // server-declared split-horizon override wins; otherwise the desktop uses
-  // its own connected server URL. The server bind address never reaches here.
-  const serverUrl = advertisedOriginOverride ?? connectedServerUrl;
-  // Assembled locally (see docblock). Empty only for the sub-second tick
-  // before BackendInfo resolves and with no override — guarded so we never
+  // The reach URL is ALWAYS this desktop's own connected server URL — the
+  // single source, so the two callers can never diverge and the server bind
+  // address never reaches here. Assembled locally (see docblock). Empty only
+  // for the sub-second tick before BackendInfo resolves — guarded so we never
   // render a malformed `--server-url` with no value or copy a broken command.
-  const daemonCommand = serverUrl
-    ? assembleConnectCommand({ daemonNpmSpec, serverUrl, connectToken })
+  const daemonCommand = connectedServerUrl
+    ? assembleConnectCommand({
+        daemonNpmSpec,
+        serverUrl: connectedServerUrl,
+        connectToken,
+      })
     : '';
 
   const displayCommand = revealed

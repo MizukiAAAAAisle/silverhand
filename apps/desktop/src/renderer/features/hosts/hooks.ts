@@ -659,16 +659,15 @@ export function useSaveHostProxyConfigMutation(hostId: string) {
 /**
  * #task:1348 / #task:1428 — create a user-managed computer. The backend mints a
  * PENDING host + a reveal-once connect token and returns the bootstrap payload
- * (`connect_token` + `daemon_npm_spec` + `advertised_origin_override`); the
- * desktop assembles the connect command locally from those + its own connected
- * server URL. Naming happens AFTER the first successful connect, so this only
- * starts the flow; the row shows up in the sidebar as pending until a daemon
- * attaches.
+ * (`connect_token` + `daemon_npm_spec`); the desktop assembles the connect
+ * command locally from those + its own connected server URL. Naming happens
+ * AFTER the first successful connect, so this only starts the flow; the row
+ * shows up in the sidebar as pending until a daemon attaches.
  *
  * **Reveal-once boundary**: `connect_token` is the cleartext credential shown
  * exactly once. The caller keeps it in local component state only — never write
- * it into the query cache. The `daemon_command` / `server_url` fields are
- * deprecated migration bridges and are no longer consumed.
+ * it into the query cache. The bootstrap payload carries no server reach URL:
+ * the command's `--server-url` is always this desktop's own connected origin.
  */
 export function useCreateComputerMutation() {
   const qc = useQueryClient();
@@ -735,7 +734,7 @@ export function useCancelPendingComputerMutation() {
  * force-drops any live connection using it (no grace — Cindy/Alice contract).
  * Same bootstrap-payload shape as create; the new `connect_token` lands once in
  * the response and is kept in local state only, and the card assembles the
- * command locally from it (the `daemon_command` bridge field is not consumed).
+ * command locally from it + this desktop's connected server URL.
  */
 export function useRotateConnectTokenMutation(hostId: string) {
   const qc = useQueryClient();
