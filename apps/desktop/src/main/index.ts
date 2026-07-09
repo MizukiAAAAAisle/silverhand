@@ -106,6 +106,9 @@ import {
   persistDesktopSessionToken,
 } from './desktop-session-storage.js';
 import {
+  extractViewerUserFromProfileMutation,
+} from './profile-session-sync.js';
+import {
   decideBackendBootMode,
   evaluateProfileCommitGuard,
   executeBackendStartup,
@@ -668,6 +671,27 @@ async function storeUserSession(token: string, user: UserDto): Promise<void> {
   userSessionUser = user;
   persistUserSessionToken(token);
   await syncEventWsSessionCookie(token);
+}
+
+function updateCachedUserSessionFromProfileMutation(
+  request: { path: string; method?: string },
+  response: BackendProxyResponse,
+): void {
+  const user = extractViewerUserFromProfileMutation(request, response);
+  if (!user) return;
+  if (userSessionUser && userSessionUser.id !== user.id) {
+    logger?.warn(
+      {
+        cached_user_id: userSessionUser.id,
+        response_user_id: user.id,
+        path: request.path,
+        method: request.method ?? 'GET',
+      },
+      'profile mutation returned a different user; keeping cached auth session user',
+    );
+    return;
+  }
+  userSessionUser = user;
 }
 
 async function clearUserSession(): Promise<void> {
@@ -1748,7 +1772,12 @@ async function proxyBackendRequest(
   if (res.status === 401) {
     await clearUserSessionAfterUnauthorized('backend request');
   }
-  return marshalBackendResponse(res, input.responseType ?? 'text');
+  const response = await marshalBackendResponse(res, input.responseType ?? 'text');
+  updateCachedUserSessionFromProfileMutation(
+    { path: input.path, method: input.method },
+    response,
+  );
+  return response;
 }
 
 async function proxyBackendUpload(
@@ -1796,7 +1825,12 @@ async function proxyBackendUpload(
   if (res.status === 401) {
     await clearUserSessionAfterUnauthorized('backend upload');
   }
-  return marshalBackendResponse(res, 'text');
+  const response = await marshalBackendResponse(res, 'text');
+  updateCachedUserSessionFromProfileMutation(
+    { path: input.path, method: 'POST' },
+    response,
+  );
+  return response;
 }
 
 async function bootstrap(): Promise<void> {
