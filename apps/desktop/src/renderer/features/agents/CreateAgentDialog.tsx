@@ -52,7 +52,7 @@ import {
 // at runtime (see the runtime-catalog probe below), never baked in here.
 const SELECTABLE_RUNTIMES = RUNTIME_CATALOG.filter(entry => entry.selectable);
 
-// Shared chip styling for the Runtime + "Runs on" pickers: ink border +
+// Shared chip styling for the Runtime + "Computer" pickers: ink border +
 // the theme's own selection fill (`--bg-row-selected`), border WIDTH /
 // radius via the per-theme control tokens (forza6 2px poster, warm/slack
 // 1px). Text held constant at text-primary across states. Kept identical
@@ -265,7 +265,7 @@ export function CreateAgentDialog({
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="ag-host" required className="font-semibold">
-              Runs on
+              Computer
             </Label>
             <ComputerPicker
               id="ag-host"
@@ -273,7 +273,7 @@ export function CreateAgentDialog({
               availabilityById={availabilityById}
               value={selectedHostId}
               onChange={setSelectedHostId}
-              ariaLabel="Runs on"
+              ariaLabel="Computer"
             />
           </div>
 

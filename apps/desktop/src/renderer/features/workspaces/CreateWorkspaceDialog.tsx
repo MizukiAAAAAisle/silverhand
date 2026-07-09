@@ -45,7 +45,6 @@ export function CreateWorkspaceDialog({
 }: CreateWorkspaceDialogProps): JSX.Element {
   const [name, setName] = useState('');
   const [workspacePath, setWorkspacePath] = useState('');
-  const [showAdvancedPath, setShowAdvancedPath] = useState(false);
   const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [selectedHumans, setSelectedHumans] = useState<string[]>([]);
@@ -106,7 +105,7 @@ export function CreateWorkspaceDialog({
 
   // Local desktop host → the user can pick a real folder on this machine.
   // Another host → no native picker; default to that daemon's managed path,
-  // with an advanced typed override that the OWNING daemon validates.
+  // with a typed override that the OWNING daemon validates.
   const canPickLocalFolder = hostProvenance.canUseLocalHostPathFor(effectiveHostId);
 
   useEffect(() => {
@@ -131,13 +130,11 @@ export function CreateWorkspaceDialog({
       return;
     }
     setWorkspacePath('');
-    setShowAdvancedPath(false);
   }, [open, effectiveHostId]);
 
   const reset = () => {
     setName('');
     setWorkspacePath('');
-    setShowAdvancedPath(false);
     setSelectedHostId(null);
     setSelectedAgents([]);
     setSelectedHumans([]);
@@ -268,7 +265,7 @@ export function CreateWorkspaceDialog({
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="ch-host" required className="font-semibold">
-              Stored on
+              Computer
             </Label>
             <ComputerPicker
               id="ch-host"
@@ -276,7 +273,7 @@ export function CreateWorkspaceDialog({
               availabilityById={availabilityById}
               value={selectedHostId}
               onChange={setSelectedHostId}
-              ariaLabel="Stored on"
+              ariaLabel="Computer"
             />
           </div>
 
@@ -298,7 +295,7 @@ export function CreateWorkspaceDialog({
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="ch-path" className="font-semibold">
-              Working directory (optional)
+              Working directory
             </Label>
             {canPickLocalFolder ? (
               // Local host: native folder picker is the primary affordance;
@@ -311,7 +308,7 @@ export function CreateWorkspaceDialog({
                   id="ch-path"
                   value={workspacePath}
                   onChange={e => setWorkspacePath(e.target.value)}
-                  placeholder="/path/to/project"
+                  placeholder="/path/to/project (optional)"
                   className="font-mono text-xs"
                 />
                 <Button
@@ -327,27 +324,17 @@ export function CreateWorkspaceDialog({
                 </Button>
               </div>
             ) : (
-              // Remote / sandbox host: no native picker. Default to the
-              // daemon-managed path; expose a typed override under "高级".
-              <>
-                {!showAdvancedPath ? (
-                  <button
-                    type="button"
-                    className="self-start text-xs text-text-muted underline underline-offset-2"
-                    onClick={() => setShowAdvancedPath(true)}
-                  >
-                    Set a path manually
-                  </button>
-                ) : (
-                  <Input
-                    id="ch-path"
-                    value={workspacePath}
-                    onChange={e => setWorkspacePath(e.target.value)}
-                    placeholder="Absolute path on this host"
-                    className="font-mono text-xs"
-                  />
-                )}
-              </>
+              // Remote / daemon computer: no native picker (browse is
+              // local-only, gated on the same placement eligibility
+              // predicate — never a kind branch). The typed override is
+              // shown directly; empty falls back to the daemon-managed path.
+              <Input
+                id="ch-path"
+                value={workspacePath}
+                onChange={e => setWorkspacePath(e.target.value)}
+                placeholder="/path/to/project (optional)"
+                className="font-mono text-xs"
+              />
             )}
           </div>
 

@@ -16,7 +16,7 @@ import { cn } from '@/lib/cn';
 /**
  * Placement computer picker — a Radix `Select` over the caller's already
  * `placeable`-filtered computers. One dropdown design shared by Create Agent
- * ("Runs on") and Create Workspace ("Stored on") so both placement pickers read
+ * and Create Workspace (both labelled "Computer") so both placement pickers read
  * identically (#task:1358).
  *
  * Placement needs BOTH axes and neither is derived from `kind`: lifecycle
