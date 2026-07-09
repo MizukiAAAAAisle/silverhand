@@ -262,7 +262,6 @@ export function formatDeliveryInstruction(
       ? 'user addressed you by name.\n'
       : '';
     return (
-      mentionHint +
       `Respond as appropriate — call \`${sendMessageTool}\` with a brief reply, ` +
       `progress update, blocker question, or final summary before stopping. ` +
       `Complete ALL your work before stopping.`
@@ -279,8 +278,8 @@ export function formatDeliveryInstruction(
   }
 
   if (nonSystemMentionsRecipient) {
+    const mentionHint = 'sender addressed you by name.';
     return (
-      `sender addressed you by name.\n` +
       `Respond as appropriate — call \`${sendMessageTool}\` before stopping. ` +
       `Complete ALL your work before stopping.`
     );
