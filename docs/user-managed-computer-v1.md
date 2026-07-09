@@ -762,21 +762,34 @@ reads the backend DB, never authors its own `hosts.id`, never learns
 (`multi-daemon-registry.md` §2.2). Publishing it as an npm artifact is a packaging
 change, not a boundary change.
 
-### 6.7 Reconnect & command persistence (answers "how to reconnect after disconnect")
+### 6.7 Reconnect, daemon mode & command persistence
 
 Because the daemon keeps **no local credential** (§6.5), the connect command *is*
 the durable credential, and its home is **the target machine, not the app**. This
 is what makes reconnect work without the app ever re-showing the token:
 
-- **Ordinary reconnect (daemon restart / reboot / network drop)** re-runs the
-  same command with the same still-valid `connect-token` — no app involvement, no
+- **Ordinary reconnect (daemon restart / network drop)** re-runs the same
+  command with the same still-valid `connect-token` — no app involvement, no
   rotate. The token is unchanged; the daemon just re-attaches.
+- **`connect` defaults to daemon mode.** A copied command must be safe to paste
+  into a remote shell without keeping a terminal or `screen` session open:
+  `silverhand-daemon connect ...` resolves its instance data-root, starts a
+  detached foreground child, writes `<data-root>/silverhand-daemon.pid`, and
+  exits after printing the exact stop command for that instance. `--foreground`
+  / `--no-daemon` are explicit opt-outs for diagnostics.
+- **Stop is instance-scoped.** The printed stop line must include the resolved
+  absolute data-root, e.g. `npx @silverhand-ai/daemon@latest stop --data-root <actual-data-root>`,
+  so copy-paste stops the daemon that was just started.
+  Argless `stop` is only a convenience path: it auto-discovers a single live
+  daemon under `~/.silverhand/computers/*/silverhand-daemon.pid`; if multiple
+  live instances exist, it fails loudly and requires `--data-root`.
 - **Persistence is a target-side responsibility**, and the daemon package should
   make it easy rather than leaving it to "remember to save the command": on first
-  `connect`, offer to **install itself as a launchd (macOS) / systemd service**
-  whose unit config carries the command (token included) as its **launch
-  arguments**. Then reboot → auto-reconnect, and the command is durably stored in
-  the service unit — so the common case never depends on the user hand-saving it.
+  `connect`, daemon mode solves "close terminal and keep running"; a later
+  launchd (macOS) / systemd service install can solve reboot auto-start by
+  storing the same command (token included) as user-owned OS config. Then reboot
+  → auto-reconnect, and the command is durably stored in the service unit — so
+  the common case never depends on the user hand-saving it.
   **This is not credential-smuggling back into the app or into daemon-private
   state:** the service unit is *user-owned, user-visible OS config the user opted
   into* — exactly equivalent to the user pasting the command into their own

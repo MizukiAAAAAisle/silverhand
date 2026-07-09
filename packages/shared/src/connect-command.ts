@@ -19,11 +19,15 @@
 /** Canonical flag names for the daemon `connect` subcommand. */
 export const CONNECT_ARG_SERVER_URL = '--server-url';
 export const CONNECT_ARG_CONNECT_TOKEN = '--connect-token';
+export const CONNECT_ARG_CONNECT_TOKEN_ENV = '--connect-token-env';
 export const CONNECT_ARG_DATA_ROOT = '--data-root';
+export const CONNECT_ARG_FOREGROUND = '--foreground';
+export const CONNECT_ARG_NO_DAEMON = '--no-daemon';
 export const CONNECT_ARG_QUIET = '--quiet';
 export const CONNECT_ARG_STDERR = '--stderr';
 /** The daemon subcommand the assembled command invokes. */
 export const CONNECT_SUBCOMMAND = 'connect';
+export const STOP_SUBCOMMAND = 'stop';
 
 export interface ConnectCommandParams {
   /** The npm spec the operator wants the daemon launched from (e.g.

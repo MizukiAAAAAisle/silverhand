@@ -861,6 +861,23 @@ per-spawn `bin/silverhand` shim that forwards to that launcher, so agents
 always call the same command name. No separate Node or Bun runtime is
 shipped.
 
+The user-managed computer daemon is a separate npm package,
+`@silverhand-ai/daemon`, built from `packages/host/src/daemon/entry.ts`. Its
+public operator surface is intentionally small:
+
+- `silverhand-daemon connect --server-url <url> --connect-token <token>
+  [--data-root <abs>]` starts in daemon mode by default. The launcher resolves
+  an instance-scoped data-root, detaches a foreground child, writes
+  `<data-root>/silverhand-daemon.pid`, and prints the exact stop command for
+  that instance. `--foreground` / `--no-daemon` are diagnostic opt-outs.
+- `silverhand-daemon stop [--data-root <abs>]` sends SIGTERM to the matching
+  daemon. Without `--data-root`, it auto-discovers a single live instance under
+  `~/.silverhand/computers/*/silverhand-daemon.pid`; if multiple live instances
+  exist it fails loudly and asks for `--data-root`.
+
+The copied connect command shown in the desktop app stays flag-stable: daemon
+mode is the default, so the card does not add a `--daemon` flag.
+
 ## 7. Observability
 
 The backend writes three categorized JSONL logs under

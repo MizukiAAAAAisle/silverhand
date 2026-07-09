@@ -57,7 +57,7 @@
  */
 import { runDaemon } from './run.js';
 import { Supervisor } from './supervisor/index.js';
-import { runConnectCommand } from './connect-command.js';
+import { runConnectCommand, runStopCommand } from './connect-command.js';
 import { enableNodeSystemCa } from '../node-system-ca.js';
 
 enableNodeSystemCa();
@@ -182,6 +182,10 @@ async function main(): Promise<void> {
     const exitCode = await runConnectCommand(argv.slice(1));
     if (exitCode !== null) process.exit(exitCode);
     return;
+  }
+  if (argv[0] === 'stop') {
+    const exitCode = await runStopCommand(argv.slice(1));
+    process.exit(exitCode);
   }
   const parsed = parseArgv(argv);
   if ('error' in parsed) {
