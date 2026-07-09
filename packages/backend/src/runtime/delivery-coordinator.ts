@@ -380,7 +380,13 @@ interface DeliveryWatchdogState {
   syntheticState: AgentRunState | null;
 }
 
-const DEFAULT_DELIVERY_WATCHDOG_MS = 30_000;
+// UI placeholder watchdog: how long to wait for the first parsed event
+// after admission before publishing a synthetic "thinking" bubble. This is
+// an observation/UX aid, not a delivery-correctness signal — a slow first
+// token (large prompt, cold start, model queue) can trip it while delivery
+// is perfectly healthy. Kept generous so it rarely fires on legitimate
+// slow starts; the fire is logged at info, not warn.
+const DEFAULT_DELIVERY_WATCHDOG_MS = 45_000;
 
 function key(conversationId: string, agentId: string): string {
   return `${conversationId}|${agentId}`;
@@ -831,7 +837,7 @@ export class RuntimeDeliveryCoordinator {
     watchdog.fired = true;
     watchdog.syntheticState = synthetic;
     this.callbacks.publishActivity?.(synthetic);
-    this.logger.warn(
+    this.logger.info(
       {
         conversationId,
         agentId,
