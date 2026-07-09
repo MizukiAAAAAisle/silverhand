@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   clearRuntimeDetectionCacheForTests,
   detectRuntimeCatalog,
+  platformBinaryCandidates,
 } from '../src/runtimes.js';
 
 const roots: string[] = [];
@@ -94,5 +95,21 @@ describe('runtime detection', () => {
         version: null,
       },
     ]);
+  });
+});
+
+describe('platformBinaryCandidates', () => {
+  // The array order IS the resolution priority (resolveBinary probes
+  // candidates in order before PATH). Pin the exact macOS codex order so a
+  // reorder — which would silently change which bundle wins — fails loudly.
+  it('resolves the macOS codex bundle order: ChatGPT.app before Codex.app', () => {
+    expect(platformBinaryCandidates('codex', 'darwin')).toEqual([
+      '/Applications/ChatGPT.app/Contents/Resources/codex',
+      '/Applications/Codex.app/Contents/Resources/codex',
+    ]);
+  });
+
+  it('has no hard-preferred bundle candidates off macOS (PATH wrapper only)', () => {
+    expect(platformBinaryCandidates('codex', 'linux')).toEqual([]);
   });
 });
