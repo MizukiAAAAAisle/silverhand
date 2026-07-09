@@ -127,6 +127,10 @@ import { fetchServerInfoWithRetry } from './fetch-server-info.js';
 import { registerEventWsDiagnosticIpcHandler } from './ipc/event-ws-diagnostics.js';
 import { registerSelectionExportIpcHandlers } from './ipc/selection-export.js';
 import {
+  configureRendererBackendNetwork,
+  fetchBackendWithNetworkPolicy,
+} from './renderer-backend-network.js';
+import {
   registerSurfaceIpcHandlers,
 } from './ipc/surface-ipc.js';
 
@@ -194,6 +198,7 @@ let mainWindow: BrowserWindow | null = null;
 let userSessionToken: string | null = null;
 let userSessionUser: UserDto | null = null;
 let localHostClaim: LocalHostClaimStatus = { status: 'unclaimed', hostId: null };
+let rendererBackendResolvedProxy: string | null = null;
 
 /**
  * D4.a Commit 5c-2 — in-memory state describing whether the desktop's
@@ -649,6 +654,21 @@ function installBackendEventWsOriginOverride(): void {
       callback({ requestHeaders: details.requestHeaders });
     },
   );
+  electronSession.defaultSession.webRequest.onErrorOccurred(
+    { urls: [`${expectedUrl.protocol}//${expectedUrl.host}${apiPaths.eventWebSocket}`] },
+    details => {
+      logger?.warn(
+        {
+          category: 'event_ws.network',
+          error: details.error,
+          resource_type: details.resourceType,
+          backend_origin: expectedOrigin,
+          resolved_proxy: rendererBackendResolvedProxy,
+        },
+        'event websocket network request failed',
+      );
+    },
+  );
 }
 
 function clearPersistedUserSession(): void {
@@ -742,7 +762,7 @@ async function validateUserSessionToken(
   // pure `classifyMeFetchOutcome` classifier (see auth-hydrate.ts).
   let res: Response;
   try {
-    res = await fetch(backendUrl(apiPaths.me), {
+    res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(apiPaths.me), {
       headers: { Authorization: `Bearer ${token}` },
     });
   } catch (err) {
@@ -878,7 +898,7 @@ async function postAuthSession(
   // exposes `kind: 'backend_unreachable'`.
   let res: Response;
   try {
-    res = await fetch(backendUrl(path), {
+    res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(path), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
@@ -926,7 +946,7 @@ async function bootstrapEmbeddedUserSession(): Promise<boolean> {
   if (!existsSync(path)) return false;
   const token = readFileSync(path, 'utf8').trim();
   if (!token) return false;
-  const res = await fetch(backendUrl(authPaths.embeddedBootstrap), {
+  const res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(authPaths.embeddedBootstrap), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token }),
@@ -979,7 +999,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
       installationId,
       existingConfig,
     });
-    const res = await fetch(backendUrl(apiPaths.hostClaimOrCreate), {
+    const res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(apiPaths.hostClaimOrCreate), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -1075,7 +1095,7 @@ async function logoutUserSession(): Promise<{ ok: true }> {
   const token = userSessionToken;
   await clearUserSession();
   if (token) {
-    await fetch(backendUrl(authPaths.logout), {
+    await fetchBackendWithNetworkPolicy(fetch, backendUrl(authPaths.logout), {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     }).catch(err => {
@@ -1311,7 +1331,7 @@ async function rotateHostToken(
 
   let res: Response;
   try {
-    res = await fetch(backendUrl(apiPaths.hostRotateToken(hostId)), {
+    res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(apiPaths.hostRotateToken(hostId)), {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -1381,7 +1401,7 @@ async function revokeHost(
 
   let res: Response;
   try {
-    res = await fetch(backendUrl(apiPaths.hostRevoke(hostId)), {
+    res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(apiPaths.hostRevoke(hostId)), {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -1446,7 +1466,7 @@ async function getHostProxyConfig(
 
   let res: Response;
   try {
-    res = await fetch(backendUrl(apiPaths.hostProxyConfig(hostId)), {
+    res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(apiPaths.hostProxyConfig(hostId)), {
       headers: { Authorization: `Bearer ${token}` },
     });
   } catch (err) {
@@ -1493,7 +1513,7 @@ async function saveHostProxyConfig(input: {
 
   let res: Response;
   try {
-    res = await fetch(backendUrl(apiPaths.hostProxyConfig(input.hostId)), {
+    res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(apiPaths.hostProxyConfig(input.hostId)), {
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -1752,7 +1772,7 @@ async function proxyBackendRequest(
   // `kind: 'backend_unreachable'`.
   let res: Response;
   try {
-    res = await fetch(backendUrl(input.path), {
+    res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(input.path), {
       method: input.method ?? 'GET',
       headers,
       body: input.bodyText,
@@ -1805,7 +1825,7 @@ async function proxyBackendUpload(
   // renderer can rely on `status: 0` regardless of which proxy ran.
   let res: Response;
   try {
-    res = await fetch(backendUrl(input.path), {
+    res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(input.path), {
       method: 'POST',
       headers: { Authorization: `Bearer ${userSessionToken}` },
       body: form,
@@ -3115,6 +3135,18 @@ app.whenReady().then(async () => {
     console.error('[main] headless backend ready — Ctrl-C to stop');
     return;
   }
+  const rendererNetwork = await configureRendererBackendNetwork({
+    session: electronSession.defaultSession,
+    backendUrl: requireBackendUrl(),
+  });
+  rendererBackendResolvedProxy = rendererNetwork.resolvedProxy;
+  logger?.info(
+    {
+      backend_origin: rendererNetwork.backendOrigin,
+      resolved_proxy: rendererNetwork.resolvedProxy,
+    },
+    'renderer backend network configured',
+  );
   Menu.setApplicationMenu(buildAppMenu());
   createWindow();
 
