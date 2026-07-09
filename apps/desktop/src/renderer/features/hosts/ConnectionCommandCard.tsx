@@ -1,24 +1,53 @@
 import { useEffect, useState, type JSX } from 'react';
 import { Check, Copy, Eye, EyeOff, Terminal } from 'lucide-react';
 import { toast } from 'sonner';
+import { assembleConnectCommand } from '@silverhand/shared';
 import { computerCopy } from './computer-copy';
 
 interface ConnectionCommandCardProps {
-  /** The verbatim, backend-minted connect command. This is the ONLY
-   *  copy/display source — never reassembled client-side. */
-  daemonCommand: string;
-  /** The cleartext connect token, used solely to locate + mask the secret
-   *  span inside `daemonCommand` for the masked view. Never the copy
-   *  source, never reconstructs the command, never persisted. */
+  /** Server-owned launch recipe (npm spec) from the bootstrap payload —
+   *  passed straight to `assembleConnectCommand`. */
+  daemonNpmSpec: string;
+  /** The reveal-once connect credential minted by the server. Assembled INTO
+   *  the command here, and also used to locate + mask the secret span for the
+   *  masked view. Never persisted, never cached. */
   connectToken: string;
+  /** This desktop's OWN connected server URL (`BackendInfo.url`) — the
+   *  proven-reachable origin it already talks to. Used as the daemon's reach
+   *  URL unless the server pinned a split-horizon override. */
+  connectedServerUrl: string;
+  /** Server-declared reach origin for split-horizon deploys, or null. When
+   *  non-null it WINS over `connectedServerUrl` (the server is pinning where
+   *  the daemon must dial back). Never the server's bind address. */
+  advertisedOriginOverride: string | null;
   /** Header-bar label. Defaults to "Connection command". */
   label?: string;
 }
 
 /**
- * #task:1348 — the reveal-once connection-command card, shared by the
- * Add-computer flow (`NewComputerDialog`) and the target-page rotate flow
+ * #task:1348 / #task:1428 — the reveal-once connection-command card, shared by
+ * the Add-computer flow (`NewComputerDialog`) and the target-page rotate flow
  * (`HostDetailView` → Connection).
+ *
+ * **#task:1428 reversal of #task:1348's "backend mints, client never
+ * recomposes"**: the command is now ASSEMBLED HERE, locally, via the shared
+ * `assembleConnectCommand`. The reach URL is a topology fact the EDGE owns
+ * (`docs/orchestration-boundary-v1.md §4.3`): the desktop knows the server URL
+ * it is actually connected to — a proven-reachable origin — while the server,
+ * behind a reverse proxy / NAT, only ever saw its own bind address (the old
+ * bug: a plausible-but-wrong `http://<bind-ip>` command). So the server now
+ * ships only identity + recipe (token + `daemonNpmSpec` + optional
+ * `advertisedOriginOverride`); we join it with our own connected URL. The
+ * arg-name format is NOT re-spelled here — `assembleConnectCommand` is the
+ * single source (symmetric with the daemon's `parseConnectArgv`), so this card
+ * carries zero command-format knowledge.
+ *
+ * **Reveal-once discipline is unchanged** — the security property rides the
+ * TOKEN, not the string. Copy ALWAYS writes the locally-assembled verbatim
+ * command (never the masked display, never the `$` prompt); the cleartext token
+ * lives in caller-owned local state only, and the assembled string is a
+ * render-scope value — never cached, never logged, discarded on unmount. The
+ * caller owns the mint and decides when to mount/unmount.
  *
  * **Terminal chrome** (shiki dogfood: "command background 不是 shell 那种
  * 感觉；reveal/copy button 位置也不对"): the command is a command you run in
@@ -29,16 +58,12 @@ interface ConnectionCommandCardProps {
  * stone, slack-dark's ink). A header strip carries the label + the
  * Reveal/Copy actions (top-right, terminal-title-bar style — not a footer
  * bar); the body shows a `$` prompt before the monospace command.
- *
- * **Reveal-once discipline** (unchanged): masked by default; Reveal toggles
- * to verbatim; Copy ALWAYS writes the verbatim `daemonCommand` (never the
- * masked display, never the `$` prompt, never a reassembly); the cleartext
- * lives in local state only — never cached, never logged, discarded on
- * unmount. The caller owns the mint and decides when to mount/unmount.
  */
 export function ConnectionCommandCard({
-  daemonCommand,
+  daemonNpmSpec,
   connectToken,
+  connectedServerUrl,
+  advertisedOriginOverride,
   label = computerCopy.connectionCommandLabel,
 }: ConnectionCommandCardProps): JSX.Element {
   const [revealed, setRevealed] = useState(false);
@@ -50,12 +75,24 @@ export function ConnectionCommandCard({
     return () => window.clearTimeout(t);
   }, [copied]);
 
+  // Precedence, in ONE place so the two callers can never diverge: a
+  // server-declared split-horizon override wins; otherwise the desktop uses
+  // its own connected server URL. The server bind address never reaches here.
+  const serverUrl = advertisedOriginOverride ?? connectedServerUrl;
+  // Assembled locally (see docblock). Empty only for the sub-second tick
+  // before BackendInfo resolves and with no override — guarded so we never
+  // render a malformed `--server-url` with no value or copy a broken command.
+  const daemonCommand = serverUrl
+    ? assembleConnectCommand({ daemonNpmSpec, serverUrl, connectToken })
+    : '';
+
   const displayCommand = revealed
     ? daemonCommand
     : maskToken(daemonCommand, connectToken);
 
   const handleCopy = async (): Promise<void> => {
-    // Copy source is ALWAYS the verbatim backend command.
+    if (!daemonCommand) return;
+    // Copy source is ALWAYS the locally-assembled verbatim command.
     await navigator.clipboard.writeText(daemonCommand);
     setCopied(true);
     toast.success(computerCopy.copied);
@@ -74,7 +111,8 @@ export function ConnectionCommandCard({
             <button
               type="button"
               onClick={() => setRevealed(v => !v)}
-              className="inline-flex items-center gap-1 px-1.5 py-1 text-[11px] font-medium text-[var(--text-island)] opacity-70 transition-opacity hover:opacity-100"
+              disabled={!daemonCommand}
+              className="inline-flex items-center gap-1 px-1.5 py-1 text-[11px] font-medium text-[var(--text-island)] opacity-70 transition-opacity hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
               aria-label={revealed ? computerCopy.hide : computerCopy.reveal}
             >
               {revealed ? (
@@ -87,7 +125,8 @@ export function ConnectionCommandCard({
             <button
               type="button"
               onClick={() => void handleCopy()}
-              className="inline-flex items-center gap-1 px-1.5 py-1 text-[11px] font-medium text-[var(--text-island)] opacity-70 transition-opacity hover:opacity-100"
+              disabled={!daemonCommand}
+              className="inline-flex items-center gap-1 px-1.5 py-1 text-[11px] font-medium text-[var(--text-island)] opacity-70 transition-opacity hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
               aria-label={computerCopy.copy}
             >
               {copied ? (

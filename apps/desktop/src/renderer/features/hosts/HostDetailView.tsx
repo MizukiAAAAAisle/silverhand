@@ -108,6 +108,7 @@ import { cn } from '@/lib/cn';
 import {
   hostStatusKey,
   useAgentOnlineByHost,
+  useBackendInfoSnapshot,
   useHostProxyConfigQuery,
   useHostStatusQuery,
   useDeleteComputerMutation,
@@ -303,9 +304,10 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
  *     Delete, a computer-level action that lives OUTSIDE this section
  *     (#task:1354).
  *
- * The rotate cleartext is reveal-once: it lands in local state (`minted`)
- * for the shared `ConnectionCommandCard` and is discarded on unmount —
- * never cached, never logged.
+ * The rotate cleartext is reveal-once: the `connect_token` lands in local
+ * state (`minted`) and the shared `ConnectionCommandCard` assembles the command
+ * locally (#task:1428) from it + this desktop's connected server URL. Both are
+ * discarded on unmount — never cached, never logged.
  */
 function ConnectionSection({
   host,
@@ -316,9 +318,13 @@ function ConnectionSection({
 }): JSX.Element {
   const rotate = useRotateConnectTokenMutation(host.id);
   const disconnect = useDisconnectHostMutation(host.id);
+  // #task:1428 — the command is assembled locally from this desktop's own
+  // connected server URL, never the server-echoed `server_url`.
+  const backendInfo = useBackendInfoSnapshot();
   const [minted, setMinted] = useState<{
-    command: string;
-    token: string;
+    daemonNpmSpec: string;
+    connectToken: string;
+    advertisedOriginOverride: string | null;
   } | null>(null);
   const [rotateError, setRotateError] = useState(false);
   const [disconnectError, setDisconnectError] = useState(false);
@@ -327,7 +333,11 @@ function ConnectionSection({
     setRotateError(false);
     try {
       const res = await rotate.mutateAsync();
-      setMinted({ command: res.daemon_command, token: res.connect_token });
+      setMinted({
+        daemonNpmSpec: res.daemon_npm_spec,
+        connectToken: res.connect_token,
+        advertisedOriginOverride: res.advertised_origin_override,
+      });
     } catch {
       setRotateError(true);
     }
@@ -348,8 +358,10 @@ function ConnectionSection({
       <div className="flex flex-col gap-3">
         {minted ? (
           <ConnectionCommandCard
-            daemonCommand={minted.command}
-            connectToken={minted.token}
+            daemonNpmSpec={minted.daemonNpmSpec}
+            connectToken={minted.connectToken}
+            connectedServerUrl={backendInfo.data?.url ?? ''}
+            advertisedOriginOverride={minted.advertisedOriginOverride}
           />
         ) : null}
 

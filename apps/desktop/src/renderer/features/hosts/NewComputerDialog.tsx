@@ -11,6 +11,7 @@ import {
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import {
+  useBackendInfoSnapshot,
   useCancelPendingComputerMutation,
   useCreateComputerMutation,
   useHostByIdQuery,
@@ -39,10 +40,12 @@ type Phase = 'creating' | 'waiting' | 'naming' | 'error';
  * hostname and ask for a name — the ONLY naming moment (shiki: no name
  * input while pending).
  *
- * **Reveal-once**: `daemon_command` (the verbatim copy source) and
- * `connect_token` (used only to locate + mask the secret for display)
- * live in local state only, discarded on unmount. They are never written
- * to the query cache, never reconstructed, never logged.
+ * **Reveal-once** (#task:1428): the connect command is assembled locally by
+ * `ConnectionCommandCard` from the recipe (`daemon_npm_spec`), this desktop's
+ * connected server URL, and `connect_token` — the reveal-once credential that
+ * lives in local state only, discarded on unmount, never written to the query
+ * cache or logged. The deprecated `daemon_command` / `server_url` in the
+ * response are migration-bridge fields we no longer consume.
  *
  * **Draft lifecycle**: a pending computer is a modal-scoped DRAFT (shiki:
  * "这个连接只是一个临时的生命周期，而不是永久的"). Closing the dialog before the
@@ -80,6 +83,10 @@ export function NewComputerDialog({
   const createComputer = useCreateComputerMutation();
   const cancelComputer = useCancelPendingComputerMutation();
   const rename = useUpdateHostMutation(created?.host_id ?? '');
+  // #task:1428 — the connect command is assembled locally from THIS desktop's
+  // own connected server URL (a proven-reachable origin), never from the
+  // server-echoed `server_url` (which carried a bind-address fallback bug).
+  const backendInfo = useBackendInfoSnapshot();
 
   // Poll the freshly-minted draft BY ID (not the rail list, which the
   // backend filters down to finalized computers). We watch its lifecycle
@@ -265,8 +272,10 @@ export function NewComputerDialog({
           // phase === 'waiting'
           <div className="flex flex-col gap-3">
             <ConnectionCommandCard
-              daemonCommand={created.daemon_command}
+              daemonNpmSpec={created.daemon_npm_spec}
               connectToken={created.connect_token}
+              connectedServerUrl={backendInfo.data?.url ?? ''}
+              advertisedOriginOverride={created.advertised_origin_override}
             />
 
             <div className="mt-1 flex items-center gap-2 border border-dashed border-border px-3 py-2.5 text-sm text-text-secondary">
