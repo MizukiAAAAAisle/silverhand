@@ -548,19 +548,20 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
         // Embedded event-WS security allowlist: the desktop main process pins
         // the WS `Origin` to the origin it actually reaches this backend at
         // (`installBackendEventWsOriginOverride`), which for embedded is this
-        // finalized loopback origin. Seed it explicitly here — the ws-server
-        // trusts ONLY `event_ws_allowed_origins` and never derives trust from
-        // `url`. Standalone declares its allowlist via env instead. See
+        // finalized loopback origin. Set it to EXACTLY that origin — not a
+        // merge with any prior value. Embedded runs on an ephemeral loopback
+        // port, so a persisted allowlist would carry stale `127.0.0.1:<oldPort>`
+        // origins that no longer reach anything; inheriting them is generated-
+        // origin residue, not security config. Trust only this boot's origin.
+        // (Desktop must also not persist this generated value — see
+        // `PersistedServerConfigSchema`.) The ws-server trusts ONLY
+        // `event_ws_allowed_origins` and never derives trust from `url`.
+        // Standalone declares its allowlist via env instead. See
         // `docs/server-env-config.md`.
         const eventWsAllowedOrigins =
           opts.mode === 'standalone'
             ? opts.serverConfig.event_ws_allowed_origins
-            : Array.from(
-                new Set([
-                  ...(opts.serverConfig.event_ws_allowed_origins ?? []),
-                  new URL(serverConfigUrl).origin,
-                ]),
-              );
+            : [new URL(serverConfigUrl).origin];
         ctx.serverConfig = {
           ...opts.serverConfig,
           url: serverConfigUrl,

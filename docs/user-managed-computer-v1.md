@@ -393,8 +393,14 @@ rail "New computer" (no name input yet)
            ISSUE connect-token: a long-lived, single-computer-scoped bearer
              credential. Store ONLY its hash in host_credentials, bound to
              (host_id, user_id). The cleartext is returned once, for display.
-           RETURN { host_id, connect_token, server_url,
-                    daemon_command (version-pinned, §6.1) }
+           RETURN { host_id, host, connect_token,
+                    daemon_npm_spec (server-owned launch recipe, §6.1) }
+             The server returns NO url and NO assembled command string. The
+             desktop assembles the connect command at the edge via shared
+             `assembleConnectCommand`, using the URL it is itself connected to
+             — the server never mints a command and so cannot leak its bind
+             address as the daemon's reach URL (§4.3 of
+             `docs/orchestration-boundary-v1.md`).
   [server] host is now `pending` (activated_at NULL, finalized_at NULL) → an
            ephemeral setup draft, modal-scoped; the bulk list hides it, so it is
            NOT in the rail / picker / placement
