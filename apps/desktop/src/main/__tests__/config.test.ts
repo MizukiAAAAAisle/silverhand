@@ -63,6 +63,41 @@ describe('desktop server config', () => {
     expect(raw).not.toHaveProperty('auth_token');
   });
 
+  it('never persists the generated event_ws_allowed_origins allowlist', async () => {
+    // #task:1428 P1: the embedded allowlist is a per-boot GENERATED value (the
+    // current finalized loopback origin, re-seeded fresh by startBackend), not a
+    // durable setting. Persisting it would let a stale origin from an earlier
+    // port survive into the next boot — trusting a loopback the app no longer
+    // listens on. So writeServerConfig must strip it even when the in-memory
+    // config carries one.
+    tmp = mkdtempSync(join(tmpdir(), 'silverhand-config-'));
+    process.env.SILVERHAND_DIR = tmp;
+    writeFileSync(
+      join(tmp, SERVER_CONFIG_FILENAME),
+      JSON.stringify({
+        mode: 'embedded',
+        url: 'http://127.0.0.1:4321',
+        refresh_token: null,
+        event_ws_allowed_origins: ['http://127.0.0.1:1111'],
+        child_sessions: {
+          max_concurrent_per_parent: null,
+          spawn_cooldown_seconds: null,
+          max_depth: 1,
+        },
+      }),
+      { mode: 0o600 },
+    );
+
+    // The read path still accepts an old file that carries the field...
+    const config = await loadOrCreateServerConfig();
+    expect(config.event_ws_allowed_origins).toEqual(['http://127.0.0.1:1111']);
+
+    // ...but a rewrite drops it, so the stale origin can't accumulate on disk.
+    await writeServerConfig(config);
+    const raw = readConfig(tmp);
+    expect(raw).not.toHaveProperty('event_ws_allowed_origins');
+  });
+
   it('derives isolated Electron userData under the silverhand root', () => {
     tmp = mkdtempSync(join(tmpdir(), 'silverhand-config-'));
     expect(electronUserDataPath(tmp)).toBe(
