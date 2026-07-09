@@ -1,9 +1,16 @@
 import { useMemo } from 'react';
-import { Bookmark, Layers } from 'lucide-react';
+import { Bookmark, Layers, User } from 'lucide-react';
 import dayjs from 'dayjs';
-import type { SavedMessageDto } from '@silverhand/shared';
+import type { AgentDto, SavedMessageDto, UserDto } from '@silverhand/shared';
 import { Markdown } from '@/components/chat/Markdown';
 import { ChannelIcon } from '@/components/ChannelIcon';
+import { WorkspaceIcon } from '@/components/WorkspaceIcon';
+import { AgentAvatar } from '@/components/AgentAvatar';
+import { UserAvatar } from '@/components/UserAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
+import { useAgents } from '@/features/agents/hooks';
+import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { useSavedMessages, useUnsaveMessage } from '@/features/saved/hooks';
 import { useUsersById, makeUserNameResolver } from '@/features/users/hooks';
 import { formatUserDisplayName } from '@/lib/current-user';
@@ -84,6 +91,26 @@ export function SavedListView({
   // user with no way to clear.
   const showFilters = hasFilters || items.length > 0;
 
+  // Identity resolution for each row's meta line (shiki #task:1441): the row now
+  // shows the WORKSPACE's own icon, the CHANNEL's `#`, and the SENDER's avatar.
+  // Resolve the directories ONCE here (workspaces keyed by id for kind/dm-agent;
+  // the agents + users directories + their avatar object URLs) and hand them to
+  // every SavedItem — the batch avatar hooks session-cache by url, so this is
+  // cheap and shared across all rows.
+  const workspacesById = useMemo(
+    () => new Map(workspaces.map(w => [w.id, w])),
+    [workspaces],
+  );
+  const { data: agents = [] } = useAgents();
+  const agentsById = useMemo<ReadonlyMap<string, AgentDto>>(
+    () => new Map(agents.map(a => [a.id, a])),
+    [agents],
+  );
+  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
+  const usersById = useUsersById();
+  const userList = useMemo(() => [...usersById.values()], [usersById]);
+  const userAvatarUrls = useUserAvatarObjectUrls(userList);
+
   return (
     <main
       className="flex h-full flex-1 flex-col bg-bg-chat"
@@ -140,6 +167,11 @@ export function SavedListView({
               <SavedItem
                 key={item.id}
                 item={item}
+                workspace={workspacesById.get(item.workspace_id) ?? null}
+                agentsById={agentsById}
+                agentAvatarUrls={agentAvatarUrls}
+                userAvatarUrls={userAvatarUrls}
+                usersById={usersById}
                 onJump={() =>
                   onJump({
                     workspaceId: item.workspace_id,
@@ -162,17 +194,29 @@ export function SavedListView({
 
 function SavedItem({
   item,
+  workspace,
+  agentsById,
+  agentAvatarUrls,
+  userAvatarUrls,
+  usersById,
   onJump,
   onUnsave,
 }: {
   item: SavedMessageDto;
+  /** The row's workspace record (joined by id upstream) — drives the
+   *  WorkspaceIcon's kind / DM-agent branch. Null in the brief window before
+   *  the workspace list resolves. */
+  workspace: WorkspaceListItem | null;
+  agentsById: ReadonlyMap<string, AgentDto>;
+  agentAvatarUrls: ReadonlyMap<string, string | null>;
+  userAvatarUrls: ReadonlyMap<string, string | null>;
+  usersById: Map<string, UserDto>;
   onJump: () => void;
   onUnsave: () => void;
 }): JSX.Element {
   // Multi-human audit 2026-06-03 #task:857 P0.10: resolve the saved
   // message's author against the global directory so it renders as the
   // human's display name instead of a raw uuid.
-  const usersById = useUsersById();
   const userResolver = useMemo(() => makeUserNameResolver(usersById), [usersById]);
   const sender = useMemo(() => {
     if (item.message.from_kind === 'user') {
@@ -212,15 +256,36 @@ function SavedItem({
           'rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-4 py-3 transition'
         }
       >
+        {/* Meta line, three identity segments (shiki #task:1441): the WORKSPACE
+            wears its own icon, the CHANNEL owns the `#`, and the SENDER gets an
+            avatar — the `#` no longer sits (wrongly) in front of the workspace
+            name. Canonical primitives throughout (WorkspaceIcon / ChannelIcon /
+            Agent|UserAvatar), so this row reads like every other identity row. */}
         <header className="mb-2 flex items-center gap-2 text-xs text-text-muted">
           <span className="inline-flex items-center gap-1 font-medium text-text-primary">
-            <ChannelIcon variant="sticker" />
+            <WorkspaceIcon
+              kind={workspace?.kind ?? 'regular'}
+              dmAgentId={workspace?.dm_agent_id ?? null}
+              agentsById={agentsById}
+              dmAgentAvatarUrls={agentAvatarUrls}
+            />
             {item.workspace_name}
           </span>
           <span>·</span>
-          <span className="truncate">{item.conversation_title}</span>
+          <span className="inline-flex min-w-0 items-center gap-1">
+            <ChannelIcon variant="sticker" density="md" />
+            <span className="truncate">{item.conversation_title}</span>
+          </span>
           <span>·</span>
-          <span>{sender}</span>
+          <span className="inline-flex items-center gap-1">
+            <SavedSenderAvatar
+              item={item}
+              agentsById={agentsById}
+              agentAvatarUrls={agentAvatarUrls}
+              userAvatarUrls={userAvatarUrls}
+            />
+            <span>{sender}</span>
+          </span>
           <span>·</span>
           <span>{when}</span>
           <button
@@ -243,4 +308,45 @@ function SavedItem({
       </div>
     </li>
   );
+}
+
+/** The saved message author's avatar — agent → runtime-tinted `AgentAvatar`,
+ *  human → neutral `UserAvatar`, at the `xs` (16px) meta-row scale. Derives the
+ *  sender from the message's `from_kind` + id; falls back to the generic person
+ *  glyph when the id isn't in the directory or the author is `system`, so a row
+ *  never renders a broken avatar (shiki #task:1441). */
+function SavedSenderAvatar({
+  item,
+  agentsById,
+  agentAvatarUrls,
+  userAvatarUrls,
+}: {
+  item: SavedMessageDto;
+  agentsById: ReadonlyMap<string, AgentDto>;
+  agentAvatarUrls: ReadonlyMap<string, string | null>;
+  userAvatarUrls: ReadonlyMap<string, string | null>;
+}): JSX.Element {
+  const { from_kind, from_agent_id, from_user_id } = item.message;
+  if (from_kind === 'agent' && from_agent_id) {
+    const runtime = agentsById.get(from_agent_id)?.runtime;
+    if (runtime) {
+      return (
+        <AgentAvatar
+          runtime={runtime}
+          size={AVATAR_PX.xs}
+          avatarObjectUrl={agentAvatarUrls.get(from_agent_id) ?? null}
+          alt={item.agent_name ?? undefined}
+        />
+      );
+    }
+  }
+  if (from_kind === 'user' && from_user_id) {
+    return (
+      <UserAvatar
+        size={AVATAR_PX.xs}
+        avatarObjectUrl={userAvatarUrls.get(from_user_id) ?? null}
+      />
+    );
+  }
+  return <User className="size-4 shrink-0 text-text-muted" />;
 }

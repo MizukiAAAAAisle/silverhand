@@ -174,22 +174,26 @@ describe('TaskFilterBar — trigger glyphs stay height-uniform (#task:1437)', ()
     );
   }
 
-  it('channel trigger uses a plain `#`, NOT the sidebar sticker hook', () => {
-    // The bug: the channel trigger carried `data-channel-icon`, whose forza6
-    // sticker recipe (content-box + 1px border + 1px padding) inflated it to
-    // 18px while the 14px sibling glyphs stayed put. With a closed popover,
-    // SSR renders only the four triggers (dropdown rows are portaled + gated
-    // on open) — so `data-channel-icon` must be ABSENT here. If it reappears,
-    // the sticker crept back onto the trigger and the height drifts again.
+  it('channel trigger uses the sticker `#` identity hook (#task:1441)', () => {
+    // #task:1437 originally kept the channel trigger on the UTILITY `#` (no
+    // `data-channel-icon` hook) so the forza6 sticker recipe couldn't inflate
+    // it past its 14px siblings. #task:1441 SUPERSEDES that: now that the
+    // forza6 `#` sticker is FLAT at rest (no drop-shadow), shiki wants the
+    // selected-label `#` to carry the same yellow poster identity as the
+    // dropdown rows + the rest of the app — so the trigger DOES wear the hook.
+    // (The slight forza6 border/padding inflation is CSS-only, out of SSR
+    // scope, and an accepted trade-off for identity consistency.)
     const html = renderBar();
     expect(html).toContain('aria-label="Channel"');
-    expect(html).not.toContain('data-channel-icon');
+    expect(html).toContain('data-channel-icon');
   });
 
-  it('every trigger glyph sits at the shared 14px box', () => {
-    // WorkspaceIcon (14) + the plain channel `#` (14) both render an explicit
-    // 14px box; no trigger glyph renders a 16/18px box. The plain lucide
-    // User/PenLine glyphs use `size-3.5` (= 14) and can't be theme-inflated.
+  it('trigger glyphs render at the shared 14px content box', () => {
+    // WorkspaceIcon (14) + the channel `#` (14, now the sticker variant) both
+    // render an explicit 14px box in SSR; no trigger glyph renders a 16/18px
+    // inline box. The plain lucide User/PenLine glyphs use `size-3.5` (= 14).
+    // (forza6's sticker border/padding is applied in CSS, not inline, so it
+    // never appears here — #task:1441.)
     const html = renderBar();
     expect(html).toContain('width:14px');
     expect(html).not.toContain('width:16px');

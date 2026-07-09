@@ -20,8 +20,13 @@ import type { AgentDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import { ChannelIcon } from '@/components/ChannelIcon';
+import { AgentAvatar } from '@/components/AgentAvatar';
+import { UserAvatar } from '@/components/UserAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+import { useUsersById } from '@/features/users/hooks';
+import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { useRovingList } from '@/features/tasks/taskFilterKeyboard';
 import {
   applyWorkspaceCascade,
@@ -29,6 +34,7 @@ import {
   taskFiltersEqual,
   type PersonFilter,
   type PersonOption,
+  type PersonRef,
   type TaskFilters,
 } from '@/features/tasks/taskFilters';
 
@@ -178,6 +184,21 @@ export function TaskFilterBar({
 }: TaskFilterBarProps): JSX.Element {
   const dirty = !taskFiltersEqual(filters, baselineFilters);
 
+  // Person avatars for the Assignee / From dropdowns (shiki #task:1441).
+  // Resolved ONCE here (agents + users directories + their avatar object URLs)
+  // and shared with both PersonFilterControls, so the two dropdowns don't each
+  // re-resolve the directory. Both `AgentDto` and `UserDto` expose {id,
+  // avatar_url}; the batch hooks session-cache by url so this is cheap.
+  const { data: agents = [] } = useAgents();
+  const personAgentsById = useMemo<ReadonlyMap<string, AgentDto>>(
+    () => new Map(agents.map(a => [a.id, a])),
+    [agents],
+  );
+  const personAgentAvatarUrls = useAgentAvatarObjectUrls(agents);
+  const usersById = useUsersById();
+  const userList = useMemo(() => [...usersById.values()], [usersById]);
+  const personUserAvatarUrls = useUserAvatarObjectUrls(userList);
+
   // Cascade (#task:1387): the channel filter shows only channels of the
   // selected workspace; at "All workspaces" it shows the full grouped set
   // (current behaviour). Selecting a workspace also drops a channel that no
@@ -222,6 +243,9 @@ export function TaskFilterBar({
         allowUnassigned={hasUnassigned}
         value={filters.assignee}
         onChange={assignee => onChange({ ...filters, assignee })}
+        agentsById={personAgentsById}
+        agentAvatarUrls={personAgentAvatarUrls}
+        userAvatarUrls={personUserAvatarUrls}
       />
       <PersonFilterControl
         icon={<PenLine className="size-3.5" />}
@@ -230,6 +254,9 @@ export function TaskFilterBar({
         options={creatorOptions}
         value={filters.creator}
         onChange={creator => onChange({ ...filters, creator })}
+        agentsById={personAgentsById}
+        agentAvatarUrls={personAgentAvatarUrls}
+        userAvatarUrls={personUserAvatarUrls}
       />
       {dirty ? (
         <button
@@ -535,12 +562,22 @@ function ChannelFilter({
     >
       <Popover.Trigger asChild>
         <FilterTrigger
-          // Utility-variant `#` (no `data-channel-icon` sticker hook) — the
-          // sidebar sticker's border/padding would inflate this past the 14px
-          // sibling glyphs in forza6 (#task:1437). `md` = 14px, matching the
-          // workspace trigger's TRIGGER_GLYPH_PX. Dropdown rows use the
-          // sticker variant.
-          icon={<ChannelIcon variant="utility" density="md" />}
+          // Sticker-variant `#` (shiki #task:1441): the selected-label `#`
+          // wears the same yellow poster sticker as the dropdown rows + the rest
+          // of the app, so the channel's identity glyph reads consistently. The
+          // `task-filter-channel-hash` class lets forza6 TIGHTEN this one sticker
+          // to the shared 14px trigger box (12px glyph + 1px ink frame, no
+          // padding) so it sits height-uniform with its sibling triggers instead
+          // of inflating to ~18px — identity AND alignment (shiki #task:1441
+          // review). warm/slack carry no box chrome, so `md` (14px) is untouched
+          // there.
+          icon={
+            <ChannelIcon
+              variant="sticker"
+              density="md"
+              className="task-filter-channel-hash"
+            />
+          }
           active={value !== null}
           aria-label="Channel"
         >
@@ -751,6 +788,47 @@ function WorkspaceFilter({
 
 // ── Person (assignee / creator) ────────────────────────────────────
 
+/** A person option's avatar — the same identity primitives as everywhere else
+ *  (agent → runtime-tinted `AgentAvatar`, human → neutral `UserAvatar`), sized
+ *  to the `xs` (16px) meta-row scale. Falls back to the generic person glyph if
+ *  an agent id isn't in the directory (e.g. a deleted agent still on old tasks),
+ *  so a row never renders a broken avatar (shiki #task:1441). */
+function PersonAvatar({
+  person,
+  name,
+  agentsById,
+  agentAvatarUrls,
+  userAvatarUrls,
+}: {
+  person: PersonRef;
+  name: string;
+  agentsById: ReadonlyMap<string, AgentDto>;
+  agentAvatarUrls: ReadonlyMap<string, string | null>;
+  userAvatarUrls: ReadonlyMap<string, string | null>;
+}): JSX.Element {
+  if (person.type === 'agent') {
+    const runtime = agentsById.get(person.id)?.runtime;
+    if (runtime) {
+      return (
+        <AgentAvatar
+          runtime={runtime}
+          size={AVATAR_PX.xs}
+          avatarObjectUrl={agentAvatarUrls.get(person.id) ?? null}
+          alt={name}
+        />
+      );
+    }
+    return <User className="size-4 shrink-0 text-text-muted" />;
+  }
+  return (
+    <UserAvatar
+      size={AVATAR_PX.xs}
+      avatarObjectUrl={userAvatarUrls.get(person.id) ?? null}
+      alt={name}
+    />
+  );
+}
+
 function PersonFilterControl({
   icon,
   label,
@@ -759,6 +837,9 @@ function PersonFilterControl({
   allowUnassigned = false,
   value,
   onChange,
+  agentsById,
+  agentAvatarUrls,
+  userAvatarUrls,
 }: {
   icon: ReactNode;
   label: string;
@@ -767,6 +848,9 @@ function PersonFilterControl({
   allowUnassigned?: boolean;
   value: PersonFilter;
   onChange: (next: PersonFilter) => void;
+  agentsById: ReadonlyMap<string, AgentDto>;
+  agentAvatarUrls: ReadonlyMap<string, string | null>;
+  userAvatarUrls: ReadonlyMap<string, string | null>;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   const selectedName = options.find(
@@ -860,7 +944,18 @@ function PersonFilterControl({
               onHover={() => roving.setActiveIndex(index)}
               onSelect={() => choose({ kind: 'person', person: o.person })}
             >
-              {`@${o.name}`}
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="shrink-0">
+                  <PersonAvatar
+                    person={o.person}
+                    name={o.name}
+                    agentsById={agentsById}
+                    agentAvatarUrls={agentAvatarUrls}
+                    userAvatarUrls={userAvatarUrls}
+                  />
+                </span>
+                <span className="truncate">{`@${o.name}`}</span>
+              </span>
             </OptionRow>
           );
         })}

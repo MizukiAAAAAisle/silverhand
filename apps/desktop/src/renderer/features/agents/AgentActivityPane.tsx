@@ -100,8 +100,14 @@ export function AgentActivityPane({
 
   return (
     <div className="flex min-h-0 flex-1">
-      {/* master: conversation rail */}
-      <aside className="flex w-[224px] shrink-0 flex-col border-r border-border-subtle bg-bg-base">
+      {/* master: conversation rail. `data-agent-activity` is a theme-neutral
+          container hook (describes the DOM role, no theme word): forza6 scopes
+          the quiet resting `#`/`@` glyph to this dense nav list + the channel
+          sidebar, while sparse content lists keep the sticker (#task:1441). */}
+      <aside
+        data-agent-activity
+        className="flex w-[224px] shrink-0 flex-col border-r border-border-subtle bg-bg-base"
+      >
         <div className="flex-1 overflow-y-auto px-1.5 py-2">
           {groups.active.length === 0 && groups.recent.length === 0 ? (
             <p className="px-2 py-6 text-center text-[11px] text-text-muted">

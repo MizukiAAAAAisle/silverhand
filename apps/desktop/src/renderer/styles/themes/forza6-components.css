@@ -462,25 +462,24 @@
   font-style: italic;
 }
 
-/* Sidebar `<Hash />` = pink poster sticker mirror of the chat
-   header `#` (v6.4, #task:917). Lucide Hash is rendered as a 14px
-   `size-3.5` SVG with `stroke="currentColor"`. We turn the SVG
-   itself into a sticker chip:
-     - background pink + ink border + 0 radius (the recipe);
-     - color: white so currentColor pushes the Hash strokes white;
-     - box-sizing: content-box so the Tailwind `size-3.5` stays
-       14×14 inside while padding/border grows the visible chip a
-       few px each side (final chip ≈ 18×18). With border-box (the
-       global default) the 1px border + 1px padding would chew the
-       14px size class down to a 10px Hash, which loses the diamond.
-     - stroke-width 2 (was 2.75) — the pink fill carries the visual
-       weight now, the strokes can lighten back to lucide default. */
+/* `<Hash />` channel `#` = yellow poster sticker mirror of the chat header `#`
+   (v6.4, #task:917). Lucide Hash is a 14px `size-3.5` SVG with
+   `stroke="currentColor"`; we turn the SVG itself into a sticker chip:
+     - yellow fill + ink border + 0 radius (the recipe);
+     - color: ink so currentColor pushes the Hash strokes to ink;
+     - box-sizing: content-box so the Tailwind `size-3.5` stays 14×14 inside
+       while padding/border grows the visible chip a few px each side (final
+       chip ≈ 18×18). With border-box (the global default) the 1px border + 1px
+       padding would chew the 14px size class down to a 10px Hash.
+     - stroke-width 2 — the yellow fill carries the weight, strokes lighten.
+
+   This is the DEFAULT: the sparse content-area lists (search / archived / task
+   filter / activity / saved) KEEP the colour pop — a `#` there is one accent in
+   a varied list, not repeated noise (shiki #task:1441: "这些地方需要一些色彩点缀").
+   No drop-shadow at rest: the forza6 `#` sticker is FLAT by default; the shadow
+   lift is EARNED (selected row) or SPECIAL (chat-header hero) only — shiki
+   #task:1441. */
 [data-theme='forza6'] [data-channel-icon] {
-  /* v6.7.1 (#task:917): mirrors `[data-conversation-hash-icon]` — channel
-     identity = yellow fill + ink glyph (see the chat-header icon rule
-     above for the full pink → ink+yellow → yellow+ink rationale). Same
-     yellow-ink recipe family as tasks-hero; glyph carries the semantic.
-     Sidebar chip uses small-chip proportions (1px border + 1px shadow). */
   background-color: var(--forza6-yellow);
   color: var(--forza6-ink);
   stroke-width: 2;
@@ -488,26 +487,71 @@
   border-radius: 0;
   box-sizing: content-box;
   padding: 1px;
-  box-shadow: 1px 1px 0 var(--forza6-ink);
 }
 
-/* v6.7.2 (#task:917, shiki review of v6.7.1 screenshot): chip on
-   selected row reads weak — selected row ground is lime-pale
-   (`#E6F68A`) and chip fill is yellow (`#FFEB00`); both are bright
-   so the fill-vs-bg contrast collapses to ~1.07:1. The ink border +
-   ink # glyph + ink box-shadow still frame the chip, but the chip
-   feels noticeably lighter than on unselected (cream-bg) rows.
+/* Dense NAVIGATION lists (channel sidebar + agent-activity roster) drop the
+   sticker AT REST — repeated down a long list the yellow fill reads heavy and
+   borrows Tasks' fluorescent yellow as mere row decoration, spending the tasks
+   hue budget. Resting = quiet ink glyph (mirrors warm/slack, which strengthen
+   the `#` by COLOUR alone); the sticker is EARNED by the selected row (below).
+   Scoped to these two containers only — every other surface keeps the pop.
+   `[data-row-selected] [data-channel-icon]` already only ever matched these two
+   (Favorites/Workspaces rows carry `data-workspace-icon`, not channel-icon), so
+   the container scope just extends that to the resting state. (shiki #task:1441)
+   The chat-header `#` (`[data-conversation-hash-icon]`) is a SEPARATE hook and
+   stays a hero sticker — the single-instance surface where loudness belongs. */
+[data-theme='forza6'] [data-sidebar='channels'] [data-channel-icon],
+[data-theme='forza6'] [data-agent-activity] [data-channel-icon] {
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  padding: 0;
+  color: var(--forza6-ink);
+}
 
-   Fix: scope-specific lift on selected rows only. Bump border to
-   1.5px + box-shadow to 2px ink — more ink mass framing the chip
-   without changing colour (hue allocation stays locked). Targets the
-   `[data-row-selected]` hook on the channel row container (theme-
-   neutral; only forza6 paints lift). Unselected rows keep the v6.7.1
-   1px / 1px chip recipe — adding lift everywhere would just make
-   unselected chips visually heavier without solving a real problem. */
-[data-theme='forza6'] [data-row-selected] [data-channel-icon] {
-  border-width: 1.5px;
-  box-shadow: 2px 2px 0 var(--forza6-ink);
+/* Selected row in those two lists EARNS the sticker back — identity emphasis on
+   the ONE active row: yellow fill + ink frame, FLAT. No drop-shadow: the
+   selected ROW already carries its own poster lift (border + shadow), so a
+   second shadow on the icon just re-stacks weight and reads heavy (shiki
+   #task:1441). The fill + 1.5px ink frame alone distinguish it from the resting
+   quiet glyph. */
+[data-theme='forza6'] [data-sidebar='channels'] [data-row-selected] [data-channel-icon],
+[data-theme='forza6'] [data-agent-activity] [data-row-selected] [data-channel-icon] {
+  background-color: var(--forza6-yellow);
+  color: var(--forza6-ink);
+  border: 1.5px solid var(--forza6-ink);
+  border-radius: 0;
+  box-sizing: content-box;
+  padding: 1px;
+}
+
+/* Task-filter channel TRIGGER: the sticker identity, TIGHTENED to the shared
+   14px trigger-glyph box so it sits height-uniform with its sibling triggers
+   (workspace / assignee / from) instead of inflating to ~18px (shiki #task:1441
+   review — "我需要一致"). The default sticker is content-box + 1px border + 1px
+   padding = ~18px. We keep content-box (border-box on an <svg> with a `width`
+   attribute doesn't reliably shrink it) and instead SHRINK the glyph: an
+   explicit 12px viewport (overriding the 14px `size` attribute) + 0 padding, so
+   12px glyph + 1px ink frame each side = 14px total. The Hash reads a touch
+   smaller but the fill + frame still say "poster sticker". Compact-control
+   tightening only — the general sticker geometry stays padded for identity
+   surfaces. */
+[data-theme='forza6'] [data-channel-icon].task-filter-channel-hash {
+  width: 12px;
+  height: 12px;
+  padding: 0;
+}
+
+/* Channel / thread header right-side action icons (search / threads / restart /
+   stop / settings / fullscreen / close): paint the glyphs in the SAME ink the
+   theme draws its BORDERS with (`--forza6-ink`), not the teal `--text-muted` —
+   so the poster header's controls read as crisp ink marks consistent with
+   forza6's ink-frame language (shiki #task:1442). The hover/pressed states keep
+   their `bg-bg-hover` feedback; only the resting glyph tone changes. Scoped to
+   the shared `[data-channel-actions]` cluster, so channel + thread headers stay
+   in lock-step. Other themes keep `--text-muted`. */
+[data-theme='forza6'] [data-channel-actions] button {
+  color: var(--forza6-ink);
 }
 
 /* ── Scroll-to-bottom FAB — poster sticker, not Material blob (#task:1184) ──
