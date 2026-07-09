@@ -150,6 +150,74 @@ describe('ConversationEventRepo', () => {
     }
   });
 
+  it('updates a live text block in place instead of creating fragment rows', () => {
+    const t = bootstrap();
+    try {
+      const repo = new ConversationEventRepo(t.db);
+
+      const first = repo.upsertTextBlock({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        kind: 'thinking',
+        text: 'find',
+        createdAt: 1_700_000_000_000,
+      });
+      const second = repo.upsertTextBlock({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        kind: 'thinking',
+        text: 'finding',
+        createdAt: 1_700_000_000_001,
+        previousEventId: first!.id,
+      });
+
+      expect(second!.id).toBe(first!.id);
+      const page = repo.listForConversationAgent({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        limit: 10,
+      });
+      expect(page.events).toHaveLength(1);
+      expect(page.events[0]).toMatchObject({
+        id: first!.id,
+        kind: 'thinking',
+        payload: { text: 'finding' },
+        created_at: 1_700_000_000_000,
+      });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('falls back to a new text block when the previous block id is absent', () => {
+    const t = bootstrap();
+    try {
+      const repo = new ConversationEventRepo(t.db);
+
+      const row = repo.upsertTextBlock({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        kind: 'text',
+        text: 'body',
+        createdAt: 1_700_000_000_000,
+        previousEventId: 999_999,
+      });
+
+      expect(row).toMatchObject({
+        kind: 'text',
+        payload: { text: 'body' },
+      });
+      const page = repo.listForConversationAgent({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        limit: 10,
+      });
+      expect(page.events).toHaveLength(1);
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('prunes expired rows for the same conversation-agent pair', () => {
     const t = bootstrap();
     try {

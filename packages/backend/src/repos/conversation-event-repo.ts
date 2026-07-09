@@ -57,6 +57,34 @@ export class ConversationEventRepo {
     });
   }
 
+  upsertTextBlock(params: {
+    conversationId: string;
+    agentId: string;
+    kind: 'thinking' | 'text';
+    text: string;
+    createdAt: number;
+    previousEventId?: number | null;
+  }): ConversationActivityEvent | null {
+    const payload: ConversationActivityPayload = { text: params.text };
+    if (params.previousEventId != null) {
+      const updated = this.updateTextBlock({
+        id: params.previousEventId,
+        conversationId: params.conversationId,
+        agentId: params.agentId,
+        kind: params.kind,
+        payload,
+      });
+      if (updated) return updated;
+    }
+    return this.insert({
+      conversationId: params.conversationId,
+      agentId: params.agentId,
+      kind: params.kind,
+      payload,
+      createdAt: params.createdAt,
+    });
+  }
+
   recordParsedEventDropped(params: {
     conversationId: string;
     agentId: string;
@@ -146,6 +174,39 @@ export class ConversationEventRepo {
       .get(Number(result.lastInsertRowid));
     if (!row) throw new Error('conversation_events insert failed');
     return rowToDto(row);
+  }
+
+  private updateTextBlock(params: {
+    id: number;
+    conversationId: string;
+    agentId: string;
+    kind: 'thinking' | 'text';
+    payload: ConversationActivityPayload;
+  }): ConversationActivityEvent | null {
+    const payloadText = params.payload === null ? null : JSON.stringify(params.payload);
+    const result = this.db
+      .prepare(
+        `UPDATE conversation_events
+            SET payload = ?
+          WHERE id = ?
+            AND conversation_id = ?
+            AND agent_id = ?
+            AND kind = ?`,
+      )
+      .run(
+        payloadText,
+        params.id,
+        params.conversationId,
+        params.agentId,
+        params.kind,
+      );
+    if (result.changes === 0) return null;
+    const row = this.db
+      .prepare<[number], SessionEventRow>(
+        `SELECT * FROM conversation_events WHERE id = ?`,
+      )
+      .get(params.id);
+    return row ? rowToDto(row) : null;
   }
 
   private pruneForConversationAgent(

@@ -5,10 +5,8 @@ const durationMs = Number(process.env.SILVERHAND_PROFILE_MS ?? process.argv[3] ?
 const out = process.env.SILVERHAND_PROFILE_OUT ?? process.argv[4] ?? `/tmp/silverhand-renderer-${Date.now()}.cpuprofile`;
 
 const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`);
-const target = targets.find(t =>
-  t.type === 'page' &&
-  typeof t.webSocketDebuggerUrl === 'string' &&
-  !String(t.url ?? '').includes('events.html')
+const target = targets.find(
+  t => t.type === 'page' && typeof t.webSocketDebuggerUrl === 'string',
 ) ?? targets.find(t => typeof t.webSocketDebuggerUrl === 'string');
 
 if (!target) {
@@ -71,4 +69,3 @@ function onceOpen(ws) {
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
-

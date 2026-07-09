@@ -864,7 +864,11 @@ export class RuntimeDeliveryCoordinator {
     const source = watchdog.syntheticState ?? current;
     if (!source || source.runId !== watchdog.baseRunId) return;
     const now = this.now();
-    const { activitySnippet: _activitySnippet, ...base } = source;
+    const {
+      activitySnippet: _activitySnippet,
+      activitySnippetKind: _activitySnippetKind,
+      ...base
+    } = source;
     const terminal: AgentRunState = {
       ...base,
       status: terminalStatusForReason(reason),

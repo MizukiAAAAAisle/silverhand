@@ -48,11 +48,6 @@ export interface BackendInfo {
   local_host_server_url: string | null;
 }
 
-export interface ActiveConversationInfo {
-  workspaceId: string | null;
-  conversationId: string | null;
-}
-
 export type DesktopAuthState =
   | { status: 'authenticated'; signup_enabled: boolean; user: UserDto }
   | { status: 'unauthenticated'; signup_enabled: boolean }
@@ -456,17 +451,6 @@ const api = {
     ipcRenderer.invoke('attachment:openExternal', input),
   showItemInFolder: (path: string): Promise<void> =>
     ipcRenderer.invoke('shell:showItemInFolder', path),
-  setWindowAlwaysOnTop: (pinned: boolean): Promise<void> =>
-    ipcRenderer.invoke('window:setAlwaysOnTop', pinned),
-  setActiveConversation: (active: ActiveConversationInfo): Promise<void> =>
-    ipcRenderer.invoke('active-conversation:set', active),
-  onActiveConversation: (handler: (active: ActiveConversationInfo) => void): (() => void) => {
-    const listener = (_event: IpcRendererEvent, active: ActiveConversationInfo) => {
-      handler(active);
-    };
-    ipcRenderer.on('active-conversation:update', listener);
-    return () => ipcRenderer.off('active-conversation:update', listener);
-  },
   /** Subscribe to shutdown progress steps emitted by the main process
    *  just before and during graceful shutdown. Drives the in-app overlay
    *  so the user sees what's happening instead of a frozen window. */

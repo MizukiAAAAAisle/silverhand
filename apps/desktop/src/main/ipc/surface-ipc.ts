@@ -4,15 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isSafeOpenExtension } from '@silverhand/shared';
 
-export interface ActiveConversationInfo {
-  workspaceId: string | null;
-  conversationId: string | null;
-}
-
-export function registerSurfaceIpcHandlers(opts: {
-  setActiveConversation: (next: ActiveConversationInfo) => void;
-  pushActiveConversationToEvents: () => void;
-}): void {
+export function registerSurfaceIpcHandlers(): void {
   // Live OS notifications keyed by the renderer-supplied notification id (the
   // backend notification row id). Retained so `notification:dismiss` can
   // `.close()` the exact alert when the backend reports it was read
@@ -141,19 +133,6 @@ export function registerSurfaceIpcHandlers(opts: {
     shell.showItemInFolder(fullPath);
   });
 
-  ipcMain.handle('window:setAlwaysOnTop', (event, pinned: boolean) => {
-    // Pin the *sender's* window — works for any future window without
-    // hard-wiring a reference here. The Events window uses this to
-    // expose Pin as an in-titlebar toggle (see EventsApp).
-    const win = BrowserWindow.fromWebContents(event.sender);
-    win?.setAlwaysOnTop(!!pinned);
-  });
-
-  ipcMain.handle('active-conversation:set', (_event, next: unknown) => {
-    opts.setActiveConversation(normalizeActiveConversation(next));
-    opts.pushActiveConversationToEvents();
-  });
-
   ipcMain.handle('badge:setCount', (_event, value: unknown) => {
     // macOS dock badge. n=0 clears it; non-finite / negative values are
     // coerced to 0 so a buggy renderer can't paint nonsense on the icon.
@@ -232,15 +211,4 @@ export function registerSurfaceIpcHandlers(opts: {
       }
     }
   });
-}
-
-function normalizeActiveConversation(value: unknown): ActiveConversationInfo {
-  if (!value || typeof value !== 'object') {
-    return { workspaceId: null, conversationId: null };
-  }
-  const v = value as Partial<Record<keyof ActiveConversationInfo, unknown>>;
-  return {
-    workspaceId: typeof v.workspaceId === 'string' ? v.workspaceId : null,
-    conversationId: typeof v.conversationId === 'string' ? v.conversationId : null,
-  };
 }

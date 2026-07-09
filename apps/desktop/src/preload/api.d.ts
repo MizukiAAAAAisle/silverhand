@@ -49,11 +49,6 @@ export interface BackendInfo {
   local_host_server_url: string | null;
 }
 
-export interface ActiveConversationInfo {
-  workspaceId: string | null;
-  conversationId: string | null;
-}
-
 export type DesktopAuthState =
   | { status: 'authenticated'; signup_enabled: boolean; user: UserDto }
   | { status: 'unauthenticated'; signup_enabled: boolean }
@@ -551,9 +546,6 @@ declare global {
         bytes: Uint8Array;
       }): Promise<{ ok: true } | { ok: false; reason: string }>;
       showItemInFolder(path: string): Promise<void>;
-      setWindowAlwaysOnTop(pinned: boolean): Promise<void>;
-      setActiveConversation(active: ActiveConversationInfo): Promise<void>;
-      onActiveConversation(handler: (active: ActiveConversationInfo) => void): () => void;
       showSystemNotification(opts: {
         title: string;
         body: string;

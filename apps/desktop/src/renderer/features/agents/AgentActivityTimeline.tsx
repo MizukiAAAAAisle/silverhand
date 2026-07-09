@@ -65,7 +65,7 @@ export function AgentActivityTimeline({
 }: AgentActivityTimelineProps): JSX.Element {
   // Pure reader (#task:1255 P1c #2): the feed lives in a React Query cache the
   // central ingestor writes live `conversation_activity` rows into; this view no
-  // longer registers `onWsFrame`/`useConversationStream`.
+  // longer registers `onWsFrame`.
   const { events, nextBeforeId, phase, isLoadingMore, loadEarlier } =
     useAgentActivityFeed(conversationId, agentId);
 

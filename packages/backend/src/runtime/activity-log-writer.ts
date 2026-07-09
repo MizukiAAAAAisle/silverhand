@@ -49,6 +49,9 @@ export class JsonlActivityLogWriter implements ActivityLogWriter {
         ? { toolCallCounts: state.toolCallCounts }
         : {}),
       ...(state.activitySnippet ? { activitySnippet: state.activitySnippet } : {}),
+      ...(state.activitySnippetKind
+        ? { activitySnippetKind: state.activitySnippetKind }
+        : {}),
       ...(state.compacting ? { compacting: state.compacting } : {}),
       ...(state.compactingSince ? { compactingSince: state.compactingSince } : {}),
       ...(state.compactionStale ? { compactionStale: state.compactionStale } : {}),

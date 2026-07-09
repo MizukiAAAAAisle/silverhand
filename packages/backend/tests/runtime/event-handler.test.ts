@@ -1024,6 +1024,9 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
           created_at: params.createdAt,
         };
       },
+      upsertTextBlock() {
+        throw new Error('not used');
+      },
       recordParsedEventDropped() {
         throw new Error('not used');
       },
@@ -1089,10 +1092,11 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     const { publisher, published } = makePublisher();
     const { sink } = makeInboxAck();
     let nextId = 1;
-    const activityCalls: Array<Parameters<ConversationActivitySink['recordParsedEvent']>[0]> = [];
+    const recordCalls: Array<Parameters<ConversationActivitySink['recordParsedEvent']>[0]> = [];
+    const textBlockCalls: Array<Parameters<ConversationActivitySink['upsertTextBlock']>[0]> = [];
     const conversationActivity: ConversationActivitySink = {
       recordParsedEvent(params) {
-        activityCalls.push(params);
+        recordCalls.push(params);
         if (params.event.kind === 'unknown') return null;
         const payload =
           params.event.kind === 'thinking' || params.event.kind === 'text'
@@ -1106,6 +1110,17 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
           agent_id: params.agentId,
           kind: params.event.kind as never,
           payload,
+          created_at: params.createdAt,
+        };
+      },
+      upsertTextBlock(params) {
+        textBlockCalls.push(params);
+        return {
+          id: params.previousEventId ?? nextId++,
+          conversation_id: params.conversationId,
+          agent_id: params.agentId,
+          kind: params.kind,
+          payload: { text: params.text },
           created_at: params.createdAt,
         };
       },
@@ -1137,7 +1152,14 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
       parsed: { kind: 'thinking', text: 'ing' } as never,
       ts: 1700000001001,
     });
-    expect(activityCalls).toEqual([]);
+    expect(recordCalls).toEqual([]);
+    expect(textBlockCalls.map(call => ({
+      kind: call.kind,
+      text: call.text,
+      previousEventId: call.previousEventId ?? null,
+    }))).toEqual([
+      { kind: 'thinking', text: 'find', previousEventId: null },
+    ]);
 
     emit({
       event: 'runtime_parsed_event',
@@ -1146,9 +1168,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
       parsed: { kind: 'text', text: 'answer ' } as never,
       ts: 1700000001002,
     });
-    expect(activityCalls.map(call => call.event)).toEqual([
-      { kind: 'thinking', text: 'finding' },
-    ]);
+    expect(recordCalls).toEqual([]);
     emit({
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
@@ -1165,16 +1185,33 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
       ts: 1700000001004,
     });
 
-    expect(activityCalls.map(call => call.event)).toEqual([
-      { kind: 'thinking', text: 'finding' },
-      { kind: 'text', text: 'answer body' },
+    expect(textBlockCalls.map(call => ({
+      kind: call.kind,
+      text: call.text,
+      previousEventId: call.previousEventId ?? null,
+    }))).toEqual([
+      { kind: 'thinking', text: 'find', previousEventId: null },
+      { kind: 'thinking', text: 'finding', previousEventId: 1 },
+      { kind: 'text', text: 'answer ', previousEventId: null },
+      { kind: 'text', text: 'answer body', previousEventId: 2 },
+    ]);
+    expect(recordCalls.map(call => call.event)).toEqual([
       { kind: 'tool_call', name: 'Bash', input: { command: 'pwd' } },
     ]);
-    expect(activityCalls[0]!.createdAt).toBe(1700000001000);
-    expect(activityCalls[1]!.createdAt).toBe(1700000001002);
+    expect(textBlockCalls[0]!.createdAt).toBe(1700000001000);
+    expect(textBlockCalls[2]!.createdAt).toBe(1700000001002);
     const activityPublishes = published.filter(p => p.kind === 'conversation_activity');
+    expect(activityPublishes.map(p => (p.payload as { id: number; kind: string }).id)).toEqual([
+      1,
+      1,
+      2,
+      2,
+      3,
+    ]);
     expect(activityPublishes.map(p => (p.payload as { kind: string }).kind)).toEqual([
       'thinking',
+      'thinking',
+      'text',
       'text',
       'tool_call',
     ]);
@@ -1197,16 +1234,28 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     });
     const { publisher, published } = makePublisher();
     const { sink } = makeInboxAck();
-    const activityCalls: Array<Parameters<ConversationActivitySink['recordParsedEvent']>[0]> = [];
+    const recordCalls: Array<Parameters<ConversationActivitySink['recordParsedEvent']>[0]> = [];
+    const textBlockCalls: Array<Parameters<ConversationActivitySink['upsertTextBlock']>[0]> = [];
     const conversationActivity: ConversationActivitySink = {
       recordParsedEvent(params) {
-        activityCalls.push(params);
+        recordCalls.push(params);
         return {
           id: 7,
           conversation_id: params.conversationId,
           agent_id: params.agentId,
           kind: params.event.kind as never,
           payload: { text: params.event.kind === 'text' ? params.event.text : '' },
+          created_at: params.createdAt,
+        };
+      },
+      upsertTextBlock(params) {
+        textBlockCalls.push(params);
+        return {
+          id: params.previousEventId ?? 7,
+          conversation_id: params.conversationId,
+          agent_id: params.agentId,
+          kind: params.kind,
+          payload: { text: params.text },
           created_at: params.createdAt,
         };
       },
@@ -1233,10 +1282,105 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     });
     emit(exitFrame('c1', 'a1', false, 1, 1700000002000));
 
-    expect(activityCalls.map(call => call.event)).toEqual([
+    expect(textBlockCalls.map(call => ({ kind: call.kind, text: call.text }))).toEqual([
+      { kind: 'text', text: 'partial reply' },
       { kind: 'text', text: 'partial reply' },
     ]);
-    expect(published.some(p => p.kind === 'conversation_activity')).toBe(true);
+    expect(recordCalls).toEqual([]);
+    expect(published.filter(p => p.kind === 'conversation_activity')).toHaveLength(2);
+  });
+
+  it('final flush reconciles the full text block even when an intermediate upsert is lost', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          pid: 1234,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const upserts: Array<Parameters<ConversationActivitySink['upsertTextBlock']>[0]> = [];
+    const conversationActivity: ConversationActivitySink = {
+      recordParsedEvent(params) {
+        return {
+          id: 9,
+          conversation_id: params.conversationId,
+          agent_id: params.agentId,
+          kind: params.event.kind as never,
+          payload: null,
+          created_at: params.createdAt,
+        };
+      },
+      upsertTextBlock(params) {
+        upserts.push(params);
+        if (upserts.length === 2) return null;
+        return {
+          id: params.previousEventId ?? 7,
+          conversation_id: params.conversationId,
+          agent_id: params.agentId,
+          kind: params.kind,
+          payload: { text: params.text },
+          created_at: params.createdAt,
+        };
+      },
+      recordParsedEventDropped() {
+        throw new Error('not used');
+      },
+    };
+    const handler = makeHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+      conversationActivity,
+    });
+    await handler.start();
+
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'thinking', text: 'find' } as never,
+      ts: 1700000001000,
+    });
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'thinking', text: 'ing' } as never,
+      ts: 1700000002000,
+    });
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'turn_end' } as never,
+      ts: 1700000002001,
+    });
+
+    expect(upserts.map(u => ({
+      text: u.text,
+      previousEventId: u.previousEventId ?? null,
+    }))).toEqual([
+      { text: 'find', previousEventId: null },
+      { text: 'finding', previousEventId: 7 },
+      { text: 'finding', previousEventId: 7 },
+    ]);
+    const finalTextBlock = published
+      .filter(p => p.kind === 'conversation_activity')
+      .map(p => p.payload as { kind: string; payload: { text?: string } | null })
+      .reverse()
+      .find(p => p.kind === 'thinking');
+    expect(finalTextBlock?.payload).toEqual({ text: 'finding' });
   });
 
   it('caps coalesced text blocks independently of tool input sanitization', async () => {
@@ -1256,16 +1400,33 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     });
     const { publisher } = makePublisher();
     const { sink } = makeInboxAck();
-    const activityCalls: Array<Parameters<ConversationActivitySink['recordParsedEvent']>[0]> = [];
+    const activityCalls: Array<
+      | { source: 'record'; event: Parameters<ConversationActivitySink['recordParsedEvent']>[0]['event'] }
+      | { source: 'text-block'; event: { kind: 'thinking' | 'text'; text: string } }
+    > = [];
     const conversationActivity: ConversationActivitySink = {
       recordParsedEvent(params) {
-        activityCalls.push(params);
+        activityCalls.push({ source: 'record', event: params.event });
         return {
           id: activityCalls.length,
           conversation_id: params.conversationId,
           agent_id: params.agentId,
           kind: params.event.kind as never,
           payload: null,
+          created_at: params.createdAt,
+        };
+      },
+      upsertTextBlock(params) {
+        activityCalls.push({
+          source: 'text-block',
+          event: { kind: params.kind, text: params.text },
+        });
+        return {
+          id: params.previousEventId ?? 1,
+          conversation_id: params.conversationId,
+          agent_id: params.agentId,
+          kind: params.kind,
+          payload: { text: params.text },
           created_at: params.createdAt,
         };
       },
@@ -1305,11 +1466,11 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
       ts: 1700000001002,
     });
 
-    const block = activityCalls[0]!.event as { kind: 'thinking'; text: string };
+    const block = activityCalls[1]!.event as { kind: 'thinking'; text: string };
     expect(block.kind).toBe('thinking');
     expect(block.text).toContain('<truncated 3616 chars>');
     expect(block.text.length).toBeGreaterThan(16_384);
-    expect(activityCalls[1]!.event).toEqual({ kind: 'turn_end' });
+    expect(activityCalls[2]!.event).toEqual({ kind: 'turn_end' });
   });
 
   it('large tool_call.input is sanitized BEFORE publish (truncation marker present)', async () => {

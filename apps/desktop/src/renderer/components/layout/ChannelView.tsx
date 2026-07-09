@@ -257,7 +257,7 @@ function ActiveChannelView({
   // (#task:1255 P1c). ChannelView is rendered only when the channel is visible,
   // but read advancement is VISIBILITY-driven, not frame-ARRIVAL-driven
   // (#task:1244 / #task:1251 read-inert axis) — so we mark read off the mainline
-  // CACHE, not an `onWsFrame`/`useConversationStream` handler (the hook is now a
+  // CACHE, not an `onWsFrame` handler (the hook is now a
   // pure reader; gate-(b)). We mark only when the window is genuinely at the
   // tail (`isAtTail && !hasNewerLiveGap`) and the newest mainline row actually
   // advanced. By construction `useChannelMessages` keeps reply-only rows OUT of

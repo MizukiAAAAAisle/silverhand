@@ -128,7 +128,6 @@ import { registerEventWsDiagnosticIpcHandler } from './ipc/event-ws-diagnostics.
 import { registerSelectionExportIpcHandlers } from './ipc/selection-export.js';
 import {
   registerSurfaceIpcHandlers,
-  type ActiveConversationInfo,
 } from './ipc/surface-ipc.js';
 
 const nodeSystemCaActivation = enableNodeSystemCa();
@@ -192,8 +191,6 @@ if (process.env.SILVERHAND_DIR) {
 let logger: FileLogger | null = null;
 let loggers: CategorizedLoggers | null = null;
 let mainWindow: BrowserWindow | null = null;
-let eventsWindow: BrowserWindow | null = null;
-let activeConversation: ActiveConversationInfo = { workspaceId: null, conversationId: null };
 let userSessionToken: string | null = null;
 let userSessionUser: UserDto | null = null;
 let localHostClaim: LocalHostClaimStatus = { status: 'unclaimed', hostId: null };
@@ -2412,91 +2409,12 @@ function createWindow(): void {
 }
 
 /**
- * Pop up the dev-only Events window. Single-instance: existing window
- * is focused; closed window is recreated. Cold-start defaults to
- * closed (no persistence) per spec §8.2 — clutter for non-dev users.
- *
- * The window has a standard frame and stays at normal stacking; the
- * "Pin Events Window" menu item flips `setAlwaysOnTop` on top of that.
- */
-function showEventsWindow(): void {
-  if (eventsWindow && !eventsWindow.isDestroyed()) {
-    eventsWindow.show();
-    eventsWindow.focus();
-    pushActiveConversationToEvents();
-    return;
-  }
-  const win = new BrowserWindow({
-    width: 480,
-    height: 720,
-    title: 'Silverhand Events',
-    show: false,
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
-      contextIsolation: true,
-    },
-  });
-  eventsWindow = win;
-
-  win.on('ready-to-show', () => win.show());
-  win.on('closed', () => {
-    if (eventsWindow === win) eventsWindow = null;
-  });
-
-  if (process.env['ELECTRON_RENDERER_URL']) {
-    const url = new URL('events.html', process.env['ELECTRON_RENDERER_URL']);
-    for (const [key, value] of Object.entries(activeConversationQuery())) {
-      url.searchParams.set(key, value);
-    }
-    win.loadURL(url.toString());
-  } else {
-    win.loadFile(join(__dirname, '../renderer/events.html'), {
-      query: activeConversationQuery(),
-    });
-  }
-}
-
-function activeConversationQuery(): Record<string, string> {
-  const query: Record<string, string> = {};
-  if (activeConversation.workspaceId) query.workspaceId = activeConversation.workspaceId;
-  if (activeConversation.conversationId) query.conversationId = activeConversation.conversationId;
-  return query;
-}
-
-function pushActiveConversationToEvents(): void {
-  const win = eventsWindow;
-  if (!win || win.isDestroyed()) return;
-  const send = () => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('active-conversation:update', activeConversation);
-    }
-  };
-  if (win.webContents.isLoading()) {
-    win.webContents.once('did-finish-load', send);
-  } else {
-    send();
-  }
-}
-
-/**
  * Build a full mac-style application menu. We can't add a single item
  * to the default menu without rebuilding it, so this template covers
- * the standard roles + adds the Developer submenu under View.
- *
- * The Pin item is intentionally always-enabled even when no Events
- * window exists — toggling it then is just a no-op, simpler than
- * rebuilding the menu on window create/destroy.
+ * the standard roles plus the app-specific Settings and Setup entries.
  */
 function buildAppMenu(): Menu {
   const isMac = process.platform === 'darwin';
-  const developerSubmenu: MenuItemConstructorOptions[] = [
-    {
-      label: 'Show Events Window',
-      accelerator: 'Alt+CommandOrControl+E',
-      click: () => showEventsWindow(),
-    },
-  ];
 
   // macOS convention: "Settings…" lives in the App menu directly under
   // About, with the standard Cmd+, accelerator. Electron's
@@ -2552,8 +2470,6 @@ function buildAppMenu(): Menu {
         { role: 'zoomOut' },
         { type: 'separator' },
         { role: 'togglefullscreen' },
-        { type: 'separator' },
-        { label: 'Developer', submenu: developerSubmenu },
       ],
     },
     { role: 'windowMenu' },
@@ -3171,12 +3087,7 @@ ipcMain.handle(
 );
 
 
-registerSurfaceIpcHandlers({
-  setActiveConversation(next) {
-    activeConversation = next;
-  },
-  pushActiveConversationToEvents,
-});
+registerSurfaceIpcHandlers();
 registerSelectionExportIpcHandlers();
 
 app.whenReady().then(async () => {

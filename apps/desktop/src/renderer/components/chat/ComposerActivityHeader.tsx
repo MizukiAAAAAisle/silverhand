@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ChevronDown, ChevronUp, Layers, Loader2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  Brain,
+  ChevronDown,
+  ChevronUp,
+  Layers,
+  Loader2,
+} from 'lucide-react';
 import type { AgentDto, AgentRunState } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
@@ -32,6 +39,20 @@ const STATUS_LABEL: Record<string, string> = {
   thinking: 'Thinking…',
   tool_running: 'Thinking…',
 };
+
+const ACTIVITY_SNIPPET_KIND_LABEL: Record<
+  NonNullable<AgentRunState['activitySnippetKind']>,
+  string
+> = {
+  thinking: 'Thinking',
+  text: 'Writing',
+};
+
+export function activitySnippetKindLabel(
+  kind: AgentRunState['activitySnippetKind'],
+): string | null {
+  return kind ? ACTIVITY_SNIPPET_KIND_LABEL[kind] : null;
+}
 
 /**
  * Main-status priority for the collapsed line's subject and for sorting
@@ -198,6 +219,12 @@ export function ComposerActivityHeader({
         ? 'Compacting · 慢'
         : 'Compacting'
       : null;
+  const snippetKindLabel =
+    subject.activitySnippet && !badge
+      ? activitySnippetKindLabel(subject.activitySnippetKind)
+      : null;
+  const SnippetKindIcon =
+    subject.activitySnippetKind === 'thinking' ? Brain : null;
   const snippet =
     subject.activitySnippet || STATUS_LABEL[subject.status] || subject.status;
   const extra = active.length - 1;
@@ -276,6 +303,12 @@ export function ComposerActivityHeader({
               {badge}
             </span>
           ) : null}
+          {snippetKindLabel ? (
+            <span className="flex shrink-0 items-center gap-1 rounded border border-border-subtle/70 px-1.5 py-px text-[10px] leading-4 text-text-muted">
+              {SnippetKindIcon ? <SnippetKindIcon className="size-3" /> : null}
+              <span>{snippetKindLabel}</span>
+            </span>
+          ) : null}
           <span className="min-w-0 flex-1 truncate text-left text-text-muted">
             {snippet}
           </span>
@@ -309,6 +342,11 @@ function ActivityDetailRow({
   const name = displayNameOf(agent);
   const progressText =
     state.activitySnippet || STATUS_LABEL[state.status] || state.status;
+  const snippetKindLabel = state.activitySnippet
+    ? activitySnippetKindLabel(state.activitySnippetKind)
+    : null;
+  const SnippetKindIcon =
+    state.activitySnippetKind === 'thinking' ? Brain : null;
   const toolEntries = Object.entries(state.toolCallCounts ?? {}).filter(
     ([, count]) => count > 0,
   );
@@ -331,6 +369,12 @@ function ActivityDetailRow({
         <span className="flex min-w-0 items-center gap-1.5 leading-5">
           <span className="shrink-0 font-medium text-accent">{name}</span>
           <Loader2 className="size-3 shrink-0 animate-spin text-text-muted" />
+          {snippetKindLabel ? (
+            <span className="flex shrink-0 items-center gap-1 rounded border border-border-subtle/70 px-1.5 py-px text-[10px] leading-4 text-text-muted">
+              {SnippetKindIcon ? <SnippetKindIcon className="size-3" /> : null}
+              <span>{snippetKindLabel}</span>
+            </span>
+          ) : null}
           <span className="min-w-0 flex-1 truncate text-text-secondary">
             {progressText}
           </span>

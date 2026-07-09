@@ -2,18 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-// #task:1251 — the no-listener-gap fix makes a resubscribe REPLAY the events
-// published while no listener was attached. The server re-sends them as
-// byte-identical `event` frames over the existing `resume` protocol, so they
-// flow through the SAME path live frames do:
-//   ws-client onFrame → useConversationStream → onEvent → setQueryData (cache).
-// Because replay reuses that path verbatim, two renderer invariants the path
-// already satisfies BY CONSTRUCTION become load-bearing for replay correctness,
-// and must not be allowed to regress silently:
+// #task:1251 — replayed frames flow through the same central conversation
+// ingestor as live frames. Two renderer invariants remain load-bearing:
 //
 //   (1) READ-INERT (surfaced ≠ eliminated, the #task:1244 invariant one layer
-//       down). The realtime ingestion bridge — `useConversationStream`, which
-//       EVERY frame, live or replayed, passes through — must never write read
+//       down). The central ingestor must never write read
 //       state. Read advancement is VISIBILITY-driven (App.tsx
 //       selectVisibleConversations → useMarkMessageChannelRead) / explicit
 //       intent, NEVER frame-arrival-driven. If the bridge advanced the
@@ -69,31 +62,6 @@ function sliceFunctionBody(source: string, declaration: string): string {
   const nextDecl = rest.search(/\n(?:export )?function /);
   return nextDecl === -1 ? rest : rest.slice(0, nextDecl);
 }
-
-describe('realtime ingestion bridge — read-inert (#task:1251)', () => {
-  const source = readFileSync(
-    fileURLToPath(new URL('./useConversationStream.ts', import.meta.url)),
-    'utf8',
-  );
-
-  it('useConversationStream is the transport→business bridge (sanity)', () => {
-    // Guard the fence itself: if this file stops being the single choke point
-    // every realtime frame passes through, the read-inert assertion below is
-    // fencing the wrong thing. The bridge OWNS its onWsFrame listener (that is
-    // its role); #task:1260 P2 moved only its scope INTEREST to the registry, so
-    // it now declares interest via useInterest( and no longer calls the transport
-    // subscribe directly — interest ⊥ listener.
-    expect(source).toContain('onWsFrame');
-    expect(source).toContain('useInterest(');
-    expect(source).not.toContain('subscribeWsScope(');
-  });
-
-  it('the bridge never writes read state on frame arrival', () => {
-    for (const writer of READ_STATE_WRITERS) {
-      expect(source).not.toContain(writer);
-    }
-  });
-});
 
 describe('replayed-frame cache merge — idempotent (#task:1251)', () => {
   // #task:1292: the append trio (appendToCache + the two typed helpers) moved to
@@ -509,21 +477,6 @@ describe('useAgentActivityFeed — read-inert content cache (#task:1255 P1c #2)'
     // snapshot behind it) — `prev ? … : prev`.
     const body = sliceFunctionBody(source, 'export function appendAgentActivityToCache(');
     expect(body).toContain('prev ?');
-  });
-});
-
-// The realtime bridge no longer carries the `agent_activity` side-effect — it
-// moved to the central ingestor (gated on a run-states reader). Fence that the
-// bridge is now a pure dispatcher so the side-effect can't silently come back
-// in two places.
-describe('useConversationStream — no business side-effects (#task:1255 P1c)', () => {
-  const source = readFileSync(
-    fileURLToPath(new URL('./useConversationStream.ts', import.meta.url)),
-    'utf8',
-  );
-
-  it('does not apply agent-run-state on the bridge (ingestor owns it)', () => {
-    expect(source).not.toContain('applyAgentRunStateToCache');
   });
 });
 

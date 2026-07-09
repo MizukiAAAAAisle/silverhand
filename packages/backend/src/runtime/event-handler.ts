@@ -179,6 +179,14 @@ export interface ConversationActivitySink {
     event: ParsedEvent;
     createdAt: number;
   }): ConversationActivityEvent | null;
+  upsertTextBlock(params: {
+    conversationId: string;
+    agentId: string;
+    kind: TextActivityKind;
+    text: string;
+    createdAt: number;
+    previousEventId?: number | null;
+  }): ConversationActivityEvent | null;
   recordParsedEventDropped(params: {
     conversationId: string;
     agentId: string;
@@ -194,13 +202,15 @@ type ConversationActivityRecordResult =
   | ConversationActivityEvent[]
   | null;
 
-type TextActivityKind = 'thinking' | 'text';
+export type TextActivityKind = 'thinking' | 'text';
 
 interface PendingTextActivityBlock {
   kind: TextActivityKind;
   text: string;
   omittedChars: number;
   createdAt: number;
+  eventId: number | null;
+  lastPublishedAt: number | null;
 }
 
 export interface RuntimeEventHandlerLogger {
@@ -216,6 +226,7 @@ const NOOP_LOGGER: RuntimeEventHandlerLogger = {
 };
 
 const CONVERSATION_ACTIVITY_TEXT_BLOCK_MAX_CHARS = 16 * 1024;
+const CONVERSATION_ACTIVITY_TEXT_BLOCK_PUBLISH_INTERVAL_MS = 1_000;
 
 export interface RuntimeEventHandlerDeps {
   client: RuntimeEventSource;
@@ -265,7 +276,7 @@ export interface RuntimeEventHandlerDeps {
    * must never block or fail the SSE publish path. */
   activityLog?: ActivityLogWriter;
   /** Optional product activity sink. When present, parsed runtime events
-   *  are inserted into `conversation_events` and the inserted row DTO is
+   *  are written into `conversation_events` and the resulting row DTO is
    *  published as `conversation_activity` on the conversation scope. */
   conversationActivity?: ConversationActivitySink;
   logger?: RuntimeEventHandlerLogger;
@@ -807,16 +818,65 @@ export class RuntimeEventHandler {
 
     const current = this.pendingTextActivityBlocks.get(key);
     if (!current) {
-      this.pendingTextActivityBlocks.set(key, {
+      const block: PendingTextActivityBlock = {
         kind: params.kind,
         ...truncateTextActivityFragment(params.text),
         createdAt: params.createdAt,
-      });
+        eventId: null,
+        lastPublishedAt: null,
+      };
+      const event = this.persistTextActivityBlock(sink, params, block);
+      this.pendingTextActivityBlocks.set(key, block);
+      if (event) events.push(event);
       return events;
     }
 
     appendTextActivityFragment(current, params.text);
+    if (this.shouldPublishTextActivityBlock(current, params.createdAt)) {
+      const event = this.persistTextActivityBlock(sink, params, current);
+      if (event) events.push(event);
+    }
     return events;
+  }
+
+  private shouldPublishTextActivityBlock(
+    block: PendingTextActivityBlock,
+    now: number,
+  ): boolean {
+    if (block.eventId === null || block.lastPublishedAt === null) return true;
+    return (
+      now - block.lastPublishedAt >=
+      CONVERSATION_ACTIVITY_TEXT_BLOCK_PUBLISH_INTERVAL_MS
+    );
+  }
+
+  private persistTextActivityBlock(
+    sink: ConversationActivitySink,
+    params: {
+      conversationId: string;
+      agentId: string;
+      kind: TextActivityKind;
+      createdAt: number;
+    },
+    block: PendingTextActivityBlock,
+  ): ConversationActivityEvent | null {
+    const text =
+      block.omittedChars > 0
+        ? `${block.text}...<truncated ${block.omittedChars} chars>`
+        : block.text;
+    const event = sink.upsertTextBlock({
+      conversationId: params.conversationId,
+      agentId: params.agentId,
+      kind: block.kind,
+      text,
+      createdAt: block.createdAt,
+      previousEventId: block.eventId,
+    });
+    if (event) {
+      block.eventId = event.id;
+      block.lastPublishedAt = params.createdAt;
+    }
+    return event;
   }
 
   private flushTextActivityBlock(
@@ -829,6 +889,19 @@ export class RuntimeEventHandler {
     if (!block) return [];
     this.pendingTextActivityBlocks.delete(key);
     if (block.text.length === 0 && block.omittedChars === 0) return [];
+    if (block.eventId !== null) {
+      const event = this.persistTextActivityBlock(
+        sink,
+        {
+          conversationId,
+          agentId,
+          kind: block.kind,
+          createdAt: block.createdAt,
+        },
+        block,
+      );
+      return event ? [event] : [];
+    }
     const text =
       block.omittedChars > 0
         ? `${block.text}...<truncated ${block.omittedChars} chars>`

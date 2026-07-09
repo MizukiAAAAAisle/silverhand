@@ -1271,10 +1271,11 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
       '--emit-line', 'B',
       '--emit-line', 'C',
       '--emit-line', 'D',
+      '--emit-line', 'E',
     ]);
     const { supervisor, events } = makeSupervisorWithDriver(driver);
-    // 5 stdout lines arrive: READY, A, B, C, D. The first call
-    // (READY) consumes step 0; the remaining four drive the
+    // 6 stdout lines arrive: READY, A, B, C, D, E. The first call
+    // (READY) consumes step 0; the remaining five drive the
     // lifecycle. step beyond the sequence returns [].
     let step = 0;
     const sequence: ParsedEvent[][] = [
@@ -1282,7 +1283,8 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
       [{ kind: 'thinking', text: 'pondering' }],          // A → thinking
       [{ kind: 'tool_call', name: 'Bash', input: {} }],   // B → tool_running(Bash)
       [{ kind: 'tool_output', name: 'Bash' }],            // C → thinking (outstanding=0)
-      [{ kind: 'turn_end' }],                              // D → idle (turn_ended)
+      [{ kind: 'text', text: 'hello' }],                   // D → text snippet, still thinking
+      [{ kind: 'turn_end' }],                              // E → idle (turn_ended)
     ];
     driver.parseLine = () => sequence[step++] ?? [];
 
@@ -1314,9 +1316,18 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
     const snippetState = events.find(
       e =>
         e.event === 'runtime_state' &&
-        e.state.activitySnippet === 'pondering',
+        e.state.activitySnippet === 'pondering' &&
+        e.state.activitySnippetKind === 'thinking',
     );
     expect(snippetState).toBeDefined();
+
+    const textSnippetState = events.find(
+      e =>
+        e.event === 'runtime_state' &&
+        e.state.activitySnippet === 'hello' &&
+        e.state.activitySnippetKind === 'text',
+    );
+    expect(textSnippetState).toBeDefined();
 
     const toolState = events.find(
       e =>
@@ -1376,7 +1387,8 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
           e.event === 'runtime_state' &&
           e.state.status === 'thinking' &&
           e.state.activitySnippet ===
-            'Claude API gateway unreachable; retrying (attempt 1)',
+            'Claude API gateway unreachable; retrying (attempt 1)' &&
+          e.state.activitySnippetKind === undefined,
       ),
     );
 

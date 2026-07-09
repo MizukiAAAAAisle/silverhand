@@ -29,6 +29,14 @@ export type AgentRunTerminalReason = z.infer<
   typeof AgentRunTerminalReasonSchema
 >;
 
+export const AgentActivitySnippetKindSchema = z.enum([
+  'thinking',
+  'text',
+]);
+export type AgentActivitySnippetKind = z.infer<
+  typeof AgentActivitySnippetKindSchema
+>;
+
 export const AgentRunStateSchema = z.object({
   runId: z.string(),
   agentId: z.string(),
@@ -39,6 +47,7 @@ export const AgentRunStateSchema = z.object({
   lastActivityAt: z.number(),
   terminalReason: AgentRunTerminalReasonSchema.optional(),
   activitySnippet: z.string().optional(),
+  activitySnippetKind: AgentActivitySnippetKindSchema.optional(),
   toolCallCounts: z.record(z.string(), z.number()).optional(),
   compacting: z.boolean().optional(),
   compactingSince: z.number().optional(),

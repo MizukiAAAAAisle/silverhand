@@ -43,7 +43,6 @@ const allowedServerImports = [
 ].sort();
 
 const cataloguedIpcHandlers = [
-  'active-conversation:set',
   'attachment:openExternal',
   'auth:getState',
   'auth:login',
@@ -79,7 +78,6 @@ const cataloguedIpcHandlers = [
   'settings:saveServerUrl',
   'shell:openExternal',
   'shell:showItemInFolder',
-  'window:setAlwaysOnTop',
 ].sort();
 
 interface SourceFile {

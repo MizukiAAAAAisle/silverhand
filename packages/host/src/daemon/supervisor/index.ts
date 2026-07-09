@@ -16,6 +16,7 @@ import { stat, writeFile } from 'node:fs/promises';
 import {
   AUTH_TOKEN_HEADER,
   buildSystemPromptFor,
+  type AgentActivitySnippetKind,
   type AgentRunState,
   decodeObservedSeq,
   internalPaths,
@@ -2989,6 +2990,7 @@ export class Supervisor implements SupervisorContract {
             status: 'thinking',
             detail: null,
             activitySnippet: parsed.message,
+            activitySnippetKind: null,
           });
         }
         break;
@@ -3032,6 +3034,7 @@ export class Supervisor implements SupervisorContract {
        *  `compactionStale: true` (Cindy plan v2 issue #4). */
       compactionStale?: boolean;
       activitySnippet?: string | null;
+      activitySnippetKind?: AgentActivitySnippetKind | null;
       toolCallCounts?: Record<string, number> | null;
     },
   ): void {
@@ -3051,6 +3054,9 @@ export class Supervisor implements SupervisorContract {
           : {}),
         ...(patch.terminalReason ? { terminalReason: patch.terminalReason } : {}),
         ...(patch.activitySnippet ? { activitySnippet: patch.activitySnippet } : {}),
+        ...(patch.activitySnippet && patch.activitySnippetKind
+          ? { activitySnippetKind: patch.activitySnippetKind }
+          : {}),
         ...(patch.toolCallCounts ? { toolCallCounts: patch.toolCallCounts } : {}),
         ...(patch.compacting !== undefined ? { compacting: patch.compacting } : {}),
         ...(patch.compactingSince !== undefined && patch.compactingSince !== null
@@ -3078,8 +3084,16 @@ export class Supervisor implements SupervisorContract {
     }
     if (patch.activitySnippet === null) {
       delete next.activitySnippet;
+      delete next.activitySnippetKind;
     } else if (patch.activitySnippet !== undefined) {
       next.activitySnippet = patch.activitySnippet;
+      if (patch.activitySnippetKind) {
+        next.activitySnippetKind = patch.activitySnippetKind;
+      } else {
+        delete next.activitySnippetKind;
+      }
+    } else if (patch.activitySnippetKind === null) {
+      delete next.activitySnippetKind;
     }
     if (patch.toolCallCounts === null) {
       delete next.toolCallCounts;
@@ -3104,6 +3118,7 @@ export class Supervisor implements SupervisorContract {
       prev.detail !== next.detail ||
       prev.terminalReason !== next.terminalReason ||
       prev.activitySnippet !== next.activitySnippet ||
+      prev.activitySnippetKind !== next.activitySnippetKind ||
       JSON.stringify(prev.toolCallCounts ?? {}) !==
         JSON.stringify(next.toolCallCounts ?? {}) ||
       prev.compacting !== next.compacting ||
@@ -3129,7 +3144,9 @@ export class Supervisor implements SupervisorContract {
     );
     this.transitionRunState(
       handle,
-      activitySnippet ? { activitySnippet } : { status: 'thinking' },
+      activitySnippet
+        ? { activitySnippet, activitySnippetKind: kind }
+        : { status: 'thinking' },
     );
   }
 

@@ -810,23 +810,6 @@ function RegisteredAppShell(): JSX.Element {
     return m;
   }, [channels]);
 
-  // IPC: tell the main process which conversation the user is focused
-  // on. Drives tray/dock badging and the events window. Schema is
-  // single-id (`{workspaceId, conversationId}`); we feed it the focused
-  // selector. Nulls out when the chat view isn't active so the events
-  // window doesn't keep highlighting a stale row after the user
-  // navigates to Members/Tasks/Settings.
-  const focusedActive =
-    (appSection === 'chat' && view === 'channel') || appSection === 'activity'
-      ? focusedConversation
-      : null;
-  useEffect(() => {
-    void window.agentHub.setActiveConversation({
-      workspaceId: focusedActive?.workspaceId ?? null,
-      conversationId: focusedActive?.id ?? null,
-    });
-  }, [focusedActive?.workspaceId, focusedActive?.id]);
-
   // Auto-advance the message read cursor for every visible pane. The
   // `visibleConversations` selector already handles the "fullscreen
   // hides primary" case and the "unresolved side has no id to mark

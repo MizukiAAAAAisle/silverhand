@@ -227,7 +227,7 @@ function asSideKind(kind: string): SideKind | null {
  * message_reaction_changed / task_changed) and the side channel
  * `conversation-side:<id>` (agent_status / agent_activity /
  * conversation_activity). It owns the cache writes that used to
- * live in each view's `useConversationStream(onEvent)` handler, so views can be
+ * live in each view's `onWsFrame` handler, so views can be
  * pure readers (zero `onWsFrame`) — the precondition Stage-2 P2 needs to drop the
  * orphan gate (gate-(b)). See docs/renderer-event-ingestion-v1.md and
  * docs/event-ws-recovery-class-scope-v1.md.

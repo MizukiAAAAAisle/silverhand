@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentRunState } from '@silverhand/shared';
-import { selectActiveRunStates } from './ComposerActivityHeader';
+import {
+  activitySnippetKindLabel,
+  selectActiveRunStates,
+} from './ComposerActivityHeader';
 
 /**
  * Locks the activity-bubble selection used by the Composer header,
@@ -80,5 +83,13 @@ describe('selectActiveRunStates', () => {
       'a-2', // newer thinking before older
       'a-1',
     ]);
+  });
+});
+
+describe('activitySnippetKindLabel', () => {
+  it('keeps snippet content type separate from run status', () => {
+    expect(activitySnippetKindLabel('thinking')).toBe('Thinking');
+    expect(activitySnippetKindLabel('text')).toBe('Writing');
+    expect(activitySnippetKindLabel(undefined)).toBeNull();
   });
 });

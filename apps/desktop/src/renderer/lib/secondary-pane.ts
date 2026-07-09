@@ -315,12 +315,6 @@ export interface FocusSelectionInputs {
  * Compute the *single* "focused" conversation. Drives:
  *   - `useNotificationToasts(focused.id)` — suppress in-app toasts for
  *     it (user can already see them).
- *   - `window.agentHub.setActiveConversation({workspaceId, conversationId})`
- *     — IPC contract is single-id; main process uses it for tray /
- *     dock badging and the events window. PR-2: workspaceId now flows
- *     from the secondary descriptor when secondary is focused, so
- *     cross-workspace focus emits the *target* workspace id, not the
- *     primary's.
  *
  * Focus drives the above ONLY; it does NOT clear notification badges /
  * write `read_at` — focus is a passive surface (surfaced ≠ eliminated,
