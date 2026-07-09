@@ -133,9 +133,7 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
     return c.json({
       host_id: created.host.id,
       host: hosts.toDto(created.host),
-      server_url: ctx.serverConfig.url,
       connect_token: created.connectToken,
-      daemon_command: buildConnectCommand(ctx.serverConfig.url, created.connectToken),
       daemon_npm_spec: daemonNpmSpec(),
       advertised_origin_override: ctx.serverConfig.advertised_origin ?? null,
     });
@@ -657,7 +655,6 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
       host: hosts.toDto(refreshed),
       status: 'rotated',
       connect_token: issued.hostToken,
-      daemon_command: buildConnectCommand(ctx.serverConfig.url, issued.hostToken),
       daemon_npm_spec: daemonNpmSpec(),
       advertised_origin_override: ctx.serverConfig.advertised_origin ?? null,
     });
@@ -1086,25 +1083,8 @@ function renderHostProxyConfigOutcome(
   );
 }
 
-function buildConnectCommand(serverUrl: string, connectToken: string): string {
-  return [
-    'npx',
-    daemonNpmSpec(),
-    'connect',
-    '--server-url',
-    shellQuote(serverUrl),
-    '--connect-token',
-    shellQuote(connectToken),
-  ].join(' ');
-}
-
 function daemonNpmSpec(): string {
   return process.env[DAEMON_NPM_SPEC_ENV]?.trim() || DEFAULT_DAEMON_NPM_SPEC;
-}
-
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9_/:.@%+=,-]+$/.test(value)) return value;
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function bearerToken(header: string | undefined): string | null {

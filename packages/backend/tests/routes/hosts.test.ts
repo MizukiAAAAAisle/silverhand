@@ -4,6 +4,7 @@ import {
   HOST_WS_CLOSE_REASON_DISCONNECTED,
   HOST_WS_CLOSE_REASON_REVOKED,
   apiPaths,
+  assembleConnectCommand,
 } from '@silverhand/shared';
 import type {
   OutboundServerCommandKind,
@@ -263,7 +264,7 @@ describe('host routes', () => {
 
   // ── POST /api/hosts — user-managed computer create ─────────────
   describe('POST /api/hosts', () => {
-    it('creates a pending user-managed computer and returns a reveal-once connect command', async () => {
+    it('creates a pending user-managed computer and returns an identity-only bootstrap payload', async () => {
       const previousSpec = process.env.SILVERHAND_DAEMON_NPM_SPEC;
       delete process.env.SILVERHAND_DAEMON_NPM_SPEC;
       try {
@@ -288,15 +289,25 @@ describe('host routes', () => {
             placeable: false,
             revoked_at: null,
           },
-          server_url: t.ctx.serverConfig.url,
           connect_token: expect.any(String),
-          daemon_command: expect.stringContaining('--connect-token'),
+          daemon_npm_spec: '@silverhand-ai/daemon@latest',
+          advertised_origin_override: null,
         });
-        expect(body.daemon_command).toContain(body.connect_token);
-        expect(body.daemon_command).toContain(
-          'npx @silverhand-ai/daemon@latest connect --server-url',
-        );
-        expect(body.daemon_command).not.toContain(body.host_id);
+        // Pure form: the server ships identity only — it never mints a command
+        // string and never echoes its own URL, so the bind address cannot leak
+        // into the bootstrap wire (Cindy criterion #5).
+        expect(body.daemon_command).toBeUndefined();
+        expect(body.server_url).toBeUndefined();
+        // The edge assembles the command from the recipe + its own reach URL;
+        // verify the payload assembles to a token-bearing command with no host id.
+        const command = assembleConnectCommand({
+          daemonNpmSpec: body.daemon_npm_spec,
+          serverUrl: 'https://silverhand.taobao.net',
+          connectToken: body.connect_token,
+        });
+        expect(command).toContain('--connect-token');
+        expect(command).toContain(body.connect_token);
+        expect(command).not.toContain(body.host_id);
 
         const host = new HostRepo(t.ctx.db).get(body.host_id);
         expect(host).toMatchObject({
@@ -333,7 +344,7 @@ describe('host routes', () => {
       }
     });
 
-    it('uses the daemon package spec from the environment when building the copied command', async () => {
+    it('surfaces the daemon package spec from the environment as the edge-assembly recipe', async () => {
       const previousSpec = process.env.SILVERHAND_DAEMON_NPM_SPEC;
       process.env.SILVERHAND_DAEMON_NPM_SPEC = 'file:/repo/packages/silverhand-daemon';
       try {
@@ -346,12 +357,19 @@ describe('host routes', () => {
 
         expect(res.status).toBe(200);
         const body = await res.json() as any;
-        expect(body.daemon_command).toContain(
+        expect(body.daemon_npm_spec).toBe('file:/repo/packages/silverhand-daemon');
+        // The recipe flows through the payload into the edge-assembled command.
+        const command = assembleConnectCommand({
+          daemonNpmSpec: body.daemon_npm_spec,
+          serverUrl: 'https://silverhand.taobao.net',
+          connectToken: body.connect_token,
+        });
+        expect(command).toContain(
           'npx file:/repo/packages/silverhand-daemon connect --server-url',
         );
-        expect(body.daemon_command).toContain('--connect-token');
-        expect(body.daemon_command).toContain(body.connect_token);
-        expect(body.daemon_command).not.toContain(body.host_id);
+        expect(command).toContain('--connect-token');
+        expect(command).toContain(body.connect_token);
+        expect(command).not.toContain(body.host_id);
       } finally {
         if (previousSpec === undefined) {
           delete process.env.SILVERHAND_DAEMON_NPM_SPEC;
@@ -378,7 +396,14 @@ describe('host routes', () => {
 
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ host_id: created.host_id });
-      expect(created.daemon_command).not.toContain(created.host_id);
+      // The copied command carries only the token (host id is resolved server-
+      // side from it), so an edge-assembled command never contains the host id.
+      const command = assembleConnectCommand({
+        daemonNpmSpec: created.daemon_npm_spec,
+        serverUrl: 'https://silverhand.taobao.net',
+        connectToken: created.connect_token,
+      });
+      expect(command).not.toContain(created.host_id);
     });
 
     it('rejects invalid connect-token resolve attempts', async () => {
@@ -1565,11 +1590,18 @@ describe('host routes', () => {
         host_id: created.host_id,
         status: 'rotated',
         connect_token: expect.any(String),
-        daemon_command: expect.stringContaining('--connect-token'),
+        daemon_npm_spec: '@silverhand-ai/daemon@latest',
+        advertised_origin_override: null,
       });
+      expect(body.daemon_command).toBeUndefined();
       expect(body.connect_token).not.toBe(oldToken);
-      expect(body.daemon_command).toContain(body.connect_token);
-      expect(body.daemon_command).not.toContain(created.host_id);
+      const rotatedCommand = assembleConnectCommand({
+        daemonNpmSpec: body.daemon_npm_spec,
+        serverUrl: 'https://silverhand.taobao.net',
+        connectToken: body.connect_token,
+      });
+      expect(rotatedCommand).toContain(body.connect_token);
+      expect(rotatedCommand).not.toContain(created.host_id);
       expect(controller!.calls).toEqual([]);
       expect(controller!.disconnects).toEqual([created.host_id]);
       expect(controller!.disconnectReasons).toEqual([
