@@ -75,6 +75,12 @@ export const computerCopy = {
     'Drops the current connection without invalidating the connection command — the same command reconnects it later.',
   disconnectFailed: "Couldn't disconnect this computer. Please try again.",
 
+  // ── Diagnostics (manual copy, #task:1445) ─────────────────────────
+  /** Footer utility: copies a redacted, plain-text diagnostics report for
+   *  this computer to the clipboard (no upload). The report body is built
+   *  by the shared `buildHostDiagnosticsText`; this is the only UI prose. */
+  copyDiagnostics: 'Copy diagnostics',
+
   // ── Badges ─────────────────────────────────────────────────────────
   appManaged: 'App managed',
 

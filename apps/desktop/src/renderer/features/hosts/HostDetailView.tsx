@@ -129,6 +129,7 @@ import {
 } from './host-status-presentation';
 import { InlineRename } from './InlineRename';
 import { ConnectionCommandCard } from './ConnectionCommandCard';
+import { HostDiagnosticsAction } from './HostDiagnosticsAction';
 import { computerCopy } from './computer-copy';
 import { formatOsShort } from './format-os';
 
@@ -279,6 +280,11 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
             />
           </>
         ) : null}
+        {/* Copy diagnostics is a page-level utility, rendered regardless of
+            the status query state — offline / unreachable / status-load-failed
+            is exactly when a user reaches for it. Sits above the Delete danger
+            section, in its own quiet frame (not inside it). */}
+        <HostDiagnosticsAction host={host} />
         {showDeleteSection ? <DeleteComputerSection host={host} /> : null}
       </div>
     </main>
