@@ -136,6 +136,8 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
       server_url: ctx.serverConfig.url,
       connect_token: created.connectToken,
       daemon_command: buildConnectCommand(ctx.serverConfig.url, created.connectToken),
+      daemon_npm_spec: daemonNpmSpec(),
+      advertised_origin_override: ctx.serverConfig.advertised_origin ?? null,
     });
   });
 
@@ -656,6 +658,8 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
       status: 'rotated',
       connect_token: issued.hostToken,
       daemon_command: buildConnectCommand(ctx.serverConfig.url, issued.hostToken),
+      daemon_npm_spec: daemonNpmSpec(),
+      advertised_origin_override: ctx.serverConfig.advertised_origin ?? null,
     });
   });
 

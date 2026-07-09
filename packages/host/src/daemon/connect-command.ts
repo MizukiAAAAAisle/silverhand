@@ -3,6 +3,11 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 import {
   apiPaths,
+  CONNECT_ARG_CONNECT_TOKEN,
+  CONNECT_ARG_DATA_ROOT,
+  CONNECT_ARG_QUIET,
+  CONNECT_ARG_SERVER_URL,
+  CONNECT_ARG_STDERR,
   readAllowInsecureRemoteFlag,
   type DaemonHostConfig,
 } from '@silverhand/shared';
@@ -36,19 +41,19 @@ export function parseConnectArgv(argv: readonly string[]): ConnectParseResult {
       case '-h':
       case '--help':
         return { ok: false, exitCode: 0, message: connectUsage() };
-      case '--server-url':
+      case CONNECT_ARG_SERVER_URL:
         serverUrl = argv[++i] ?? null;
         break;
-      case '--connect-token':
+      case CONNECT_ARG_CONNECT_TOKEN:
         connectToken = argv[++i] ?? null;
         break;
-      case '--data-root':
+      case CONNECT_ARG_DATA_ROOT:
         dataRoot = argv[++i] ?? null;
         break;
-      case '--quiet':
+      case CONNECT_ARG_QUIET:
         alsoStderr = false;
         break;
-      case '--stderr':
+      case CONNECT_ARG_STDERR:
         alsoStderr = true;
         break;
       default:

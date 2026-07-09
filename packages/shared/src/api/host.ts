@@ -340,9 +340,27 @@ export type HostCreateInput = z.infer<typeof HostCreateInputSchema>;
 export const HostCreateResponseSchema = z.object({
   host_id: z.string(),
   host: HostDtoSchema,
+  /** @deprecated Migration bridge only — the desktop assembles the connect
+   *  command locally from its own connected server profile URL, never from a
+   *  server-echoed URL (which carries a bind-address fallback). Removed once
+   *  the desktop consumer is cut over. Do not consume in new code. */
   server_url: z.string().url(),
   connect_token: z.string().min(1),
+  /** @deprecated Migration bridge only — server no longer owns command
+   *  assembly. New UI builds the command via shared `assembleConnectCommand`
+   *  from `daemon_npm_spec` + `advertised_origin_override ?? profileUrl` +
+   *  `connect_token`. Removed once the desktop consumer is cut over. */
   daemon_command: z.string().min(1),
+  /** Server-owned launch recipe (npm spec) the desktop passes to
+   *  `assembleConnectCommand`. Per-deploy configurable via
+   *  `SILVERHAND_DAEMON_NPM_SPEC`. */
+  daemon_npm_spec: z.string().min(1),
+  /** Operator-declared reach origin for split-horizon deploys, or null. When
+   *  non-null the desktop MUST use it as the daemon's `--server-url` (the
+   *  server is pinning where the daemon connects back); when null the desktop
+   *  uses its own connected server profile URL. NEVER the server bind address.
+   *  See `docs/orchestration-boundary-v1.md §4.3`. */
+  advertised_origin_override: z.string().url().nullable(),
 });
 export type HostCreateResponse = z.infer<typeof HostCreateResponseSchema>;
 
@@ -460,7 +478,13 @@ export const HostRotateTokenUserManagedResponseSchema = z.object({
   host: HostDtoSchema,
   status: z.literal('rotated'),
   connect_token: z.string().min(1),
+  /** @deprecated Migration bridge only — see `HostCreateResponseSchema`.
+   *  The desktop assembles the command locally via `assembleConnectCommand`. */
   daemon_command: z.string().min(1),
+  /** Server-owned launch recipe (npm spec); see `HostCreateResponseSchema`. */
+  daemon_npm_spec: z.string().min(1),
+  /** Split-horizon reach origin override, or null; see `HostCreateResponseSchema`. */
+  advertised_origin_override: z.string().url().nullable(),
 });
 
 /** `POST /api/hosts/{id}/disconnect` user-managed connection kick. This only

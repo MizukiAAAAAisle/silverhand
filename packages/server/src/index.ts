@@ -175,6 +175,10 @@ function standaloneServerConfig(config: StandaloneServerEnvConfig): ServerConfig
   return {
     mode: 'remote',
     url: publicOrigin ?? urlForListen(config.listen.value),
+    // Raw operator-declared reach origin (null when unset). Kept distinct from
+    // `url` so the connect-command bootstrap surfaces it verbatim as
+    // `advertised_origin_override` and NEVER falls back to the bind address.
+    advertised_origin: publicOrigin ?? null,
     ...(publicOrigin
       ? { event_ws_allowed_origins: [publicOrigin] }
       : {}),

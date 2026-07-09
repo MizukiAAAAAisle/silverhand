@@ -4,6 +4,7 @@ export * from './bind-address-scope.js';
 export * from './db/schema.js';
 export * from './driver/index.js';
 export * from './config.js';
+export * from './connect-command.js';
 export * from './logging.js';
 export * from './mcp-config.js';
 export * from './mime.js';
