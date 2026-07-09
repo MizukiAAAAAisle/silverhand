@@ -1,6 +1,6 @@
 {
   "name": "@silverhand-ai/daemon",
-  "version": "0.0.1-alpha.8",
+  "version": "0.0.1-alpha.9",
   "private": false,
   "type": "module",
   "description": "Silverhand user-managed computer daemon",
