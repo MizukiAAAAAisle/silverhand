@@ -4,8 +4,8 @@
 // server URL it is actually connected to), never minted by the server from its
 // own bind address — see `docs/orchestration-boundary-v1.md §4.3` ("server
 // ships identity, host/edge owns topology"). The server returns only the
-// identity payload (token + recipe + optional advertised-origin override); the
-// desktop joins it into a command locally using its own connected server URL.
+// identity payload (connect token + daemon npm-spec recipe); the desktop joins
+// it into a command locally using its own connected server URL.
 //
 // The arg-name contract lives here (not on the per-request wire) because it is
 // a STATIC property of the daemon CLI surface — it does not vary per invite.
