@@ -522,7 +522,9 @@ describe('buildSideOpenUrl — clears ?thread (side/thread mutual exclusion)', (
 
 // Agent side panel (`?agent=<agentId>`, #task:1189). Carries an agent id (not
 // a conversation), rendered by `AgentView variant="side"` in the chat-section
-// right pane, and mutually exclusive with every conversation-based secondary.
+// right pane. It OVERLAYS the thread panes: `?agent` coexists with `?thread` /
+// `?threads` in the URL (App renders it ahead by precedence, closing it
+// restores the covered pane — #task:1433). Only `?side` is cleared on open.
 describe('parseRouteState — ?agent=<id> agent side panel', () => {
   it('parses ?agent as agentPanelId, distinct from the /members/:agentId route', () => {
     const r = parseRouteState('/chat/w/w-1/c/c-a', '?agent=a-9');
@@ -537,6 +539,22 @@ describe('parseRouteState — ?agent=<id> agent side panel', () => {
     });
   });
 
+  it('parses ?agent and ?thread together — overlay coexists at the RouteState layer (#task:1433)', () => {
+    const r = parseRouteState('/chat/w/w-1/c/c-a', '?agent=a-9&thread=m-1');
+    expect(r).toMatchObject({
+      agentPanelId: 'a-9',
+      threadRootId: 'm-1',
+    });
+  });
+
+  it('parses ?agent and ?threads together — overlay coexists with the threads-list (#task:1433)', () => {
+    const r = parseRouteState('/chat/w/w-1/c/c-a', '?agent=a-9&threads=1');
+    expect(r).toMatchObject({
+      agentPanelId: 'a-9',
+      threadsListOpen: true,
+    });
+  });
+
   it('defaults agentPanelId to null and treats empty as unset', () => {
     expect(parseRouteState('/chat/w/w-1/c/c-a', '').agentPanelId).toBeNull();
     expect(parseRouteState('/chat/w/w-1/c/c-a', '?agent=').agentPanelId).toBeNull();
@@ -544,18 +562,37 @@ describe('parseRouteState — ?agent=<id> agent side panel', () => {
 });
 
 describe('withAgentQuery / buildAgentPanelOpenUrl — open / close the agent panel', () => {
-  it('opens ?agent, clearing every conversation-based pane + fullscreen', () => {
+  it('opens ?agent as an overlay: preserves thread / threads-list, clears ?side + fullscreen', () => {
     const out = buildAgentPanelOpenUrl(
       '/chat/w/w-1/c/c-a',
       '?side=c-other&thread=m-1&threads=1&fullscreen=1',
       'a-9',
     );
     expect(out).toContain('agent=a-9');
+    // thread / threads-list are channel-context panes with no
+    // secondary-model impact → preserved so closing the panel restores
+    // them (#task:1433).
+    expect(out).toContain('thread=m-1');
+    expect(out).toContain('threads=1');
+    // ?side is a secondary CONVERSATION (feeds notification suppression) →
+    // cleared while covered. ?fullscreen is dropped so the panel opens at
+    // its normal width.
     expect(out).not.toContain('side=c-other');
-    expect(out).not.toContain('thread=m-1');
-    expect(out).not.toContain('threads=1');
     expect(out).not.toContain('fullscreen=1');
   });
+
+  it('round-trip: opening then closing the panel over a thread restores the thread pane (#task:1433)', () => {
+    const opened = buildAgentPanelOpenUrl(
+      '/chat/w/w-1/c/c-a',
+      '?thread=m-1',
+      'a-9',
+    );
+    const search = opened.slice(opened.indexOf('?'));
+    const closed = withAgentQuery('/chat/w/w-1/c/c-a', search, null);
+    expect(closed).not.toContain('agent');
+    expect(closed).toContain('thread=m-1');
+  });
+
 
   it('preserves unrelated params (e.g. ?task) when opening', () => {
     const out = buildAgentPanelOpenUrl('/chat/w/w-1/c/c-a', '?task=7', 'a-9');

@@ -141,10 +141,13 @@ export interface RouteState {
   /** Agent side-panel pointer (`?agent=<agentId>`). Opens that agent's
    *  compact panel in the chat section's right pane so a channel and an
    *  agent's Activity can be read side-by-side (#task:1189). It is NOT a
-   *  conversation — it is an agent id rendered by `AgentView variant="side"`
-   *  — and it is mutually exclusive with the conversation-based secondary
-   *  panes (`?side` / `?thread` / `?threads`) at the nav layer (opening any
-   *  one clears the others). Distinct from `agentId`, which is the
+   *  conversation — it is an agent id rendered by `AgentView variant="side"`.
+   *  It OVERLAYS the thread panes rather than excluding them: `?agent` can
+   *  coexist with `?thread` / `?threads` in the URL (App renders the agent
+   *  ahead of them by precedence, and closing it restores the covered pane
+   *  — #task:1433). Only `?side` is cleared on open, because a secondary
+   *  conversation enters the focus/notification-suppression model and must
+   *  not stay "visible" while covered. Distinct from `agentId`, which is the
    *  `/members/:agentId` *full-page* route segment. */
   agentPanelId: string | null;
 }
@@ -582,10 +585,17 @@ export function withThreadsQuery(
  *
  * Rules:
  *  - `agentId == null` → strip `?agent` AND `?fullscreen` (closing the panel
- *    removes the secondary pane).
- *  - `agentId !== null` → set `?agent=<id>`, strip `?side`, `?thread`,
- *    `?threads` and `?fullscreen` (the panel is a fresh secondary, mutually
- *    exclusive with every conversation-based pane).
+ *    removes the secondary pane). Any `?thread` / `?threads` that were
+ *    PRESERVED when the panel opened survive, so the previously-open thread
+ *    pane comes back (#task:1433).
+ *  - `agentId !== null` → set `?agent=<id>`. The panel is an OVERLAY: App's
+ *    secondary-pane precedence renders it ahead of the thread / threads-list
+ *    pane, but their query params are PRESERVED so closing the panel restores
+ *    whatever was open. `?side` is the exception — a secondary CONVERSATION
+ *    feeds `useSecondaryPaneModel`'s visible/focused set (which drives
+ *    notification suppression), so leaving it set while it's visually covered
+ *    would silence toasts for a pane the user can't see; clear it instead.
+ *    `?fullscreen` is dropped so the panel opens at its normal width.
  *  - Other query params (`task`, …) are preserved verbatim.
  */
 export function withAgentQuery(
@@ -600,8 +610,6 @@ export function withAgentQuery(
   } else {
     params.set('agent', agentId);
     params.delete('side');
-    params.delete('thread');
-    params.delete('threads');
     params.delete('fullscreen');
   }
   const next = params.toString();

@@ -1466,10 +1466,11 @@ describe('Markdown task refs', () => {
 
   it('does not match malformed task sigils', () => {
     // Word-boundary + digit-only validation. None of these should
-    // produce a TaskRef.
+    // produce a TaskRef. (Bare `#123` is now a task CANDIDATE — see the
+    // "Markdown bare task refs" describe below — so it lives there, not
+    // here; this set is the structurally-never-a-task forms.)
     const html = renderWithTaskCtx(
       [
-        'PR #123',          // bare # + number is *issue ref*, not task
         'see#1',             // attached to word — leading-boundary guard blocks
         'path/#task:2',      // slash is a path separator unless it follows a live ref
         '#task:abc',         // non-numeric value
@@ -1480,7 +1481,6 @@ describe('Markdown task refs', () => {
       () => {},
     );
     // None of the protected forms should yield a TaskRef chip.
-    expect(html).not.toContain('data-task-ref="123"');
     expect(html).not.toContain('data-task-ref="1"');
     expect(html).not.toContain('data-task-ref="2"');
     expect(html).not.toContain('data-task-ref="99"');
@@ -1532,6 +1532,114 @@ describe('Markdown task refs', () => {
     expect(html.indexOf('data-task-ref="7"')).toBeLessThan(
       html.indexOf('data-conversation-ref="AbC123_-xyZ789qR"'),
     );
+  });
+});
+
+describe('Markdown bare task refs (#task:1430)', () => {
+  function bareTask(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
+    return {
+      message_id: 'msg-bare',
+      task_number: 42,
+      workspace_id: 'w-eng',
+      workspace_name: 'silverhand',
+      channel_id: 'chan-1',
+      channel_name: 'general',
+      thread_root_id: null,
+      conversation: { id: 'chan-1', title: 'general' },
+      status: 'todo',
+      title: 'wire registry',
+      assignee: null,
+      creator: { type: 'agent', id: 'a-alice', name: 'Alice' },
+      created_at: 0,
+      closed_at: null,
+      ...overrides,
+    };
+  }
+
+  function renderBare(
+    content: string,
+    workspaceId: string | null,
+    seeded: TaskSummaryDto[] = [],
+    onOpenTask?: (n: number) => void,
+  ): string {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    for (const t of seeded) {
+      qc.setQueryData(taskByNumberKey(t.workspace_id, t.task_number), t);
+    }
+    return renderToStaticMarkup(
+      React.createElement(
+        QueryClientProvider,
+        { client: qc },
+        React.createElement(
+          TaskRefContextProvider,
+          { value: { workspaceId, onOpenTask } },
+          React.createElement(Markdown, { content }),
+        ),
+      ),
+    );
+  }
+
+  it('renders a resolved bare `#<n>` as a clickable task chip', () => {
+    const html = renderBare('Fixing #42 today.', 'w-eng', [bareTask()], () => {});
+    expect(html).toContain('data-task-ref="42"');
+    expect(html).toContain('data-task-ref-state="resolved"');
+    // Resolved chip carries `#<n> · title` — same chrome as `#task:<n>`.
+    expect(html).toContain('wire registry');
+  });
+
+  it('demotes an unresolved bare `#<n>` to plain text (no chip)', () => {
+    // Workspace context present but no matching task in cache → SSR sees
+    // the query unsettled → bare demotes to its literal text, no chrome.
+    // This is the core `#task:1430` contract: a bare number that isn't a
+    // task must render exactly as authored.
+    const html = renderBare('We shipped #999 improvements.', 'w-eng');
+    expect(html).not.toContain('data-task-ref="999"');
+    // The internal scheme must never leak into rendered HTML.
+    expect(html).not.toContain('silverhand-task-bare:999');
+    expect(html).toContain('#999');
+  });
+
+  it('demotes a bare `#<n>` to plain text with no workspace context', () => {
+    const html = renderBare('See #5 here.', null);
+    expect(html).not.toContain('data-task-ref="5"');
+    expect(html).toContain('#5');
+  });
+
+  it('chips only the numbers that resolve to real tasks', () => {
+    // Only #42 is seeded; #7 is a random number → chip for 42, plain 7.
+    const html = renderBare('Compare #42 and #7.', 'w-eng', [bareTask()], () => {});
+    expect(html).toContain('data-task-ref="42"');
+    expect(html).not.toContain('data-task-ref="7"');
+    expect(html).toContain('#7');
+  });
+
+  it('does not regress the explicit `#task:<n>` sigil (no bare hijack)', () => {
+    // `#task:5` must still route through the explicit scheme — a muted
+    // chip even when unresolved — not the bare demote-to-text path.
+    const html = renderBare('Working on #task:5 now.', 'w-eng', [], () => {});
+    expect(html).toContain('data-task-ref="5"');
+    expect(html).toContain('#task:5');
+  });
+
+  it('does not match bare `#0` / leading-zero forms', () => {
+    const html = renderBare('#0 #007 done', 'w-eng', [], () => {});
+    expect(html).not.toContain('data-task-ref="0"');
+    expect(html).not.toContain('data-task-ref="7"');
+    expect(html).not.toContain('data-task-ref="007"');
+    expect(html).toContain('#0');
+  });
+
+  it('does not match `#<n>` attached to a preceding word', () => {
+    // Even though task 3 is seeded, the leading-boundary guard blocks a
+    // `#3` glued to a word (`issue#3`) so mid-token noise stays prose.
+    const html = renderBare(
+      'issue#3 stays text',
+      'w-eng',
+      [bareTask({ task_number: 3 })],
+      () => {},
+    );
+    expect(html).not.toContain('data-task-ref="3"');
+    expect(html).toContain('issue#3');
   });
 });
 

@@ -92,6 +92,14 @@ const MENTION_PREFIX = 'silverhand-mention:';
 const CHANNEL_PREFIX = 'silverhand-channel:';
 const CONVERSATION_PREFIX = 'silverhand-conversation:';
 const TASK_PREFIX = 'silverhand-task:';
+// Bare `#<n>` task reference (no `#task:` sigil). Agents habitually write
+// `#123` for a task; we resolve it against the workspace's task numbers and
+// render a chip ONLY when a matching task exists. Unlike the explicit
+// `#task:<n>` scheme — which keeps a muted chip even when unresolved — a bare
+// `#<n>` is ambiguous (issue numbers, quantities, versions), so an unresolved
+// one demotes to its literal text and leaves no chrome. The distinct scheme is
+// what lets the `a` override pick the demote-to-text fallback for bare refs.
+const BARE_TASK_PREFIX = 'silverhand-task-bare:';
 
 /**
  * Renders message body as Markdown.
@@ -158,7 +166,8 @@ function MarkdownInner({
           url.startsWith(MENTION_PREFIX) ||
           url.startsWith(CHANNEL_PREFIX) ||
           url.startsWith(CONVERSATION_PREFIX) ||
-          url.startsWith(TASK_PREFIX)
+          url.startsWith(TASK_PREFIX) ||
+          url.startsWith(BARE_TASK_PREFIX)
             ? url
             : defaultUrlTransform(url)
         }
@@ -221,6 +230,23 @@ function MarkdownInner({
                     );
                   }
                   return <span>{children}</span>;
+                }
+                if (href.startsWith(BARE_TASK_PREFIX)) {
+                  // Bare `#<n>` in the export path: only render a chip when
+                  // the export builder pre-resolved this number to a task.
+                  // Otherwise keep the literal text — a bare number that
+                  // isn't a task must not sprout chrome in a screenshot.
+                  const raw = href.slice(BARE_TASK_PREFIX.length);
+                  const taskNumber = Number.parseInt(raw, 10);
+                  const resolved =
+                    /^[1-9]\d*$/.test(raw) && Number.isFinite(taskNumber)
+                      ? taskRefsByNumber?.get(taskNumber)
+                      : null;
+                  return resolved ? (
+                    <TaskRefStaticChip taskNumber={taskNumber} task={resolved} />
+                  ) : (
+                    <span>{children}</span>
+                  );
                 }
               }
               return (
@@ -298,6 +324,26 @@ function MarkdownInner({
               // Pathological — render as plain text so we don't crash
               // on a malformed href and don't hand our internal scheme
               // to the OS handler.
+              return <span>{children}</span>;
+            }
+            if (
+              typeof href === 'string' &&
+              href.startsWith(BARE_TASK_PREFIX)
+            ) {
+              // Bare `#<n>`: same resolve path as `#task:<n>`, but the
+              // `bare` flag makes TaskRef demote to its literal text
+              // (no chip) for the no-context / loading / missing states.
+              // Only a resolved-present task yields a chip. The tokenizer
+              // guarantees `[1-9]\d*`; parse defensively as above.
+              const raw = href.slice(BARE_TASK_PREFIX.length);
+              const taskNumber = Number.parseInt(raw, 10);
+              if (
+                /^[1-9]\d*$/.test(raw) &&
+                Number.isFinite(taskNumber) &&
+                taskNumber > 0
+              ) {
+                return <TaskRef taskNumber={taskNumber} bare />;
+              }
               return <span>{children}</span>;
             }
             return (
@@ -526,10 +572,9 @@ function walk(node: MdastNode): void {
 }
 
 // Leading-boundary validation is handled in `canStartRef`. It keeps
-// email addresses (`me@example.com`), paths (`a/@b`), URL fragments
-// (`page#anchor`), and issue refs (`PR #123` — alpha-first below
-// filters those) out, while still allowing slash-separated live refs
-// such as `#task:317/#task:318`. Handle character class
+// email addresses (`me@example.com`), paths (`a/@b`), and URL
+// fragments (`page#anchor`) out, while still allowing slash-separated
+// live refs such as `#task:317/#task:318`. Handle character class
 // mirrors `CreateAgentInputSchema` / `CreateChannelInputSchema` in
 // `packages/shared/src/api/agent.ts` / `conversation.ts` (alphanumerics, `-`, `_`).
 // Conversation ids are generated from 12 random bytes as base64url,
@@ -545,12 +590,21 @@ function walk(node: MdastNode): void {
 //                    swallowing `12` as a task — same strict tail
 //                    Cindy review of `80f544e` flagged on the URL
 //                    parser.
+//  - `#<n>`        — BARE task number (no `#task:` sigil). Agents write
+//                    `#123` to mean task 123. Same `[1-9]\d*`(?!\w)
+//                    shape as `#task:<n>`, routed through the distinct
+//                    BARE_TASK_PREFIX so an unresolved `#123` demotes to
+//                    its literal text instead of showing a chip (see the
+//                    scheme comment above). This branch is LAST so the
+//                    explicit `#conv:` / `#task:` / `#<channel>` forms
+//                    always win at a shared `#`.
 // The channel branch explicitly excludes `#conv:` and `#task:`
 // prefixes via negative lookahead so a malformed `#conv:bad` /
 // `#task:abc` doesn't fall back to matching `#conv` / `#task` as a
-// stray channel reference.
+// stray channel reference. A digit-first `#<n>` never collides with the
+// alpha-first channel branch.
 const REF_RE =
-  /(?:#conv:([A-Za-z0-9_-]{16})(?![A-Za-z0-9_-])|#task:([1-9]\d*)(?!\w)|@([a-zA-Z][a-zA-Z0-9_-]*)|#(?!conv:|task:)([a-zA-Z][a-zA-Z0-9_-]*))/g;
+  /(?:#conv:([A-Za-z0-9_-]{16})(?![A-Za-z0-9_-])|#task:([1-9]\d*)(?!\w)|@([a-zA-Z][a-zA-Z0-9_-]*)|#(?!conv:|task:)([a-zA-Z][a-zA-Z0-9_-]*)|#([1-9]\d*)(?!\w))/g;
 
 function pushSplit(text: string, out: MdastNode[]): void {
   let last = 0;
@@ -601,11 +655,25 @@ function pushSplit(text: string, out: MdastNode[]): void {
       lastRefEnd = refEnd;
       continue;
     }
-    const channelName = m[4]!;
+    const channelName = m[4];
+    if (channelName) {
+      out.push({
+        type: 'link',
+        url: `${CHANNEL_PREFIX}${channelName}`,
+        children: [{ type: 'text', value: `#${channelName}` }],
+      });
+      last = refEnd;
+      lastRefEnd = refEnd;
+      continue;
+    }
+    // Bare `#<n>` task reference. The `text` child keeps the literal
+    // `#<n>` so the demote-to-text fallback (unresolved / no context)
+    // reproduces the original prose verbatim.
+    const bareTaskNumber = m[5]!;
     out.push({
       type: 'link',
-      url: `${CHANNEL_PREFIX}${channelName}`,
-      children: [{ type: 'text', value: `#${channelName}` }],
+      url: `${BARE_TASK_PREFIX}${bareTaskNumber}`,
+      children: [{ type: 'text', value: `#${bareTaskNumber}` }],
     });
     last = refEnd;
     lastRefEnd = refEnd;

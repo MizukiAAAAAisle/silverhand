@@ -12,6 +12,13 @@ interface TaskRefProps {
   /** Raw `<n>` from the `#task:<n>` sigil — already validated as a
    *  positive integer by the markdown tokenizer. */
   taskNumber: number;
+  /** Bare `#<n>` origin (no `#task:` sigil). When true, the non-resolved
+   *  states (no context / loading / resolved-missing) render the literal
+   *  `#<n>` text with NO chip — a bare number that isn't a task must not
+   *  sprout chrome. Only a resolved-present task yields a chip, identical
+   *  to the explicit sigil. Default (false) keeps the explicit `#task:<n>`
+   *  behaviour: a muted chip in every state. */
+  bare?: boolean;
 }
 
 export interface StaticTaskRefSummary {
@@ -80,7 +87,7 @@ export function TaskRefStaticChip({
  *    Tasks drawer focused on that row. Hover ≥500ms surfaces a
  *    popover with status / assignee / conversation context.
  */
-export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
+export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element {
   const ctx = useTaskRefContext();
   const workspaceId = ctx?.workspaceId ?? null;
   const result = useTaskByNumber(workspaceId, taskNumber);
@@ -93,6 +100,16 @@ export function TaskRef({ taskNumber }: TaskRefProps): JSX.Element {
   // this the pointer-leave close delay would unmount it mid-pick.
   const [pickerOpen, setPickerOpen] = useState(false);
   const updateStatus = useUpdateTaskStatus();
+
+  // Bare `#<n>` with no resolved task → render the literal `#<n>` text,
+  // no chip. One gate covers no-context (hook disabled → no data),
+  // loading (data not yet settled), and resolved-missing (task deleted /
+  // never existed). The explicit `#task:<n>` sigil keeps its muted chip
+  // in these states instead; a bare number is too ambiguous to mark up
+  // until it's confirmed to be a real task.
+  if (bare && !task) {
+    return <>{`#${taskNumber}`}</>;
+  }
 
   // No-context (saved/preview surfaces) and resolved-missing (task
   // deleted or never existed in this workspace) render a tooltip-only

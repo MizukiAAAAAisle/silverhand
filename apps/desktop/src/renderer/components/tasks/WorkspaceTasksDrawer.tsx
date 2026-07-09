@@ -218,22 +218,29 @@ export function WorkspaceTasksDrawer({
   // global Tasks board. `channelId` is a conversation id:
   //  - a channel id → matches that channel + all its threads;
   //  - a thread id  → matches only that thread.
-  // Baseline (= reset/Clear target) is the current channel — the drawer's
-  // entry context — but it stays switchable to any channel/thread or All
-  // (shiki/Cindy: don't lock the drawer to the current channel). Clear
-  // restores this baseline rather than jumping to All.
+  // Baseline (= reset/Clear target) is the drawer's entry context: the
+  // current WORKSPACE + current CHANNEL. Both anchor on open — the drawer
+  // opens from inside a workspace, so defaulting its workspace filter to
+  // ALL surfaced unrelated workspaces' tasks (#task:1432). Both stay
+  // switchable to any workspace/channel or All; Clear restores this
+  // baseline rather than jumping to All.
   const baselineFilters = useMemo<TaskFilters>(
-    () => ({ ...DEFAULT_TASK_FILTERS, channelId: defaultConversationId }),
-    [defaultConversationId],
+    () => ({
+      ...DEFAULT_TASK_FILTERS,
+      workspaceId,
+      channelId: defaultConversationId,
+    }),
+    [workspaceId, defaultConversationId],
   );
   const [filters, setFilters] = useState<TaskFilters>(baselineFilters);
   // Re-sync every time the drawer opens. When a `?task=<n>` focus is in
-  // flight, widen channel → All so the focused row is in the rendered
-  // tree (a different channel would otherwise be filtered out and the
-  // scroll-and-highlight effect below couldn't find `[data-task-number]`).
-  // Closed tasks are always in the tree now (a status column, not a
-  // hidden visibility tier), so no visibility widening is needed. The
-  // user can still re-select afterward.
+  // flight, widen BOTH workspace and channel → All so the focused row is
+  // in the rendered tree (the target task may live in another
+  // workspace/channel that the anchored baseline would filter out, and
+  // the scroll-and-highlight effect below couldn't then find
+  // `[data-task-number]`). Closed tasks are always in the tree now (a
+  // status column, not a hidden visibility tier), so no visibility
+  // widening is needed. The user can still re-select afterward.
   useEffect(() => {
     if (!open) return;
     if (focusedTaskNumber !== null) {
@@ -265,9 +272,8 @@ export function WorkspaceTasksDrawer({
   // Workspace + channel options + scope ids come from the SAME hook the global
   // Tasks pane uses (#task:1165), so both surfaces' dropdowns list the
   // identical set and can't drift. The drawer is the same board, just
-  // pre-focused on the current channel via `defaultConversationId` (the
-  // baseline below); the workspace filter defaults to ALL there too
-  // (#task:1387).
+  // pre-focused on the current workspace + channel via the baseline above
+  // (#task:1432); both filters stay switchable to All.
   const { workspaceOptions, channelOptions, workspaceScopeIds } =
     useTaskFilterOptions();
 

@@ -1353,9 +1353,13 @@ function RegisteredAppShell(): JSX.Element {
     // Agent side panel (`?agent=<id>`, #task:1189). Renders an agent's compact
     // panel beside the channel so chat + the agent's Activity show together
     // (dual-screen). It is NOT a conversation, so it sits ahead of the
-    // `secondaryDescriptor`/thread/threads-list chain (and `?agent` is mutually
-    // exclusive with all of them at the nav layer). Activity locks to the
-    // current channel (A — shiki).
+    // `secondaryDescriptor`/thread/threads-list chain. It OVERLAYS the
+    // thread / threads-list pane rather than replacing it: `withAgentQuery`
+    // preserves `?thread` / `?threads` so closing the panel restores whatever
+    // was open (#task:1433). `?side` is the exception — cleared on open,
+    // because a secondary conversation feeds notification suppression and
+    // must not stay "visible" while covered. Activity locks to the current
+    // channel (A — shiki).
     secondaryView = (
       <AgentView
         key={`side-${agentPanelId}`}
