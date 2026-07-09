@@ -1,4 +1,4 @@
-import type { ObserveSource } from '@silverhand/shared';
+import type { ObserveSource, UnreadUpdatedBadgePayload } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
 import type { Principal } from '../auth/principal.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
@@ -206,6 +206,10 @@ export async function observe(
   const outcome = deps.ctx.db.transaction(() => {
     const changedConversations = new Set<string>();
     let notificationChanged = false;
+    // The notification ids this batch flipped unread→read. Carried out to the
+    // badge-variant event so the OS-notification-dismiss projection (#task:1431)
+    // can `.close()` exactly these — the client never re-derives read state.
+    const dismissedNotificationIds: string[] = [];
     for (const r of resolved) {
       if (r.kind === 'stream') {
         const current = deps.conversationReads.getLastReadSeq(
@@ -225,24 +229,27 @@ export async function observe(
         // overlap (§3): fold the directed clear into the positional one, even
         // when the cursor did not move (a lingering mention at/below the cursor
         // is still a real change). `markStreamMentionsRead` is monotonic /
-        // idempotent — already-read mentions are skipped.
-        const cleared = deps.notifications.markStreamMentionsRead({
+        // idempotent — already-read mentions are skipped — and returns the ids
+        // it actually flipped.
+        const clearedIds = deps.notifications.markStreamMentionsRead({
           userId: input.viewerUserId,
           conversationId: r.conversationId,
           threadRootId: r.threadRootId,
           uptoSeq: r.targetSeq,
         });
-        if (cleared > 0) {
+        if (clearedIds.length > 0) {
           changedConversations.add(r.conversationId);
           notificationChanged = true;
+          dismissedNotificationIds.push(...clearedIds);
         }
       } else {
         if (deps.notifications.markRead(r.notificationId, input.viewerUserId)) {
           notificationChanged = true;
+          dismissedNotificationIds.push(r.notificationId);
         }
       }
     }
-    return { changedConversations, notificationChanged };
+    return { changedConversations, notificationChanged, dismissedNotificationIds };
   })();
 
   const changed =
@@ -277,14 +284,19 @@ export async function observe(
       );
     }
     if (outcome.notificationChanged) {
+      // Badge variant: NO conversation_id (the predicate keys on its absence) →
+      // routes to the notification-badge consumers, not the cursor read-models.
+      // It also carries the ids just marked read so the single viewer-scope
+      // handler can fan the "notification read" fact to the OS-dismiss projection
+      // (#task:1431) — same fact, one event, no per-projection event.
+      const badgePayload: UnreadUpdatedBadgePayload = {
+        dismissed_notification_ids: outcome.dismissedNotificationIds,
+      };
       effects.push(() =>
         deps.ctx.events.publishToScope(
           `viewer:${input.viewerUserId}`,
           'unread_updated',
-          // Badge variant: NO conversation_id (the predicate keys on its
-          // absence) → routes to the notification-badge consumers, not the
-          // cursor read-models.
-          {},
+          badgePayload,
         ),
       );
     }

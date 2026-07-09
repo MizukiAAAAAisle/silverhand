@@ -6,6 +6,7 @@ import {
   type ConversationRef,
   type MarkNotificationsReadInput,
   type NotificationDto,
+  type UnreadUpdatedBadgePayload,
 } from '@silverhand/shared';
 import { api } from '@/lib/api';
 import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
@@ -163,7 +164,11 @@ export function useNotificationToasts(
 
   // Toasts need the latest notification rows only when a new notification
   // arrives. `unread_updated` is a badge/read-cursor signal and would make
-  // every channel switch refetch the toast list.
+  // every channel switch refetch the toast list. The badge variant does,
+  // however, carry the ids just marked read — forward those to main so the OS
+  // notification center clears in step with in-app read state (#task:1431).
+  // This is the single viewer-scope handler fanning the "notification read"
+  // fact to the OS-dismiss projection; main never re-derives read state.
   useEffect(() => {
     const sub = subscribeViewerScope();
     const toastKey = [...listKey, { unread: true, toasts: true }] as const;
@@ -171,6 +176,20 @@ export function useNotificationToasts(
       if (frame.type === 'event' && isCurrentViewerScope(frame.scope)) {
         if (frame.kind === 'notification') {
           invalidateQueryDebounced(qc, toastKey);
+        } else if (
+          frame.kind === 'unread_updated' &&
+          !isMessageUnreadUpdatedPayload(frame.payload)
+        ) {
+          const ids = (frame.payload as UnreadUpdatedBadgePayload)
+            .dismissed_notification_ids;
+          if (Array.isArray(ids)) {
+            const stringIds = ids.filter(
+              (id): id is string => typeof id === 'string',
+            );
+            if (stringIds.length > 0) {
+              void window.agentHub.dismissSystemNotifications(stringIds);
+            }
+          }
         }
       } else if (frame.type === 'snapshot_required' && isCurrentViewerScope(frame.scope)) {
         invalidateQueryDebounced(qc, toastKey);

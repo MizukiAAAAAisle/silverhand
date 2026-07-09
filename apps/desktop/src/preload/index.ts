@@ -511,6 +511,13 @@ const api = {
     ipcRenderer.on('notification:clicked', listener);
     return () => ipcRenderer.off('notification:clicked', listener);
   },
+  /** Dismiss OS-level notifications by the ids originally passed to
+   *  `showSystemNotification`. Fired when the backend reports those
+   *  notifications were read (viewer-scoped `unread_updated`), so the
+   *  system notification center clears in step with in-app read state.
+   *  Unknown / already-closed ids are ignored by main. */
+  dismissSystemNotifications: (notificationIds: string[]): Promise<void> =>
+    ipcRenderer.invoke('notification:dismiss', notificationIds),
   setBadgeCount: (count: number): Promise<void> =>
     ipcRenderer.invoke('badge:setCount', count),
   /** Save a PNG snapshot to disk via the native save dialog. The

@@ -13,6 +13,12 @@ export function registerSurfaceIpcHandlers(opts: {
   setActiveConversation: (next: ActiveConversationInfo) => void;
   pushActiveConversationToEvents: () => void;
 }): void {
+  // Live OS notifications keyed by the renderer-supplied notification id (the
+  // backend notification row id). Retained so `notification:dismiss` can
+  // `.close()` the exact alert when the backend reports it was read
+  // (#task:1431). Entries self-evict on the Notification's own `close` event.
+  const shownNotifications = new Map<string, Notification>();
+
   ipcMain.handle('dialog:pickDirectory', async (event, options?: { defaultPath?: string }) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     const result = await dialog.showOpenDialog(win ?? undefined!, {
@@ -178,6 +184,14 @@ export function registerSurfaceIpcHandlers(opts: {
     // to the right conversation. Without an id this is just an alert and
     // we keep the legacy "show only" behavior.
     if (typeof notificationId === 'string' && notificationId.length > 0) {
+      // Retain so a later `notification:dismiss` (backend reported it read) can
+      // close this exact alert; self-evict when the OS closes it.
+      shownNotifications.set(notificationId, n);
+      n.on('close', () => {
+        if (shownNotifications.get(notificationId) === n) {
+          shownNotifications.delete(notificationId);
+        }
+      });
       n.on('click', () => {
         // Prefer the sender's window (the renderer that called us); fall
         // back to any visible window. macOS keeps windows around in the
@@ -201,6 +215,22 @@ export function registerSurfaceIpcHandlers(opts: {
       });
     }
     n.show();
+  });
+
+  ipcMain.handle('notification:dismiss', (_event, notificationIds: unknown) => {
+    // Close OS notifications the backend reported as read (#task:1431). The
+    // renderer forwards the exact ids from the viewer-scoped "notification read"
+    // fact — main never re-derives read state. Unknown / already-closed ids are
+    // silently ignored (best-effort: OS alerts are transient).
+    if (!Array.isArray(notificationIds)) return;
+    for (const id of notificationIds) {
+      if (typeof id !== 'string') continue;
+      const n = shownNotifications.get(id);
+      if (n) {
+        n.close();
+        shownNotifications.delete(id);
+      }
+    }
   });
 }
 

@@ -62,6 +62,7 @@ const cataloguedIpcHandlers = [
   'hosts:proxyConfig:get',
   'hosts:proxyConfig:set',
   'notification:show',
+  'notification:dismiss',
   // D4.a Commit 5c-2 — partial_apply_pending state machine IPC.
   // `partialApply:get` returns the in-memory state; `partialApply:retry`
   // re-runs phase-2 against the on-disk profile. Both are local

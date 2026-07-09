@@ -280,9 +280,12 @@ export type MessageUnreadSummaryDto = z.infer<
  *                                   favorites row `unread_count`
  *  - `latest_unread` (pointer, not a count) → `latest_by_conversation`;
  *    null ⇒ this conversation has no unread (cleared → delete the key).
- *  The BADGE variant stays `{}` (no `conversation_id`) and is NOT extended —
- *  the renderer discriminates the two variants by `conversation_id` presence.
- *  See docs/projection-recovery-s1-unread-v1.md. */
+ *  The two variants are discriminated SOLELY by `conversation_id` presence:
+ *  the MESSAGE variant always carries it, the BADGE variant never does. The
+ *  badge variant is not required to be empty (the mark-read route ships
+ *  `{marked}`, and observe ships `dismissed_notification_ids` — see
+ *  `UnreadUpdatedBadgePayload`); consumers must key on the discriminator, not on
+ *  an empty body. See docs/projection-recovery-s1-unread-v1.md. */
 export const UnreadUpdatedMessagePayloadSchema = z.object({
   conversation_id: z.string(),
   workspace_id: z.string(),
@@ -293,6 +296,21 @@ export const UnreadUpdatedMessagePayloadSchema = z.object({
 export type UnreadUpdatedMessagePayload = z.infer<
   typeof UnreadUpdatedMessagePayloadSchema
 >;
+
+/** The `unread_updated` BADGE-variant payload (viewer scope). Discriminated
+ *  from the message variant by the ABSENCE of `conversation_id`. Beyond the
+ *  discriminator it MAY carry `dismissed_notification_ids` — the notification
+ *  ids that just transitioned unread→read in this observe() batch. That field
+ *  is consumed by the OS-notification-dismiss projection (#task:1431): the same
+ *  "notification read" domain fact that refreshes the badge count also tells the
+ *  desktop main process which OS notifications to `.close()`, so no read
+ *  predicate is re-derived on the client. Other producers (the mark-read route)
+ *  carry `marked` instead; both are optional and non-load-bearing for the badge
+ *  count itself, which the client always refetches. */
+export interface UnreadUpdatedBadgePayload {
+  dismissed_notification_ids?: string[];
+  marked?: number;
+}
 
 const SearchOptionalMillisSchema = z.preprocess(
   value => (value === '' || value === undefined ? undefined : value),

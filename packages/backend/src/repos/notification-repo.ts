@@ -236,16 +236,30 @@ export class NotificationRepo {
    * conversation-level notification surface. The stream is matched by the anchor
    * message's `thread_root_id` (NULL = mainline), keeping the clear precise to
    * `(conversation, stream, seq <= uptoSeq)` — not a conversation-level bulk.
+   *
+   * Returns the ids of the notifications it flipped unread→read (via `RETURNING`,
+   * surfaced by better-sqlite3 `.all()`). Callers need the ids — not just a
+   * count — to fan the "notification read" fact out to consumers that act on the
+   * specific rows, e.g. dismissing the matching OS notification (#task:1431).
    */
   markStreamMentionsRead(params: {
     userId: string;
     conversationId: string;
     threadRootId: string | null;
     uptoSeq: number;
-  }): number {
+  }): string[] {
     const now = Date.now();
-    const r = this.db
-      .prepare(
+    const rows = this.db
+      .prepare<
+        {
+          now: number;
+          viewer: string;
+          conv: string;
+          root: string | null;
+          upto: number;
+        },
+        { id: string }
+      >(
         `UPDATE notifications
             SET read_at = @now
           WHERE user_id = @viewer
@@ -257,16 +271,17 @@ export class NotificationRepo {
                WHERE m.conversation_id = @conv
                  AND m.thread_root_id IS @root
                  AND m.seq <= @upto
-            )`,
+            )
+          RETURNING id`,
       )
-      .run({
+      .all({
         now,
         viewer: params.userId,
         conv: params.conversationId,
         root: params.threadRootId,
         upto: params.uptoSeq,
       });
-    return r.changes;
+    return rows.map(r => r.id);
   }
 
   unreadCount(userId?: string | null): number {

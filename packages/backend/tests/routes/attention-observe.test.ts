@@ -345,6 +345,60 @@ describe('POST /api/attention/observe (#task:1231)', () => {
     expect(notifications.get(threadMention.id)?.read_at).toBeNull(); // other stream
   });
 
+  it('overlap: the badge variant carries exactly the folded notification ids (#task:1431)', async () => {
+    t = buildTestApp();
+    const { channelId, agentId } = await createChannel(t);
+    const messages = new MessageRepo(t.ctx.db);
+    const notifications = new NotificationRepo(t.ctx.db);
+
+    const mainMsg = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: agentId,
+      content: '@local on mainline',
+    });
+    const mainMention = notifications.insert({
+      kind: 'mention_self',
+      userId: 'local',
+      conversationId: channelId,
+      messageId: mainMsg.id,
+    });
+    // An anchorless notification the mainline observe must NOT fold, so it must
+    // NOT appear in the dismissed-ids surfaced to the OS-dismiss consumer.
+    const anchorless = notifications.insert({
+      kind: 'agent_start_failed',
+      userId: 'local',
+      conversationId: channelId,
+    });
+
+    const events: { kind: string; payload: unknown }[] = [];
+    const unsub = t.ctx.events.subscribeScope('viewer:local', e =>
+      events.push({ kind: e.kind, payload: e.payload }),
+    );
+    await http(t).post(observePath, {
+      sources: [
+        {
+          kind: 'stream',
+          conversation_id: channelId,
+          thread_root_id: null,
+          position: { kind: 'stream_head' },
+        },
+      ],
+    });
+    unsub();
+
+    const badgeVariant = events
+      .filter(e => e.kind === 'unread_updated')
+      .filter(e => (e.payload as { conversation_id?: unknown }).conversation_id == null);
+    expect(badgeVariant).toHaveLength(1);
+    expect(
+      (badgeVariant[0]?.payload as { dismissed_notification_ids?: unknown })
+        .dismissed_notification_ids,
+    ).toEqual([mainMention.id]);
+    // The anchorless row was never touched, so it is never surfaced for dismiss.
+    expect(notifications.get(anchorless.id)?.read_at).toBeNull();
+  });
+
   it('batch fail-whole: one illegal source clears nothing (no partial)', async () => {
     t = buildTestApp();
     const { channelId, agentId } = await createChannel(t);
