@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import dayjs from 'dayjs';
-import { Archive, ArchiveRestore, Hash } from 'lucide-react';
+import { Archive, ArchiveRestore } from 'lucide-react';
 import type { ArchivedChannelListItemDto } from '@silverhand/shared';
+import { ChannelIcon } from '@/components/ChannelIcon';
 import {
   useArchiveChannel,
   useArchivedChannelsIndex,
@@ -189,7 +190,7 @@ function ArchivedChannelRow({
           className="flex min-w-0 flex-1 items-center gap-3 px-3 py-3 text-left"
         >
           <span data-list-row-icon className="flex size-8 shrink-0 items-center justify-center text-text-muted">
-            <Hash data-channel-icon className="size-6" />
+            <ChannelIcon variant="sticker" density="lg" />
           </span>
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">

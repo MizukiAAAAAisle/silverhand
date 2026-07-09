@@ -3,14 +3,15 @@ import {
   Activity as ActivityIcon,
   AlertTriangle,
   Check,
-  Hash,
   MessageCircle,
   MessagesSquare,
 } from 'lucide-react';
 import type { ActivityItemDto, ActivityPreviewSender, AgentDto } from '@silverhand/shared';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
+import { ChannelIcon } from '@/components/ChannelIcon';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import type { AgentAvatarSource } from '@/features/agents/avatar-hooks';
 import {
@@ -117,7 +118,7 @@ function ChannelGlyph({ item }: { item: ActivityItemDto }): JSX.Element {
   if (item.conversation_kind === 'dm_channel') {
     return <MessageCircle className="size-3.5 shrink-0 text-text-muted" />;
   }
-  return <Hash data-channel-icon className="size-3.5 shrink-0 text-text-muted" />;
+  return <ChannelIcon variant="sticker" className="text-text-muted" />;
 }
 
 /** The sender's avatar for a message line. The DTO gives a resolved
@@ -145,7 +146,7 @@ function SenderAvatar({
       return (
         <AgentAvatar
           runtime={runtime}
-          size={16}
+          size={AVATAR_PX.xs}
           avatarObjectUrl={objectUrl}
           alt={sender.display_name}
         />
@@ -153,7 +154,7 @@ function SenderAvatar({
     }
   }
   return (
-    <UserAvatar size={16} avatarObjectUrl={objectUrl} alt={sender.display_name} />
+    <UserAvatar size={AVATAR_PX.xs} avatarObjectUrl={objectUrl} alt={sender.display_name} />
   );
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronUp, Layers, Loader2 } from 'lucide-react';
 import type { AgentDto, AgentRunState } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgentRunStates } from '@/features/channels/hooks';
 
 // ── Time helpers ─────────────────────────────────────────────────────────
@@ -254,7 +255,7 @@ export function ComposerActivityHeader({
         >
           <AgentAvatar
             runtime={subjectAgent?.runtime ?? 'claude'}
-            size={16}
+            size={AVATAR_PX.xs}
             className="shrink-0"
             avatarObjectUrl={agentAvatarUrls.get(subject.agentId) ?? null}
             alt={subjectAgent?.display_name || subjectAgent?.name}
@@ -321,7 +322,7 @@ function ActivityDetailRow({
       <span className="pt-0.5">
         <AgentAvatar
           runtime={runtime}
-          size={16}
+          size={AVATAR_PX.xs}
           avatarObjectUrl={avatarObjectUrl}
           alt={agent?.display_name || agent?.name}
         />

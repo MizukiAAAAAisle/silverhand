@@ -21,6 +21,7 @@ import {
   runtimeSupportsReasoningEffort,
 } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { Combobox } from '@/components/ui/combobox';
 import { cn } from '@/lib/cn';
 import {
@@ -156,7 +157,7 @@ export function AgentProfileCard({
           {canEdit ? (
             <EditableAgentAvatar
               agentId={agent.id}
-              size={56}
+              size={AVATAR_PX['3xl']}
               runtime={agent.runtime}
               alt={agent.display_name || agent.name}
               avatarObjectUrl={avatarObjectUrl}
@@ -165,7 +166,7 @@ export function AgentProfileCard({
           ) : (
             <AgentAvatar
               runtime={agent.runtime}
-              size={56}
+              size={AVATAR_PX['3xl']}
               avatarObjectUrl={avatarObjectUrl}
               alt={agent.display_name || agent.name}
             />

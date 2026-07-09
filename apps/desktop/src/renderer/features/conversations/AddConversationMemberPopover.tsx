@@ -4,6 +4,7 @@ import { Plus, Search } from 'lucide-react';
 import type { AgentDto, MemberDto, UserDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
@@ -216,13 +217,13 @@ function PopoverBody({
                   {c.kind === 'agent' ? (
                     <AgentAvatar
                       runtime={c.agent.runtime}
-                      size={20}
+                      size={AVATAR_PX.sm}
                       avatarObjectUrl={agentAvatars.get(c.agent.id) ?? null}
                       alt={displayName}
                     />
                   ) : (
                     <UserAvatar
-                      size={20}
+                      size={AVATAR_PX.sm}
                       avatarObjectUrl={humanAvatars.get(c.user.id) ?? null}
                       alt={displayName}
                     />

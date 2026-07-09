@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import {
   buildChannelFilterOptions,
+  TaskFilterBar,
   type ChannelFilterCandidate,
+  type ChannelOption,
+  type WorkspaceOption,
 } from './TaskFilterBar';
+import { DEFAULT_TASK_FILTERS } from '@/features/tasks/taskFilters';
 import { workspaceChannelCandidates } from '@/features/tasks/useTaskFilterOptions';
 
 function candidate(
@@ -133,5 +140,59 @@ describe('workspaceChannelCandidates — channel picker label/subtitle rule', ()
       ch('c1', 'Onboarding', { kind: 'dm_channel' }),
     ]);
     expect(out[0]).toMatchObject({ title: 'Onboarding', sublabel: '@Judy' });
+  });
+});
+
+describe('TaskFilterBar — trigger glyphs stay height-uniform (#task:1437)', () => {
+  const workspaceOptions: WorkspaceOption[] = [
+    { id: 'ws-1', label: 'Engineering', kind: 'regular', dmAgentId: null },
+  ];
+  const channelOptions: ChannelOption[] = [
+    { id: 'c-1', workspaceId: 'ws-1', label: 'general', group: 'workspace' },
+  ];
+
+  function renderBar(): string {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    return renderToStaticMarkup(
+      React.createElement(
+        QueryClientProvider,
+        { client },
+        React.createElement(TaskFilterBar, {
+          filters: DEFAULT_TASK_FILTERS,
+          onChange: () => {},
+          baselineFilters: DEFAULT_TASK_FILTERS,
+          workspaceOptions,
+          channelOptions,
+          allChannelsLabel: 'All channels',
+          assigneeOptions: [],
+          creatorOptions: [],
+          hasUnassigned: false,
+        }),
+      ),
+    );
+  }
+
+  it('channel trigger uses a plain `#`, NOT the sidebar sticker hook', () => {
+    // The bug: the channel trigger carried `data-channel-icon`, whose forza6
+    // sticker recipe (content-box + 1px border + 1px padding) inflated it to
+    // 18px while the 14px sibling glyphs stayed put. With a closed popover,
+    // SSR renders only the four triggers (dropdown rows are portaled + gated
+    // on open) — so `data-channel-icon` must be ABSENT here. If it reappears,
+    // the sticker crept back onto the trigger and the height drifts again.
+    const html = renderBar();
+    expect(html).toContain('aria-label="Channel"');
+    expect(html).not.toContain('data-channel-icon');
+  });
+
+  it('every trigger glyph sits at the shared 14px box', () => {
+    // WorkspaceIcon (14) + the plain channel `#` (14) both render an explicit
+    // 14px box; no trigger glyph renders a 16/18px box. The plain lucide
+    // User/PenLine glyphs use `size-3.5` (= 14) and can't be theme-inflated.
+    const html = renderBar();
+    expect(html).toContain('width:14px');
+    expect(html).not.toContain('width:16px');
+    expect(html).not.toContain('width:18px');
   });
 });

@@ -28,6 +28,7 @@ import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AvatarPickerButton } from '@/components/AvatarPickerButton';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { cn } from '@/lib/cn';
 import { useAppearance } from '@/hooks/useAppearance';
 import { useBackendInfoSnapshot } from '@/features/hosts/hooks';
@@ -636,7 +637,7 @@ function ProfilePane(): JSX.Element {
           <Label>Avatar</Label>
           <div className="flex items-center gap-3">
             <AvatarPickerButton
-              size={56}
+              size={AVATAR_PX['3xl']}
               label={dto.avatar_url ? 'Edit' : 'Add'}
               onPick={file => void onPickAvatar(file)}
               disabled={uploadAvatar.isPending}

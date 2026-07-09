@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
-import { Bookmark, Hash, Layers } from 'lucide-react';
+import { Bookmark, Layers } from 'lucide-react';
 import dayjs from 'dayjs';
 import type { SavedMessageDto } from '@silverhand/shared';
 import { Markdown } from '@/components/chat/Markdown';
+import { ChannelIcon } from '@/components/ChannelIcon';
 import { useSavedMessages, useUnsaveMessage } from '@/features/saved/hooks';
 import { useUsersById, makeUserNameResolver } from '@/features/users/hooks';
 import { formatUserDisplayName } from '@/lib/current-user';
@@ -213,7 +214,7 @@ function SavedItem({
       >
         <header className="mb-2 flex items-center gap-2 text-xs text-text-muted">
           <span className="inline-flex items-center gap-1 font-medium text-text-primary">
-            <Hash data-channel-icon className="size-3.5" />
+            <ChannelIcon variant="sticker" />
             {item.workspace_name}
           </span>
           <span>·</span>

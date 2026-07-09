@@ -19,6 +19,7 @@ import {
 } from '@/components/menus/AppContextMenu';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
@@ -1294,7 +1295,7 @@ function Row({
         <>
           <AgentAvatar
             runtime={item.agent.runtime}
-            size={28}
+            size={AVATAR_PX.md}
             avatarObjectUrl={agentAvatarUrl}
             alt={item.agent.display_name || item.agent.name}
           />
@@ -1327,7 +1328,7 @@ function Row({
       ) : item.kind === 'human' ? (
         <>
           <UserAvatar
-            size={28}
+            size={AVATAR_PX.md}
             avatarObjectUrl={humanAvatarUrl}
             alt={item.human.display_name || item.human.name}
           />

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowUpRight, AtSign, Hash } from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
 import type {
   AgentRuntimeConversation,
   AgentRuntimeStateDto,
 } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
+import { ConversationGlyph } from '@/components/ConversationGlyph';
 import { AgentActivityTimeline } from './AgentActivityTimeline';
 
 interface AgentActivityPaneProps {
@@ -191,7 +192,6 @@ function RosterItem({
   const live = row.closed_at === null && (row.status === 'active' || row.status === 'starting');
   const isDm =
     row.conversation_kind === 'dm_channel' || row.workspace_kind === 'agent_home';
-  const Icon = isDm ? AtSign : Hash;
   return (
     <li className="group/row relative">
       <button
@@ -218,19 +218,15 @@ function RosterItem({
             : 'border-transparent text-text-secondary hover:border-[var(--border-row-hover,var(--accent))] hover:text-text-primary',
         )}
       >
-        {/* `data-channel-icon` → forza6 paints the yellow ink-bordered `#`
-            sticker (inert in other themes); the `data-row-selected` ancestor
-            gives it the heavier border + shadow lift on the lime selected row. */}
-        {/* On a selected row the icon flips to `--text-on-selected` so it
-            stays legible on the fill (warm/slack); forza6 paints the
-            `data-channel-icon` sticker which overrides colour either way. */}
-        <Icon
-          data-channel-icon
-          className={cn(
-            'size-3.5 shrink-0',
-            selected ? 'text-text-on-selected' : 'text-text-muted',
-          )}
-          strokeWidth={2}
+        {/* Conversation roster row identity. The `data-channel-icon` sticker
+            hook (forza6 paints the ink-bordered `#`/`@` chip; the
+            `data-row-selected` ancestor adds the heavier lift on the lime
+            selected row) is owned by ConversationGlyph, not hand-written here
+            (#task:1438). On a selected row the glyph flips to
+            `--text-on-selected` so it stays legible on the fill. */}
+        <ConversationGlyph
+          kind={isDm ? 'dm' : 'channel'}
+          className={selected ? 'text-text-on-selected' : 'text-text-muted'}
         />
         <span className="min-w-0 flex-1 truncate text-[12px]">
           {row.channel_title}

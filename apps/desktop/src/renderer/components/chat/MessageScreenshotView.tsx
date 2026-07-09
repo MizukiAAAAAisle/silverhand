@@ -7,6 +7,7 @@ import type {
 import { resolveAttachmentLabels } from '@silverhand/shared';
 import { FileText, Hash, User } from 'lucide-react';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { getAttachmentBlobUrl } from '@/lib/attachment-blob-cache';
 import { Markdown } from './Markdown';
 import { MessageRowContent } from './MessageRowContent';
@@ -351,7 +352,7 @@ function ScreenshotAvatar({
     return (
       <AgentAvatar
         runtime={agent.runtime}
-        size={32}
+        size={AVATAR_PX.lg}
         className="border-[length:var(--border-avatar-width)] border-border-avatar"
         avatarObjectUrl={agentAvatarObjectUrl}
         alt={sanitizeScreenshotText(agent.display_name || agent.name)}

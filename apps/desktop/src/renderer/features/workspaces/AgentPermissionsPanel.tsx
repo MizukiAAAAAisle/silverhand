@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import type { AgentCapability, AgentDto, WorkspaceRole } from '@silverhand/shared';
 import { ApiError } from '@/lib/api';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -161,7 +162,7 @@ function AgentSelect({
           <span className="flex min-w-0 items-center gap-2">
             <AgentAvatar
               runtime={selected.runtime}
-              size={18}
+              size={AVATAR_PX.sm}
               avatarObjectUrl={avatarUrls.get(selected.id) ?? null}
             />
             <span className="truncate font-medium text-text-primary">
@@ -191,7 +192,7 @@ function AgentSelect({
               >
                 <AgentAvatar
                   runtime={agent.runtime}
-                  size={18}
+                  size={AVATAR_PX.sm}
                   avatarObjectUrl={avatarUrls.get(agent.id) ?? null}
                 />
                 <Select.ItemText>

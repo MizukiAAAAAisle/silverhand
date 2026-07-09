@@ -87,6 +87,7 @@ import type {
 } from '@silverhand/shared';
 import { RuntimeKindSchema, RUNTIME_ORDER_LIST, runtimeLabel } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import {
   isBackendUnreachable,
@@ -681,7 +682,7 @@ function CascadeImpact({
               {knownRuntime.success ? (
                 <AgentAvatar
                   runtime={knownRuntime.data as RuntimeKind}
-                  size={20}
+                  size={AVATAR_PX.sm}
                   alt={agent.display_name}
                 />
               ) : (
@@ -918,7 +919,7 @@ function ProxySection({
                     >
                       <Check className="size-3" />
                     </span>
-                    <AgentAvatar runtime={kind} size={22} />
+                    <AgentAvatar runtime={kind} size={AVATAR_PX.sm} />
                     <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
                       {runtimeLabel(kind)}
                     </span>
@@ -1372,7 +1373,7 @@ function AgentCard({
         {knownRuntime.success ? (
           <AgentAvatar
             runtime={knownRuntime.data as RuntimeKind}
-            size={36}
+            size={AVATAR_PX.xl}
             avatarObjectUrl={avatarObjectUrl}
             alt={agent.display_name}
           />

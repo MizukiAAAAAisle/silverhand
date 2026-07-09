@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import type { WorkspaceHumanMemberDto, WorkspaceRole } from '@silverhand/shared';
 import { ApiError } from '@/lib/api';
 import { UserAvatar } from '@/components/UserAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
@@ -133,7 +134,7 @@ export function HumanRolesPanel({ workspaceId }: HumanRolesPanelProps): JSX.Elem
               className="flex items-center gap-2.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-3 py-2"
             >
               <UserAvatar
-                size={24}
+                size={AVATAR_PX.sm}
                 avatarObjectUrl={avatarUrls.get(member.id) ?? null}
                 alt={member.display_name || member.name}
               />

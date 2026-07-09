@@ -9,6 +9,7 @@ import { Lock, User as UserIcon } from 'lucide-react';
 import { validateAvatarFile, type UserDto } from '@silverhand/shared';
 import { ApiError } from '@/lib/api';
 import { AvatarPickerButton } from '@/components/AvatarPickerButton';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { cn } from '@/lib/cn';
 import {
   MetadataList,
@@ -145,7 +146,7 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
             // identical means a viewer who knows one knows the other.
             <div className="flex flex-col items-center gap-1.5">
               <AvatarPickerButton
-                size={56}
+                size={AVATAR_PX['3xl']}
                 label={hasAvatar ? 'Edit' : 'Add'}
                 onPick={file => void onPickAvatar(file)}
                 disabled={avatarPending}

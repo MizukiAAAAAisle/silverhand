@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 
 interface AgentPickerProps {
@@ -160,7 +161,7 @@ export function MemberPicker({
                   // 了, 失去了空间感"). The smaller glyph leaves
                   // ~5px above/below so the avatar reads as a small
                   // identity icon rather than a tile.
-                  size={14}
+                  size={AVATAR_PX.chip}
                   avatarObjectUrl={
                     agentAvatars.get(candidate.agent.id) ?? null
                   }
@@ -168,7 +169,7 @@ export function MemberPicker({
                 />
               ) : (
                 <UserAvatar
-                  size={14}
+                  size={AVATAR_PX.chip}
                   avatarObjectUrl={
                     humanAvatars.get(candidate.user.id) ?? null
                   }
@@ -235,7 +236,7 @@ export function MemberPicker({
                       {candidate.kind === 'agent' ? (
                         <AgentAvatar
                           runtime={candidate.agent.runtime}
-                          size={18}
+                          size={AVATAR_PX.sm}
                           avatarObjectUrl={
                             agentAvatars.get(candidate.agent.id) ?? null
                           }
@@ -243,7 +244,7 @@ export function MemberPicker({
                         />
                       ) : (
                         <UserAvatar
-                          size={18}
+                          size={AVATAR_PX.sm}
                           avatarObjectUrl={
                             humanAvatars.get(candidate.user.id) ?? null
                           }

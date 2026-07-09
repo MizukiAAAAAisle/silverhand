@@ -19,6 +19,7 @@ import { useUsers } from '@/features/users/hooks';
 import { usePresenceById, presenceDotStatus } from '@/features/presence/hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { Button } from '@/components/ui/button';
 import { CURRENT_USER_SUBTITLE } from '@/lib/current-user';
 import { SidebarRow, SidebarSection } from './sidebar-shared';
@@ -99,7 +100,7 @@ export function MembersPanel({
       icon={
         <AgentAvatar
           runtime={a.runtime}
-          size={16}
+          size={AVATAR_PX.xs}
           avatarObjectUrl={agentAvatarUrls.get(a.id) ?? null}
           alt={a.display_name || a.name}
         />

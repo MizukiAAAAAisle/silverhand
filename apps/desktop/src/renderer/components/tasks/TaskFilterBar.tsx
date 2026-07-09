@@ -11,7 +11,6 @@ import * as Popover from '@radix-ui/react-popover';
 import {
   Check,
   ChevronDown,
-  Hash,
   PenLine,
   RotateCcw,
   Search,
@@ -20,6 +19,7 @@ import {
 import type { AgentDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
+import { ChannelIcon } from '@/components/ChannelIcon';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useRovingList } from '@/features/tasks/taskFilterKeyboard';
@@ -130,13 +130,14 @@ export function buildChannelFilterOptions(
   return [...byId.values()];
 }
 
-/** Leading icon for every channel-filter row and the trigger. This is a
- *  channel picker, so the icon is uniformly the `#` glyph — carrying the
- *  `data-channel-icon` hook so it picks up the sidebar's `#` sticker recipe
- *  (forza6), the same `#` icon as ChannelsSidebar. The source (workspace /
- *  DM agent) is conveyed by the subtitle, not the icon (shiki #task:1165). */
+/** The `#` glyph for channel-filter dropdown rows — a sticker-variant
+ *  {@link ChannelIcon} so it picks up the theme's `#` sticker recipe, the same
+ *  identity `#` as ChannelsSidebar. The compact filter TRIGGER uses the
+ *  utility variant instead (no sticker hook → can't inflate; #task:1437). The
+ *  source (workspace / DM agent) is conveyed by the subtitle, not the icon
+ *  (shiki #task:1165). */
 function ChannelGlyph(): JSX.Element {
-  return <Hash data-channel-icon className="size-3.5" />;
+  return <ChannelIcon variant="sticker" />;
 }
 
 export interface TaskFilterBarProps {
@@ -254,6 +255,14 @@ export function TaskFilterBar({
 }
 
 // ── Shared trigger + panel shells ──────────────────────────────────
+
+/** Icon edge (px) for the WORKSPACE filter trigger. The plain lucide glyphs
+ *  (`User`, `PenLine`) render at `size-3.5` = 14px and the channel `#` uses
+ *  `ChannelIcon` at `md` (also 14px); `WorkspaceIcon` takes a numeric `size`,
+ *  so it consumes this value to sit at the same height. Kept == 14 (the
+ *  control density) so no trigger glyph drifts taller than the row
+ *  (#task:1437 / #task:1438). */
+const TRIGGER_GLYPH_PX = 14;
 
 const FilterTrigger = forwardRef<
   HTMLButtonElement,
@@ -526,7 +535,12 @@ function ChannelFilter({
     >
       <Popover.Trigger asChild>
         <FilterTrigger
-          icon={<ChannelGlyph />}
+          // Utility-variant `#` (no `data-channel-icon` sticker hook) — the
+          // sidebar sticker's border/padding would inflate this past the 14px
+          // sibling glyphs in forza6 (#task:1437). `md` = 14px, matching the
+          // workspace trigger's TRIGGER_GLYPH_PX. Dropdown rows use the
+          // sticker variant.
+          icon={<ChannelIcon variant="utility" density="md" />}
           active={value !== null}
           aria-label="Channel"
         >
@@ -648,12 +662,16 @@ function WorkspaceFilter({
   });
 
   const selected = value ? flatOptions.find(o => o.id === value) ?? null : null;
-  const iconFor = (o: WorkspaceOption): JSX.Element => (
+  // `triggerSize` scales the trigger icon down to the shared control-glyph
+  // box (#task:1437); the dropdown rows keep the default 16px so they read at
+  // the same workspace-identity size as the rail.
+  const iconFor = (o: WorkspaceOption, triggerSize?: number): JSX.Element => (
     <WorkspaceIcon
       kind={o.kind}
       dmAgentId={o.dmAgentId}
       agentsById={agentsById}
       dmAgentAvatarUrls={agentAvatarUrls}
+      {...(triggerSize !== undefined ? { size: triggerSize } : {})}
     />
   );
 
@@ -662,8 +680,16 @@ function WorkspaceFilter({
       <Popover.Trigger asChild>
         <FilterTrigger
           // Resting/ALL: the generic workspace glyph (serif "W"); a selection:
-          // that workspace's own icon (avatar for a DM).
-          icon={selected ? iconFor(selected) : <WorkspaceIcon kind="regular" dmAgentId={null} />}
+          // that workspace's own icon (avatar for a DM). Both sized to the
+          // shared trigger-glyph box so this trigger matches its siblings'
+          // height (#task:1437).
+          icon={
+            selected ? (
+              iconFor(selected, TRIGGER_GLYPH_PX)
+            ) : (
+              <WorkspaceIcon kind="regular" dmAgentId={null} size={TRIGGER_GLYPH_PX} />
+            )
+          }
           active={value !== null}
           aria-label="Workspace"
         >

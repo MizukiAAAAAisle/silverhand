@@ -30,6 +30,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { AgentAvatar } from './AgentAvatar';
+import { AVATAR_PX } from './avatar-scale';
 
 interface AgentInfoPopoverProps {
   agent: AgentDto;
@@ -178,7 +179,7 @@ export function AgentInfoPopover({
           <div className="flex items-center gap-3">
             <AgentAvatar
               runtime={agent.runtime}
-              size={36}
+              size={AVATAR_PX.xl}
               avatarObjectUrl={resolvedAvatarObjectUrl}
               alt={agent.display_name || agent.name}
             />

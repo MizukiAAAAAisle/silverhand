@@ -5,6 +5,7 @@ import { ChevronDown, Trash2, UserPlus } from 'lucide-react';
 import type { AddWorkspaceMemberInput, AgentDto, UserDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { ApiError } from '@/lib/api';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
@@ -240,7 +241,7 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
                         {c.kind === 'agent' ? (
                           <AgentAvatar
                             runtime={c.agent.runtime}
-                            size={18}
+                            size={AVATAR_PX.sm}
                             avatarObjectUrl={
                               candidateAgentAvatarUrls.get(c.agent.id) ?? null
                             }
@@ -248,7 +249,7 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
                           />
                         ) : (
                           <UserAvatar
-                            size={18}
+                            size={AVATAR_PX.sm}
                             avatarObjectUrl={
                               candidateHumanAvatarUrls.get(c.user.id) ?? null
                             }
@@ -297,13 +298,13 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
                   {m.kind === 'agent' ? (
                     <AgentAvatar
                       runtime={m.agent.runtime}
-                      size={20}
+                      size={AVATAR_PX.sm}
                       avatarObjectUrl={agentAvatarUrls.get(m.agent.id) ?? null}
                       alt={displayName}
                     />
                   ) : (
                     <UserAvatar
-                      size={20}
+                      size={AVATAR_PX.sm}
                       avatarObjectUrl={humanAvatarUrls.get(m.user.id) ?? null}
                       alt={displayName}
                     />

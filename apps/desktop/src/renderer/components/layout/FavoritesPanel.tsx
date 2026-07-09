@@ -4,6 +4,7 @@ import type { FavoriteRowDto } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import {
   useAgentAvatarObjectUrls,
   type AgentAvatarSource,
@@ -305,7 +306,7 @@ function FavoriteLeadingIcon({
     // glyph if it is ever missing rather than guessing a runtime.
     if (!item.runtime) return <User className="size-4 shrink-0" />;
     return (
-      <AgentAvatar runtime={item.runtime} size={16} avatarObjectUrl={dmAvatarUrl} />
+      <AgentAvatar runtime={item.runtime} size={AVATAR_PX.xs} avatarObjectUrl={dmAvatarUrl} />
     );
   }
   // workspace → the canonical themed poster badge (regular workspaces carry no

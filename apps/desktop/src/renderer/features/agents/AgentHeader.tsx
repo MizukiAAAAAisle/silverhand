@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Power, Trash2 } from 'lucide-react';
 import type { AgentDto, AgentRuntimeStateDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { Button } from '@/components/ui/button';
 import {
   HeroDot,
@@ -55,7 +56,7 @@ export function AgentHeader({
         avatar={
           <AgentAvatar
             runtime={agent.runtime}
-            size={48}
+            size={AVATAR_PX['2xl']}
             avatarObjectUrl={avatarObjectUrl}
             alt={agent.display_name || agent.name}
           />

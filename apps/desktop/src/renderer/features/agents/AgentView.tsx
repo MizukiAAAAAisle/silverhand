@@ -14,6 +14,7 @@ import type {
 } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { AgentHeader } from './AgentHeader';
 import { AgentProfileCard } from './AgentProfileCard';
 import { AgentSchedulesCard } from './AgentSchedulesCard';
@@ -401,7 +402,7 @@ function AgentSidePanel({
       <header className="flex items-center gap-2.5 border-b border-border-subtle px-3 py-2.5">
         <AgentAvatar
           runtime={agent.runtime}
-          size={28}
+          size={AVATAR_PX.md}
           avatarObjectUrl={avatarObjectUrl}
           alt={agent.display_name || agent.name}
         />

@@ -6,6 +6,7 @@ import type {
   MemberDto,
 } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
 import { HoverPopover } from '@/components/chat/HoverPopover';
@@ -132,7 +133,7 @@ export function MemberStrip({
               >
                 <AgentAvatar
                   runtime={agent.runtime}
-                  size={20}
+                  size={AVATAR_PX.sm}
                   avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
                   alt={agent.display_name || agent.name}
                 />

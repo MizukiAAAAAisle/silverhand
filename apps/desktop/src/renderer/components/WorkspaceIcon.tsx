@@ -16,13 +16,20 @@ import { AgentAvatar } from '@/components/AgentAvatar';
  * - DM workspace → the bound agent's avatar (DMs are 1:1 with an agent), so the
  *   row reads as "talking to @x" instead of a generic person glyph.
  * - DM fallback (agent not yet resolved / list still loading) → the neutral
- *   `User` glyph in the same 16px box.
+ *   `User` glyph in the same box.
+ *
+ * `size` (px, default 16) is the single layout knob — it drives the avatar,
+ * the `User` fallback, and the `W` box uniformly, so a consumer that needs the
+ * icon to match a smaller control glyph (e.g. the task filter-bar triggers at
+ * 14px) scales all three branches together instead of one drifting from the
+ * rest (#task:1437).
  */
 export function WorkspaceIcon({
   kind,
   dmAgentId,
   agentsById,
   dmAgentAvatarUrls,
+  size = 16,
 }: {
   kind: 'regular' | 'dm';
   dmAgentId: string | null;
@@ -30,6 +37,9 @@ export function WorkspaceIcon({
   /** Optional — only read for the DM branch. Regular callers (e.g. a search
    *  result row with no agent context) can omit it. */
   dmAgentAvatarUrls?: ReadonlyMap<string, string | null>;
+  /** Square edge in px for all three branches. Default 16 (rail / search /
+   *  archived panels). */
+  size?: number;
 }): JSX.Element {
   const dmAgent =
     kind === 'dm' && dmAgentId ? agentsById?.get(dmAgentId) ?? null : null;
@@ -37,17 +47,19 @@ export function WorkspaceIcon({
     return (
       <AgentAvatar
         runtime={dmAgent.runtime}
-        size={16}
+        size={size}
         avatarObjectUrl={dmAgentAvatarUrls?.get(dmAgent.id) ?? null}
         alt={dmAgent.display_name?.trim() || dmAgent.name}
       />
     );
   }
-  if (kind === 'dm') return <User className="size-4 shrink-0" />;
+  if (kind === 'dm')
+    return <User style={{ width: size, height: size }} className="shrink-0" />;
   return (
     <span
       data-workspace-icon
-      className="inline-flex size-4 shrink-0 items-center justify-center font-serif text-[16px] font-semibold leading-none"
+      style={{ width: size, height: size }}
+      className="inline-flex shrink-0 items-center justify-center font-serif text-[16px] font-semibold leading-none"
     >
       W
     </span>

@@ -8,10 +8,12 @@ import {
   QODER_LOGO_DATA_URI,
 } from '@/icons/agents';
 import { cn } from '@/lib/cn';
+import { AVATAR_PX_DEFAULT } from './avatar-scale';
 
 interface AgentAvatarProps {
   runtime: RuntimeKind;
-  /** Pixel size of the square. Default 28. */
+  /** Pixel size of the square. Sizes come from the `AVATAR_PX` scale
+   *  (#task:1440); defaults to `md` (28). */
   size?: number;
   className?: string;
   title?: string;
@@ -67,7 +69,7 @@ const TINTS: Partial<Record<RuntimeKind, { bg: string; fg: string }>> = {
 
 export function AgentAvatar({
   runtime,
-  size = 28,
+  size = AVATAR_PX_DEFAULT,
   className,
   title,
   avatarObjectUrl,

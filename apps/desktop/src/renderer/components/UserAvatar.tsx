@@ -1,8 +1,10 @@
 import { User as UserIcon } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { AVATAR_PX_DEFAULT } from './avatar-scale';
 
 interface UserAvatarProps {
-  /** Pixel size of the square. Default 28 to match `AgentAvatar`. */
+  /** Pixel size of the square. Sizes come from the `AVATAR_PX` scale
+   *  (#task:1440); defaults to `md` (28), matching `AgentAvatar`. */
   size?: number;
   className?: string;
   title?: string;
@@ -33,7 +35,7 @@ interface UserAvatarProps {
  * full-bleed inside the same square silhouette as agent avatars.
  */
 export function UserAvatar({
-  size = 28,
+  size = AVATAR_PX_DEFAULT,
   className,
   title,
   avatarObjectUrl,

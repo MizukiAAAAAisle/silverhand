@@ -13,6 +13,7 @@ import type {
 import { resolveAttachmentLabels } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
 import { useNav } from '@/router';
@@ -886,7 +887,7 @@ function Avatar({
         >
           <AgentAvatar
             runtime={agent.runtime}
-            size={32}
+            size={AVATAR_PX.lg}
             className="border-[length:var(--border-avatar-width)] border-border-avatar"
             avatarObjectUrl={agentAvatarObjectUrl}
             alt={agent.display_name || agent.name}

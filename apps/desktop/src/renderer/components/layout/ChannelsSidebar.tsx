@@ -4,12 +4,12 @@ import {
   ArchiveRestore,
   Bell,
   Copy,
-  Hash,
   Plus,
   Star,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSortable } from '@dnd-kit/sortable';
+import { ChannelIcon } from '@/components/ChannelIcon';
 import {
   AppContextMenu,
   AppContextMenuItem,
@@ -362,12 +362,9 @@ function ChannelRow({
         onClick={onClick}
         className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[12px]"
       >
-        <Hash
-          data-channel-icon
-          className={
-            'size-3.5 shrink-0 ' +
-            (isClosed ? 'text-text-muted/50' : 'text-text-muted')
-          }
+        <ChannelIcon
+          variant="sticker"
+          className={isClosed ? 'text-text-muted/50' : 'text-text-muted'}
         />
         <span
           className={

@@ -21,7 +21,9 @@ import {
 } from '@/components/ui/filter-select';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
+import { ChannelIcon } from '@/components/ChannelIcon';
 import { UserAvatar } from '@/components/UserAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
@@ -492,7 +494,7 @@ function SenderFilterSelect({
                 // pick "self" so the filter is usable on first paint.
                 <SelectItem
                   value={`user:${viewerId ?? 'self'}`}
-                  icon={<UserAvatar size={16} />}
+                  icon={<UserAvatar size={AVATAR_PX.xs} />}
                 >
                   {formatUserDisplayName(viewerId, userResolver)}
                 </SelectItem>
@@ -503,7 +505,7 @@ function SenderFilterSelect({
                     value={`user:${user.id}`}
                     icon={
                       <UserAvatar
-                        size={16}
+                        size={AVATAR_PX.xs}
                         avatarObjectUrl={userAvatarUrls.get(user.id) ?? null}
                         alt={user.display_name || user.name}
                       />
@@ -531,7 +533,7 @@ function SenderFilterSelect({
                     icon={
                       <AgentAvatar
                         runtime={agent.runtime}
-                        size={16}
+                        size={AVATAR_PX.xs}
                         avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
                         alt={agent.display_name?.trim() || agent.name}
                       />
@@ -695,15 +697,16 @@ function MessageResultHeader({
       </span>
       <MetaDot />
       <span className="flex min-w-0 items-center gap-1">
-        {/* Same channel glyph the sidebar / saved / activity lists use — the
-            `data-channel-icon` hook lets each theme paint its `#` chip (forza6
-            poster sticker) so a channel reads identically everywhere. Not a
-            bare Hash, and not the chat-header hero (`data-conversation-hash-icon`,
-            which scales up to ~28px). `size-3` (12px) so forza6's content-box
-            chip (+2px pad +2px border) lands at 16px — matching the 16px
-            workspace icon + sender avatar on this row (shiki #task:1336). warm /
-            slack paint no chip, so their glyph is simply 12px. */}
-        <Hash data-channel-icon className="size-3 shrink-0" />
+        {/* Same channel glyph the sidebar / saved / activity lists use, via
+            the shared ChannelIcon primitive. `sticker` → the `data-channel-icon`
+            hook lets each theme paint its `#` chip (forza6 poster sticker) so a
+            channel reads identically everywhere. `sm` (12px) is intentional
+            (shiki #task:1438): forza6's content-box chip (+2px pad +2px border)
+            lands at 16px — matching the 16px workspace icon + sender avatar on
+            this row (shiki #task:1336); warm / slack paint no chip, so their
+            glyph is simply 12px. Not the chat-header hero
+            (`data-conversation-hash-icon`, ~28px). */}
+        <ChannelIcon variant="sticker" density="sm" />
         <span className="truncate">{result.conversation.title}</span>
       </span>
       <MetaDot />
@@ -764,7 +767,7 @@ function messageSenderAvatar(
     return (
       <AgentAvatar
         runtime={agent.runtime}
-        size={16}
+        size={AVATAR_PX.xs}
         avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
         alt={agent.display_name?.trim() || agent.name}
       />
@@ -773,7 +776,7 @@ function messageSenderAvatar(
   if (message.from_kind === 'user') {
     return (
       <UserAvatar
-        size={16}
+        size={AVATAR_PX.xs}
         avatarObjectUrl={
           message.from_user_id
             ? userAvatarUrls.get(message.from_user_id) ?? null
@@ -1004,7 +1007,7 @@ function senderFilterLabel(
       label,
       icon: (
         <UserAvatar
-          size={16}
+          size={AVATAR_PX.xs}
           avatarObjectUrl={userAvatarUrls?.get(userId) ?? null}
           alt={label}
         />
@@ -1020,7 +1023,7 @@ function senderFilterLabel(
       icon: agent ? (
         <AgentAvatar
           runtime={agent.runtime}
-          size={16}
+          size={AVATAR_PX.xs}
           avatarObjectUrl={agentAvatarUrls?.get(agentId) ?? null}
           alt={label}
         />
