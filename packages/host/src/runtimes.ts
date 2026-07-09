@@ -48,6 +48,20 @@ const PLATFORM_CANDIDATES: Partial<Record<RuntimeKind, Partial<Record<NodeJS.Pla
   },
 };
 
+/**
+ * The platform-specific hard-preferred binary locations for `kind` (see
+ * `PLATFORM_CANDIDATES`). Diagnostic use only: lets a caller classify a
+ * resolved binary path as coming from a known app-bundle candidate vs a
+ * plain PATH lookup, which is central to the #1422 "which codex did the
+ * daemon actually exec" investigation. Does not affect resolution.
+ */
+export function platformBinaryCandidates(
+  kind: RuntimeKind,
+  platform: NodeJS.Platform = process.platform,
+): readonly string[] {
+  return PLATFORM_CANDIDATES[kind]?.[platform] ?? [];
+}
+
 async function isExecutableFile(path: string): Promise<boolean> {
   try {
     const s = await stat(path);

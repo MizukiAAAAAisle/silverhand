@@ -25,7 +25,13 @@ import {
 } from '@silverhand/shared';
 
 import { getDriver as getDefaultDriver, type Driver } from '../../drivers/index.js';
-import { detectRuntimes } from '../../runtimes.js';
+import { detectRuntimes, platformBinaryCandidates } from '../../runtimes.js';
+import {
+  describeSpawnError,
+  redactSpawnArgs,
+  summarizeSpawnEnv,
+  summarizeSpawnPath,
+} from '../spawn-diagnostics.js';
 import {
   encodeFrame,
   MAX_FRAME_BYTES,
@@ -505,6 +511,10 @@ export class Supervisor implements SupervisorContract {
   private readonly initFailureCooldownMs: number;
   private readonly compactionStaleMs: number;
   private readonly emitRawRuntimeOutput: boolean;
+  /** Wall-clock at daemon/supervisor construction — logged with every spawn
+   *  so a runtime failure can be tied to the daemon process instance that
+   *  produced it (see #task:1420 spawn diagnostics). */
+  private readonly daemonStartedAt: number;
 
   constructor(opts: SupervisorOptions) {
     this.emit = opts.emit;
@@ -538,6 +548,7 @@ export class Supervisor implements SupervisorContract {
       opts.initFailureCooldownMs ?? DEFAULT_INIT_FAILURE_COOLDOWN_MS;
     this.compactionStaleMs = opts.compactionStaleMs ?? DEFAULT_COMPACTION_STALE_MS;
     this.emitRawRuntimeOutput = opts.emitRawRuntimeOutput ?? false;
+    this.daemonStartedAt = this.now();
   }
 
   /** Pure per-stream observed advance: bump the stream to max(prev, seq)
@@ -1303,6 +1314,31 @@ export class Supervisor implements SupervisorContract {
     };
     const startedAt = this.now();
 
+    // #task:1420 — pre-spawn diagnostics. Log-only: capture exactly what env
+    // and which binary this daemon process is about to exec, so the next
+    // runtime failure is legible without a repro. Secret-safe by construction
+    // (see spawn-diagnostics.ts): no token/secret/cert body is emitted.
+    this.logger.info(
+      {
+        kind: 'process',
+        action: 'runtime_spawn_attempt',
+        daemon_pid: process.pid,
+        daemon_started_at: this.daemonStartedAt,
+        conversationId: params.conversation_id,
+        agent_id: params.agent_id,
+        runtime: runtimeKind,
+        binary,
+        binary_source: platformBinaryCandidates(runtimeKind).includes(binary)
+          ? 'platform_candidate'
+          : 'path_or_detected',
+        argv: redactSpawnArgs(args),
+        cwd: spawnCtx.workspacePath,
+        path_summary: summarizeSpawnPath(env.PATH),
+        env_summary: summarizeSpawnEnv(env),
+      },
+      'spawning runtime child',
+    );
+
     const child = this.spawnFn(binary, args, {
       cwd: spawnCtx.workspacePath,
       env,
@@ -1316,18 +1352,24 @@ export class Supervisor implements SupervisorContract {
     // runtime_start cannot become an unhandled EventEmitter error that
     // terminates the daemon.
     const earlyChildErrorListener = (err: Error): void => {
-      this.logger.warn(
+      const spawnError = describeSpawnError(err);
+      this.logger.error(
         {
           kind: 'process',
           action: 'child_error_before_handle',
+          daemon_pid: process.pid,
+          daemon_started_at: this.daemonStartedAt,
           conversationId: params.conversation_id,
           agent_id: params.agent_id,
           runtime: runtimeKind,
           binary,
+          binary_source: platformBinaryCandidates(runtimeKind).includes(binary)
+            ? 'platform_candidate'
+            : 'path_or_detected',
           workspace_path: spawnCtx.workspacePath,
-          error_message: err.message,
+          spawn_error: spawnError,
         },
-        'child process emitted error before runtime handle was registered',
+        `runtime child failed to spawn before handle was registered: ${spawnError.readable}`,
       );
     };
     child.once('error', earlyChildErrorListener);
