@@ -160,7 +160,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         overflow: 'hidden',
       }}
     >
-      <nav className="flex-1 overflow-y-auto py-1.5">
+      <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
         {/* App-level tool entries (Search/Saved/Archived). Kept a SOFT group:
           * tight inner gap + `mb-3` below (matching the inter-section `pb-3`)
           * to separate them from the workspace nav by spacing alone — no hard

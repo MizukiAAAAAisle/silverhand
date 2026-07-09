@@ -1577,7 +1577,7 @@ function RegisteredAppShell(): JSX.Element {
                 overflow: 'hidden',
               }}
             >
-              <nav className="flex-1 overflow-y-auto py-1.5">
+              <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
                 <MembersPanel
                   selectedAgentId={selectedAgentId}
                   onSelectAgent={id => nav.toMembers(id)}
@@ -1631,7 +1631,7 @@ function RegisteredAppShell(): JSX.Element {
                 overflow: 'hidden',
               }}
             >
-              <nav className="flex-1 overflow-y-auto py-1.5">
+              <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
                 <ComputersPanel
                   hosts={computerHosts}
                   localHostId={localHostIdForComputers}
