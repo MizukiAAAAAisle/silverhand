@@ -545,7 +545,29 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
           opts.mode === 'standalone' && opts.serverConfig.url !== inputListenUrl
             ? opts.serverConfig.url
             : url;
-        ctx.serverConfig = { ...opts.serverConfig, url: serverConfigUrl };
+        // Embedded event-WS security allowlist: the desktop main process pins
+        // the WS `Origin` to the origin it actually reaches this backend at
+        // (`installBackendEventWsOriginOverride`), which for embedded is this
+        // finalized loopback origin. Seed it explicitly here — the ws-server
+        // trusts ONLY `event_ws_allowed_origins` and never derives trust from
+        // `url`. Standalone declares its allowlist via env instead. See
+        // `docs/server-env-config.md`.
+        const eventWsAllowedOrigins =
+          opts.mode === 'standalone'
+            ? opts.serverConfig.event_ws_allowed_origins
+            : Array.from(
+                new Set([
+                  ...(opts.serverConfig.event_ws_allowed_origins ?? []),
+                  new URL(serverConfigUrl).origin,
+                ]),
+              );
+        ctx.serverConfig = {
+          ...opts.serverConfig,
+          url: serverConfigUrl,
+          ...(eventWsAllowedOrigins
+            ? { event_ws_allowed_origins: eventWsAllowedOrigins }
+            : {}),
+        };
         ctx.readiness.listenReady = true;
         logger.info(
           { url, serverConfigUrl, listenHostname, port },

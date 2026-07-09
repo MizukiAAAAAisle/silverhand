@@ -55,10 +55,13 @@ describe('host routes', () => {
         revoked_at: null,
         last_seen_at: expect.any(Number),
       },
-      server_url: t.ctx.serverConfig.url,
       host_token: expect.any(String),
     });
     expect(body.host.id).toBe(body.host_id);
+    // Pure form: claim-or-create ships identity only — it never echoes the
+    // server's own URL, so the bind address cannot leak to the daemon (which
+    // uses its own connected URL for daemon-config).
+    expect(body.server_url).toBeUndefined();
 
     const host = new HostRepo(t.ctx.db).get(body.host_id);
     expect(host).toMatchObject({
@@ -291,13 +294,13 @@ describe('host routes', () => {
           },
           connect_token: expect.any(String),
           daemon_npm_spec: '@silverhand-ai/daemon@latest',
-          advertised_origin_override: null,
         });
         // Pure form: the server ships identity only — it never mints a command
-        // string and never echoes its own URL, so the bind address cannot leak
-        // into the bootstrap wire (Cindy criterion #5).
+        // string, never echoes its own URL, and no longer advertises any reach
+        // origin, so the bind address cannot leak into the bootstrap wire.
         expect(body.daemon_command).toBeUndefined();
         expect(body.server_url).toBeUndefined();
+        expect(body.advertised_origin_override).toBeUndefined();
         // The edge assembles the command from the recipe + its own reach URL;
         // verify the payload assembles to a token-bearing command with no host id.
         const command = assembleConnectCommand({
@@ -1591,8 +1594,8 @@ describe('host routes', () => {
         status: 'rotated',
         connect_token: expect.any(String),
         daemon_npm_spec: '@silverhand-ai/daemon@latest',
-        advertised_origin_override: null,
       });
+      expect(body.advertised_origin_override).toBeUndefined();
       expect(body.daemon_command).toBeUndefined();
       expect(body.connect_token).not.toBe(oldToken);
       const rotatedCommand = assembleConnectCommand({

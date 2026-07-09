@@ -14,18 +14,18 @@ export type ChildSessionLimits = z.infer<typeof ChildSessionLimitsSchema>;
 export const ServerConfigSchema = z.object({
   mode: ServerModeSchema,
   url: z.string().url(),
-  /**
-   * Operator-declared public origin the daemon must dial back to reach this
-   * server (`SILVERHAND_PUBLIC_ORIGIN`). Distinct from `url`: `url` carries a
-   * bind-address fallback for internal use, whereas this field is ONLY set when
-   * the operator explicitly declares a reachable origin, and is `null`
-   * otherwise. It is surfaced verbatim to the desktop as the connect command's
-   * `advertised_origin_override` so a split-horizon deploy (internal bind ≠
-   * external reach) can pin where the daemon connects — never the bind address.
-   * See `docs/orchestration-boundary-v1.md §4.3`.
-   */
-  advertised_origin: z.string().url().nullable().optional(),
   auth_token: z.string().min(16).optional(),
+  /**
+   * Browser/Electron `Origin` values allowed to open the authenticated event
+   * WebSocket — a first-class SECURITY allowlist, not a topology hint. A legit
+   * desktop sends `Origin` = the origin it reaches this backend at (the main
+   * process pins it via `installBackendEventWsOriginOverride`); a malicious page
+   * sends its own domain (browsers forbid JS from spoofing `Origin`) and is
+   * rejected. The ws-server trusts ONLY this list — it never derives trust from
+   * `url`. Standalone populates it from `SILVERHAND_EVENT_WS_ALLOWED_ORIGINS`;
+   * embedded seeds it with its finalized loopback origin at bind time. See
+   * `docs/server-env-config.md` and `docs/orchestration-boundary-v1.md §4.3`.
+   */
   event_ws_allowed_origins: z.array(z.string().url()).optional(),
   refresh_token: z.string().nullable().default(null),
   child_sessions: ChildSessionLimitsSchema.default({

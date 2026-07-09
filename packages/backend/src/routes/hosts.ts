@@ -135,7 +135,6 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
       host: hosts.toDto(created.host),
       connect_token: created.connectToken,
       daemon_npm_spec: daemonNpmSpec(),
-      advertised_origin_override: ctx.serverConfig.advertised_origin ?? null,
     });
   });
 
@@ -410,7 +409,6 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
     const response = {
       host_id: claimed.host.id,
       host: hosts.toDto(claimed.host),
-      server_url: ctx.serverConfig.url,
       ...(hostToken ? { host_token: hostToken } : {}),
     };
     return c.json(response);
@@ -656,7 +654,6 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
       status: 'rotated',
       connect_token: issued.hostToken,
       daemon_npm_spec: daemonNpmSpec(),
-      advertised_origin_override: ctx.serverConfig.advertised_origin ?? null,
     });
   });
 

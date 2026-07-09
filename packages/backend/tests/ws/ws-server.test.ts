@@ -491,7 +491,20 @@ async function openServer(
   });
   await new Promise<void>(resolve => httpServer.listen(0, '127.0.0.1', resolve));
   const port = (httpServer.address() as AddressInfo).port;
-  t.ctx.serverConfig = { ...t.ctx.serverConfig, url: `http://127.0.0.1:${port}` };
+  const backendOrigin = `http://127.0.0.1:${port}`;
+  // Mirror the embedded seed `startBackend` performs at bind time: the desktop
+  // pins the WS `Origin` to the origin it reaches this backend at, so the
+  // allowlist must trust that origin. These tests use `installEventWebSocketServer`
+  // directly (no `startBackend`), so seed it here. Merge (don't overwrite) so a
+  // test that pre-declares extra allowed origins keeps them.
+  t.ctx.serverConfig = {
+    ...t.ctx.serverConfig,
+    url: backendOrigin,
+    event_ws_allowed_origins: [
+      ...(t.ctx.serverConfig.event_ws_allowed_origins ?? []),
+      backendOrigin,
+    ],
+  };
   return {
     url: `ws://127.0.0.1:${port}${EVENT_WS_PATH}`,
     controller,

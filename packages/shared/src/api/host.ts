@@ -317,7 +317,6 @@ export type HostClaimOrCreateInput = z.infer<typeof HostClaimOrCreateInputSchema
 export const HostClaimOrCreateResponseSchema = z.object({
   host_id: z.string(),
   host: HostDtoSchema,
-  server_url: z.string().url(),
   host_token: z.string().min(1).optional(),
 });
 export type HostClaimOrCreateResponse = z.infer<
@@ -349,12 +348,6 @@ export const HostCreateResponseSchema = z.object({
    *  `assembleConnectCommand`. Per-deploy configurable via
    *  `SILVERHAND_DAEMON_NPM_SPEC`. */
   daemon_npm_spec: z.string().min(1),
-  /** Operator-declared reach origin for split-horizon deploys, or null. When
-   *  non-null the desktop MUST use it as the daemon's `--server-url` (the
-   *  server is pinning where the daemon connects back); when null the desktop
-   *  uses its own connected server profile URL. NEVER the server bind address.
-   *  See `docs/orchestration-boundary-v1.md §4.3`. */
-  advertised_origin_override: z.string().url().nullable(),
 });
 export type HostCreateResponse = z.infer<typeof HostCreateResponseSchema>;
 
@@ -474,8 +467,6 @@ export const HostRotateTokenUserManagedResponseSchema = z.object({
   connect_token: z.string().min(1),
   /** Server-owned launch recipe (npm spec); see `HostCreateResponseSchema`. */
   daemon_npm_spec: z.string().min(1),
-  /** Split-horizon reach origin override, or null; see `HostCreateResponseSchema`. */
-  advertised_origin_override: z.string().url().nullable(),
 });
 
 /** `POST /api/hosts/{id}/disconnect` user-managed connection kick. This only

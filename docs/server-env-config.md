@@ -27,15 +27,23 @@ runtime difference is explicit config (`mode='embedded'` plus a daemon
 | `SILVERHAND_DISABLE_SIGNUP` | `0` | `0` or `1` | `disableSignup.source` |
 | `SILVERHAND_LOG_LEVEL` | `info` | `error`, `warn`, `info`, or `debug` | `logLevel.source` |
 | `SILVERHAND_MIGRATE` | standalone: `0`; embedded desktop: `1` | `0` or `1` | `migrate.source` |
-| `SILVERHAND_PUBLIC_ORIGIN` | unset | `http://` or `https://` origin, no path/query/fragment | `publicOrigin.source` |
+| `SILVERHAND_EVENT_WS_ALLOWED_ORIGINS` | unset (empty) | comma-separated `http(s)` origins, each with no path/query/fragment; no wildcards | `eventWsAllowedOrigins.source` |
 
 `source` is `default` when the process used the default and `env` when the
 variable was supplied. Invalid values fail before the HTTP listener starts.
 
-Set `SILVERHAND_PUBLIC_ORIGIN` when the process is reached through a reverse
-proxy, sandbox ingress, or other public URL whose browser `Origin` differs from
-the internal `SILVERHAND_LISTEN` URL. The backend event WebSocket accepts both
-the bound server origin and this configured public origin.
+Set `SILVERHAND_EVENT_WS_ALLOWED_ORIGINS` to the public `Origin`(s) that
+browsers/Electron use to reach this server when it sits behind a reverse proxy,
+sandbox ingress, or any public URL. It is a **security allowlist** for the
+authenticated event WebSocket — a legit desktop sends `Origin` = the origin it
+reaches the backend at (pinned by the desktop main process), and a page from any
+other origin is rejected. This is deliberately **not** derived from the server's
+own bind URL, and it is **not** a topology hint: the server never advertises its
+own reach origin, and connect commands are assembled desktop-side from the URL
+the desktop is connected to (see `docs/orchestration-boundary-v1.md §4.3`).
+Embedded desktop needs no value here — it seeds its loopback origin
+automatically at bind time. Multiple origins are comma-separated:
+`https://app.example.com,https://alt.example.com`.
 
 ## Data Layout
 

@@ -46,8 +46,8 @@ describe('standalone server env config', () => {
       value: false,
       source: 'default',
     });
-    expect(resolved.publicOrigin).toEqual({
-      value: null,
+    expect(resolved.eventWsAllowedOrigins).toEqual({
+      value: [],
       source: 'default',
     });
 
@@ -95,20 +95,29 @@ describe('standalone server env config', () => {
       resolveStandaloneServerEnv({ SILVERHAND_MIGRATE: 'true' }),
     ).toThrow(ServerEnvConfigError);
     expect(() =>
-      resolveStandaloneServerEnv({ SILVERHAND_PUBLIC_ORIGIN: 'wss://example.test' }),
+      resolveStandaloneServerEnv({
+        SILVERHAND_EVENT_WS_ALLOWED_ORIGINS: 'wss://example.test',
+      }),
     ).toThrow(ServerEnvConfigError);
     expect(() =>
-      resolveStandaloneServerEnv({ SILVERHAND_PUBLIC_ORIGIN: 'https://example.test/ws' }),
+      resolveStandaloneServerEnv({
+        SILVERHAND_EVENT_WS_ALLOWED_ORIGINS: 'https://example.test/ws',
+      }),
+    ).toThrow(ServerEnvConfigError);
+    // set-but-empty (only separators / blanks) is a misconfiguration
+    expect(() =>
+      resolveStandaloneServerEnv({ SILVERHAND_EVENT_WS_ALLOWED_ORIGINS: ' , ' }),
     ).toThrow(ServerEnvConfigError);
   });
 
-  it('resolves standalone public origin for reverse-proxy event WS origin checks', () => {
+  it('resolves the event-WS Origin allowlist (comma-separated, reverse-proxy origins)', () => {
     const resolved = resolveStandaloneServerEnv({
-      SILVERHAND_PUBLIC_ORIGIN: 'https://proxy.example.test/',
+      SILVERHAND_EVENT_WS_ALLOWED_ORIGINS:
+        'https://proxy.example.test/, https://alt.example.test',
     });
 
-    expect(resolved.publicOrigin).toEqual({
-      value: 'https://proxy.example.test',
+    expect(resolved.eventWsAllowedOrigins).toEqual({
+      value: ['https://proxy.example.test', 'https://alt.example.test'],
       source: 'env',
     });
   });
@@ -123,7 +132,7 @@ describe('standalone server env config', () => {
         SILVERHAND_DATA_DIR: dataDir,
         SILVERHAND_DISABLE_SIGNUP: '1',
         SILVERHAND_LOG_LEVEL: 'warn',
-        SILVERHAND_PUBLIC_ORIGIN: 'https://proxy.example.test/',
+        SILVERHAND_EVENT_WS_ALLOWED_ORIGINS: 'https://proxy.example.test/',
       },
     });
     try {
@@ -132,8 +141,9 @@ describe('standalone server env config', () => {
       expect(running.context.serverConfig.event_ws_allowed_origins).toEqual([
         'https://proxy.example.test',
       ]);
-      expect(running.context.serverConfig.url).toBe('https://proxy.example.test');
-      expect(running.url).not.toBe(running.context.serverConfig.url);
+      // The server's identity URL is its bind address — it does NOT know its
+      // public origin. So `serverConfig.url` equals the actually-bound URL.
+      expect(running.context.serverConfig.url).toBe(running.url);
       expect(running.context.embeddedBootstrap.enabled).toBe(false);
 
       const health = await fetch(`${running.url}/api/health`);

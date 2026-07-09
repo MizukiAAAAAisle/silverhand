@@ -9,7 +9,8 @@ export const SILVERHAND_DATA_DIR_ENV = 'SILVERHAND_DATA_DIR';
 export const SILVERHAND_DISABLE_SIGNUP_ENV = 'SILVERHAND_DISABLE_SIGNUP';
 export const SILVERHAND_SERVER_LOG_LEVEL_ENV = 'SILVERHAND_LOG_LEVEL';
 export const SILVERHAND_MIGRATE_ENV = 'SILVERHAND_MIGRATE';
-export const SILVERHAND_PUBLIC_ORIGIN_ENV = 'SILVERHAND_PUBLIC_ORIGIN';
+export const SILVERHAND_EVENT_WS_ALLOWED_ORIGINS_ENV =
+  'SILVERHAND_EVENT_WS_ALLOWED_ORIGINS';
 
 export const DEFAULT_SILVERHAND_LISTEN = '127.0.0.1:8080';
 export const DEFAULT_SILVERHAND_DATA_DIR = '/var/lib/silverhand';
@@ -36,7 +37,15 @@ export interface StandaloneServerEnvConfig {
   disableSignup: ResolvedValue<boolean>;
   logLevel: ResolvedValue<SilverhandLogLevel>;
   migrate: ResolvedValue<boolean>;
-  publicOrigin: ResolvedValue<string | null>;
+  /**
+   * Browser/Electron `Origin` values allowed to open the authenticated event
+   * WebSocket (`SILVERHAND_EVENT_WS_ALLOWED_ORIGINS`, comma-separated). A
+   * first-class SECURITY allowlist — NOT a topology hint. Empty by default; a
+   * standalone deploy behind a reverse proxy declares its public origin here so
+   * the desktop's pinned `Origin` is accepted. The server never derives this
+   * from its own bind URL. See `docs/server-env-config.md`.
+   */
+  eventWsAllowedOrigins: ResolvedValue<string[]>;
 }
 
 export class ServerEnvConfigError extends Error {
@@ -78,11 +87,11 @@ export function resolveStandaloneServerEnv(
       DEFAULT_SILVERHAND_SERVER_LOG_LEVEL,
     ),
     migrate: resolveMigrationEnv(env),
-    publicOrigin: resolveValue<string | null>(
-      env[SILVERHAND_PUBLIC_ORIGIN_ENV],
-      parsePublicOrigin,
-      SILVERHAND_PUBLIC_ORIGIN_ENV,
-      null,
+    eventWsAllowedOrigins: resolveValue<string[]>(
+      env[SILVERHAND_EVENT_WS_ALLOWED_ORIGINS_ENV],
+      parseEventWsAllowedOrigins,
+      SILVERHAND_EVENT_WS_ALLOWED_ORIGINS_ENV,
+      [],
     ),
   };
 }
@@ -188,9 +197,14 @@ export function parseLogLevel(
   );
 }
 
-export function parsePublicOrigin(
+/**
+ * Validate a single browser `Origin` value: an http(s) origin URL with no
+ * userinfo, path, query, or fragment. Returns the canonical `URL.origin`.
+ * Shared by {@link parseEventWsAllowedOrigins}.
+ */
+export function parseOrigin(
   raw: string,
-  variable = SILVERHAND_PUBLIC_ORIGIN_ENV,
+  variable = SILVERHAND_EVENT_WS_ALLOWED_ORIGINS_ENV,
 ): string {
   const value = raw.trim();
   if (!value) throw new ServerEnvConfigError(variable, 'must not be empty');
@@ -215,6 +229,36 @@ export function parsePublicOrigin(
     );
   }
   return parsed.origin;
+}
+
+/**
+ * Parse the comma-separated event-WS `Origin` allowlist. Each item is validated
+ * as an origin (see {@link parseOrigin}); wildcards are NOT supported. Blank
+ * items are skipped; a non-empty env that yields zero origins is an error
+ * (a set-but-meaningless allowlist is almost certainly a misconfiguration).
+ * Duplicate origins are de-duplicated.
+ */
+export function parseEventWsAllowedOrigins(
+  raw: string,
+  variable = SILVERHAND_EVENT_WS_ALLOWED_ORIGINS_ENV,
+): string[] {
+  const origins: string[] = [];
+  const seen = new Set<string>();
+  for (const part of raw.split(',')) {
+    if (!part.trim()) continue;
+    const origin = parseOrigin(part, variable);
+    if (!seen.has(origin)) {
+      seen.add(origin);
+      origins.push(origin);
+    }
+  }
+  if (origins.length === 0) {
+    throw new ServerEnvConfigError(
+      variable,
+      'must list at least one origin (comma-separated)',
+    );
+  }
+  return origins;
 }
 
 function parseBoolean01(raw: string, variable: string): boolean {

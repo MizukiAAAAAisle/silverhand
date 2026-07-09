@@ -31,9 +31,8 @@ export interface ConnectCommandParams {
    *  bootstrap payload because it is per-deploy configurable. */
   daemonNpmSpec: string;
   /** The URL the daemon must dial back to reach this server. Supplied by the
-   *  EDGE (the desktop's own connected server URL, or a server-declared
-   *  `advertised_origin_override` for split-horizon deploys) — never the
-   *  server's own bind address. */
+   *  EDGE — the desktop's own connected server URL — never the server's own
+   *  bind address (the server no longer advertises any reach origin). */
   serverUrl: string;
   /** The reveal-once connect credential minted by the server. */
   connectToken: string;

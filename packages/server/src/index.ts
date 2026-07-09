@@ -31,7 +31,7 @@ export {
   SILVERHAND_DISABLE_SIGNUP_ENV,
   SILVERHAND_LISTEN_ENV,
   SILVERHAND_MIGRATE_ENV,
-  SILVERHAND_PUBLIC_ORIGIN_ENV,
+  SILVERHAND_EVENT_WS_ALLOWED_ORIGINS_ENV,
   SILVERHAND_SERVER_LOG_LEVEL_ENV,
   ServerEnvConfigError,
   parseDataDir,
@@ -39,7 +39,8 @@ export {
   parseListen,
   parseLogLevel,
   parseMigrate,
-  parsePublicOrigin,
+  parseOrigin,
+  parseEventWsAllowedOrigins,
   resolveEmbeddedMigrationEnv,
   resolveStandaloneServerEnv,
   resolveMigrationEnv,
@@ -144,9 +145,9 @@ export async function startStandaloneSilverhandServer(
         value: config.migrate.value,
         source: config.migrate.source,
       },
-      publicOrigin: {
-        value: config.publicOrigin.value,
-        source: config.publicOrigin.source,
+      eventWsAllowedOrigins: {
+        value: config.eventWsAllowedOrigins.value,
+        source: config.eventWsAllowedOrigins.source,
       },
     },
     'silverhand-server config resolved',
@@ -171,16 +172,16 @@ export async function startStandaloneSilverhandServer(
 }
 
 function standaloneServerConfig(config: StandaloneServerEnvConfig): ServerConfig {
-  const publicOrigin = config.publicOrigin.value;
+  const eventWsAllowedOrigins = config.eventWsAllowedOrigins.value;
   return {
     mode: 'remote',
-    url: publicOrigin ?? urlForListen(config.listen.value),
-    // Raw operator-declared reach origin (null when unset). Kept distinct from
-    // `url` so the connect-command bootstrap surfaces it verbatim as
-    // `advertised_origin_override` and NEVER falls back to the bind address.
-    advertised_origin: publicOrigin ?? null,
-    ...(publicOrigin
-      ? { event_ws_allowed_origins: [publicOrigin] }
+    // The server's own identity URL is always its bind address — it does NOT
+    // know its public origin (the edge owns topology; connect commands are
+    // assembled desktop-side from the URL the desktop reaches). See
+    // `docs/orchestration-boundary-v1.md §4.3`.
+    url: urlForListen(config.listen.value),
+    ...(eventWsAllowedOrigins.length > 0
+      ? { event_ws_allowed_origins: eventWsAllowedOrigins }
       : {}),
     refresh_token: null,
     child_sessions: {

@@ -113,7 +113,12 @@ function hasExpectedOrigin(req: IncomingMessage, ctx: BackendContext): boolean {
 }
 
 function eventWsAllowedOrigins(ctx: BackendContext): Set<string> {
-  const origins = new Set<string>([new URL(ctx.serverConfig.url).origin]);
+  // Trust ONLY the explicit security allowlist — never derive trust from
+  // `serverConfig.url` (that conflates the server's own identity URL with "which
+  // browser origins may connect"). Standalone populates the allowlist from
+  // `SILVERHAND_EVENT_WS_ALLOWED_ORIGINS`; embedded seeds its finalized loopback
+  // origin at bind time (`startBackend`). See `docs/server-env-config.md`.
+  const origins = new Set<string>();
   for (const configured of ctx.serverConfig.event_ws_allowed_origins ?? []) {
     origins.add(new URL(configured).origin);
   }
