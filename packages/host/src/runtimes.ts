@@ -31,12 +31,19 @@ const COMMAND_TIMEOUT_MS = 5_000;
  * Cold-start latency for the wrapper is empirically 10–22s, which used
  * to push our 30s init watchdog past the line and SIGTERM Codex before
  * it could emit `session_init`. Slock-ai
- * resolves codex by preferring the native bundle binary inside
- * `Codex.app` on macOS, which skips the wrapper entirely and typically
+ * resolves codex by preferring the native bundle binary inside the codex
+ * app bundle on macOS, which skips the wrapper entirely and typically
  * cuts cold start in half.
  *
+ * Bundle order (macOS): the codex binary now ships inside `ChatGPT.app`
+ * (`/Applications/ChatGPT.app/Contents/Resources/codex`); the standalone
+ * `Codex.app` is the legacy location kept as a fallback for machines that
+ * still have it. Both are probed before the PATH wrapper (the last
+ * resort). Candidates are probed in order, so the array order below IS
+ * the resolution priority.
+ *
  * We deliberately do NOT version-match the bundle against the npm CLI:
- * the user has already accepted the bundle by installing Codex.app, and
+ * the user has already accepted the bundle by installing the app, and
  * gating on version equality would silently disable the optimization
  * for anyone on a slightly different release. If alpha-bundle
  * incompatibility surfaces, fix the driver to handle both — don't fall
@@ -44,7 +51,10 @@ const COMMAND_TIMEOUT_MS = 5_000;
  */
 const PLATFORM_CANDIDATES: Partial<Record<RuntimeKind, Partial<Record<NodeJS.Platform, string[]>>>> = {
   codex: {
-    darwin: ['/Applications/Codex.app/Contents/Resources/codex'],
+    darwin: [
+      '/Applications/ChatGPT.app/Contents/Resources/codex',
+      '/Applications/Codex.app/Contents/Resources/codex',
+    ],
   },
 };
 
