@@ -67,20 +67,12 @@ export function GeminiIcon(props: SVGProps<SVGSVGElement>): JSX.Element {
   );
 }
 
-export function OpenCodeIcon(props: SVGProps<SVGSVGElement>): JSX.Element {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      xmlns="http://www.w3.org/2000/svg"
-      {...props}
-    >
-      <path
-        fill="currentColor"
-        d="M4 4h16v16H4V4Zm4.25 4.25v7.5h7.5v-7.5h-7.5Zm2.35 2.35h2.8v2.8h-2.8v-2.8Z"
-      />
-    </svg>
-  );
-}
+/**
+ * OpenCode's official brand mark. It carries its own dark square background, so
+ * render it as a full-bleed raster logo rather than a tinted monochrome badge.
+ */
+export const OPENCODE_LOGO_DATA_URI =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc4AAABzUlEQVR4AeycQQrCQBAEF1+g6J/0o5LPCXmCnnNx0E2nNqGEPciw024VffV0PZ/fHo7BqflBCSgAxd+aAhQAE4DjbYACYAJwvA1QAEwAjrcBCgAIDBRpA2AZClAATACOtwEKgAnA8TZAATABOD7egNc8tz2ftJ+4gPQD9r5fAbDBDQXALx00XgGwGAUoACYAx9sABcAE4HgboACYABxvAxSwJHC7XFryLNP4bzYg7KBar4CKUHiugDDgar0CKkLhuQLCgKv1CqgIhecKCAOu1iugIhSeKyAMuFqvgIpQeK6AMOBq/XAC7o9H6z5fdlRAtp4PJ2BrAHSeAmADClAATACOtwEKgAnA8TZAATABON4GKAAmAMev2AD4JTuNVwAsTgEKgAnA8TZAATABON4GKAAmAMfbAAXABOB4G9ApoPe6AnoJdt5XQCfA3uvDCXhOU0ueXmBr3x9OwNoPHH2fAmBDClAATACOtwEKgAnA8TZAAX8QONAVGwDLVIACYAJwfLwByf/+2WJ32k9cQPoBe9+vANigAhQAE4DjbYACYAJw/A8NgH/pQeMVAItVgAJgAnC8DVAATACOtwEKgAnA8TZAATABON4GFALS4w8AAAD//x7wkLQAAAAGSURBVAMAKj5LkLSa6SQAAAAASUVORK5CYII=';
 
 /**
  * Qoder's official brand mark. Unlike the other runtime icons (monochrome
