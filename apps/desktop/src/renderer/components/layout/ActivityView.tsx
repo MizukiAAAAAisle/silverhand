@@ -17,7 +17,6 @@ import type { AgentAvatarSource } from '@/features/agents/avatar-hooks';
 import {
   useActivity,
   useClearActivityItem,
-  useMarkActivityAllRead,
 } from '@/features/attention/hooks';
 import { activityItemSource } from '@/features/attention/observe';
 import { ListRowsSkeleton } from './ListRowsSkeleton';
@@ -57,11 +56,11 @@ import type { MessageJumpTarget } from '@/features/channels/useMessageJumpContro
  *   - mention / agent_failed (directed) → mark the `notification_id` read.
  *   - unread (ambient)                  → advance the stream cursor via an
  *     EXPLICIT stream-head clear (#task:1231 phase B; knowingly tail-swallows, §2).
- *   Each row exposes a hover-✓ that clears WITHOUT navigating, and the header
- *   "Mark all read" batches the currently-visible list in one `observe()` call
- *   (directed by id, ambient by stream-head — a batch never converts a directed
- *   dismiss into a stream clear). Navigating to a source still clears it too
- *   (directed on click; ambient via open-time mark-read).
+ *   Each row exposes a hover-✓ that clears WITHOUT navigating. (A header
+ *   "Mark all read" that batched the visible list in one `observe()` call was
+ *   removed from the UI — #task:1446 — pending a new home; `useMarkActivityAllRead`
+ *   and its batch semantics are kept for when it returns.) Navigating to a source
+ *   still clears it too (directed on click; ambient via open-time mark-read).
  *
  * `kind=task` is intentionally NOT in Activity v1:
  * an `in_review && member` projection is a standing mirror of the task panel's
@@ -240,7 +239,6 @@ export function ActivityView({
 }: ActivityViewProps): JSX.Element {
   const { data, isLoading, isError } = useActivity();
   const [filter, setFilter] = useState<FilterKey>('all');
-  const markAllRead = useMarkActivityAllRead();
 
   const items = data?.items ?? [];
 
@@ -299,15 +297,6 @@ export function ActivityView({
   const directed = filtered.filter(it => it.salience === 'directed');
   const ambient = filtered.filter(it => it.salience === 'ambient');
 
-  // "Mark all read" clears the VISIBLE (filtered) list, so the label names that
-  // scope to stay honest under a filter: "Mark all read" only when nothing is
-  // filtered out, else "Mark mentions/threads read". Behavior is unchanged — the
-  // label just tells the truth about what the click clears.
-  const markAllLabel =
-    filter === 'all'
-      ? 'Mark all read'
-      : `Mark ${FILTERS.find(f => f.key === filter)?.label.toLowerCase()} read`;
-
   return (
     <main
       className="flex h-full flex-1 flex-col bg-bg-chat"
@@ -325,11 +314,10 @@ export function ActivityView({
         <span className="text-xs text-text-muted">{counts.all}</span>
       </header>
 
-      {/* Filter chips + Mark-all share one toolbar: Mark-all's scope follows the
-          active filter, so co-location keeps that coupling legible. No bottom
-          divider — chip spacing + section labels carry the hierarchy. Selected
-          chips use the theme selection token, never a semantic hue (they must not
-          steal the items' volume budget). */}
+      {/* Filter chips. Selected chips use the theme selection token, never a
+          semantic hue (they must not steal the items' volume budget). (The
+          "Mark all read" action was removed from the UI — #task:1446 — pending a
+          new home; `useMarkActivityAllRead` + the observe machinery are kept.) */}
       <div className="flex shrink-0 items-center gap-1.5 px-4 py-2">
         {FILTERS.map(f => {
           const on = f.key === filter;
@@ -350,22 +338,6 @@ export function ActivityView({
             </button>
           );
         })}
-        {/* Mark all read — clears the visible filtered list only (never a hidden
-            item; `markAllLabel` names the scope). Routes each item via
-            `activityItemSource`; the list empties as its own feedback (no toast).
-            Quiet utility action (ink border, not a primary fill) so it doesn't
-            compete with the chips beside it. */}
-        {filtered.length > 0 ? (
-          <button
-            type="button"
-            onClick={() => markAllRead.mutate(filtered)}
-            disabled={markAllRead.isPending}
-            className="ml-auto inline-flex items-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2 py-1 text-xs font-medium text-text-muted transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary disabled:opacity-50"
-          >
-            <Check className="size-3" />
-            {markAllLabel}
-          </button>
-        ) : null}
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
