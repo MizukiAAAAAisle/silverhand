@@ -1,11 +1,7 @@
 import { useMemo } from 'react';
-import { Star, User } from 'lucide-react';
+import { User } from 'lucide-react';
 import type { FavoriteRowDto } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
-import {
-  AppContextMenu,
-  AppContextMenuItem,
-} from '@/components/menus/AppContextMenu';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import {
@@ -28,6 +24,8 @@ import {
   sortableItemStyle,
   useListDragSort,
 } from '@/components/layout/list-drag-sort';
+import { WorkspaceContextMenu } from './WorkspaceContextMenu';
+import type { WorkspaceItem } from './WorkspacesPanel';
 import { SidebarSection } from './sidebar-shared';
 
 /** The favorites list's own sort namespace. A single FLAT group (`favorites`),
@@ -82,6 +80,12 @@ export function FavoritesGroup(props: {
    *  view (Activity/Saved/…) owns selection. */
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
+  /** The RAW full workspace set keyed by id (a starred workspace stays in it —
+   *  star only MOVES it out of the home render groups). Lets a favorite row
+   *  resolve its `workspace_path` / reveal capability so its context menu
+   *  matches the home-rail one (#task:1439). */
+  workspacesById: ReadonlyMap<string, WorkspaceItem>;
+  canRevealWorkspace: (workspace: WorkspaceItem) => boolean;
 }): JSX.Element | null {
   const { data } = useFavorites();
   const items = useMemo(() => data?.items ?? [], [data]);
@@ -138,19 +142,24 @@ export function FavoritesGroup(props: {
         ids={ordered.map(i => i.favorite_key)}
         onReorder={o => onReorder(FAVORITES_GROUP, o)}
       >
-        {ordered.map(item => (
-          <SortableFavoriteRow
-            key={item.favorite_key}
-            item={item}
-            tier={railSelectionTier(
-              favoriteToRailRow(item),
-              props.selectedWorkspaceId,
-            )}
-            dmAvatarUrl={dmAvatarUrls.get(item.entity_id) ?? null}
-            onSelectWorkspace={props.onSelectWorkspace}
-            onUnstar={() => unstar.mutate(item)}
-          />
-        ))}
+        {ordered.map(item => {
+          const ws = props.workspacesById.get(item.workspace_id);
+          return (
+            <SortableFavoriteRow
+              key={item.favorite_key}
+              item={item}
+              tier={railSelectionTier(
+                favoriteToRailRow(item),
+                props.selectedWorkspaceId,
+              )}
+              dmAvatarUrl={dmAvatarUrls.get(item.entity_id) ?? null}
+              workspacePath={ws?.workspace_path ?? null}
+              canReveal={ws ? props.canRevealWorkspace(ws) : false}
+              onSelectWorkspace={props.onSelectWorkspace}
+              onUnstar={() => unstar.mutate(item)}
+            />
+          );
+        })}
       </SortableGroup>
     </SidebarSection>
   );
@@ -160,6 +169,10 @@ interface FavoriteRowProps {
   item: FavoriteRowDto;
   tier: RowSelectionTier;
   dmAvatarUrl: string | null;
+  /** From the joined `WorkspaceItem` — powers the shared menu's Open in Finder /
+   *  Copy path. Null in the brief window before the workspace record resolves. */
+  workspacePath: string | null;
+  canReveal: boolean;
   onSelectWorkspace: (id: string) => void;
   onUnstar: () => void;
 }
@@ -197,6 +210,8 @@ function FavoriteRow({
   item,
   tier,
   dmAvatarUrl,
+  workspacePath,
+  canReveal,
   onSelectWorkspace,
   onUnstar,
 }: FavoriteRowProps): JSX.Element {
@@ -267,14 +282,14 @@ function FavoriteRow({
   );
 
   return (
-    <AppContextMenu trigger={row}>
-      <AppContextMenuItem
-        icon={<Star className="size-3.5 fill-current" />}
-        onSelect={onUnstar}
-      >
-        Unstar
-      </AppContextMenuItem>
-    </AppContextMenu>
+    <WorkspaceContextMenu
+      trigger={row}
+      canStar
+      isStarred
+      onToggleStar={onUnstar}
+      canReveal={canReveal}
+      workspacePath={workspacePath}
+    />
   );
 }
 

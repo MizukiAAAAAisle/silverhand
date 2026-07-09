@@ -1,13 +1,6 @@
 import { Fragment, type ReactNode } from 'react';
-import { Copy, FolderOpen, Star } from 'lucide-react';
-import { toast } from 'sonner';
 import type { AgentDto, SortGroup } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
-import {
-  AppContextMenu,
-  AppContextMenuItem,
-  AppContextMenuSeparator,
-} from '@/components/menus/AppContextMenu';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import {
   SortableGroup,
@@ -15,6 +8,7 @@ import {
   sortableItemStyle,
 } from '@/components/layout/list-drag-sort';
 import { SidebarSection } from './sidebar-shared';
+import { WorkspaceContextMenu } from './WorkspaceContextMenu';
 import { dmWorkspaceLabel } from '@/lib/workspace-name';
 import { railRowTierClass, railSelectionTier } from '@/lib/rail-selection';
 
@@ -321,47 +315,17 @@ function WorkspaceRow({
   );
 
   return (
-    <AppContextMenu trigger={row}>
-      {canStar ? (
-        <AppContextMenuItem
-          icon={<Star className={'size-3.5' + (isStarred ? ' fill-current' : '')} />}
-          onSelect={() => ctx.onStarWorkspace?.(workspace.id, !isStarred)}
-        >
-          {isStarred ? 'Unstar' : 'Star'}
-        </AppContextMenuItem>
-      ) : null}
-      {canStar ? <AppContextMenuSeparator /> : null}
-      {canReveal ? (
-        <AppContextMenuItem
-          icon={<FolderOpen className="size-3.5" />}
-          onSelect={() => {
-            void window.agentHub.showItemInFolder(workspace.workspace_path);
-          }}
-        >
-          Open in Finder
-        </AppContextMenuItem>
-      ) : null}
-      <AppContextMenuItem
-        icon={<Copy className="size-3.5" />}
-        onSelect={() => {
-          void copyWorkspacePath(workspace.workspace_path);
-        }}
-      >
-        Copy path
-      </AppContextMenuItem>
-    </AppContextMenu>
+    <WorkspaceContextMenu
+      trigger={row}
+      canStar={canStar}
+      isStarred={isStarred}
+      onToggleStar={() => ctx.onStarWorkspace?.(workspace.id, !isStarred)}
+      canReveal={canReveal}
+      workspacePath={workspace.workspace_path}
+    />
   );
 }
 
 export function isWorkspaceStarred(workspace: WorkspaceItem): boolean {
   return workspace.starred_at !== null && workspace.starred_at !== undefined;
-}
-
-async function copyWorkspacePath(path: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(path);
-    toast.success('已复制路径');
-  } catch {
-    toast.error('复制路径失败');
-  }
 }

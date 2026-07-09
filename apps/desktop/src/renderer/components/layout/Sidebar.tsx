@@ -78,6 +78,15 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     [props.workspaces],
   );
 
+  // The STARRED section renders from its own favorites read-model (no
+  // `workspace_path`), so key the RAW full set by id to hand each starred row its
+  // full workspace record — its context menu resolves path / reveal from here and
+  // matches the home-rail menu (#task:1439).
+  const workspacesById = useMemo(
+    () => new Map(props.workspaces.map(w => [w.id, w])),
+    [props.workspaces],
+  );
+
   // Resolve DM-agent avatar object URLs ONCE for the whole rail, over the
   // STABLE union of every DM agent (across dm / regular / archived) from the RAW
   // workspace set. Resolving over the raw set (not the home projection) keeps the
@@ -229,6 +238,10 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         <FavoritesGroup
           selectedWorkspaceId={workspaceHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
+          workspacesById={workspacesById}
+          canRevealWorkspace={workspace =>
+            hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
+          }
         />
         <WorkspaceGroup
           label="DM"
