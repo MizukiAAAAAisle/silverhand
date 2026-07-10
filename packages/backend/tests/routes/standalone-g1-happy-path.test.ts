@@ -38,6 +38,7 @@
  * exercises the server↔daemon outbound WS protocol exclusively.
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { OUTBOUND_PROTOCOL_VERSION } from '@silverhand/host';
 import { apiPaths, authPaths } from '@silverhand/shared';
 import type { ConversationBusEvent } from '../../src/ws/scope-event-bus.js';
 import { buildTestApp, type TestApp } from '../utils/app.js';
@@ -61,6 +62,7 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     expect(res.body).toEqual({
       signup_enabled: true,
       bind_address_scope: 'lan',
+      outbound_protocol_version: OUTBOUND_PROTOCOL_VERSION,
     });
   });
 
@@ -78,6 +80,7 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     expect(info.body).toEqual({
       signup_enabled: false,
       bind_address_scope: 'public',
+      outbound_protocol_version: OUTBOUND_PROTOCOL_VERSION,
     });
     const blocked = await fetchJson(t, 'POST', authPaths.signup, {
       email: 'late@example.com',

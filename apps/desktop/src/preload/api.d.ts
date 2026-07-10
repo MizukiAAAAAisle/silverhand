@@ -12,6 +12,22 @@ import type {
 export interface BackendInfo {
   url: string;
   mode: 'embedded' | 'remote';
+  /** Local comparison between the protocol compiled into this app's bundled
+   * daemon and the exact outbound protocol accepted by the connected server. */
+  outbound_protocol_compatibility:
+    | {
+        status:
+          | 'compatible'
+          | 'app_update_required'
+          | 'server_update_required';
+        app_protocol_version: number;
+        server_protocol_version: number;
+      }
+    | {
+        status: 'unknown';
+        app_protocol_version: number;
+        server_protocol_version: null;
+      };
   local_host_id: string | null;
   local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error' | 'failed';
   /**

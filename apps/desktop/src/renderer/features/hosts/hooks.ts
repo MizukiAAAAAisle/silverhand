@@ -70,6 +70,21 @@ export interface BackendInfoSnapshot {
    *  `local_host_server_url` is null (pre-claim). NOT the value
    *  the Settings "Server" pane saves — that's `local_host_server_url`. */
   url: string;
+  outbound_protocol_compatibility:
+    | {
+        status:
+          | 'compatible'
+          | 'app_update_required'
+          | 'server_update_required';
+        app_protocol_version: number;
+        server_protocol_version: number;
+      }
+    | {
+        status: 'unknown';
+        app_protocol_version: number;
+        server_protocol_version: null;
+      }
+    | null;
   local_host_id: string | null;
   local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error' | 'failed';
   /**
@@ -102,6 +117,7 @@ async function fetchBackendInfo(): Promise<BackendInfoSnapshot> {
     return {
       mode: 'embedded',
       url: '',
+      outbound_protocol_compatibility: null,
       local_host_id: null,
       local_host_status: 'error',
       local_host_ws_attached_at: null,
@@ -111,6 +127,7 @@ async function fetchBackendInfo(): Promise<BackendInfoSnapshot> {
   return {
     mode: info.mode,
     url: info.url,
+    outbound_protocol_compatibility: info.outbound_protocol_compatibility,
     local_host_id: info.local_host_id,
     local_host_status: info.local_host_status,
     local_host_ws_attached_at: info.local_host_ws_attached_at,
@@ -134,17 +151,20 @@ export function useBackendInfoSnapshot(options?: {
    * connecting window (`claimed + attached_at===null`); the moment
    * attached_at lands or the status moves to a terminal arm
    * (revoked / error / failed) we stop polling. Callers that don't
-   * render the connection pill should NOT opt in — there's no other
-   * field on `BackendInfoSnapshot` that flips out-of-band.
+   * render the connection pill should NOT opt in.
    */
   pollWhileConnecting?: boolean;
+  /** Periodically re-check the remote server's advertised outbound protocol
+   * version. This lets an already-running app notice a future server protocol
+   * bump before the user retries an agent action. */
+  pollProtocolCompatibility?: boolean;
 }) {
   return useQuery({
     queryKey: backendInfoKey,
     queryFn: fetchBackendInfo,
-    refetchInterval: options?.pollWhileConnecting
-      ? query => connectingRefetchIntervalMs(query.state.data ?? null)
-      : false,
+    refetchInterval: query =>
+      backendInfoRefetchIntervalMs(query.state.data ?? null, options),
+    refetchOnWindowFocus: options?.pollProtocolCompatibility === true,
   });
 }
 
@@ -167,6 +187,24 @@ export function useBackendInfoSnapshot(options?: {
  * over the entire connecting window — cheap.
  */
 export const CONNECTING_POLL_MS = 1500;
+export const PROTOCOL_COMPATIBILITY_POLL_MS = 30_000;
+
+export function backendInfoRefetchIntervalMs(
+  data: BackendInfoSnapshot | null,
+  options?: {
+    pollWhileConnecting?: boolean;
+    pollProtocolCompatibility?: boolean;
+  },
+): number | false {
+  if (options?.pollWhileConnecting) {
+    const connectingInterval = connectingRefetchIntervalMs(data);
+    if (connectingInterval !== false) return connectingInterval;
+  }
+  if (options?.pollProtocolCompatibility && data?.mode === 'remote') {
+    return PROTOCOL_COMPATIBILITY_POLL_MS;
+  }
+  return false;
+}
 
 export function connectingRefetchIntervalMs(
   data: BackendInfoSnapshot | null,

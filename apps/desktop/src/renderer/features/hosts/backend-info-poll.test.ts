@@ -14,6 +14,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   CONNECTING_POLL_MS,
+  PROTOCOL_COMPATIBILITY_POLL_MS,
+  backendInfoRefetchIntervalMs,
   connectingRefetchIntervalMs,
   hostStatusFreshnessPolicy,
   type BackendInfoSnapshot,
@@ -23,6 +25,11 @@ function snap(over: Partial<BackendInfoSnapshot> = {}): BackendInfoSnapshot {
   return {
     mode: 'embedded',
     url: 'http://127.0.0.1:1234',
+    outbound_protocol_compatibility: {
+      status: 'compatible',
+      app_protocol_version: 7,
+      server_protocol_version: 7,
+    },
     local_host_id: 'host-1',
     local_host_status: 'claimed',
     local_host_ws_attached_at: null,
@@ -110,6 +117,33 @@ describe('connectingRefetchIntervalMs — terminal arms with stale attached_at a
           local_host_ws_attached_at: 1_700_000_000_000,
         }),
       ),
+    ).toBe(false);
+  });
+});
+
+describe('backendInfoRefetchIntervalMs — protocol compatibility', () => {
+  it('periodically rechecks the advertised protocol for remote backends', () => {
+    expect(
+      backendInfoRefetchIntervalMs(snap({ mode: 'remote' }), {
+        pollProtocolCompatibility: true,
+      }),
+    ).toBe(PROTOCOL_COMPATIBILITY_POLL_MS);
+  });
+
+  it('keeps the faster connecting poll when both probes are enabled', () => {
+    expect(
+      backendInfoRefetchIntervalMs(snap({ mode: 'remote' }), {
+        pollWhileConnecting: true,
+        pollProtocolCompatibility: true,
+      }),
+    ).toBe(CONNECTING_POLL_MS);
+  });
+
+  it('does not poll an embedded backend for outbound compatibility', () => {
+    expect(
+      backendInfoRefetchIntervalMs(snap(), {
+        pollProtocolCompatibility: true,
+      }),
     ).toBe(false);
   });
 });

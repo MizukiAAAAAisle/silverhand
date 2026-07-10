@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { OUTBOUND_PROTOCOL_VERSION } from '@silverhand/host';
 import { apiPaths, authPaths } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
@@ -29,6 +30,7 @@ describe('auth routes', () => {
     expect(info.body).toEqual({
       signup_enabled: false,
       bind_address_scope: 'lan',
+      outbound_protocol_version: OUTBOUND_PROTOCOL_VERSION,
     });
 
     const disabled = await requestJson(t, 'POST', authPaths.signup, {

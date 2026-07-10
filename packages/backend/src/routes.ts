@@ -21,6 +21,7 @@ import { ConversationRepo } from './repos/conversation-repo.js';
 import { ConversationEventRepo } from './repos/conversation-event-repo.js';
 import { SortRepo } from './repos/sort-repo.js';
 import { detectRuntimes } from '@silverhand/host/runtimes';
+import { OUTBOUND_PROTOCOL_VERSION } from '@silverhand/host';
 import { createHostApp } from './routes/hosts.js';
 import { createWorkspacesApp } from './routes/workspaces.js';
 import { createSortApp } from './routes/sort.js';
@@ -333,6 +334,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     c.json({
       signup_enabled: ctx.authConfig.signupEnabled,
       bind_address_scope: ctx.bindAddressScope,
+      outbound_protocol_version: OUTBOUND_PROTOCOL_VERSION,
     }),
   );
 

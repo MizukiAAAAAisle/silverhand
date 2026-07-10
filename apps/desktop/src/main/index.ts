@@ -46,6 +46,7 @@ import {
   enableNodeSystemCa,
   HostClient,
   HostClientError,
+  OUTBOUND_PROTOCOL_VERSION,
   spawnDaemonChild,
   type DaemonHandle,
 } from '@silverhand/host';
@@ -127,6 +128,10 @@ import {
 import { fetchServerInfoWithRetry } from './fetch-server-info.js';
 import { registerEventWsDiagnosticIpcHandler } from './ipc/event-ws-diagnostics.js';
 import { registerSelectionExportIpcHandlers } from './ipc/selection-export.js';
+import {
+  classifyOutboundProtocolCompatibility,
+  type OutboundProtocolCompatibility,
+} from './outbound-protocol-compatibility.js';
 import {
   configureRendererBackendNetwork,
   fetchBackendWithNetworkPolicy,
@@ -748,6 +753,32 @@ async function fetchServerInfo(): Promise<ServerInfo> {
   return fetchServerInfoWithRetry({
     url: backendUrl(apiPaths.serverInfo),
   });
+}
+
+async function readOutboundProtocolCompatibility(): Promise<OutboundProtocolCompatibility> {
+  try {
+    const info = await fetchServerInfoWithRetry({
+      url: backendUrl(apiPaths.serverInfo),
+      fetcher: input => fetchBackendWithNetworkPolicy(fetch, input),
+      // BackendInfo is a periodic capability probe, not a boot gate. One
+      // attempt keeps it cheap; a transient failure becomes `unknown` and the
+      // next poll/focus refetch retries without blocking the renderer.
+      retryDelaysMs: [],
+    });
+    return classifyOutboundProtocolCompatibility({
+      appProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
+      serverProtocolVersion: info.outbound_protocol_version,
+    });
+  } catch (err) {
+    logger?.debug(
+      { err },
+      'outbound protocol compatibility probe unavailable',
+    );
+    return classifyOutboundProtocolCompatibility({
+      appProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
+      serverProtocolVersion: undefined,
+    });
+  }
 }
 
 async function validateUserSessionToken(
@@ -2559,7 +2590,7 @@ function openSetupWizard(): void {
 
 registerEventWsDiagnosticIpcHandler({ getLogger: () => logger });
 
-ipcMain.handle('backend:info', () => {
+ipcMain.handle('backend:info', async () => {
   if (!backend) return null;
   // D4.a Commit 5d — `mode` is the union discriminator on
   // {@link BackendHandle}, not derived from the embedded-only
@@ -2569,6 +2600,13 @@ ipcMain.handle('backend:info', () => {
   return {
     url: requireBackendUrl(),
     mode: backend.kind,
+    outbound_protocol_compatibility:
+      backend.kind === 'embedded'
+        ? classifyOutboundProtocolCompatibility({
+            appProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
+            serverProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
+          })
+        : await readOutboundProtocolCompatibility(),
     ...snapshotLocalHostInfo(),
   };
 });

@@ -8,6 +8,16 @@ export type BindAddressScope = z.infer<typeof BindAddressScopeSchema>;
 export const ServerInfoSchema = z.object({
   signup_enabled: z.boolean(),
   /**
+   * Exact outbound daemon protocol version accepted by this server build.
+   *
+   * The websocket handshake is exact-version gated, so desktop can compare
+   * this value with the protocol compiled into its bundled daemon and explain
+   * a required upgrade before an agent action fails. Optional on receive so a
+   * new desktop can still connect to a server build that predates this field;
+   * production servers emit it unconditionally.
+   */
+  outbound_protocol_version: z.number().int().nonnegative().optional(),
+  /**
    * D4.a Commit 4 (per `docs/remote-backend-architecture-notes.md §3`
    * condition 3): classification of the address the standalone /
    * embedded backend is bound to, so desktop and ops tooling can
