@@ -40,7 +40,7 @@ files:
 extraResources:
   - from: ../../packages/cli/dist/cli.js
     to: silverhand-cli/cli.mjs
-  - from: ../../packages/host/dist/daemon.js
+  - from: ../../packages/silverhand-daemon/dist/daemon.js
     to: silverhand-daemon/daemon.mjs
 
 mac:

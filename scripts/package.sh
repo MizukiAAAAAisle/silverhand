@@ -355,8 +355,43 @@ verify_packaged_better_sqlite3() {
   ' "$app_package_json" "$expected_abi"
 }
 
+verify_packaged_daemon() {
+  local app_path="$1"
+  local expected="$2"
+  local expected_version="$3"
+  local packaged="$app_path/Contents/Resources/silverhand-daemon/daemon.mjs"
+
+  if [[ ! -f "$packaged" || ! -f "$expected" ]]; then
+    echo "[package] packaged or release daemon bundle missing" >&2
+    return 1
+  fi
+  if ! cmp -s "$packaged" "$expected"; then
+    echo "[package] packaged daemon differs from the release daemon bundle" >&2
+    return 1
+  fi
+  if ! grep -aFq "$expected_version" "$packaged"; then
+    echo "[package] packaged daemon does not contain version $expected_version" >&2
+    return 1
+  fi
+  echo "[package] packaged daemon matches @silverhand-ai/daemon@$expected_version"
+}
+
+PACKAGED_APP_NAME="Silverhand.app"
+EXPECTED_DAEMON_BUNDLE="$ROOT_DIR/packages/host/dist/daemon.js"
+EXPECTED_DAEMON_VERSION="0.0.0-dev"
+if [[ "$REMOTE_ONLY" == "1" ]]; then
+  PACKAGED_APP_NAME="Silverhand-remote-server.app"
+  EXPECTED_DAEMON_BUNDLE="$ROOT_DIR/packages/silverhand-daemon/dist/daemon.js"
+  EXPECTED_DAEMON_VERSION="$(node -p "require('./packages/silverhand-daemon/package.json').version")"
+fi
+PACKAGED_APP_PATH="$ROOT_DIR/apps/desktop/$ARTIFACT_OUTPUT_DIR/mac-arm64/$PACKAGED_APP_NAME"
+verify_packaged_daemon \
+  "$PACKAGED_APP_PATH" \
+  "$EXPECTED_DAEMON_BUNDLE" \
+  "$EXPECTED_DAEMON_VERSION"
+
 if [[ "$REMOTE_ONLY" != "1" ]]; then
-  verify_packaged_better_sqlite3 "$ROOT_DIR/apps/desktop/$ARTIFACT_OUTPUT_DIR/mac-arm64/Silverhand.app" "$ELECTRON_ABI"
+  verify_packaged_better_sqlite3 "$PACKAGED_APP_PATH" "$ELECTRON_ABI"
 fi
 
 echo "[package] artifacts in apps/desktop/$ARTIFACT_OUTPUT_DIR/"
