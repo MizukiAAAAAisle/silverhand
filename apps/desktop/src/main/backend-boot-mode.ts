@@ -484,6 +484,20 @@ export type BackendStartupPlan =
       classifyMessage: string;
     };
 
+/**
+ * The daemon's local outbound frame socket is an embedded-backend transport,
+ * not a generic desktop-daemon capability. A remote backend reaches the local
+ * computer through the daemon's authenticated outbound WebSocket; enabling the
+ * Unix listener there makes the daemon misclassify its workspace-registry
+ * binding as `local-embedded` and hides the live remote `{origin, host_id}`.
+ */
+export function localOutboundSocketPathForStartupPlan(
+  plan: BackendStartupPlan,
+  socketPath: string,
+): string | null {
+  return plan.mode === 'embedded' ? socketPath : null;
+}
+
 export function planBackendStartup(decision: BackendBootMode): BackendStartupPlan {
   switch (decision.mode) {
     case 'embedded':

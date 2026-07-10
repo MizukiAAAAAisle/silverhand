@@ -112,6 +112,7 @@ import {
   decideBackendBootMode,
   evaluateProfileCommitGuard,
   executeBackendStartup,
+  localOutboundSocketPathForStartupPlan,
   planBackendStartup,
   ProfileUnusableError,
 } from './backend-boot-mode.js';
@@ -2044,13 +2045,15 @@ async function bootstrap(): Promise<void> {
         startupPlan.mode === 'embedded'
           ? paths.controlPlaneServerUrlPath
           : null,
-      // D5.a-3: the daemon binds its local outbound frame server here so
-      // the embedded backend can dial it and speak the same outbound
-      // envelope as the standalone WSS path (R4 unification). This is the
-      // formal server↔daemon runtime/materialize transport; it is
-      // distinct from the host-control IPC the desktop HostClient below
-      // keeps using (revoke/disconnect/rotate/status).
-      localOutboundSocketPath: paths.localOutboundSocketPath,
+      // D5.a-3: only an embedded backend dials this local outbound frame
+      // socket. A remote backend reaches the daemon over its authenticated
+      // outbound WebSocket; enabling the embedded listener on that arm makes
+      // the daemon select the wrong (`local-embedded`) workspace-registry
+      // namespace. Host-control IPC continues to use daemon.sock in both arms.
+      localOutboundSocketPath: localOutboundSocketPathForStartupPlan(
+        startupPlan,
+        paths.localOutboundSocketPath,
+      ),
       // D3.a Commit 4: the daemon is spawned WITHOUT --host-config so
       // it cannot dial a stale `daemon-config.json` left over from a
       // previous user. Outbound attach is triggered after login via
