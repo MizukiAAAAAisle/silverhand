@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { ensureSystemCaTrusted } from '../src/system-ca.js';
 import type { NodeSystemCaActivation } from '@silverhand/host/node-system-ca';
 
@@ -30,7 +32,40 @@ describe('ensureSystemCaTrusted', () => {
       throw new Error('trust store unreadable');
     });
 
-    expect(() => ensureSystemCaTrusted(activate)).not.toThrow();
-    expect(ensureSystemCaTrusted(activate)).toBeUndefined();
+    let result: unknown;
+    expect(() => {
+      result = ensureSystemCaTrusted(activate);
+    }).not.toThrow();
+    expect(result).toBeUndefined();
+    expect(activate).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Entry wiring guard. The #1464 bug was "helper correct but a process never
+ * called it", so the seam being invocable is not enough — the CLI entry must
+ * actually run it, and run it in process bootstrap BEFORE `void main(...)` so it
+ * precedes every network path (command requests AND the top-level rejection
+ * handler's out-of-band `reportPreflightFailure()` fetch). A source-order guard
+ * catches a regression that unit-testing the wrapper cannot (cli.ts self-runs on
+ * import, so it can't be imported into a unit test). Same technique as the
+ * repo's other structural fences.
+ */
+describe('cli entry activates system CA at bootstrap', () => {
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/cli.ts', import.meta.url)),
+    'utf8',
+  );
+
+  it('imports the activation seam', () => {
+    expect(source).toMatch(/import\s*\{\s*ensureSystemCaTrusted\s*\}\s*from\s*'\.\/system-ca\.js'/);
+  });
+
+  it('calls ensureSystemCaTrusted() before void main(...)', () => {
+    const callIdx = source.indexOf('ensureSystemCaTrusted();');
+    const mainIdx = source.indexOf('void main(process.argv');
+    expect(callIdx).toBeGreaterThan(-1);
+    expect(mainIdx).toBeGreaterThan(-1);
+    expect(callIdx).toBeLessThan(mainIdx);
   });
 });

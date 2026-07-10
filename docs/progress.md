@@ -8,9 +8,9 @@
 
 #1463 诊断（Cindy）确定:为启用 system CA 升级 Electron42/Node24 只覆盖了 desktop main 与 daemon,**漏了 agent 实际执行的 `silverhand` CLI 进程**。CLI 是 daemon 用 `execPath + ELECTRON_RUN_AS_NODE=1` 另起的独立进程,而 `tls.setDefaultCACertificates()` 进程内生效、不继承,所以 `enableNodeSystemCa()`（只在 main/daemon 调）从没到 CLI 的 `fetch`。结果:直连 backend 的命令（`task claim` 等）在内网 CA 上 `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`（agent 侧归一为 `upstream_unavailable`）;`message send` 因走 daemon Unix socket 无 TLS 而幸存。
 
-- **修复** — CLI 在任何网络 I/O 前自行激活 system CA。新增 `packages/cli/src/system-ca.ts` 的 `ensureSystemCaTrusted()`,在 `cli.ts` 的 `executeCommand` 唯一 pre-request choke（`loadEnv` 之前）调用,复用 host 的 `enableNodeSystemCa()`——不复制函数、不用 `NODE_OPTIONS`。best-effort:激活失败被吞,退回 bundled bundle 而非中断命令。
+- **修复** — CLI 在任何网络 I/O 前自行激活 system CA。新增 `packages/cli/src/system-ca.ts` 的 `ensureSystemCaTrusted()`,在 `cli.ts` **进程 bootstrap**（`void main(...)` 之前）调用,复用 host 的 `enableNodeSystemCa()`——不复制函数、不用 `NODE_OPTIONS`。best-effort:激活失败被吞,退回 bundled bundle 而非中断命令。放 bootstrap 而非 `executeCommand`,是因顶层 rejection handler 的 `reportPreflightFailure()`（`cli-trace.ts`）在命令 choke 之外**自己 fetch**,只有进程级 bootstrap 才真覆盖所有网络出口（Cindy review 纠正）。
 - **边界** — host 新增专用 subpath export `@silverhand/host/node-system-ca`,CLI 只引这一个纯 `node:tls` helper（CLI 本就依赖 `@silverhand/host`）。`enableNodeSystemCa()` 加可注入 TLS facade 形参（默认真 `tls`），仅为测试。
-- **测试（两层，不碰平台真实证书集）** — host `node-system-ca.test.ts`:注入 facade 验 default+system 去重写回 + `system_store_empty`/`api_unavailable`/`set_failed` 分支;cli `system-ca.test.ts`:验 activation 被调用且失败不外抛。
+- **测试（两层,不碰平台真实证书集）** — host `node-system-ca.test.ts`:注入 facade 验 default+system 去重写回 + `system_store_empty`/`api_unavailable`/`set_failed` 分支;cli `system-ca.test.ts`:验 activation 被调用/失败不外抛 + **entry source-order guard**（断言 bootstrap 的 `ensureSystemCaTrusted()` 在 `void main(process.argv` 之前,防"helper 正确但漏接进程"回归）。
 - **验证** — `pnpm -r typecheck` 全绿;host+cli 全套测试通过（cli 186 项含 real-subprocess message-send 回归）;`pnpm --filter @silverhand/cli build` 确认 esbuild 解析新 subpath 并把激活代码打进 bundle。
 - **未涉** — 无 agent 面命令/DTO/路由/task 行为变化,故不动 `docs/cli-system.md` 与 platform prompt。
 

@@ -232,12 +232,6 @@ async function executeCommand(
 
   // Lazy: only load env when we're actually about to make a request.
   // Help/version never reach this line.
-  //
-  // Trust the OS/corporate CA store before any network I/O. This is the single
-  // pre-request choke point for every command (both direct-HTTPS and
-  // daemon-socket), so activating here guarantees `fetch` trusts enterprise
-  // roots before `task claim` and friends dial the backend. See system-ca.ts.
-  ensureSystemCaTrusted();
   const env = loadEnv();
   const client = new BackendClient(env);
   const result = await cmd.run({ env, client, args });
@@ -246,6 +240,14 @@ async function executeCommand(
   }
   return 0;
 }
+
+// Trust the OS / corporate CA store as the very first thing this process does,
+// before ANY network I/O. This must precede `void main(...)` so it also covers
+// the top-level rejection handler's out-of-band `reportPreflightFailure()`
+// fetch — not just command business requests. `setDefaultCACertificates()` is
+// process-local and the daemon spawns this CLI as a separate process, so the
+// main/daemon activation never reaches us. See system-ca.ts (#task:1464).
+ensureSystemCaTrusted();
 
 const startedAt = performance.now();
 void main(process.argv.slice(2)).then(
