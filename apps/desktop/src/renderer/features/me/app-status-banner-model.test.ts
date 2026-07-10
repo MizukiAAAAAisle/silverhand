@@ -3,8 +3,9 @@ import { selectAppStatusBanner } from './app-status-banner-model';
 import type { ProtocolSkewView } from './protocol-skew-presentation';
 
 const skewView: ProtocolSkewView = {
-  title: 'Silverhand is out of date',
-  detail: 'Update Silverhand to reconnect this Computer.',
+  title: 'Silverhand update required',
+  detail:
+    'This version is incompatible with the server. Update Silverhand to restore agent connectivity.',
 };
 
 describe('selectAppStatusBanner', () => {

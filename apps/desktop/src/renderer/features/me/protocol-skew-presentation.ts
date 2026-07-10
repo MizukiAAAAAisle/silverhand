@@ -25,7 +25,7 @@
  *     server"; guessing would raise a false "please update" alarm.
  *
  * Copy is deliberately English to match the sibling connection-chrome
- * (`AppStatusBanner` "Can't reach server", `host-status-
+ * (`AppStatusBanner` "Server unreachable", `host-status-
  * presentation`) — the two banners share one shell + screen position, so
  * mixing languages would read as broken. Protocol versions are integers
  * (7, 8), not user-facing app versions, so they are intentionally NOT
@@ -58,13 +58,15 @@ export function describeProtocolSkew(
   switch (compat.status) {
     case 'app_update_required':
       return {
-        title: 'Silverhand is out of date',
-        detail: 'Update Silverhand to reconnect this Computer.',
+        title: 'Silverhand update required',
+        detail:
+          'This version is incompatible with the server. Update Silverhand to restore agent connectivity.',
       };
     case 'server_update_required':
       return {
-        title: 'Server is out of date',
-        detail: 'Agents will resume once it updates.',
+        title: 'Server update required',
+        detail:
+          'The server uses an incompatible protocol version. Agent operations are unavailable until the server is updated.',
       };
     case 'compatible':
     case 'unknown':

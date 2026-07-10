@@ -92,7 +92,7 @@ export function AppStatusBanner(): JSX.Element | null {
   if (model.kind === 'backend_unreachable') {
     return (
       <BannerShell
-        title="Can't reach server"
+        title="Server unreachable"
         action={{ label: 'Retry', onClick: unreachable.retry }}
       />
     );

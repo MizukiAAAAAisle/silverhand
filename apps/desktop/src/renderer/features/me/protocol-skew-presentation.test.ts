@@ -35,7 +35,8 @@ describe('describeProtocolSkew', () => {
       server_protocol_version: 8,
     });
     expect(view).not.toBeNull();
-    expect(view?.title).toMatch(/out of date/i);
+    // Names Silverhand + an update directive — the actionable app-behind arm.
+    expect(view?.title).toMatch(/silverhand update required/i);
     expect(`${view?.title} ${view?.detail ?? ''}`.toLowerCase()).toContain(
       'update silverhand',
     );
@@ -49,10 +50,11 @@ describe('describeProtocolSkew', () => {
     });
     expect(view).not.toBeNull();
     // Guard the invariant Alice/Cindy pinned: the server-behind arm must
-    // never point the user at an app update they can't act on.
-    expect(view?.title.toLowerCase()).not.toContain('update silverhand');
-    expect(`${view?.title} ${view?.detail ?? ''}`.toLowerCase()).toContain(
-      'server',
-    );
+    // never point the user at an app update they can't act on — it must not
+    // even mention Silverhand.
+    const combined = `${view?.title} ${view?.detail ?? ''}`.toLowerCase();
+    expect(combined).not.toContain('silverhand');
+    expect(combined).toContain('server');
+    expect(combined).toContain('agent operations');
   });
 });
