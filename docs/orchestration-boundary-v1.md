@@ -132,13 +132,13 @@ Server owns and is the only writer of:
   — daemon never opens the inbox repo.
 - **Activity log JSONL persistence** (`runtime/activity-log-writer.ts`):
   daemon emits `runtime_output` / control events; server persists the
-  JSONL file and republishes to renderers via SSE. PR-2 §4.2 + §4.3
+  JSONL file and republishes event frames to renderers. PR-2 §4.2 + §4.3
   lock this — `runtime_close_activity_log` semantics = daemon flushes
   outbound buffers, server then closes its writer.
 - Run-state cache projection mirror: daemon is source of truth for
   per-host execution-plane state; server caches a projection for ACL'd
-  HTTP / SSE consumers. (See §5.)
-- SSE / event-bus fanout to renderers.
+  HTTP snapshot / event-WebSocket consumers. (See §5.)
+- Event-bus / event-WebSocket fanout to renderers.
 
 Server **must not**:
 
@@ -279,7 +279,7 @@ not an escape hatch.
 
 **Direction key**: "Req" = request from server, daemon replies with a
 matching **response** (sync, single arm). "Event" = unsolicited from
-daemon, no reply — server fans out via the activity log / SSE bus.
+daemon, no reply — server fans out via the activity log / renderer event bus.
 
 **Server → daemon requests (sync response):**
 
@@ -295,7 +295,7 @@ daemon, no reply — server fans out via the activity log / SSE bus.
 | `runtime_output_pause` | `{ conversation_id, agent_id }` (PR-2 §2.2; backend stays in always-flowing mode in v0) | `{ paused: boolean }` |
 | `runtime_output_resume` | `{ conversation_id, agent_id }` | `{ resumed: boolean }` |
 
-**Daemon → server unsolicited events (no reply; activity log / SSE fanout):**
+**Daemon → server unsolicited events (no reply; activity log / event-WebSocket fanout):**
 
 | Event | Payload | Notes |
 |-------|---------|-------|
@@ -588,14 +588,14 @@ Each row names the V1 destination + the migration step (D2 / D2.1 / D3).
 | `storage/blob-file-storage.ts` | backend `node:fs` blob R/W | **server (unchanged)** | — | **Q1 decision**: blob bytes are server data (§3.1 / §4.4). No relocation; the existing put/serve/locate/delete + sweep stays server-side. |
 | `runtime/spawn-env.ts` | backend composed spawn env | **daemon-host** | D2.g implemented for runtime_start | Backend helper deleted from the runtime_start path. Env policy (§4.3, including server URL/token, launcher metadata, proxy policy) is built in `runtime-start-options.ts`; `process.env` merge + per-spawn shim path + `driver.applyEnv(process.env)` invocation happens in daemon-host `spawn-env.ts`. **Server never sends a generic env map and never invokes `driver.applyEnv`**. |
 | `runtime/prompt-context.ts` | backend reads L1/L2/CONSENSUS files + composes `DriverPromptContext` | **daemon-host** | D2.g implemented | Rev 5 LOCK: in V1 topology server has no business reading these bytes (§1.1 / §3.1). Daemon-local helpers perform read-with-cap, memory-index path rendering, `DriverPromptContext` construction, shared `buildSystemPromptFor` invocation, and per-spawn `system-prompt.md` materialization. **Server backend MUST NOT import or call any helper that reads these files or returns composed prompt text** — this is a calling-boundary rule, not just a module-location rule (§5.2). |
-| `runtime/activity-log-writer.ts` | backend writes activity JSONL from daemon events | **server (unchanged)** | — | PR-2 §4.2 + §4.3 lock: daemon emits `runtime_output` + control events; server persists JSONL and republishes via SSE. `runtime_close_activity_log` semantics = daemon flushes outbound buffers → server closes its writer. |
-| `runtime/run-state-cache.ts` | in-memory cache server-side | **daemon-host primary**, server projection mirror | D2 | Daemon is source of truth (per host); server caches a per-host projection for ACL'd HTTP / SSE consumers. Server projection is rebuilt from `runtime_state` events; not persisted. |
+| `runtime/activity-log-writer.ts` | backend writes activity JSONL from daemon events | **server (unchanged)** | — | PR-2 §4.2 + §4.3 lock: daemon emits `runtime_output` + control events; server persists JSONL and republishes renderer event frames. `runtime_close_activity_log` semantics = daemon flushes outbound buffers → server closes its writer. |
+| `runtime/run-state-cache.ts` | in-memory cache server-side | **daemon-host primary**, server projection mirror | D2 | Daemon is source of truth (per host); server caches a per-host projection for ACL'd HTTP snapshot / event-WebSocket consumers. Server projection is rebuilt from `runtime_state` events; not persisted. |
 | `runtime/daemon-agent-runtime-host.ts` | backend proxy to daemon | **server (unchanged)** | D2.g corrected | Server-side IPC client. It may format server-owned delivery text and build typed `runtime_start.options`, but MUST NOT hydrate prompt bytes, prepare spawn files, derive cwd/spawn paths, or compose child env. |
 | `runtime/daemon-runtime-wiring.ts` | backend wires daemon for embedded | **server (unchanged)** | — | Dynamic-import boundary stays; standalone mode skips this entirely |
 | `runtime/control-plane-runtime-host.ts` | standalone fail-loud stub | **server (unchanged)** | — | Correct |
 | `runtime/delivery-coordinator.ts` | backend orchestrates deliveries | **server (unchanged)** | — | Server-owned per §3.1. PR-2 §4.3 locks this. |
 | delivery-text formatter helpers (`formatInboxBatch` / `formatLiveMessage` / `combineGatedBatch`) | backend hydrates inbox/live rows into **unencoded** delivery text + attachment suffix + sender prefix | **server (unchanged)** | — | Server-owned per §3.1 / §4.5. Option A v2: backend ships unencoded text; daemon's driver encodes via `encodeStdinMessage(text, cliSessionId)`. **Backend MUST NOT pre-encode** (`packages/host/src/protocol.ts:300-310` + `:387-417`). |
-| `runtime/status-projector.ts` | backend projects daemon snapshots into HTTP / SSE | **server (unchanged)** | — | Projection consumer of run-state cache (see above) |
+| `runtime/status-projector.ts` | backend projects daemon snapshots into HTTP / event-WebSocket views | **server (unchanged)** | — | Projection consumer of run-state cache (see above) |
 | `auth/embedded-bootstrap.ts` | backend writes one-shot bootstrap file | **daemon-host** | D2 | File is host-machine-local; daemon owns write/read. Server issues the bootstrap token over protocol |
 | `provision.ts` | backend creates workspace dirs / onboarding messages | **split** | D2 | Workspace **fs** materialization → daemon (via materialization intent). Onboarding **DB** row writes (inbox, conversation_agents, messages) → server. |
 | `routes.ts` direct host-fs callers | `initWorkspaceDir`, `ensureAgentL1Dir`, `seedAgentL2` on workspace/agent create; `fs.rm` of L1/L2 on agent delete | **daemon-host** for fs ops | D2 | Route handler stays server (DB writes + ACL); fs side-effects become typed materialization intents to daemon. **Intent names below are illustrative — concrete vocab lives in the D2 implementation PR, not frozen in §3.3 V1 surface**: `workspace_materialize` / `agent_l1_seed` / `agent_l2_seed` / `agent_l1_rm` / `agent_l2_rm`. |
@@ -901,7 +901,7 @@ expanded in PR descriptions.
   - Blocker 2 (`activity-log-writer.ts` mis-placement): Revision 1
     erroneously relocated to daemon-host; PR-2 §4.2 + §4.3 keep it
     server-side (daemon emits `runtime_output` + control events,
-    server persists JSONL + republishes SSE,
+    server persists JSONL + republishes renderer event frames,
     `runtime_close_activity_log` = daemon flushes outbound buffers
     → server closes its writer). Fixed §3.1 (added "Activity log
     JSONL persistence"), §3.2 (removed from daemon-owned list;

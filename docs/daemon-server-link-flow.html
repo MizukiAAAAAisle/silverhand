@@ -461,7 +461,7 @@
           <path d="M620 175 H520" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#b-blue)"></path>
           <text x="570" y="196" text-anchor="middle" class="edge">runtime_status / output</text>
           <path d="M330 175 H250" stroke="#7c3aed" stroke-width="2" fill="none" marker-end="url(#b-purple)"></path>
-          <text x="290" y="196" text-anchor="middle" class="edge">SSE / WS UI events</text>
+          <text x="290" y="196" text-anchor="middle" class="edge">event WS frames</text>
 
           <rect x="170" y="360" width="210" height="82" rx="8" fill="#f0fdfa" stroke="#ccfbf1" stroke-width="1.5"></rect>
           <text x="275" y="390" text-anchor="middle" class="h">Backend HostWsServer</text>
@@ -803,7 +803,7 @@
       <div class="cell" style="grid-column: 2 / span 2;">stdio IPC（同机 / 同 sandbox container 内），<code>stream-json</code>；deployment 形态无关。</div>
 
       <div class="cell">runtime event 主路径</div>
-      <div class="cell">daemon → 同进程 backend projector → SSE/WSS 推 UI（loopback 短路）。</div>
+      <div class="cell">daemon → 同进程 backend projector → event WebSocket 推 UI（loopback 短路）。</div>
       <div class="cell">daemon → outbound WS → backend <code>OutboundRuntimeEventFanout</code> → fanout 给订阅该 host/viewer 的 UI WSS。<strong>handler 入口同形</strong>。</div>
 
       <div class="cell">DB / DB inbox</div>

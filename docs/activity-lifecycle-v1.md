@@ -10,7 +10,7 @@ Owner: 脊柱(数据模型/生命周期/领域分层)=Alice · UI 表面节=Norm
 
 ## 1. 问题与定位
 
-`#1226` 修了 thread 未读不可发现,但暴露一个更深的问题(shiki):**activity「产生 → 消除」整条链路是否第一性?** 今天 human 的「等我看/等我处理」散落在 sidebar badge + SSE + 各处 cache,没有一个一等公民的入口,也没有一个统一、可证的生命周期。
+`#1226` 修了 thread 未读不可发现,但暴露一个更深的问题(shiki):**activity「产生 → 消除」整条链路是否第一性?** 今天 human 的「等我看/等我处理」散落在 sidebar badge + event WebSocket + 各处 cache,没有一个一等公民的入口,也没有一个统一、可证的生命周期。
 
 **定位 = 补全 Human/Agent 同构(`architecture-principles.md`)。** Agent 早已 inbox 驱动(durable inbox row + drainChain,host owns inbox drain);human 还没有对称的「有一个队列在等我」。Activity = 给 human 这个对称面。**这是补全,不是新增机制。**
 

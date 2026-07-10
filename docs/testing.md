@@ -93,11 +93,11 @@ packages/backend/
 ├── tests/
 │   ├── utils/
 │   │   ├── db.ts             # in-memory DB + temp dir 夹具
-│   │   ├── app.ts            # Hono app + FakeConversationManager + http() 包装
-│   │   └── manager.ts        # 真 ConversationManager + 注入 mock-claude 二进制
+│   │   ├── app.ts            # Hono app + AgentRuntimeHost fake + http() 包装
+│   │   └── embedded-seed-fixtures.ts
 │   ├── smoke.test.ts         # 验证测试基建本身
 │   ├── repos/                # L1：仓储层（直接打 in-memory SQLite）
-│   ├── routes/               # L2：HTTP 层（app.fetch + 假 ConversationManager）
+│   ├── routes/               # L2：HTTP 层（app.fetch + 假 AgentRuntimeHost）
 │   ├── runtime/              # L3：runtime host / dispatcher / fanout
 │   ├── services/             # L2：service 层
 │   ├── observability/        # CLI route map / system-message drift 等漂移 guard
@@ -105,7 +105,8 @@ packages/backend/
 └── vitest.config.ts
 
 packages/server/tests/
-packages/host/tests/
+packages/host/tests/               # daemon / supervisor / driver / 真 socket
+└── _fixtures/                     # echo/no-output runtime + driver oracle
 packages/cli/tests/
 └── subprocess/               # 真子进程 / 真 daemon 走的慢 lane
 apps/desktop/src/{renderer,main}/**/*.test.ts
@@ -117,9 +118,10 @@ apps/desktop/src/{renderer,main}/**/*.test.ts
 |---|---|---|
 | **L0 跨包合同** | `@silverhand/shared` 里的纯函数（zod schema / classifier / drift guard） | ✅ |
 | **L1 Repos** | 单个 repo 直连 in-memory SQLite，验证 SQL / FK / 边界条件 | ✅ |
-| **L2 Routes / Services** | `app.fetch(req)` 对真实 Hono 路由打请求，验证 HTTP 行为；ConversationManager 用假实现避免真 spawn | ✅ |
-| **L3 ConversationManager** | 用 `mock-claude` 假二进制走 spawn → stdin → SSE → DB 全链路 | ✅ |
-| **L3 Daemon e2e** | `packages/host/tests/{e2e-socket,spawn-daemon}.test.ts`：真 socket / 真子进程 | ✅ |
+| **L2 Routes / Services** | `app.fetch(req)` 对真实 Hono 路由打请求，验证 HTTP 行为；`AgentRuntimeHost` 用 fake 避免真 spawn | ✅ |
+| **L3 Daemon supervisor** | `packages/host/tests/supervisor.test.ts` 用可控 runtime fixture 走真 spawn / stdio / exit / watchdog | ✅ |
+| **L3 Daemon transport e2e** | `packages/host/tests/{e2e-socket,e2e-supervisor,spawn-daemon}.test.ts` 覆盖真 socket、协议 dispatch 与子进程 | ✅ |
+| **L3 Backend projection e2e** | `packages/backend/tests/e2e/` 覆盖 embedded / standalone daemon event → DB / event-WebSocket projection parity | ✅ |
 
 ---
 
@@ -154,34 +156,34 @@ const h = http(t.app);
 const res = await h.post('/api/agents', { name: 'a', runtime: 'claude' });
 expect(res.status).toBe(201);
 
-// 检查路由对 ConversationManager 的副作用
+// 检查路由对 AgentRuntimeHost 的副作用
 expect(t.fake.starts).toHaveLength(1);
 expect(t.fake.delivered[0]!.agentId).toBe(...);
 
 afterEach(() => t.cleanup());      // 关 DB + 删临时 dir
 ```
 
-`FakeConversationManager` `implements AgentRuntimeHost`，记录所有 `start` /
-`stop` / `deliverMessage` / `stopAll` 调用——这条 `implements` 约束是显式的，
+`FakeConversationManager` 是尚未重命名的 legacy test-double 名字；它
+`implements AgentRuntimeHost`，记录所有 `start` / `stop` / `deliverMessage` /
+`stopAll` 调用——这条 `implements` 约束是显式的，
 runtime host 接口未来加方法时这里直接 typecheck fail，不能再用 `as unknown as`
-绕过。L2 测的是路由本身，不是 ConversationManager。
+绕过。L2 测的是路由本身，不是 daemon / supervisor。
 
-L3 测试用 `tests/utils/manager.ts` + `mock-claude.mjs`：
+L3 执行面测试已经迁到 `packages/host/tests/supervisor.test.ts`。它让真实
+`Supervisor` spawn 可控 fixture，而不是复活已删除的 backend
+`ConversationManager`：
 
 ```ts
-const h = await buildManagerHarness();    // 真 ConversationManager + 预建 workspace/channel/agent
-h.setMockEnv({ MOCK_CLAUDE_EXIT_CODE: '7', MOCK_CLAUDE_EXIT_AFTER_INIT_MS: '20' });
-
-await h.manager.start(h.conversationId, h.agentId);
-await h.waitForEvent(e => e.kind === 'agent_status' && (e.payload as any).status === 'crashed');
-
-const lines = await readStdinLog(h.stdinLog);  // 检查 mock 收到了哪些 stdin 行
-afterEach(() => h.cleanup());
+const { supervisor, events } = makeSupervisor(); // helper in supervisor.test.ts
+const result = await supervisor.start(baseStartParams);
+expect(result.started).toBe(true);
+expect(events.some(e => e.event === 'runtime_state')).toBe(true);
 ```
 
-`mock-claude.mjs` 是一个 chmod +x 的 node 脚本，行为由 env 控制：`MOCK_CLAUDE_INIT_SESSION_ID`、`MOCK_CLAUDE_NO_INIT`、`MOCK_CLAUDE_EXIT_CODE`、`MOCK_CLAUDE_EXIT_AFTER_INIT_MS`、`MOCK_CLAUDE_EMIT_TURN_END`、`MOCK_CLAUDE_STDIN_LOG`。`ConversationManager` 内部的 `binariesPromise` 被 monkey-patch 直接指向这个脚本，绕过 `which claude` 检测——这样 L3 测试在 CI 上也能跑（不需要真装 Claude）。
-
-读取 `"control_request"` 行时 mock 会立即按 `MOCK_CLAUDE_EXIT_CODE` 退出，模拟真 claude 收到 interrupt 后的行为。
+`echo-runtime.cjs` 覆盖 stdout/stderr/stdin、SIGTERM 与退出行为；
+`no-output-runtime.cjs` 覆盖 init silence/watchdog；driver raw-frame parity 由
+`_fixtures/driver-oracles.ts` 承担。跨 daemon transport 的 backend 投影则放在
+`packages/backend/tests/e2e/`，不要把 spawn ownership 拉回 backend 测试。
 
 ---
 
@@ -209,7 +211,7 @@ afterEach(() => h.cleanup());
 
 ## 端到端：headless 后端
 
-如果想在不开 Electron 窗口的情况下跑真实后端（curl 调试 / 手动验证 SSE），用：
+如果想在不开 Electron 窗口的情况下跑真实后端（curl 调试 / 手动验证 event WebSocket），用：
 
 ```bash
 pnpm dev:headless
@@ -239,4 +241,6 @@ curl -H "authorization: Bearer $AUTH" "$URL/api/workspaces"
 SILVERHAND_DIR=/tmp/sh-sandbox pnpm dev:headless
 ```
 
-`SILVERHAND_DIR` 仅在 headless 模式下使用，正常 `pnpm dev` 仍走 `~/.silverhand/`。
+`SILVERHAND_DIR` 会作用于 desktop main（含 headless 与普通 dev）；不设置时才默认
+走 `~/.silverhand/`。并行调试或 smoke app 必须给每个实例独立目录，避免 socket、
+pidfile、DB 与日志互相污染。

@@ -1,6 +1,11 @@
 # Silverhand — Tasks 设计
 
-> **Status**: shipped — task domain model 的 current canonical（2026-05-03 起草，已落地）。代码（shared task schema / migration / hooks / UI）以本 doc 为准;与现实偏离时回这里改,不要让代码和文档分叉。
+> **Status**: shipped domain-design record（2026-05-03 起草）。任务状态机、编号、
+> claim mutex 等领域约束仍适用；§10 的 PR 切片、旧 session/chat-bridge 名称与文件
+> 路径是落地前历史，不是当前代码索引。当前实现入口以
+> `packages/shared/src/api/task.ts`、`packages/backend/src/services/task-service.ts`、
+> `packages/backend/src/routes/{tasks,internal-agent/task-routes}.ts`、
+> `apps/desktop/src/renderer/features/tasks/` 和 `docs/cli-system.md` 为准。
 >
 > 与 [`core-design.md`](./core-design.md) §6.2 对齐——该表原本把"Task board"标成 v2 不做；本 doc 是把它从 v2 提前到 v1.5 的提案。提案通过后 §6.2 相应行改标 "收编到 `tasks-design.md`"。
 >
@@ -282,9 +287,9 @@ Assignee-only。合法转换：
 
 Human 的 claim / unclaim / status 写 system message（subtype 复用 `task_claim` / `task_unclaim` / `task_status`，但 metadata 里 `actor.type = 'user'`），agent 能看到"human 把 #7 推到 done 了"。Archive 是低噪音可见性操作，只发 `task_changed(kind='archive')`，不插入 chat system message。
 
-### 6.3 SSE 事件
+### 6.3 Event WebSocket 事件
 
-现有 `/api/stream` 增加 event kind：
+现有 `/api/ws/events` event WebSocket 增加 frame kind：
 
 | kind | payload |
 |---|---|
@@ -324,7 +329,7 @@ renderer 订阅后刷新所有 task 视图（NavRail 全局列表、channel tab�
 
 ### 7.4 一致性：两个层级共用同一批组件
 
-`KanbanColumn` / `TaskCard` / `Chip` 在 NavRail Tasks 与 ChannelTasksDialog 中共享样式与交互；状态修改都走 `useUpdateTaskStatus`（POST /api/tasks/:id/status），SSE `task_changed` 事件触发 React Query 失效。
+`KanbanColumn` / `TaskCard` / `Chip` 在 NavRail Tasks 与 ChannelTasksDialog 中共享样式与交互；状态修改都走 `useUpdateTaskStatus`（POST /api/tasks/:id/status），event WebSocket 的 `task_changed` frame 触发 React Query 失效。
 
 ### 7.5 与原始设计的差异说明（实施备注）
 
@@ -406,9 +411,9 @@ Rules:
 
 - migration 007_tasks：`messages` 加 5 列 + `task_channel_id` 冗余 + partial unique index
 - `packages/shared/src/api/task.ts`：TaskStatus 枚举、TaskSummary DTO、TaskChangedEvent
-- `packages/backend/src/tasks.ts`：5 个 agent endpoint + 3 个 human endpoint
+- 当前 task service / human routes / agent routes（现行路径见文首 status note）
 - 系统消息 subtype 扩展（`task_create` / `task_claim` / `task_unclaim` / `task_status`）
-- 广播路径复用现有 `broadcastMessage` + SSE
+- 广播路径复用现有 `broadcastMessage` + event bus / event WebSocket fanout
 - **不含 UI；测试用 curl 即可**
 
 ### PR-T2：chat-bridge MCP 工具

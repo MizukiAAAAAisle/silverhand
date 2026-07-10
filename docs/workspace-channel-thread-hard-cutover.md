@@ -159,7 +159,7 @@ runtime still depends on legacy repos and classes:
 - task/search/saved/notification code joins through `sessions` and `channels`
 
 `packages/backend/src/routes.ts` contains additive workspace/conversation
-routes, but the active message, SSE, agent-run-state, task, and internal MCP
+routes, but the active message, event-WebSocket, agent-run-state, task, and internal MCP
 routes are still largely `/api/sessions/*` or `/internal/sessions/*`.
 
 ### Frontend
@@ -332,7 +332,7 @@ Required route behavior:
   - channel message read;
   - thread message read;
   - workspace unread summary.
-- agent start/stop/run-state/SSE routes exist for both channel-like
+- agent start/stop/run-state/event routes exist for both channel-like
   conversations and threads.
 - task list/mutation routes report `workspace_id`, `conversation_id`,
   `channel_id`, and `thread_id` consistently.
@@ -389,7 +389,7 @@ Recommended hook names:
 
 - `useChannelMessages(channelId)`;
 - `useThreadMessages(threadId)`;
-- `useConversationStream(conversationId)` for shared SSE plumbing, with
+- `useConversationStream(conversationId)` for shared event-WebSocket plumbing, with
   route-specific wrappers if the caller needs kind guarantees.
 
 ### G. Tests
@@ -409,7 +409,7 @@ Backend:
 - route kind guards for channel-vs-thread ids;
 - message windowing by `conversation_id`;
 - inbox delivery by `conversation_id`;
-- agent run-state snapshot/SSE by `conversation_id`;
+- agent run-state snapshot / event-WebSocket projection by `conversation_id`;
 - tasks numbered by `workspace_id`;
 - saved/search/notification links navigate to channel/thread correctly.
 

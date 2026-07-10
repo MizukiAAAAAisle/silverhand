@@ -260,7 +260,7 @@ Notes on shape:
 - `unregister(daemon_id)`. All in-flight requests on that client fail-loud (HostClient already does this).
 - Pending wakes for (conv, agent) placed on that daemon: **not stashed in backend**. The DB inbox row remains undelivered. This preserves the Option-A-v2 invariant from the 2b-iii rework (`packages/host/src/protocol.ts` RuntimeWakeReason docs): the DB inbox is the only durable queue; backend may not invent a second one.
 - On daemon re-registration, the existing `runtime_ready_for_drain` path fires once init completes; backend's existing drain code replays from the DB row.
-- SSE projection: emit `agent_status reason='daemon_unavailable'` for every (conv, agent) placed on the gone daemon. New SSE reason; UI shows a tombstone state similar to `init_cooldown`.
+- Event projection: emit `agent_status reason='daemon_unavailable'` for every (conv, agent) placed on the gone daemon. The event WebSocket carries the new reason; UI shows a tombstone state similar to `init_cooldown`.
 
 **Daemon reconnects, same `daemon_id`, new `instance_id`** (= daemon restarted):
 - Registry treats this as `reregister(daemon_id, instance_id)`. New `client` replaces old; `capabilities` may differ (upgrade); `daemon_version` may differ.
@@ -377,7 +377,7 @@ Two viable answers. Both are migration-compatible with §6 (column stays; semant
 
 - **PRO**: simple. RunStateCache key matches DB column exactly. UI can show "agent X runs on daemon Y" persistently. Stateful drivers (codex `threadId`, claude resume jsonl) just work — agent state is filesystem-anchored to the daemon's view of `~/.silverhand/agents/<id>/`, and a different daemon may not see the same files.
 - **CON**: if the chosen daemon is permanently gone, the (conv, agent) is stuck. Need an explicit "re-place" admin surface (Settings → Conversation → Move runtime to daemon X) and probably a "stop then re-place" affordance.
-- **UX shape**: defaults are deterministic (always picks the same daemon for a given combination of `runtime` + `host_id`). Daemon outages are visible (SSE `daemon_unavailable`) but require user action to recover. Matches today's stateful-driver invariants exactly.
+- **UX shape**: defaults are deterministic (always picks the same daemon for a given combination of `runtime` + `host_id`). Daemon outages are visible (`agent_status reason='daemon_unavailable'` over the event WebSocket) but require user action to recover. Matches today's stateful-driver invariants exactly.
 
 ### Option B — Per-call dispatch
 

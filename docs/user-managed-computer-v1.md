@@ -110,7 +110,7 @@ host_id + attached daemon instance + credentials + status + placement target
 ```
 
 Everything downstream — agent/workspace placement, host status page, `revoke`,
-`rotate-token`, agents-on-host list, SSE availability — reads this one shape and
+`rotate-token`, agents-on-host list, event-WebSocket availability — reads this one shape and
 **never branches on how the host was provisioned**. This is the fusion Cindy
 named: *运行态统一,创建/身份协议分两条,最终收敛到一个 active host 形态*.
 
@@ -434,7 +434,7 @@ rail "New computer" (no name input yet)
              - already attached elsewhere → REJECT computer_already_connected
              - free → accept the WS
   [server] on the FIRST successful authenticated attach → SET activated_at
-           host transitions pending → `attached` (still a draft); SSE notifies renderer
+           host transitions pending → `attached` (still a draft); event WebSocket notifies renderer
   [modal]  polls GET /api/hosts/{id} (by-id returns the draft; the list does not) →
            observes status pending → attached; on `attached` it shows
            "Connected to <hostname>" + the name input for the first time

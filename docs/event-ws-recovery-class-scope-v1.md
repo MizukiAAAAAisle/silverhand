@@ -78,7 +78,7 @@ space*, and the design must own that — see §4. (Cindy's blocker, accepted.)
 | `conversation_members_changed` | conversation-member:275/421 | `useConversationMembers` (its own `onWsFrame`) | invalidate members query | **side-channel** |
 | `agent_init_timeout` | event-handler:504 | dev EventStream only (no product consumer) | ephemeral notice; invalidate/refetch-recoverable | **side-channel** |
 | `compaction_stale` | event-handler:558 | dev EventStream only (no product consumer) | ephemeral notice; invalidate/refetch-recoverable | **side-channel** |
-| `agent_event` | event-handler:575 (parsed-event SSE, **high-frequency** — every parsed agent event) | dev EventStream only (renderer Events panel) | own cache / refetch; **must not** inflate message-stream | **side-channel** |
+| `agent_event` | event-handler:575 (parsed-event frame, **high-frequency** — every parsed agent event) | dev EventStream only (renderer Events panel) | own cache / refetch; **must not** inflate message-stream | **side-channel** |
 | `thread_updated` | conversation-message-service:614, channel-service:480 | **no renderer consumer (confirmed vestigial, Norman)** — Threads-list liveness rides the `message` kind via `ingestMessage → invalidateChannelThreadsList` | n/a (unconsumed) | **side-channel** — published-but-unconsumed; do not promote to a load-bearing source in P2 |
 
 > **Audit gap closed (§1(b), Alice at implementation):** the original §1 audit

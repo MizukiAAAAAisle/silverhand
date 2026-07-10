@@ -226,9 +226,9 @@ daemon's perspective.
 
 D2.d wires outbound daemon events into the same backend projection sink used by
 the Unix-socket daemon path: `RuntimeEventHandler` plus `RunStateCache`,
-`DbRuntimeStatusProjector`, inbox ack, SSE, and activity-log writer. The
-outbound WebSocket is only a new ingress; it must not grow a parallel DB/SSE
-projection.
+`DbRuntimeStatusProjector`, inbox ack, renderer event projection, and the
+activity-log writer. The outbound WebSocket is only a new ingress; it must not
+grow a parallel DB / event-WebSocket projection.
 
 In standalone server mode, `/api/hosts/connect` forwards authenticated
 daemon-to-server event frames into that sink. In embedded mode the existing

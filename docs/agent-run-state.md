@@ -3,6 +3,14 @@
 > 配套文档：`core-design.md`（§3 进程编排）、`cli-system.md`。compaction 总论已并入本文（§ compaction-as-state）。
 > 本文聚焦"agent 在某个 channel/thread 里正在做什么"这一**临时运行态**的端到端模型——driver 输出 → ConversationManager 聚合 → WS scope 分发 → 前端 cache → Activity Strip 渲染——以及 2026-05-08 task #159 / #169 的修复点。
 
+> **2026-07-10 ownership update:** `AgentRunState` 的数据语义与 UI 行为仍是
+> 本文主题，但下文把 backend `ConversationManager` 写成执行态 owner 的路径已经
+> 过时。当前链路是 host `Supervisor` 聚合 per-handle run state → 发
+> `runtime_state` → backend `OutboundRuntimeEventFanout` / projection cache →
+> renderer event WebSocket → React Query cache → `ComposerActivityHeader`。
+> 涉及 ownership、文件路径或测试落点时，以这条链和当前代码为准；下文的
+> `ConversationManager` 图与迁移前文件名只作为历史行为说明，不能用于新增代码。
+
 ---
 
 ## 1. 设计目标

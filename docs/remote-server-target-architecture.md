@@ -65,18 +65,18 @@ Already daemon-side:
 
 Still backend-side, by design today:
 
-- `packages/backend/src/runtime/daemon-agent-runtime-host.ts` adapts backend
-  conversation/agent state into daemon `runtime_*` intents.
-- It assembles prompt context, prepares spawn files, issues agent-scoped
-  tokens/env, coordinates inbox delivery, owns run-state cache/SSE projection,
-  and calls `HostClient.runtimeStart/runtimeWake/runtimeStop/...`.
-- `RuntimeDeliveryCoordinator` decides wake / queue / respawn routing from
-  durable backend state.
+- `packages/backend/src/runtime/outbound-agent-runtime-host.ts` is the unified
+  `AgentRuntimeHost` adapter for embedded and standalone deployments.
+- `OutboundRuntimeEventFanout` + `RuntimeDeliveryCoordinator` own durable inbox
+  coordination, typed `runtime_*` dispatch, backend run-state projection, and
+  renderer event publication. They send metadata and scoped credentials, not
+  host-local prompt bytes or a generic child env map.
+- The daemon resolves cwd / prompt files / spawn shim / child env locally and
+  emits typed lifecycle and run-state events back to the backend.
 
-Therefore the main gap is not "move runtime out of backend". The main gap is:
-
-> Upgrade the backend daemon adapter from **single local `HostClient`** to a
-> **multi-host registry** that can route intents to the correct daemon host.
+Therefore the remaining extension point is not "move runtime out of backend".
+Future sandbox or multi-device placement must extend host selection and routing
+without moving spawn/filesystem ownership back into the backend.
 
 ## 3. Protocol baseline
 

@@ -397,7 +397,7 @@ message，写入 `messages.thread_root_id = <root message id>`。
 
 ### 8.1 动机
 
-普通用户不需要看 events——会冲淡 IM 心智，且 events 只有"接 backend SSE 然后 dump JSON"这种 raw 价值，是开发/调试场景。
+普通用户不需要看 events——会冲淡 IM 心智，且 events 只有"接 backend event WebSocket 然后 dump JSON"这种 raw 价值，是开发/调试场景。
 
 ### 8.2 实现
 
@@ -414,9 +414,9 @@ message，写入 `messages.thread_root_id = <root message id>`。
      └─ Pin Events Window      （checked toggle，调 win.setAlwaysOnTop）
   ```
 - 冷启动默认关；窗口开/关状态不持久化
-- Events Window 内部：复用现有 `EventPanel.tsx` 内容（拆出 reusable 部分），通过 preload 接 SSE → 直接 render
+- Events Window 内部：复用现有 `EventPanel.tsx` 内容（拆出 reusable 部分），消费 event WebSocket frame → 直接 render
 
-backend SSE 现状已经是订阅 + multicast，无需改动。
+backend event bus / WebSocket 现状已经是订阅 + multicast，无需改动。
 
 ---
 

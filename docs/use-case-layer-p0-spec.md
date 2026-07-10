@@ -71,7 +71,7 @@ use case **不得** import 任何返回 Hono `Response` / 依赖 `Context` 的 r
   破坏不变量。这正是 Cindy 在 `routes.ts:3059-3063` 钉的 red-line,本 spec 把它升格为通用判据,
   而不是单点注释。
 - 事件/通知排在 commit **之后**(③):崩在 commit 与 publish 之间 → DB 事实在、UI 晚一拍刷新
-  (下次 list/SSE 重连自愈)= 良性。反之若 publish 放 commit 前、事务回滚 → **phantom event**
+  (下次 list / event WebSocket 重连自愈)= 良性。反之若 publish 放 commit 前、事务回滚 → **phantom event**
   (前端以为加了、实际没加)= 破坏。
 
 **判据一句话:precondition 在前、通知在后;残留要选可自愈的那一侧。**
