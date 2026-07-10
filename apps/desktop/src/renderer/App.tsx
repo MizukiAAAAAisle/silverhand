@@ -34,7 +34,7 @@ import {
 } from '@/features/me/hooks';
 import { RegistrationGate } from '@/features/me/RegistrationGate';
 import { BackendUnreachableGate } from '@/features/me/BackendUnreachableGate';
-import { BackendUnreachableBanner } from '@/features/me/BackendUnreachableBanner';
+import { AppStatusBanner } from '@/features/me/AppStatusBanner';
 import { SetupWizardModal } from '@/features/setup/SetupWizard';
 import { useResizableWidth } from '@/hooks/useResizableWidth';
 import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDialog';
@@ -723,7 +723,13 @@ function RegisteredAppShell(): JSX.Element {
   // mid-update). ComputersPanel takes the data as props; HostDetailView
   // gets the resolved `selectedHost` directly.
   const hostsQuery = useHostsQuery();
-  const backendInfoQuery = useBackendInfoSnapshot();
+  // `pollProtocolCompatibility` keeps the outbound-protocol skew field
+  // (#task:1462) fresh via a 30s + window-focus refetch, so a future
+  // server protocol bump surfaces in `AppStatusBanner` without the
+  // user having to retry an agent action first.
+  const backendInfoQuery = useBackendInfoSnapshot({
+    pollProtocolCompatibility: true,
+  });
   const computerHosts = hostsQuery.data?.hosts ?? [];
   const localHostIdForComputers =
     backendInfoQuery.data?.local_host_id ?? null;
@@ -2023,17 +2029,15 @@ function RegisteredAppShell(): JSX.Element {
       ) : null}
       <Toaster position="bottom-right" richColors />
 
-      {/* D4.a Commit 6 (4) — mid-session "Can't reach server" banner.
-        * Mounted INSIDE the registered shell on purpose: boot-time
-        * unreachability is the BackendUnreachableGate's job (full-
-        * screen, App-root level); this banner only fires after the
-        * user got past the boot gate and a subsequent query/mutation
-        * threw ApiError.kind === 'backend_unreachable'.
-        *
-        * Renders nothing when no recent backend_unreachable error
-        * has fired since the last clear. Owns its own click target
-        * + retry handler — see useBackendUnreachableSnitch. */}
-      <BackendUnreachableBanner />
+      {/* #task:1462 — single app-status banner slot. Mounted INSIDE the
+        * registered shell on purpose: boot-time unreachability is the
+        * BackendUnreachableGate's full-screen job; this is the non-blocking
+        * mid-session arm. It collapses two signals that share one fixed
+        * slot — backend unreachable (ApiError.kind === 'backend_unreachable')
+        * and outbound-protocol skew (BackendInfo.outbound_protocol_
+        * compatibility) — into one banner, priority unreachable > skew.
+        * Renders nothing when neither signal is active. */}
+      <AppStatusBanner />
 
       {/* Shutdown progress overlay — shown during graceful quit so the
         * user sees activity instead of a frozen window. Rendered above

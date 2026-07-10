@@ -162,6 +162,13 @@ export function useBackendInfoSnapshot(options?: {
   return useQuery({
     queryKey: backendInfoKey,
     queryFn: fetchBackendInfo,
+    // `#task:1462` — backend:info is a local-IPC query that always
+    // resolves (and its protocol probe swallows transient failure into
+    // `unknown`), so its success/failure says nothing about remote-server
+    // reachability. Mark it neutral so `useBackendUnreachableSnitch`
+    // ignores it — otherwise the protocol-compatibility poll below would
+    // clear a legitimate "Can't reach server" banner every cycle.
+    meta: { backendReachability: 'neutral' },
     refetchInterval: query =>
       backendInfoRefetchIntervalMs(query.state.data ?? null, options),
     refetchOnWindowFocus: options?.pollProtocolCompatibility === true,

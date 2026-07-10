@@ -77,6 +77,17 @@ export function isBackendUnreachableError(err: unknown): boolean {
 export interface SnitchCacheEvent {
   status: string;
   error: unknown;
+  /**
+   * `#task:1462` — reachability-neutral marker copied from the query's
+   * `meta.backendReachability`. Local-IPC queries (e.g. `backend:info`,
+   * which always resolves regardless of the remote server AND whose
+   * protocol probe swallows transient failure into `unknown`) mark
+   * themselves `'neutral'` so their success/failure never toggles the
+   * banner. Without this, a periodic local poll would clear a legitimate
+   * "Can't reach server" banner every cycle. `undefined` = a normal
+   * remote-backed query, which does count.
+   */
+  backendReachability?: 'neutral';
 }
 
 /**
@@ -86,6 +97,9 @@ export interface SnitchCacheEvent {
  * to a shared function so drift is impossible.
  *
  * Contract:
+ *   - A `backendReachability === 'neutral'` event NEVER changes state
+ *     (`null`), whatever its status — a local-IPC poll is not a
+ *     reachability signal (`#task:1462`).
  *   - On a `status === 'error'` event where the error matches
  *     `isBackendUnreachableError`, return `true` (banner up).
  *   - On a `status === 'success'` event, return `false` (banner
@@ -99,6 +113,7 @@ export interface SnitchCacheEvent {
  * `setState(prev)` and triggering subscriber churn.
  */
 export function decideNextVisible(event: SnitchCacheEvent): boolean | null {
+  if (event.backendReachability === 'neutral') return null;
   if (event.status === 'error') {
     return isBackendUnreachableError(event.error) ? true : null;
   }
@@ -145,9 +160,24 @@ export function useBackendUnreachableSnitch(
     };
 
     const onQueryEvent = (event: { query?: unknown }): void => {
-      const q = (event as { query?: { state: SnitchCacheEvent } }).query;
+      const q = (
+        event as {
+          query?: {
+            state: { status: string; error: unknown };
+            meta?: Record<string, unknown>;
+          };
+        }
+      ).query;
       if (!q) return;
-      apply(q.state);
+      apply({
+        status: q.state.status,
+        error: q.state.error,
+        // Copy the reachability marker off the query's meta so a
+        // local-IPC poll (e.g. backend:info, #task:1462) can't toggle
+        // the banner. Read from meta, not the query key string.
+        backendReachability:
+          q.meta?.backendReachability === 'neutral' ? 'neutral' : undefined,
+      });
     };
 
     const onMutationEvent = (event: { mutation?: unknown }): void => {

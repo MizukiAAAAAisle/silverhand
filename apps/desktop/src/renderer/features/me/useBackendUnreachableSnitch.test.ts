@@ -23,6 +23,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import { ApiError } from '@/lib/api';
+import { backendInfoKey } from '@/features/hosts/hooks';
 import {
   decideNextVisible,
   isBackendUnreachableError,
@@ -107,6 +108,25 @@ describe('decideNextVisible — pure reducer shared by hook + tests', () => {
     expect(decideNextVisible({ status: 'paused', error: null })).toBe(null);
     expect(decideNextVisible({ status: 'idle', error: null })).toBe(null);
   });
+
+  it('neutral query → null regardless of status (#task:1462 local-IPC poll)', () => {
+    // A reachability-neutral query (backend:info) must never toggle the
+    // banner: neither its success clears it nor its error raises it.
+    expect(
+      decideNextVisible({
+        status: 'success',
+        error: null,
+        backendReachability: 'neutral',
+      }),
+    ).toBe(null);
+    expect(
+      decideNextVisible({
+        status: 'error',
+        error: new ApiError(0, 'Network Error', '', 'backend_unreachable'),
+        backendReachability: 'neutral',
+      }),
+    ).toBe(null);
+  });
 });
 
 describe('live React Query cache → shared reducer integration', () => {
@@ -126,8 +146,21 @@ describe('live React Query cache → shared reducer integration', () => {
       state.visible = next;
     };
     const unsubQ = client.getQueryCache().subscribe(event => {
-      const q = (event as { query?: { state: SnitchCacheEvent } }).query;
-      if (q) apply(q.state);
+      const q = (
+        event as {
+          query?: {
+            state: { status: string; error: unknown };
+            meta?: Record<string, unknown>;
+          };
+        }
+      ).query;
+      if (q)
+        apply({
+          status: q.state.status,
+          error: q.state.error,
+          backendReachability:
+            q.meta?.backendReachability === 'neutral' ? 'neutral' : undefined,
+        });
     });
     const unsubM = client.getMutationCache().subscribe(event => {
       const m = (event as { mutation?: { state: SnitchCacheEvent } }).mutation;
@@ -257,6 +290,40 @@ describe('live React Query cache → shared reducer integration', () => {
       });
       await succeeding.execute(undefined);
       expect(state.visible).toBe(false);
+    } finally {
+      teardown();
+    }
+  });
+
+  it('#task:1462 REGRESSION BAIT: a neutral query (backend:info poll) succeeding does NOT clear a live unreachable banner', async () => {
+    // The bug: enabling the 30s protocol-compatibility poll made
+    // backend:info emit a periodic `success`. Because backend:info is a
+    // local-IPC query (always resolves, and its probe swallows failure
+    // into `unknown`), that success would clear a legitimate "Can't reach
+    // server" banner every cycle. The neutral meta marker makes the
+    // subscriber ignore it.
+    const client = makeClient();
+    const { state, teardown } = attach(client);
+    try {
+      // A real remote query fails → banner up.
+      await client
+        .fetchQuery({
+          queryKey: ['reach-1'],
+          queryFn: async () => {
+            throw new ApiError(0, 'Network Error', '', 'backend_unreachable');
+          },
+        })
+        .catch(() => {});
+      expect(state.visible).toBe(true);
+
+      // The neutral backend:info poll resolves successfully. Must NOT
+      // clear the banner.
+      await client.fetchQuery({
+        queryKey: backendInfoKey,
+        queryFn: async () => ({ ok: true }),
+        meta: { backendReachability: 'neutral' },
+      });
+      expect(state.visible).toBe(true);
     } finally {
       teardown();
     }
