@@ -9,18 +9,28 @@ export interface NodeSystemCaActivation {
   error?: string;
 }
 
-type TlsWithCaStores = typeof tls & {
+export type TlsCaStore = {
   getCACertificates?: (type?: 'default' | 'bundled' | 'system' | 'extra') => string[];
   setDefaultCACertificates?: (certs: string[]) => void;
 };
+
+type TlsWithCaStores = typeof tls & TlsCaStore;
 
 /**
  * Node 24 can read the OS trust store at runtime. Enable it explicitly for
  * Electron-hosted Node processes so enterprise roots installed in macOS Keychain
  * are trusted by main-process fetch and daemon outbound WebSocket/fetch calls.
+ *
+ * `setDefaultCACertificates` is process-local — it does NOT propagate to child
+ * processes. Every Node process that makes TLS calls (Electron main, daemon,
+ * and the spawned `silverhand` CLI) must call this itself. The `tlsFacade`
+ * seam exists only so tests can exercise the merge/dedup logic without touching
+ * the platform trust store.
  */
-export function enableNodeSystemCa(): NodeSystemCaActivation {
-  const tlsWithCaStores = tls as TlsWithCaStores;
+export function enableNodeSystemCa(
+  tlsFacade: TlsCaStore = tls as TlsWithCaStores,
+): NodeSystemCaActivation {
+  const tlsWithCaStores = tlsFacade;
   if (
     typeof tlsWithCaStores.getCACertificates !== 'function' ||
     typeof tlsWithCaStores.setDefaultCACertificates !== 'function'

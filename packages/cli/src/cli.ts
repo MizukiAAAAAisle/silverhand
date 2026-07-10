@@ -25,6 +25,7 @@ import { nounHelp, topLevelHelp, verbHelp, facetHelp, facetVerbHelp } from './he
 import { writeJson } from './output.js';
 import { parseArgs } from './parse.js';
 import { assertKnownFlags } from './strict-flags.js';
+import { ensureSystemCaTrusted } from './system-ca.js';
 
 /**
  * Per-process trace context populated as the dispatcher resolves
@@ -231,6 +232,12 @@ async function executeCommand(
 
   // Lazy: only load env when we're actually about to make a request.
   // Help/version never reach this line.
+  //
+  // Trust the OS/corporate CA store before any network I/O. This is the single
+  // pre-request choke point for every command (both direct-HTTPS and
+  // daemon-socket), so activating here guarantees `fetch` trusts enterprise
+  // roots before `task claim` and friends dial the backend. See system-ca.ts.
+  ensureSystemCaTrusted();
   const env = loadEnv();
   const client = new BackendClient(env);
   const result = await cmd.run({ env, client, args });
