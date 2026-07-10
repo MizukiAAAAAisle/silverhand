@@ -416,6 +416,104 @@ describe('WorkspaceRegistry — binding-slug namespace isolation', () => {
   });
 });
 
+describe('WorkspaceRegistry — trusted legacy binding handoff', () => {
+  function makeGuardedTarget(legacyBindings: readonly RegistryBinding[]) {
+    return new WorkspaceRegistry({
+      stateDir,
+      binding: STANDALONE,
+      silverhandStateRoot: stateDir,
+      legacyWorkspacesRoot: join(stateDir, 'legacy-workspaces'),
+      legacyBindings,
+      now: () => 1_800_000_000_000,
+    });
+  }
+
+  it('copies an exact id/path entry from local-embedded without widening the state-root guard', () => {
+    const legacy = makeRegistry(EMBEDDED, () => 1_700_000_000_000);
+    const old = legacy.provision('ws_managed');
+    expect(old.path).toContain(join(stateDir, bindingSlug(EMBEDDED), 'workspaces'));
+
+    const current = makeGuardedTarget([EMBEDDED]);
+    const copied = current.provision('ws_managed', old.path);
+
+    expect(copied).toEqual({ path: old.path, created: false });
+    expect(current.resolve('ws_managed')).toBe(old.path);
+    expect(legacy.resolve('ws_managed')).toBe(old.path);
+    const currentFile = JSON.parse(readFileSync(current.registryFilePath(), 'utf-8'));
+    expect(currentFile.workspaces.ws_managed.provisioned_at).toBe(1_700_000_000_000);
+  });
+
+  it('checks the stable pre-claim local id without scanning arbitrary bindings', () => {
+    const currentHostEmbedded: RegistryBinding = {
+      server_origin: 'local-embedded',
+      host_id: STANDALONE.host_id,
+    };
+    const fallback = makeRegistry(EMBEDDED);
+    const old = fallback.provision('ws_pre_claim');
+    const current = makeGuardedTarget([currentHostEmbedded, EMBEDDED]);
+
+    expect(current.provision('ws_pre_claim', old.path)).toEqual({
+      path: old.path,
+      created: false,
+    });
+    expect(current.resolve('ws_pre_claim')).toBe(old.path);
+  });
+
+  it('still rejects a state-root path that no trusted predecessor registry owns', () => {
+    const legacy = makeRegistry(EMBEDDED);
+    const old = legacy.provision('ws_owned_by_someone_else');
+    const current = makeGuardedTarget([EMBEDDED]);
+
+    expect(() => current.provision('ws_unproven', old.path)).toThrowError(
+      expect.objectContaining({ code: 'invalid_path' }),
+    );
+    expect(current.has('ws_unproven')).toBe(false);
+    expect(legacy.has('ws_owned_by_someone_else')).toBe(true);
+  });
+
+  it('does not let a predecessor custom entry bypass current path validation', () => {
+    const legacy = makeRegistry(EMBEDDED);
+    const customInsideState = join(stateDir, 'custom-inside-state');
+    legacy.provision('ws_custom', customInsideState);
+    const current = makeGuardedTarget([EMBEDDED]);
+
+    expect(() => current.provision('ws_custom', customInsideState)).toThrowError(
+      expect.objectContaining({ code: 'invalid_path' }),
+    );
+    expect(current.has('ws_custom')).toBe(false);
+    expect(legacy.resolve('ws_custom')).toBe(customInsideState);
+  });
+
+  it('fails closed when the predecessor records the id under a different path', () => {
+    const legacy = makeRegistry(EMBEDDED);
+    const old = legacy.provision('ws_conflict');
+    const current = makeGuardedTarget([EMBEDDED]);
+
+    expect(() =>
+      current.provision('ws_conflict', join(stateDir, 'different-managed-path')),
+    ).toThrowError(expect.objectContaining({ code: 'path_conflict' }));
+    expect(current.has('ws_conflict')).toBe(false);
+    expect(legacy.resolve('ws_conflict')).toBe(old.path);
+  });
+
+  it('does not consult a predecessor after the destination already has the exact entry', () => {
+    const legacy = makeRegistry(EMBEDDED);
+    const old = legacy.provision('ws_retry');
+    // Simulate a hotfix user whose real-origin destination was already bound.
+    makeRegistry(STANDALONE).provision('ws_retry', old.path);
+    // A corrupt predecessor must not break that already-complete path; legacy
+    // handoff is demand-driven only on destination miss.
+    writeFileSync(legacy.registryFilePath(), '{ broken legacy registry');
+
+    const current = makeGuardedTarget([EMBEDDED]);
+    expect(current.provision('ws_retry', old.path)).toEqual({
+      path: old.path,
+      created: false,
+    });
+    expect(current.resolve('ws_retry')).toBe(old.path);
+  });
+});
+
 describe('WorkspaceRegistry — foreign guard + corruption (fail-closed)', () => {
   it('a registry file whose header binding mismatches fails closed with registry_foreign', () => {
     // Standalone provisions; then a handle with a *different* host_id but

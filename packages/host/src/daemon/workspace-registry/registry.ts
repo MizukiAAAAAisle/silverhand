@@ -36,12 +36,14 @@ import { z } from 'zod';
 export interface RegistryBinding {
   /**
    * Standalone: `new URL(daemon-config.server_url).origin`.
-   * Embedded (no outbound config): the fixed sentinel `local-embedded`.
+   * Embedded before its live host binding: the fixed sentinel
+   * `local-embedded`.
    */
   server_origin: string;
   /**
    * Standalone: `daemon-config.host_id`.
-   * Embedded: the daemon identity's `daemon_id` (default `local`).
+   * Embedded after claim: `daemon-config.host_id`; before claim, the daemon
+   * identity's `daemon_id` (default `local`).
    */
   host_id: string;
 }
@@ -167,6 +169,14 @@ export interface WorkspaceRegistryOptions {
    * is set.
    */
   legacyWorkspacesRoot?: string;
+  /**
+   * Explicitly trusted predecessor bindings whose exact daemon-managed
+   * `workspace_id -> path` entry may be copied into this registry.
+   * This is the narrow upgrade seam for desktop's historical
+   * `local-embedded` namespace; it never widens generic requested-path
+   * validation and never scans arbitrary binding directories.
+   */
+  legacyBindings?: readonly RegistryBinding[];
   /** Injectable clock for tests. */
   now?: () => number;
 }
@@ -192,14 +202,17 @@ function pathsOverlap(a: string, b: string): boolean {
  * interleave a load with another op's save.
  */
 export class WorkspaceRegistry {
+  private readonly stateDir: string;
   private readonly filePath: string;
   private readonly managedRoot: string;
   private readonly binding: RegistryBinding;
   private readonly silverhandStateRoot: string | undefined;
   private readonly legacyWorkspacesRoot: string | undefined;
+  private readonly legacyBindings: readonly RegistryBinding[];
   private readonly now: () => number;
 
   constructor(opts: WorkspaceRegistryOptions) {
+    this.stateDir = opts.stateDir;
     const nsRoot = join(opts.stateDir, bindingSlug(opts.binding));
     this.filePath = join(nsRoot, REGISTRY_FILE_NAME);
     this.managedRoot = join(nsRoot, MANAGED_WORKSPACES_DIR);
@@ -210,6 +223,14 @@ export class WorkspaceRegistry {
     this.legacyWorkspacesRoot = opts.legacyWorkspacesRoot
       ? resolve(opts.legacyWorkspacesRoot)
       : undefined;
+    const seenLegacyBindings = new Set<string>();
+    this.legacyBindings = (opts.legacyBindings ?? []).filter(candidate => {
+      if (bindingsEqual(candidate, opts.binding)) return false;
+      const key = `${candidate.server_origin}\0${candidate.host_id}`;
+      if (seenLegacyBindings.has(key)) return false;
+      seenLegacyBindings.add(key);
+      return true;
+    });
     this.now = opts.now ?? (() => Date.now());
   }
 
@@ -308,6 +329,10 @@ export class WorkspaceRegistry {
         `workspace ${workspaceId} is already bound to ${existing.path}; refusing to overwrite with ${validated}`,
       );
     }
+    if (requestedPath !== undefined) {
+      const copied = this.copyLegacyEntry(file, workspaceId, requestedPath);
+      if (copied) return copied;
+    }
 
     let path: string;
     if (requestedPath === undefined) {
@@ -323,6 +348,77 @@ export class WorkspaceRegistry {
     file.workspaces[workspaceId] = { path, provisioned_at: this.now() };
     this.persist(file);
     return { path, created: true };
+  }
+
+  /**
+   * Copy an exact daemon-managed entry from an explicitly trusted predecessor
+   * registry.
+   *
+   * A normal caller may never bind a requested path inside Silverhand's state
+   * root. Historical desktop-managed workspaces are the one upgrade case that
+   * legitimately live there: their path was allocated by an older
+   * `local-embedded` registry. We accept that path only when the predecessor
+   * registry itself proves the same workspace id owns its deterministic
+   * managed path, and that path exactly matches the server's requested path.
+   * The predecessor remains intact for rollback. This creates no general alias:
+   * only the same workspace id and exact daemon-recorded path may be copied,
+   * and the daemon process still activates only one binding at a time.
+   */
+  private copyLegacyEntry(
+    destination: RegistryFile,
+    workspaceId: string,
+    requestedPath: string,
+  ): ProvisionResult | null {
+    if (this.legacyBindings.length === 0 || !isAbsolute(requestedPath)) {
+      return null;
+    }
+    const resolvedRequestedPath = resolve(requestedPath);
+    const sources: Array<{
+      entry: RegistryFile['workspaces'][string];
+    }> = [];
+
+    for (const binding of this.legacyBindings) {
+      const registry = new WorkspaceRegistry({
+        stateDir: this.stateDir,
+        binding,
+        ...(this.silverhandStateRoot
+          ? { silverhandStateRoot: this.silverhandStateRoot }
+          : {}),
+        ...(this.legacyWorkspacesRoot
+          ? { legacyWorkspacesRoot: this.legacyWorkspacesRoot }
+          : {}),
+        now: this.now,
+      });
+      const source = registry.load();
+      const entry = source?.workspaces[workspaceId];
+      if (!entry) continue;
+      const sourceManagedPath = join(
+        registry.managedRoot,
+        managedWorkspaceSlug(workspaceId),
+      );
+      // A predecessor's user-requested path still goes through today's normal
+      // validation. Only the deterministic path minted inside the predecessor's
+      // own managed root needs this state-root migration seam.
+      if (entry.path !== sourceManagedPath) continue;
+      if (!isAbsolute(entry.path) || resolve(entry.path) !== resolvedRequestedPath) {
+        throw new WorkspaceRegistryError(
+          'path_conflict',
+          `legacy registry binds workspace ${workspaceId} to ${entry.path}; ` +
+            `refusing requested path ${resolvedRequestedPath}`,
+        );
+      }
+      sources.push({ entry });
+    }
+
+    if (sources.length === 0) return null;
+
+    this.assertNoOverlap(destination, workspaceId, resolvedRequestedPath);
+    destination.workspaces[workspaceId] = {
+      path: resolvedRequestedPath,
+      provisioned_at: Math.min(...sources.map(source => source.entry.provisioned_at)),
+    };
+    this.persist(destination);
+    return { path: resolvedRequestedPath, created: false };
   }
 
   /**

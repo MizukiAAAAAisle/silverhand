@@ -559,6 +559,26 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     }
     return liveOutboundBinding();
   };
+  const workspaceRegistry = (binding: RegistryBinding): WorkspaceRegistry => {
+    const legacyBindings: RegistryBinding[] = [];
+    // Public `connect` daemons use an explicit in-memory identity and never
+    // owned desktop's historical local-embedded registry. Desktop-managed
+    // daemons retain an identity file, so they may need a one-time handoff from
+    // either the post-claim host id or the pre-claim `local` placeholder.
+    if (daemonIdentityPath !== null) {
+      legacyBindings.push(
+        { server_origin: 'local-embedded', host_id: binding.host_id },
+        { server_origin: 'local-embedded', host_id: fallbackEmbeddedHostId },
+      );
+    }
+    return new WorkspaceRegistry({
+      stateDir: workspaceRegistryStateDir,
+      binding,
+      silverhandStateRoot,
+      legacyWorkspacesRoot,
+      legacyBindings,
+    });
+  };
   const resolveProxyConfigPath = (): string | null => {
     if (opts.proxyConfigPath) return opts.proxyConfigPath;
     const binding = resolveRegistryBinding();
@@ -604,12 +624,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
           'daemon not attached to a control plane; cannot resolve workspace registry binding',
         );
       }
-      const registry = new WorkspaceRegistry({
-        stateDir: workspaceRegistryStateDir,
-        binding,
-        silverhandStateRoot,
-        legacyWorkspacesRoot,
-      });
+      const registry = workspaceRegistry(binding);
       try {
         return registry.resolve(workspaceId);
       } catch (err) {
@@ -696,12 +711,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
           'daemon not attached to a control plane; cannot resolve workspace registry binding',
         );
       }
-      const registry = new WorkspaceRegistry({
-        stateDir: workspaceRegistryStateDir,
-        binding,
-        silverhandStateRoot,
-        legacyWorkspacesRoot,
-      });
+      const registry = workspaceRegistry(binding);
       return provisionWorkspace(params, { registry, logger });
     },
     // D4.e-1 — agent_workspace_index: route-time `agent_dir` resolver.
@@ -716,12 +726,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
           'daemon not attached to a control plane; cannot resolve workspace registry binding',
         );
       }
-      const registry = new WorkspaceRegistry({
-        stateDir: workspaceRegistryStateDir,
-        binding,
-        silverhandStateRoot,
-        legacyWorkspacesRoot,
-      });
+      const registry = workspaceRegistry(binding);
       return indexAgentWorkspaces(params, {
         registry,
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
@@ -735,14 +740,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // to the same L1 dir. No server-derived path crosses the wire.
     agentWorkspaceTreeHandler: async params => {
       const binding = params.workspace_id ? resolveRegistryBinding() : null;
-      const registry = binding
-        ? new WorkspaceRegistry({
-            stateDir: workspaceRegistryStateDir,
-            binding,
-            silverhandStateRoot,
-            legacyWorkspacesRoot,
-          })
-        : undefined;
+      const registry = binding ? workspaceRegistry(binding) : undefined;
       return listAgentWorkspaceTree(params, {
         registry,
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
@@ -755,14 +753,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // so the daemon never follows a symlink or reads outside the resolved base.
     agentWorkspaceFileReadHandler: async params => {
       const binding = params.workspace_id ? resolveRegistryBinding() : null;
-      const registry = binding
-        ? new WorkspaceRegistry({
-            stateDir: workspaceRegistryStateDir,
-            binding,
-            silverhandStateRoot,
-            legacyWorkspacesRoot,
-          })
-        : undefined;
+      const registry = binding ? workspaceRegistry(binding) : undefined;
       return readAgentWorkspaceFile(params, {
         registry,
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
@@ -782,12 +773,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
           'daemon not attached to a control plane; cannot resolve workspace registry binding',
         );
       }
-      const registry = new WorkspaceRegistry({
-        stateDir: workspaceRegistryStateDir,
-        binding,
-        silverhandStateRoot,
-        legacyWorkspacesRoot,
-      });
+      const registry = workspaceRegistry(binding);
       return seedAgentL2(params, { registry });
     },
     // D4.e-4 — agent_files_purge: remove an agent's host-local L1/L2 files
@@ -806,12 +792,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
           'daemon not attached to a control plane; cannot resolve workspace registry binding',
         );
       }
-      const registry = new WorkspaceRegistry({
-        stateDir: workspaceRegistryStateDir,
-        binding,
-        silverhandStateRoot,
-        legacyWorkspacesRoot,
-      });
+      const registry = workspaceRegistry(binding);
       return purgeAgentFiles(params, {
         registry,
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
