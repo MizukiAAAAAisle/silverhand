@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-07-10 — daemon：pre-init 异常退出并入 init-failure cooldown（#task:1460，#1459 修复，未 push）
+
+#1459:Claude 被 EDR 在 `session_init` 前反复 SIGKILL,daemon 10 分钟 spawn 1105 次。根因:现有 init-failure 计数器/cooldown **只在 init watchdog fire（`initTimedOut`）时记账**;child 在 `session_init` 前自己异常退出(死得比任何 watchdog tier 都快,或 `requires_first_message` 空 inbox 下 watchdog 根本没 arm)完全绕过它 → backend 拿着 pending inbox 行无限 re-drive。
+
+- **修复(纯 daemon 侧,`supervisor/index.ts`)** — `onChildExit` 识别 **pre-init failure** 并入同一 sticky 计数器。判定用 **driver lifecycle 而非 exit code**(Cindy:`code !== 0` 是"该不该 init"的脆弱 proxy):`!initObserved && !initTimedOut && !intentionalExit && !driver.oneShot`。long-lived 运行时在 `session_init` 前退出(**即便 code 0**)都算 init failure(它没 reply、会被 pending inbox 热循环);oneShot(cursor `--print`)退出是正常完成,排除。
+- **retry owner 不在 daemon** — 阈值前的重试仍由 backend 现有 pending-inbox re-drive 驱动(`DeliveryCoordinator.onRuntimeExit` 对任何 `!intentional && !initTimedOut && !fatalError` + pending 立即 re-drive,**无 backoff** → 真实语义是 bounded retry + cooldown,非短/指数退避)。daemon 只**记账**,不加第二个 respawn 驱动(否则与 backend attempt 计数竞争)。第 N 次(阈值,默认 3)engage 5min cooldown → `runtime_init_cooldown`(在 terminal `runtime_state`/`runtime_exit` **之前**发)→ backend 置 `initFailureFlag` 抑制下次 respawn + start-time cooldown gate 拒 fresh start → 热循环停。
+- **DDD 收紧(Cindy review)** — 把 `recordInitTimeout` 拆成**纯记账** `recordInitFailure`(返回 `{failures, cooldownUntilOnEvent}`);daemon-internal retry 决策移回 `failInitWatchdog`(watchdog 独有)。pre-init 路径**不置 `initTimedOut`**,故 terminal reason 不会被误映射成 `timeout`;terminal reason 映射新增 `preInitFailure → crashed`(即便 code 0——long-lived 未 reply 不能投 `replied→idle`)。
+- **契约澄清** — 既有 B4 测试("code 0 → replied")原用 non-oneShot driver + 无 session_init,是不真实配置(真实 cursor 正常跑会 emit `session_init`,退出时 `initObserved=true`)。改为 oneShot driver,忠实其 cursor 本意;long-lived pre-init clean-exit 现正确归 `crashed`,由 #1460 新测试覆盖。
+- **验证** — host `typecheck` 全绿;host 全套 1104 测试通过。新增 4 个 #task:1460 测试:pre-init crash engage cooldown 且**无 `runtime_init_timeout`**(证明非伪装 timeout)/ cooldown 拒下次 fresh start(止循环 gate)/ long-lived code-0 pre-init 仍计数(lifecycle 非 code)/ oneShot pre-init 排除(不 cooldown、下次 start 成功)。
+- **未涉** — wire 事件类型/backend 消费不变(复用现有 `runtime_init_cooldown`,已核对其消费不依赖先行的 timeout 事件);无 agent 面命令/DTO/路由变化。EDR 本身不在范围。
+
+---
+
 ## 2026-07-10 — CLI 信任 system/corporate CA（#task:1464，#1463 修复，未 push）
 
 #1463 诊断（Cindy）确定:为启用 system CA 升级 Electron42/Node24 只覆盖了 desktop main 与 daemon,**漏了 agent 实际执行的 `silverhand` CLI 进程**。CLI 是 daemon 用 `execPath + ELECTRON_RUN_AS_NODE=1` 另起的独立进程,而 `tls.setDefaultCACertificates()` 进程内生效、不继承,所以 `enableNodeSystemCa()`（只在 main/daemon 调）从没到 CLI 的 `fetch`。结果:直连 backend 的命令（`task claim` 等）在内网 CA 上 `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`（agent 侧归一为 `upstream_unavailable`）;`message send` 因走 daemon Unix socket 无 TLS 而幸存。

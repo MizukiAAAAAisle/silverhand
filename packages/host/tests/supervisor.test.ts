@@ -760,17 +760,27 @@ describe('Supervisor 3a — hard stop / exit', () => {
     await waitFor(() => events.some(e => e.event === 'runtime_exit'));
   });
 
-  it('voluntary child exit code 0 (no stop request) marks intentional=false; reason maps to replied → status:idle (Cindy `5nruk1IPaEHSab0T` B4)', async () => {
+  it('oneShot clean exit code 0 (no stop request) marks intentional=false; reason maps to replied → status:idle (Cindy `5nruk1IPaEHSab0T` B4)', async () => {
     // Cindy `5nruk1IPaEHSab0T` B4: a clean `exit(0)` is NOT a crash.
     // CM's terminal mapping uses code===0 → `replied/idle`; the
     // distinction matters for oneShot drivers (cursor) where a
     // single-turn process exits cleanly after producing its reply.
     // Mapping it to `crashed/failed` would let the UI / RunStateCache
     // mark every successful cursor run as failed.
-    const { supervisor, events } = makeSupervisor({
+    //
+    // #task:1460 sharpened this: the `code === 0 → replied` arm is for a
+    // runtime that completed its work — a oneShot single-turn run, or a
+    // long-lived runtime that reached `session_init`. A LONG-LIVED
+    // runtime that exits (even code 0) BEFORE `session_init` never
+    // replied and is now an init failure (`crashed`), so this contract is
+    // pinned with a oneShot driver — the class whose normal completion is
+    // a pre-init-looking clean exit. (See the #task:1460 describe block
+    // for the long-lived pre-init → crashed counterpart.)
+    const { supervisor, events } = make3cSupervisor({
       // Sleep briefly then voluntarily exit(0). The supervisor never
       // gets a stop() call — this exercises the clean-exit path.
       driverArgs: ['--sleep', '50'],
+      driverOverride: base => ({ ...base, oneShot: true }),
     });
     await supervisor.start(baseStartParams);
     await waitFor(
@@ -2543,6 +2553,116 @@ describe('Supervisor 3c-b — retry / cooldown state machine', () => {
     if (last && last.event === 'runtime_init_timeout') {
       expect(last.cooldown_until).toBeUndefined();
     }
+  });
+});
+
+describe('Supervisor #task:1460 — pre-init exit folds into init-failure cooldown', () => {
+  // Incident #1459: a long-lived runtime (claude) was SIGKILL'd by EDR
+  // BEFORE `session_init`. The init watchdog never fired (the child died
+  // faster than any tier), so the failure bypassed the retry/cooldown
+  // counter entirely and backend re-drove the pending inbox row without
+  // bound — 1105 spawns in 10 min. These tests pin the fold: a pre-init
+  // abnormal exit of a long-lived runtime is accounted in the SAME
+  // sticky counter, engages the same cooldown, and the cooldown then
+  // refuses the next fresh start — WITHOUT the watchdog ever firing.
+  //
+  // The child crashes via `--sleep N --exit-code 1` (an abnormal exit
+  // that isn't user-intentional); the predicate is exit-code/signal
+  // agnostic (it keys off `driver.oneShot`), so a fast crash stands in
+  // for the external SIGKILL. `initWatchdogMs` is left at its 5-min
+  // default so the watchdog provably does NOT fire inside the test.
+
+  it('a long-lived pre-init crash engages cooldown with NO runtime_init_timeout (not disguised as a watchdog timeout)', async () => {
+    const { supervisor, events } = make3cSupervisor({
+      driverArgs: ['--sleep', '30', '--exit-code', '1'],
+      // parseLine never returns session_init → initObserved stays false.
+      initFailureCooldownThreshold: 1, // cooldown on the first failure
+      initFailureCooldownMs: 60_000,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(
+      () => events.some(e => e.event === 'runtime_init_cooldown'),
+      3_000,
+    );
+    // The watchdog must NOT have fired — this is the pre-init path, not a
+    // timeout re-labelled. (Core of Cindy's "don't disguise as timeout".)
+    expect(events.some(e => e.event === 'runtime_init_timeout')).toBe(false);
+    const cooldown = events.find(e => e.event === 'runtime_init_cooldown');
+    if (cooldown && cooldown.event === 'runtime_init_cooldown') {
+      expect(cooldown.attempts_exhausted).toBe(1);
+      expect(cooldown.cooldown_until > Date.now()).toBe(true);
+    }
+  });
+
+  it('cooldown from a pre-init crash refuses the next fresh start (the loop-stopping gate)', async () => {
+    const { supervisor } = make3cSupervisor({
+      driverArgs: ['--sleep', '30', '--exit-code', '1'],
+      initFailureCooldownThreshold: 1,
+      initFailureCooldownMs: 60_000,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(
+      () =>
+        supervisor
+          .status({ conversation_id: 'c1', agent_id: 'a1' })
+          .runtimes.every(r => r.phase === 'exited') ||
+        supervisor.status({ conversation_id: 'c1', agent_id: 'a1' }).runtimes
+          .length === 0,
+      3_000,
+    );
+    await wait(50); // let the exit handler engage cooldown
+    const second = await supervisor.start(baseStartParams);
+    expect(second.started).toBe(false);
+    if (!second.started) {
+      expect(second.reason).toBe('init_cooldown');
+      expect(second.cooldown_until > Date.now()).toBe(true);
+    }
+  });
+
+  it('a long-lived runtime that exits code 0 BEFORE session_init still counts (lifecycle, not exit code)', async () => {
+    // Cindy point 1: for a long-lived driver a clean code-0 exit before
+    // `session_init` is STILL an init failure — it never replied and
+    // would re-loop on the pending inbox — so it must engage cooldown.
+    const { supervisor, events } = make3cSupervisor({
+      driverArgs: ['--sleep', '30', '--exit-code', '0'],
+      initFailureCooldownThreshold: 1,
+      initFailureCooldownMs: 60_000,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(
+      () => events.some(e => e.event === 'runtime_init_cooldown'),
+      3_000,
+    );
+    expect(events.some(e => e.event === 'runtime_init_timeout')).toBe(false);
+  });
+
+  it('a oneShot runtime that exits pre-init is EXCLUDED — no cooldown, next start still succeeds', async () => {
+    // A oneShot / cursor `--print` runtime exits before `initObserved` on
+    // its NORMAL completion path; counting it would cooldown a healthy
+    // runtime. The predicate excludes `driver.oneShot`, so even a
+    // threshold of 1 never engages here.
+    const { supervisor, events } = make3cSupervisor({
+      driverArgs: ['--sleep', '30', '--exit-code', '0'],
+      driverOverride: base => ({ ...base, oneShot: true }),
+      initFailureCooldownThreshold: 1,
+      initFailureCooldownMs: 60_000,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(
+      () =>
+        supervisor
+          .status({ conversation_id: 'c1', agent_id: 'a1' })
+          .runtimes.every(r => r.phase === 'exited') ||
+        supervisor.status({ conversation_id: 'c1', agent_id: 'a1' }).runtimes
+          .length === 0,
+      3_000,
+    );
+    await wait(50);
+    expect(events.some(e => e.event === 'runtime_init_cooldown')).toBe(false);
+    // Not gated — a oneShot's normal exit left the failure counter clean.
+    const second = await supervisor.start(baseStartParams);
+    expect(second.started).toBe(true);
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
   });
 });
 

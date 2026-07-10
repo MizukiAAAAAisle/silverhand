@@ -3367,6 +3367,43 @@ export class Supervisor implements SupervisorContract {
     const ts = this.now();
     const k = key(handle.conversationId, handle.agentId);
 
+    // #task:1460: fold a pre-init abnormal exit into the SAME init-failure
+    // counter the watchdog uses. When a runtime dies BEFORE `session_init`
+    // and the watchdog never fired (it dies faster than any tier, or was
+    // never armed), it otherwise bypasses the failure accounting entirely
+    // — backend keeps re-driving the still-pending inbox row and respawns
+    // without bound (incident #1459: EDR SIGKILL'd claude pre-init → 1105
+    // spawns in 10 min). Recording it here bumps the sticky per-(conv,
+    // agent) counter, so the Nth failure engages the same 5-min cooldown
+    // and the start-time cooldown gate then refuses backend's respawn.
+    // Retries before the threshold stay driven by backend's existing
+    // re-drive of the pending inbox (`DeliveryCoordinator.onRuntimeExit`
+    // re-drives ANY `!intentional && !initTimedOut && !fatalError` exit
+    // with a pending row — immediately, no backoff; this is bounded
+    // retry + cooldown, NOT exponential/short backoff). The daemon only
+    // ACCOUNTS the failure here; it does not add a second respawn driver
+    // (which would race backend's attempt numbering). Membership is by
+    // DRIVER LIFECYCLE, not exit code (Cindy: `code !== 0` is a fragile
+    // proxy for "init should have happened"). Exclusions:
+    //   - initObserved    → init succeeded; not an init failure.
+    //   - initTimedOut    → the watchdog path already recorded this exit
+    //     (`failInitWatchdog` bumps the counter before the kill).
+    //   - intentionalExit → a user/daemon stop, not a crash.
+    //   - driver.oneShot  → a oneShot / cursor `--print` runtime exits
+    //     BEFORE `initObserved` on its NORMAL completion path, so any of
+    //     its exits (code 0 or not) is expected, not an init failure.
+    //     A long-lived (non-oneShot) runtime, by contrast, must reach
+    //     `session_init`; ANY non-intentional exit before it — even a
+    //     clean code 0 — is a genuine init failure worth counting.
+    const preInitFailure =
+      !handle.initObserved &&
+      !handle.initTimedOut &&
+      !handle.intentionalExit &&
+      !handle.driver.oneShot;
+    if (preInitFailure) {
+      this.recordInitFailure(handle);
+    }
+
     this.logger.info(
       {
         kind: 'process',
@@ -3457,8 +3494,14 @@ export class Supervisor implements SupervisorContract {
     // reason=init_cooldown` for the now-dead handle. `cooldownUntil > now`
     // is the only "really cooling down right now" check (Cindy plan
     // v2 issue #2 — cooldown ≠ retry-exhausted; the two are
-    // independent state).
-    if (handle.initTimedOut) {
+    // independent state). #task:1460: a pre-init exit accounted above
+    // takes the exact same branch — it engages cooldown identically, so
+    // backend sets `initFailureFlag` (suppressing the next respawn) and
+    // the start-time cooldown gate refuses fresh starts. The
+    // `runtime_init_cooldown` emit MUST precede the terminal
+    // `runtime_state` / `runtime_exit` below so backend has the flag set
+    // before it processes the exit.
+    if (handle.initTimedOut || preInitFailure) {
       const state = this.initRetryStates.get(k);
       if (state && state.cooldownUntil > this.now()) {
         this.emit({
@@ -3482,6 +3525,12 @@ export class Supervisor implements SupervisorContract {
     // 856-907):
     //   init watchdog killed it → `timeout` (precedence over intentional)
     //   intentional stop request → `stopped`
+    //   pre-init failure (#task:1460) → `crashed`, even on code === 0:
+    //     a long-lived runtime that dies before `session_init` did NOT
+    //     reply, so it must not project `replied → idle`; and it is NOT a
+    //     `timeout` (the watchdog never fired). oneShot runtimes are
+    //     excluded from `preInitFailure`, so their normal code-0 exit
+    //     still maps to `replied` below.
     //   clean exit (code === 0)  → `replied`  (oneShot/cursor critical)
     //   non-zero / signal exit   → `crashed`
     // `replied → idle`, `timeout|stopped|crashed → failed` per CM's
@@ -3491,9 +3540,11 @@ export class Supervisor implements SupervisorContract {
         ? 'timeout'
         : intentional
           ? 'stopped'
-          : code === 0
-            ? 'replied'
-            : 'crashed';
+          : preInitFailure
+            ? 'crashed'
+            : code === 0
+              ? 'replied'
+              : 'crashed';
     this.resolveRun(handle, reason);
     this.emit({
       event: 'runtime_exit',
@@ -3728,7 +3779,14 @@ export class Supervisor implements SupervisorContract {
     // not block `internalRespawnForRetry`.
     handle.phase = 'draining';
     this.emitState(handle);
-    const { retry, cooldownUntilOnEvent } = this.recordInitTimeout(handle);
+    // Account the failure (pure), then decide daemon-internal retry —
+    // a watchdog-only concern: retry only when no cooldown is active,
+    // attempts remain, and the exit wasn't user-intentional.
+    const { cooldownUntilOnEvent } = this.recordInitFailure(handle);
+    const retry =
+      cooldownUntilOnEvent === null &&
+      handle.initAttempt < this.initMaxRetries &&
+      !handle.intentionalExit;
     handle.initRetryPlanned = retry;
 
     const elapsedMs = this.now() - handle.initStartedAt;
@@ -3781,12 +3839,16 @@ export class Supervisor implements SupervisorContract {
     }, this.sigtermToSigkillMs).unref();
   }
 
-  /** Bump the failure counter, engage cooldown if threshold crossed,
-   *  decide retry eligibility. Cindy plan v2 issue #2: cooldown vs
-   *  retry-exhausted are independent — return cooldownUntilOnEvent
-   *  only when cooldown is genuinely active right now. */
-  private recordInitTimeout(handle: RuntimeHandle): {
-    retry: boolean;
+  /** Bump the sticky per-(conv, agent) init-failure counter and engage
+   *  the cooldown clock when the threshold is crossed. PURE accounting —
+   *  it deliberately does NOT decide daemon-internal retry; that is the
+   *  watchdog's concern (`failInitWatchdog`), layered on top of this
+   *  result, and it does not apply to a backend-driven pre-init respawn.
+   *  Returns the new failure count plus, when a cooldown window is active
+   *  right now, its deadline (Cindy plan v2 issue #2: cooldown vs
+   *  retry-exhausted are independent state). */
+  private recordInitFailure(handle: RuntimeHandle): {
+    failures: number;
     cooldownUntilOnEvent: number | null;
   } {
     const k = key(handle.conversationId, handle.agentId);
@@ -3798,12 +3860,8 @@ export class Supervisor implements SupervisorContract {
     }
     this.initRetryStates.set(k, state);
     const cooldownActive = state.cooldownUntil > now;
-    const retry =
-      !cooldownActive &&
-      handle.initAttempt < this.initMaxRetries &&
-      !handle.intentionalExit;
     return {
-      retry,
+      failures: state.failures,
       cooldownUntilOnEvent: cooldownActive ? state.cooldownUntil : null,
     };
   }
