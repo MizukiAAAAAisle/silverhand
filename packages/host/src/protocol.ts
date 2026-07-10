@@ -133,8 +133,14 @@ import {
 // safe-boundary hold out of the backend coordinator. A v6 peer has no
 // `deferred` arm in its result union, so the shape is wire-breaking and gates
 // at hello. `OUTBOUND_PROTOCOL_VERSION` bumps alongside (5→6). No shim.
+//
+// v8 (#task:1461): `runtime_deliver`'s SPAWN arm now carries the same typed
+// workspace-resolution errors as `runtime_start`. A v7 client rejects those
+// response codes, while a v7 daemon collapses them to `internal_error`, so the
+// pair is semantically incompatible and must fail loud at hello. The external
+// outbound protocol bumps alongside (6→7).
 
-export const HOST_PROTOCOL_VERSION = 7;
+export const HOST_PROTOCOL_VERSION = 8;
 
 export const KNOWN_CAPABILITIES_V1 = [
   'runtime.claude',
@@ -1652,15 +1658,15 @@ const AgentMaterializeIpcErrorSchema = z
   })
   .strict();
 
-// ── D4.e-6: runtime_start typed-error taxonomy ───────────────────────
+// ── D4.e-6: runtime spawn typed-error taxonomy ───────────────────────
 //
-// Before D4.e-6 `runtime_start` shipped paths and could not fail on path
-// resolution, so it used only the 5 generic codes. Now the daemon
-// resolves `workspace.path`/`home_dir` itself (registry + computeAgentDir)
-// and FAILS CLOSED when it can't — design §3.5 / Cindy criterion 2. Two
-// daemon-business codes carry that failure with the same per-command
-// scoping as agent_materialize (a typed code here cannot leak onto any
-// other intent's wire error):
+// Before D4.e-6 runtime spawn shipped paths and could not fail on path
+// resolution, so `runtime_start` used only the 5 generic codes. Now the daemon
+// resolves `workspace.path`/`home_dir` itself (registry + computeAgentDir) and
+// FAILS CLOSED when it can't — design §3.5 / Cindy criterion 2. The three
+// daemon-business codes below form the resolver taxonomy. Both `runtime_start`
+// and `runtime_deliver` may spawn, so both declare it; a typed code still
+// cannot leak onto a non-spawning intent's wire error.
 //   - `workspace_not_provisioned`: the regular workspace id is not bound
 //     in the daemon registry (legacy row never provisioned / never
 //     read-path-backfilled). Recoverable: the backend may backfill via
@@ -1680,7 +1686,7 @@ export const RuntimeStartErrorCodeSchema = z.enum([
 ]);
 export type RuntimeStartErrorCode = z.infer<typeof RuntimeStartErrorCodeSchema>;
 
-const RuntimeStartIpcErrorSchema = z
+const RuntimeSpawnIpcErrorSchema = z
   .object({
     code: z.union([ResponseErrorCodeSchema, RuntimeStartErrorCodeSchema]),
     message: z.string(),
@@ -2323,7 +2329,7 @@ export const intentSchemas = {
     // `workspace_path_missing` (host-local files missing), and
     // `registry_unavailable` (hard fail) apart from a generic
     // `internal_error`. Per-command scoped like agent_materialize.
-    error: RuntimeStartIpcErrorSchema,
+    error: RuntimeSpawnIpcErrorSchema,
   },
   runtime_stop: {
     params: RuntimeStopParamsSchema,
@@ -2335,6 +2341,10 @@ export const intentSchemas = {
     // async `runtime_delivery_consumed`/`_failed` events below.
     params: RuntimeDeliverParamsSchema,
     result: RuntimeDeliverResultSchema,
+    // `runtime_deliver` is the sole delivery command and its SPAWN arm runs
+    // the same path resolver as `runtime_start`. Preserve those typed errors
+    // so the backend can backfill/retry instead of receiving taxonomy drift.
+    error: RuntimeSpawnIpcErrorSchema,
   },
   runtime_status: {
     params: RuntimeStatusParamsSchema,

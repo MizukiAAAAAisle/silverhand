@@ -530,8 +530,9 @@ export class IntentDispatcher {
       // keeps the wire-error scope per-intent: only intents whose schema
       // widens (agent_materialize / workspace_provision /
       // agent_workspace_index) can carry their typed codes; a runtime_*
-      // intent (defaulting to the 5 generic codes) rejects any foreign
-      // typed code here.
+      // non-spawning runtime intent (defaulting to the 5 generic codes)
+      // rejects any foreign typed code here. `runtime_start` and
+      // `runtime_deliver` both widen because either may spawn.
       if (err instanceof DaemonTypedError) {
         const errorSchema = intentErrorSchema(intent as IntentName);
         const validated = errorSchema.safeParse({

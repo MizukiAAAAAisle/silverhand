@@ -576,7 +576,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     frame: enc({
       id: 'req-hello',
       result: {
-        protocol_version: 7,
+        protocol_version: 8,
         daemon_version: '0.1.0',
         daemon_id: 'local',
         instance_id: 'inst-fixture',
@@ -2012,6 +2012,52 @@ const RUNTIME_START_ERROR_FIXTURES: WireFixture[] = [
     kind: { kind: 'response_error_typed', intent: 'runtime_start' },
   },
 ];
+// `runtime_deliver` is the sole delivery command and may take the SPAWN arm,
+// which runs the same daemon-side path resolver as `runtime_start`. Pin the
+// same three typed failures to this intent so a legitimate resolver error can
+// never collapse into a taxonomy-drift `internal_error`.
+const RUNTIME_DELIVER_ERROR_FIXTURES: WireFixture[] = [
+  {
+    name: 'response/runtime_deliver-error-workspace_not_provisioned',
+    description:
+      'The SPAWN arm references a regular workspace not bound in the daemon registry. The backend keeps delivery pending, re-provisions, and retries.',
+    frame: enc({
+      id: 'req-runtime-deliver-1',
+      error: {
+        code: 'workspace_not_provisioned',
+        message: 'workspace ws_custom_7 is not provisioned on this host',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'runtime_deliver' },
+  },
+  {
+    name: 'response/runtime_deliver-error-workspace_path_missing',
+    description:
+      'The SPAWN arm resolved a semantic workspace ref, but its host-local directory is missing.',
+    frame: enc({
+      id: 'req-runtime-deliver-1',
+      error: {
+        code: 'workspace_path_missing',
+        message:
+          'runtime_deliver: resolved workspace path does not exist: /tmp/missing',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'runtime_deliver' },
+  },
+  {
+    name: 'response/runtime_deliver-error-registry_unavailable',
+    description:
+      'The SPAWN arm cannot consult the daemon registry and fails closed.',
+    frame: enc({
+      id: 'req-runtime-deliver-1',
+      error: {
+        code: 'registry_unavailable',
+        message: 'registry identity mismatch; refusing foreign registry',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'runtime_deliver' },
+  },
+];
 // #task:1135 agent_profile_mcp_{read,write} typed errors. Both intents share
 // the AgentProfileMcpErrorCode set; one fixture per (intent, code) slot so the
 // wire-contract catalogue test sees full coverage.
@@ -2108,6 +2154,7 @@ RESPONSES_ERROR_TYPED.push(
   ...AGENT_PROFILE_MCP_ERROR_FIXTURES,
   ...MCP_PROBE_ERROR_FIXTURES,
   ...RUNTIME_START_ERROR_FIXTURES,
+  ...RUNTIME_DELIVER_ERROR_FIXTURES,
 );
 
 // ── Event fixtures ─────────────────────────────────────────────────
@@ -2121,7 +2168,7 @@ const EVENTS: WireFixture[] = [
       'Daemon socket bound — handshake mirror. Carries the same identity fields as hello result plus socket_path / daemon_pid / started_at.',
     frame: enc({
       event: 'ready',
-      protocol_version: 7,
+      protocol_version: 8,
       daemon_version: '0.1.0',
       daemon_id: 'local',
       instance_id: 'inst-fixture',

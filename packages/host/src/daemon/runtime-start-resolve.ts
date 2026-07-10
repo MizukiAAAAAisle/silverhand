@@ -19,8 +19,9 @@
  *
  * Fail-closed: when a regular workspace cannot be resolved the resolver
  * throws a `RuntimeStartResolveError` (a `DaemonTypedError`); the dispatcher
- * validates its code against `intentErrorSchema('runtime_start')` and emits
- * the typed wire code (`workspace_not_provisioned` /
+ * validates its code against the spawning intent's error schema
+ * (`runtime_start` or `runtime_deliver`) and emits the typed wire code
+ * (`workspace_not_provisioned` /
  * `workspace_path_missing` / `registry_unavailable`) instead of collapsing to
  * `internal_error`. This is the daemon-side final boundary; the backend ALSO
  * bounded-lazy-backfills before dispatch (Cindy `2A_y70Aue5X1SlOr`) so a

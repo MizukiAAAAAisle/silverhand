@@ -187,7 +187,13 @@ const FrameIdSchema = z.string().min(1);
 // result shape changed, so a version-mismatched standalone daemon would send /
 // expect a disposition space the peer cannot parse — fail loud at attach. Bumps
 // alongside HOST_PROTOCOL_VERSION (6→7).
-export const OUTBOUND_PROTOCOL_VERSION = 6;
+//
+// v7 (#task:1461): `runtime_deliver`'s SPAWN arm now preserves the typed
+// workspace-resolution taxonomy. A v6 server rejects those response codes and
+// a v6 daemon emits taxonomy drift instead, so old/new peers must fail loud at
+// attach rather than appear compatible until first delivery. Bumps alongside
+// HOST_PROTOCOL_VERSION (7→8).
+export const OUTBOUND_PROTOCOL_VERSION = 7;
 
 // ── server → daemon command catalogue ──────────────────────────────
 
@@ -366,11 +372,12 @@ export const McpProbeWireErrorSchema = z
   .strict();
 export type McpProbeWireError = z.infer<typeof McpProbeWireErrorSchema>;
 
-// D4.e-6: runtime_start widens its wire error with the same per-command
-// scoping. The daemon now resolves all host paths and fails closed; the
-// backend reads `workspace_not_provisioned` (backfill + retry),
-// `workspace_path_missing` (host-local files absent), or
-// `registry_unavailable` (hard fail) off this arm.
+// D4.e-6: commands whose execution may spawn a runtime widen their wire error
+// with the same resolver taxonomy. The daemon resolves all host paths and
+// fails closed; the backend reads `workspace_not_provisioned` (backfill +
+// retry), `workspace_path_missing` (host-local files absent), or
+// `registry_unavailable` (hard fail) off this arm. `runtime_deliver` shares it
+// because its SPAWN arm executes the same resolver as `runtime_start`.
 export const RuntimeStartWireErrorSchema = z
   .object({
     code: z.union([
@@ -399,9 +406,10 @@ export type RuntimeStartWireError = z.infer<
  * workspace data-plane commands `workspace_provision` /
  * `agent_workspace_index` / `agent_l2_seed` / `agent_files_purge`;
  * #task:811 commands `agent_workspace_tree` / `agent_workspace_file_read`;
- * and `runtime_start` — D4.e-6, codes `workspace_not_provisioned` /
- * `workspace_path_missing` / `registry_unavailable`) override with their
- * own wider schema.
+ * and runtime-spawning commands (`runtime_start` plus `runtime_deliver`'s
+ * SPAWN arm — D4.e-6, codes `workspace_not_provisioned` /
+ * `workspace_path_missing` / `registry_unavailable`) override with their own
+ * wider schema.
  */
 export const outboundServerCommandSchemas = {
   runtime_start: {
@@ -419,7 +427,7 @@ export const outboundServerCommandSchemas = {
     // transport. Params/result single-sourced from `protocol.js`.
     params: RuntimeDeliverParamsSchema,
     result: RuntimeDeliverResultSchema,
-    error: ResponseErrorSchema,
+    error: RuntimeStartWireErrorSchema,
   },
   runtime_status: {
     params: RuntimeStatusParamsSchema,

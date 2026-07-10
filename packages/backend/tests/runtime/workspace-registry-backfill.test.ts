@@ -14,9 +14,10 @@
  *      NOT memoized (next call retries).
  *   4. mixed → status partial (some bound, one typed-failed), NOT memoized.
  *   5. no rows → noop, no dispatch.
- *   6. per-(host,id) in-flight guard: concurrent ensure() of the same row
- *      share ONE dispatch.
- *   7. memoize success: a second ensure() of a bound row does NO dispatch.
+ *   6. per-(host,id,connection) in-flight guard: concurrent ensure() of the
+ *      same row + daemon connection share ONE dispatch.
+ *   7. memoize success only within the acknowledging connection: a second
+ *      ensure() does NO dispatch until the host reconnects, then re-provisions.
  *   8. per-id scope: a caller asking only for its own row is unaffected by an
  *      unrelated row that would fail (P1-2 at the helper level).
  *   9. fail-closed never writes a workspace_path fallback (only daemon ack).
@@ -255,6 +256,57 @@ describe('WorkspaceRegistryBackfiller', () => {
     expect(second.status).toBe('ok');
     expect(second.alreadyBound).toEqual(['ws_a']);
     expect(calls).toHaveLength(1);
+  });
+
+  it('re-provisions a settled row after the host reconnects with a new connection id', async () => {
+    const { repo } = makeRepo();
+    const rows = [{ id: 'ws_a', workspace_path: '/Users/x/a' }];
+    let connectionId = 'conn-1';
+    const calls: Array<{ connectionId: string; workspace_id: string }> = [];
+    const adapter: OutboundFrameAdapter = {
+      activeConnectionCount: () => 1,
+      connectedHostIds: () => ['local'],
+      connectionIdForHost: () => connectionId,
+      getAttachment: () => null,
+      async sendCommand<K extends OutboundServerCommandKind>(
+        _hostId: string,
+        kind: K,
+        params: OutboundServerCommandParams<K>,
+      ): Promise<OutboundServerCommandResult<K>> {
+        expect(kind).toBe('workspace_provision');
+        const p = params as { workspace_id: string; requested_path?: string };
+        calls.push({ connectionId, workspace_id: p.workspace_id });
+        return {
+          ok: true,
+          provisioned: calls.length === 1,
+          bound_workspace_path: p.requested_path!,
+        } as OutboundServerCommandResult<K>;
+      },
+      async close() {},
+    };
+    const bf = new WorkspaceRegistryBackfiller({
+      workspaces: repo,
+      outboundFrameAdapter: () => adapter,
+    });
+
+    await bf.ensure('local', rows);
+    await bf.ensure('local', rows);
+    expect(calls).toEqual([{ connectionId: 'conn-1', workspace_id: 'ws_a' }]);
+
+    // A reconnect can attach a different registry binding/namespace. The
+    // previous connection's success must not suppress provisioning there.
+    connectionId = 'conn-2';
+    const afterReconnect = await bf.ensure('local', rows);
+    expect(afterReconnect.status).toBe('ok');
+    expect(afterReconnect.alreadyBound).toEqual(['ws_a']);
+    expect(calls).toEqual([
+      { connectionId: 'conn-1', workspace_id: 'ws_a' },
+      { connectionId: 'conn-2', workspace_id: 'ws_a' },
+    ]);
+
+    // Memoization resumes for the new connection after its own ack.
+    await bf.ensure('local', rows);
+    expect(calls).toHaveLength(2);
   });
 
   it('unrelated failing rows do not affect a separate row request (per-id scope)', async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { IntentDispatcher } from '../src/daemon/dispatcher.js';
+import { RuntimeStartResolveError } from '../src/daemon/runtime-start-resolve.js';
 import { DAEMON_VERSION } from '../src/daemon/version.js';
 import type { SupervisorContract } from '../src/daemon/supervisor-contract.js';
 import { FakeSupervisor } from './_helpers/fake-supervisor.js';
@@ -369,6 +370,40 @@ describe('IntentDispatcher — runtime_* routing', () => {
       const result = r.result as { disposition: string };
       expect(result.disposition).toBe('admitted');
     }
+  });
+
+  it('runtime_deliver preserves spawn path-resolution errors instead of emitting taxonomy drift', async () => {
+    const supervisor = {
+      deliver: () => {
+        throw new RuntimeStartResolveError(
+          'workspace_not_provisioned',
+          'workspace ws_1 is not provisioned on this host',
+        );
+      },
+    } as unknown as SupervisorContract;
+    const d = new IntentDispatcher({ logger: silentLogger(), supervisor });
+
+    const r = await d.dispatch(
+      'w-missing',
+      'runtime_deliver',
+      {
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [101],
+        kind: 'message',
+        text: 'hi',
+        spawn_options: testStartOptions(),
+      },
+      { owner: 'test-owner' },
+    );
+
+    expect(r).toMatchObject({
+      id: 'w-missing',
+      error: {
+        code: 'workspace_not_provisioned',
+        message: 'workspace ws_1 is not provisioned on this host',
+      },
+    });
   });
 
   it('runtime_status reflects supervisor snapshot', async () => {
