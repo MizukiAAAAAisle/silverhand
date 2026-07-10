@@ -2636,11 +2636,11 @@ describe('Supervisor #task:1460 — pre-init exit folds into init-failure cooldo
     expect(events.some(e => e.event === 'runtime_init_timeout')).toBe(false);
   });
 
-  it('a oneShot runtime that exits pre-init is EXCLUDED — no cooldown, next start still succeeds', async () => {
-    // A oneShot / cursor `--print` runtime exits before `initObserved` on
-    // its NORMAL completion path; counting it would cooldown a healthy
-    // runtime. The predicate excludes `driver.oneShot`, so even a
-    // threshold of 1 never engages here.
+  it('a oneShot runtime that exits CLEAN code-0 pre-init is EXCLUDED — no cooldown, next start still succeeds', async () => {
+    // A oneShot / cursor `--print` runtime's compatible completion is a
+    // clean code-0 exit before `initObserved`; counting it would cooldown
+    // a healthy runtime. The predicate excludes ONLY the clean case, so
+    // even a threshold of 1 never engages here.
     const { supervisor, events } = make3cSupervisor({
       driverArgs: ['--sleep', '30', '--exit-code', '0'],
       driverOverride: base => ({ ...base, oneShot: true }),
@@ -2659,10 +2659,93 @@ describe('Supervisor #task:1460 — pre-init exit folds into init-failure cooldo
     );
     await wait(50);
     expect(events.some(e => e.event === 'runtime_init_cooldown')).toBe(false);
-    // Not gated — a oneShot's normal exit left the failure counter clean.
+    // Not gated — a oneShot's clean exit left the failure counter clean.
     const second = await supervisor.start(baseStartParams);
     expect(second.started).toBe(true);
     await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('a oneShot runtime that exits ABNORMALLY (non-zero) pre-init IS counted (oneShot excuses success, not a kill)', async () => {
+    // Cindy P1: `oneShot` only explains "exits after a successful turn",
+    // NOT "gets signal-killed / exits non-zero before init". EDR can
+    // SIGKILL cursor too, and backend's generic pending re-drive would
+    // loop it just the same. A non-zero pre-init exit therefore counts
+    // and engages cooldown. (A SIGKILL delivers code=null / signal set,
+    // which takes the same `code !== 0` disjunct as this non-zero case.)
+    const { supervisor, events } = make3cSupervisor({
+      driverArgs: ['--sleep', '30', '--exit-code', '1'],
+      driverOverride: base => ({ ...base, oneShot: true }),
+      initFailureCooldownThreshold: 1,
+      initFailureCooldownMs: 60_000,
+    });
+    await supervisor.start(baseStartParams);
+    await waitFor(
+      () => events.some(e => e.event === 'runtime_init_cooldown'),
+      3_000,
+    );
+    expect(events.some(e => e.event === 'runtime_init_timeout')).toBe(false);
+    const cooldown = events.find(e => e.event === 'runtime_init_cooldown');
+    if (cooldown && cooldown.event === 'runtime_init_cooldown') {
+      expect(cooldown.attempts_exhausted).toBe(1);
+    }
+    // And the cooldown gate now refuses the next fresh start.
+    await wait(20);
+    const second = await supervisor.start(baseStartParams);
+    expect(second.started).toBe(false);
+  });
+
+  it('threshold=3: the sticky counter accumulates across 3 independent pre-init crashes; only the 3rd engages cooldown; the 4th fresh start is refused (#1459 acceptance)', async () => {
+    // The real #1459 acceptance: prove the per-(conv, agent) counter is
+    // STICKY across separate handles (each `start()` is a fresh
+    // user-initiated attempt=0, purging the prior exited handle), that
+    // the first two crashes do NOT cooldown, that the 3rd emits exactly
+    // one `runtime_init_cooldown` with `attempts_exhausted === 3`, and
+    // that the 4th start is gated. Guards off-by-one and any per-handle
+    // counter reset that a threshold=1 test cannot catch.
+    const { supervisor, events } = make3cSupervisor({
+      driverArgs: ['--sleep', '25', '--exit-code', '1'],
+      initFailureCooldownThreshold: 3,
+      initFailureCooldownMs: 60_000,
+    });
+
+    // Crash 1 and 2: fresh start each time, wait for the terminal exit so
+    // the counter is bumped before the next start. Neither should cooldown.
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const res = await supervisor.start(baseStartParams);
+      expect(res.started).toBe(true); // not gated yet
+      await waitFor(
+        () => events.filter(e => e.event === 'runtime_exit').length === attempt,
+        3_000,
+      );
+      expect(events.some(e => e.event === 'runtime_init_cooldown')).toBe(false);
+    }
+
+    // Crash 3: still a permitted fresh start, but this exit crosses the
+    // threshold and engages cooldown.
+    const third = await supervisor.start(baseStartParams);
+    expect(third.started).toBe(true);
+    await waitFor(
+      () => events.some(e => e.event === 'runtime_init_cooldown'),
+      3_000,
+    );
+    const cooldowns = events.filter(e => e.event === 'runtime_init_cooldown');
+    expect(cooldowns).toHaveLength(1);
+    const cd = cooldowns[0];
+    if (cd && cd.event === 'runtime_init_cooldown') {
+      expect(cd.attempts_exhausted).toBe(3);
+      expect(cd.cooldown_until > Date.now()).toBe(true);
+    }
+    // The watchdog never fired across the whole sequence.
+    expect(events.some(e => e.event === 'runtime_init_timeout')).toBe(false);
+
+    // 4th fresh start is refused by the cooldown gate.
+    await wait(20);
+    const fourth = await supervisor.start(baseStartParams);
+    expect(fourth.started).toBe(false);
+    if (!fourth.started) {
+      expect(fourth.reason).toBe('init_cooldown');
+      expect(fourth.cooldown_until > Date.now()).toBe(true);
+    }
   });
 });
 

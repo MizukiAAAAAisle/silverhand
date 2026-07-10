@@ -3367,39 +3367,32 @@ export class Supervisor implements SupervisorContract {
     const ts = this.now();
     const k = key(handle.conversationId, handle.agentId);
 
-    // #task:1460: fold a pre-init abnormal exit into the SAME init-failure
-    // counter the watchdog uses. When a runtime dies BEFORE `session_init`
-    // and the watchdog never fired (it dies faster than any tier, or was
-    // never armed), it otherwise bypasses the failure accounting entirely
-    // — backend keeps re-driving the still-pending inbox row and respawns
-    // without bound (incident #1459: EDR SIGKILL'd claude pre-init → 1105
-    // spawns in 10 min). Recording it here bumps the sticky per-(conv,
-    // agent) counter, so the Nth failure engages the same 5-min cooldown
-    // and the start-time cooldown gate then refuses backend's respawn.
-    // Retries before the threshold stay driven by backend's existing
-    // re-drive of the pending inbox (`DeliveryCoordinator.onRuntimeExit`
-    // re-drives ANY `!intentional && !initTimedOut && !fatalError` exit
-    // with a pending row — immediately, no backoff; this is bounded
-    // retry + cooldown, NOT exponential/short backoff). The daemon only
-    // ACCOUNTS the failure here; it does not add a second respawn driver
-    // (which would race backend's attempt numbering). Membership is by
-    // DRIVER LIFECYCLE, not exit code (Cindy: `code !== 0` is a fragile
-    // proxy for "init should have happened"). Exclusions:
-    //   - initObserved    → init succeeded; not an init failure.
-    //   - initTimedOut    → the watchdog path already recorded this exit
-    //     (`failInitWatchdog` bumps the counter before the kill).
-    //   - intentionalExit → a user/daemon stop, not a crash.
-    //   - driver.oneShot  → a oneShot / cursor `--print` runtime exits
-    //     BEFORE `initObserved` on its NORMAL completion path, so any of
-    //     its exits (code 0 or not) is expected, not an init failure.
-    //     A long-lived (non-oneShot) runtime, by contrast, must reach
-    //     `session_init`; ANY non-intentional exit before it — even a
-    //     clean code 0 — is a genuine init failure worth counting.
+    // #task:1460: fold a pre-init failure into the SAME sticky
+    // init-failure counter the watchdog uses, so a runtime that dies
+    // before `session_init` (before, or without, the watchdog arming)
+    // can't drive an unbounded backend re-drive loop (incident #1459 —
+    // narrative in docs/progress.md). Membership contract:
+    //   - never reached `session_init` (`!initObserved`), is not the
+    //     watchdog's own kill (`!initTimedOut`, already counted in
+    //     `failInitWatchdog`), and is not a user/daemon stop
+    //     (`!intentionalExit`);
+    //   - a long-lived (non-oneShot) runtime counts on ANY such exit,
+    //     even a clean code 0 — it never replied, so it is an init
+    //     failure (Cindy: lifecycle, not exit code);
+    //   - a oneShot (cursor `--print`) runtime's compatible completion is
+    //     a clean code-0 exit, which is NOT a failure; but an ABNORMAL
+    //     oneShot exit before init (non-zero code, or a signal such as an
+    //     EDR SIGKILL) IS a failure — `oneShot` explains "exits after a
+    //     successful turn", not "gets killed mid-startup".
+    // The daemon only ACCOUNTS the failure here (bumps the counter,
+    // engages cooldown at threshold); backend owns the actual respawn via
+    // its pending-inbox re-drive (immediate, no backoff → this is bounded
+    // retry + cooldown, not exponential/short backoff).
     const preInitFailure =
       !handle.initObserved &&
       !handle.initTimedOut &&
       !handle.intentionalExit &&
-      !handle.driver.oneShot;
+      (!handle.driver.oneShot || code !== 0 || signal !== null);
     if (preInitFailure) {
       this.recordInitFailure(handle);
     }
@@ -3528,9 +3521,10 @@ export class Supervisor implements SupervisorContract {
     //   pre-init failure (#task:1460) → `crashed`, even on code === 0:
     //     a long-lived runtime that dies before `session_init` did NOT
     //     reply, so it must not project `replied → idle`; and it is NOT a
-    //     `timeout` (the watchdog never fired). oneShot runtimes are
-    //     excluded from `preInitFailure`, so their normal code-0 exit
-    //     still maps to `replied` below.
+    //     `timeout` (the watchdog never fired). A oneShot's CLEAN code-0
+    //     exit is excluded from `preInitFailure`, so it still maps to
+    //     `replied` below; an ABNORMAL oneShot pre-init exit is a
+    //     `preInitFailure` and correctly lands here as `crashed`.
     //   clean exit (code === 0)  → `replied`  (oneShot/cursor critical)
     //   non-zero / signal exit   → `crashed`
     // `replied → idle`, `timeout|stopped|crashed → failed` per CM's
