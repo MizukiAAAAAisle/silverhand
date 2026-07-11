@@ -1688,13 +1688,37 @@ export class Supervisor implements SupervisorContract {
     }
 
     try {
+      // #task:1471 — mid-turn deliveries must NOT advance the model-seen
+      // observed cursor. `consumeStartupDelivery` is the shared write path for
+      // spawn/session-init AND mid-turn (`deliver` admitted arm + deferred
+      // flush), so route the admit decision through the same
+      // `shouldAdmitDeliveryImmediately(handle)` gate the pre-#1417 wake path
+      // used: turn active → queue into `pendingAdmissionSeqByStream` (promoted
+      // by `admitPendingSeqForNewTurn` on the next `parsedStartsTurn`); turn
+      // not active → admit now. Hardcoding `true` here was the freshness
+      // regression that let mid-turn writes silently bump `observedSeqByStream`
+      // between the model's turn-start context capture and its send, so
+      // `agentMessageSend` reported a `seen_up_to_seq` covering messages the
+      // model never had in scope and CAS never staled the reply.
+      //
+      // Snapshot the decision BEFORE `await writeStdinPayload`. `dispatchParsedLine`
+      // runs synchronously from the stdout data listener and is NOT scoped
+      // under this handle's lifecycle lock, so `turn_end` processed during
+      // the write's await window would flip `inputTurnActive=false` and — if
+      // we read the decision post-await — cause a batch decided upon while
+      // the prior turn was active to slip past the pending-admission gate
+      // (Cindy: same-invariant race that the pre-#1417 `runtime_wake` path
+      // avoided by snapshotting first).
+      const admitNow = this.shouldAdmitDeliveryImmediately(handle);
       await this.writeStdinPayload(handle, encoded);
       this.admitDeliveryBatch(
         handle,
         batch.deliveries,
         batch.deliveredUpToSeq,
-        true,
-        'startup_delivery_admitted',
+        admitNow,
+        admitNow
+          ? 'startup_delivery_admitted'
+          : 'startup_delivery_queued_mid_turn',
       );
       await this.writeLastDeliveredSeq(handle, batch.deliveredUpToSeq);
     } catch (err) {

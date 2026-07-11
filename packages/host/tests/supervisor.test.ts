@@ -1164,8 +1164,10 @@ describe('Supervisor 3b — clearSession behavior', () => {
  *  pre-loads via `setNextParse`. Lets us drive the supervisor's
  *  parse fanout without depending on a real driver's JSON shape.
  *
- *  `kickoffMode` defaults to `'self_inits'` (matches claude); pass
- *  `'requires_first_message'` for B2 deferred-consume tests. */
+ *  `kickoffMode` defaults to `'self_inits'` (real claude is
+ *  `requires_first_message`; pick the mode that matches the surface
+ *  under test — this default is chosen for round-trip test simplicity,
+ *  not driver realism). */
 function makeProgrammableDriver(
   extraArgs: string[] = [],
   kickoffMode: 'self_inits' | 'requires_first_message' = 'self_inits',
@@ -3436,6 +3438,689 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       expect(postedBodies[1]?.['seen_up_to_seq']).toBe(13);
       expect(postedBodies[1]?.['stale_event_id']).toBe('stale-1');
       expect(postedBodies[1]?.['stale_resolution_reason']).toBe('revised');
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+});
+
+// =============================================================================
+// Supervisor — mid-turn delivery admission gate (#task:1471)
+// -----------------------------------------------------------------------------
+// CONTRACT (Do Not Weaken):
+//
+//   A delivery admitted into `observedSeqByStream` must reflect what the
+//   *model* has actually observed as a bounded turn context — NOT what the
+//   daemon has merely handed to stdin. When the model is mid-turn
+//   (`inputTurnActive=true`), a fresh delivery's seq goes into
+//   `pendingAdmissionSeqByStream` and is promoted to observed only at the
+//   next parsed turn-start (`admitPendingSeqForNewTurn`), OR when a stale
+//   response advances it via `message_stale_response`.
+//
+// WHY THIS EXISTS:
+//
+//   The pre-#1417 world had a `runtime_wake` contract test that pinned
+//   this ("does not admit mid-turn wake delivery into the next send
+//   boundary"). #1417 folded wake into `runtime_deliver →
+//   consumeStartupDelivery` and that test was deleted with the old API,
+//   leaving the behaviour untested. `consumeStartupDelivery` then
+//   hard-coded `admitNow=true`, which silently bypassed the 409 stale
+//   gate and broke turn-taking in countgame1 (5-agent race — the daemon
+//   reported mid-turn deliveries as model-seen even though the model's
+//   current action was generated from the earlier turn context, so the
+//   backend CAS couldn't identify laggard sends as stale).
+//
+// REVIEW GATE — a modifier MUST answer these before changing this group:
+//
+//   1. Are you softening `expect(seen_up_to_seq).toBe(<pre-turn seq>)` in
+//      the mid-turn send? If yes, you are removing a load-bearing proof
+//      point of the #1417 regression guard — do not.
+//   2. Are you deleting the 409-aware mock in the gated test (returning
+//      200 unconditionally)? That collapses this into an error-handling
+//      test and stops proving that stale is being *produced*.
+//   3. Are you removing the race test? The pre-await snapshot invariant
+//      (see supervisor/index.ts consumeStartupDelivery) is a
+//      load-bearing proof point in this group — without an equivalent,
+//      moving the admission-decision read to after any async barrier
+//      that can interleave with `turn_end` will pass CI.
+//   4. Are you migrating this behaviour to a new API? Port the
+//      equivalent proof points to that API's inputs BEFORE deleting or
+//      replacing this group; merging/renaming tests is fine, dropping
+//      the contract is not.
+// =============================================================================
+describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
+  it('queues mid-turn delivery into pending admission and promotes it at the next parsed turn-start, while runtime_delivery_consumed still fires per delivery', async () => {
+    // INVARIANT: mid-turn delivery's seq must NOT reach the model-seen
+    // cursor (observed) until the next parsed turn-start. Two proof
+    // points, both load-bearing:
+    //   (a) mid-turn send body carries seen=10 (pre-turn), not 11.
+    //   (b) after turn_end + parsed thinking, next-turn send carries seen=11
+    //       — pending WAS promoted, so the fix hasn't over-corrected into
+    //       "never admit".
+    // Delivery custody (runtime_delivery_consumed) fires for both
+    // regardless. Do not weaken either proof point; (a) proves the gate,
+    // (b) proves the promoter.
+    class ControlledStub extends EventEmitter {
+      readonly pid = 34_567;
+      readonly stdout = new EventEmitter();
+      readonly stderr = new EventEmitter();
+      readonly stdin = {
+        write: (
+          _line: string,
+          cb?: (err?: Error | null) => void,
+        ): boolean => {
+          setImmediate(() => cb?.());
+          return true;
+        },
+        end: () => {},
+        destroyed: false,
+        once: () => {},
+      };
+      kill(_sig?: NodeJS.Signals | number): boolean {
+        setImmediate(() => this.emit('exit', 0, null));
+        return true;
+      }
+    }
+    const stub = new ControlledStub();
+    const spawnFn = (
+      _b: string,
+      _a: ReadonlyArray<string>,
+      _o: SpawnOptions,
+    ): ChildProcess => stub as unknown as ChildProcess;
+
+    const { driver } = makeProgrammableDriver([], 'self_inits');
+    const spy = makeEmitSpy();
+    const supervisor = new Supervisor({
+      emit: spy.emit,
+      logger: silentLogger(),
+      driverFor: () => driver,
+      resolveBinary: async (_kind, fallback) => fallback,
+      spawnFn,
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
+      controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
+      emitRawRuntimeOutput: true,
+      sigtermToSigkillMs: 50,
+      sigkillTimeoutMs: 200,
+    });
+
+    const postedBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        postedBodies.push(body);
+        // Deliberately omit `message_seq` on the send response so the
+        // post-commit `advanceObservedStream(message_send_commit)` is a
+        // no-op. This isolates what we're actually testing (the mid-turn
+        // admit boundary) from the orthogonal send-commit advance path.
+        return new Response(
+          JSON.stringify({ message_id: `m${postedBodies.length}` }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+
+    try {
+      // M1 arrives via SPAWN arm — no prior handle → startUnlocked with
+      // M1 as its startup_delivery. Handle materializes with
+      // inputTurnActive=false (fake driver is not oneShot), so
+      // consumeStartupDelivery admits M1 immediately into observed
+      // (MAIN=10) and the admit flips inputTurnActive=true.
+      const spawnResult = await supervisor.deliver({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [10],
+        kind: 'message',
+        text: 'first message (spawn batch)',
+        delivered_up_to_seq: 10,
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      expect(spawnResult).toMatchObject({ disposition: 'spawning' });
+      await waitForDeliveryConsumed(spy.events, 10);
+
+      // M2 arrives while the model is still mid-turn (inputTurnActive=true).
+      // Pre-fix: admitted immediately, bumped observed to 11 → the still-
+      // in-flight model send would report seen=11 for a message it never
+      // saw and CAS would never stale. Fixed: routed into
+      // pendingAdmissionSeqByStream; observed stays at 10 until the next
+      // parsed turn-start.
+      const midTurnDeliver = await supervisor.deliver({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [11],
+        kind: 'message',
+        text: 'second message arriving mid-turn',
+        delivered_up_to_seq: 11,
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      expect(midTurnDeliver).toMatchObject({ disposition: 'admitted' });
+      await waitForDeliveryConsumed(spy.events, 11);
+
+      // Delivery custody unchanged — both consumed events fire even though
+      // only M1 advanced the model-seen cursor. Cindy: the fix only moves
+      // observed-cursor timing; DB ack/`delivered_at` contract stays.
+      const consumedIds = spy.events
+        .flatMap(e =>
+          e.event === 'runtime_delivery_consumed' ? [...e.delivery_ids] : [],
+        )
+        .sort((a, b) => a - b);
+      expect(consumedIds).toEqual([10, 11]);
+
+      // ── Mid-turn agent send. seen_up_to_seq must be 10 (M1 only), not 11.
+      // Before the #task:1471 fix this was 11 → the regression.
+      const midTurnSend = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'draft reply generated on M1 context',
+      });
+      expect(midTurnSend).toMatchObject({ ok: true });
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(10);
+      expect(postedBodies[0]?.['stream_key']).toBe('main');
+
+      // ── Turn boundary: parsed turn_end → resolveRun clears
+      // inputTurnActive. Then a parsed thinking event (parsedStartsTurn=true)
+      // triggers admitPendingSeqForNewTurn, promoting the queued M2 (11)
+      // from pendingAdmissionSeqByStream into observedSeqByStream.
+      driver.parseLine = () => [{ kind: 'turn_end' }];
+      stub.stdout.emit('data', 'END\n');
+      await waitFor(() =>
+        spy.events.some(
+          e =>
+            e.event === 'runtime_parsed_event' &&
+            e.parsed.kind === 'turn_end',
+        ),
+      );
+      driver.parseLine = () => [
+        { kind: 'thinking', text: 'starting next turn' },
+      ];
+      stub.stdout.emit('data', 'THINK\n');
+      await waitFor(() =>
+        spy.events.some(
+          e =>
+            e.event === 'runtime_parsed_event' &&
+            e.parsed.kind === 'thinking',
+        ),
+      );
+      driver.parseLine = () => [];
+
+      // ── Next-turn send: pending was promoted, so seen now covers M2.
+      // Guards against the sibling regression where the fix could over-
+      // correct into "never admit" — must actually promote here.
+      const nextTurnSend = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'reply generated on new turn context',
+      });
+      expect(nextTurnSend).toMatchObject({ ok: true });
+      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(11);
+      expect(postedBodies[1]?.['stream_key']).toBe('main');
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('gated driver — mid-turn deferred flush at tool_output boundary keeps observed at the pre-turn seq (countgame1 claude path)', async () => {
+    // INVARIANTS (Cindy — do not weaken):
+    //   1. Old-turn send must trigger a REAL 409 from the backend. The
+    //      mock CAS on `seen_up_to_seq < BACKEND_CURRENT_SEQ` is
+    //      load-bearing — reverting to unconditional 409 (or 200) turns
+    //      this into an error-handling test and drops the *production
+    //      condition* the regression bypassed.
+    //   2. `delivery-consumed != model-seen`: both M1+M2 fire
+    //      runtime_delivery_consumed, but only M1 advances observed
+    //      until the next parsed turn-start.
+    //   3. Gated `busyDeliveryMode` is intentional. Reverting to the
+    //      default `direct` picks a different consumeStartupDelivery
+    //      entry and no longer exercises the deferred-queue path that
+    //      broke countgame1.
+    // The countgame1 regression path (claude, `busyDeliveryMode='gated'`):
+    //   1. M1 delivered idle → SPAWN arm admits → observed=10, inputTurnActive=true
+    //   2. Model emits tool_call → busy.outstandingToolUses=1 → boundary closed
+    //   3. M2 delivered mid-tool_call → gated && !boundaryOpen → `deferred`
+    //   4. Model emits tool_output → outstandingToolUses=0 → boundary reopens
+    //      → maybeScheduleDeferredFlush → flushDeferred → consumeStartupDelivery
+    //   5. HERE: inputTurnActive still true (no turn_end fired). Pre-fix
+    //      unconditional admit at :1692 bumped observed to 11 before the
+    //      model's in-turn `agentMessageSend`; the send then reported
+    //      seen=11 for a message the model never saw. Fix routes to
+    //      pending admission until the next parsed turn-start.
+    class ControlledStub extends EventEmitter {
+      readonly pid = 45_678;
+      readonly stdout = new EventEmitter();
+      readonly stderr = new EventEmitter();
+      readonly stdin = {
+        write: (
+          _line: string,
+          cb?: (err?: Error | null) => void,
+        ): boolean => {
+          setImmediate(() => cb?.());
+          return true;
+        },
+        end: () => {},
+        destroyed: false,
+        once: () => {},
+      };
+      kill(_sig?: NodeJS.Signals | number): boolean {
+        setImmediate(() => this.emit('exit', 0, null));
+        return true;
+      }
+    }
+    const stub = new ControlledStub();
+    const spawnFn = (
+      _b: string,
+      _a: ReadonlyArray<string>,
+      _o: SpawnOptions,
+    ): ChildProcess => stub as unknown as ChildProcess;
+
+    const { driver: baseDriver } = makeProgrammableDriver([], 'self_inits');
+    // Real claude driver is `gated` (tests/../drivers/claude.ts). The default
+    // fake is `direct`; override so this test exercises the actual
+    // countgame1 code path (deferred queue + boundary-reopen flush).
+    const driver: Driver = { ...baseDriver, busyDeliveryMode: 'gated' };
+    const spy = makeEmitSpy();
+    const supervisor = new Supervisor({
+      emit: spy.emit,
+      logger: silentLogger(),
+      driverFor: () => driver,
+      resolveBinary: async (_kind, fallback) => fallback,
+      spawnFn,
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
+      controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
+      emitRawRuntimeOutput: true,
+      sigtermToSigkillMs: 50,
+      sigkillTimeoutMs: 200,
+    });
+
+    const postedBodies: Record<string, unknown>[] = [];
+    // 409-aware mock: the backend's authoritative main-line seq after M1+M2
+    // deliver is 11. A send with `seen_up_to_seq < 11` is stale under the
+    // per-stream CAS; the backend returns 409 with `subkind='message_stale'`.
+    // A revised retry (or any send with seen>=11) settles at 200. This is
+    // the correctness gate the #task:1417 regression bypassed: mid-turn
+    // deliveries bumped observed to 11 before the model's in-turn send,
+    // so `seen_up_to_seq=11` slipped past CAS and never staled.
+    const BACKEND_CURRENT_SEQ = 11;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        postedBodies.push(body);
+        const seen = body['seen_up_to_seq'];
+        if (typeof seen === 'number' && seen < BACKEND_CURRENT_SEQ) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'conflict',
+                message: 'message stale',
+                details: {
+                  subkind: 'message_stale',
+                  conversation_id: 'c1',
+                  stale_event_id: `stale-${postedBodies.length}`,
+                  seen_up_to_seq: seen,
+                  current_seq: BACKEND_CURRENT_SEQ,
+                  newer_messages: [],
+                },
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({ message_id: `m${postedBodies.length}` }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+
+    try {
+      // ── M1: SPAWN arm — startup admit, observed=10, inputTurnActive=true.
+      const spawnResult = await supervisor.deliver({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [10],
+        kind: 'message',
+        text: 'first message (spawn batch)',
+        delivered_up_to_seq: 10,
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      expect(spawnResult).toMatchObject({ disposition: 'spawning' });
+      await waitForDeliveryConsumed(spy.events, 10);
+
+      // ── Model enters a tool_call — boundary closes (outstandingToolUses=1).
+      driver.parseLine = () => [
+        { kind: 'tool_call', name: 'Bash', input: {} },
+      ];
+      stub.stdout.emit('data', 'TOOL\n');
+      await waitFor(() =>
+        spy.events.some(
+          e =>
+            e.event === 'runtime_parsed_event' &&
+            e.parsed.kind === 'tool_call',
+        ),
+      );
+
+      // ── M2 delivered mid-tool_call — gated && !boundaryOpen → deferred.
+      // Pre-fix and post-fix both take this arm; the regression is in step 5.
+      driver.parseLine = () => [];
+      const midToolCallDeliver = await supervisor.deliver({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [11],
+        kind: 'message',
+        text: 'second message arriving mid tool_call',
+        delivered_up_to_seq: 11,
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      expect(midToolCallDeliver).toMatchObject({ disposition: 'deferred' });
+
+      // ── tool_output → outstandingToolUses=0 → handleAtSafeBoundary
+      // reopens → maybeScheduleDeferredFlush → flushDeferred →
+      // consumeStartupDelivery drains M2. inputTurnActive still true.
+      driver.parseLine = () => [{ kind: 'tool_output', name: 'Bash' }];
+      stub.stdout.emit('data', 'TOOL_OUT\n');
+      await waitForDeliveryConsumed(spy.events, 11);
+      driver.parseLine = () => [];
+
+      // Custody unchanged: consumed for both, direct/gated alike.
+      const consumedIds = spy.events
+        .flatMap(e =>
+          e.event === 'runtime_delivery_consumed' ? [...e.delivery_ids] : [],
+        )
+        .sort((a, b) => a - b);
+      expect(consumedIds).toEqual([10, 11]);
+
+      // ── In-turn agent send after the deferred flush. This is the exact
+      // countgame1 06:08 moment: tool_output just resolved, model generates
+      // its reply, calls message_send with a `seen_up_to_seq` that reflects
+      // ONLY M1 context. With the fix, observed is still 10 (M2 sits in
+      // pending), so the send body carries seen=10 and the backend's CAS
+      // fires 409 message_stale — the correctness gate the regression
+      // silently bypassed. Pre-fix, seen would be 11 and the send would
+      // slip past CAS with 200 (the countgame1 turn-taking break).
+      const midTurnSend = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'draft reply generated on M1 context after tool_output',
+      });
+      expect(midTurnSend).toMatchObject({ ok: false, status: 409 });
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(10);
+
+      // ── Turn boundary + revised retry. Once the model surfaces
+      // turn_end and a new turn-start (`thinking`), pending is folded into
+      // observed via `admitPendingSeqForNewTurn`. In this test 409's own
+      // `message_stale_response` observed-advance already reached seq=11,
+      // so promotion is a monotonic no-op (proven separately by the
+      // direct-mode test above); the point here is that the next send
+      // carries the freshened boundary and the 409 gate no longer fires.
+      driver.parseLine = () => [{ kind: 'turn_end' }];
+      stub.stdout.emit('data', 'END\n');
+      await waitFor(() =>
+        spy.events.some(
+          e =>
+            e.event === 'runtime_parsed_event' &&
+            e.parsed.kind === 'turn_end',
+        ),
+      );
+      driver.parseLine = () => [
+        { kind: 'thinking', text: 'starting next turn' },
+      ];
+      stub.stdout.emit('data', 'THINK\n');
+      await waitFor(() =>
+        spy.events.some(
+          e =>
+            e.event === 'runtime_parsed_event' &&
+            e.parsed.kind === 'thinking',
+        ),
+      );
+      driver.parseLine = () => [];
+
+      const nextTurnSend = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'revised reply on refreshed context',
+        stale_resolution_reason: 'revised',
+      });
+      expect(nextTurnSend).toMatchObject({ ok: true });
+      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(11);
+      expect(postedBodies[1]?.['stale_event_id']).toBe('stale-1');
+      expect(postedBodies[1]?.['stale_resolution_reason']).toBe('revised');
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('snapshots admit decision BEFORE writeStdinPayload so a turn_end interleaving the write cannot bypass the pending gate', async () => {
+    // INVARIANTS (do not weaken):
+    //   1. The admission decision (admit-now vs queue-to-pending) must
+    //      be bound BEFORE any async boundary that can interleave with
+    //      `turn_end`. The current implementation achieves this by
+    //      snapshotting `admitNow = shouldAdmitDeliveryImmediately(handle)`
+    //      before `await this.writeStdinPayload(...)` in
+    //      consumeStartupDelivery; a later serialisation or atomic
+    //      state-machine rewrite is fine so long as the decision
+    //      remains bound to the turn state at the moment the batch was
+    //      chosen — post-await re-reads reintroduce the regression.
+    //   2. The test must preserve a deterministic barrier proving the
+    //      write can be in-flight while `turn_end` crosses it. The
+    //      current fixture uses `parkWrites` + `resolveParkedWrite()`
+    //      to make the interleaving reliable; refactor the fixture
+    //      freely, but do NOT fall back to probabilistic timing
+    //      (setImmediate / setTimeout scheduling doesn't hold the
+    //      write callback long enough for `dispatchParsedLine` — which
+    //      runs synchronously from the stdout listener, unlocked — to
+    //      reliably interleave a `turn_end` line).
+    //   3. The 409 assertion on `postedBodies[0]['seen_up_to_seq'] ===
+    //      10` is the proof point that the decision honoured the
+    //      pre-boundary turn state. Weakening it to `<= 11` allows the
+    //      regression through.
+    // Race window (Cindy): `dispatchParsedLine` runs synchronously from the
+    // child stdout listener and is NOT under this handle's lifecycle lock.
+    // So while `consumeStartupDelivery` is awaiting `writeStdinPayload`, a
+    // `turn_end` line on stdout can be processed and flip
+    // `inputTurnActive=false` before the write callback fires. A post-await
+    // read of `shouldAdmitDeliveryImmediately(handle)` would then admit
+    // immediately — even though this batch was decided upon and started
+    // being written while the prior turn was still active. Correct
+    // semantics: snapshot the decision BEFORE the write, matching the
+    // pre-#task:1417 `runtime_wake` invariant.
+    class ControlledStub extends EventEmitter {
+      readonly pid = 56_789;
+      readonly stdout = new EventEmitter();
+      readonly stderr = new EventEmitter();
+      parkWrites = false;
+      pendingWriteCb: ((err?: Error | null) => void) | null = null;
+      readonly stdin = {
+        write: (
+          _line: string,
+          cb?: (err?: Error | null) => void,
+        ): boolean => {
+          if (this.parkWrites) {
+            // Park the callback; the test resolves it manually after
+            // interleaving a `turn_end` stdout line so we can prove the
+            // decision is taken pre-await, not post-await.
+            this.pendingWriteCb = cb ?? null;
+          } else {
+            setImmediate(() => cb?.());
+          }
+          return true;
+        },
+        end: () => {},
+        destroyed: false,
+        once: () => {},
+      };
+      resolveParkedWrite(): void {
+        const cb = this.pendingWriteCb;
+        this.pendingWriteCb = null;
+        cb?.();
+      }
+      kill(_sig?: NodeJS.Signals | number): boolean {
+        setImmediate(() => this.emit('exit', 0, null));
+        return true;
+      }
+    }
+    const stub = new ControlledStub();
+    const spawnFn = (
+      _b: string,
+      _a: ReadonlyArray<string>,
+      _o: SpawnOptions,
+    ): ChildProcess => stub as unknown as ChildProcess;
+
+    const { driver: baseDriver } = makeProgrammableDriver([], 'self_inits');
+    const driver: Driver = { ...baseDriver, busyDeliveryMode: 'gated' };
+    const spy = makeEmitSpy();
+    const supervisor = new Supervisor({
+      emit: spy.emit,
+      logger: silentLogger(),
+      driverFor: () => driver,
+      resolveBinary: async (_kind, fallback) => fallback,
+      spawnFn,
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
+      controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
+      emitRawRuntimeOutput: true,
+      sigtermToSigkillMs: 50,
+      sigkillTimeoutMs: 200,
+    });
+
+    const postedBodies: Record<string, unknown>[] = [];
+    const BACKEND_CURRENT_SEQ = 11;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        postedBodies.push(body);
+        const seen = body['seen_up_to_seq'];
+        if (typeof seen === 'number' && seen < BACKEND_CURRENT_SEQ) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'conflict',
+                message: 'message stale',
+                details: {
+                  subkind: 'message_stale',
+                  conversation_id: 'c1',
+                  stale_event_id: `stale-${postedBodies.length}`,
+                  seen_up_to_seq: seen,
+                  current_seq: BACKEND_CURRENT_SEQ,
+                  newer_messages: [],
+                },
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({ message_id: `m${postedBodies.length}` }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+
+    try {
+      // ── Setup identical to the countgame1 gated test, up to M2 deferred.
+      const spawnResult = await supervisor.deliver({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [10],
+        kind: 'message',
+        text: 'first message',
+        delivered_up_to_seq: 10,
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      expect(spawnResult).toMatchObject({ disposition: 'spawning' });
+      await waitForDeliveryConsumed(spy.events, 10);
+
+      driver.parseLine = () => [
+        { kind: 'tool_call', name: 'Bash', input: {} },
+      ];
+      stub.stdout.emit('data', 'TOOL\n');
+      await waitFor(() =>
+        spy.events.some(
+          e =>
+            e.event === 'runtime_parsed_event' &&
+            e.parsed.kind === 'tool_call',
+        ),
+      );
+
+      driver.parseLine = () => [];
+      const midToolCallDeliver = await supervisor.deliver({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [11],
+        kind: 'message',
+        text: 'second message arriving mid tool_call',
+        delivered_up_to_seq: 11,
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      expect(midToolCallDeliver).toMatchObject({ disposition: 'deferred' });
+
+      // ── Race sequencing. Park M2's write, then emit tool_output +
+      // turn_end back-to-back so `resolveRun` flips inputTurnActive=false
+      // WHILE the write's promise is still awaiting. Only then release
+      // the write. Pre-fix: `shouldAdmitDeliveryImmediately(handle)` read
+      // after the await would return true (turn just ended) → admit
+      // immediately → observed=11 → mid-turn send seen=11, no 409. With
+      // the pre-await snapshot: decision taken as false (turn active)
+      // → queue to pending → observed stays 10 → send seen=10, 409.
+      stub.parkWrites = true;
+      driver.parseLine = () => [{ kind: 'tool_output', name: 'Bash' }];
+      stub.stdout.emit('data', 'TOOL_OUT\n');
+      // Wait for flushDeferred to reach stdin.write (the callback lands
+      // in pendingWriteCb). This proves the M2 write is genuinely
+      // in-flight before we interleave turn_end.
+      await waitFor(() => stub.pendingWriteCb !== null, 1_000);
+
+      driver.parseLine = () => [{ kind: 'turn_end' }];
+      stub.stdout.emit('data', 'END\n');
+      await waitFor(() =>
+        spy.events.some(
+          e =>
+            e.event === 'runtime_parsed_event' &&
+            e.parsed.kind === 'turn_end',
+        ),
+      );
+
+      // Only NOW release the write. consumeStartupDelivery resumes; the
+      // fixed code applies the pre-await snapshot (admitNow=false) and
+      // routes M2 into pending. Without the fix it would read live state
+      // (post-turn_end, admitNow=true) and admit immediately.
+      driver.parseLine = () => [];
+      stub.parkWrites = false;
+      stub.resolveParkedWrite();
+      await waitForDeliveryConsumed(spy.events, 11);
+
+      // Custody still per-delivery regardless of the race timing.
+      const consumedIds = spy.events
+        .flatMap(e =>
+          e.event === 'runtime_delivery_consumed' ? [...e.delivery_ids] : [],
+        )
+        .sort((a, b) => a - b);
+      expect(consumedIds).toEqual([10, 11]);
+
+      // The proof: an in-turn send generated before the turn boundary was
+      // observed by the model must still stale. Backend returns 409
+      // because seen=10 < BACKEND_CURRENT_SEQ=11.
+      const raceSend = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'draft reply raced against turn_end',
+      });
+      expect(raceSend).toMatchObject({ ok: false, status: 409 });
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(10);
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
