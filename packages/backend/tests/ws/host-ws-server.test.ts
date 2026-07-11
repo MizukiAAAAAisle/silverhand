@@ -16,6 +16,7 @@ import {
 } from '@silverhand/shared';
 import { HostTokenService } from '../../src/auth/host-token.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
+import { BackendMetrics } from '../../src/observability/metrics.js';
 import {
   HOST_WS_PATH,
   HostWsCommandTransportError,
@@ -75,6 +76,36 @@ describe('host outbound WebSocket server', () => {
     const after = new HostRepo(t.ctx.db).get(host!.id)!.last_seen_at;
     expect(after).not.toBeNull();
     expect(after!).toBeGreaterThanOrEqual(before ?? 0);
+  });
+
+  it('records a bounded protocol mismatch before rejecting an incompatible ready frame', async () => {
+    t = buildTestApp();
+    const metrics = new BackendMetrics('standalone');
+    t.ctx.metrics = metrics;
+    server = await openServer(t);
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+
+    ws.send(
+      JSON.stringify({
+        ...(readyFrame({ hostName: 'Old Mac' }) as Record<string, unknown>),
+        protocol_version: OUTBOUND_PROTOCOL_VERSION + 1,
+      }),
+    );
+    const closed = await waitForClose(ws);
+    expect(closed.code).toBe(1002);
+    const body = await metrics.render();
+    expect(body).toContain(
+      `actual_version="${OUTBOUND_PROTOCOL_VERSION + 1}"`,
+    );
+    expect(body).toContain(
+      `supported_version="${OUTBOUND_PROTOCOL_VERSION}"`,
+    );
+    metrics.close();
   });
 
   it('rejects missing, unknown, and revoked host tokens before upgrade', async () => {

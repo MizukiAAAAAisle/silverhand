@@ -46,12 +46,15 @@ describe('standalone server env config', () => {
       value: false,
       source: 'default',
     });
+    expect(resolved.metricsListen).toEqual({ value: null, source: 'default' });
     expect(resolved.eventWsAllowedOrigins).toEqual({
       value: [],
       source: 'default',
     });
 
-    expect(resolveStandaloneServerEnv({ SILVERHAND_MIGRATE: '1' }).migrate).toEqual({
+    expect(
+      resolveStandaloneServerEnv({ SILVERHAND_MIGRATE: '1' }).migrate,
+    ).toEqual({
       value: true,
       source: 'env',
     });
@@ -62,7 +65,9 @@ describe('standalone server env config', () => {
       value: false,
       source: 'default',
     });
-    expect(resolveMigrationEnv({}, DEFAULT_EMBEDDED_SILVERHAND_MIGRATE)).toEqual({
+    expect(
+      resolveMigrationEnv({}, DEFAULT_EMBEDDED_SILVERHAND_MIGRATE),
+    ).toEqual({
       value: true,
       source: 'default',
     });
@@ -70,9 +75,7 @@ describe('standalone server env config', () => {
       value: true,
       source: 'default',
     });
-    expect(
-      resolveEmbeddedMigrationEnv({ SILVERHAND_MIGRATE: '0' }),
-    ).toEqual({
+    expect(resolveEmbeddedMigrationEnv({ SILVERHAND_MIGRATE: '0' })).toEqual({
       value: false,
       source: 'env',
     });
@@ -95,6 +98,9 @@ describe('standalone server env config', () => {
       resolveStandaloneServerEnv({ SILVERHAND_MIGRATE: 'true' }),
     ).toThrow(ServerEnvConfigError);
     expect(() =>
+      resolveStandaloneServerEnv({ SILVERHAND_METRICS_LISTEN: '0.0.0.0:9464' }),
+    ).toThrow(ServerEnvConfigError);
+    expect(() =>
       resolveStandaloneServerEnv({
         SILVERHAND_EVENT_WS_ALLOWED_ORIGINS: 'wss://example.test',
       }),
@@ -106,8 +112,21 @@ describe('standalone server env config', () => {
     ).toThrow(ServerEnvConfigError);
     // set-but-empty (only separators / blanks) is a misconfiguration
     expect(() =>
-      resolveStandaloneServerEnv({ SILVERHAND_EVENT_WS_ALLOWED_ORIGINS: ' , ' }),
+      resolveStandaloneServerEnv({
+        SILVERHAND_EVENT_WS_ALLOWED_ORIGINS: ' , ',
+      }),
     ).toThrow(ServerEnvConfigError);
+  });
+
+  it('accepts only an explicit loopback metrics listener', () => {
+    expect(
+      resolveStandaloneServerEnv({
+        SILVERHAND_METRICS_LISTEN: '127.0.0.1:9464',
+      }).metricsListen,
+    ).toEqual({
+      value: { hostname: '127.0.0.1', port: 9464 },
+      source: 'env',
+    });
   });
 
   it('resolves the event-WS Origin allowlist (comma-separated, reverse-proxy origins)', () => {
@@ -132,6 +151,7 @@ describe('standalone server env config', () => {
         SILVERHAND_DATA_DIR: dataDir,
         SILVERHAND_DISABLE_SIGNUP: '1',
         SILVERHAND_LOG_LEVEL: 'warn',
+        SILVERHAND_METRICS_LISTEN: '127.0.0.1:0',
         SILVERHAND_EVENT_WS_ALLOWED_ORIGINS: 'https://proxy.example.test/',
       },
     });
@@ -162,6 +182,23 @@ describe('standalone server env config', () => {
           db_writable: true,
         },
       });
+
+      await fetch(`${running.url}/api/hosts/some-host/status`);
+
+      expect(running.metricsUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      const metrics = await fetch(`${running.metricsUrl}/metrics`);
+      expect(metrics.status).toBe(200);
+      const metricsBody = await metrics.text();
+      expect(metricsBody).toContain(
+        'silverhand_http_request_duration_seconds_bucket',
+      );
+      expect(metricsBody).toContain('route="/readyz"');
+      expect(metricsBody).not.toContain('/api/hosts/some-host');
+      const publicMetrics = await fetch(`${running.url}/metrics`);
+      expect(publicMetrics.status).not.toBe(200);
+      expect(await publicMetrics.text()).not.toContain(
+        'silverhand_http_request_duration_seconds',
+      );
 
       const bootstrap = await fetch(`${running.url}/auth/embedded-bootstrap`, {
         method: 'POST',
@@ -208,7 +245,7 @@ describe('standalone server env config', () => {
         headers: { 'content-type': 'application/json' },
       });
       expect(signup.status).toBe(200);
-      const session = await signup.json() as { user_token: string };
+      const session = (await signup.json()) as { user_token: string };
 
       const runtimes = await fetch(`${running.url}${apiPaths.runtimes}`, {
         headers: { authorization: `Bearer ${session.user_token}` },

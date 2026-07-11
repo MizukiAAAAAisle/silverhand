@@ -22,7 +22,8 @@ The package also owns the standalone command-line surface:
 - `src/main.ts` is the `silverhand-server` binary entry point.
 - `src/config.ts` parses standalone env such as `SILVERHAND_LISTEN`,
   `SILVERHAND_DATA_DIR`, `SILVERHAND_MIGRATE`, `SILVERHAND_DISABLE_SIGNUP`, and
-  `SILVERHAND_LOG_LEVEL`.
+  `SILVERHAND_LOG_LEVEL`. An opt-in `SILVERHAND_METRICS_LISTEN` starts the
+  separate loopback-only Prometheus listener.
 - `src/admin.ts` implements `silverhand-server admin ...` commands.
 
 ## Relationship to `@silverhand/backend`

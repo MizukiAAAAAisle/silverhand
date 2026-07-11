@@ -1,4 +1,5 @@
 import { Hono, type Context } from 'hono';
+import { routePath } from 'hono/route';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { performance } from 'node:perf_hooks';
 import { apiPaths, authPaths, probePaths } from '@silverhand/shared';
@@ -63,6 +64,7 @@ import {
   isLoopbackAddress,
 } from './auth/embedded-bootstrap.js';
 import { UserAuthService } from './auth/user-auth-service.js';
+import { runWithBackendRequestContext } from './observability/request-context.js';
 
 function standaloneMode(ctx: BackendContext): boolean {
   return ctx.deploymentMode === 'standalone';
@@ -113,7 +115,9 @@ function readinessResponse(ctx: BackendContext): {
   // Embedded mode also constructs the shared fanout, but readiness must
   // not be read as daemon attachment for either the local Unix-socket
   // host or user-managed WS hosts, so the check remains omitted there.
-  const checks: typeof baseChecks & { outbound_event_fanout_installed?: boolean } =
+  const checks: typeof baseChecks & {
+    outbound_event_fanout_installed?: boolean;
+  } =
     ctx.deploymentMode === 'standalone'
       ? {
           ...baseChecks,
@@ -140,14 +144,25 @@ function readinessResponse(ctx: BackendContext): {
   };
 }
 
-function probeDbWritable(ctx: BackendContext): { ok: true } | { ok: false; error: string } {
+function probeDbWritable(
+  ctx: BackendContext,
+): { ok: true } | { ok: false; error: string } {
+  const startedAt = performance.now();
   try {
     ctx.db.exec('BEGIN IMMEDIATE');
     ctx.db.exec('ROLLBACK');
+    ctx.metrics?.observeReadinessProbe('ok', elapsedSince(startedAt));
     return { ok: true };
   } catch (err) {
     safeRollback(ctx);
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    ctx.metrics?.observeReadinessProbe(
+      sqliteProbeOutcome(err),
+      elapsedSince(startedAt),
+    );
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
@@ -159,8 +174,10 @@ function safeRollback(ctx: BackendContext): void {
   }
 }
 
-
-function requireSessionBearerUser(c: Context, ctx: BackendContext): Response | string {
+function requireSessionBearerUser(
+  c: Context,
+  ctx: BackendContext,
+): Response | string {
   const token = parseBearerTokenHeader(c.req.header('authorization'));
   if (!token) {
     return c.json(
@@ -200,12 +217,14 @@ function isLoopbackRequest(c: Context): boolean {
   }
 }
 
-
 const SLOW_REQUEST_MS = 500;
 const DIAGNOSTIC_REQUEST_MS = 100;
 let apiRequestSequence = 0;
 
-function installApiTimingMiddleware(app: Hono<AppEnv>, ctx: BackendContext): void {
+function installApiTimingMiddleware(
+  app: Hono<AppEnv>,
+  ctx: BackendContext,
+): void {
   app.use('*', async (c, next) => {
     const url = new URL(c.req.url);
     const path = url.pathname;
@@ -221,39 +240,70 @@ function installApiTimingMiddleware(app: Hono<AppEnv>, ctx: BackendContext): voi
       },
       'api: request start',
     );
-    try {
-      await next();
-    } finally {
-      const elapsedMs = elapsedSince(startedAt);
-      ctx.logger.info(
-        {
-          requestId,
-          method: c.req.method,
-          path,
-          query: url.search || null,
-          status: c.res.status,
-          elapsedMs,
-        },
-        'api: request complete',
-      );
-      if (
-        elapsedMs >= SLOW_REQUEST_MS ||
-        (isDiagnosticPath && elapsedMs >= DIAGNOSTIC_REQUEST_MS)
-      ) {
-        ctx.logger.warn(
-          {
-            requestId,
+    await runWithBackendRequestContext(
+      { requestId, method: c.req.method },
+      async () => {
+        let unhandledError = false;
+        try {
+          await next();
+        } catch (err) {
+          unhandledError = true;
+          throw err;
+        } finally {
+          const elapsedMs = elapsedSince(startedAt);
+          const status = unhandledError ? 500 : c.res.status;
+          ctx.metrics?.observeHttpRequest({
             method: c.req.method,
-            path,
-            status: c.res.status,
+            route: normalizedRoute(c),
+            status,
             elapsedMs,
-            thresholdMs: isDiagnosticPath ? DIAGNOSTIC_REQUEST_MS : SLOW_REQUEST_MS,
-          },
-          'api: slow request',
-        );
-      }
-    }
+          });
+          ctx.logger.info(
+            {
+              requestId,
+              method: c.req.method,
+              path,
+              query: url.search || null,
+              status,
+              elapsedMs,
+            },
+            'api: request complete',
+          );
+          if (
+            elapsedMs >= SLOW_REQUEST_MS ||
+            (isDiagnosticPath && elapsedMs >= DIAGNOSTIC_REQUEST_MS)
+          ) {
+            ctx.logger.warn(
+              {
+                requestId,
+                method: c.req.method,
+                path,
+                status,
+                elapsedMs,
+                thresholdMs: isDiagnosticPath
+                  ? DIAGNOSTIC_REQUEST_MS
+                  : SLOW_REQUEST_MS,
+              },
+              'api: slow request',
+            );
+          }
+        }
+      },
+    );
   });
+}
+
+function normalizedRoute(c: Context): string {
+  const matched = routePath(c, -1);
+  return matched && matched !== '*' ? matched : 'unmatched';
+}
+
+function sqliteProbeOutcome(err: unknown): 'busy' | 'locked' | 'error' {
+  if (!err || typeof err !== 'object' || !('code' in err)) return 'error';
+  const code = String((err as { code?: unknown }).code ?? '');
+  if (code.startsWith('SQLITE_BUSY')) return 'busy';
+  if (code.startsWith('SQLITE_LOCKED')) return 'locked';
+  return 'error';
 }
 
 function nextApiRequestId(): string {
@@ -265,7 +315,8 @@ function isChannelSwitchDiagnosticPath(path: string): boolean {
   if (path === apiPaths.messageUnreadSummary) {
     return true;
   }
-  if (/^\/api\/workspaces\/[^/]+\/channels(\/archived)?$/.test(path)) return true;
+  if (/^\/api\/workspaces\/[^/]+\/channels(\/archived)?$/.test(path))
+    return true;
   return /^\/api\/channels\/[^/]+\/(messages|agents|agent-run-states|threads|message-unread)$/.test(
     path,
   );
@@ -295,7 +346,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   });
   const hosts = new HostRepo(ctx.db);
   const agents = new AgentRepo(ctx.db);
-  const workspaces = new WorkspaceRepo(ctx.db, { workspacesRoot: ctx.workspacesRoot });
+  const workspaces = new WorkspaceRepo(ctx.db, {
+    workspacesRoot: ctx.workspacesRoot,
+  });
   const conversations = new ConversationRepo(ctx.db);
   const messages = new MessageRepo(ctx.db);
   const reactions = new MessageReactionRepo(ctx.db);
@@ -344,7 +397,9 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       if (!isLoopbackRequest(c)) return notFound(c);
       const body = await c.req.json().catch(() => null);
       const token =
-        body && typeof body === 'object' && typeof (body as { token?: unknown }).token === 'string'
+        body &&
+        typeof body === 'object' &&
+        typeof (body as { token?: unknown }).token === 'string'
           ? (body as { token: string }).token.trim()
           : '';
       if (!token) return notFound(c);
@@ -441,7 +496,15 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   // Workspace lifecycle, metadata, and workspace-channel collection routes.
   app.route(
     '/',
-    createWorkspacesApp({ ctx, agents, users, workspaces, conversations, messages, sort }),
+    createWorkspacesApp({
+      ctx,
+      agents,
+      users,
+      workspaces,
+      conversations,
+      messages,
+      sort,
+    }),
   );
 
   // Per-user list sort mutations (rail + channel sidebar ordering).
@@ -460,7 +523,13 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   // Conversation read, metadata, and log-debug routes.
   app.route(
     '/',
-    createConversationReadApp({ ctx, conversations, workspaces, messages, conversationReads }),
+    createConversationReadApp({
+      ctx,
+      conversations,
+      workspaces,
+      messages,
+      conversationReads,
+    }),
   );
 
   // Attention bounded context (#task:1227): per-(viewer, channel) ambient
@@ -518,7 +587,15 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   // Public agent routes.
   app.route(
     '/',
-    createAgentsApp({ ctx, agents, workspaces, conversations, messages, conversationInboxes, users }),
+    createAgentsApp({
+      ctx,
+      agents,
+      workspaces,
+      conversations,
+      messages,
+      conversationInboxes,
+      users,
+    }),
   );
   // Current viewer, user directory, and avatar routes.
   app.route('/', createUsersApp({ ctx }));

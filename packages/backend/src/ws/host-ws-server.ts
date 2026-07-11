@@ -1,5 +1,6 @@
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import {
@@ -7,6 +8,7 @@ import {
   OutboundDaemonToServerEventFrameSchema,
   OutboundHeartbeatFrameSchema,
   OutboundServerToDaemonCommandFrameSchema,
+  OUTBOUND_PROTOCOL_VERSION,
   encodeOutboundFrame,
   type OutboundFrame,
   type OutboundDaemonToServerCommandResponseFrame,
@@ -192,22 +194,30 @@ export function installHostWebSocketServer(
   const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const pathname = requestPathname(req);
     if (pathname !== path) return;
+    ctx.metrics?.observeHostWsConnection('upgrade', 'attempt');
     if (!isWebSocketUpgrade(req)) {
+      ctx.metrics?.observeHostWsConnection('upgrade', 'invalid_upgrade');
       rejectUpgrade(socket, 400, 'Bad Request');
       return;
     }
     if (closing) {
+      ctx.metrics?.observeHostWsConnection('upgrade', 'server_closing');
       rejectUpgrade(socket, 503, 'Service Unavailable');
       return;
     }
 
     const auth = authenticateHost(req, ctx);
     if (!auth.ok) {
+      ctx.metrics?.observeHostWsConnection(
+        'upgrade',
+        `auth_${auth.statusCode}`,
+      );
       rejectUpgrade(socket, auth.statusCode, auth.reason);
       return;
     }
     const existing = attachmentsByHost.get(auth.host.hostId);
     if (existing) {
+      ctx.metrics?.observeHostWsConnection('upgrade', 'already_connected');
       rejectUpgrade(socket, 409, 'Conflict', {
         error: 'computer already connected',
         error_code: 'computer_already_connected',
@@ -217,6 +227,8 @@ export function installHostWebSocketServer(
     }
 
     wss.handleUpgrade(req, socket, head, ws => {
+      ctx.metrics?.observeHostWsConnection('upgrade', 'accepted');
+      ctx.metrics?.changeHostWsConnections('websocket_open', 1);
       const connectionId = `${commandIdPrefix}-conn-${++connectionSeq}`;
       const connection = new HostWsConnection(ws, ctx, auth.host, {
         connectionId,
@@ -252,7 +264,12 @@ export function installHostWebSocketServer(
       publishHostConnectionChanged(ctx, auth.host.userId, {
         host_id: auth.host.hostId,
       });
-      ws.on('close', () => {
+      ws.on('close', (code, reason) => {
+        ctx.metrics?.changeHostWsConnections('websocket_open', -1);
+        ctx.metrics?.observeHostWsClose(
+          code,
+          classifyHostWsCloseReason(code, reason),
+        );
         connections.delete(ws);
         if (connectionsByHost.get(auth.host.hostId) === connection) {
           connectionsByHost.delete(auth.host.hostId);
@@ -282,13 +299,19 @@ export function installHostWebSocketServer(
       connectionsByHost.get(hostId)?.connectionId ?? null,
     getAttachment: hostId => attachmentsByHost.get(hostId) ?? null,
     sendCommand: (hostId, kind, params, commandOpts) => {
+      const startedAt = performance.now();
       const connection = connectionsByHost.get(hostId);
       if (!connection) {
-        return Promise.reject(
-          new HostWsCommandTransportError(
-            'transport_no_connection',
-            `host ${hostId} is not connected to outbound websocket`,
-            { hostId, commandKind: kind },
+        return observeDaemonCommand(
+          ctx,
+          kind,
+          startedAt,
+          Promise.reject(
+            new HostWsCommandTransportError(
+              'transport_no_connection',
+              `host ${hostId} is not connected to outbound websocket`,
+              { hostId, commandKind: kind },
+            ),
           ),
         );
       }
@@ -296,18 +319,28 @@ export function installHostWebSocketServer(
         commandOpts?.expectedConnectionId &&
         connection.connectionId !== commandOpts.expectedConnectionId
       ) {
-        return Promise.reject(
-          new HostWsCommandTransportError(
-            'transport_disconnected',
-            `host ${hostId} websocket connection changed before ${kind}`,
-            {
-              hostId,
-              commandKind: kind,
-            },
+        return observeDaemonCommand(
+          ctx,
+          kind,
+          startedAt,
+          Promise.reject(
+            new HostWsCommandTransportError(
+              'transport_disconnected',
+              `host ${hostId} websocket connection changed before ${kind}`,
+              {
+                hostId,
+                commandKind: kind,
+              },
+            ),
           ),
         );
       }
-      return connection.sendCommand(kind, params, commandOpts);
+      return observeDaemonCommand(
+        ctx,
+        kind,
+        startedAt,
+        connection.sendCommand(kind, params, commandOpts),
+      );
     },
     disconnectHost: (hostId, reason = HOST_WS_CLOSE_REASON_REVOKED) => {
       const connection = connectionsByHost.get(hostId);
@@ -341,10 +374,7 @@ export function installHostWebSocketServer(
           connection.terminate();
         }
       });
-      await Promise.race([
-        Promise.allSettled(closeWaits),
-        terminateAfterGrace,
-      ]);
+      await Promise.race([Promise.allSettled(closeWaits), terminateAfterGrace]);
       await new Promise<void>(resolve => wss.close(() => resolve()));
     },
   };
@@ -380,6 +410,7 @@ class HostWsConnection {
   private pingTimer: NodeJS.Timeout | null = null;
   private pongTimer: NodeJS.Timeout | null = null;
   private cleanedUp = false;
+  private readyProtocolVersion: string | null = null;
   private loggedNoEventSink = false;
   private readonly deploymentMode: BackendDeploymentMode;
 
@@ -555,7 +586,11 @@ class HostWsConnection {
         new HostWsCommandTransportError(
           'transport_invalid_command',
           (err as Error).message,
-          { hostId: this.host.hostId, commandKind: kind, requestId: id },
+          {
+            hostId: this.host.hostId,
+            commandKind: kind,
+            requestId: id,
+          },
         ),
       );
     }
@@ -591,7 +626,11 @@ class HostWsConnection {
             new HostWsCommandTransportError(
               'transport_send_failed',
               err.message,
-              { hostId: this.host.hostId, commandKind: kind, requestId: id },
+              {
+                hostId: this.host.hostId,
+                commandKind: kind,
+                requestId: id,
+              },
             ),
           );
         });
@@ -604,7 +643,11 @@ class HostWsConnection {
           new HostWsCommandTransportError(
             'transport_send_failed',
             (err as Error).message,
-            { hostId: this.host.hostId, commandKind: kind, requestId: id },
+            {
+              hostId: this.host.hostId,
+              commandKind: kind,
+              requestId: id,
+            },
           ),
         );
       }
@@ -619,7 +662,19 @@ class HostWsConnection {
       return;
     }
 
-    const response = OutboundDaemonToServerCommandResponseFrameSchema.safeParse(frame);
+    const offeredProtocolVersion = readyFrameProtocolVersion(frame);
+    if (
+      offeredProtocolVersion !== null &&
+      offeredProtocolVersion !== String(OUTBOUND_PROTOCOL_VERSION)
+    ) {
+      this.ctx.metrics?.observeHostWsProtocolMismatch(
+        offeredProtocolVersion,
+        String(OUTBOUND_PROTOCOL_VERSION),
+      );
+    }
+
+    const response =
+      OutboundDaemonToServerCommandResponseFrameSchema.safeParse(frame);
     if (response.success) {
       this.handleCommandResponse(response.data);
       return;
@@ -653,6 +708,13 @@ class HostWsConnection {
   private cleanup(): void {
     if (this.cleanedUp) return;
     this.cleanedUp = true;
+    if (this.readyProtocolVersion !== null) {
+      this.ctx.metrics?.changeHostWsReadyConnections(
+        this.readyProtocolVersion,
+        -1,
+      );
+      this.readyProtocolVersion = null;
+    }
     this.clearPingTimer();
     this.clearPongTimer();
     this.rejectPendingDisconnected(
@@ -665,6 +727,17 @@ class HostWsConnection {
 
   private handleDaemonEvent(frame: OutboundDaemonToServerEventFrame): void {
     if (frame.kind === 'ready') {
+      if (this.readyProtocolVersion === null) {
+        this.readyProtocolVersion = String(frame.protocol_version);
+        this.ctx.metrics?.changeHostWsReadyConnections(
+          this.readyProtocolVersion,
+          1,
+        );
+      }
+      this.ctx.metrics?.observeHostWsConnection(
+        'ready',
+        `protocol_${frame.protocol_version}`,
+      );
       this.updateAttachmentHostname(frame.host_descriptor.name);
     }
     if (this.shouldIgnoreEventSink()) {
@@ -866,11 +939,89 @@ class HostWsConnection {
   }
 }
 
+function observeDaemonCommand<T>(
+  ctx: BackendContext,
+  command: OutboundServerCommandKind,
+  startedAt: number,
+  result: Promise<T>,
+): Promise<T> {
+  return result.then(
+    value => {
+      ctx.metrics?.observeDaemonCommand(
+        command,
+        'ok',
+        performance.now() - startedAt,
+      );
+      return value;
+    },
+    err => {
+      ctx.metrics?.observeDaemonCommand(
+        command,
+        daemonCommandOutcome(err),
+        performance.now() - startedAt,
+      );
+      throw err;
+    },
+  );
+}
+
+function daemonCommandOutcome(
+  err: unknown,
+): 'timeout' | 'disconnected' | 'error' {
+  if (err instanceof HostWsCommandTransportError) {
+    if (err.code === 'transport_timeout') return 'timeout';
+    if (
+      err.code === 'transport_no_connection' ||
+      err.code === 'transport_disconnected'
+    ) {
+      return 'disconnected';
+    }
+  }
+  return 'error';
+}
+
+function classifyHostWsCloseReason(code: number, rawReason: Buffer): string {
+  const reason = rawReason.toString('utf8');
+  if (reason === 'server_shutdown') return 'server_shutdown';
+  if (reason === HOST_WS_CLOSE_REASON_REVOKED) return 'host_revoked';
+  if (reason === HOST_WS_CLOSE_REASON_DISCONNECTED) return 'host_disconnected';
+  if (reason === 'host_connection_replaced') return 'host_connection_replaced';
+  if (reason === 'heartbeat_timeout') return 'heartbeat_timeout';
+  if (code === 1002) return 'protocol_error';
+  if (code === 1000) return 'normal';
+  if (reason === '') return 'no_reason';
+  return 'other';
+}
+
+function readyFrameProtocolVersion(frame: object): string | null {
+  const candidate = frame as Record<string, unknown>;
+  if (
+    candidate.direction !== 'daemon_to_server' ||
+    candidate.type !== 'event' ||
+    candidate.kind !== 'ready'
+  ) {
+    return null;
+  }
+  const version = candidate.protocol_version;
+  if (
+    typeof version !== 'number' ||
+    !Number.isSafeInteger(version) ||
+    version < 0 ||
+    version > 100
+  ) {
+    return 'invalid';
+  }
+  return String(version);
+}
+
 type HostAuthResult =
   | { ok: true; host: AuthenticatedHost }
   | { ok: false; statusCode: number; reason: string };
 
-function authenticateHost(req: IncomingMessage, ctx: BackendContext): HostAuthResult {
+function authenticateHost(
+  req: IncomingMessage,
+  ctx: BackendContext,
+): HostAuthResult {
   const token = bearerToken(req.headers.authorization);
   if (!token) {
     return { ok: false, statusCode: 401, reason: 'Unauthorized' };
@@ -950,7 +1101,9 @@ function rejectUpgrade(
   body?: Record<string, unknown>,
 ): void {
   if (!body) {
-    socket.write(`HTTP/1.1 ${statusCode} ${reason}\r\nConnection: close\r\n\r\n`);
+    socket.write(
+      `HTTP/1.1 ${statusCode} ${reason}\r\nConnection: close\r\n\r\n`,
+    );
     socket.destroy();
     return;
   }

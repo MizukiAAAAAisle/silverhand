@@ -1,0 +1,70 @@
+groups:
+  - name: silverhand
+    rules:
+      - alert: SilverhandMetricsTargetDown
+        expr: up{job="silverhand"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Silverhand metrics target is down
+
+      - alert: SilverhandHttp5xxRateHigh
+        expr: |
+          sum(rate(silverhand_http_request_duration_seconds_count{status_class="5xx"}[5m]))
+          /
+          clamp_min(sum(rate(silverhand_http_request_duration_seconds_count[5m])), 0.001)
+          > 0.01
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Silverhand HTTP 5xx ratio is above 1%
+
+      - alert: SilverhandEventLoopDelayHigh
+        expr: nodejs_eventloop_lag_p99_seconds{job="silverhand"} > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Silverhand event-loop p99 delay is above 100ms
+
+      - alert: SilverhandSqliteContention
+        expr: |
+          sum(rate(silverhand_db_statement_duration_seconds_count{outcome=~"busy|locked"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: SQLite is reporting busy or locked statement executions
+
+      - alert: SilverhandDaemonCommandTimeout
+        expr: |
+          sum(increase(silverhand_daemon_command_duration_seconds_count{outcome="timeout"}[5m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: A server-to-daemon command timed out
+
+      - alert: SilverhandProtocolMismatch
+        expr: sum(increase(silverhand_host_ws_protocol_mismatch_total[5m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: A daemon offered an unsupported outbound protocol version
+
+      - alert: SilverhandHostMemoryHigh
+        expr: 1 - (node_memory_MemAvailable_bytes{job="node"} / node_memory_MemTotal_bytes{job="node"}) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: ECS memory usage is above 90%
+
+      - alert: SilverhandHostRootDiskHigh
+        expr: 1 - (node_filesystem_avail_bytes{job="node",mountpoint="/"} / node_filesystem_size_bytes{job="node",mountpoint="/"}) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: ECS root disk usage is above 80%

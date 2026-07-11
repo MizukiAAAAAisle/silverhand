@@ -7,6 +7,7 @@ import type {
   HostProvisioningSource,
   HostRow,
 } from '@silverhand/shared';
+import { prepareObserved } from '../observability/observed-statement.js';
 
 function newId(): string {
   return randomBytes(12).toString('base64url');
@@ -85,9 +86,11 @@ export class HostRepo {
   constructor(private readonly db: Db) {}
 
   list(): HostDto[] {
-    const rows = this.db
-      .prepare<[], HostRow>('SELECT * FROM hosts ORDER BY created_at ASC')
-      .all();
+    const rows = prepareObserved<[], HostRow>(
+      this.db,
+      'hosts.list_all',
+      'SELECT * FROM hosts ORDER BY created_at ASC',
+    ).all();
     return rows.map(rowToDto);
   }
 
@@ -95,9 +98,10 @@ export class HostRepo {
    *  filter). Includes revoked rows so the user can see audit
    *  history; sort active rows first then by created_at. */
   listForUser(userId: string): HostDto[] {
-    const rows = this.db
-      .prepare<[string], HostRow>(
-        `SELECT * FROM hosts
+    const rows = prepareObserved<[string], HostRow>(
+      this.db,
+      'hosts.list_for_user',
+      `SELECT * FROM hosts
           WHERE user_id = ?
             AND NOT (
               provisioning_source = 'user_invite'
@@ -105,8 +109,7 @@ export class HostRepo {
             )
           ORDER BY (CASE WHEN revoked_at IS NULL THEN 0 ELSE 1 END) ASC,
                    created_at ASC`,
-      )
-      .all(userId);
+    ).all(userId);
     return rows.map(rowToDto);
   }
 
@@ -116,16 +119,20 @@ export class HostRepo {
   }
 
   get(id: string): HostRow | null {
-    const row = this.db
-      .prepare<[string], HostRow>('SELECT * FROM hosts WHERE id = ?')
-      .get(id);
+    const row = prepareObserved<[string], HostRow>(
+      this.db,
+      'hosts.get_by_id',
+      'SELECT * FROM hosts WHERE id = ?',
+    ).get(id);
     return row ?? null;
   }
 
   getByName(name: string): HostRow | null {
-    const row = this.db
-      .prepare<[string], HostRow>('SELECT * FROM hosts WHERE name = ?')
-      .get(name);
+    const row = prepareObserved<[string], HostRow>(
+      this.db,
+      'hosts.get_by_name',
+      'SELECT * FROM hosts WHERE name = ?',
+    ).get(name);
     return row ?? null;
   }
 
@@ -136,7 +143,7 @@ export class HostRepo {
       opts.activatedAt !== undefined
         ? opts.activatedAt
         : opts.userId && kind === 'local'
-          ? opts.lastSeenAt ?? now
+          ? (opts.lastSeenAt ?? now)
           : null;
     const finalizedAt =
       opts.finalizedAt !== undefined
@@ -149,25 +156,25 @@ export class HostRepo {
       (opts.userId && kind === 'local' && opts.installationId
         ? 'app_install'
         : 'system');
-    this.db
-      .prepare(
-        `INSERT INTO hosts
+    prepareObserved(
+      this.db,
+      'hosts.create',
+      `INSERT INTO hosts
            (id, name, kind, user_id, installation_id, last_seen_at, revoked_at, created_at, display_label, activated_at, finalized_at, provisioning_source)
          VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        id,
-        name,
-        kind,
-        opts.userId ?? null,
-        opts.installationId ?? null,
-        opts.lastSeenAt ?? null,
-        now,
-        normalizeDisplayLabel(opts.displayLabel),
-        activatedAt,
-        finalizedAt,
-        provisioningSource,
-      );
+    ).run(
+      id,
+      name,
+      kind,
+      opts.userId ?? null,
+      opts.installationId ?? null,
+      opts.lastSeenAt ?? null,
+      now,
+      normalizeDisplayLabel(opts.displayLabel),
+      activatedAt,
+      finalizedAt,
+      provisioningSource,
+    );
     const row = this.get(id);
     if (!row) throw new Error('insert failed');
     return row;
@@ -178,29 +185,32 @@ export class HostRepo {
    *  can mint a fresh active row for a recurring installation after
    *  revoke; this lookup matches that invariant. Revoked rows stay in
    *  the table for audit history but never surface here. */
-  getByUserInstallation(userId: string, installationId: string): HostRow | null {
-    const row = this.db
-      .prepare<[string, string], HostRow>(
-        `SELECT * FROM hosts
+  getByUserInstallation(
+    userId: string,
+    installationId: string,
+  ): HostRow | null {
+    const row = prepareObserved<[string, string], HostRow>(
+      this.db,
+      'hosts.get_by_user_installation',
+      `SELECT * FROM hosts
           WHERE user_id = ?
             AND installation_id = ?
             AND revoked_at IS NULL`,
-      )
-      .get(userId, installationId);
+    ).get(userId, installationId);
     return row ?? null;
   }
 
   getOwnedLocalForUser(userId: string): HostRow | null {
-    const row = this.db
-      .prepare<[string], HostRow>(
-        `SELECT * FROM hosts
+    const row = prepareObserved<[string], HostRow>(
+      this.db,
+      'hosts.get_owned_local_for_user',
+      `SELECT * FROM hosts
           WHERE user_id = ?
             AND kind = 'local'
             AND revoked_at IS NULL
           ORDER BY COALESCE(last_seen_at, created_at) DESC,
                    created_at DESC`,
-      )
-      .get(userId);
+    ).get(userId);
     return row ?? null;
   }
 
@@ -226,28 +236,28 @@ export class HostRepo {
    *   they live in the table for audit history only.
    */
   listOwnedActiveLocalForUser(userId: string): HostRow[] {
-    return this.db
-      .prepare<[string], HostRow>(
-        `SELECT * FROM hosts
+    return prepareObserved<[string], HostRow>(
+      this.db,
+      'hosts.list_owned_active_local_for_user',
+      `SELECT * FROM hosts
           WHERE user_id = ?
             AND kind = 'local'
             AND revoked_at IS NULL
           ORDER BY COALESCE(last_seen_at, created_at) DESC,
                    created_at DESC`,
-      )
-      .all(userId);
+    ).all(userId);
   }
 
   listOwnedReadyForPlacement(userId: string): HostRow[] {
-    return this.db
-      .prepare<[string], HostRow>(
-        `SELECT * FROM hosts
+    return prepareObserved<[string], HostRow>(
+      this.db,
+      'hosts.list_owned_ready_for_placement',
+      `SELECT * FROM hosts
           WHERE user_id = ?
             AND ${HOST_READY_FOR_PLACEMENT_SQL}
           ORDER BY COALESCE(last_seen_at, activated_at, created_at) DESC,
                    created_at DESC`,
-      )
-      .all(userId);
+    ).all(userId);
   }
 
   bindToUserInstallation(input: {
@@ -257,9 +267,10 @@ export class HostRepo {
     lastSeenAt?: number;
   }): HostRow {
     const lastSeenAt = input.lastSeenAt ?? Date.now();
-    this.db
-      .prepare(
-        `UPDATE hosts
+    prepareObserved(
+      this.db,
+      'hosts.bind_to_user_installation',
+      `UPDATE hosts
             SET user_id = ?,
                 installation_id = ?,
                 last_seen_at = ?,
@@ -267,15 +278,14 @@ export class HostRepo {
                 finalized_at = COALESCE(finalized_at, ?),
                 provisioning_source = 'app_install'
           WHERE id = ?`,
-      )
-      .run(
-        input.userId,
-        input.installationId,
-        lastSeenAt,
-        lastSeenAt,
-        lastSeenAt,
-        input.hostId,
-      );
+    ).run(
+      input.userId,
+      input.installationId,
+      lastSeenAt,
+      lastSeenAt,
+      lastSeenAt,
+      input.hostId,
+    );
     const row = this.get(input.hostId);
     if (!row) {
       throw new Error(
@@ -296,7 +306,10 @@ export class HostRepo {
     // (user, installation) was revoked, it is no longer surfaced here
     // and the path falls through to legacy/unclaimed reuse or to a
     // fresh `create`, matching the active-only partial-unique index.
-    const existing = this.getByUserInstallation(input.userId, input.installationId);
+    const existing = this.getByUserInstallation(
+      input.userId,
+      input.installationId,
+    );
     if (existing) {
       this.touchLastSeen(existing.id, now);
       const touched = this.get(existing.id);
@@ -348,83 +361,87 @@ export class HostRepo {
    *  Trims/validates length per `normalizeDisplayLabel`. */
   updateDisplayLabel(id: string, label: string | null): HostRow | null {
     const normalized = normalizeDisplayLabel(label);
-    this.db
-      .prepare(`UPDATE hosts SET display_label = ? WHERE id = ?`)
-      .run(normalized, id);
+    prepareObserved(
+      this.db,
+      'hosts.update_display_label',
+      'UPDATE hosts SET display_label = ? WHERE id = ?',
+    ).run(normalized, id);
     return this.get(id);
   }
 
   touchLastSeen(id: string, lastSeenAt = Date.now()): boolean {
-    const result = this.db
-      .prepare(`UPDATE hosts SET last_seen_at = ? WHERE id = ?`)
-      .run(lastSeenAt, id);
+    const result = prepareObserved(
+      this.db,
+      'hosts.touch_last_seen',
+      'UPDATE hosts SET last_seen_at = ? WHERE id = ?',
+    ).run(lastSeenAt, id);
     return result.changes > 0;
   }
 
   markActivated(id: string, activatedAt = Date.now()): HostRow | null {
-    this.db
-      .prepare(
-        `UPDATE hosts
+    prepareObserved(
+      this.db,
+      'hosts.mark_activated',
+      `UPDATE hosts
             SET activated_at = COALESCE(activated_at, ?),
                 last_seen_at = ?
           WHERE id = ?`,
-      )
-      .run(activatedAt, activatedAt, id);
+    ).run(activatedAt, activatedAt, id);
     return this.get(id);
   }
 
   markFinalized(id: string, finalizedAt = Date.now()): HostRow | null {
-    this.db
-      .prepare(
-        `UPDATE hosts
+    prepareObserved(
+      this.db,
+      'hosts.mark_finalized',
+      `UPDATE hosts
             SET finalized_at = COALESCE(finalized_at, ?)
           WHERE id = ?`,
-      )
-      .run(finalizedAt, id);
+    ).run(finalizedAt, id);
     return this.get(id);
   }
 
   countDeleteDependents(hostId: string): HostDeleteDependents {
     const agents =
-      this.db
-        .prepare<[string], { c: number }>(
-          `SELECT COUNT(*) AS c FROM agents WHERE host_id = ?`,
-        )
-        .get(hostId)?.c ?? 0;
+      prepareObserved<[string], { c: number }>(
+        this.db,
+        'hosts.count_dependent_agents',
+        `SELECT COUNT(*) AS c FROM agents WHERE host_id = ?`,
+      ).get(hostId)?.c ?? 0;
     const workspaces =
-      this.db
-        .prepare<[string], { c: number }>(
-          `SELECT COUNT(*) AS c
+      prepareObserved<[string], { c: number }>(
+        this.db,
+        'hosts.count_dependent_workspaces',
+        `SELECT COUNT(*) AS c
              FROM workspaces
             WHERE workspace_host_id = ?
               AND workspace_kind = 'regular'`,
-        )
-        .get(hostId)?.c ?? 0;
+      ).get(hostId)?.c ?? 0;
     return { agents, workspaces };
   }
 
   deleteOwnedUserInvite(input: { hostId: string; userId: string }): boolean {
-    const result = this.db
-      .prepare(
-        `DELETE FROM hosts
+    const result = prepareObserved(
+      this.db,
+      'hosts.delete_owned_user_invite',
+      `DELETE FROM hosts
           WHERE id = ?
             AND user_id = ?
             AND kind = 'remote'
             AND provisioning_source = 'user_invite'`,
-      )
-      .run(input.hostId, input.userId);
+    ).run(input.hostId, input.userId);
     return result.changes > 0;
   }
 
   revoke(id: string, revokedAt = Date.now()): boolean {
-    const result = this.db
-      .prepare(
-        `UPDATE hosts
+    const result = prepareObserved(
+      this.db,
+      'hosts.revoke',
+      `UPDATE hosts
             SET revoked_at = ?
           WHERE id = ?
             AND revoked_at IS NULL`,
-      )
-      .run(revokedAt, id);
+    ).run(revokedAt, id);
     return result.changes > 0;
   }
 
@@ -460,16 +477,16 @@ export class HostRepo {
   }
 
   private getUnclaimedLocal(): HostRow | null {
-    const row = this.db
-      .prepare<[string], HostRow>(
-        `SELECT * FROM hosts
+    const row = prepareObserved<[string], HostRow>(
+      this.db,
+      'hosts.get_unclaimed_local',
+      `SELECT * FROM hosts
           WHERE name = ?
             AND kind = 'local'
             AND user_id IS NULL
             AND installation_id IS NULL
             AND revoked_at IS NULL`,
-      )
-      .get(LOCAL_HOST_NAME);
+    ).get(LOCAL_HOST_NAME);
     return row ?? null;
   }
 
@@ -491,7 +508,9 @@ export class HostRepo {
       const candidate = `${LOCAL_HOST_NAME}-${prefix}-${randomBytes(3).toString('hex')}`;
       if (!this.getByName(candidate)) return candidate;
     }
-    throw new Error('HostRepo.claimOrCreateLocal: unable to allocate host name');
+    throw new Error(
+      'HostRepo.claimOrCreateLocal: unable to allocate host name',
+    );
   }
 }
 
@@ -511,7 +530,9 @@ function normalizeHostName(value: string): string {
  * fine) but trim whitespace, cap length, and coerce empty → null so
  * the renderer's `display_label ?? name` fallback fires.
  */
-function normalizeDisplayLabel(value: string | null | undefined): string | null {
+function normalizeDisplayLabel(
+  value: string | null | undefined,
+): string | null {
   if (value === null || value === undefined) return null;
   const trimmed = value.trim().slice(0, 64);
   return trimmed.length > 0 ? trimmed : null;

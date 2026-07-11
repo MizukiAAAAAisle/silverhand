@@ -27,6 +27,7 @@ runtime difference is explicit config (`mode='embedded'` plus a daemon
 | `SILVERHAND_DISABLE_SIGNUP` | `0` | `0` or `1` | `disableSignup.source` |
 | `SILVERHAND_LOG_LEVEL` | `info` | `error`, `warn`, `info`, or `debug` | `logLevel.source` |
 | `SILVERHAND_MIGRATE` | standalone: `0`; embedded desktop: `1` | `0` or `1` | `migrate.source` |
+| `SILVERHAND_METRICS_LISTEN` | unset (disabled) | loopback `host:port` or `[ipv6]:port` only | `metricsListen.source` |
 | `SILVERHAND_EVENT_WS_ALLOWED_ORIGINS` | unset (empty) | comma-separated `http(s)` origins, each with no path/query/fragment; no wildcards | `eventWsAllowedOrigins.source` |
 
 `source` is `default` when the process used the default and `env` when the
@@ -114,6 +115,11 @@ manually remove the lock directory shown in the error message before retrying.
 Use `/readyz` for process supervisors that support readiness checks. Do not use
 `/api/health` as a traffic-readiness signal.
 
+When `SILVERHAND_METRICS_LISTEN` is set, the standalone process also exposes
+`GET /metrics` on a separate loopback-only listener. Keep it outside public
+Nginx routing. See `docs/server-observability.md` for Prometheus/Grafana setup,
+label-cardinality rules, and same-ECS resource limits.
+
 ## Native Dependencies
 
 Route 1 V1 ships a Node server package, not an official server image. Operators
@@ -170,6 +176,7 @@ SILVERHAND_LISTEN=127.0.0.1:8080 \
 SILVERHAND_DATA_DIR=/var/lib/silverhand \
 SILVERHAND_DISABLE_SIGNUP=1 \
 SILVERHAND_LOG_LEVEL=info \
+SILVERHAND_METRICS_LISTEN=127.0.0.1:9464 \
 pnpm --filter @silverhand/server start
 ```
 

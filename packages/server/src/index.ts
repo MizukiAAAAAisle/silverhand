@@ -5,6 +5,8 @@ import {
   createLogLevelControl,
   resolveAuthRuntimeConfig,
   startBackend,
+  BackendMetrics,
+  startMetricsServer,
   type BackendListenOptions,
   type CategorizedLoggers,
   type EmbeddedBackendOptions,
@@ -16,7 +18,9 @@ import {
   DEFAULT_EMBEDDED_SILVERHAND_MIGRATE,
   resolveEmbeddedMigrationEnv,
   resolveMigrationEnv,
+  resolveOptionalMetricsListen,
   resolveStandaloneServerEnv,
+  SILVERHAND_METRICS_LISTEN_ENV,
   type StandaloneServerEnvConfig,
 } from './config.js';
 
@@ -31,6 +35,7 @@ export {
   SILVERHAND_DISABLE_SIGNUP_ENV,
   SILVERHAND_LISTEN_ENV,
   SILVERHAND_MIGRATE_ENV,
+  SILVERHAND_METRICS_LISTEN_ENV,
   SILVERHAND_EVENT_WS_ALLOWED_ORIGINS_ENV,
   SILVERHAND_SERVER_LOG_LEVEL_ENV,
   ServerEnvConfigError,
@@ -44,6 +49,7 @@ export {
   resolveEmbeddedMigrationEnv,
   resolveStandaloneServerEnv,
   resolveMigrationEnv,
+  resolveOptionalMetricsListen,
   type ListenConfig,
   type ResolvedValue,
   type StandaloneServerEnvConfig,
@@ -145,6 +151,10 @@ export async function startStandaloneSilverhandServer(
         value: config.migrate.value,
         source: config.migrate.source,
       },
+      metricsListen: {
+        value: config.metricsListen.value,
+        source: config.metricsListen.source,
+      },
       eventWsAllowedOrigins: {
         value: config.eventWsAllowedOrigins.value,
         source: config.eventWsAllowedOrigins.source,
@@ -152,26 +162,63 @@ export async function startStandaloneSilverhandServer(
     },
     'silverhand-server config resolved',
   );
-  return startBackend({
-    mode: 'standalone',
-    dbPath: join(config.dataDir.value, 'silverhand.db'),
-    silverhandDir: config.dataDir.value,
-    serverConfig: standaloneServerConfig(config),
-    authConfig: {
-      ...resolveAuthRuntimeConfig(env),
-      signupEnabled: !config.disableSignup.value,
-    },
-    logger,
-    loggers,
-    logDir: join(config.dataDir.value, 'logs'),
-    schemaUpgrade: {
-      allow: config.migrate.value,
-    },
-    listen: config.listen.value,
-  });
+  const metrics = config.metricsListen.value
+    ? new BackendMetrics('standalone')
+    : undefined;
+  let backend: RunningBackend | null = null;
+  let metricsServer: Awaited<ReturnType<typeof startMetricsServer>> | null = null;
+  try {
+    if (metrics && config.metricsListen.value) {
+      // Bind the private listener before the public backend. A bad metrics
+      // address/port must fail startup without briefly accepting real traffic
+      // and then tearing down attached daemon runtimes.
+      metricsServer = await startMetricsServer(
+        metrics,
+        config.metricsListen.value,
+        logger,
+      );
+    }
+    backend = await startBackend({
+      mode: 'standalone',
+      dbPath: join(config.dataDir.value, 'silverhand.db'),
+      silverhandDir: config.dataDir.value,
+      serverConfig: standaloneServerConfig(config),
+      authConfig: {
+        ...resolveAuthRuntimeConfig(env),
+        signupEnabled: !config.disableSignup.value,
+      },
+      logger,
+      loggers,
+      logDir: join(config.dataDir.value, 'logs'),
+      schemaUpgrade: {
+        allow: config.migrate.value,
+      },
+      metrics,
+      listen: config.listen.value,
+    });
+    if (!metrics || !metricsServer) return backend;
+    const runningBackend = backend;
+    const runningMetricsServer = metricsServer;
+    return {
+      ...runningBackend,
+      metricsUrl: runningMetricsServer.url,
+      close: async () => {
+        await runningMetricsServer.close();
+        metrics.close();
+        await runningBackend.close();
+      },
+    };
+  } catch (err) {
+    await metricsServer?.close().catch(() => undefined);
+    metrics?.close();
+    await backend?.close().catch(() => undefined);
+    throw err;
+  }
 }
 
-function standaloneServerConfig(config: StandaloneServerEnvConfig): ServerConfig {
+function standaloneServerConfig(
+  config: StandaloneServerEnvConfig,
+): ServerConfig {
   const eventWsAllowedOrigins = config.eventWsAllowedOrigins.value;
   return {
     mode: 'remote',
@@ -193,8 +240,9 @@ function standaloneServerConfig(config: StandaloneServerEnvConfig): ServerConfig
 }
 
 function urlForListen(listen: BackendListenOptions): string {
-  const host = listen.hostname.includes(':') && !listen.hostname.startsWith('[')
-    ? `[${listen.hostname}]`
-    : listen.hostname;
+  const host =
+    listen.hostname.includes(':') && !listen.hostname.startsWith('[')
+      ? `[${listen.hostname}]`
+      : listen.hostname;
   return `http://${host}:${listen.port}`;
 }

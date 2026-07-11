@@ -22,6 +22,7 @@ import type { OutboundFrameAdapter } from './runtime/outbound-frame-adapter.js';
 import type { WorkspaceRegistryBackfiller } from './runtime/workspace-registry-backfill.js';
 import type { HostWsServerController } from './ws/host-ws-server.js';
 import type { PresenceRegistry } from './presence/presence-registry.js';
+import type { BackendMetrics } from './observability/metrics.js';
 
 export type BackendDeploymentMode = 'embedded' | 'standalone';
 
@@ -66,6 +67,9 @@ export interface SilverhandCliLauncher {
 
 export interface BackendContext {
   db: Db;
+  /** Optional process-local Prometheus registry. Disabled unless an operator
+   * explicitly configures the private metrics listener. */
+  metrics?: BackendMetrics;
   deploymentMode: BackendDeploymentMode;
   readiness: {
     migrationsApplied: boolean;

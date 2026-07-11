@@ -1,6 +1,7 @@
 import { isAbsolute, resolve } from 'node:path';
 import {
   SILVERHAND_LOG_LEVELS,
+  classifyBindAddressScope,
   type SilverhandLogLevel,
 } from '@silverhand/shared';
 
@@ -9,6 +10,7 @@ export const SILVERHAND_DATA_DIR_ENV = 'SILVERHAND_DATA_DIR';
 export const SILVERHAND_DISABLE_SIGNUP_ENV = 'SILVERHAND_DISABLE_SIGNUP';
 export const SILVERHAND_SERVER_LOG_LEVEL_ENV = 'SILVERHAND_LOG_LEVEL';
 export const SILVERHAND_MIGRATE_ENV = 'SILVERHAND_MIGRATE';
+export const SILVERHAND_METRICS_LISTEN_ENV = 'SILVERHAND_METRICS_LISTEN';
 export const SILVERHAND_EVENT_WS_ALLOWED_ORIGINS_ENV =
   'SILVERHAND_EVENT_WS_ALLOWED_ORIGINS';
 
@@ -37,6 +39,8 @@ export interface StandaloneServerEnvConfig {
   disableSignup: ResolvedValue<boolean>;
   logLevel: ResolvedValue<SilverhandLogLevel>;
   migrate: ResolvedValue<boolean>;
+  /** Private Prometheus listener. Disabled unless explicitly configured. */
+  metricsListen: ResolvedValue<ListenConfig | null>;
   /**
    * Browser/Electron `Origin` values allowed to open the authenticated event
    * WebSocket (`SILVERHAND_EVENT_WS_ALLOWED_ORIGINS`, comma-separated). A
@@ -87,6 +91,7 @@ export function resolveStandaloneServerEnv(
       DEFAULT_SILVERHAND_SERVER_LOG_LEVEL,
     ),
     migrate: resolveMigrationEnv(env),
+    metricsListen: resolveOptionalMetricsListen(env),
     eventWsAllowedOrigins: resolveValue<string[]>(
       env[SILVERHAND_EVENT_WS_ALLOWED_ORIGINS_ENV],
       parseEventWsAllowedOrigins,
@@ -94,6 +99,23 @@ export function resolveStandaloneServerEnv(
       [],
     ),
   };
+}
+
+export function resolveOptionalMetricsListen(
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedValue<ListenConfig | null> {
+  const raw = env[SILVERHAND_METRICS_LISTEN_ENV];
+  if (raw === undefined || raw.trim() === '') {
+    return { value: null, source: 'default' };
+  }
+  const listen = parseListen(raw, SILVERHAND_METRICS_LISTEN_ENV);
+  if (classifyBindAddressScope(listen.hostname) !== 'loopback') {
+    throw new ServerEnvConfigError(
+      SILVERHAND_METRICS_LISTEN_ENV,
+      'must bind to a loopback address',
+    );
+  }
+  return { value: listen, source: 'env' };
 }
 
 export function resolveMigrationEnv(
@@ -126,7 +148,10 @@ function resolveValue<T>(
   return { value: parse(raw, variable), source: 'env' };
 }
 
-export function parseListen(raw: string, variable = SILVERHAND_LISTEN_ENV): ListenConfig {
+export function parseListen(
+  raw: string,
+  variable = SILVERHAND_LISTEN_ENV,
+): ListenConfig {
   const value = raw.trim();
   if (!value) throw new ServerEnvConfigError(variable, 'must not be empty');
 
@@ -135,7 +160,10 @@ export function parseListen(raw: string, variable = SILVERHAND_LISTEN_ENV): List
   if (value.startsWith('[')) {
     const close = value.indexOf(']');
     if (close < 0 || value[close + 1] !== ':') {
-      throw new ServerEnvConfigError(variable, 'must be host:port or [ipv6]:port');
+      throw new ServerEnvConfigError(
+        variable,
+        'must be host:port or [ipv6]:port',
+      );
     }
     hostname = value.slice(1, close);
     portText = value.slice(close + 2);
@@ -149,18 +177,25 @@ export function parseListen(raw: string, variable = SILVERHAND_LISTEN_ENV): List
   }
 
   hostname = hostname.trim();
-  if (!hostname) throw new ServerEnvConfigError(variable, 'host must not be empty');
+  if (!hostname)
+    throw new ServerEnvConfigError(variable, 'host must not be empty');
   if (!/^\d+$/.test(portText)) {
     throw new ServerEnvConfigError(variable, 'port must be an integer');
   }
   const port = Number.parseInt(portText, 10);
   if (!Number.isSafeInteger(port) || port < 0 || port > 65535) {
-    throw new ServerEnvConfigError(variable, 'port must be between 0 and 65535');
+    throw new ServerEnvConfigError(
+      variable,
+      'port must be between 0 and 65535',
+    );
   }
   return { hostname, port };
 }
 
-export function parseDataDir(raw: string, variable = SILVERHAND_DATA_DIR_ENV): string {
+export function parseDataDir(
+  raw: string,
+  variable = SILVERHAND_DATA_DIR_ENV,
+): string {
   const value = raw.trim();
   if (!value) throw new ServerEnvConfigError(variable, 'must not be empty');
   if (!isAbsolute(value)) {

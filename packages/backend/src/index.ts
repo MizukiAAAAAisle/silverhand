@@ -52,9 +52,7 @@ import {
   type OutboundFrameAdapter,
 } from './runtime/outbound-frame-adapter.js';
 import { EmbeddedUnixOutboundFrameAdapter } from './runtime/embedded-unix-outbound-frame-adapter.js';
-import {
-  RuntimeHostPlacementResolver,
-} from './runtime/host-placement.js';
+import { RuntimeHostPlacementResolver } from './runtime/host-placement.js';
 import { runBootMaterializeReconciler } from './runtime/materialize-reconciler.js';
 import { AgentRepo } from './repos/agent-repo.js';
 import { AttachmentRepo } from './repos/attachment-repo.js';
@@ -86,6 +84,11 @@ import { deriveLocalOutboundFrameSocketPath } from '@silverhand/host';
 import type { Server as HttpServer } from 'node:http';
 import { createLogLevelControl, type LogLevelControl } from './logger.js';
 import type { AuthRuntimeConfig } from './auth/config.js';
+import {
+  BackendMetrics,
+  startEventLoopHealthMonitor,
+} from './observability/metrics.js';
+import { configureDatabaseObservation } from './observability/observed-statement.js';
 
 export interface BackendListenOptions {
   hostname: string;
@@ -110,6 +113,9 @@ interface BaseBackendOptions {
   schemaUpgrade?: {
     allow: boolean;
   };
+  /** Pre-created registry shared by HTTP, DB, and transport instrumentation.
+   * The caller owns the private metrics listener and registry lifecycle. */
+  metrics?: BackendMetrics;
   /**
    * D4.b-1 — TEST ONLY. Wrap the `HostWsEventSink` installed on the
    * outbound WS server. The wrapper receives the real fanout (or
@@ -158,16 +164,22 @@ export interface StandaloneBackendOptions extends BaseBackendOptions {
   outboundSocketPath?: never;
 }
 
-export type CreateBackendOptions = EmbeddedBackendOptions | StandaloneBackendOptions;
+export type CreateBackendOptions =
+  | EmbeddedBackendOptions
+  | StandaloneBackendOptions;
 
 export interface RunningBackend {
   url: string;
   port: number;
+  /** Present only when the standalone private Prometheus listener is enabled. */
+  metricsUrl?: string;
   context: BackendContext;
   close(): Promise<void>;
 }
 
-export async function startBackend(opts: CreateBackendOptions): Promise<RunningBackend> {
+export async function startBackend(
+  opts: CreateBackendOptions,
+): Promise<RunningBackend> {
   const listenHostname = opts.listen?.hostname ?? '127.0.0.1';
   const listenPort = opts.listen?.port ?? 0;
   const logger = opts.logger ?? consoleLogger;
@@ -184,7 +196,8 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   // the value on `ctx.bindAddressScope` keeps the boot-time WARN
   // line (below) and the `/api/server/info` response surface
   // consistent for the life of the process.
-  const bindAddressScope: BindAddressScope = classifyBindAddressScope(listenHostname);
+  const bindAddressScope: BindAddressScope =
+    classifyBindAddressScope(listenHostname);
   logger.info(
     {
       mode: opts.mode,
@@ -214,7 +227,9 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     );
   }
   let migrationsApplied = false;
-  const migrationResult: { current: MigrationRunResult | null } = { current: null };
+  const migrationResult: { current: MigrationRunResult | null } = {
+    current: null,
+  };
   const migrationStartedAt = performance.now();
   let db: ReturnType<typeof openDatabase>;
   try {
@@ -239,8 +254,8 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     throw err;
   }
   if (
-    migrationResult.current
-    && migrationResult.current.appliedVersions.length > 0
+    migrationResult.current &&
+    migrationResult.current.appliedVersions.length > 0
   ) {
     logger.info(
       {
@@ -254,12 +269,17 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     );
   }
   const workspacesRoot = join(opts.silverhandDir, 'workspaces');
-  const blobStorage = createLocalBlobFileStorage({ silverhandDir: opts.silverhandDir });
+  const blobStorage = createLocalBlobFileStorage({
+    silverhandDir: opts.silverhandDir,
+  });
   await ensureWorkspacesRoot(workspacesRoot);
   await blobStorage.ensureReady();
 
   if (opts.mode === 'embedded') {
-    assertLauncherResolvable(opts.silverhandCliLauncher.command, 'silverhand CLI');
+    assertLauncherResolvable(
+      opts.silverhandCliLauncher.command,
+      'silverhand CLI',
+    );
   }
 
   // Bootstrap: embedded desktop owns the local daemon-host identity.
@@ -324,6 +344,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
 
   const ctx: BackendContext = {
     db,
+    metrics: opts.metrics,
     deploymentMode: opts.mode,
     // D4.e-1 3b P1-2 — the exact co-located host (embedded backend's own disk).
     // In embedded that is the single `local`-named host (`ensureLocal`); in
@@ -350,7 +371,8 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     agentService,
     userService,
     channelService: undefined as unknown as ChannelService,
-    conversationMessageService: undefined as unknown as ConversationMessageService,
+    conversationMessageService:
+      undefined as unknown as ConversationMessageService,
     taskService: undefined as unknown as TaskService,
     scheduleService: undefined as unknown as ScheduleService,
     idleReaperService: undefined as unknown as IdleReaperService,
@@ -391,6 +413,10 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
     // Filled immediately below when the daemon runtime host is constructed.
     runtimeHost: undefined as unknown as AgentRuntimeHost,
   };
+  configureDatabaseObservation(db, {
+    metrics: opts.metrics,
+    logger,
+  });
   // ── Runtime host wiring ─────────────────────────────────────────
   // D5.a-3 — embedded and standalone are ONE runtime host over the
   // outbound frame transport. The host delegates to the
@@ -482,7 +508,9 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
         ctx,
         { kind: 'agent', agentId, conversationId: '' },
         capability,
-        { workspaceId },
+        {
+          workspaceId,
+        },
       ),
   });
   ctx.idleReaperService = new IdleReaperService({
@@ -508,8 +536,6 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
   await ctx.runtimeHost.reconcileOnBoot();
   ctx.scheduleService.start();
   ctx.idleReaperService.start();
-  const stopEventLoopLagProbe = startEventLoopLagProbe(logger);
-
   ctx.embeddedBootstrap = await prepareEmbeddedBootstrap({
     silverhandDir: opts.silverhandDir,
     serverConfig: ctx.serverConfig,
@@ -570,6 +596,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
             : {}),
         };
         ctx.readiness.listenReady = true;
+        const stopEventLoopHealthMonitor = startEventLoopHealthMonitor(logger);
         logger.info(
           { url, serverConfigUrl, listenHostname, port },
           'backend listening',
@@ -583,7 +610,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
           port,
           context: ctx,
           close: async () => {
-            stopEventLoopLagProbe();
+            stopEventLoopHealthMonitor();
             // Stop the scheduler before any agent shutdown so we don't
             // race a fire mid-teardown (would write to a dying CM).
             ctx.scheduleService.stop();
@@ -602,10 +629,7 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
             await ctx.runtimeHost.closeActivityLog().catch(() => undefined);
 
             // Phase 2: close WS lifecycle before the HTTP drain removes sockets.
-            await Promise.all([
-              eventWs?.close(),
-              hostWs?.close(),
-            ]);
+            await Promise.all([eventWs?.close(), hostWs?.close()]);
             ctx.presence.dispose();
             // Close the embedded local-Unix adapter's socket (the
             // standalone adapter only views the bootstrap-owned hostWs,
@@ -624,7 +648,9 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
             //      sockets so `server.close()` resolves right away.
             // The `in` guard handles the Http2Server union member which lacks
             // this method (we always use HTTP/1.1, but the type is a union).
-            const serverDrained = new Promise<void>(res => server.close(() => res()));
+            const serverDrained = new Promise<void>(res =>
+              server.close(() => res()),
+            );
             if ('closeAllConnections' in server) server.closeAllConnections();
             await serverDrained;
 
@@ -656,7 +682,9 @@ export async function startBackend(opts: CreateBackendOptions): Promise<RunningB
         logger,
         workspacesRoot,
         silverhandCli: ctx.silverhandCliLauncher,
-        ...(ctx.coLocatedHostId ? { coLocatedHostId: ctx.coLocatedHostId } : {}),
+        ...(ctx.coLocatedHostId
+          ? { coLocatedHostId: ctx.coLocatedHostId }
+          : {}),
         agentTokens: ctx.agentTokens,
         logDir: ctx.logDir,
         workspaceRegistryBackfiller: ctx.workspaceRegistryBackfiller,
@@ -780,6 +808,19 @@ export type {
 export type { AuthRuntimeConfig } from './auth/config.js';
 export { resolveAuthRuntimeConfig } from './auth/config.js';
 export {
+  BackendMetrics,
+  startEventLoopHealthMonitor,
+} from './observability/metrics.js';
+export {
+  startMetricsServer,
+  type RunningMetricsServer,
+} from './observability/metrics-server.js';
+export {
+  configureDatabaseObservation,
+  prepareObserved,
+  type ObservedStatement,
+} from './observability/observed-statement.js';
+export {
   CURRENT_SCHEMA_VERSION,
   MIN_SUPPORTED_SCHEMA_VERSION,
 } from '@silverhand/shared/db/migrations';
@@ -831,9 +872,10 @@ function resolveLogControl(logger: BackendLogger): LogLevelControl {
 }
 
 function urlForListenAddress(hostname: string, port: number): string {
-  const host = hostname.includes(':') && !hostname.startsWith('[')
-    ? `[${hostname}]`
-    : hostname;
+  const host =
+    hostname.includes(':') && !hostname.startsWith('[')
+      ? `[${hostname}]`
+      : hostname;
   return `http://${host}:${port}`;
 }
 
@@ -859,32 +901,4 @@ function assertLauncherResolvable(command: string, label = 'launcher'): void {
         `Without it agents may be unable to use Silverhand runtime actions.`,
     );
   }
-}
-
-const EVENT_LOOP_LAG_INTERVAL_MS = 500;
-const EVENT_LOOP_LAG_WARN_MS = 250;
-
-function startEventLoopLagProbe(logger: BackendLogger): () => void {
-  let expectedAt = performance.now() + EVENT_LOOP_LAG_INTERVAL_MS;
-  const timer = setInterval(() => {
-    const now = performance.now();
-    const lagMs = now - expectedAt;
-    expectedAt = now + EVENT_LOOP_LAG_INTERVAL_MS;
-    if (lagMs >= EVENT_LOOP_LAG_WARN_MS) {
-      logger.warn(
-        {
-          lagMs: roundMs(lagMs),
-          intervalMs: EVENT_LOOP_LAG_INTERVAL_MS,
-          thresholdMs: EVENT_LOOP_LAG_WARN_MS,
-        },
-        'backend: event loop lag detected',
-      );
-    }
-  }, EVENT_LOOP_LAG_INTERVAL_MS);
-  timer.unref?.();
-  return () => clearInterval(timer);
-}
-
-function roundMs(ms: number): number {
-  return Math.round(ms * 10) / 10;
 }

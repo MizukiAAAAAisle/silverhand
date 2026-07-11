@@ -1,0 +1,10 @@
+/var/lib/silverhand/logs/*.log {
+  daily
+  size 100M
+  rotate 7
+  missingok
+  notifempty
+  compress
+  delaycompress
+  copytruncate
+}
