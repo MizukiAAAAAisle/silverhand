@@ -136,6 +136,32 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  it('keeps inbox custody pending and blocks spawn while the agent switches runtime', async () => {
+    const fix = makeFixture({ runtime: 'claude' });
+    try {
+      expect(
+        new AgentRepo(fix.db).beginRuntimeTransition(fix.agentId, 'codex'),
+      ).toBe('started');
+      const msg = fix.messages.insertForConversation({
+        conversationId: fix.channelId,
+        fromKind: 'user',
+        content: 'wait for the target runtime',
+      });
+
+      await fix.fanout.deliverMessage(fix.channelId, fix.agentId, msg.id);
+      await fix.fanout.start(fix.channelId, fix.agentId);
+
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toHaveLength(1);
+      expect(
+        fix.transport.calls.filter(
+          call => call.kind === 'runtime_deliver' || call.kind === 'runtime_start',
+        ),
+      ).toEqual([]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   it('rehydrates from runtime_status on fresh ready after disconnect even for the same daemon pid', async () => {
     const fix = makeFixture();
     try {

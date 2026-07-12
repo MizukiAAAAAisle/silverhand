@@ -17,6 +17,7 @@ const buttonVariants = cva(
         danger: 'bg-error text-text-on-error hover:opacity-90',
       },
       size: {
+        xs: 'h-6 px-2 text-xs',
         sm: 'h-7 px-2.5',
         md: 'h-9 px-3',
         lg: 'h-10 px-4',

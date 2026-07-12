@@ -1474,12 +1474,12 @@ const RESPONSES_ERROR_TYPED: WireFixture[] = [
   {
     name: 'response/agent_materialize-error-agent_dir_collision',
     description:
-      'Daemon refused to seed because the agent_dir is populated by foreign content (no sentinel) or carries a sentinel whose (agent_id, template_choice, runtime) triple does not match the request. §4.6 collision arms.',
+      'Daemon refused to seed because the agent_dir is populated by foreign content (no sentinel) or carries a sentinel whose (agent_id, template_choice) identity does not match the request. §4.6 collision arms.',
     frame: enc({
       id: 'req-agent-materialize-1',
       error: {
         code: 'agent_dir_collision',
-        message: 'agent_dir already materialized with mismatched metadata; sentinel.runtime=codex but request.runtime=claude',
+        message: 'agent_dir already materialized with mismatched metadata; sentinel.template_choice=minimal but request.template_choice=default',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'agent_materialize' },

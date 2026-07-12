@@ -17,10 +17,11 @@
  *     the DM workspace path IS the L1 dir).
  *   - Templates come from `template.ts`; daemon owns them and the
  *     backend does NOT import them (tripwire test enforces this).
- *   - Idempotent re-call: the sentinel's
- *     `(agent_id, template_choice, runtime)` triple matches the
+ *   - Idempotent re-call: the sentinel's directory identity
+ *     `(agent_id, template_choice)` matches the
  *     request → return ok:true without rewriting any file. Any
- *     mismatch → `agent_dir_collision`. Foreign content (no
+ *     mismatch → `agent_dir_collision`. The stored runtime is
+ *     materialization-time provenance, not directory identity. Foreign content (no
  *     sentinel + non-empty dir) → `agent_dir_collision`.
  *   - fs errors map to typed wire codes (not collapsed into
  *     `internal_error`): `ENOSPC` → `fs_quota_exceeded`,
@@ -171,12 +172,11 @@ export async function materializeAgent(
   }
 
   if (sentinel.kind === 'ok') {
-    // §4.6 case 4 / 5 — sentinel exists and is valid. Triple
+    // §4.6 case 4 / 5 — sentinel exists and is valid. Identity
     // check decides idempotent-ok vs collision.
     const match = compareSentinel(sentinel.sentinel, {
       agent_id: params.agent_id,
       template_choice: params.template_choice,
-      runtime: params.runtime,
     });
     if (match.kind === 'match') {
       return {

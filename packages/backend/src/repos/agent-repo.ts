@@ -8,6 +8,8 @@ import {
   type ConversationAgentStatus,
   type ConversationKind,
   type CreateAgentInput,
+  type RuntimeKind,
+  type SwitchAgentRuntimeInput,
   type UpdateAgentInput,
   type WorkspaceKind,
 } from '@silverhand/shared';
@@ -463,6 +465,96 @@ export class AgentRepo {
       .prepare(`UPDATE agents SET ${sets.join(', ')} WHERE id = ?`)
       .run(...values, now, id);
     return this.get(id);
+  }
+
+  /**
+   * Acquire the durable runtime-transition lock without changing the current
+   * runtime. The compare-and-set makes concurrent transitions fail loudly.
+   */
+  beginRuntimeTransition(
+    id: string,
+    target: RuntimeKind,
+    now = Date.now(),
+  ): 'started' | 'not_found' | 'in_progress' {
+    const result = this.db
+      .prepare(
+        `UPDATE agents
+            SET runtime_transition_target = ?,
+                runtime_transition_started_at = ?
+          WHERE id = ?
+            AND runtime_transition_target IS NULL`,
+      )
+      .run(target, now, id);
+    if (result.changes > 0) return 'started';
+    return this.getRow(id) ? 'in_progress' : 'not_found';
+  }
+
+  /** Release a matching transition lock after a pre-commit failure. */
+  abortRuntimeTransition(id: string, target: RuntimeKind): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE agents
+            SET runtime_transition_target = NULL,
+                runtime_transition_started_at = NULL
+          WHERE id = ?
+            AND runtime_transition_target = ?`,
+      )
+      .run(id, target);
+    return result.changes > 0;
+  }
+
+  /**
+   * Commit runtime and target-runtime tuning as one write, then release the
+   * lock. A target mismatch is a lost-ownership failure, never a blind update.
+   */
+  completeRuntimeTransition(
+    id: string,
+    input: SwitchAgentRuntimeInput,
+  ): AgentDto | null {
+    const result = this.db
+      .prepare(
+        `UPDATE agents
+            SET runtime = ?,
+                model = ?,
+                reasoning_effort = ?,
+                fast_mode = ?,
+                runtime_transition_target = NULL,
+                runtime_transition_started_at = NULL,
+                updated_at = ?
+          WHERE id = ?
+            AND runtime_transition_target = ?`,
+      )
+      .run(
+        input.runtime,
+        input.model,
+        input.reasoning_effort,
+        input.fast_mode === null ? null : input.fast_mode ? 1 : 0,
+        Date.now(),
+        id,
+        input.runtime,
+      );
+    if (result.changes === 0) return null;
+    return this.get(id);
+  }
+
+  isRuntimeTransitioning(id: string): boolean {
+    return this.getRow(id)?.runtime_transition_target != null;
+  }
+
+  /**
+   * Boot recovery for transitions interrupted before commit. The current
+   * runtime remains authoritative until `completeRuntimeTransition`, so stale
+   * locks can be rolled back without reconstructing an epoch.
+   */
+  clearStaleRuntimeTransitions(): number {
+    return this.db
+      .prepare(
+        `UPDATE agents
+            SET runtime_transition_target = NULL,
+                runtime_transition_started_at = NULL
+          WHERE runtime_transition_target IS NOT NULL`,
+      )
+      .run().changes;
   }
 
   delete(id: string): void {

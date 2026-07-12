@@ -570,6 +570,43 @@ export const migrations: Migration[] = [
          AND provisioning_source != 'user_invite';
     `,
   },
+  {
+    version: 57,
+    name: 'agent_runtime_transition_lock',
+    up: `
+      -- Runtime switching is a multi-step transition: block new spawn/delivery,
+      -- clear every old-runtime session, then atomically install the target
+      -- runtime and tuning. The persisted lock survives a process crash; boot
+      -- safely rolls it back because agents.runtime is unchanged until commit.
+      ALTER TABLE agents ADD COLUMN runtime_transition_started_at INTEGER;
+      ALTER TABLE agents ADD COLUMN runtime_transition_target TEXT
+        CHECK (
+          (runtime_transition_target IS NULL AND runtime_transition_started_at IS NULL)
+          OR
+          (runtime_transition_target IN ('claude','codex','cursor','gemini','qoder','opencode')
+           AND runtime_transition_started_at IS NOT NULL)
+        );
+
+      -- SQLite may skip a column-level CHECK when an UPDATE touches only the
+      -- sibling column. Pair triggers make the two-column invariant explicit
+      -- for every insert and either-column update.
+      CREATE TRIGGER agents_runtime_transition_pair_insert
+        BEFORE INSERT ON agents
+        WHEN (NEW.runtime_transition_target IS NULL) !=
+             (NEW.runtime_transition_started_at IS NULL)
+        BEGIN
+          SELECT RAISE(ABORT, 'agents runtime transition lock must be a pair');
+        END;
+
+      CREATE TRIGGER agents_runtime_transition_pair_update
+        BEFORE UPDATE OF runtime_transition_target, runtime_transition_started_at ON agents
+        WHEN (NEW.runtime_transition_target IS NULL) !=
+             (NEW.runtime_transition_started_at IS NULL)
+        BEGIN
+          SELECT RAISE(ABORT, 'agents runtime transition lock must be a pair');
+        END;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

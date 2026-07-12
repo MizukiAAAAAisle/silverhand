@@ -14,6 +14,7 @@ import type {
 import {
   decodeUserPrincipalHeader,
   isAgentHomeWorkspaceId,
+  RUNTIME_CATALOG,
   X_SILVERHAND_LEGACY_USER_ID_HEADER as LEGACY_USER_ID_HEADER,
   X_SILVERHAND_PRINCIPAL_HEADER as PRINCIPAL_HEADER,
 } from '@silverhand/shared';
@@ -255,6 +256,9 @@ export class FakeHostWsServerController implements HostWsServerController {
   }> = [];
   /** Inject an error from `sendCommand` (any kind). */
   sendCommandError: Error | null = null;
+  hostRuntimeCatalogAckOverride:
+    | (() => OutboundServerCommandResult<'host_runtime_catalog'>)
+    | null = null;
   /**
    * Override the `agent_materialize` ack body. Tests that want to
    * exercise the `agent_dir !== agent_home_workspace_path` skew or
@@ -420,6 +424,22 @@ export class FakeHostWsServerController implements HostWsServerController {
       params: params as Record<string, unknown>,
     });
     if (this.sendCommandError) throw this.sendCommandError;
+    if (kind === 'host_runtime_catalog') {
+      if (this.hostRuntimeCatalogAckOverride) {
+        return this.hostRuntimeCatalogAckOverride() as OutboundServerCommandResult<K>;
+      }
+      return {
+        runtimes: RUNTIME_CATALOG.map(entry => ({
+          kind: entry.kind,
+          state: 'present' as const,
+          reason: 'resolved' as const,
+          installed: true,
+          binary: `/usr/bin/${entry.kind}`,
+          version: 'test',
+        })),
+        detected_at: Date.now(),
+      } as OutboundServerCommandResult<K>;
+    }
     if (kind === 'agent_materialize') {
       const p = params as OutboundServerCommandParams<'agent_materialize'>;
       if (this.agentMaterializeAckOverride) {

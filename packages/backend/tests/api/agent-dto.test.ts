@@ -96,7 +96,7 @@ describe('agent fast_mode validation', () => {
 });
 
 describe('agent update validation', () => {
-  it('rejects runtime changes; runtime is create-time immutable', () => {
+  it('rejects runtime changes through generic PATCH', () => {
     expect(
       UpdateAgentInputSchema.safeParse({ runtime: 'codex' }).success,
     ).toBe(false);

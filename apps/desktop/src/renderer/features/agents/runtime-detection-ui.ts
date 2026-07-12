@@ -15,15 +15,25 @@ export type RuntimePickerMode =
   | 'probe-failed' // the probe itself errored (transport = unknown-for-all)
   | 'detected'; // fresh catalog for an available host — states authoritative
 
-/** Fold the four async signals into one mode. Order matters: a host must be
- *  chosen and available before loading/error even apply. */
+/** Fold the async signals into one mode. Order matters — earlier branches
+ *  short-circuit later ones:
+ *    hasHost → host-availability loading (probing) → offline → catalog
+ *    loading (probing) → catalog error (probe-failed) → detected.
+ *  Host-availability-loading precedes `offline` because the map's initial
+ *  read for any host is `undefined` (== "not available yet, per the getter")
+ *  until the first status probe settles — treating that gap as offline
+ *  would flash "Connect the computer to detect runtimes" for ~50ms on every
+ *  mount (Cindy #1472 round-7 HIGH). Consumers that mount only AFTER they
+ *  know the host is available pass `isHostAvailabilityLoading: false`. */
 export function deriveRuntimePickerMode(input: {
   hasHost: boolean;
+  isHostAvailabilityLoading: boolean;
   hostAvailable: boolean;
   isLoading: boolean;
   isError: boolean;
 }): RuntimePickerMode {
   if (!input.hasHost) return 'no-host';
+  if (input.isHostAvailabilityLoading) return 'probing';
   if (!input.hostAvailable) return 'offline';
   if (input.isLoading) return 'probing';
   if (input.isError) return 'probe-failed';

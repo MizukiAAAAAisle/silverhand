@@ -1,5 +1,14 @@
-import type { AgentRow, AgentDto, UpdateAgentInput } from '@silverhand/shared';
-import { reasoningEffortValidForRuntime, validateAvatarFile } from '@silverhand/shared';
+import type {
+  AgentRow,
+  AgentDto,
+  SwitchAgentRuntimeInput,
+  UpdateAgentInput,
+} from '@silverhand/shared';
+import {
+  reasoningEffortValidForRuntime,
+  runtimeSupportsFastMode,
+  validateAvatarFile,
+} from '@silverhand/shared';
 import type { BlobFileStorage } from '../storage/blob-file-storage.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import { AgentRepo } from '../repos/agent-repo.js';
@@ -14,6 +23,7 @@ export class AgentServiceError extends Error {
     public readonly code:
       | 'agent_not_found'
       | 'reasoning_effort_invalid_for_runtime'
+      | 'fast_mode_invalid_for_runtime'
       | 'avatar_too_large'
       | 'avatar_unsupported_type'
       | 'avatar_missing'
@@ -32,16 +42,16 @@ export interface AgentServiceOptions {
 }
 
 /**
- * Enforce the runtime/reasoning invariant on an update. Runtime itself is a
- * create-time driver boundary (changing it would invalidate stored CLI session
- * / resume semantics), so PATCH rejects runtime before reaching this service.
+ * Enforce the runtime/reasoning invariant on an ordinary profile update.
+ * Runtime itself is handled by the dedicated transition command (which clears
+ * stored CLI session/resume state), so PATCH rejects it before this service.
  * Explicit reasoning_effort in the patch must be valid for the agent's current
  * runtime, else throw → 400. We reject rather than silently drop an explicit
  * value — dropping what the caller asked for would be a silent rebind.
  *
- * fast_mode needs no equivalent: its values (true/false/null) are all valid
- * for its only consumer (codex); a stale fast_mode on another runtime is
- * ignored by that driver, so there's no out-of-range value to leak.
+ * fast_mode follows the same rule: non-null is valid only on runtimes whose
+ * catalog capability explicitly supports it. `null` always clears to the
+ * driver default.
  */
 export function normalizeRuntimeTuning(
   existing: AgentRow,
@@ -56,6 +66,16 @@ export function normalizeRuntimeTuning(
         `reasoning_effort '${input.reasoning_effort}' is not valid for runtime '${existing.runtime}'`,
       );
     }
+  }
+  if (
+    input.fast_mode !== undefined
+    && input.fast_mode !== null
+    && !runtimeSupportsFastMode(existing.runtime)
+  ) {
+    throw new AgentServiceError(
+      'fast_mode_invalid_for_runtime',
+      `fast_mode is not valid for runtime '${existing.runtime}'`,
+    );
   }
   return input;
 }
@@ -118,6 +138,16 @@ export class AgentService {
     if (!existing) return null;
     const normalized = normalizeRuntimeTuning(existing, input);
     const updated = this.agents.update(id, normalized);
+    if (updated) this.publishChanged(id);
+    return updated;
+  }
+
+  /** Commit a previously locked runtime transition and publish one refresh. */
+  completeRuntimeTransition(
+    id: string,
+    input: SwitchAgentRuntimeInput,
+  ): AgentDto | null {
+    const updated = this.agents.completeRuntimeTransition(id, input);
     if (updated) this.publishChanged(id);
     return updated;
   }

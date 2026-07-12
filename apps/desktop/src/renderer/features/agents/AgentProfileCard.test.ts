@@ -87,14 +87,18 @@ describe('AgentProfileCard creator/read-only render branches', () => {
     expect(html).not.toContain(
       "Only the creator can edit this agent&#x27;s profile.",
     );
-    // Description goes through GhostTextarea on the creator branch.
-    expect(html).toContain('<textarea');
+    // #task:1472 refactored the card to a pencil-edit pattern: fields are
+    // readonly by default and only mount their input chrome on demand. So
+    // an SSR snapshot shows no `<textarea>` for description and no combobox
+    // for model. What the creator branch DOES surface unconditionally is:
+    // the display-name pencil trigger, the description pencil trigger, the
+    // runtime-configuration pencil trigger — all lifted to the section
+    // header via `ProfileSection titleAdornment` — plus the avatar picker.
+    expect(html).toContain('aria-label="Edit display name"');
+    expect(html).toContain('aria-label="Edit description"');
+    expect(html).toContain('aria-label="Edit runtime configuration"');
     // Editable avatar picker is mounted — the whole avatar square is the
-    // click target now (a hidden file input + a hover label band). Both
-    // markers must show; the human/agent click-the-avatar UX consolidation
-    // (#task:314) replaced the old "Choose…/Change…" button. The visible
-    // strip label is a single verb ("Edit" / "Add") to fit within the
-    // frame's clip; the verbose text lives on the wrapper's `aria-label`.
+    // click target now (a hidden file input + a hover label band).
     expect(html).toContain('type="file"');
     expect(html).toMatch(/>Edit<|>Add</);
     expect(html).toMatch(/aria-label="(Change avatar|Add avatar) for @Alice"/);
@@ -114,14 +118,17 @@ describe('AgentProfileCard creator/read-only render branches', () => {
     expect(html).not.toMatch(/sign in as|log in as/i);
   });
 
-  it('renders the model field as an editable combobox (not a native datalist)', () => {
-    // #task:1328: model is a free-text combobox with runtime suggestions
-    // (qoder tiers). The earlier native <datalist> approach is gone.
+  it('runtime configuration is readonly on first mount — combobox only appears after entering edit mode', () => {
+    // #task:1472: model no longer sits in the always-editable Capabilities
+    // grid. It lives inside RuntimeConfigEditor which is readonly by
+    // default; the SSR pass therefore shows neither a combobox nor a
+    // datalist. The Edit trigger is the pencil at the section header.
     const html = render(
       makeAgent({ runtime: 'qoder', created_by_user_id: 'u-creator' }),
       'u-creator',
     );
-    expect(html).toContain('role="combobox"');
+    expect(html).not.toContain('role="combobox"');
     expect(html).not.toContain('<datalist');
+    expect(html).toContain('aria-label="Edit runtime configuration"');
   });
 });

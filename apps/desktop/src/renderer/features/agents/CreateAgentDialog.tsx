@@ -388,6 +388,11 @@ function RuntimePicker({
 
   const mode = deriveRuntimePickerMode({
     hasHost: Boolean(hostId),
+    // RuntimePicker mounts only after the host availability map has resolved
+    // (see the `allSettled` gate in the parent), so this axis is always
+    // settled at this point — pass false explicitly to keep the pure core's
+    // signature honest instead of hiding the invariant.
+    isHostAvailabilityLoading: false,
     hostAvailable,
     isLoading: runtimeCatalog.isLoading,
     isError: runtimeCatalog.isError,

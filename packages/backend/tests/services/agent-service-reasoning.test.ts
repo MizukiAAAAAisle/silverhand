@@ -11,8 +11,8 @@ import {
  * compatibility (Cindy #task:1328 P1): the shared ReasoningEffort enum is the
  * union across runtimes, so a value like qoder's `max` parses structurally but
  * is meaningless for codex and, if it reached the row, `CodexDriver.buildArgs`
- * would forward it verbatim. Runtime itself is create-time immutable; update
- * validation here only checks explicit reasoning against the current runtime.
+ * would forward it verbatim. Runtime transitions have their own command;
+ * ordinary updates still validate explicit tuning against the current runtime.
  */
 function row(overrides: Partial<AgentRow>): AgentRow {
   return {
@@ -31,6 +31,9 @@ function row(overrides: Partial<AgentRow>): AgentRow {
     materialization_status: 'active',
     materialization_failed_code: null,
     materialization_failed_at: null,
+    idempotency_key: null,
+    runtime_transition_target: null,
+    runtime_transition_started_at: null,
     created_at: 1,
     updated_at: 1,
     ...overrides,
@@ -70,5 +73,17 @@ describe('normalizeRuntimeTuning — reasoning valid for the agent runtime', () 
     expect(
       normalizeRuntimeTuning(row({ runtime: 'codex' }), { display_name: 'New' }),
     ).toEqual({ display_name: 'New' });
+  });
+
+  it('allows non-null fast mode only on runtimes that support it', () => {
+    expect(
+      normalizeRuntimeTuning(row({ runtime: 'codex' }), { fast_mode: true }),
+    ).toEqual({ fast_mode: true });
+    expect(() =>
+      normalizeRuntimeTuning(row({ runtime: 'claude' }), { fast_mode: false }),
+    ).toThrow(/fast_mode is not valid for runtime 'claude'/);
+    expect(
+      normalizeRuntimeTuning(row({ runtime: 'claude' }), { fast_mode: null }),
+    ).toEqual({ fast_mode: null });
   });
 });

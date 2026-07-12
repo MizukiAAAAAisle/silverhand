@@ -1,4 +1,4 @@
-// Public `/api/agents` surface: list / create / get / patch / avatar
+// Public `/api/agents` surface: list / create / get / patch / runtime transition / avatar
 // workspace-fs (tree·file) / runtime-state / schedules (list·cancel) / stop /
 // delete. The destructive DELETE cascade already delegates to
 // the `deleteAgent` use case; `stop` is a runtime-adapter aggregation with no
@@ -11,6 +11,10 @@ import { isAgentNameAvailable } from '../application/name-availability.js';
 import {
   deleteAgent,
 } from '../application/delete-agent.js';
+import {
+  switchAgentRuntime,
+  SwitchAgentRuntimeError,
+} from '../application/switch-agent-runtime.js';
 import {
   runPostCommitEffects,
 } from '../application/post-commit.js';
@@ -54,6 +58,7 @@ import {
   EntityNameSchema,
   McpProbeRequestSchema,
   ScheduleListInputSchema,
+  SwitchAgentRuntimeInputSchema,
   UpdateAgentInputSchema,
   apiPaths,
   type AgentDto,
@@ -457,8 +462,8 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
   // patchable here: `name` is the immutable handle (renaming would
   // ripple through the agent_home workspace, every @mention in history,
   // every L2 file path), host swap is out of v1 scope, and runtime swap is
-  // not a simple profile edit: it would invalidate existing CLI session/resume
-  // state and needs a dedicated migration use case if it ever ships.
+  // not a simple profile edit: the dedicated PUT transition below owns CLI
+  // session clearing, spawn exclusion, and atomic target-runtime tuning.
   //
   // Permission: `canEditAgent` (v26). The creator user — recorded on
   // `agents.created_by_user_id` at create time — and the agent acting
@@ -496,6 +501,51 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     }
     if (!updated) return c.json({ error: 'agent not found' }, 404);
     return c.json({ agent: updated });
+  });
+
+  // Runtime is intentionally not part of generic PATCH. Switching drivers is
+  // a lifecycle transition: lock delivery, clear every old-runtime session,
+  // atomically install the target runtime + explicit tuning, then re-drive
+  // active/pending conversations.
+  app.put(apiPaths.agentRuntime(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'agent id required' }, 400);
+    const agent = agents.get(id);
+    if (!agent) return c.json({ error: 'agent not found' }, 404);
+    const principal = getUserPrincipal(c);
+    if (!canViewAgent(ctx, principal, id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
+    if (!canEditAgent(ctx, principal, id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = SwitchAgentRuntimeInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    try {
+      const result = await switchAgentRuntime(
+        { ctx, agents, conversations, conversationInboxes },
+        {
+          agentId: id,
+          actorUserId: resolveViewerUserId(c),
+          config: parsed.data,
+        },
+      );
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof SwitchAgentRuntimeError) {
+        if (err.cause) {
+          const mapped = placementErrorResponse(c, err.cause);
+          if (mapped) return mapped;
+        }
+        return c.json({ error: err.message, code: err.code }, err.status);
+      }
+      const mapped = placementErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
   });
 
   // Public avatar lifecycle. Mirrors `/api/me/avatar` but keyed by

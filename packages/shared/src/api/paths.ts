@@ -100,6 +100,7 @@ export const apiPaths = {
    *  (Test connection / List tools buttons) calls this. */
   agentProfileMcpProbe: (id: string) => `/api/agents/${id}/profile/mcp/probe`,
   agentRuntimeState: (id: string) => `/api/agents/${id}/runtime-state`,
+  agentRuntime: (id: string) => `/api/agents/${id}/runtime`,
   agentStop: (id: string) => `/api/agents/${id}/stop`,
   /** Public avatar fetch for any agent. Returns the blob bytes with a
    *  long immutable Cache-Control header (cache-busted via the

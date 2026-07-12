@@ -228,7 +228,14 @@ export function AgentView({
               onOpenConversation={onOpenConversation}
             />
           ) : (
-            <div className="flex-1 overflow-y-auto">
+            // Reserve scrollbar width only for profile editing; MCP and
+            // schedules retain their full width.
+            <div
+              className={cn(
+                'flex-1 overflow-y-auto',
+                section === 'profile' && '[scrollbar-gutter:stable]',
+              )}
+            >
               <div className="px-8 py-6">
                 {section === 'profile' ? (
                   <AgentProfileCard agent={agent} />
@@ -531,7 +538,7 @@ function AgentSidePanel({
             </div>
           )
         ) : section === 'profile' ? (
-          <div className="flex-1 overflow-y-auto px-4 py-4">
+          <div className="flex-1 overflow-y-auto px-4 py-4 [scrollbar-gutter:stable]">
             <AgentProfileCard agent={agent} />
           </div>
         ) : canManageSchedules ? (

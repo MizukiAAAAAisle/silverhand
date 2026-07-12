@@ -1575,10 +1575,11 @@ export const AgentMaterializeErrorCodeSchema = z.enum([
    * `agent_dir_collision` (not `already_exists`): the dir is
    * unexpectedly populated by foreign content without the
    * `.materialized` sentinel, or the sentinel exists but does
-   * not match the requested (agent_id, template_choice, runtime)
-   * triple (sentinel "template_match" per §4.6 / §14 Q3).
+   * not match the requested (agent_id, template_choice) identity
+   * (sentinel "template_match" per §4.6 / §14 Q3). Runtime is
+   * materialization-time provenance and may change later.
    * Idempotent re-call of an already-materialized `agent_id`
-   * (all three sentinel fields match) returns `ok: true` and is
+   * (both identity fields match) returns `ok: true` and is
    * NOT an error.
    */
   'agent_dir_collision',

@@ -407,6 +407,7 @@ const agentServiceErrorStatusMap: Partial<
 > = {
   agent_not_found: 404,
   reasoning_effort_invalid_for_runtime: 400,
+  fast_mode_invalid_for_runtime: 400,
   avatar_missing: 400,
   avatar_too_large: 413,
   avatar_unsupported_type: 415,

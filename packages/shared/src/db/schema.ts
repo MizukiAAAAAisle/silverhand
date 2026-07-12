@@ -214,6 +214,10 @@ export interface AgentRow {
    *  lookup paths MUST filter by `(created_by_user_id, idempotency_key)`
    *  — never by key alone (Cindy round-2 P1 #5). */
   idempotency_key: string | null;
+  /** Target runtime while a durable runtime transition owns the agent. */
+  runtime_transition_target: RuntimeKind | null;
+  /** Epoch ms paired with `runtime_transition_target`; internal, not a DTO field. */
+  runtime_transition_started_at: number | null;
   created_at: number;
   updated_at: number;
 }

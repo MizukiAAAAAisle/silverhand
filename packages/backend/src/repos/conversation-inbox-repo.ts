@@ -204,6 +204,34 @@ export class ConversationInboxRepo {
     ).run(inFlightOwner);
   }
 
+  /** Return every in-flight delivery for an agent to pending custody. */
+  rollbackInFlightForAgent(agentId: string): string[] {
+    return this.db.transaction(() => {
+      const rows = this.db
+        .prepare<[string], { conversation_id: string }>(
+          `SELECT DISTINCT conversation_id
+             FROM conversation_inboxes
+            WHERE agent_id = ?
+              AND in_flight_owner IS NOT NULL
+              AND delivered_at IS NULL
+              AND failed_at IS NULL`,
+        )
+        .all(agentId);
+      this.db
+        .prepare(
+          `UPDATE conversation_inboxes
+              SET in_flight_owner = NULL,
+                  in_flight_at = NULL
+            WHERE agent_id = ?
+              AND in_flight_owner IS NOT NULL
+              AND delivered_at IS NULL
+              AND failed_at IS NULL`,
+        )
+        .run(agentId);
+      return rows.map(row => row.conversation_id);
+    }).exclusive();
+  }
+
   rollbackInFlightForPairExceptOwner(
     conversationId: string,
     agentId: string,
@@ -252,6 +280,25 @@ export class ConversationInboxRepo {
       )
       .get(agentId);
     return row?.c ?? 0;
+  }
+
+  /** Pending pairs created during a transition, excluding historical backlog. */
+  listPendingConversationIdsForAgentSince(
+    agentId: string,
+    createdAtOrAfter: number,
+  ): string[] {
+    const rows = this.db
+      .prepare<[string, number], { conversation_id: string }>(
+        `SELECT DISTINCT conversation_id
+           FROM conversation_inboxes
+          WHERE agent_id = ?
+            AND delivered_at IS NULL
+            AND failed_at IS NULL
+            AND created_at >= ?
+          ORDER BY conversation_id ASC`,
+      )
+      .all(agentId, createdAtOrAfter);
+    return rows.map(row => row.conversation_id);
   }
 
   /**

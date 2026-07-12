@@ -390,6 +390,9 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       messageId,
     );
     if (delivery.deliveredAt !== null) return;
+    // Runtime transition owns spawn/delivery custody. Keep the durable inbox
+    // row pending; the transition use case re-drives it after atomic commit.
+    if (this.runtimeTransitioning(agentId)) return;
     const hostId = this.hostIdForAgent(agentId);
     // #task:1417 Stage 2b — no cache-phase fork. Claim pending + submit a
     // live `runtime_deliver`; the daemon decides spawn-vs-admit-vs-refuse.
@@ -835,6 +838,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     conversationId: string,
     agentId: string,
   ): Promise<boolean> {
+    if (this.runtimeTransitioning(agentId)) return false;
     const hostId = this.hostIdForAgent(agentId);
     const connectionId = this.connectedConnectionId(hostId, 'runtime_deliver');
     const staleInFlight = this.inboxRepo.rollbackInFlightForPairExceptOwner(
@@ -930,6 +934,10 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   }
 
   async start(conversationId: string, agentId: string): Promise<void> {
+    // Automatic start callers are allowed to queue work while a transition
+    // owns the agent. The transition resumes previously-live and pending pairs
+    // after commit, so a no-op here avoids spawning the old runtime.
+    if (this.runtimeTransitioning(agentId)) return;
     // #task:1417 Stage 2b — two planes. If there is pending inbox work,
     // drain it via the delivery plane (`deliverPending` → `runtime_deliver`,
     // which spawns-with-batch). Otherwise spawn a bare lifecycle runtime
@@ -942,6 +950,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     conversationId: string,
     agentId: string,
   ): Promise<void> {
+    if (this.runtimeTransitioning(agentId)) return;
     const hostId = this.hostIdForAgent(agentId);
     const connectionId = this.connectedConnectionId(hostId, 'runtime_start');
     const state = this.stateForHost(hostId);
@@ -970,6 +979,9 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       );
     }
     const transport = this.requireTransport();
+    if (this.runtimeTransitioning(agentId)) {
+      throw new Error(`agent ${agentId} is switching runtime`);
+    }
     await transport.sendCommand(
       hostId,
       'runtime_start',
@@ -987,6 +999,9 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     conversationId: string,
     agentId: string,
   ): RuntimeStartParams['options'] {
+    if (this.runtimeTransitioning(agentId)) {
+      throw new Error(`agent ${agentId} is switching runtime`);
+    }
     const conversation = this.conversations.get(conversationId);
     if (!conversation) throw new Error(`conversation ${conversationId} not found`);
     const workspace = this.workspaces.get(conversation.workspace_id);
@@ -1262,6 +1277,9 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         // (`WorkspaceRegistryBackfiller.settled`), so the ready-admit hot
         // path pays only an in-memory set lookup after the first bind.
         runtimeDeliver: async params => {
+          if (this.runtimeTransitioning(params.agent_id)) {
+            throw new Error(`agent ${params.agent_id} is switching runtime`);
+          }
           // Pin the deliver to the SAME connection the caller resolved and
           // claimed rows under. During event dispatch (respawn / drain
           // replay) that is `dispatchConnectionId` (the event's connection,
@@ -1308,6 +1326,9 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
             params.agent_id,
           );
           const transport = this.requireTransport();
+          if (this.runtimeTransitioning(params.agent_id)) {
+            throw new Error(`agent ${params.agent_id} is switching runtime`);
+          }
           return transport.sendCommand(
             hostId,
             'runtime_deliver',
@@ -1332,7 +1353,8 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         respawn: (cid, aid) =>
           this.deliverPending(cid, aid).then(() => undefined),
         hasPendingInbox: (cid, aid) =>
-          this.inboxRepo.listPending(cid, aid).length > 0,
+          !this.runtimeTransitioning(aid)
+          && this.inboxRepo.listPending(cid, aid).length > 0,
         publishActivity: runState => {
           this.opts.events.publishSide(runState.conversationId, {
             kind: 'agent_activity',
@@ -1506,6 +1528,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     conversationId: string,
     agentId: string,
   ): Promise<void> {
+    if (this.runtimeTransitioning(agentId)) return;
     const claimed = this.inboxRepo.claimPending(
       conversationId,
       agentId,
@@ -1569,6 +1592,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     conversationId: string,
     agentId: string,
   ): Promise<void> {
+    if (this.runtimeTransitioning(agentId)) return;
     const claimed = this.inboxRepo.claimPending(
       conversationId,
       agentId,
@@ -1642,6 +1666,10 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       agentRuntime: agent.runtime,
       driver,
     };
+  }
+
+  private runtimeTransitioning(agentId: string): boolean {
+    return this.agents.isRuntimeTransitioning(agentId);
   }
 
   private defaultUserHandle(conversationId: string): string | undefined {

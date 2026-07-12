@@ -34,8 +34,14 @@ import { cn } from '@/lib/cn';
 
 export interface ProfileSectionProps {
   title: string;
-  /** Right-aligned slot in the section header — typically an "edit"
-   *  link or an icon button. Visual subordinate to the title. */
+  /** Rendered inline immediately after the title — for a small edit
+   *  affordance (pencil icon) that visually belongs to the label rather
+   *  than the section's right edge. Use this for section-scoped edit
+   *  triggers; use `headerSlot` for trailing utility actions (copy,
+   *  disclosure) whose natural home is the right edge. */
+  titleAdornment?: ReactNode;
+  /** Right-aligned slot in the section header — typically a trailing
+   *  utility action (copy, download). Visual subordinate to the title. */
   headerSlot?: ReactNode;
   /** When `true` the title renders in `text-muted` rather than
    *  `text-secondary`. Used for the Metadata section so it visually
@@ -46,6 +52,7 @@ export interface ProfileSectionProps {
 
 export function ProfileSection({
   title,
+  titleAdornment,
   headerSlot,
   muted = false,
   children,
@@ -53,14 +60,17 @@ export function ProfileSection({
   return (
     <section className="flex flex-col">
       <header className="mb-2 flex items-baseline justify-between gap-2">
-        <h3
-          className={cn(
-            'font-serif text-[13px] font-semibold uppercase tracking-wider',
-            muted ? 'text-text-muted' : 'text-text-secondary',
-          )}
-        >
-          {title}
-        </h3>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <h3
+            className={cn(
+              'font-serif text-[13px] font-semibold uppercase tracking-wider',
+              muted ? 'text-text-muted' : 'text-text-secondary',
+            )}
+          >
+            {title}
+          </h3>
+          {titleAdornment ?? null}
+        </div>
         {headerSlot ? (
           <div className="text-[11px] text-text-muted">{headerSlot}</div>
         ) : null}

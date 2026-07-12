@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type {
   AgentDto,
   AgentRuntimeStateDto,
@@ -9,6 +9,8 @@ import type {
   McpProbeResult,
   ScheduleDto,
   ScheduleListStatusFilter,
+  SwitchAgentRuntimeInput,
+  SwitchAgentRuntimeResponse,
   UpdateAgentInput,
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
@@ -199,6 +201,71 @@ export function useUpdateAgent(agentId: string | null) {
       if (!agentId) return;
       qc.invalidateQueries({ queryKey: agentsKey });
       qc.invalidateQueries({ queryKey: agentKey(agentId) });
+    },
+  });
+}
+
+/**
+ * Cache-invalidation side effects for a successful runtime switch. Extracted
+ * from `useSwitchAgentRuntime.onSuccess` so it can be unit-tested against a
+ * real QueryClient with a seeded run-state query (Cindy #1470 review).
+ *
+ * The run-state keys are `['conversations', conversationId, 'agent-run-states']`
+ * — see `lib/agentRunStateCache.ts::agentRunStatesKey` (the single authority;
+ * `features/channels/hooks.ts::useAgentRunStates` calls into it). A bare
+ * `['conversations']` prefix would over-fire against every conversation-scoped
+ * query, so we use a structured predicate that matches only run-state slots.
+ */
+export function applySwitchAgentRuntimeSideEffects(
+  qc: QueryClient,
+  agentId: string,
+): void {
+  qc.invalidateQueries({ queryKey: agentsKey });
+  qc.invalidateQueries({ queryKey: agentKey(agentId) });
+  qc.invalidateQueries({ queryKey: agentRuntimeStateKey(agentId) });
+  qc.invalidateQueries({ queryKey: ['channels'] });
+  qc.invalidateQueries({
+    predicate: q =>
+      q.queryKey[0] === 'conversations' && q.queryKey[2] === 'agent-run-states',
+  });
+}
+
+/**
+ * PUT /api/agents/:id/runtime — transition an agent to a different runtime
+ * (#task:1470). Distinct from `useUpdateAgent`'s PATCH: runtime changes carry
+ * transition semantics (stop child processes, clear CLI sessions, reset
+ * per-runtime state) and MUST go through the dedicated backend command, not
+ * the ordinary field-patch route.
+ *
+ * Contract (`SwitchAgentRuntimeInputSchema` in shared): all four keys
+ * required; `null` on model / reasoning_effort / fast_mode is the explicit
+ * "Use driver default" sentinel. The schema also enforces `(runtime, value)`
+ * legality — the UI's per-runtime catalog gating mirrors this, so a legal UI
+ * state is always accepted.
+ *
+ * Response (`SwitchAgentRuntimeResponse`) carries transition side-effects.
+ * The renderer keys on `restart_failures > 0` to surface partial success as
+ * a warning (not a green toast), so a "runtime committed but N conversations
+ * couldn't restart" outcome isn't misread as clean success. `restart_failures`
+ * is a nonneg count (not a list of details).
+ */
+export function useSwitchAgentRuntime(agentId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: SwitchAgentRuntimeInput) => {
+      if (!agentId) throw new Error('no agent id');
+      const res = await api<SwitchAgentRuntimeResponse>(
+        apiPaths.agentRuntime(agentId),
+        {
+          method: 'PUT',
+          body: JSON.stringify(input),
+        },
+      );
+      return res;
+    },
+    onSuccess: () => {
+      if (!agentId) return;
+      applySwitchAgentRuntimeSideEffects(qc, agentId);
     },
   });
 }

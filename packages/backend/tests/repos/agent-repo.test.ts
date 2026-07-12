@@ -124,6 +124,66 @@ describe('AgentRepo', () => {
     expect(u.description).toBeNull();
   });
 
+  it('runtime transition is compare-and-set and commits runtime+tuning atomically', () => {
+    const { db, localHostId } = openTestDb();
+    const repo = new AgentRepo(db);
+    const agent = repo.create(
+      { name: 'switcher', runtime: 'claude', model: 'sonnet' },
+      localHostId,
+      'local',
+    );
+
+    expect(() =>
+      db.prepare(
+        'UPDATE agents SET runtime_transition_started_at = 1 WHERE id = ?',
+      ).run(agent.id),
+    ).toThrow(/runtime transition lock must be a pair/i);
+
+    expect(repo.beginRuntimeTransition(agent.id, 'codex', 123)).toBe('started');
+    expect(repo.beginRuntimeTransition(agent.id, 'qoder', 456)).toBe('in_progress');
+    expect(repo.getRow(agent.id)).toMatchObject({
+      runtime: 'claude',
+      model: 'sonnet',
+      runtime_transition_target: 'codex',
+      runtime_transition_started_at: 123,
+    });
+
+    const updated = repo.completeRuntimeTransition(agent.id, {
+      runtime: 'codex',
+      model: 'gpt-5-codex',
+      reasoning_effort: 'xhigh',
+      fast_mode: false,
+    });
+    expect(updated).toMatchObject({
+      runtime: 'codex',
+      model: 'gpt-5-codex',
+      reasoning_effort: 'xhigh',
+      fast_mode: false,
+    });
+    expect(repo.getRow(agent.id)).toMatchObject({
+      runtime_transition_target: null,
+      runtime_transition_started_at: null,
+    });
+  });
+
+  it('boot recovery clears stale transition locks without changing runtime', () => {
+    const { db, localHostId } = openTestDb();
+    const repo = new AgentRepo(db);
+    const agent = repo.create(
+      { name: 'stale-switch', runtime: 'claude' },
+      localHostId,
+      'local',
+    );
+    expect(repo.beginRuntimeTransition(agent.id, 'codex')).toBe('started');
+
+    expect(repo.clearStaleRuntimeTransitions()).toBe(1);
+    expect(repo.getRow(agent.id)).toMatchObject({
+      runtime: 'claude',
+      runtime_transition_target: null,
+      runtime_transition_started_at: null,
+    });
+  });
+
   it('create rejects an unknown user id (FK to users.id)', () => {
     const { db, localHostId } = openTestDb();
     const repo = new AgentRepo(db);

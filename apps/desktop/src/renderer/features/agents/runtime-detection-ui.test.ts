@@ -10,6 +10,7 @@ describe('deriveRuntimePickerMode', () => {
     expect(
       deriveRuntimePickerMode({
         hasHost: false,
+        isHostAvailabilityLoading: false,
         hostAvailable: false,
         isLoading: true,
         isError: true,
@@ -17,10 +18,27 @@ describe('deriveRuntimePickerMode', () => {
     ).toBe('no-host');
   });
 
-  it('host chosen but unavailable → offline', () => {
+  it('host availability still resolving → probing, NEVER offline (freshness ≠ fact)', () => {
+    // Regression: the `useHostAvailabilityMap` map returns `undefined` for
+    // any hostId until the first status probe settles. Treating that gap as
+    // offline flashed "Connect the computer to detect runtimes" for ~50ms
+    // on every RuntimeConfigEditor edit-enter (Cindy #1472 round-7 HIGH).
     expect(
       deriveRuntimePickerMode({
         hasHost: true,
+        isHostAvailabilityLoading: true,
+        hostAvailable: false,
+        isLoading: false,
+        isError: false,
+      }),
+    ).toBe('probing');
+  });
+
+  it('settled + host disconnected → offline (only after availability is a fact)', () => {
+    expect(
+      deriveRuntimePickerMode({
+        hasHost: true,
+        isHostAvailabilityLoading: false,
         hostAvailable: false,
         isLoading: false,
         isError: false,
@@ -32,6 +50,7 @@ describe('deriveRuntimePickerMode', () => {
     expect(
       deriveRuntimePickerMode({
         hasHost: true,
+        isHostAvailabilityLoading: false,
         hostAvailable: true,
         isLoading: true,
         isError: false,
@@ -43,6 +62,7 @@ describe('deriveRuntimePickerMode', () => {
     expect(
       deriveRuntimePickerMode({
         hasHost: true,
+        isHostAvailabilityLoading: false,
         hostAvailable: true,
         isLoading: false,
         isError: true,
@@ -54,6 +74,7 @@ describe('deriveRuntimePickerMode', () => {
     expect(
       deriveRuntimePickerMode({
         hasHost: true,
+        isHostAvailabilityLoading: false,
         hostAvailable: true,
         isLoading: false,
         isError: false,

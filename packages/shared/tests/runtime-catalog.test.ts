@@ -13,6 +13,7 @@ import {
   runtimeCliLabel,
   runtimeLabel,
   runtimeSupportsReasoningEffort,
+  runtimeSupportsFastMode,
 } from '../src/index.js';
 
 describe('runtime catalog (shared source of truth)', () => {
@@ -91,10 +92,30 @@ describe('runtime catalog (shared source of truth)', () => {
     }
   });
 
+  it('exposes codex model suggestions as quick-picks (free text still accepted, no forced default)', () => {
+    expect(runtimeCatalogEntry('codex').modelSuggestions).toEqual([
+      'gpt-5.5',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+    ]);
+    // Suggestions only — codex must not force a create-time default.
+    expect(runtimeDefaultModel('codex')).toBeNull();
+  });
+
   it('enables profile MCP for runtimes with spawn adapters', () => {
     expect(
       RUNTIME_CATALOG.filter(e => e.supportsProfileMcp).map(e => e.kind),
     ).toEqual(['claude', 'codex', 'qoder', 'opencode']);
+  });
+
+  it('exposes fast mode only for codex', () => {
+    expect(RUNTIME_CATALOG.filter(e => e.supportsFastMode).map(e => e.kind)).toEqual([
+      'codex',
+    ]);
+    for (const entry of RUNTIME_CATALOG) {
+      expect(runtimeSupportsFastMode(entry.kind)).toBe(entry.supportsFastMode);
+    }
   });
 
   it('title-cases reasoning labels for display while values stay lowercase', () => {

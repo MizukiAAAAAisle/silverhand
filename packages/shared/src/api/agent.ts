@@ -12,7 +12,10 @@ import {
 } from '../db/schema.js';
 import { DisplayNameSchema } from './user.js';
 import { EntityNameSchema } from './name.js';
-import { reasoningEffortValidForRuntime } from '../runtime-catalog.js';
+import {
+  reasoningEffortValidForRuntime,
+  runtimeSupportsFastMode,
+} from '../runtime-catalog.js';
 
 export const AgentDtoSchema = z.object({
   id: z.string(),
@@ -87,14 +90,21 @@ export const CreateAgentInputSchema = z
         message: `reasoning_effort '${val.reasoning_effort}' is not valid for runtime '${val.runtime}'`,
       });
     }
+    if (!runtimeSupportsFastMode(val.runtime) && val.fast_mode !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['fast_mode'],
+        message: `fast_mode is not supported by runtime '${val.runtime}'`,
+      });
+    }
   });
 export type CreateAgentInput = z.infer<typeof CreateAgentInputSchema>;
 
 // PATCH /api/agents/:id — every field optional, only provided keys
 // are written. `name`, `host_id`, and `runtime` are deliberately excluded:
 // `name` is the immutable identifier (see migrations.ts v5 comment),
-// `host_id` swap is out of v1 scope, and runtime is a create-time driver
-// boundary rather than profile metadata.
+// `host_id` swap is out of v1 scope, and runtime changes require the dedicated
+// transition command rather than an ordinary metadata patch.
 export const UpdateAgentInputSchema = z
   .object({
     display_name: DisplayNameSchema.optional(),
@@ -106,6 +116,49 @@ export const UpdateAgentInputSchema = z
   })
   .refine(v => Object.keys(v).length > 0, { message: 'no fields to update' });
 export type UpdateAgentInput = z.infer<typeof UpdateAgentInputSchema>;
+
+/**
+ * Dedicated runtime transition command. Every tuning key is required so a
+ * missing field cannot silently select a default. `null` is the caller's
+ * explicit "use the target driver's default" choice.
+ */
+export const SwitchAgentRuntimeInputSchema = z
+  .object({
+    runtime: RuntimeKindSchema,
+    model: z.string().trim().min(1).nullable(),
+    reasoning_effort: ReasoningEffortSchema.nullable(),
+    fast_mode: FastModeSchema.nullable(),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    if (!reasoningEffortValidForRuntime(val.runtime, val.reasoning_effort)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['reasoning_effort'],
+        message: `reasoning_effort '${val.reasoning_effort}' is not valid for runtime '${val.runtime}'`,
+      });
+    }
+    if (!runtimeSupportsFastMode(val.runtime) && val.fast_mode !== null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['fast_mode'],
+        message: `fast_mode is not supported by runtime '${val.runtime}'`,
+      });
+    }
+  });
+export type SwitchAgentRuntimeInput = z.infer<
+  typeof SwitchAgentRuntimeInputSchema
+>;
+
+export const SwitchAgentRuntimeResponseSchema = z.object({
+  agent: AgentDtoSchema,
+  cleared_sessions: z.number().int().nonnegative(),
+  restarted_conversations: z.number().int().nonnegative(),
+  restart_failures: z.number().int().nonnegative(),
+});
+export type SwitchAgentRuntimeResponse = z.infer<
+  typeof SwitchAgentRuntimeResponseSchema
+>;
 
 // ── Self-profile (`silverhand profile get|update`, #task:1178) ─────────
 //

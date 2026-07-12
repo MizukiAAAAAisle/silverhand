@@ -1,9 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   encodeUserPrincipalHeader,
+  RUNTIME_CATALOG,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import { HostRepo } from '../../src/repos/host-repo.js';
+import { AgentRepo } from '../../src/repos/agent-repo.js';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
+import { MessageRepo } from '../../src/repos/message-repo.js';
+import { switchAgentRuntime } from '../../src/application/switch-agent-runtime.js';
 import {
   HostWsCommandResponseError,
   HostWsCommandTransportError,
@@ -457,7 +463,7 @@ describe('PATCH /api/agents/:id', () => {
     expect(res.status).toBe(400);
   });
 
-  it('rejects runtime changes; runtime is create-time immutable', async () => {
+  it('rejects runtime changes through PATCH; callers must use the transition endpoint', async () => {
     t = buildTestApp();
     const created = await (
       await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
@@ -1221,6 +1227,279 @@ describe('POST /api/agents/:id/profile/mcp/probe', () => {
     expect(
       t.fakeHostWs!.calls.filter(c => c.kind === 'mcp_probe'),
     ).toHaveLength(0);
+  });
+});
+
+describe('PUT /api/agents/:id/runtime', () => {
+  let t: TestApp | null = null;
+  afterEach(() => { t?.cleanup(); t = null; });
+
+  const codexConfig = {
+    runtime: 'codex',
+    model: 'gpt-5-codex',
+    reasoning_effort: 'high',
+    fast_mode: true,
+  } as const;
+
+  it('clears old live sessions, atomically switches tuning, publishes, and restarts', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'switcher', runtime: 'claude' })
+    ).json() as any;
+    const agentId: string = created.agent.id;
+    const conversationId: string = created.dm_channel_id;
+    t.ctx.db.prepare(
+      `UPDATE conversation_agents
+          SET status = 'active', cli_session_id = 'claude-session'
+        WHERE conversation_id = ? AND agent_id = ?`,
+    ).run(conversationId, agentId);
+    const changed: string[] = [];
+    t.ctx.events.subscribeScope('app', event => {
+      if (event.kind === 'agent_changed') {
+        changed.push((event.payload as { agent_id: string }).agent_id);
+      }
+    });
+    t.fake.starts.length = 0;
+
+    const res = await http(t).put(`/api/agents/${agentId}/runtime`, codexConfig);
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.agent).toMatchObject(codexConfig);
+    expect(body.cleared_sessions).toBe(1);
+    expect(body.restarted_conversations).toBe(1);
+    expect(body.restart_failures).toBe(0);
+    expect(t.fake.clearedSessions).toEqual([
+      { conversationId, agentId, actorUserId: t.viewerUserId },
+    ]);
+    expect(t.fake.starts).toEqual([{ conversationId, agentId }]);
+    expect(changed).toEqual([agentId]);
+    expect(new AgentRepo(t.ctx.db).getRow(agentId)).toMatchObject({
+      runtime: 'codex',
+      runtime_transition_target: null,
+      runtime_transition_started_at: null,
+    });
+  });
+
+  it('requires explicit tuning choices and rejects invalid target-runtime values', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'strict-switch', runtime: 'claude' })
+    ).json() as any;
+    const path = `/api/agents/${created.agent.id}/runtime`;
+
+    expect((await http(t).put(path, {
+      runtime: 'codex',
+      model: null,
+      reasoning_effort: null,
+    })).status).toBe(400);
+    expect((await http(t).put(path, {
+      runtime: 'claude',
+      model: null,
+      reasoning_effort: 'high',
+      fast_mode: null,
+    })).status).toBe(400);
+  });
+
+  it('rejects same-runtime and non-selectable transitions without clearing sessions', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'guarded-switch', runtime: 'claude' })
+    ).json() as any;
+    const path = `/api/agents/${created.agent.id}/runtime`;
+
+    const same = await http(t).put(path, {
+      runtime: 'claude', model: null, reasoning_effort: null, fast_mode: null,
+    });
+    expect(same.status).toBe(409);
+    expect(await same.json()).toMatchObject({ code: 'runtime_unchanged' });
+
+    const hidden = await http(t).put(path, {
+      runtime: 'cursor', model: null, reasoning_effort: null, fast_mode: null,
+    });
+    expect(hidden.status).toBe(400);
+    expect(await hidden.json()).toMatchObject({ code: 'runtime_not_selectable' });
+    expect(t.fake.clearedSessions).toEqual([]);
+  });
+
+  it('fails closed when the target runtime is absent on the owning computer', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'absent-switch', runtime: 'claude' })
+    ).json() as any;
+    t.fakeHostWs!.hostRuntimeCatalogAckOverride = () => ({
+      runtimes: [{
+        kind: 'codex', state: 'absent', reason: 'not_found', installed: false,
+        binary: null, version: null,
+      }],
+      detected_at: Date.now(),
+    });
+
+    const res = await http(t).put(
+      `/api/agents/${created.agent.id}/runtime`,
+      codexConfig,
+    );
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: 'runtime_not_installed' });
+    expect(new AgentRepo(t.ctx.db).get(created.agent.id)?.runtime).toBe('claude');
+  });
+
+  it('leaves runtime unchanged and releases the lock when any session clear fails', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'failed-switch', runtime: 'claude' })
+    ).json() as any;
+    const agentId: string = created.agent.id;
+    t.ctx.db.prepare(
+      `UPDATE conversation_agents SET status = 'active'
+        WHERE conversation_id = ? AND agent_id = ?`,
+    ).run(created.dm_channel_id, agentId);
+    t.fake.clearError = new Error('clear failed');
+
+    const res = await http(t).put(`/api/agents/${agentId}/runtime`, codexConfig);
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ code: 'runtime_session_clear_failed' });
+    expect(new AgentRepo(t.ctx.db).getRow(agentId)).toMatchObject({
+      runtime: 'claude',
+      runtime_transition_target: null,
+      runtime_transition_started_at: null,
+    });
+  });
+
+  it('releases the lock and preserves the original error when pre-clear inbox rollback throws', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'rollback-error-switch', runtime: 'claude' })
+    ).json() as any;
+    const agentId: string = created.agent.id;
+    const agents = new AgentRepo(t.ctx.db);
+    const inboxes = new ConversationInboxRepo(t.ctx.db);
+    const originalError = new Error('rollback in-flight failed');
+    inboxes.rollbackInFlightForAgent = () => {
+      throw originalError;
+    };
+
+    await expect(switchAgentRuntime(
+      {
+        ctx: t.ctx,
+        agents,
+        conversations: new ConversationRepo(t.ctx.db),
+        conversationInboxes: inboxes,
+      },
+      {
+        agentId,
+        actorUserId: t.viewerUserId,
+        config: codexConfig,
+      },
+    )).rejects.toBe(originalError);
+
+    expect(agents.isRuntimeTransitioning(agentId)).toBe(false);
+    expect(agents.getRow(agentId)).toMatchObject({
+      runtime: 'claude',
+      runtime_transition_target: null,
+      runtime_transition_started_at: null,
+    });
+  });
+
+  it('re-checks the runtime under lock and does not overwrite a concurrent switch', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'concurrent-switch', runtime: 'claude' })
+    ).json() as any;
+    const agentId: string = created.agent.id;
+    t.fakeHostWs!.hostRuntimeCatalogAckOverride = () => {
+      t!.ctx.db.prepare(
+        `UPDATE agents
+            SET runtime = 'codex',
+                model = 'concurrent-model',
+                reasoning_effort = 'medium',
+                fast_mode = 0
+          WHERE id = ?`,
+      ).run(agentId);
+      return {
+        runtimes: RUNTIME_CATALOG.map(entry => ({
+          kind: entry.kind,
+          state: 'present' as const,
+          reason: 'resolved' as const,
+          installed: true,
+          binary: `/usr/bin/${entry.kind}`,
+          version: 'test',
+        })),
+        detected_at: Date.now(),
+      };
+    };
+
+    const res = await http(t).put(`/api/agents/${agentId}/runtime`, codexConfig);
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: 'runtime_unchanged' });
+    expect(t.fake.clearedSessions).toEqual([]);
+    expect(new AgentRepo(t.ctx.db).getRow(agentId)).toMatchObject({
+      runtime: 'codex',
+      model: 'concurrent-model',
+      reasoning_effort: 'medium',
+      fast_mode: 0,
+      runtime_transition_target: null,
+      runtime_transition_started_at: null,
+    });
+  });
+
+  it('does not turn historical pending inbox backlog into a restart herd', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'quiet-switch', runtime: 'claude' })
+    ).json() as any;
+    const message = new MessageRepo(t.ctx.db).insertForConversation({
+      conversationId: created.dm_channel_id,
+      fromKind: 'user',
+      content: 'historical backlog',
+    });
+    const inbox = new ConversationInboxRepo(t.ctx.db);
+    const pending = inbox.ensureDelivery(
+      created.dm_channel_id,
+      created.agent.id,
+      message.id,
+    );
+    t.ctx.db.prepare(
+      'UPDATE conversation_inboxes SET created_at = 1 WHERE id = ?',
+    ).run(pending.inboxId);
+    t.fake.starts.length = 0;
+
+    const res = await http(t).put(
+      `/api/agents/${created.agent.id}/runtime`,
+      codexConfig,
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      restarted_conversations: 0,
+      restart_failures: 0,
+    });
+    expect(t.fake.starts).toEqual([]);
+    expect(inbox.listPending(created.dm_channel_id, created.agent.id)).toHaveLength(1);
+  });
+
+  it('commits the transition but reports restart failures as partial success', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', { name: 'partial-switch', runtime: 'claude' })
+    ).json() as any;
+    t.ctx.db.prepare(
+      `UPDATE conversation_agents SET status = 'active'
+        WHERE conversation_id = ? AND agent_id = ?`,
+    ).run(created.dm_channel_id, created.agent.id);
+    t.fake.startError = new Error('restart unavailable');
+
+    const res = await http(t).put(
+      `/api/agents/${created.agent.id}/runtime`,
+      codexConfig,
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      agent: { runtime: 'codex' },
+      restarted_conversations: 0,
+      restart_failures: 1,
+    });
   });
 });
 

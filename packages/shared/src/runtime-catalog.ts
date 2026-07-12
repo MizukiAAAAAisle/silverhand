@@ -43,6 +43,8 @@ export interface RuntimeCatalogEntry {
    * `low/medium/high/xhigh`, qoder gets the full set.
    */
   reasoningEffortOptions: readonly ReasoningEffort[];
+  /** Whether the runtime accepts the persisted fast-mode tri-state. */
+  supportsFastMode: boolean;
   /**
    * Profile MCP servers load at spawn for this runtime. Source of truth
    * is the host spawn loader (`mcp-spawn.ts`); this mirrors it and a
@@ -75,6 +77,7 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     cliLabel: 'Claude Code',
     selectable: true,
     reasoningEffortOptions: [],
+    supportsFastMode: false,
     supportsProfileMcp: true,
     modelSuggestions: [],
   },
@@ -84,8 +87,12 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     cliLabel: 'Codex CLI',
     selectable: true,
     reasoningEffortOptions: ['low', 'medium', 'high', 'xhigh'],
+    supportsFastMode: true,
     supportsProfileMcp: true,
-    modelSuggestions: [],
+    // Suggested model ids for the Model combobox. Free text still accepted;
+    // these are quick-picks only (no `defaultModel` — codex has no forced
+    // create-time default).
+    modelSuggestions: ['gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
   },
   qoder: {
     kind: 'qoder',
@@ -94,6 +101,7 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     selectable: true,
     // qoder's full allowed set (known from the qodercli binary).
     reasoningEffortOptions: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+    supportsFastMode: false,
     supportsProfileMcp: true,
     // The five capability tiers from `qodercli --list-models`. Specific
     // model ids (Qwen*/GLM*/DeepSeek*/Kimi*/MiniMax*) go through free
@@ -107,6 +115,7 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     cliLabel: 'OpenCode',
     selectable: true,
     reasoningEffortOptions: [],
+    supportsFastMode: false,
     // Profile MCP rides the deep-merged OPENCODE_CONFIG_CONTENT env seam
     // (#task:1405) — the same additive layer claude/codex/qoder get, so
     // opencode reaches parity rather than shipping uniquely weaker.
@@ -119,6 +128,7 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     cliLabel: 'Cursor',
     selectable: false,
     reasoningEffortOptions: [],
+    supportsFastMode: false,
     supportsProfileMcp: false,
     modelSuggestions: [],
   },
@@ -128,6 +138,7 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     cliLabel: 'Gemini',
     selectable: false,
     reasoningEffortOptions: [],
+    supportsFastMode: false,
     supportsProfileMcp: false,
     modelSuggestions: [],
   },
@@ -180,6 +191,11 @@ export function runtimeDefaultModel(kind: RuntimeKind): string | null {
 /** True if the runtime exposes a reasoning-effort control. */
 export function runtimeSupportsReasoningEffort(kind: RuntimeKind): boolean {
   return CATALOG[kind].reasoningEffortOptions.length > 0;
+}
+
+/** True when the runtime exposes the fast-mode control. */
+export function runtimeSupportsFastMode(kind: RuntimeKind): boolean {
+  return CATALOG[kind].supportsFastMode;
 }
 
 /**

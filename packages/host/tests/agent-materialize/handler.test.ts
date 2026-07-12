@@ -75,8 +75,7 @@ describe('materializeAgent — §4.6 decision tree', () => {
     expect(existsSync(join(agentDir, 'notes/project.md'))).toBe(true);
     expect(existsSync(join(agentDir, 'notes/work-log.md'))).toBe(true);
 
-    // Sentinel present + carries the full minimum set (Cindy
-    // pre-gate #2: agent_id + template_version + runtime)
+    // Sentinel carries identity plus materialization-time runtime provenance.
     const sentinelPath = join(agentDir, AGENT_HOME_SENTINEL_FILENAME);
     const sentinel = JSON.parse(readFileSync(sentinelPath, 'utf8'));
     expect(sentinel).toEqual({
@@ -102,7 +101,7 @@ describe('materializeAgent — §4.6 decision tree', () => {
     expect(existsSync(computeAgentDir('aid_abc', homeDir))).toBe(false);
   });
 
-  it('idempotent re-call: all three sentinel fields match → ok without rewrite', async () => {
+  it('idempotent re-call: sentinel identity fields match → ok without rewrite', async () => {
     await materializeAgent(baseParams(), {
       homeDir,
       now: () => 1_700_000_000_000,
@@ -124,7 +123,7 @@ describe('materializeAgent — §4.6 decision tree', () => {
     expect(readFileSync(promptPath, 'utf8')).toBe('user-edited content');
   });
 
-  it.each(['agent_id', 'template_choice', 'runtime'] as const)(
+  it.each(['agent_id', 'template_choice'] as const)(
     'sentinel mismatch on %s → agent_dir_collision',
     async field => {
       // First materialize with the canonical params.
@@ -147,9 +146,6 @@ describe('materializeAgent — §4.6 decision tree', () => {
         case 'template_choice':
           stored.template_choice = 'minimal';
           break;
-        case 'runtime':
-          stored.runtime = 'codex';
-          break;
       }
       writeFileSync(sentinelPath, JSON.stringify(stored));
 
@@ -160,6 +156,21 @@ describe('materializeAgent — §4.6 decision tree', () => {
       });
     },
   );
+
+  it('treats sentinel runtime as materialization provenance, not directory identity', async () => {
+    await materializeAgent(baseParams(), { homeDir });
+    const agentDir = computeAgentDir('aid_abc', homeDir);
+    const file = join(agentDir, AGENT_HOME_SENTINEL_FILENAME);
+    const stored = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    stored.runtime = 'codex';
+    writeFileSync(file, JSON.stringify(stored));
+
+    const result = await materializeAgent(baseParams(), { homeDir });
+
+    expect(result.ok).toBe(true);
+    expect(result.materialized_at).toBe(stored.materialized_at);
+    expect(JSON.parse(readFileSync(file, 'utf8')).runtime).toBe('codex');
+  });
 
   it('foreign content in dir (no sentinel) → agent_dir_collision', async () => {
     const agentDir = computeAgentDir('aid_abc', homeDir);

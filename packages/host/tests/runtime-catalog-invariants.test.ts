@@ -79,6 +79,19 @@ describe('runtime catalog ⟺ host invariants', () => {
     }
   });
 
+  it('supportsFastMode ⟺ the driver forwards the fast-mode flag', () => {
+    for (const entry of RUNTIME_CATALOG) {
+      if (entry.kind === 'cursor' || entry.kind === 'gemini') continue;
+      const built = makeCtx({ fastMode: true });
+      try {
+        const args = getDriver(entry.kind).buildArgs(built.ctx);
+        expect(args.includes('fast_mode')).toBe(entry.supportsFastMode);
+      } finally {
+        built.cleanup();
+      }
+    }
+  });
+
   it('supportsProfileMcp ⟺ the MCP spawn loader has an adapter', async () => {
     for (const entry of RUNTIME_CATALOG) {
       const tmp = mkdtempSync(join(tmpdir(), 'catalog-mcp-'));

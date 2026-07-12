@@ -530,6 +530,16 @@ export async function startBackend(
     agents: new AgentRepo(db),
     logger,
   });
+  // A runtime transition never changes `agents.runtime` until its final
+  // atomic commit. After a backend crash no transition executor survives, so
+  // stale locks are safe to roll back before hydrate/scheduling can spawn.
+  const staleRuntimeTransitions = new AgentRepo(db).clearStaleRuntimeTransitions();
+  if (staleRuntimeTransitions > 0) {
+    logger.warn(
+      { count: staleRuntimeTransitions },
+      'cleared stale agent runtime-transition locks on boot',
+    );
+  }
   // Boot recovery (daemon hydrate from `runtime_status` then diff
   // stale DB rows). Scheduling waits until reconcile lands so any
   // handles brought back are visible to the first live delivery.

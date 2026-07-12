@@ -12,19 +12,20 @@
  *   - file exists but is not valid JSON / has unknown
  *     `version` → `agent_dir_collision` (don't trust an
  *     unrecognizable sentinel and silently rewrite over it)
- *   - file exists, valid, and all three of
- *     `(agent_id, template_choice, runtime)` match the incoming
+ *   - file exists, valid, and both
+ *     `(agent_id, template_choice)` match the incoming
  *     request → idempotent OK (handler returns ok:true without
  *     rewriting any file)
- *   - file exists, valid, but any of those three fields mismatches
+ *   - file exists, valid, but either identity field mismatches
  *     → `agent_dir_collision` (previously materialized for a
- *     different agent / template / runtime; refuse to overwrite,
+ *     different agent / template; refuse to overwrite,
  *     this is an operator-visible state needing investigation).
  *
- * The "minimum set" of `(agent_id, template_choice, runtime)`
- * comes from Cindy D2 pre-gate #2 (and §14 Q3 design call): a
- * bare-existence check would let any empty `.materialized` file
- * placed in a foreign dir masquerade as a valid materialization.
+ * Runtime remains recorded as materialization-time provenance, but it is not
+ * directory identity: an agent may switch execution runtime without
+ * rematerializing its L1 home. The minimum identity set of
+ * `(agent_id, template_choice)` still prevents a foreign sentinel from
+ * masquerading as this agent; a bare-existence check would still be unsafe.
  */
 
 import {
@@ -118,13 +119,12 @@ export function readSentinel(agentDir: string): ReadSentinelResult {
 
 /**
  * Decide whether a present, well-formed sentinel matches an
- * incoming materialize request. Mismatch on any of the three
- * dimensions yields `agent_dir_collision`.
+ * incoming materialize request. Runtime is intentionally excluded: it records
+ * materialization-time provenance and may differ after a runtime transition.
  */
 export interface SentinelMatchInput {
   agent_id: string;
   template_choice: string;
-  runtime: string;
 }
 
 export type SentinelMatchResult =
@@ -145,12 +145,6 @@ export function compareSentinel(
     return {
       kind: 'mismatch',
       reason: `sentinel.template_choice=${sentinel.template_choice} but request.template_choice=${input.template_choice}`,
-    };
-  }
-  if (sentinel.runtime !== input.runtime) {
-    return {
-      kind: 'mismatch',
-      reason: `sentinel.runtime=${sentinel.runtime} but request.runtime=${input.runtime}`,
     };
   }
   return { kind: 'match' };

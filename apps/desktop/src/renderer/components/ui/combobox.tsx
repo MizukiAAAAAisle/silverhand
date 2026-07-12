@@ -90,7 +90,18 @@ export function Combobox({
               onChange(e.target.value);
               if (hasSuggestions) setOpen(true);
             }}
-            onFocus={() => hasSuggestions && setOpen(true)}
+            // No onFocus auto-open. The chevron's toggle path calls
+            // `inputRef.focus()` after `setOpen(false)`, and an onFocus
+            // that reopens would race with the close: chevron closes →
+            // focus() re-fires focus → onFocus reopens → visible flicker
+            // (shiki 2026-07-12 dogfood #2, Cindy scope confirm — root
+            // cause is the shared primitive, fix here, not in
+            // RuntimeConfigEditor). The click path already opens via
+            // `onClick`; keyboard opens via ArrowDown; typing opens via
+            // `onChange`. Tab-focus intentionally does NOT auto-open —
+            // matches WAI-ARIA combobox convention.
+            //
+            // Locked by source fence in combobox.test.ts.
             onClick={() => hasSuggestions && setOpen(true)}
             onBlur={() => onCommit(value)}
             onKeyDown={onKeyDown}

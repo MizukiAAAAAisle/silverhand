@@ -1881,4 +1881,44 @@ describe('database migrations', () => {
       }
     });
   });
+
+  describe('v57 agent_runtime_transition_lock', () => {
+    it('adds a paired nullable durable transition lock', () => {
+      const db = openDbAt(56);
+      try {
+        applyMigrationsThrough(db, 57);
+        const columns = db
+          .prepare<[], { name: string; notnull: number }>('PRAGMA table_info(agents)')
+          .all()
+          .filter(row => row.name.startsWith('runtime_transition_'))
+          .map(row => ({ name: row.name, notnull: row.notnull }));
+        expect(columns).toEqual([
+          { name: 'runtime_transition_started_at', notnull: 0 },
+          { name: 'runtime_transition_target', notnull: 0 },
+        ]);
+        const table = db
+          .prepare<[], { sql: string }>(
+            `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agents'`,
+          )
+          .get();
+        expect(table?.sql).toContain('runtime_transition_target IN');
+        expect(table?.sql).toContain('runtime_transition_started_at IS NOT NULL');
+        const triggers = db
+          .prepare<[], { name: string }>(
+            `SELECT name FROM sqlite_master
+              WHERE type = 'trigger'
+                AND name LIKE 'agents_runtime_transition_pair_%'
+              ORDER BY name`,
+          )
+          .all()
+          .map(row => row.name);
+        expect(triggers).toEqual([
+          'agents_runtime_transition_pair_insert',
+          'agents_runtime_transition_pair_update',
+        ]);
+      } finally {
+        db.close();
+      }
+    });
+  });
 });
