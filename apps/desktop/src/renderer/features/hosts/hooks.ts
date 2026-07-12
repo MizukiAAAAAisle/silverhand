@@ -827,6 +827,69 @@ export function useDisconnectHostMutation(hostId: string) {
 }
 
 /**
+ * App-managed credential rotation. Wraps the main-process
+ * `window.agentHub.rotateHostToken` IPC, which updates the local
+ * daemon-config's host token in place. Token bytes NEVER enter the
+ * renderer — the IPC returns `DesktopHostMutationResult` with fresh
+ * `BackendInfo` fields but no credential payload.
+ *
+ * This is the app-managed counterpart to `useRotateConnectTokenMutation`
+ * (user-managed reveal-once command). Do not merge the two flows —
+ * they target different daemon layers (local config vs. server-issued
+ * connect-token) and their success/failure copy is different.
+ *
+ * The mutation surfaces the typed `ok:false` branch as an Error so
+ * consumers can render one banner path without special-casing the
+ * discriminant. Invalidates the host list + backend snapshot so the
+ * detail view re-reads whatever changed (e.g. `local_host_status`).
+ */
+export function useRotateHostTokenMutation(hostId: string) {
+  const qc = useQueryClient();
+  return useMutation<void, Error, void>({
+    mutationFn: async () => {
+      const result = await window.agentHub.rotateHostToken({ hostId });
+      if (!result.ok) {
+        throw new Error(result.message ?? result.code);
+      }
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: hostsKey });
+      void qc.invalidateQueries({ queryKey: backendInfoKey });
+      void qc.invalidateQueries({ queryKey: hostStatusKey(hostId) });
+    },
+  });
+}
+
+/**
+ * App-managed soft revoke. Wraps `window.agentHub.revokeHost`, which
+ * writes `revoked_at`, invalidates the credential, force-drops any
+ * live WS, and preserves agents/workspaces (per doc §5.3). NOT a
+ * lexical alias of Delete — Delete is the user-managed terminal verb
+ * with dependency-check + cascade semantics.
+ *
+ * Revoking the current local computer does NOT log the user out —
+ * user sessions are user-level, independent of Computer lifecycle.
+ * The renderer's session stays valid; the detail view flips to a
+ * revoked-terminal read-only shape via the invalidated host queries.
+ */
+export function useRevokeComputerMutation(hostId: string) {
+  const qc = useQueryClient();
+  return useMutation<void, Error, void>({
+    mutationFn: async () => {
+      const result = await window.agentHub.revokeHost({ hostId });
+      if (!result.ok) {
+        throw new Error(result.message ?? result.code);
+      }
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: hostsKey });
+      void qc.invalidateQueries({ queryKey: backendInfoKey });
+      void qc.invalidateQueries({ queryKey: hostStatusKey(hostId) });
+    },
+  });
+}
+
+/**
  * #task:1354 — a `409 has_dependents` delete block, surfaced as a typed
  * error so the UI can render the dependency-block state (how many agents /
  * workspaces still pin this computer) instead of a generic failure. Carries

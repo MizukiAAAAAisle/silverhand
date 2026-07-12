@@ -1,20 +1,22 @@
 /**
  * Connection settings pane.
  *
- * Product-layer merge of the former "Server" (ServerUrlPane) and
- * "Local host" (HostsPane) sub-pages into one surface. shiki feedback:
- * the old copy read like a technical doc (daemon-config.json /
- * host_token / daemon / attach) and "local host" duplicated a concept
- * the user already thinks of as "the server". So the user-facing model
- * is now just two ideas:
+ * Owns exactly one product idea: **Desktop → Server** — where this
+ * app connects and whether the connection is up. Everything about
+ * individual Computers (this-computer status, refresh credentials,
+ * other devices inventory, revoke) lives on the **Computer Rail**
+ * (`features/hosts/HostDetailView`), not here.
  *
- *   - **Server** — where this app keeps your workspaces and messages.
- *   - **This computer** — whether this machine is connected and able to
- *     run your agents.
- *
- * Everything implementation-shaped (host record id, last-seen, token
- * refresh, other owned host records) is tucked behind a collapsed
- * **Details** disclosure so the primary surface stays product copy.
+ * The pane renders:
+ *   - a persistent Desktop→Server status pip (`desktopServerConnectionStatus`)
+ *     sourced from the mode-appropriate authoritative signal (renderer
+ *     event WS in remote, daemon `local_host_ws_attached_at` in embedded),
+ *   - the address form (edit + Save), embedded and remote modes both
+ *     supported by branching inside the save mutation,
+ *   - a save-result banner that ONLY dismisses on an observed
+ *     Desktop→Server reachability proof — never on a local IPC bump
+ *     (`isDesktopServerReadyAfterSave`), so a save-then-unreachable
+ *     never quietly reads as success.
  *
  * IMPORTANT — token-handling invariant is preserved: the renderer NEVER sees
  * `host_token` (main reads it from disk itself). In embedded mode this pane
@@ -22,17 +24,10 @@
  * profile so the app backend handle, event WS, and daemon outbound config all
  * converge on the same origin.
  */
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  Loader2,
-  RefreshCw,
-  Save,
-  Trash2,
-} from 'lucide-react';
-import type { HostDto } from '@silverhand/shared';
+import { Loader2, Save } from 'lucide-react';
 import type {
-  DesktopHostMutationResult,
   DesktopProfileSaveWithTestResult,
   DesktopSaveServerUrlResult,
 } from '../../../preload/api';
@@ -44,16 +39,8 @@ import {
   hostsKey,
   hostStatusKey,
   useBackendInfoSnapshot,
-  useHostStatusQuery,
-  useHostsQuery,
 } from '@/features/hosts/hooks';
-import {
-  describeConnectionState,
-  type ConnectionStateView,
-  type ConnectionTone,
-  type LocalHostStatus,
-} from '@/features/hosts/connection-state';
-import { eventWsClient } from '@/lib/ws-client';
+import { eventWsClient, type WsClientStatus } from '@/lib/ws-client';
 import { describeProbeOutcome } from '@/features/setup/describe-probe-outcome';
 import {
   describeSaveServerUrlOutcome,
@@ -61,96 +48,46 @@ import {
 } from './describe-save-server-url-outcome';
 import { saveServerConnectionProfileWithSettingsRetry } from './save-server-url-retry';
 import { validateServerUrlDraft } from './server-url-validation';
+import {
+  desktopServerConnectionStatus,
+  isDesktopServerReadyAfterSave,
+  type DesktopServerConnectionStatus,
+  type DesktopServerMode,
+} from './connection-readiness';
+import {
+  CONTROL_HOVER_LIFT,
+  CONTROL_INK_BORDER,
+} from '@/features/common/ControlInkBorder';
 
-function formatTimestamp(value: number | null): string {
-  if (!value) return '—';
-  const d = new Date(value);
-  return d.toLocaleString();
-}
-
-/**
- * Tone → token mapping for the connection pill. Every value resolves
- * to existing theme tokens defined in BOTH `warm-script.css` AND
- * `forza6.css` — no new tokens, no per-theme branches, no hardcoded
- * colors. Border picks up the tone; bg stays neutral `bg-bg-floating`.
- */
-const TONE_CLASS: Record<ConnectionTone, string> = {
-  hidden: '',
-  accent: 'border-accent text-accent',
-  success: 'border-success text-success',
-  muted: 'border-border-subtle text-text-muted',
-  warning: 'border-warning text-warning',
-  error: 'border-error text-error',
+const STATUS_LABEL: Record<DesktopServerConnectionStatus, string> = {
+  connected: 'Connected',
+  connecting: 'Connecting…',
+  offline: 'Offline',
 };
 
-function ConnectionPill({ view }: { view: ConnectionStateView }): JSX.Element | null {
-  if (!view.visible) return null;
+const STATUS_TONE_CLASS: Record<DesktopServerConnectionStatus, string> = {
+  connected: 'border-success text-success',
+  connecting: 'border-border-subtle text-text-secondary',
+  offline: 'border-warning text-warning',
+};
+
+function ServerStatusPill({
+  status,
+}: {
+  status: DesktopServerConnectionStatus;
+}): JSX.Element {
   return (
     <span
+      role="status"
+      aria-label={`Desktop to server: ${STATUS_LABEL[status]}`}
       className={cn(
         'inline-flex shrink-0 items-center gap-1 rounded-[var(--control-radius)] border bg-bg-floating px-2 py-0.5 text-[10px] font-medium',
-        TONE_CLASS[view.tone],
+        STATUS_TONE_CLASS[status],
       )}
-      role="status"
-      aria-label={view.detail ? `${view.label} ${view.detail}` : view.label}
     >
-      <span>{view.label}</span>
-      {view.detail && <span className="text-text-muted">· {view.detail}</span>}
+      {STATUS_LABEL[status]}
     </span>
   );
-}
-
-/**
- * One-line product summary for the "This computer" block. Mirrors the
- * connection-state arms but speaks in user terms ("run your agents")
- * rather than daemon/attachment language.
- */
-function describeThisMac(
-  status: LocalHostStatus,
-  attachedAt: number | null,
-  remoteAttached: boolean,
-): string {
-  switch (status) {
-    case 'unclaimed':
-      return 'Sign in from this computer to start running your agents.';
-    case 'claimed':
-      return attachedAt === null && !remoteAttached
-        ? 'Connecting this computer to the server…'
-        : 'This computer is connected and ready to run your agents.';
-    case 'revoked':
-      return 'This computer was removed. Sign in again to reconnect it.';
-    case 'error':
-      return 'This computer is offline. It will reconnect when the server is reachable again.';
-    case 'failed':
-      return 'This computer stopped running agents. Relaunch the app to reconnect.';
-    default: {
-      const _exhaustive: never = status;
-      return _exhaustive;
-    }
-  }
-}
-
-function describeMutationFailure(
-  result: Extract<DesktopHostMutationResult, { ok: false }>,
-): string {
-  switch (result.code) {
-    case 'unauthorized':
-      return 'Not signed in.';
-    case 'not_current_host':
-      return 'Only this computer’s own connection can be refreshed.';
-    case 'host_not_found':
-      return 'This device record was not found.';
-    case 'host_revoked':
-      return 'This device has already been removed.';
-    case 'kind_not_supported':
-      return 'This device cannot be changed from here.';
-    case 'invalid_response':
-      return 'The server returned an unexpected response.';
-    case 'network_error':
-      return result.message ?? 'Could not reach the server.';
-    default:
-      return 'Something went wrong.';
-  }
 }
 
 type ServerUrlSaveResult =
@@ -164,7 +101,7 @@ function describeProfileSaveForConnection(
     return {
       tone: 'info',
       title: 'Saved. Reconnecting…',
-      description: `Using ${result.profile.server_url}. Watch “This computer” below for the live connection status.`,
+      description: `Using ${result.profile.server_url}.`,
       dismissOnReady: true,
     };
   }
@@ -192,16 +129,47 @@ function describeProfileSaveForConnection(
 
 export function ConnectionPane(): JSX.Element {
   const qc = useQueryClient();
-  const hostsQuery = useHostsQuery();
-  // This pane renders the live connection pill, so it opts into the
-  // narrow `claimed + attached_at===null` polling. In embedded mode this
-  // auto-stops once `attached_at` lands (the attachment is observable
-  // in-process). In remote mode `attached_at` never lands (#task:1010),
-  // so this keeps ticking at 1.5s while the pane is open — but it's a
-  // cheap local backend-info IPC, NOT a daemon round-trip, and the
-  // pill's Connecting→Ready flip in remote comes from the separate
-  // host-status probe below, which DOES stop once `available`.
-  const backendInfoQuery = useBackendInfoSnapshot({ pollWhileConnecting: true });
+  // Opt into `pollWhileConnecting` so `attachedAt` / `local_host_status`
+  // actually flip in cache during the embedded connecting window. The
+  // readiness derivation below is correct, but a static cache would let
+  // it settle on the pre-attach snapshot forever — banner stuck on
+  // "Reconnecting…", pip stuck on Connecting/Offline. The hook already
+  // stops polling on any terminal / attached state, so this is cheap.
+  const backendInfoQuery = useBackendInfoSnapshot({
+    pollWhileConnecting: true,
+  });
+
+  const mode: DesktopServerMode =
+    backendInfoQuery.data?.mode === 'remote' ? 'remote' : 'embedded';
+  const attachedAt =
+    backendInfoQuery.data?.local_host_ws_attached_at ?? null;
+  const localHostStatus =
+    backendInfoQuery.data?.local_host_status ?? 'unclaimed';
+
+  // Renderer event WS status — authoritative Desktop→Server signal in
+  // remote mode (in embedded the WS is against embedded main, so the
+  // pip falls back to daemon `attachedAt` via the derivation).
+  const [wsStatus, setWsStatus] = useState<WsClientStatus>(() =>
+    eventWsClient.getStatus(),
+  );
+  const wsConnectedAtRef = useRef<number | null>(
+    eventWsClient.getStatus() === 'connected' ? Date.now() : null,
+  );
+  useEffect(() => {
+    return eventWsClient.onStatus(next => {
+      setWsStatus(next);
+      if (next === 'connected') {
+        wsConnectedAtRef.current = Date.now();
+      }
+    });
+  }, []);
+
+  const connectionStatus = desktopServerConnectionStatus({
+    mode,
+    attachedAt,
+    localHostStatus,
+    wsStatus,
+  });
 
   // ---- Server address form -------------------------------------------------
   // Source-of-truth pin:
@@ -215,9 +183,7 @@ export function ConnectionPane(): JSX.Element {
   const savedUrl = backendInfoQuery.data?.local_host_server_url ?? null;
   const fallbackUrl = backendInfoQuery.data?.url ?? '';
   const currentUrl =
-    backendInfoQuery.data?.mode === 'remote'
-      ? fallbackUrl
-      : savedUrl ?? fallbackUrl;
+    mode === 'remote' ? fallbackUrl : savedUrl ?? fallbackUrl;
 
   const [draft, setDraft] = useState<string>('');
   useEffect(() => {
@@ -225,9 +191,7 @@ export function ConnectionPane(): JSX.Element {
   }, [currentUrl]);
 
   const [banner, setBanner] = useState<SaveServerUrlBanner | null>(null);
-  const [reconnectBannerStartedAt, setReconnectBannerStartedAt] = useState<
-    number | null
-  >(null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
   const [allowInsecureRemote, setAllowInsecureRemote] = useState(false);
   useEffect(() => {
     let cancelled = false;
@@ -245,12 +209,12 @@ export function ConnectionPane(): JSX.Element {
   const updateDraft = (value: string): void => {
     setDraft(value);
     setBanner(null);
-    setReconnectBannerStartedAt(null);
+    setSavedAt(null);
   };
 
   const save = useMutation({
     mutationFn: async (serverUrl: string): Promise<ServerUrlSaveResult> => {
-      if (backendInfoQuery.data?.mode === 'remote') {
+      if (mode === 'remote') {
         return {
           source: 'profile',
           result: await saveServerConnectionProfileWithSettingsRetry({
@@ -270,9 +234,7 @@ export function ConnectionPane(): JSX.Element {
           ? describeProfileSaveForConnection(saveResult.result)
           : describeSaveServerUrlOutcome(saveResult.result);
       setBanner(nextBanner);
-      setReconnectBannerStartedAt(
-        nextBanner.dismissOnReady ? Date.now() : null,
-      );
+      setSavedAt(nextBanner.dismissOnReady ? Date.now() : null);
       if (saveResult.result.ok) {
         if (saveResult.source === 'profile') {
           // Remote-mode Settings edits must retarget the renderer transport too.
@@ -284,16 +246,6 @@ export function ConnectionPane(): JSX.Element {
         }
         void qc.invalidateQueries({ queryKey: backendInfoKey });
         void qc.invalidateQueries({ queryKey: hostsKey });
-        // `#task:1021` — a save bounces the daemon's outbound WS. The
-        // connection indicator's host-status query is the single
-        // readiness signal source (embedded `attached_at` is null in
-        // remote, so the pill reads host-status `availability` —
-        // #task:1010). Force it to re-probe: its `refetchInterval`
-        // has already stopped if it previously observed `available`,
-        // so without this invalidate the pill would show a stale
-        // "Ready" through the reconnect. `hostStatusFreshnessPolicy(true)`
-        // (set by `pollUntilAvailable`) makes the refetch hit the live
-        // backend, not the shared manual-refresh cache.
         const hostId = backendInfoQuery.data?.local_host_id ?? null;
         if (hostId !== null) {
           void qc.invalidateQueries({ queryKey: hostStatusKey(hostId) });
@@ -301,7 +253,7 @@ export function ConnectionPane(): JSX.Element {
       }
     },
     onError: err => {
-      setReconnectBannerStartedAt(null);
+      setSavedAt(null);
       setBanner({
         tone: 'error',
         title: 'Could not save.',
@@ -309,6 +261,28 @@ export function ConnectionPane(): JSX.Element {
       });
     },
   });
+
+  // Dismiss the "Saved. Reconnecting…" banner only on an authoritative
+  // Desktop→Server reachability proof observed AFTER save started —
+  // renderer WS `connected` (remote) or daemon `attachedAt` moving
+  // forward past `savedAt` (embedded). See `connection-readiness.ts`.
+  // Explicitly NOT `backendInfoQuery.dataUpdatedAt`: the `backend:info`
+  // IPC always resolves regardless of remote reachability, so trusting
+  // it dismisses the banner on a save-then-unreachable.
+  const ready = isDesktopServerReadyAfterSave({
+    mode,
+    attachedAt,
+    localHostStatus,
+    wsStatus,
+    wsConnectedAt: wsConnectedAtRef.current,
+    savedAt,
+  });
+  useEffect(() => {
+    if (banner?.dismissOnReady && ready) {
+      setBanner(null);
+      setSavedAt(null);
+    }
+  }, [banner, ready]);
 
   const classification = useMemo(() => {
     return validateServerUrlDraft(draft, { allowInsecureRemote });
@@ -322,154 +296,9 @@ export function ConnectionPane(): JSX.Element {
     e.preventDefault();
     if (saveDisabled) return;
     setBanner(null);
-    setReconnectBannerStartedAt(null);
+    setSavedAt(null);
     save.mutate(draft.trim());
   };
-
-  // ---- This computer / host records ----------------------------------------
-  const currentLocalHostId = backendInfoQuery.data?.local_host_id ?? null;
-  const localHostStatus: LocalHostStatus =
-    backendInfoQuery.data?.local_host_status ?? 'unclaimed';
-  const localHostAttachedAt =
-    backendInfoQuery.data?.local_host_ws_attached_at ?? null;
-
-  // #task:1010 — remote-mode readiness source. In a remote-server
-  // deployment `local_host_ws_attached_at` is structurally null (the
-  // attachment registry lives in the remote backend, not in this
-  // process), so the embedded "attached_at" proof never lands and the
-  // pill would be stuck on "Connecting…" forever even though the daemon
-  // is genuinely attached (agents communicate fine). We consult the
-  // remote backend's host-status over HTTP — `availability === 'available'`
-  // is the same authority every other remote-mode fact flows through —
-  // but ONLY in the ambiguous window (`claimed` + no local attach
-  // timestamp). In embedded mode `attachedAt` lands fast, so this probe
-  // is disabled almost immediately and never adds traffic.
-  const needsRemoteAttachProbe =
-    localHostStatus === 'claimed' && localHostAttachedAt === null;
-  const localHostStatusQuery = useHostStatusQuery(currentLocalHostId, {
-    enabled: needsRemoteAttachProbe && currentLocalHostId !== null,
-    pollUntilAvailable: true,
-  });
-  const remoteAttached =
-    localHostStatusQuery.data?.availability === 'available';
-
-  const localConnectionView = useMemo(
-    () =>
-      describeConnectionState(localHostStatus, localHostAttachedAt, Date.now(), {
-        remoteAttached,
-      }),
-    [localHostStatus, localHostAttachedAt, remoteAttached],
-  );
-  useEffect(() => {
-    const readyObservedAt = remoteAttached
-      ? localHostStatusQuery.dataUpdatedAt
-      : localHostAttachedAt ?? 0;
-    if (
-      banner?.dismissOnReady &&
-      reconnectBannerStartedAt !== null &&
-      localConnectionView.tone === 'success' &&
-      readyObservedAt >= reconnectBannerStartedAt
-    ) {
-      setBanner(null);
-      setReconnectBannerStartedAt(null);
-    }
-  }, [
-    banner,
-    localConnectionView.tone,
-    localHostAttachedAt,
-    localHostStatusQuery.dataUpdatedAt,
-    reconnectBannerStartedAt,
-    remoteAttached,
-  ]);
-
-  const hosts: ReadonlyArray<HostDto> = useMemo(
-    () => hostsQuery.data?.hosts ?? [],
-    [hostsQuery.data],
-  );
-  const currentHost = useMemo(
-    () => hosts.find(h => h.id === currentLocalHostId) ?? null,
-    [hosts, currentLocalHostId],
-  );
-  const otherHosts = useMemo(
-    () => hosts.filter(h => h.id !== currentLocalHostId),
-    [hosts, currentLocalHostId],
-  );
-
-  const [pendingRotateId, setPendingRotateId] = useState<string | null>(null);
-  const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
-  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
-  const [statusMessage, setStatusMessage] = useState<{
-    kind: 'info' | 'error';
-    text: string;
-  } | null>(null);
-
-  const refreshHostQueries = (): void => {
-    void qc.invalidateQueries({ queryKey: hostsKey });
-    void qc.invalidateQueries({ queryKey: backendInfoKey });
-  };
-
-  const rotate = useMutation({
-    mutationFn: async (hostId: string) => {
-      setPendingRotateId(hostId);
-      try {
-        return await window.agentHub.rotateHostToken({ hostId });
-      } finally {
-        setPendingRotateId(null);
-      }
-    },
-    onSuccess: result => {
-      setStatusMessage(
-        result.ok
-          ? { kind: 'info', text: 'This computer’s connection credentials were refreshed.' }
-          : { kind: 'error', text: describeMutationFailure(result) },
-      );
-      refreshHostQueries();
-    },
-    onError: err => {
-      setStatusMessage({
-        kind: 'error',
-        text: err instanceof Error ? err.message : 'Could not refresh credentials.',
-      });
-    },
-  });
-
-  const remove = useMutation({
-    mutationFn: async (hostId: string) => {
-      setPendingRemoveId(hostId);
-      try {
-        return await window.agentHub.revokeHost({ hostId });
-      } finally {
-        setPendingRemoveId(null);
-      }
-    },
-    onSuccess: result => {
-      setConfirmRemoveId(null);
-      setStatusMessage(
-        result.ok
-          ? {
-              kind: 'info',
-              text:
-                result.local_host_status === 'revoked'
-                  ? 'This computer was removed. Sign in again to reconnect it.'
-                  : 'Device removed.',
-            }
-          : { kind: 'error', text: describeMutationFailure(result) },
-      );
-      refreshHostQueries();
-    },
-    onError: err => {
-      setStatusMessage({
-        kind: 'error',
-        text: err instanceof Error ? err.message : 'Could not remove the device.',
-      });
-    },
-  });
-
-  const currentIsRemovable =
-    currentHost !== null &&
-    currentHost.revoked_at === null &&
-    localHostStatus !== 'unclaimed' &&
-    localHostStatus !== 'revoked';
 
   return (
     <section className="flex min-w-0 flex-1 flex-col gap-6 px-5 py-5">
@@ -478,17 +307,15 @@ export function ConnectionPane(): JSX.Element {
           Connection
         </h2>
         <p className="max-w-prose text-xs text-text-muted">
-          Where this app connects, and what this computer runs.
+          The server this app connects to. Computers are managed under the
+          Computers panel.
         </p>
       </header>
 
-      {/* ---- Server ---------------------------------------------------- */}
       <div className="flex flex-col gap-3">
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col items-start gap-1">
           <h3 className="text-sm font-semibold text-text-primary">Server</h3>
-          <p className="max-w-prose text-xs text-text-muted">
-            Choose the server this app connects to.
-          </p>
+          <ServerStatusPill status={connectionStatus} />
         </div>
 
         {banner && (
@@ -528,7 +355,7 @@ export function ConnectionPane(): JSX.Element {
             <Button
               type="submit"
               variant="outline"
-              className="shrink-0"
+              className={`shrink-0 ${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} hover:bg-bg-floating`}
               disabled={saveDisabled}
               title={
                 classification.kind === 'reject'
@@ -552,210 +379,6 @@ export function ConnectionPane(): JSX.Element {
             <p className="text-[11px] text-error">{classification.message}</p>
           )}
         </form>
-      </div>
-
-      {/* ---- This computer -------------------------------------------- */}
-      <div className="flex flex-col gap-3 border-t border-border-subtle pt-5">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-1">
-            <h3 className="text-sm font-semibold text-text-primary">This computer</h3>
-            <p className="max-w-prose text-xs text-text-muted">
-              {describeThisMac(localHostStatus, localHostAttachedAt, remoteAttached)}
-            </p>
-          </div>
-          <ConnectionPill view={localConnectionView} />
-        </div>
-
-        {statusMessage && (
-          <div
-            role="status"
-            className={cn(
-              'rounded-md border px-3 py-2 text-xs',
-              statusMessage.kind === 'error'
-                ? 'border-error bg-bg-row-hover text-error'
-                : 'border-border-subtle bg-bg-row-hover text-text-secondary',
-            )}
-          >
-            {statusMessage.text}
-          </div>
-        )}
-
-        {/* Device metadata flattened inline (no Details fold) — a
-            settings surface should be glanceable, and the status line
-            alone left this block feeling empty (shiki + Cindy). No
-            daemon/token language is reintroduced; these are plain
-            facts + a secondary action. */}
-        {currentHost ? (
-          <>
-            <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-xs text-text-secondary">
-              <dt className="text-text-muted">Device ID</dt>
-              <dd className="font-mono text-[11px]">{currentHost.id}</dd>
-              <dt className="text-text-muted">Added</dt>
-              <dd>{formatTimestamp(currentHost.created_at)}</dd>
-              <dt className="text-text-muted">Last seen</dt>
-              <dd>{formatTimestamp(currentHost.last_seen_at)}</dd>
-            </dl>
-            <div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={
-                  currentHost.revoked_at !== null ||
-                  pendingRotateId === currentHost.id
-                }
-                onClick={() => rotate.mutate(currentHost.id)}
-              >
-                {pendingRotateId === currentHost.id ? (
-                  <Loader2 className="mr-1 size-3.5 animate-spin" />
-                ) : (
-                  <RefreshCw className="mr-1 size-3.5" />
-                )}
-                Refresh credentials
-              </Button>
-            </div>
-          </>
-        ) : (
-          <p className="text-xs text-text-muted">
-            No device record yet. Sign in from this computer to create one.
-          </p>
-        )}
-
-        {otherHosts.length > 0 && (
-          <div className="flex flex-col gap-2 border-t border-border-subtle pt-3">
-            <p className="text-[11px] font-medium text-text-secondary">
-              Other devices
-            </p>
-            <ul className="flex flex-col gap-2">
-              {otherHosts.map(host => {
-                const isRevoked = host.revoked_at !== null;
-                const removeBusy = pendingRemoveId === host.id;
-                return (
-                  <li
-                    key={host.id}
-                    className={cn(
-                      'flex flex-col gap-1.5 rounded-md border border-border-subtle bg-bg-floating px-3 py-2 text-xs',
-                      isRevoked && 'opacity-60',
-                    )}
-                  >
-                    <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <span className="font-medium text-text-primary">
-                        {host.name}
-                      </span>
-                      <span className="font-mono text-[10px] text-text-muted">
-                        {host.id}
-                      </span>
-                    </div>
-                    <span className="text-[11px] text-text-muted">
-                      {isRevoked
-                        ? `Removed · ${formatTimestamp(host.revoked_at)}`
-                        : `Last seen ${formatTimestamp(host.last_seen_at)}`}
-                    </span>
-                    {!isRevoked && (
-                      <div>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          disabled={removeBusy}
-                          onClick={() => setConfirmRemoveId(host.id)}
-                        >
-                          {removeBusy ? (
-                            <Loader2 className="mr-1 size-3.5 animate-spin" />
-                          ) : (
-                            <Trash2 className="mr-1 size-3.5" />
-                          )}
-                          Remove
-                        </Button>
-                      </div>
-                    )}
-                    {confirmRemoveId === host.id && (
-                      <div className="rounded-md border border-error bg-bg-row-hover px-3 py-2 text-[11px] text-text-secondary">
-                        <p>
-                          Remove <span className="font-medium">{host.name}</span>?
-                          It will stop running agents until it is reconnected.{' '}
-                          <span className="text-text-primary">
-                            Workspaces and messages are kept.
-                          </span>
-                        </p>
-                        <div className="mt-2 flex gap-2">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setConfirmRemoveId(null)}
-                          >
-                            Cancel
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="danger"
-                            onClick={() => remove.mutate(host.id)}
-                          >
-                            Remove
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        )}
-
-        {/* Danger zone pinned to the bottom of the block (shiki + Cindy):
-            destructive action stays out of the primary status row. */}
-        {currentIsRemovable && (
-          <div className="flex flex-col gap-2 border-t border-border-subtle pt-3">
-            {confirmRemoveId === currentLocalHostId ? (
-              <div className="rounded-md border border-error bg-bg-row-hover px-3 py-2 text-[11px] text-text-secondary">
-                <p>
-                  This computer will stop running agents until you sign in again
-                  and reconnect it.{' '}
-                  <span className="text-text-primary">
-                    Your workspaces and messages are kept.
-                  </span>
-                </p>
-                <div className="mt-2 flex gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setConfirmRemoveId(null)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="danger"
-                    disabled={pendingRemoveId === currentLocalHostId}
-                    onClick={() => remove.mutate(currentLocalHostId!)}
-                  >
-                    {pendingRemoveId === currentLocalHostId && (
-                      <Loader2 className="mr-1 size-3.5 animate-spin" />
-                    )}
-                    Remove this computer
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setConfirmRemoveId(currentLocalHostId)}
-                >
-                  <Trash2 className="mr-1 size-3.5 text-error" />
-                  <span className="text-error">Remove this computer</span>
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
       </div>
     </section>
   );

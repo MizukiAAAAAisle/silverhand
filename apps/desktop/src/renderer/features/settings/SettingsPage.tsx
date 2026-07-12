@@ -13,19 +13,16 @@ import {
   Palette,
   RotateCcw,
   Server,
-  ShieldOff,
   Type,
 } from 'lucide-react';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
 import { useAppearance } from '@/hooks/useAppearance';
-import { useBackendInfoSnapshot } from '@/features/hosts/hooks';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
   useLogout,
-  useLogoutAndDisableHost,
   useViewerUser,
 } from '@/features/me/hooks';
 import {
@@ -400,25 +397,16 @@ function AppearancePane({
   );
 }
 
-/** Account pane — session-scope operations for the local user on this
- *  computer: a plain Log out and a destructive "Remove this computer &
- *  log out" path. Display name and avatar edits live on
- *  `HumanProfileCard` in the Members panel; this pane holds no
- *  identity affordance so `/api/me` mutations have exactly one
- *  long-lived surface. */
+/** Account pane — user-session operations only. Log out ends the
+ *  current sign-in on this computer; Computer lifecycle (revoke,
+ *  refresh credentials, delete) lives on Computer Detail
+ *  (`features/hosts/HostDetailView`) because sessions are user-level
+ *  and independent of Computer lifecycle. Display name and avatar
+ *  edits live on `HumanProfileCard` in the Members panel, so
+ *  `/api/me` mutations have exactly one long-lived surface. */
 function AccountPane(): JSX.Element {
   const viewer = useViewerUser();
   const logout = useLogout();
-  // Secondary affordance: "Remove this computer and log out". Reuses
-  // `hosts:revoke` + `auth:logout` in strict sequence; the plain
-  // `logout` mutation above stays as-is so the default Log out path
-  // NEVER touches the host record.
-  const logoutAndDisable = useLogoutAndDisableHost();
-  const backendInfoQuery = useBackendInfoSnapshot();
-  const currentLocalHostId = backendInfoQuery.data?.local_host_id ?? null;
-  const localHostStatus =
-    backendInfoQuery.data?.local_host_status ?? 'unclaimed';
-  const [confirmDisableHost, setConfirmDisableHost] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // AccountPane only mounts after registration (App.tsx gates the shell
@@ -440,42 +428,6 @@ function AccountPane(): JSX.Element {
       setError(String(err));
     }
   };
-
-  // Destructive variant. Stays a separate handler so the confirm dialog
-  // hits ONLY this path (plain Log out is a one-click action). On
-  // revoke failure we keep the user signed in and show the typed
-  // message; the next attempt is up to them.
-  const onLogoutAndDisableHost = async () => {
-    setError(null);
-    try {
-      const result = await logoutAndDisable.mutateAsync({
-        hostId: currentLocalHostId,
-      });
-      if (!result.ok) {
-        setError(result.message);
-        // Keep the confirm dialog open ONLY on `no_current_host` so the
-        // user re-reads what went wrong. Other failures clear the
-        // confirm because the action was attempted; user retries
-        // explicitly via the button.
-        if (result.kind !== 'no_current_host') {
-          setConfirmDisableHost(false);
-        }
-        return;
-      }
-      setConfirmDisableHost(false);
-    } catch (err) {
-      setConfirmDisableHost(false);
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  // Disable "Remove this computer" when there's no current local host
-  // (unclaimed / already revoked) — revoking an already-revoked host
-  // returns a typed `host_revoked` error that's user-confusing here.
-  const disableHostUnavailable =
-    currentLocalHostId === null ||
-    localHostStatus === 'revoked' ||
-    localHostStatus === 'unclaimed';
 
   if (viewer.isLoading) {
     return (
@@ -512,7 +464,7 @@ function AccountPane(): JSX.Element {
             type="button"
             variant="outline"
             onClick={() => void onLogout()}
-            disabled={logout.isPending || logoutAndDisable.isPending}
+            disabled={logout.isPending}
             className="border-[length:var(--control-border-width)] border-border-focus transition-[color,background-color,border-color,transform] hover:-translate-y-px hover:bg-bg-floating"
           >
             {logout.isPending ? (
@@ -523,80 +475,6 @@ function AccountPane(): JSX.Element {
             Log out
           </Button>
         </div>
-        {/* Destructive secondary — layered below the safe Log out so a
-            hurried click hits the safe path; this one requires confirm.
-            Disabled when no current local host exists (unclaimed /
-            already revoked) so the user isn't presented an action that
-            can't succeed. */}
-        <div className="flex items-center justify-between gap-3 pt-1">
-          <div className="min-w-0">
-            <p className="text-[11px] font-medium text-text-secondary">
-              Remove this computer
-            </p>
-            <p className="text-[11px] text-text-muted">
-              Revokes this computer's access and stops its agents.
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => setConfirmDisableHost(true)}
-            disabled={
-              disableHostUnavailable ||
-              logout.isPending ||
-              logoutAndDisable.isPending
-            }
-            title={
-              disableHostUnavailable
-                ? 'This computer is not connected.'
-                : undefined
-            }
-            className="border-[length:var(--control-border-width)] border-transparent transition-[color,background-color,border-color,transform] hover:-translate-y-px hover:border-border-focus hover:bg-bg-floating"
-          >
-            {logoutAndDisable.isPending ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <ShieldOff className="size-3.5 text-error" />
-            )}
-            <span className="text-error">Remove & log out</span>
-          </Button>
-        </div>
-        {confirmDisableHost && (
-          <div className="rounded-md border border-error bg-bg-row-hover px-3 py-2 text-[11px] text-text-secondary">
-            <p>
-              Agents on this computer stop, and it loses server access
-              until you sign in and reconnect it.{' '}
-              <span className="text-text-primary">
-                Workspaces and messages are preserved.
-              </span>
-            </p>
-            <div className="mt-2 flex gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setConfirmDisableHost(false)}
-                disabled={logoutAndDisable.isPending}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="danger"
-                onClick={() => void onLogoutAndDisableHost()}
-                disabled={logoutAndDisable.isPending}
-              >
-                {logoutAndDisable.isPending ? (
-                  <Loader2 className="mr-1 size-3.5 animate-spin" />
-                ) : (
-                  <ShieldOff className="mr-1 size-3.5" />
-                )}
-                Remove & log out
-              </Button>
-            </div>
-          </div>
-        )}
         {error ? (
           <p className="text-xs text-status-error" role="alert">{error}</p>
         ) : null}

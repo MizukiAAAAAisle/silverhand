@@ -92,12 +92,13 @@ export const computerCopy = {
       ? `This computer is already connected from ${hostname}.`
       : 'This computer is already connected from another machine.',
 
-  // ── Delete (computer-level, danger) ────────────────────────────────
-  // The single removal verb (#task:1354). No user-facing "revoke": an
-  // empty computer hard-deletes; a computer that still has agents /
-  // workspaces is blocked (backend `409 has_dependents`) so the user
-  // removes those in their own context first — deleting the computer never
-  // silently takes conversation history with it.
+  // ── Delete (user-managed, terminal) ────────────────────────────────
+  // The user-managed removal verb (#task:1354; `docs/user-managed-
+  // computer-v1.md` §5.3). Distinct from Revoke: Delete is terminal
+  // (hard-deletes the row, invalidates the connect-token, subject to
+  // dependency check + optional agent cascade). Revoke is soft
+  // (`revoked_at` set, credential invalidated, agents/workspaces
+  // preserved). The two never share a component, mutation, or copy.
   deleteComputer: 'Delete computer',
   deleteConfirmTitle: 'Delete this computer?',
   /** One line of consequence — deleting invalidates the connection command
@@ -147,4 +148,40 @@ export const computerCopy = {
    *  collapses the whole section to this one short line (shiki-frozen copy;
    *  do not expand into "readable but locked" — offline means neither). */
   proxyOfflineHint: 'Please connect first',
+
+  /* ── Refresh credentials (app-managed, current-machine only) ──── */
+  /** Section heading. Refresh rotates the backend-issued host token in
+   *  local daemon config — token bytes stay in main-process memory and
+   *  never enter the renderer. Independent of the user-managed
+   *  `Generate connection command` flow; do not merge the copy. */
+  refreshCredentialsTitle: 'Credentials',
+  refreshCredentialsBody:
+    "This computer's connection credentials update in place. Agents keep running.",
+  refreshCredentials: 'Refresh credentials',
+  refreshingCredentials: 'Refreshing…',
+  refreshCredentialsSuccess: 'Credentials refreshed.',
+  refreshCredentialsFailed:
+    "Couldn't refresh credentials. Try again in a moment.",
+
+  /* ── Revoke (app-managed, soft) ────────────────────────────────── */
+  /** Soft revoke: writes `revoked_at`, invalidates the credential, and
+   *  force-drops the live connection. Agents and workspaces are
+   *  preserved (per doc §5.3). Never bundled with sign-out — user
+   *  sessions are user-level and independent of Computer lifecycle.
+   *
+   *  Confirm copy is three user-visible consequences, in dependency
+   *  order: what disappears (the live connection), what that costs
+   *  right now (running agents stop), and what does NOT disappear
+   *  (records/workspaces/messages). Anything less than all three lets
+   *  the user click Revoke without seeing the durability boundary. */
+  revokeComputer: 'Revoke computer',
+  revokeConfirmTitle: 'Revoke this computer?',
+  revokeConfirmFacts: [
+    'The computer disconnects and cannot reconnect.',
+    'Running agents stop.',
+    'Agent records, workspaces, and messages are preserved.',
+  ] as const,
+  revokeConfirm: 'Revoke',
+  revoking: 'Revoking…',
+  revokeFailed: "Couldn't revoke this computer. Please try again.",
 } as const;

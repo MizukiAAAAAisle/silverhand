@@ -66,6 +66,7 @@ import {
   Monitor,
   RefreshCw,
   Save,
+  ShieldOff,
   Trash2,
   Unplug,
 } from 'lucide-react';
@@ -114,7 +115,9 @@ import {
   useHostStatusQuery,
   useDeleteComputerMutation,
   useDisconnectHostMutation,
+  useRevokeComputerMutation,
   useRotateConnectTokenMutation,
+  useRotateHostTokenMutation,
   useSaveHostProxyConfigMutation,
   useUpdateHostMutation,
   isHostProxyOfflineError,
@@ -122,6 +125,11 @@ import {
   ComputerHasPendingAgentsError,
   type HostProxyConfig,
 } from './hooks';
+import { computerActions } from './computer-actions';
+import {
+  CONTROL_HOVER_LIFT,
+  CONTROL_INK_BORDER,
+} from '@/features/common/ControlInkBorder';
 import {
   describeHostStatus,
   formatUptime,
@@ -202,23 +210,17 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
       : null;
   const canEditHostLocalConfig =
     viewerId !== null && host.creator_user_id === viewerId;
-  // The Connection section (generate command / disconnect) is only
-  // meaningful for a user-managed computer the viewer owns and hasn't
-  // revoked. The local app-managed computer has no user-facing connect
-  // command at all, so gating on `provisioning_source` here is legitimate
-  // provenance use (connect-recovery flow), NOT a capability fork (Alice
-  // §3.1). A revoked computer is terminal — nothing to reconnect.
-  const showConnectionSection =
-    canEditHostLocalConfig &&
-    host.provisioning_source === 'user_invite' &&
-    host.status !== 'revoked';
-  // Delete is the single computer-level removal verb (#task:1354). Scoped to
-  // a user-managed computer the viewer owns — the local app-managed computer
-  // has its own lifecycle and is not user-deletable here (Alice §gate-scope).
-  // Unlike Connection, Delete stays available in every lifecycle/availability
-  // state (you delete an offline computer too), so it is NOT gated on status.
-  const showDeleteSection =
-    canEditHostLocalConfig && host.provisioning_source === 'user_invite';
+  const backendInfo = useBackendInfoSnapshot();
+  const currentLocalHostId = backendInfo.data?.local_host_id ?? null;
+  // The mutex among Connection / Delete / Refresh / Revoke is derived
+  // by one pure predicate (`computerActions`). See its docstring for
+  // the ownership + lifecycle + provisioning-source rules and the
+  // four-matrix test that locks them.
+  const actions = computerActions({
+    host,
+    viewerId,
+    currentLocalHostId,
+  });
 
   return (
     <main
@@ -239,6 +241,7 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
         onRename={async next => {
           await renameMutation.mutateAsync({ display_label: next });
         }}
+        appManaged={host.provisioning_source === 'app_install'}
       />
 
       <div className="mx-auto flex w-full max-w-2xl flex-col px-6">
@@ -262,11 +265,14 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
             ) : (
               <OfflineSection status={statusQuery.data} />
             )}
-            {showConnectionSection ? (
+            {actions.connection ? (
               <ConnectionSection
                 host={host}
                 availability={statusQuery.data.availability}
               />
+            ) : null}
+            {actions.refresh ? (
+              <RefreshCredentialsSection host={host} />
             ) : null}
             {canEditHostLocalConfig ? (
               <ProxySection
@@ -282,10 +288,11 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
         ) : null}
         {/* Copy diagnostics is a page-level utility, rendered regardless of
             the status query state — offline / unreachable / status-load-failed
-            is exactly when a user reaches for it. Sits above the Delete danger
-            section, in its own quiet frame (not inside it). */}
+            is exactly when a user reaches for it. Sits above the destructive
+            action, in its own quiet frame (not inside it). */}
         <HostDiagnosticsAction host={host} />
-        {showDeleteSection ? <DeleteComputerSection host={host} /> : null}
+        {actions.revoke ? <RevokeComputerSection host={host} /> : null}
+        {actions.delete ? <DeleteComputerSection host={host} /> : null}
       </div>
     </main>
   );
@@ -410,6 +417,175 @@ function ConnectionSection({
         ) : null}
       </div>
     </HostSection>
+  );
+}
+
+/* ─── Refresh credentials (app-managed, current-machine only) ──── */
+
+/**
+ * The app-managed counterpart to `ConnectionSection`. Rotates the
+ * backend-issued host token in local daemon-config via a main-process
+ * IPC (`window.agentHub.rotateHostToken`) — token bytes NEVER enter
+ * the renderer. Deliberately NOT merged with `ConnectionSection`: the
+ * two target different daemon layers (local config vs. server-issued
+ * connect-token) and their copy is different.
+ *
+ * Gated (by `computerActions`) to `host.id === currentLocalHostId`
+ * because the mutation writes to THIS desktop's daemon config; trying
+ * to rotate another machine's app-managed token from here would
+ * silently miss the daemon that actually reads it.
+ */
+function RefreshCredentialsSection({ host }: { host: HostDto }): JSX.Element {
+  const rotate = useRotateHostTokenMutation(host.id);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleRefresh = async (): Promise<void> => {
+    setError(null);
+    setSaved(false);
+    try {
+      await rotate.mutateAsync();
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 1500);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : computerCopy.refreshCredentialsFailed);
+    }
+  };
+
+  return (
+    <HostSection title={computerCopy.refreshCredentialsTitle}>
+      <div className="flex flex-col gap-3">
+        <p className="text-sm text-text-muted">
+          {computerCopy.refreshCredentialsBody}
+        </p>
+        <div className="flex items-center gap-3">
+          <Button
+            size="sm"
+            onClick={() => void handleRefresh()}
+            disabled={rotate.isPending}
+            className={`gap-2 ${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} hover:bg-[var(--bg-control-primary)]`}
+          >
+            {rotate.isPending ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="size-3.5" />
+            )}
+            {rotate.isPending
+              ? computerCopy.refreshingCredentials
+              : computerCopy.refreshCredentials}
+          </Button>
+          {saved ? (
+            <span className="inline-flex items-center gap-1.5 text-xs text-success">
+              <CheckCircle2 className="size-3.5" />
+              {computerCopy.refreshCredentialsSuccess}
+            </span>
+          ) : null}
+        </div>
+        {error ? <p className="text-xs text-error">{error}</p> : null}
+      </div>
+    </HostSection>
+  );
+}
+
+/* ─── Revoke (app-managed, soft) ────────────────────────────────── */
+
+/**
+ * The app-managed soft-revoke surface. Distinct from
+ * `DeleteComputerSection` (user-managed terminal delete): revoke sets
+ * `revoked_at`, invalidates the credential, and force-drops the live
+ * WS while preserving agents and workspaces (doc §5.3). Different
+ * component, different mutation, different confirm copy — the two
+ * never share a backend verb.
+ *
+ * Revoking the current local computer does NOT log the user out.
+ * User sessions are user-level and outlive Computer lifecycle; the
+ * detail view flips to the revoked-terminal read-only shape (via the
+ * invalidated queries) and the user can add another computer or keep
+ * using other daemon-connected computers.
+ */
+function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element {
+  const revoke = useRevokeComputerMutation(host.id);
+  const [open, setOpen] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  const openConfirm = (): void => {
+    setFailed(false);
+    setOpen(true);
+  };
+
+  const handleRevoke = async (): Promise<void> => {
+    setFailed(false);
+    try {
+      await revoke.mutateAsync();
+      setOpen(false);
+    } catch {
+      setFailed(true);
+    }
+  };
+
+  const label = host.display_label?.trim() || host.name;
+
+  return (
+    <section className="flex flex-col border-t border-border-subtle py-6 first:border-t-0">
+      <Button
+        variant="outline"
+        onClick={openConfirm}
+        className={`gap-2 self-start ${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} text-error hover:bg-bg-floating`}
+      >
+        <ShieldOff className="size-3.5" />
+        {computerCopy.revokeComputer}
+      </Button>
+
+      <Dialog
+        open={open}
+        onOpenChange={next => {
+          setOpen(next);
+          if (!next) setFailed(false);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{computerCopy.revokeConfirmTitle}</DialogTitle>
+            <DialogDescription asChild>
+              <ul className="mt-1 flex list-disc flex-col gap-1 pl-4">
+                {computerCopy.revokeConfirmFacts.map(fact => (
+                  <li key={fact}>{fact}</li>
+                ))}
+              </ul>
+            </DialogDescription>
+          </DialogHeader>
+          {failed ? (
+            <p className="text-xs text-error">{computerCopy.revokeFailed}</p>
+          ) : null}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setOpen(false)}
+              disabled={revoke.isPending}
+              className={`${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} hover:bg-bg-floating`}
+            >
+              {computerCopy.cancel}
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => void handleRevoke()}
+              disabled={revoke.isPending}
+              className={`gap-2 ${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} hover:opacity-100`}
+              aria-label={`${computerCopy.revokeComputer}: ${label}`}
+            >
+              {revoke.isPending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <ShieldOff className="size-3.5" />
+              )}
+              {revoke.isPending
+                ? computerCopy.revoking
+                : computerCopy.revokeConfirm}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </section>
   );
 }
 
@@ -960,7 +1136,7 @@ function ProxySection({
             <Button
               type="submit"
               disabled={saving || settingsLoading}
-              className="gap-2"
+              className={`gap-2 ${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} hover:bg-[var(--bg-control-primary)]`}
             >
               {saving ? (
                 <Loader2 className="size-3.5 animate-spin" />
@@ -987,6 +1163,7 @@ function HostHero({
   refreshing,
   onRefresh,
   onRename,
+  appManaged,
 }: {
   host: HostDto;
   showStableName: boolean;
@@ -996,6 +1173,11 @@ function HostHero({
   refreshing: boolean;
   onRefresh: () => void;
   onRename: (next: string | null) => Promise<void>;
+  /** Provenance chip in the state row. This is lifecycle/origin
+   *  metadata (per doc §3.1), NOT a capability signal — the four
+   *  danger surfaces below are picked by `computerActions`, not by
+   *  this flag. */
+  appManaged: boolean;
 }): JSX.Element {
   return (
     <header className="flex shrink-0 items-start gap-4 border-b border-border-subtle bg-bg-floating px-6 py-4">
@@ -1029,6 +1211,7 @@ function HostHero({
               <span>Loading…</span>
             </span>
           ) : null}
+          {appManaged ? <ProvenanceChip /> : null}
           <Button
             variant="ghost"
             size="icon"
@@ -1126,6 +1309,24 @@ function StatusChip({
         aria-hidden
       />
       {label}
+    </span>
+  );
+}
+
+/**
+ * Provenance chip — sibling of `StatusChip` in geometry, distinct in
+ * meaning. This is lifecycle/origin metadata (per doc §3.1: "explains
+ * where a host came from; drives nothing runtime"), never a capability
+ * signal. The four danger surfaces are picked by `computerActions`,
+ * not by anything a viewer can read here.
+ */
+function ProvenanceChip(): JSX.Element {
+  return (
+    <span
+      data-panel-pill="host-provenance"
+      className="inline-flex items-center border border-border-subtle bg-transparent px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted"
+    >
+      {computerCopy.appManaged}
     </span>
   );
 }

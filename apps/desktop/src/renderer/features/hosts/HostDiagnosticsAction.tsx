@@ -11,6 +11,10 @@ import {
 } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import { ApiError } from '@/lib/api';
+import {
+  CONTROL_HOVER_LIFT,
+  CONTROL_INK_BORDER,
+} from '@/features/common/ControlInkBorder';
 import { computerCopy } from './computer-copy';
 import {
   useBackendInfoSnapshot,
@@ -79,7 +83,7 @@ export function HostDiagnosticsAction({ host }: { host: HostDto }): JSX.Element 
         variant="outline"
         size="sm"
         onClick={() => void handleCopy()}
-        className="gap-2 self-start"
+        className={`gap-2 self-start ${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} hover:bg-bg-floating`}
       >
         {copied ? (
           <Check className="size-3.5" />
