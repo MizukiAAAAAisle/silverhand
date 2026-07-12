@@ -1,46 +1,31 @@
 import {
   useEffect,
-  useMemo,
   useState,
   type CSSProperties,
-  type FormEvent,
   type ReactNode,
 } from 'react';
 import {
   Check,
-  CheckCircle2,
   Code2,
+  KeyRound,
   LogOut,
   Loader2,
   Palette,
   RotateCcw,
-  Save,
   Server,
   ShieldOff,
   Type,
-  User,
 } from 'lucide-react';
-import {
-  AVATAR_MAX_SIZE_LABEL,
-  validateAvatarFile,
-} from '@silverhand/shared';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { AvatarPickerButton } from '@/components/AvatarPickerButton';
-import { AVATAR_PX } from '@/components/avatar-scale';
 import { cn } from '@/lib/cn';
 import { useAppearance } from '@/hooks/useAppearance';
 import { useBackendInfoSnapshot } from '@/features/hosts/hooks';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
-  useClearAvatar,
   useLogout,
   useLogoutAndDisableHost,
-  useUpdateProfile,
-  useUploadAvatar,
-  useViewerAvatarObjectUrl,
   useViewerUser,
 } from '@/features/me/hooks';
 import {
@@ -128,10 +113,10 @@ const THEME_META: Record<
  *  page-internal sub-nav; selection is local React state, persisted to
  *  localStorage so a refresh stays put. (No URL routing yet — settings
  *  deep-links are rare and the URL slot belongs to the chat router.) */
-type SettingsSection = 'appearance' | 'profile' | 'connection';
+type SettingsSection = 'appearance' | 'account' | 'connection';
 const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   'appearance',
-  'profile',
+  'account',
   'connection',
 ];
 const SETTINGS_SECTION_KEY = 'silverhand:settings-section';
@@ -142,8 +127,12 @@ function readPersistedSection(): SettingsSection {
   // Migrate retired sections so returning users land somewhere valid.
   // `server` / `hosts` folded into Connection; `proxy` moved to the
   // Computers/Host detail surface because proxy affects runtime hosts,
-  // not app-level settings.
+  // not app-level settings. `profile` was renamed to `account` after
+  // identity editing moved to Members > Human Profile — a returning
+  // user who left the app on `profile` lands on Account rather than
+  // on an empty section.
   if (raw === 'server' || raw === 'hosts' || raw === 'proxy') return 'connection';
+  if (raw === 'profile') return 'account';
   return SETTINGS_SECTIONS.includes(raw as SettingsSection)
     ? (raw as SettingsSection)
     : 'appearance';
@@ -179,22 +168,9 @@ export function SettingsPage(): JSX.Element {
             Settings
           </span>
           <span className="truncate text-xs text-text-muted">
-            Host-level preferences for future agent processes
+            Application preferences, account access, and server connection.
           </span>
         </div>
-        {/* v6.9.3 #task:917 (shiki settings audit "C"): the page-scope
-            tag was plain muted prose. Reuse `data-host-kind-tag` (landed
-            v6.9.1 for ComputersPanel) so any place in the app surfacing a
-            host's kind reads as the same HUD tag — Settings, sidebar,
-            future Hosts list, etc. forza6 paints uppercase mono caps via
-            the hook; other themes inherit muted text. Lowercase literal
-            matches the kind-enum source-of-truth (`host.kind === 'local'`). */}
-        <span
-          data-host-kind-tag
-          className="shrink-0 text-[11px] font-medium text-text-muted"
-        >
-          local
-        </span>
       </header>
 
       <div className="flex min-h-0 flex-1 justify-center">
@@ -209,8 +185,8 @@ export function SettingsPage(): JSX.Element {
               resetMarkdownText={resetMarkdownText}
               resetMarkdownFontSize={resetMarkdownFontSize}
             />
-          ) : section === 'profile' ? (
-            <ProfilePane />
+          ) : section === 'account' ? (
+            <AccountPane />
           ) : (
             <ConnectionPane />
           )}
@@ -240,7 +216,7 @@ function SettingsSubNav({
     icon: ReactNode;
   }> = [
     { id: 'appearance', label: 'Appearance', icon: <Palette className="size-3.5" /> },
-    { id: 'profile', label: 'Profile', icon: <User className="size-3.5" /> },
+    { id: 'account', label: 'Account', icon: <KeyRound className="size-3.5" /> },
     { id: 'connection', label: 'Connection', icon: <Server className="size-3.5" /> },
   ];
 
@@ -424,117 +400,37 @@ function AppearancePane({
   );
 }
 
-/** Profile pane — viewer's mention name (read-only), display name, and
- *  avatar. Backed by `/api/me` (GET/PATCH/POST/DELETE) for reads and
- *  display_name / avatar edits.
- *
- *  `name` is set once at registration (full-screen gate before the app
- *  shell mounts) and is intentionally not editable here: the backend
- *  service / route layer does not expose a rename surface, and PATCH
- *  /api/me does not accept a `name` field. The display copy makes this
- *  permanent contract visible to the user. */
-function ProfilePane(): JSX.Element {
+/** Account pane — session-scope operations for the local user on this
+ *  computer: a plain Log out and a destructive "Remove this computer &
+ *  log out" path. Display name and avatar edits live on
+ *  `HumanProfileCard` in the Members panel; this pane holds no
+ *  identity affordance so `/api/me` mutations have exactly one
+ *  long-lived surface. */
+function AccountPane(): JSX.Element {
   const viewer = useViewerUser();
-  const updateProfile = useUpdateProfile();
-  const uploadAvatar = useUploadAvatar();
-  const clearAvatar = useClearAvatar();
   const logout = useLogout();
-  // D3.e — secondary affordance: "Remove this computer and log out".
-  // Reuses `hosts:revoke` + `auth:logout` in strict sequence; the
-  // plain `logout` mutation above stays as-is so the default Log out
-  // path NEVER touches the host record (Cindy review gate 2).
+  // Secondary affordance: "Remove this computer and log out". Reuses
+  // `hosts:revoke` + `auth:logout` in strict sequence; the plain
+  // `logout` mutation above stays as-is so the default Log out path
+  // NEVER touches the host record.
   const logoutAndDisable = useLogoutAndDisableHost();
   const backendInfoQuery = useBackendInfoSnapshot();
   const currentLocalHostId = backendInfoQuery.data?.local_host_id ?? null;
   const localHostStatus =
     backendInfoQuery.data?.local_host_status ?? 'unclaimed';
   const [confirmDisableHost, setConfirmDisableHost] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // ProfilePane only mounts after registration (App.tsx gates the
-  // shell behind <RegistrationGate />), so any `registration_required`
-  // shape here is a transient race during refetch. Narrow once and
-  // treat it as `undefined` for the rest of the pane.
+  // AccountPane only mounts after registration (App.tsx gates the shell
+  // behind <RegistrationGate />), so any `registration_required` shape
+  // here is a transient race during refetch. Narrow once and treat it
+  // as `undefined` for the rest of the pane.
   const dto =
     viewer.data
     && !isRegistrationRequired(viewer.data)
     && !isBackendUnreachable(viewer.data)
       ? viewer.data
       : undefined;
-
-  const [displayName, setDisplayName] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const avatarObjectUrl = useViewerAvatarObjectUrl();
-
-  // Seed local form state from server. Re-runs whenever the cached
-  // viewer dto changes (e.g. after a successful PATCH).
-  useEffect(() => {
-    if (dto) {
-      setDisplayName(dto.display_name);
-      setError(null);
-    }
-  }, [dto]);
-
-  // Avatar blob → object URL is now lifted into the shared
-  // `useViewerAvatarObjectUrl()` hook above; chat MessageItem also
-  // consumes it so the same fetch result drives every render that
-  // needs the viewer's photo.
-
-  const dirty =
-    !!dto && displayName !== dto.display_name;
-
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!dto) return;
-    setError(null);
-    try {
-      await updateProfile.mutateAsync({
-        display_name:
-          displayName !== dto.display_name ? displayName : undefined,
-      });
-      setSaved(true);
-      window.setTimeout(() => setSaved(false), 1500);
-    } catch (err) {
-      const apiErr = err as { body?: string; message?: string };
-      let parsed: { error?: string; code?: string } = {};
-      try {
-        parsed = JSON.parse(apiErr.body ?? '{}');
-      } catch {
-        // not JSON — fall through to .message.
-      }
-      setError(parsed.error ?? apiErr.message ?? 'Failed to save');
-    }
-  };
-
-  const onPickAvatar = async (file: File) => {
-    setError(null);
-    const validation = validateAvatarFile(file);
-    if (validation) {
-      setError(validation.message);
-      return;
-    }
-    try {
-      await uploadAvatar.mutateAsync({ file });
-    } catch (err) {
-      const apiErr = err as { body?: string; message?: string };
-      let parsed: { error?: string; code?: string } = {};
-      try {
-        parsed = JSON.parse(apiErr.body ?? '{}');
-      } catch {
-        // not JSON — fall through to .message.
-      }
-      setError(parsed.error ?? apiErr.message ?? 'Failed to upload avatar');
-    }
-  };
-
-  const onClearAvatar = async () => {
-    setError(null);
-    try {
-      await clearAvatar.mutateAsync();
-    } catch (err) {
-      setError(String(err));
-    }
-  };
 
   const onLogout = async () => {
     setError(null);
@@ -545,10 +441,10 @@ function ProfilePane(): JSX.Element {
     }
   };
 
-  // D3.e — destructive variant. Stays a separate handler so the
-  // confirm dialog hits ONLY this path (the plain Log out is a
-  // one-click action). On revoke failure we keep the user signed in
-  // and show the typed message; the next attempt is up to them.
+  // Destructive variant. Stays a separate handler so the confirm dialog
+  // hits ONLY this path (plain Log out is a one-click action). On
+  // revoke failure we keep the user signed in and show the typed
+  // message; the next attempt is up to them.
   const onLogoutAndDisableHost = async () => {
     setError(null);
     try {
@@ -557,9 +453,9 @@ function ProfilePane(): JSX.Element {
       });
       if (!result.ok) {
         setError(result.message);
-        // Keep the confirm dialog open ONLY on `no_current_host` so
-        // the user re-reads what went wrong. Other failures clear
-        // the confirm because the action was attempted; user retries
+        // Keep the confirm dialog open ONLY on `no_current_host` so the
+        // user re-reads what went wrong. Other failures clear the
+        // confirm because the action was attempted; user retries
         // explicitly via the button.
         if (result.kind !== 'no_current_host') {
           setConfirmDisableHost(false);
@@ -573,10 +469,9 @@ function ProfilePane(): JSX.Element {
     }
   };
 
-  // Disable the "Remove this computer" action when there's
-  // no current local host (unclaimed / already revoked) — revoking
-  // an already-revoked host returns a typed `host_revoked` error
-  // that's user-confusing in this context.
+  // Disable "Remove this computer" when there's no current local host
+  // (unclaimed / already revoked) — revoking an already-revoked host
+  // returns a typed `host_revoked` error that's user-confusing here.
   const disableHostUnavailable =
     currentLocalHostId === null ||
     localHostStatus === 'revoked' ||
@@ -585,14 +480,14 @@ function ProfilePane(): JSX.Element {
   if (viewer.isLoading) {
     return (
       <section className="flex min-w-0 flex-1 items-center justify-center py-10 text-xs text-text-muted">
-        Loading profile…
+        Loading account…
       </section>
     );
   }
   if (!dto) {
     return (
       <section className="flex min-w-0 flex-1 items-center justify-center py-10 text-xs text-text-muted">
-        Could not load your profile. Please retry from the main app.
+        Could not load your account. Please retry from the main app.
       </section>
     );
   }
@@ -601,116 +496,16 @@ function ProfilePane(): JSX.Element {
     <section className="flex min-w-0 flex-1 flex-col gap-5 px-5 py-5">
       <header className="flex flex-col gap-1">
         <h2 className="font-serif text-base font-semibold text-text-primary">
-          Profile
+          Account
         </h2>
-        <p className="text-xs text-text-muted">
-          How you appear to agents in this workspace. Your name was set at
-          registration and cannot be changed; display name and avatar can.
-        </p>
       </header>
 
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-        <div className="flex flex-col gap-2">
-          <Label>Name</Label>
-          <div className="flex max-w-sm items-center gap-2 rounded-[var(--control-radius)] border border-border-subtle bg-bg-row-hover px-3 py-1.5 text-sm text-text-primary">
-            <span className="font-mono text-text-muted">@</span>
-            <span className="select-text">{dto.name}</span>
-          </div>
-          <p className="text-[11px] text-text-muted">
-            Permanent — used for <code>@mention</code>s across messages,
-            prompts, and search.
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="profile-display-name">Display name</Label>
-          <Input
-            id="profile-display-name"
-            value={displayName}
-            onChange={e => setDisplayName(e.target.value)}
-            placeholder="Your Name"
-            className="max-w-sm"
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label>Avatar</Label>
-          <div className="flex items-center gap-3">
-            <AvatarPickerButton
-              size={AVATAR_PX['3xl']}
-              label={dto.avatar_url ? 'Edit' : 'Add'}
-              onPick={file => void onPickAvatar(file)}
-              disabled={uploadAvatar.isPending}
-              ariaLabel={dto.avatar_url ? 'Change avatar' : 'Add avatar'}
-              className="border border-border-subtle"
-            >
-              <span className="grid size-full place-items-center bg-bg-row-hover">
-                {avatarObjectUrl ? (
-                  // eslint-disable-next-line jsx-a11y/img-redundant-alt
-                  <img
-                    src={avatarObjectUrl}
-                    alt="Your avatar"
-                    className="size-full object-cover"
-                  />
-                ) : (
-                  <User className="size-7 text-text-muted" />
-                )}
-              </span>
-            </AvatarPickerButton>
-            <div className="flex flex-col gap-1">
-              {uploadAvatar.isPending ? (
-                <span className="inline-flex items-center gap-1 text-[11px] text-text-muted">
-                  <Loader2 className="size-3 animate-spin" />
-                  Uploading…
-                </span>
-              ) : null}
-              {dto.avatar_url ? (
-                <button
-                  type="button"
-                  onClick={onClearAvatar}
-                  disabled={clearAvatar.isPending}
-                  className="self-start text-[11px] text-text-muted underline-offset-2 hover:underline disabled:opacity-50"
-                >
-                  Remove avatar
-                </button>
-              ) : null}
-              <p className="text-[11px] text-text-muted">
-                PNG / JPEG / GIF / WEBP, up to {AVATAR_MAX_SIZE_LABEL}.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <footer className="flex items-center gap-3 pt-2">
-          <Button type="submit" disabled={!dirty || updateProfile.isPending}>
-            {updateProfile.isPending ? (
-              <>
-                <Loader2 className="size-3.5 animate-spin" /> Saving…
-              </>
-            ) : (
-              <>
-                <Save className="size-3.5" /> Save changes
-              </>
-            )}
-          </Button>
-          {saved ? (
-            <span className="inline-flex items-center gap-1 text-xs text-text-secondary">
-              <CheckCircle2 className="size-3.5 text-status-success" />
-              Saved
-            </span>
-          ) : null}
-          {error ? (
-            <span className="text-xs text-status-error">{error}</span>
-          ) : null}
-        </footer>
-      </form>
-
-      <div className="flex max-w-2xl flex-col gap-3 border-t border-border-subtle pt-5">
+      <div className="flex max-w-2xl flex-col gap-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-xs font-medium text-text-secondary">Account</p>
+            <p className="text-xs font-medium text-text-secondary">Log out</p>
             <p className="text-[11px] text-text-muted">
-              Sign out on this computer.
+              Ends the current sign-in on this computer.
             </p>
           </div>
           <Button
@@ -718,6 +513,7 @@ function ProfilePane(): JSX.Element {
             variant="outline"
             onClick={() => void onLogout()}
             disabled={logout.isPending || logoutAndDisable.isPending}
+            className="border-[length:var(--control-border-width)] border-border-focus transition-[color,background-color,border-color,transform] hover:-translate-y-px hover:bg-bg-floating"
           >
             {logout.isPending ? (
               <Loader2 className="size-3.5 animate-spin" />
@@ -727,18 +523,18 @@ function ProfilePane(): JSX.Element {
             Log out
           </Button>
         </div>
-        {/* D3.e secondary action — destructive. Layered below the
-            default Log out so a hurried click hits the safe path; the
-            destructive path requires confirm. Disabled when no
-            current local host exists (unclaimed / already revoked)
-            so the user isn't presented an action that can't succeed. */}
+        {/* Destructive secondary — layered below the safe Log out so a
+            hurried click hits the safe path; this one requires confirm.
+            Disabled when no current local host exists (unclaimed /
+            already revoked) so the user isn't presented an action that
+            can't succeed. */}
         <div className="flex items-center justify-between gap-3 pt-1">
           <div className="min-w-0">
             <p className="text-[11px] font-medium text-text-secondary">
               Remove this computer
             </p>
             <p className="text-[11px] text-text-muted">
-              Stop this computer from running agents, then log out.
+              Revokes this computer's access and stops its agents.
             </p>
           </div>
           <Button
@@ -755,6 +551,7 @@ function ProfilePane(): JSX.Element {
                 ? 'This computer is not connected.'
                 : undefined
             }
+            className="border-[length:var(--control-border-width)] border-transparent transition-[color,background-color,border-color,transform] hover:-translate-y-px hover:border-border-focus hover:bg-bg-floating"
           >
             {logoutAndDisable.isPending ? (
               <Loader2 className="size-3.5 animate-spin" />
@@ -767,10 +564,10 @@ function ProfilePane(): JSX.Element {
         {confirmDisableHost && (
           <div className="rounded-md border border-error bg-bg-row-hover px-3 py-2 text-[11px] text-text-secondary">
             <p>
-              This computer will stop running agents until you sign in
-              again and reconnect it.{' '}
+              Agents on this computer stop, and it loses server access
+              until you sign in and reconnect it.{' '}
               <span className="text-text-primary">
-                Your workspaces and messages are kept.
+                Workspaces and messages are preserved.
               </span>
             </p>
             <div className="mt-2 flex gap-2">
@@ -800,6 +597,9 @@ function ProfilePane(): JSX.Element {
             </div>
           </div>
         )}
+        {error ? (
+          <p className="text-xs text-status-error" role="alert">{error}</p>
+        ) : null}
       </div>
     </section>
   );

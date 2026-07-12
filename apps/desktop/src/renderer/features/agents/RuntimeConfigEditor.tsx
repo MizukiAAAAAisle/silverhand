@@ -22,7 +22,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { Label } from '@/components/ui/input';
 import { cn } from '@/lib/cn';
 import { describeApiError } from '@/lib/api-error-message';
-import { CancelButton, SaveButton } from './EditToolbarButtons';
+import { CancelButton, SaveButton } from '@/features/common/EditToolbarButtons';
 import { SwitchRuntimeConfirmDialog } from './SwitchRuntimeConfirmDialog';
 import { useSwitchAgentRuntime, useUpdateAgent } from './hooks';
 import {

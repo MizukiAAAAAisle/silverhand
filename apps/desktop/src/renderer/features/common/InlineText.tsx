@@ -13,15 +13,14 @@ import { CancelButton, SaveButton } from './EditToolbarButtons';
  * Inline edit field for a required non-null string, controlled by the
  * parent (the section owns the edit trigger and passes `editing` /
  * `onExitEdit`). Display body shows only the value — the pencil affordance
- * lives in the section header (`ProfileSection titleAdornment`) so all
- * three profile sections use one uniform enter-edit pattern
- * (shiki 2026-07-12 dogfood).
+ * lives in the section header (`ProfileSection titleAdornment`) so every
+ * profile section uses one uniform enter-edit pattern.
  *
  * Commit is explicit — blur does not save. Enter or the Save button
  * persists; Escape or Cancel discards; focus loss preserves the draft.
- * This differs from `features/hosts/InlineRename`, which commits on blur;
- * #task:1472 gave the agent profile explicit-Save semantics so a stray
- * click on the page can't silently PATCH.
+ * This differs from `features/hosts/InlineRename`, which commits on
+ * blur; profile edits use explicit-Save semantics so a stray click on
+ * the page can't silently PATCH.
  */
 
 export interface InlineTextProps {

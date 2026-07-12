@@ -3,8 +3,8 @@ import type { JSX } from 'react';
 import { cn } from '@/lib/cn';
 
 /**
- * Shared pencil affordance for section-level "enter edit" triggers on the
- * agent profile card. Rendered by `ProfileSection titleAdornment` — sits
+ * Shared pencil affordance for section-level "enter edit" triggers on
+ * profile cards. Rendered by `ProfileSection titleAdornment` — sits
  * inline immediately after the section title. Icon-only, low-chrome
  * (muted → regular text color on hover, no background pill) so the trigger
  * subordinates to the title.

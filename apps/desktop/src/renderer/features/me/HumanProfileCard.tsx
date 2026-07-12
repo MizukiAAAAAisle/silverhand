@@ -1,20 +1,16 @@
-import {
-  forwardRef,
-  useEffect,
-  useState,
-  type InputHTMLAttributes,
-} from 'react';
+import { useEffect, useState } from 'react';
 import dayjs from 'dayjs';
 import { Lock, User as UserIcon } from 'lucide-react';
 import { validateAvatarFile, type UserDto } from '@silverhand/shared';
 import { ApiError } from '@/lib/api';
 import { AvatarPickerButton } from '@/components/AvatarPickerButton';
 import { AVATAR_PX } from '@/components/avatar-scale';
-import { cn } from '@/lib/cn';
 import {
   MetadataList,
   ProfileSection,
 } from '@/features/common/ProfileSummarySections';
+import { EditPencilButton } from '@/features/common/EditPencilButton';
+import { InlineText } from '@/features/common/InlineText';
 import {
   useClearAvatar,
   isBackendUnreachable,
@@ -33,36 +29,38 @@ interface HumanProfileCardProps {
 }
 
 /**
- * Human profile card. Section structure mirrors `AgentProfileCard` —
- * Identity + Metadata — but drops the Capabilities section because
- * humans have no runtime/model surface. Identity hosts the avatar
- * picker and the editable display-name input; Metadata is the tight
- * `<dl>` of created/updated/id.
+ * Human profile card. Section shape mirrors `AgentProfileCard`:
+ * Identity holds the editable display-name (Identity-header pencil) +
+ * avatar picker + locked handle; Metadata is the tight `<dl>` of
+ * created/updated/id. Every edit is explicit (Enter or Save; blur
+ * preserves the draft) so a stray click on the page can't silently
+ * PATCH — same contract as the agent profile card.
  *
- * Backend contract reused as-is from the registration / Settings →
- * Profile flow:
- *   - `PATCH /api/me` only accepts `display_name`. Names are permanent.
- *   - `POST/DELETE /api/me/avatar` for avatar upload / clear.
- *   - All three are keyed off `requireViewerUserId(c)`, so a non-self
- *     edit attempt 403s server-side. The renderer-side gate
+ * Editing display name and avatar for the viewer's own profile lives
+ * only on this card; the Settings pane is Account-only (session
+ * operations). Keeping one editing surface avoids two long-lived
+ * ownership sites for the same `/api/me` capabilities.
+ *
+ * Backend contract:
+ *   - `PATCH /api/me` accepts `display_name` only (names are permanent).
+ *   - `POST/DELETE /api/me/avatar` upload / clear.
+ *   - All three key off `requireViewerUserId(c)`; a non-self edit
+ *     attempt 403s server-side. The renderer-side gate
  *     (`canEditUserProfile`) is a UI-affordance hide, not the security
  *     boundary.
  */
 export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
   const { data: viewer } = useViewerUser();
-  // D4.a Commit 5d-fixup (Cindy P1-2): map BackendUnreachable arm
-  // to `undefined` so the permissions helper (typed as
-  // `MeResponse | undefined`) sees a known shape.
   const viewerForPermissions =
     viewer && isBackendUnreachable(viewer) ? undefined : viewer;
   const canEdit = canEditUserProfile(viewerForPermissions, user);
   const update = useUpdateProfile();
   const upload = useUploadAvatar();
   const clear = useClearAvatar();
-  // Multi-human (Alice audit 2026-06-03 #task:857 P0.8): pick the
-  // resolver by viewer match so visiting another human's profile
-  // renders THEIR avatar, not the viewer's. Self continues to use the
-  // viewer-cached path (works even before /api/users hydrates).
+  // Multi-human: pick the avatar resolver by viewer match so visiting
+  // another human's profile renders THEIR avatar, not the viewer's. Self
+  // continues to use the viewer-cached path (works even before /api/users
+  // hydrates).
   const isSelf =
     viewerForPermissions
     && !('registration_required' in viewerForPermissions)
@@ -71,33 +69,14 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
   const otherAvatar = useUserAvatarObjectUrl({ userId: isSelf ? null : user.id });
   const avatarObjectUrl = isSelf ? viewerAvatar : otherAvatar;
 
-  const [displayName, setDisplayName] = useState(user.display_name);
+  const [nameEditing, setNameEditing] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
-
-  // Reseed when switching users (v2) or on remote profile updates.
-  useEffect(() => {
-    setDisplayName(user.display_name);
-  }, [user.display_name, user.id]);
 
   // Clear avatar error when switching users — stale "Avatar must be
   // PNG…" text shouldn't follow from one profile to the next.
   useEffect(() => {
     setAvatarError(null);
   }, [user.id]);
-
-  const onCommitDisplayName = () => {
-    const next = displayName.trim();
-    if (!next) {
-      // Empty display_name means "back to default = name". The PATCH
-      // service rejects an empty string, so we just snap the local
-      // draft back to the canonical value rather than firing a doomed
-      // request.
-      setDisplayName(user.display_name);
-      return;
-    }
-    if (next === user.display_name) return;
-    update.mutate({ display_name: next });
-  };
 
   const onPickAvatar = async (file: File): Promise<void> => {
     setAvatarError(null);
@@ -129,21 +108,23 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
     <div className="mx-auto flex max-w-3xl flex-col gap-6">
       {!canEdit ? <ReadOnlyNotice /> : null}
 
-      <ProfileSection title="Identity">
-        {/* `items-start` (was `items-center`) — the avatar column
-            (avatar + Remove + optional error) is taller than the
-            name column (name input + meta line), so center-aligning
-            pushed the name visibly below the avatar's top edge.
-            shiki `1nxzdHvkmh_X8fN1` (#task:824): '顶部没有和头像
-            对齐?'. Top-aligning makes the name and avatar share the
-            top inset; the Remove button just hangs below the avatar
-            on its own. */}
+      <ProfileSection
+        title="Identity"
+        titleAdornment={
+          canEdit ? (
+            <EditPencilButton
+              onClick={() => setNameEditing(true)}
+              ariaLabel="Edit display name"
+              hidden={nameEditing}
+            />
+          ) : null
+        }
+      >
+        {/* `items-start` keeps the avatar column (avatar + Remove +
+            optional error) top-aligned with the name column so the name
+            input never dips below the avatar's top edge. */}
         <div className="flex items-start gap-4">
           {canEdit ? (
-            // Avatar column: picker on top, Remove link centered below
-            // (vertical-stack mirror of EditableAgentAvatar — same copy,
-            // same gap, same centering). Keeping the two surfaces visually
-            // identical means a viewer who knows one knows the other.
             <div className="flex flex-col items-center gap-1.5">
               <AvatarPickerButton
                 size={AVATAR_PX['3xl']}
@@ -202,19 +183,22 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
           )}
           <div className="min-w-0 flex-1">
             {canEdit ? (
-              <GhostInput
-                value={displayName}
-                onChange={e => setDisplayName(e.target.value)}
-                onBlur={onCommitDisplayName}
-                placeholder={user.name}
+              <InlineText
+                value={user.display_name}
+                ariaLabel="Display name"
+                editing={nameEditing}
+                onExitEdit={() => setNameEditing(false)}
                 className="font-serif text-lg font-semibold leading-tight"
+                onCommit={async next => {
+                  await update.mutateAsync({ display_name: next });
+                }}
               />
             ) : (
-              <div className="px-2 font-serif text-lg font-semibold leading-tight text-text-primary">
+              <div className="font-serif text-lg font-semibold leading-tight text-text-primary">
                 {user.display_name || user.name}
               </div>
             )}
-            <div className="mt-1 flex items-center gap-1.5 px-2 text-xs text-text-muted">
+            <div className="mt-1 flex items-center gap-1.5 text-xs text-text-muted">
               <span className="font-mono">@{user.name}</span>
               <Lock className="size-3" />
               <span>name is permanent</span>
@@ -251,8 +235,7 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
 /**
  * Single-source-of-truth read-only message. Mirrors the agent
  * equivalent — no `@<id>` substitution because there is no users-by-id
- * lookup yet; once we have one we can swap in the actual creator name.
- * Until then the line is intentionally generic.
+ * lookup yet.
  */
 function ReadOnlyNotice(): JSX.Element {
   return (
@@ -268,10 +251,8 @@ function ReadOnlyNotice(): JSX.Element {
 
 /**
  * Map a failed `/api/me/avatar` mutation to a one-line user-facing
- * message. Mirrors `formatAvatarMutationError` in
- * `EditableAgentAvatar` but localized for the user surface — 403 is
- * effectively impossible here in v1 (the route is keyed off the
- * viewer's principal), but we still cover it for v2.
+ * message. Mirrors `formatAvatarMutationError` in `EditableAgentAvatar`
+ * but localized for the user surface.
  */
 export function formatAvatarMutationError(err: unknown): string {
   if (err instanceof ApiError) {
@@ -311,31 +292,3 @@ function parseErrorCode(body: string): string | null {
     return null;
   }
 }
-
-const GhostInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
-  ({ className, ...props }, ref) => (
-    <input
-      ref={ref}
-      data-panel-control="ghost-input"
-      // No `border border-transparent` and no `py-*` in the idle
-      // state — the previous defaults (`border-transparent` + `py-1`)
-      // pushed the visible text 5px below the input's box top, which
-      // showed up as a visible y-shift between the avatar (image fills
-      // its 56×56 box from corner to corner, visible top = column top)
-      // and the name input (visible text top = column top + 5px).
-      // shiki `jlFehpdzColU0Cvs` (#task:825) saw this whenever the
-      // image-bearing avatar was present (UserIcon-fallback masked the
-      // gap by happening to center 14px below column top). Hover /
-      // focus affordance survives via bg + ring; the border-on-hover
-      // was a nice-to-have, not load-bearing.
-      className={cn(
-        'w-full bg-transparent px-2 text-sm text-text-primary placeholder:text-text-muted',
-        'transition-colors hover:bg-bg-base/40',
-        'focus:bg-bg-floating focus:outline-none focus:ring-2 focus:ring-border-focus',
-        className,
-      )}
-      {...props}
-    />
-  ),
-);
-GhostInput.displayName = 'GhostInput';
