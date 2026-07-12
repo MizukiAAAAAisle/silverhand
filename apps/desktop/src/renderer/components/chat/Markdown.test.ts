@@ -1641,6 +1641,57 @@ describe('Markdown bare task refs (#task:1430)', () => {
     expect(html).not.toContain('data-task-ref="3"');
     expect(html).toContain('issue#3');
   });
+
+  it('leaves bare `#1` as plain text (list-marker habit `#1, #2, #3`)', () => {
+    // Seeded so a resolvable path exists — the numeric-range guard must
+    // still keep 1–10 out of the bare tokenizer so numbered lists don't
+    // get chipped.
+    const html = renderBare(
+      '#1 first, #2 next',
+      'w-eng',
+      [bareTask({ task_number: 1 })],
+      () => {},
+    );
+    expect(html).not.toContain('data-task-ref="1"');
+    expect(html).not.toContain('silverhand-task-bare:1');
+    expect(html).toContain('#1');
+  });
+
+  it('leaves bare `#10` as plain text (upper boundary of the excluded range)', () => {
+    const html = renderBare(
+      'See #10 in the list.',
+      'w-eng',
+      [bareTask({ task_number: 10 })],
+      () => {},
+    );
+    expect(html).not.toContain('data-task-ref="10"');
+    expect(html).not.toContain('silverhand-task-bare:10');
+    expect(html).toContain('#10');
+  });
+
+  it('chips bare `#11` when resolved (lower boundary of the matched range)', () => {
+    const html = renderBare(
+      'Refs #11 today.',
+      'w-eng',
+      [bareTask({ task_number: 11 })],
+      () => {},
+    );
+    expect(html).toContain('data-task-ref="11"');
+    expect(html).toContain('data-task-ref-state="resolved"');
+  });
+
+  it('preserves explicit `#task:1`–`#task:10` (only the bare form is filtered)', () => {
+    const html = renderBare(
+      'Working on #task:1 and #task:10 now.',
+      'w-eng',
+      [],
+      () => {},
+    );
+    expect(html).toContain('data-task-ref="1"');
+    expect(html).toContain('#task:1');
+    expect(html).toContain('data-task-ref="10"');
+    expect(html).toContain('#task:10');
+  });
 });
 
 describe('Markdown mermaid fences (#task:1322)', () => {

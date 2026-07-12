@@ -591,20 +591,23 @@ function walk(node: MdastNode): void {
 //                    Cindy review of `80f544e` flagged on the URL
 //                    parser.
 //  - `#<n>`        — BARE task number (no `#task:` sigil). Agents write
-//                    `#123` to mean task 123. Same `[1-9]\d*`(?!\w)
-//                    shape as `#task:<n>`, routed through the distinct
+//                    `#123` to mean task 123. Routed through the distinct
 //                    BARE_TASK_PREFIX so an unresolved `#123` demotes to
 //                    its literal text instead of showing a chip (see the
 //                    scheme comment above). This branch is LAST so the
 //                    explicit `#conv:` / `#task:` / `#<channel>` forms
-//                    always win at a shared `#`.
+//                    always win at a shared `#`. The numeric range
+//                    starts at 11 — `#1` … `#10` collide with the
+//                    Markdown editorial habit of numbering steps
+//                    `#1, #2, #3`, so those stay plain text. Explicit
+//                    `#task:1` … `#task:10` still resolve normally.
 // The channel branch explicitly excludes `#conv:` and `#task:`
 // prefixes via negative lookahead so a malformed `#conv:bad` /
 // `#task:abc` doesn't fall back to matching `#conv` / `#task` as a
 // stray channel reference. A digit-first `#<n>` never collides with the
 // alpha-first channel branch.
 const REF_RE =
-  /(?:#conv:([A-Za-z0-9_-]{16})(?![A-Za-z0-9_-])|#task:([1-9]\d*)(?!\w)|@([a-zA-Z][a-zA-Z0-9_-]*)|#(?!conv:|task:)([a-zA-Z][a-zA-Z0-9_-]*)|#([1-9]\d*)(?!\w))/g;
+  /(?:#conv:([A-Za-z0-9_-]{16})(?![A-Za-z0-9_-])|#task:([1-9]\d*)(?!\w)|@([a-zA-Z][a-zA-Z0-9_-]*)|#(?!conv:|task:)([a-zA-Z][a-zA-Z0-9_-]*)|#((?:1[1-9]|[2-9]\d|[1-9]\d{2,}))(?!\w))/g;
 
 function pushSplit(text: string, out: MdastNode[]): void {
   let last = 0;
