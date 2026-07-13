@@ -582,6 +582,25 @@ declare global {
       onShutdownProgress(handler: (step: string) => void): () => void;
       onNavigateSettings(handler: () => void): () => void;
       /**
+       * ⌘W contextual close. Main is the single interception owner
+       * (a menu accelerator fires before any renderer keydown): on each ⌘W it
+       * sends a request with a fresh `reqId` bound to the window that had focus,
+       * and the renderer answers via `respondContextualClose` with the same
+       * `reqId`. Main hides the app (macOS Hide) ONLY on `background-app`,
+       * fail-closed otherwise. Wire channels (`shortcut:contextual-close`
+       * request / `shortcut:contextual-close-result` outcome) and the positional
+       * arg shape are the main↔renderer contract — keep in sync with
+       * `apps/desktop/src/main/index.ts`.
+       */
+      onContextualClose(handler: (reqId: string) => void): () => void;
+      /** Renderer's authoritative answer to one `onContextualClose` request.
+       *  `outcome` mirrors `ContextualCloseOutcome` in the renderer's
+       *  `features/app-shell/keyboard-shortcuts.ts` (the SSOT). */
+      respondContextualClose(
+        reqId: string,
+        outcome: 'closed-panel' | 'background-app',
+      ): void;
+      /**
        * D4.a Commit 2 — fired by the App menu's "Connect to backend…"
        * item so the renderer can mount the Setup Wizard modal/route.
        * Main focuses the window before emitting; the handler only

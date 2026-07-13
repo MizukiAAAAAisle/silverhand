@@ -44,14 +44,18 @@ interface NavItem {
   id: AppSection;
   label: string;
   icon: ReactNode;
+  /** ⌘<n> global shortcut for this section. Surfaced in the
+   *  tooltip so the binding is discoverable; the handler lives in the
+   *  renderer's keyboard-shortcuts hook, not here. */
+  shortcut: number;
 }
 
 const ITEMS: NavItem[] = [
-  { id: 'chat', label: 'Chat', icon: <MessagesSquare className="size-4" /> },
-  { id: 'activity', label: 'Activity', icon: <Activity className="size-4" /> },
-  { id: 'tasks', label: 'Tasks', icon: <CheckSquare className="size-4" /> },
-  { id: 'members', label: 'Members', icon: <Users className="size-4" /> },
-  { id: 'computers', label: 'Computers', icon: <Monitor className="size-4" /> },
+  { id: 'chat', label: 'Chat', icon: <MessagesSquare className="size-4" />, shortcut: 1 },
+  { id: 'activity', label: 'Activity', icon: <Activity className="size-4" />, shortcut: 2 },
+  { id: 'tasks', label: 'Tasks', icon: <CheckSquare className="size-4" />, shortcut: 3 },
+  { id: 'members', label: 'Members', icon: <Users className="size-4" />, shortcut: 4 },
+  { id: 'computers', label: 'Computers', icon: <Monitor className="size-4" />, shortcut: 5 },
 ];
 
 /**
@@ -98,7 +102,7 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
           <button
             key={item.id}
             type="button"
-            title={item.label}
+            title={`${item.label}  ⌘${item.shortcut}`}
             aria-label={item.label}
             aria-current={selected ? 'page' : undefined}
             onClick={() => onChange(item.id)}

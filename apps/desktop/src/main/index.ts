@@ -129,6 +129,10 @@ import { fetchServerInfoWithRetry } from './fetch-server-info.js';
 import { registerEventWsDiagnosticIpcHandler } from './ipc/event-ws-diagnostics.js';
 import { registerSelectionExportIpcHandlers } from './ipc/selection-export.js';
 import {
+  ContextualCloseCoordinator,
+  type CloseTarget,
+} from './contextual-close.js';
+import {
   classifyOutboundProtocolCompatibility,
   type OutboundProtocolCompatibility,
 } from './outbound-protocol-compatibility.js';
@@ -2508,9 +2512,40 @@ function buildAppMenu(): Menu {
       }
     : { role: 'appMenu' };
 
+  // ⌘W is a *contextual* Close (mac only), not an unconditional "Close
+  // Window", so the item is named neutrally "Close": it closes the topmost
+  // in-app surface (thread / side / attachment panel) when one is open and,
+  // when none is, sends the app to the background (macOS Hide) rather than
+  // destroying the window. A mouse click runs the SAME contextual flow as the
+  // ⌘W accelerator — a command and its shortcut must not diverge. Main only
+  // intercepts here; the renderer owns the ladder and replies with the outcome
+  // (`handleContextualClose`).
+  //
+  // This custom File menu is gated on `isMac` and only overrides the mac ⌘W
+  // owner (whose default was `role: 'fileMenu'`'s `role: 'close'`). Off mac we
+  // keep Electron's standard `role: 'fileMenu'` untouched — the contextual-close
+  // feature is scoped to macOS ⌘W, and we don't want to strip the platform's
+  // File/Quit items or claim Ctrl+W. Mirrors the `appMenuItem` split above.
+  const fileMenuItem: MenuItemConstructorOptions = isMac
+    ? {
+        label: 'File',
+        submenu: [
+          {
+            label: 'Close',
+            accelerator: 'CmdOrCtrl+W',
+            click: (_item, browserWindow) => {
+              if (browserWindow instanceof BrowserWindow) {
+                handleContextualClose(browserWindow);
+              }
+            },
+          },
+        ],
+      }
+    : { role: 'fileMenu' };
+
   const template: MenuItemConstructorOptions[] = [
     ...(isMac ? [appMenuItem] : []),
-    { role: 'fileMenu' },
+    fileMenuItem,
     { role: 'editMenu' },
     {
       label: 'View',
@@ -2587,6 +2622,69 @@ function openSetupWizard(): void {
     send();
   }
 }
+
+// ─── ⌘W contextual close (main = single interception owner) ──────────────
+// The window is captured at press time and never re-derived via
+// `getFocusedWindow()` — focus can move during the async round-trip and we
+// must act on the window the user actually invoked. The coordinator's
+// registry / correlation / timeout / outcome-gating contract lives in the pure
+// `./contextual-close.ts` module (unit-tested there); here we only inject the
+// Electron seams: `webContents.send` for the request, `app.hide()` for the
+// terminal "send to background" action, and `setTimeout` for the fail-closed
+// timeout.
+
+/** How long main waits for the renderer's close outcome before failing
+ *  closed. Generous for a normal round-trip, short enough that a wedged
+ *  renderer never leaves ⌘W feeling dead for long. */
+const CLOSE_OUTCOME_TIMEOUT_MS = 250;
+
+const contextualClose = new ContextualCloseCoordinator(
+  {
+    set: (fn, ms) => {
+      const timer = setTimeout(fn, ms);
+      // Never let a pending timer keep the process alive during shutdown.
+      timer.unref?.();
+      return timer;
+    },
+    clear: (token) => clearTimeout(token as NodeJS.Timeout),
+  },
+  CLOSE_OUTCOME_TIMEOUT_MS,
+  // Terminal action when ⌘W found nothing in-app to close: send the whole app
+  // to the background (macOS Hide). The window is preserved — never destroyed —
+  // so the session (drafts, scroll) survives and a dock click / ⌘Tab returns
+  // instantly. macOS-only, matching the app's target platform.
+  () => app.hide(),
+);
+
+/** Wrap a BrowserWindow as the coordinator's window seam. `webContentsId`
+ *  doubles as the sender credential the reply is checked against. The liveness
+ *  check covers the webContents itself, not just the BrowserWindow — a
+ *  destroyed/crashed webContents (with the window shell still nominally alive)
+ *  is what makes `send` throw. The terminal action is app-level (Hide), so it
+ *  is injected into the coordinator, not carried here per-window. */
+function closeTargetFor(window: BrowserWindow): CloseTarget {
+  return {
+    webContentsId: window.webContents.id,
+    isDestroyed: () =>
+      window.isDestroyed() || window.webContents.isDestroyed(),
+    sendRequest: (reqId) =>
+      window.webContents.send('shortcut:contextual-close', reqId),
+  };
+}
+
+/** Menu "Close" / ⌘W handler. Binds the request to the window that
+ *  triggered it and asks its renderer to resolve the press. */
+function handleContextualClose(triggeringWindow: BrowserWindow): void {
+  contextualClose.begin(closeTargetFor(triggeringWindow));
+}
+
+ipcMain.on(
+  'shortcut:contextual-close-result',
+  (event, reqId: unknown, outcome: unknown) => {
+    if (typeof reqId !== 'string') return;
+    contextualClose.resolve(event.sender.id, reqId, outcome);
+  },
+);
 
 registerEventWsDiagnosticIpcHandler({ getLogger: () => logger });
 

@@ -57,6 +57,10 @@ import {
   useLayoutKeyboardShortcuts,
   useSettingsMenuNav,
 } from '@/features/app-shell/effects';
+import {
+  useContextualCloseResponder,
+  useNavSectionShortcuts,
+} from '@/features/app-shell/keyboard-shortcuts';
 import { useSecondaryPaneModel } from '@/features/app-shell/secondary-pane-model';
 import { useSelectionPersistenceEffects } from '@/features/app-shell/selection-persistence';
 import {
@@ -297,6 +301,15 @@ function RegisteredAppShell(): JSX.Element {
   // App menu's "Settings…" item (Cmd+,) — main process focuses the window and
   // pushes this; renderer just navigates.
   useSettingsMenuNav(nav.toSettings);
+
+  // ⌘1–5 → nav-rail section. Renderer-owned, global (⌘+digit is
+  // never a typing key), no native-menu accelerator claims it.
+  useNavSectionShortcuts(nav);
+
+  // ⌘W contextual close. Main owns the accelerator and asks the
+  // renderer, per keypress, which panel to peel; this answers with the
+  // authoritative outcome against the latest route.
+  useContextualCloseResponder(route, nav);
 
   // Per-workspace "last viewed channel" memory lives as a module
   // singleton above (persisted via localStorage). The recording effect

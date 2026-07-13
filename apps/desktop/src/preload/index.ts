@@ -495,6 +495,25 @@ const api = {
     ipcRenderer.on('navigate:settings', listener);
     return () => ipcRenderer.off('navigate:settings', listener);
   },
+  /** ⌘W contextual close. Main is the single interception owner
+   *  (a menu accelerator fires before any renderer keydown), so it sends a
+   *  per-keypress request; the renderer resolves its close ladder and answers
+   *  via `respondContextualClose` with the SAME `reqId`. Positional args match
+   *  the house style (`onNotificationClicked` etc.) and the main handler in
+   *  `main/index.ts`. Named "contextual close", not "close window", because the
+   *  command does NOT always background the app (`closed-panel` peels a panel
+   *  instead). */
+  onContextualClose: (handler: (reqId: string) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, reqId: string) => handler(reqId);
+    ipcRenderer.on('shortcut:contextual-close', listener);
+    return () => ipcRenderer.off('shortcut:contextual-close', listener);
+  },
+  respondContextualClose: (
+    reqId: string,
+    outcome: 'closed-panel' | 'background-app',
+  ): void => {
+    ipcRenderer.send('shortcut:contextual-close-result', reqId, outcome);
+  },
   /** D4.a Commit 2 — fired by the App menu's "Connect to backend…"
    *  item. Renderer mounts the Setup Wizard modal in response. */
   onNavigateSetupWizard: (handler: () => void): (() => void) => {
