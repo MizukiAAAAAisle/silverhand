@@ -333,18 +333,23 @@ describe('desktop protocol purity catalogue', () => {
     // `local_host_ws_attached_at` is the in-process WS attach timestamp;
     // it is structurally null when the backend runs remotely. Any renderer
     // surface that derives connection/online state from it MUST also
-    // consult host-status `availability` — directly, or via the
+    // consult host-status `availability` — directly through the
     // connection-state helpers (`isLocalHostAttached` /
-    // `describeConnectionState`) / `useHostStatusQuery` that fold it in.
-    // The #task:1132 bug was App.tsx mapping `attached_at === null`
-    // straight to offline with no availability fallback. A new consumer
-    // that does the same trips this guard; the fix is to route the
-    // judgment through the helper, not to add the file here.
+    // `describeConnectionState`) / `useHostStatusQuery` that fold it in,
+    // OR by routing the judgment through a canonical Desktop→Server
+    // projection function (`desktopServerConnectionStatus(` /
+    // `isDesktopServerReadyAfterSave(`) whose mode-aware body already
+    // consults the renderer WS status for the remote arm. The
+    // #task:1132 bug was App.tsx mapping `attached_at === null` straight
+    // to offline with no availability fallback. Comments/docstrings that
+    // merely mention the attach field are stripped first — only actual
+    // code counts.
     const fallbackTokens =
-      /\bavailability\b|\bisLocalHostAttached\b|\bdescribeConnectionState\b|\buseHostStatusQuery\b/;
+      /\bavailability\b|\bisLocalHostAttached\b|\bdescribeConnectionState\b|\buseHostStatusQuery\b|\bdesktopServerConnectionStatus\(|\bisDesktopServerReadyAfterSave\(/;
     const offenders = sourceFiles(rendererRoot, new Set(['.ts', '.tsx']))
-      .filter(source => source.content.includes('local_host_ws_attached_at'))
-      .filter(source => !fallbackTokens.test(source.content))
+      .map(source => ({ ...source, code: stripComments(source.content) }))
+      .filter(source => source.code.includes('local_host_ws_attached_at'))
+      .filter(source => !fallbackTokens.test(source.code))
       .map(source => source.path);
 
     expect(offenders).toEqual([]);
