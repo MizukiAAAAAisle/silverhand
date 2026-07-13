@@ -617,12 +617,14 @@
   border-color: transparent;
 }
 
-/* thread-row hover: same borderless-state language as the list rows — drop
-   the ink border deepen (the component's `hover:border-[--border-control-hover]`
-   resolves to the near-black accent in warm), letting the bg-hover veil + 1px
-   lift the component applies carry it. (slack resolves --border-control-hover
-   to --border already, so its thread-row hover is borderless out of the box.) */
-[data-theme='warm-script'] [data-thread-row]:hover {
+/* thread-row + attachment-row hover: the two channel side-panel list rows share
+   one hover language — same borderless-state treatment as the list rows. Drop
+   the component's `hover:border-[--border-control-hover]` (it resolves to the
+   near-black accent in warm), letting the `bg-hover` veil + 1px lift the
+   components apply carry the state. (slack resolves --border-control-hover to
+   --border already, so both rows are borderless out of the box there.) */
+[data-theme='warm-script'] [data-thread-row]:hover,
+[data-theme='warm-script'] [data-attachment-row]:hover {
   border-color: var(--border);
 }
 

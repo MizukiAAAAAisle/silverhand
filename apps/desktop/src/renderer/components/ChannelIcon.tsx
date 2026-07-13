@@ -4,9 +4,12 @@ import { cn } from '@/lib/cn';
 /**
  * Named density tiers for the channel `#` identity glyph. Each tier is a
  * SEMANTIC surface density — pick by the surface, not by eye:
- *  - `sm` (12px): dense result lists (SearchPanel). Intentionally tighter.
- *  - `md` (14px): the default — sidebar rows, filter controls, activity /
- *    saved rows, dropdown option rows.
+ *  - `sm` (12px): dense result / message-header rows — SearchPanel AND
+ *    SavedListView message headers. In the sticker variant a theme's chip
+ *    chrome (forza6's `content-box` border + padding) lands the physical box at
+ *    16px, aligning with the row's `WorkspaceIcon` / sender avatar.
+ *  - `md` (14px): the default — sidebar rows, filter controls, activity rows,
+ *    dropdown option rows.
  *  - `lg` (24px): spacious list panels (ArchivedChannelsPanel).
  *
  * `sm` / `lg` are intentional per shiki (#task:1438) — do NOT collapse them

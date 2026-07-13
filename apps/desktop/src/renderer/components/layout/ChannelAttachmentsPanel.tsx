@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import dayjs from 'dayjs';
 import { GroupedVirtuoso } from 'react-virtuoso';
 import { toast } from 'sonner';
 import * as Select from '@radix-ui/react-select';
 import {
   ChevronDown,
+  Clock,
   Download,
   ExternalLink,
   FileText,
@@ -23,7 +25,6 @@ import type {
 } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
-import { useRelativeTime } from '@/components/chat/useRelativeTime';
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
@@ -183,9 +184,9 @@ export function ChannelAttachmentsPanel({
           title="Close"
           onClick={onClose}
           data-sticker-close
-          className="flex size-8 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+          className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
         >
-          <X className="size-4" />
+          <X className="size-3.5" />
         </button>
       </header>
 
@@ -568,7 +569,7 @@ function AttachmentRow({
 }: AttachmentRowProps): JSX.Element {
   const { attachment, source } = item;
   const isImage = attachment.content_type.startsWith('image/');
-  const appeared = useRelativeTime(source.appeared_at);
+  const appeared = dayjs(source.appeared_at);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const senderLabel = identity.label ?? 'System';
 
@@ -590,7 +591,7 @@ function AttachmentRow({
     <div>
       <div
         data-attachment-row
-        className="flex w-full items-stretch overflow-hidden rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating transition hover:-translate-y-px hover:border-[color:var(--border-control-hover)]"
+        className="flex w-full items-center gap-1.5 overflow-hidden rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-4 py-3 transition hover:-translate-y-px hover:border-[color:var(--border-control-hover)] hover:bg-bg-hover"
       >
         {/* Sibling 1 — main preview / open. Hover = ink darkening on the
             filename + row lift (structural signal); no bg reversal. */}
@@ -600,7 +601,7 @@ function AttachmentRow({
             if (isImage) void openImagePreview();
             else void openAttachmentExternally(attachment);
           }}
-          className="group flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+          className="group flex min-w-0 flex-1 items-center gap-2.5 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
           title={`${attachment.filename} (${formatBytes(attachment.size)})`}
         >
           <AttachmentThumb attachment={attachment} isImage={isImage} />
@@ -608,29 +609,31 @@ function AttachmentRow({
             <span className="truncate text-sm text-text-primary group-hover:text-text-primary">
               {attachment.filename}
             </span>
-            <span className="flex items-center gap-1.5 truncate text-xs text-text-muted">
-              <span className="flex shrink-0">
-                <SenderAvatar avatar={avatarProps} size={16} />
+            <span className="flex min-w-0 items-center gap-2 text-xs text-text-muted">
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="flex shrink-0">
+                  <SenderAvatar avatar={avatarProps} size={16} />
+                </span>
+                <span className="truncate">{senderLabel}</span>
               </span>
-              <span className="truncate">{senderLabel}</span>
-              <span aria-hidden>·</span>
+              <span className="shrink-0">{formatBytes(attachment.size)}</span>
               <time
                 dateTime={new Date(source.appeared_at).toISOString()}
-                title={appeared.absolute}
-                className="shrink-0"
+                title={appeared.format('YYYY-MM-DD HH:mm:ss')}
+                className="flex shrink-0 items-center gap-1"
               >
-                {appeared.relative}
+                <Clock className="size-3" />
+                {appeared.format('YYYY-MM-DD HH:mm')}
               </time>
-              <span aria-hidden>·</span>
-              <span className="shrink-0">{formatBytes(attachment.size)}</span>
             </span>
           </span>
         </button>
 
         <button
           type="button"
+          data-attachment-row-action
           onClick={() => void saveAttachmentToDisk(attachment)}
-          className="flex shrink-0 items-center justify-center px-2 text-text-muted hover:text-text-primary focus:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+          className="flex size-7 shrink-0 items-center justify-center text-text-muted hover:text-text-primary focus:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
           title={`Download ${attachment.filename}`}
           aria-label={`Download ${attachment.filename}`}
         >
@@ -639,8 +642,9 @@ function AttachmentRow({
 
         <button
           type="button"
+          data-attachment-row-action
           onClick={onJump}
-          className="flex shrink-0 items-center justify-center px-2 text-text-muted hover:text-text-primary focus:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+          className="flex size-7 shrink-0 items-center justify-center text-text-muted hover:text-text-primary focus:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
           title={`Show ${attachment.filename} in conversation`}
           aria-label={`Show ${attachment.filename} in conversation`}
         >
@@ -785,7 +789,7 @@ function ImageLightboxHost({
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${Math.round(n / 1024 / 1024)} MB`;
+  return `${Math.round(n / 1024 / 1024 / 1024)} GB`;
 }

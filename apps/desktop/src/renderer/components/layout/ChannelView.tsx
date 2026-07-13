@@ -586,7 +586,7 @@ function ActiveChannelView({
           </span>
         ) : null}
 
-        <div data-channel-actions className="ml-auto flex shrink-0 items-center gap-1">
+        <div data-channel-actions className="ml-auto flex shrink-0 items-center gap-1.5">
           {findEnabled ? (
             <button
               type="button"
@@ -601,7 +601,7 @@ function ActiveChannelView({
                   : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
               }
             >
-              <Search className="size-4" />
+              <Search className="size-3.5" />
             </button>
           ) : null}
           {onToggleThreadsList ? (
@@ -618,7 +618,7 @@ function ActiveChannelView({
                   : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
               }
             >
-              <ThreadIcon className="size-4" />
+              <ThreadIcon className="size-3.5" />
             </button>
           ) : null}
           {onToggleFilesList ? (
@@ -635,7 +635,7 @@ function ActiveChannelView({
                   : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
               }
             >
-              <Paperclip className="size-4" />
+              <Paperclip className="size-3.5" />
             </button>
           ) : null}
           {canManageAllChannelAgents ? (
@@ -648,7 +648,7 @@ function ActiveChannelView({
                 title={restartTitle}
                 className="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
               >
-                <RefreshCw className="size-4" />
+                <RefreshCw className="size-3.5" />
               </button>
               <button
                 type="button"
@@ -658,7 +658,7 @@ function ActiveChannelView({
                 title={stopTitle}
                 className="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
               >
-                <Power className="size-4" />
+                <Power className="size-3.5" />
               </button>
             </>
           ) : null}
@@ -670,7 +670,7 @@ function ActiveChannelView({
               title="Channel settings"
               className="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
-              <Settings className="size-4" />
+              <Settings className="size-3.5" />
             </button>
           ) : null}
           {onToggleFullscreen ? (
@@ -682,9 +682,9 @@ function ActiveChannelView({
               className="flex size-7 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
               {isFullscreen ? (
-                <Minimize2 className="size-4" />
+                <Minimize2 className="size-3.5" />
               ) : (
-                <Maximize2 className="size-4" />
+                <Maximize2 className="size-3.5" />
               )}
             </button>
           ) : null}
@@ -696,7 +696,7 @@ function ActiveChannelView({
               title={closeLabel}
               className="flex size-7 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
-              <X className="size-4" />
+              <X className="size-3.5" />
             </button>
           ) : null}
         </div>

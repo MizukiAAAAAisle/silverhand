@@ -273,7 +273,7 @@ function SavedItem({
           </span>
           <span>·</span>
           <span className="inline-flex min-w-0 items-center gap-1">
-            <ChannelIcon variant="sticker" density="md" />
+            <ChannelIcon variant="sticker" density="sm" />
             <span className="truncate">{item.conversation_title}</span>
           </span>
           <span>·</span>

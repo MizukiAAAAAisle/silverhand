@@ -695,7 +695,7 @@ export function ThreadPanel({
         </div>
         <div
           data-channel-actions
-          className="ml-auto flex shrink-0 items-center gap-1"
+          className="ml-auto flex shrink-0 items-center gap-1.5"
         >
           {findEnabled ? (
             <button
@@ -705,13 +705,13 @@ export function ThreadPanel({
               aria-pressed={find.open}
               title="Search this thread"
               className={
-                'flex size-8 shrink-0 items-center justify-center rounded-[var(--control-radius)] ' +
+                'flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] ' +
                 (find.open
                   ? 'bg-bg-hover text-text-primary'
                   : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
               }
             >
-              <Search className="size-4" />
+              <Search className="size-3.5" />
             </button>
           ) : null}
           {followers.data ? (
@@ -723,16 +723,16 @@ export function ThreadPanel({
               onClick={toggleFollow}
               disabled={followPending}
               className={
-                'flex size-8 shrink-0 items-center justify-center rounded-[var(--control-radius)] hover:bg-bg-hover disabled:opacity-50 ' +
+                'flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] hover:bg-bg-hover disabled:opacity-50 ' +
                 (viewerFollowing
                   ? 'text-text-primary hover:text-text-primary'
                   : 'text-text-muted hover:text-text-primary')
               }
             >
               {viewerFollowing ? (
-                <BellOff className="size-4" />
+                <BellOff className="size-3.5" />
               ) : (
-                <Bell className="size-4" />
+                <Bell className="size-3.5" />
               )}
             </button>
           ) : null}
@@ -742,9 +742,9 @@ export function ThreadPanel({
               aria-label="View in channel"
               title="View in channel"
               onClick={onViewInChannel}
-              className="flex size-8 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+              className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
-              <ArrowUpRight className="size-4" />
+              <ArrowUpRight className="size-3.5" />
             </button>
           ) : null}
           <button
@@ -753,9 +753,9 @@ export function ThreadPanel({
             title="Close"
             onClick={onClose}
             data-sticker-close
-            className="flex size-8 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+            className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
           >
-            <X className="size-4" />
+            <X className="size-3.5" />
           </button>
         </div>
       </header>
