@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { AgentDto, SearchResultDto, UserDto } from '@silverhand/shared';
 import { Input } from '@/components/ui/input';
+import { CollectionItemCard } from '@/components/layout/collection-item-card';
 import {
   FilterBlock,
   FilterSelectItem as SelectItem,
@@ -619,14 +620,14 @@ function SearchResultRow({
 
   return (
     <li>
-      <button
+      <CollectionItemCard
+        as="button"
         type="button"
         onClick={onClick}
-        data-list-row
-        className="flex w-full min-w-0 items-start gap-3 rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-3 py-3 text-left transition"
+        className="flex w-full min-w-0 items-start gap-3 px-3 py-3 text-left"
       >
         <span
-          data-list-row-icon
+          data-collection-card-icon
           className="flex size-8 shrink-0 items-center justify-center self-center rounded-md border border-border-subtle bg-bg-base text-text-muted"
         >
           {icon}
@@ -660,7 +661,7 @@ function SearchResultRow({
             </span>
           ) : null}
         </span>
-      </button>
+      </CollectionItemCard>
     </li>
   );
 }

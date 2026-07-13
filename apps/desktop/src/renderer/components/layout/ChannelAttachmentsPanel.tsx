@@ -25,6 +25,7 @@ import type {
 } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
+import { CollectionItemCard } from '@/components/layout/collection-item-card';
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
@@ -589,9 +590,8 @@ function AttachmentRow({
 
   return (
     <div>
-      <div
-        data-attachment-row
-        className="flex w-full items-center gap-1.5 overflow-hidden rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-4 py-3 transition hover:-translate-y-px hover:border-[color:var(--border-control-hover)] hover:bg-bg-hover"
+      <CollectionItemCard
+        className="flex w-full items-center gap-1.5 overflow-hidden px-4 py-3"
       >
         {/* Sibling 1 — main preview / open. Hover = ink darkening on the
             filename + row lift (structural signal); no bg reversal. */}
@@ -650,7 +650,7 @@ function AttachmentRow({
         >
           <ExternalLink className="size-3.5" />
         </button>
-      </div>
+      </CollectionItemCard>
 
       {isImage && lightboxOpen ? (
         <ImageLightboxHost

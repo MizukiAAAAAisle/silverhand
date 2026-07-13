@@ -579,9 +579,10 @@
    structure (option A) — only state changes go borderless. forza6 is
    untouched: it stays the bordered poster theme. */
 
-/* list-row hover (Search / Saved / Archived): bg veil + soft paper lift,
-   no border change. Resting 1px hairline stays. */
-[data-theme='warm-script'] [data-list-row]:hover {
+/* collection item card hover (Search / Saved / Archived / Activity / Thread /
+   Attachment — shared `data-collection-card`): bg veil + soft paper lift, no
+   border change. Resting 1px hairline stays. */
+[data-theme='warm-script'] [data-collection-card]:hover {
   background-color: var(--bg-hover);
   box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.12);
   transform: translateY(-1px);
@@ -615,17 +616,6 @@
 [data-theme='warm-script'] nav[aria-label='App sections'] button[aria-current='page'],
 [data-theme='warm-script'] nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border-color: transparent;
-}
-
-/* thread-row + attachment-row hover: the two channel side-panel list rows share
-   one hover language — same borderless-state treatment as the list rows. Drop
-   the component's `hover:border-[--border-control-hover]` (it resolves to the
-   near-black accent in warm), letting the `bg-hover` veil + 1px lift the
-   components apply carry the state. (slack resolves --border-control-hover to
-   --border already, so both rows are borderless out of the box there.) */
-[data-theme='warm-script'] [data-thread-row]:hover,
-[data-theme='warm-script'] [data-attachment-row]:hover {
-  border-color: var(--border);
 }
 
 /* ── channel `#` icon — warm colour accent (no chip) ─────────────────

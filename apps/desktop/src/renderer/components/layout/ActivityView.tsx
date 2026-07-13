@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import type { ActivityItemDto, ActivityPreviewSender, AgentDto } from '@silverhand/shared';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
+import { CollectionItemCard } from '@/components/layout/collection-item-card';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { ThreadIcon } from '@/components/icons/conversation-icons';
 import { AgentAvatar } from '@/components/AgentAvatar';
@@ -32,7 +33,7 @@ import type { MessageJumpTarget } from '@/features/channels/useMessageJumpContro
  * v1 UI scope = GLOBAL: one list spanning every workspace. Each row is a LIST
  * CARD in the Saved-item visual language — NOT an alert feed: no left icon box,
  * no left salience rail, items spaced apart, themed border, forza6 poster hover
- * via the shared `data-list-row` hook. Salience is carried by the two sections
+ * via the shared `data-collection-card` hook. Salience is carried by the two sections
  * (Requires attention / Subscribed), not by a per-row border. Location reads
  * through real identity icons on the where-line (workspace + channel).
  *
@@ -520,10 +521,10 @@ function ActivityRow({
     <li>
       {/* List card in the Saved-item language: themed border + bg-floating
           ground + `--row-radius`; forza6 repaints it as a 0-radius poster with
-          ink-border + drop-shadow + lift hover via the shared `data-list-row`
+          ink-border + drop-shadow + lift hover via the shared `data-collection-card`
           hook (no per-row left rail). A row hover is a utility signal → ink
           border, never the brand hue. */}
-      <div
+      <CollectionItemCard
         role={canJump ? 'button' : undefined}
         tabIndex={canJump ? 0 : undefined}
         onClick={handleRowClick}
@@ -533,11 +534,9 @@ function ActivityRow({
             handleRowClick();
           }
         }}
-        data-list-row
-        className={
-          'group flex items-start gap-3 rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-4 py-3 transition-colors ' +
-          (canJump ? 'cursor-pointer hover:border-[color:var(--border-control-hover)]' : '')
-        }
+        className={`group flex items-start gap-3 px-4 py-3 ${
+          canJump ? 'cursor-pointer' : ''
+        }`}
       >
         <div className="min-w-0 flex-1">
           {/* row 1 — WHERE: workspace icon + name · channel icon + title.
@@ -633,7 +632,7 @@ function ActivityRow({
             <Check className="size-4" />
           </button>
         ) : null}
-      </div>
+      </CollectionItemCard>
     </li>
   );
 }

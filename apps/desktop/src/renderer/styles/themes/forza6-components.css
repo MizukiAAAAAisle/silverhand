@@ -253,21 +253,6 @@
   box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
 }
 
-/* ── Thread-list row hover — poster sticker preview, no ground shift ──
-   shiki #task:1286: in forza6 the row hover must NOT tint the
-   background (a flat bg wash reads off-language for the poster
-   system). Instead the row earns the poster sticker drop shadow, and
-   its border already flips to ink via the global
-   `hover:border-[--border-control-hover]` utility (= --forza6-ink).
-   Same 1.5px ink offset as the sidebar row / `#` chip sticker family
-   — box-shadow takes no layout space so rows don't shift. Holds the
-   resting `--bg-floating` ground (matches saved-message / archived
-   cards; cancels the `hover:bg-bg-hover` utility other themes keep). */
-[data-theme='forza6'] [data-thread-row]:hover {
-  background-color: var(--bg-floating);
-  box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
-}
-
 /* `bg-success` status dot in SELECTED row (lime wedge): default PR-1
    `--success #3F7A1B` deep lime collapses on lime wedge. Override
    to near-black so the 1.5px dot reads as a HUD marker on lime.
@@ -712,61 +697,31 @@
   border-radius: 0 !important;
 }
 
-/* ── List row — poster hard-cut + structural hover (v6.5j, #task:917) ─
-   Shared rule for every "result/record card" list surface. Currently:
-     - SearchPanel.tsx — search hit button (CSS `:hover` driven)
-     - SavedListView.tsx — saved message card (JS `setHover` →
-       toggles `border-accent` class)
-     - ArchivedChannelsPanel.tsx — archived channel row (JS hover →
-       toggles `border-accent bg-bg-hover`)
-   All three render the same "rounded card with pink-accent hover"
-   pattern that doesn't speak forza6's poster vocabulary. shiki:
-   "search 出来的 message item 的圆角没有适配主题" →
-   "hover 颜色不搭配" → "saved 和 archived item 也都这样改。保持一致".
-
-   Stable hooks:
-     - `data-list-row`       → outer row container (card surface)
-     - `data-list-row-icon`  → 32px avatar square inside (if any)
+/* ── Collection item card — poster hard-cut + structural hover ──────────────
+   ONE rule for every side-panel list card: Search / Saved / Archived /
+   Activity / Thread / Attachment rows, all rendered through
+   `<CollectionItemCard>` which carries `data-collection-card` (was three
+   parallel hooks list-row / thread-row / attachment-row, now consolidated).
 
    Forza6 paint:
-     - Resting state: 0 radius on row + inner icon (poster hard-cut,
-       overrides Tailwind `rounded-md` / `rounded-[var(--row-radius)]`).
-     - Hover: STRUCTURAL signal only — ink border + 1.5px ink box-
-       shadow投影 + 1px upward lift. NO ground colour change.
-   v6.5j (#task:917): the v6.5e..h rule painted hover ground lime
-   `#E6F68A` to match sidebar-row / task-card / panel-card hover.
-   But list-rows are the ONLY poster-card family that can contain
-   markdown previews (saved/search messages), and the lime hover
-   ground collided with inline-code chips (also lime fill) — they
-   visually disappeared into the wash. v6.5h tried inverting the
-   chip to ink-on-lime on hover, but shiki: "inline-code 颜色反转
-   这么设计很别扭，突然的颜色变化会让用户不适，不是好的设计".
-   The cleanest fix is to keep the row ground stable on hover and
-   let frame + shadow + lift carry the "I'm hovered" signal — the
-   poster vocabulary still reads (ink border + ink drop shadow are
-   the structural hallmarks anyway), and nothing inside the row
-   needs to flicker because the ground never changes.
-   Hover is caught two ways so the rule is uniform across JS- and
-   CSS-driven hover handling:
-     - `:hover` for CSS-driven (SearchPanel)
-     - `.border-accent` for JS-driven (Saved, Archived — these toggle
-       the class on mouseenter so the selector pinpoints the same
-       hovered state without relying on the pseudo-class).
-   `!important` on background-color forces the row back to `bg-floating`
-   ground over Tailwind's `hover:bg-bg-hover` utility on the Search
-   variant and the JS-applied `bg-bg-hover` on the Archived variant,
-   both of which would otherwise tint the ground frosty pink. */
-[data-theme='forza6'] [data-list-row],
-[data-theme='forza6'] [data-list-row-icon] {
+     - Resting: 0 radius on the card + inner `data-collection-card-icon`
+       (poster hard-cut, overrides Tailwind rounded utilities).
+     - Hover: STRUCTURAL only — ink border + 1.5px ink drop shadow + 1px lift,
+       NO ground colour change. The `!important` pins the ground to
+       `--bg-floating` so the poster stays paper on hover (markdown previews /
+       inline-code chips inside never flicker) regardless of any theme bg-hover
+       default. Hover is the ONLY shared state painted here; focus stays on each
+       consumer's own interactive element, and no consumer has a selected state. */
+[data-theme='forza6'] [data-collection-card],
+[data-theme='forza6'] [data-collection-card-icon] {
   border-radius: 0;
 }
-[data-theme='forza6'] [data-list-row] {
+[data-theme='forza6'] [data-collection-card] {
   transition: transform 150ms var(--ease, ease),
     border-color 150ms ease,
     box-shadow 150ms ease;
 }
-[data-theme='forza6'] [data-list-row]:hover,
-[data-theme='forza6'] [data-list-row].border-accent {
+[data-theme='forza6'] [data-collection-card]:hover {
   border-color: var(--forza6-ink);
   background-color: var(--bg-floating) !important;
   box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
@@ -1019,7 +974,7 @@
   border-radius: 0;
   /* Poster sticker drop (shiki `NBHpEtEc42PDCGFX`): promote the bordered
      box to a true sticker — hard ink shadow at rest, growing on the hover
-     lift. Same offset family as `[data-channel-icon]` / `[data-list-row]`.
+     lift. Same offset family as `[data-channel-icon]` / `[data-collection-card]`.
      `[data-channel-settings-archive]` is the wide Archive/Restore button
      in the channel-settings modal, painted with the same recipe so the
      forza6 surface reads as one sticker family. Other themes keep the
@@ -1110,30 +1065,16 @@
   outline-offset: 2px;
 }
 
-/* ── Attachment row — same poster language as the thread-list row ───
-   The attachment row and the thread-list row are the two channel side-panel
-   list rows, so in forza6 they share ONE hover language (see the
-   `[data-thread-row]:hover` rule above — keep the two in sync): resting border /
-   radius come from the shared row tokens (`--border`, `--row-radius`), NO forced
-   ink frame at rest; on hover hold the `--bg-floating` paper (cancel the
-   `hover:bg-bg-hover` veil the other themes keep), earn a 1.5px ink poster drop
-   shadow, and let the border flip to ink via the JSX
-   `hover:border-[--border-control-hover]` utility (= --forza6-ink). Same offset
-   scale as the thread row — no independent 3px.
-
-   The two right-side actions (Download, Show) are the one attachment-only
-   addition: small poster stamps (paper + ink border + 0 radius + 1.5px ink
-   shadow, 2.5px on their own hover) — their own inner level, on top of the row.
-   Layout geometry (28 hitbox, gap, row padding) is in the JSX; this block paints
-   only poster identity. `overflow-hidden` stays — the stamp shadows fall inside
-   the row padding and the row's own hover shadow renders outside its box
-   regardless. Actions use their own hook, NOT `data-find-action` /
-   `data-sticker-close`. Other themes keep the flat JSX row + actions. */
-[data-theme='forza6'] [data-attachment-row]:hover {
-  background-color: var(--bg-floating);
-  box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
-}
-[data-theme='forza6'] [data-attachment-row] [data-attachment-row-action] {
+/* ── Attachment row action stamps — the one attachment-only inner level ──
+   The attachment row's frame + hover is the shared `[data-collection-card]`
+   poster rule above. On top of it, the two right-side actions (Download, Show)
+   are small poster stamps: paper + ink border + 0 radius + 1.5px ink shadow
+   (2.5px on their own hover). Layout geometry (28 hitbox, gap, padding) is in
+   the JSX; this paints only stamp identity. Scoped under
+   `[data-collection-card]` so it lands only on attachment rows (the sole card
+   carrying `data-attachment-row-action`). Actions use their own hook, NOT
+   `data-find-action` / `data-sticker-close`. */
+[data-theme='forza6'] [data-collection-card] [data-attachment-row-action] {
   background-color: var(--bg-floating);
   color: var(--forza6-ink);
   border: var(--control-border-width) solid var(--forza6-ink);
@@ -1141,11 +1082,11 @@
   box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
   transition: transform 150ms var(--ease, ease), box-shadow 150ms ease;
 }
-[data-theme='forza6'] [data-attachment-row] [data-attachment-row-action]:hover:not(:disabled) {
+[data-theme='forza6'] [data-collection-card] [data-attachment-row-action]:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 2.5px 2.5px 0 var(--forza6-ink);
 }
-[data-theme='forza6'] [data-attachment-row] [data-attachment-row-action]:focus-visible {
+[data-theme='forza6'] [data-collection-card] [data-attachment-row-action]:focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
   /* re-assert the sticker shadow so the JSX focus ring doesn't clobber it */

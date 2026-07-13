@@ -396,9 +396,10 @@
    fill/veil or a soft brand glow; resting cards keep their 1px hairline
    (option A). forza6 stays the bordered poster theme, untouched. */
 
-/* list-row hover (Search / Saved / Archived): bg veil + soft lift, no
-   border change. Resting 1px hairline stays. */
-[data-theme='slack-dark'] [data-list-row]:hover {
+/* collection item card hover (Search / Saved / Archived / Activity / Thread /
+   Attachment — shared `data-collection-card`): bg veil + soft lift, no border
+   change. Resting 1px hairline stays. */
+[data-theme='slack-dark'] [data-collection-card]:hover {
   background-color: var(--bg-hover);
   box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.45);
   transform: translateY(-1px);

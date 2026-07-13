@@ -3,6 +3,7 @@ import { Bookmark, Layers, User } from 'lucide-react';
 import dayjs from 'dayjs';
 import type { AgentDto, SavedMessageDto, UserDto } from '@silverhand/shared';
 import { Markdown } from '@/components/chat/Markdown';
+import { CollectionItemCard } from '@/components/layout/collection-item-card';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import { AgentAvatar } from '@/components/AgentAvatar';
@@ -234,7 +235,7 @@ function SavedItem({
     <li>
       {/* The whole card is clickable. Bookmark/unsave is a nested button —
           stopPropagation prevents it from firing the jump. */}
-      <div
+      <CollectionItemCard
         role="button"
         tabIndex={0}
         onClick={onJump}
@@ -244,17 +245,11 @@ function SavedItem({
             onJump();
           }
         }}
-        data-list-row
-        className={
-          // Row card identity is token-driven and shared verbatim with the
-          // Search / Archived list rows so all three read identically per
-          // theme (radius `--row-radius`, border `--control-border-width`).
-          // Hover is NOT painted here — it's a per-theme structural signal
-          // in each theme's CSS via `[data-list-row]:hover` (forza6 = ink
-          // border + poster shadow + lift; warm/slack = border deepen + soft
-          // lift), so a row hover never flips to the brand hue or a bg wash.
-          'rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-4 py-3 transition'
-        }
+        // Frame + hover come from the shell; each theme paints one
+        // `[data-collection-card]:hover` (forza6 = ink border + poster shadow +
+        // lift; warm/slack = bg veil + soft lift), so a row hover never flips to
+        // the brand hue. Local layout only below.
+        className="px-4 py-3"
       >
         {/* Meta line, three identity segments (shiki #task:1441): the WORKSPACE
             wears its own icon, the CHANNEL owns the `#`, and the SENDER gets an
@@ -305,7 +300,7 @@ function SavedItem({
         <div className="text-sm text-text-primary">
           <Markdown content={item.message.content} />
         </div>
-      </div>
+      </CollectionItemCard>
     </li>
   );
 }

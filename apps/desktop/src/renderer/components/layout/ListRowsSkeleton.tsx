@@ -1,23 +1,25 @@
 /**
  * Shared loading skeleton for the CARD-LIST surfaces — Activity, Search, Saved,
  * and Archived Channels (#task:1327). Each of those panes renders a scrollable
- * column of `data-list-row` cards; before its query resolves it used to show an
+ * column of `data-collection-card` cards; before its query resolves it used to show an
  * ad-hoc "Loading…" / "加载中…" text (or a lone pulsing icon). This replaces all
  * four with the SAME skeleton so every "a card list is loading" surface reads
  * identically, the way `MessageRowsSkeleton` already unifies the conversation
  * panes.
  *
- * The card shell mirrors the real list row 1:1 (same `--row-radius`,
- * `--control-border-width`, `border-border` + `bg-bg-floating` ground, `px-4
- * py-3` rhythm) so the swap to live rows never jumps the layout. Two shapes,
- * toggled by `withIcon`, cover the real rows: Search/Archived lead with a
- * `size-8` icon square, Saved/Activity carry inline meta instead.
+ * The card shell mirrors the real list row via `COLLECTION_CARD_CLASS` (same
+ * `--row-radius`, `--control-border-width`, `border-border` + `bg-bg-floating`
+ * ground) plus the `px-4 py-3` rhythm, so the swap to live rows never jumps the
+ * layout. Two shapes, toggled by `withIcon`, cover the real rows: Search/Archived
+ * lead with a `size-8` icon square, Saved/Activity carry inline meta instead.
  *
  * Deliberately data-free and cheap — one shared `animate-pulse`, neutral utility
  * bars (`bg-bg-hover`); a skeleton is chrome, never a saturated status signal.
  * Drops straight into a pane's already-rendered scroller (which owns the outer
  * `px-4 py-3`), so this only lays out the `space-y-2` card stack.
  */
+
+import { COLLECTION_CARD_CLASS } from '@/components/layout/collection-item-card';
 
 // Per-card recipe: the meta-line width, the title width, and the body-line
 // widths beneath. Hand-varied so the stack reads as a list of real cards, not a
@@ -54,7 +56,10 @@ export function ListRowsSkeleton({
       {cards.map((card, i) => (
         <div
           key={i}
-          className="flex items-start gap-3 rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-4 py-3"
+          // Frame mirrors the real card (`COLLECTION_CARD_CLASS`) so the swap to
+          // live rows never jumps; NO `data-collection-card` hook — a skeleton is inert and
+          // must not pick up the per-theme hover.
+          className={`${COLLECTION_CARD_CLASS} flex items-start gap-3 px-4 py-3`}
         >
           {withIcon ? (
             <div className="mt-0.5 size-8 shrink-0 rounded-md bg-bg-hover" />

@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { Archive, ArchiveRestore } from 'lucide-react';
 import type { ArchivedChannelListItemDto } from '@silverhand/shared';
 import { ChannelIcon } from '@/components/ChannelIcon';
+import { CollectionItemCard } from '@/components/layout/collection-item-card';
 import {
   useArchiveChannel,
   useArchivedChannelsIndex,
@@ -180,16 +181,13 @@ function ArchivedChannelRow({
 
   return (
     <li>
-      <div
-        data-list-row
-        className="flex min-w-0 items-stretch rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating transition"
-      >
+      <CollectionItemCard className="flex min-w-0 items-stretch">
         <button
           type="button"
           onClick={onOpen}
           className="flex min-w-0 flex-1 items-center gap-3 px-3 py-3 text-left"
         >
-          <span data-list-row-icon className="flex size-8 shrink-0 items-center justify-center text-text-muted">
+          <span data-collection-card-icon className="flex size-8 shrink-0 items-center justify-center text-text-muted">
             <ChannelIcon variant="sticker" density="lg" />
           </span>
           <span className="min-w-0 flex-1">
@@ -226,7 +224,7 @@ function ArchivedChannelRow({
           <ArchiveRestore className="size-3.5" />
           Restore
         </button>
-      </div>
+      </CollectionItemCard>
     </li>
   );
 }

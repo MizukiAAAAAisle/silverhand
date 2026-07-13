@@ -1,5 +1,6 @@
 import { Loader2, X } from 'lucide-react';
 import { ThreadIcon } from '@/components/icons/conversation-icons';
+import { CollectionItemCard } from '@/components/layout/collection-item-card';
 import type { StreamUnreadDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
@@ -196,11 +197,11 @@ function ThreadRow({
 
   return (
     <li>
-      <button
+      <CollectionItemCard
+        as="button"
         type="button"
         onClick={onOpen}
-        data-thread-row
-        className="flex w-full flex-col overflow-hidden rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating text-left transition hover:-translate-y-px hover:border-[color:var(--border-control-hover)] hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+        className="flex w-full flex-col overflow-hidden text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
       >
         {/* Band 1 — root message: sender avatar + a natural "Name: content"
             flow. shiki wants the avatar kept; the standalone byline row read as
@@ -275,7 +276,7 @@ function ThreadRow({
             </time>
           </span>
         ) : null}
-      </button>
+      </CollectionItemCard>
     </li>
   );
 }
