@@ -45,9 +45,11 @@ export interface AgentServiceOptions {
  * Enforce the runtime/reasoning invariant on an ordinary profile update.
  * Runtime itself is handled by the dedicated transition command (which clears
  * stored CLI session/resume state), so PATCH rejects it before this service.
- * Explicit reasoning_effort in the patch must be valid for the agent's current
- * runtime, else throw → 400. We reject rather than silently drop an explicit
- * value — dropping what the caller asked for would be a silent rebind.
+ * The effective (model, reasoning_effort) pair after the patch must be valid
+ * for the agent's current runtime, else throw → 400. Checking both fields is
+ * load-bearing: changing only `model` must not strand a previously-valid
+ * model-specific effort on an incompatible model. We reject rather than
+ * silently clear an explicit value — that would be a silent rebind.
  *
  * fast_mode follows the same rule: non-null is valid only on runtimes whose
  * catalog capability explicitly supports it. `null` always clears to the
@@ -57,13 +59,22 @@ export function normalizeRuntimeTuning(
   existing: AgentRow,
   input: UpdateAgentInput,
 ): UpdateAgentInput {
-  if (input.reasoning_effort !== undefined) {
+  if (input.reasoning_effort !== undefined || input.model !== undefined) {
+    const nextModel = input.model !== undefined ? input.model : existing.model;
+    const nextReasoning =
+      input.reasoning_effort !== undefined
+        ? input.reasoning_effort
+        : existing.reasoning_effort;
     if (
-      !reasoningEffortValidForRuntime(existing.runtime, input.reasoning_effort)
+      !reasoningEffortValidForRuntime(
+        existing.runtime,
+        nextReasoning,
+        nextModel,
+      )
     ) {
       throw new AgentServiceError(
         'reasoning_effort_invalid_for_runtime',
-        `reasoning_effort '${input.reasoning_effort}' is not valid for runtime '${existing.runtime}'`,
+        `reasoning_effort '${nextReasoning}' is not valid for runtime '${existing.runtime}' and model '${nextModel ?? 'driver default'}'`,
       );
     }
   }

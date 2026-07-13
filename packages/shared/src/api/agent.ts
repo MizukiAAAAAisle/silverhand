@@ -76,18 +76,24 @@ export const CreateAgentInputSchema = z
     host_id: z.string().optional(), // defaults to the current user's owned local host
     description: z.string().optional(),
   })
-  // reasoning_effort must be valid for the chosen runtime. `ReasoningEffortSchema`
-  // is only a known-value registry (the union across closed-set runtimes), not a
-  // standard — so a value like qoder's `max` parses structurally but is
-  // meaningless for codex. This per-runtime check is the authoritative gate; both
-  // fields are present in the create payload, so it closes at the schema (route +
-  // CLI get it free).
+  // reasoning_effort must be valid for the chosen runtime/model pair.
+  // `ReasoningEffortSchema` is only a known-value registry (the union across
+  // closed-set runtimes), not a standard — so a value like qoder's `max`
+  // parses structurally but is meaningless for codex, while Codex `ultra` is
+  // legal only on an explicitly compatible model. All fields are present in
+  // the create payload, so the authoritative gate closes at the schema.
   .superRefine((val, ctx) => {
-    if (!reasoningEffortValidForRuntime(val.runtime, val.reasoning_effort)) {
+    if (
+      !reasoningEffortValidForRuntime(
+        val.runtime,
+        val.reasoning_effort,
+        val.model,
+      )
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['reasoning_effort'],
-        message: `reasoning_effort '${val.reasoning_effort}' is not valid for runtime '${val.runtime}'`,
+        message: `reasoning_effort '${val.reasoning_effort}' is not valid for runtime '${val.runtime}' and model '${val.model ?? 'driver default'}'`,
       });
     }
     if (!runtimeSupportsFastMode(val.runtime) && val.fast_mode !== undefined) {
@@ -131,11 +137,17 @@ export const SwitchAgentRuntimeInputSchema = z
   })
   .strict()
   .superRefine((val, ctx) => {
-    if (!reasoningEffortValidForRuntime(val.runtime, val.reasoning_effort)) {
+    if (
+      !reasoningEffortValidForRuntime(
+        val.runtime,
+        val.reasoning_effort,
+        val.model,
+      )
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['reasoning_effort'],
-        message: `reasoning_effort '${val.reasoning_effort}' is not valid for runtime '${val.runtime}'`,
+        message: `reasoning_effort '${val.reasoning_effort}' is not valid for runtime '${val.runtime}' and model '${val.model ?? 'driver default'}'`,
       });
     }
     if (!runtimeSupportsFastMode(val.runtime) && val.fast_mode !== null) {

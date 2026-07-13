@@ -153,6 +153,21 @@ describe('canSaveRuntimeConfig', () => {
     };
     expect(canSaveRuntimeConfig(baseAgent, d)).toBe(true);
   });
+
+  it('accepts Ultra only for a compatible explicit Codex model', () => {
+    const compatible: RuntimeConfigDraft = {
+      ...draftFromAgent(baseAgent),
+      modelValue: 'gpt-5.6-sol',
+      reasoning: 'ultra',
+    };
+    expect(canSaveRuntimeConfig(baseAgent, compatible)).toBe(true);
+    expect(
+      canSaveRuntimeConfig(baseAgent, {
+        ...compatible,
+        modelValue: 'gpt-5.6-luna',
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('draftIsDirty', () => {
@@ -391,6 +406,26 @@ describe('modelDraftAfterCommit — unified Combobox commit mapping', () => {
       modelValue: 'sonnet',
       reasoning: 'high',
       fastMode: '',
+    });
+  });
+
+  it('clears Ultra for a newly incompatible model instead of downgrading it', () => {
+    const ultra: RuntimeConfigDraft = {
+      runtime: 'codex',
+      modelChoice: 'specify',
+      modelValue: 'gpt-5.6-sol',
+      reasoning: 'ultra',
+      fastMode: '__default__',
+    };
+    expect(modelDraftAfterCommit(ultra, 'gpt-5.6-luna')).toEqual({
+      ...ultra,
+      modelValue: 'gpt-5.6-luna',
+      reasoning: '',
+    });
+    expect(modelDraftAfterCommit(ultra, 'gpt-5.6-terra')).toEqual({
+      ...ultra,
+      modelValue: 'gpt-5.6-terra',
+      reasoning: '',
     });
   });
 });

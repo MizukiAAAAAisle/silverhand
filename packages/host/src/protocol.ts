@@ -139,8 +139,13 @@ import {
 // response codes, while a v7 daemon collapses them to `internal_error`, so the
 // pair is semantically incompatible and must fail loud at hello. The external
 // outbound protocol bumps alongside (6→7).
+//
+// v9 (#task:1486): `ReasoningEffortSchema` gained `ultra`, which travels in
+// strict `runtime_start` driver options. A v8 daemon rejects that value, so a
+// new backend must not advertise / persist Ultra while attached to an old
+// daemon. Fail loud at hello; the outbound protocol bumps alongside (7→8).
 
-export const HOST_PROTOCOL_VERSION = 8;
+export const HOST_PROTOCOL_VERSION = 9;
 
 export const KNOWN_CAPABILITIES_V1 = [
   'runtime.claude',

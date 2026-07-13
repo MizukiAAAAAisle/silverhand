@@ -15,11 +15,12 @@ export type RuntimeKind = z.infer<typeof RuntimeKindSchema>;
 // to each runtime/driver, not a global enum. This is a known-value registry
 // (a union) for typing + drift guards, NOT the field's semantic standard and
 // NOT the authoritative write gate: that is per-runtime
-// (`reasoningEffortValidForRuntime`; the values a runtime actually allows live
-// in the runtime catalog). `none/xhigh/max` beyond the classic low/medium/high
-// come from qoder's set (verified from the qodercli binary). Stored/sent
+// (`reasoningEffortValidForRuntime`; the values a runtime/model pair actually
+// allows live in the runtime catalog). `none/xhigh/max` beyond the classic
+// low/medium/high come from qoder's set (verified from the qodercli binary);
+// `ultra` is Codex's model-specific proactive multi-agent mode. Stored/sent
 // verbatim (lowercase). `null` (unset) is distinct from `'none'` (explicitly
-// disabled) — unset means the driver doesn't pass `--reasoning-effort` at all.
+// disabled) — unset means the driver doesn't pass a reasoning override.
 export const ReasoningEffortSchema = z.enum([
   'none',
   'low',
@@ -27,6 +28,7 @@ export const ReasoningEffortSchema = z.enum([
   'high',
   'xhigh',
   'max',
+  'ultra',
 ]);
 export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
 

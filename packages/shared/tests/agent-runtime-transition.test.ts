@@ -55,6 +55,29 @@ describe('SwitchAgentRuntimeInputSchema', () => {
     ).toBe(false);
   });
 
+  it('validates model-specific Codex Ultra capability', () => {
+    const input = {
+      runtime: 'codex' as const,
+      reasoning_effort: 'ultra' as const,
+      fast_mode: null,
+    };
+    expect(
+      SwitchAgentRuntimeInputSchema.safeParse({
+        ...input,
+        model: 'gpt-5.6-sol',
+      }).success,
+    ).toBe(true);
+    expect(
+      SwitchAgentRuntimeInputSchema.safeParse({
+        ...input,
+        model: 'gpt-5.6-luna',
+      }).success,
+    ).toBe(false);
+    expect(
+      SwitchAgentRuntimeInputSchema.safeParse({ ...input, model: null }).success,
+    ).toBe(false);
+  });
+
   it('distinguishes explicit driver default from an empty custom model', () => {
     expect(
       SwitchAgentRuntimeInputSchema.safeParse({

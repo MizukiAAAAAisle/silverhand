@@ -9,9 +9,18 @@ import {
 
 describe('agent reasoning_effort validation', () => {
   it('accepts every known reasoning effort value in the shared registry', () => {
-    // Union of codex (low/medium/high/xhigh) and qoder (none/…/max); the
+    // Union of codex (low/medium/high/xhigh + model-specific ultra) and
+    // qoder (none/…/max); the
     // per-runtime catalog gates which subset each picker offers.
-    for (const effort of ['none', 'low', 'medium', 'high', 'xhigh', 'max']) {
+    for (const effort of [
+      'none',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+      'ultra',
+    ]) {
       expect(
         UpdateAgentInputSchema.safeParse({ reasoning_effort: effort }).success,
       ).toBe(true);
@@ -19,7 +28,7 @@ describe('agent reasoning_effort validation', () => {
   });
 
   it('rejects unsupported reasoning effort values before persistence', () => {
-    for (const effort of ['minimal', 'off', 'HIGH', 'ultra']) {
+    for (const effort of ['minimal', 'off', 'HIGH']) {
       expect(
         CreateAgentInputSchema.safeParse({
           name: 'bad-effort',
@@ -64,6 +73,27 @@ describe('agent reasoning_effort validation', () => {
           reasoning_effort: effort,
         }).success,
       ).toBe(true);
+    }
+  });
+
+  it('accepts Codex Ultra only with a compatible model', () => {
+    expect(
+      CreateAgentInputSchema.safeParse({
+        name: 'ultra-sol',
+        runtime: 'codex',
+        model: 'gpt-5.6-sol',
+        reasoning_effort: 'ultra',
+      }).success,
+    ).toBe(true);
+    for (const model of ['gpt-5.6-luna', 'gpt-5.5', undefined]) {
+      expect(
+        CreateAgentInputSchema.safeParse({
+          name: 'bad-ultra',
+          runtime: 'codex',
+          model,
+          reasoning_effort: 'ultra',
+        }).success,
+      ).toBe(false);
     }
   });
 });

@@ -6,6 +6,7 @@ import {
   RuntimeKindSchema,
   ReasoningEffortSchema,
   reasoningEffortLabel,
+  reasoningEffortOptionsForRuntime,
   reasoningEffortValidForRuntime,
   runtimeDefaultModel,
   runtimeCatalogCoversAllKinds,
@@ -48,6 +49,13 @@ describe('runtime catalog (shared source of truth)', () => {
       for (const opt of entry.reasoningEffortOptions) {
         expect(ReasoningEffortSchema.safeParse(opt).success).toBe(true);
       }
+      for (const options of Object.values(
+        entry.reasoningEffortOptionsByModel ?? {},
+      )) {
+        for (const opt of options) {
+          expect(ReasoningEffortSchema.safeParse(opt).success).toBe(true);
+        }
+      }
       // `runtimeSupportsReasoningEffort` mirrors the options list.
       expect(runtimeSupportsReasoningEffort(entry.kind)).toBe(
         entry.reasoningEffortOptions.length > 0,
@@ -72,6 +80,27 @@ describe('runtime catalog (shared source of truth)', () => {
     ]);
     // claude has no reasoning control.
     expect(runtimeCatalogEntry('claude').reasoningEffortOptions).toEqual([]);
+  });
+
+  it('offers Codex Ultra only on explicitly compatible models', () => {
+    const withUltra = ['low', 'medium', 'high', 'xhigh', 'ultra'];
+    expect(reasoningEffortOptionsForRuntime('codex', 'gpt-5.6-sol')).toEqual(
+      withUltra,
+    );
+    for (const model of [
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-5.5',
+      'future-model',
+      null,
+    ]) {
+      expect(reasoningEffortOptionsForRuntime('codex', model)).toEqual([
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+      ]);
+    }
   });
 
   it('models qoder tiers as suggestions plus an explicit Ultimate create default', () => {
@@ -122,6 +151,7 @@ describe('runtime catalog (shared source of truth)', () => {
     expect(reasoningEffortLabel('xhigh')).toBe('Xhigh');
     expect(reasoningEffortLabel('none')).toBe('None');
     expect(reasoningEffortLabel('max')).toBe('Max');
+    expect(reasoningEffortLabel('ultra')).toBe('Ultra');
   });
 
   it('reasoningEffortValidForRuntime gates values to the runtime (null always ok)', () => {
@@ -132,6 +162,16 @@ describe('runtime catalog (shared source of truth)', () => {
     expect(reasoningEffortValidForRuntime('codex', 'high')).toBe(true);
     expect(reasoningEffortValidForRuntime('codex', 'max')).toBe(false);
     expect(reasoningEffortValidForRuntime('codex', 'none')).toBe(false);
+    expect(
+      reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-sol'),
+    ).toBe(true);
+    expect(
+      reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-terra'),
+    ).toBe(false);
+    expect(
+      reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-luna'),
+    ).toBe(false);
+    expect(reasoningEffortValidForRuntime('codex', 'ultra', null)).toBe(false);
     // qoder accepts its full allowed set.
     for (const v of ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
       expect(reasoningEffortValidForRuntime('qoder', v)).toBe(true);

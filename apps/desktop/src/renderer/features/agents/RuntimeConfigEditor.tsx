@@ -13,6 +13,8 @@ import type {
 import {
   RUNTIME_CATALOG,
   reasoningEffortLabel,
+  reasoningEffortOptionsForRuntime,
+  reasoningEffortValidForRuntime,
   runtimeCatalogEntry,
   runtimeCliLabel,
   runtimeSupportsFastMode,
@@ -149,6 +151,15 @@ export function canSaveRuntimeConfig(
     return false;
   }
   if (runtimeSupportsReasoningEffort(draft.runtime) && draft.reasoning === '') {
+    return false;
+  }
+  const model =
+    draft.modelChoice === 'specify' ? draft.modelValue.trim() : null;
+  const reasoning =
+    draft.reasoning === '' || draft.reasoning === '__default__'
+      ? null
+      : draft.reasoning;
+  if (!reasoningEffortValidForRuntime(draft.runtime, reasoning, model)) {
     return false;
   }
   if (runtimeSupportsFastMode(draft.runtime) && draft.fastMode === '') {
@@ -518,6 +529,10 @@ function EditForm({
 }): JSX.Element {
   const supportsReasoning = runtimeSupportsReasoningEffort(draft.runtime);
   const supportsFastMode = runtimeSupportsFastMode(draft.runtime);
+  const reasoningOptions = reasoningEffortOptionsForRuntime(
+    draft.runtime,
+    draft.modelChoice === 'specify' ? draft.modelValue : null,
+  );
 
   // Runtime detection — same primitives as the New Agent dialog's
   // RuntimePicker, so we don't grow a parallel availability path
@@ -640,7 +655,7 @@ function EditForm({
               placeholder="Choose…"
               options={[
                 { value: '__default__', label: 'Use driver default' },
-                ...catalogEntry.reasoningEffortOptions.map(v => ({
+                ...reasoningOptions.map(v => ({
                   value: v,
                   label: reasoningEffortLabel(v),
                 })),
@@ -896,7 +911,11 @@ export function modelDraftAfterCommit(
   next: string,
 ): RuntimeConfigDraft {
   if (next === MODEL_DEFAULT_LABEL) {
-    return { ...draft, modelChoice: 'default', modelValue: '' };
+    return clearIncompatibleReasoning({
+      ...draft,
+      modelChoice: 'default',
+      modelValue: '',
+    });
   }
   const trimmed = next.trim();
   if (trimmed.length === 0) {
@@ -904,9 +923,32 @@ export function modelDraftAfterCommit(
     // design); collapse `specify` to `unset` (user cleared what they
     // typed); leave `unset` unchanged.
     if (draft.modelChoice === 'default') return draft;
-    return { ...draft, modelChoice: 'unset', modelValue: '' };
+    return clearIncompatibleReasoning({
+      ...draft,
+      modelChoice: 'unset',
+      modelValue: '',
+    });
   }
-  return { ...draft, modelChoice: 'specify', modelValue: trimmed };
+  return clearIncompatibleReasoning({
+    ...draft,
+    modelChoice: 'specify',
+    modelValue: trimmed,
+  });
+}
+
+function clearIncompatibleReasoning(
+  draft: RuntimeConfigDraft,
+): RuntimeConfigDraft {
+  if (!runtimeSupportsReasoningEffort(draft.runtime)) return draft;
+  if (draft.reasoning === '' || draft.reasoning === '__default__') return draft;
+  const model =
+    draft.modelChoice === 'specify' ? draft.modelValue.trim() : null;
+  if (reasoningEffortValidForRuntime(draft.runtime, draft.reasoning, model)) {
+    return draft;
+  }
+  // Force a positive re-pick instead of silently downgrading Ultra when the
+  // model changes to one that does not support it.
+  return { ...draft, reasoning: '' };
 }
 
 function triggerClass(): string {

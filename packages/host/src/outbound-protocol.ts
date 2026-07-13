@@ -193,7 +193,12 @@ const FrameIdSchema = z.string().min(1);
 // a v6 daemon emits taxonomy drift instead, so old/new peers must fail loud at
 // attach rather than appear compatible until first delivery. Bumps alongside
 // HOST_PROTOCOL_VERSION (7→8).
-export const OUTBOUND_PROTOCOL_VERSION = 7;
+//
+// v8 (#task:1486): shared runtime-start options gained the `ultra` reasoning
+// value. A v7 daemon strict-rejects it, so mixed peers fail at attach instead
+// of waiting for the first Ultra start. Bumps alongside
+// HOST_PROTOCOL_VERSION (8→9).
+export const OUTBOUND_PROTOCOL_VERSION = 8;
 
 // ── server → daemon command catalogue ──────────────────────────────
 

@@ -151,6 +151,16 @@ describe('CodexDriver.buildArgs', () => {
     }
   });
 
+  it('passes Ultra verbatim to Codex app-server', () => {
+    const { ctx, cleanup } = makeSpawnCtx({ reasoningEffort: 'ultra' });
+    try {
+      const kv = collectCArgs(new CodexDriver().buildArgs(ctx));
+      expect(kv.get('model_reasoning_effort')).toBe('"ultra"');
+    } finally {
+      cleanup();
+    }
+  });
+
   it('omits fast_mode flags when fastMode is null', () => {
     const { ctx, cleanup } = makeSpawnCtx();
     try {
@@ -240,9 +250,9 @@ describe('CodexDriver JSON-RPC handshake', () => {
         approvalPolicy: 'never',
         sandbox: 'danger-full-access',
         developerInstructions: 'STANDING PROMPT\n',
-        model: 'gpt-5.5',
       },
     });
+    expect(threadStart.params).not.toHaveProperty('model');
 
     // Either `thread/started` notification OR a `result.thread` reply
     // surfaces the threadId. Try the notification path here.
@@ -284,8 +294,8 @@ describe('CodexDriver JSON-RPC handshake', () => {
     expect(threadCall.params).toMatchObject({
       threadId: 'thread-resumed',
       cwd: built.ctx.workspacePath,
-      model: 'gpt-5.5',
     });
+    expect(threadCall.params).not.toHaveProperty('model');
   });
 
   it('uses an explicitly configured model for thread/start', async () => {

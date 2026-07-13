@@ -464,8 +464,10 @@ export class CodexDriver implements Driver {
       sandbox: 'danger-full-access',
       developerInstructions: standingPrompt,
     };
+    // Omission is intentional: NULL means use Codex's own current default.
+    // A hidden Silverhand fallback would pin new agents to an older model and
+    // make model-specific capabilities such as Ultra fail unexpectedly.
     if (ctx.model) params.model = ctx.model;
-    else params.model = 'gpt-5.5';
     if (ctx.cliSessionId) {
       return {
         method: 'thread/resume',

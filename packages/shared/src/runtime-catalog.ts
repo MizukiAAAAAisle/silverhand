@@ -37,12 +37,22 @@ export interface RuntimeCatalogEntry {
    * allowed values (lowercase tokens) stored + passed to the driver
    * verbatim — the authoritative source of what this runtime accepts.
    * The shared `ReasoningEffortSchema` is only a known-value registry
-   * (union) for typing/drift, NOT a standard: keeping the allowed set
-   * PER-RUNTIME means widening that union (e.g. qoder's `none`/`max`)
-   * can't leak into another runtime's picker — codex stays
-   * `low/medium/high/xhigh`, qoder gets the full set.
+   * (union) for typing/drift, NOT a standard. This is the runtime baseline;
+   * `reasoningEffortOptionsByModel` may replace it for a verified model.
+   * Keeping the allowed set here means widening the union (e.g. qoder's
+   * `none`/`max`, Codex's model-specific `ultra`) cannot leak into another
+   * runtime or model picker.
    */
   reasoningEffortOptions: readonly ReasoningEffort[];
+  /**
+   * Full replacement option lists for models whose effort capability differs
+   * from the runtime baseline. Unknown / default models deliberately use the
+   * baseline: free-text model ids are open-ended, so Silverhand must not
+   * promise a model-specific effort without an explicit capability entry.
+   */
+  reasoningEffortOptionsByModel?: Readonly<
+    Record<string, readonly ReasoningEffort[]>
+  >;
   /** Whether the runtime accepts the persisted fast-mode tri-state. */
   supportsFastMode: boolean;
   /**
@@ -87,6 +97,15 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     cliLabel: 'Codex CLI',
     selectable: true,
     reasoningEffortOptions: ['low', 'medium', 'high', 'xhigh'],
+    // Codex Ultra is a product-level proactive multi-agent mode, not a
+    // universally accepted OpenAI API effort token. The app-server model
+    // catalog advertises it for more than one model, but the ChatGPT product
+    // currently exposes Ultra only for sol. Product eligibility is the
+    // contract users can actually exercise; other and unknown models stay on
+    // the conservative runtime baseline above.
+    reasoningEffortOptionsByModel: {
+      'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'ultra'],
+    },
     supportsFastMode: true,
     supportsProfileMcp: true,
     // Suggested model ids for the Model combobox. Free text still accepted;
@@ -193,6 +212,22 @@ export function runtimeSupportsReasoningEffort(kind: RuntimeKind): boolean {
   return CATALOG[kind].reasoningEffortOptions.length > 0;
 }
 
+/** Model-aware reasoning options. The runtime baseline is the safe fallback
+ * for driver-default, custom, and future model ids whose capability has not
+ * been explicitly verified. */
+export function reasoningEffortOptionsForRuntime(
+  kind: RuntimeKind,
+  model: string | null | undefined,
+): readonly ReasoningEffort[] {
+  const entry = CATALOG[kind];
+  const modelId = model?.trim();
+  if (!modelId) return entry.reasoningEffortOptions;
+  return (
+    entry.reasoningEffortOptionsByModel?.[modelId]
+    ?? entry.reasoningEffortOptions
+  );
+}
+
 /** True when the runtime exposes the fast-mode control. */
 export function runtimeSupportsFastMode(kind: RuntimeKind): boolean {
   return CATALOG[kind].supportsFastMode;
@@ -200,8 +235,8 @@ export function runtimeSupportsFastMode(kind: RuntimeKind): boolean {
 
 /**
  * Domain invariant: a stored `reasoning_effort` must be `null` (unset) OR a
- * value this runtime actually supports (per its catalog options). The UI
- * picker only offers valid values, but this is the AUTHORITATIVE check the
+ * value this runtime/model pair actually supports (per its catalog options).
+ * The UI picker only offers valid values, but this is the AUTHORITATIVE check the
  * write boundary (create + update) enforces so a direct-API call or a
  * runtime switch can't persist e.g. qoder's `max` onto a codex agent (which
  * would then forward an out-of-range value to the codex driver). Keeping the
@@ -211,9 +246,10 @@ export function runtimeSupportsFastMode(kind: RuntimeKind): boolean {
 export function reasoningEffortValidForRuntime(
   kind: RuntimeKind,
   value: ReasoningEffort | null | undefined,
+  model?: string | null,
 ): boolean {
   if (value === null || value === undefined) return true;
-  return CATALOG[kind].reasoningEffortOptions.includes(value);
+  return reasoningEffortOptionsForRuntime(kind, model).includes(value);
 }
 
 /** Generic display label for a reasoning-effort value (title-cased):

@@ -63,6 +63,32 @@ describe('normalizeRuntimeTuning — reasoning valid for the agent runtime', () 
     }
   });
 
+  it('validates the effective Codex model + effort pair', () => {
+    const sol = row({
+      runtime: 'codex',
+      model: 'gpt-5.6-sol',
+      reasoning_effort: 'high',
+    });
+    expect(normalizeRuntimeTuning(sol, { reasoning_effort: 'ultra' })).toEqual({
+      reasoning_effort: 'ultra',
+    });
+    expect(() =>
+      normalizeRuntimeTuning(sol, {
+        model: 'gpt-5.6-luna',
+        reasoning_effort: 'ultra',
+      }),
+    ).toThrow(/model 'gpt-5.6-luna'/);
+
+    const ultra = row({
+      runtime: 'codex',
+      model: 'gpt-5.6-sol',
+      reasoning_effort: 'ultra',
+    });
+    expect(() =>
+      normalizeRuntimeTuning(ultra, { model: 'gpt-5.5' }),
+    ).toThrow(/reasoning_effort 'ultra'/);
+  });
+
   it('allows explicit null (clearing) on any runtime', () => {
     expect(
       normalizeRuntimeTuning(row({ runtime: 'codex' }), { reasoning_effort: null }),
