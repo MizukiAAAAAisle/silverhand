@@ -1,9 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { X_SILVERHAND_LEGACY_USER_ID_HEADER } from '@silverhand/shared';
+import {
+  X_SILVERHAND_LEGACY_USER_ID_HEADER,
+  X_SILVERHAND_PRINCIPAL_HEADER,
+  encodeUserPrincipalHeader,
+} from '@silverhand/shared';
 import { formatAttachmentSuffix } from '../../src/runtime/stdin-format.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { MessageRepo } from '../../src/repos/message-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 async function createWorkspaceChannel(t: TestApp, members: string[] = ['alice']) {
@@ -267,6 +273,453 @@ describe('Attachment routes', () => {
     expect(msg.status).toBe(400);
     const body = await msg.json() as any;
     expect(body.attachment_id).toBe(aDto.id);
+  });
+});
+
+describe('Channel attachment list (GET /api/channels/:id/attachments)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  async function uploadAndReference(
+    tt: TestApp,
+    channelId: string,
+    filename: string,
+    contentType: string,
+  ) {
+    const dto = await (
+      await uploadFile(
+        tt,
+        `/api/channels/${channelId}/attachments`,
+        filename,
+        contentType,
+        PNG_BYTES,
+      )
+    ).json() as any;
+    const viewer = http(tt, { 'X-Silverhand-User-Id': 'local' });
+    const msg = await viewer.post(`/api/channels/${channelId}/messages`, {
+      content: filename,
+      attachment_ids: [dto.id],
+    });
+    expect(msg.status).toBe(201);
+    return { attachment: dto, message: (await msg.json() as any).message };
+  }
+
+  it('returns referenced attachments with the AttachmentListPage shape', async () => {
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId } = await createWorkspaceChannel(t);
+    const { attachment, message } = await uploadAndReference(
+      t,
+      channelId,
+      'first.png',
+      'image/png',
+    );
+
+    const res = await viewer.get(`/api/channels/${channelId}/attachments`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(Array.isArray(body.items)).toBe(true);
+    expect(body.items).toHaveLength(1);
+    expect(body.next_cursor).toBeNull();
+    const item = body.items[0];
+    expect(item.attachment.id).toBe(attachment.id);
+    expect(item.attachment.channel_id).toBe(channelId);
+    expect(item.source.message_id).toBe(message.id);
+    expect(item.source.conversation_id).toBe(channelId);
+    expect(item.source.thread_root_id).toBeNull();
+    expect(item.source.from_kind).toBe('user');
+    expect(item.source.from_user_id).toBe('local');
+    expect(typeof item.source.appeared_at).toBe('number');
+    expect(typeof item.source.message_seq).toBe('number');
+  });
+
+  it('excludes uploaded-but-unsent orphan attachments', async () => {
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId } = await createWorkspaceChannel(t);
+    // Upload without ever referencing in a message.
+    await uploadFile(
+      t,
+      `/api/channels/${channelId}/attachments`,
+      'orphan.png',
+      'image/png',
+      PNG_BYTES,
+    );
+
+    const res = await viewer.get(`/api/channels/${channelId}/attachments`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.items).toEqual([]);
+    expect(body.next_cursor).toBeNull();
+  });
+
+  it('returns 404 for an unknown channel id', async () => {
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    await createWorkspaceChannel(t);
+
+    const res = await viewer.get('/api/channels/no-such-channel/attachments');
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects a tampered cursor with 400 / invalid_cursor', async () => {
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId } = await createWorkspaceChannel(t);
+
+    const res = await viewer.get(
+      `/api/channels/${channelId}/attachments?cursor=not-a-real-cursor!!!`,
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json() as any;
+    expect(body.code).toBe('invalid_cursor');
+  });
+
+  it('paginates via next_cursor across the full result set', async () => {
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId } = await createWorkspaceChannel(t);
+    // Three referenced attachments so a limit=2 page splits cleanly.
+    const first = await uploadAndReference(t, channelId, 'a1.png', 'image/png');
+    const second = await uploadAndReference(t, channelId, 'a2.png', 'image/png');
+    const third = await uploadAndReference(t, channelId, 'a3.png', 'image/png');
+
+    const page1 = await viewer.get(`/api/channels/${channelId}/attachments?limit=2`);
+    expect(page1.status).toBe(200);
+    const body1 = await page1.json() as any;
+    expect(body1.items).toHaveLength(2);
+    expect(body1.next_cursor).toBeTypeOf('string');
+    // DESC order — the most recent reference comes first.
+    expect(body1.items[0].attachment.id).toBe(third.attachment.id);
+    expect(body1.items[1].attachment.id).toBe(second.attachment.id);
+
+    const page2 = await viewer.get(
+      `/api/channels/${channelId}/attachments?limit=2&cursor=${encodeURIComponent(body1.next_cursor)}`,
+    );
+    expect(page2.status).toBe(200);
+    const body2 = await page2.json() as any;
+    expect(body2.items).toHaveLength(1);
+    expect(body2.items[0].attachment.id).toBe(first.attachment.id);
+    expect(body2.next_cursor).toBeNull();
+  });
+
+  it('lists via the underlying repo API to prove the DTO shape end-to-end', async () => {
+    // A defense-in-depth check that the route and repo agree on the wire shape:
+    // insert directly via the repo, then read via the route.
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId } = await createWorkspaceChannel(t);
+    await uploadAndReference(t, channelId, 'shape.png', 'image/png');
+
+    const res = await viewer.get(`/api/channels/${channelId}/attachments`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    // Rehydrate the same page via the repo — same set, same order.
+    const repo = new AttachmentRepo(t.ctx.db);
+    const direct = repo.listChannelReferences(channelId, { limit: 100 });
+    expect(direct.items.map(i => i.attachment.id)).toEqual(
+      body.items.map((i: any) => i.attachment.id),
+    );
+  });
+
+  it('returns 403 for a workspace member who is not a conversation member', async () => {
+    // Route boundary: `canViewConversation` requires the caller be an explicit
+    // `conversation_users` member of THIS channel — workspace membership alone
+    // is not enough. Test-fixture users are auto-seeded as workspace owners on
+    // registration (user-service backfill), so we KEEP teammate's
+    // `workspace_users` row (proves the workspace gate would let them
+    // through) and only strip the channel-level `conversation_users` row.
+    // If the route ever regressed to `canViewWorkspace`-only, this test
+    // would flip to 200 and catch the drift.
+    t = buildTestApp();
+    const { workspaceId, channelId } = await createWorkspaceChannel(t);
+    await uploadAndReference(t, channelId, 'private.png', 'image/png');
+    t.ctx.db
+      .prepare('DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?')
+      .run(channelId, 'teammate');
+    // Sanity: teammate is still a workspace member — the failure below
+    // must come from the conversation-membership gate, not workspace denial.
+    const wsRow = t.ctx.db
+      .prepare('SELECT 1 AS hit FROM workspace_users WHERE workspace_id = ? AND user_id = ?')
+      .get(workspaceId, 'teammate');
+    expect(wsRow).not.toBeUndefined();
+
+    const teammate = http(t, {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    });
+    const res = await teammate.get(`/api/channels/${channelId}/attachments`);
+    expect(res.status).toBe(403);
+  });
+
+  it('resolves and lists via getChannelLike when the target is a dm_channel', async () => {
+    // `getChannelLike` covers both `channel` and `dm_channel` — a bare
+    // `getChannel` would 404 the DM branch. Falsifier: swap the route
+    // resolver to `getChannel` and this test fails on the GET.
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { workspaceId } = await createWorkspaceChannel(t);
+    const conversations = new ConversationRepo(t.ctx.db);
+    const workspacePath = (
+      t.ctx.db
+        .prepare('SELECT workspace_path FROM conversations WHERE workspace_id = ? LIMIT 1')
+        .get(workspaceId) as any
+    ).workspace_path as string;
+    const dm = conversations.insertDmChannel({
+      workspaceId,
+      workspacePath,
+      title: 'dm',
+    });
+    // Seed the 'local' user as a dm_channel member so canViewConversation
+    // resolves to true — otherwise this test would land on the 403 branch
+    // and prove nothing about kind resolution.
+    conversations.addUser(dm.id, 'local');
+    await uploadAndReference(t, dm.id, 'dm-only.png', 'image/png');
+
+    const res = await viewer.get(`/api/channels/${dm.id}/attachments`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].source.conversation_id).toBe(dm.id);
+  });
+
+  it('lists an archived channel as long as the caller can still view it', async () => {
+    // Archive is an admin/governance state — it hides the channel from the
+    // active-channel index, but existing members can still read its
+    // messages, attachments, and by extension this panel. Falsifier: an
+    // over-broad guard that filters `archived_at IS NULL` in the route
+    // would return an empty list or 404 here.
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId } = await createWorkspaceChannel(t);
+    const { attachment } = await uploadAndReference(
+      t,
+      channelId,
+      'kept.png',
+      'image/png',
+    );
+    const conversations = new ConversationRepo(t.ctx.db);
+    const archived = conversations.setArchived(channelId, true);
+    expect(archived?.archived_at).not.toBeNull();
+
+    const res = await viewer.get(`/api/channels/${channelId}/attachments`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.items.map((i: any) => i.attachment.id)).toEqual([attachment.id]);
+  });
+});
+
+describe('Channel attachment list — sender/time filters', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  async function uploadAndReference(
+    tt: TestApp,
+    channelId: string,
+    filename: string,
+  ) {
+    const dto = await (
+      await uploadFile(
+        tt,
+        `/api/channels/${channelId}/attachments`,
+        filename,
+        'image/png',
+        PNG_BYTES,
+      )
+    ).json() as any;
+    const viewer = http(tt, { 'X-Silverhand-User-Id': 'local' });
+    const msg = await viewer.post(`/api/channels/${channelId}/messages`, {
+      content: filename,
+      attachment_ids: [dto.id],
+    });
+    expect(msg.status).toBe(201);
+    return dto;
+  }
+
+  // ── 400 validation matrix: a malformed filter is rejected, never
+  //    silently served as the unfiltered list under a filtered UI. ──
+  const badFilters: Array<[string, string]> = [
+    ['unknown sender_kind', 'sender_kind=ghost'],
+    ['sender_id without sender_kind', 'sender_id=local'],
+    ['system sender_kind carrying sender_id', 'sender_kind=system&sender_id=x'],
+    ['user sender_kind missing sender_id', 'sender_kind=user'],
+    ['agent sender_kind missing sender_id', 'sender_kind=agent'],
+    ['user sender_kind with empty sender_id', 'sender_kind=user&sender_id='],
+    ['user sender_kind with whitespace-only sender_id', 'sender_kind=user&sender_id=%20%20'],
+    ['non-integer since', 'since=abc'],
+    ['negative since', 'since=-1'],
+    ['decimal until', 'until=1.5'],
+    ['since equal to until', 'since=1000&until=1000'],
+    ['since greater than until', 'since=2000&until=1000'],
+  ];
+  for (const [label, query] of badFilters) {
+    it(`rejects ${label} with 400 / invalid_filter`, async () => {
+      t = buildTestApp();
+      const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+      const { channelId } = await createWorkspaceChannel(t);
+      const res = await viewer.get(
+        `/api/channels/${channelId}/attachments?${query}`,
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json() as any;
+      expect(body.code).toBe('invalid_filter');
+    });
+  }
+
+  it('accepts a well-formed system sender filter (no sender_id) as 200', async () => {
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId } = await createWorkspaceChannel(t);
+    const res = await viewer.get(
+      `/api/channels/${channelId}/attachments?sender_kind=system`,
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it('filters by sender identity — matching id returns, other id is empty', async () => {
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId } = await createWorkspaceChannel(t);
+    const a = await uploadAndReference(t, channelId, 'a.png');
+    const b = await uploadAndReference(t, channelId, 'b.png');
+
+    const mine = await viewer.get(
+      `/api/channels/${channelId}/attachments?sender_kind=user&sender_id=local`,
+    );
+    expect(mine.status).toBe(200);
+    const mineBody = await mine.json() as any;
+    expect(mineBody.items.map((i: any) => i.attachment.id).sort()).toEqual(
+      [a.id, b.id].sort(),
+    );
+
+    const other = await viewer.get(
+      `/api/channels/${channelId}/attachments?sender_kind=user&sender_id=nobody`,
+    );
+    expect(other.status).toBe(200);
+    const otherBody = await other.json() as any;
+    expect(otherBody.items).toEqual([]);
+  });
+
+  it('passes the time window through to the repo (since far-future → empty)', async () => {
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId } = await createWorkspaceChannel(t);
+    await uploadAndReference(t, channelId, 'now.png');
+
+    // since=0 is inclusive of every real timestamp → the attachment is present.
+    const all = await viewer.get(
+      `/api/channels/${channelId}/attachments?since=0`,
+    );
+    expect(((await all.json()) as any).items).toHaveLength(1);
+
+    // A far-future lower bound excludes every reference.
+    const none = await viewer.get(
+      `/api/channels/${channelId}/attachments?since=99999999999999`,
+    );
+    expect(((await none.json()) as any).items).toEqual([]);
+  });
+});
+
+describe('Channel attachment sender facets (GET .../attachments/senders)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  async function referenceAsUser(tt: TestApp, channelId: string, filename: string) {
+    const dto = await (
+      await uploadFile(
+        tt,
+        `/api/channels/${channelId}/attachments`,
+        filename,
+        'image/png',
+        PNG_BYTES,
+      )
+    ).json() as any;
+    const viewer = http(tt, { 'X-Silverhand-User-Id': 'local' });
+    const msg = await viewer.post(`/api/channels/${channelId}/messages`, {
+      content: filename,
+      attachment_ids: [dto.id],
+    });
+    expect(msg.status).toBe(201);
+    return dto;
+  }
+
+  it('returns the distinct canonical-source actors in deterministic order', async () => {
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const agentId = agentIds.alice!;
+    // One user-sourced attachment via the public path.
+    await referenceAsUser(t, channelId, 'u.png');
+    // One agent-sourced attachment — inserted directly (the public compose
+    // path is user-only); the blob still needs a real row for the boundary
+    // join, so upload it first, then attribute the reference to the agent.
+    const agentDto = await (
+      await uploadFile(
+        t,
+        `/api/channels/${channelId}/attachments`,
+        'a.png',
+        'image/png',
+        PNG_BYTES,
+      )
+    ).json() as any;
+    new MessageRepo(t.ctx.db).insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: agentId,
+      content: 'from agent',
+      attachments: [
+        { id: agentDto.id, filename: 'a.png', size: 1, content_type: 'image/png' },
+      ],
+    });
+
+    const res = await viewer.get(
+      `/api/channels/${channelId}/attachments/senders`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    // from_kind ASC ('agent' before 'user'); identity-only, no display_name.
+    expect(body.senders).toEqual([
+      { from_kind: 'agent', from_user_id: null, from_agent_id: agentId },
+      { from_kind: 'user', from_user_id: 'local', from_agent_id: null },
+    ]);
+  });
+
+  it('returns 404 for an unknown channel id', async () => {
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    await createWorkspaceChannel(t);
+    const res = await viewer.get('/api/channels/no-such/attachments/senders');
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 403 for a workspace member who is not a conversation member', async () => {
+    // Same view gate as the list: workspace membership alone is insufficient.
+    t = buildTestApp();
+    const { workspaceId, channelId } = await createWorkspaceChannel(t);
+    await referenceAsUser(t, channelId, 'private.png');
+    t.ctx.db
+      .prepare('DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?')
+      .run(channelId, 'teammate');
+    const wsRow = t.ctx.db
+      .prepare('SELECT 1 AS hit FROM workspace_users WHERE workspace_id = ? AND user_id = ?')
+      .get(workspaceId, 'teammate');
+    expect(wsRow).not.toBeUndefined();
+
+    const teammate = http(t, {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    });
+    const res = await teammate.get(
+      `/api/channels/${channelId}/attachments/senders`,
+    );
+    expect(res.status).toBe(403);
   });
 });
 

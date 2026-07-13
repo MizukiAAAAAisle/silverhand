@@ -7,17 +7,17 @@ import {
   useState,
 } from 'react';
 import {
-  CornerDownRight,
   Hash,
   Maximize2,
-  CornerUpLeft,
   Minimize2,
+  Paperclip,
   Power,
   RefreshCw,
   Search,
   Settings,
   X,
 } from 'lucide-react';
+import { ThreadIcon } from '@/components/icons/conversation-icons';
 import { Composer } from '@/components/chat/Composer';
 import { QuotedMessagePreview } from '@/components/chat/QuotedMessagePreview';
 import { findThreadAnchor, readAnchorMessageId } from '@/components/chat/threadAnchor';
@@ -102,6 +102,14 @@ interface ChannelViewProps {
   /** Whether the Threads-list pane is currently open (drives the toggle's
    *  active styling + aria-pressed). */
   threadsListActive?: boolean;
+  /** Toggle the channel Attachments-list pane — opens when
+   *  closed, closes when open. When set, the header renders an Attachments
+   *  toggle. Only the primary channel pane passes this — thread/dm/side
+   *  panes have no channel-scoped attachments index. */
+  onToggleFilesList?: () => void;
+  /** Whether the Attachments-list pane is currently open (drives the
+   *  toggle's active styling + aria-pressed). */
+  filesListActive?: boolean;
   /** When set, renders an X button in the header that calls this back.
    *  Used by the right-side secondary pane to close itself. */
   onCloseChild?: () => void;
@@ -216,6 +224,8 @@ function ActiveChannelView({
   onOpenThread,
   onToggleThreadsList,
   threadsListActive = false,
+  onToggleFilesList,
+  filesListActive = false,
   onCloseChild,
   closeLabel = '关闭 Thread',
   onJumpToOriginal,
@@ -500,13 +510,13 @@ function ActiveChannelView({
       <header className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         {showThreadHeader ? (
           <>
-            <CornerDownRight className="size-4 shrink-0 text-text-muted" />
+            <ThreadIcon className="size-4 shrink-0 text-text-muted" />
             <span
               data-conversation-title
               className="min-w-0 truncate font-serif text-base font-semibold text-text-primary"
             >
               {/* A thread is a reply-cluster, not a channel: the
-                  `CornerDownRight` above is its identity glyph, so the
+                  `ThreadIcon` above is its identity glyph, so the
                   channel `#` (`[data-conversation-hash-icon]`) does NOT
                   belong here — only true channel/DM headers carry it
                   (shiki, #task:1373). */}
@@ -541,7 +551,7 @@ function ActiveChannelView({
                   branch: this else-branch is the main channel/DM header and
                   `conversation` is always `channel` | `dm_channel`. (Threads
                   take the showThreadHeader branch above, which shows the
-                  `CornerDownRight` reply glyph instead — no `#`.) Painted per
+                  `ThreadIcon` instead — no `#`.) Painted per
                   theme via `[data-conversation-hash-icon]` (shiki: "只要是
                   channel 都需要 # icon,逻辑上不需要分支", #task:1373). */}
               <Hash
@@ -559,7 +569,7 @@ function ActiveChannelView({
             ) : null}
             {parentTitle ? (
               <span className="flex min-w-0 items-center gap-1 truncate text-xs text-text-muted">
-                <CornerDownRight className="size-3 shrink-0 text-text-muted/60" />
+                <ThreadIcon className="size-3 shrink-0 text-text-muted/60" />
                 <span className="truncate">thread of {parentTitle}</span>
               </span>
             ) : null}
@@ -608,7 +618,24 @@ function ActiveChannelView({
                   : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
               }
             >
-              <CornerUpLeft className="size-4" />
+              <ThreadIcon className="size-4" />
+            </button>
+          ) : null}
+          {onToggleFilesList ? (
+            <button
+              type="button"
+              onClick={onToggleFilesList}
+              aria-label="Attachments"
+              aria-pressed={filesListActive}
+              title="Attachments"
+              className={
+                'flex size-7 shrink-0 items-center justify-center rounded-[6px] ' +
+                (filesListActive
+                  ? 'bg-bg-hover text-text-primary'
+                  : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
+              }
+            >
+              <Paperclip className="size-4" />
             </button>
           ) : null}
           {canManageAllChannelAgents ? (

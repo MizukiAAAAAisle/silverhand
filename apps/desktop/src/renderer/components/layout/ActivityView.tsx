@@ -4,11 +4,11 @@ import {
   AlertTriangle,
   Check,
   MessageCircle,
-  MessagesSquare,
 } from 'lucide-react';
 import type { ActivityItemDto, ActivityPreviewSender, AgentDto } from '@silverhand/shared';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import { ChannelIcon } from '@/components/ChannelIcon';
+import { ThreadIcon } from '@/components/icons/conversation-icons';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
@@ -578,7 +578,7 @@ function ActivityRow({
               the focus and keeps primary ink (#task:1269 item 3). */}
           {hasRootLine ? (
             <div className="mt-1 flex items-center gap-2">
-              <MessagesSquare
+              <ThreadIcon
                 aria-hidden
                 className="size-3.5 shrink-0 text-text-muted"
               />

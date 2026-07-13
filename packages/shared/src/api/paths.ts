@@ -256,6 +256,11 @@ export const apiPaths = {
   // attachments — upload via channel context, download by id.
   // Each upload creates an independent blob (no de-dup).
   channelAttachments: (id: string) => `/api/channels/${id}/attachments`,
+  /** Distinct canonical-source senders for the channel Attachments panel's
+   *  sender filter. Identity-only facets; same channel view permission as the
+   *  list. A distinct path from the list route, and `attachment(:id)` lives
+   *  under `/api/attachments`, so there is no route-ordering hazard. */
+  channelAttachmentSenders: (id: string) => `/api/channels/${id}/attachments/senders`,
   attachment: (id: string) => `/api/attachments/${id}`,
 
   /** Global message unread summary across all workspace/sidebar items.

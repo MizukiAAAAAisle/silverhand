@@ -14,11 +14,12 @@
  *
  * Besides the last workspace and last channel per workspace, we also remember
  * the last **secondary-pane layout per channel** ({@link lastLayoutByChannel})
- * so switching away from a channel and back restores its threads-list / thread
- * / side overlay instead of dropping to a bare channel, plus a per-channel
- * **explicit-close watermark** ({@link closeWatermarkByChannel}) that lets an
- * unread thread auto-surface without immediately re-surfacing a batch the user
- * just closed. All place-memory state is wiped together on logout.
+ * so switching away from a channel and back restores its threads-list /
+ * thread / side overlay instead of dropping to a bare channel, plus a
+ * per-channel **explicit-close watermark**
+ * ({@link closeWatermarkByChannel}) that lets an unread thread auto-surface
+ * without immediately re-surfacing a batch the user just closed. All
+ * place-memory state is wiped together on logout.
  *
  * Lives in `lib/` (not `App.tsx`) so `useLogout` in
  * `features/me/hooks.ts` can import it without taking a circular

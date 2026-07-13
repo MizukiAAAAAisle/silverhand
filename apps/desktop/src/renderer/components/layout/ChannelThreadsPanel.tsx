@@ -1,4 +1,5 @@
-import { CornerUpLeft, Loader2, X } from 'lucide-react';
+import { Loader2, X } from 'lucide-react';
+import { ThreadIcon } from '@/components/icons/conversation-icons';
 import type { StreamUnreadDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
@@ -104,7 +105,7 @@ export function ChannelThreadsPanel({
       className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
     >
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-3">
-        <CornerUpLeft className="size-3.5 shrink-0 text-text-muted" />
+        <ThreadIcon className="size-3.5 shrink-0 text-text-muted" />
         <div className="min-w-0 flex-1 leading-tight">
           <div className="truncate text-sm font-medium text-text-primary">
             Threads
@@ -140,7 +141,7 @@ export function ChannelThreadsPanel({
           </div>
         ) : threads.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
-            <CornerUpLeft className="size-6 text-text-muted/50" />
+            <ThreadIcon className="size-6 text-text-muted/50" />
             <p className="text-sm text-text-primary">No threads yet</p>
             <p className="text-xs text-text-muted">
               Reply to a message to start a thread — it’ll show up here.

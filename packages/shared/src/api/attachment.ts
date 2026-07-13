@@ -3,8 +3,10 @@
 import { z } from 'zod';
 import {
   AttachmentCreatorKindSchema,
+  FromKindSchema,
   StorageKindSchema,
 } from '../db/schema.js';
+import { MessageSeqSchema } from '../seq.js';
 
 //
 // Two shapes:
@@ -183,3 +185,115 @@ export const AttachmentLocateDtoSchema = z.union([
   }),
 ]);
 export type AttachmentLocateDto = z.infer<typeof AttachmentLocateDtoSchema>;
+
+// ── Channel Attachments list (#task:1481) ──────────────────────────────────
+//
+// Scope: attachments referenced by persisted messages in a channel. Orphans
+// (uploaded but never sent) are excluded — a channel Attachments panel shows
+// blobs that actually appear in the conversation, not the composer drafts
+// awaiting send. Thread replies live under the parent channel's conversation_id
+// (docs/thread-reply-cluster-v1.md), so a single `conversation_id = channel_id`
+// scan covers main-line + thread references.
+//
+// De-duplication: one row per attachment id. When the same blob is referenced
+// by multiple messages, the panel shows the earliest persisted reference as
+// the source, chosen deterministically by (message.created_at ASC, message.id
+// ASC) — never `MIN(created_at)` + independent field pick (ties would drift
+// message_id / thread_root_id across rows).
+//
+// Source actor is the earliest reference message's sender, NOT the attachment
+// uploader — `AttachmentDto.created_by_*` is the blob's originator (may be an
+// agent that never sends the message), which is a separate axis. The panel row
+// renders sender identity from `source.from_*`, avoiding an N+1 lookup.
+
+/** Earliest persisted-message reference for an attachment in the channel. */
+export const AttachmentListItemSourceSchema = z.object({
+  message_id: z.string(),
+  /** Always the channel id — thread reply messages store the parent channel
+   *  here, with `thread_root_id` distinguishing them. */
+  conversation_id: z.string(),
+  thread_root_id: z.string().nullable(),
+  message_seq: MessageSeqSchema,
+  from_kind: FromKindSchema,
+  from_user_id: z.string().nullable(),
+  from_agent_id: z.string().nullable(),
+  /** The reference message's `created_at`. Doubles as the list's sort key —
+   *  panel rows are `appeared_at DESC`. */
+  appeared_at: z.number(),
+});
+export type AttachmentListItemSource = z.infer<
+  typeof AttachmentListItemSourceSchema
+>;
+
+export const AttachmentListItemSchema = z.object({
+  attachment: AttachmentDtoSchema,
+  source: AttachmentListItemSourceSchema,
+});
+export type AttachmentListItem = z.infer<typeof AttachmentListItemSchema>;
+
+export const AttachmentListPageSchema = z.object({
+  items: z.array(AttachmentListItemSchema),
+  /** Opaque; base64url JSON `[appeared_at, attachment_id]`. Null when the
+   *  page reaches the tail. */
+  next_cursor: z.string().nullable(),
+});
+export type AttachmentListPage = z.infer<typeof AttachmentListPageSchema>;
+
+// ── Channel Attachments filter facets ──────────────────────────────────────
+//
+// The list supports two filter axes, both applied to the CANONICAL row (the
+// earliest reference chosen by the dedup) — never to raw references. Filtering
+// raw refs then deduping would drift an attachment's displayed source / jump
+// target between filter states; the canonical source is a stable property of
+// the attachment, so the filter reads the same `from_*` / `appeared_at` the
+// panel renders (WYSIWYG). Time bounds are a half-open `[since, until)` window
+// on the canonical `appeared_at`, which is also the sort + cursor key, so they
+// compose with keyset pagination (a viewer-local calendar day stays correct
+// across DST because the caller passes the two local-midnight instants).
+//
+// The sender facet set is the DISTINCT canonical-source actors — the same
+// dedup set the list filters over, NOT "every actor that ever referenced an
+// attachment". A re-share-only actor (never the earliest reference) is not a
+// canonical source, so offering them in the dropdown would be a dead option
+// (selecting yields zero rows).
+//
+// Every facet MUST be selectable by the list's sender wire, so the set carries
+// only actors the wire can name: `sender_kind=user|agent` requires a non-empty
+// id. `messages.from_{user,agent}_id` are ON DELETE SET NULL and a hard-deleted
+// actor physically drops its row, so a canonical source whose actor was hard-
+// deleted survives as a `from_kind` with a NULL id. That dangling actor is not
+// wire-expressible and is excluded from the facet set — the attachment still
+// appears in the unfiltered list, so no data is hidden, only an unusable filter
+// option is withheld. The facet is therefore a precise discriminated union: a
+// `user` carries only its user id, an `agent` only its agent id, `system`
+// neither. Identity only — no display_name / avatar; the renderer resolves
+// those via its member maps and, for an actor removed FROM THE ROSTER but still
+// present in the DB, falls back to the raw id. (A hard delete leaves no id in
+// the DB, which is exactly why the dangling case is filtered above rather than
+// surfaced as a raw-id facet.) The set is time-independent: a sender ∩ time
+// intersection that comes back empty is an honest "no results", not the
+// pagination-window illusion the list itself guards.
+
+export const AttachmentSenderFacetSchema = z.discriminatedUnion('from_kind', [
+  z.object({
+    from_kind: z.literal('user'),
+    from_user_id: z.string().min(1),
+    from_agent_id: z.null(),
+  }),
+  z.object({
+    from_kind: z.literal('agent'),
+    from_user_id: z.null(),
+    from_agent_id: z.string().min(1),
+  }),
+  z.object({
+    from_kind: z.literal('system'),
+    from_user_id: z.null(),
+    from_agent_id: z.null(),
+  }),
+]);
+export type AttachmentSenderFacet = z.infer<typeof AttachmentSenderFacetSchema>;
+
+export const AttachmentSenderFacetsSchema = z.object({
+  senders: z.array(AttachmentSenderFacetSchema),
+});
+export type AttachmentSenderFacets = z.infer<typeof AttachmentSenderFacetsSchema>;

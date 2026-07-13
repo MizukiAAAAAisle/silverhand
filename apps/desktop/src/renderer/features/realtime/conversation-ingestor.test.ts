@@ -24,6 +24,10 @@ import { clusterMessagesKey, messagesKey, threadRootKey } from '@/features/chann
 import { messageReactorsKey } from '@/features/channels/reaction-hooks';
 import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
+import {
+  channelAttachmentsKey,
+  channelAttachmentSendersKey,
+} from '@/features/channels/useChannelAttachments';
 import { agentRunStatesKey } from '@/lib/agentRunStateCache';
 import { eventWsClient } from '@/lib/ws-client';
 import {
@@ -304,6 +308,138 @@ describe('ingestConversationFrame — channel-threads gate (#1255 P1c)', () => {
     ingestConversationFrame(qc, messageFrame('c1', message({ id: 'm1', seq: 1 })));
 
     expect(spy).not.toHaveBeenCalledWith({ queryKey: channelThreadsKey('c1') });
+  });
+});
+
+// The channel Attachments list is a message-derived read model
+// (one row per unique attachment referenced by a persisted message). Same
+// reader-gate as threads-list, plus a message-branch payload gate:
+// `msg.attachments?.length > 0` — an unrelated reply must NOT trigger a full
+// list refetch (no full-message storm into a projection refetch).
+// Snapshot_required carries no payload → invalidates unconditionally whenever
+// the reader is up.
+describe('ingestConversationFrame — channel-attachments gate', () => {
+  const withAttachment: Partial<MessageDto> = {
+    attachments: [
+      {
+        id: 'att_1',
+        filename: 'foo.png',
+        size: 42,
+        content_type: 'image/png',
+      },
+    ],
+  };
+
+  it('invalidates the attachments list on a mainline attachment message when a reader is mounted', () => {
+    const qc = new QueryClient();
+    const unsub = mountReader(qc, channelAttachmentsKey('c1'));
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    ingestConversationFrame(
+      qc,
+      messageFrame('c1', message({ id: 'm1', seq: 1, ...withAttachment })),
+    );
+
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: channelAttachmentsKey('c1'),
+    });
+    // A new attachment message can introduce a first-time sender, so the
+    // (lazy) sender facets are invalidated in lockstep with the list.
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: channelAttachmentSendersKey('c1'),
+    });
+    unsub();
+  });
+
+  it('invalidates on a THREAD reply that carries an attachment (parent-channel scope)', () => {
+    const qc = new QueryClient();
+    const unsub = mountReader(qc, channelAttachmentsKey('c1'));
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    ingestConversationFrame(
+      qc,
+      messageFrame(
+        'c1',
+        message({
+          id: 'm2',
+          seq: 2,
+          thread_root_id: 'root1',
+          ...withAttachment,
+        }),
+      ),
+    );
+
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: channelAttachmentsKey('c1'),
+    });
+    unsub();
+  });
+
+  it('does NOT invalidate on a message WITHOUT attachments (falsifier — no full-list storm)', () => {
+    const qc = new QueryClient();
+    const unsub = mountReader(qc, channelAttachmentsKey('c1'));
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    ingestConversationFrame(
+      qc,
+      messageFrame('c1', message({ id: 'm3', seq: 3, attachments: null })),
+    );
+
+    expect(spy).not.toHaveBeenCalledWith({
+      queryKey: channelAttachmentsKey('c1'),
+    });
+    expect(spy).not.toHaveBeenCalledWith({
+      queryKey: channelAttachmentSendersKey('c1'),
+    });
+    unsub();
+  });
+
+  it('does NOT invalidate on an attachment message when no reader is mounted (falsifier)', () => {
+    const qc = new QueryClient();
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    ingestConversationFrame(
+      qc,
+      messageFrame('c1', message({ id: 'm4', seq: 4, ...withAttachment })),
+    );
+
+    expect(spy).not.toHaveBeenCalledWith({
+      queryKey: channelAttachmentsKey('c1'),
+    });
+  });
+
+  it('snapshot_required on the MESSAGE scope invalidates unconditionally when a reader is mounted', () => {
+    const qc = new QueryClient();
+    const unsub = mountReader(qc, channelAttachmentsKey('c1'));
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    ingestConversationFrame(qc, {
+      type: 'snapshot_required',
+      scope: 'conversation:c1',
+      epoch: 'e',
+      currentSeq: 5,
+    } as ServerFrame);
+
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: channelAttachmentsKey('c1'),
+    });
+    unsub();
+  });
+
+  it('snapshot_required does NOT invalidate when no reader is mounted (falsifier)', () => {
+    const qc = new QueryClient();
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    ingestConversationFrame(qc, {
+      type: 'snapshot_required',
+      scope: 'conversation:c1',
+      epoch: 'e',
+      currentSeq: 5,
+    } as ServerFrame);
+
+    expect(spy).not.toHaveBeenCalledWith({
+      queryKey: channelAttachmentsKey('c1'),
+    });
   });
 });
 

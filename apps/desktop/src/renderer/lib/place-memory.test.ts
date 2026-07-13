@@ -176,6 +176,22 @@ describe('place-memory', () => {
       });
       vi.resetModules();
     });
+
+    it('drops a stale persisted files-list entry (Attachments no longer persists)', async () => {
+      // The Attachments panel became a transient overlay — `files-list` was
+      // removed from ChannelLayout. A value written by an older build must be
+      // rejected on load (not laundered into an invalid layout), so the
+      // channel opens bare instead of resurrecting a pane the model no longer
+      // knows how to render.
+      memoryStore.set(
+        LAST_LAYOUT_KEY,
+        JSON.stringify({ 'ch-files': { kind: 'files-list' } }),
+      );
+      vi.resetModules();
+      const fresh = await import('./place-memory');
+      expect(fresh.getChannelLayout('ch-files')).toBeNull();
+      vi.resetModules();
+    });
   });
 
   describe('explicit-close watermark', () => {

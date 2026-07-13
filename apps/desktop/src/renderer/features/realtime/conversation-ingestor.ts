@@ -33,6 +33,11 @@ import {
   invalidateChannelThreadsList,
 } from '@/features/channels/useChannelThreads';
 import {
+  hasActiveChannelAttachmentsReader,
+  invalidateChannelAttachmentsList,
+  invalidateChannelAttachmentSenders,
+} from '@/features/channels/useChannelAttachments';
+import {
   applyAgentStatusToCache,
   applyClusterMessageToCaches,
   applyMainlineMessageToChannelCaches,
@@ -408,6 +413,27 @@ function ingestMessage(
     if (!isPatchedThreadsList) push(invalidateChannelThreadsList(qc, channelId));
   }
 
+  // ATTACHMENTS-LIST — message-derived read model. A row is
+  // emitted per unique attachment referenced by a persisted message in this
+  // channel, so only frames that carry attachment refs can grow / reorder
+  // the list. Gate on `attachments?.length > 0` (a plain reply frame must
+  // NOT cause a full-list refetch — the reader must not fan a full-message
+  // storm into a projection refetch) AND on an active reader (no work while
+  // the panel is closed). Thread replies land here too — the DTO carries
+  // the parent channel id, so this fires exactly once per attachment-bearing
+  // message.
+  if (
+    msg.attachments &&
+    msg.attachments.length > 0 &&
+    hasActiveChannelAttachmentsReader(qc, channelId)
+  ) {
+    push(invalidateChannelAttachmentsList(qc, channelId));
+    // The new message may carry a sender not yet in the facet set; refresh
+    // the (lazy) sender dropdown source so a first-time sender becomes
+    // filterable without reopening the panel.
+    push(invalidateChannelAttachmentSenders(qc, channelId));
+  }
+
   // S1 authoritative projection merge (#task:1277): dispatch the frame's VALIDATED
   // absolute projection patches through the reader registry; each displayed surface
   // returns a 4-state disposition (§7) mapped to its settle promise for the
@@ -579,6 +605,15 @@ function ingestMessageStreamSnapshotRequired(
   // a plain root into a thread) → stays on the message stream.
   if (hasActiveChannelThreadsReader(qc, channelId)) {
     settles.push(invalidateChannelThreadsList(qc, channelId));
+  }
+  // The channel Attachments list is also message-derived. A
+  // snapshot_required covers gap recovery — the missed window may have
+  // referenced attachments we don't know about, so invalidate + settle
+  // whenever the panel reader is active (no `msg.attachments` gate here:
+  // snapshot_required carries no payload).
+  if (hasActiveChannelAttachmentsReader(qc, channelId)) {
+    settles.push(invalidateChannelAttachmentsList(qc, channelId));
+    settles.push(invalidateChannelAttachmentSenders(qc, channelId));
   }
   return settles;
 }

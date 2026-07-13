@@ -17,6 +17,7 @@ import { ConversationViewSkeleton } from '@/components/layout/ConversationViewSk
 import { SectionLayer } from '@/components/layout/SectionLayer';
 import { ThreadPanel } from '@/components/layout/ThreadPanel';
 import { ChannelThreadsPanel } from '@/components/layout/ChannelThreadsPanel';
+import { ChannelAttachmentsPanel } from '@/components/layout/ChannelAttachmentsPanel';
 import { SavedListView, SAVED_FILTER_DEFAULT, type SavedFilterState } from '@/components/layout/SavedListView';
 import { SearchPanel, SEARCH_FILTER_DEFAULT, type SearchFilterState } from '@/components/layout/SearchPanel';
 import { ArchivedChannelsPanel, ARCHIVED_FILTER_DEFAULT, type ArchivedFilterState } from '@/components/layout/ArchivedChannelsPanel';
@@ -250,6 +251,7 @@ function RegisteredAppShell(): JSX.Element {
     sideConversationId,
     threadRootId,
     threadsListOpen,
+    filesListOpen,
     focusedTaskNumber,
     fullscreen: routeFullscreen,
     agentId: selectedAgentId,
@@ -1316,6 +1318,17 @@ function RegisteredAppShell(): JSX.Element {
           : undefined
       }
       threadsListActive={threadsListOpen}
+      // Attachments-list pane toggle. Same gate as threads: any
+      // top-level channel-like conversation carries a channel-scoped
+      // attachments index; thread / dm-side / `?side` secondary primaries
+      // don't.
+      onToggleFilesList={
+        deferredParentDescriptor?.kind === 'channel' ||
+        deferredParentDescriptor?.kind === 'dm_channel'
+          ? nav.toggleFilesList
+          : undefined
+      }
+      filesListActive={filesListOpen}
       onArchiveChannel={handleArchiveChannelMutation}
       onRenameChannel={handleRenameChannelMutation}
       archivePending={archiveChannel.isPending}
@@ -1358,6 +1371,26 @@ function RegisteredAppShell(): JSX.Element {
         contextWorkspaceId={selectedWorkspaceId ?? null}
         onClose={nav.closeAgentPanel}
         onDeleted={nav.closeAgentPanel}
+      />
+    );
+  } else if (filesListOpen && selectedChannelId && selectedWorkspaceId) {
+    // Channel Attachments panel (`?files=1`). An OVERLAY utility pane, so it
+    // sits just below the agent panel in precedence (agent > files > side >
+    // thread > threads) and ahead of the conversation panes: opening it
+    // preserves `?thread` / `?threads` in the URL (cleared only `?side` /
+    // `?agent`), so closing it reveals whatever conversation pane was
+    // underneath — the URL is the restore stack (same model as `?agent`,
+    // #task:1433). Not a conversation, so it doesn't feed
+    // `secondaryDescriptor` / notification suppression. The row's main
+    // click previews/opens the attachment; a separate locate button jumps
+    // to the source message via the shared `handleJumpToMessage`.
+    secondaryView = (
+      <ChannelAttachmentsPanel
+        channelId={selectedChannelId}
+        workspaceId={selectedWorkspaceId}
+        parentTitle={selectedChannel?.title ?? null}
+        onClose={nav.closeFilesList}
+        onJumpToMessage={handleJumpToMessage}
       />
     );
   } else if (secondaryDescriptor) {

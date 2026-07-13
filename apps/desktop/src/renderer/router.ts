@@ -125,6 +125,22 @@ export interface RouteState {
    *  and `threadRootId` at the nav layer (opening any one clears the
    *  others). */
   threadsListOpen: boolean;
+  /** Channel Attachments panel flag (`?files=1`). An OVERLAY utility pane,
+   *  NOT a mutually-exclusive secondary-family peer: opening it clears
+   *  `?side` / `?agent` / `?fullscreen` but PRESERVES `?thread` /
+   *  `?threads`, so closing it (deleting `?files`) reveals whatever
+   *  conversation pane was underneath — the URL itself is the restore
+   *  stack, no memory needed (same model as `?agent`, #task:1433). The
+   *  render layer honours priority `agent > files > side > thread >
+   *  threads`. `?side` is cleared on open because a secondary CONVERSATION
+   *  feeds notification suppression and must not stay "visible" while
+   *  covered. It is NOT a conversation — a channel-scoped index resolved
+   *  against `channelId` — and is deliberately absent from `ChannelLayout`
+   *  persistence: a transient overlay should not resurrect on channel
+   *  re-entry (only the underlying thread/threads pane persists). The URL
+   *  uses `?files` (matching `?threads=1`) rather than the product-facing
+   *  word "Attachments" for symmetry; the panel title is "Attachments". */
+   filesListOpen: boolean;
   /** Tasks-drawer focus pointer (`?task=<task_number>`). When set, the
    *  drawer opens to "all" filter and scrolls/highlights the row. The
    *  number is workspace-scoped — resolution uses the workspace of the
@@ -200,6 +216,10 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   // carried — the flag alone is enough to switch the right pane to the
   // index view.
   const threadsListOpen = searchParams.get('threads') === '1';
+  // Channel Attachments panel: same shape as `?threads=1` (a boolean
+  // flag; the panel scopes to `channelId`). Fourth secondary-family axis.
+  // Any value other than exactly `'1'` treated as absent.
+  const filesListOpen = searchParams.get('files') === '1';
   // Agent side-panel pane (`?agent=<agentId>`). Empty string treated as
   // unset (mirrors `?side`). Carries an agent id, not a conversation id —
   // the chat-section right pane renders it as `AgentView variant="side"`.
@@ -246,6 +266,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
     sideConversationId,
     threadRootId,
     threadsListOpen,
+    filesListOpen,
     focusedTaskNumber,
     fullscreen,
     agentId: mAgent?.params.agentId ?? null,
@@ -269,6 +290,11 @@ export function useRouteState(): RouteState {
  * closes the secondary pane we record `none` so re-entering the channel
  * keeps it closed rather than resurrecting a stale pane.
  *
+ * The Attachments panel (`?files=1`) is deliberately ABSENT here: it is a
+ * transient OVERLAY (see `RouteState.filesListOpen`), and resurrecting a
+ * utility overlay on channel re-entry is not the intent. When it covers a
+ * thread/threads pane, that underlying pane is what persists.
+ *
  * Fullscreen is deliberately NOT part of this model: no UI affordance
  * writes `?fullscreen=1` today (the `/t/` viewer that owned the only
  * fullscreen toggle was retired), and the render gate only honours
@@ -286,6 +312,8 @@ export type ChannelLayout =
  * The secondary-pane slice of a RouteState that determines a channel's
  * layout. Narrower than the full RouteState so callers (and the layout
  * write-effect) depend only on these primitives, not route identity.
+ * `filesListOpen` is intentionally NOT here — the Attachments overlay does
+ * not persist (see {@link ChannelLayout}).
  */
 export type SecondaryRouteFields = Pick<
   RouteState,
@@ -294,10 +322,13 @@ export type SecondaryRouteFields = Pick<
 
 /**
  * Project the secondary-pane fields of a RouteState down to the persisted
- * {@link ChannelLayout}. The three panes are mutually exclusive at the
- * nav layer, but we resolve in the same priority the render layer uses
- * (side > thread > threads-list) so a malformed URL with more than one
- * set maps deterministically.
+ * {@link ChannelLayout}. The three persisted panes are mutually exclusive
+ * at the nav layer, but we resolve in the same priority the render layer
+ * uses (side > thread > threads-list) so a malformed URL with more than
+ * one set maps deterministically. The Attachments overlay (`?files`) is
+ * not projected here: when it covers a thread/threads pane, that pane's
+ * query param is still present and wins; when it is open alone the layout
+ * is `none`, so a bare channel + Files does not resurrect on re-entry.
  */
 export function layoutMemoryFromRoute(
   route: SecondaryRouteFields,
@@ -491,6 +522,9 @@ export function buildSideOpenUrl(
   params.delete('thread');
   // Same exclusion for the channel Threads-list pane (#task:1073).
   params.delete('threads');
+  // …and the channel Attachments panel — fourth axis in the
+  // same secondary family, single-slot.
+  params.delete('files');
   // …and the agent side-panel pane (#task:1189) — the right pane holds one
   // secondary at a time.
   params.delete('agent');
@@ -526,6 +560,7 @@ export function withThreadQuery(
     params.set('thread', rootMessageId);
     params.delete('side');
     params.delete('threads');
+    params.delete('files');
     params.delete('agent');
     params.delete('fullscreen');
   }
@@ -572,12 +607,52 @@ export function withThreadsQuery(
     params.set('threads', '1');
     params.delete('side');
     params.delete('thread');
+    params.delete('files');
     params.delete('agent');
     params.delete('fullscreen');
   }
   const next = params.toString();
   return next ? `${pathname}?${next}` : pathname;
 }
+
+/**
+ * Build a URL with `?files` written or cleared. The Attachments panel is an
+ * OVERLAY (mirrors `withAgentQuery`, #task:1433), not a mutually-exclusive
+ * secondary-family peer.
+ *
+ * Rules:
+ *  - `open === false` → strip `?files` AND `?fullscreen`. Any `?thread` /
+ *    `?threads` that were PRESERVED when the panel opened survive, so the
+ *    previously-open conversation pane comes back — the URL is the restore
+ *    stack, no memory needed.
+ *  - `open === true` → set `?files=1`; strip `?side`, `?agent` and
+ *    `?fullscreen`, but PRESERVE `?thread` / `?threads`. `?side` is the
+ *    exception (like `?agent`): a secondary CONVERSATION feeds
+ *    `useSecondaryPaneModel`'s visible/focused set (which drives
+ *    notification suppression), so leaving it set while visually covered
+ *    would silence toasts for a pane the user can't see. `?agent` is
+ *    cleared because the right pane holds one overlay at a time.
+ *  - Other query params (`task`, …) are preserved verbatim.
+ */
+export function withFilesQuery(
+  pathname: string,
+  search: string,
+  open: boolean,
+): string {
+  const params = new URLSearchParams(search);
+  if (!open) {
+    params.delete('files');
+    params.delete('fullscreen');
+  } else {
+    params.set('files', '1');
+    params.delete('side');
+    params.delete('agent');
+    params.delete('fullscreen');
+  }
+  const next = params.toString();
+  return next ? `${pathname}?${next}` : pathname;
+}
+
 
 /**
  * Build a URL with `?agent` written or cleared (#task:1189). Mirrors
@@ -678,6 +753,16 @@ export function useNav(): {
    *  it when open. Drives the header Threads icon's click-to-toggle
    *  behaviour (#task:1126 follow-up). */
   toggleThreadsList: () => void;
+  /** Open the channel Attachments panel in the right pane (`?files=1`).
+   *  Clears `?side`/`?thread`/`?threads`/`?agent`/`?fullscreen`
+   *  — fourth secondary-family axis, single-slot. */
+  openFilesList: () => void;
+  /** Close the channel Attachments panel. Strips `?files` (and any residual
+   *  `?fullscreen` — the panel has no fullscreen affordance). */
+  closeFilesList: () => void;
+  /** Toggle the channel Attachments panel — drives the header Paperclip
+   *  icon's click-to-toggle behaviour, mirroring `toggleThreadsList`. */
+  toggleFilesList: () => void;
   /** Focus a task in the workspace tasks drawer by writing `?task=<n>`.
    *  The drawer auto-opens, switches to "all" filter, scrolls the row
    *  into view, and applies a brief highlight. `replace` so re-clicking
@@ -743,6 +828,19 @@ export function useNav(): {
   const toggleThreadsList = useCallback(() => {
     const open = new URLSearchParams(location.search).get('threads') === '1';
     const next = withThreadsQuery(location.pathname, location.search, !open);
+    navigate(next, { replace: true });
+  }, [navigate, location.pathname, location.search]);
+  const openFilesList = useCallback(() => {
+    const next = withFilesQuery(location.pathname, location.search, true);
+    navigate(next, { replace: true });
+  }, [navigate, location.pathname, location.search]);
+  const closeFilesList = useCallback(() => {
+    const next = withFilesQuery(location.pathname, location.search, false);
+    navigate(next, { replace: true });
+  }, [navigate, location.pathname, location.search]);
+  const toggleFilesList = useCallback(() => {
+    const open = new URLSearchParams(location.search).get('files') === '1';
+    const next = withFilesQuery(location.pathname, location.search, !open);
     navigate(next, { replace: true });
   }, [navigate, location.pathname, location.search]);
   const openTask = useCallback(
@@ -822,6 +920,9 @@ export function useNav(): {
     openThreadsList,
     closeThreadsList,
     toggleThreadsList,
+    openFilesList,
+    closeFilesList,
+    toggleFilesList,
     openTask,
     closeTask,
     openAgentPanel,
@@ -847,6 +948,9 @@ export function useNav(): {
     openThreadsList,
     closeThreadsList,
     toggleThreadsList,
+    openFilesList,
+    closeFilesList,
+    toggleFilesList,
     openTask,
     closeTask,
     openAgentPanel,

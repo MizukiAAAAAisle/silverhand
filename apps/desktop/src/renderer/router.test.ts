@@ -14,6 +14,7 @@ import {
   withTaskQuery,
   withThreadQuery,
   withThreadsQuery,
+  withFilesQuery,
 } from './router';
 import type { SecondaryRouteFields } from './router';
 
@@ -511,6 +512,158 @@ describe('mutual exclusion — opening side/thread clears ?threads', () => {
   });
 });
 
+describe('parseRouteState — ?files=1 channel Attachments panel', () => {
+  it('parses ?files=1 as filesListOpen', () => {
+    const r = parseRouteState('/chat/w/w-1/c/c-a', '?files=1');
+    expect(r).toMatchObject({
+      channelId: 'c-a',
+      filesListOpen: true,
+      sideConversationId: null,
+      threadRootId: null,
+      threadsListOpen: false,
+    });
+  });
+
+  it('defaults filesListOpen to false with no query', () => {
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '').filesListOpen).toBe(false);
+  });
+
+  it('treats any value other than "1" as closed (falsifier for slack parsing)', () => {
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?files=0').filesListOpen).toBe(
+      false,
+    );
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?files=').filesListOpen).toBe(
+      false,
+    );
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?files=true').filesListOpen).toBe(
+      false,
+    );
+  });
+});
+
+describe('withFilesQuery — URL writer for openFilesList / closeFilesList', () => {
+  it('writes ?files=1, clearing ?side/?agent/?fullscreen but PRESERVING ?thread/?threads', () => {
+    // Overlay contract (mirrors ?agent, #task:1433): opening Attachments
+    // keeps the underlying conversation pane in the URL so closing restores
+    // it. ?side is the exception — a covered CONVERSATION would still count
+    // as visible and silence its toasts, so it (and ?agent) is swept.
+    const out = withFilesQuery(
+      '/chat/w/w-1/c/c-a',
+      '?side=c-other&thread=m-1&threads=1&agent=a-9&fullscreen=1',
+      true,
+    );
+    expect(out).toContain('files=1');
+    expect(out).not.toContain('side=c-other');
+    expect(out).not.toContain('agent=a-9');
+    expect(out).not.toContain('fullscreen=1');
+    // Preserved — the restore stack.
+    expect(out).toContain('thread=m-1');
+    expect(out).toContain('threads=1');
+  });
+
+  it('closing over a preserved ?thread reveals the thread (thread+files → close files = thread)', () => {
+    const opened = withFilesQuery('/chat/w/w-1/c/c-a', '?thread=m-1', true);
+    expect(opened).toContain('thread=m-1');
+    expect(opened).toContain('files=1');
+    const closed = withFilesQuery('/chat/w/w-1/c/c-a', opened.split('?')[1] ?? '', false);
+    expect(closed).toContain('thread=m-1');
+    expect(closed).not.toContain('files');
+  });
+
+  it('closing over a preserved ?threads reveals the list (threads+files → close = threads)', () => {
+    const opened = withFilesQuery('/chat/w/w-1/c/c-a', '?threads=1', true);
+    expect(opened).toContain('threads=1');
+    expect(opened).toContain('files=1');
+    const closed = withFilesQuery('/chat/w/w-1/c/c-a', opened.split('?')[1] ?? '', false);
+    expect(closed).toContain('threads=1');
+    expect(closed).not.toContain('files');
+  });
+
+  it('clears ?files (and ?fullscreen defensively) when closing', () => {
+    const closed = withFilesQuery(
+      '/chat/w/w-1/c/c-a',
+      '?files=1&fullscreen=1',
+      false,
+    );
+    expect(closed).not.toContain('files');
+    expect(closed).not.toContain('fullscreen');
+  });
+
+  it('preserves unrelated params (e.g. ?task) when opening', () => {
+    const out = withFilesQuery('/chat/w/w-1/c/c-a', '?task=7', true);
+    expect(out).toContain('files=1');
+    expect(out).toContain('task=7');
+  });
+
+  it('returns the bare path when the resulting query is empty', () => {
+    // Falsifier: closing must not leave a dangling `?` on the path.
+    expect(withFilesQuery('/chat/w/w-1/c/c-a', '?files=1', false)).toBe(
+      '/chat/w/w-1/c/c-a',
+    );
+  });
+});
+
+describe('opening side/thread/threads closes the ?files overlay', () => {
+  // The Attachments overlay does not coexist with a freshly-opened
+  // conversation pane: navigating to side/thread/threads sweeps ?files so
+  // the new pane is visible (the overlay would otherwise render ahead of it
+  // by precedence). This is the reverse direction from withFilesQuery, which
+  // PRESERVES an already-open thread/threads when Attachments opens.
+  it('buildSideOpenUrl drops an open ?files', () => {
+    const out = buildSideOpenUrl('/chat/w/w-1/c/c-a', '?files=1', 'c-other');
+    expect(out).toContain('side=c-other');
+    expect(out).not.toContain('files');
+  });
+
+  it('withThreadQuery (open) drops an open ?files', () => {
+    const out = withThreadQuery('/chat/w/w-1/c/c-a', '?files=1', 'm-1');
+    expect(out).toContain('thread=m-1');
+    expect(out).not.toContain('files=1');
+  });
+
+  it('withThreadsQuery (open) drops an open ?files', () => {
+    const out = withThreadsQuery('/chat/w/w-1/c/c-a', '?files=1', true);
+    expect(out).toContain('threads=1');
+    expect(out).not.toContain('files=1');
+  });
+});
+
+describe('?agent + ?files overlay stack (agent > files precedence)', () => {
+  // Both are overlays. Opening agent over Files keeps ?files so closing
+  // agent reveals Files again (thread+files+agent → close agent = files →
+  // close files = thread). Opening Files over agent clears ?agent (files
+  // becomes the single visible overlay).
+  it('withAgentQuery (open) preserves ?files=1 — closing agent reveals Files', () => {
+    const out = withAgentQuery('/chat/w/w-1/c/c-a', '?thread=m-1&files=1', 'a-9');
+    expect(out).toContain('agent=a-9');
+    expect(out).toContain('files=1');
+    expect(out).toContain('thread=m-1');
+    // Close agent → files + thread survive.
+    const afterAgentClose = withAgentQuery(
+      '/chat/w/w-1/c/c-a',
+      out.split('?')[1] ?? '',
+      null,
+    );
+    expect(afterAgentClose).not.toContain('agent');
+    expect(afterAgentClose).toContain('files=1');
+    expect(afterAgentClose).toContain('thread=m-1');
+    // Close files → thread survives.
+    const afterFilesClose = withFilesQuery(
+      '/chat/w/w-1/c/c-a',
+      afterAgentClose.split('?')[1] ?? '',
+      false,
+    );
+    expect(afterFilesClose).not.toContain('files');
+    expect(afterFilesClose).toContain('thread=m-1');
+  });
+
+  it('withFilesQuery (open) clears ?agent — Files is the single visible overlay', () => {
+    const out = withFilesQuery('/chat/w/w-1/c/c-a', '?agent=a-9', true);
+    expect(out).toContain('files=1');
+    expect(out).not.toContain('agent');
+  });
+});
+
 describe('buildSideOpenUrl — clears ?thread (side/thread mutual exclusion)', () => {
   it('opening a side overlay closes an open thread', () => {
     const out = buildSideOpenUrl('/chat/w/w-1/c/c-a', '?thread=m-1', 'c-other');
@@ -689,7 +842,32 @@ describe('layoutMemoryFromRoute — RouteState → persisted layout', () => {
     });
   });
 
-  it('resolves side > thread > threads when a malformed URL sets several', () => {
+  it('does NOT persist the Attachments overlay: files-only route → { none }', () => {
+    // The overlay is transient (see ChannelLayout doc): opening Attachments
+    // on a bare channel and switching away must not resurrect it on re-entry.
+    // `parseRouteState` still carries filesListOpen, but layoutMemoryFromRoute
+    // ignores it — a files-only route memoizes as `none`.
+    const filesOnly = parseRouteState('/chat/w/w-1/c/c-a', '?files=1');
+    expect(filesOnly.filesListOpen).toBe(true);
+    expect(layoutMemoryFromRoute(filesOnly)).toEqual({ kind: 'none' });
+  });
+
+  it('persists the underlying pane, not the overlay, when files covers a thread', () => {
+    // thread+files → the thread is the persisted layout, so channel re-entry
+    // restores the thread (files overlay is dropped) rather than the overlay.
+    const threadUnderFiles = parseRouteState(
+      '/chat/w/w-1/c/c-a',
+      '?thread=m-1&files=1',
+    );
+    expect(layoutMemoryFromRoute(threadUnderFiles)).toEqual({
+      kind: 'thread',
+      rootId: 'm-1',
+    });
+  });
+
+  it('resolves side > thread > threads-list when a malformed URL sets several', () => {
+    // Priority is the documented render-layer chain (Attachments overlay is
+    // not part of it). A re-ordering would silently change persisted memory.
     expect(
       layoutMemoryFromRoute(
         fields({
@@ -699,6 +877,9 @@ describe('layoutMemoryFromRoute — RouteState → persisted layout', () => {
         }),
       ),
     ).toEqual({ kind: 'side', id: 'c-x' });
+    expect(
+      layoutMemoryFromRoute(fields({ threadsListOpen: true })),
+    ).toEqual({ kind: 'threads-list' });
   });
 });
 

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { CornerDownRight } from 'lucide-react';
+import { ThreadIcon } from '@/components/icons/conversation-icons';
 import type { MessageDto } from '@silverhand/shared';
 import { useMessage } from '@/features/messages/hooks';
 import { useUsersById, makeUserNameResolver } from '@/features/users/hooks';
@@ -58,7 +58,7 @@ function readQuotedMessageId(metadata: MessageDto['metadata']): string | null {
  * Renders the message that anchored a thread child conversation as the first
  * row in the child's chat scroll area. Mirrors `MessageItem`'s frame
  * (white background, 2px subtle border, full width) so it reads as
- * "the original message" — a small "↳ thread from" hint signals intent.
+ * "the original message" — a small "thread from" hint signals intent.
  *
  * Modern data: snapshot fields live in `metadata` directly, no extra
  * fetch. Legacy data (PR4 pre-fix): falls back to a lazy fetch of the
@@ -132,7 +132,7 @@ export function QuotedMessagePreview({
       }
     >
       <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wider text-text-muted">
-        <CornerDownRight className="size-3" />
+        <ThreadIcon className="size-3" />
         <span>thread from</span>
       </div>
       <header className="mb-1 text-xs">
