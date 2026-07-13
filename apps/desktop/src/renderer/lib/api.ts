@@ -198,6 +198,35 @@ export async function fetchAttachmentBlob(attachmentId: string): Promise<{
   return fetchBackendBlob(`/api/attachments/${encodeURIComponent(attachmentId)}`);
 }
 
+/** Fetch an attachment as raw bytes — no `URL.createObjectURL` in the
+ *  chain. For "open-with-OS" / "save-as" flows the renderer only needs
+ *  the bytes to ship over IPC; going through the blob-URL API leaks a
+ *  reference every call (attachments cap at 10MB, so repeated saves
+ *  would accumulate). Use `fetchAttachmentBlob` only when you need a
+ *  URL for `<img src>` / `<video src>` (image cache path). */
+export async function fetchAttachmentBytes(attachmentId: string): Promise<{
+  bytes: Uint8Array;
+  contentType: string;
+  filename: string | null;
+}> {
+  const res = await window.agentHub.backendRequest({
+    path: `/api/attachments/${encodeURIComponent(attachmentId)}`,
+    responseType: 'arrayBuffer',
+  });
+  assertOk(res);
+  const contentType =
+    headerValue(res.headers, 'content-type') ?? 'application/octet-stream';
+  const disposition = headerValue(res.headers, 'content-disposition');
+  const filename = disposition ? extractDispositionFilename(disposition) : null;
+  const source = res.bodyBytes ?? new Uint8Array();
+  // Copy defensively — `bodyBytes` may reuse an underlying buffer
+  // shared with the IPC transport; downstream `Uint8Array` consumers
+  // (IPC handoff, file write) expect an owned buffer.
+  const bytes = new Uint8Array(source.byteLength);
+  bytes.set(source);
+  return { bytes, contentType, filename };
+}
+
 function extractDispositionFilename(value: string): string | null {
   const match = /filename\*?=(?:UTF-8'')?([^;]+)/i.exec(value);
   if (!match || !match[1]) return null;

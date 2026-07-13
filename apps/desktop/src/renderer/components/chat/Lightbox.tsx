@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
-import { X } from 'lucide-react';
+import { Download, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { SelectionActionButton } from './SelectionToolbar';
 
@@ -9,6 +9,13 @@ interface LightboxProps {
   onOpenChange: (open: boolean) => void;
   src: string;
   alt: string;
+  /**
+   * Optional save-as callback. When provided, the footer shows a
+   * "Download" action alongside "Copy". Omitted for the composer's
+   * pre-send preview (the file is on the user's disk already, so
+   * save-as is not a meaningful action there).
+   */
+  onDownload?: () => void | Promise<void>;
 }
 
 /**
@@ -16,8 +23,9 @@ interface LightboxProps {
  * `data-modal-shell` chrome — 2px ink frame + hard drop shadow — exactly
  * like the export preview modal) with a header ("Image Preview" title +
  * a close icon on the right), the image filling the body, and a bottom
- * action bar with the single real action: Copy. Dismiss is the header
- * close icon (plus Escape / backdrop click).
+ * action bar. When `onDownload` is provided the primary action is
+ * Download (durable save-as); Copy stays as a lightweight secondary
+ * action. In the composer preview (no `onDownload`) Copy alone remains.
  *
  * Sizing caps at `min(920px, 88vw)` × `82vh`; the image area scrolls /
  * `object-contain`s within that so tall or wide images stay inside the
@@ -30,8 +38,15 @@ interface LightboxProps {
  * images on Electron/macOS. nativeImage decodes PNG/JPEG; an
  * undecodable format surfaces a toast rather than failing silently.
  */
-export function Lightbox({ open, onOpenChange, src, alt }: LightboxProps): JSX.Element {
+export function Lightbox({
+  open,
+  onOpenChange,
+  src,
+  alt,
+  onDownload,
+}: LightboxProps): JSX.Element {
   const [busy, setBusy] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   const onCopy = async (): Promise<void> => {
     if (busy) return;
@@ -49,6 +64,16 @@ export function Lightbox({ open, onOpenChange, src, alt }: LightboxProps): JSX.E
       toast.error('复制失败：' + (err instanceof Error ? err.message : String(err)));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const onSave = async (): Promise<void> => {
+    if (downloading || !onDownload) return;
+    setDownloading(true);
+    try {
+      await onDownload();
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -84,11 +109,20 @@ export function Lightbox({ open, onOpenChange, src, alt }: LightboxProps): JSX.E
 
           <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border-subtle px-3 py-2 text-xs">
             <SelectionActionButton
-              variant="primary"
+              variant={onDownload ? 'neutral' : 'primary'}
               label="Copy"
               disabled={busy}
               onClick={onCopy}
             />
+            {onDownload ? (
+              <SelectionActionButton
+                variant="primary"
+                icon={<Download className="size-3.5" />}
+                label="Download"
+                disabled={downloading}
+                onClick={() => void onSave()}
+              />
+            ) : null}
           </div>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

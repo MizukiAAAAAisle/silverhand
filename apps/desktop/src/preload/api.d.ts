@@ -561,6 +561,14 @@ declare global {
         filename: string;
         bytes: Uint8Array;
       }): Promise<{ ok: true } | { ok: false; reason: string }>;
+      saveAttachment(input: {
+        filename: string;
+        bytes: Uint8Array;
+      }): Promise<
+        | { ok: true; path: string }
+        | { ok: false; canceled: true }
+        | { ok: false; reason: string }
+      >;
       showItemInFolder(path: string): Promise<void>;
       showSystemNotification(opts: {
         title: string;

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, api, apiUpload } from './api';
+import { ApiError, api, apiUpload, fetchAttachmentBytes } from './api';
 
 const agentHub = {
   getBackendInfo: vi.fn(),
@@ -213,5 +213,119 @@ describe('ApiError — D4.a Commit 5d-fixup (Cindy P1-2): backend_unreachable ki
     const err = new ApiError(0, 'Network Error', '{}', 'backend_unreachable');
     expect(err.kind).toBe('backend_unreachable');
     expect(err.message).toContain('Network Error');
+  });
+});
+
+describe('fetchAttachmentBytes — no-blob-URL contract for open/save paths', () => {
+  beforeEach(() => {
+    agentHub.getBackendInfo.mockReset();
+    agentHub.backendRequest.mockReset();
+    agentHub.backendUpload.mockReset();
+    vi.stubGlobal('window', { agentHub });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    // vi.spyOn attaches transparently and is restored by
+    // `vi.restoreAllMocks()`; do NOT `delete URL.createObjectURL`
+    // — the descriptor is `configurable` on modern Node so a delete
+    // would remove the native implementation for the rest of the
+    // worker's test files.
+    vi.restoreAllMocks();
+  });
+
+  it('fetches the attachment through backendRequest with responseType=arrayBuffer', async () => {
+    // Falsifier for a regression that switched back to `fetchBackendBlob`
+    // (which constructs a Blob + createObjectURL). This handler ships
+    // bytes to IPC — it MUST bypass the display-URL builder entirely.
+    agentHub.backendRequest.mockResolvedValueOnce({
+      status: 200,
+      statusText: 'OK',
+      headers: {
+        'content-type': 'application/pdf',
+        'content-disposition': 'attachment; filename="report.pdf"',
+      },
+      bodyBytes: new Uint8Array([1, 2, 3, 4]),
+    });
+
+    const result = await fetchAttachmentBytes('att_1');
+
+    expect(agentHub.backendRequest).toHaveBeenCalledWith({
+      path: '/api/attachments/att_1',
+      responseType: 'arrayBuffer',
+    });
+    expect(result.contentType).toBe('application/pdf');
+    expect(result.filename).toBe('report.pdf');
+    expect(Array.from(result.bytes)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('returns an OWNED Uint8Array — mutating the transport buffer afterwards does NOT corrupt the result', async () => {
+    // Load-bearing pin for the leak fix: if we returned a view over
+    // the transport's underlying buffer, downstream consumers (IPC
+    // handoff, file write) could observe mutation, and the transport
+    // itself would be pinned in memory until every consumer released
+    // its reference. Defensive copy = owned lifetime.
+    const transport = new Uint8Array([9, 8, 7, 6]);
+    agentHub.backendRequest.mockResolvedValueOnce({
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'application/octet-stream' },
+      bodyBytes: transport,
+    });
+
+    const { bytes } = await fetchAttachmentBytes('att_2');
+
+    // Overwrite the transport bytes; the returned array must not
+    // observe the mutation.
+    transport.fill(0);
+    expect(Array.from(bytes)).toEqual([9, 8, 7, 6]);
+    // And the underlying buffers must not be the same reference.
+    expect(bytes.buffer).not.toBe(transport.buffer);
+  });
+
+  it('never calls URL.createObjectURL — leak-surface guard', async () => {
+    // The whole point of `fetchAttachmentBytes` is to avoid the
+    // `URL.createObjectURL` round-trip that `fetchAttachmentBlob`
+    // performs for `<img src>` display. `vi.spyOn` wraps the native
+    // implementation transparently and is restored by
+    // `vi.restoreAllMocks()` in `afterEach`.
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL');
+
+    agentHub.backendRequest.mockResolvedValueOnce({
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'text/plain' },
+      bodyBytes: new Uint8Array([1, 2, 3]),
+    });
+
+    await fetchAttachmentBytes('att_3');
+
+    expect(createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it('empty body still returns a well-formed owned Uint8Array (no throw, length 0)', async () => {
+    agentHub.backendRequest.mockResolvedValueOnce({
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'application/octet-stream' },
+      bodyBytes: undefined,
+    });
+
+    const { bytes } = await fetchAttachmentBytes('att_empty');
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(bytes.byteLength).toBe(0);
+  });
+
+  it('surfaces backend errors as ApiError (no silent fallthrough)', async () => {
+    agentHub.backendRequest.mockResolvedValueOnce({
+      status: 404,
+      statusText: 'Not Found',
+      headers: {},
+      bodyText: '{}',
+    });
+
+    await expect(fetchAttachmentBytes('missing')).rejects.toBeInstanceOf(
+      ApiError,
+    );
   });
 });

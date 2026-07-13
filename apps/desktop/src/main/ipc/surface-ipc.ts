@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isSafeOpenExtension } from '@silverhand/shared';
+import { handleAttachmentSave } from './attachment-save.js';
 
 export function registerSurfaceIpcHandlers(): void {
   // Live OS notifications keyed by the renderer-supplied notification id (the
@@ -122,6 +123,39 @@ export function registerSurfaceIpcHandlers(): void {
         return { ok: false, reason: `open_failed:${openErr}` };
       }
       return { ok: true };
+    },
+  );
+
+  /**
+   * Save an attachment to a user-chosen location via the OS save-as
+   * dialog. Same trust boundary as `attachment:openExternal` — main
+   * owns the filesystem write; the renderer only forwards the bytes it
+   * already fetched through the authenticated backend route.
+   *
+   * Result shape distinguishes cancel from failure so the renderer can
+   * stay silent on cancel (a normal user action, not an error) while
+   * still surfacing real write failures.
+   *
+   * No `isSafeOpenExtension` gate here — the user is choosing where
+   * bytes land on their own disk, not asking the OS to *execute* the
+   * file. The renderer-supplied filename is sanitized (path separators
+   * and control chars stripped) and pre-fills the dialog; the user has
+   * final say over the destination path and extension.
+   */
+  ipcMain.handle(
+    'attachment:save',
+    async (
+      event,
+      input: { filename?: unknown; bytes?: unknown },
+    ) => {
+      const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+      return handleAttachmentSave(input, {
+        showSaveDialog: options => dialog.showSaveDialog(win!, options),
+        writeFile: async (path, data) => {
+          const { writeFile } = await import('node:fs/promises');
+          await writeFile(path, data);
+        },
+      });
     },
   );
 

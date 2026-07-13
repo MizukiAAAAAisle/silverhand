@@ -44,6 +44,7 @@ const allowedServerImports = [
 
 const cataloguedIpcHandlers = [
   'attachment:openExternal',
+  'attachment:save',
   'auth:getState',
   'auth:login',
   'auth:logout',

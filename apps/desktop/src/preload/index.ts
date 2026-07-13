@@ -465,6 +465,18 @@ const api = {
     bytes: Uint8Array;
   }): Promise<{ ok: true } | { ok: false; reason: string }> =>
     ipcRenderer.invoke('attachment:openExternal', input),
+  /** Save attachment bytes to a user-chosen path via the OS save-as
+   *  dialog. The renderer stays out of `fs` and `dialog`; main owns
+   *  the write. `canceled: true` is the "user dismissed the picker"
+   *  case (not an error) so the caller can stay silent. */
+  saveAttachment: (input: {
+    filename: string;
+    bytes: Uint8Array;
+  }): Promise<
+    | { ok: true; path: string }
+    | { ok: false; canceled: true }
+    | { ok: false; reason: string }
+  > => ipcRenderer.invoke('attachment:save', input),
   showItemInFolder: (path: string): Promise<void> =>
     ipcRenderer.invoke('shell:showItemInFolder', path),
   /** Subscribe to shutdown progress steps emitted by the main process

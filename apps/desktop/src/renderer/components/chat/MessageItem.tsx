@@ -1,7 +1,7 @@
 import { type FocusEvent, useCallback, useEffect, useState } from 'react';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { Bookmark, Check, CornerUpLeft, FileText, SmilePlus, User } from 'lucide-react';
+import { Bookmark, Check, CornerUpLeft, Download, FileText, SmilePlus, User } from 'lucide-react';
 import type {
   AgentDto,
   AttachmentSnapshot,
@@ -17,7 +17,7 @@ import { AVATAR_PX } from '@/components/avatar-scale';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
 import { useNav } from '@/router';
-import { fetchAttachmentBlob } from '@/lib/api';
+import { fetchAttachmentBytes } from '@/lib/api';
 import {
   getAttachmentBlobUrl,
   loadAttachmentBlobUrl,
@@ -28,6 +28,7 @@ import {
   type UserNameResolver,
 } from '@/lib/current-user';
 import { Lightbox } from './Lightbox';
+import { saveAttachmentToDisk } from './save-attachment';
 import { Markdown } from './Markdown';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
@@ -1116,9 +1117,7 @@ function AttachmentTile({
     // execute code (`.command`, `.app`, `.pkg`, ...) are rejected here
     // with `unsafe_extension`. We surface that as a friendly hint.
     try {
-      const res = await fetchAttachmentBlob(attachment.id);
-      const blob = await fetch(res.url).then(r => r.blob());
-      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const { bytes } = await fetchAttachmentBytes(attachment.id);
       const result = await window.agentHub.openAttachmentExternal({
         filename: attachment.filename,
         bytes,
@@ -1161,6 +1160,7 @@ function AttachmentTile({
             onOpenChange={setLightboxOpen}
             src={imageUrl}
             alt={attachment.filename}
+            onDownload={() => saveAttachmentToDisk(attachment)}
           />
         ) : null}
       </div>
@@ -1169,18 +1169,29 @@ function AttachmentTile({
 
   return (
     <div className="flex flex-col items-start gap-1">
-      <button
-        type="button"
-        onClick={downloadAndOpen}
-        className="flex max-w-[280px] items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
-        title={error ?? `${attachment.filename} (${formatBytes(attachment.size)})`}
-      >
-        <FileText className="size-4 shrink-0 text-text-muted" />
-        <span className="min-w-0 truncate">{attachment.filename}</span>
-        <span className="shrink-0 text-[10px] text-text-muted">
-          {formatBytes(attachment.size)}
-        </span>
-      </button>
+      <div className="flex max-w-[320px] items-stretch overflow-hidden rounded-[var(--chip-radius)] border border-border-subtle bg-bg-floating focus-within:ring-2 focus-within:ring-border-focus">
+        <button
+          type="button"
+          onClick={downloadAndOpen}
+          className="group flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-xs text-text-secondary hover:text-text-primary focus:outline-none"
+          title={error ?? `${attachment.filename} (${formatBytes(attachment.size)})`}
+        >
+          <FileText className="size-4 shrink-0 text-text-muted group-hover:text-text-primary" />
+          <span className="min-w-0 truncate">{attachment.filename}</span>
+          <span className="shrink-0 text-[10px] text-text-muted group-hover:text-text-primary">
+            {formatBytes(attachment.size)}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => void saveAttachmentToDisk(attachment)}
+          className="flex shrink-0 items-center justify-center px-2 text-text-muted hover:text-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+          title="下载"
+          aria-label={`下载 ${attachment.filename}`}
+        >
+          <Download className="size-3.5" />
+        </button>
+      </div>
       {label ? <AttachmentLabelBadge label={label} /> : null}
     </div>
   );
