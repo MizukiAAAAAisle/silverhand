@@ -4,14 +4,34 @@
 
 ---
 
+## 2026-07-14 — Codex Max + reasoning-effort 收敛为 per-runtime 有界 token（#task:1492，未 push）
+
+两部分，同一任务：
+
+**(1) Codex Max：gpt-5.6 全系放开 max effort。** shiki App 实测确认 gpt-5.6 全系（sol/terra/luna）引擎支持 `max` level；Cindy 从 13:46 的本地 rollout（`~/.codex/sessions/.../rollout-...jsonl`）核实 host model 描述一致。产品策略（per-runtime、per-model，独立于 Qoder 的 `max`）：
+
+- `gpt-5.6-sol` → `low–xhigh + max + ultra`
+- `gpt-5.6-terra` / `gpt-5.6-luna` → `low–xhigh + max`
+- 其他/自定义/默认 modelId → Codex baseline `low–xhigh`（未验证 model 保守回落不变）
+
+改动仅在 `runtime-catalog.ts` 的 `reasoningEffortOptionsByModel`（加三个精确 id 条目）。DRI 决定：用精确 model id 而非 `gpt-5.6-*` 前缀——前缀会给未验证的未来 id 静默授予 max，翻转"未验证 model 保守回落"原则；新 5.6 model 是一行表补充。复用 #1486 机制：`max` 非 baseline → 走 `runtime.codex.reasoning.v1` capability gate；**不 bump 协议**。
+
+**(2) reasoning-effort 收敛为 per-runtime 有界 token（shiki 指令：effort 是 per-runtime 的，不再为每个 level 全局登记）。** 删除闭合的全局语义注册表 `ReasoningEffortSchema`（`z.enum([...])`），一次性把 DTO/row 的 `reasoning_effort` 类型放宽为既有有界 token `ReasoningEffortTokenSchema`（`z.string().min(1).max(32).regex(/^[a-z][a-z0-9_-]*$/)`）。`ReasoningEffort` 保名做该 token 的类型别名（无全局合法性语义）。**runtime catalog 成为语义唯一权威**：合法集合/顺序/model override 只在各 runtime 自己的 catalog 条目，校验只走 `(runtime, model, token)`——`reasoningEffortValidForRuntime`。今后新增任何 level 只改对应 runtime 的表，永不再触碰全局 schema 或牵连其他 runtime。
+
+- **写边界（精确归属）** — create/switch 在 **schema superRefine**；PATCH/update 在服务层 **`normalizeRuntimeTuning`**（PATCH 是偏应用，runtime 固定、model 可缺，token 只在 schema 层做结构校验，legality 下沉到服务边界解析实际 (runtime, effective model)）。
+- **兼容边界（Cindy gate）** — 这是一次**加法式 wire-schema widening**（HTTP DTO 层，非"无 wire 改动"：HOST/OUTBOUND frame 不变、不 bump；daemon wire 早已是开放 token）。它只让**升级后**的 client 对未来 token forward-compatible，**无法反向修复旧 client**：钉在旧闭合枚举 DTO 的 client 见到历史集外的未来 token 仍会 decode 失败。本次安全，因 `max/ultra` 已在旧枚举内、未引入新 token；**第一次引入真正新 token 前，必须把相关 remote desktop/CLI 升级到 open-token DTO 当作发布门**，而不是再扩全局 enum。daemon 的 `runtime.codex.reasoning.v1` 只护 backend→daemon，**不护 backend→desktop DTO 读侧**。DB 无迁移（本就是 TEXT）。
+- **验证** — `pnpm typecheck` 全绿；测试覆盖：DTO round-trip 结构合法但产品未知的 `giga`（读投影接受、写边界 create/switch/`normalizeRuntimeTuning` 按 runtime/model 拒绝）、token schema 结构拒绝（大小写/空白/非法字符/空/越 32 长——证"开放"非任意串）、per-model Max 正反例、Ultra 仍 sol-only、catalog 每个 option 都是结构合法 token、protocol 冻结旧枚举兼容不引用 live schema。全仓已清零把 `ReasoningEffortSchema`/共享 union 当能力 SoT 或把 `max` 写成 Qoder-only 的注释/测试名。
+
+---
+
 ## 2026-07-14 — Codex Ultra reasoning-effort：静态产品表 + 能力协商（#task:1486，未 push）
 
 原始 bug：ChatGPT Ultra 模式下选 silverhand `high` reasoning → Codex 400 `[reasoning.effort] [invalid_enum_value] Invalid value: 'ultra'`。shiki 核心痛点：**新增一个 reasoning 值不得 bump wire protocol**（bump → client↔server 断连）；且 Ultra 经验证只有 `gpt-5.6-sol` 支持。
 
 第一版曾把"daemon 上报 model/effort"实现成运行时动态目录（探测 `codex app-server model/list` + 缓存/单飞/连接代次 + UI/write/spawn 四层目录校验）。shiki/Cindy 复核后判定这是把单一 Codex 特化过度抽象成通用 host-truth 子系统，边界选错：**通用层只该解决跨版本兼容，Codex 特化留在产品/driver policy**。遂删除整条动态探测，收缩为下述最小模型。
 
-- **两层兼容分离** — PROTOCOL EPOCH（`HOST_PROTOCOL_VERSION`/`OUTBOUND_PROTOCOL_VERSION`，从早先误 bump **回退**）只留给破坏性变更；FEATURE CAPABILITY 协商（`runtime.codex.reasoning.v1`，加性/可忽略）承载本 feature。新增 effort 永不 bump protocol，靠 **开放 wire token** `ReasoningEffortTokenSchema`（有界开放串 `/^[a-z][a-z0-9_-]*$/`）：新 daemon 见未来 token 不 strict-reject，与闭合产品枚举 `ReasoningEffortSchema` 分离。
-- **静态产品表是唯一真相** — `runtime-catalog.ts` 的 `reasoningEffortOptionsByModel`（`gpt-5.6-sol → …ultra`，其余 model → 历史 baseline）由 shared `reasoningEffortValidForRuntime` 在**所有写边界**（create/update 的 schema superRefine、switch schema、`normalizeRuntimeTuning`）执行——**这就是产品合法性的唯一权威边界**；renderer picker 读同一张表做 UI 校验。model 始终可自由输入，preset 只是静态建议；Codex 出新 model/effort 时改这张表即可。
+- **两层兼容分离** — PROTOCOL EPOCH（`HOST_PROTOCOL_VERSION`/`OUTBOUND_PROTOCOL_VERSION`，从早先误 bump **回退**）只留给破坏性变更；FEATURE CAPABILITY 协商（`runtime.codex.reasoning.v1`，加性/可忽略）承载本 feature。新增 effort 永不 bump protocol，靠 **开放 wire token** `ReasoningEffortTokenSchema`（有界开放串 `/^[a-z][a-z0-9_-]*$/`）：新 daemon 见未来 token 不 strict-reject。（当时 API/DB 层还并存一个闭合产品枚举 `ReasoningEffortSchema`；已在 #1492 收敛中删除，legality 全部下沉到 per-runtime catalog——见上一节。）
+- **静态产品表是唯一真相** — `runtime-catalog.ts` 的 `reasoningEffortOptionsByModel`（`gpt-5.6-sol → …ultra`，其余 model → 历史 baseline）由 shared `reasoningEffortValidForRuntime` 在**所有写边界**（create/switch 的 schema superRefine、update 的 `normalizeRuntimeTuning`）执行——**这就是产品合法性的唯一权威边界**；renderer picker 读同一张表做 UI 校验。model 始终可自由输入，preset 只是静态建议；Codex 出新 model/effort 时改这张表即可。
 - **能力协商（保留）** — 新 daemon 在 `ready` 硬编码声明 `runtime.codex.reasoning.v1`（generation-local，断连清空）；backend SEND gate 发非-baseline effort（如 Ultra）前查该 cap，旧 strict daemon 无 cap → 不发（否则旧 daemon 又会 400）。**该 cap 只证明 Silverhand daemon 的 parser/forwarder 版本，不证明用户装的 Codex binary 支持该 effort**（不做 model/list/version 探测的既定范围下，advertise 了 cap 的 daemon 仍可能把 `ultra` 转给过旧的 Codex → provider 400，属如实 runtime error）。daemon 对 effort token 只做**有界结构 wire 校验并原样透传**，产品合法性不在 execution plane 复制——Codex 引擎自己给最终裁决。
 - **删除（整条动态探测 + execution-plane 产品复核）** — `codex-reasoning-probe.ts`、`resolveCodexReasoningModels`/`peekCodexReasoningModels`/probe 缓存·单飞·代次、`RuntimeInfo.reasoning_models` + `ReasoningModelCapabilitySchema`、backend `reasoning-effort-write-gate.ts`（host round-trip / connection-generation custody）、renderer 对 host catalog 的 reasoning 依赖、daemon spawn 前的 catalog 探测。**并（Cindy P1）删除 daemon spawn 末线的静态产品表复核 `assertReasoningEffortSpawnable` + `ReasoningEffortUnsupportedError`**——它与开放 token contract 自相矛盾（旧 daemon 的静态表会拒掉新 backend 合法下发的未来 token，逼迫升 daemon，开放 token 形同失效），且在 execution plane 复制了产品 allowlist。硬门：全仓不再出现 `model/list` reasoning probe；任何 runtime_start（含首次 Ultra）都不为拿 model catalog 额外 spawn 子进程；daemon 不再对 effort 做产品级拒绝。
 - **验证** — `pnpm typecheck` 全绿；全测试 gate 通过。测试覆盖：shared 静态表（Ultra 仅 sol、其余/未列/默认 model → baseline、null 恒有效）、daemon 透传（baseline High 任意 model 放行、Ultra@sol 放行、**未来 token `giga` 经 runtime_start → DriverSpawnContext → CodexDriver argv `model_reasoning_effort="giga"` 原样透传、无 daemon 拒绝**）、codex 驱动 buildArgs（`ultra`/未来 `giga` 逐字透传）、protocol 开放 token（收未来 token 而旧闭枚举拒之=双向证明）、send-gate（无 cap→阻断、有 cap→放行、baseline 永不阻断）、frame-adapter 能力记录（`ready` 记录、断连/重连清空）。

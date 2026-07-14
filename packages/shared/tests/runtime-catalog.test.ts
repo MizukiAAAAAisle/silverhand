@@ -4,7 +4,7 @@ import {
   RUNTIME_CATALOG,
   RUNTIME_ORDER_LIST,
   RuntimeKindSchema,
-  ReasoningEffortSchema,
+  ReasoningEffortTokenSchema,
   isBaselineReasoningEffort,
   reasoningEffortLabel,
   reasoningEffortOptionsForRuntime,
@@ -45,16 +45,19 @@ describe('runtime catalog (shared source of truth)', () => {
     expect(selectable).toEqual(['claude', 'codex', 'qoder', 'opencode']);
   });
 
-  it('keeps every reasoning option inside the shared ReasoningEffort enum', () => {
+  it('every catalog reasoning option is a structurally-valid bounded token', () => {
+    // There is no shared closed enum any more: the catalog IS the allowlist.
+    // The only global constraint is that each option is a well-formed token
+    // (lowercase, bounded) — legality is per-runtime, proven elsewhere.
     for (const entry of RUNTIME_CATALOG) {
       for (const opt of entry.reasoningEffortOptions) {
-        expect(ReasoningEffortSchema.safeParse(opt).success).toBe(true);
+        expect(ReasoningEffortTokenSchema.safeParse(opt).success).toBe(true);
       }
       for (const options of Object.values(
         entry.reasoningEffortOptionsByModel ?? {},
       )) {
         for (const opt of options) {
-          expect(ReasoningEffortSchema.safeParse(opt).success).toBe(true);
+          expect(ReasoningEffortTokenSchema.safeParse(opt).success).toBe(true);
         }
       }
       // `runtimeSupportsReasoningEffort` mirrors the options list.
@@ -83,18 +86,27 @@ describe('runtime catalog (shared source of truth)', () => {
     expect(runtimeCatalogEntry('claude').reasoningEffortOptions).toEqual([]);
   });
 
-  it('offers Codex Ultra only on explicitly compatible models', () => {
-    const withUltra = ['low', 'medium', 'high', 'xhigh', 'ultra'];
-    expect(reasoningEffortOptionsForRuntime('codex', 'gpt-5.6-sol')).toEqual(
-      withUltra,
-    );
-    for (const model of [
-      'gpt-5.6-terra',
-      'gpt-5.6-luna',
-      'gpt-5.5',
-      'future-model',
-      null,
-    ]) {
+  it('offers Codex Max on all verified 5.6 models and Ultra only on sol', () => {
+    expect(reasoningEffortOptionsForRuntime('codex', 'gpt-5.6-sol')).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+      'ultra',
+    ]);
+    for (const model of ['gpt-5.6-terra', 'gpt-5.6-luna']) {
+      expect(reasoningEffortOptionsForRuntime('codex', model)).toEqual([
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+        'max',
+      ]);
+    }
+    // Non-5.6 / unlisted / default models stay on the conservative baseline —
+    // we do NOT prefix-match the family, so an unverified id gets nothing extra.
+    for (const model of ['gpt-5.5', 'future-model', null]) {
       expect(reasoningEffortOptionsForRuntime('codex', model)).toEqual([
         'low',
         'medium',
@@ -159,10 +171,26 @@ describe('runtime catalog (shared source of truth)', () => {
     // null/undefined (unset) is always valid.
     expect(reasoningEffortValidForRuntime('codex', null)).toBe(true);
     expect(reasoningEffortValidForRuntime('codex', undefined)).toBe(true);
-    // codex accepts its four, rejects qoder-only values.
+    // codex accepts its baseline four for any model; Max/Ultra are per-model
+    // extensions (model-gated), rejected when no model or an unverified model.
     expect(reasoningEffortValidForRuntime('codex', 'high')).toBe(true);
     expect(reasoningEffortValidForRuntime('codex', 'max')).toBe(false);
     expect(reasoningEffortValidForRuntime('codex', 'none')).toBe(false);
+    // Max is valid for every verified 5.6 model, not for others.
+    expect(reasoningEffortValidForRuntime('codex', 'max', 'gpt-5.6-sol')).toBe(
+      true,
+    );
+    expect(
+      reasoningEffortValidForRuntime('codex', 'max', 'gpt-5.6-terra'),
+    ).toBe(true);
+    expect(reasoningEffortValidForRuntime('codex', 'max', 'gpt-5.6-luna')).toBe(
+      true,
+    );
+    expect(reasoningEffortValidForRuntime('codex', 'max', 'my-proxy-model')).toBe(
+      false,
+    );
+    expect(reasoningEffortValidForRuntime('codex', 'max', null)).toBe(false);
+    // Ultra remains sol-only, even among the 5.6 family.
     expect(
       reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-sol'),
     ).toBe(true);
@@ -182,18 +210,38 @@ describe('runtime catalog (shared source of truth)', () => {
     expect(reasoningEffortValidForRuntime('claude', null)).toBe(true);
   });
 
-  // ── #task:1486 static reasoning-effort product table ────────────────
+  // ── #task:1486 / #task:1492 static reasoning-effort product table ─────
   //
   // Reasoning validity is decided by the STATIC product table alone (no host
-  // probe). The table encodes model-specific rules: Codex Ultra is an extension
-  // offered only for gpt-5.6-sol; every other / unlisted / default model stays
-  // on the historical baseline. The daemon enforces the same table at spawn.
+  // probe). The table encodes model-specific rules: Codex Max is offered for
+  // every verified gpt-5.6 model (sol/terra/luna); Ultra is a further extension
+  // offered only for sol; every other / unlisted / default model stays on the
+  // historical baseline. Both are per-runtime, per-model — never derived from
+  // another runtime's catalog/set (e.g. qoder's `max`).
   describe('#1486 static reasoning-effort product table', () => {
     it('isBaselineReasoningEffort: historical baseline vs extension', () => {
       expect(isBaselineReasoningEffort('codex', 'high')).toBe(true);
       expect(isBaselineReasoningEffort('codex', 'xhigh')).toBe(true);
-      // Ultra is an extension even though it parses as a codex value.
+      // Max and Ultra are extensions even though they parse as codex values —
+      // both are gated behind `runtime.codex.reasoning.v1` at send time.
+      expect(isBaselineReasoningEffort('codex', 'max')).toBe(false);
       expect(isBaselineReasoningEffort('codex', 'ultra')).toBe(false);
+    });
+
+    it('Max is offered + valid for every verified 5.6 model, refused elsewhere', () => {
+      for (const model of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
+        expect(reasoningEffortOptionsForRuntime('codex', model)).toContain(
+          'max',
+        );
+        expect(reasoningEffortValidForRuntime('codex', 'max', model)).toBe(true);
+      }
+      expect(reasoningEffortValidForRuntime('codex', 'max', 'gpt-5.5')).toBe(
+        false,
+      );
+      expect(
+        reasoningEffortValidForRuntime('codex', 'max', 'my-proxy-model'),
+      ).toBe(false);
+      expect(reasoningEffortValidForRuntime('codex', 'max', null)).toBe(false);
     });
 
     it('Ultra is offered + valid only for gpt-5.6-sol', () => {
@@ -205,9 +253,10 @@ describe('runtime catalog (shared source of truth)', () => {
       ).toBe(true);
     });
 
-    it('Ultra refused on other / unlisted / default models → baseline only', () => {
+    it('Ultra refused on other 5.6 / unlisted / default models (they keep Max but not Ultra)', () => {
+      // terra/luna get Max but NOT Ultra — Ultra stays sol-only.
       expect(reasoningEffortOptionsForRuntime('codex', 'gpt-5.6-terra')).toEqual(
-        ['low', 'medium', 'high', 'xhigh'],
+        ['low', 'medium', 'high', 'xhigh', 'max'],
       );
       expect(
         reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-terra'),
@@ -228,5 +277,29 @@ describe('runtime catalog (shared source of truth)', () => {
         true,
       );
     });
+  });
+});
+
+describe('ReasoningEffortTokenSchema — "open" is bounded, not arbitrary', () => {
+  it('accepts well-formed lowercase tokens (known + never-seen)', () => {
+    for (const token of ['none', 'high', 'xhigh', 'max', 'ultra', 'giga', 'a', 'v2', 'multi-agent', 'a'.repeat(32)]) {
+      expect(ReasoningEffortTokenSchema.safeParse(token).success).toBe(true);
+    }
+  });
+
+  it('rejects uppercase, whitespace, illegal chars, empty, and over-length', () => {
+    for (const token of [
+      'HIGH', // uppercase
+      'High', // mixed case
+      'a b', // whitespace
+      'x!', // illegal char
+      '9x', // leading digit
+      '-x', // leading dash
+      '_x', // leading underscore
+      '', // empty (min 1)
+      'a'.repeat(33), // over the 32-char bound
+    ]) {
+      expect(ReasoningEffortTokenSchema.safeParse(token).success).toBe(false);
+    }
   });
 });

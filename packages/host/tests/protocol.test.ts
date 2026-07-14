@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
   RuntimeKindSchema,
-  ReasoningEffortSchema,
   ReasoningEffortTokenSchema,
+  reasoningEffortValidForRuntime,
 } from '@silverhand/shared';
 import { hasDriver } from '../src/drivers/index.js';
 import {
@@ -28,6 +28,21 @@ import {
   splitNdjson,
 } from '../src/protocol.js';
 import { testStartOptions } from './_helpers/runtime-start-options.js';
+
+// The closed effort enum an OLD daemon's wire schema accepted before the open
+// token landed — the REAL pre-Ultra set (`none/low/medium/high/xhigh/max`),
+// copied VERBATIM, NOT a narrower approximation. It is a frozen literal on
+// PURPOSE: it must model what an old consumer actually accepted and must NOT
+// drift as the live catalog gains tokens (the live product schema no longer
+// exists as a closed enum — legality is per-runtime in the catalog now).
+const FROZEN_OLD_EFFORT_ENUM = z.enum([
+  'none',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+]);
 
 const HELLO_IDENTITY = {
   daemon_id: 'local',
@@ -433,11 +448,11 @@ describe('protocol — runtime_start reasoning-effort open wire token (#task:148
     expect(RuntimeStartParamsSchema.safeParse(startWithEffort(future)).success).toBe(
       true,
     );
-    // Bidirectional proof: the CLOSED product enum (what an OLD daemon's schema
-    // used on the wire) REJECTS that same token — which is exactly why the
+    // Bidirectional proof: the CLOSED effort enum an OLD daemon's wire schema
+    // used REJECTS that same token — which is exactly why the
     // `runtime.codex.reasoning.v1` capability gate must protect old daemons from
     // ever receiving a non-baseline token they cannot parse.
-    expect(ReasoningEffortSchema.safeParse(future).success).toBe(false);
+    expect(FROZEN_OLD_EFFORT_ENUM.safeParse(future).success).toBe(false);
   });
 
   it('still rejects a structurally-invalid token (uppercase / spaces)', () => {
@@ -454,25 +469,13 @@ describe('protocol — runtime_start reasoning-effort open wire token (#task:148
   });
 });
 
-// #task:1486 — adding Codex `ultra` to the wire must NOT bump the protocol. The
-// open effort token carries any value; an OLD daemon's closed enum rejects
-// `ultra`, so `runtime.codex.reasoning.v1` gates the send. These frozen literals
-// deliberately DO NOT reference the live schema, so they model what an old
-// consumer actually accepted.
+// #task:1486 / #task:1492 — adding a Codex effort to the wire must NOT bump the
+// protocol. The open effort token carries any value; an OLD daemon's closed enum
+// rejects `ultra`, so `runtime.codex.reasoning.v1` gates the send. The frozen
+// literal (module scope) DOES NOT reference the live schema — the live product
+// schema is no longer a closed enum at all (legality moved per-runtime to the
+// catalog), so this pins what an old consumer actually accepted.
 describe('protocol — reasoning-effort frozen old-daemon compatibility (#task:1486)', () => {
-  // The closed effort enum an old daemon's wire schema accepted before Ultra —
-  // the REAL pre-Ultra set (`none/low/medium/high/xhigh/max`), copied verbatim
-  // from `ReasoningEffortSchema` as it stood before `ba41e555`, NOT a narrower
-  // approximation.
-  const FROZEN_OLD_EFFORT_ENUM = z.enum([
-    'none',
-    'low',
-    'medium',
-    'high',
-    'xhigh',
-    'max',
-  ]);
-
   it('FROZEN old effort enum REJECTS Ultra while the CURRENT wire token accepts it', () => {
     // An old daemon would reject `ultra` outright on the wire — sending it there
     // is a hard failure, so `runtime.codex.reasoning.v1` must gate the send.
@@ -484,14 +487,17 @@ describe('protocol — reasoning-effort frozen old-daemon compatibility (#task:1
     // The CURRENT wire carries Ultra without a protocol bump. Assert this on the
     // actual wire type: `ReasoningEffortTokenSchema` is exactly the schema
     // `RuntimeStartParamsSchema`'s nested `reasoning_effort` field delegates to
-    // (protocol.ts) — the open, bounded token, NOT the closed product enum. So
+    // (protocol.ts) — the open, bounded token, NOT any closed product enum. So
     // a new daemon frames `ultra` fine while an old one (above) rejects it.
     expect(ReasoningEffortTokenSchema.safeParse('ultra').success).toBe(true);
     // A future, never-seen effort also frames on the wire (additive/ignorable).
     expect(ReasoningEffortTokenSchema.safeParse('giga').success).toBe(true);
-    // The closed PRODUCT enum now includes Ultra post-#1486 (was absent pre-bump
-    // — that is the value the old frozen enum lacks).
-    expect(ReasoningEffortSchema.safeParse('ultra').success).toBe(true);
+    // Product legality now lives in the per-runtime catalog (no global enum):
+    // `ultra` is legal for a verified Codex 5.6 model — the value the old
+    // frozen enum lacks — while remaining out of the historical baseline.
+    expect(
+      reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-sol'),
+    ).toBe(true);
   });
 });
 

@@ -78,6 +78,24 @@ describe('SwitchAgentRuntimeInputSchema', () => {
     ).toBe(false);
   });
 
+  it('rejects a structurally-valid but product-unknown token (#task:1492)', () => {
+    // Third write boundary (Switch schema superRefine): `giga` parses as a
+    // bounded token but is in NO runtime's catalog, so the transition command
+    // must reject it for codex regardless of model — mirroring Create and the
+    // update-path `normalizeRuntimeTuning`. Read DTOs round-trip such a token;
+    // every write boundary refuses it.
+    for (const model of ['gpt-5.6-sol', 'gpt-5.5', null]) {
+      expect(
+        SwitchAgentRuntimeInputSchema.safeParse({
+          runtime: 'codex',
+          model,
+          reasoning_effort: 'giga',
+          fast_mode: null,
+        }).success,
+      ).toBe(false);
+    }
+  });
+
   it('distinguishes explicit driver default from an empty custom model', () => {
     expect(
       SwitchAgentRuntimeInputSchema.safeParse({

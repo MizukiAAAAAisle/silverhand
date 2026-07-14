@@ -8,10 +8,13 @@ import {
 } from '@silverhand/shared';
 
 describe('agent reasoning_effort validation', () => {
-  it('accepts every known reasoning effort value in the shared registry', () => {
-    // Union of codex (low/medium/high/xhigh + model-specific ultra) and
-    // qoder (none/…/max); the
-    // per-runtime catalog gates which subset each picker offers.
+  it('accepts any structurally-valid reasoning token on update (legality is per-runtime, enforced downstream)', () => {
+    // `reasoning_effort` is a bounded opaque token, NOT a closed enum: the
+    // shared type only bounds structure. PATCH has no reasoning superRefine, so
+    // it accepts every well-formed token here — including a product-unknown
+    // `giga` — and the per-runtime/model legality gate is `normalizeRuntimeTuning`
+    // at the service boundary. The historical values plus an unknown one all
+    // round-trip structurally.
     for (const effort of [
       'none',
       'low',
@@ -20,6 +23,7 @@ describe('agent reasoning_effort validation', () => {
       'xhigh',
       'max',
       'ultra',
+      'giga',
     ]) {
       expect(
         UpdateAgentInputSchema.safeParse({ reasoning_effort: effort }).success,
@@ -27,8 +31,38 @@ describe('agent reasoning_effort validation', () => {
     }
   });
 
-  it('rejects unsupported reasoning effort values before persistence', () => {
-    for (const effort of ['minimal', 'off', 'HIGH']) {
+  it('round-trips a structurally-valid but product-unknown token through the read DTO', () => {
+    // The AgentDto is the READ projection with no superRefine: a token a FUTURE
+    // backend persisted must parse on an older-but-widened reader rather than
+    // crash the whole DTO. `giga` is not in any runtime's catalog, yet it must
+    // survive the structural parse.
+    const parsed = AgentDtoSchema.safeParse({
+      id: 'a1',
+      name: 'alice',
+      display_name: 'Alice',
+      runtime: 'codex',
+      model: 'gpt-5.6-sol',
+      reasoning_effort: 'giga',
+      fast_mode: null,
+      host_id: 'h1',
+      description: null,
+      created_by_user_id: 'u1',
+      avatar_url: null,
+      materialization_status: 'active',
+      materialization_failed_code: null,
+      materialization_failed_at: null,
+      created_at: 1,
+      updated_at: 1,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.reasoning_effort).toBe('giga');
+  });
+
+  it('rejects structurally-invalid reasoning tokens before persistence', () => {
+    // "Open" is not "arbitrary string": uppercase, spaces, a leading digit/dash,
+    // and an over-length (>32) token all fail the bounded token shape, at every
+    // write boundary, before any per-runtime check.
+    for (const effort of ['HIGH', 'a b', '9x', '-x', 'x'.repeat(33)]) {
       expect(
         CreateAgentInputSchema.safeParse({
           name: 'bad-effort',
@@ -36,19 +70,49 @@ describe('agent reasoning_effort validation', () => {
           reasoning_effort: effort,
         }).success,
       ).toBe(false);
+      expect(
+        UpdateAgentInputSchema.safeParse({ reasoning_effort: effort }).success,
+      ).toBe(false);
     }
   });
 
-  it('rejects a reasoning value not valid for the chosen runtime on create', () => {
-    // `max`/`none` are valid enum members but qoder-only — codex create
-    // must reject them at the schema (route + CLI get this for free).
-    for (const effort of ['max', 'none']) {
+  it('rejects a reasoning token not valid for the chosen runtime on create', () => {
+    // Without a compatible model, `max` (needs a verified 5.6 model), `none`
+    // (qoder-only), and `giga` (structurally valid but in NO runtime's catalog)
+    // are all out of codex's baseline — create must reject them at the schema
+    // (route + CLI get this for free). This is the write-boundary counterpart to
+    // the read DTO round-trip above: unknown tokens survive a read, never a write.
+    for (const effort of ['max', 'none', 'giga']) {
       const res = CreateAgentInputSchema.safeParse({
         name: 'codex-agent',
         runtime: 'codex',
         reasoning_effort: effort,
       });
       expect(res.success).toBe(false);
+    }
+  });
+
+  it('accepts Codex Max on every verified 5.6 model, rejects without a compatible model (#task:1492)', () => {
+    for (const model of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
+      expect(
+        CreateAgentInputSchema.safeParse({
+          name: 'max-ok',
+          runtime: 'codex',
+          model,
+          reasoning_effort: 'max',
+        }).success,
+      ).toBe(true);
+    }
+    // Non-5.6 / unlisted / default models keep the conservative baseline.
+    for (const model of ['gpt-5.5', 'my-proxy-model', undefined]) {
+      expect(
+        CreateAgentInputSchema.safeParse({
+          name: 'max-bad',
+          runtime: 'codex',
+          model,
+          reasoning_effort: 'max',
+        }).success,
+      ).toBe(false);
     }
   });
 
@@ -64,7 +128,7 @@ describe('agent reasoning_effort validation', () => {
     }
   });
 
-  it('accepts codex create with its four supported reasoning values', () => {
+  it('accepts codex create with its four baseline reasoning values', () => {
     for (const effort of ['low', 'medium', 'high', 'xhigh']) {
       expect(
         CreateAgentInputSchema.safeParse({

@@ -8,11 +8,14 @@ import {
 
 /**
  * `normalizeRuntimeTuning` is the write-boundary guard for reasoning/runtime
- * compatibility (Cindy #task:1328 P1): the shared ReasoningEffort enum is the
- * union across runtimes, so a value like qoder's `max` parses structurally but
- * is meaningless for codex and, if it reached the row, `CodexDriver.buildArgs`
- * would forward it verbatim. Runtime transitions have their own command;
- * ordinary updates still validate explicit tuning against the current runtime.
+ * compatibility on the PATCH path (Cindy #task:1328 P1; #task:1492). Reasoning
+ * effort is a bounded opaque token with NO global legality — the sole allowlist
+ * is per-runtime/model in the catalog. PATCH has no reasoning superRefine, so a
+ * structurally-valid token this runtime/model does not support (e.g. qoder's
+ * `none` or a product-unknown `giga` on codex) parses at the schema and, if it
+ * reached the row, `CodexDriver.buildArgs` would forward it verbatim — so this
+ * service check is the authoritative gate. Runtime transitions have their own
+ * command; ordinary updates validate explicit tuning against the current runtime.
  */
 function row(overrides: Partial<AgentRow>): AgentRow {
   return {
@@ -48,6 +51,11 @@ describe('normalizeRuntimeTuning — reasoning valid for the agent runtime', () 
     // `none` is qoder-only too — codex must reject it.
     expect(() =>
       normalizeRuntimeTuning(row({ runtime: 'codex' }), { reasoning_effort: 'none' }),
+    ).toThrow(/not valid for runtime 'codex'/);
+    // A structurally-valid but product-unknown token (in no runtime catalog)
+    // survives the DTO parse but the service gate still rejects it.
+    expect(() =>
+      normalizeRuntimeTuning(row({ runtime: 'codex' }), { reasoning_effort: 'giga' }),
     ).toThrow(/not valid for runtime 'codex'/);
   });
 
@@ -87,6 +95,28 @@ describe('normalizeRuntimeTuning — reasoning valid for the agent runtime', () 
     expect(() =>
       normalizeRuntimeTuning(ultra, { model: 'gpt-5.5' }),
     ).toThrow(/reasoning_effort 'ultra'/);
+  });
+
+  it('accepts Codex Max on a verified 5.6 model, rejects it off one (#task:1492)', () => {
+    for (const model of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
+      const r = row({ runtime: 'codex', model, reasoning_effort: 'high' });
+      expect(normalizeRuntimeTuning(r, { reasoning_effort: 'max' })).toEqual({
+        reasoning_effort: 'max',
+      });
+    }
+    // Switching the effective model off the 5.6 family invalidates a stored Max.
+    const sol = row({
+      runtime: 'codex',
+      model: 'gpt-5.6-sol',
+      reasoning_effort: 'max',
+    });
+    expect(() =>
+      normalizeRuntimeTuning(sol, { model: 'gpt-5.5' }),
+    ).toThrow(/reasoning_effort 'max'/);
+    // Max with no model at all stays rejected (conservative baseline).
+    expect(() =>
+      normalizeRuntimeTuning(row({ runtime: 'codex' }), { reasoning_effort: 'max' }),
+    ).toThrow(/not valid for runtime 'codex'/);
   });
 
   it('allows explicit null (clearing) on any runtime', () => {

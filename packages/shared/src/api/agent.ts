@@ -6,7 +6,7 @@ import {
   ConversationAgentStatusSchema,
   ConversationKindSchema,
   FastModeSchema,
-  ReasoningEffortSchema,
+  ReasoningEffortTokenSchema,
   RuntimeKindSchema,
   WorkspaceKindSchema,
 } from '../db/schema.js';
@@ -23,7 +23,7 @@ export const AgentDtoSchema = z.object({
   display_name: z.string(),
   runtime: RuntimeKindSchema,
   model: z.string().nullable(),
-  reasoning_effort: ReasoningEffortSchema.nullable(),
+  reasoning_effort: ReasoningEffortTokenSchema.nullable(),
   fast_mode: FastModeSchema.nullable(),
   host_id: z.string(),
   description: z.string().nullable(),
@@ -71,17 +71,17 @@ export const CreateAgentInputSchema = z
     name: EntityNameSchema,
     runtime: RuntimeKindSchema,
     model: z.string().optional(),
-    reasoning_effort: ReasoningEffortSchema.optional(),
+    reasoning_effort: ReasoningEffortTokenSchema.optional(),
     fast_mode: FastModeSchema.optional(),
     host_id: z.string().optional(), // defaults to the current user's owned local host
     description: z.string().optional(),
   })
-  // reasoning_effort must be valid for the chosen runtime/model pair.
-  // `ReasoningEffortSchema` is only a known-value registry (the union across
-  // closed-set runtimes), not a standard — so a value like qoder's `max`
-  // parses structurally but is meaningless for codex, while Codex `ultra` is
-  // legal only on an explicitly compatible model. All fields are present in
-  // the create payload, so the authoritative gate closes at the schema.
+  // reasoning_effort is a bounded opaque token (see ReasoningEffortTokenSchema):
+  // the schema accepts ANY structurally-valid token, and the SOLE legality gate
+  // is per-runtime/model via `reasoningEffortValidForRuntime`. So a token like
+  // Qoder's `none` parses structurally but is simply not in Codex's catalog set,
+  // while Codex `max`/`ultra` are legal only on a verified 5.6 model. All fields
+  // are present in the create payload, so the authoritative gate closes here.
   .superRefine((val, ctx) => {
     if (
       !reasoningEffortValidForRuntime(
@@ -111,13 +111,20 @@ export type CreateAgentInput = z.infer<typeof CreateAgentInputSchema>;
 // `name` is the immutable identifier (see migrations.ts v5 comment),
 // `host_id` swap is out of v1 scope, and runtime changes require the dedicated
 // transition command rather than an ordinary metadata patch.
+//
+// Unlike create/switch, this schema has NO reasoning superRefine: PATCH is
+// partial, so the effective (runtime, model, token) tuple isn't fully known
+// here (runtime is fixed, model may be absent). `reasoning_effort` is only
+// bounded structurally by the token schema; its per-runtime/model legality is
+// enforced downstream at the service boundary (`normalizeRuntimeTuning`), which
+// resolves the token against the agent's current runtime + effective model.
 export const UpdateAgentInputSchema = z
   .object({
     display_name: DisplayNameSchema.optional(),
     description: z.string().max(2000).nullable().optional(),
     runtime: z.never().optional(),
     model: z.string().nullable().optional(),
-    reasoning_effort: ReasoningEffortSchema.nullable().optional(),
+    reasoning_effort: ReasoningEffortTokenSchema.nullable().optional(),
     fast_mode: FastModeSchema.nullable().optional(),
   })
   .refine(v => Object.keys(v).length > 0, { message: 'no fields to update' });
@@ -132,7 +139,7 @@ export const SwitchAgentRuntimeInputSchema = z
   .object({
     runtime: RuntimeKindSchema,
     model: z.string().trim().min(1).nullable(),
-    reasoning_effort: ReasoningEffortSchema.nullable(),
+    reasoning_effort: ReasoningEffortTokenSchema.nullable(),
     fast_mode: FastModeSchema.nullable(),
   })
   .strict()

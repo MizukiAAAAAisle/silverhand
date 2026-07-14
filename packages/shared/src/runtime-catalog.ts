@@ -35,13 +35,13 @@ export interface RuntimeCatalogEntry {
    * User-facing reasoning-effort options for this runtime, in display
    * order (empty = no Reasoning control). These are the per-runtime
    * allowed values (lowercase tokens) stored + passed to the driver
-   * verbatim — the authoritative source of what this runtime accepts.
-   * The shared `ReasoningEffortSchema` is only a known-value registry
-   * (union) for typing/drift, NOT a standard. This is the runtime baseline;
-   * `reasoningEffortOptionsByModel` may replace it for a verified model.
-   * Keeping the allowed set here means widening the union (e.g. qoder's
-   * `none`/`max`, Codex's model-specific `ultra`) cannot leak into another
-   * runtime or model picker.
+   * verbatim — the AUTHORITATIVE and SOLE allowlist of what this runtime
+   * accepts. The shared `ReasoningEffort` type is only a bounded opaque
+   * token (structure, not semantics); it grants no legality. This is the
+   * runtime baseline; `reasoningEffortOptionsByModel` may replace it for a
+   * verified model. Keeping the allowed set here means a value legal for
+   * one runtime/model (e.g. qoder's `none`, Codex's model-specific `ultra`)
+   * cannot leak into another runtime or model picker.
    */
   reasoningEffortOptions: readonly ReasoningEffort[];
   /**
@@ -97,14 +97,19 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     cliLabel: 'Codex CLI',
     selectable: true,
     reasoningEffortOptions: ['low', 'medium', 'high', 'xhigh'],
-    // Codex Ultra is a product-level proactive multi-agent mode, not a
-    // universally accepted OpenAI API effort token. The app-server model
-    // catalog advertises it for more than one model, but the ChatGPT product
-    // currently exposes Ultra only for sol. Product eligibility is the
+    // Codex Max/Ultra are product-level efforts beyond the conservative
+    // baseline, gated per model. Per shiki's App testing, all gpt-5.6 models
+    // (sol/terra/luna) expose Max; Ultra (the proactive multi-agent mode) is
+    // currently product-exposed only for sol. Product eligibility is the
     // contract users can actually exercise; other and unknown models stay on
-    // the conservative runtime baseline above.
+    // the conservative runtime baseline above. A newly-verified 5.6 model is a
+    // one-line addition here (exact model id, matching modelSuggestions) — we
+    // deliberately do NOT prefix-match `gpt-5.6-*`, which would grant Max to an
+    // unverified future id and flip the conservative-fallback default.
     reasoningEffortOptionsByModel: {
-      'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'ultra'],
+      'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max'],
+      'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
     },
     supportsFastMode: true,
     supportsProfileMcp: true,
@@ -235,13 +240,14 @@ export function runtimeSupportsFastMode(kind: RuntimeKind): boolean {
 
 /**
  * Domain invariant: a stored `reasoning_effort` must be `null` (unset) OR a
- * value this runtime/model pair actually supports (per its catalog options).
- * The UI picker only offers valid values, but this is the AUTHORITATIVE check the
- * write boundary (create + update) enforces so a direct-API call or a
- * runtime switch can't persist e.g. qoder's `max` onto a codex agent (which
- * would then forward an out-of-range value to the codex driver). Keeping the
- * rule here — beside the options it reads — means create and update share one
- * definition instead of two hand-copied allowlists.
+ * token this runtime/model pair actually supports (per its catalog options).
+ * The UI picker only offers valid values, but this is the AUTHORITATIVE check
+ * every write boundary enforces — create/switch (schema superRefine) and
+ * update (`normalizeRuntimeTuning`) — so a direct-API call or a runtime switch
+ * can't persist e.g. qoder's `none` onto a codex agent (which would then
+ * forward an out-of-range token to the codex driver). Keeping the rule here —
+ * beside the options it reads — means every write boundary shares one
+ * definition instead of hand-copied allowlists.
  */
 export function reasoningEffortValidForRuntime(
   kind: RuntimeKind,

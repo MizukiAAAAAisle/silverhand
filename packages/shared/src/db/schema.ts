@@ -10,47 +10,45 @@ export const RuntimeKindSchema = z.enum([
 ]);
 export type RuntimeKind = z.infer<typeof RuntimeKindSchema>;
 
-// Known reasoning-effort values across the CLOSED-SET drivers (codex/qoder).
-// Reasoning effort has NO cross-vendor standard — the value namespace belongs
-// to each runtime/driver, not a global enum. This is a known-value registry
-// (a union) for typing + drift guards, NOT the field's semantic standard and
-// NOT the authoritative write gate: that is per-runtime
-// (`reasoningEffortValidForRuntime`; the values a runtime/model pair actually
-// allows live in the runtime catalog). `none/xhigh/max` beyond the classic
-// low/medium/high come from qoder's set (verified from the qodercli binary);
-// `ultra` is Codex's model-specific proactive multi-agent mode. Stored/sent
-// verbatim (lowercase). `null` (unset) is distinct from `'none'` (explicitly
-// disabled) — unset means the driver doesn't pass a reasoning override.
-export const ReasoningEffortSchema = z.enum([
-  'none',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-  'ultra',
-]);
-export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
-
-// Reasoning effort as it travels on the daemon `runtime_start` wire — an OPEN,
-// length/charset-bounded token, NOT the closed
-// `ReasoningEffortSchema` product registry above. This is the receiver-future-
-// compat half of the two-layer capability model (#task:1486): a daemon must
-// accept a token it has never heard of rather than strict-reject the whole
-// `runtime_start`, so adding a new effort value never requires a wire-protocol
-// bump. Codex's own app-server protocol models per-model effort exactly this
-// way (a non-empty string). The bound stops a malformed value from reaching the
-// CLI as a config override; PRODUCT legality of a token stays with
-// `ReasoningEffortSchema` + the static product table
-// (`reasoningEffortOptionsByModel`), and the backend gates
-// non-baseline tokens on the daemon's `runtime.codex.reasoning.v1` capability
-// before one ever rides here.
+// Reasoning effort is a bounded, opaque, lowercase TOKEN — one shape shared by
+// persistence, the HTTP DTOs, and the daemon `runtime_start` wire. It has NO
+// global legality semantics: this schema only bounds the STRUCTURE (charset +
+// length), it is NOT a registry of which values are legal. Reasoning effort has
+// no cross-vendor standard, so the value namespace belongs to each runtime — the
+// SOLE allowlist of which tokens a given runtime/model pair accepts lives in the
+// runtime catalog (`reasoningEffortValidForRuntime` /
+// `reasoningEffortOptionsByModel`), never in a global enum.
+//
+// Two consequences of the bound:
+//   - it stops a malformed value from reaching a CLI as a config override;
+//   - any NEW daemon that adopts this open-token schema can FRAME a token it has
+//     never heard of rather than strict-reject the whole `runtime_start`, so
+//     adding a new effort value never requires a wire-protocol bump — the
+//     receiver-future-compat half of the two-layer capability model (#task:1486).
+//     An OLD daemon still on a closed enum would strict-reject an unknown token;
+//     it is protected NOT by this schema but by the send gate — the backend only
+//     sends a non-baseline token to a daemon advertising the
+//     `runtime.codex.reasoning.v1` capability, so a strict old daemon never
+//     receives one. (That daemon capability protects backend→daemon only; it does
+//     NOT make an old backend→desktop DTO reader understand a future token — see
+//     `docs/multi-daemon-registry.md` §3.3 + `docs/progress.md`.)
+//
+// Codex's own app-server protocol models per-model effort exactly this way (a
+// non-empty string). Stored/sent verbatim (lowercase). `null` (unset) is
+// distinct from `'none'` (explicitly disabled): unset means the driver passes
+// no reasoning override.
 export const ReasoningEffortTokenSchema = z
   .string()
   .min(1)
   .max(32)
   .regex(/^[a-z][a-z0-9_-]*$/);
 export type ReasoningEffortToken = z.infer<typeof ReasoningEffortTokenSchema>;
+
+// Domain-readable alias used at DTO / row / catalog field sites. IDENTICAL to
+// `ReasoningEffortToken` — it carries NO global legality at the type level: any
+// structurally-valid token is a valid `ReasoningEffort`, and whether a specific
+// runtime/model accepts it is a runtime-catalog decision, not a type-system one.
+export type ReasoningEffort = ReasoningEffortToken;
 
 /** Tri-state fast_mode for the codex driver: NULL = use codex's own
  *  default (currently enabled by the catalog), true = `--enable
