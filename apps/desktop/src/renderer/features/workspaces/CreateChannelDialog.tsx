@@ -1,4 +1,9 @@
 import { useState, useEffect, useMemo, useRef, type FormEvent } from 'react';
+import { Lock, Hash } from 'lucide-react';
+import type {
+  ConversationVisibility,
+  CreateConversationChannelInput,
+} from '@silverhand/shared';
 import {
   Dialog,
   DialogContent,
@@ -9,6 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/cn';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
@@ -23,18 +29,19 @@ const EMPTY_MEMBERS = { agents: [], humans: [] } as const;
 
 interface SeedMembersInput {
   members: { agents: ReadonlyArray<{ id: string }>; humans: ReadonlyArray<{ id: string }> };
-  viewerUserId: string;
 }
 
 /**
- * Pure helper that decides which agent / human ids to auto-seed into
- * the "new channel" picker. Exported separately for unit testing
- * (Cindy #task:890): the caller is responsible for gating on
- * `viewerUserId !== null`; if the viewer is unknown we must NOT seed,
- * because filtering against null would leak the viewer into
- * `selectedHumans` and the downstream candidate list excludes them
- * (creating a re-render orphan tag). Once the viewer id is in hand,
- * the seed is "every workspace member except me".
+ * Pure helper that decides which ids to auto-seed into the "new channel"
+ * picker. Exported separately for unit testing.
+ *
+ * A channel's HUMAN membership is a deliberate choice: the privacy model must
+ * NOT force every workspace human into a new channel, so humans seed to EMPTY
+ * (the creator is unioned in by the backend and isn't a deselectable
+ * candidate). AGENTS still seed to all workspace agents: a channel without
+ * agents is pointless, and which humans can *see* a private channel is the
+ * privacy axis, not which agents it talks to. Agents remain freely
+ * deselectable via the picker.
  */
 export function computeChannelSeedSelection(input: SeedMembersInput): {
   agents: string[];
@@ -42,10 +49,70 @@ export function computeChannelSeedSelection(input: SeedMembersInput): {
 } {
   return {
     agents: input.members.agents.map(m => m.id),
-    humans: input.members.humans
-      .filter(m => m.id !== input.viewerUserId)
-      .map(m => m.id),
+    humans: [],
   };
+}
+
+/**
+ * Pure builder for the channel-create wire payload. Exported for unit testing
+ * so the request shape is locked independently of the form UI (a control can
+ * look correct while the payload silently regresses).
+ *
+ * The two axes it settles:
+ *  - `visibility` is sent EXPLICITLY for a regular channel (never relying on
+ *    the server default-on-omission), so the wire states intent. A DM omits it
+ *    entirely — the agent_home DM path is always private and rejects `public`.
+ *  - `member_user_ids` carries the (possibly empty) explicit human selection
+ *    for a regular channel; the creator is unioned in server-side. A DM omits
+ *    it — a DM is always 1:1, there is no member selection.
+ */
+export function computeCreateChannelPayload(input: {
+  isDm: boolean;
+  title: string;
+  visibility: ConversationVisibility;
+  selectedAgents: string[];
+  selectedHumans: string[];
+}): CreateConversationChannelInput {
+  const { isDm, title, visibility, selectedAgents, selectedHumans } = input;
+  return {
+    title: title.trim(),
+    member_agent_ids: isDm ? [] : selectedAgents,
+    member_user_ids: isDm ? undefined : selectedHumans,
+    ...(isDm ? {} : { visibility }),
+  };
+}
+
+/**
+ * Which humans may be OFFERED as selectable members, given the current viewer
+ * identity. Pure + exported so the timing invariant is falsifiable.
+ *
+ * The creator is auto-added by the backend and must never be a selectable
+ * candidate. Until the viewer identity resolves (`viewerUserId === null`) we
+ * cannot tell which human IS the creator — so we offer NO humans at all rather
+ * than risk exposing the creator (who could then be picked and linger as an
+ * orphan selection once identity lands and their candidate disappears). Once
+ * known, the creator is filtered out.
+ */
+export function computeSelectableHumans<T extends { id: string }>(
+  humans: ReadonlyArray<T>,
+  viewerUserId: string | null,
+): T[] {
+  if (viewerUserId === null) return [];
+  return humans.filter(user => user.id !== viewerUserId);
+}
+
+/**
+ * Prune a human selection down to the ids still offered as candidates. Pure +
+ * exported: this is the defence that stops a human selected before the viewer
+ * identity resolved (or any vanished candidate) from surviving in the
+ * submitted payload.
+ */
+export function pruneSelectedHumanIds(
+  selected: ReadonlyArray<string>,
+  validHumanIds: ReadonlyArray<string>,
+): string[] {
+  const valid = new Set(validHumanIds);
+  return selected.filter(id => valid.has(id));
 }
 
 interface CreateChannelDialogProps {
@@ -67,6 +134,7 @@ export function CreateChannelDialog({
   onCreated,
 }: CreateChannelDialogProps): JSX.Element {
   const [title, setTitle] = useState('');
+  const [visibility, setVisibility] = useState<ConversationVisibility>('private');
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [selectedHumans, setSelectedHumans] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -83,62 +151,62 @@ export function CreateChannelDialog({
 
   const isDm = workspaceKind === 'dm';
 
-  // Default a fresh root channel to inheriting every workspace member.
-  // The workspace itself is the membership pool; making the user re-pick
-  // would be busywork. They can still drop members via the chip Xs.
-  //
-  // Only seed once per "open" cycle so a re-fetch of `members` (e.g. a
-  // background invalidation) doesn't clobber the user's deselections.
+  // Reset the whole form on close so a reopened dialog starts clean —
+  // default visibility is Private (the safe, non-discoverable default).
   const seededOnceRef = useRef(false);
   useEffect(() => {
     if (open) return;
     setTitle('');
+    setVisibility('private');
     setSelectedAgents([]);
     setSelectedHumans([]);
     setError(null);
     seededOnceRef.current = false;
   }, [open]);
 
+  // Seed the AGENT selection once per open cycle (all workspace agents — a
+  // channel without agents is pointless). Humans are intentionally NOT seeded
+  // (see `computeChannelSeedSelection`): the creator is unioned in server-side
+  // and additional humans are an explicit choice under the privacy model.
   useEffect(() => {
     if (!open) return;
     if (seededOnceRef.current) return;
     if (isDm) return;
     const totalMembers = members.agents.length + members.humans.length;
     if (totalMembers === 0) return; // wait for the members query to land
-    // Cindy review #task:890: wait for `viewerUserId` to resolve before
-    // seeding. If we seed against `viewerUserId === null` the
-    // `filter(m => m.id !== null)` is a no-op and the viewer ends up in
-    // `selectedHumans`. Once `candidates` later excludes the viewer
-    // (which it does unconditionally), that selected key becomes an
-    // orphan tag rendered as `id.slice(0, 8)`. Worse, the seed ref is
-    // already latched so we never self-correct. Gate the seed on the
-    // viewer id being known.
-    if (viewerUserId === null) return;
-    // Auto-seed every workspace agent + every workspace human EXCEPT
-    // the viewer themselves — the backend always unions the creator
-    // into the channel member set (`channel-service.ts`:
-    // `Array.from(new Set([input.actor.userId, ...explicitUserMemberIds]))`),
-    // so the viewer is effectively forced. Per shiki #task:888 we don't
-    // surface that forced membership as a deselectable chip; the picker
-    // only lists the candidates the user actually controls.
-    const seed = computeChannelSeedSelection({ members, viewerUserId });
+    const seed = computeChannelSeedSelection({ members });
     setSelectedAgents(seed.agents);
     setSelectedHumans(seed.humans);
     seededOnceRef.current = true;
-  }, [open, isDm, members, viewerUserId]);
+  }, [open, isDm, members]);
 
   const candidates = useMemo<MemberPickerCandidate[]>(
     () => [
       ...members.agents.map(agent => ({ kind: 'agent' as const, agent })),
-      // See seed effect above — the viewer is auto-added by the
-      // backend on every channel create, so they have no business
-      // appearing as a selectable human candidate either.
-      ...members.humans
-        .filter(user => user.id !== viewerUserId)
-        .map(user => ({ kind: 'human' as const, user })),
+      // The creator is auto-added server-side and must never be a selectable
+      // human candidate; while the viewer identity is unknown we offer no
+      // humans at all. See `computeSelectableHumans` for the timing rationale.
+      ...computeSelectableHumans(members.humans, viewerUserId).map(user => ({
+        kind: 'human' as const,
+        user,
+      })),
     ],
     [members, viewerUserId],
   );
+
+  // Defence in depth for the same invariant: prune any selected human that is
+  // no longer a valid candidate (e.g. selected before the viewer identity
+  // resolved). Functional update preserves the array reference when nothing
+  // changed, so this cannot loop.
+  useEffect(() => {
+    const validHumanIds = candidates
+      .filter(c => c.kind === 'human')
+      .map(c => c.user.id);
+    setSelectedHumans(prev => {
+      const next = pruneSelectedHumanIds(prev, validHumanIds);
+      return next.length === prev.length ? prev : next;
+    });
+  }, [candidates]);
   const selectedMembers = useMemo(
     () => [
       ...selectedAgents.map(id => `agent:${id}`),
@@ -154,15 +222,19 @@ export function CreateChannelDialog({
       setError('Please enter a channel title');
       return;
     }
-    // DM channels are always 1:1 — no member selection needed.
-    const memberAgentIds = isDm ? [] : selectedAgents;
-    const memberUserIds = isDm ? undefined : selectedHumans;
+    // DM channels are always 1:1 — no member selection, and visibility is N/A
+    // (the agent_home DM path is always private and rejects `public`). The
+    // exact wire shape is settled by `computeCreateChannelPayload`.
     try {
-      const channel = await createChannel.mutateAsync({
-        title: title.trim(),
-        member_agent_ids: memberAgentIds,
-        member_user_ids: memberUserIds,
-      });
+      const channel = await createChannel.mutateAsync(
+        computeCreateChannelPayload({
+          isDm,
+          title,
+          visibility,
+          selectedAgents,
+          selectedHumans,
+        }),
+      );
       onCreated?.(channel.id);
       onOpenChange(false);
     } catch (err) {
@@ -189,6 +261,10 @@ export function CreateChannelDialog({
               autoFocus
             />
           </div>
+
+          {isDm ? null : (
+            <VisibilitySelect value={visibility} onChange={setVisibility} />
+          )}
 
           {isDm ? null : (
             <RegularMemberPicker
@@ -226,6 +302,76 @@ export function CreateChannelDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** The two channel-visibility options. Icons mirror the sidebar identity
+ *  glyph language established in batch-1 (private = Lock, public = `#`), so a
+ *  user picks the same symbol they'll later recognise in the channel list. The
+ *  one-line hint is a deliberate exception to "no explanatory copy": choosing
+ *  Public by mistake is a real visibility-leak misoperation, so the consequence
+ *  is stated plainly. */
+const VISIBILITY_OPTIONS: ReadonlyArray<{
+  value: ConversationVisibility;
+  label: string;
+  icon: typeof Lock;
+  hint: string;
+}> = [
+  {
+    value: 'private',
+    label: 'Private',
+    icon: Lock,
+    hint: 'Only invited members can see this channel.',
+  },
+  {
+    value: 'public',
+    label: 'Public',
+    icon: Hash,
+    hint: 'Anyone in the workspace can find and join this channel.',
+  },
+];
+
+function VisibilitySelect({
+  value,
+  onChange,
+}: {
+  value: ConversationVisibility;
+  onChange: (v: ConversationVisibility) => void;
+}): JSX.Element {
+  const active = VISIBILITY_OPTIONS.find(o => o.value === value);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label>Visibility</Label>
+      <div
+        role="radiogroup"
+        aria-label="Channel visibility"
+        className="inline-flex gap-1 self-start rounded-[var(--control-radius)] border border-border bg-bg-hover p-1"
+      >
+        {VISIBILITY_OPTIONS.map(opt => {
+          const selected = opt.value === value;
+          const Icon = opt.icon;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => onChange(opt.value)}
+              className={cn(
+                'flex items-center justify-center gap-1.5 rounded-[calc(var(--control-radius)-2px)] px-3 py-1 text-xs font-medium transition-colors',
+                selected
+                  ? 'bg-bg-floating text-text-primary'
+                  : 'text-text-muted hover:text-text-secondary',
+              )}
+            >
+              <Icon className="size-3.5" />
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
+      <span className="text-xs text-text-muted">{active?.hint}</span>
+    </div>
   );
 }
 

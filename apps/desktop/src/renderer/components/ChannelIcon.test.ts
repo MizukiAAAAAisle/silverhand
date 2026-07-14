@@ -55,3 +55,36 @@ describe('ChannelIcon — sticker vs utility is enforced (#task:1438)', () => {
     expect(CHANNEL_ICON_PX).toEqual({ sm: 12, md: 14, lg: 24 });
   });
 });
+
+describe('ChannelIcon — visibility selects the glyph (private = Lock)', () => {
+  // The private/public glyph split is a product-semantic axis, orthogonal to
+  // the sticker/utility hook: a `private` channel is membership-gated so it
+  // wears a Lock; `public` (and every existing omit-visibility call-site) keeps
+  // the canonical `#`. This locks the SEMANTIC mapping (which glyph), not any
+  // size — sizing stays owned by the density scale above.
+  it('private renders a Lock, never the `#` Hash — and stays a channel identity', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ChannelIcon, { variant: 'sticker', visibility: 'private' }),
+    );
+    expect(html).toContain('lucide-lock');
+    expect(html).not.toContain('lucide-hash');
+    // A private channel is still a channel identity → keeps the sticker hook.
+    expect(html).toContain('data-channel-icon');
+  });
+
+  it('public renders the canonical `#` Hash, never a Lock', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ChannelIcon, { variant: 'sticker', visibility: 'public' }),
+    );
+    expect(html).toContain('lucide-hash');
+    expect(html).not.toContain('lucide-lock');
+  });
+
+  it('omitted visibility defaults to the `#` Hash (existing call-sites unchanged)', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ChannelIcon, { variant: 'utility' }),
+    );
+    expect(html).toContain('lucide-hash');
+    expect(html).not.toContain('lucide-lock');
+  });
+});

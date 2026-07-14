@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { ThreadIcon } from '@/components/icons/conversation-icons';
 import { Composer } from '@/components/chat/Composer';
+import { ChannelJoinBar } from '@/components/chat/ChannelJoinBar';
 import { QuotedMessagePreview } from '@/components/chat/QuotedMessagePreview';
 import { findThreadAnchor, readAnchorMessageId } from '@/components/chat/threadAnchor';
 import { ConversationViewSkeleton } from '@/components/layout/ConversationViewSkeleton';
@@ -40,6 +41,8 @@ import {
   useStartAgent,
   useStopAgent,
 } from '@/features/channels/hooks';
+import { useChannelMembership } from '@/features/channels/use-channel-membership';
+import { useJoinChannel } from '@/features/workspaces/hooks';
 import { lastCommittedSeq } from '@/features/channels/pending-message';
 import { nextTailReadMark, type TailReadMark } from '@/lib/channel-read';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
@@ -61,6 +64,12 @@ interface ChannelDescriptor {
   closed_at: number | null;
   archived_at: number | null;
   workspace_id: string;
+  /** Per-viewer membership, when the carrier (discovery-union list item)
+   *  provides it. Absent on a cross-workspace `?side` ref / deep link →
+   *  the view resolves it via a channel-detail fetch (see the membership
+   *  derivation below). Drives the read-only-browse + Join gate for a
+   *  public channel the viewer hasn't joined. */
+  is_member?: boolean;
 }
 
 interface ChannelViewProps {
@@ -256,12 +265,29 @@ function ActiveChannelView({
     replySummariesByRoot,
   } = useChannelMessages(conversation.id);
 
+  // Per-viewer membership gate. A PUBLIC channel is readable by a
+  // workspace user who has not joined it: they browse (message history + thread
+  // content + inline attachment preview) with a Join affordance in place of the
+  // composer, and every member effect / mutation is withheld. The three-state
+  // (member | nonmember | unknown) is resolved by the shared hook from the
+  // carrier's own authoritative `is_member` (or a channel-detail fetch when a
+  // deep-link carrier lacks it). The gate is FAIL-CLOSED: until it resolves to
+  // `member`, no member effect fires and no write affordance renders. DMs and
+  // private channels always resolve to `member` (the backend stamps
+  // `is_member: true`), so this is a no-op regression-wise there.
+  const { gate } = useChannelMembership(conversation, conversation.id);
+  const joinChannel = useJoinChannel(conversation.workspace_id);
+
   // Per-viewer server-scored unread for this conversation's reply-clusters
   // (#task:1226). The SINGLE source of the chip's "N new" + first-unread —
   // sparse (only roots with unread > 0). Settled from REST after
   // `unread_updated` or this client's successful observe(); the message-window
-  // summary no longer carries unread.
-  const threadUnreadByRoot = useConversationUnread(conversation.id).data?.threads;
+  // summary no longer carries unread. Gated OFF for a non-member (reading
+  // per-viewer unread state is a member effect) — the hook disables its query +
+  // WS interest when passed a null id.
+  const threadUnreadByRoot = useConversationUnread(
+    gate.allowMemberEffects ? conversation.id : null,
+  ).data?.threads;
 
   // Advance the message read cursor as the visible mainline tail advances
   // (#task:1255 P1c). ChannelView is rendered only when the channel is visible,
@@ -281,7 +307,13 @@ function ActiveChannelView({
   // MessageSeq, and mark-read must advance on a real ordinal (§3.3/§3.5).
   const tailSeq = lastCommittedSeq(messages);
   const lastMarkedRef = useRef<TailReadMark | null>(null);
+
   useEffect(() => {
+    // Mark-read is a member effect: a non-member browsing a public channel must
+    // never advance a read cursor / write read-state (gate.allowMemberEffects).
+    // This is a BEHAVIOR gate, not a hidden control — the auto-effect itself is
+    // suppressed, not merely a button.
+    if (!gate.allowMemberEffects) return;
     const next = nextTailReadMark(
       lastMarkedRef.current,
       conversation.id,
@@ -294,7 +326,7 @@ function ActiveChannelView({
     markRead.mutate(conversation.id);
     // markRead.mutate is stable; nextTailReadMark encodes the trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversation.id, tailSeq, isAtTail, hasNewerLiveGap]);
+  }, [conversation.id, tailSeq, isAtTail, hasNewerLiveGap, gate.allowMemberEffects]);
 
   const { data: agents = [] } = useAgents();
   // Single batch fetch for every agent avatar in this channel — threaded
@@ -317,12 +349,18 @@ function ActiveChannelView({
   const isTopLevelChannelLike =
     channelKind !== null &&
     (conversation.kind === 'channel' || conversation.kind === 'dm_channel');
-  const canToggleArchive = isTopLevelChannelLike && !!onArchiveChannel;
+  const canToggleArchive =
+    isTopLevelChannelLike && !!onArchiveChannel && gate.allowMutations;
   const canRenameChannel =
-    isTopLevelChannelLike && !closed && !!onRenameChannel;
+    isTopLevelChannelLike && !closed && !!onRenameChannel && gate.allowMutations;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { data: viewer } = useViewerUser();
-  const { data: channelAgents = [] } = useChannelAgents(conversation.id);
+  // The channel roster is a member surface — the roster/agent
+  // strip + the restart/stop controls it feeds are join-gated. Disable the
+  // fetch (query + WS interest) for a non-member by passing a null id.
+  const { data: channelAgents = [] } = useChannelAgents(
+    gate.allowMemberEffects ? conversation.id : null,
+  );
   const startAgent = useStartAgent(conversation.id);
   const stopAgent = useStopAgent(conversation.id);
   const agentIds = useMemo(
@@ -373,13 +411,15 @@ function ActiveChannelView({
       await stopAgent.mutateAsync({ agentId, mode: 'hard' });
     }
   }, [agentActionDisabled, agentIds, stopAgent]);
-  const memberStrip = (
+  // The roster/agent strip is a member surface — hidden for a
+  // non-member (channelAgents is also empty there, the fetch being gated off).
+  const memberStrip = gate.allowMemberEffects ? (
     <MemberStrip
       channelId={conversation.id}
       conversationAgents={channelAgents}
       agentAvatarUrls={agentAvatarUrls}
     />
-  );
+  ) : null;
 
   // Thread children carry a single thread_anchor system message — the
   // header surfaces it as "Thread — #parent" + jump-back. The row
@@ -459,6 +499,9 @@ function ActiveChannelView({
   // Offered only when the pane supports being jumped into (`onJumpToMessage`
   // present) — secondary `?side` panes don't, so they show no find affordance.
   const findEnabled = !!onJumpToMessage;
+  // In-channel find is a member surface — the allowlist restores it
+  // only on join. Gate the toggle, the ⌘F hotkey, and the overlay together.
+  const findAvailable = findEnabled && gate.allowMemberEffects;
   const loadedMessageIds = useMemo(
     () => new Set(visibleMessages.map(m => m.id)),
     [visibleMessages],
@@ -486,13 +529,16 @@ function ActiveChannelView({
     conversationId: conversation.id,
     stream: 'mainline',
     onNavigate: inlineFindNavigate,
+    // Gate the QUERY SOURCE, not just the toggle: a non-member must never reach
+    // the member-only /api/search, and a downgrade while open force-clears it.
+    enabled: findAvailable,
   });
   // ⌘F opens the find. Channel is the primary pane, so it also claims ⌘F when
   // focus is nowhere specific (see useInlineFindHotkey).
   const findRootRef = useRef<HTMLElement>(null);
   useInlineFindHotkey({
     rootRef: findRootRef,
-    enabled: findEnabled,
+    enabled: findAvailable,
     isPrimary: true,
     onOpen: find.openFind,
   });
@@ -523,7 +569,7 @@ function ActiveChannelView({
               {parentTitle ?? conversation.title}
             </span>
             {memberStrip}
-            {canAddMember(conversation, closed) ? (
+            {canAddMember(conversation, closed) && gate.allowMutations ? (
               <AddConversationMemberPopover
                 workspaceId={conversation.workspace_id}
                 conversationId={conversation.id}
@@ -561,7 +607,7 @@ function ActiveChannelView({
               {conversation.title}
             </span>
             {memberStrip}
-            {canAddMember(conversation, closed) ? (
+            {canAddMember(conversation, closed) && gate.allowMutations ? (
               <AddConversationMemberPopover
                 workspaceId={conversation.workspace_id}
                 conversationId={conversation.id}
@@ -587,7 +633,7 @@ function ActiveChannelView({
         ) : null}
 
         <div data-channel-actions className="ml-auto flex shrink-0 items-center gap-1.5">
-          {findEnabled ? (
+          {findAvailable ? (
             <button
               type="button"
               onClick={find.open ? find.close : find.openFind}
@@ -604,7 +650,7 @@ function ActiveChannelView({
               <Search className="size-3.5" />
             </button>
           ) : null}
-          {onToggleThreadsList ? (
+          {onToggleThreadsList && gate.allowMemberEffects ? (
             <button
               type="button"
               onClick={onToggleThreadsList}
@@ -621,7 +667,7 @@ function ActiveChannelView({
               <ThreadIcon className="size-3.5" />
             </button>
           ) : null}
-          {onToggleFilesList ? (
+          {onToggleFilesList && gate.allowMemberEffects ? (
             <button
               type="button"
               onClick={onToggleFilesList}
@@ -709,7 +755,7 @@ function ActiveChannelView({
           (shiki: 搜索框不应挤压对话流、不应触发重渲染). It only drives the
           search controller + this overlay; the message window is untouched
           until the user navigates to a match (ensure-visible below). */}
-      {findEnabled && find.open ? (
+      {findAvailable && find.open ? (
         <div className="absolute inset-x-0 top-12 z-20">
           <InlineFindBar
             controller={find}
@@ -751,7 +797,9 @@ function ActiveChannelView({
             channelId={conversation.id}
             workspaceId={conversation.workspace_id}
             messages={visibleMessages}
-            canReact={!closed && !isArchived}
+            canReact={!closed && !isArchived && gate.allowMutations}
+            canSave={gate.allowMutations}
+            canParticipate={gate.allowMemberEffects}
             isLoading={isLoading}
             hasMoreBefore={!!hasPreviousPage}
             isFetchingEarlier={isFetchingPreviousPage}
@@ -796,12 +844,23 @@ function ActiveChannelView({
           />
         </div>
 
-        <Composer
-          key={conversation.id}
-          conversationId={conversation.id}
-          disabled={closed}
-          archived={isArchived}
-        />
+        {gate.showComposer ? (
+          <Composer
+            key={conversation.id}
+            conversationId={conversation.id}
+            disabled={closed}
+            archived={isArchived}
+          />
+        ) : gate.showJoin ? (
+          // Resolved non-member browsing a public channel: Join replaces the
+          // composer. `unknown` (membership still resolving) shows NEITHER — a
+          // neutral state — so we never flash a Join affordance we might revoke.
+          <ChannelJoinBar
+            onJoin={() => joinChannel.mutate(conversation.id)}
+            joining={joinChannel.isPending}
+            channelTitle={conversation.title}
+          />
+        ) : null}
       </div>
     </main>
     </TaskRefContextProvider>

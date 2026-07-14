@@ -765,6 +765,25 @@
   padding-right: 5.5rem;
 }
 
+/* ── Non-member Join button — poster sticker ─────────────────────────
+   The composer-slot Join affordance a workspace user sees while browsing a
+   public channel they have not joined (`ChannelJoinBar`). The base button
+   already fills with `--bg-row-selected` (forza6 = acid lime, the selection
+   identity) and inks its label via `--text-on-selected`; corners are already
+   square through `--control-radius` (0 in forza6). Here we stamp it into the
+   same poster-sticker family the selected sidebar row and the chat-header `#`
+   chip wear — a 1.5px ink frame plus a hard offset ink shadow — so the button
+   reads as "step onto this channel". Press collapses the lift for a tactile
+   stamp. Other themes keep the flat token fill, untouched. */
+[data-theme='forza6'] [data-channel-join] {
+  border: 1.5px solid var(--forza6-ink);
+  box-shadow: 2px 2px 0 var(--forza6-ink);
+}
+[data-theme='forza6'] [data-channel-join]:active:not(:disabled) {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0 var(--forza6-ink);
+}
+
 /* ── #v5.5 — Multi-line fenced code block as deep-teal HUD island ───
    shiki `GpO6aSc83fIkGZ-1` "多行 ``` 围栏代码块需要处理" + Cindy
    `VGm9HpWGWyDx5bhf` "深色 HUD/code island，保留可读性，lime/粉只

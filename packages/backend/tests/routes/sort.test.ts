@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { encodeUserPrincipalHeader, X_SILVERHAND_PRINCIPAL_HEADER } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
@@ -384,6 +385,62 @@ describe('PUT /api/sort/order', () => {
     // The `pinned` / `dm` sections keep their own (default) mode — no rail-wide flip.
     expect(modes.pinned).toBeUndefined();
     expect(modes.dm).toBeUndefined();
+  });
+
+  // Discovery-union presentation state: a visible unjoined PUBLIC
+  // channel is a viewer-local sidebar member, so it enters the reorder set;
+  // an unjoined PRIVATE channel is not visible and its id is rejected. This is
+  // presentation state (manual order), NOT a membership/restore projection —
+  // restore/default stay member-only in the renderer. Locks the sort policy so
+  // it cannot silently regress to the old member-only set.
+  it('reorder set includes visible unjoined PUBLIC channels, rejects unjoined private ids', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const agentId = await makeAgent(t, 'alice');
+    const wsId = await makeWorkspace(t, 'eng', agentId);
+    // teammate: workspace member, but NOT a member of the channels below.
+    t.ctx.db
+      .prepare(
+        `INSERT OR IGNORE INTO workspace_users (workspace_id, user_id, joined_at, role)
+         VALUES (?, ?, ?, 'member')`,
+      )
+      .run(wsId, 'teammate', Date.now());
+    const asTeammate = http(t, {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    });
+    const mkChannel = async (title: string, visibility?: 'public') => {
+      const r = await http(t!).post(`/api/workspaces/${wsId}/channels`, {
+        title,
+        member_agent_ids: [],
+        ...(visibility ? { visibility } : {}),
+      });
+      return ((await r.json()) as any).channel.id as string;
+    };
+    const pubJoined = await mkChannel('pub-joined', 'public');
+    const pubUnjoined = await mkChannel('pub-unjoined', 'public');
+    const privUnjoined = await mkChannel('priv-unjoined');
+    expect((await asTeammate.post(`/api/channels/${pubJoined}/join`, {})).status).toBe(200);
+
+    const listKey = `channels:${wsId}`;
+    // teammate's visible set = joined + unjoined public; private-unjoined excluded.
+    const chList = (await (await asTeammate.get(`/api/workspaces/${wsId}/channels`)).json()) as any;
+    const visibleIds: string[] = chList.channels.map((c: any) => c.id);
+    expect(visibleIds.sort()).toEqual([pubJoined, pubUnjoined].sort());
+
+    // The full visible set — including the unjoined public channel — is a legal reorder.
+    const ok = await asTeammate.put('/api/sort/order', {
+      list_key: listKey,
+      group: 'unstarred',
+      ordered_ids: [pubUnjoined, pubJoined],
+    });
+    expect(ok.status).toBe(200);
+
+    // Submitting the unjoined PRIVATE id (not in the viewer's visible set) is rejected.
+    const rejected = await asTeammate.put('/api/sort/order', {
+      list_key: listKey,
+      group: 'unstarred',
+      ordered_ids: [pubUnjoined, pubJoined, privUnjoined],
+    });
+    expect(rejected.status).toBe(400);
   });
 });
 

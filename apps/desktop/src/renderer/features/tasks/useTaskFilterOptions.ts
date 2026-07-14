@@ -4,6 +4,7 @@ import {
   useChannelsAcrossWorkspaces,
 } from '@/features/workspaces/hooks';
 import { dmWorkspaceLabel, workspaceDisplayName } from '@/lib/workspace-name';
+import { isMemberChannel } from '@/features/channels/membership';
 import {
   buildChannelFilterOptions,
   type ChannelFilterCandidate,
@@ -126,7 +127,12 @@ export function useTaskFilterOptions(): TaskFilterOptions {
     const candidates: ChannelFilterCandidate[] = workspaces.flatMap((w, i) =>
       workspaceChannelCandidates(
         { id: w.id, name: w.name, kind: w.kind },
-        channelLists[i]?.data ?? [],
+        // Member-scoped aggregate: the discovery union now mixes in
+        // active PUBLIC channels the viewer hasn't joined. The Tasks channel
+        // filter is a member projection (v1 aggregates stay member-only), so
+        // exclude non-members — `isMemberChannel` admits only authoritative
+        // `is_member === true`.
+        (channelLists[i]?.data ?? []).filter(isMemberChannel),
       ),
     );
     // Group by data source — Workspaces section first, then DMs — and

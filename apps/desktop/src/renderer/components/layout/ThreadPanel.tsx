@@ -11,6 +11,7 @@ import {
 import { SystemMessage } from '@/components/chat/SystemMessage';
 import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
 import { Composer } from '@/components/chat/Composer';
+import { ChannelJoinBar } from '@/components/chat/ChannelJoinBar';
 import { MessageRowsSkeleton } from '@/components/layout/ConversationViewSkeleton';
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import { useMessageActionSurface } from '@/components/chat/useMessageActionSurface';
@@ -35,6 +36,11 @@ import {
 import type { MessageSeq } from '@silverhand/shared';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+import { useJoinChannel } from '@/features/workspaces/hooks';
+import {
+  channelGateFor,
+  type MembershipState,
+} from '@/features/channels/membership';
 
 interface ThreadPanelProps {
   /** Parent channel conversation. Replies live in this conversation with
@@ -48,6 +54,16 @@ interface ThreadPanelProps {
   /** Parent channel closed → composer disabled. */
   closed?: boolean;
   archived?: boolean;
+  /** The PARENT channel's per-viewer membership, resolved by App
+   *  from the SAME authority `ChannelView` uses (the shared
+   *  `useChannelMembership` three-state — never a collapsed boolean). A thread
+   *  shares its channel's membership: `member` participates fully; `nonmember`
+   *  reads the thread but the composer is replaced by Join and every member
+   *  affordance (follow / react / save / attachment export) hides; `unknown`
+   *  (still resolving) is NEUTRAL — neither composer nor Join — so we never
+   *  flash a Join we might revoke. Required (no default) so a caller can't
+   *  silently fail open. */
+  membership: MembershipState;
   onClose: () => void;
   /** "View in channel": close this panel and scroll-locate + flash the
    *  root message in the main channel stream. Wired by App to
@@ -117,6 +133,7 @@ export function ThreadPanel({
   parentTitle,
   closed = false,
   archived = false,
+  membership,
   onClose,
   onViewInChannel,
   conversationRefsById,
@@ -129,6 +146,12 @@ export function ThreadPanel({
   onJumpToMessage,
   onOpenAdvancedSearch,
 }: ThreadPanelProps): JSX.Element {
+  // Derive the member gate from the authoritative parent-channel three-state
+  // membership. `canParticipate` (member effects: follow / react / save /
+  // attachment export + the mark-read effect below) is member-only. The
+  // composer / Join slot uses the full gate so `unknown` shows NEITHER.
+  const gate = channelGateFor(membership);
+  const canParticipate = gate.allowMemberEffects;
   const rootCtx = useThreadRoot(channelId, rootMessageId);
   const cluster = useThreadCluster(channelId, rootMessageId, {
     jumpWindowLocked: jumpWindowLockedForPhase(jumpPhase),
@@ -144,7 +167,12 @@ export function ThreadPanel({
   // Human follower state for this cluster (item 4 + 5). `viewer_following`
   // drives the header toggle / context-menu unfollow; `follower_agent_ids`
   // restricts the (channel-scoped) activity bubble to this thread's agents.
-  const followers = useThreadFollowers(channelId, rootMessageId);
+  // Thread follow is a member surface: a non-member's fetch is
+  // disabled (null root), and the activity bubble then stays empty-allow-listed.
+  const followers = useThreadFollowers(
+    channelId,
+    canParticipate ? rootMessageId : null,
+  );
   const viewerFollowing = followers.data?.viewer_following ?? false;
   // Until we have an authoritative follower snapshot, restrict the
   // (channel-scoped) activity bubble to an EMPTY allow-list so it shows
@@ -158,6 +186,9 @@ export function ThreadPanel({
   const unfollowThread = useUnfollowThread(channelId, rootMessageId);
   const markThreadRead = useMarkThreadRead();
   const followPending = followThread.isPending || unfollowThread.isPending;
+  // Join the PARENT channel (the Composer-slot affordance for a non-member
+  // browsing this public channel's thread).
+  const joinChannel = useJoinChannel(workspaceId);
   const toggleFollow = (): void => {
     if (followPending) return;
     if (viewerFollowing) unfollowThread.mutate();
@@ -180,7 +211,7 @@ export function ThreadPanel({
     userResolver,
     liveChannels,
     archivedChannels,
-  } = useMessageRenderContext(workspaceId, channelId);
+  } = useMessageRenderContext(workspaceId, channelId, canParticipate);
   const { data: agents = [] } = useAgents();
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
 
@@ -199,6 +230,7 @@ export function ThreadPanel({
     jumpToMessageId: jumpMessageId ?? null,
     agentsById,
     viewer,
+    canSave: canParticipate,
   });
 
   // Parent-channel title/kind for the export screenshot header + filename.
@@ -348,6 +380,10 @@ export function ThreadPanel({
   // scope its node lookup to THIS pane (see below).
   const findRootRef = useRef<HTMLElement>(null);
   const findEnabled = !!onJumpToMessage;
+  // In-thread search is a member surface — the allowlist restores
+  // it only on join. Gate the toggle, the ⌘F hotkey, the bar, AND the query
+  // source (via the controller's `enabled`) together, mirroring ChannelView.
+  const findAvailable = findEnabled && canParticipate;
   const inlineFindNavigate = useCallback(
     (messageId: string) => {
       const inWindow =
@@ -385,12 +421,13 @@ export function ThreadPanel({
     stream: 'thread',
     threadRootId: rootMessageId,
     onNavigate: inlineFindNavigate,
+    enabled: findAvailable,
   });
   // ⌘F opens the thread find — but only when focus is inside this panel (the
   // channel handles the nowhere-focus default). See useInlineFindHotkey.
   useInlineFindHotkey({
     rootRef: findRootRef,
-    enabled: findEnabled,
+    enabled: findAvailable,
     isPrimary: false,
     onOpen: find.openFind,
   });
@@ -450,6 +487,10 @@ export function ThreadPanel({
   const markThreadReadMutate = markThreadRead.mutate;
   const issueMarkRead = useCallback(
     (seq: MessageSeq, onMarked?: () => void) => {
+      // Mark-read is a member effect: a non-member browsing a
+      // public channel's thread must never advance thread read-state. Behavior
+      // gate, not a hidden control — the auto-effect itself is suppressed.
+      if (!canParticipate) return;
       // Same-stream (this thread) MessageSeq compares, guarded on explicit
       // absence: a null gate ("nothing marked / none in flight") never blocks
       // the first mark (#task:1267 Axis-B).
@@ -470,7 +511,7 @@ export function ThreadPanel({
         },
       );
     },
-    [channelId, rootMessageId, markThreadReadMutate],
+    [channelId, rootMessageId, markThreadReadMutate, canParticipate],
   );
 
   // §9.10: drive this open's window fetch explicitly (the query itself has
@@ -654,7 +695,8 @@ export function ThreadPanel({
         key={m.id}
         message={m}
         conversationId={channelId}
-        canReact={!closed && !archived}
+        canReact={!closed && !archived && canParticipate}
+        canParticipate={canParticipate}
         agentsById={agentsById}
         agentsByName={agentsByName}
         humansByName={humansByName}
@@ -697,7 +739,7 @@ export function ThreadPanel({
           data-channel-actions
           className="ml-auto flex shrink-0 items-center gap-1.5"
         >
-          {findEnabled ? (
+          {findAvailable ? (
             <button
               type="button"
               onClick={find.open ? find.close : find.openFind}
@@ -714,7 +756,7 @@ export function ThreadPanel({
               <Search className="size-3.5" />
             </button>
           ) : null}
-          {followers.data ? (
+          {followers.data && canParticipate ? (
             <button
               type="button"
               aria-label={viewerFollowing ? 'Unfollow thread' : 'Follow thread'}
@@ -766,7 +808,7 @@ export function ThreadPanel({
           the scroller's height (shiki: 搜索框不应挤压对话流、不应触发重渲染).
           It drives only the search controller + overlay; the cluster window is
           untouched until the user navigates to a match (ensure-visible above). */}
-      {findEnabled && find.open ? (
+      {findAvailable && find.open ? (
         <div className="absolute inset-x-0 top-12 z-20">
           <InlineFindBar
             controller={find}
@@ -882,14 +924,26 @@ export function ThreadPanel({
         </div>
       )}
 
-      <Composer
-        key={`${channelId}#cluster#${rootMessageId}`}
-        conversationId={channelId}
-        threadRootId={rootMessageId}
-        disabled={closed || rootCtx.isError || !rootCtx.root}
-        archived={archived}
-        activityAgentIds={followerAgentIds}
-      />
+      {gate.showComposer ? (
+        <Composer
+          key={`${channelId}#cluster#${rootMessageId}`}
+          conversationId={channelId}
+          threadRootId={rootMessageId}
+          disabled={closed || rootCtx.isError || !rootCtx.root}
+          archived={archived}
+          activityAgentIds={followerAgentIds}
+        />
+      ) : gate.showJoin ? (
+        // Resolved non-member browsing a public channel's thread: Join (the
+        // parent channel) replaces the reply composer. `unknown` (still
+        // resolving) shows NEITHER — a neutral state — so we never flash a Join
+        // affordance we might revoke.
+        <ChannelJoinBar
+          onJoin={() => joinChannel.mutate(channelId)}
+          joining={joinChannel.isPending}
+          channelTitle={channelMeta.title}
+        />
+      ) : null}
     </aside>
     </TaskRefContextProvider>
   );

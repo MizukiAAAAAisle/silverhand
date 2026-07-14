@@ -1,6 +1,7 @@
 import type { Database as Db } from 'better-sqlite3';
 import {
   type ChannelConversationDto,
+  type ConversationVisibility,
   type DmChannelDto,
   type MessageDto,
   systemSubtype,
@@ -31,8 +32,10 @@ import type { AgentPrincipal, UserPrincipal } from '../auth/principal.js';
  *   parameters, so the agent_home rule "members are always the owner + the
  *   current user" is structural.
  * - Every requested member must exist and already be a workspace member.
- * - User actors may pass an explicit human member subset. If omitted,
- *   channel creation preserves the legacy full workspace-human snapshot.
+ * - User actors scope humans to the creator (implicit) plus any explicit
+ *   subset they pass. Omitted or empty both mean creator-only — there is NO
+ *   full-workspace snapshot; others reach a `public` channel via browse +
+ *   self-join and never see a `private` one they weren't added to.
  *   Agent actors inherit humans from the source conversation instead.
  * - Agent actors must be members of their source conversation, and that
  *   source conversation must belong to the target workspace.
@@ -53,6 +56,9 @@ export interface CreateChannelInput {
   title: string;
   memberAgentIds: string[];
   memberUserIds?: string[];
+  /** Channel visibility. Omitted → 'private'. `public` requires a user actor
+   *  (agents have no public-creation path); the service rejects otherwise. */
+  visibility?: ConversationVisibility;
   actor: ChannelActor;
   seed?: {
     systemMessageBody: string;
@@ -136,7 +142,8 @@ export type ActorErrorCode =
   | 'agent_not_found'
   | 'source_conversation_not_found'
   | 'agent_not_member_of_source_conv'
-  | 'agent_workspace_mismatch';
+  | 'agent_workspace_mismatch'
+  | 'agent_cannot_create_public';
 
 export class ActorError extends Error {
   constructor(
@@ -278,6 +285,17 @@ export class ChannelService {
       );
     }
 
+    // `public` is a human product concept — agents have no public read/create
+    // path (see canReadConversation). Guard the invariant at the write boundary
+    // rather than trusting callers: the human create route always passes a user
+    // actor, but a future agent caller must never mint a public channel.
+    if (input.visibility === 'public' && input.actor.kind !== 'user') {
+      throw new ActorError(
+        'agent_cannot_create_public',
+        'public channel creation requires a human actor',
+      );
+    }
+
     const created = this.db.transaction((): CreateChannelTxResult => {
       const channel = this.conversations.insertChannel({
         workspaceId: workspace.id,
@@ -285,30 +303,29 @@ export class ChannelService {
         title: input.title,
         spawnedByAgentId:
           input.actor.kind === 'agent' ? input.actor.agentId : null,
+        visibility: input.visibility,
       });
       for (const memberId of memberAgentIds) {
         this.conversations.addAgent(channel.id, memberId);
       }
 
-      // v25+ human membership snapshot:
-      //   - user-created channel with no explicit human list:
-      //     snapshot full `workspace_users` for legacy callers.
-      //   - user-created channel with an explicit human list: add that
-      //     subset plus the creator, so creators cannot accidentally
-      //     create a channel they cannot view.
+      // Human membership snapshot at creation:
       //   - agent-created channel: inherit narrowly from the SOURCE
-      //     conversation's `conversation_users`. v1 single-human is
-      //     equivalent to the workspace snapshot; v2 multi-human will
-      //     legitimately differ (an agent in a private subset of
-      //     humans should not fan out to humans outside that
-      //     conversation just because they share the workspace).
+      //     conversation's `conversation_users` (an agent in a private subset
+      //     of humans must not fan out to the whole workspace).
+      //   - user-created channel: the creator (implicit, so they can always
+      //     view what they made) plus any explicitly-selected humans. There is
+      //     NO full-workspace snapshot — a new channel starts scoped to the
+      //     creator + chosen members; others reach a `public` channel by
+      //     browsing (canReadConversation) and self-join, and never see a
+      //     `private` one they weren't added to.
       const userMemberIds = input.actor.kind === 'agent'
         ? this.conversations
             .listUsers(input.actor.conversationId)
             .map(u => u.user_id)
-        : explicitUserMemberIds
-          ? Array.from(new Set([input.actor.userId, ...explicitUserMemberIds]))
-          : this.workspaces.listUserMemberIds(workspace.id);
+        : Array.from(
+            new Set([input.actor.userId, ...(explicitUserMemberIds ?? [])]),
+          );
       for (const userId of userMemberIds) {
         this.conversations.addUser(channel.id, userId);
       }

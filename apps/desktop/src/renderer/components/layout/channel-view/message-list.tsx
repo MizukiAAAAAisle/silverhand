@@ -58,6 +58,8 @@ export function MessageList({
   onOpenConversationRef,
   onOpenChannelRef,
   canReact,
+  canSave = true,
+  canParticipate = true,
   searchQuery,
   searchActiveMessageId,
 }: {
@@ -118,6 +120,18 @@ export function MessageList({
    *  archived. Threaded down to each MessageItem so the reaction write
    *  affordances hide in a read-only channel. */
   canReact: boolean;
+  /** Whether save/unsave (收藏) is permitted. Defaults to `true`; `false` for a
+   *  non-member browsing a public channel — the Save affordance
+   *  hides. Copy / share (read-side export) stay available. */
+  canSave?: boolean;
+  /** Whether the viewer is a member who may perform member-only per-message
+   *  actions — starting a new thread, following a thread, exporting an
+   *  attachment (download / open-external). Defaults to `true`; `false` for a
+   *  non-member browsing a public channel. Reading messages,
+   *  opening EXISTING threads, and inline attachment PREVIEW stay available. It
+   *  also gates the @human-mention roster fetch (`useConversationMembers`) —
+   *  the roster is a member surface. */
+  canParticipate?: boolean;
   /** In-conversation header find (#task:1335). The active term — highlighted
    *  inside every rendered row's body via `MessageItem`→`Markdown`. */
   searchQuery?: string;
@@ -144,7 +158,7 @@ export function MessageList({
     userResolver,
     liveChannels,
     archivedChannels,
-  } = useMessageRenderContext(workspaceId, channelId);
+  } = useMessageRenderContext(workspaceId, channelId, canParticipate);
   const handleOpenThread = (
     msg: CachedMessage,
     jumpToMessageId?: string,
@@ -224,6 +238,7 @@ export function MessageList({
     jumpToMessageId,
     agentsById,
     viewer,
+    canSave,
   });
   // Channel title/kind — surfaced in the screenshot header and used as the
   // suggested filename base. Top-level channels live in liveChannels; we
@@ -523,6 +538,7 @@ export function MessageList({
           message={m}
           conversationId={channelId}
           canReact={canReact}
+          canParticipate={canParticipate}
           agentsById={agentsById}
           agentsByName={agentsByName}
           humansByName={humansByName}

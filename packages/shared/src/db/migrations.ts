@@ -607,6 +607,35 @@ export const migrations: Migration[] = [
         END;
     `,
   },
+  {
+    version: 58,
+    name: 'conversation_visibility',
+    up: `
+      -- public/private channel visibility. ADDITIVE: every
+      -- existing conversation is explicitly backfilled 'private' by the DEFAULT
+      -- so there is NO "missing = private" long-term compat branch — the column
+      -- is the single source of truth from day one. visibility is only
+      -- meaningful for regular channels; a 'dm_channel' (and any future
+      -- non-channel kind) is private by construction. public read is gated on
+      -- kind='channel' in the permission layer, so this pairing is a
+      -- security-relevant invariant, not cosmetic.
+      --
+      -- A single cross-column CHECK is the whole enforcement. SQLite re-validates
+      -- every CHECK on the row for ANY INSERT or UPDATE, including an UPDATE that
+      -- touches only the sibling 'kind' column — so demoting a public channel's
+      -- kind out from under the pairing aborts on the CHECK alone. (Verified: a
+      -- same-shape table with only this CHECK and no trigger rejects
+      -- UPDATE...SET kind='dm_channel' on a (channel, public) row with a
+      -- "CHECK constraint failed" error.) No BEFORE trigger is needed; adding one
+      -- would be permanently redundant. Mirrors the v57 runtime-transition
+      -- ADD COLUMN + cross-column CHECK pattern.
+      ALTER TABLE conversations ADD COLUMN visibility TEXT NOT NULL DEFAULT 'private'
+        CHECK (
+          visibility IN ('private', 'public')
+          AND (visibility = 'private' OR kind = 'channel')
+        );
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

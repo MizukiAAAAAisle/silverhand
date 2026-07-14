@@ -294,6 +294,62 @@ export class AttachmentRepo {
     return row !== undefined;
   }
 
+  /** True if a persisted message IN THIS CHANNEL references `attachmentId`.
+   *
+   *  This is the "in-message" boundary for a public non-member's byte read:
+   *  the locked surface is "message-embedded attachment preview", NOT "every
+   *  attachment row under a public channel". An unsent composer upload
+   *  (orphan/draft) has no persisted reference, so it stays closed.
+   *
+   *  Differs from `isReferencedByMessage` on two axes that both matter here and
+   *  are absent there — do NOT collapse them:
+   *    - CHANNEL-SCOPED: `m.conversation_id = @channelId`. The metadata snapshot
+   *      is untrusted content; a legacy or tampered row in another channel
+   *      could carry this id, so the channel bound is the authoritative
+   *      reassertion (mirrors the `attachments`-join guard in
+   *      `CANONICAL_REFS_CTE` / `listChannelReferences`).
+   *    - FAIL-CLOSED on untrusted JSON, order-independently. Two guard layers,
+   *      both matching `CANONICAL_REFS_CTE`:
+   *        (1) whole-metadata: `json_valid` + `json_type='array'` → a malformed
+   *            `metadata`, or an `attachments` that isn't an array, contributes
+   *            zero refs rather than faulting;
+   *        (2) per-item: the id extraction lives INSIDE
+   *            `CASE WHEN je.type='object' THEN json_extract(...) ELSE NULL END`,
+   *            NOT as an `AND`-guarded predicate. A valid array may still hold a
+   *            scalar element (`{"attachments":["oops",{"id":...}]}`);
+   *            `json_extract('oops','$.id')` raises "malformed JSON", and SQL
+   *            does NOT guarantee the `je.type` predicate short-circuits first.
+   *            The CASE makes it a single expression so extraction never runs on
+   *            a non-object — healthy refs in the same array still match.
+   *      Either omission surfaces as a 500 on hostile/legacy content. */
+  isReferencedByChannelMessage(attachmentId: string, channelId: string): boolean {
+    const row = this.db
+      .prepare<{ attachmentId: string; channelId: string }, { hit: number }>(
+        `SELECT 1 AS hit
+           FROM messages m,
+                json_each(
+                  CASE
+                    WHEN json_valid(m.metadata) THEN
+                      CASE
+                        WHEN json_type(m.metadata, '$.attachments') = 'array'
+                          THEN json_extract(m.metadata, '$.attachments')
+                        ELSE '[]'
+                      END
+                    ELSE '[]'
+                  END
+                ) je
+          WHERE m.conversation_id = @channelId
+            AND CASE
+                  WHEN je.type = 'object'
+                    THEN json_extract(je.value, '$.id')
+                  ELSE NULL
+                END = @attachmentId
+          LIMIT 1`,
+      )
+      .get({ attachmentId, channelId });
+    return row !== undefined;
+  }
+
   /**
    * Page channel attachments back through persisted message references. The
    * channel's authoritative view is "attachments that appear in persisted

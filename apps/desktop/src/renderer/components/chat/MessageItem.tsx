@@ -102,6 +102,14 @@ export interface MessageItemProps {
    *  existing reaction chips stay visible as display-only counts
    *  (#task:1122 dogfood follow-up). */
   canReact?: boolean;
+  /** Whether the viewer is a member who may perform member-only per-message
+   *  actions: START a new thread (the hover "Thread" button) and EXPORT an
+   *  attachment (download / open-external). Defaults to `true`; `false` for a
+   *  non-member browsing a public channel. Opening an EXISTING
+   *  thread (the reply badge) and inline attachment PREVIEW stay available —
+   *  those are reads. Save/unsave is gated separately via `onSave` (undefined
+   *  hides it). */
+  canParticipate?: boolean;
   /** Object URL pointing at the current viewer's avatar blob (or null
    *  if the viewer has no avatar / isn't loaded yet). Lifted into the
    *  parent pane so a single fetch drives every message render in the
@@ -215,6 +223,7 @@ export function MessageItem({
   onSave,
   saved = false,
   canReact = true,
+  canParticipate = true,
   highlighted = false,
   jumpFlash = false,
   viewerAvatarObjectUrl = null,
@@ -449,7 +458,11 @@ export function MessageItem({
   );
   const attachmentsNode =
     message.attachments && message.attachments.length > 0 ? (
-      <AttachmentList attachments={message.attachments} alignRight={alignRight} />
+      <AttachmentList
+        attachments={message.attachments}
+        alignRight={alignRight}
+        canExport={canParticipate}
+      />
     ) : null;
   // Null when the message has no reactions — keeps the shared bottom row
   // (task tag · replies · reactions) from rendering an empty slot.
@@ -657,7 +670,7 @@ export function MessageItem({
             }
           />
         ) : null}
-        {onStartThread && threadReplyCount === undefined ? (
+        {onStartThread && threadReplyCount === undefined && canParticipate ? (
           <ActionButton
             icon={<ThreadIcon className="size-3.5" />}
             label="Thread"
@@ -666,14 +679,16 @@ export function MessageItem({
             hovered={hover}
           />
         ) : null}
-        <ActionButton
-          icon={<Bookmark className={'size-3.5 ' + (saved ? 'fill-current' : '')} />}
-          label={saved ? 'Saved' : 'Save'}
-          active={saved}
-          onClick={() => onSave?.(message)}
-          alwaysVisible
-          hovered={hover}
-        />
+        {onSave ? (
+          <ActionButton
+            icon={<Bookmark className={'size-3.5 ' + (saved ? 'fill-current' : '')} />}
+            label={saved ? 'Saved' : 'Save'}
+            active={saved}
+            onClick={() => onSave(message)}
+            alwaysVisible
+            hovered={hover}
+          />
+        ) : null}
       </div>
       ) : null}
     </div>
@@ -1034,9 +1049,14 @@ function ActionButton({
 function AttachmentList({
   attachments,
   alignRight,
+  canExport = true,
 }: {
   attachments: AttachmentSnapshot[];
   alignRight: boolean;
+  /** Whether the viewer may export (download / open-external) an attachment.
+   *  `false` for a non-member browsing a public channel: inline
+   *  PREVIEW stays, but the download / open affordances are withheld. */
+  canExport?: boolean;
 }): JSX.Element {
   // Resolve every tile's label once at the list level so ordinals match the
   // agent-facing stdin suffix exactly (same shared resolver). This lets a
@@ -1049,7 +1069,12 @@ function AttachmentList({
       }
     >
       {attachments.map((att, i) => (
-        <AttachmentTile key={att.id} attachment={att} label={labels[i]} />
+        <AttachmentTile
+          key={att.id}
+          attachment={att}
+          label={labels[i]}
+          canExport={canExport}
+        />
       ))}
     </div>
   );
@@ -1058,9 +1083,11 @@ function AttachmentList({
 function AttachmentTile({
   attachment,
   label,
+  canExport = true,
 }: {
   attachment: AttachmentSnapshot;
   label?: string;
+  canExport?: boolean;
 }): JSX.Element {
   const isImage = attachment.content_type.startsWith('image/');
   // Synchronous cache hit covers both the optimistic-message render
@@ -1152,9 +1179,35 @@ function AttachmentTile({
             onOpenChange={setLightboxOpen}
             src={imageUrl}
             alt={attachment.filename}
-            onDownload={() => saveAttachmentToDisk(attachment)}
+            // Preview stays; download is a member export. Omitting
+            // `onDownload` hides the Lightbox's download action (Copy remains).
+            onDownload={
+              canExport ? () => saveAttachmentToDisk(attachment) : undefined
+            }
           />
         ) : null}
+      </div>
+    );
+  }
+
+  if (!canExport) {
+    // Non-member preview: a non-image attachment has no inline
+    // render, so its "preview" is the file reference itself — a static,
+    // non-interactive chip. Clicking would download-and-open (an export), so
+    // the whole tile is inert and the explicit Download button is omitted.
+    return (
+      <div className="flex flex-col items-start gap-1">
+        <div
+          className="flex max-w-[320px] items-center gap-2 overflow-hidden rounded-[var(--chip-radius)] border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary"
+          title={`${attachment.filename} (${formatBytes(attachment.size)})`}
+        >
+          <FileText className="size-4 shrink-0 text-text-muted" />
+          <span className="min-w-0 truncate">{attachment.filename}</span>
+          <span className="shrink-0 text-[10px] text-text-muted">
+            {formatBytes(attachment.size)}
+          </span>
+        </div>
+        {label ? <AttachmentLabelBadge label={label} /> : null}
       </div>
     );
   }

@@ -9,8 +9,10 @@ import type {
   ConversationRow,
   ConversationUserMemberDto,
   ConversationUserMemberRow,
+  ConversationVisibility,
   DmChannelDto,
   UserRow,
+  WorkspaceChannelListItem,
 } from '@silverhand/shared';
 
 function newId(): string {
@@ -96,38 +98,66 @@ export class ConversationRepo {
     return row ? assertChannelLike(row) : null;
   }
 
-  /** Active (non-archived) channels for a workspace. Pinned-first sort,
-   *  consumed by the workspace channels list endpoint.
-   *
-   *  When `opts.forUserId` is supplied (route-layer user principal),
-   *  the result is intersected with `conversation_users` so the caller
-   *  only sees channels they are explicitly a member of. v1 single-
-   *  human is auto-added to every channel by ChannelService /
-   *  registration backfill so this filter is a no-op in practice;
-   *  v2 multi-human relies on it as the authoritative chokepoint.
-   */
-  listActiveChannelsForWorkspace(
-    workspaceId: string,
-    opts: { forUserId?: string } = {},
-  ): ChannelConversationDto[] {
-    const args: Array<string> = [workspaceId];
-    let userJoin = '';
-    if (opts.forUserId !== undefined) {
-      userJoin = `AND EXISTS (
-        SELECT 1 FROM conversation_users cu
-         WHERE cu.conversation_id = conversations.id AND cu.user_id = ?
-      )`;
-      args.push(opts.forUserId);
-    }
+  /** All active (non-archived) regular channels for a workspace — IDENTITY
+   *  only, no viewer. Returns every active channel regardless of visibility or
+   *  membership, so it is NOT a sidebar/discovery query: use it for
+   *  workspace-wide existence/fan-out needs where there is no viewer to project
+   *  membership against. The per-viewer sidebar list is
+   *  `listActiveChannelsForViewer`. */
+  listActiveChannelsForWorkspace(workspaceId: string): ChannelConversationDto[] {
     const rows = this.db
-      .prepare<typeof args, ConversationRow>(
+      .prepare<[string], ConversationRow>(
         `SELECT * FROM conversations
          WHERE workspace_id = ? AND kind = 'channel' AND archived_at IS NULL
-           ${userJoin}
          ORDER BY created_at ASC`,
       )
-      .all(...args);
+      .all(workspaceId);
     return rows.map(rowToChannel);
+  }
+
+  /** Active (non-archived) regular channels for a workspace, as a per-viewer
+   *  DISCOVERY UNION (`WorkspaceChannelListItem`, `kind='channel'`). Each item
+   *  carries a route-computed `is_member` — the viewer-scoped bit the
+   *  channel-detail envelope exposes; identity DTOs stay pure.
+   *
+   *  The result is the union of (a) channels the viewer has joined — any
+   *  visibility, `is_member: true` — and (b) active PUBLIC channels the viewer
+   *  has NOT joined — `is_member: false`, the browse-and-Join discovery surface.
+   *  Private channels the viewer is not a member of are excluded. This is the
+   *  authoritative channel set for BOTH the sidebar list and sort-group
+   *  validation, so a public channel a viewer can see is a reorderable member of
+   *  their sidebar.
+   *
+   *  `viewerUserId` is REQUIRED: membership is a per-viewer fact, so there is no
+   *  viewer-less form of this projection (a caller needing all-active identity
+   *  uses `listActiveChannelsForWorkspace`). */
+  listActiveChannelsForViewer(
+    workspaceId: string,
+    viewerUserId: string,
+  ): WorkspaceChannelListItem[] {
+    const rows = this.db
+      .prepare<[string, string, string], ConversationRow & { is_member: number }>(
+        `SELECT conversations.*,
+                EXISTS (
+                  SELECT 1 FROM conversation_users cu
+                   WHERE cu.conversation_id = conversations.id AND cu.user_id = ?
+                ) AS is_member
+           FROM conversations
+          WHERE workspace_id = ? AND kind = 'channel' AND archived_at IS NULL
+            AND (
+              visibility = 'public'
+              OR EXISTS (
+                SELECT 1 FROM conversation_users cu2
+                 WHERE cu2.conversation_id = conversations.id AND cu2.user_id = ?
+              )
+            )
+          ORDER BY created_at ASC`,
+      )
+      .all(viewerUserId, workspaceId, viewerUserId);
+    return rows.map(row => {
+      const { is_member, ...conversation } = row;
+      return { ...rowToChannel(conversation), is_member: is_member === 1 };
+    });
   }
 
   listArchivedChannelsForWorkspace(
@@ -270,11 +300,21 @@ export class ConversationRepo {
   // never merged into the regular channel lists. Active/all keep the
   // Onboarding-first ordering; archived sorts most-recently-archived first
   // (mirrors `listArchivedChannelsForWorkspace`).
-  listActiveDmChannelsForWorkspace(
+  /** Active (non-archived) DM channels for a workspace, as per-viewer list
+   *  items (`WorkspaceChannelListItem`, `kind='dm_channel'`). The DM list is
+   *  STRICTLY membership-filtered by `viewerUserId`, so every returned item is
+   *  one the viewer belongs to → `is_member: true` unconditionally. This keeps
+   *  the workspace-channels endpoint's contract uniform: every active item a
+   *  user receives carries an authoritative `is_member`, DM included, so the
+   *  renderer gate never falls to unknown/detail on a DM. */
+  listActiveDmChannelsForViewer(
     workspaceId: string,
-    opts: { forUserId?: string } = {},
-  ): DmChannelDto[] {
-    return this.queryDmChannelsForWorkspace(workspaceId, { ...opts, archived: false });
+    viewerUserId: string,
+  ): WorkspaceChannelListItem[] {
+    return this.queryDmChannelsForWorkspace(workspaceId, {
+      forUserId: viewerUserId,
+      archived: false,
+    }).map(dm => ({ ...dm, is_member: true }));
   }
 
   listArchivedDmChannelsForWorkspace(
@@ -377,6 +417,8 @@ export class ConversationRepo {
     workspacePath: string;
     title: string;
     spawnedByAgentId?: string | null;
+    /** Channel visibility; defaults to 'private'. */
+    visibility?: ConversationVisibility;
   }): ChannelConversationDto {
     const row = this.insert({
       workspaceId: params.workspaceId,
@@ -384,6 +426,7 @@ export class ConversationRepo {
       kind: 'channel',
       title: params.title,
       spawnedByAgentId: params.spawnedByAgentId ?? null,
+      visibility: params.visibility ?? 'private',
     });
     return rowToChannel(row);
   }
@@ -632,6 +675,9 @@ export class ConversationRepo {
     kind: ConversationKind;
     title: string;
     spawnedByAgentId: string | null;
+    /** Defaults to the DB column default ('private') when
+     *  omitted. Only 'channel' may be 'public' (the DB CHECK enforces it). */
+    visibility?: ConversationVisibility;
   }): ConversationRow {
     const id = newId();
     const now = Date.now();
@@ -640,8 +686,8 @@ export class ConversationRepo {
         `INSERT INTO conversations
          (id, workspace_id, workspace_path, kind, title, status,
           spawned_by_agent_id, closed_at, close_summary,
-          created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'idle', ?, NULL, NULL, ?, ?)`,
+          created_at, updated_at, visibility)
+         VALUES (?, ?, ?, ?, ?, 'idle', ?, NULL, NULL, ?, ?, ?)`,
       )
       .run(
         id,
@@ -652,6 +698,7 @@ export class ConversationRepo {
         params.spawnedByAgentId,
         now,
         now,
+        params.visibility ?? 'private',
       );
     const row = this.db
       .prepare<[string], ConversationRow>('SELECT * FROM conversations WHERE id = ?')

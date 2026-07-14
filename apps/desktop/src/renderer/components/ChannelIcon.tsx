@@ -1,4 +1,5 @@
-import { Hash } from 'lucide-react';
+import { Hash, Lock } from 'lucide-react';
+import type { ConversationVisibility } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 
 /**
@@ -44,6 +45,18 @@ export interface ChannelIconProps {
   /** Surface density (default `md` = 14px). Drives the box from the shared
    *  {@link CHANNEL_ICON_PX} scale. */
   density?: ChannelIconDensity;
+  /**
+   * Channel visibility — selects the GLYPH, orthogonal to `variant`. A
+   * `'private'` channel is membership-gated, so it wears a `Lock`; `'public'`
+   * (or omitted) wears the canonical `#` `Hash`. The sticker/utility hook
+   * behaviour is unchanged either way — a private channel is still a channel
+   * identity, so it keeps the same theme treatment, only the glyph differs.
+   * Omitted defaults to `Hash`, so every existing call-site (and every
+   * non-`channel` kind, e.g. a `dm_channel` row) renders exactly as before —
+   * the Lock is opt-in, keyed on a real `visibility === 'private'` regular
+   * channel by the caller.
+   */
+  visibility?: ConversationVisibility;
   /** Extra classes (colour / context). Layout (`shrink-0`) and size are owned
    *  by the primitive; consumers only tint. */
   className?: string;
@@ -58,6 +71,7 @@ export interface ChannelIconProps {
 export function ChannelIcon({
   variant,
   density = 'md',
+  visibility,
   className,
 }: ChannelIconProps): JSX.Element {
   // Fail-loud: `variant` is required with no default. A missing / invalid value
@@ -71,13 +85,17 @@ export function ChannelIcon({
     );
   }
   const px = CHANNEL_ICON_PX[density];
+  // Glyph = identity of the channel's visibility axis: `Lock` for a private
+  // channel, the canonical `#` otherwise. Orthogonal to `variant` (which only
+  // decides the sticker hook), so both branches below select it the same way.
+  const Glyph = visibility === 'private' ? Lock : Hash;
   // Two explicit branches (not a spread) so the `data-channel-icon` hook is
   // literally present only for `sticker` — mirrors the working JSX form and
   // keeps the sticker markup byte-identical to the pre-primitive call-sites.
   if (variant === 'sticker') {
     return (
-      <Hash data-channel-icon size={px} className={cn('shrink-0', className)} />
+      <Glyph data-channel-icon size={px} className={cn('shrink-0', className)} />
     );
   }
-  return <Hash size={px} className={cn('shrink-0', className)} />;
+  return <Glyph size={px} className={cn('shrink-0', className)} />;
 }

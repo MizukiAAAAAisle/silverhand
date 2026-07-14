@@ -1,4 +1,5 @@
 import { type ReactNode } from 'react';
+import type { ConversationVisibility } from '@silverhand/shared';
 import {
   Archive,
   ArchiveRestore,
@@ -36,12 +37,29 @@ interface ChannelNode {
   id: string;
   title: string;
   kind: 'channel' | 'dm_channel';
+  /** Identity-level visibility. `'private'` regular channels render a Lock
+   *  glyph; `'public'` render the canonical `#`. Only meaningful for
+   *  `kind === 'channel'` — a `dm_channel` is not a private *channel* and never
+   *  shows the lock (see the render site). */
+  visibility: ConversationVisibility;
   status: 'active' | 'idle' | 'crashed';
   closed_at: number | null;
   starred_at: number | null;
   archived_at: number | null;
   /** Creation time — stable fallback/tiebreak for sort modes (#task:1146). */
   created_at: number;
+  /** Per-viewer membership. The discovery union mixes joined
+   *  channels with active PUBLIC channels the viewer has NOT joined
+   *  (`is_member: false`, browse-and-join). Member projections are FAIL-CLOSED
+   *  (`is_member === true`): the unread badge (a member read-state projection)
+   *  and the member/org context actions (Archive,
+   *  Show-in-Activity) render only for an authoritative member; a non-member OR
+   *  an unknown row shows neither. Local star + manual sort are viewer-local
+   *  presentation state and STAY available for a visible unjoined public row
+   *  (presentation state covers the discovery union). The backend stamps
+   *  the field on every regular/DM item, so `undefined` only occurs on a stale
+   *  payload — where fail-closed is the safe default. */
+  is_member?: boolean;
 }
 
 interface ChannelsSidebarProps {
@@ -324,17 +342,28 @@ function ChannelRow({
   const isClosed = channel.closed_at !== null;
   const isStarred = channel.starred_at !== null;
   const isArchived = channel.archived_at !== null;
+  // Fail-closed membership gate: member/org actions render only for
+  // an authoritative member. A browse-only public row (is_member === false) — or
+  // an unknown row — keeps only the presentation-state actions (Star) + read-side
+  // Copy name. Star + manual drag-sort are viewer-local and stay available.
+  const isMember = channel.is_member === true;
   // Archive/Restore is a channel-like organization action (#task:1145):
   // it applies to any top-level channel-like row — `channel` in a regular
   // workspace AND `dm_channel` in an agent_home/DM — and only excludes
   // threads. `channel.kind` is the precise discriminant, so we no longer
   // gate on the workspace `workspaceKind` beyond "a workspace is selected".
+  // Non-members can't organize a channel they haven't joined (the backend
+  // 403s), so it is member-gated.
   const showArchiveMenu =
+    isMember &&
     workspaceKind !== null &&
     (channel.kind === 'channel' || channel.kind === 'dm_channel');
+  // Per-viewer attention preference — a member-scoped write, regular channels
+  // only. Hidden for a browse-only public row.
+  const showAttentionMenu = isMember && channel.kind === 'channel';
   // Star + attention + archive form the management group; the separator below
-  // fences them off from "Copy name" whenever any of them is present.
-  const hasManagementMenu = showArchiveMenu || channel.kind === 'channel';
+  // fences them off from "Copy name" whenever any member action is present.
+  const hasManagementMenu = showArchiveMenu || showAttentionMenu;
 
   const rowBg = selected
     ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
@@ -364,6 +393,10 @@ function ChannelRow({
       >
         <ChannelIcon
           variant="sticker"
+          // Lock is opt-in for a private *regular* channel only. A `dm_channel`
+          // is not a private channel, so it keeps the canonical `#` — pass the
+          // visibility only when the row is a real channel.
+          visibility={channel.kind === 'channel' ? channel.visibility : undefined}
           className={isClosed ? 'text-text-muted/50' : 'text-text-muted'}
         />
         <span
@@ -373,7 +406,7 @@ function ChannelRow({
         >
           {channel.title}
         </span>
-        {unreadCount > 0 ? (
+        {isMember && unreadCount > 0 ? (
           <span data-sidebar-unread className="ml-auto shrink-0 min-w-[16px] rounded-full bg-accent px-1 text-center text-[9px] font-semibold leading-[16px] text-text-on-accent">
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
@@ -393,7 +426,7 @@ function ChannelRow({
       {/* Per-viewer attention preference — regular channels only (the backend
           404s dm_channel / thread). Children mount lazily on submenu open, so
           no GET fires per channel row (#task:1227). */}
-      {channel.kind === 'channel' ? (
+      {showAttentionMenu ? (
         <AppContextMenuSub icon={<Bell className="size-3.5" />} label="Show in Activity">
           <ChannelAttentionMenuItems channelId={channel.id} />
         </AppContextMenuSub>

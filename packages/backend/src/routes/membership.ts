@@ -53,6 +53,7 @@ import {
   type ConversationMemberAddedMemberSnapshot,
   conversationMemberRemovedContent,
   conversationMemberRemovedMetadata,
+  joinPublicChannel,
   publishMemberRemoved,
   removeConversationMember,
 } from '../application/conversation-member.js';
@@ -614,6 +615,33 @@ export function createConversationMembershipApp(
       member: parsed.data,
     });
     return conversationMemberResultResponse(c, result);
+  });
+
+  // Self-join a PUBLIC channel. The only non-member channel
+  // mutation: a workspace human pulls THEMSELVES in. Empty body — the caller is
+  // ALWAYS the joined member (`getUserPrincipal`), so there is no target on the
+  // wire to forge. Admission + membership transition + idempotency live in the
+  // `joinPublicChannel` use case; the handler only maps the typed result to a
+  // `{channel, is_member:true}` envelope IDENTICAL to GET channel detail, so the
+  // client backfills its cache uniformly on first join and idempotent retry.
+  app.post(apiPaths.channelJoin(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'channel id required' }, 400);
+    const result = await joinPublicChannel(
+      { ctx, conversations, messages, channelAttentionPrefs },
+      { conversationId: id, principal: getUserPrincipal(c) },
+    );
+    if (!result.ok) {
+      switch (result.error.code) {
+        case 'channel_not_found':
+          return c.json({ error: 'channel not found' }, 404);
+        case 'forbidden':
+          return c.json({ error: 'forbidden' }, 403);
+      }
+    }
+    const channel = conversations.getChannelLike(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    return c.json({ channel, is_member: true });
   });
 
   app.delete(apiPaths.conversationAgentMember(':id', ':agentId'), async c => {

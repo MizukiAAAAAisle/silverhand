@@ -125,6 +125,20 @@ export function toChronologicalMatchIds(results: SearchDto['results']): string[]
   return ids;
 }
 
+/** Whether an inline-find query may fire against `/api/search`: the bar is
+ *  open, the viewer has ACCESS (a member — in-conversation search is a member
+ *  surface), and there is a non-empty term. The membership gate
+ *  lives HERE, on the query source, not only on the visible toggle — a
+ *  non-member (or a viewer whose membership is revoked mid-search) must never
+ *  reach the member-only endpoint. Pure — unit-tested. */
+export function inlineFindQueryEnabled(
+  open: boolean,
+  available: boolean,
+  q: string,
+): boolean {
+  return open && available && q.trim().length > 0;
+}
+
 function useInlineFindQuery(input: {
   conversationId: string;
   stream: InlineFindStream;
@@ -141,7 +155,7 @@ function useInlineFindQuery(input: {
       input.threadRootId ?? null,
       q,
     ] as const,
-    enabled: input.enabled && q.length > 0,
+    enabled: input.enabled,
     // Keep the previous result visible while the next query resolves, so the
     // counter / marks don't flicker to empty between keystrokes.
     placeholderData: prev => prev,
@@ -202,8 +216,15 @@ export function useInlineFindController(input: {
   stream: InlineFindStream;
   threadRootId?: string;
   onNavigate: (messageId: string) => void;
+  /** Whether inline find is available to this viewer. In-conversation search is
+   *  a member surface: a non-member browsing a public channel/thread must not
+   *  reach the member-only `/api/search`. Defaults to `true`. This gates the
+   *  QUERY SOURCE, not just the visible entry — so a query in flight when the
+   *  viewer's membership is revoked stops, and a bar left open is force-closed
+   *  and cleared (mirroring the scope-change reset). */
+  enabled?: boolean;
 }): InlineFindController {
-  const { conversationId, stream, threadRootId, onNavigate } = input;
+  const { conversationId, stream, threadRootId, onNavigate, enabled = true } = input;
   const [open, setOpen] = useState(false);
   const [query, setQueryState] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -218,6 +239,17 @@ export function useInlineFindController(input: {
     setActiveIndex(-1);
   }, [conversationId, threadRootId]);
 
+  // Availability revoked mid-session (membership downgraded while the bar is
+  // open) → force-close + wipe, exactly like a scope change. Without this the
+  // `open` state would keep the query source live and the bar visible.
+  useEffect(() => {
+    if (enabled) return;
+    setOpen(false);
+    setQueryState('');
+    setDebounced('');
+    setActiveIndex(-1);
+  }, [enabled]);
+
   // Debounce the typed query into the fetched value.
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query), DEBOUNCE_MS);
@@ -229,15 +261,16 @@ export function useInlineFindController(input: {
     stream,
     threadRootId,
     q: debounced,
-    enabled: open,
+    enabled: inlineFindQueryEnabled(open, enabled, debounced),
   });
   // `useQuery` keeps its last data when disabled (empty query), so gate on an
   // actually-active query. Gate on the RAW query too (not just `debounced`) so
   // clearing the input drops matches + marks instantly instead of lingering for
   // one debounce interval (Cindy #task:1335); while typing, the debounced term
-  // still drives what's actually searched/marked.
+  // still drives what's actually searched/marked. `enabled` gates it too so a
+  // downgrade clears marks/counter the same render.
   const hasActiveQuery =
-    open && query.trim().length > 0 && debounced.trim().length > 0;
+    open && enabled && query.trim().length > 0 && debounced.trim().length > 0;
   const matchIds = hasActiveQuery ? (result.data?.matchIds ?? []) : [];
   const truncated = hasActiveQuery ? (result.data?.truncated ?? false) : false;
   // Stable value key: fire the "new results" effect only when the actual match
@@ -270,7 +303,10 @@ export function useInlineFindController(input: {
     [matchIds, activeIndex, onNavigate],
   );
 
-  const openFind = useCallback(() => setOpen(true), []);
+  const openFind = useCallback(() => {
+    // Never open for a viewer without access (defends the hotkey path too).
+    if (enabled) setOpen(true);
+  }, [enabled]);
   // Closing wipes the whole find state (shiki #task:1335): the keyword clears,
   // so reopening always starts empty rather than silently re-running — and
   // re-jumping to — the previous search.
@@ -293,8 +329,11 @@ export function useInlineFindController(input: {
     query,
     setQuery,
     // Marks follow the debounced (searched) term while typing, but clear the
-    // instant the input is emptied — gate on the raw query too.
-    highlightQuery: open && query.trim().length > 0 ? debounced.trim() : '',
+    // instant the input is emptied — gate on the raw query too. `enabled` gates
+    // it as well (via the shared predicate) so a membership downgrade clears the
+    // <mark>s the SAME render it clears matchIds / the active row — the whole
+    // availability gate (query source, active match, highlight) moves together.
+    highlightQuery: inlineFindQueryEnabled(open, enabled, query) ? debounced.trim() : '',
     matchCount: matchIds.length,
     truncated,
     isFetching: result.isFetching,

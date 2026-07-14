@@ -18,7 +18,11 @@ import { useSavedMessageIds, useToggleSave } from '@/features/saved/hooks';
  *  #task:1065 save, #task:1068 copy/share). */
 export interface MessageRowActionProps {
   saved: boolean;
-  onSave: (msg: CachedMessage) => void;
+  /** Save/unsave (收藏) is a member mutation. Absent (undefined) when the
+   *  viewer may not mutate — a non-member browsing a public channel — which
+   *  hides the Save affordance (MessageItem guards on `onSave`). Copy / share
+   *  (read-side export) stay available regardless. */
+  onSave?: (msg: CachedMessage) => void;
   selectionMode: boolean;
   selected: boolean;
   onToggleSelected: (msg: CachedMessage) => void;
@@ -63,9 +67,20 @@ export function useMessageActionSurface(deps: {
   /** For the multi-message transcript export (sender labels). */
   agentsById: ReadonlyMap<string, AgentDto>;
   viewer: UserDto | undefined;
+  /** Whether save/unsave (收藏) is permitted. Defaults to `true`. `false` for a
+   *  non-member browsing a public channel — save is a member
+   *  mutation, so `onSave` is withheld (undefined) and the Save affordance is
+   *  hidden. Copy / share (read-side export) are unaffected. */
+  canSave?: boolean;
 }): MessageActionSurface {
-  const { channelId, windowResetVersion, jumpToMessageId, agentsById, viewer } =
-    deps;
+  const {
+    channelId,
+    windowResetVersion,
+    jumpToMessageId,
+    agentsById,
+    viewer,
+    canSave = true,
+  } = deps;
   const savedIds = useSavedMessageIds();
   const { toggle: toggleSave } = useToggleSave();
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
@@ -167,7 +182,9 @@ export function useMessageActionSurface(deps: {
   const rowActionProps = useCallback(
     (msg: CachedMessage): MessageRowActionProps => ({
       saved: savedIds.has(msg.id),
-      onSave: handleSave,
+      // Withhold the save handler entirely when the viewer may not mutate, so
+      // the Save affordance is hidden (MessageItem guards on `onSave`).
+      onSave: canSave ? handleSave : undefined,
       selectionMode: selection.active,
       selected: selection.isSelected(msg.id),
       onToggleSelected: handleToggleSelected,
@@ -176,6 +193,7 @@ export function useMessageActionSurface(deps: {
     }),
     [
       savedIds,
+      canSave,
       handleSave,
       selection.active,
       selection.isSelected,

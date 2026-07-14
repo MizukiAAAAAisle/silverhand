@@ -7,6 +7,7 @@ import {
   canViewAgent,
   canGovernWorkspace,
   canPostToConversation,
+  canReadConversation,
   canSubscribeScope,
   canViewAttachment,
   canViewConversation,
@@ -90,6 +91,195 @@ describe('permission helpers', () => {
 
     expect(canViewWorkspace(t.ctx, user, 'missing-workspace')).toBe(false);
     expect(canViewConversation(t.ctx, user, 'missing-conversation')).toBe(false);
+  });
+
+  describe('canReadConversation (public read widening)', () => {
+    // A workspace member who is NOT a conversation member. This is the ONLY
+    // principal the public branch may newly admit — everything else must stay
+    // exactly as `canViewConversation` decides (fail-closed by default).
+    function seedNonMember(): {
+      f: ReturnType<typeof seed>;
+      user: UserPrincipal;
+      publicChannel: ReturnType<ConversationRepo['insertChannel']>;
+    } {
+      const app = buildTestApp({ seedAllFixtureMemberships: false });
+      t = app;
+      const f = seed(app);
+      // workspace member, but joined to NO conversation.
+      app.ctx.db
+        .prepare(
+          `INSERT INTO workspace_users (workspace_id, user_id, joined_at) VALUES (?, 'local', ?)`,
+        )
+        .run(f.workspace.id, Date.now());
+      const publicChannel = f.conversations.insertChannel({
+        workspaceId: f.workspace.id,
+        workspacePath: f.workspace.workspace_path,
+        title: 'Public',
+        visibility: 'public',
+      });
+      return { f, user: { kind: 'user', userId: 'local' }, publicChannel };
+    }
+
+    it('lets a workspace member READ a public channel without membership, but not VIEW/interact', () => {
+      const { f, user, publicChannel } = seedNonMember();
+      // Non-member on a PUBLIC channel: read yes, interaction gate no.
+      expect(canReadConversation(t!.ctx, user, publicChannel.id)).toBe(true);
+      expect(canViewConversation(t!.ctx, user, publicChannel.id)).toBe(false);
+      expect(canPostToConversation(t!.ctx, user, publicChannel.id)).toBe(false);
+      // Non-member on a PRIVATE channel: read is denied too.
+      expect(canReadConversation(t!.ctx, user, f.channel.id)).toBe(false);
+    });
+
+    it('denies the public read path to agents (agents never get public access)', () => {
+      const { f, publicChannel } = seedNonMember();
+      // bob is not an agent-member of the public channel.
+      const bob: AgentPrincipal = {
+        kind: 'agent',
+        agentId: f.bob.id,
+        conversationId: publicChannel.id,
+      };
+      expect(canReadConversation(t!.ctx, bob, publicChannel.id)).toBe(false);
+    });
+
+    it('denies public read to a non-workspace-member', () => {
+      const { publicChannel } = seedNonMember();
+      // 'stranger' is not in workspace_users at all.
+      const stranger: UserPrincipal = { kind: 'user', userId: 'stranger' };
+      expect(canReadConversation(t!.ctx, stranger, publicChannel.id)).toBe(false);
+    });
+
+    it('denies public read of an ARCHIVED public channel to a non-member (archive ≠ delete)', () => {
+      const { user, publicChannel } = seedNonMember();
+      t!.ctx.db
+        .prepare(`UPDATE conversations SET archived_at = ? WHERE id = ?`)
+        .run(Date.now(), publicChannel.id);
+      expect(canReadConversation(t!.ctx, user, publicChannel.id)).toBe(false);
+    });
+
+    it('splits the WS scope: message stream widens, side plane stays member-only', () => {
+      const { user: _user, publicChannel } = seedNonMember();
+      const convScope = parseWsScope(`conversation:${publicChannel.id}`, 'local');
+      const sideScope = parseWsScope(
+        `conversation-side:${publicChannel.id}`,
+        'local',
+      );
+      expect(convScope).not.toBeNull();
+      expect(sideScope).not.toBeNull();
+      // Message content stream: readable by the non-member.
+      expect(canSubscribeScope(t!.ctx, 'local', convScope!)).toBe(true);
+      // Agent activity/run-state side plane: member-only.
+      expect(canSubscribeScope(t!.ctx, 'local', sideScope!)).toBe(false);
+    });
+
+    // Raw message insert so we can control the exact metadata bytes — including
+    // MALFORMED JSON, which the service layer would never persist.
+    function insertMessage(
+      convId: string,
+      seq: number,
+      metadata: string | null,
+    ): void {
+      t!.ctx.db
+        .prepare(
+          `INSERT INTO messages
+             (id, conversation_id, from_kind, from_user_id, content, seq, created_at, metadata)
+           VALUES (?, ?, 'user', 'local', 'hi', ?, ?, ?)`,
+        )
+        .run(`m-${convId}-${seq}`, convId, seq, Date.now(), metadata);
+    }
+
+    function insertAttachment(
+      f: ReturnType<typeof seed>,
+      channelId: string,
+      key: string,
+    ): { id: string; channel_id: string; created_by_kind: 'user'; created_by_id: string } {
+      const dto = f.attachments.insert({
+        channelId,
+        sourceConversationId: channelId,
+        filename: `${key}.txt`,
+        size: 1,
+        contentType: 'text/plain',
+        storage: 'local',
+        storageKey: key,
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      return {
+        id: dto.id,
+        channel_id: dto.channel_id,
+        created_by_kind: 'user',
+        created_by_id: 'local',
+      };
+    }
+
+    it('lets a non-member read bytes of an attachment REFERENCED by a persisted channel message', () => {
+      const { f, user, publicChannel } = seedNonMember();
+      const att = insertAttachment(f, publicChannel.id, 'ref');
+      insertMessage(publicChannel.id, 1, JSON.stringify({ attachments: [{ id: att.id }] }));
+      // In-message preview: the byte read the renderer needs is allowed.
+      expect(canViewAttachment(t!.ctx, user, att)).toBe(true);
+    });
+
+    it('denies a non-member the bytes of an UNREFERENCED (orphan/draft) attachment', () => {
+      const { f, user, publicChannel } = seedNonMember();
+      // Uploaded to the public channel but never sent in a message.
+      const orphan = insertAttachment(f, publicChannel.id, 'orphan');
+      expect(canViewAttachment(t!.ctx, user, orphan)).toBe(false);
+    });
+
+    it('denies a non-member when the only reference is a forged CROSS-CHANNEL snapshot', () => {
+      const { f, user, publicChannel } = seedNonMember();
+      const att = insertAttachment(f, publicChannel.id, 'xchan');
+      // A message in a DIFFERENT (private) channel carries this attachment id in
+      // its metadata — untrusted content must not reach across the channel bound.
+      insertMessage(f.channel.id, 1, JSON.stringify({ attachments: [{ id: att.id }] }));
+      expect(canViewAttachment(t!.ctx, user, att)).toBe(false);
+    });
+
+    it('fails closed (no fault) when a channel message has MALFORMED metadata JSON', () => {
+      const { f, user, publicChannel } = seedNonMember();
+      const orphan = insertAttachment(f, publicChannel.id, 'malformed');
+      // A malformed-metadata row in the SAME channel must not fault the
+      // reference query; the orphan simply stays unreadable.
+      insertMessage(publicChannel.id, 1, '{ this is not json');
+      expect(() => canViewAttachment(t!.ctx, user, orphan)).not.toThrow();
+      expect(canViewAttachment(t!.ctx, user, orphan)).toBe(false);
+    });
+
+    it('handles a VALID array holding scalar/misshaped elements without faulting', () => {
+      const { f, user, publicChannel } = seedNonMember();
+      const att = insertAttachment(f, publicChannel.id, 'mixed');
+      const orphan = insertAttachment(f, publicChannel.id, 'mixedorphan');
+      // Valid JSON, but the array mixes scalars with a real object ref. Bare
+      // `json_extract(scalar, '$.id')` would raise "malformed JSON" if it ran on
+      // 'oops' — the item-level CASE guard must prevent that regardless of
+      // predicate order, while the healthy `{id: att.id}` ref still matches.
+      insertMessage(
+        publicChannel.id,
+        1,
+        JSON.stringify({ attachments: ['oops', 42, { id: att.id }] }),
+      );
+      // A second message whose array is ALL scalars references nothing.
+      insertMessage(
+        publicChannel.id,
+        2,
+        JSON.stringify({ attachments: ['oops', 42] }),
+      );
+      expect(() => canViewAttachment(t!.ctx, user, att)).not.toThrow();
+      expect(canViewAttachment(t!.ctx, user, att)).toBe(true);
+      expect(() => canViewAttachment(t!.ctx, user, orphan)).not.toThrow();
+      expect(canViewAttachment(t!.ctx, user, orphan)).toBe(false);
+    });
+
+    it('denies a non-member DELETE even of a referenced attachment they created', () => {
+      const { f, user, publicChannel } = seedNonMember();
+      const att = insertAttachment(f, publicChannel.id, 'del');
+      insertMessage(publicChannel.id, 1, JSON.stringify({ attachments: [{ id: att.id }] }));
+      // Read is allowed (referenced), but delete is a member mutation — denied
+      // even though 'local' is the creator, because delete gates on membership,
+      // not the widened read helper.
+      expect(canViewAttachment(t!.ctx, user, att)).toBe(true);
+      expect(canDeleteAttachment(t!.ctx, user, att)).toBe(false);
+    });
   });
 
   it('keeps agent access bound to its resolved conversation membership', () => {

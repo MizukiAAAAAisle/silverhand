@@ -73,6 +73,7 @@ export interface MessageRenderContext {
 export function useMessageRenderContext(
   workspaceId: string,
   conversationId: string,
+  membersEnabled = true,
 ): MessageRenderContext {
   const { data: agents = [] } = useAgents();
   const { data: users = [] } = useUsers();
@@ -100,7 +101,15 @@ export function useMessageRenderContext(
       : undefined;
   const viewerAvatarObjectUrl = useViewerAvatarObjectUrl();
   const humanAvatarUrls = useUserAvatarObjectUrls(users);
-  const conversationMembers = useConversationMembers(conversationId);
+  // The conversation roster feeds ONLY @human-mention chip resolution
+  // (`humansByName` below). It is a member surface: a non-member
+  // browsing a public channel must not fetch it, so pass a null id to disable
+  // both the query and its WS side-scope interest. Author display names come
+  // from the global `useUsers()` (`humansById`), not the roster, so reading the
+  // stream is unaffected — only unresolved @human chips degrade to plain text.
+  const conversationMembers = useConversationMembers(
+    membersEnabled ? conversationId : null,
+  );
 
   const { agentsById, agentsByName } = useMemo(() => {
     const byId = new Map<string, AgentDto>();

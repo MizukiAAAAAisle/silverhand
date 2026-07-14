@@ -5,7 +5,7 @@ import {
   systemSubtype,
 } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
-import type { Principal } from '../auth/principal.js';
+import type { Principal, UserPrincipal } from '../auth/principal.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
@@ -14,7 +14,13 @@ import { ConversationReadRepo } from '../repos/conversation-read-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { ChannelAttentionPreferenceRepo } from '../repos/channel-attention-preference-repo.js';
 import type { MembershipService } from '../services/membership-service.js';
-import { canAddConversationMember, canEditAgent, canGovernWorkspace, canViewConversation } from '../permissions.js';
+import {
+  canAddConversationMember,
+  canEditAgent,
+  canGovernWorkspace,
+  canJoinPublicChannel,
+  canViewConversation,
+} from '../permissions.js';
 import { addWorkspaceAgentMember } from './add-workspace-agent-member.js';
 import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
 
@@ -70,6 +76,65 @@ export type AddConversationMemberDeps = {
   channelAttentionPrefs: ChannelAttentionPreferenceRepo;
   membership: MembershipService;
 };
+
+/**
+ * The membership-transition write-core for "an existing workspace human enters
+ * a channel", SHARED by {@link addConversationMember}'s human leg and
+ * {@link joinPublicChannel} so the join invariants live in ONE place and cannot
+ * drift into two models. The CALLER owns the enclosing DB transaction and any
+ * visible system message / post-commit effects — this does only the membership
+ * writes.
+ *
+ * PRECONDITION: call ONLY inside a transition the caller has confirmed to be a
+ * fresh entry (target is NOT already a member). This is NOT a re-entrant upsert:
+ * the read baseline uses `markRead` (monotonic max), which never regresses but
+ * WOULD advance the cursor past new messages if re-run after the first entry —
+ * so re-invoking it on an already-member is a silent cursor bug, not a no-op.
+ * Zero-increment on an idempotent retry is the CALLER's `alreadyMember` guard,
+ * not a property of this function.
+ *
+ * Writes:
+ *  1. the `conversation_users` edge (`addUser` = INSERT OR IGNORE);
+ *  2. an insert-only `mentions` attention preference — a human pulled into an
+ *     existing channel does NOT inherit the noisy `all` default (initial members
+ *     keep the default; a later entrant is mention-only). Insert-only keeps a
+ *     prior explicit choice across remove-then-re-add;
+ *  3. a per-stream read baseline: the mainline AND every existing thread head
+ *     seeded to that stream's CURRENT head, so pre-join history is not unread
+ *     (#task:1404). Mainline alone is insufficient — the thread-chip read model
+ *     (`streamUnreadForConversation`) is follow-agnostic, so a member with no
+ *     thread cursors would see pre-join thread replies as `+n new`. markRead is
+ *     monotonic max(), so remove-then-re-add advances to the re-join head.
+ *
+ * A caller that also inserts a member-added system message MUST insert it BEFORE
+ * calling this, so the baseline's `listStreamHeads` read includes it.
+ */
+function seedChannelHumanMembership(
+  deps: {
+    ctx: BackendContext;
+    conversations: ConversationRepo;
+    messages: MessageRepo;
+    channelAttentionPrefs: ChannelAttentionPreferenceRepo;
+  },
+  conversationId: string,
+  userId: string,
+): void {
+  deps.conversations.addUser(conversationId, userId);
+  deps.channelAttentionPrefs.insertIfAbsent({
+    viewerUserId: userId,
+    conversationId,
+    mode: 'mentions',
+  });
+  const reads = new ConversationReadRepo(deps.ctx.db);
+  for (const head of deps.messages.listStreamHeads(conversationId)) {
+    reads.markRead({
+      viewerUserId: userId,
+      conversationId,
+      threadRootId: head.threadRootId,
+      seq: head.latestSeq,
+    });
+  }
+}
 
 export async function addConversationMember(
   deps: AddConversationMemberDeps,
@@ -217,46 +282,21 @@ export async function addConversationMember(
         : deps.workspaces.addUserMember(conversation.workspace_id, user.id);
       let message: ReturnType<MessageRepo['insertForConversation']> | null = null;
       if (!alreadyMember) {
-        deps.conversations.addUser(conversation.id, user.id);
-        // A human pulled into an existing channel should not inherit the noisy
-        // channel default (`all`). This is membership-event policy, not a
-        // channel default: initial channel members keep the default; only a
-        // later add seeds an explicit mention-only preference. Insert-only
-        // semantics keep a viewer's existing explicit choice if they are
-        // removed and later re-added.
-        deps.channelAttentionPrefs.insertIfAbsent({
-          viewerUserId: user.id,
-          conversationId: conversation.id,
-          mode: 'mentions',
-        });
+        // Insert the member-added system message FIRST, THEN run the shared
+        // membership transition. Order is load-bearing: seedChannelHumanMembership
+        // baselines the read cursor to each stream's CURRENT head, so the message
+        // must already be on the mainline for the new member to not see "X added
+        // you" as unread. The visible system message is admin-add-specific and
+        // stays HERE in the caller; the addUser + attention-pref + per-stream
+        // baseline write-core is shared with self-join so the join invariants
+        // cannot drift into two models.
         message = deps.messages.insertForConversation({
           conversationId: conversation.id,
           fromKind: 'system',
           content: conversationMemberAddedContent({ actor, member: memberSnap }),
           metadata: conversationMemberAddedMetadata({ actor, member: memberSnap }),
         });
-        // IM convention: joining a channel sets the unread baseline at the join
-        // point — prior history is NOT unread, only messages posted AFTER the
-        // join count (shiki/Cindy ruling on #task:1404). Seed the read cursor
-        // for EVERY stream — the mainline (now including the member-added system
-        // message) AND every existing thread — to that stream's current head.
-        // Mainline alone is insufficient: the thread-chip read model
-        // (streamUnreadForConversation) is follow-agnostic, so a member with no
-        // thread cursors would see every pre-join thread's replies as `+n new`
-        // (Cindy blocking review). Followed-thread ROLLUP membership is a
-        // separate axis handled by the follow leg. Transactional, not
-        // post-commit: the baseline is part of the join write. markRead is
-        // monotonic max(), so a remove-then-re-add advances to the re-join head
-        // rather than resurrecting the first stint's history as unread.
-        const reads = new ConversationReadRepo(deps.ctx.db);
-        for (const head of deps.messages.listStreamHeads(conversation.id)) {
-          reads.markRead({
-            viewerUserId: user.id,
-            conversationId: conversation.id,
-            threadRootId: head.threadRootId,
-            seq: head.latestSeq,
-          });
-        }
+        seedChannelHumanMembership(deps, conversation.id, user.id);
       }
       return { workspaceMember, message };
     })();
@@ -308,6 +348,95 @@ function publishMemberAdded(
   message: ReturnType<MessageRepo['insertForConversation']>,
 ): void {
   ctx.events.publish(conversation.id, { kind: 'message', payload: { message } });
+  ctx.events.publishSide(conversation.id, {
+    kind: 'conversation_members_changed',
+    payload: {
+      conversation_id: conversation.id,
+      workspace_id: conversation.workspace_id,
+    },
+  });
+  ctx.events.publishToScope(
+    `workspace:${conversation.workspace_id}`,
+    'workspace_channels_changed',
+    {
+      workspace_id: conversation.workspace_id,
+      channel_id: conversation.id,
+    },
+  );
+}
+
+// ── joinPublicChannel ──
+
+export type JoinPublicChannelDeps = {
+  ctx: BackendContext;
+  conversations: ConversationRepo;
+  messages: MessageRepo;
+  channelAttentionPrefs: ChannelAttentionPreferenceRepo;
+};
+
+export type JoinPublicChannelResult =
+  | { ok: true }
+  | { ok: false; error: { code: 'channel_not_found' } | { code: 'forbidden' } };
+
+/**
+ * Self-join a PUBLIC channel — the ONLY non-member mutation the public model
+ * allows: a workspace human pulls THEMSELVES into a public channel. The caller
+ * is ALWAYS the joined member; the route takes no body, so there is no target
+ * on the wire to forge.
+ *
+ * Admission (`canJoinPublicChannel`) is validated BEFORE the already-member
+ * idempotency check, so an existing member of a private / `dm_channel` / legacy
+ * thread / archived target cannot get a success from `/join`. On a fresh join
+ * the membership transition runs through the SHARED
+ * {@link seedChannelHumanMembership} primitive (same-source with admin-add).
+ *
+ * Post-commit fires ONLY `conversation_members_changed` (roster) +
+ * `workspace_channels_changed` (discovery/list): NO `viewer_workspaces_changed`
+ * (the joiner was already a workspace member — joining a channel does not change
+ * workspace membership) and NO system message (self-join has no "actor added
+ * member" semantic to reuse, and v1 has no distinct joined message). Every
+ * effect is gated by `alreadyMember`, so an idempotent retry is zero-increment
+ * on the row, the attention preference, the read cursors, AND the events.
+ */
+export async function joinPublicChannel(
+  deps: JoinPublicChannelDeps,
+  input: { conversationId: string; principal: Principal },
+): Promise<JoinPublicChannelResult> {
+  const conversation = deps.conversations.get(input.conversationId);
+  if (!conversation) return { ok: false, error: { code: 'channel_not_found' } };
+  // Public-target admission BEFORE already-member idempotency (a member of a
+  // non-public target must not get success). Also rejects non-user principals.
+  if (!canJoinPublicChannel(deps.ctx, input.principal, conversation.id)) {
+    return { ok: false, error: { code: 'forbidden' } };
+  }
+  // canJoinPublicChannel guarantees `principal.kind === 'user'`.
+  const userId = (input.principal as UserPrincipal).userId;
+  const alreadyMember = deps.conversations.getUser(conversation.id, userId) !== null;
+  if (!alreadyMember) {
+    deps.ctx.db.transaction(() => {
+      seedChannelHumanMembership(deps, conversation.id, userId);
+    })();
+    await runPostCommitEffects(
+      [() => publishSelfJoined(deps.ctx, conversation)],
+      deps.ctx.logger,
+    );
+  }
+  return { ok: true };
+}
+
+/**
+ * Post-commit publish for a SELF-JOIN. Unlike {@link publishMemberAdded} there
+ * is NO member-added system message (self-join has no actor-added-member
+ * semantic) and NO `viewer_workspaces_changed` (workspace membership is
+ * unchanged). Emits only the two invalidation signals a new channel membership
+ * requires: `conversation_members_changed` (roster) + `workspace_channels_changed`
+ * (the viewer's channel list / discovery) — the add path's event choice minus
+ * the message.
+ */
+function publishSelfJoined(
+  ctx: BackendContext,
+  conversation: { id: string; workspace_id: string },
+): void {
   ctx.events.publishSide(conversation.id, {
     kind: 'conversation_members_changed',
     payload: {

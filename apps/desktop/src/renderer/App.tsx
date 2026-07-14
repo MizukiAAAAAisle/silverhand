@@ -85,6 +85,8 @@ import {
   useMessageUnreadCounts,
   useMessageUnreadSummary,
 } from '@/features/channels/hooks';
+import { isMemberChannel, mountsMemberOnlyPanel } from '@/features/channels/membership';
+import { useChannelMembership } from '@/features/channels/use-channel-membership';
 import { useActivity } from '@/features/attention/hooks';
 import {
   useMessageJumpController,
@@ -308,8 +310,11 @@ function RegisteredAppShell(): JSX.Element {
 
   // ⌘W contextual close. Main owns the accelerator and asks the
   // renderer, per keypress, which panel to peel; this answers with the
-  // authoritative outcome against the latest route.
-  useContextualCloseResponder(route, nav);
+  // authoritative outcome against the latest route. The responder is called
+  // further down (after the parent-channel membership resolves) so the ladder
+  // it reports mirrors the membership-gated render — a non-member's ungated
+  // `?files` / `?threads` flag must not occupy a close rung for a pane that
+  // never mounts.
 
   // Per-workspace "last viewed channel" memory lives as a module
   // singleton above (persisted via localStorage). The recording effect
@@ -411,6 +416,18 @@ function RegisteredAppShell(): JSX.Element {
   const channels = useMemo<ChannelListItem[]>(
     () => [...activeChannels, ...archivedChannels],
     [activeChannels, archivedChannels],
+  );
+  // Member-scoped projection of the discovery union. `activeChannels` now
+  // includes unjoined active PUBLIC channels (`is_member: false`, browse-only)
+  // and possibly not-yet-resolved (`unknown`) items. Auto-select / remembered /
+  // default / fallback restore, selection persistence, and any member-scoped
+  // aggregate must consume ONLY authoritative members — never auto-open or
+  // persist a channel the viewer hasn't joined. The full `channels` union stays
+  // for existence / selectedChannel resolution (a user CAN open a public channel
+  // to browse it) and the sidebar (which renders both, gating badge/select).
+  const memberActiveChannels = useMemo(
+    () => activeChannels.filter(isMemberChannel),
+    [activeChannels],
   );
   const starWorkspace = useStarWorkspace();
   const starChannel = useStarChannel(selectedWorkspaceId ?? null);
@@ -590,7 +607,7 @@ function RegisteredAppShell(): JSX.Element {
       workspaceId: selectedWorkspaceId,
       selectedChannelId,
       allChannels: channels,
-      activeTopLevel: activeChannels,
+      activeTopLevel: memberActiveChannels,
       jumpTargetChannelId: jumpTarget?.channelId ?? null,
       excludeId,
       rememberedChannelId,
@@ -632,7 +649,7 @@ function RegisteredAppShell(): JSX.Element {
     selectedWorkspaceId,
     selectedChannelId,
     channels,
-    activeChannels,
+    memberActiveChannels,
     jumpTarget,
     nav.go,
   ]);
@@ -657,7 +674,7 @@ function RegisteredAppShell(): JSX.Element {
     selectedWorkspaceId,
     selectedChannelId,
     selectedAgentId,
-    activeChannels,
+    activeChannels: memberActiveChannels,
     workspaces,
     agents,
     lastSelectedWorkspaceId,
@@ -779,6 +796,37 @@ function RegisteredAppShell(): JSX.Element {
   );
 
   const selectedChannel = channels.find(s => s.id === selectedChannelId) ?? null;
+  // Resolve the selected channel's per-viewer membership ONCE, from the shared
+  // three-state authority, so the open ThreadPanel consumes exactly
+  // what ChannelView does — a thread inherits its parent channel's membership.
+  // Passed as the raw three-state (not a collapsed boolean) so `unknown` stays
+  // neutral in the panel and never fails open. Fires no extra fetch on the
+  // member hot path (the carrier already stamps `is_member`).
+  const parentChannelMembership = useChannelMembership(
+    selectedChannel,
+    selectedChannelId,
+  ).membership;
+
+  // The Attachments (`?files=1`) and Threads-list (`?threads=1`) panes are
+  // member-only aggregates. Gating the header toggles that open them is NOT a
+  // mount guard: a non-member can hand-write / restore the query flag, or a
+  // member's status can be revoked while the pane is open — either way the
+  // ungated branch would still MOUNT the panel and fire its member-only
+  // readers. So the mount itself is gated here, at the secondary-view owner, on
+  // the authoritative parent membership (`member` only; `nonmember`/`unknown`
+  // fail closed). The single `?thread=` pane and inline attachment preview are
+  // NOT gated — reading an existing thread is allowed for a non-member. The
+  // same gated flags feed the ⌘W responder below so a stale flag never occupies
+  // a close rung for a pane that isn't rendered.
+  const filesListMounted = mountsMemberOnlyPanel(filesListOpen, parentChannelMembership);
+  const threadsListMounted = mountsMemberOnlyPanel(
+    threadsListOpen,
+    parentChannelMembership,
+  );
+  useContextualCloseResponder(
+    { ...route, filesListOpen: filesListMounted, threadsListOpen: threadsListMounted },
+    nav,
+  );
   // Decouple the heavy PRIMARY pane (ChannelView + message list) from the cheap
   // sidebar highlight (#task:1162). Selecting a channel re-renders ChannelView
   // with a new conversation, which tears down the old message list (~hundreds of
@@ -1082,6 +1130,7 @@ function RegisteredAppShell(): JSX.Element {
             closed_at: s.closed_at,
             archived_at: s.archived_at,
             workspace_id: s.workspace_id,
+            is_member: s.is_member,
           }
         : null,
     [],
@@ -1120,11 +1169,16 @@ function RegisteredAppShell(): JSX.Element {
               onSuccess: () => {
                 const wid = selectedWorkspaceId;
                 if (!wid) return;
-                // `activeChannels` here still includes the just-archived
-                // channel (the list invalidation hasn't landed yet), which is
+                // `memberActiveChannels` here still includes the just-archived
+                // channel (a channel you can archive is one you've joined, so it
+                // is member-scoped; the list invalidation hasn't landed yet) —
                 // exactly what the neighbor-aware picker needs to find its
-                // siblings.
-                const fallbackId = pickFallbackAfterArchive(activeChannels, channelId);
+                // siblings. Scoped to members so the archive fallback never
+                // auto-selects a browse-only public channel.
+                const fallbackId = pickFallbackAfterArchive(
+                  memberActiveChannels,
+                  channelId,
+                );
                 if (fallbackId) {
                   nav.toChannel(wid, fallbackId);
                   return;
@@ -1153,7 +1207,7 @@ function RegisteredAppShell(): JSX.Element {
       archiveChannel,
       selectedWorkspaceId,
       selectedChannelId,
-      activeChannels,
+      memberActiveChannels,
       nav.toChannel,
       nav.toWorkspace,
     ],
@@ -1330,7 +1384,7 @@ function RegisteredAppShell(): JSX.Element {
           ? nav.toggleThreadsList
           : undefined
       }
-      threadsListActive={threadsListOpen}
+      threadsListActive={threadsListMounted}
       // Attachments-list pane toggle. Same gate as threads: any
       // top-level channel-like conversation carries a channel-scoped
       // attachments index; thread / dm-side / `?side` secondary primaries
@@ -1341,7 +1395,7 @@ function RegisteredAppShell(): JSX.Element {
           ? nav.toggleFilesList
           : undefined
       }
-      filesListActive={filesListOpen}
+      filesListActive={filesListMounted}
       onArchiveChannel={handleArchiveChannelMutation}
       onRenameChannel={handleRenameChannelMutation}
       archivePending={archiveChannel.isPending}
@@ -1386,7 +1440,7 @@ function RegisteredAppShell(): JSX.Element {
         onDeleted={nav.closeAgentPanel}
       />
     );
-  } else if (filesListOpen && selectedChannelId && selectedWorkspaceId) {
+  } else if (filesListMounted && selectedChannelId && selectedWorkspaceId) {
     // Channel Attachments panel (`?files=1`). An OVERLAY utility pane, so it
     // sits just below the agent panel in precedence (agent > files > side >
     // thread > threads) and ahead of the conversation panes: opening it
@@ -1473,6 +1527,12 @@ function RegisteredAppShell(): JSX.Element {
         parentTitle={selectedChannel?.title ?? null}
         closed={selectedChannelDescriptor?.closed_at != null}
         archived={selectedChannelDescriptor?.archived_at != null}
+        // Thread reply/follow/react/save are member mutations.
+        // Participation follows the PARENT channel's membership, passed as the
+        // authoritative three-state (member | nonmember | unknown) so the panel
+        // fails closed on `unknown` (neutral: neither composer nor Join) and
+        // never collapses it to a fail-open boolean.
+        membership={parentChannelMembership}
         onClose={nav.closeThread}
         onViewInChannel={() => {
           // Scroll-locate + flash the root in the main channel stream,
@@ -1498,7 +1558,7 @@ function RegisteredAppShell(): JSX.Element {
         onOpenAdvancedSearch={handleOpenAdvancedSearch}
       />
     );
-  } else if (threadsListOpen && selectedChannelId && selectedWorkspaceId) {
+  } else if (threadsListMounted && selectedChannelId && selectedWorkspaceId) {
     // Channel Threads-list pane (`?threads=1`, #task:1073). Like a single
     // thread it is NOT a conversation — it is a channel-scoped index — so it
     // renders here rather than through `secondaryDescriptor`/`ChannelView`,
@@ -1938,6 +1998,8 @@ function RegisteredAppShell(): JSX.Element {
                           id: s.id,
                           title: s.title,
                           kind: s.kind,
+                          visibility: s.visibility,
+                          is_member: s.is_member,
                           status:
                             s.status === 'active' || s.status === 'crashed' ? s.status : 'idle',
                           closed_at: s.closed_at,

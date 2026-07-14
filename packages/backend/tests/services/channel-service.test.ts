@@ -344,7 +344,7 @@ describe('ChannelService.createChannel', () => {
     }
   });
 
-  it('user-created channel snapshots the full workspace_users set', async () => {
+  it('user-created channel with no explicit human list seeds ONLY the creator', async () => {
     const t = bootstrap();
     try {
       // Drop test-fixture autoseed triggers so the user-membership we
@@ -354,9 +354,10 @@ describe('ChannelService.createChannel', () => {
         `DROP TRIGGER IF EXISTS test_seed_workspace_users;
          DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
       );
-      // Pin a deterministic workspace_users set: only `local` and
-      // `alice` are workspace members. The user-actor branch must
-      // mirror these into the new channel's conversation_users.
+      // `local` and `alice` are both workspace members, but an omitted human
+      // list must NOT snapshot the whole workspace anymore — only the creator
+      // is added, so a new channel starts scoped to its creator + chosen
+      // members (others reach a public one by browse + self-join).
       t.db.exec(`DELETE FROM workspace_users WHERE workspace_id = '${t.workspace.id}'`);
       const now = Date.now();
       t.db
@@ -377,7 +378,84 @@ describe('ChannelService.createChannel', () => {
         .listUsers(result.channel.id)
         .map(u => u.user_id)
         .sort();
+      // Creator only — `alice` is a workspace member but was not selected.
+      expect(userMembers).toEqual(['local']);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('user-created channel with an explicit human list seeds creator + that subset', async () => {
+    const t = bootstrap();
+    try {
+      t.db.exec(
+        `DROP TRIGGER IF EXISTS test_seed_workspace_users;
+         DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
+      );
+      t.db.exec(`DELETE FROM workspace_users WHERE workspace_id = '${t.workspace.id}'`);
+      const now = Date.now();
+      t.db
+        .prepare(
+          `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
+             VALUES (?, 'local', ?), (?, 'alice', ?)`,
+        )
+        .run(t.workspace.id, now, t.workspace.id, now);
+
+      const result = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'planning',
+        memberAgentIds: [t.alice.id],
+        memberUserIds: ['alice'],
+        actor: { kind: 'user', userId: 'local' },
+      });
+
+      const userMembers = t.conversations
+        .listUsers(result.channel.id)
+        .map(u => u.user_id)
+        .sort();
+      // Explicit subset plus the implicit creator.
       expect(userMembers).toEqual(['alice', 'local']);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('persists visibility: explicit public is stored, omitted defaults to private', async () => {
+    const t = bootstrap();
+    try {
+      const pub = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'public-chan',
+        memberAgentIds: [],
+        actor: { kind: 'user', userId: 'local' },
+        visibility: 'public',
+      });
+      expect(pub.channel.visibility).toBe('public');
+
+      const priv = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'default-chan',
+        memberAgentIds: [],
+        actor: { kind: 'user', userId: 'local' },
+      });
+      expect(priv.channel.visibility).toBe('private');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('rejects public channel creation by an agent actor (public is human-only)', async () => {
+    const t = bootstrap();
+    try {
+      await expect(
+        t.service.createChannel({
+          workspaceId: t.workspace.id,
+          title: 'agent-public',
+          memberAgentIds: [t.alice.id],
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.source.id },
+          visibility: 'public',
+        }),
+      ).rejects.toMatchObject({ name: 'ActorError', code: 'agent_cannot_create_public' });
     } finally {
       t.cleanup();
     }

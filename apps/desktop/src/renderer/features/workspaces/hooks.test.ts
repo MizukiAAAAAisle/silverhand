@@ -48,6 +48,7 @@ function channel(
     archived_at: null,
     created_at: createdAt,
     updated_at: createdAt,
+    visibility: 'private',
   };
 }
 

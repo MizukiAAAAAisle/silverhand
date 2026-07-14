@@ -181,6 +181,12 @@ export const apiPaths = {
   channelStop: (id: string) => `/api/channels/${id}/stop`,
   channelResume: (id: string) => `/api/channels/${id}/resume`,
   channelArchive: (id: string) => `/api/channels/${id}/archive`,
+  /** Self-join a PUBLIC channel. POST, empty body — the caller is
+   *  ALWAYS the joined member, so there is no target on the wire to forge. The
+   *  only non-member channel mutation; a member of a private / dm_channel /
+   *  archived target is rejected. Returns the same `{channel, is_member:true}`
+   *  envelope as channel detail so the client can backfill its cache. */
+  channelJoin: (id: string) => `/api/channels/${id}/join`,
   conversationChannel: (id: string) => `/api/channels/${id}`,
   conversationChannelMessages: (id: string) => `/api/channels/${id}/messages`,
   conversationChannelAgents: (id: string) => `/api/channels/${id}/agents`,

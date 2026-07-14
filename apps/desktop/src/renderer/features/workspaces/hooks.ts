@@ -7,6 +7,7 @@ import type {
   AgentDto,
   ArchivedChannelListItemDto,
   ChannelConversationDto,
+  ChannelDetailResponse,
   ChannelLikeDto,
   CreateConversationChannelInput,
   CreateWorkspaceInput,
@@ -44,10 +45,20 @@ export type WorkspaceListItem = {
   updated_at: number;
 };
 
-export type ChannelListItem = ChannelConversationDto | DmChannelDto;
+/**
+ * A workspace channel-sidebar item. The list from `GET /api/workspaces/:id/channels`
+ * is a per-viewer DISCOVERY UNION (joined channels + unjoined active PUBLIC
+ * channels), so each item carries the route-computed, per-viewer `is_member`.
+ * It is optional here for transitional safety: a payload lacking it is `unknown`
+ * (see `deriveChannelMembership`), never silently treated as a member.
+ */
+export type ChannelListItem = (ChannelConversationDto | DmChannelDto) & {
+  is_member?: boolean;
+};
 
 const workspacesKey = ['workspaces'] as const;
 const channelsKey = (workspaceId: string) => ['workspaces', workspaceId, 'channels'] as const;
+const channelDetailKey = (channelId: string) => ['channel-detail', channelId] as const;
 const archivedChannelsKey = (workspaceId: string) =>
   ['workspaces', workspaceId, 'channels', 'archived'] as const;
 const archivedChannelsIndexKey = (workspaceId: string | null, since: number | null) =>
@@ -466,7 +477,7 @@ export interface ChannelListPayload {
 
 async function fetchWorkspaceChannels(workspaceId: string): Promise<ChannelListPayload> {
   const res = await api<{
-    channels: ChannelLikeDto[];
+    channels: ChannelListItem[];
     viewer_sort: ViewerSortStateDto;
   }>(apiPaths.workspaceChannels(workspaceId));
   return {
@@ -508,6 +519,80 @@ export function useChannelsForWorkspace(
     queryFn: () => fetchWorkspaceChannels(workspaceId!),
     select: r => r.items,
   });
+}
+
+/**
+ * Authoritative per-viewer channel detail from `GET /api/channels/:id`, carrying
+ * `is_member`. This is the DEEP-LINK / UNKNOWN fallback: the sidebar list item
+ * already carries `is_member`, so this only runs when a channel is reached with
+ * no authoritative carrier (e.g. a `#conv:`/`?side=` deep-link) — pass `enabled`
+ * = "membership is still unknown" so member channels opened from the list never
+ * fire an extra fetch (zero flicker on the hot path).
+ */
+export function useChannelDetail(channelId: string | null, enabled = true) {
+  return useQuery<ChannelDetailResponse>({
+    queryKey: channelId ? channelDetailKey(channelId) : ['channel-detail', 'none'],
+    enabled: !!channelId && enabled,
+    queryFn: () => api<ChannelDetailResponse>(apiPaths.conversationChannel(channelId!)),
+  });
+}
+
+/**
+ * Self-join a public channel: `POST /api/channels/:id/join` (empty body — the
+ * caller is always the joiner, no forgeable target). Idempotent; first-join and
+ * retry both return `{ channel, is_member: true }`. On success we backfill the
+ * channel-detail cache from the AUTHORITATIVE response (never an optimistic
+ * client-side flip) so membership resolves to `member`, and invalidate the
+ * workspace channel list so the joined channel's `is_member` converges to true
+ * (the server also fires `workspace_channels_changed`, subscribed by
+ * `useChannelsForWorkspace`; invalidating here just avoids the round-trip wait).
+ * On failure the caches are untouched → the viewer stays a nonmember.
+ */
+export function useJoinChannel(workspaceId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (channelId: string) =>
+      api<ChannelDetailResponse>(apiPaths.channelJoin(channelId), { method: 'POST' }),
+    onSuccess: (res, channelId) => {
+      qc.setQueryData(channelDetailKey(channelId), res);
+      if (workspaceId) {
+        // Converge the CURRENT list carrier immediately. The join's
+        // 200 IS the authority (`is_member: true`), not an optimistic guess, and
+        // `deriveChannelMembership` prefers the carrier — so without this in-place
+        // flip the row (and any ChannelView reading it) would stay `nonmember`
+        // until the list refetch lands, and a slow/failed refetch would strand
+        // it. The invalidate below still runs for full reconciliation.
+        qc.setQueryData<ChannelListPayload>(channelsKey(workspaceId), prev =>
+          applyChannelJoinToList(prev, channelId),
+        );
+        void qc.invalidateQueries({ queryKey: channelsKey(workspaceId) });
+      }
+    },
+  });
+}
+
+/**
+ * Pure: flip ONE channel's list carrier to `is_member: true` after a successful
+ * self-join. Kept a pure function (not inlined into the mutation) so the
+ * convergence contract is unit-testable without a query client. A row not in
+ * the loaded list (a deep-link to a channel the workspace list hasn't fetched)
+ * is left untouched — there is nothing to converge. Referentially stable when
+ * nothing changes (already a member, or id absent), so an idempotent retry
+ * writes no new cache object. Failure has NO handler and therefore never calls
+ * this — a failed join leaves every carrier as `nonmember`.
+ */
+export function applyChannelJoinToList(
+  payload: ChannelListPayload | undefined,
+  channelId: string,
+): ChannelListPayload | undefined {
+  if (!payload) return payload;
+  let changed = false;
+  const items = payload.items.map(item => {
+    if (item.id !== channelId || item.is_member === true) return item;
+    changed = true;
+    return { ...item, is_member: true };
+  });
+  return changed ? { ...payload, items } : payload;
 }
 
 /** The viewer's sort state (`mode` + sparse `entries`) for one workspace's

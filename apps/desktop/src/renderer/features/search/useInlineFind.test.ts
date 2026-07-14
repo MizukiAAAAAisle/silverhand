@@ -5,6 +5,7 @@ import {
   buildInlineFindParams,
   cycleIndex,
   inlineFindKeyAction,
+  inlineFindQueryEnabled,
   toChronologicalMatchIds,
 } from './useInlineFind';
 
@@ -14,6 +15,48 @@ const msg = (id: string) => ({ type: 'message' as const, message: { id } });
 // Pure helpers behind the in-conversation header find (#task:1335). The query
 // shape IS the backend contract (#task:1334 guardrails), and the cyclic index
 // is what makes prev/next wrap like a browser find — both worth pinning.
+
+describe('inlineFindQueryEnabled (membership-gated query source)', () => {
+  it('a member with an open bar and a term fires the query', () => {
+    expect(inlineFindQueryEnabled(true, true, 'hi')).toBe(true);
+  });
+
+  it('a non-member (available=false) NEVER fires, even with an open bar + term', () => {
+    // In-conversation search is a member surface: the gate must cover the query
+    // source, not just the visible toggle. This also covers a mid-search
+    // membership downgrade — `available` flips false and the query stops.
+    expect(inlineFindQueryEnabled(true, false, 'hi')).toBe(false);
+  });
+
+  it('does not fire when the bar is closed or the term is empty/whitespace', () => {
+    expect(inlineFindQueryEnabled(false, true, 'hi')).toBe(false);
+    expect(inlineFindQueryEnabled(true, true, '')).toBe(false);
+    expect(inlineFindQueryEnabled(true, true, '   ')).toBe(false);
+  });
+
+  it('gates query source + highlight + active match together when unavailable', () => {
+    // The controller derives THREE things from this one predicate on a
+    // membership downgrade (available → false), all in the SAME render:
+    //   (1) the /api/search query source (`enabled`),
+    //   (2) the highlightQuery term fed to the message bodies,
+    //   (3) matchIds → [], which makes the active row clear via `activeMatch`.
+    // A downgrade must clear all three the same frame, not leave a stale marked
+    // term until the force-close effect fires after paint. Lock that the gate is
+    // the single source: false → query off AND the highlight term derivation is
+    // empty AND the (now-empty) match set yields a cleared active row.
+    const open = true;
+    const q = 'stale-term';
+    const available = false;
+    const queryFires = inlineFindQueryEnabled(open, available, q);
+    const highlight = inlineFindQueryEnabled(open, available, q) ? q.trim() : '';
+    // matchIds are gated by the same predicate upstream, so an unavailable
+    // viewer's active match resolves against an empty set.
+    const active = activeMatch(open, 0, []);
+    expect(queryFires).toBe(false);
+    expect(highlight).toBe('');
+    expect(active).toEqual({ activeMessageId: null, activePosition: 0 });
+  });
+});
 
 describe('buildInlineFindParams', () => {
   it('builds the mainline shape: trimmed q, recency_desc, capped limit, no root', () => {

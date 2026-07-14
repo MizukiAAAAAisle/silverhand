@@ -70,6 +70,53 @@ describe('POST /api/workspaces/:id/channels — agent_home DM branch characteriz
     });
   });
 
+  it('rejects visibility=public on an agent_home DM create with 400 and no row', async () => {
+    t = buildTestApp();
+    const { homeId } = await createHomeWorkspace(t, 'alice');
+
+    const before = (
+      t.ctx.db
+        .prepare('SELECT COUNT(*) AS n FROM conversations WHERE workspace_id = ?')
+        .get(homeId) as { n: number }
+    ).n;
+
+    const res = await http(t).post(`/api/workspaces/${homeId}/channels`, {
+      title: 'PublicDM',
+      member_agent_ids: [],
+      visibility: 'public',
+    });
+    // `public` is regular-channel-only; the agent_home path mints a dm_channel,
+    // so this must fail closed (4xx) rather than silently create a private DM.
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: 'agent_home DM channels cannot be public',
+    });
+
+    // No row leaked — the guard runs before createAgentHomeDmChannel.
+    const after = (
+      t.ctx.db
+        .prepare('SELECT COUNT(*) AS n FROM conversations WHERE workspace_id = ?')
+        .get(homeId) as { n: number }
+    ).n;
+    expect(after).toBe(before);
+  });
+
+  it('allows explicit visibility=private on an agent_home DM create (201, unchanged)', async () => {
+    t = buildTestApp();
+    const { homeId } = await createHomeWorkspace(t, 'alice');
+
+    const res = await http(t).post(`/api/workspaces/${homeId}/channels`, {
+      title: 'PrivateDM',
+      member_agent_ids: [],
+      visibility: 'private',
+    });
+    // Omitted / explicit `private` pass through — only `public` is rejected.
+    expect(res.status).toBe(201);
+    const channel = ((await res.json()) as any).channel;
+    expect(channel.kind).toBe('dm_channel');
+    expect(channel.visibility).toBe('private');
+  });
+
   // The owner-unset 500 and owner-not-found 404 arms are DEFENSIVE guards
   // against a state the schema forbids: a CHECK constraint enforces
   // `agent_home ⇒ owner_agent_id IS NOT NULL`, and a FK enforces

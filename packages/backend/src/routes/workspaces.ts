@@ -305,13 +305,14 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     if (!canViewWorkspace(ctx, principal, workspace.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    // Membership filter: human principals only see channels/threads
-    // they are explicit members of (`conversation_users`). Agent /
-    // system principals never call these public list endpoints in
-    // practice; if they ever do, the unfiltered behavior is the
-    // historical contract.
-    const forUserId =
-      principal.kind === 'user' ? principal.userId : undefined;
+    // Per-viewer projection: a regular workspace returns the DISCOVERY UNION
+    // (channels the viewer joined, any visibility, PLUS active PUBLIC channels
+    // they can browse but have not joined), each item carrying an authoritative
+    // `is_member`; a DM workspace returns the viewer's membership-filtered DMs
+    // (all `is_member: true`). `getUserPrincipal` guarantees a user principal,
+    // so `is_member` is always a real per-viewer fact here. Agents list channels
+    // via the internal agent route, not this public endpoint.
+    const viewerUserId = principal.userId;
     const channels =
       workspace.workspace_kind === 'regular'
         ? timedRouteSpan(
@@ -319,9 +320,10 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
             'workspace.channels.list_active',
             { workspaceId: workspace.id },
             () =>
-              conversations.listActiveChannelsForWorkspace(workspace.id, {
-                forUserId,
-              }),
+              conversations.listActiveChannelsForViewer(
+                workspace.id,
+                viewerUserId,
+              ),
             result => ({ channelCount: result.length }),
           )
         : timedRouteSpan(
@@ -329,9 +331,10 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
             'workspace.dm_channel.list_active',
             { workspaceId: workspace.id },
             () =>
-              conversations.listActiveDmChannelsForWorkspace(workspace.id, {
-                forUserId,
-              }),
+              conversations.listActiveDmChannelsForViewer(
+                workspace.id,
+                viewerUserId,
+              ),
             result => ({ channelCount: result.length }),
           );
     return c.json({
@@ -449,6 +452,18 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
       return c.json({ error: 'forbidden' }, 403);
     }
     if (workspace.workspace_kind === 'agent_home') {
+      // `public` is a regular-channel-only concept: the DB CHECK ties it to
+      // `kind='channel'`, but the agent_home path mints a `dm_channel` via
+      // createAgentHomeDmChannel (which takes no visibility). Reject an
+      // explicit `public` here rather than silently minting a private
+      // dm_channel — an illegal kind×visibility must fail closed, not
+      // downgrade. Omitted / explicit `private` pass through unchanged.
+      if (parsed.data.visibility === 'public') {
+        return c.json(
+          { error: 'agent_home DM channels cannot be public' },
+          400,
+        );
+      }
       if (
         parsed.data.member_agent_ids.length > 0 ||
         (parsed.data.member_user_ids?.length ?? 0) > 0
@@ -492,6 +507,7 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
         title: parsed.data.title,
         memberAgentIds: parsed.data.member_agent_ids,
         memberUserIds: parsed.data.member_user_ids,
+        visibility: parsed.data.visibility,
         actor: getUserPrincipal(c),
       });
       return c.json({ channel: result.channel }, 201);

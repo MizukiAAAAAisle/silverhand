@@ -6,6 +6,7 @@ import {
   ConversationEventKindSchema,
   ConversationKindSchema,
   ConversationStatusSchema,
+  ConversationVisibilitySchema,
   RuntimeKindSchema,
 } from '../db/schema.js';
 
@@ -22,6 +23,11 @@ export const ConversationDtoSchema = z.object({
   archived_at: z.number().nullable(),
   created_at: z.number(),
   updated_at: z.number(),
+  // Stored, identity-level visibility. `private` (default) |
+  // `public`. Per-viewer `is_member` is NOT here (it is viewer-scoped, computed
+  // at the route on channel-detail / discovery responses, not conversation
+  // identity).
+  visibility: ConversationVisibilitySchema,
 });
 export type ConversationDto = z.infer<typeof ConversationDtoSchema>;
 
@@ -46,6 +52,10 @@ export const CreateConversationChannelInputSchema = z.object({
   title: ChannelTitleSchema,
   member_agent_ids: z.array(z.string()).default([]),
   member_user_ids: z.array(z.string()).optional(),
+  // Channel visibility. Omitted = server default 'private'. `public` is a
+  // human-only creation concept (the create route always acts as a user); the
+  // service rejects a non-user actor requesting `public`.
+  visibility: ConversationVisibilitySchema.optional(),
 });
 export type CreateConversationChannelInput = z.infer<
   typeof CreateConversationChannelInputSchema
@@ -220,6 +230,53 @@ export const ChannelLikeDtoSchema = z.union([
   DmChannelDtoSchema,
 ]);
 export type ChannelLikeDto = z.infer<typeof ChannelLikeDtoSchema>;
+
+/** Response for `GET /api/channels/:id`. Carries the channel identity plus the
+ *  route-computed, per-viewer `is_member` — membership is viewer-scoped, so it
+ *  lives on the response envelope, NOT on `ConversationDto` identity (see the
+ *  note on `ConversationDtoSchema.visibility`). A public-channel non-member now
+ *  reads channel detail with `is_member: false` (the renderer shows a Join
+ *  affordance instead of the composer); an actual member gets `true`. For a
+ *  `dm_channel` or a private channel only members can reach this route at all,
+ *  so `is_member` is always `true` there. */
+export const ChannelDetailResponseSchema = z.object({
+  channel: ChannelLikeDtoSchema,
+  is_member: z.boolean(),
+});
+export type ChannelDetailResponse = z.infer<typeof ChannelDetailResponseSchema>;
+
+/** Item in the workspace channel list (`GET /api/workspaces/:id/channels`). It
+ *  is a channel-like identity (`channel` OR `dm_channel`) PLUS the route-computed,
+ *  per-viewer `is_member` — the SAME viewer-scoped bit the channel-detail
+ *  envelope carries (see `ChannelDetailResponseSchema` and the note on
+ *  `ConversationDtoSchema.visibility`). `is_member` stays a projection field;
+ *  the identity DTOs are never widened. EVERY active item a user receives from
+ *  this endpoint carries `is_member`: a regular channel computes it (joined vs
+ *  browse-only public), a `dm_channel` is always `true` (the DM list is strictly
+ *  membership-filtered). A missing field means an older/unaware payload → the
+ *  gate treats it as unknown and fetches detail; it never assumes membership.
+ *
+ *  DISCOVERY UNION (regular workspaces, user principal): the list is channels
+ *  the viewer has joined (any visibility → `is_member: true`) PLUS active PUBLIC
+ *  channels the viewer has not joined (`is_member: false`, the browse-and-Join
+ *  surface). Private channels the viewer is not a member of never appear.
+ *
+ *  ⚠️ NOT a backward-compatible additive change at the SET level. The FIELD is
+ *  additive, but the returned SET widens from member-only to a discovery union,
+ *  so an unaware consumer would treat a browse-only public channel as an
+ *  ordinary joined channel (auto-open / restore / persist it, list it in
+ *  member-scoped aggregations). EVERY consumer of this list must classify items
+ *  by `is_member` (member-only paths — restore/default/fallback, task/aggregate
+ *  filters — must exclude `is_member: false`). The backend union and the
+ *  renderer consumer-split therefore ship in the SAME release; this list must
+ *  not be published to an un-migrated renderer. The flat shape only buys a
+ *  single-field gate read — it does NOT remove the consumer-migration
+ *  requirement. */
+export const WorkspaceChannelListItemSchema = z.discriminatedUnion('kind', [
+  ChannelConversationDtoSchema.extend({ is_member: z.boolean() }),
+  DmChannelDtoSchema.extend({ is_member: z.boolean() }),
+]);
+export type WorkspaceChannelListItem = z.infer<typeof WorkspaceChannelListItemSchema>;
 
 /** Body for `PATCH /api/channels/:id/archive`. Same toggle shape as the
  *  workspace archive endpoint. Archive is purely organizational — agents

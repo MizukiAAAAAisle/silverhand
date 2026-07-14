@@ -59,6 +59,17 @@ export type WorkspaceKind = z.infer<typeof WorkspaceKindSchema>;
 export const ConversationKindSchema = z.enum(['channel', 'dm_channel']);
 export type ConversationKind = z.infer<typeof ConversationKindSchema>;
 
+/**
+ * Channel visibility. `private` is the historical, membership-
+ * gated semantic — only explicit `conversation_users` members can read or
+ * interact. `public` widens READ (browse content) to any human workspace
+ * member while leaving every interaction gated on membership (join to
+ * participate). Meaningful only for `kind='channel'`; `dm_channel` is always
+ * `private` (enforced by a DB CHECK, migration v58).
+ */
+export const ConversationVisibilitySchema = z.enum(['private', 'public']);
+export type ConversationVisibility = z.infer<typeof ConversationVisibilitySchema>;
+
 export const ConversationStatusSchema = z.enum([
   'starting',
   'active',
@@ -398,6 +409,10 @@ export interface ConversationRow {
   latest_message_seq: number;
   created_at: number;
   updated_at: number;
+  /** `private` (default, membership-gated) | `public` (workspace
+   *  members may browse; interaction still requires membership). Always
+   *  `private` for `dm_channel`. */
+  visibility: ConversationVisibility;
 }
 
 export interface ConversationAgentRow {

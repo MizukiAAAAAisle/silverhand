@@ -159,11 +159,14 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     if (!canViewWorkspace(ctx, principal, workspace.id)) {
       return { ok: false, status: 403 };
     }
-    const forUserId = principal.kind === 'user' ? principal.userId : undefined;
+    // `getUserPrincipal` (above) guarantees a user principal, so membership is
+    // always a real per-viewer fact. A regular workspace's sidebar sort set is
+    // the DISCOVERY UNION (joined + browse-only public) — every visible item is
+    // orderable; a DM workspace's is the viewer's membership-filtered DMs.
     const channels =
       workspace.workspace_kind === 'regular'
-        ? conversations.listActiveChannelsForWorkspace(workspace.id, { forUserId })
-        : conversations.listActiveDmChannelsForWorkspace(workspace.id, { forUserId });
+        ? conversations.listActiveChannelsForViewer(workspace.id, principal.userId)
+        : conversations.listActiveDmChannelsForViewer(workspace.id, principal.userId);
     for (const ch of channels) {
       groups.set(ch.id, channelStarred.has(ch.id) ? 'starred' : 'unstarred');
     }

@@ -40,6 +40,7 @@ import {
   canEditAgent,
   canGovernWorkspace,
   canPostToConversation,
+  canReadConversation,
   canViewConversation,
   canViewOwnedState,
   canViewWorkspace,
@@ -162,7 +163,12 @@ export function createConversationReadApp(
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const channel = conversations.getChannelLike(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
-    if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
+    // PUBLIC-aware read gate: message history (incl. thread content read via
+    // `thread_root_id` below) is a pure read, so a workspace member browsing a
+    // public channel may fetch it without joining. `canReadConversation` widens
+    // ONLY for active public regular channels + user principals; every write
+    // path (post/react/save/follow) stays on strict `canViewConversation`.
+    if (!canReadConversation(ctx, getUserPrincipal(c), channel.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
     const parsed = parseMessagesWindowQuery(c);
@@ -239,11 +245,21 @@ export function createConversationReadApp(
           // bulk query (no N+1, §6). Viewer = the human reading the window, so
           // `viewer_reacted` is that user's. Reactor identities stay off this
           // payload (lazy hover endpoint).
+          //
+          // Public-read neutralization: a non-member browsing a PUBLIC channel
+          // reaches this window via `canReadConversation`, but per-viewer state
+          // is not theirs to see. Reaction COUNT is a pure read fact (kept), but
+          // `viewer_reacted` is a personal relation — same class as unread /
+          // follow / read-state — so a non-member reads it as `false`. Passing a
+          // `null` viewer makes that structural (no `(kind,id)` ever matches), so
+          // even a stray reactor row for a since-removed member reads false.
           const viewerUserId = requireViewerUserId(c);
+          const isMember =
+            conversations.getUser(channel.id, viewerUserId) !== null;
           const aggregates = loadReactionAggregates(
             ctx,
             window.messages.map(message => message.id),
-            { kind: 'user', id: viewerUserId },
+            isMember ? { kind: 'user', id: viewerUserId } : null,
           );
           const messagesWithReactions = window.messages.map(message => ({
             ...message,
@@ -298,10 +314,18 @@ export function createConversationReadApp(
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const channel = conversations.getChannelLike(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
-    if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
+    // PUBLIC-aware read gate: channel identity/detail is a pure read (see the
+    // messages route). A workspace member may resolve a public channel's detail
+    // before joining; strict `canViewConversation` still guards every mutation.
+    const principal = getUserPrincipal(c);
+    if (!canReadConversation(ctx, principal, channel.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    return c.json({ channel });
+    // Authoritative per-viewer membership. A public-channel non-member reads
+    // detail with `is_member: false` (renderer shows Join, not the composer);
+    // the renderer must NOT reverse-infer membership from the read succeeding.
+    const isMember = conversations.getUser(channel.id, principal.userId) !== null;
+    return c.json({ channel, is_member: isMember });
   });
 
   /**

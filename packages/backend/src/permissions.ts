@@ -4,6 +4,7 @@ import type { BackendContext } from './context.js';
 import type { Principal, UserPrincipal } from './auth/principal.js';
 import { AgentRepo } from './repos/agent-repo.js';
 import { AgentCapabilityRepo } from './repos/agent-capability-repo.js';
+import { AttachmentRepo } from './repos/attachment-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
 
@@ -16,7 +17,7 @@ export type ParsedWsScope =
 
 export type AttachmentAclRow = Pick<
   AttachmentRow,
-  'channel_id' | 'created_by_kind' | 'created_by_id'
+  'id' | 'channel_id' | 'created_by_kind' | 'created_by_id'
 >;
 
 function workspaceRepo(ctx: BackendContext): WorkspaceRepo {
@@ -25,6 +26,10 @@ function workspaceRepo(ctx: BackendContext): WorkspaceRepo {
 
 function conversationRepo(ctx: BackendContext): ConversationRepo {
   return new ConversationRepo(ctx.db);
+}
+
+function attachmentRepo(ctx: BackendContext): AttachmentRepo {
+  return new AttachmentRepo(ctx.db);
 }
 
 function workspaceExists(ctx: BackendContext, workspaceId: string): boolean {
@@ -270,6 +275,90 @@ export function canViewConversation(
   return conversationRepo(ctx).getAgent(conversation.id, principal.agentId) !== null;
 }
 
+/**
+ * The PUBLIC-aware READ gate. Distinct from
+ * `canViewConversation`, which stays the strict membership/interaction gate
+ * (post, react, save, follow, read-state, observe, member ops). This predicate
+ * governs the PUBLIC pure-read surface only: channel detail, message history,
+ * thread read, and the attachment BYTES of an attachment referenced by a
+ * persisted message in this channel (in-message preview). It is the ONLY place
+ * the public widening lives — so every write/interaction path that keeps
+ * calling `canViewConversation` remains fail-closed by default (a public
+ * non-member cannot reach it). The Attachments PANEL list
+ * (`GET /api/channels/:id/attachments`) stays membership-only; "download /
+ * Save-As" is not a separate capability but a data fact of the same bytes
+ * endpoint (see `canViewAttachment`), NOT a public UI affordance.
+ * See docs/architecture-principles.md §12.1#4 (consumer-split).
+ *
+ * Grants read when EITHER:
+ *   1. `canViewConversation` already passes (system, or an explicit
+ *      member/agent) — members read everything they always could; OR
+ *   2. the PUBLIC branch: a HUMAN workspace member browsing an ACTIVE,
+ *      PUBLIC, regular `channel`. Deliberately narrow:
+ *        - `principal.kind === 'user'` — agents have NO public path; their
+ *          read/delivery stays strictly `conversation_agents`-gated via
+ *          `canViewConversation` above.
+ *        - `kind === 'channel'` — `dm_channel` / legacy thread never gain
+ *          public semantics (also enforced at the DB CHECK, migration v58).
+ *        - `visibility === 'public'`.
+ *        - `archived_at == null` — an archived public channel is not
+ *          browsable by non-members (archive ≠ delete, §12.2: it stays
+ *          explicitly reachable to MEMBERS via the branch above, but drops
+ *          out of the non-member public surface).
+ *        - `canViewWorkspace` — must be a member of the owning workspace.
+ */
+export function canReadConversation(
+  ctx: BackendContext,
+  principal: Principal,
+  conversationId: string,
+): boolean {
+  if (canViewConversation(ctx, principal, conversationId)) return true;
+  const conversation = conversationRepo(ctx).get(conversationId);
+  if (!conversation) return false;
+  return isPublicChannelBranch(ctx, principal, conversation);
+}
+
+/**
+ * The PUBLIC-branch admission shared by {@link canReadConversation} (public
+ * read) and {@link canJoinPublicChannel} (self-join): a HUMAN workspace member
+ * + an ACTIVE, PUBLIC, regular `channel`. Deliberately membership-AGNOSTIC — it
+ * never short-circuits on `canViewConversation`. `canReadConversation` ORs it
+ * AFTER the membership check (members read everything they always could);
+ * `canJoinPublicChannel` uses it ALONE, so a member of a NON-public target
+ * (private / `dm_channel` / archived) is NOT admitted to `/join`.
+ */
+function isPublicChannelBranch(
+  ctx: BackendContext,
+  principal: Principal,
+  conversation: NonNullable<ReturnType<ConversationRepo['get']>>,
+): boolean {
+  if (principal.kind !== 'user') return false;
+  if (conversation.kind !== 'channel') return false;
+  if (conversation.visibility !== 'public') return false;
+  if (conversation.archived_at !== null) return false;
+  return canViewWorkspace(ctx, principal, conversation.workspace_id);
+}
+
+/**
+ * Self-join admission. TRUE iff `principal` (a human workspace
+ * member) may pull THEMSELVES into this ACTIVE, PUBLIC, regular channel — the
+ * only non-member mutation the public model allows. Uses the public branch
+ * ALONE (no membership short-circuit): a member of a private / `dm_channel` /
+ * legacy thread / archived conversation is NOT admitted, so `/join` on a
+ * non-public target fails closed EVEN for an existing member. The use case
+ * runs this admission BEFORE the already-member idempotency check, so an
+ * existing member of a non-public target cannot slip through on a no-op.
+ */
+export function canJoinPublicChannel(
+  ctx: BackendContext,
+  principal: Principal,
+  conversationId: string,
+): boolean {
+  const conversation = conversationRepo(ctx).get(conversationId);
+  if (!conversation) return false;
+  return isPublicChannelBranch(ctx, principal, conversation);
+}
+
 export function canPostToConversation(
   ctx: BackendContext,
   principal: Principal,
@@ -467,7 +556,30 @@ export function canViewAttachment(
   if (principal.kind === 'agent') {
     return principalConversationChannelId(ctx, principal) === attachment.channel_id;
   }
-  return canViewConversation(ctx, principal, attachment.channel_id);
+  // Gates the single attachment-BYTES endpoint
+  // (`GET /api/attachments/:id`), which serves the same bytes for both
+  // in-message inline PREVIEW and download/Save-As.
+  //
+  // A MEMBER (or system) reads any blob owned by the channel, including their
+  // own not-yet-sent composer upload (draft/orphan) — unchanged.
+  if (canViewConversation(ctx, principal, attachment.channel_id)) return true;
+  //
+  // A PUBLIC non-member's read is scoped to the locked "in-message preview"
+  // boundary, NOT "every attachment row under a public channel". The bytes are
+  // readable ONLY for an attachment actually referenced by a persisted message
+  // in THIS channel. An unsent composer upload (orphan/draft) has no persisted
+  // reference and stays closed; a forged cross-channel metadata snapshot cannot
+  // reach another channel's blob (the predicate is channel-scoped). "No
+  // download / Save As / open external" remains a UI-capability boundary
+  // (renderer hides the affordances), NOT a data-confidentiality boundary — a
+  // rendered preview IS having the bytes. The channel Attachments PANEL list
+  // (`GET /api/channels/:id/attachments`, a member tool) stays
+  // `canViewConversation` separately in the route.
+  if (!canReadConversation(ctx, principal, attachment.channel_id)) return false;
+  return attachmentRepo(ctx).isReferencedByChannelMessage(
+    attachment.id,
+    attachment.channel_id,
+  );
 }
 
 export function canDeleteAttachment(
@@ -475,7 +587,12 @@ export function canDeleteAttachment(
   principal: Principal,
   attachment: AttachmentAclRow,
 ): boolean {
-  if (!canViewAttachment(ctx, principal, attachment)) return false;
+  // Delete is a MEMBER mutation, NOT read. Gate on strict
+  // conversation membership (`canViewConversation`), NOT `canViewAttachment`
+  // (which now widens to public read): otherwise a former uploader who was
+  // removed from the channel could still delete via the creator-ownership
+  // check below. Read widened; delete stays membership + original ownership.
+  if (!canViewConversation(ctx, principal, attachment.channel_id)) return false;
   if (principal.kind === 'system') return true;
   if (principal.kind === 'user') {
     return (
@@ -518,10 +635,17 @@ export function canSubscribeScope(
     case 'workspace':
       return canViewWorkspace(ctx, principal, scope.workspaceId);
     case 'conversation':
+      // The message content stream. A public non-member may
+      // receive realtime message content, so this rides the public-aware
+      // read gate.
+      return canReadConversation(ctx, principal, scope.conversationId);
     case 'conversation-side':
-      // Both conversation recovery classes gate on the same view permission —
-      // the side channel carries no data the message stream doesn't already
-      // expose to a conversation member.
+      // The side channel carries agent activity / run-state / status — NOT
+      // "conversation content". It stays strictly membership-gated
+      // (`canViewConversation`): a public non-member browsing content must
+      // not observe the member-only side plane (§12.1#4 consumer-split — the
+      // two recovery-class scopes no longer share one gate now that read has
+      // widened).
       return canViewConversation(ctx, principal, scope.conversationId);
     case 'viewer':
       return canViewOwnedState(ctx, principal, scope.viewerUserId);
