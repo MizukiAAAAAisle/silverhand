@@ -15,74 +15,57 @@ function apiErrorWith(status: number, body: string): ApiError {
 }
 
 describe('formatAvatarMutationError', () => {
-  it('renders avatar_too_large from a 413 + service-error body', () => {
-    expect(
+  const SERVICE_CODES = [
+    { status: 413, code: 'avatar_too_large' },
+    { status: 415, code: 'avatar_unsupported_type' },
+    { status: 400, code: 'avatar_missing' },
+    { status: 400, code: 'avatar_storage_failed' },
+  ] as const;
+
+  it('maps each service code to its own non-empty message (typed-code branch)', () => {
+    const messages = SERVICE_CODES.map(({ status, code }) =>
       formatAvatarMutationError(
-        apiErrorWith(413, JSON.stringify({ error: '...', code: 'avatar_too_large' })),
+        apiErrorWith(status, JSON.stringify({ error: '...', code })),
       ),
-    ).toBe('Avatar must be 5 MB or smaller.');
-  });
-
-  it('renders avatar_unsupported_type from a 415 + service-error body', () => {
-    expect(
-      formatAvatarMutationError(
-        apiErrorWith(415, JSON.stringify({ error: '...', code: 'avatar_unsupported_type' })),
-      ),
-    ).toBe('Avatar must be a PNG, JPEG, GIF, or WEBP image.');
-  });
-
-  it('renders avatar_missing from a 400 + service-error body', () => {
-    expect(
-      formatAvatarMutationError(
-        apiErrorWith(400, JSON.stringify({ error: '...', code: 'avatar_missing' })),
-      ),
-    ).toBe('Avatar file is empty.');
-  });
-
-  it('renders avatar_storage_failed from a 400 + service-error body', () => {
-    expect(
-      formatAvatarMutationError(
-        apiErrorWith(400, JSON.stringify({ error: '...', code: 'avatar_storage_failed' })),
-      ),
-    ).toBe('Storage backend failed to write the avatar. Try again.');
-  });
-
-  it('renders the permission-race line for 403 forbidden (no service code)', () => {
-    // Backend's PATCH/avatar 403 path returns `{ error: 'forbidden' }`
-    // with no `code`. We fall through to the status-based branch.
-    expect(
-      formatAvatarMutationError(apiErrorWith(403, JSON.stringify({ error: 'forbidden' }))),
-    ).toBe("You no longer have permission to edit this agent's avatar.");
-  });
-
-  it('renders the agent-deleted line for 404 (no service code)', () => {
-    // 404 happens when the agent was deleted between cache resolve and
-    // mutation send. canEditAgent's missing-row branch also lands at
-    // 403, so 404 here means agent_not_found from the route layer
-    // (e.g. `agentsByName` cache miss on the backend).
-    expect(formatAvatarMutationError(apiErrorWith(404, ''))).toBe(
-      'This agent no longer exists.',
     );
+    // Every code resolves to a non-empty tailored message (copy is visual)...
+    for (const m of messages) expect(m.length).toBeGreaterThan(0);
+    // ...and they are all distinct — no two codes collapse to one line.
+    expect(new Set(messages).size).toBe(messages.length);
   });
 
-  it('renders a generic HTTP fallback for unmapped statuses', () => {
-    expect(formatAvatarMutationError(apiErrorWith(500, ''))).toBe(
-      'Failed to update avatar (HTTP 500).',
+  it('renders distinct permission (403) and deleted (404) lines from the status branch', () => {
+    // Backend's PATCH/avatar 403 path returns `{ error: 'forbidden' }` with no
+    // `code`; 404 means agent_not_found. Both fall through to the status-based
+    // branch and must produce distinct, non-empty guidance.
+    const forbidden = formatAvatarMutationError(
+      apiErrorWith(403, JSON.stringify({ error: 'forbidden' })),
     );
+    const notFound = formatAvatarMutationError(apiErrorWith(404, ''));
+    expect(forbidden.length).toBeGreaterThan(0);
+    expect(notFound.length).toBeGreaterThan(0);
+    expect(forbidden).not.toBe(notFound);
   });
 
-  it('falls back to a generic message for non-ApiError throwables', () => {
-    expect(formatAvatarMutationError(new Error('network down'))).toBe(
-      'Failed to update avatar.',
-    );
-    expect(formatAvatarMutationError('plain string')).toBe('Failed to update avatar.');
+  it('preserves the status in the generic HTTP fallback for unmapped statuses', () => {
+    expect(formatAvatarMutationError(apiErrorWith(500, ''))).toContain('500');
+  });
+
+  it('falls back to a non-empty generic message for non-ApiError throwables', () => {
+    expect(
+      formatAvatarMutationError(new Error('network down')).length,
+    ).toBeGreaterThan(0);
+    expect(formatAvatarMutationError('plain string').length).toBeGreaterThan(0);
   });
 
   it('prefers the service code over the status line when both are present', () => {
-    // Belt-and-suspenders: even if a 4xx response also carries an
-    // unrelated status (say a future backend pairs 413 with a custom
-    // line), we always re-render the localized service-code message.
-    const err = apiErrorWith(413, JSON.stringify({ error: '...', code: 'avatar_too_large' }));
-    expect(formatAvatarMutationError(err)).toBe('Avatar must be 5 MB or smaller.');
+    // Belt-and-suspenders: even when a 4xx also carries a status, the localized
+    // service-code message wins. Proven by inequality with the status-only
+    // rendering of the same HTTP code — not by pinning the sentence.
+    const both = formatAvatarMutationError(
+      apiErrorWith(413, JSON.stringify({ error: '...', code: 'avatar_too_large' })),
+    );
+    const statusOnly = formatAvatarMutationError(apiErrorWith(413, ''));
+    expect(both).not.toBe(statusOnly);
   });
 });

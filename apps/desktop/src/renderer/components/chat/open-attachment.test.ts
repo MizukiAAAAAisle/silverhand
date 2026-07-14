@@ -48,7 +48,7 @@ describe('openAttachmentExternally', () => {
     );
 
     expect(d.toastError).toHaveBeenCalledWith(
-      '该类型的文件不能直接在应用内打开（出于安全考虑）。',
+      describeOpenFailure('unsafe_extension'),
     );
   });
 
@@ -64,11 +64,11 @@ describe('openAttachmentExternally', () => {
       d,
     );
 
-    expect(inline).toHaveBeenCalledWith('系统未能打开此文件。');
+    expect(inline).toHaveBeenCalledWith(describeOpenFailure('open_failed: foo'));
     expect(d.toastError).not.toHaveBeenCalled();
   });
 
-  it('translates a fetch exception into a user-facing "打开失败：<msg>"', async () => {
+  it('translates a fetch exception into the formatted open-exception message', async () => {
     const d = deps({
       fetchBytes: vi.fn(async () => {
         throw new Error('network down');
@@ -81,20 +81,32 @@ describe('openAttachmentExternally', () => {
       d,
     );
 
-    expect(d.toastError).toHaveBeenCalledWith('打开失败：network down');
+    expect(d.toastError).toHaveBeenCalledWith(
+      formatOpenException(new Error('network down')),
+    );
     expect(d.open).not.toHaveBeenCalled();
   });
 });
 
 describe('describeOpenFailure', () => {
-  it('maps every canonical reason to a short Chinese message', () => {
-    expect(describeOpenFailure('unsafe_extension')).toBe(
-      '该类型的文件不能直接在应用内打开（出于安全考虑）。',
+  it('groups canonical reasons into stable buckets (refusal / open-failure / invalid-payload)', () => {
+    // The safety refusal is its own non-empty message.
+    expect(describeOpenFailure('unsafe_extension').length).toBeGreaterThan(0);
+    // `open_failed` groups regardless of any trailing detail.
+    expect(describeOpenFailure('open_failed: EPERM')).toBe(
+      describeOpenFailure('open_failed'),
     );
-    expect(describeOpenFailure('open_failed')).toBe('系统未能打开此文件。');
-    expect(describeOpenFailure('open_failed: EPERM')).toBe('系统未能打开此文件。');
-    expect(describeOpenFailure('empty_payload')).toBe('附件数据无效。');
-    expect(describeOpenFailure('invalid_payload')).toBe('附件数据无效。');
+    // Both payload reasons share one message.
+    expect(describeOpenFailure('invalid_payload')).toBe(
+      describeOpenFailure('empty_payload'),
+    );
+    // The three buckets are mutually distinct.
+    const buckets = new Set([
+      describeOpenFailure('unsafe_extension'),
+      describeOpenFailure('open_failed'),
+      describeOpenFailure('empty_payload'),
+    ]);
+    expect(buckets.size).toBe(3);
   });
 
   it('echoes an unknown reason verbatim as a last resort', () => {
@@ -103,14 +115,14 @@ describe('describeOpenFailure', () => {
 });
 
 describe('formatOpenException', () => {
-  it('wraps an Error message with the "打开失败：" prefix', () => {
-    expect(formatOpenException(new Error('network down'))).toBe(
-      '打开失败：network down',
+  it('surfaces an Error message in the wrapped output', () => {
+    expect(formatOpenException(new Error('network down'))).toContain(
+      'network down',
     );
   });
 
-  it('coerces a non-Error thrown value into a string', () => {
-    expect(formatOpenException('boom')).toBe('打开失败：boom');
-    expect(formatOpenException(42)).toBe('打开失败：42');
+  it('coerces a non-Error thrown value into the message', () => {
+    expect(formatOpenException('boom')).toContain('boom');
+    expect(formatOpenException(42)).toContain('42');
   });
 });

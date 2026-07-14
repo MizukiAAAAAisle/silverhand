@@ -63,29 +63,25 @@ function render(agent: AgentDto, viewerId: string): string {
 }
 
 describe('AgentProfileCard creator/read-only render branches', () => {
-  it('non-creator viewer sees the read-only notice and no editable inputs', () => {
+  it('non-creator viewer sees no editable inputs', () => {
     const html = render(
       makeAgent({ created_by_user_id: 'u-creator' }),
       'u-other',
-    );
-    // The read-only notice mounts only on the non-creator branch.
-    expect(html).toContain(
-      "Only the creator can edit this agent&#x27;s profile.",
     );
     // Description text appears as static text, not inside a textarea.
     expect(html).toContain('Helpful assistant');
     expect(html).not.toContain('<textarea');
     // No editable file input — non-creator never sees the avatar picker.
     expect(html).not.toContain('type="file"');
+    // No edit affordances on the non-creator branch (identified by a11y
+    // command name, not by read-only copy).
+    expect(html).not.toContain('aria-label="Edit display name"');
   });
 
-  it('creator viewer sees editable inputs and the avatar picker, no read-only notice', () => {
+  it('creator viewer sees editable inputs and the avatar picker', () => {
     const html = render(
       makeAgent({ created_by_user_id: 'u-creator' }),
       'u-creator',
-    );
-    expect(html).not.toContain(
-      "Only the creator can edit this agent&#x27;s profile.",
     );
     // #task:1472 refactored the card to a pencil-edit pattern: fields are
     // readonly by default and only mount their input chrome on demand. So
@@ -94,13 +90,13 @@ describe('AgentProfileCard creator/read-only render branches', () => {
     // the display-name pencil trigger, the description pencil trigger, the
     // runtime-configuration pencil trigger — all lifted to the section
     // header via `ProfileSection titleAdornment` — plus the avatar picker.
+    // Identified by a11y command names, not by button copy.
     expect(html).toContain('aria-label="Edit display name"');
     expect(html).toContain('aria-label="Edit description"');
     expect(html).toContain('aria-label="Edit runtime configuration"');
     // Editable avatar picker is mounted — the whole avatar square is the
     // click target now (a hidden file input + a hover label band).
     expect(html).toContain('type="file"');
-    expect(html).toMatch(/>Edit<|>Add</);
     expect(html).toMatch(/aria-label="(Change avatar|Add avatar) for @Alice"/);
   });
 

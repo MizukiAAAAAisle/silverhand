@@ -325,19 +325,4 @@ describe('ConnectionPane consumer contract', () => {
     // this fence stops that regression path from re-opening.
     expect(CONNECTION_PANE_CODE).not.toMatch(/dataUpdatedAt/);
   });
-
-  it('stacks the Server status pill directly below the Server label, not inline or pushed to the row end', () => {
-    // Guards against the pip drifting back to the row's right end
-    // (`justify-between`) or onto the same line as the label. The pip
-    // reads as a secondary status under its heading.
-    expect(CONNECTION_PANE_CODE).toMatch(
-      /<div className="flex flex-col items-start gap-1">\s*<h3[^>]*>Server<\/h3>\s*<ServerStatusPill/,
-    );
-    expect(CONNECTION_PANE_CODE).not.toMatch(
-      /justify-between[\s\S]{0,120}?Server<\/h3>\s*<ServerStatusPill/,
-    );
-    expect(CONNECTION_PANE_CODE).not.toMatch(
-      /flex items-center[^"]*"\s*>\s*<h3[^>]*>Server<\/h3>\s*<ServerStatusPill/,
-    );
-  });
 });

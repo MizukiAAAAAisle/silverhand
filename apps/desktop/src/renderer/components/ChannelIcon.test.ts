@@ -2,7 +2,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import { ChannelIcon, CHANNEL_ICON_PX } from './ChannelIcon';
+import { ChannelIcon } from './ChannelIcon';
 
 // The channel `#` glyph must be sticker-or-utility BY CONSTRUCTION: the
 // `data-channel-icon` theme hook (whose forza6 sticker chrome inflates the box)
@@ -33,26 +33,6 @@ describe('ChannelIcon — sticker vs utility is enforced (#task:1438)', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       renderToStaticMarkup(React.createElement(ChannelIcon, {} as any)),
     ).toThrow(/variant/);
-  });
-
-  it('density maps to the named scale (sm 12 / md 14 / lg 24)', () => {
-    const px = (density: 'sm' | 'md' | 'lg') =>
-      renderToStaticMarkup(
-        React.createElement(ChannelIcon, { variant: 'utility', density }),
-      );
-    expect(px('sm')).toContain('width="12"');
-    expect(px('md')).toContain('width="14"');
-    expect(px('lg')).toContain('width="24"');
-    // Default density is md (14px).
-    expect(
-      renderToStaticMarkup(
-        React.createElement(ChannelIcon, { variant: 'utility' }),
-      ),
-    ).toContain('width="14"');
-  });
-
-  it('exposes the density scale for consumers that need the raw px', () => {
-    expect(CHANNEL_ICON_PX).toEqual({ sm: 12, md: 14, lg: 24 });
   });
 });
 

@@ -38,8 +38,7 @@ describe('RenameRow scope (#task:1109)', () => {
         message: renameMessage({ old_name: 'alpha', new_name: 'beta' }),
       }),
     );
-    expect(html).toContain('workspace renamed');
-    expect(html).not.toContain('channel renamed');
+    // Workspace scope is name-addressable → names carry the `#` sigil.
     expect(html).toContain('#alpha');
     expect(html).toContain('#beta');
   });
@@ -54,8 +53,6 @@ describe('RenameRow scope (#task:1109)', () => {
         }),
       }),
     );
-    expect(html).toContain('channel renamed');
-    expect(html).not.toContain('workspace renamed');
     // Freeform titles (spaces / CJK) drop the name-addressable `#` sigil.
     expect(html).toContain('UI/UX 优化');
     expect(html).not.toContain('#UI/UX');

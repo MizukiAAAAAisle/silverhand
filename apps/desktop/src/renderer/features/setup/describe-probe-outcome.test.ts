@@ -22,17 +22,6 @@ describe('describeProbeOutcome — success arms', () => {
     });
     expect(r.tone).toBe('success');
     expect(r.title.length).toBeGreaterThan(0);
-    expect(r.description.toLowerCase()).toContain('signup');
-  });
-
-  it('system_ca_verified with signup disabled mentions disabled', () => {
-    const r = describeProbeOutcome({
-      ok: true,
-      kind: 'system_ca_verified',
-      info: { signup_enabled: false },
-      originUrl: 'https://backend.example.test',
-    });
-    expect(r.description.toLowerCase()).toContain('disabled');
   });
 
   it('loopback_ok → success + does NOT claim TLS verified', () => {

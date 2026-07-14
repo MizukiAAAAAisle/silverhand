@@ -13,10 +13,13 @@ import {
 
 /**
  * #task:808 slice 4 — pure mapper tests for `HostStatusResponse` →
- * UI pill view. Pin the four arm cases + the `unreachable.reason`
- * fan-out so a future tone tweak (e.g. switching `unreachable` from
- * `warning` to `error`) lands as an explicit test edit, not a silent
- * theme drift.
+ * UI pill view. Pins the stable state semantics per arm — `tone` and
+ * `detail` shape (and, for `unreachable`, the per-reason detail via the
+ * `describeUnreachableReason` mapper) — plus the anti-collapse invariant
+ * (revoked vs disconnected must not share a label). Tone is a stable
+ * state semantic, so a tone change (e.g. `unreachable` warning → error)
+ * is a deliberate contract edit and SHOULD land here; the label copy is
+ * visual and is NOT pinned.
  */
 
 function aHost(hostId = 'host-1'): {
@@ -27,7 +30,7 @@ function aHost(hostId = 'host-1'): {
 }
 
 describe('describeHostStatus', () => {
-  it('maps `available` to Connected + success tone', () => {
+  it('maps `available` to a success tone with no detail', () => {
     const view = describeHostStatus({
       ...aHost(),
       availability: 'available',
@@ -40,34 +43,31 @@ describe('describeHostStatus', () => {
       },
       agents: [],
     } as HostStatusResponse);
-    expect(view).toEqual({
-      label: 'Connected',
-      tone: 'success',
-      detail: null,
-    });
+    expect(view.tone).toBe('success');
+    expect(view.detail).toBeNull();
+    expect(view.label.length).toBeGreaterThan(0);
   });
 
-  it('maps `disconnected` to Offline + muted tone with explanatory detail', () => {
+  it('maps `disconnected` to a muted tone with non-empty offline detail', () => {
     const view = describeHostStatus({
       ...aHost(),
       availability: 'disconnected',
       agents: [],
     } as HostStatusResponse);
-    expect(view.label).toBe('Offline');
     expect(view.tone).toBe('muted');
     // Detail prepares the user for the offline-but-registration-visible
     // pattern — it is intentionally non-empty.
-    expect(view.detail).toContain('Registered agents');
+    expect(view.detail).not.toBeNull();
+    expect(view.detail!.length).toBeGreaterThan(0);
   });
 
-  it('maps `unreachable{timeout}` to Unreachable + warning tone + per-reason detail', () => {
+  it('maps `unreachable{timeout}` to a warning tone + per-reason detail (via the mapper)', () => {
     const view = describeHostStatus({
       ...aHost(),
       availability: 'unreachable',
       reason: 'timeout',
       agents: [],
     } as HostStatusResponse);
-    expect(view.label).toBe('Unreachable');
     expect(view.tone).toBe('warning');
     expect(view.detail).toBe(describeUnreachableReason('timeout'));
   });
@@ -82,35 +82,43 @@ describe('describeHostStatus', () => {
     expect(view.detail).toBe(describeUnreachableReason('daemon_unreachable'));
   });
 
-  it('maps `revoked` to Revoked + muted tone (no `reason` is leaked)', () => {
-    const view = describeHostStatus({
+  it('maps `revoked` to a muted tone with non-empty recovery detail, distinct from disconnected', () => {
+    const revoked = describeHostStatus({
       ...aHost(),
       availability: 'revoked',
       agents: [],
     } as HostStatusResponse);
-    expect(view.label).toBe('Revoked');
-    expect(view.tone).toBe('muted');
-    // Detail tells the user how to recover — Re-add language.
-    expect(view.detail).toContain('Re-add');
+    expect(revoked.tone).toBe('muted');
+    expect(revoked.detail).not.toBeNull();
+    // revoked and disconnected share the muted tone but need different user
+    // actions, so their labels must NOT collapse to one.
+    const disconnected = describeHostStatus({
+      ...aHost(),
+      availability: 'disconnected',
+      agents: [],
+    } as HostStatusResponse);
+    expect(revoked.label).not.toBe(disconnected.label);
   });
 });
 
 describe('describeUnreachableReason', () => {
-  it('returns user-readable strings for every reason (no daemon vocab leaks)', () => {
-    const cases: Array<['timeout' | 'daemon_unreachable' | 'protocol_error', RegExp]> = [
-      ['timeout', /took too long|timed/i],
-      ['daemon_unreachable', /Could not reach/i],
-      ['protocol_error', /unexpected response/i],
+  it('returns a distinct, non-empty, jargon-free string for every reason', () => {
+    const reasons: Array<'timeout' | 'daemon_unreachable' | 'protocol_error'> = [
+      'timeout',
+      'daemon_unreachable',
+      'protocol_error',
     ];
-    for (const [reason, pattern] of cases) {
-      const text = describeUnreachableReason(reason);
-      expect(text).toMatch(pattern);
+    const texts = reasons.map(describeUnreachableReason);
+    for (const text of texts) {
+      expect(text.length).toBeGreaterThan(0);
       // Daemon-lang terms must NOT leak verbatim — keeps the pill in
       // user-facing voice no matter what we add server-side.
       expect(text).not.toMatch(/daemon/i);
       expect(text).not.toMatch(/RPC/i);
       expect(text).not.toMatch(/transport/i);
     }
+    // Each reason surfaces its own message — none collapse together.
+    expect(new Set(texts).size).toBe(texts.length);
   });
 });
 

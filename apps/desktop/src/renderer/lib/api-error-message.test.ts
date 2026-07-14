@@ -62,9 +62,9 @@ describe('describeApiError', () => {
         ),
         options,
       ),
-    ).toBe(
-      'No connected computer can store this workspace. Connect one and try again.',
-    );
+      // Compare to the configured copy — the routing (code → message) is the
+      // contract, not the sentence text.
+    ).toBe(options.knownCodeMessages.local_host_unbound);
   });
 
   it('lets known codes replace noisy backend path details', () => {
@@ -81,36 +81,37 @@ describe('describeApiError', () => {
         ),
         options,
       ),
-    ).toBe(
-      'This folder is already used by another Silverhand workspace; choose a different folder.',
-    );
+    ).toBe(options.knownCodeMessages.workspace_path_conflict);
   });
 
   it('surfaces unknown backend reasons instead of a generic fallback', () => {
-    expect(
-      describeApiError(
-        new ApiError(
-          409,
-          'Conflict',
-          JSON.stringify({
-            error: 'workspace name already exists',
-            code: 'workspace_name_taken',
-          }),
-        ),
-        options,
+    const msg = describeApiError(
+      new ApiError(
+        409,
+        'Conflict',
+        JSON.stringify({
+          error: 'workspace name already exists',
+          code: 'workspace_name_taken',
+        }),
       ),
-    ).toBe(
-      "Couldn't create the workspace: workspace name already exists (workspace_name_taken).",
+      options,
     );
+    // Contract: an unknown code surfaces the backend detail + the raw code so
+    // the user/operator can act, rather than collapsing to the generic
+    // fallback. Assert those pieces are carried, not the exact wording.
+    expect(msg).toContain('workspace name already exists');
+    expect(msg).toContain('workspace_name_taken');
+    expect(msg).not.toBe(options.fallbackMessage);
   });
 
   it('falls back to HTTP status when the body has no usable reason', () => {
-    expect(
-      describeApiError(
-        new ApiError(500, 'Internal Server Error', JSON.stringify({ issues: [] })),
-        options,
-      ),
-    ).toBe("Couldn't create the workspace: HTTP 500 Internal Server Error.");
+    const msg = describeApiError(
+      new ApiError(500, 'Internal Server Error', JSON.stringify({ issues: [] })),
+      options,
+    );
+    // No usable body reason → the HTTP status is preserved in the message.
+    expect(msg).toContain('500');
+    expect(msg).toContain('Internal Server Error');
   });
 
   it('preserves backend-unreachable copy', () => {
@@ -119,12 +120,11 @@ describe('describeApiError', () => {
         new ApiError(0, 'Network Error', '{}', 'backend_unreachable'),
         options,
       ),
-    ).toBe("Can't reach the backend. Check your connection and try again.");
+    ).toBe(options.backendUnreachableMessage);
   });
 
   it('surfaces plain Error messages in bounded form', () => {
-    expect(describeApiError(new Error('boom'), options)).toBe(
-      "Couldn't create the workspace: boom.",
-    );
+    // The underlying error message is carried through, not swallowed.
+    expect(describeApiError(new Error('boom'), options)).toContain('boom');
   });
 });

@@ -125,6 +125,7 @@ export function BackendUnreachableGate({
 
   return (
     <main
+      data-gate="backend-unreachable"
       className="grid h-screen w-screen place-items-center bg-bg-base px-6 py-14 text-text-primary"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >

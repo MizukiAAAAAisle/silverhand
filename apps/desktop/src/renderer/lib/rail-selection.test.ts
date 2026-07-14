@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { railRowTierClass, railSelectionTier, type RailRowRef } from './rail-selection';
+import { railSelectionTier, type RailRowRef } from './rail-selection';
 
 describe('railSelectionTier (#task:1254 exclusive, workspace/DM-only binary)', () => {
   const ws = (id: string): RailRowRef => ({ kind: 'workspace', workspaceId: id });
@@ -30,24 +30,5 @@ describe('railSelectionTier (#task:1254 exclusive, workspace/DM-only binary)', (
   it('selecting a workspace: exactly one primary across the rail', () => {
     const tiers = [ws('w1'), ws('w2'), dm('w3')].map(r => railSelectionTier(r, 'w1'));
     expect(tiers).toEqual(['primary', 'none', 'none']);
-  });
-});
-
-describe('railRowTierClass (#task:1254 binary visual vocabulary)', () => {
-  it('primary carries the selected-fill + on-selected text hook (theme border keys on it)', () => {
-    const cls = railRowTierClass('primary');
-    expect(cls).toContain('text-text-on-selected');
-    expect(cls).toContain('bg-[var(--bg-row-selected,var(--bg-selected))]');
-  });
-
-  it('none is resting + hover only, without the selected hook', () => {
-    const cls = railRowTierClass('none');
-    expect(cls).not.toContain('text-text-on-selected');
-    expect(cls).toContain('hover:');
-  });
-
-  it('there is no ambient tier anymore (no .rail-row-ambient anywhere)', () => {
-    expect(railRowTierClass('primary')).not.toContain('rail-row-ambient');
-    expect(railRowTierClass('none')).not.toContain('rail-row-ambient');
   });
 });

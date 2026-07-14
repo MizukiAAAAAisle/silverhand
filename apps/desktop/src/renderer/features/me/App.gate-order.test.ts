@@ -26,11 +26,12 @@
  * pin keyed each gate off its distinctive user-facing copy, which
  * made a pure wording edit (e.g. "Silverhand backend" → "server")
  * trip the assertions even though gate routing was unchanged. We now
- * identify each gate by stable, copy-free signals — the warning icon
- * unique to the unreachable gate, the email/password form fields and
- * `autocomplete` mode unique to the registration gate, and the
- * server-url / message DATA the unreachable gate echoes from its
- * props. Copy is free to change without touching this file.
+ * identify each gate by stable, copy-free signals — a branch-owned
+ * `data-gate` marker on the unreachable gate, the email/password form
+ * fields and `autocomplete` mode unique to the registration gate, and
+ * the server-url / message DATA the unreachable gate echoes from its
+ * props. Copy AND iconography are free to change without touching this
+ * file.
  *
  * **Authenticated arm is intentionally out of scope.** The
  * authenticated branch renders `RegisteredAppShell`, which is a
@@ -51,16 +52,15 @@ import type {
 } from './hooks';
 
 // Copy-free gate discriminators. Each is a structural or data signal
-// that does NOT depend on user-facing wording, so copy edits never
-// break this pin (the whole point of the rewrite).
+// that does NOT depend on user-facing wording or iconography, so copy
+// edits never break this pin (the whole point of the rewrite).
 //
-//   - Unreachable gate: the warning icon (lucide-triangle-alert) is
-//     unique to it among the gates, and it echoes the server_url /
-//     message it is handed as props.
+//   - Unreachable gate: a branch-owned `data-gate` marker on its root,
+//     plus the server_url / message it echoes from its props.
 //   - Registration gate: the email + password form fields, with the
 //     `autocomplete` mode distinguishing signup (new-password) from
 //     login (current-password).
-const SIG_UNREACHABLE_ICON = 'lucide-triangle-alert';
+const SIG_UNREACHABLE_GATE = 'data-gate="backend-unreachable"';
 const SIG_REG_EMAIL_FIELD = 'type="email"';
 const SIG_REG_PASSWORD_FIELD = 'type="password"';
 // NB: react-dom/server emits the `autoComplete` prop in camelCase
@@ -160,7 +160,7 @@ describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {
   it('loading branch: viewer.data is undefined → no gate renders', async () => {
     const html = await renderApp(undefined);
     // Neither gate's structural signal should be present while loading.
-    expect(html).not.toContain(SIG_UNREACHABLE_ICON);
+    expect(html).not.toContain(SIG_UNREACHABLE_GATE);
     expect(html).not.toContain(SIG_REG_EMAIL_FIELD);
   });
 
@@ -171,8 +171,8 @@ describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {
       message: 'connect ECONNREFUSED 127.0.0.1:443',
     };
     const html = await renderApp(viewer);
-    // Gate identity: the warning icon unique to this gate.
-    expect(html).toContain(SIG_UNREACHABLE_ICON);
+    // Gate identity: the branch-owned data marker unique to this gate.
+    expect(html).toContain(SIG_UNREACHABLE_GATE);
     // Data echo: the gate surfaces the server_url + message it is handed.
     expect(html).toContain('https://down.example.test');
     expect(html).toContain('ECONNREFUSED');
@@ -195,7 +195,7 @@ describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {
     expect(html).toContain(SIG_REG_SIGNUP_AUTOCOMPLETE);
     // The unreachable gate must NOT appear when registration is the
     // intended branch.
-    expect(html).not.toContain(SIG_UNREACHABLE_ICON);
+    expect(html).not.toContain(SIG_UNREACHABLE_GATE);
   });
 
   it('registration_required (signup disabled) branch: RegistrationGate renders the login form (current-password, no new-password)', async () => {
@@ -209,7 +209,7 @@ describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {
     expect(html).toContain(SIG_REG_LOGIN_AUTOCOMPLETE);
     // Login mode suppresses the new-password (signup/confirm) wiring.
     expect(html).not.toContain(SIG_REG_SIGNUP_AUTOCOMPLETE);
-    expect(html).not.toContain(SIG_UNREACHABLE_ICON);
+    expect(html).not.toContain(SIG_UNREACHABLE_GATE);
   });
 
   it('GATE ORDER (Cindy P1-2): synthetic ViewerState satisfying BOTH backend_unreachable AND registration_required renders the UNREACHABLE gate, not the registration gate', async () => {
@@ -228,7 +228,7 @@ describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {
       signup_enabled: true,
     } as unknown as ViewerState;
     const html = await renderApp(synthetic);
-    expect(html).toContain(SIG_UNREACHABLE_ICON);
+    expect(html).toContain(SIG_UNREACHABLE_GATE);
     expect(html).toContain('https://down.example.test');
     // The registration form must NOT appear — order proven.
     expect(html).not.toContain(SIG_REG_EMAIL_FIELD);

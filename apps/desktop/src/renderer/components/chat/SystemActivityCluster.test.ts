@@ -108,18 +108,18 @@ describe('SystemActivityCluster (PR-10)', () => {
       { id: 'b' },
     );
     const html = renderCluster([a, b], [seededTask({ status: 'in_review' })]);
-    // The cluster's outermost element is `.system-activity-cluster`.
-    expect(html).toMatch(/^<div class="system-activity-cluster" data-system-activity-cluster="2">/);
+    // The cluster's outermost element carries the row-count data marker.
+    expect(html).toMatch(/^<div[^>]*\bdata-system-activity-cluster="2"/);
   });
 
-  it('renders one inner `.system-message-row` per cluster member, each tagged with `data-system-event-row="1"`', () => {
+  it('renders one inner system event-row per cluster member, each tagged with `data-system-event-row="1"`', () => {
     // Drift guard: SystemActivityCluster delegates per-row rendering to
     // SystemMessage. The cluster CSS in `global.css` uses
     // `.system-activity-cluster [data-system-event-row="1"] > *` to
     // override the row body's chunky padding. If the SystemMessage
-    // wrapper ever drops the `data-system-event-row` attribute (or the
-    // class), the cluster CSS hook would silently break — the rows
-    // would still render, just no longer in tight 2px stacking.
+    // wrapper ever drops the `data-system-event-row` attribute, the
+    // cluster CSS hook would silently break — the rows would still
+    // render, just no longer in tight 2px stacking.
     const a = makeSystemMessage('task_claim', fullTaskMeta(), { id: 'a' });
     const b = makeSystemMessage(
       'task_status',
@@ -132,9 +132,9 @@ describe('SystemActivityCluster (PR-10)', () => {
       { id: 'c' },
     );
     const html = renderCluster([a, b, c], [seededTask()]);
-    // Three rows → three system-message-row wrappers, each with the
-    // PR-10 data attribute.
-    const matches = html.match(/<div class="system-message-row" data-system-event-row="1">/g) ?? [];
+    // Three rows → three system event-row wrappers, keyed on the PR-10
+    // data attribute (not the class name).
+    const matches = html.match(/data-system-event-row="1"/g) ?? [];
     expect(matches).toHaveLength(3);
   });
 
@@ -171,10 +171,8 @@ describe('SystemActivityCluster (PR-10)', () => {
     expect(html).toContain('data-task-ref="42"');
     // session_cleared signal
     expect(html).toContain('data-session-cleared="1"');
-    expect(html).toContain('lucide-rotate-ccw');
     // rename signal
     expect(html).toContain('data-rename-row="1"');
-    expect(html).toContain('lucide-pencil');
   });
 
   it('a 1-element cluster still uses the cluster wrapper (so even a lone audit row visually demotes)', () => {
@@ -185,7 +183,7 @@ describe('SystemActivityCluster (PR-10)', () => {
     // standalone chunky `px-4 py-1.5` padding).
     const only = makeSystemMessage('task_claim', fullTaskMeta(), { id: 'only' });
     const html = renderCluster([only], [seededTask()]);
-    expect(html).toMatch(/^<div class="system-activity-cluster" data-system-activity-cluster="1">/);
-    expect(html).toContain('<div class="system-message-row" data-system-event-row="1">');
+    expect(html).toMatch(/^<div[^>]*\bdata-system-activity-cluster="1"/);
+    expect(html).toContain('data-system-event-row="1"');
   });
 });

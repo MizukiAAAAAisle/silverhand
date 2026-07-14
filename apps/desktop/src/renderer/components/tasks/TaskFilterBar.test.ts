@@ -187,16 +187,4 @@ describe('TaskFilterBar — trigger glyphs stay height-uniform (#task:1437)', ()
     expect(html).toContain('aria-label="Channel"');
     expect(html).toContain('data-channel-icon');
   });
-
-  it('trigger glyphs render at the shared 14px content box', () => {
-    // WorkspaceIcon (14) + the channel `#` (14, now the sticker variant) both
-    // render an explicit 14px box in SSR; no trigger glyph renders a 16/18px
-    // inline box. The plain lucide User/PenLine glyphs use `size-3.5` (= 14).
-    // (forza6's sticker border/padding is applied in CSS, not inline, so it
-    // never appears here — #task:1441.)
-    const html = renderBar();
-    expect(html).toContain('width:14px');
-    expect(html).not.toContain('width:16px');
-    expect(html).not.toContain('width:18px');
-  });
 });

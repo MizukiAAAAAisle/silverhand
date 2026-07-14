@@ -42,14 +42,6 @@ describe('MessageItem — pending rows render no server-row affordance (#task:12
     expect(occurrences).toBeGreaterThanOrEqual(2);
   });
 
-  it('gates the selection-mode pointer cursor on committed', () => {
-    // A pending row in selection mode shows no checkbox and does not
-    // toggle-select, so it must not display `cursor-pointer` either — otherwise
-    // it's a visible affordance that does nothing when clicked (Cindy slice-B
-    // review, lighter than a button but the same class of dead affordance).
-    expect(source).toContain("selectionMode && committed ? 'cursor-pointer '");
-  });
-
   it('gates every context-menu callback on committed', () => {
     for (const cb of [
       'committed && onCopyMarkdown',

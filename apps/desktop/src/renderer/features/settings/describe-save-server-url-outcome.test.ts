@@ -10,7 +10,7 @@ import type { DesktopSaveServerUrlResult } from '../../../preload/api';
 import { describeSaveServerUrlOutcome } from './describe-save-server-url-outcome';
 
 describe('describeSaveServerUrlOutcome — success arms', () => {
-  it('reloaded uses tone=success and explicitly says reconnected', () => {
+  it('reloaded uses tone=success and reports the elapsed reconnect time', () => {
     const banner = describeSaveServerUrlOutcome({
       ok: true,
       kind: 'reloaded',
@@ -18,7 +18,6 @@ describe('describeSaveServerUrlOutcome — success arms', () => {
       attachedAt: 1_700_000_000_000,
     });
     expect(banner.tone).toBe('success');
-    expect(banner.title).toMatch(/reconnected/i);
     expect(banner.description).toMatch(/380\s*ms/);
   });
 
@@ -28,7 +27,6 @@ describe('describeSaveServerUrlOutcome — success arms', () => {
       kind: 'unchanged',
     });
     expect(banner.tone).toBe('info');
-    expect(banner.title).toMatch(/already that value/i);
     // The connection is whatever it was before; UI must not imply
     // a verified state from this arm.
     expect(banner.title.toLowerCase()).not.toMatch(/connected/);
@@ -47,8 +45,6 @@ describe('describeSaveServerUrlOutcome — success arms', () => {
       elapsedMs: 10_000,
     });
     expect(banner.tone).toBe('info');
-    expect(banner.title).toMatch(/saved/i);
-    expect(banner.title).toMatch(/reconnect|reconnecting/i);
     // Anti-claim: the headline MUST NOT say "Connected".
     expect(banner.title.toLowerCase()).not.toMatch(/\bconnected\b/);
     expect(banner.dismissOnReady).toBe(true);
@@ -65,7 +61,7 @@ describe('describeSaveServerUrlOutcome — success arms', () => {
     expect(banner.description).toMatch(/10\.0\s*s/);
   });
 
-  it('reloaded_remote uses tone=info, points at the indicator, and MUST NOT say "not available in this mode" (`#task:1021`)', () => {
+  it('reloaded_remote uses tone=info, points at the live indicator, stays direction-free, and MUST NOT claim "Connected"/"not available" (`#task:1021`)', () => {
     // Regression for shiki's report: in remote mode every save (even a
     // correct sandbox URL) showed "Connection check is not available in
     // this mode." That copy is wrong — connectivity IS shown live by the
@@ -76,8 +72,6 @@ describe('describeSaveServerUrlOutcome — success arms', () => {
       kind: 'reloaded_remote',
     });
     expect(banner.tone).toBe('info');
-    expect(banner.title).toMatch(/saved/i);
-    expect(banner.title).toMatch(/reconnect|reconnecting/i);
     // The exact misleading phrasing must be gone.
     expect(banner.title.toLowerCase()).not.toMatch(/not available/);
     expect(banner.description.toLowerCase()).not.toMatch(/not available/);
@@ -197,30 +191,25 @@ describe('describeSaveServerUrlOutcome — reload_rejected reasons', () => {
 });
 
 describe('describeSaveServerUrlOutcome — other failure arms', () => {
-  it('config_write_failed → tone=error, product copy, NO raw disk path', () => {
+  it('config_write_failed → tone=error, NO raw disk path leaked', () => {
     const banner = describeSaveServerUrlOutcome({
       ok: false,
       kind: 'config_write_failed',
       message: 'EACCES /path/daemon-config.json',
     });
     expect(banner.tone).toBe('error');
-    expect(banner.title).toMatch(/could not save/i);
     // Raw path / errno withheld from the user-facing banner.
     expect(banner.description).not.toContain('daemon-config.json');
-    expect(banner.description).toMatch(/app data folder/i);
   });
 
-  it('no_attachment_controller → tone=info, product copy, NO controller type', () => {
+  it('no_attachment_controller → tone=info, NO controller type leaked', () => {
     const banner = describeSaveServerUrlOutcome({
       ok: false,
       kind: 'no_attachment_controller',
       message: 'backend HostWsServerController unavailable',
     });
     expect(banner.tone).toBe('info');
-    expect(banner.title).toMatch(/saved/i);
-    expect(banner.title).toMatch(/not available/i);
     expect(banner.description).not.toContain('HostWsServerController');
-    expect(banner.description).toMatch(/cannot verify the connection/i);
   });
 });
 

@@ -5,49 +5,46 @@ import type { AgentDto } from '@silverhand/shared';
 
 import { WorkspaceIcon } from './WorkspaceIcon';
 
-// The task filter-bar bug (#task:1437): the workspace filter trigger rendered
-// its icon at WorkspaceIcon's 16px default while every sibling trigger uses a
-// 14px (`size-3.5`) glyph, so that one trigger sat taller. The fix routes a
-// numeric `size` through all three branches. These lock that contract so the
-// workspace trigger can't silently drift from its siblings again.
+// #task:1437: the workspace filter trigger rendered its icon at WorkspaceIcon's
+// own default while every sibling trigger passed an explicit size, so that one
+// trigger sat taller. The fix routes a numeric `size` through all three render
+// branches (regular / DM-fallback / resolved-DM-avatar). These lock that the
+// caller's size reaches every branch — using an arbitrary sentinel so the test
+// tracks passthrough, not a specific px value (icon sizes are visual, verified
+// by dogfood).
+
+// Arbitrary non-default sentinel: if any branch ignored `size` and fell back to
+// its own constant, the box would not be SENTINEL px.
+const SENTINEL = 23;
 
 describe('WorkspaceIcon — size prop drives every branch (#task:1437)', () => {
-  it('regular workspace W: default box is 16px', () => {
-    const html = renderToStaticMarkup(
-      React.createElement(WorkspaceIcon, { kind: 'regular', dmAgentId: null }),
-    );
-    expect(html).toContain('width:16px');
-    expect(html).toContain('height:16px');
-  });
-
-  it('regular workspace W: honours a smaller size (filter-trigger box)', () => {
+  it('regular workspace W: passes size through to the box', () => {
     const html = renderToStaticMarkup(
       React.createElement(WorkspaceIcon, {
         kind: 'regular',
         dmAgentId: null,
-        size: 14,
+        size: SENTINEL,
       }),
     );
-    expect(html).toContain('width:14px');
-    expect(html).toContain('height:14px');
-    expect(html).not.toContain('width:16px');
+    expect(html).toContain(`width:${SENTINEL}px`);
+    expect(html).toContain(`height:${SENTINEL}px`);
   });
 
-  it('DM fallback (agent unresolved): honours size on the neutral glyph', () => {
+  it('DM fallback (agent unresolved): passes size through to the neutral glyph', () => {
     const html = renderToStaticMarkup(
       React.createElement(WorkspaceIcon, {
         kind: 'dm',
         dmAgentId: 'a-missing',
-        size: 14,
+        size: SENTINEL,
       }),
     );
-    expect(html).toContain('width:14px');
-    expect(html).toContain('height:14px');
+    expect(html).toContain(`width:${SENTINEL}px`);
+    expect(html).toContain(`height:${SENTINEL}px`);
   });
 
-  it('resolved DM avatar: honours size on the AgentAvatar box', () => {
-    // Guards the third branch: if AgentAvatar's `size` were ever pinned back
-    // to 16, the DM workspace trigger would re-inflate while the other two
+  it('resolved DM avatar: passes size through to the AgentAvatar box', () => {
+    // Guards the third branch: if AgentAvatar's `size` were ever pinned to a
+    // constant, the DM workspace trigger would drift while the other two
     // branches stayed correct — the earlier two cases would miss it.
     const agent = {
       id: 'a-1',
@@ -60,13 +57,10 @@ describe('WorkspaceIcon — size prop drives every branch (#task:1437)', () => {
         kind: 'dm',
         dmAgentId: 'a-1',
         agentsById: new Map([['a-1', agent]]),
-        size: 14,
+        size: SENTINEL,
       }),
     );
-    expect(html).toContain('width:14px');
-    expect(html).toContain('height:14px');
-    // The avatar box, not just the inner runtime glyph (0.6× = ~8px), sits at
-    // the requested edge.
-    expect(html).not.toContain('width:16px');
+    expect(html).toContain(`width:${SENTINEL}px`);
+    expect(html).toContain(`height:${SENTINEL}px`);
   });
 });

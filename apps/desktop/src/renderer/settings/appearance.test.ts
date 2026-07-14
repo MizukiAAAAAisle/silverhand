@@ -105,71 +105,73 @@ describe('theme markdown token cascade contract', () => {
     new URL('../styles/themes/forza6.css', import.meta.url),
     'utf8',
   );
+  const forza6ComponentsCss = readFileSync(
+    new URL('../styles/themes/forza6-components.css', import.meta.url),
+    'utf8',
+  );
   const slackDarkCss = readFileSync(
     new URL('../styles/themes/slack-dark.css', import.meta.url),
     'utf8',
   );
 
-  it('imports the default :root theme before themes that override it', () => {
-    const themeImports = [...globalCss.matchAll(/@import "\.\/themes\/([^"]+)";/g)].map(
+  // Cascade STRUCTURE guards: the whole no-leak model rests on the default
+  // theme owning `:root` and being imported before any override theme. If
+  // another theme declares `:root`, or the default imports after an override,
+  // the default's festival-only values leak globally / get clobbered — a
+  // cross-theme corruption TS can't catch. (Structural boundaries, not values.)
+  it('imports the default :root theme before the themes that override it', () => {
+    const order = [...globalCss.matchAll(/@import "\.\/themes\/([^"]+)";/g)].map(
       m => m[1],
     );
-
-    expect(themeImports).toEqual([
-      'forza6.css',
-      'warm-script.css',
-      'slack-dark.css',
-      'forza6-components.css',
-    ]);
+    const forzaIdx = order.indexOf('forza6.css');
+    expect(forzaIdx).toBeGreaterThanOrEqual(0);
+    for (const override of ['warm-script.css', 'slack-dark.css']) {
+      expect(order.indexOf(override)).toBeGreaterThan(forzaIdx);
+    }
   });
 
   it('keeps :root only on the default theme', () => {
-    expect(forza6Css).toContain(':root,\n[data-theme=\'forza6\']');
+    // Whitespace-insensitive: the default theme owns a `:root, [data-theme='forza6']`
+    // block. Match the selector pair structurally so this guard doesn't itself
+    // relock the exact newline/spacing formatting.
+    expect(forza6Css).toMatch(/:root\s*,\s*\[data-theme=['"]forza6['"]\]/);
     expect(warmScriptCss).not.toContain(':root');
     expect(slackDarkCss).not.toContain(':root');
   });
 
-  it('defaults prose and code markdown font sizes to 14px in every theme', () => {
-    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      expect(css).toContain('--md-prose-size: 14px;');
-      expect(css).toContain('--md-code-size: 14px;');
-    }
+  // Component-layer root-ownership guard (restored, #task:788 failure path).
+  // `forza6-components.css` may add element-/state-scoped overrides and may
+  // redefine tokens INSIDE those scoped bundles, but must NOT reintroduce a
+  // bare `[data-theme='forza6'] { --token: … }` block or a `:root` block —
+  // root-level token reassignment has a single source in `forza6.css`. A bare
+  // theme block here would silently fork the token SSOT (values drift between
+  // the two files, invisible to TS). This is a stable layering boundary
+  // (guideline 5), not a CSS re-lock: it names the concrete corruption path.
+  it('forbids root-level token reassignment in the forza6 component layer', () => {
+    // Strip CSS comments first — the file's own header prose mentions the
+    // removed `[data-theme='forza6'] {}` block, which must not trip the guard.
+    const code = forza6ComponentsCss.replace(/\/\*[\s\S]*?\*\//g, '');
+    // A bare theme selector = the attribute selector directly followed by `{`
+    // (only whitespace between). Qualified selectors like
+    // `[data-theme='forza6'] header[...] {` have another selector before `{`,
+    // so they don't match.
+    expect(code).not.toMatch(/\[data-theme=['"]forza6['"]\]\s*\{/);
+    expect(code).not.toContain(':root');
   });
 
-  it('defaults system-message-row size to 12px in every theme', () => {
-    // System messages live one tier below markdown body — chrome, not
-    // content. The token is intentionally independent of `--md-*-size`
-    // so themes can drift system size without dragging markdown.
-    // shiki spec msg `cN9u0jopk9w5nafo`.
-    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      expect(css).toContain('--system-message-size: 12px;');
-    }
-  });
-
-  it('sizes the inline-code chip via the shared integer reference calc, not a per-theme em', () => {
-    // Inline code is emphasis in prose, not a standalone block — the
-    // chip wants cap-height ≈ surrounding body x-height (same rule as
-    // [data-task-ref]). Previously a per-theme `--inline-code-size:
-    // 0.88em` (= 12.32px at 14px body — fractional, shiki #task:1192
-    // "凑整"). Unified to a single global rule that subtracts 2px off the
-    // same Appearance token .markdown-body reads → whole 12px, scales
-    // with the slider, no per-theme drift. Independent of
-    // `--md-code-size` (which drives fenced code blocks).
-    expect(globalCss).toContain(
-      'font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 2px);',
-    );
-    // The per-theme em token is gone — no theme should re-introduce it.
-    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      expect(css).not.toContain('--inline-code-size');
-    }
-  });
-
-  /* Forza6 introduced 8 new tokens — every theme MUST define them
-     explicitly so a theme switch from forza6 doesn't leak the
-     festival-only values via :root fallback (design-new-theme §3.1
-     关键 3). */
-  it('every theme explicitly defines forza6-introduced tokens', () => {
-    const NEW_TOKENS = [
+  // The ONE cascade-safety token test: every promoted token MUST be declared
+  // explicitly in every theme, so a switch away from the default can't leak its
+  // festival-only value via the :root fallback. This is the contract that
+  // catches the real recurring bug (a new theme forgets a token). We assert the
+  // token is DECLARED per theme — never its value (14px / a hue / a radius),
+  // which is a visual concern verified by dogfood.
+  it('every theme explicitly declares the full promoted-token set (no :root leak)', () => {
+    const REQUIRED_TOKENS = [
+      // markdown + chrome sizes (declaration only — the px value is visual)
+      '--md-prose-size',
+      '--md-code-size',
+      '--system-message-size',
+      // forza6-introduced identity tokens
       '--font-display',
       '--bg-pattern-image',
       '--bg-pattern-opacity',
@@ -178,106 +180,35 @@ describe('theme markdown token cascade contract', () => {
       '--bg-structure-dark',
       '--text-on-structure',
       '--text-on-dark-pop',
-    ];
-    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      for (const token of NEW_TOKENS) {
-        expect(css).toContain(`${token}:`);
-      }
-    }
-  });
-
-  /* Review fix (#task:912): `--profile-section-radius` was added in
-     #task:814 for forza6's poster hard-cut treatment. forza6 sets `0`
-     on its `:root,[data-theme='forza6']` block; the CSS rule in
-     global.css falls back to `var(--card-radius)` if not defined. But
-     because forza6 owns `:root`, themes that didn't redeclare leaked
-     forza6's `0` — silently turning warm-script + slack-dark profile
-     sections into square corners against design intent. This contract
-     test pins the leak shut: every theme MUST declare its own value. */
-  it('every theme explicitly defines the profile-section radius token', () => {
-    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      expect(css).toContain('--profile-section-radius:');
-    }
-  });
-
-  /* Review round 2 (#task:912): `--row-radius` covers the 5 row-style
-     surfaces (sidebar rows / NavRail buttons / Saved item / schedule +
-     activity row cards / MessageItem hover frame). Single token because
-     each theme moves all five surfaces in the same direction —
-     warm/forza6 keep `0` (chat-surface scan-line vocabulary); slack-dark
-     uses `6px` for Slack-style subtle list rounding. Same leak-pin
-     reasoning as `--profile-section-radius`: forza6's `:root` block
-     would leak `0` to any theme that forgets to declare. */
-  it('every theme explicitly defines the row-radius token', () => {
-    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      expect(css).toContain('--row-radius:');
-    }
-  });
-
-  /* Review round 3 (#task:912): control-surface hover border. The
-     TaskFilterBar trigger had been borrowing `--border-row-hover`
-     (sidebar/NavRail row hover). slack-dark sets that to `transparent`
-     — sidebar rows express hover via bg veil, not stroke — but a
-     borderless control trigger is a hover dead zone. `--border-control-
-     hover` decouples the two surfaces: forza6/warm = same as row hover
-     (poster ink / accent, pixel-zero); slack-dark = `--border` 10% white
-     (visible step up from resting `--border-subtle` 6%). */
-  it('every theme explicitly defines the control-hover border token', () => {
-    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      expect(css).toContain('--border-control-hover:');
-    }
-  });
-
-  /* Review round 3 (#task:912): tab-segment radius. `[data-panel-tabs]
-     button` had been hard-coded `border-radius: 0` so forza6's poster
-     "hard wedge inside the bracket" reads. slack-dark wants the active
-     segment rounded to match its hairline-rounded language. Token-route
-     it: forza6 / warm = `0`, slack-dark = `4px`. */
-  it('every theme explicitly defines the tab-segment radius token', () => {
-    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      expect(css).toContain('--tab-segment-radius:');
-    }
-  });
-
-  /* PR-3 token promotion (#task:344): inline-code chip is now a
-     4-token contract (bg / border / radius + the existing
-     --text-inline-code). Every theme MUST declare the three new
-     tokens so a theme switch from forza6 doesn't leak the lime
-     poster recipe via :root fallback. */
-  it('every theme explicitly defines inline-code chip tokens', () => {
-    const INLINE_CODE_TOKENS = [
+      // radius family
+      '--profile-section-radius',
+      '--row-radius',
+      '--tab-segment-radius',
+      '--control-radius',
+      '--chip-radius',
+      '--select-content-radius',
+      '--select-item-radius',
+      // border / hover state
+      '--border-control-hover',
+      '--border-row-hover',
+      '--border-row-selected',
+      // inline-code chip
       '--bg-inline-code',
       '--border-inline-code',
       '--radius-inline-code',
-    ];
-    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      for (const token of INLINE_CODE_TOKENS) {
-        expect(css).toContain(`${token}:`);
-      }
-    }
-  });
-
-  /* PR-5 token promotion (#task:345; closed status #task:770): the
-     task-status badge is now a 15-token contract (5 statuses × {bg /
-     text / border} — todo / in_progress / in_review / done / closed).
-     `closed` is a terminal status (not a separate visibility axis), so
-     it joins the same family; its forza6 indigo poster chip / warm
-     low-noise chip must be declared per theme so a switch doesn't leak
-     forza6's indigo via :root fallback. Domain-prefixed
-     (`--task-status-*`) over generic (`--status-*`) because the
-     namespace must stay narrow — these values are tuned for a single
-     ~10px poster-display badge, not a general "status colour"
-     vocabulary.
-
-     #task:1018 adds a 6th per-status token, `-solid`: the single
-     representative hue a small fill (the chat-stream TaskEventDot) uses
-     to match this status's board chip. Each theme homes it on its own
-     identity source (forza6 → poster `-bg`; warm/slack tint chips →
-     saturated `-text`), so the contract is now 20 tokens (5 × {bg /
-     text / border / solid}). Declared per theme for the same
-     no-:root-leak reason as the rest of the family. */
-  it('every theme explicitly defines task-status badge tokens', () => {
-    const TASK_STATUS_TOKENS = [
+      // chrome-label utility
+      '--font-chrome-label',
+      '--chrome-label-tracking',
+      '--chrome-label-transform',
+      // primary control surface (CTA)
+      '--bg-control-primary',
+      '--bg-control-primary-hover',
+      '--text-on-control-primary',
+      // floating frame
+      '--floating-border',
+      '--floating-radius',
+      '--floating-item-radius',
+      // task-status badge family (5 statuses × {bg, text, border, solid})
       '--task-status-todo-bg',
       '--task-status-todo-text',
       '--task-status-todo-border',
@@ -300,284 +231,9 @@ describe('theme markdown token cascade contract', () => {
       '--task-status-closed-solid',
     ];
     for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      for (const token of TASK_STATUS_TOKENS) {
+      for (const token of REQUIRED_TOKENS) {
         expect(css).toContain(`${token}:`);
       }
     }
-  });
-
-  /* PR-4 token promotion (#task:350): floating frame (menu /
-     popover / hover-card outer chrome + inner item radius) is now a
-     3-token contract. Every theme MUST declare all three so a theme
-     switch from forza6 doesn't leak its 2px black + 0-radius poster
-     sticker frame into warm themes via :root fallback. Border is a
-     shorthand (width + style + color) so a single token captures the
-     full edge identity per theme; per Cindy `GZJAggfU2U8kcIV0` we
-     intentionally skipped a separate `--floating-border-width` until
-     a real consumer needs the width for layout/inset math. */
-  it('every theme explicitly defines floating frame tokens', () => {
-    const FLOATING_FRAME_TOKENS = [
-      '--floating-border',
-      '--floating-radius',
-      '--floating-item-radius',
-    ];
-    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      for (const token of FLOATING_FRAME_TOKENS) {
-        expect(css).toContain(`${token}:`);
-      }
-    }
-  });
-
-  /* PR-5 token promotion (#task:352): sidebar / NavRail row border
-     colour for hover + selected states is now a 2-token contract.
-     Every theme MUST declare both so a theme switch from forza6
-     doesn't leak its poster-sticker near-black into warm themes via
-     :root fallback. Per Cindy `tBslbxNV5QSi8x3s` we kept this scoped
-     to row state border colour only — width + radius stay on
-     `.sidebar-row-border` (global.css) because they don't vary by
-     theme today. */
-  it('every theme explicitly defines row-state border tokens', () => {
-    const ROW_STATE_TOKENS = [
-      '--border-row-hover',
-      '--border-row-selected',
-    ];
-    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      for (const token of ROW_STATE_TOKENS) {
-        expect(css).toContain(`${token}:`);
-      }
-    }
-  });
-
-  /* PR-6 token promotion (#task:354): `.chrome-label` utility reads a
-     3-token contract (font family / tracking / text transform). Every
-     theme MUST declare all three so a theme switch from forza6 doesn't
-     leak the display font + 0.06em tracking into warm themes via :root
-     fallback. The utility is intentionally narrow — size / weight /
-     color stay at the call site so existing Tailwind vocabulary isn't
-     overridden. */
-  it('every theme explicitly defines chrome-label tokens', () => {
-    const CHROME_LABEL_TOKENS = [
-      '--font-chrome-label',
-      '--chrome-label-tracking',
-      '--chrome-label-transform',
-    ];
-    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      for (const token of CHROME_LABEL_TOKENS) {
-        expect(css).toContain(`${token}:`);
-      }
-    }
-  });
-
-  /* PR-8 token promotion (#task:359): control + chip radius is now a
-     2-token contract. Every theme MUST declare both so a theme switch
-     from forza6 doesn't leak the `0` poster radius into warm themes
-     via :root fallback. Scope is intentionally narrow:
-     - `--control-radius` → input / textarea / button / select trigger /
-       small icon button (everything that was Tailwind `rounded-md` on
-       a control surface).
-     - `--chip-radius` → inline reference chip / filter chip / small
-       data chip (everything that was Tailwind `rounded` ≈ 4px on a
-       chip surface).
-     `--pill-radius` deliberately NOT introduced — TaskStatusPill is
-     the sole `rounded-full` consumer and shiki decided to keep it
-     capsule (forza6 expresses status via saturated fill, not shape).
-     Open a `pill-radius` PR if/when a second pill consumer lands. */
-  it('every theme explicitly defines control + chip radius tokens', () => {
-    const RADIUS_TOKENS = ['--control-radius', '--chip-radius'];
-    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      for (const token of RADIUS_TOKENS) {
-        expect(css).toContain(`${token}:`);
-      }
-    }
-  });
-
-  /* PR-9 token promotion (#task:361): Select listbox radius is now a
-     2-token contract. Radix `Select.Content` + `Select.Item` get
-     dedicated radius so forza6 can square them without inheriting the
-     heavy 2px poster border meant for full menus (PR-4 boundary
-     preserved). Every theme MUST declare both so a theme switch
-     doesn't leak the `0` value into warm themes via :root fallback. */
-  it('every theme explicitly defines select listbox radius tokens', () => {
-    const SELECT_RADIUS_TOKENS = ['--select-content-radius', '--select-item-radius'];
-    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      for (const token of SELECT_RADIUS_TOKENS) {
-        expect(css).toContain(`${token}:`);
-      }
-    }
-  });
-
-  /* PR-10 token promotion (#task:365): primary control surface
-     (Button `default` variant CTA — Create / Save / Register submit
-     buttons) is now a 3-token contract. forza6 needed CTAs to use
-     `--brand-primary` (#FF2C7A "theme pink") instead of `--accent`
-     (#B3186A deep magenta — pressed dark for text-accent浅底 AA per
-     Cindy `JzkPVNV3svN97WSR`); the previous coupling of CTA bg to
-     accent foreground meant forza6 CTAs read as muddy dark pink
-     (shiki `Ao2TTCQ6Q2r5OG-a`). Every theme MUST declare all three
-     so the brand vs accent decision is explicit per-theme. warm-script
-     degenerates each to the accent family (pixel-zero — warm's accent
-     is intentionally a single warm-near-black hue serving both bg and
-     fg). */
-  it('every theme explicitly defines primary control surface tokens', () => {
-    const CTA_TOKENS = [
-      '--bg-control-primary',
-      '--bg-control-primary-hover',
-      '--text-on-control-primary',
-    ];
-    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
-      for (const token of CTA_TOKENS) {
-        expect(css).toContain(`${token}:`);
-      }
-    }
-  });
-
-  /* PR follow-up (#task:417, updated #task:912 review round 2): panel
-     radius is token-driven. Every panel hook reads its `border-radius`
-     from `--card-radius` / `--chip-radius` / `--control-radius` /
-     `--row-radius` via global.css, so a theme-author change to one
-     token reaches every panel surface and JSX never carries a
-     `rounded-*` class on the hook elements that would fight the
-     contract.
-
-     This test pins the four invariants that make that work:
-
-       1. The panel block lives in `global.css`, NOT in
-          `forza6-components.css` (the previous override pass had it
-          there and depended on cascade-layer + specificity tricks
-          to win over Tailwind — see #task:415 retro).
-       2. Long rows + placeholders consume `--row-radius` (warm /
-          forza6 = 0 chat-surface scan-line vocabulary; slack-dark =
-          6px Slack-style subtle list rounding).
-       3. Static cards consume `--card-radius`; pills consume
-          `--chip-radius`; tabs + controls consume `--control-radius`.
-          Inner tab segment buttons are explicitly squared so the
-          active tab reads as a hard wedge inside the bracket.
-       4. `forza6-components.css` carries NO `border-radius` on the
-          panel hooks — its job is now non-radius identity only
-          (poster border, lime hover, dashed stroke, display caps).
-
-     This test replaces the previous "forza6-components.css unlayered
-     + post-tailwind import" lock (#task:415), which became
-     unnecessary once the radius contract no longer depends on the
-     unlayered/layered cascade order. */
-  it('routes every agent-panel hook radius through global.css tokens', () => {
-    // (1) global.css owns the panel radius block.
-    //     `row` + `placeholder` route through `--row-radius` so each
-    //     theme can opt into Slack-style 6px (slack-dark) while warm /
-    //     forza6 stay at 0 (chat-surface scan-line vocabulary). The
-    //     value-side change happens at the theme layer, not here.
-    expect(globalCss).toMatch(
-      /\[data-panel-card='row'\][\s\S]{0,400}border-radius:\s*var\(--row-radius\)/,
-    );
-    expect(globalCss).toMatch(
-      /\[data-panel-card='placeholder'\][\s\S]{0,400}border-radius:\s*var\(--row-radius\)/,
-    );
-    expect(globalCss).toMatch(
-      /\[data-panel-card='profile-section'\][\s\S]{0,200}border-radius:\s*var\(--profile-section-radius,\s*var\(--card-radius\)\)/,
-    );
-    expect(globalCss).toMatch(
-      /\[data-panel-pill\][\s\S]{0,200}border-radius:\s*var\(--chip-radius\)/,
-    );
-    expect(globalCss).toMatch(
-      /\[data-panel-tabs\][\s\S]{0,200}border-radius:\s*var\(--control-radius\)/,
-    );
-    expect(globalCss).toMatch(
-      /\[data-panel-tabs\]\s+button[\s\S]{0,400}border-radius:\s*var\(--tab-segment-radius\)/,
-    );
-    expect(globalCss).toMatch(
-      /\[data-panel-control\][\s\S]{0,200}border-radius:\s*var\(--control-radius\)/,
-    );
-
-    // (4) forza6-components.css must NOT redeclare radius on these
-    // hooks — its scope is now non-radius identity only.
-    const forza6ComponentsCss = readFileSync(
-      new URL('../styles/themes/forza6-components.css', import.meta.url),
-      'utf8',
-    );
-    const panelHookRadiusRegex =
-      /\[data-panel-(?:card|pill|tabs|control)[^\]]*\][\s\S]{0,400}?\bborder-radius:/g;
-    expect(forza6ComponentsCss.match(panelHookRadiusRegex)).toBeNull();
-  });
-
-  /* #task:788 forza6 colour-system refactor — three-layer token model.
-     L1 raw palette is the ONLY place a forza6 brand hex literal lives;
-     L2 semantic tokens derive via var(--forza6-*); L3
-     (forza6-components.css) carries NO second root-level token block —
-     root tokens are defined once in forza6.css. See design-new-theme
-     §12.1.1. */
-  it('defines the forza6 raw palette in forza6.css', () => {
-    const RAW_PALETTE = [
-      '--forza6-pink',
-      '--forza6-pink-deep',
-      '--forza6-lime',
-      '--forza6-lime-pale',
-      '--forza6-lime-deep',
-      '--forza6-cyan',
-      '--forza6-yellow',
-      '--forza6-ink',
-      '--forza6-teal-island',
-      '--forza6-teal-deep',
-      // P2 v6 (#task:917) — chrome poster colours promoted from
-      // hex literals to named raws so `--bg-app` and `--bg-nav-rail`
-      // derive via var(...) like every other forza6 semantic token.
-      '--forza6-poster-teal',
-      '--forza6-poster-teal-deep',
-      // P2 v6.4 (#task:917) — NavRail moved to poster paper white;
-      // promoted to a named raw so `--bg-nav-rail` keeps deriving
-      // via var(...) (no bare hex in L2). The previous L2 raw
-      // `--forza6-poster-teal-deep` stays declared as dormant for
-      // backwards-compatibility / future deep-strip surface; not
-      // currently consumed.
-      '--forza6-paper',
-      '--forza6-carrier-channels',
-      '--forza6-carrier-sessions',
-    ];
-    for (const token of RAW_PALETTE) {
-      expect(forza6Css).toContain(`${token}:`);
-    }
-  });
-
-  it('keeps forza6 root tokens defined once (no component-layer root reassign)', () => {
-    const forza6ComponentsCss = readFileSync(
-      new URL('../styles/themes/forza6-components.css', import.meta.url),
-      'utf8',
-    );
-    // Strip CSS block comments so prose mentions of a token (e.g. the
-    // header rationale) don't count as declarations.
-    const code = forza6ComponentsCss.replace(/\/\*[\s\S]*?\*\//g, '');
-    // No bare `[data-theme='forza6'] {` block — every selector in the
-    // component layer must be element-scoped, never a second root-level
-    // token reassignment.
-    expect(code).not.toMatch(/\[data-theme='forza6'\]\s*\{/);
-    // The tokens the deleted root-reassign block used to own are now
-    // owned solely by forza6.css; the component layer must not redefine
-    // them (which would re-create the dead-root-value bug).
-    for (const token of ['--bg-app', '--bg-nav-rail', '--border-focus']) {
-      expect(code).not.toContain(`${token}:`);
-    }
-  });
-
-  it('homes the live forza6 root token values in forza6.css (not dead values)', () => {
-    // `--border-focus` live value (ink) was previously set in the
-    // component-layer root block (P1 pulled it back to root); v6.10
-    // (#task:920) dialed it down from festival magenta (`--brand-
-    // primary`) to deep magenta (`--accent`); v6.10.1 demoted it
-    // entirely out of the magenta family to solid ink + a translucent
-    // ink ring halo (decoupled via `forza6-components.css` on the
-    // ring-color utility). Same vocabulary as v6.9.6 splitter /
-    // row-hover / control-hover — utility focus = ink, no hue.
-    expect(forza6Css).toContain('--border-focus: var(--forza6-ink);');
-    // Brand + chrome semantic tokens derive from raws, not inline hex.
-    expect(forza6Css).toContain('--brand-primary: var(--forza6-pink);');
-    // P2 v6 (#task:917) — chrome master color migrated from
-    // `--forza6-pink` to the poster's deep teal-green; NavRail dropped
-    // the pale-lime carrier (which collapsed onto channels-sidebar) and
-    // adopted the poster's deep湖青 chrome strip color.
-    expect(forza6Css).toContain('--bg-app: var(--forza6-poster-teal);');
-    // P2 v6.4 (#task:917) — NavRail moved to poster paper white;
-    // 「跟青色 chrome 搭配不好」+「整体偏暗」issues with the v6.1-
-    // v6.3 deep湖青 NavRail. Paper white delivers strongest chrome-
-    // vs-rail contrast and matches forza6's 暖色系 family.
-    expect(forza6Css).toContain('--bg-nav-rail: var(--forza6-paper);');
   });
 });

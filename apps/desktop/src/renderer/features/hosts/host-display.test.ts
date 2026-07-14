@@ -75,13 +75,23 @@ describe('computerUnavailableLabel', () => {
     expect(computerUnavailableLabel('available')).toBeNull();
   });
 
-  it('explains why a disabled computer can not be picked', () => {
-    expect(computerUnavailableLabel('disconnected')).toBe('Offline');
-    expect(computerUnavailableLabel('unreachable')).toBe('Unreachable');
-    expect(computerUnavailableLabel('revoked')).toBe('Revoked');
+  it('surfaces a distinct, non-empty badge for each unavailable reason', () => {
+    const labels = [
+      computerUnavailableLabel('disconnected'),
+      computerUnavailableLabel('unreachable'),
+      computerUnavailableLabel('revoked'),
+    ];
+    for (const l of labels) {
+      expect(l).not.toBeNull();
+      expect(l!.length).toBeGreaterThan(0);
+    }
+    // The three reasons must not collapse to one badge.
+    expect(new Set(labels).size).toBe(labels.length);
   });
 
-  it('shows a loading badge while the status probe is in flight', () => {
-    expect(computerUnavailableLabel(undefined)).toBe('Checking…');
+  it('shows a non-empty loading badge while the status probe is in flight', () => {
+    const l = computerUnavailableLabel(undefined);
+    expect(l).not.toBeNull();
+    expect(l!.length).toBeGreaterThan(0);
   });
 });

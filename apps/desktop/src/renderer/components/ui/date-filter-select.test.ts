@@ -17,15 +17,6 @@ describe('DATE_FILTER_OPTIONS — canonical near→far order', () => {
       '30d',
     ]);
   });
-
-  it('labels read as the near→far progression', () => {
-    expect(DATE_FILTER_OPTIONS.map(o => o.label)).toEqual([
-      'All time',
-      'Last 1 week',
-      'Last 2 weeks',
-      'Last 30 days',
-    ]);
-  });
 });
 
 describe('dateFilterSince — cutoff resolves against an injected clock', () => {

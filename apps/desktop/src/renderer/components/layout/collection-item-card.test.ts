@@ -70,7 +70,6 @@ describe('CollectionItemCard — the shell owns the theme-paint marker', () => {
     expect(html).not.toContain('HACKED');
     // frame + consumer class both present, children rendered
     expect(html).toContain('consumer-layout');
-    expect(html).toContain('var(--row-radius)');
     expect(html).toContain('body');
   });
 
@@ -88,13 +87,15 @@ describe('CollectionItemCard — the shell owns the theme-paint marker', () => {
 });
 
 describe('collection-item-card — one shell, one marker, no drift', () => {
-  it('frame SSOT consumes per-theme tokens, never a hardcoded framework default', () => {
-    // The frame must ride the theme token clusters so it can't split across
-    // themes (one right, one wrong) — guards a regression to raw `rounded-md` /
-    // `border` (1px).
-    expect(COLLECTION_CARD_CLASS).toContain('var(--row-radius)');
-    expect(COLLECTION_CARD_CLASS).toContain('var(--control-border-width)');
+  it('frame SSOT never falls back to a hardcoded framework default', () => {
+    // The frame must ride the theme token clusters, never raw `rounded-md` /
+    // bare `border` (1px). Failure mode if this regresses: the shell splits
+    // across themes — forza6 (radius 0) vs warm/slack (radius 6px) render
+    // differently because a hardcoded default bypasses the semantic token layer.
+    // We assert the NEGATIVE (no hardcoded default), not which exact token is
+    // used — the token value itself is a visual concern.
     expect(COLLECTION_CARD_CLASS).not.toMatch(/\brounded-md\b/);
+    expect(COLLECTION_CARD_CLASS).not.toMatch(/(?:^|\s)border(?=\s|$)/);
   });
 
   it('the shell is the SOLE hand-written source of the marker', () => {

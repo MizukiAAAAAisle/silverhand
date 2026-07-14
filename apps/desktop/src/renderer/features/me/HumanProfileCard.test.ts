@@ -43,26 +43,20 @@ function render(user: UserDto, viewerId: string): string {
 }
 
 describe('HumanProfileCard creator/read-only render branches', () => {
-  it('non-self viewer sees the read-only notice and a static name', () => {
+  it('non-self viewer gets no editable affordances', () => {
     const html = render(makeUser({ id: 'u-other', display_name: 'Other' }), 'u-self');
-    expect(html).toContain('Only this user can edit their profile.');
-    expect(html).toContain('Other');
-    // No editable affordances on the non-self branch.
+    // No editable affordances on the non-self branch (identified by a11y name /
+    // input type, not by the read-only copy).
     expect(html).not.toContain('type="file"');
     expect(html).not.toMatch(/aria-label="(Change|Add) avatar"/);
     expect(html).not.toMatch(/aria-label="Edit display name"/);
   });
 
-  it('self viewer sees the avatar picker and the pencil trigger, not an input', () => {
+  it('self viewer sees the avatar picker and the pencil edit trigger', () => {
     const html = render(makeUser({ id: 'u-self', display_name: 'Self' }), 'u-self');
-    expect(html).not.toContain('Only this user can edit their profile.');
-    // Display name renders as static text until pencil enters edit mode.
-    expect(html).not.toMatch(/<input[^>]*value="Self"/);
-    expect(html).toContain('Self');
     expect(html).toMatch(/aria-label="Edit display name"/);
     // Avatar picker mounts with the click-the-avatar UX.
     expect(html).toContain('type="file"');
-    expect(html).toMatch(/>Edit<|>Add</);
     expect(html).toMatch(/aria-label="(Change|Add) avatar"/);
   });
 

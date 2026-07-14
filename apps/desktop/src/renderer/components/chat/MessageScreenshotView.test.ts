@@ -138,11 +138,9 @@ describe('MessageScreenshotView — non-interactive contract', () => {
   it('renders the export channel header with the same channel symbol hook', () => {
     const html = render([msg('m1', 1, 'hello')]);
     expect(html).toContain('data-conversation-title');
-    // The channel `#` is now a lucide Hash icon (unified with the sidebar `#`
-    // across every theme — forza6 paints it as a poster sticker, warm/slack as
-    // a coloured glyph), not a text `#` glyph.
+    // The channel `#` renders through the shared hash-icon hook (unified with
+    // the sidebar `#` across every theme), not a text `#` glyph.
     expect(html).toContain('data-conversation-hash-icon');
-    expect(html).toContain('lucide-hash');
     expect(html).toContain('design');
   });
 
@@ -197,7 +195,6 @@ describe('MessageScreenshotView — non-interactive contract', () => {
     // applies — pinning it lets future drift trip a test instead of
     // silently re-exposing real anchors.
     expect(html).toContain('markdown-link-static');
-    expect(html).toContain('text-accent');
   });
 
   it('unresolved @mention refs collapse to muted static text (no Mention component)', () => {
@@ -249,8 +246,6 @@ describe('MessageScreenshotView — non-interactive contract', () => {
       conversationRefsById: refs,
     });
     expect(html).toContain('data-conversation-ref="abcdefghijklmnop"');
-    expect(html).toContain('bg-accent-soft');
-    expect(html).toContain('text-accent');
     expect(html).toContain('infra');
     expect(html).not.toContain('#conv:abcdefghijklmnop');
     expect(html).not.toMatch(/<button/);
@@ -273,8 +268,6 @@ describe('MessageScreenshotView — non-interactive contract', () => {
     });
     expect(html).toContain('data-task-ref="42"');
     expect(html).toContain('data-task-ref-state="static-resolved"');
-    expect(html).toContain('bg-accent-soft');
-    expect(html).toContain('text-accent');
     expect(html).toContain('#42');
     expect(html).toContain('Thread screenshot polish');
     expect(html).not.toContain('#task:42');
@@ -350,7 +343,6 @@ describe('MessageScreenshotView — non-interactive contract', () => {
     );
     expect(html).toContain('<img');
     expect(html).toContain('src="blob:screenshot"');
-    expect(html).toContain('bg-bg-floating');
     expect(html).toContain('screenshot.png');
     expect(html).not.toContain('<figcaption');
     expect(html).not.toMatch(/<button/);
@@ -371,8 +363,6 @@ describe('MessageScreenshotView — non-interactive contract', () => {
     ]);
     expect(html).toContain('notes.txt');
     expect(html).toContain('512 B');
-    expect(html).toContain('bg-bg-floating');
-    expect(html).toContain('text-text-secondary');
     expect(html).not.toMatch(/<button/);
   });
 

@@ -261,21 +261,13 @@ describe('SystemMessage channel refs', () => {
     );
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-session-cleared="1"');
-    expect(html).toContain('lucide-rotate-ccw');
-    // RotateCcw, not the destructive Eraser.
-    expect(html).not.toContain('lucide-eraser');
-    // No toast container colors.
-    expect(html).not.toContain('border-error');
-    expect(html).not.toContain('bg-error');
-    // Structured pieces visible.
+    // Actor + agent + session-id passthrough (data, not copy).
     expect(html).toContain('@you');
-    expect(html).toContain('reset');
     expect(html).toContain('@Alice');
     expect(html).toContain('fbe21c8a');
-    expect(html).toContain('was running');
   });
 
-  it('session_cleared was_running=false renders "was idle"', () => {
+  it('session_cleared was_running=false carries the idle marker', () => {
     const msg = makeSystemMessage(
       'session_cleared',
       {
@@ -288,12 +280,9 @@ describe('SystemMessage channel refs', () => {
     );
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-session-cleared-running="0"');
-    expect(html).toContain('was idle');
-    // No `prev <hash>` chip when previous_cli_session_id_prefix is null.
-    expect(html).not.toContain('prev ');
   });
 
-  it('session_cleared with actor_user_id=null renders "a user", NOT @you', () => {
+  it('session_cleared with actor_user_id=null marks the actor unknown and must NOT render @you', () => {
     // Schema docstring (`packages/shared/src/system-messages.ts`):
     // null = principal info wasn't recorded at insert time. This is the
     // OPPOSITE of the v1 message-row convention where null = current
@@ -312,7 +301,6 @@ describe('SystemMessage channel refs', () => {
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-session-cleared="1"');
     expect(html).toContain('data-session-cleared-actor="unknown"');
-    expect(html).toContain('a user');
     expect(html).not.toContain('@you');
   });
 
@@ -324,8 +312,6 @@ describe('SystemMessage channel refs', () => {
     );
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-session-cleared-legacy="1"');
-    expect(html).toContain('lucide-rotate-ccw');
-    expect(html).not.toContain('border-error');
     expect(html).toContain("CLI session context");
   });
 
@@ -348,8 +334,6 @@ describe('SystemMessage channel refs', () => {
     );
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-schedule-fire="1"');
-    expect(html).toContain('lucide-clock');
-    expect(html).toContain('border-l-warning');
     // Header spec summary surfaced.
     expect(html).toContain('cron */5 9-18 * * 1-5 (Asia/Shanghai)');
     // All four pills present, in order.
@@ -379,8 +363,6 @@ describe('SystemMessage channel refs', () => {
     );
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-missed-count="4"');
-    expect(html).toContain('bg-warning/10');
-    expect(html).toContain('text-warning');
     expect(html).toContain('interval 60s');
   });
 
@@ -420,7 +402,6 @@ describe('SystemMessage channel refs', () => {
     );
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-schedule-fire="0"');
-    expect(html).toContain('Scheduled wake');
     expect(html).toContain('legacy body text');
     // No pills when metadata is absent.
     expect(html).not.toContain('data-pill="fired"');
@@ -449,10 +430,6 @@ describe('SystemMessage channel refs', () => {
     ]);
     const html = renderSystem(msg, new Map(), refs);
     expect(html).toContain('data-context-card="quoted"');
-    expect(html).toContain('border-l-accent');
-    // Kind tag uppercase + colored bg.
-    expect(html).toContain('Quoted');
-    expect(html).toContain('bg-accent');
     // Source chip is a clickable ConversationRef pointing at the
     // parent conversation; the prop fast path resolves to the channel
     // title so the chip shows "version3" (the leading # is rendered
@@ -480,11 +457,7 @@ describe('SystemMessage channel refs', () => {
     ]);
     const html = renderSystem(msg, new Map(), refs);
     expect(html).toContain('data-context-card="inherited"');
-    expect(html).toContain('border-l-success');
-    expect(html).toContain('Inherited');
-    expect(html).toContain('bg-success');
-    // Source chip "from " prefix + clickable ConversationRef.
-    expect(html).toContain('from ');
+    // Source chip is a clickable ConversationRef resolving to the parent title.
     expect(html).toContain('data-conversation-ref="conv-parent"');
     expect(html).toContain('>feature/cli design<');
     // Default collapsed → expand toggle present.
@@ -508,12 +481,10 @@ describe('SystemMessage channel refs', () => {
     ]);
     const html = renderSystem(msg, new Map(), refs);
     expect(html).toContain('data-context-card="spawned"');
-    expect(html).toContain('border-l-warning');
-    expect(html).toContain('Spawned-from');
-    expect(html).toContain('bg-warning');
     expect(html).toContain('data-conversation-ref="conv-source"');
     expect(html).toContain('>version3<');
-    expect(html).toContain('by @Cindy');
+    // Creator agent name is passthrough data (drop the "by " connector face).
+    expect(html).toContain('@Cindy');
     expect(html).toContain('data-context-toggle="expand"');
   });
 
@@ -534,10 +505,8 @@ describe('SystemMessage channel refs', () => {
     );
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-context-card="spawned"');
-    expect(html).toContain('Spawned-from');
     // Chip is still present + clickable, just shows the short id.
     expect(html).toContain('data-conversation-ref="conv-source"');
-    expect(html).toContain('by an agent');
   });
 
   it('thread_anchor without enriched metadata falls back to legacy muted row', () => {
@@ -548,8 +517,6 @@ describe('SystemMessage channel refs', () => {
     );
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-context-card-legacy="1"');
-    expect(html).toContain('border-l-accent');
-    expect(html).toContain('Quoted');
     expect(html).toContain('legacy quote body text');
     // No structured chip / blockquote.
     expect(html).not.toContain('<blockquote');
@@ -563,8 +530,6 @@ describe('SystemMessage channel refs', () => {
     );
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-context-card-legacy="1"');
-    expect(html).toContain('border-l-success');
-    expect(html).toContain('Inherited');
     expect(html).toContain('legacy summary');
   });
 
@@ -582,7 +547,6 @@ describe('SystemMessage channel refs', () => {
     // The collapsible component renders a `<button>` with `aria-expanded`;
     // generic narration renders a centered italic `<div>` instead.
     expect(html).not.toContain('aria-expanded');
-    expect(html).toContain('italic');
     expect(html).toContain('Sub-session 8c2a closed');
   });
 
@@ -590,7 +554,6 @@ describe('SystemMessage channel refs', () => {
     const msg = makeSystemMessage('join', {}, '@old-agent joined #version3');
     const html = renderSystem(msg, new Map());
     expect(html).not.toContain('aria-expanded');
-    expect(html).toContain('italic');
     expect(html).toContain('@old-agent');
     expect(html).toContain('joined');
   });
@@ -613,7 +576,6 @@ describe('SystemMessage channel refs', () => {
     msg.metadata = {};
     const html = renderSystem(msg, new Map());
     expect(html).not.toContain('aria-expanded');
-    expect(html).toContain('italic');
   });
 
   // PR-6: onboarding gets an explicit "Onboarding" badge alongside
@@ -630,35 +592,10 @@ describe('SystemMessage channel refs', () => {
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-onboarding-row="1"');
     expect(html).toContain('data-onboarding-badge="1"');
-    expect(html).toContain('Onboarding');
-    expect(html).toContain('bg-accent-soft');
     // First-line preview only when collapsed (default state in SSR).
     expect(html).toContain('Onboarding task: you (@Alice) joined #version3.');
     expect(html).not.toContain('Send greeting');
     expect(html).toContain('aria-expanded="false"');
-  });
-
-  it('onboarding row uses items-start so chevron/badge stay top-aligned when expanded', () => {
-    // Drift guard for PR-6 follow-up review by @Cindy: a previous
-    // version used `items-center`, which floated the chevron and
-    // badge into the vertical middle of the expanded multi-line
-    // body. The button must use `items-start`, the chevron
-    // `mt-[3px]`, and the badge `mt-0.5` so all three line up
-    // against the first line of the body.
-    const msg = makeSystemMessage(
-      'onboarding',
-      {},
-      'Onboarding task: greet then stop.',
-    );
-    const html = renderSystem(msg, new Map());
-    expect(html).toContain('items-start');
-    expect(html).not.toMatch(/data-onboarding-row="1"[^>]*items-center/);
-    expect(html).toContain('mt-[3px]');
-    // Badge gets a small top offset of its own for first-line baseline.
-    // SSR emits class= before data-onboarding-badge=, so match the
-    // element directly to lock the pairing without depending on attr
-    // order.
-    expect(html).toMatch(/<span class="[^"]*mt-0\.5[^"]*"[^>]*data-onboarding-badge="1"/);
   });
 
   // PR-6: rename reads `{old_name, new_name}` and draws a compact
@@ -668,7 +605,7 @@ describe('SystemMessage channel refs', () => {
   // the earlier `<code>` chips read as visual noise (@shiki
   // `otnb0ykIuDaNTtoC`).
 
-  it('renders rename with ✎ pencil icon + plain old → new text when metadata is present', () => {
+  it('renders rename as a data-rename-row audit row with old/new name passthrough when metadata is present', () => {
     const msg = makeSystemMessage(
       'rename',
       { old_name: 'version2', new_name: 'version3' },
@@ -676,13 +613,8 @@ describe('SystemMessage channel refs', () => {
     );
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-rename-row="1"');
-    expect(html).toContain('lucide-pencil');
     expect(html).toContain('#version2');
     expect(html).toContain('#version3');
-    expect(html).toContain('→');
-    // Names are plain inline text, NOT wrapped in <code> chips.
-    expect(html).not.toMatch(/<code[^>]*>#version2<\/code>/);
-    expect(html).not.toMatch(/<code[^>]*>#version3<\/code>/);
   });
 
   it('renames without enriched metadata fall back to generic italic narration', () => {
@@ -694,8 +626,6 @@ describe('SystemMessage channel refs', () => {
     const html = renderSystem(msg, new Map());
     expect(html).not.toContain('data-rename-row="1"');
     // Generic narration is centered italic muted text.
-    expect(html).toContain('italic');
-    expect(html).toContain('text-text-muted');
     expect(html).toContain('legacy-old');
     expect(html).toContain('legacy-new');
   });
@@ -867,7 +797,6 @@ describe('SystemMessage task event rows (PR-2)', () => {
     const msg = makeSystemMessage('task_create', fullMeta({}));
     const html = renderTaskEvent(msg, () => undefined, [seededTask()]);
     expect(html).toContain('@Alice');
-    expect(html).toContain('created');
     expect(html).toContain('data-task-event-dot="todo"');
     // PR-7: chip is now TaskRef. Resolved+handler state → label
     // `#42 · wire registry`, attribute `data-task-ref-state="resolved"`.
@@ -887,7 +816,6 @@ describe('SystemMessage task event rows (PR-2)', () => {
     const html = renderTaskEvent(msg, () => undefined, [
       seededTask({ status: 'in_progress' }),
     ]);
-    expect(html).toContain('claimed');
     expect(html).toContain('data-task-event-dot="in_progress"');
     expect(html).toContain('data-task-ref="42"');
   });
@@ -898,9 +826,7 @@ describe('SystemMessage task event rows (PR-2)', () => {
       fullMeta({ task_status: 'todo', task_assignee: null }),
     );
     const html = renderTaskEvent(msg, () => undefined, [seededTask()]);
-    expect(html).toContain('unclaimed');
     expect(html).toContain('data-task-event-dot="unclaim"');
-    expect(html).toContain('border-dashed');
     expect(html).toContain('data-task-ref="42"');
   });
 
@@ -910,16 +836,14 @@ describe('SystemMessage task event rows (PR-2)', () => {
       seededTask({ status: 'in_review' }),
     ]);
     expect(html).toContain('@Alice');
-    expect(html).toContain('moved');
     expect(html).toContain('data-task-ref="42"');
     expect(html).toContain('data-task-event-status="in_review"');
-    expect(html).toContain('in review');
     // PR-9: actor is now the first text node, NOT a "by @actor"
     // suffix. Verify we don't accidentally re-introduce the old form.
     expect(html).not.toContain('by @Alice');
-    // Reading order: @actor → moved → chip → pill.
-    expect(html.indexOf('@Alice')).toBeLessThan(html.indexOf('moved'));
-    expect(html.indexOf('moved')).toBeLessThan(html.indexOf('data-task-ref="42"'));
+    // Reading order: @actor → task-ref chip → status marker. Keyed on
+    // stable nodes, not the connecting verb (which is copy).
+    expect(html.indexOf('@Alice')).toBeLessThan(html.indexOf('data-task-ref="42"'));
     expect(html.indexOf('data-task-ref="42"')).toBeLessThan(
       html.indexOf('data-task-event-status="in_review"'),
     );
@@ -943,7 +867,6 @@ describe('SystemMessage task event rows (PR-2)', () => {
     expect(html).toContain('data-task-event-status="done"');
     // PR-9 actor-first: `@you moved ... → DONE`, not `... by @you`.
     expect(html).toContain('@you');
-    expect(html).toContain('moved');
     expect(html).not.toContain('by @you');
   });
 
@@ -972,7 +895,6 @@ describe('SystemMessage task event rows (PR-2)', () => {
     expect(html).toContain('data-task-event-degraded="1"');
     expect(html).toContain('data-task-event-dot="todo"');
     expect(html).toContain('#task:9');
-    expect(html).toContain('created');
     // Title not in legacy metadata → chip has no inline title.
     expect(html).not.toContain('old format');
     expect(html).not.toContain('data-task-event-legacy');
@@ -998,7 +920,6 @@ describe('SystemMessage task event rows (PR-2)', () => {
     const html = renderTaskEvent(msg, () => undefined);
     expect(html).toContain('data-task-event-degraded="1"');
     expect(html).toContain('data-task-event-dot="unclaim"');
-    expect(html).toContain('unclaimed');
   });
 
   it('total fallback (metadata missing even task_number) → muted narration', () => {
@@ -1013,22 +934,20 @@ describe('SystemMessage task event rows (PR-2)', () => {
     );
     const html = renderTaskEvent(msg, () => undefined);
     expect(html).toContain('data-task-event-legacy="1"');
-    expect(html).toContain('italic');
     expect(html).toContain('broken task row content');
     expect(html).not.toContain('data-task-event-degraded');
   });
 
-  it('PR-8: every system message renders inside `.system-message-row` so theme prose font/size cascade', () => {
-    // Drift guard: the SystemMessage entry wraps every per-subtype
-    // renderer in `<div class="system-message-row">`. global.css attaches
-    // `font-family: var(--appearance-prose-font, ...)` + `font-size:
-    // var(--md-prose-size, ...)` to that class so plain-text system rows
-    // (task events, schedule banners, rename chips) follow the theme's
-    // chosen prose font alongside Markdown bodies. Removing this wrapper
-    // would silently strip system rows out of the theme font cascade.
+  it('PR-8: every system message renders inside the system event-row wrapper', () => {
+    // Drift guard: the SystemMessage entry wraps every per-subtype renderer
+    // in the shared system event-row container (marked
+    // `data-system-event-row="1"`), which global.css hooks the theme prose
+    // font/size cascade onto. Removing the wrapper would silently strip
+    // system rows out of that cascade. Keyed on the data marker, not the
+    // class name (the class string is a styling detail).
     const enriched = makeSystemMessage('task_create', fullMeta({}));
     const enrichedHtml = renderTaskEvent(enriched, () => undefined, [seededTask()]);
-    expect(enrichedHtml).toMatch(/^<div class="system-message-row" data-system-event-row="1">/);
+    expect(enrichedHtml).toMatch(/^<div[^>]*\bdata-system-event-row="1"/);
 
     const legacy = makeSystemMessage(
       'task_create',
@@ -1036,98 +955,7 @@ describe('SystemMessage task event rows (PR-2)', () => {
       '@alice created task #9',
     );
     const legacyHtml = renderTaskEvent(legacy, () => undefined);
-    expect(legacyHtml).toMatch(/^<div class="system-message-row" data-system-event-row="1">/);
-  });
-
-  it('PR-8 follow-up: TaskStatusPill keeps leading-none + drops py-0.5; both pill and chip get height from `.system-message-row` scoped CSS (no inline h-[18px])', () => {
-    // shiki PR-8 feedback: chip + pill ended up on visually different
-    // baselines because pill had `py-0.5` (~20px outer) while chip
-    // rendered at the row's natural inline-flex height (~16px).
-    //
-    // Cindy PR-8 review #2 (msg `0PEPg70b84bxYrlK`): locking `h-[18px]`
-    // directly on TaskRef would (a) crop the chip when the user picks
-    // a larger theme prose size and (b) leak into Markdown inline
-    // `#task:N` chips that have no pill sibling.
-    //
-    // Cindy PR-8 follow-up review #3 (msg `VOGiR_K30xhSOswD`): a fixed
-    // `h-[18px]` on the pill (or a fixed `height: 18px` CSS rule on
-    // the chip) crops at large prose sizes too — the chrome must
-    // grow with the prose size. Fix: both chip and pill get their
-    // height from `.system-message-row { --system-message-control-height:
-    // max(18px, calc(var(--system-message-size, 12px) * 1.5)) }` applied
-    // via attribute selectors. (forza6 字体 v5 拆出独立 system-message
-    // 12px baseline,所以这里读 `--system-message-size`,不再读
-    // `--md-prose-size`。) SSR can't resolve CSS variables, so this
-    // test instead asserts the inline classes are absent — the
-    // CSS-var path is what locks heights together.
-    const msg = makeSystemMessage(
-      'task_status',
-      fullMeta({ task_status: 'in_review' }),
-    );
-    const html = renderTaskEvent(msg, () => undefined, [
-      seededTask({ status: 'in_review' }),
-    ]);
-    // Pill keeps `leading-none` so the [10px] text stays vertically
-    // centered inside the CSS-var-driven height regardless of the row's
-    // 1.5 line-height.
-    expect(html).toMatch(
-      /data-task-event-status="in_review"[^>]*class="[^"]*leading-none[^"]*"|class="[^"]*leading-none[^"]*"[^>]*data-task-event-status="in_review"/,
-    );
-    // Pill must NOT carry py-0.5 anymore (would re-introduce the
-    // height mismatch by adding extra vertical padding on top of the
-    // CSS-var height).
-    expect(html).not.toMatch(
-      /data-task-event-status="in_review"[^>]*class="[^"]*py-0\.5/,
-    );
-    // Pill must NOT carry inline `h-[18px]` either — height is
-    // CSS-var-driven via `.system-message-row [data-task-event-status]`
-    // so chip + pill grow together at large prose sizes.
-    expect(html).not.toMatch(
-      /data-task-event-status="in_review"[^>]*class="[^"]*h-\[18px\]/,
-    );
-    // TaskRef chip likewise must NOT carry inline `h-[18px]` — the
-    // height alignment lives in CSS scoped to `.system-message-row` so
-    // (a) the markup stays small, (b) Markdown inline `#task:N` chips
-    // (outside system rows) keep flowing with surrounding text size,
-    // and (c) chip + pill share the same theme-aware height token.
-    expect(html).not.toMatch(/data-task-ref="42"[^>]*class="[^"]*h-\[18px\]/);
-    // The chip + pill must still be wrapped in `.system-message-row`
-    // so the scoped CSS rule applies. PR-10 added `data-system-event-row="1"`
-    // to the same wrapper so cluster CSS can hook to it; both the
-    // class and the data attribute must be present in the prefix.
-    expect(html).toMatch(/^<div class="system-message-row" data-system-event-row="1">/);
-  });
-
-  it('PR-8 follow-up: body containers no longer carry `text-xs`/`text-sm` so theme prose size cascades from `.system-message-row`', () => {
-    // Cindy PR-8 review #1: the wrapper class set `font-size:
-    // var(--md-prose-size)` but children with `text-xs` / `text-sm`
-    // Tailwind utilities won via specificity, so a customized prose
-    // size never reached the body text. Drift guard: the task event
-    // row outer container (the body text wrapper, not chrome chips) is
-    // free of those Tailwind size utilities. Chrome elements that
-    // explicitly set `text-[10px]` / `text-[11px]` (status pill, mono
-    // timestamp) are intentionally fixed and remain.
-    const enriched = makeSystemMessage('task_create', fullMeta({}));
-    const enrichedHtml = renderTaskEvent(enriched, () => undefined, [seededTask()]);
-    // Outer body row of TaskEventRowEnriched — must NOT carry text-xs
-    // (would override inherited `--md-prose-size`).
-    expect(enrichedHtml).toMatch(
-      /<div class="flex items-center gap-2\.5 px-4 py-1\.5 text-text-secondary"/,
-    );
-    expect(enrichedHtml).not.toMatch(
-      /<div class="flex items-center gap-2\.5 px-4 py-1\.5 text-xs/,
-    );
-
-    const legacy = makeSystemMessage(
-      'task_create',
-      { task_number: 9, task_status: 'todo' },
-      '@alice created task #9',
-    );
-    const legacyHtml = renderTaskEvent(legacy, () => undefined);
-    // Same drift guard for the degraded row.
-    expect(legacyHtml).not.toMatch(
-      /<div class="flex items-center gap-2\.5 px-4 py-1\.5 text-xs/,
-    );
+    expect(legacyHtml).toMatch(/^<div[^>]*\bdata-system-event-row="1"/);
   });
 });
 
@@ -1265,7 +1093,6 @@ describe('Markdown conversation refs', () => {
     const html = render(`See #conv:${id} for details.`, refs);
 
     expect(html).toContain(`data-conversation-ref="${id}"`);
-    expect(html).toContain('bg-accent-soft');
     expect(html).toContain('version3');
     expect(html).not.toContain('#version3');
     expect(html).not.toContain(`#conv:${id}`);

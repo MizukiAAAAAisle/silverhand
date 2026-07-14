@@ -131,45 +131,52 @@ describe('presentToolCall', () => {
     );
   });
 
-  it('silverhand CLI → product label, no raw bash/flags; caught inside shell wrapper', () => {
-    // `task status` reads as "Task update", with id + status change as metadata.
-    expect(
-      presentToolCall('Bash', {
-        command: 'silverhand task status --task-number 1187 --status in_review',
-      }),
-    ).toEqual({ verb: 'Task update', arg: '#1187 → in_review', detail: null });
+  it('recognises a silverhand CLI call as a product action (not raw Bash), incl. shell-wrapped', () => {
+    // A `task status` call is recognised as an action (NOT surfaced as raw Bash),
+    // and carries id + status change as arg metadata. The arg is extracted data,
+    // not copy — kept exact; the verb label face is not pinned.
+    const taskStatus = presentToolCall('Bash', {
+      command: 'silverhand task status --task-number 1187 --status in_review',
+    });
+    expect(taskStatus.verb).not.toBe('Bash');
+    expect(taskStatus.arg).toBe('#1187 → in_review');
+    expect(taskStatus.detail).toBeNull();
     // recognised even when wrapped in a `zsh -lc "…"` launcher (heredoc dropped)
     const wrapped = presentToolCall('Bash', {
       command: `/bin/zsh -lc "silverhand message send <<'SILVERHAND_EOF'\nhi\nSILVERHAND_EOF"`,
     });
-    expect(wrapped).toEqual({ verb: 'Message send', arg: null, detail: null });
+    expect(wrapped.verb).not.toBe('Bash');
+    expect(wrapped.arg).toBeNull();
     // …and even when the broadcast cap truncated the launcher mid-heredoc, so
     // the closing quote is gone (relaxed unwrap is gated on the launcher head).
     const truncated = presentToolCall('Bash', {
       command: `/bin/zsh -lc "silverhand message send <<'SILVERHAND_EOF'\n@Norman body body body...<truncated 456 chars>`,
     });
-    expect(truncated.verb).toBe('Message send');
-    // a stale-resolution send surfaces a distinct label
-    expect(
-      presentToolCall('Bash', {
-        command: 'silverhand message send --stale-resolution unaffected',
-      }).verb,
-    ).toBe('Message send stale');
+    // plain / wrapped / truncated sends all resolve to the same action.
+    expect(truncated.verb).toBe(wrapped.verb);
+    // a stale-resolution send is a DISTINCT action from a plain send.
+    const staleSend = presentToolCall('Bash', {
+      command: 'silverhand message send --stale-resolution unaffected',
+    });
+    expect(staleSend.verb).not.toBe('Bash');
+    expect(staleSend.verb).not.toBe(wrapped.verb);
   });
 
   it('task actions surface task id + status change; never fabricate an id', () => {
-    expect(presentToolCall('Bash', { command: 'silverhand task claim --task-number 9' })).toEqual({
-      verb: 'Task claim',
-      arg: '#9',
-      detail: null,
+    const claim = presentToolCall('Bash', { command: 'silverhand task claim --task-number 9' });
+    expect(claim.verb).not.toBe('Bash');
+    expect(claim.arg).toBe('#9');
+    expect(claim.detail).toBeNull();
+    const update = presentToolCall('Bash', {
+      command: 'silverhand task status --task-number 42 --status done',
     });
-    expect(
-      presentToolCall('Bash', { command: 'silverhand task status --task-number 42 --status done' }),
-    ).toEqual({ verb: 'Task update', arg: '#42 → done', detail: null });
+    expect(update.arg).toBe('#42 → done');
+    // claim and status-update are distinguishable actions.
+    expect(update.verb).not.toBe(claim.verb);
     // promote-and-claim by message id → no task number, so no fabricated `#…`
-    expect(
-      presentToolCall('Bash', { command: 'silverhand task claim --message-id abc123' }),
-    ).toEqual({ verb: 'Task claim', arg: null, detail: null });
+    const byMessage = presentToolCall('Bash', { command: 'silverhand task claim --message-id abc123' });
+    expect(byMessage.verb).not.toBe('Bash');
+    expect(byMessage.arg).toBeNull();
   });
 
   it('does NOT mislabel a quoted "silverhand …" argument as a real action', () => {
@@ -186,9 +193,9 @@ describe('presentToolCall', () => {
     expect(presentToolCall('Bash', { command: "echo '; silverhand task status'" }).verb).toBe(
       'Bash',
     );
-    // but a real call after an UNQUOTED separator IS recognised
-    expect(presentToolCall('Bash', { command: 'cd /x && silverhand task claim' }).verb).toBe(
-      'Task claim',
+    // but a real call after an UNQUOTED separator IS recognised (not raw Bash)
+    expect(presentToolCall('Bash', { command: 'cd /x && silverhand task claim' }).verb).not.toBe(
+      'Bash',
     );
   });
 
