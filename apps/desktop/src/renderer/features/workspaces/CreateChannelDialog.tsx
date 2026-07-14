@@ -305,30 +305,18 @@ export function CreateChannelDialog({
   );
 }
 
-/** The two channel-visibility options. Icons mirror the sidebar identity
- *  glyph language established in batch-1 (private = Lock, public = `#`), so a
- *  user picks the same symbol they'll later recognise in the channel list. The
- *  one-line hint is a deliberate exception to "no explanatory copy": choosing
- *  Public by mistake is a real visibility-leak misoperation, so the consequence
- *  is stated plainly. */
+/** The two channel-visibility options. Icons mirror the sidebar identity glyph
+ *  language (private = Lock, public = `#`), so a user picks the same symbol
+ *  they'll later recognise in the channel list. Rendered as two independent
+ *  buttons — no segmented frame, no explanatory copy: the label + familiar
+ *  glyph carry the meaning. */
 const VISIBILITY_OPTIONS: ReadonlyArray<{
   value: ConversationVisibility;
   label: string;
   icon: typeof Lock;
-  hint: string;
 }> = [
-  {
-    value: 'private',
-    label: 'Private',
-    icon: Lock,
-    hint: 'Only invited members can see this channel.',
-  },
-  {
-    value: 'public',
-    label: 'Public',
-    icon: Hash,
-    hint: 'Anyone in the workspace can find and join this channel.',
-  },
+  { value: 'private', label: 'Private', icon: Lock },
+  { value: 'public', label: 'Public', icon: Hash },
 ];
 
 function VisibilitySelect({
@@ -338,14 +326,17 @@ function VisibilitySelect({
   value: ConversationVisibility;
   onChange: (v: ConversationVisibility) => void;
 }): JSX.Element {
-  const active = VISIBILITY_OPTIONS.find(o => o.value === value);
   return (
     <div className="flex flex-col gap-1.5">
       <Label>Visibility</Label>
+      {/* Single-select, so a11y-grouped as a radiogroup — but visually two
+          independent buttons, each carrying its own border (no segmented
+          container frame). Selected reuses the canonical neutral selected-row
+          recipe (ink fill + border, never a brand hue). */}
       <div
         role="radiogroup"
         aria-label="Channel visibility"
-        className="inline-flex gap-1 self-start rounded-[var(--control-radius)] border border-border bg-bg-hover p-1"
+        className="flex gap-2 self-start"
       >
         {VISIBILITY_OPTIONS.map(opt => {
           const selected = opt.value === value;
@@ -358,10 +349,11 @@ function VisibilitySelect({
               aria-checked={selected}
               onClick={() => onChange(opt.value)}
               className={cn(
-                'flex items-center justify-center gap-1.5 rounded-[calc(var(--control-radius)-2px)] px-3 py-1 text-xs font-medium transition-colors',
+                'flex items-center justify-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs font-medium transition-colors',
+                'hover:border-[color:var(--border-control-hover)]',
                 selected
-                  ? 'bg-bg-floating text-text-primary'
-                  : 'text-text-muted hover:text-text-secondary',
+                  ? 'border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-[color:var(--text-on-selected)]'
+                  : 'border-border-subtle bg-bg-primary text-text-secondary hover:text-text-primary',
               )}
             >
               <Icon className="size-3.5" />
@@ -370,7 +362,6 @@ function VisibilitySelect({
           );
         })}
       </div>
-      <span className="text-xs text-text-muted">{active?.hint}</span>
     </div>
   );
 }
