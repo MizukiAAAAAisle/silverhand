@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useRef, type FormEvent } from 'react';
-import { Lock, Hash } from 'lucide-react';
+import { useState, useEffect, useMemo, type FormEvent } from 'react';
+import { Lock, Hash, X } from 'lucide-react';
 import type {
   ConversationVisibility,
   CreateConversationChannelInput,
@@ -26,32 +26,6 @@ import { useCreateChannel, useWorkspaceMemberLists } from './hooks';
 // Stable empty member object so the useEffect dependency on `members` doesn't
 // create a new reference every render when the query hasn't resolved yet.
 const EMPTY_MEMBERS = { agents: [], humans: [] } as const;
-
-interface SeedMembersInput {
-  members: { agents: ReadonlyArray<{ id: string }>; humans: ReadonlyArray<{ id: string }> };
-}
-
-/**
- * Pure helper that decides which ids to auto-seed into the "new channel"
- * picker. Exported separately for unit testing.
- *
- * A channel's HUMAN membership is a deliberate choice: the privacy model must
- * NOT force every workspace human into a new channel, so humans seed to EMPTY
- * (the creator is unioned in by the backend and isn't a deselectable
- * candidate). AGENTS still seed to all workspace agents: a channel without
- * agents is pointless, and which humans can *see* a private channel is the
- * privacy axis, not which agents it talks to. Agents remain freely
- * deselectable via the picker.
- */
-export function computeChannelSeedSelection(input: SeedMembersInput): {
-  agents: string[];
-  humans: string[];
-} {
-  return {
-    agents: input.members.agents.map(m => m.id),
-    humans: [],
-  };
-}
 
 /**
  * Pure builder for the channel-create wire payload. Exported for unit testing
@@ -152,8 +126,9 @@ export function CreateChannelDialog({
   const isDm = workspaceKind === 'dm';
 
   // Reset the whole form on close so a reopened dialog starts clean —
-  // default visibility is Private (the safe, non-discoverable default).
-  const seededOnceRef = useRef(false);
+  // default visibility is Private (the safe, non-discoverable default) and no
+  // members pre-selected: the user chooses who's in (agents and humans alike;
+  // the creator is unioned in server-side).
   useEffect(() => {
     if (open) return;
     setTitle('');
@@ -161,24 +136,7 @@ export function CreateChannelDialog({
     setSelectedAgents([]);
     setSelectedHumans([]);
     setError(null);
-    seededOnceRef.current = false;
   }, [open]);
-
-  // Seed the AGENT selection once per open cycle (all workspace agents — a
-  // channel without agents is pointless). Humans are intentionally NOT seeded
-  // (see `computeChannelSeedSelection`): the creator is unioned in server-side
-  // and additional humans are an explicit choice under the privacy model.
-  useEffect(() => {
-    if (!open) return;
-    if (seededOnceRef.current) return;
-    if (isDm) return;
-    const totalMembers = members.agents.length + members.humans.length;
-    if (totalMembers === 0) return; // wait for the members query to land
-    const seed = computeChannelSeedSelection({ members });
-    setSelectedAgents(seed.agents);
-    setSelectedHumans(seed.humans);
-    seededOnceRef.current = true;
-  }, [open, isDm, members]);
 
   const candidates = useMemo<MemberPickerCandidate[]>(
     () => [
@@ -350,10 +308,16 @@ function VisibilitySelect({
               onClick={() => onChange(opt.value)}
               className={cn(
                 'flex items-center justify-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs font-medium transition-colors',
-                'hover:border-[color:var(--border-control-hover)]',
                 selected
                   ? 'border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-[color:var(--text-on-selected)]'
-                  : 'border-border-subtle bg-bg-primary text-text-secondary hover:text-text-primary',
+                  // Resting matches the member chips below (bg-base + subtle
+                  // border). Hover is the canonical control-hover recipe: an
+                  // ink border (`--border-control-hover` — dark ink in warm,
+                  // near-black in forza6, neutral in slack) plus the shared
+                  // selectable-option fill (`--bg-option-hover` — forza6 pale
+                  // lime, warm/slack neutral). NOT `--bg-row-hover`, which is a
+                  // magenta brand tint in forza6.
+                  : 'border-border-subtle bg-[var(--bg-base)] text-text-secondary hover:border-[color:var(--border-control-hover)] hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
               )}
             >
               <Icon className="size-3.5" />
@@ -389,12 +353,28 @@ function RegularMemberPicker({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor="se-add-member">
-        Members
-        <span className="ml-1 text-text-muted">
-          ({selected.length} / {candidates.length})
-        </span>
-      </Label>
+      <div className="flex items-center gap-1">
+        <Label htmlFor="se-add-member">
+          Members
+          <span className="ml-1 text-text-muted">
+            ({selected.length} / {candidates.length})
+          </span>
+        </Label>
+        {/* Clear the whole selection — a quiet inline glyph that only darkens
+            on hover (no fill, not the destructive-red chip-remove): clearing a
+            pick is mild and reversible, so it stays calm. Shown only when
+            there's something to clear. */}
+        {selected.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => onChange([])}
+            aria-label="Clear selected members"
+            className="shrink-0 rounded-[var(--control-radius)] text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+          >
+            <X className="size-3.5" aria-hidden />
+          </button>
+        ) : null}
+      </div>
 
       <MemberPicker
         selectId="se-add-member"

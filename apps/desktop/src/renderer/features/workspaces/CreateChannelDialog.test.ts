@@ -1,53 +1,15 @@
 /**
  * Unit tests for the pure helpers used by `CreateChannelDialog`.
  *
- * `computeChannelSeedSelection` locks the SEEDING contract: agents seed to all
- * workspace agents, humans seed to none (a channel's human membership is an
- * explicit choice under the privacy model — the creator is unioned in
- * server-side, and *which humans can see* a channel is the privacy axis, not
- * which agents it talks to). Independent of any viewer id, which the helper no
- * longer needs.
- *
  * `computeCreateChannelPayload` locks the WIRE contract so the request shape
  * cannot silently regress while the form UI still looks correct.
  */
 import { describe, expect, it } from 'vitest';
 import {
-  computeChannelSeedSelection,
   computeCreateChannelPayload,
   computeSelectableHumans,
   pruneSelectedHumanIds,
 } from './CreateChannelDialog';
-
-describe('computeChannelSeedSelection', () => {
-  const members = {
-    agents: [{ id: 'agent-alice' }, { id: 'agent-bob' }],
-    humans: [
-      { id: 'user-viewer' },
-      { id: 'user-other1' },
-      { id: 'user-other2' },
-    ],
-  };
-
-  it('seeds every workspace agent', () => {
-    expect(computeChannelSeedSelection({ members }).agents).toEqual([
-      'agent-alice',
-      'agent-bob',
-    ]);
-  });
-
-  it('never seeds humans — human membership is explicit (creator implicit server-side)', () => {
-    // Regardless of how many humans the workspace has, the picker starts with
-    // zero selected humans. This is the core anti-"seed-all-users" guarantee.
-    expect(computeChannelSeedSelection({ members }).humans).toEqual([]);
-  });
-
-  it('handles the empty-members case without throwing', () => {
-    expect(
-      computeChannelSeedSelection({ members: { agents: [], humans: [] } }),
-    ).toEqual({ agents: [], humans: [] });
-  });
-});
 
 describe('computeCreateChannelPayload', () => {
   const base = {
