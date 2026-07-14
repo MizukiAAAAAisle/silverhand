@@ -42,6 +42,28 @@ export const SAVED_FILTER_DEFAULT: SavedFilterState = {
   date: 'all',
 };
 
+/** A Saved card navigates on click, but it wraps fully-interactive message
+ *  content: a code-fence Copy button, inline links, and selectable text. The
+ *  jump must fire only for a *bare* click — not when the click lands on a
+ *  nested interactive control (button / link) or ends a text selection inside
+ *  the card. Extracted + exported so the decision branch is unit-tested rather
+ *  than presentation-locked (#task:1497). */
+export function isBareCardClick(
+  target: HTMLElement,
+  card: HTMLElement,
+  selection: Selection | null,
+): boolean {
+  if (target.closest('button, a')) return false;
+  if (
+    selection &&
+    !selection.isCollapsed &&
+    card.contains(selection.anchorNode)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 interface SavedListViewProps {
   workspaces: WorkspaceListItem[];
   /** Filter selection, owned by App so it persists across pane switches
@@ -233,12 +255,26 @@ function SavedItem({
 
   return (
     <li>
-      {/* The whole card is clickable. Bookmark/unsave is a nested button —
-          stopPropagation prevents it from firing the jump. */}
+      {/* The whole card navigates on click, but it wraps fully-interactive
+          message content: a code-fence Copy button, inline links, the unsave
+          button, and selectable text. Those must keep working, so `onJump`
+          fires only for a bare click — suppressed when the click lands on a
+          nested interactive control (button / link) or ends a text selection.
+          The unsave button also stopPropagation's, so it never reaches here. */}
       <CollectionItemCard
         role="button"
         tabIndex={0}
-        onClick={onJump}
+        onClick={e => {
+          if (
+            isBareCardClick(
+              e.target as HTMLElement,
+              e.currentTarget,
+              window.getSelection(),
+            )
+          ) {
+            onJump();
+          }
+        }}
         onKeyDown={e => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
