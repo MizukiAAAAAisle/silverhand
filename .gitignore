@@ -16,6 +16,7 @@ release-remote-server/
 .claude/worktrees/*
 docs/cli-log-reports/*
 docs/changelogs/*
+.codex
 .silverhand
 *.db
 *.db-journal
