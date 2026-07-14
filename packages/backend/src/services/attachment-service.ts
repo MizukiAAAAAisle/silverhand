@@ -38,7 +38,7 @@ export interface AttachmentServiceOptions {
 }
 
 export interface UploadInput {
-  /** Conversation that received the upload (channel or thread). */
+  /** Channel-like conversation (channel/dm_channel) that received the upload; a reply-cluster upload shares its parent channel. */
   sourceConversationId: string;
   filename: string;
   contentType: string | null;

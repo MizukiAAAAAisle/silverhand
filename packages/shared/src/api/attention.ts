@@ -185,7 +185,8 @@ export type ListActivityDto = z.infer<typeof ListActivityDtoSchema>;
 // that delegates the write back to the source aggregate (per-stream cursor /
 // `notifications.read_at`); Attention owns NO read state of its own. The legacy
 // channel mark-read route was retired into this primitive (#task:1232).
-// Canonical: docs/observe-collapse-v1.md.
+// The schema below is the public wire contract; the backend use case owns the
+// transactional routing and overlap semantics.
 //
 // Disambiguation: this `observe` (attention eliminate) is UNRELATED to the
 // thread-delivery `observe` kind (backfill / non-waking). The `/api/attention/`

@@ -942,8 +942,7 @@ describe('OutboundSupervisor — reload() (D3.c Commit 2)', () => {
     expect(f.spawned).toHaveLength(2);
   });
 
-  // ── D4.a Commit 5b: profile_version is part of the fingerprint
-  //    (per `docs/remote-backend-architecture-notes.md §3` daemon nuance) ────
+  // ── profile_version is part of the fingerprint ────
 
   it('changes to profile_version alone flip unchanged → reloaded (5b: profile_version is in the fingerprint)', () => {
     // §7.6 daemon nuance: a profile commit that bumps `profile_version`

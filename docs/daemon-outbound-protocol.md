@@ -1,9 +1,7 @@
-# Daemon outbound protocol — D2
+# Daemon outbound protocol
 
-Status: D2.f host token rotation over outbound WebSocket.
-
-This document defines the WebSocket transport introduced in Stage D2 for the
-desktop-local daemon. The orchestration boundary remains
+This document defines the WebSocket transport for the daemon. The orchestration
+boundary remains
 `docs/orchestration-boundary-v1.md`: server owns DB/control-plane state, daemon
 owns host-local filesystem/process execution. This protocol only carries typed
 intent and events across that boundary.
@@ -12,36 +10,29 @@ intent and events across that boundary.
 
 - Endpoint: `GET /api/hosts/connect` as a WebSocket upgrade.
 - Authentication: `Authorization: Bearer <host_token>` on the upgrade request.
-- Validation: server calls Stage B `verifyHostToken()`; missing, revoked,
+- Validation: server calls `verifyHostToken()`; missing, revoked,
   expired, rotated-past-grace, bootstrap, or host-revoked tokens are rejected
   before upgrade.
-- Scope: V1 accepts only `hosts.kind = 'local'`. Headless remote hosts and
-  sandbox hosts remain out of scope.
-- On accepted upgrade, the server touches `hosts.last_seen_at`. Later D2 slices
-  update it from heartbeat/pong cadence.
+- Host acceptance: the endpoint accepts a `hosts.kind = 'local'` host, or a
+  user-managed remote host — one with `kind = 'remote'`,
+  `provisioning_source = 'user_invite'`, and a non-null `user_id`. Any other
+  host (e.g. a remote host that is not user-managed) is rejected `403`. Sandbox
+  hosts are not a distinct `HostKind` and are not accepted as one.
+- On accepted upgrade, the server touches `hosts.last_seen_at` and updates it
+  from the heartbeat/pong cadence.
 
 User session cookies are not accepted on this endpoint. `host_token` remains
 daemon-only and must not be exposed to renderer or agent process credentials.
 
-### Host kind narrowing
+### Local and remote hosts share one wire
 
-The `kind === 'local'` constraint above is a V1-prep scope boundary, not a
-permanent protocol limitation. `auth-and-host-model.md` §1.1 establishes that
-`local` and `remote` Hosts are the same entity at the auth and wire layers —
-they share the credential schema, the `verifyHostToken()` validator, this
-WebSocket endpoint, the rotation flow, and the placement resolver.
-
-When the headless / remote-host phase opens (Phase 4 / V1.5 per
-`auth-and-host-model.md` §9), enabling remote Hosts on this endpoint is a
-single change: relax the kind check from `=== 'local'` to the full set the
-deployment supports. **No wire schema, frame format, authentication code path,
-or rotation flow changes.** Sandboxing remains orthogonal: a sandbox daemon
-runs as a Host (typically `kind=remote`) plus a capability layer
-(`auth-and-host-model.md` Appendix A.5), not as a new HostKind enum value.
-
-The narrowing exists so V1 prep cannot accidentally accept a remote Host
-upgrade before the matching provisioning UI, headless daemon binary, and
-threat-model review for that surface ship together.
+`local` and `remote` Hosts are the same entity at the auth and wire layers
+(`auth-and-host-model.md` §1.1): they share the credential schema, the
+`verifyHostToken()` validator, this WebSocket endpoint, the rotation flow, and
+the placement resolver. The host-acceptance guard above is the only kind-aware
+branch on this endpoint — no wire schema, frame format, authentication code
+path, or rotation flow differs by host kind. Sandboxing is orthogonal: a sandbox
+daemon runs as a Host plus a capability layer, not as a new `HostKind` value.
 
 ## Envelope
 
@@ -57,12 +48,33 @@ Frames are JSON objects with three layers:
 This avoids mixing command names and event names into one namespace while
 keeping frames readable in logs.
 
+### One outbound frame adapter, not a fork
+
+Both deployment shapes dispatch the **same** outbound frame schemas
+(`OutboundServerToDaemonCommandFrame`,
+`OutboundDaemonToServerCommandResponseFrame`,
+`OutboundDaemonToServerEventFrame`) through one `OutboundFrameAdapter`
+(`packages/backend/src/runtime/outbound-frame-adapter.ts`). Standalone reaches
+the daemon over WSS via `HostWsServerController`; embedded reaches the local
+daemon over the `daemon-outbound.sock` Unix socket via
+`EmbeddedUnixOutboundFrameAdapter`. The transport underneath differs; the frame
+envelope, command schemas, error taxonomy, and backend dispatch path do not.
+**Backend handlers never branch on deployment mode.**
+
+The same envelope carries the `runtime_*` control commands and
+`agent_materialize` — there is no embedded-only `{ intent, params }` local-RPC
+shape carrying those semantics. The backend enforces this by importing **zero**
+`HostClient`: `packages/backend/src` speaks only through the adapter. The only
+live `HostClient` call sites are `apps/desktop/src/main/**` (desktop-local
+supervisor / host-control IPC — attach, detach, reload, revoke), which are not
+the server↔daemon runtime data plane.
+
 ## Connection lifecycle
 
 The desktop main process starts the local daemon with
 `--host-config ~/.silverhand/daemon-config.json`. The daemon polls that file
 and opens one WebSocket to `/api/hosts/connect` when the file contains a valid
-Stage B host token. Missing or invalid config closes the outbound connection
+host token. Missing or invalid config closes the outbound connection
 without affecting the local Unix socket.
 
 Reconnect uses jittered exponential backoff capped at 60 seconds. Close-code
@@ -137,7 +149,7 @@ Heartbeat is an app-level protocol frame, not only a WebSocket ping:
 
 ## Server commands
 
-The D2 command catalogue reuses the current runtime schemas from
+The command catalogue reuses the current runtime schemas from
 `packages/host/src/protocol.ts`:
 
 - `runtime_start`
@@ -151,14 +163,64 @@ The D2 command catalogue reuses the current runtime schemas from
 - `runtime_output_resume`
 - `rotate_token`
 
-The `runtime_*` payloads are the accepted D2.0 request surface. `rotate_token`
-is D2's transport-local host credential refresh command; the daemon must write
+The `runtime_*` payloads are the accepted request surface. `rotate_token`
+is the transport-local host credential refresh command; the daemon must write
 the new `daemon-config.json` atomically before acknowledging success.
+
+### `agent_materialize` command
+
+`agent_materialize` is an additive outbound command (schemas in
+`packages/host/src/protocol.ts`, re-exported onto the wire from
+`packages/host/src/outbound-protocol.ts`). It reuses the existing
+WS/correlation/auth/timeout machinery unchanged — it rides the same command
+envelope, is correlated by `id`, authenticated by the same host token, and
+returns per-command typed wire errors like any other command. It is the
+canonical way the server asks the daemon-owning host to create an agent's L1
+home (the DM workspace path, which coincides with L1).
+
+Load-bearing invariants:
+
+- **L1 template truth stays on the daemon.** The server sends metadata only
+  (`agent_id`, `agent_home_workspace_id`, `name`, `runtime`, optional
+  `model` / `description`, and `template_choice`) and performs no filesystem
+  work; the daemon owns the templates and writes the L1 dir. The daemon returns
+  `agent_dir` and `agent_home_workspace_path`, which the result schema's
+  `superRefine` requires to be equal — the server treats both as opaque and
+  uses the path verbatim for the `agent_home` workspace row.
+- **Explicit materialization state, with a read-visibility rule.**
+  `agents.materialization_status` is exactly
+  `{ 'pending_materialization', 'active', 'failed' }`
+  (`packages/shared/src/db/schema.ts`). New rows start
+  `pending_materialization` and flip to `active` on daemon ack or `failed` on a
+  typed error / timeout; pre-existing rows backfill to `active`.
+  `pending_materialization` rows are hidden from reads; `failed` rows are hidden
+  unless the caller passes `?include_failed=1`, and that widening is
+  creator-scoped (it never crosses to another user's rows).
+- **Two-layer idempotency.** The HTTP layer requires an `Idempotency-Key`
+  header matching `/^[A-Za-z0-9_-]{1,64}$/`, backed by the creator-scoped unique
+  index `idx_agents_idempotency_key_per_user` on
+  `(created_by_user_id, idempotency_key)`. The wire `command_id` is a separate,
+  server-allocated-per-send correlation id (`nextCommandId`) that is never
+  reused. Re-dispatch on the same key with matching body echoes the prior
+  outcome (active → success, pending → `materialization_in_progress`, failed →
+  `materialization_previously_failed`); a mismatched body on a reused key is
+  rejected `idempotency_metadata_mismatch` **before** dispatch.
+- **Offline reserves no row.** The server checks that the target host has a live
+  outbound connection **before** reserving the `pending_materialization` row; if
+  the daemon is not attached it returns `host_attach_pending` with no row
+  written. The captured connection id is re-confirmed before the write so a
+  daemon reattach in the window fails closed rather than materializing on a dead
+  generation.
+- **Boot reconciler for stale pending rows.** At bootstrap, synchronously and
+  before the server listens, a reconciler flips any `pending_materialization`
+  row older than the threshold to `failed` with
+  `backend_crash_during_materialize`; fresher pending rows and already
+  `active` / `failed` rows are left untouched. There is no background sweep
+  beyond boot.
 
 ## Host token rotation
 
-D2.f supports server-initiated rotation only. Daemon-initiated "please rotate
-me" self-healing is a future protocol extension and is not part of V1 prep.
+Rotation is server-initiated only; daemon-initiated rotation is not supported.
 
 Rotation is a two-phase handshake so the server never revokes the old token
 before the daemon has durably learned the replacement:
@@ -190,7 +252,7 @@ before acking, so the next reconnect presents the new token immediately.
 
 The old credential remains valid for a 60s grace window by setting
 `host_credentials.revoked_at = issued_at + 60_000` and recording
-`consumed_at = issued_at` as the rotation handoff timestamp. Stage B
+`consumed_at = issued_at` as the rotation handoff timestamp.
 `verifyHostToken()` accepts that credential only while `revoked_at` is in the
 future; once the grace window passes, reconnect with the old token fails during
 upgrade. Immediate host/credential revocation still has no grace window.
@@ -224,7 +286,7 @@ daemon's perspective.
 
 ## Event fanout
 
-D2.d wires outbound daemon events into the same backend projection sink used by
+Outbound daemon events wire into the same backend projection sink used by
 the Unix-socket daemon path: `RuntimeEventHandler` plus `RunStateCache`,
 `DbRuntimeStatusProjector`, inbox ack, renderer event projection, and the
 activity-log writer. The outbound WebSocket is only a new ingress; it must not
@@ -247,7 +309,7 @@ the existing run-state shape when a run-state entry is present.
 
 ## Delivery-backed replay
 
-D2.e connects the durable DB inbox to outbound WebSocket command dispatch. The
+Delivery-backed replay connects the durable DB inbox to outbound WebSocket command dispatch. The
 DB inbox remains the only durable queue; the host WS command `Map<id, pending>`
 is still only a per-command correlation table and is cleared on disconnect.
 
@@ -282,10 +344,9 @@ and chooses spawn / admit / refuse itself, so server no longer forks command
 shape by cached phase.
 
 - No live handle (absent or `exited`): the daemon spawns with the batch as its
-  startup delivery → `spawning`. The D2.e implementation does not ship
-  daemon-local absolute workspace or spawn-prep paths in this command; the full
-  workspace/session/profile bundles remain the D2.0 contract for later
-  materialization work.
+  startup delivery → `spawning`. This command carries no daemon-local absolute
+  workspace or spawn-prep paths; the daemon resolves those host-local paths
+  itself from its placement (see `orchestration-boundary-v1.md` §5.1).
 - `ready` + driver ready to encode: the daemon writes stdin → `admitted`.
 - `startup_pending`, `spawning`, a live oneShot, a batch already in flight, or a
   driver not yet ready to encode → `refused{startup_pending}`; a hard stop in
@@ -301,7 +362,7 @@ reconnect.
 ## Durability
 
 The DB inbox plus `RuntimeDeliveryCoordinator` is the only durable delivery
-queue. The WebSocket write buffer introduced in D2.b must be bounded and
+queue. The WebSocket write buffer must be bounded and
 non-durable.
 
 On disconnect or backpressure:
@@ -333,9 +394,3 @@ Overflow behavior:
 The close reason intentionally stays short because WebSocket close reason
 payloads are limited. The structured daemon log is the durable diagnostic
 record for the event that triggered fail-loud overflow.
-
-## D2.f limit
-
-D2.f covers host token rotation over the outbound WebSocket. It still does not
-implement daemon-initiated rotation, D3 desktop lifecycle UI, headless remote
-host provisioning, sandbox capability, or D2.1 file-to-DB migration.

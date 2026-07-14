@@ -1,10 +1,9 @@
 # Brand-typed seq (S2) — contract v1
 
-Status: **signed; backend implementation in progress** (task #1266, contract
-owner @Alice; contract PASS'd by @Cindy). Renderer consumption half = #1267
-(@Norman, `docs/s2-renderer-seq-consumption-v1.md`). Slice 1 (shared brand types
-+ mint + decode helpers) landed; this doc is the seam the implementation is
-written against.
+This document owns the semantic contract for the sequence brands and their
+conversion seams. Renderer enforcement lives with the consumption fences in
+`apps/desktop/src/renderer/seq-brand-consumption.test.ts`; implementation
+inventory and rollout history belong to git and the task board.
 
 Ubiquitous-language note: this doc is the source of truth for what each "seq"
 means. When code conflicts with a name/semantic here, the code is the bug.
@@ -21,12 +20,13 @@ pass would not have prevented the bug that motivated S2.
 - **Axis A — space mixing.** A value from one ordinal space is compared/assigned
   to another. The genuine hazard is **MessageSeq ↔ TransportSeq** (a persisted
   message ordinal vs. an ephemeral per-WS-scope event counter): the same
-  `number` carrying two unrelated meanings. Norman's renderer finding-2
-  (`useConversationStream.ts:75` copies a TransportSeq into a payload a business
+  `number` carrying two unrelated meanings. The renderer seam at
+  `useConversationStream.ts:75` (copies a TransportSeq into a payload a business
   hook could read as a MessageSeq) is exactly this — "one number, two meanings",
-  the same shape as #1265.
+  the same shape as the false-stale bug class.
 - **Axis B — optionality collapse.** `map.get(k) ?? 0` conflates *"absent /
-  never set"* with *"present, value 0"*. **This is #1265's actual root cause**
+  never set"* with *"present, value 0"*. **This is the false-stale bug's actual
+  root cause**
   (`observedSeqByStream.get(MAIN) ?? 0` manufactured `seen=0` for a
   never-observed stream → false-stale). **Brand types do NOT fix Axis B.**
   `?? 0` on a branded `ObservedSeq` still compiles and still lies.
@@ -34,7 +34,7 @@ pass would not have prevented the bug that motivated S2.
 > **Thesis (bold, falsifiable):** S2 must be **two-pronged**. Branding fixes
 > Axis A only. Axis B is fixed by *explicit absence* (`Seq | undefined`, no
 > `?? 0`) plus a **per-role decision on what "absent" means** — and that
-> decision differs by role (§5). Ship only the brands and #1265's bug class
+> decision differs by role (§5). Ship only the brands and the false-stale bug class
 > survives.
 >
 > Falsifier: if every live seq defect in the census (§2) were a space-mix and
@@ -61,7 +61,7 @@ collapse is load-bearing, so each claim is sourced.
 MessageSeq and TransportSeq **never legitimately convert**. A
 `TransportSeq → MessageSeq` flow is *always* a bug. This is the one hard wall.
 
-> **MessageSeq is conversation-global, not per-stream (Cindy Blocker 1).** The
+> **MessageSeq is conversation-global, not per-stream.** The
 > allocator bumps `conversations.latest_message_seq` once per message regardless
 > of stream, so a mainline message and a reply-cluster message in the same
 > conversation draw from **one** sequence. Stream identity
@@ -95,12 +95,12 @@ correct — but only within the same stream** (e.g. the unread test
 `last_read_seq < messageSeq`, `mention-cc.ts:342-351`, which SELECTs
 stream-qualified `thread_root_id IS ?` *before* comparing). Branding every cursor
 as its own ordinal would flag correct code → push people to `number` escape
-hatches (violates Cindy review-criterion 2). So we brand a cursor **only where it
+hatches (which the fence test forbids). So we brand a cursor **only where it
 has a mint boundary whose bypass is a bug** (§4), not merely because it plays a
 role. The same-stream premise is enforced separately (§4 ordering rule), never by
 the cursor's brand.
 
-### Client-side quantities (renderer) — from Cindy's #1267 review
+### Client-side quantities (renderer)
 
 The renderer holds seq-shaped channels the backend sweep can't see. They are
 contract decisions (this doc), not renderer-local choices. Four kinds:
@@ -134,7 +134,7 @@ contract decisions (this doc), not renderer-local choices. Four kinds:
      → localStorage → `resolveChannelOpen(pointer.seq > watermark)`
      (`App.tsx` / `place-memory.ts` / `channel-open.ts:34`). localStorage hydrate
      is a **decode boundary** (§4.1).
-   - **mainline tail-read gate** (Cindy Blocker 4): `tailSeq = messages.at(-1).seq`
+   - **mainline tail-read gate**: `tailSeq = messages.at(-1).seq`
      → `nextTailReadMark()` → `TailReadMark.seq` (`ChannelView.tsx:289-304`,
      `channel-read.ts`); the emitted observe is `mainlineStreamSourceHead()`
      (server head, brand-free). Symmetric with the thread tail gate — brand both
@@ -146,7 +146,7 @@ contract decisions (this doc), not renderer-local choices. Four kinds:
    Not a channel to migrate; noted so a future reader doesn't mistake it for a
    live decision input.
 
-### Dangerous collapse vs. role-defined zero (Cindy Blocker 3)
+### Dangerous collapse vs. role-defined zero
 
 Not every `?? 0` is a bug. A `0` is only dangerous where "absent" and "value 0"
 carry **different** meaning for that role. Splitting the sites:
@@ -155,14 +155,14 @@ carry **different** meaning for that role. Splitting the sites:
 
 | Site | Pattern | Note |
 |---|---|---|
-| `supervisor/index.ts:514` | `pendingAdmissionSeqByStream.get(k) ?? 0` | **#1265 family**: never-admitted vs. admitted-to-0. This is the daemon observed-boundary — the actual #1265 layer. |
+| `supervisor/index.ts:514` | `pendingAdmissionSeqByStream.get(k) ?? 0` | **false-stale family**: never-admitted vs. admitted-to-0. This is the daemon observed-boundary — the actual false-stale layer. |
 | `delivery-coordinator.ts:1270` | `deliveredUpToSeq ?? 0` | daemon-boundary-adjacent: "not delivered" vs. "delivered to 0". **Verify in impl** whether absent wrongly advances observed; if it only skips, downgrade. |
 
 **Role-defined zero (absent ≡ 0 *is the design*) — do NOT "fix":**
 
 | Site | Pattern | Why 0 is correct |
 |---|---|---|
-| `message-repo.ts:1182` (stream head) | `latest_seq ?? 0` | empty thread stream's CAS token **is** 0 by design — a thread's first reply sends `seen=0` and inserts (`ON CONFLICT DO NOTHING`, `message-repo.ts:1222-1223`; pinned by test *"thread first reply (seen=0) succeeds even though the main head exists"*, `message-repo.test.ts:459`). The #1265 bug is NOT here. |
+| `message-repo.ts:1182` (stream head) | `latest_seq ?? 0` | empty thread stream's CAS token **is** 0 by design — a thread's first reply sends `seen=0` and inserts (`ON CONFLICT DO NOTHING`, `message-repo.ts:1222-1223`; pinned by test *"thread first reply (seen=0) succeeds even though the main head exists"*, `message-repo.test.ts:459`). The false-stale bug is NOT here. |
 | `message-repo.ts:1071` (conversation allocator) | `latest_message_seq ?? 0` | empty conversation's next-seq base is 0; first message reserves 1. Allocator high-water. |
 | `scope-event-bus.ts:207,213` (transport counter) | `seqCounters.get(scope) ?? 0` | never-published scope → current 0 / first publish 1 is correct allocator/high-water semantics. |
 | `conversation-read-repo.ts:114` (read cursor) | `last_read_seq ?? 0` | never-read ≡ all-unread ≡ cursor before msg 1 (see §5). |
@@ -173,7 +173,7 @@ carry **different** meaning for that role. Splitting the sites:
 |---|---|---|
 | `outbound-event-fanout.ts:1848` | `Math.max(...message.seq)` over a mixed-stream batch | same conversation-global ordinal interpreted across streams (§7) — a stream-key mismatch, not Message↔Transport. |
 
-Message↔Transport branding is **preventive** (guards Norman's finding-2 seam
+Message↔Transport branding is **preventive** (guards the renderer finding-2 seam
 before it's violated); the live Axis-B bugs are the two daemon-boundary sites.
 
 ---
@@ -206,8 +206,8 @@ export type ObservedSeq = number & { readonly [ObservedSeqB]: true } // minted v
 - **ReadSeq / ObservedSeq are branded** precisely because each has a single mint
   boundary (`observe` write; daemon admission) whose bypass is a bug. The brand
   makes "you may only become a read cursor by going through observe" a
-  compile-time fact — this is Cindy review-criterion 3 (single testable
-  conversion) enforced by types, not discipline.
+  compile-time fact — a single testable conversion enforced by types, not
+  discipline.
 
 ---
 
@@ -219,7 +219,7 @@ export const asReadSeq     = (m: MessageSeq): ReadSeq     => m as unknown as Rea
 export const asObservedSeq = (m: MessageSeq): ObservedSeq => m as unknown as ObservedSeq
 ```
 
-**Ordering: NO generic cross-brand comparators in shared (Cindy Blocker 4).**
+**Ordering: NO generic cross-brand comparators in shared.**
 Because MessageSeq is conversation-global (§2), `cursor < msg` is only meaningful
 *within one stream* — and a bare `isUnread(cursor: ReadSeq, msg: MessageSeq)`
 would let a mainline cursor be compared to a cluster message with types passing,
@@ -239,8 +239,8 @@ re-opening the stream-key-mismatch bug the brand can't see. So:
 
 - **MessageSeq ↔ TransportSeq: NO conversion exists.** Any need to write one is
   a design error. The brand wall *is* the contract.
-- `asReadSeq` lives in `@silverhand/shared` (backend + CLI + renderer all mint) —
-  **agrees with Norman Q4**. Same for `asObservedSeq` (host imports from shared).
+- `asReadSeq` lives in `@silverhand/shared` (backend + CLI + renderer all mint).
+  Same for `asObservedSeq` (host imports from shared).
 - The mint helpers are the enforcement point for Axis B too: they take a
   *present* `MessageSeq`; there is no `asReadSeq(undefined)`. Absence is handled
   before the mint, explicitly (§5).
@@ -270,7 +270,7 @@ must already be branded (the compiler enforces it):
      `JSON.parse(body) as T` — it never runs `MessageDtoSchema.parse`. So the
      renderer receives already-validated wire values and **trusts** the typed
      contract; the authoritative decode happened **server-side at DTO
-     construction** (bullet 1). Consequence (Cindy slice-2 blocker): a wire seq
+     construction** (bullet 1). Consequence: a wire seq
      field MUST be minted/decoded server-side — never claim "the client parses
      it". The renderer must not paper a raw wire number into a brand with an
      ad-hoc `.parse()` or `as MessageSeq`; it consumes the typed DTO. A future
@@ -280,7 +280,7 @@ must already be branded (the compiler enforces it):
    - **localStorage hydrate** — e.g. the close-watermark
      (`CLOSE_WATERMARK_KEY`): the stored number is decoded + validated back to a
      `MessageSeq` on read. **This is the renderer's ONE real runtime decode
-     boundary** (and the boundary Cindy's Blocker 3 names).
+     boundary.**
 
 `decodeMessageSeq(n: number): MessageSeq` (and peers) live in
 `@silverhand/shared` next to the mint helpers — one definition, reused
@@ -301,7 +301,7 @@ encoded at the single accessor + documented here:
 | Role | "absent" means | Collapse to 0? | Why |
 |---|---|---|---|
 | **ReadSeq** (read cursor) | never read | **Yes → 0 is correct** | nothing-read ≡ cursor before msg 1 ≡ all unread. `mention-cc.ts:351` `?? 0` is *correct*. |
-| **ObservedSeq** (freshness, daemon) | never observed | **No** | first-touch: **skip CAS** (omit `seen+stream_key`), ≠ observed-to-0. This is the #1265 fix (shipped for MAIN in `4fbd6ea`); S2 makes it type-visible so it can't regress. The one dangerous role. |
+| **ObservedSeq** (freshness, daemon) | never observed | **No** | first-touch: **skip CAS** (omit `seen+stream_key`), ≠ observed-to-0. This is the false-stale fix (`observedSeqByStream.get(MAIN) ?? 0` no longer manufactures `seen=0`); S2 makes it type-visible so it can't regress. The one dangerous role. |
 | **StreamHeadSeq** (CAS token) | no stream head yet | **Yes → 0 is correct** | empty thread stream's CAS token **is** 0 by design — enables the first reply (`seen=0` inserts via `ON CONFLICT DO NOTHING`, pinned by `message-repo.test.ts:459`). Do **not** "fix" `message-repo.ts:1182`. |
 | **DeliverySeq** (high-water) | nothing delivered | **check in impl** | "not delivered" vs. "delivered to 0" may matter at the daemon boundary (`delivery-coordinator.ts:1270`); verify whether absent advances observed before deciding. |
 | **TransportSeq** (fanout counter) | scope never published | **Yes → 0 is correct** | current 0 / first publish 1 is allocator/high-water semantics (`scope-event-bus.ts:207`); resume gap detection is handled by `epoch` + buffer, not by treating 0 as special. |
@@ -313,23 +313,22 @@ are the S2 deliverable.
 
 ---
 
-## 6. Answers to Norman's seam questions (#1267)
+## 6. Seam decisions
 
-- **Q1 — epoch its own brand?** **Yes → `TransportEpoch`.** Epoch (restart
+- **Epoch its own brand?** **Yes → `TransportEpoch`.** Epoch (restart
   generation) and TransportSeq (position within a generation) are different
   quantities; bundling them into one field recreates the one-number-two-meanings
   trap S2 exists to kill. Renderer transports the pair
   `{ epoch: TransportEpoch, seq: TransportSeq }` opaquely.
-- **Q2 — synthetic `connected.seq` in `useConversationStream`:** **delete the
-  field.** I initially leaned "keep + brand TransportSeq"; Cindy's refinement is
-  correct and Norman verified it — `useConversationStream`'s only caller is
+- **Synthetic `connected.seq` in `useConversationStream`:** **delete the
+  field.** `useConversationStream`'s only caller is
   `components/dev/EventStream.tsx`, whose `connected` branch reads `kind` only
   and **never reads `payload.seq`**. No consumer → carrying a TransportSeq into a
   legacy business payload is pure leak surface. Deleting the field is cleaner
-  than branding-and-keeping and closes a #1265-shaped channel outright. (I
-  conflated "the connected *event* is load-bearing for resume" — true — with
-  "the *seq field* is consumed" — false.)
-- **Q3 — `stream_head_seq` = MessageSeq; conversion at observe boundary:**
+  than branding-and-keeping and closes a false-stale-shaped channel outright.
+  (The connected *event* is load-bearing for resume; the *seq field* is not
+  consumed.)
+- **`stream_head_seq` = MessageSeq; conversion at observe boundary:**
   **Confirmed at source** (`schema.ts:419-420`). `stream_head_seq` is a
   MessageSeq. The backend decodes it at DTO construction
   (`routes/conversations.ts`, §4.1 — `streamHeadLatestSeq()` stays a plain
@@ -338,14 +337,14 @@ are the S2 deliverable.
   client `.parse()`). It then flows into `observe` and is minted to a ReadSeq
   **there** via `asReadSeq`, never at the cache-write layer. Cache pages carry
   MessageSeq.
-- **Q4 — `asReadSeq`/`toReadSeq` in shared or renderer?** **`@silverhand/shared`**
-  — agree with your lean. Backend, CLI, and renderer all mint read cursors;
+- **`asReadSeq`/`toReadSeq` in shared or renderer?** **`@silverhand/shared`.**
+  Backend, CLI, and renderer all mint read cursors;
   one definition, reused. (Named `asReadSeq` for cast-direction clarity; alias
-  `toReadSeq` if you prefer.) **Mint helpers and decoders live in shared. No
+  `toReadSeq` optional.) **Mint helpers and decoders live in shared. No
   generic cross-brand ordering/comparison helpers are exported** (§4) — any future
   comparator must carry `MessageStreamKey` and assert same-stream, or stay inside
   stream-qualified repo/query code.
-- **Q5 — pending message: `PendingMessage` type or a `PendingSeq` brand?**
+- **Pending message: `PendingMessage` type or a `PendingSeq` brand?**
   **`PendingMessage` type split** (§2 kind-1). A pending message has no server
   position, so a `PendingSeq` brand would be modeling a quantity that shouldn't
   exist and would invite ordering it against real MessageSeq. Model it as a
@@ -371,33 +370,3 @@ are the S2 deliverable.
   The specific `Math.max`-across-streams high-water is a separate correctness fix
   (per-stream max), tracked independently of S2 branding.
 - **S1 projection-level recovery** — unrelated axis, sequenced after S2.
-
----
-
-## 8. Migration surface & sequencing
-
-1. Land brand types + mint + decode helpers in `@silverhand/shared` (this
-   contract). No behavior change — brands are erased at runtime.
-2. Backend half (my #1266): thread MessageSeq / TransportSeq / TransportEpoch /
-   ReadSeq / ObservedSeq / StreamHeadSeq(=MessageSeq) through DTOs
-   (`api/message.ts`), repos, services, fanout, daemon protocol; replace the
-   **dangerous** `?? 0` sites (§2/§5: the daemon observed-boundary ones) with
-   explicit absence — **leave the role-defined zeros** (stream-head, allocator,
-   transport counter, read cursor) intact. This is where the compile errors
-   surface the real crossings.
-3. Renderer half (#1267, Norman): consume the shared brands; the two seams in
-   his draft (`observe` mint, `useConversationStream` TransportSeq) align here.
-4. Guardrail tests: one test per mint helper / decoder. The source-fence forbids
-   `?? 0` **only on dangerous absence roles** (ObservedSeq, and any DeliverySeq
-   site proven dangerous); **role-defined zero sites** (stream-head, allocator,
-   transport counter, read cursor — §2/§5) are an explicit allowlist, owned by
-   their accessors and covered by their own tests. Acceptance = **no
-   *unclassified* `?? 0`**, not "no `?? 0` anywhere." Maps to Cindy's 3 criteria:
-   (1) no parallel defs / (2) no `number` escape hatch / (3) single testable
-   conversion.
-
-Sequence: contract sign-off → backend brands (shared types first) → renderer
-consume. Slices are landed as independent, revertable local commits with
-per-slice focused typecheck/test; push happens once the whole feature line is
-stable (shiki holds the push — implementation does **not** wait for it, amended
-2026-07-02).

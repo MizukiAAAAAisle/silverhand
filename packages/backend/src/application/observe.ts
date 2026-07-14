@@ -10,8 +10,8 @@ import { buildUnreadUpdatedMessagePayload } from '../viewer-scope.js';
 import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
 
 /**
- * observe() — the SINGLE eliminate primitive (#task:1231,
- * docs/observe-collapse-v1.md). Every read-cleared Activity item (and, before
+ * observe() — the SINGLE Attention eliminate primitive. Every read-cleared
+ * Activity item (and, before
  * its retirement in #task:1232, the legacy channel mark-read route) collapses
  * here; the write is delegated back to the source aggregate (the per-stream
  * cursor `conversation_reads`, or `notifications.read_at`). Attention owns NO

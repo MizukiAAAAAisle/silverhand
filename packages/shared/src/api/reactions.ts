@@ -1,4 +1,4 @@
-// Bounded context: message reactions (docs/reactions-design.md §12).
+// Bounded context: message reactions (docs/reactions-design.md §4).
 // Re-exported via api/index.ts → @silverhand/shared. Shared between the
 // backend (write use-cases, read-model, routes), the CLI, and the renderer
 // so the contract (DTO shapes, event payload, emoji validation) lives in

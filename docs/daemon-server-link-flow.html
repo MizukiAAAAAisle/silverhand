@@ -230,8 +230,7 @@
           backend 是一份 codebase + 一套 wire protocol；部署形态可以是 <strong>embedded</strong>（inline 在 Electron 主进程，本机加速）
           也可以是 <strong>standalone</strong>（remote fleet，公网 TLS）。embedded 只是同一 backend 的本地部署形态 + transport 适配器，
           <strong>handler / auth / ACL / frame envelope 不分叉</strong>。这份图把 V1 desktop embedded 现状（Panel 1–2）和终态拓扑（Panel 3，
-          backend 在中心做 relay，daemon 可 local 可 sandbox）并排，底部矩阵从「embedded vs standalone 各自承担什么 + 为什么协议不能 fork」角度看；
-          Panel 4 是正交于 topology 的 daemon 多实例 placement 子问题。
+          backend 在中心做 relay，daemon 可 local 可 sandbox）并排，底部矩阵从「embedded vs standalone 各自承担什么 + 为什么协议不能 fork」角度看。
         </p>
       </div>
       <div class="stamp">Stage D3 参考图 · HTML standalone</div>
@@ -671,111 +670,6 @@
             <tspan font-weight="700">关键不变量：</tspan>
             backend codebase 只有一份；embedded / standalone 只是部署形态 + transport adapter，handler / wire protocol / auth / ACL 一字不差；daemon-placement 只是位置 + capability。
           </text>
-        </svg>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-head">
-        <div>
-          <h2>4. 正交子问题：同一台 host 上多 daemon installation + capability placement</h2>
-          <p class="panel-note">
-            注意这是「<strong>同一台 host 上跑多个 daemon</strong>」的问题——比如用户机器上同时跑一个 local daemon 和一个本机 sandbox daemon（受限 fs / PATH / secrets）。
-            它和 Panel 3 的「daemon-placement = local vs sandbox」是 <strong>正交维度</strong>：Panel 3 解释「daemon 进哪台机器」，这里解释「同一台机器里如何并存多个 daemon installation」。
-            两个维度可以叠加：用户机器可以有多个本地 daemon installation；datacenter 也可以有多种 sandbox container 镜像。
-            sandbox 不是 <code>host_descriptor.kind</code>，是 daemon installation + capability + mount 边界。
-          </p>
-        </div>
-        <span class="tag">future · 正交于部署 topology</span>
-      </div>
-      <div class="diagram-wrap">
-        <svg viewBox="0 0 1180 650" role="img" aria-label="Future sandbox daemon registration and placement">
-          <defs>
-            <marker id="c-blue" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto">
-              <polygon points="0 0, 11 4, 0 8" fill="#2563eb"></polygon>
-            </marker>
-            <marker id="c-green" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto">
-              <polygon points="0 0, 11 4, 0 8" fill="#16a34a"></polygon>
-            </marker>
-            <marker id="c-orange" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto">
-              <polygon points="0 0, 11 4, 0 8" fill="#ea580c"></polygon>
-            </marker>
-            <marker id="c-purple" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto">
-              <polygon points="0 0, 11 4, 0 8" fill="#7c3aed"></polygon>
-            </marker>
-            <style>
-              .zone { fill: rgba(15, 23, 42, 0.025); stroke: #cbd5e1; stroke-dasharray: 7 5; }
-              .ztitle { font-size: 12px; font-weight: 700; fill: #475569; }
-              .n { fill: #fff; stroke: #d1d5db; stroke-width: 1.5; }
-              .nh { font-size: 14px; font-weight: 700; fill: #111827; }
-              .ns { font-size: 11px; fill: #64748b; }
-              .el { font-size: 11px; fill: #475569; }
-            </style>
-          </defs>
-
-          <rect width="1180" height="650" fill="#fff"></rect>
-          <rect x="35" y="55" width="340" height="455" rx="8" class="zone"></rect>
-          <text x="55" y="78" class="ztitle">launcher / desktop main</text>
-          <rect x="420" y="55" width="335" height="455" rx="8" class="zone"></rect>
-          <text x="440" y="78" class="ztitle">daemon installations</text>
-          <rect x="800" y="55" width="345" height="455" rx="8" class="zone"></rect>
-          <text x="820" y="78" class="ztitle">backend runtime host registry</text>
-
-          <rect x="80" y="125" width="240" height="88" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"></rect>
-          <text x="200" y="157" text-anchor="middle" class="nh">Desktop launcher</text>
-          <text x="200" y="179" text-anchor="middle" class="ns">decides which daemon homes to spawn</text>
-          <text x="200" y="196" text-anchor="middle" class="ns">local + sandbox-default</text>
-
-          <rect x="465" y="105" width="245" height="108" rx="8" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"></rect>
-          <text x="587" y="136" text-anchor="middle" class="nh">Local daemon</text>
-          <text x="587" y="158" text-anchor="middle" class="ns">--daemon-home ~/.silverhand/daemons/local</text>
-          <text x="587" y="175" text-anchor="middle" class="ns">capabilities: fs.local</text>
-          <text x="587" y="192" text-anchor="middle" class="ns">host_descriptor.kind = local</text>
-
-          <rect x="465" y="285" width="245" height="126" rx="8" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"></rect>
-          <text x="587" y="317" text-anchor="middle" class="nh">Sandbox daemon</text>
-          <text x="587" y="339" text-anchor="middle" class="ns">--daemon-home .../daemons/sandbox-default</text>
-          <text x="587" y="356" text-anchor="middle" class="ns">restricted filesystem / PATH / secrets</text>
-          <text x="587" y="373" text-anchor="middle" class="ns">capabilities: fs.sandbox.&lt;name&gt;</text>
-          <text x="587" y="390" text-anchor="middle" class="ns">host_descriptor.kind 仍是 local</text>
-
-          <rect x="850" y="105" width="240" height="108" rx="8" fill="#f0fdfa" stroke="#ccfbf1" stroke-width="1.5"></rect>
-          <text x="970" y="136" text-anchor="middle" class="nh">RuntimeHostRegistry</text>
-          <text x="970" y="158" text-anchor="middle" class="ns">register({ client })</text>
-          <text x="970" y="175" text-anchor="middle" class="ns">daemon_id + instance_id</text>
-          <text x="970" y="192" text-anchor="middle" class="ns">resolve host_descriptor → hosts.id</text>
-
-          <rect x="850" y="285" width="240" height="126" rx="8" fill="#f5f3ff" stroke="#ddd6fe" stroke-width="1.5"></rect>
-          <text x="970" y="317" text-anchor="middle" class="nh">Placement decision</text>
-          <text x="970" y="339" text-anchor="middle" class="ns">runtime.codex / runtime.claude</text>
-          <text x="970" y="356" text-anchor="middle" class="ns">workspace path inside mount?</text>
-          <text x="970" y="373" text-anchor="middle" class="ns">fs.local vs fs.sandbox.&lt;name&gt;</text>
-          <text x="970" y="390" text-anchor="middle" class="ns">route runtime_start to chosen daemon</text>
-
-          <path d="M320 153 H465" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#c-blue)"></path>
-          <text x="392" y="141" text-anchor="middle" class="el">spawn local</text>
-          <path d="M320 187 C380 230 390 326 465 344" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#c-blue)"></path>
-          <text x="373" y="286" class="el">spawn sandbox</text>
-
-          <path d="M710 159 H850" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#c-blue)"></path>
-          <text x="780" y="147" text-anchor="middle" class="el">HostClient / hello</text>
-          <path d="M710 348 H850" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#c-blue)"></path>
-          <text x="780" y="336" text-anchor="middle" class="el">HostClient / hello</text>
-
-          <path d="M970 213 V285" stroke="#7c3aed" stroke-width="2" fill="none" marker-end="url(#c-purple)"></path>
-          <text x="990" y="254" class="el">candidate set</text>
-
-          <path d="M850 390 C790 470 675 498 610 411" stroke="#16a34a" stroke-width="2" fill="none" marker-end="url(#c-green)"></path>
-          <text x="732" y="480" text-anchor="middle" class="el">sandboxed workspace start</text>
-          <path d="M850 326 C780 270 745 212 710 170" stroke="#16a34a" stroke-width="2" fill="none" marker-end="url(#c-green)"></path>
-          <text x="785" y="255" class="el">regular workspace start</text>
-
-          <rect x="225" y="540" width="730" height="64" rx="8" fill="#f8fafc" stroke="#e2e8f0"></rect>
-          <text x="590" y="564" text-anchor="middle" class="ns">未来 remote backend 时，daemon 也可以通过 outbound WS 连 server；但 sandbox 的核心模型仍是：</text>
-          <text x="590" y="584" text-anchor="middle" class="ns">单独 daemon installation + capability placement + mount/secret 边界，不把 sandbox 混成 host kind。</text>
-
-          <path d="M955 510 C910 548 858 552 800 542" stroke="#ea580c" stroke-width="1.8" stroke-dasharray="7 5" fill="none" marker-end="url(#c-orange)"></path>
-          <text x="933" y="535" class="el">D4 / future outbound</text>
         </svg>
       </div>
     </section>

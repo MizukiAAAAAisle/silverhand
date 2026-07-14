@@ -1,8 +1,6 @@
 /**
  * `@silverhand/shared` — server connection profile primitive.
  *
- * D4.a Commit 2 (per `docs/remote-backend-architecture-notes.md §3`).
- *
  * ## What this is
  *
  * The desktop main process owns a single on-disk **server connection
@@ -42,10 +40,7 @@
 import { z } from 'zod';
 
 /**
- * Profile **generation** version. Per
- * `docs/remote-backend-architecture-notes.md §3`:
- *
- *   `version: int // monotonic; increments on every commit`
+ * Profile **generation** version — monotonic; increments on every commit.
  *
  * This is the GENERATION number, NOT a schema version. Each successful
  * commit (first-write or overwrite) emits the next integer; the

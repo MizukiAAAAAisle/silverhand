@@ -1,4 +1,4 @@
-// The single eliminate primitive (#task:1231, docs/observe-collapse-v1.md).
+// The single Attention eliminate primitive.
 // Every read-state clearing path in the renderer reduces to one `observe()`
 // call — the backend routes the write back to the source aggregate (stream
 // cursor for `stream`, `notifications.read_at` for `notification`), so the

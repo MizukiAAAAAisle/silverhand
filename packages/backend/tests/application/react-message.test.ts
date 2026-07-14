@@ -17,7 +17,7 @@ import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 /**
  * Application + repo + read-model tests for message reactions
- * (docs/reactions-design.md §12). The keystone here is §12.A — the
+ * (docs/reactions-design.md §4). The keystone here is §4 — the
  * CAS-exclusion invariant: a reaction write must never allocate a message
  * seq, advance `conversations.latest_message_seq`, or move any
  * `conversation_stream_heads.latest_seq`. The rest pin reactor isomorphism

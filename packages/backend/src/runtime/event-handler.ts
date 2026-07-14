@@ -73,7 +73,7 @@ import { NOOP_STATUS_PROJECTOR, type RuntimeStatusProjector } from './status-pro
  * `publish` routes to the resume-governed message-stream scope
  * (`conversation:{id}`); `publishSide` routes to the cursor-inert
  * side-channel scope (`conversation-side:{id}`) for agent-runtime /
- * activity / members kinds. See docs/event-ws-recovery-class-scope-v1.md.
+ * activity / members kinds. See docs/event-ws-transport-v1.md §4.2.
  */
 export interface EventPublisher {
   publish(conversationId: string, payload: { kind: string; payload: unknown }): void;

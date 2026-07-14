@@ -1,52 +1,47 @@
-# Auth and Host model — V1 spec
+# Auth and Host model
 
-> **Status**: V1 implementation spec, 2026-05-25. Companion to
-> `remote-server-target-architecture.md`. Reverse-engineered from the target
-> topology back to the work needed today.
->
-> **Supersedes**: §5 *Auth baseline candidate* of
-> `remote-server-target-architecture.md`. That section described a self-hosted
-> pairing-flow + owner-concept design that was simplified during channel
-> review; this document is the new baseline.
->
+This is the canonical contract for the auth/identity/host-credential model:
+resource ownership, authentication, registration, principal construction, the
+token/credential taxonomy, and host lifecycle. It states the current contract
+only. Governance/capability grading is owned by `graded-permissions-v1.md`
+(referenced, not restated here); DDL and migrations are owned by
+`packages/shared/src/db/schema.ts` + `packages/shared/src/db/migrations.ts`.
+
 > **Related docs**:
-> - `remote-server-target-architecture.md` — target topology + phase 0–5
->   migration plan (still authoritative on those topics).
-> - `multi-daemon-registry.md` — RuntimeHostRegistry mechanics inside the
->   backend.
-> - `silverhand-daemon.md` — current daemon execution-plane scope.
-> - `architecture-principles.md` §9 — control plane vs execution plane.
+> - `graded-permissions-v1.md` — the two-axis authority model (human roles +
+>   agent capabilities) layered on top of the ownership base defined here.
+> - `silverhand-daemon.md` — daemon execution-plane scope.
+> - `daemon-outbound-protocol.md` — the daemon↔backend wire contract.
+> - `orchestration-boundary-v1.md` — control plane vs execution plane, incl.
+>   host-local path authority (§5.1).
+> - `architecture-principles.md` — control plane vs execution plane.
 >
-> **Scope**: this document covers the auth/identity/host-credential model and
-> the V1 work list. Topology, phase ordering, and orchestration-boundary
-> design are owned by the related docs above and only summarised here.
+> **Scope**: topology, phase ordering, and orchestration-boundary design are
+> owned by the related docs above and only summarised here.
 
 ---
 
 ## 0. Three orthogonal layers
 
-The single most important reframing from review: auth is **not one concern**.
-Treating it as one led to a phantom "owner" entity that crossed all three
-layers. The V1 design splits cleanly into three orthogonal layers, each with
-its own implementation and its own tradeoffs:
+Auth is **not one concern**. Treating it as one produces a phantom "owner"
+entity that crosses all three layers. The design splits into three orthogonal
+layers, each with its own implementation and tradeoffs:
 
-| Layer | Question it answers | V1 mechanism |
+| Layer | Question it answers | Mechanism |
 |---|---|---|
-| **Resource ownership** | Once a user exists, what can they see and modify? | `users.id` is the ACL root; every resource resolves an owner user, directly or via parent. |
-| **Authentication** | This request — who is it from? | Email + password; server-issued session token (`user_token`); OAuth provider interface reserved for V2. |
+| **Resource ownership** | Once a user exists, what can they see and modify? | `users.id` is the ACL root; every resource resolves an owner user, directly or via parent. Workspace **governance roles** (owner/admin/member) grade what a member may do — see §2 and `graded-permissions-v1.md`. |
+| **Authentication** | This request — who is it from? | Email + password; server-issued session token (`user_token`). |
 | **Registration** | Who is allowed to create a user account, and when? | `POST /auth/signup` open by default; `SILVERHAND_DISABLE_SIGNUP=1` env to close. No bootstrap policy, no first-user-special role. |
 
 The layers are independent: changing the registration mechanism (open signup
-→ invite-only → OAuth → SSO) does **not** change the resource ownership model
-or the session token shape. Future hardening additions land in their own
-layer without disturbing the others.
+→ invite-only) does **not** change the resource ownership model or the session
+token shape.
 
 ---
 
-## 1. Target topology recap
+## 1. Topology recap
 
-For terminology consistency, the agreed target topology (full discussion in
-`remote-server-target-architecture.md`):
+For terminology consistency, the deployment topology:
 
 ```
 Server (control / state plane)              ← does not run agent or daemon
@@ -56,8 +51,8 @@ Server (control / state plane)              ← does not run agent or daemon
     │
   ┌─┴────────────────────┬─────────────────┐
   │                      │                 │
-Desktop deployment    Sandbox deployment   ...
-  UI client +            (V1.5+) headless
+Desktop deployment    Remote deployment   ...
+  UI client +            headless
   local Host             Host
     │                      │
   Daemon                 Daemon
@@ -65,24 +60,23 @@ Desktop deployment    Sandbox deployment   ...
   Agent processes        Agent processes
 ```
 
-Three first-class concepts (conceptually independent, all sharing schema with
-the existing `hosts` table):
+Three first-class concepts (conceptually independent, all sharing the `hosts`
+table):
 
-- **Host** — `id, user_id, kind=local|remote, label, capabilities, status,
-  installation_id, created_at, last_seen_at, revoked_at`. The execution
-  environment. Identity unit users see, manage, and revoke.
+- **Host** — `id, user_id, kind=local|remote, provisioning_source, label,
+  capabilities, status, installation_id, created_at, last_seen_at,
+  revoked_at`. The execution environment. Identity unit users see, manage, and
+  revoke.
 - **Daemon** — runtime connector running inside a Host. A replaceable instance
   that consumes a Host's credential and supervises agent processes. Daemon
   instance id ≠ host id.
 - **Agent** — actor/config that runs on some Host. Has placement
-  (`default_host_id` etc.) but does not embed a Host credential.
+  (`host_id` etc.) but does not embed a Host credential.
 
-V1 ships exactly one Host kind in scope: `local` (the user's desktop). The
-existing `HostKindSchema` is `local|remote`; this doc keeps that schema
-unchanged. *Sandbox is not a Host kind* — per `multi-daemon-registry.md`,
-sandboxing is a Host capability / mount concern, not an enum tag. A future
-sandbox-provisioning flow (Appendix A.5) MUST come with its own HostKind
-redesign decision; V1 does not pre-commit either schema or provisioning.
+Both Host kinds — `local` (the user's desktop, `provisioning_source =
+'app_install'`) and `remote` (a user-managed computer, `provisioning_source =
+'user_invite'`) — are live and first-class. *Sandbox is not a Host kind*:
+sandboxing is a Host capability / mount concern, not an enum tag.
 
 ### 1.1 HOSTS uniformity (top-level invariant)
 
@@ -91,53 +85,76 @@ auth and wire layers. All differences are confined to provisioning and
 capability metadata; the credential, validation, transport, and lifecycle
 control plane are identical.
 
-| Concern | local Host | remote Host |
+| Concern | local Host | remote Host (user-managed computer) |
 |---|---|---|
-| DB row | `hosts` (one row, `kind='local'`) | `hosts` (one row, `kind='remote'`) |
-| Credential row | `host_credentials` (one or more `kind=long_lived`) | `host_credentials` (one `kind=bootstrap` consumed at first exchange, then one or more `kind=long_lived`) |
-| Mint authority | `user_token` session via `POST /api/hosts/claim-or-create` (§6.1) | `user_token` session via `POST /api/hosts` (§6.2) — desktop is always the trust anchor |
-| Wire auth | `Authorization: Bearer <host_token>` on `GET /api/hosts/connect` | identical |
+| DB row | `hosts` (`kind='local'`, `provisioning_source='app_install'`) | `hosts` (`kind='remote'`, `provisioning_source='user_invite'`) |
+| Credential row | `host_credentials` (one or more `kind=long_lived`) | `host_credentials` (one or more `kind=long_lived`) |
+| Mint authority | `user_token` session via `POST /api/hosts/claim_or_create` (§6.1) | `user_token` session via `POST /api/hosts` (§6.2) — desktop is always the trust anchor |
+| Wire auth | `Authorization: Bearer <host_token>` on the daemon connect/WS transport | identical (the `connect_token` is a long-lived `host_token`, used as both the `connect-token/resolve` bearer and the WS credential) |
 | Server validator | `HostTokenService.verifyHostToken()` | identical (no separate code path) |
-| Outbound transport | one outbound WebSocket per Host (D2) | identical |
-| Rotation | `POST /api/hosts/{id}/rotate-token` + `rotate_token` WS command + 60s grace (§6.4 / D2.f) | identical |
-| Revoke | `POST /api/hosts/{id}/revoke` (hard deny, no grace) | identical |
+| Outbound transport | one outbound WebSocket per Host | identical |
+| Rotation | `POST /api/hosts/:id/rotate-token` + 60s grace (§6.4) | `POST /api/hosts/:id/connect-token/rotate` (§6.2) |
+| Revoke | `POST /api/hosts/:id/revoke` (hard deny, no grace) | for a user-managed computer, `DELETE /api/hosts/:id` (hard delete) / `POST /api/hosts/:id/disconnect` instead — revoke is local-only |
 | Placement key | `agent.host_id` → `RuntimeHostPlacementResolver` | identical (resolver is host-kind-agnostic) |
-| Capability layer | `host_capabilities.*` rows describe local fs / mounts | identical mechanism; sandbox profile etc. attach here (Appendix A.5) |
+| Capability layer | `host_capabilities.*` rows describe local fs / mounts | identical mechanism |
 
 What this invariant buys:
-- Adding a new Host kind in the future (`remote_sandbox`, `cloud`, …) requires
-  only enum extension + a new provisioning entry route. **Wire schema, auth
-  validator, transport, rotation, revoke, and placement code paths do not
-  change.**
-- A user-facing "create sandbox" UX is the same shape as remote-host
-  provisioning (§6.2): desktop UI calls server, server mints a Host row +
-  bootstrap token, the user delivers the bootstrap into the target environment.
-  The sandbox daemon then exchanges to long-lived `host_token` and connects
-  via the same `/api/hosts/connect` endpoint as the local daemon.
-- The desktop is always the trust anchor for any new Host. There is no
-  zero-trust path where a Host claims itself into existence — every Host's
-  first credential is minted by a logged-in user session in the desktop UI,
-  whether the daemon will run on the desktop machine or elsewhere.
+- The desktop / a logged-in user session is always the trust anchor for any
+  new Host. There is no zero-trust path where a Host claims itself into
+  existence — every Host's first credential is minted by an authenticated user
+  session, whether the daemon runs on the desktop machine or elsewhere.
 
-V1 narrows the active surface to `local` only (D2 endpoint, claim-or-create
-route, desktop UI) but the schema, protocol, and code paths are already
-shaped for `remote` to be opened later by enum widening + provisioning UI,
-not by re-architecting the auth model.
+### 1.2 Outbound TLS policy (all dial-out processes)
+
+Every outbound HTTPS the desktop-main process, the daemon, and the spawned CLI
+make relies **entirely** on Node/Electron's system-default CA verification
+pipeline — chain-to-a-system-trusted-CA plus hostname match plus validity-window
+check. Silverhand writes no custom verifier, pins nothing, and does not touch
+the trust store; it only classifies the errors that pipeline produces. Handshake
+failures collapse into a **closed set of three** typed codes so UI, logs, and
+runbooks share a stable surface: `host_tls_chain_invalid` (untrusted / unverifiable
+chain — the fallback for any TLS-class error not more specifically recognized),
+`host_tls_hostname_mismatch`, and `host_tls_expired` (covers both expired and
+not-yet-valid). Non-TLS errors (DNS / connect / timeout / HTTP 401/403) are *not*
+folded into this taxonomy — they carry their own typed codes elsewhere.
+
+`http://` (no TLS) is accepted **only** for the loopback literals
+`{ localhost, 127.0.0.1, ::1, [::1] }` (the embedded-backend and local-dev case).
+A non-loopback `http://` server URL is rejected (`insecure_remote_http_disallowed`)
+unless the client is explicitly launched with `SILVERHAND_ALLOW_INSECURE_REMOTE=1`
+(matched as the exact string `'1'`). That escape hatch is a client-side dev
+opt-in, **not a supported production mode**: there is no self-signed / SPKI-pin
+accept state.
+
+The unverified-TLS bypass — `rejectUnauthorized: false` — is banned across the
+entire client TLS surface, and the ban is enforced mechanically: a `pnpm test`
+gate (`packages/shared/tests/no-insecure-tls.test.ts`) greps the production
+source scopes (`apps/desktop/src/main`, `apps/desktop/src/preload`,
+`packages/{host,backend,shared,cli}/src`) and fails on any occurrence. The
+legitimate production count is exactly zero; test fixtures constructing bad TLS
+contexts are out of scope by design.
 
 ---
 
 ## 2. Resource ownership model
 
-V1 ACL is **per-user resource visibility**, not RBAC. Every queryable
-resource MUST resolve to a `viewer_user_id` scope; the request handler MUST
-scope every read, write, and delete to that user. Visibility comes from one
-of three orthogonal paths — V1 does **not** invent a single global
+The base ACL is **per-user resource visibility**. Every queryable resource
+resolves to a `viewer_user_id` scope for a `user` principal; the request
+handler scopes every read, write, and delete to that user. Visibility comes
+from one of three orthogonal paths — there is **no** single global
 `<resource>.user_id` shortcut where the schema already represents access via
 membership edges.
 
+Layered on top of this base, workspace **governance roles**
+(`owner`/`admin`/`member`) grade what a member may do inside a workspace they
+can see (rename, archive, manage members/agents). Roles do not replace the
+visibility paths below — they refine authority *within* a visible resource.
+The role model, its storage, and the orthogonal agent-capability axis are
+owned by `graded-permissions-v1.md`; §2.4 records only the storage anchor.
+
 ### 2.1 Three ownership / visibility paths
 
-V1 distinguishes three classes of ACL path. Each resource picks exactly one:
+There are three classes of ACL path. Each resource picks exactly one:
 
 | Class | Mechanism | Examples |
 |---|---|---|
@@ -151,7 +168,7 @@ V1 distinguishes three classes of ACL path. Each resource picks exactly one:
 |---|---|---|
 | `users` | n/a | root identity |
 | `hosts` | A | `hosts.user_id` |
-| `agents` | A | `agents.created_by_user_id` (existing column) |
+| `agents` | A | `agents.created_by_user_id` |
 | `notifications` | A | `notifications.user_id` |
 | `workspaces` | B | `workspace_users(workspace_id, user_id)` membership |
 | `conversations` | B | `conversation_users(conversation_id, user_id)` membership (and inherited workspace membership) |
@@ -159,86 +176,86 @@ V1 distinguishes three classes of ACL path. Each resource picks exactly one:
 | `attachments` / `blobs` | C | inherited via parent message / workspace |
 | `tasks` | C | inherited via `tasks.message_id` → conversation |
 
-Implementation invariant: every route handler MUST resolve a `viewer_user_id`
-from the request's session token before any DB read; routes that cannot
-resolve one MUST return 401. There is no "global" or "system" view in V1
-beyond admin recovery commands (§7.4).
+Principal-source contract: a public route resolves a `user` principal from the
+session bearer (no principal ⇒ registration gate refuses the route); an
+internal agent route resolves an `agent` principal from its URL binding; a
+`system` principal exists for backend-internal triggers and is never
+HTTP-resolved. The authoritative statement of principal construction is §3.5 —
+this table does not restate it. So "every route resolves a `viewer_user_id`"
+holds for public routes only, not for internal agent or system contexts.
 
 ### 2.3 Per-user creation does not implicitly equal direct ownership
 
 The frequent-but-wrong shorthand "every resource a user creates is owned by
 that user" hides the membership/inheritance path. A user creating a workspace
-becomes its first member (workspace_users row), not a row in `workspaces.user_id`.
-Class B is still scoped to the creator in V1 because membership starts at
-size 1, but the data model permits later widening (V1.5 invite + workspace
-sharing) without changing class.
+becomes its first member (`workspace_users` row) with `owner` role, not a row
+in `workspaces.user_id`. Class B scopes visibility through membership, so
+widening a workspace to more humans (adding `workspace_users` rows) does not
+change the ACL class.
 
-### 2.4 No RBAC fields in V1
+### 2.4 Governance roles
 
-- No `users.is_admin`, no `users.role`, no `roles` table.
-- No "owner" or "admin" designation among users in the data model.
-- No "user A invites user B" flow (V1.5+).
+Workspace governance roles are **live**: `WorkspaceRole = 'owner' | 'admin' |
+'member'`, stored on `workspace_users.role` (the authoritative source), with a
+denormalized `workspaces.owner_user_id` pointer. `canGovernWorkspace(ctx,
+principal, workspaceId, minRole)` gates governance ops (`owner` ⊇ `admin` ⊇
+`member`); `member` visibility still flows through the class-B membership edge.
+Design, capability axis, and role→operation matrix are owned by
+`graded-permissions-v1.md`.
 
-A user's only authorisation in V1 is the implicit "I can see and modify
-resources whose ownership chain ends at my `user_id`."
+Note the axis boundary: `conversation_users` has **no** role column —
+conversation membership is binary (member or not). Governance roles are
+workspace-scoped only. There is no `users.is_admin` / global-admin designation;
+authority is per-workspace.
 
-### 2.5 What cross-user namespace operations look like
+### 2.5 Cross-user namespace operations
 
-V1 has none in-product. The following are not in V1:
-
-- viewing another user's hosts, workspaces, conversations, agents
-- revoking another user's host
-- sharing a workspace across users
-- promoting/demoting users
-
-If they show up later (V1.5 invite + workspace sharing, V2 admin console),
-they are additive layers on top of this model — they do not require rewriting
-ownership semantics.
+Shared-workspace human membership and per-workspace role governance are
+current: multiple humans can be members of one workspace, each with a role, and
+`owner`/`admin` govern it per §2.4.
 
 ---
 
 ## 3. Authentication
 
-### 3.1 V1 mechanism: email + password + session
+### 3.1 Mechanism: email + password + session
 
-**Identity vs credential split** (P1 review fix). The existing `users` table
-is profile/human identity — `name`, `display_name`, avatar, name uniqueness
-across users/agents. V1 does NOT reshape it into an email-only auth row.
-Auth-related state lives in dedicated tables, the `users` row stays the
-profile root.
+**Identity vs credential split.** The `users` table is profile/human identity —
+`name`, `display_name`, avatar, name uniqueness across users/agents. It is NOT
+an email-only auth row. Auth-related state lives in dedicated tables; the
+`users` row stays the profile root.
 
-- `users` (existing, augmented): keeps `name`, `display_name`, etc. V1 adds
-  `users.email` (unique nullable until first auth-enabled user, then
-  enforced) **only as the canonical login handle**; profile fields stay
+- `users`: keeps `name`, `display_name`, etc., plus `users.email`
+  (unique-when-set) as the canonical login handle; profile fields stay
   authoritative for display.
 - `user_password_credentials(user_id PK FK, password_hash, password_hash_params JSON, password_updated_at)` —
   Argon2id storage in its own table. A `users` row without a row here is a
-  legacy profile-only user (e.g. agents-as-actor metadata; v0 single-user
-  fallback) and cannot log in until a credential is provisioned.
-- `password_hash` uses Argon2id with parameters per OWASP current
+  profile-only user (e.g. agents-as-actor metadata; embedded single-user
+  bootstrap) and cannot log in until a credential is provisioned.
+- `password_hash` uses Argon2id with parameters per current OWASP
   recommendation; specific values are not committed in this doc —
   implementation chooses per-env benchmark and stores them in
   `password_hash_params` so future migration is non-breaking.
-- Signup MUST populate `users.name` / `users.display_name` (defaults derived
-  from email local-part if user does not provide them) so the new row is
-  valid against existing profile constraints + uniqueness; signup body
-  shape: `{ email, password, display_name? }`.
+- Signup populates `users.name` / `users.display_name` (defaults derived
+  from email local-part if the user does not provide them) so the new row is
+  valid against profile constraints + uniqueness; signup body shape:
+  `{ email, password, display_name? }`.
 - Login: `POST /auth/login {email, password}` → server resolves
   `users` row by email, joins `user_password_credentials`, validates → issues
   `user_token` (opaque session token) bound to a row in
   `auth_sessions(id, user_id, token_hash, created_at, last_used_at, revoked_at, user_agent, ip_first_seen)`.
 - Token transport: `Authorization: Bearer <user_token>` on every HTTP call
   from desktop UI / renderer.
-- Storage on desktop: V1 stores the opaque `user_token` in a main-owned
+- Storage on desktop: the opaque `user_token` lives in a main-owned
   0600 plaintext file under `~/.silverhand/desktop/session.bin`. This is
   intentionally the same local-file policy used by `daemon-config.json`
-  for `host_token`: the desktop is inside the V1 trust boundary, and
+  for `host_token`: the desktop is inside the trust boundary, and
   local encryption would not defend against user-level code execution.
   The renderer never sees the token; the file must not be copied into
   workspaces, logs, IPC payloads, attachments, or support bundles. Server
   storage remains hash-only and logout/session revoke invalidates the
   bearer immediately.
-- V1 local credential file policy applies uniformly to `session.bin`,
+- The local credential-file policy applies uniformly to `session.bin`,
   `daemon-config.json` (`host_token`), and `server-profile.bin`:
   main/daemon-only access, mode 0600, opaque bearer values, renderer
   never receives credentials, no credential bytes in logs/IPC/attachments,
@@ -248,29 +265,47 @@ profile root.
   long-lived credentials together to a real secret store instead of
   encrypting only one token class.
 
-### 3.2 Provider interface reserved for V2
+### 3.2 Server connection profile (single desktop-main transport source)
 
-V1 has exactly one auth provider (`password`) and ships the credential
-table for it (`user_password_credentials`). When V2 adds OAuth, it
-introduces a sibling `user_auth_links(user_id, provider, provider_user_id,
-email, linked_at)` table in the same migration that ships the route — V1
-does NOT pre-create an empty OAuth table.
+`server-profile.bin` is the **single desktop-main-owned source of `server_url`**
+for every desktop↔backend transport, across both the pre-auth phase
+(`GET /api/server/info`, signup, login) and the post-auth phase (proxied
+`/api/*`, session refresh, the event WebSocket, host claim). It lives at
+`~/.silverhand/desktop/server-profile.bin`, mode 0600, under the same local
+credential-file policy as `session.bin` and `daemon-config.json`. Its persisted
+shape is intentionally minimal — JSON with exactly `{ version, server_url,
+created_at, updated_at }` (no token, no TLS/insecure flag, no SPKI pin; insecure
+status is recomputed at runtime from the URL + env, never stored). The renderer
+only ever receives a redacted view (`{ server_url, updated_at }`).
 
-V2 provider list (planned, not committed):
+The daemon **never reads the profile.** It reads only the *derived*
+`daemon-config.json` (`{ server_url, host_id, host_token, profile_version?,
+allow_insecure_remote? }`). Updating the server URL is a two-phase operation:
+phase 1 commits the profile atomically (temp file → fsync → rename, so a crash
+before the rename leaves the prior profile intact); phase 2 derives a fresh
+daemon-config from `{ profile.version, server_url, host_id, host_token }` and
+sends the daemon a reload IPC. If phase 2 fails (config-write / reload-IPC /
+ack / missing host token), the profile is already at the new generation while
+the daemon still runs the old config; this is recorded as
+`partial_apply_pending` and converges via a Retry, a daemon restart, or a
+boot-time reconciliation that re-derives state by comparing `profile.version`
+against `daemon-config.profile_version`. A pre-auth commit with no host claim
+yet is *not* pending — the next sign-in's host claim stamps the current profile
+into the daemon-config it writes.
 
-- `password` (V1)
-- `github_oauth`
-- `google_oidc`
-- (later) `enterprise_sso` via OIDC/SAML
-
-Regardless of provider, every successful auth ends in the same `auth_sessions` row + same `user_token` shape. Provider only changes how identity is proven, not what identity yields.
+`profile.version` is a monotonic **generation counter** (floor 1, bumped on
+every commit), not a schema version. It exists solely to drive that local
+reconciliation and reload-fingerprint decision; it is a strict local-config
+boundary and is **never** placed on any outbound WSS frame, backend HTTP
+request, or `Authorization` header. The daemon↔backend protocol is unaware of
+it — the daemon authenticates with `host_token` alone.
 
 ### 3.3 Logout vs sign-out-and-disable-host
 
 Two distinct UX actions, two distinct mutations:
 
 - **Logout (UI only)**: invalidates the current `auth_sessions` row and removes the local session file. Local Host's `host_token` is **not** affected — the daemon stays online (independent lifecycle).
-- **Sign out and disable this host**: above, plus `POST /api/hosts/{id}/revoke` for the local host. Daemon connection drops, won't reconnect.
+- **Sign out and disable this host**: above, plus `POST /api/hosts/:id/revoke` for the local host. Daemon connection drops, won't reconnect.
 
 Default UI button label: "Logout". The "disable this host too" affordance lives behind a secondary control or in the Hosts page, not as the default action.
 
@@ -297,53 +332,84 @@ Anti-enumeration applies to authentication outcomes, not to route
 existence. Implementations MUST add timing-equalisation for the credential
 path; the disabled-signup 404 needs no special handling.
 
+### 3.5 Principal source per route class (single owner of the identity axis)
+
+Every request resolves exactly one `Principal` (`user` / `agent` / `system`),
+but the **input source** differs by route class and is not negotiable by the
+caller. This is the single authoritative statement of principal construction;
+other docs reference it, they do not restate it.
+
+| Route class | Principal kind | Source | Enforced by |
+|---|---|---|---|
+| public `/api/*` | `user` | session bearer (`user_token`) → `auth_sessions` subject | `bearer.ts` sets the principal; no request-declared header is trusted |
+| internal `/internal/conversations/:cid/agents/:aid/*` | `agent` | URL `(cid, aid)` + scoped bearer + `conversations.getAgent(cid, aid)` membership | `installInternalPrincipalMiddleware` (`auth/principal.ts`) |
+| backend-internal code | `system` | not HTTP-originated | never resolved from a request |
+
+- **Internal routes reject the principal header (400, not silent-ignore).**
+  `X-Silverhand-Principal` on any `/internal/*` route returns
+  `400 principal header is not allowed on internal routes`. Machine identity
+  has a single source — the URL binding — so a second identity input would only
+  create conflict: trusting the header would let any token-bearing process forge
+  an agent identity (the URL binding wasted); trusting the URL would leave the
+  header a decorative footgun a caller believes is effective. A hard 400 makes a
+  mis-set header fail loudly at the caller rather than resolve to the wrong
+  identity. (The header is not a public principal source either: the public
+  bearer middleware is the only place a `user` principal is set; no legacy
+  header is synthesised into one.)
+- **`from_kind='system'` messages are never HTTP-originated.** The `system`
+  principal exists only for backend-internal triggers (onboarding, lifecycle,
+  provision). No HTTP route resolves a `system` principal, so a `from_kind =
+  'system'` insert must always be traceable to backend-internal code; the repo
+  layer asserts this rather than relying on a route guard.
+
 ---
 
 ## 4. Registration
 
-### 4.1 V1: open signup with disable env
+### 4.1 Open signup with disable env
 
 - `POST /auth/signup {email, password}` is open by default.
 - `SILVERHAND_DISABLE_SIGNUP=1` env (read once at server startup, frozen) closes the route — returns 404, identical to other not-found.
 - `GET /api/server/info` returns `{ signup_enabled: bool }` so desktop UI can render the right surface (signup form vs login-only) without round-tripping through a failed POST.
-- Startup log MUST print the resolved value: `Signup: enabled (or: disabled)`.
+- Startup log prints the resolved value: `Signup: enabled (or: disabled)`.
 
-### 4.2 What V1 does NOT do
+### 4.2 What registration does NOT do
 
 - No `bootstrap_policy` config, no `setup_secret`, no special first-user codepath.
 - No invite tokens, no email verification, no password recovery via email, no rate limiting beyond what the HTTP layer offers.
 - No anti-enumeration response masking for signup specifically (covered by §3.4 already).
 
-The first user is just the first row in `users`. They have no special role.
+The first user is just the first row in `users`. They have no special global role (workspace-scoped `owner` on their workspaces is a separate axis, §2.4).
 
 ### 4.3 Frozen at startup
 
-`signup_enabled` is loaded from env once at server startup into an immutable config object. Auth/setup routes reference this in-memory object only; they do **not** read settings tables at request time. Hot-swap is forbidden; toggling signup requires a server restart. This makes audit, testing, and reasoning straightforward.
-
-### 4.4 Future hardening (Appendix A)
-
-Future modes — bootstrap_policy, setup_secret, invite-only signup, OAuth-only — are documented as Appendix A options. They are not implemented in V1 because shiki's V1 product positioning is "I deploy this for myself" — the user is also the deployer, the deployment is implicitly trusted, and `SILVERHAND_DISABLE_SIGNUP=1` after first registration covers the "don't want random signups" case adequately.
+`signup_enabled` is loaded from env once at server startup into an immutable config object. Auth/setup routes reference this in-memory object only; they do **not** read settings tables at request time. Hot-swap is forbidden; toggling signup requires a server restart. This keeps audit, testing, and reasoning straightforward.
 
 ---
 
 ## 5. Token / credential taxonomy
 
-V1 has three independent credentials with **non-overlapping** lifetimes and authorities. Code MUST treat them as distinct types (not generic `string`), and logs MUST never print them in cleartext.
+There are two live credential classes with **non-overlapping** lifetimes and authorities. Code treats them as distinct types (not generic `string`), and logs never print them in cleartext.
 
 | Credential | Bound to | Lifetime | Issued by | Used by | Revocation |
 |---|---|---|---|---|---|
 | `user_token` (session) | `(user_id, auth_sessions.id)` | Long-lived (config; default 30d), refreshed on use | `/auth/login` success | desktop UI / Electron main HTTP client | Logout invalidates one session; DELETE all user sessions on password change |
-| `host_token` | `(user_id, host_id)` | Long-lived (default 90d, rotatable) | First-time exchange of `host_bootstrap_token` (or auto-issue on local-host claim, see §6.1) | Daemon outbound HTTP/WS only | `POST /api/hosts/{id}/revoke` invalidates immediately (hard deny, no grace). Rotation has 60s grace — see §6.4 |
-| `host_bootstrap_token` | `(user_id, host_id, single_use)` | Short (default 15min, one-shot) | `POST /api/hosts` when creating a remote host | Daemon's first-ever connect, exchanged for `host_token` | Single-use; consumed on first exchange. Time-expiry as backup. |
+| `host_token` | `(user_id, host_id)` | Long-lived, rotatable (`host_credentials.kind='long_lived'`) | `POST /api/hosts/claim_or_create` (local) or `POST /api/hosts` (remote/user-managed computer — returned as the `connect_token`) | Daemon outbound HTTP/WS only | `POST /api/hosts/:id/revoke` (local) or `DELETE`/`disconnect` (user-managed) invalidates immediately (hard deny, no grace). Rotation has 60s grace — see §6.4 |
 
-Three rules that the type system / interface MUST enforce:
+The `host_credentials.kind` enum has a second arm, `bootstrap`. It has **no
+live issuance path** today: both local and remote provisioning mint a
+`long_lived` `host_token` directly (remote returns it as the `connect_token`,
+which the daemon presents to `GET /api/hosts/connect-token/resolve` and then
+reuses as the WS bearer).
+
+Rules the type system / interface enforces:
 
 1. `user_token` is never sent to a daemon.
 2. `host_token` is never visible to the renderer/UI process. The Electron
    main process may receive it (over an authenticated HTTP call using
    `user_token`) and write it to the daemon config file via privileged
    local FS, but it MUST NOT be forwarded over IPC to the renderer.
-3. `host_bootstrap_token` is never persisted beyond its first exchange.
+3. If a `bootstrap`-kind credential is ever issued, it is never persisted beyond its first exchange.
 
 `installation_id` is **not** in this table because it is not a credential. It is a local stable id (`~/.silverhand/installation_id`, auto-generated UUID per fresh install) used solely to deduplicate auto-registration of the same desktop machine. Server may store it for display/recognition, but it never grants authority — it is paired with `user_token` proving who the user is, and only then maps to a `host_id`.
 
@@ -360,7 +426,7 @@ This flow runs in the Electron **main** process; the renderer only sees
 [main] desktop login (POST /auth/login from main process)
        └─→ user_token issued, stored in main-owned 0600 local file
 [main] read ~/.silverhand/installation_id (creates uuid if absent)
-[main] POST /api/hosts/claim-or-create
+[main] POST /api/hosts/claim_or_create
          Authorization: Bearer <user_token>
          Body: { installation_id, label: os.hostname(), current_host_id? }
 [server] resolves (user_id, installation_id):
@@ -371,7 +437,8 @@ This flow runs in the Electron **main** process; the renderer only sees
                long_lived credential; stale/missing/revoked credentials force
                a replacement token without treating claim as rotation)
          CASE B: no existing host
-           → CREATE host (user_id, installation_id, kind=local, label, ...)
+           → CREATE host (user_id, installation_id, kind=local,
+                          provisioning_source='app_install', label, ...)
            → ISSUE host_token
            → return { host_id, host_token, server_url }
          CASE C: existing host, revoked
@@ -380,76 +447,65 @@ This flow runs in the Electron **main** process; the renderer only sees
               re-create it from the Hosts page" (no silent revival)
 [main] write {host_id, host_token, server_url} to
        ~/.silverhand/daemon-config.json (mode 0600, owner-only)
-[main] existing local daemon transport remains unchanged in Stage B
-[daemon] holds host_token on disk; presents it on whatever transport
-         the daemon ↔ server channel uses (see transport note below)
+[daemon] holds host_token on disk; presents it as the bearer on the
+         outbound daemon↔backend transport (see transport note below)
 ```
 
-**Transport note**: V1 (Stage B; stages now in `remote-backend-architecture-notes.md`) keeps
-the existing pre-outbound transport — backend / Electron main dials the
-daemon's Unix socket via `HostClient`. The daemon does NOT initiate
-HTTP/WS calls to the backend in V1. Adding `host_token` to the request
-shape of an outbound daemon-initiated channel is the
-**follow-up phase** (daemon outbound protocol). Stage B's contract for
-`host_token` is: it is issued, persisted, validated by a generic
-`verifyHostToken()` server-side, and used to authorize host-scoped
-operations the server performs (placement routing, revoke enforcement).
-Stage B does NOT introduce a new daemon-initiated authenticated
-connection.
+**Transport note**: the daemon reaches the backend over an outbound channel —
+a local `daemon-outbound.sock` in embedded mode, an outbound WSS in standalone
+mode (`daemon-outbound-protocol.md`). `host_token` is the bearer on that
+channel: issued, persisted, validated server-side by a generic
+`verifyHostToken()`, and used to authorize host-scoped operations (placement
+routing, revoke enforcement). (`daemon.sock` is the separate desktop
+host-control IPC — revoke/rotate/disconnect — not the runtime data plane.)
 
 Renderer-side surface: the renderer sends "log me in" / "log me out" IPCs
 to main and observes connection state via subscription. It never receives
-`host_token`, `host_bootstrap_token`, or daemon config contents over IPC.
+`host_token` or daemon config contents over IPC.
 
-### 6.2 Remote Host provisioning (V1.5+, schema arm exists, no V1 surface)
+### 6.2 Remote Host provisioning (user-managed computer)
 
-The existing `HostKindSchema` already has `local|remote`. V1 ships `local`
-end-to-end; `remote` is the next step (headless daemon binary, sandbox
-provisioning, etc.). The **provisioning flow** below is the planned shape;
-V1 implementation MUST NOT ship the desktop UI surface or the headless
-daemon binary, but the protocol shape is fixed here so Phase 4 has a target:
+A `remote` Host — a "user-managed computer" (`provisioning_source =
+'user_invite'`) — is provisioned from the desktop and attaches over the same
+outbound transport as the local Host. The flow:
 
 ```
-desktop UI → "Hosts" page → "Add remote host"
-  user inputs: label
-[main] POST /api/hosts { kind: 'remote', label }
-       Authorization: Bearer <user_token>
-[server] CREATE host row (user_id, installation_id=null, kind=remote)
-         ISSUE host_bootstrap_token (15min one-shot, scope=host_id)
-         RETURN { host_id, host_bootstrap_token, server_url }
-[main] desktop UI shows: silverhand-daemon bootstrap eyJzZXJ2ZXIi...
-       (base64 of {server_url, host_id, host_bootstrap_token})
-user copies bootstrap string, runs in target env (Docker / k8s / VM)
-[remote daemon] parses payload, POST /api/hosts/{id}/exchange
-                 Authorization: Bearer <host_bootstrap_token>
-[server] validates bootstrap token (not yet consumed, not expired,
-         matches host_id) → ISSUE host_token (long-lived)
-         → mark host_bootstrap_token consumed
-[remote daemon] stores host_token, opens outbound WS to server_url
+desktop UI → "Add computer"
+[main] POST /api/hosts               Authorization: Bearer <user_token>
+[server] CREATE host row (user_id, kind='remote',
+                          provisioning_source='user_invite')
+         ISSUE long_lived host_token
+         RETURN { host_id, host, connect_token, daemon_npm_spec }
+[main] desktop UI shows a copyable connect command carrying <connect_token>
+user runs the command in the target env (another machine / container)
+[remote daemon] GET /api/hosts/connect-token/resolve
+                 Authorization: Bearer <connect_token>
+[server] verifyHostToken(connect_token) + assert host.kind='remote',
+         provisioning_source='user_invite', not revoked
+         → RETURN { host_id }   (daemon learns its host id for local namespacing)
+[remote daemon] opens outbound WS to server_url, presenting the same
+                connect_token as the WS bearer
+[main] PATCH /api/hosts/:id   finalizes the setup draft (display_label)
+       after first daemon attach
 ```
 
-**V1 ship scope from this section: nothing** (other than the existing
-`hosts.kind` enum already supporting `remote`). The protocol shape above
-is documented here so Phase 4 / V1.5 has a fixed target, but V1
-implementation MUST NOT ship `POST /api/hosts` (kind=remote create),
-`POST /api/hosts/{id}/exchange`, the desktop "Add remote host" UI, or the
-headless daemon binary. Those routes carry their own threat model
-(bootstrap-token leak surface, exchange replay, daemon outbound auth) and
-should land **with** their callers and headless daemon binary, not ahead
-of them — exposing an exchange endpoint without a real consumer means
-shipping unaudited surface area. V1's only host routes are the local-host
-set: `claim-or-create`, `revoke`, `rotate-token` (§6.1 / §6.3 / §6.4).
-
-*Sandboxing as a Host capability* (chroot, seccomp, namespace mounts,
-ephemeral fs) is orthogonal to `kind` and out of scope here; see Appendix
-A.5 for the future track.
+Notes:
+- The `connect_token` *is* a `long_lived` `host_token` (§5) — there is no
+  separate bootstrap-exchange step. `connect-token/resolve` only maps the token
+  to its `host_id`; the token itself remains the WS credential.
+- The connect command intentionally carries no host id; the daemon proves
+  possession of the token and the server returns the id.
+- Rotation is via `POST /api/hosts/:id/connect-token/rotate` (§6.4);
+  teardown is `DELETE /api/hosts/:id` (hard delete of an empty user-managed
+  computer) or `POST /api/hosts/:id/disconnect` (drop the live WS). A
+  user-managed computer does not use the local `revoke` path.
 
 ### 6.3 Host revoke
 
 ```
 authenticated user → desktop Settings → Local host → Revoke
 [renderer] window.agentHub.revokeHost({ hostId })
-[main]   POST /api/hosts/{id}/revoke (Authorization: Bearer <user_token>)
+[main]   POST /api/hosts/:id/revoke (Authorization: Bearer <user_token>)
 [server] BEGIN
            mark host.revoked_at = now (only when not already revoked)
            bulk-mark host_credentials.revoked_at = now WHERE revoked_at IS NULL
@@ -474,11 +530,10 @@ grace described in §6.4 applies to **rotation only**, never to revoke.
 
 Soft-delete on both the `hosts` row (`hosts.revoked_at`) and every active
 `host_credentials` row (`host_credentials.revoked_at = now`). The rows
-stay for audit / placement-history continuity; physical row removal is a
-future compaction concern, not a revoke responsibility. Token-validator
+stay for audit / placement-history continuity. Token-validator
 treats `revoked_at != NULL` and missing row identically (deny).
 
-**Stage B.4 invariants:**
+**Invariants:**
 
 - The route is **idempotent**: revoking an already-revoked host is a 200
   OK and still sweeps any straggler `host_credentials` rows whose
@@ -494,39 +549,34 @@ treats `revoked_at != NULL` and missing row identically (deny).
   lost** until a future re-bind or migration. Confirm copy and docs MUST
   distinguish these two facts so users do not believe revoke deletes
   their conversation history.
-- **Active-only `(user_id, installation_id)` UNIQUE** (migration v31).
+- **Active-only `(user_id, installation_id)` UNIQUE.**
   Re-claiming the same installation after revoke transparently mints a
   new active host row; the old revoked row is preserved. This prevents
   "revoked your own local host → permanently locked out from this
-  desktop" without any local-state surgery (the previous design had the
-  partial-unique cover any non-null pair, which made re-claim 409).
+  desktop" without any local-state surgery.
 - **Owner check uses 404, not 403,** for missing or cross-user host ids
-  (matches the route ACL convention from A.3 §2.5: "non-visible →
-  404"). No `host_id` enumeration through this surface.
+  (matches the route ACL convention "non-visible → 404", §2.5). No
+  `host_id` enumeration through this surface.
 - The route requires a **session bearer** (`requireSessionBearerUser`).
-  The retired embedded server-config token is not accepted by public
-  bearer auth at all, so a pre-Stage-A renderer cannot reach it by
-  forging viewer headers.
 
 ### 6.4 Host_token rotation
 
-`host_token` rotation is **not** implicit on every claim. Implicit rotation breaks the daemon's existing connection or creates double-token races. Explicit rotation:
+`host_token` rotation is **not** implicit on every claim. Implicit rotation breaks the daemon's existing connection or creates double-token races. There are two explicit rotation surfaces, one per Host kind:
 
-- `POST /api/hosts/{id}/rotate-token` issues a new long_lived token; the
+- **Local Host — `POST /api/hosts/:id/rotate-token`** issues a new long_lived token; the
   prior credential's `expires_at` is set to `min(now+60_000, prior)` so it
   remains valid for the 60-second grace window; the new token is returned
   to the desktop main process, which writes `daemon-config.json` (mode
   0600) atomically before the IPC return crosses the renderer boundary.
-- Daily auto-rotation by server is a future hardening option; V1 does no auto-rotation.
+- **User-managed computer — `POST /api/hosts/:id/connect-token/rotate`** issues a fresh `connect_token` for the remote host. Unlike the local path there is no local daemon-config write; the operator re-copies the new connect command.
 
-**Stage B.4 invariants:**
+**Invariants (local `rotate-token`):**
 
 - **Owner-only,** session bearer required. Cross-user / missing host id
   → 404 (no enumeration). Already-revoked host → 409
   `error_code: host_revoked`. Non-`local` kind → 409
-  `error_code: kind_not_supported` (V1 surface only rotates the user's
-  local host; remote / sandbox hosts have no UI yet, so their rotation
-  channel is reserved for the future remote-daemon era).
+  `error_code: kind_not_supported` — a user-managed computer rotates through
+  `connect-token/rotate` instead, not this route.
 - **Renderer never sees `host_token`.** The route response carries the
   cleartext token; `assertApiProxyPath` refuses to proxy
   `/api/hosts/*/rotate-token` through the generic `backend:request`
@@ -543,29 +593,25 @@ treats `revoked_at != NULL` and missing row identically (deny).
 
 ### 6.5 Listing hosts
 
-`GET /api/hosts` is **owner-scoped** (Stage B.4 viewer filter):
+`GET /api/hosts` is **owner-scoped**:
 
-- Session bearer required. A retired server-config bearer is treated as
-  an invalid public bearer (401) before the host route runs.
+- Session bearer required.
 - Returns every host owned by the caller, including revoked rows
   (sorted active-first, then by `created_at`). `HostDto` includes
   `revoked_at` and `last_seen_at` so the Settings page can render
-  audit history.
-- The previous unscoped behaviour ("return all rows in the `hosts`
-  table") is gone. There is no production caller that needed
-  cross-user host visibility.
+  audit history. Unfinalized user-invite drafts are hidden from this list (they surface only via `GET /api/hosts/:id`, §6.2).
+- There is no cross-user host visibility.
 
 ---
 
 ## 7. Server deployment form
 
 The server is **not** a desktop-only helper. It is a deployable Node server
-artifact. V1 route 1 ships the Node process first; an official Docker image is
-deferred until the server has passed local/remote soak.
+artifact. The Node process is the shipped form.
 
 ### 7.1 Standalone Node.js process
 
-Primary V1 distribution form:
+Primary distribution form:
 
 - Node.js 24+ runtime; `silverhand-server` is the primary process.
 - Persistent state: `/var/lib/silverhand` or another absolute
@@ -573,7 +619,7 @@ Primary V1 distribution form:
   - `silverhand.db` (SQLite WAL)
   - `silverhand.db-wal` / `silverhand.db-shm` beside the DB file
   - `blobs/` (local blob storage)
-  - `workspaces/` (per-workspace fs roots; future host-bound resolution per `[depends: workspace-fs-decision]`)
+  - `workspaces/` (per-workspace fs roots)
 - `silverhand.db`, `silverhand.db-wal`, and `silverhand.db-shm` must remain in
   the same directory on the same filesystem.
 - Listen: default `127.0.0.1:8080`; bind and expose it through the deployer's
@@ -594,15 +640,9 @@ Operators running under systemd, pm2, or a bare Node process own native
 dependency installation/rebuild for the target Node ABI (`better-sqlite3`
 included).
 
-### 7.2 Future Docker image
-
-The official Docker image is deferred until after V1 route-1 soak. When it
-lands, it must preserve the same env contract, data-root layout, and single
-replica SQLite/WAL invariant.
-
 ### 7.3 Configuration interface
 
-**Configuration is via environment variables**, not CLI flags. CLI flags are for one-shot operations (§7.4), not for server lifecycle config. The full env list is committed in `docs/server-env-config.md` (to be written alongside V1 implementation), key entries:
+**Configuration is via environment variables**, not CLI flags. CLI flags are for one-shot operations (§7.4), not for server lifecycle config. The full env list is in `docs/server-env-config.md`; key entries:
 
 - `SILVERHAND_LISTEN` — `host:port` to bind, default `127.0.0.1:8080`
 - `SILVERHAND_DATA_DIR` — persistent state root, default `/var/lib/silverhand`
@@ -612,21 +652,19 @@ replica SQLite/WAL invariant.
   upgrades require operator opt-in), embedded desktop default `1` (auto-upgrade
   with the same pre-migration backup). Any allowed upgrade backs up the whole
   data dir to a sibling `<data_dir>-backup-<utc>/` before applying migrations
-- (V2 / Appendix A) `SILVERHAND_AUTH_PROVIDERS` — comma list
 
 ### 7.4 Admin operations (recovery / maintenance)
 
-The server package includes `silverhand-server admin <subcommand>` for one-shot operational tasks. These are NOT part of the V1 product flow; they are recovery tools. They exist because losing all desktop sessions or forgetting an email's password should not require re-deploying the server.
+The server package includes `silverhand-server admin <subcommand>` for one-shot operational tasks. These are NOT part of the normal product flow; they are recovery tools. They exist because losing all desktop sessions or forgetting an email's password should not require re-deploying the server.
 
-Available admin subcommands in V1:
+Available admin subcommands:
 
 - `silverhand-server admin reset-password --email <x>` — masked prompt for new password; updates the credential through `PasswordCredentialService`; revokes all sessions for that user.
 
 `--password` is intentionally unsupported. For non-interactive recovery, use
 `--password-from-file <path>` with an owner-only secret file; the CLI unlinks it
 after reading. Unknown emails fail with `user_not_found` and never create a new
-user. List/revoke-style admin commands are deferred until their auth and audit
-surface is intentionally scoped.
+user.
 
 Invocation: `SILVERHAND_DATA_DIR=/var/lib/silverhand silverhand-server admin reset-password --email shiki@example.com`.
 
@@ -647,282 +685,46 @@ This makes embedded a deployment variant of remote, not a separate auth path. No
 
 ---
 
-## 8. Schema migration map
+## 8. Schema
 
-Three classes of changes:
-
-### 8.1 Reuse (existing fields, V1 keeps semantics)
-
-- `users` table — exists today as profile/identity (name, display_name,
-  avatar). V1 keeps profile fields untouched; signup writes additional
-  rows in new auth tables and a new `email` column on `users` (see §8.3).
-- `agents.created_by_user_id` — already an FK to `users.id`. V1 uses it as the authoritative agent owner.
-- `messages.from_user_id` — exists for authorship attribution. V1 keeps as authorship metadata; ACL still flows through conversation→workspace membership.
-- `notifications.user_id` — exists. V1 uses as per-user inbox.
-- `workspace_users`, `conversation_users` — existing membership tables. V1
-  uses them as the class-B ACL edge per §2; no schema change.
-
-### 8.2 Reinterpret (existing column, new semantic)
-
-- `app_settings.viewer_user_id` — deprecated legacy row. V1 no longer
-  writes or reads it as a current-viewer bridge; viewer identity is
-  sourced from the resolved session subject, and viewer-scope fanout uses
-  membership tables. The row/key may stay until D-stage schema cleanup.
-- `hosts` table — currently registry-scoped. V1: becomes the user-facing
-  Host concept (per `multi-daemon-registry.md`). `kind` enum stays
-  `local|remote`. Add `installation_id`, `revoked_at`, `last_seen_at` if
-  not yet present (verify in implementation); `user_id` FK should already
-  be there. `kind=sandbox` is **not** added in V1.
-
-### 8.3 New (V1 additions)
-
-- `users.email` — unique-when-set (`UNIQUE` index on non-NULL). May already
-  exist; verify. Profile rows that predate auth migration keep `email
-  IS NULL` and cannot log in until upgraded.
-- `user_password_credentials(user_id PK FK→users.id, password_hash, password_hash_params JSON, password_updated_at)` —
-  one-to-zero-or-one with `users`. Argon2id storage isolated from profile
-  identity. Future providers (OAuth) MUST add their own credential tables
-  rather than reusing this one.
-- `auth_sessions(id, user_id, token_hash, created_at, last_used_at, revoked_at, user_agent, ip_first_seen)` — session table.
-- `host_credentials(id, host_id, token_hash, kind=long_lived|bootstrap, expires_at, consumed_at, revoked_at)` — host token storage. Single table with `kind` enum is preferred over two parallel tables.
-
-### 8.4 Deferred to V2
-
-- `user_auth_links(user_id, provider, provider_user_id, email, linked_at)`
-  — OAuth provider linkage. V1 has no OAuth, no need to ship empty table;
-  the V2 migration that adds `github_oauth` introduces this table together
-  with the route. (Closes Cindy's open question on review round 1.)
-
-Migration ordering and idempotence are owned by the implementation PR; this doc only captures the destination state.
+The live tables and columns backing this model — `users`, `users.email`,
+`user_password_credentials`, `auth_sessions`, `hosts`, `host_credentials`,
+`workspace_users` (incl. `role`), `conversation_users` — and the append-only
+migrations that define them are self-documenting in
+`packages/shared/src/db/schema.ts` and `packages/shared/src/db/migrations.ts`.
+Read those for the authoritative column set; this doc does not mirror DDL.
 
 ---
 
-## 9. V1 work list (reverse-engineered from target)
+## 9. Invariants checklist
 
-This maps to the phase plan in `remote-server-target-architecture.md` §4. Each entry is a unit of implementation work that this auth/host model spec is a prerequisite for. Time estimates are budget guidance, not commitments.
+The following invariants hold; implementation PRs are auditable against this list.
 
-### Phase 0 — Protocol-purity sweep (1–2 weeks)
-
-Make embedded protocol-equivalent to remote, touching auth/host paths:
-
-- Audit `apps/desktop/src/main/index.ts` for any direct backend object reads that bypass HTTP. Convert to HTTP calls.
-- Audit `apps/desktop/src/preload/index.ts` for IPC routes that pass server/host absolute paths to renderer. Tag as "OS-IPC" (clipboard, dialog, notification, etc.) vs "data" (must be HTTP).
-- Audit `apps/desktop/src/renderer/components/layout/WorkspacesPanel.tsx` and similar for `showItemInFolder(workspace_path)` patterns. Local-Host-only UX; behind a "host is local" check.
-- Convert `BackendInfo` IPC consumer to honour `mode: 'embedded' | 'remote'` (currently field exists but unconsumed).
-- Audit CLI (`packages/cli`) `SILVERHAND_*` env injection: confirm path goes through `SILVERHAND_SERVER_URL` only, no in-process shortcuts.
-
-### Phase 1 — RuntimeHostRegistry local-only (1–2 weeks)
-
-Implement the Host model end-to-end, keeping a single local desktop daemon online:
-
-- Schema migration: add columns/tables per §8.
-- `/api/hosts/claim-or-create`, `/api/hosts/{id}/rotate-token`, `/api/hosts/{id}/revoke` routes (local-host scope only). Remote-host create + `/api/hosts/{id}/exchange` are deferred to Phase 4 / V1.5 along with the headless daemon binary — see §6.2.
-- Backend `RuntimeHostRegistry` abstraction over today's single `hostClient`. Cache keys gain `host_id` dimension. Run-state cache: per-host generation.
-- `conversation_agents.runtime_host_id` (or equivalent placement state) on the conversation/agent join row.
-- Tests: every runtime intent route through registry lookup (even when there's only one entry).
-
-### Phase 2 — Standalone server entrypoint (~1 week)
-
-Make `packages/backend` a deployable service:
-
-- New `packages/server` binary that wraps `startBackend(...)` for non-embedded use.
-- Env-driven config (per §7.3); replace constructor args.
-- Node process deployment/runbook for systemd, pm2, or bare Node.
-- Persistent state layout per §7.1.
-- Official Dockerfile + multi-stage image publish workflow deferred until
-  after V1 route-1 soak.
-- TLS not committed in V1 server package — deployer's reverse proxy is
-  responsible.
-
-### Phase 3 — Desktop remote connection skeleton + signup/login UI (1–2 weeks)
-
-User-visible connection surface:
-
-- Settings → "Server connection": URL input, connect/disconnect, connection state machine.
-- `signup_enabled` state from `/api/server/info` controls whether Setup Wizard shows signup vs login-only.
-- Setup Wizard: signup form (email, password, confirm password). Login form. Logout button. "Logout vs disable host" affordance per §3.3.
-- Hosts page: list user's hosts, show online status, revoke action.
-- Connection state machine: `disconnected | connecting | authenticated | error`. Renderer subscribes via main-process state provider.
-- Embedded mode: settings page hides "Server connection" or shows it read-only; password login skipped (auto-bootstrap per §7.5).
-
-### Phase 4 — Outbound daemon-host protocol + headless lifecycle + orchestration boundary decision (3–4 weeks)
-
-Most disruptive phase. Auth model contributes:
-
-- Daemon authenticates with `host_token` for outbound WS connection (Authorization: Bearer).
-- Server-side WS connection bound to `(user_id, host_id)` from token verification.
-- `host_token` rotation channel: server initiates rotate, daemon receives new token via existing connection, ACKs, server marks old expired with 60s grace.
-- Headless daemon entrypoint (sandbox prep, V1.5 use): standalone binary, config from env, log to stdout, signal handling.
-- Orchestration-boundary decision (separate proposal doc, Alice owns; pre-Phase 4 deliverable): which `DaemonAgentRuntimeHost` responsibilities stay server-side vs move to daemon-host. Each item from §4 of `remote-server-target-architecture.md` decided.
-
-### Phase 5 — Decision-driven cleanup (deferred per shiki)
-
-V1 / V1.5 keeps deferred:
-
-- `[depends: workspace-fs-decision]` workspace fs as logical vs host-bound — current single-host (desktop-local) leaves host-local fs viable short-term.
-- `[depends: L1L2-source-of-truth]` L1/L2 memory location — same; single host, no fork risk.
-- `[depends: sandbox-placement-flow]` — sandbox out of V1 scope.
-- `[depends: server-auth-mode]` — answered by this doc (V1: open signup + password; V2: OAuth providers).
-
----
-
-## 10. Implementation invariants checklist
-
-Reviewers (Cindy) will verify the following invariants. Implementation PRs MUST be auditable against this list.
-
-### 10.1 Concept boundaries
+### 9.1 Concept boundaries
 
 1. User auth scope = desktop UI/session only. `user_token` never reaches daemon or agent process.
 2. Host credential = execution environment only. `host_token` never reaches the renderer process — Electron main owns it, daemon receives it via privileged local FS, neither IPC nor HTTP exposes it to the renderer.
 3. Daemon = replaceable connector instance. Daemon `instance_id` is per-boot; `host_id` is stable identity.
 4. Agent placement references `host_id` only; agent identity does not embed any credential.
-5. `host_bootstrap_token` is short-lived, exchanged for `host_token`, never persisted past first exchange.
-6. Revoking a Host kills daemon connectivity immediately (no grace) and prevents future runtime placement on it; it does NOT cascade-delete agents/conversations. Token-validator's primary check is `host_token.revoked_at IS NULL AND host.revoked_at IS NULL`.
-7. `kind=sandbox` is NOT a V1 Host kind. The schema arm is `local|remote`; sandboxing is a future Host capability orthogonal to `kind`.
+5. Provisioning mints a `long_lived` `host_token` directly (local via `claim_or_create`, remote as the `connect_token`); the `bootstrap` credential arm has no live producer. Any short-lived credential, if introduced, is never persisted past first exchange.
+6. Revoking a Host kills daemon connectivity immediately (no grace) and prevents future runtime placement on it; it does NOT cascade-delete agents/conversations. Token-validator's primary check is `host_credentials.revoked_at IS NULL AND host.revoked_at IS NULL`.
+7. `kind=sandbox` is not a Host kind. The schema arm is `local|remote`; sandboxing is a Host capability orthogonal to `kind`.
 
-### 10.2 Implementation details
+### 9.2 Implementation details
 
 8. Embedded mode auto-issues credentials over the same HTTP API used in remote (via `/auth/embedded-bootstrap`); no privileged in-process shortcut.
 9. Logout vs sign-out-and-disable-host are two distinct UX actions; default is logout-only. Logout clears the desktop session and local daemon config file but does **not** revoke the server-side Host row or its credentials; the next login reclaims the Host and receives a replacement token if the old local token is gone/stale.
 10. `host_token` rotation is explicit (no auto-rotation on claim); 60s grace period applies to **rotation only**, never to revoke.
-11. `DELETE /api/hosts/{id}` does not exist in V1; only `POST /api/hosts/{id}/revoke` (soft-delete on `hosts.revoked_at` AND `host_credentials.revoked_at`; token-validator denies on either set or row missing). Physical row removal is a future compaction concern, not a revoke responsibility.
+11. Teardown differs by kind: a local Host is soft-deleted via `POST /api/hosts/:id/revoke` (soft-delete on `hosts.revoked_at` AND `host_credentials.revoked_at`; token-validator denies on either set or row missing; rows stay for audit). A user-managed computer is hard-deleted via `DELETE /api/hosts/:id` (empty only) or dropped via `disconnect`.
 12. Argon2id parameters are not hard-coded in the doc or implementation; stored in `user_password_credentials.password_hash_params`, set per environment per OWASP recommendation.
-13. `/auth/embedded-bootstrap` constraints (all four MUST hold): loopback-only listen + one-shot + boot-session scoped + only when `mode=embedded`. Failing any returns 404.
+13. `/auth/embedded-bootstrap` constraints (all four hold): loopback-only listen + one-shot + boot-session scoped + only when `mode=embedded`. Failing any returns 404.
 14. `SILVERHAND_DISABLE_SIGNUP` and other auth-relevant config are loaded once at server startup into immutable in-memory config; auth routes do not re-read settings tables at request time.
 15. Auth credential storage is split from profile identity: `users` keeps profile fields; `user_password_credentials` is a separate one-to-zero-or-one table. Profile-only `users` rows (no credential row) cannot log in.
 
-### 10.3 ACL and information
+### 9.3 ACL and information
 
 16. Every resource picks exactly one of three ACL classes (direct owner column / membership edge / inherited via parent) per §2.1. Routes do not invent ad-hoc paths.
-17. Open signup ≠ no ACL. Every resource query/mutation is scoped by `viewer_user_id`; routes failing to resolve viewer return 401.
+17. Open signup ≠ no ACL. Every public route resolves a principal per §3.5: a `user` principal scopes reads/mutations by `viewer_user_id` (no principal → 403 registration gate); internal agent routes carry an `agent` principal from the URL binding; `system` is backend-internal only.
 18. Auth/setup error responses are uniform within the same route — no enumeration of email/password/credential-row distinguishability. Disabled-signup 404 is allowed; credential-failure path is always 401 with constant-time compare.
 19. `installation_id` is a stable local id only, not an auth factor. Hardware machine fingerprint is at most a UI display hint, never a permission boundary.
 20. Existing host record + revoked_at set + new claim attempt → 409 fail-closed, no silent revival.
-
----
-
-## Appendix A — Future hardening (not in V1)
-
-Documented for forward planning. Implementation deferred until product positioning requires them.
-
-### A.1 `bootstrap_policy` for distributed deployments
-
-If silverhand-server is distributed for others to self-host, the V1 "open signup" default loses safety because deployers other than shiki may forget to disable signup before exposing publicly. A future config:
-
-- `bootstrap_policy = first_user_signup | setup_secret_required`
-- `loopback` listen → default `first_user_signup`
-- non-loopback listen → default `setup_secret_required`
-- override via `SILVERHAND_BOOTSTRAP_POLICY=...`; non-loopback explicit `first_user_signup` logs warning + `/api/server/info` exposes `policy_relaxed: true`
-
-`setup_secret` mode requires the deployer to read a one-shot secret from server log and paste into the desktop Setup Wizard alongside email/password. Keeps root-of-trust at "can read server log" without forcing CLI interaction.
-
-### A.2 OAuth providers
-
-GitHub first (`auth_provider = github_oauth`):
-
-- Each deployer registers their own GitHub OAuth App against the server's public URL, configures `GITHUB_CLIENT_ID/SECRET`.
-- GitHub Device Flow available for headless / no-callback-URL deployments — owner enables Device Flow in the OAuth App settings.
-- Desktop UI: "Login with GitHub" button → server `/auth/github/start` → standard or device flow as configured.
-
-Google later (`auth_provider = google_oidc`):
-
-- Standard OIDC web callback only (Google Limited-Input Device Flow not appropriate for desktop apps with browsers).
-- Same deployer-registers-OAuth-app friction; consider documenting as "advanced setup".
-
-Provider-agnostic invariant: every successful OAuth login funnels into the same `auth_sessions` row + `user_token` shape.
-
-### A.3 Multi-user invite flow (V1.5)
-
-When silverhand grows beyond single-user-per-server:
-
-- Add `users.is_admin` boolean. First-existing user auto-promoted on migration.
-- `POST /auth/signup-with-invite { invite_code, email, password }` — invite-only signup gated by code.
-- Admins generate invite codes via desktop UI → `POST /api/invites`.
-- Invite codes are short-lived (7d default), single-use, optionally email-bound.
-- Open `/auth/signup` toggle: now `signup_policy = closed | invite_only | open` (orthogonal to auth provider).
-
-### A.4 Multi-tenant evolution
-
-When silverhand becomes shared infrastructure (one server, multiple unrelated owners):
-
-- `tenants` table; `users.tenant_id`; resource ownership chain extended through tenant.
-- Tenant-scoped admin role.
-- Cross-tenant isolation invariant test suite.
-- Out of scope for V1 and V1.5.
-
-### A.5 Sandboxing as a Host capability
-
-Per `multi-daemon-registry.md`, sandboxing (chroot, seccomp, namespace
-mounts, ephemeral fs, network egress policy) is orthogonal to `Host.kind`.
-A future hardening track adds:
-
-- `host_capabilities.sandbox_profile` (nullable; selects a server-defined
-  profile).
-- Daemon advertises sandbox capability bits in its bootstrap; server stores
-  alongside `hosts.capabilities`.
-- Agent placement filters can require `sandbox_profile=<x>` for a given
-  agent class.
-- Pre-V1.5 there is no `kind=sandbox` enum addition; if we ever need a
-  separate kind, it would be `kind=remote_sandbox` or similar — but the
-  current expectation is that sandbox is a capability layer on top of
-  `kind=remote`, not a sibling kind.
-
----
-
-## Appendix B — Non-decisions / known gaps
-
-This doc deliberately leaves the following undecided:
-
-- TLS cert provisioning for V1 image — assumed deployer's reverse proxy handles it. If we ever ship without a reverse proxy assumption, ACME/Let's-Encrypt integration becomes its own scope.
-- Password recovery via email — V1 uses admin CLI. V1.5+ may add email-based recovery, which requires SMTP integration.
-- Rate limiting on `/auth/login` and `/auth/signup` — V1 relies on basic HTTP rate limiting (or none). Brute-force defense is hardening item, not blocking V1.
-- Backup/restore tooling for `/var/lib/silverhand` — out of scope; deployer responsibility.
-
----
-
-## Document review log
-
-- 2026-05-25 — Initial draft (Alice). Reviewer: @Cindy. Pending shiki product confirm.
-- 2026-05-25 — Round 2 revision (Alice). Addresses Cindy review round 1
-  P1/P2 findings:
-  - HostKind aligned to existing `local|remote` schema; sandbox flow
-    rewritten as remote-host provisioning + Appendix A.5 capability track.
-  - Resource ownership rewritten as three orthogonal classes (direct
-    owner / membership edge / inherited) honouring existing
-    `workspace_users` / `conversation_users` tables.
-  - `users` profile identity preserved; auth credential split into
-    `user_password_credentials`; signup must populate name/display_name.
-  - Revoke flow: hard deny, no grace; rotation alone keeps 60s grace.
-  - `host_token` boundary corrected to "renderer never sees it; main owns
-    it"; renderer/main process responsibilities annotated in §6.1.
-  - Auth error uniformity scoped to credential failure; signup-disabled
-    404 explicitly allowed.
-  - Desktop local credential policy later simplified to unified 0600
-    plaintext files for session/profile/host credentials; server keeps
-    hash-only state.
-  - `user_auth_links` deferred to V2 migration (Cindy open question).
-- 2026-05-25 — Round 3 cleanup (Alice). Addresses Cindy review round 2 P2:
-  - Revoke uses soft-delete on **both** `hosts.revoked_at` and
-    `host_credentials.revoked_at`; token-validator denies on either set
-    or row missing. Earlier "hard-delete the credential row" wording
-    removed for consistency with the schema column.
-  - Remote-host route scope tightened: V1 ships only the local-host set
-    (`claim-or-create` / `revoke` / `rotate-token`). `POST /api/hosts`
-    (remote create) and `POST /api/hosts/{id}/exchange` move with the
-    headless daemon binary into Phase 4 / V1.5 so we don't expose
-    bootstrap-exchange surface ahead of its caller.
-- 2026-05-25 — Round 4 transport-truth fix (Alice). Addresses the
-  cross-doc finding from Cindy during remote-backend roadmap round 2:
-  - §6.1 last diagram line previously read "[daemon] outbound-connects
-    with host_token; server marks (user_id, host_id) online". This
-    overstated V1's transport — V1 keeps the pre-outbound model where
-    backend/Electron main dials the daemon's Unix socket via
-    `HostClient`; the daemon does NOT initiate HTTP/WS to the backend.
-    Rewritten to "daemon holds host_token on disk; presents it on
-    whatever transport the daemon ↔ server channel uses" + new
-    "Transport note" paragraph clarifying that the daemon-initiated
-    authenticated connection lands in the **follow-up phase** (daemon
-    outbound protocol), not Stage B. Stage B's `host_token` contract:
-    issued + persisted + validated by `verifyHostToken()` + used to
-    authorize host-scoped server-side operations (placement, revoke
-    enforcement). No new daemon-initiated channel.

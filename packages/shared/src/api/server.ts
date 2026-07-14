@@ -18,8 +18,7 @@ export const ServerInfoSchema = z.object({
    */
   outbound_protocol_version: z.number().int().nonnegative().optional(),
   /**
-   * D4.a Commit 4 (per `docs/remote-backend-architecture-notes.md §3`
-   * condition 3): classification of the address the standalone /
+   * Classification of the address the standalone /
    * embedded backend is bound to, so desktop and ops tooling can
    * read "signup_enabled + bind_address_scope" together
    * programmatically.

@@ -231,8 +231,8 @@ export type HelloResult = z.infer<typeof HelloResultSchema>;
 // PR-1 intent surface is intentionally tiny: hello gates protocol
 // compatibility, then ping/status/echo prove the IPC carries
 // structured payloads, plumbs lifecycle, and supports reconnect.
-// PR-2 expands this with the runtime_* family that the
-// design lock at `docs/remote-backend-architecture-notes.md §5` describes.
+// PR-2 expands this with the runtime_* family: the wire surface for
+// the (conversation, agent) supervised process.
 //
 // PR-2 step 1 lands the wire schemas here PLUS a daemon-internal fake
 // supervisor that satisfies the contract without doing any real
@@ -521,8 +521,7 @@ export type AgentStreamObservedResult = z.infer<
 // ── PR-2 runtime_* surface ──────────────────────────────────────────
 //
 // Wire surface for the (conversation, agent) supervisor that the
-// daemon owns. The shapes below match the design lock in
-// `docs/remote-backend-architecture-notes.md §5` verbatim. Anything that
+// daemon owns. Anything that
 // looks "runtime_*" goes through one (conversation_id, agent_id) pair
 // — the daemon serializes operations on that key with the same
 // per-pair lifecycle lock CM uses today.
@@ -939,9 +938,8 @@ export type RuntimeStopResult = z.infer<typeof RuntimeStopResultSchema>;
 // that, which kills the #task:1416 bug class (backend guessing runtime
 // lifecycle truth from its desyncable `RunStateCache`).
 //
-// Canonical: docs/daemon-authoritative-delivery-v1.md §10 (authoritative
-// for Stage 2; §3–5 describe the post-Stage-3 end-state and are NOT what
-// this ships).
+// Canonical: docs/daemon-authoritative-delivery-v1.md §10–§11 (the
+// authoritative custody / async-ack contract for runtime_deliver).
 //
 // Fully wired (Stage 2a/2b): the command is in the command catalogues, its
 // consumed/failed events are in `EventFrameSchema` (forcing the
@@ -1519,7 +1517,7 @@ export type HostProxyConfigSetResult = HostProxyConfigGetResult;
 // per-command error scoping — see Cindy D1 round-1 P1) stays a
 // thin envelope around the same Zod definitions.
 //
-// See `docs/remote-backend-architecture-notes.md §3.4`.
+// See `docs/daemon-outbound-protocol.md` (§ "agent_materialize command").
 
 export const AgentMaterializeParamsSchema = z
   .object({

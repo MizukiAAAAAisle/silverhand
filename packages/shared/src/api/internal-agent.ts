@@ -249,7 +249,7 @@ export const ReadHistoryMessageSchema = z.object({
    *  perspective (`viewer_reacted` is the agent's own). `null` when the
    *  message has no reactions. Carried on read-history (incl. the
    *  reply-cluster pull form) so an agent that can `message react` can
-   *  also see the result — docs/reactions-design.md §12.C. */
+   *  also see the result — docs/reactions-design.md §5.2. */
   reactions: z.array(ReactionAggregateDtoSchema).nullable(),
   content: z.string().optional(),
 });

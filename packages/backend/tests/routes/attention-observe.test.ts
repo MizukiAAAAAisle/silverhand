@@ -5,8 +5,8 @@ import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
-// observe() — the single eliminate primitive (#task:1231,
-// docs/observe-collapse-v1.md). These cover the contract the renderer read-side
+// observe() — the single Attention eliminate primitive. These cover the
+// contract the renderer read-side
 // collapse relies on — and, since the legacy channel mark-read route was retired
 // into observe() (#task:1232), the sole backend home for per-stream cursor
 // advance + §3 overlap.

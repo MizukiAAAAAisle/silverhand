@@ -365,8 +365,8 @@ describe('useChannelThreads — pure reader / gate-(b) fence (#task:1255 P1c)', 
   it('declares scope interest via the registry, not a direct subscribe (#task:1260 P2)', () => {
     // Migrated in #1260 P2: interest now routes through the InterestRegistry
     // (`useInterest`), and the direct transport subscribe is gone. This is the
-    // P2 direct-subscribe deny-list entry for this reader file — the fence
-    // widens one reader per P2 slice (see docs/renderer-interest-registry-v1.md §6).
+    // Direct-subscribe deny-list entry for this reader file: the registry is
+    // the sole subscription-lifetime owner for product conversation readers.
     // Call-form assertion (like every fence here): the migration comment above
     // still names `subscribeWsScope` in prose, which must not trip the guard —
     // what's forbidden is the direct *call*.
@@ -489,7 +489,7 @@ describe('useAgentActivityFeed — read-inert content cache (#task:1255 P1c #2)'
 // live delivery (side kind published to a scope with no subscriber = broken
 // live). Call-form assertions — `wsConversationScope(` is not a substring of
 // `wsConversationSideScope(`, so the two never cross. See
-// docs/event-ws-recovery-class-scope-v1.md.
+// docs/event-ws-transport-v1.md §4.2.
 describe('conversation-scope subscribe whitelist (#task:1255 P2 step-3)', () => {
   const hooksSrc = readFileSync(
     fileURLToPath(new URL('../features/channels/hooks.ts', import.meta.url)),

@@ -134,7 +134,7 @@ export function createAttentionApp(deps: AttentionRouteDeps): Hono<AppEnv> {
     return c.json(dto);
   });
 
-  // POST the single eliminate primitive (#task:1231, docs/observe-collapse-v1.md).
+  // POST the single Attention eliminate primitive.
   // Base gate = owned-state (the viewer only observes their OWN read state);
   // per-source `canViewConversation` + root validation lives in the use case
   // (the endpoint accepts arbitrary conversation ids in the body, so each stream

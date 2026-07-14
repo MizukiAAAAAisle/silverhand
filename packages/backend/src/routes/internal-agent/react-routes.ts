@@ -1,4 +1,4 @@
-// Agent reaction facet (docs/reactions-design.md §5.1 / §12.D). A reaction is
+// Agent reaction facet (docs/reactions-design.md §5.1 / §1). A reaction is
 // a WRITE, so it carries the same `send_messages` capability gate as posting a
 // message — not a read capability. POST adds, DELETE removes; both take
 // `{message_id, emoji}`. The use case enforces that the target message is in

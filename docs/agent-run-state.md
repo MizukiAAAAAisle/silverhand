@@ -37,8 +37,8 @@
 
 | 层 | 文件 | 职责 |
 |----|------|------|
-| Driver | `packages/backend/src/drivers/{claude,codex,cursor}.ts` | 把 runtime stream 解析成统一的 `ParsedEvent`（kind: `thinking` / `text` / `tool_call` / `tool_output` / `compaction_started` / `compaction_finished` / `turn_end` / `error` / ...） |
-| ConversationManager | `packages/backend/src/conversation-manager.ts` | 维护 per (conv, agent) 的 `AgentRunState`，聚合 thinking/text 片段为尾窗 `activitySnippet`，跟踪 compaction，处理 turn 边界 resolve，并在 raw `agent_event` fanout 前压缩大 `tool_call.input` |
+| Driver | `packages/host/src/drivers/{claude,codex,cursor,opencode,qoder}.ts` | 把 runtime stream 解析成统一的 `ParsedEvent`（kind: `thinking` / `text` / `tool_call` / `tool_output` / `compaction_started` / `compaction_finished` / `turn_end` / `error` / ...） |
+| Supervisor (host) | `packages/host/src/daemon/supervisor/` | **当前** run-state owner：维护 per (conv, agent) 的 `AgentRunState`，聚合 thinking/text 片段为尾窗 `activitySnippet`，跟踪 compaction，处理 turn 边界 resolve，并在 raw `agent_event` fanout 前压缩大 `tool_call.input`（下文历史图里的 `ConversationManager` 已迁到这里） |
 | Bus | `packages/backend/src/ws/scope-event-bus.ts` | 把 `agent_activity` payload 路由到 `conversation:{conversationId}` scope，replay buffer 200 条 |
 | WS Client | `apps/desktop/src/renderer/lib/ws-client.ts` | 单 socket 多 scope，断线 resume；scope 不匹配的 frame 不投递给该 hook |
 | Cache | `apps/desktop/src/renderer/lib/agentRunStateCache.ts` | per-conversation TanStack Query cache，按 (agentId) 去重，终态 tombstone TTL 5 分钟防 stale snapshot 复活 |
@@ -306,15 +306,14 @@ useConversationStream(conversationId, onEvent, scope)
 
 ## 9. 测试覆盖
 
-`packages/backend/tests/manager/lifecycle.test.ts`：
+Run-state / snippet-accumulation / turn-boundary behavior is now covered host-side
+(`packages/host/tests/supervisor.test.ts`) and by the backend run-state projection
+(`packages/backend/tests/runtime/run-state-cache.test.ts`); raw `agent_event`
+sanitization is in `packages/backend/tests/runtime/event-sanitize.test.ts` /
+`event-handler.test.ts`. (The former `packages/backend/tests/manager/lifecycle.test.ts`
+suite was retired when run-state ownership moved to the host supervisor.)
 
-- `accumulates thinking/text deltas as a latest-window activitySnippet` — 验证 snippet 累积 + 尾窗 + kind 切换重置。
-- `preserves the current direct-mode run when steering an active agent` — 验证 codex steer 不换 runId、保留 toolCallCounts。
-- `defers turn_end cleanup until compaction reaches a safe boundary` — 验证 `pendingTurnEnd` + `compaction_finished` 触发的延迟 resolve。
-- 旧 run `replaced` 终态广播 — 验证 startRun 覆盖时旧 runId 走终态。
-- `sanitizes large tool_call inputs before raw agent_event broadcast` — 验证 raw `agent_event` 不持有大工具输入，同时不影响 tool counts。
-
-`packages/backend/tests/drivers/codex.test.ts`：
+`packages/host/tests/drivers/codex.test.ts`：
 
 - `pairs webSearch start with a tool_output on completion` — 验证 webSearch 配对。
 - `emits one tool_output per fileChange entry on completion` — 验证 fileChange 按 `changes` 数等量配对。
@@ -349,13 +348,14 @@ useConversationStream(conversationId, onEvent, scope)
 ### 10.3 回归命令
 
 ```bash
-pnpm --filter @silverhand/backend exec vitest run tests/manager/lifecycle.test.ts
+pnpm --filter @silverhand/host exec vitest run tests/supervisor.test.ts
+pnpm --filter @silverhand/backend exec vitest run tests/runtime/run-state-cache.test.ts
 pnpm --filter @silverhand/desktop exec vitest run src/renderer/lib/agentRunStateCache.test.ts
 pnpm --filter @silverhand/backend typecheck
 pnpm --filter @silverhand/desktop typecheck
 ```
 
-并发跑这些命令时本机 IO/CPU 抢占可能让 lifecycle 里的 `waitForEvent` 超时；如果并发失败，先单独 rerun 失败项确认。
+并发跑这些命令时本机 IO/CPU 抢占可能让 supervisor 里的 `waitForEvent` 超时；如果并发失败，先单独 rerun 失败项确认。
 
 ---
 
@@ -447,9 +447,8 @@ passive enqueue 修好了"看得到",没修"塞得动"。如果用户跟 A 聊�
 `ScheduleService` 在到点时把 wake 写到 owner agent 的 agent_home
 primary `dm_channel`,**走的是普通的 `messages.insertForConversation`
 + `ConversationManager.deliverMessage` + `start`** —— 没有第二条 inbox
-路径,也没有"特殊 wake 总线"。这条决策是 PR-1 锁的(见
-`docs/cli-system.md` 与 `progress.md` 2026-05-09 PR-1
-section),目的是让 schedule wake 在 run-state 维度上和任何用户消息
+路径,也没有"特殊 wake 总线"。这条决策见
+`docs/cli-system.md`;目的是让 schedule wake 在 run-state 维度上和任何用户消息
 没有区别,Activity Strip / activity bubble / inbox 全部自动复用。
 
 对 run-state 的影响:

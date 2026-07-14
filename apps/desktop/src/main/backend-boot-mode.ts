@@ -1,7 +1,7 @@
 /**
  * D4.a Commit 3 — boot-mode decision primitive.
  *
- * Per `docs/remote-backend-architecture-notes.md §3` (Cindy boundary lock):
+ * Per `docs/auth-and-host-model.md §3.2` (Server connection profile; boundary lock):
  *
  *   > Desktop main detects `server_url` config and **skips** the
  *   > embedded `startBackend(...)` call when configured to remote.

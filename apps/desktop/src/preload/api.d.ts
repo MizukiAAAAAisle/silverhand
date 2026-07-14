@@ -294,8 +294,7 @@ export type DesktopProfileSaveWithTestResult =
       profile: ServerConnectionProfileView;
       /**
        * D4.a Commit 5c-2 — phase-2 outcome from `performProfilePhase2`
-       * after the profile commit (`docs/remote-backend-architecture-notes.md §3`
-       * §7.5). Renderer keys copy off `kind`:
+       * after the profile commit. Renderer keys copy off `kind`:
        *   - `fully_applied` — daemon's running config is at
        *     `profileVersion`; sub-arms `reloaded` / `unchanged` /
        *     `connectivity_unverified` differentiate the IPC action

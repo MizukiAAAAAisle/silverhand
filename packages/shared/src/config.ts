@@ -57,8 +57,7 @@ export const DaemonHostConfigSchema = z.object({
    */
   allow_insecure_remote: z.boolean().optional(),
   /**
-   * D4.a Commit 5b — local config consistency anchor (per
-   * `docs/remote-backend-architecture-notes.md §3`). When the desktop main
+   * Local config consistency anchor. When the desktop main
    * process derives daemon-config from the server connection profile
    * it stamps the profile's monotonic `version` here; the daemon
    * reads it solely to:
@@ -120,7 +119,8 @@ export const SILVERHAND_DAEMON_SOCKET_ENV = 'SILVERHAND_DAEMON_SOCKET';
  *   - affect the loopback http path (which never needed it).
  *
  * The flag value is intentionally NOT persisted to the server
- * connection profile (`docs/remote-backend-architecture-notes.md §3`): if it
+ * connection profile (`docs/auth-and-host-model.md` §3.2 — Server
+ * connection profile): if it
  * were, toggling the env would cause profile↔runtime drift. Profile
  * acceptance is re-evaluated on every read against current env.
  *
@@ -149,7 +149,8 @@ export function readAllowInsecureRemoteFlag(
 /**
  * D4.a Commit 3 — dev-only escape hatch that forces the desktop main
  * process to boot the EMBEDDED backend even when a server connection
- * profile (`docs/remote-backend-architecture-notes.md §3`) is present and would
+ * profile (`docs/auth-and-host-model.md` §3.2 — Server connection
+ * profile) is present and would
  * otherwise route to remote mode.
  *
  * Intended use cases (all dev-only):

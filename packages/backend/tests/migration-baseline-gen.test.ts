@@ -6,8 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { type Migration, migrations } from '@silverhand/shared/db/migrations';
 
 /**
- * ONE-SHOT generator for the #task:1213 baseline compaction (design:
- * docs/db-migration-baseline-compaction-v1.md §5.1 / §7.1).
+ * ONE-SHOT generator for the compacted migration baseline.
  *
  * Run ONLY in the compaction PR, while the historical chain v1..v44 is
  * still present in `migrations`:
@@ -156,8 +155,7 @@ describe('migration baseline generator (#task:1213, one-shot)', () => {
       `// Source of truth: a one-shot replay of historical migrations v1..v${BASELINE_VERSION}\n` +
       `// (deleted from the live plan; preserved in this commit's git history).\n` +
       `// Regeneration is impossible post-compaction (the chain is gone); the\n` +
-      `// two-stage drift guard in migration-baseline.test.ts pins this artifact.\n` +
-      `// See docs/db-migration-baseline-compaction-v1.md §5.2.\n\n` +
+      `// two-stage drift guard in migration-baseline.test.ts pins this artifact.\n\n` +
       `export const BASELINE_SCHEMA_VERSION = ${BASELINE_VERSION};\n\n` +
       `export const BASELINE_SCHEMA_SQL = \`\n${baselineSql}\`;\n`;
     writeFileSync(join(here, '..', '..', 'shared', 'src', 'db', 'baseline-schema.ts'), tsBody);

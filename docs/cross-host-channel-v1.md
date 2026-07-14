@@ -2,9 +2,7 @@
 
 > **Status**: v1 设计文档,**非实现**。本文档锁定"不同 host 上的 agent 共处同一 channel"的领域模型与不变量;落地拆成后续 PR。
 >
-> **Scope**: 这是一个 **communication-plane** feature。它**不**引入 federation / consensus / 跨 host 文件同步。唯一真正新增的领域概念是 per-(host, workspace) 的 **workspace local root** 及其 **ownership / 删除权**;其余落地依赖(membership host-equality gate、runtime placement 路由)是 design-but-unbuilt,记于 `docs/multi-daemon-registry.md`,本文只引用不重述。
->
-> **Revision history**: v1 (2026-06-24, Alice) — thread `U5ELXL2KZ41rhDTU`(#task:1203)结论成文。v1.1 (2026-06-24, Alice) — Cindy review:§5.1 加 fail-closed 硬不变量(放宽 membership ≠ 放宽 runtime/fs);§6.2 create-on-join 改 host-side materialize-on-first-use(fs op 归 daemon 不归 backend);§4.2 明确 guest root = L2+scratch、非 home repo 副本;§6.3 删除触发器 v1 收敛到仅 workspace-delete;§3.1 prompt predicate 改 backend boolean。v1.2 (2026-06-24, Alice) — Cindy review PASS + §3.1 措辞校正("零后端"→"零新 backend data model/传输;predicate 由 renderer 基于现有 placement/membership 算 boolean")。
+> **Scope**: 这是一个 **communication-plane** feature。它**不**引入 federation / consensus / 跨 host 文件同步。唯一真正新增的领域概念是 per-(host, workspace) 的 **workspace local root** 及其 **ownership / 删除权**。落地依赖里,runtime placement 路由已由现行 `agents.host_id` + `RuntimeHostPlacementResolver` + per-host outbound routing 提供(见 `docs/orchestration-boundary-v1.md`、`docs/daemon-outbound-protocol.md`);仍未落地的只有 membership host-equality gate 的**放宽**(§5),本文只引用不重述。
 
 ---
 
@@ -16,9 +14,9 @@
 
 - **沟通 = channel message**。这已经是系统的核心能力,跨 host 不需要任何新东西——message 经 backend 持久化与投递,本来就与 agent 跑在哪台机器无关。
 - **文件隔离 = host 不变量本身**,不是要去工程绕过的东西。见 §3。
-- 因此跨 host 同 channel **不是** federation:没有第二个 backend、没有 server↔server 通道、没有共识。所有 agent 仍连同一个 backend(embedded 经 Unix socket / standalone 经 outbound WS),backend 仍是唯一真相源。多个 daemon attach 到同一 backend 即可,这正是 `docs/multi-daemon-registry.md` 已设计的形态。
+- 因此跨 host 同 channel **不是** federation:没有第二个 backend、没有 server↔server 通道、没有共识。所有 agent 仍连同一个 backend(embedded 经 Unix socket / standalone 经 outbound WS),backend 仍是唯一真相源。多个 daemon attach 到同一 backend 即可,这正是现行 per-host outbound routing 的形态(见 `docs/daemon-outbound-protocol.md`)。
 
-> 对比:slock / `@botiverse/raft-daemon` 的 "joint channel" 是 **server 侧跨 server 联邦 + 付费档**,client daemon 严格一 profile 一 (agent, server)、无 federation 原语(#task:1202 核实)。我们这里**不是**那个东西——我们是单 backend 多 daemon,问题域完全不同。
+> 对比:slock / `@botiverse/raft-daemon` 的 "joint channel" 是 **server 侧跨 server 联邦 + 付费档**,client daemon 严格一 profile 一 (agent, server)、无 federation 原语。我们这里**不是**那个东西——我们是单 backend 多 daemon,问题域完全不同。
 
 ---
 
@@ -29,7 +27,7 @@
 1. **不做 server↔server 联邦 / 共识**:单 backend,不引入第二真相源。
 2. **不做跨 host 文件同步**:不 rsync、不挂网络盘、不做分布式 fs。文件隔离是不变量(§3),不是 bug。
 3. **不做跨 host 共享 worktree**:同 host 内的共享 worktree 并发约束(独立 commit、不 amend)与本特性正交;跨 host 的 agent 本就各有各的 fs,不存在共享 index。
-4. **不在本文档实现 membership gate 放宽 / runtime placement 路由**:那是 `docs/multi-daemon-registry.md` 的 design-but-unbuilt 部分,本文只把它们记为落地依赖(§5)。
+4. **不在本文档实现 membership gate 放宽**:membership host-equality gate 的放宽仍是 design-but-unbuilt,本文只把它记为落地依赖(§5)。runtime placement 路由本身已上线(现行 `agents.host_id` + `RuntimeHostPlacementResolver`),不在待建之列。
 
 ---
 
@@ -73,7 +71,7 @@ L2 workspace memory 今天锚在 workspace 路径下:
 | `<workspace>/.silverhand/agents/<id>/MEMORY.md` | L2 |
 | `<workspace>/.silverhand/agents/<id>/notes/*` | L2 |
 
-这里的 `<workspace>` = `workspaces.workspace_path`,是一个 **host-side 绝对路径**(`docs/multi-daemon-registry.md` §8.1)。今天它隐含成立,是因为 workspace 的所有 agent 都在**同一个 host** 上,共享那一个路径。
+这里的 `<workspace>` = `workspaces.workspace_path`,是一个 **host-side 绝对路径**(host-local path authority 见 `docs/orchestration-boundary-v1.md` §5.1)。今天它隐含成立,是因为 workspace 的所有 agent 都在**同一个 host** 上,共享那一个路径。
 
 跨 host 一引入,这个假设就破了:**guest host 上根本没有 `workspace_path` 这个目录**(那是 home host 上用户的 repo 路径)。guest host 上的 agent 没有地方放它的 L2。
 
@@ -95,7 +93,7 @@ L2 workspace memory 今天锚在 workspace 路径下:
 guest local root 用 `<workspace_id>`,**不用** workspace name:
 
 - name 可 rename;若用 name 做目录,rename 后要么孤儿目录、要么得搬迁。用不可变的 id 彻底回避。
-- 与 `docs/multi-daemon-registry.md` 的"id-first、name 仅供人看"取向一致。
+- 与现行 host-local path authority 的"id-first、name 仅供人看"取向一致(raw id 永不作 path component,见 `docs/orchestration-boundary-v1.md` §5.1)。
 
 ### 4.4 命名(ubiquitous language)
 
@@ -119,14 +117,14 @@ guest local root 用 `<workspace_id>`,**不用** workspace name:
 
 > 这条直接回答了"放宽后仍必须成立的不变量是什么":membership 是 control plane 的可见性/成员资格;runtime/fs 是 execution plane 的能力边界。放宽前者一个字节都不能渗到后者。
 
-### 5.2 design-but-unbuilt 依赖
+### 5.2 落地依赖:一个待建,一个已上线
 
-跨 host 同 channel 要真正跑起来,还要碰两个**已设计但未实现**的点。本文只记为依赖,设计细节在 `docs/multi-daemon-registry.md`:
+跨 host 同 channel 要真正跑起来,涉及两块 runtime 机制。其中**只有第一块仍待建**;第二块已经是现行契约,本文只作消费:
 
-1. **membership host-equality gate 放宽。** 今天 member-add 有 `assertAgentHostMatchesWorkspaceHost`(`packages/backend/src/repos/workspace-repo.ts`),要求 `agent.host_id == workspace.workspace_host_id`,host 不等就抛 `host_mismatch`。跨 host 同 channel 的前提就是允许 host 不等的 agent 入 workspace——这条 gate 从"硬等"放宽成"允许多 host,但每个 (conv, agent) 的 runtime 落在它自己的 host 上",且**严格受 §5.1 fail-closed 不变量约束**。
-2. **runtime placement 按 `agents.host_id` 路由。** 今天 placement 实质单 host。多 host 后,每个 (conv, agent) 的 daemon 由 `conversation_agents.runtime_host_id`(`docs/multi-daemon-registry.md` §6)决定,在首次 spawn 时按该 agent 的 host 写定。这是 multi-daemon-registry 的核心机制,跨 host channel 是它的直接消费者。
+1. **membership host-equality gate 放宽(design-but-unbuilt)。** 今天 member-add 有 `assertAgentHostMatchesWorkspaceHost`(`packages/backend/src/repos/workspace-repo.ts`),要求 `agent.host_id == workspace.workspace_host_id`,host 不等就抛 `host_mismatch`。跨 host 同 channel 的前提就是允许 host 不等的 agent 入 workspace——这条 gate 要从"硬等"放宽成"允许多 host,但每个 (conv, agent) 的 runtime 落在它自己的 host 上",且**严格受 §5.1 fail-closed 不变量约束**。
+2. **runtime placement 按 `agents.host_id` 路由(已上线,非待建)。** 每个 agent 的 host 由 `agents.host_id` 记定;`RuntimeHostPlacementResolver`(`packages/backend/src/runtime/host-placement.ts`)据此解析出该 (conv, agent) 的目标 host,dispatch 再按 `host_id` 路由到该 host 的 per-host outbound connection。跨 host channel 是这套现行 placement 的直接消费者,不需要新增 placement 机制。
 
-> 换句话说:本特性 = multi-daemon-registry 的**应用层语义** + 一个新的 workspace local root 概念 + 一段条件 prompt。底层 routing 机制不在本文重新发明。
+> 换句话说:本特性 = 现行 host placement 的**应用层语义** + 一个新的 workspace local root 概念 + 一段条件 prompt。底层 routing 机制已存在,不在本文重新发明。
 
 ---
 
@@ -182,18 +180,17 @@ L2 是 agent 在这个 workspace 攒下的**记忆**,正是最该留的东西:le
 
 ## 7. Open questions(落地前待定)
 
-1. **guest root 默认位置**:`$HOME/joint-ws/<id>/` 是默认;是否允许 host 侧配置覆盖(类似 sandbox mount)?与 `docs/multi-daemon-registry.md` §8 的 sandbox_path 讨论可能合并。
-2. **ownership 如何持久化**:是 `workspaces` 上的派生属性(home vs guest 由 host_id 是否 == workspace_host_id 推出),还是 per-(host, workspace) 的显式行?倾向后者(显式 > 派生),但要确认与 multi-daemon-registry 的 placement 行不重复建模——别为了一个 ownership 标记另起一张和 placement 同维度的表。
-3. **membership gate 放宽的确切实现形态**:§5.1 已钉死**不变量**(放宽 membership ≠ 放宽 runtime/fs,fail-closed);剩下的是具体放宽机制(校验改成什么、placement 解析在哪一层兜底 fail-closed),需与 @Cindy(runtime/backend)定。
+1. **ownership 如何持久化**:是 `workspaces` 上的派生属性(home vs guest 由 host_id 是否 == workspace_host_id 推出),还是 per-(host, workspace) 的显式行?倾向后者(显式 > 派生),但要确认与现行 host placement(`agents.host_id`)不重复建模——别为了一个 ownership 标记另起一张和 placement 同维度的表。
 
-> 已拍板、不再 open:删除触发器 v1 = 仅 workspace-delete(§6.3);root 物化/删除 = host-side(§6.2);prompt predicate = backend boolean(§3.1)。
+> 已拍板、不再 open:删除触发器 v1 = 仅 workspace-delete(§6.3);root 物化/删除 = host-side(§6.2);prompt predicate = backend boolean(§3.1);放宽 membership ≠ 放宽 runtime/fs 的 fail-closed 不变量(§5.1)。剩余的 membership gate 放宽是纯实现工作(校验形态 / placement 兜底层),不是待裁定的契约选择,不进本节。
 
 ---
 
 ## 8. 关联文档
 
-- `docs/multi-daemon-registry.md` — runtime placement / `runtime_host_id` / membership host-equality gate / workspace_path host-side 语义(本特性的底层机制)。
+- `docs/orchestration-boundary-v1.md` §5 / §5.1 — control plane ⟂ execution plane、host-local path authority(`workspace_path` host-side 语义、raw id 不作 path component)。
+- `docs/auth-and-host-model.md` §1.1 — host identity / `agents.host_id` 与 `hosts.id` 的 placement 依据。
+- `docs/daemon-outbound-protocol.md` — per-host outbound routing / 端点 / 现行 wire(本特性的底层 routing 机制)。
 - `docs/architecture-principles.md` §9 — host = 安全边界,IM plane vs execution plane(§3 文件隔离的依据)。
 - `docs/agent-system-prompt-memory.md` — L1/L2 三文件模型与 spawn-time 注入(§4 workspace local root 改的是 L2 锚点)。
 - `docs/platform-prompt-design.md` — 条件 prompt 段的注入纪律(§3.1)。
-- #task:1202 — slock / `@botiverse/raft-daemon` joint-channel 调研(确认对方是 server-side 联邦,与本设计不同域)。

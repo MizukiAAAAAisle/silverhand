@@ -7,7 +7,7 @@ function newId(): string {
 }
 
 /**
- * Persistence for `message_reactions` (docs/reactions-design.md §3.1 / §12).
+ * Persistence for `message_reactions` (docs/reactions-design.md §3.1 / §4).
  *
  * Pure data layer: insert / delete / count on the reactions table ONLY.
  * It deliberately knows nothing about message seq, `conversations

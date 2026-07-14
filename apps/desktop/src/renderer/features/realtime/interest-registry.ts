@@ -8,7 +8,8 @@ import { subscribeWsScope, type WsScopeSubscription } from '@/lib/ws-client';
 // rather than a per-view convention. Correctness (never miss a frame across view
 // churn) is ALREADY guaranteed by the transport cursor + resume-replay (#1251)
 // and the central ingestor owning apply+cursor off the view lifecycle (#1255);
-// this registry does not change that. See docs/renderer-interest-registry-v1.md.
+// this registry does not change that. Transport correctness is defined by
+// docs/event-ws-transport-v1.md; this module owns subscription lifetime only.
 //
 // P1 is pure pass-through: `retain`→0→1 subscribes once, last `release`→n→0
 // unsubscribes once (routing into the transport's existing last-unsubscribe

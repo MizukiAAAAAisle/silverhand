@@ -213,7 +213,7 @@ let rendererBackendResolvedProxy: string | null = null;
 /**
  * D4.a Commit 5c-2 — in-memory state describing whether the desktop's
  * view of the server connection profile has been fully applied to the
- * daemon's running config (per `docs/remote-backend-architecture-notes.md §3`).
+ * daemon's running config (per `docs/auth-and-host-model.md §3.2`).
  *
  * Lives on the desktop main process only — NOT serialized to disk
  * (the source of truth is the comparison `profile.version` vs
@@ -1083,7 +1083,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
     const localHostId = parsed.data.host_id;
     const attachWindow = captureAttachWindow(localHostId);
 
-    // D4.a Commit 5c-1 (per `docs/remote-backend-architecture-notes.md §3`):
+    // D4.a Commit 5c-1 (per `docs/auth-and-host-model.md §3.2`):
     // when a server connection profile is committed, claim writes the
     // profile generation into daemon-config so the daemon's fingerprint
     // (5b) stays in sync with desktop's view of the current profile.
@@ -2437,7 +2437,7 @@ function createWindow(): void {
     // info gets the prime real estate. Traffic-lights stay native (we
     // just nudge them to vertically center inside the 36px bar).
     // Win/Linux keep the native frame for now — self-drawn min/max/close
-    // is deferred (see docs/app-layout.md §11).
+    // is deferred (see docs/app-layout.md §0).
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : undefined,
     trafficLightPosition:
       process.platform === 'darwin' ? { x: 12, y: 11 } : undefined,
@@ -2781,8 +2781,7 @@ ipcMain.handle(
  * D4.a Commit 2 — Server connection profile IPC surface.
  *
  * Pre-auth Setup Wizard / Settings UI uses these handlers to read,
- * test, and commit the on-disk server connection profile (per
- * `docs/remote-backend-architecture-notes.md §3`).
+ * test, and commit the on-disk server connection profile.
  *
  * Boundary discipline:
  *   - `profile:get` returns a redacted view (`server_url + updated_at`
@@ -2820,8 +2819,7 @@ export type ProfileSaveWithTestResult =
       profile: ServerConnectionProfileView;
       /**
        * D4.a Commit 5c-2 — phase-2 outcome from
-       * `performProfilePhase2` after the profile commit succeeded
-       * (`docs/remote-backend-architecture-notes.md §3`).
+       * `performProfilePhase2` after the profile commit succeeded.
        *
        * Three high-level kinds; renderer copy keys off the
        * discriminator:

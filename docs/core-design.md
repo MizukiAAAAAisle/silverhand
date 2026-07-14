@@ -6,7 +6,7 @@
 >
 > 写作规则：每条决策旁边记一句"为什么"。新决策追加节，旧决策不改写（可"作废"标注）。
 >
-> **新功能 / 新 service / 新 DB 表 / 新 migration 设计前必读**：[`architecture-principles.md`](./architecture-principles.md)（Human/Agent 同构强制 checklist + 反模式）。鉴权细节见 [`permissions.md`](./permissions.md)。
+> **新功能 / 新 service / 新 DB 表 / 新 migration 设计前必读**：[`architecture-principles.md`](./architecture-principles.md)（Human/Agent 同构强制 checklist + 反模式）。鉴权细节见 [`auth-and-host-model.md`](./auth-and-host-model.md)（身份/资源归属）与 [`graded-permissions-v1.md`](./graded-permissions-v1.md)（分级能力）。
 
 ---
 
@@ -321,8 +321,6 @@ Codex CLI 有没有等价的 control_request interrupt？slock 源码里对 code
 
 **v1 兜底**（如果实际跑出失控）：每个 session 设 turn 上限——例如连续 N 个 agent reply 没用户消息就强制 pause，等用户介入。**不预先实现**，观察后再说。
 
-> 已知问题与修复方向见 [platform-prompt-known-issues.md §2](./platform-prompt-known-issues.md#2-agent-互相频繁无意义-ping-ping-loop)。
-
 ### 3.4 chat-bridge 启动参数
 
 每个 (conversation, agent) 对应一个 chat-bridge 子进程：
@@ -382,156 +380,34 @@ slock 完全不动 messages 表。投递过的消息留在 db 里供 history 检
 - DB schema 不需要为压缩加任何字段（messages append-only，trajectory 是 driver 调试日志，可后期再说）
 
 
-### 3.6 Thread —— 取代 slock thread 的真隔离方案
+### 3.6 Thread —— 消息 reply-cluster
 
-#### 动机
+> **UI 呈现见 [`app-layout.md` §7](./app-layout.md#7-thread);本节是领域模型 owner。**
 
-slock 的 thread 只是**消息的服务端归类 + 投递过滤**——参与 thread 的 agent 看到的是混合上下文（thread 消息和其他 workspace 消息穿插在同一个 CLI conversation 里），thread 之间没有真正的上下文隔离。这是 slock 在"agent 单进程订阅多 workspace"模型下的必然妥协。
-
-我们既然走 **channel-主导 = 每个 channel 独立 CLI 进程独立上下文**，就有条件做到 slock 做不到的事：**让 agent 主动 spawn 一个真正隔离的子讨论**。
+Thread 是**消息的 reply-cluster**,不是独立会话:在某条消息下展开的子讨论,每条 reply 都是
+**父 channel 里的一条普通 message**,靠 `messages.thread_root_id = <root message id>` 归属到
+某个 root。它不新增 conversation 行、不 spawn 独立进程——与父 channel 共用同一个 CLI 上下文与
+投递管线。
 
 #### 核心规则
 
-- **谁能 spawn**：agent 通过 MCP 工具 `create_thread`；human 通过 UI 在某条消息上点 **Thread**（详见 [`app-layout.md` §7](./app-layout.md#7-thread--child-session)）。两条路径产物相同（一行 child `conversations`），区别在 `spawned_by_agent_id`：agent spawn 非 NULL，human Thread 为 NULL，且只有 human Thread 会写入 `thread_anchor` 系统消息把 child 跟原消息绑定。
-- **拉谁进来**：必须从父 workspace 的 member pool 里选（防止跨 workspace 滥拉）
-- **嵌套深度**：**硬限 1 层**，thread 不能再开 thread（写死，不开放配置）
-- **Workspace**：thread 共享父的 `workspace_path`（同 workspace），agent memory 自然继承
-- **DB**：conversations 表加 `parent_conversation_id` / `spawned_by_agent_id` / `closed_at` / `close_summary`，复用现有表结构，不另开表
-- **Inbox**：thread 自己一份 `agent_inboxes`（按 channel 维度切，跟普通 channel 一致）
+- **归属**:reply 用 `thread_root_id` 指向 canonical root message;root 自身 `thread_root_id
+  IS NULL`。主 channel 列表只显示 main stream(`thread_root_id IS NULL`),root 消息带 reply
+  徽标;展开才按 root 过滤加载该 cluster。
+- **一层封顶**:reply 归一到 canonical root,不允许 reply 之上再 reply 成树(写死)。cluster 不是
+  导航树节点,channel sidebar 不展示。
+- **锚定**:human 在某条消息上发起 thread 时写一条 `thread_anchor` 系统消息,把 cluster 绑定到
+  被引用的 root;agent 以 `target: thread:<root>` 回复既有 cluster。
+- **freshness / 投递**:main 与 cluster 是同一 conversation 上的两条 stream(`main` =
+  `thread_root_id IS NULL`;cluster = `id=root OR thread_root_id=root`)。二者**共用该 conversation
+  的全局 seq 分配空间**(seq 不按 stream 重置),独立的是各自的 **freshness head 与 read cursor**;
+  成员与准入边界仍是同一个 channel 的。
+- **隔离需求**:需要真正隔离的上下文或并行长任务时,**新建 channel**,而不是 thread——thread 只
+  做同 channel 内的话题归类。
 
-#### MCP 工具：create_thread
-
-```ts
-create_thread({
-  title: string,             // thread 标题
-  members?: AgentId[],       // 可选；省略时默认复制当前 channel 全部成员
-  context_summary: string,   // 父 channel 中跟新话题相关的浓缩信息（agent 自己写）
-  initial_prompt: string,    // 给 thread 第一个 agent 的开场指令
-})
-→ { thread_id: string }
-```
-
-后端落库：
-1. `INSERT INTO conversations` 带 `parent_conversation_id` + `spawned_by_agent_id`
-2. 解析 members：省略时使用 parent channel 全部成员；显式传入时必须是 parent channel 成员子集，且 spawning agent 永远会被加入
-3. 拉 resolved members 进 `conversation_agents`
-4. 写第一条 message：`from_kind='system'`, content = `"Inherited context from parent channel '<父 title>': <context_summary>"`
-5. 写第二条 message：`from_kind='agent'`, `from_agent_id=<spawning agent>`, content = `<initial_prompt>`
-6. 不主动 spawn thread 进程——等第一个 member agent 被 wake 时按 §3.1 spawn
-
-**关键设计：context_summary 必须由 agent 自己写，不由后端自动塞父 channel 最近 N 条消息。**
-
-理由：
-- N 条消息没有判断力（容易塞一堆无关讨论）
-- 强制 agent 写 summary 是 forcing function——逼它想清楚 "我为什么要分出去 / thread 真正需要知道什么"，而不是冲动 fork
-- 这个 summary 同时是 close_thread 的对照基准（"你当初要解决 X，现在解决了吗"）
-
-#### 跨 channel 通信：parent ↔ thread 双向
-
-可达性规则——**当前 channel 树上相邻一跳**：
-
-```
-对一个 channel C，可以向：
-- self（C 本身）             ← 现有 send_message
-- parent(C)                  ← 上行
-- children(C) 中的任一个     ← 下行
-
-不可达：
-- 兄弟 channel（同 parent 下另一个 thread）
-- 跨 workspace 的任何 channel
-- 既然只允许 1 层嵌套，孙辈/祖辈本来不存在
-```
-
-工具形状（统一到 send_message，不拆三个工具避免 LLM 误用）：
-
-```ts
-send_message({
-  target?: 'self' | 'parent' | { thread_id: string },
-  // 省略 = self（current channel）
-  content: string,
-})
-```
-
-后端校验 target 在可达集合内，否则返回结构化错误 `target not reachable from current channel`。
-
-Human 侧不需要"target"概念——UI sidebar 树状显示父子，user 切 tab 选哪个 channel 就往哪个发，物理上等价。
-
-#### 关闭：close_thread 与回流
-
-thread 通过 `close_thread` 终止：
-
-```ts
-close_thread({
-  summary: string,
-  posted_to_parent?: boolean,  // 默认 false → 自动投 summary 到父；true → 跳过自动投
-})
-```
-
-后端行为：
-1. `UPDATE conversations SET closed_at = ?, close_summary = ?`
-2. 如果 `!posted_to_parent` → 往父 channel 投一条 `from_kind='system'`：`"Thread '<子 title>' closed by @<agent>. Summary: <summary>"`
-3. 终止 thread 进程
-
-**send_message + close_thread 的分工心智模型**：
-
-```
-┌─ thread 进行中 ──────────────────────────────────────┐
-│  send_message(target='parent', ...)                 │  ← 中途主动汇报
-│    用途：blocked、发现父需立刻知道的事、求决策     │     ad-hoc、可选、随时
-├─ thread 结束时 ──────────────────────────────────────┤
-│  close_thread(summary)                              │  ← 最终结论
-│    用途：固化"这件事的结果"                         │     强制、一次、结构化
-└──────────────────────────────────────────────────────┘
-```
-
-不做自动去重逻辑（"判断 agent 最近的 send 算不算总结" 是脆的）。给 agent 显式 flag `posted_to_parent`，让它自己决定。System prompt 里写明：「如果你已发过最终结论给 parent，调用 close_thread 时设 posted_to_parent=true 避免重复；否则保持 false 让系统自动投 summary」。
-
-#### 边角 case
-
-| 场景 | 处理 |
-|------|------|
-| Parent close 但 thread 还没 close | **拒绝**（"close all threads first"），避免孤儿 thread |
-| Thread 已 close，parent 还想发消息 | 拒绝（closed channel 只读）|
-| Parent 给 thread 发消息时 thread 进程挂了 | 走 §3.1 inbox 流程，下次 spawn 时 inject |
-| Parent crash 重启后 thread 还在跑 | thread 不受影响（独立进程），parent 重启后能继续向 thread 发 |
-
-#### 防回声 / 防 ping-pong
-
-thread↔parent 通信适用 §3.3 防回声原则——靠 system prompt 自律：
-
-1. **Parent → Thread**：只在"补充关键信息 / 改方向 / 紧急叫停"时下行。日常情况让 thread 跑完。
-2. **Thread → Parent**：只在"被卡住需要决策 / 发现 parent 必须立刻知道"时上行。日常进度藏着，最终用 close_thread summary 一次性交付。
-
-System prompt 必须写明：**频繁双向通信通常是 spawn 决策本身有问题**——如果你跟 parent 来回 5 轮以上，说明这事根本不该 spawn 出去，应该回到 parent channel 一起讨论。
-
-#### 限额配置（v1 默认全不限，配置存在即启用）
-
-`server-config.json` 加一段：
-
-```jsonc
-{
-  "threads": {
-    "max_concurrent_per_parent": null,   // null = 不限；填数字 = 单个父 channel 下活跃 thread 数上限
-    "spawn_cooldown_seconds": null,      // null = 不限；填数字 = 同一 agent 连续 spawn 的最小间隔（秒）
-    "max_depth": 1                        // 硬编码，配置无效（写死避免嵌套语义复杂化）
-  }
-}
-```
-
-设计取舍：
-- `max_concurrent_per_parent` 防"agent 一次 spawn 8 个并行子任务"导致进程 + token 爆炸
-- `spawn_cooldown_seconds` 防 agent 在同一 turn 里连开多个（通常是规划失误）
-- v1 默认全不限——加 telemetry 记录"单 turn spawn 数 / 单父并发数"，观察实际行为再决定阈值
-- 超限的 spawn 请求返回结构化错误 `child session limit reached: ...`，agent 看到自己决定怎么办
-
-#### v1 实现要点
-
-- DB migration：conversations 表加 `parent_conversation_id` / `spawned_by_agent_id` / `closed_at` / `close_summary`（已在 v11/v12 migration 中实现）
-- chat-bridge 加两个工具：`create_thread` / `close_thread`；`send_message` 加 `target` 参数（含 `thread_id`）
-- backend：spawn 校验 members ⊆ 父 workspace + 限额；close 校验"无活跃 thread"
-- ConversationManager：跨 conversation 投递（target=parent/child 时路由到对应 conversation 的 inbox）
-- UI：ChannelView tabs 改成树状（thread indent + 父名前缀，如 `↳ refactor auth (parent: API redesign)`）；消息右键 "Branch into thread"
-- System prompt（§4.7）增加段落：何时 create_thread / 何时 send_message(target='parent') / close_thread 礼仪 / 防 ping-pong
+> **历史 fossil**:早期 `kind='thread'` child conversation 模型(`parent_conversation_id` /
+> `create_thread` / `close_thread`)已冻结为只读——schema 保留列与 enum、历史行可读,但不再 spawn
+> 或写入,`resolveChannelId` 只认 `channel|dm_channel`。新代码一律走上面的 reply-cluster 模型。
 
 
 ## 4. Memory / Notes —— 两层知识
@@ -813,8 +689,6 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" 段做调整：
 
 #### 为什么平台 prompt 要这么长？
 
-> 已知措辞问题（"平台"口头禅）及修复方向见 [platform-prompt-known-issues.md §1](./platform-prompt-known-issues.md#1-agent-频繁使用平台一词)。
-
 可能感觉这一坨"啰嗦"。但 slock 的实际 system prompt 也是这个量级（~3-4K tokens），且每一段都有具体落地的副作用——少了哪段，agent 就会在那个维度出 bug：
 
 - 没有 Critical rules → agent 把 reply 打到 stdout 而不是 send_reply
@@ -867,7 +741,7 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" 段做调整：
 
 | 功能 | slock 怎么用 | 我们 v1 是否需要 | 排到 v2 时的代价估计 |
 |------|------------|--------------|----------------|
-| **Threads（消息嵌套讨论）** | `target=#workspace:<msgId-shortId>` 表示 thread；可在 workspace / DM 内开 thread；`thread unfollow` 退订 | **已收编进 §3.6 Thread**。slock thread 是"消息归类 + 投递过滤"，agent 上下文并未隔离。我们改用真隔离的 thread（独立进程 / 独立 conversation / 父子双向通信 / close_thread 强制 summary 回流），比 slock 更干净 | —— |
+| **Threads（消息嵌套讨论）** | `target=#workspace:<msgId-shortId>` 表示 thread；可在 workspace / DM 内开 thread；`thread unfollow` 退订 | **已收编进 §3.6 Thread**。v1 落地为**消息 reply-cluster**（同 channel 内按 `thread_root_id` 归类的子讨论，一层封顶）；早期设想的"独立子进程 / 子会话 / close_thread 回流"方案已废弃为只读 fossil（见 §3.6） | —— |
 | **Task board（任务板）** | 任务是带 `[task #N status=...]` 后缀的特殊消息；工具：`list_tasks`、`create_tasks`、`claim_tasks`、`unclaim_task`、`update_task_status`；状态：todo / claimed / in_review / done；slock 强制 "claim before work" | **v2**。多 agent 并行协作的核心原语，但 v1 用普通消息聊任务也能凑合 | 大：tasks 表 + 状态机 + 5 个 MCP 工具 + UI 任务板视图 + 防 race claim 逻辑 |
 | **Reminders（提醒/调度）** | 工具：`schedule_reminder`、`list_reminders`、`cancel_reminder`；支持一次性 / 定时 / 周期；daemon 负责到点投递 | **v2**。"提醒我下周一问 codex 那个问题"这种场景需要它，但 v1 用户可以自己设系统闹钟 | 中：reminders 表 + 调度器（cron-like）+ 3 个 MCP 工具 |
 | **Attachments（附件）** | 工具：`upload_file`、`view_file`；附件以 ID 形式挂在消息上；支持 mime sniffing / 图片预览 | **v2**。code review 给截图 / 贴日志文件场景需要，v1 用户用 path 引用本地文件代替 | 中：attachments 表 + 文件存储路径 + 2 个 MCP 工具 + UI 上传/预览 |
@@ -912,7 +786,7 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" 段做调整：
 | 没有打断机制 / "需要时加 SIGINT" | 显式两层：soft（追加新指令走 §3.1 A 档 push）+ hard（Claude control_request interrupt → SIGTERM fallback） | 用户实际需要"换方向"和"立刻停"两种语义，slock 也是这套（control 协议 + 进程信号） |
 | Server-side 上下文压缩 / chat history 裁剪 | 全部不做，跟随 slock：压缩是 agent CLI 内部行为，silverhand 只 observer + push 暂停 + watchdog；messages 表 append-only 永不裁剪 | 压缩本质损失性，由 model runtime 自己决定最合适；server 介入会双重压缩 / 触发不一致 |
 | §4.7 平台 prompt 模板"几条 etiquette 提醒" | 完整操作手册（Critical rules / Startup sequence / Workspace & Memory / Compaction safety / Etiquette / Initial role），抄 slock 的覆盖度 | 单靠几句礼貌话不够：少了 startup sequence agent 不读 MEMORY、少了 compaction safety 压缩后 agent 失忆、少了 critical rule agent 把 reply 打到 stdout |
-| 子话题用 slock-style thread（消息归类）| §3.6 Thread：真隔离的子进程 + 父子双向通信（send_message target=parent/child）+ close_thread 强制 summary 回流；硬限 1 层嵌套 | slock thread 不隔离 agent 上下文（同进程订阅多 workspace），是 slock 单进程模型下的妥协。我们 channel-主导模型有条件做真隔离，干脆做对 |
+| 子话题用 slock-style thread（消息归类）| §3.6 Thread：v1 落地为**消息 reply-cluster**（同 channel `thread_root_id` 归类，一层封顶）；早期设想的真隔离子进程 / 父子双向通信 / close_thread 回流方案已废弃为只读 fossil（见 §3.6） | slock thread 不隔离 agent 上下文（同进程订阅多 workspace），是 slock 单进程模型下的妥协；早期一度想做真隔离子进程，v1 最终收敛为同 channel 内的 reply-cluster，避免多进程/跨会话通信的复杂度 |
 
 ---
 

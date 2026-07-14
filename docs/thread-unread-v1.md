@@ -14,7 +14,8 @@ Status: **implemented (backend)**（#task:1226；**unread 读模型重构见 §4
 > 全部原样保留**,只是承载从「专用 route + `snapshot_seq` 字段」迁到「observe `stream` source + `at_seq` position」;
 > 凡读到 `MarkConversationReadInputSchema` / route `markConversationRead` / `snapshot_seq` **字段名**处,按此对应阅读。
 > §9.10 的 AUTO tail-swallow 守卫现纯由 renderer typed builder + observe 旧语义测试承载(后端 route 不再兜底),
-> canonical 见 `docs/observe-collapse-v1.md`。
+> 该接口的当前契约由 `packages/shared/src/api/attention.ts`、后端 use case
+> `packages/backend/src/application/observe.ts` 与对应行为测试共同承载。
 
 ## 1. 问题
 

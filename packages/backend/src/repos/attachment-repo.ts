@@ -20,7 +20,7 @@ function newId(): string {
 export interface InsertAttachmentInput {
   /** Channel-like conversation id (channel/dm_channel) — access boundary. */
   channelId: string;
-  /** The conversation that originated this upload (channel or thread). */
+  /** The channel-like conversation (channel/dm_channel) that originated this upload; reply-cluster uploads share the parent channel. */
   sourceConversationId: string | null;
   filename: string;
   size: number;

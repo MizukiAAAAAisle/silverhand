@@ -10,9 +10,8 @@
 > security defense, or scramble the deliberate section order.
 >
 > Related: `docs/agent-system-prompt-memory.md` (the three-file L1/L2 model and
-> spawn-time assembly — *how* the prompt is injected) and
-> `docs/platform-prompt-known-issues.md` (the historical problem log — *what has
-> gone wrong*). This doc is the forward contract: *what must hold*.
+> spawn-time assembly — *how* the prompt is injected). This doc is the forward
+> contract: *what must hold*.
 
 ---
 

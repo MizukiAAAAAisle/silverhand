@@ -7,9 +7,8 @@ import { fileURLToPath } from 'node:url';
 // The brand types (docs/brand-typed-seq-v1.md) turn "several distinct quantities
 // all called seq and typed number" into compile errors. But a brand is only as
 // strong as the discipline that no code launders a raw number into a brand
-// off-boundary. These source-scans lock the four consumption invariants of
-// docs/s2-renderer-seq-consumption-v1.md §6 so a future edit can't quietly
-// re-open the #1265-class trap:
+// off-boundary. These source-scans lock the four renderer consumption
+// invariants so a future edit can't quietly re-open the #1265-class trap:
 //
 //   1. §3.1 — the ONE genuine MessageSeq → ReadSeq conversion is minted at
 //      streamSourceAtSeq alone (single testable bridge). `asReadSeq(` must not

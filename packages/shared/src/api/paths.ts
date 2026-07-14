@@ -233,7 +233,7 @@ export const apiPaths = {
    *  `items` order is only a deterministic fallback, NOT pre-sorted by starred_at.
    *  Read-only, human viewer-scoped, global (no workspace filter). */
   favorites: '/api/favorites',
-  /** The single eliminate primitive (#task:1231, docs/observe-collapse-v1.md):
+  /** The single Attention eliminate primitive:
    *  every read-cleared Activity item collapses into one `observe(source_ref[])`
    *  use case that delegates the write back to the source aggregate (per-stream
    *  cursor / `notifications.read_at`). The legacy channel mark-read route was
@@ -307,7 +307,7 @@ export const apiPaths = {
   notificationsRead: '/api/notifications/read',
 
   // tasks — human-facing list + mutation endpoints. Per
-  // docs/tasks-design.md §6.2. Path key = message id (a task is a
+  // docs/tasks-design.md. Path key = message id (a task is a
   // message with task metadata).
   tasks: '/api/tasks',
   taskClaim: (messageId: string) => `/api/tasks/${messageId}/claim`,
@@ -364,7 +364,7 @@ export const internalPaths = {
     `/internal/conversations/${cid}/agents/${aid}/members`,
   /** Agent reacts to a message with an emoji (POST add / DELETE remove,
    *  `{message_id, emoji}` body). Requires the `send_messages` capability —
-   *  reaction is a write (docs/reactions-design.md §12.D). */
+   *  reaction is a write (docs/reactions-design.md §1). */
   agentReactMessage: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/react-message`,
 

@@ -14,8 +14,7 @@ import {
 import { runMigrations } from '../src/db.js';
 
 /**
- * Continuous drift guard for the #task:1213 baseline compaction
- * (docs/db-migration-baseline-compaction-v1.md §5.2.1-2). The baseline is a
+ * Continuous drift guard for the compacted migration baseline. The baseline is a
  * DERIVED artifact (a snapshot of the deleted historical chain v1..v44); these
  * tests keep it honest WITHOUT a second hand-maintained source of truth.
  *

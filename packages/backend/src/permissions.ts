@@ -67,7 +67,7 @@ export function parseWsScope(scope: string, viewerUserId: string): ParsedWsScope
   if (prefix === 'conversation-side') {
     // Side-channel scope shares the conversation's view-permission but is a
     // distinct recovery class (cursor-inert, self-healing). Same viewer gate,
-    // separate seq/replay space. See docs/event-ws-recovery-class-scope-v1.md.
+    // separate seq/replay space. See docs/event-ws-transport-v1.md §4.2.
     return {
       type: 'conversation-side',
       scope: conversationSideScope(rawId),

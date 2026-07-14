@@ -45,8 +45,8 @@ interface ScopeEventLogger {
  * The message-stream and side-channel scopes are disjoint prefixes, own
  * independent seq/replay spaces, and are routed only through the shared
  * `parseConversationScope` / `parseConversationSideScope` parsers — never a
- * fuzzy `startsWith('conversation')`. See docs/event-ws-recovery-class-scope-v1.md
- * (§2 = the canonical per-kind classification).
+ * fuzzy `startsWith('conversation')`. See docs/event-ws-transport-v1.md §4.2
+ * (the recovery-class scope partition = the canonical per-kind classification).
  *
  * WS handlers subscribe to a scope key via subscribeScope() and receive
  * ScopedEvent objects. The replay buffer per scope keeps the last 200 events.
@@ -107,7 +107,7 @@ export class ScopeEventBus {
    *
    * Only message-stream kinds belong here (message / reaction / task_changed).
    * Side-channel kinds must go through `publishSide` — see the recovery-class
-   * matrix (docs/event-ws-recovery-class-scope-v1.md §2) for the authoritative
+   * matrix (docs/event-ws-transport-v1.md §4.2) for the authoritative
    * classification; do not re-list it inline.
    */
   publish(conversationId: string, event: ConversationBusEvent): void {
@@ -124,7 +124,7 @@ export class ScopeEventBus {
    * without the compat `conversationEmitter` emit: the side channel has no
    * legacy in-process consumers, and it is a separate recovery class (cursor-
    * inert, self-healing) with its own seq/replay space, so it must never share
-   * the message-stream's seq counter. See docs/event-ws-recovery-class-scope-v1.md.
+   * the message-stream's seq counter. See docs/event-ws-transport-v1.md §4.2.
    */
   publishSide(conversationId: string, event: ConversationBusEvent): void {
     this.publishToScope(conversationSideScope(conversationId), event.kind, event.payload);

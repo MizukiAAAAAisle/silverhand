@@ -913,8 +913,7 @@ export function writeHostConfigAtomic(path: string, config: DaemonHostConfig): v
  *
  * Bytes covered: `server_url`, `host_id`, `host_token`, local
  * insecure-remote policy, and (D4.a
- * Commit 5b, per `docs/remote-backend-architecture-notes.md §3` daemon
- * fingerprint nuance) `profile_version` — the local-config consistency
+ * Commit 5b, daemon fingerprint nuance) `profile_version` — the local-config consistency
  * anchor that links daemon-config to the server connection profile
  * generation. Without it, a profile commit that changes only
  * timestamps would write a config that fingerprints identically to

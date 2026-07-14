@@ -9,7 +9,7 @@ import { z } from 'zod';
  *
  * The keystone primitive that makes the daemon — not the backend — the
  * sole authority for host-local path resolution of *regular* workspaces.
- * See `docs/remote-backend-architecture-notes.md §3.5`.
+ * See `docs/orchestration-boundary-v1.md §5.1` (Host-local path authority).
  *
  * Why this exists: pre-D4.e the backend computed `<workspace>/.silverhand/
  * ...` paths from the server DB column `workspaces.workspace_path` and

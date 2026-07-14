@@ -1,7 +1,7 @@
 /**
  * D4.d §5 — boot-time materialization reconciler tests.
  *
- * Pins the three §10.4 contracts from `docs/remote-backend-architecture-notes.md §3.4`:
+ * Pins the three boot-reconciler contracts:
  *
  *   1. A seeded `pending_materialization` row OLDER than the
  *      threshold is flipped to `failed` with code

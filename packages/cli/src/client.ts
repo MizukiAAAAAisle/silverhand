@@ -114,7 +114,7 @@ export class BackendClient {
   }
 
   /** Add or remove the agent's own emoji reaction on a message
-   *  (docs/reactions-design.md §7). Idempotent: re-adding / re-removing
+   *  (docs/cli-system.md §3.6). Idempotent: re-adding / re-removing
    *  returns `changed: false`. */
   reactToMessage(input: {
     message_id: string;

@@ -235,7 +235,7 @@ function asSideKind(kind: string): SideKind | null {
  * live in each view's `onWsFrame` handler, so views can be
  * pure readers (zero `onWsFrame`) — the precondition Stage-2 P2 needs to drop the
  * orphan gate (gate-(b)). See docs/renderer-event-ingestion-v1.md and
- * docs/event-ws-recovery-class-scope-v1.md.
+ * docs/event-ws-transport-v1.md §4.2.
  *
  * P1a + P1b + P1c scope: the main-stream caches (old
  * `useChannelMessages.onEvent`), the thread cluster / root / followers caches

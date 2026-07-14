@@ -14,7 +14,7 @@
    redefine tokens inside element-/state-scoped bundles (e.g.
    `aside[data-sidebar]`, focus/hover states) so Tailwind utilities
    cascade locally. It does not expand the global token contract
-   (design-new-theme.md §3 stays the PR-1 surface). See §12.1.1 for the
+   (design-new-theme.md §3 stays the PR-1 surface). See §12.5 for the
    three-layer model.
 
    ── PR-2 v5 — selected/focus role swap + poster-style inline code,

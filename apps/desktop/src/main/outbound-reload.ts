@@ -241,7 +241,7 @@ export interface PerformOutboundReloadDeps {
    */
   currentHostToken: () => string | null;
   /**
-   * D4.a Commit 5c-1 (per `docs/remote-backend-architecture-notes.md §3`):
+   * D4.a Commit 5c-1 (per `docs/auth-and-host-model.md §3.2`):
    * returns the current `profile_version` from the on-disk
    * daemon-config, or undefined when the field is absent (D3.x
    * config or embedded boot pre-Setup-Wizard). The legacy

@@ -30,8 +30,7 @@ export type RuntimeKind = z.infer<typeof RuntimeKindSchema>;
 //     sends a non-baseline token to a daemon advertising the
 //     `runtime.codex.reasoning.v1` capability, so a strict old daemon never
 //     receives one. (That daemon capability protects backend→daemon only; it does
-//     NOT make an old backend→desktop DTO reader understand a future token — see
-//     `docs/multi-daemon-registry.md` §3.3 + `docs/progress.md`.)
+//     NOT make an old backend→desktop DTO reader understand a future token.)
 //
 // Codex's own app-server protocol models per-model effort exactly this way (a
 // non-empty string). Stored/sent verbatim (lowercase). `null` (unset) is
@@ -144,7 +143,8 @@ export type ConversationEventKind = z.infer<typeof ConversationEventKindSchema>;
  * through the legacy backend-direct-fs path so the L1 already
  * exists). New rows START in 'pending_materialization' and flip
  * to 'active' on daemon ack (L3a) or 'failed' on typed error /
- * timeout (L3b). See `docs/remote-backend-architecture-notes.md §3.4`.
+ * timeout (L3b). See `docs/daemon-outbound-protocol.md`
+ * (§ "agent_materialize command").
  */
 export const AgentMaterializationStatusSchema = z.enum([
   'pending_materialization',
@@ -565,8 +565,9 @@ export const AttachmentCreatorKindSchema = z.enum(['user', 'agent']);
 export type AttachmentCreatorKind = z.infer<typeof AttachmentCreatorKindSchema>;
 
 /**
- * One uploaded blob, scoped to a channel for access control. Threads upload
- * via their parent channel — `source_conversation_id` keeps the lineage.
+ * One uploaded blob, scoped to a channel-like conversation (channel/dm_channel)
+ * for access control. Reply-cluster uploads share their parent channel —
+ * `source_conversation_id` keeps the lineage.
  *
  * No de-duplication: every upload creates a new row + new blob, so each
  * filename/source/creator is preserved cleanly.
@@ -575,7 +576,7 @@ export interface AttachmentRow {
   id: string;
   /** channel/dm_channel that owns this blob (access boundary). */
   channel_id: string;
-  /** channel or thread that originated the upload (audit / lineage). */
+  /** channel-like conversation (channel/dm_channel) that originated the upload (audit / lineage). */
   source_conversation_id: string | null;
   filename: string;
   size: number;

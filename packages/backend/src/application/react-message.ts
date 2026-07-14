@@ -13,7 +13,7 @@ import { canViewConversation } from '../permissions.js';
 import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
 
 /**
- * Add / remove a reaction on a message (docs/reactions-design.md §12.B).
+ * Add / remove a reaction on a message (docs/reactions-design.md §5.1).
  *
  * The load-bearing invariant lives here by what these use cases DON'T do:
  * the write touches ONLY `message_reactions` (via the repo) — never a message

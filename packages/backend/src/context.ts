@@ -96,8 +96,7 @@ export interface BackendContext {
    * is bound to. Surfaced on `/api/server/info` so desktop / ops
    * tooling can read `(signup_enabled, bind_address_scope)`
    * together, and used at boot to decide whether to emit the
-   * "non-loopback bind + signup enabled" WARN line (per
-   * `docs/remote-backend-architecture-notes.md §3` condition 3).
+   * "non-loopback bind + signup enabled" WARN line.
    *
    * Derived once at boot via `classifyBindAddressScope(listenHostname)`;
    * stored on the context so handlers don't re-derive (the

@@ -3397,8 +3397,8 @@ export class Supervisor implements SupervisorContract {
     // #task:1460: fold a pre-init failure into the SAME sticky
     // init-failure counter the watchdog uses, so a runtime that dies
     // before `session_init` (before, or without, the watchdog arming)
-    // can't drive an unbounded backend re-drive loop (incident #1459 —
-    // narrative in docs/progress.md). Membership contract:
+    // can't drive an unbounded backend re-drive loop (incident #1459).
+    // Membership contract:
     //   - never reached `session_init` (`!initObserved`), is not the
     //     watchdog's own kill (`!initTimedOut`, already counted in
     //     `failInitWatchdog`), and is not a user/daemon stop

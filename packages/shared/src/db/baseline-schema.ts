@@ -3,7 +3,6 @@
 // (deleted from the live plan; preserved in this commit's git history).
 // Regeneration is impossible post-compaction (the chain is gone); the
 // two-stage drift guard in migration-baseline.test.ts pins this artifact.
-// See docs/db-migration-baseline-compaction-v1.md §5.2.
 
 export const BASELINE_SCHEMA_VERSION = 44;
 

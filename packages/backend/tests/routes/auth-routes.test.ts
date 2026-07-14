@@ -12,14 +12,14 @@ describe('auth routes', () => {
   });
 
   it('exposes server info with bind scope and serves typed 403 when signup is disabled', async () => {
-    // D4.a Commit 4 contract (per `docs/remote-backend-architecture-notes.md §3`):
+    // Contract:
     //   - `/api/server/info` exposes both `signup_enabled` AND
     //     `bind_address_scope` so desktop/ops tooling can read the
     //     "exposure + signup" combination programmatically.
     //   - `/auth/signup` is ALWAYS mounted; the handler branches on
     //     `signupEnabled` and returns a typed `403 { code:
     //     'signup_disabled' }` body when disabled (reversing the
-    //     A.2 hide-as-missing behaviour, see §6.2 for rationale).
+    //     A.2 hide-as-missing behaviour).
     t = buildTestApp({
       authConfig: { signupEnabled: false },
       bindAddressScope: 'lan',

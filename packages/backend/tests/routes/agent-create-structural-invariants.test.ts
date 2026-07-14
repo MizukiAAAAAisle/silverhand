@@ -5,11 +5,6 @@
  * declared at design-pass close (and Alice agreed to pin explicitly
  * across D1–D5). D1 landed them as `.skip` stubs; D3 un-skips
  * invariants 1 + 3; D5 un-skips invariant 2.
-
- * Cross-referenced from `docs/remote-backend-architecture-notes.md §3.4`:
- *   - §3.2  + §6.1 (metadata mismatch precedence)
- *   - §4.1  + §7.3 + §10.3 (ACL-first list/get widener — D5)
- *   - §6.3  L3a/L3b + §10.3 (L3a tx atomicity contract)
  *
  * These pin the failure modes that are easy to re-introduce when
  * D3 / D5 re-shape the route. They are NOT happy-path coverage —

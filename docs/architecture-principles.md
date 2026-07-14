@@ -1,8 +1,8 @@
 # Silverhand — Architecture Principles
 
-> **Status**: 2026-05-09 整理。来自 PR-1 ~ PR-6 落地的"Human/Agent 同构"主线。
+> 本 doc 锁定 silverhand "Human/Agent 同构"主线的架构约束。
 >
-> 本 doc 是 silverhand **后端**新功能 / 新 service / 新 DB 表 / 新 migration 必须遵守的约束清单，与 `core-design.md`（产品/数据模型权威）和 `permissions.md`（鉴权模型权威）平级。代码与本 doc 冲突时，以本 doc 为准。**（§11 是例外：compat / legacy / fallback shim 的退出条件是系统级约束，同样覆盖客户端 / renderer 的兼容 shim，不限后端。）**
+> 本 doc 是 silverhand **后端**新功能 / 新 service / 新 DB 表 / 新 migration 必须遵守的约束清单，与 `core-design.md`（产品/数据模型权威）和鉴权模型权威（`auth-and-host-model.md` 身份/资源归属 + `graded-permissions-v1.md` 分级能力）平级。代码与本 doc 冲突时，以本 doc 为准。**（§11 是例外：compat / legacy / fallback shim 的退出条件是系统级约束，同样覆盖客户端 / renderer 的兼容 shim，不限后端。）**
 >
 > 任何提交前 review 都应当用 §1 checklist 检查；任何例外必须在设计稿里写明理由。
 
@@ -20,13 +20,13 @@
 
 | # | 检查项 | 通过条件 |
 |---|--------|---------|
-| 1 | Service 方法签名是否对 user/agent 同一份？ | 入口接收 `*Actor` union 或 `Principal`（Slice A' 后），不要 `sendUserMessage` + `sendAgentMessage` 两个方法 |
+| 1 | Service 方法签名是否对 user/agent 同一份？ | 入口接收统一的 `Principal`，不要 `sendUserMessage` + `sendAgentMessage` 两个方法 |
 | 2 | 行为差异是否走 `POLICIES` 表？ | 新增 policy 字段而不是 `if (actor.kind === 'agent')` |
 | 3 | Actor / Principal 是否在**路由 boundary** 构造？ | route handler 解析 token/header/url → 构造 actor → 调 service。Service 内不再解析身份 |
-| 4 | 是否新增 actor union？ | **不要**。复用现有 `SendMessageActor` / `ChannelActor` / `TaskActor` / `ThreadActor`，最终目标是统一到 `Principal`（见 `permissions.md` §4） |
+| 4 | 是否新增 actor union？ | **不要**。身份已统一到 `Principal`（`user` / `agent` / `system`，见 `packages/backend/src/auth/principal.ts`）；service 直接接 `Principal`，不要再引入 `*Actor` union（身份构造契约见 `auth-and-host-model.md` §3.5） |
 | 5 | DB 字段是否区分 `*_kind + *_id` 两列？ | 参照 AttachmentService 的 `createdByKind:'user'\|'agent', createdById:string`。**不要**建 `user_id` + `agent_id` 两列各占一边 |
 | 6 | Workspace member 关系是否只覆盖 regular workspace？ | `workspace_members` regular-only。**不要**为 `agent_home` 加 member 行；agent_home 的 agent 关系**只**走 `workspaces.owner_agent_id`（DB BEFORE INSERT trigger 兜底） |
-| 7 | 是否新增"隐式信任 header"？ | **禁止**。新身份信息必须走 token / URL 明示，不能让 caller 自填身份（见 `permissions.md` §4.2） |
+| 7 | 是否新增"隐式信任 header"？ | **禁止**。新身份信息必须走 session token / URL 明示，不能让 caller 自填身份。内部路由已硬性 400 拒绝 principal header（见 `auth-and-host-model.md` §3.5） |
 | 8 | 是否裸奔 attachment / 私有资源 GET？ | 必须在 **route 层**（不是 service 注释里）显式做 viewer + ACL 校验 |
 
 ---
@@ -50,22 +50,24 @@ const POLICIES = {
 
 ---
 
-## 3. 当前 Actor union（设计期请优先复用）
+## 3. Principal（当前统一身份主语）
+
+身份已统一到单一 `Principal`（`packages/backend/src/auth/principal.ts`），旧的四个
+`*Actor` union（`SendMessageActor` / `ChannelActor` / `TaskActor` / `ThreadActor`）已被折叠移除：
 
 ```ts
-// packages/backend/src/services/*.ts
-SendMessageActor  = user{userId} | agent{agentId}
-ChannelActor      = user{userId} | agent{agentId, conversationId}
-TaskActor         = user{userId} | agent{agentId, conversationId}
-ThreadActor       = user{userId} | agent{agentId}
-// AttachmentService: createdByKind + createdById（特殊：附件创建者天然不需要 conversation 上下文）
+// packages/backend/src/auth/principal.ts
+type Principal =
+  | { kind: 'user'; userId: string }
+  | { kind: 'agent'; agentId: string; conversationId: string }
+  | { kind: 'system' };
 ```
 
-**新功能不准发明新 actor union**。要么复用，要么直接按 `permissions.md` §4 的 `Principal` 设计（如果 task #125 已合并）。
+**新功能不准发明新 actor union**，直接接 `Principal`。身份如何构造（每类路由的输入来源、内部路由拒绝 principal header）是 `auth-and-host-model.md` §3.5 的单一权威；本 doc 只引用不重述。
 
 ---
 
-## 4. Workspace / Channel / DM 模型不变量（PR-6 后）
+## 4. Workspace / Channel / DM 模型不变量
 
 | 不变量 | 含义 |
 |--------|------|
@@ -116,15 +118,17 @@ PRAGMA restore (foreign_keys=ON, legacy_alter_table 恢复原值)
 
 ---
 
-## 7. 已知漏洞（新功能要绕开 / 顺手补 / 显式接受）
+## 7. 鉴权硬约束（新功能必须守住的现状，不得回退）
 
-⚠️ 这些坑 PR-1~6 没有修，详情和修复路径见 `permissions.md` §3。新功能涉及任一点时**必须在设计稿里写明：是顺手补、绕开、还是接受现状**：
+> 以下曾是 PR-1~6 时期的已知漏洞，现已全部收口。它们在此保留为**约束**——新功能不得把任何一条重新打开。身份/资源归属模型见 `auth-and-host-model.md`，分级能力见 `graded-permissions-v1.md`；本节只引用不重述。
 
-- `/api/*` **无 Bearer 校验**（Slice B 修）
-- `X-Silverhand-User-Id` 被 header 信任，可伪造（Slice A' 修）
-- `GET /api/attachments/:id` **裸奔**：service 注释撒谎（Slice C 修）
-- WS `canViewWorkspace` / `canViewConversation` 是 exists check 占位（Slice D 修）
-- 没有 `users` 表，没有 `human_workspace_members` 表（远端/多人模式时再补）
+- **公开 `/api/*` 必须经身份校验**：session bearer（`user_token`）→ `auth_sessions` subject 解析出 `user` principal；无 principal 的请求落到 registration gate（`403 registration_required`），不再"本机任意进程可调用"。
+- **身份不由请求方 header 声明**：内部路由（`/internal/conversations/:cid/agents/:aid/*`）对 `X-Silverhand-Principal` 硬性 **400 拒绝**，agent 身份只从 URL 绑定 + membership 推导；公开路由的 `user` 身份只由 bearer 中间件写入。旧的可伪造 `X-Silverhand-User-Id` 路径已关闭（见 `auth-and-host-model.md` §3.5）。
+- **私有资源 GET 必须在 route/permissions 层做 ACL**：`GET /api/attachments/:id` 走 `canViewAttachment`（channel-scoped，公开分支仅限被持久化消息引用的字节），不再裸奔。
+- **WS 订阅 scope 走真实 membership 校验**：`canViewWorkspace` / `canViewConversation` 现读 `workspace_users` / `conversation_users` 成员边，不再是 exists 占位。
+- **身份/成员表已落地**：`users` + `workspace_users`（含 `role`）+ `conversation_users` 均已存在（v25）；多人模式在此基础上加层，不改归属语义。
+
+新功能涉及任一点时**必须在设计稿里写明：是顺手强化、还是显式接受现状**——绝不允许无声回退。
 
 ---
 
@@ -133,8 +137,8 @@ PRAGMA restore (foreign_keys=ON, legacy_alter_table 恢复原值)
 PR / 设计稿 review 时按以下顺序检查：
 1. §1 checklist —— 8 项逐一过，违反需要解释
 2. §6 反模式 —— 不能命中
-3. §7 已知漏洞 —— 涉及到的必须显式回应
-4. 涉及鉴权 → 同时过 `permissions.md`
+3. §7 鉴权硬约束 —— 涉及到的必须显式回应，不得回退
+4. 涉及鉴权 → 同时过 `auth-and-host-model.md`（身份/资源归属）+ `graded-permissions-v1.md`（分级能力）
 5. 涉及数据模型 → 同时过 `core-design.md` §2
 6. 涉及 spawn / 子进程 / runtime 生命周期 → 同时过 §9 AgentHost runtime boundary
 7. 涉及 compat / legacy / fallback / 迁移过渡 shim → 过 §11 退出条件三件套（守哪个具名契约 / 删除触发条件 / owner）
@@ -144,17 +148,17 @@ PR / 设计稿 review 时按以下顺序检查：
 
 ## 9. AgentHost runtime boundary（control plane vs execution plane）
 
-> Anchor for `docs/silverhand-daemon.md` (PR-1 落地 `#task:510`)。
+> Anchor for `docs/silverhand-daemon.md`.
 
 ### 9.1 两个 plane 的分工
 
 | plane | 角色 | 例子 |
 | --- | --- | --- |
 | **control plane** | IM server：HTTP route、DB、ACL、消息分发、scheduler | `packages/backend` |
-| **execution plane** | AgentHost：spawn agent CLI、stdin/stdout、文件系统访问、API key、本地 PATH | `packages/host`（PR-1 IPC skeleton；PR-2 起承接 spawn / inbox-drain / run-state） |
+| **execution plane** | AgentHost：spawn agent CLI、stdin/stdout、文件系统访问、API key、本地 PATH | `packages/host`（daemon，承接 spawn / inbox-drain / run-state） |
 
 **核心 invariant**：spawn agent CLI 是 execution plane 的事，**不是** control plane 的事。
-当前 `ConversationManager` 物理上还在 backend，是过渡形态，不是目标形态。
+agent spawn / inbox-drain / run-state 归 `packages/host`（daemon），backend 只记 runtime intent / state、不持有 OS process handle。
 
 未来 remote / sandbox 形态：
 - 云端 backend 不可能 spawn `claude` —— 没装、没用户 fs、没 API key；
@@ -171,21 +175,20 @@ PR / 设计稿 review 时按以下顺序检查：
 
 1. **agent-facing CLI 永远只暴露业务面**（message / task / channel / thread / workspace / file / schedule）。daemon 控制权（spawn / pid / version / token 颁发）属基础设施层，**不允许**写成 `silverhand host ...` 子命令。
 2. **backend 记 `(conversation, agent)` runtime intent / state；不记 OS process handle**。handle 永远归 host。
-3. **host 是真正的安全边界**：进程在哪个 host 上跑、能访问哪些 fs / API key，host 是 truth source。`host_id` membership precondition（`agent.host_id == workspace.host_id`）已经把 host 建模成一等公民，PR-2+ 会把它从 ACL 字段提升为 runtime 协议端点。
+3. **host 是真正的安全边界**：进程在哪个 host 上跑、能访问哪些 fs / API key，host 是 truth source。`host_id` membership precondition（`agent.host_id == workspace.host_id`）已经把 host 建模成一等公民，并作为 runtime 协议端点参与 spawn。
 4. **CLI 不是秘密边界，backend token + ACL 才是**。任何"防止 agent 看见 X"的需求，应该走 backend authz，**不要**走"agent 看不见这个命令"的路径——agent 是有自主性的 actor，藏命令并不等同于授权拒绝。
 5. **创建 host-placed 资源时,origin surface 必须显式带 host。** `POST /api/agents` 的 `host_id`、`POST /api/workspaces` 的 `workspace_host_id` 以及未来任何 optional `*_host_id` 都不能让 desktop UI 依赖 backend 的 0/1/N fallback。即使 picker 因为当前只有一个 host 而隐藏,desktop 也要发送当前 bound host id；backend fallback 只保留给无 origin-host 上下文的 API/remote caller,并在多 host 时 fail closed (`local_host_ambiguous`)。
 
-### 9.4 当前实现 vs 目标实现
+### 9.4 spawn / inbox / run-state 的归属（当前实现）
 
-| 关注点 | 当前实现 | 目标实现（PR-2+） |
-| --- | --- | --- |
-| spawn agent CLI | `backend/conversation-manager.ts`（同进程） | `packages/host` daemon（独立子进程） |
-| inbox drain | backend | daemon |
-| run state record | backend | daemon → backend 通过 event 上报 |
-| backend → daemon 通信 | n/a | `HostClient` over Unix socket（PR-1 已经接好 ping/status/echo） |
-| `hostClient` 必需性 | optional（PR-1） | required（PR-2） |
+| 关注点 | 归属 |
+| --- | --- |
+| spawn agent CLI | `packages/host` daemon（独立子进程） |
+| inbox drain | daemon |
+| run state record | daemon → backend 通过 event 上报 |
+| backend ↔ daemon 通信 | `HostClient`（embedded 走 Unix socket，standalone 走 outbound WS）——已落地且**必需**，不是可选 |
 
-`packages/backend/src/conversation-manager.ts` 是技术债 anchor。新功能不要再往 CM 里堆 IM 语义，旧的 IM 语义遇到机会就往 backend 收。PR-2 真搬迁之前**不要做并行重写**——保持单一实现是真相源。
+backend 已不再自己 host ConversationManager；spawn / stdin-stdout / inbox-drain / run-state 全部归 `packages/host` daemon。backend 只记 `(conversation, agent)` 的 runtime intent / state，不持有 OS process handle。**host 是真正的安全边界**：控制面（backend 记 intent / 颁 token / 走 ACL）与执行面（daemon 持 pid / 跑进程 / 触碰 fs 与 API key）分离，`host_id` membership precondition（`agent.host_id == workspace.host_id`）是 spawn 的前置条件。
 
 ---
 
@@ -304,14 +307,3 @@ agent 授权是 capability-based（见 `graded-permissions-v1.md`）。新增 ca
 - **夸大 chokepoint**:将 cleanup-declaration 声称为 query-definition,使后续读者误以为 raw `useQuery` 亦被拦截(见 #1412)。
 
 > **Review 时**:该域改动必须按 §12.1 十项逐条通过,且不得命中 §12.2 四条边界;新增 source / projection 必须能被 §12.3 的登记 / 测试机制在编译期或测试期捕获漏项;无法捕获者,应在加入 UI 前停止。
-
----
-
-## 13. 历史
-
-- 2026-05-04 ~ 05-05：mcp system 频道下 thread `bbUBIrwJO5ZNY1ww`（"统一 human/agent 共用业务到 application service 层"）通过 PR-1 ~ PR-6 完成首轮落地
-- 2026-05-07：`permissions.md` 锁版 Slice A'/B/C/D 计划，task #125 是 Slice A' 实施
-- 2026-05-09：本 doc 创建，把"同构"提升为后端设计期强制规则
-- 2026-07-01：IM-终态三方架构 review 后加 §10（transport/cursor 不变量 + 单一 fanout 源非目标 + seq id-space 命名规则 + capability 桶判据）
-- 2026-07-04：#1301 legacy 审计（#1303/#1304/#1305/#1310/#1311/#1312）收官后加 §11——把审计时事后用的 A/B/C 退役判据前置成合入 gate（compat/legacy/fallback shim 必带「退出条件三件套」）
-- 2026-07-08:unread / archive / delete 加固 arc(#1398/#1400/#1402/#1403/#1404/#1409/#1410/#1411/#1412/#1413)收官后新增 §12——可见性丧失 / 派生投影完整性(checklist + 每条 falsifier + consumer-split、archive≠delete + 完整性网档次的 blast-radius 判据);依 shiki 裁定「文档仅作提醒不足,须有结构性硬规则」,各 agent L2 仅保留指向本节的硬触发器、不各自存摘要以防 drift。

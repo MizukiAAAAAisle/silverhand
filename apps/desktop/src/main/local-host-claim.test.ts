@@ -236,7 +236,6 @@ describe('desktop local host claim helpers', () => {
     expect(fileMode(daemonHostConfigPath(dir))).toBe(0o600);
   });
 
-  // D4.a Commit 5c-1 (per `docs/remote-backend-architecture-notes.md §3`):
   // rotate must NOT silently drop `profile_version`. Rotate doesn't
   // change the profile generation, so the new daemon-config reflects
   // the same generation as before — otherwise the daemon's

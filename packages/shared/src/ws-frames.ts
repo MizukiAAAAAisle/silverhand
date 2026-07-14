@@ -20,7 +20,7 @@
  *                                   (agent_status / agent_activity /
  *                                   conversation_activity / members_changed) —
  *                                   cursor-inert, self-healing via own REST /
- *                                   invalidate (Stage-2, docs/event-ws-recovery-class-scope-v1.md).
+ *                                   invalidate (Stage-2, docs/event-ws-transport-v1.md §4.2).
  *   viewer:{userId}               — viewer-private (notifications, unread)
  */
 

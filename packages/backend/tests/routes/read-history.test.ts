@@ -427,7 +427,7 @@ describe('POST /internal/.../read-history', () => {
   });
 
   // Reaction visibility on the agent read surface (docs/reactions-design.md
-  // §12.C): an agent that can `message react` must also SEE reactions when it
+  // §5.2): an agent that can `message react` must also SEE reactions when it
   // reads history — counts plus its own `viewer_reacted` — on both the main
   // line and the reply-cluster pull. This is the S2 "read-history agent viewer
   // semantics" contract, not S4 renderer.

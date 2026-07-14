@@ -42,8 +42,8 @@ export const migrations: Migration[] = [
     name: 'baseline',
     // Compacted snapshot of historical migrations v1..v44 (#task:1213). The
     // executable DDL is the single authoritative source in baseline-schema.ts
-    // (generated, drift-guarded — docs/db-migration-baseline-compaction-v1.md
-    // §5.2). Plain CREATE (no IF NOT EXISTS): the floor guard
+    // and is pinned by the two-stage migration-baseline drift guard. Plain
+    // CREATE (no IF NOT EXISTS): the floor guard
     // (MIN_SUPPORTED_SCHEMA_VERSION=44 in packages/backend/src/db.ts) guarantees
     // this only ever runs on an empty DB, so it must fail loud if that
     // invariant is ever violated.
@@ -60,7 +60,7 @@ export const migrations: Migration[] = [
     version: 46,
     name: 'message_reactions',
     up: `
-      -- Message reactions (docs/reactions-design.md §3.1 / §12).
+      -- Message reactions (docs/reactions-design.md §3.1 / §4).
       -- Reactions are an out-of-band projection on a message, NOT messages
       -- themselves: a separate table so they never write a message row, never
       -- allocate a conversation seq, and never advance a stream head — the CAS

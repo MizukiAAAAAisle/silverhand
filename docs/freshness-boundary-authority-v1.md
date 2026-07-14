@@ -1,20 +1,14 @@
-# Freshness Boundary Authority v1 (held-draft CAS, Plan B)
+# Freshness Boundary Authority (held-draft CAS, Plan B)
 
 > Architecture contract for moving the outbound-send freshness boundary from a
 > CLI-read sidecar file to **daemon-owned authority**. This document is the
 > **contract + invariants** (runtime-agnostic). The daemon-internal mechanism
 > (coordinator storage, IPC shape, per-runtime input-admission signals, file
-> migration mechanics) is owned by the implementation task (#task:945, Cindy).
->
-> Status: Phase 1 implemented (#task:945, Cindy) and reviewed against this
-> contract (Alice) — in_review, uncommitted, awaiting shiki dogfood. Author:
-> Alice (architecture). Reviewer: Cindy (boundary / implementability).
-> Decision owner: shiki.
-> Redline: no push / no merge-main until bugs fixed AND dogfood passes.
+> migration mechanics) is a daemon implementation concern.
 
 ## 1. Why this exists
 
-`#task:940` shipped send-side optimistic concurrency (CAS) on conversation seq:
+Send-side optimistic concurrency (CAS) on conversation seq:
 each `message send` carries `seen_up_to_seq`; the server rejects the insert
 (`MessageFreshnessError` → 409 `message_stale`) when the conversation advanced
 past it. The DB layer is correct — `conversations.latest_message_seq` single-row
@@ -49,14 +43,14 @@ Counting-game trace:
    `seen == 13` → **passes** → a stale `1` lands at seq 14.
 
 The CAS validated the **delivery boundary**, not the **boundary the model
-observed when forming the draft**. This is exactly the `#task:940` known
+observed when forming the draft**. This is the known CAS
 semantics ("delivered" ≠ "absorbed"); the counting game proves "delivered" is
 too loose for the CAS use case.
 
 ## 2. Decision: Plan B (daemon as freshness authority)
 
-Two repair shapes were considered (chat decision 2026-06-08, shiki: *"长期正确、
-收益大优先于开发简单"* → **B**):
+Two repair shapes were considered (decision: long-term-correct and
+higher-payoff over simpler-to-build → **B**):
 
 - **A (light patch):** host keeps writing the sidecar file but with corrected
   *input-admission* semantics; CLI keeps reading it and transports
@@ -80,7 +74,7 @@ Two repair shapes were considered (chat decision 2026-06-08, shiki: *"长期正�
    glance card, three-tier read primitive, structural relevance flags all
    require a daemon-side pending/read coordinator. slock blocks the counting
    game precisely via that coordinator's local preflight hold. A is a dead-end
-   patch w.r.t. that roadmap; B's Phase 1 lays its foundation.
+   patch w.r.t. that roadmap; B lays its foundation.
 3. **Single source of truth (`architecture-principles.md`).** A splits "what an
    agent has seen" across three places (host file + CLI transport + server
    seq) — the state-split anti-pattern. B consolidates it into one authority
@@ -98,8 +92,8 @@ Two repair shapes were considered (chat decision 2026-06-08, shiki: *"长期正�
 - **Server-side CAS is identical under A and B** (allocator + `UNIQUE`
   unchanged); the divergence is purely client/daemon-side boundary computation.
 - B's real cost is more logic in the spawn/delivery-critical daemon path. This
-  is mitigated by phasing (§6): Phase 1 both fixes gaming **and** establishes the
-  authority — it is not a big-bang rewrite.
+  is mitigated because the daemon-authority move both fixes gaming **and**
+  establishes the authority in one step — it is not a big-bang rewrite.
 
 ### 2.3 Reference: slock already does B
 
@@ -133,8 +127,8 @@ admission:
 - the agent explicitly reads bodies: `check` / `history` returning message
   bodies.
 - a `409 message_stale` body that displays newer messages to the agent (the
-  agent has now genuinely observed them — preserves `#task:940`'s
-  409-advances-seen).
+  agent has now genuinely observed them — preserves the
+  409-advances-seen rule).
 - a successful `send` commit advancing the agent past its own message.
 
 ### 3.2 Mid-turn red line (the boundary does NOT advance here)
@@ -153,8 +147,8 @@ model this requires a reliable **"new turn input start"** runtime signal,
 especially when the runtime self-consumes queued stdin without a new host
 delivery. The spec pins admission to that signal; otherwise queued messages
 would stall in `delivered` and never reach `observed` — the inverse failure
-(systematic false 409). Sourcing this signal per runtime is an implementation
-concern (#task:945).
+(systematic false 409). Sourcing this signal per runtime is a daemon
+implementation concern.
 
 ### 3.4 Commit timing: admission-time, not turn-end
 
@@ -162,8 +156,7 @@ concern (#task:945).
 Rationale: the agent's `message send` runs **mid-turn**, so the boundary the
 send reads must already equal *this* turn's input high-water before the send
 fires. Committing at turn-end would lag a full turn and systematically false-409
-the agent on its own turn input. (Converged with Cindy 2026-06-08; superseded
-the earlier turn-end-commit proposal.)
+the agent on its own turn input.
 
 ## 4. Authority contract (Plan B)
 
@@ -176,14 +169,14 @@ caches the freshness boundary. The CLI MUST NOT read or derive the boundary.
 
 `message send` becomes: CLI submits the send intent (content, target, optional
 explicit overrides) to the daemon; the **daemon** stamps `seen_up_to_seq` from
-its `observed` authority (and, Phase 2+, may locally hold before the server when
+its `observed` authority (and, in a future rich-seen model, may locally hold before the server when
 the target has unread pending) and then performs the server side-effect. The CLI
 does not supply `seen_up_to_seq` from a file.
 
 - `--anyway` (freshness bypass) remains an explicit agent affordance and stays
   observable (`freshness_bypass_explicit`); it instructs the daemon to skip the
   CAS stamp/hold, not the CLI.
-- Stale-resolution reason enum (`#task:941`) is unchanged and remains telemetry,
+- The stale-resolution reason enum is unchanged and remains telemetry,
   never a gate.
 
 ### 4.3 Server CAS role (concurrent-race backstop, not observed truthfulness)
@@ -203,9 +196,7 @@ and cannot, rescue an untruthful boundary.
 
 The `last-delivered-seq` sidecar file is **retired as a freshness source**. Any
 residual use of it for intervention/awareness, if kept, MUST NOT feed
-`seen_up_to_seq`. Migration sequencing (so no window regresses correctness) is an
-implementation detail of #task:945, but the contract requires: after Phase 1, no
-send path derives freshness from the file.
+`seen_up_to_seq`. The contract: no send path derives freshness from the file.
 
 ## 5. Invariants (fail-loud)
 
@@ -227,9 +218,8 @@ send path derives freshness from the file.
    `observed`/admission discipline (§3.2, invariant 2) is itself
    **correctness-critical**, not merely a freshness-quality optimization — the
    server CAS narrows the concurrent-race window but is **not** a substitute for
-   a correct boundary. (Caught by Cindy 2026-06-08; the earlier "a daemon bug
-   can only cause extra false-409s, never let a stale send pass" wording was
-   wrong — it holds only for *under*-advance.)
+   a correct boundary. (The "a daemon bug can only cause extra false-409s, never
+   let a stale send pass" claim holds only for *under*-advance.)
 5. **Fail conservative, both directions.** A daemon that *under*-advances
    `observed` (e.g. an unavailable turn-input-start signal, §3.3) only causes
    safe false-409s and must always be preferred over advancing on bare
@@ -237,40 +227,20 @@ send path derives freshness from the file.
    so every admission point must be provably tied to genuine model precedent
    context; when in doubt, do not admit.
 
-## 6. Phasing
+## 6. Future directions (not built)
 
-- **Phase 1 — authority + bug fix (this contract).** Move boundary ownership
-  into the daemon; CLI send asks the daemon to stamp/validate `observed`; daemon
-  maintains `observed` via input-admission (§3). This alone fixes the counting
-  game and demotes the CLI to a dumb shim. Server CAS unchanged.
-- **Phase 2 — local preflight + pending coordinator.** Daemon holds a send
-  before the server when the target has unread pending bodies (slock-style
-  `getPendingMessages` local hold). Enables "exists-but-unread" freshness.
-- **Phase 3 — rich seen model.** Evolve `observed` from scalar high-water toward
+Beyond the current daemon-owned boundary model, two extensions are anticipated
+but unbuilt:
+
+- **Local preflight hold** — the daemon holds a send before the server when the
+  target has unread pending bodies (slock-style `getPendingMessages` local
+  hold), enabling "exists-but-unread" freshness.
+- **Rich seen model** — evolve `observed` from a scalar high-water toward a
   per-target boundary / message-id seen-set / read-source provenance, in service
   of count-only delivery, glance card, and relevance-scoped freshness.
 
-## 7. Open questions / Cindy review targets
+## 7. References
 
-- Exact per-runtime "turn-input-start" signal for §3.3 (claude stream events vs
-  codex thread events) — does each give a reliable admission anchor, or do we
-  need a conservative fallback?
-- Where `observed` lives in the daemon coordinator and how it survives
-  respawn/resume without re-admitting un-absorbed batches.
-- Migration ordering off the file contract with zero correctness window (§4.4).
-- Whether Phase 1 keeps any file for intervention-awareness or removes it
-  entirely.
-- Interaction with idle-reap respawn (`#task:928`): does a reaped+rewoken agent
-  re-admit its last input correctly?
-
-## 8. References
-
-- `#task:940` — send-side CAS + v42 allocator (server backstop).
-- `#task:941` — stale-resolution reason enum (telemetry).
-- `#task:943` — gaming counting repro + root cause.
-- `#task:944` — slock daemon investigation (model-seen boundary).
-- `packages/host/src/daemon/supervisor/index.ts:779-780, 1266-1267` — current
-  unconditional `last-delivered-seq` writes.
 - `@slock-ai/daemon@0.56.1` `dist/chunk-RIBO24KM.js` — reference daemon-authority
   implementation (`getVisibleBoundary`, `modelSeenSeq`, `consumeVisibleMessages`,
   `cursors_advanced:"none"`).

@@ -10,17 +10,21 @@ Authoritative design docs (read the relevant one before non-trivial work):
 
 - `docs/architecture-principles.md` — **MUST-READ before any new service / route / DB table / migration.** Human/Agent isomorphism checklist, anti-patterns, known-vuln list.
 - `docs/core-design.md` — product + data-model authority. **Code that conflicts with this doc is the bug.** §10 = deferred design.
-- `docs/permissions.md` + `docs/graded-permissions-v1.md` — authorization model (resource ownership by `viewer_user_id`, graded capabilities).
-- `docs/auth-and-host-model.md` — users / sessions / signup toggle, and the host-credential model (bootstrap vs long-lived; a host's credential *is* the daemon's wire identity).
-- `docs/silverhand-daemon.md` + `docs/daemon-outbound-protocol.md` — the daemon and the backend↔daemon wire contract (local Unix socket embedded; outbound WebSocket standalone). `docs/multi-daemon-registry.md` for daemon-instance tracking.
+- `docs/auth-and-host-model.md` + `docs/graded-permissions-v1.md` — current identity, resource-ownership, and graded-capability model. Current enforcement lives in `packages/backend/src/permissions.ts` (ACL family) and `packages/backend/src/auth/principal.ts` (principal construction) plus their conformance tests.
+- `docs/silverhand-daemon.md` + `docs/daemon-outbound-protocol.md` — the daemon and the backend↔daemon wire contract (local Unix socket embedded; outbound WebSocket standalone). Runtime placement routes by `agents.host_id` via `RuntimeHostPlacementResolver`.
 - `docs/server-env-config.md` + `docs/build-release.md` — standalone-server env contract; desktop DMG packaging.
 - `docs/cli-system.md` — the agent-facing `silverhand` CLI surface, env contract, errors, maintenance checklist.
 - `docs/agent-system-prompt-memory.md` — the three-file model (L1 `system_prompt.md`, L2 `MEMORY.md` / `notes/`) and spawn-time prompt assembly.
 - `docs/platform-prompt-design.md` — **READ before editing the platform prompt** (`packages/shared/src/platform-prompt.ts`). The canonical section skeleton, load-bearing content that must not be silently dropped, security-critical renderers, and test discipline that hold across edits.
 - `docs/agent-run-state.md` — `AgentRunState` lifecycle, snippet accumulation, compaction-as-state, Activity Bubble. (Data semantics are current; the old backend `ConversationManager` ownership described in places is historical — see the doc's top banner for current ownership.)
 - `docs/app-layout.md` + `docs/design-new-theme.md` — UI structure / interaction spec and theme tokens.
-- `docs/progress.md` — recent-changes log; add a dated section after meaningful changes, and prune stale/old entries to keep it short (full history lives in `git log`).
 - `docs/electron-install-troubleshooting.md` — fix for `pnpm dev` failing with `Error: Electron uninstall` (it's an `extract-zip` failure, **not** a mirror/download problem).
+
+Documentation is for durable product/architecture contracts, cross-process or
+external interfaces, operational procedures, and rationale that code cannot
+express. Task status, rollout checklists, review rounds, commit inventories,
+and completed implementation maps belong to the task board, tests, and git
+history; do not create standing docs for them.
 
 ## Common commands
 
@@ -47,7 +51,7 @@ pnpm workspaces, all `workspace:*` linked:
 
 ## Architecture in five facts
 
-1. **Three conversation tiers, one table.** A `workspace` (`kind = 'workspace' | 'dm'`) groups member agents; a `conversation` is one running thread inside it, with `kind ∈ {'channel', 'dm_channel', 'thread'}`. DM workspaces auto-provision a single agent and skip member-picker UI. Channels snapshot the workspace's agents at creation. This is the canonical model — the legacy `channels` / `sessions` tables were dropped in migration (the Workspace→Channel→Thread cutover is done at the DB layer; `docs/workspace-channel-thread-hard-cutover.md` tracks any residual cleanup).
+1. **Three conversation tiers, one table.** A `workspace` (`kind = 'workspace' | 'dm'`) groups member agents; a `conversation` is one running thread inside it, with `kind ∈ {'channel', 'dm_channel', 'thread'}`. DM workspaces auto-provision a single agent and skip member-picker UI. Channels snapshot the workspace's agents at creation. This is the canonical model — the legacy `channels` / `sessions` tables were dropped in migration; new code must not reintroduce them.
 
 2. **Backend ↔ daemon split via `AgentRuntimeHost`.** The backend never spawns agents directly; it calls the `AgentRuntimeHost` interface (`packages/backend/src/runtime/agent-runtime-host.ts`). Both deployments use one implementation, `OutboundAgentRuntimeHost` — embedded reaches the local daemon through `daemon-outbound.sock` (the `EmbeddedUnixOutboundFrameAdapter`), standalone reaches a remote daemon over an outbound WSS. (`daemon.sock` is the separate desktop host-control IPC — revoke/rotate-token/disconnect — **not** the runtime data plane.) The daemon spawns each agent's CLI per `(conversation, agent)` pair, wires stdin/stdout per the runtime's own protocol (see the driver list above — it is **not** universally `stream-json`), injects `SILVERHAND_*` env, prepends a per-spawn `bin/silverhand` shim to `PATH`, and tracks lifecycle. When no daemon is attached in standalone mode, runtime calls fail with a typed `HostRuntimeDisabledError` — that is expected, not a crash.
 
@@ -69,7 +73,7 @@ pnpm workspaces, all `workspace:*` linked:
 
 ## Conventions worth knowing
 
-- **Target platform is macOS only** for v1. Don't add Win/Linux branches (no `frame: false` fallback, no self-drawn window controls, no `process.platform !== 'darwin'` workarounds in the renderer). The `titleBarStyle: 'hiddenInset'` / `trafficLightPosition` lines are guarded by `process.platform === 'darwin'` only because their *values* don't make sense off-mac — not an invitation to write the non-mac branch. See `docs/app-layout.md` §0/§2/§11.
+- **Target platform is macOS only** for v1. Don't add Win/Linux branches (no `frame: false` fallback, no self-drawn window controls, no `process.platform !== 'darwin'` workarounds in the renderer). The `titleBarStyle: 'hiddenInset'` / `trafficLightPosition` lines are guarded by `process.platform === 'darwin'` only because their *values* don't make sense off-mac — not an invitation to write the non-mac branch. See `docs/app-layout.md` §0/§2.
 - **Onboarding system messages must be imperative**, not descriptive — descriptive prompts ("welcome, please introduce yourself") frequently produce no reply. See `ONBOARDING_BODY` in `packages/backend/src/provision.ts`.
 - **No "stop" affordance in the composer.** Per IM design, message sending is one-shot; agent execution control belongs elsewhere (TBD). Don't reintroduce it.
 - **Renderer composer is IME-safe.** Enter sends, Shift+Enter newlines, but `onCompositionStart/End` + `e.nativeEvent.isComposing` must guard against firing during CJK input.

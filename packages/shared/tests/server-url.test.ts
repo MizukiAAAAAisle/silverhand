@@ -639,7 +639,7 @@ describe('classifyServerUrl — V1 acceptance policy', () => {
   });
 
   describe('D4.a Commit 2 fixup — non_origin_url rejection (Cindy review 2026-05-28)', () => {
-    // Contract (`docs/remote-backend-architecture-notes.md §3`): the server
+    // Contract: the server
     // connection profile is `{ scheme, host, port }` only. The
     // classifier MUST reject any input with non-trivial path / query
     // / fragment, BEFORE branching on loopback / remote, so the

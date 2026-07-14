@@ -2,11 +2,17 @@ import type { HostDto } from '@silverhand/shared';
 
 /**
  * The four mutually-exclusive lifecycle/credential verbs the Computer
- * Detail page exposes. Named to match the backend contract in
- * `docs/user-managed-computer-v1.md` §5.3 — they are NOT synonyms:
+ * Detail page exposes. Named to match the contract in
+ * `docs/user-managed-computer-v1.md` §6 (interaction actions; the
+ * Revoke/Delete boundary is §5) — they are NOT synonyms:
  *
- *   - `connection` — user-managed only: rotate the reveal-once connect
- *     command + disconnect the live WS (credential-preserving).
+ *   - `connection` — user-managed only: the connection-management
+ *     surface, holding two ORTHOGONAL actions (NOT one
+ *     credential-preserving op):
+ *       - rotate — mints a fresh reveal-once command, invalidates the
+ *         old token, and force-drops its live WS (a credential swap);
+ *       - disconnect — force-drops the live WS only, leaving the token
+ *         intact so the same command reconnects (credential-preserving).
  *   - `delete`     — user-managed only: terminal removal with
  *     dependency check + optional agent cascade.
  *   - `refresh`    — app-managed, current-machine only: rotate the
@@ -16,7 +22,7 @@ import type { HostDto } from '@silverhand/shared';
  *     invalidates cred, keeps agents/workspaces). Independent of Delete.
  *
  * `provisioning_source` is legitimately used here for flow selection
- * (§3.1: UI copy, connect/recovery flow, revoke/rotate messaging) —
+ * (§1.1: UI copy, connect/recovery flow, revoke/rotate messaging) —
  * NOT for capability derivation. Ownership + lifecycle are the
  * capability inputs; `provisioning_source` picks which flow the
  * capability takes.

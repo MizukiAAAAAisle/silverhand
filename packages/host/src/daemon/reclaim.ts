@@ -1,8 +1,7 @@
 /**
  * Stale-daemon kill-and-reclaim — recovery path for the case where
  * the previous Electron / dev:headless session crashed without
- * tearing down the daemon child. Per design lock
- * `docs/remote-backend-architecture-notes.md §5`, the recovery is
+ * tearing down the daemon child. The recovery is
  * **bounded reclaim**: we only kill a pid we can positively identify
  * as a sibling silverhand-daemon of *this* silverhand-dir. Anything
  * off → fail loudly so the operator can decide.

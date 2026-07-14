@@ -22,9 +22,9 @@
      `var(--forza6-*)`; `forza6-components.css` (L3) reads the semantic
      tokens and never a bare brand hex. It MAY read these raws directly
      in the one controlled exception documented in docs/design-new-theme
-     §12.1.1 — a scoped carrier bundle with no matching L2 semantic token
+     §12.5 — a scoped carrier bundle with no matching L2 semantic token
      (the sidebar `--forza6-carrier-*` re-derivation). To restyle a hue,
-     edit it here once. See docs/design-new-theme.md §12.1.1 token model.
+     edit it here once. See docs/design-new-theme.md §12.5 token model.
      (The `--forza6-syntax-*` / `--forza6-indigo-*` families further down
      are already theme-private raws for the code-island sub-system.)
      ════════════════════════════════════════════════════════════════ */
@@ -44,9 +44,7 @@
                                         carries universal "needs review / pending"
                                         vocabulary; ink-on-orange ≈ 6.21:1 (AA
                                         normal, AAA Large). Pink stays exclusive
-                                        to `#` channel identity + unread badge.
-                                        Hex matches `docs/mockups/forza6-poster-v2.html`
-                                        HUD-warning slot — single-sourced. */
+                                        to `#` channel identity + unread badge. */
   --forza6-ink: #0A0A0A;             /* poster near-black — ink / poster border / structure */
   --forza6-teal-island: #0F2F2C;     /* code-island ground */
   --forza6-teal-deep: #081E1B;       /* code-island deep ground */

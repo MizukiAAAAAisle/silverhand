@@ -1,9 +1,7 @@
 /**
  * Agent failed-row recovery surface tests.
  *
- * Origin: D4.d D5. Pins the D5 deliverables in
- * `docs/remote-backend-architecture-notes.md §3.4` §3.2 / §4.1 /
- * §7.3 / §10.3:
+ * Origin: D4.d D5. Pins the D5 deliverables:
  *
  *   1. DELETE branches:
  *      - `failed`  → 204 row-only delete (no dependents to sweep)

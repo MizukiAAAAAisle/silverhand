@@ -1,7 +1,7 @@
 /**
  * D4.a Commit 5d — `RemoteBackendHandle` facade for remote-mode boot.
  *
- * **Purpose** (per `docs/remote-backend-architecture-notes.md §3`):
+ * **Purpose** (per `docs/auth-and-host-model.md §3.2`):
  *   - Desktop main detects a remote `server_url` profile and **skips**
  *     the embedded `startBackend(...)` call. There is no
  *     in-process backend on this arm — every HTTP / SSE / WS request

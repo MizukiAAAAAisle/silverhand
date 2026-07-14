@@ -58,7 +58,7 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand task create` | Create tasks on the channel main line, or in a reply cluster via `--target thread:<message_id>` (§3.5). |
 | `silverhand task claim` | Claim tasks by task number or promote-and-claim messages. Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4. |
 | `silverhand task unclaim` | Release a task claim. Accepts the workspace selector. |
-| `silverhand task status` | Move a task through `in_progress`, `in_review`, or `done`. Accepts the workspace selector. Rejects the list-only filter macros (`active|open|pending|all`) and the initial state `todo` with `subkind: 'enum_invalid'` — see §3.2. |
+| `silverhand task status` | Move a task to any concrete state (`todo\|in_progress\|in_review\|done\|closed`); `todo` is a valid target only as a `closed → todo` reopen (other `→ todo` transitions are rejected server-side). Accepts the workspace selector. Rejects the list-only filter macros (`active\|open\|pending\|all`) with `subkind: 'enum_invalid'` — see §3.2. |
 | `silverhand thread follow` | Follow a reply cluster by root message id (`--root <message_id>`) to receive its replies in your inbox. Subscription, not permission (§3.5). |
 | `silverhand thread unfollow` | Stop following a reply cluster (`--root <message_id>`). Idempotent; a later mention/reply re-follows (§3.5). |
 | `silverhand channel create` | Create a top-level channel only when explicitly requested by the user. |
@@ -95,8 +95,7 @@ pass `--attachment <id>`.
 The original `--content <text>` flag was removed because shell quoting
 silently truncated bodies whenever the value contained `"`, `` ` ``, or
 `$` — bash word-split at the first unescaped `"` and the tail landed in
-`args.positional`, which the dispatcher used to discard silently. See the
-incident note linked in `docs/progress.md` for the original repro.
+`args.positional`, which the dispatcher used to discard silently.
 
 Two recommended call shapes:
 
@@ -206,7 +205,6 @@ Freshness conflict (exit 1, code `conflict`):
 
 Decision note, 2026-05-26: `silverhand channel create` should use the same
 heredoc / pipe model for its initial prompt body as `silverhand message send`.
-The focused plan lives in `docs/remote-backend-architecture-notes.md §6`.
 
 Target semantics for the follow-up implementation:
 
@@ -238,9 +236,9 @@ operational instruction.
 
 ### 3.2 `silverhand task list --status` filter macros
 
-The DB-side `tasks.status` column is always one of the four canonical
-values `todo | in_progress | in_review | done`. The list filter accepts
-those values verbatim, plus a small set of **list-only filter macros**
+The DB-side `tasks.status` column is always one of the five canonical
+values `todo | in_progress | in_review | done | closed`. The list filter
+accepts those values verbatim, plus a small set of **list-only filter macros**
 that expand to one or more canonical statuses on the agent's side
 before the request is sent:
 
@@ -258,14 +256,16 @@ not record a `status` query key, and any future canonical status
 is included automatically).
 
 `silverhand task status --status` is the **mutation** verb — it writes
-one concrete status onto a task. It explicitly rejects:
+one concrete status onto a task. It accepts any of the five concrete
+states and rejects the list-only macros above with
+`subkind: 'enum_invalid'` and `details.reason = 'list_only_macro'`, plus a
+message pointing at `silverhand task list`.
 
-- the macros above with `subkind: 'enum_invalid'` and `details.reason
-  = 'list_only_macro'`, and a message pointing at `silverhand task
-  list`;
-- the initial state `todo` with the same `enum_invalid` subkind
-  (mirroring the server-side workflow that forbids transitioning *to*
-  todo).
+Which target is *legal from the current status* is enforced server-side
+by the transition graph, not at the CLI — e.g. `todo` is a valid target
+only as a `closed → todo` reopen (`→ todo` from any other state is
+rejected). The transition semantics are owned by `docs/tasks-design.md`
+§3.2 (`services/task/contracts.ts` `VALID_TRANSITIONS` is the enforcement).
 
 This boundary is what keeps the macros aliasing-only — the DB never
 stores an aggregate word like `active`.
@@ -431,7 +431,7 @@ its own. The write deliberately stays **out of the message CAS / freshness
 path** (both channel main line and reply clusters): it allocates no `seq`,
 never advances any stream's freshness head, and touches no read cursor — so
 adding or removing a reaction never wakes anyone and never makes a pending
-draft stale. See `docs/reactions-design.md` §12.A for the invariant.
+draft stale. See `docs/reactions-design.md` §4 for the invariant.
 
 ```bash
 # add 👀 to a message you can see

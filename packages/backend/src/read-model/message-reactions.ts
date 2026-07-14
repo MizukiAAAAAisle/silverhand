@@ -1,4 +1,4 @@
-// Read-model for message reactions (docs/reactions-design.md §12.B). The
+// Read-model for message reactions (docs/reactions-design.md §6). The
 // viewer-scoped aggregate projection + the lazy reactor detail live here as
 // raw SQL, separate from the write repo (`repos/message-reaction-repo.ts`).
 // Dependency direction is one-way: routes / read paths → read-model.

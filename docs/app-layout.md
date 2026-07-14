@@ -4,15 +4,15 @@
 
 整体架构、数据流、process 模型见 [`core-design.md`](./core-design.md)。本文聚焦"用户能看见和操作的部分"。
 
-> **Status**: 2026-05-02 起草。各小节标 `Status: Spec` 表示未实现；标 `Status: Done @ <PR#>` 表示落地（PR 落地后回填）。
+> 本文只保留跨表面的交互原则与布局约束；组件结构、路径、尺寸、CSS var、localStorage key 与实现状态以代码、测试与 task board 为准。
 
 ---
 
 ## 0. 设计原则
 
 1. **IM 直觉优先**：参考 Slack / Discord 的核心心智模型——左侧 workspace 列表、中间 channel 列表 + 消息流、消息可 hover/save/thread。不引入任何"agent runtime"概念到普通用户视野（events、debug、process status 都属于开发者面板）。
-2. **窗口就是工具**：主窗口给最终用户；调试用的 Events Panel 拆成独立窗口（可 pin 到最前）。
-3. **状态最小化持久层**：用户偏好（sidebar 宽度、sidebar 显隐、theme）走 `localStorage`，跨进程/跨重启的领域状态走 SQLite，不混。
+2. **主窗口只给最终用户**：agent-runtime 调试面（events、process status）不嵌入主窗口、不进普通用户视野；开发者面若存在，与产品 UI 物理分离。
+3. **状态最小化持久层**：用户偏好（sidebar 宽度、显隐、theme）走前端本地存储，跨进程/跨重启的领域状态走 SQLite，不混。
 4. **拒绝乐观跳层**：每个交互都从一个明确的"当前位置"出发——currentWorkspace × currentChannel × currentThread（最多一层）。`Saved` 视图是一个例外的"fly-out"，进入后退出回到上次的 channel。
 5. **平台范围 = macOS**：v1 只目标 macOS，渲染 / 布局 / 自绘 titlebar 都按 mac 优先打磨。**不要为 Win/Linux 写兼容分支**（`frame: false`、自绘窗控按钮、平台 sniff fallback 等等都不要），后面如果要支持，开新分支统一处理，避免主线代码到处 `process.platform !== 'darwin'` 污染。
 
@@ -24,42 +24,34 @@
 ┌──────────────────── Custom Titlebar (drag region) ───────────────────────────┐
 │  [traffic-lights] [WS] [CH] workspace-name  ⋯  [icons] workspace-path …       │
 ├────┬──────────┬──────────────┬─────────────────────────┬────────────────────┤
-│    │          │              │                         │                    │
-│ Nav│          │              │   Parent ChannelView    │  Thread View       │
-│Rail│ Sidebar  │  Channels    │   (markdown messages,   │  (only when a      │
-│icon│  (work-  │  Sidebar     │    composer)            │   thread was       │
-│col │  spaces  │  (channel    │                         │   spawned)         │
-│    │  + Saved)│   tree)      │                         │                    │
-│    │          │              │                         │                    │
+│ Nav│ Sidebar  │  Channels    │   ChannelView           │  ThreadPanel       │
+│Rail│  (work-  │  Sidebar     │   (main line:           │  (only when a      │
+│icon│  spaces  │  (channels)  │    messages, composer)  │   reply-cluster    │
+│col │  + Saved)│              │                         │   is open)         │
 └────┴──────────┴──────────────┴─────────────────────────┴────────────────────┘
         ↑resize     ↑resize                  ↑split-resize (only when thread open)
 ```
 
-- **NavRail（最左 icon 列）**：宽度固定 `--nav-rail-width: 48px`，不可拖拽。Top-level section 切换：`chat` / `activity` / `members` / `computers`。底部一个 settings 按钮（独立 action）。当前 section 决定后面几列显示什么——`chat` 见下方 browse 模式，`activity` 见 §1.1，`members` / `computers` 见 §3。
-- **Titlebar**：跨整个窗口宽度。`-webkit-app-region: drag`，按钮 `no-drag`。macOS 用 `titleBarStyle: 'hiddenInset'` + 自绘内容。**Titlebar chrome 是 section-aware 的**：**chat/browse mode** 在红绿灯右侧放 workspace/channel 两个 sidebar toggle；**activity mode 不显示 toggle、左 offset 独立于 chat sidebar state**（见 §1.1，别拿本条泛化覆盖 §1.1）。**Win/Linux 暂不支持**（v1 平台仅 macOS，详见 §0 与 §11），无需为其做兼容处理。
-- **Sidebar / Channels Sidebar**：宽度可拖拽，显隐和宽度都 `localStorage` 持久化。每个可见 sidebar 有右边一条 4px 的 splitter（hover 时变色）。**仅在 NavRail = `chat`（browse 模式）时显示**；两列都隐藏时进入 chat-only zen，但 NavRail 作为 section 切换器常驻，titlebar toggle 仍是恢复 sidebar 的唯一入口。**`activity` section 不显示这两条 browse sidebar**——由 Activity list 列取代（§1.1），这正是「省下一个 sidebar」的来源。
-- **Main view（Parent + Thread split）**：默认只有 parent 占满；user 在某条 message 上点 Thread 后才出现 right pane。thread 永远只有一个（再点 Thread 替换当前 thread + 用户确认）。
-- **Events Panel** 不再嵌入主窗口（见 §8）。
+- **NavRail（最左 icon 列）**：宽度固定、不可拖拽。Top-level section 切换：`chat` / `activity` / `tasks` / `members` / `computers`，底部一个独立 settings 按钮。当前 section 决定后面几列显示什么——`chat` 见下方 browse 模式，`activity` 见 §1.1，`tasks` 见 [`tasks-design.md` §5](./tasks-design.md)，`members` / `computers` 见 §3。
+- **Titlebar**：跨整个窗口宽度，drag 区 + no-drag 按钮，macOS 走 hiddenInset + 自绘内容。**Titlebar chrome 是 section-aware 的**：**chat/browse mode** 在红绿灯右侧放 workspace/channel 两个 sidebar toggle；**activity mode 不显示 toggle、左 offset 独立于 chat sidebar state**（见 §1.1，别拿本条泛化覆盖 §1.1）。
+- **Sidebar / Channels Sidebar**：宽度可拖拽，显隐和宽度都持久化。**仅在 NavRail = `chat`（browse 模式）时显示**；两列都隐藏时进入 chat-only zen，但 NavRail 作为 section 切换器常驻，titlebar toggle 仍是恢复 sidebar 的入口。**`activity` section 不显示这两条 browse sidebar**——由 Activity list 列取代（§1.1），这正是「省下一个 sidebar」的来源。
+- **Main view（ChannelView + ThreadPanel split）**：默认只有主消息流占满；user 在某条 message 上点 Thread 后才出现 right pane（该 message 的 reply-cluster）。ThreadPanel 永远只有一个（在另一条 message 上点 Thread 替换当前 cluster + 用户确认）。
 
-CSS variable 仍保留 `--titlebar-height` 和 `--nav-rail-width`（不可主题化的全局常量），其他与 sidebar 相关的 var (`--sidebar-width` / `--sessions-sidebar-width`) 改为内联 style 由 hook 控制。
-
-颜色梯度（NavRail → Channels → Sessions → Chat 的纵向色阶）由 theme 决定，详见 `design-new-theme.md` §9。导航 row 的 default / hover / selected 状态机详见 `design-new-theme.md` §10。
+纵向色阶（NavRail → Channels → Chat）与导航 row 的 default/hover/selected 状态机由 theme 决定，详见 `design-new-theme.md`。
 
 ---
 
 ## 1.1 Activity section（NavRail = `activity`）
 
-**Status**: Spec → #task:1394（Norman 实现；契约见 `activity-lifecycle-v1.md §13`）
-
 Activity 是 NavRail 顶层 section，与 `chat` 平级（不再是 chat sidebar 里的折叠/快捷版）。**该模式下不显示 workspace/channels 两条 browse sidebar**——Activity list 取代它们。布局是**自适应的、由 route 派生**（不是独立 `isSplit` UI flag）：
 
 - **未选中 item**（bare `/activity`，含 caught-up 空态）→ Activity list **占满** NavRail 右侧剩余空间；右侧**不挂** ChannelView / SplitPane（不摆空 pane，也不带回「未选中也有 conversation surface」的隐性状态）。
-- **选中 item**（route 进入 `/activity/w/:wid/c/:cid?thread=<root>`）→ 分屏：Activity list（此时收成左列）| 完整 ChannelView | optional ThreadPanel。
+- **选中 item** → 分屏：Activity list（此时收成左列）| 完整 ChannelView | optional ThreadPanel。
 
 即 **split ⟺ route 带 channel**，与 chat「thread pane 仅在某 message 上点 Thread 后才出现」是**同一条渐进披露原语**（§1）：Activity-list→ChannelView 之于 ChannelView→ThreadPanel。
 
 ```
-未选中（bare /activity）                选中（/activity/w/:wid/c/:cid[?thread=]）
+未选中（bare /activity）                选中（route 带 workspace + channel）
 ┌────┬────────────────────────┐        ┌────┬──────────┬──────────────┬───────────┐
 │ Nav│  Activity list         │        │ Nav│ Activity │ ChannelView  │ Thread    │
 │Rail│  占满右侧（含空态）      │   →    │Rail│ list     │ （完整，与    │ （完整，   │
@@ -71,15 +63,15 @@ Activity 是 NavRail 顶层 section，与 `chat` 平级（不再是 chat sidebar
 
 铁律（本 section 的存在理由 = 删一层重复渲染，不是加一个入口）：
 
-- **右侧复用 Chat 的真正 `ChannelView` / `ThreadPanel`——同一组件、同一 hooks，不复制。** composer / thread / inline-search / jump-prime / mark-read / attachment / message-actions 全经同一路径继承 → chat 侧任何改动 Activity 自动跟。**「无条件自动同步」是单一组件权威的结构性保证，不是纪律要求。** 判据（Cindy review 锚）：任何 chat 能力若需要在 Activity 里单独补一遍，即结构没改对。
-- **选中态 SoT = `(workspace, channel, optional thread)`，且 workspace 从选中的 conversation 派生。** Activity 是**跨 workspace 的全局队列**（`activity-lifecycle-v1.md §13.2`），而 ChannelView / titlebar(ws name/path) / 所有 ws-scoped hooks 都是**单 workspace 作用域**。故 Activity section 复用 chat 的 channel/thread 路由参数形，**并带 workspace 段**：`/activity/w/:wid/c/:cid?thread=<root>`。titlebar 与 ws-scoped hooks 读同一 route workspace → 跨 ws 选一条 activity，右侧 pane 与 workspace context **一起**切，不留 desync。chat 与 Activity = 同一 selection SoT 的两个 navigator。
-- **Activity route 恰有两形,没有 workspace-only 中间态。** 合法形只有 bare `/activity`（未选中）与 `/activity/w/:wid/c/:cid[?thread=<root>]`（选中）。**`/activity/w/:wid`（有 workspace 无 channel）不是合法 selection state** —— 它会造出一个「无 activity item 对应、workspace 非从 conversation 派生」的第三态（titlebar 显示 workspace name/settings/member、ws-scoped query 以为有 workspace，但内容区仍是全屏 list），直接违反上一条「workspace 从选中 conversation 派生」+「未选中 = 纯 global list」。`parseRouteState` 对 Activity **只认这两形**；手写 `/activity/w/foo` 至多降级成 activity section + 无 workspace/无 channel（或 normalize 回 bare `/activity`），**绝不产生 workspace selection**。(#1394 Cindy review 抓到的 structural blocker,固化成此不变量防第三态回归。)
-- **删除的两条隐藏分支（重构的实质）**：① `sourceViewer` 降级 chrome；② `useActivitySource` 平行 docked-source 机。二者是旧「快捷版」的载体，改对后不再存在——不是被新分支替换，是被删除。
-- **Activity list 列本身 = 全局 scorer 的纯投影**（`activity-lifecycle-v1.md §13`）：只负责选中 / 排序 / 过滤，**不拥有任何 message/thread 渲染**。空态 = caught-up。
-- **Activity list 宽度 = Activity 自己的 resizable + min-width + 独立持久化的 layout preference**（分屏时生效）。**绝不复用 chat 的 `workspaceSidebarVisible` / `--sidebar-width` 语义**——那会把 chat browse state 泄进 Activity，与 Titlebar blocker 同类。min-width 保证 list row（where / subject / reply 三行 + count token，`activity-lifecycle-v1.md §13.2`）基本元素可读。像素值（默认宽 / min-width）= pixel 域（shiki + Norman）。
-- **Titlebar chrome 必须 section-aware,绝不读 chat 的 browse-sidebar 可见态来给 Activity 布局。** Activity mode 下:**不显示 workspace/channel 两个 sidebar toggle**(该模式没有 browse sidebar,控件不该暴露);**offset 跟随 Activity list 的实际(可拖拽)宽度、独立于 chat 的 `workspaceSidebarVisible` state**——未选中(list 占满)时无 workspace title;选中后 workspace name/path 对齐到 ChannelView 列正上方;**拖拽改变 Activity list 宽度时 offset 必须同步**。否则用户在 chat 收起过 workspace sidebar 的话,进 Activity 后 titlebar 会按错误 offset 偏移 —— 这是 chat-only UI state 泄进 Activity layout,违反本节「Activity 下无 browse sidebar、Activity list 取代它」的契约(#1394 Cindy review 抓到的 blocker,固化成此不变量防回归)。
-- **隐藏一个控件 ≠ 停用它背后所有 mutation path —— browse-sidebar 的每条控制入口(可见 toggle *与* 键盘 chord)必须同处 `chat` section 边界。** Titlebar 里那两个 sidebar toggle 只是 browse-sidebar 状态的**可见**入口;`⌘\` / `⌘⇧\` 键盘 chord 是**第二条隐藏入口**。只把可见 toggle 做成 section-aware、却让键盘 chord 无条件挂在全局,Activity mode 下用户仍能改 chat browse-sidebar 的 visible preference,回到 chat 时布局突变——与上一条 Titlebar blocker、`/activity/w/:wid` 第三态同源(hidden control state 被 Activity 面的残留入口触达)。铁律:凡 `chat` 独占的 browse-sidebar 控制,gate 在 `appSection === 'chat'`——键盘 chord **gate 的是注册**(disabled section 不 `addEventListener`,chord 保持自由、不 stray `preventDefault`),不是在 handler 里 early-return。**判据:一个控件被 section 隐藏时,枚举它所有 mutation path(toggle / 快捷键 / 命令 / 深链)确保每条都被同一 section 边界挡住,别只挡可见的那条。**(#1394 Cindy review 第二轮抓到的同源 blocker,Norman 实现 `useLayoutKeyboardShortcuts(enabled)`。)
-- **Titlebar entry 分两轴,别混进一个 gate —— browse-sidebar chrome=section-scoped(chat 独占)⊥ workspace-scoped action=workspace-presence-scoped(section 无关)。** browse-sidebar toggle 只在 `chat` 有意义(Activity 无 browse sidebar),gate 在 `appSection === 'chat'`;但 workspace-scoped action(Tasks drawer、Workspace settings 等)只看「有没有选中的 workspace」——Activity 选中态 workspace 从 conversation 派生(SoT),这些 action 必须可用;bare `/activity` 因 `selectedWorkspace === null` 自然隐藏。**把 workspace action 绑到 section 轴 = category error**:`onOpenTasks` 曾误 gate 成 `appSection === 'chat' && …`,导致 Activity 选中态 task 入口消失(而紧邻的 `onOpenWorkspaceSettings` 只 gate `selectedWorkspace` 是对的——同类 action 不一致就是 tell)。正确谓词复用 §"conversation-showing context" 那条 `((appSection === 'chat' && view === 'channel') || appSection === 'activity') && selectedWorkspace`。**这条与上一条键盘 chord 是一对对称失败**:上一条=Activity 该隐藏的 browse 控件残留 mutation path(多了);本条=Activity 该保留的 workspace action 被 chat-only gate 误删(少了);同一个 root=section 轴与 workspace-scoped-action 轴混用。(注:create-channel 入口是 browse-sidebar action、Activity 无 channels sidebar,**真** chat-only,不在此列。)(#1394 Cindy review 第三轮 / shiki dogfood 抓到,固化防回归。)
+- **右侧复用 Chat 的真正 `ChannelView` / `ThreadPanel`——同一组件、同一 hooks，不复制。** composer / thread / inline-search / jump-prime / mark-read / attachment / message-actions 全经同一路径继承 → chat 侧任何改动 Activity 自动跟。**「无条件自动同步」是单一组件权威的结构性保证，不是纪律要求。** 判据：任何 chat 能力若需要在 Activity 里单独补一遍，即结构没改对。
+- **选中态 SoT = `(workspace, channel, optional thread)`，且 workspace 从选中的 conversation 派生。** Activity 是**跨 workspace 的全局队列**，而 ChannelView / titlebar(ws name/path) / 所有 ws-scoped hooks 都是**单 workspace 作用域**。故 Activity section 复用 chat 的 channel/thread 路由参数形，**并带 workspace 段**；titlebar 与 ws-scoped hooks 读同一 route workspace → 跨 ws 选一条 activity，右侧 pane 与 workspace context **一起**切，不留 desync。chat 与 Activity = 同一 selection SoT 的两个 navigator。
+- **Activity route 恰有两形，没有 workspace-only 中间态。** 合法形只有 bare `/activity`（未选中）与「带 workspace + channel」（选中）。**「有 workspace 无 channel」不是合法 selection state**——它会造出一个「无 activity item 对应、workspace 非从 conversation 派生」的第三态（titlebar 显示 workspace name/settings/member、ws-scoped query 以为有 workspace，但内容区仍是全屏 list），直接违反上一条「workspace 从选中 conversation 派生」+「未选中 = 纯 global list」。route 解析对 Activity **只认这两形**；手写非法路径至多降级成 activity section + 无 workspace/无 channel（或 normalize 回 bare `/activity`），**绝不产生 workspace selection**。
+- **删除的两条隐藏分支（重构的实质）**：① `sourceViewer` 降级 chrome；② 平行 docked-source 机。二者是旧「快捷版」的载体，改对后不再存在——不是被新分支替换，是被删除。
+- **Activity list 列本身 = 全局 scorer 的纯投影**：只负责选中 / 排序 / 过滤，**不拥有任何 message/thread 渲染**。空态 = caught-up。
+- **Activity list 宽度 = Activity 自己的 resizable + min-width + 独立持久化的 layout preference**（分屏时生效）。**绝不复用 chat 的 workspace-sidebar 可见态或宽度语义**——那会把 chat browse state 泄进 Activity，与 Titlebar blocker 同类。min-width 保证 list row（where / subject / reply 三行 + count token）基本元素可读。
+- **Titlebar chrome 必须 section-aware，绝不读 chat 的 browse-sidebar 可见态来给 Activity 布局。** Activity mode 下：**不显示 workspace/channel 两个 sidebar toggle**（该模式没有 browse sidebar，控件不该暴露）；**offset 跟随 Activity list 的实际（可拖拽）宽度、独立于 chat 的 workspace-sidebar state**——未选中（list 占满）时无 workspace title；选中后 workspace name/path 对齐到 ChannelView 列正上方；**拖拽改变 Activity list 宽度时 offset 必须同步**。否则用户在 chat 收起过 workspace sidebar 后进 Activity，titlebar 会按错误 offset 偏移——这是 chat-only UI state 泄进 Activity layout，违反本节「Activity 下无 browse sidebar、Activity list 取代它」的契约。
+- **隐藏一个控件 ≠ 停用它背后所有 mutation path——browse-sidebar 的每条控制入口（可见 toggle *与* 键盘 chord）必须同处 `chat` section 边界。** Titlebar 里那两个 sidebar toggle 只是 browse-sidebar 状态的**可见**入口；键盘 chord 是**第二条隐藏入口**。只把可见 toggle 做成 section-aware、却让键盘 chord 无条件挂在全局，Activity mode 下用户仍能改 chat browse-sidebar 的 visible preference，回到 chat 时布局突变——与上一条 Titlebar blocker 同源（hidden control state 被 Activity 面的残留入口触达）。铁律：凡 `chat` 独占的 browse-sidebar 控制，gate 在 `appSection === 'chat'`——键盘 chord **gate 的是注册**（disabled section 不注册监听，chord 保持自由、不 stray `preventDefault`），不是在 handler 里 early-return。**判据：一个控件被 section 隐藏时，枚举它所有 mutation path（toggle / 快捷键 / 命令 / 深链）确保每条都被同一 section 边界挡住，别只挡可见的那条。**
+- **Titlebar entry 分两轴，别混进一个 gate——browse-sidebar chrome = section-scoped（chat 独占）⊥ workspace-scoped action = workspace-presence-scoped（section 无关）。** browse-sidebar toggle 只在 `chat` 有意义（Activity 无 browse sidebar），gate 在 `appSection === 'chat'`；但 workspace-scoped action（Tasks drawer、Workspace settings 等）只看「有没有选中的 workspace」——Activity 选中态 workspace 从 conversation 派生（SoT），这些 action 必须可用；bare `/activity` 因无选中 workspace 自然隐藏。**把 workspace action 绑到 section 轴 = category error**（同类 action 不一致就是 tell）。正确谓词看「conversation-showing context」：`((chat && channel view) || activity) && selectedWorkspace`。这条与上一条键盘 chord 是**一对对称失败**：上一条 = Activity 该隐藏的 browse 控件残留 mutation path（多了）；本条 = Activity 该保留的 workspace action 被 chat-only gate 误删（少了）；同一 root = section 轴与 workspace-scoped-action 轴混用。（注：create-channel 入口是 browse-sidebar action、Activity 无 channels sidebar，**真** chat-only，不在此列。）
 
 `chat` 保持 browse 模式不动；要去一个没有 activity 的 channel → 切回 `chat`。
 
@@ -87,371 +79,117 @@ Activity 是 NavRail 顶层 section，与 `chat` 平级（不再是 chat sidebar
 
 ## 2. Titlebar
 
-**Status**: Spec → PR5
+布局（左到右）：traffic-lights + 两个 sidebar toggle（**chat/browse mode only**；activity mode 不显示，见 §1.1）→ workspace name（ellipsis）→ `⋯` more 菜单 → 预留 icons slot → workspace_path（右侧 ellipsis 保留路径尾部）。空区 drag，按钮 no-drag（避免吃掉原生拖拽/双击最大化）。
 
-布局（左到右）：
-
-| 段 | 内容 | 区域 |
-|----|------|------|
-| traffic-lights + sidebar toggles | native traffic lights；右侧约 12px 放 workspace / channel 两个独立按钮（**chat/browse mode only**；activity mode 不显示，见 §1.1） | mixed：空区 drag，按钮 no-drag |
-| workspace name | 当前选中 workspace 的 name；ellipsis | drag |
-| more icon | `⋯` 按钮，菜单：Rename / Manage Members / Copy Workspace Path / Delete Workspace | no-drag |
-| icons slot | 预留：theme toggle、help、events window 切换（debug 用，最终走 menu） | no-drag |
-| workspace_path | 右侧 ellipsis + `dir="rtl"`（保留路径尾部） | drag |
-
-> `trafficLightPosition: { x: 12, y: 11 }` 负责红绿灯安全区；toggle group 使用 `--titlebar-sidebar-toggle-left` / `--titlebar-controls-safe-width`，按钮必须带 `no-drag`，避免吃掉原生拖拽/双击最大化。  
-> **Toggle 视觉**（task #171 改）：状态用图标形状表达，不用激活背景色。Workspace toggle 用 `PanelLeft`（visible）↔ `PanelLeftDashed`（hidden）；Channel toggle 用 `Columns2`（visible）↔ `Square`（hidden）。两个按钮使用不同 lucide 家族，便于一眼区分；hover 仅淡化背景，移除原 `bg-row-selected` 选中态。  
-> **More 菜单的 Rename / Delete** 沿用 ChannelsSidebar 现有逻辑（移过来即可），不是新功能。  
-> **Manage Members** 在 DM workspace 下隐藏（同现状）。  
-> 没有 workspace 选中时（chat/browse mode），titlebar 仍显示 traffic-lights + sidebar toggles + 空 drag 区。（activity mode 的 titlebar chrome 见 §1.1。）
-
-**main 进程改动**：
-
-```ts
-new BrowserWindow({
-  // ...
-  titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : undefined,
-  trafficLightPosition: { x: 12, y: 11 },
-});
-```
-
-> **平台范围**：v1 仅支持 macOS。Win/Linux 上自绘 titlebar 没必要做、也不需要兼容代码——
-> 不要为 `process.platform !== 'darwin'` 加 `frame: false` 之类的分支，
-> 后面要补再统一开新分支处理（详见 §11）。
-
-参考 `/Users/shiki/workspace/webskill-repos/api-anything/electron/src/renderer/src/components/MainTitlebar/`。
+- **Toggle 视觉**：状态用图标形状表达，不用激活背景色；两个按钮用可一眼区分的不同图标家族，hover 仅淡化背景，不带选中态底色。
+- **More 菜单**：Rename / Manage Members / Copy Workspace Path / Delete Workspace。Rename / Delete 沿用 ChannelsSidebar 现有逻辑，不是新功能。**Manage Members 在 DM workspace 下隐藏。**
+- 没有 workspace 选中时（chat/browse mode），titlebar 仍显示 traffic-lights + sidebar toggles + 空 drag 区。（activity mode 的 titlebar chrome 见 §1.1。）
+- **平台范围**：v1 仅支持 macOS。Win/Linux 上自绘 titlebar 没必要做、也不需要兼容代码，别为 `process.platform !== 'darwin'` 加分支（见 §0）。
 
 ---
 
 ## 3. Sidebar（workspaces 列，NavRail 右侧）
 
-**Status**: 现状已有 workspace 分组 + Saved 入口 + 宽度持久化。原顶部 "Agent Hub + ⚙" 头条已移除（settings 入口下沉到 NavRail 底部）；workspaces/members tab toggle 已移除（members 是 NavRail top-level section，不在 Sidebar 内）。
+结构（自上而下）：全局唯一的 `★ Saved` 入口 → DM 分组 → WORKSPACES 分组 → 底部 user footer。settings 入口已下沉到 NavRail 底部；members 是 NavRail top-level section，不在 Sidebar 内。
 
-结构（自上而下）：
-
-```
-┌─ Sidebar (workspaces) ┐
-│ ★ Saved               │  ← 全局唯一入口；选中时 main view 切到 SavedListView
-├───────────────────────┤
-│ DM ▾                  │  ← collapsible group header（整行可点击，详见下）
-│   @claude             │
-│ WORKSPACES ▾   +      │  ← group header 右侧的 + 是独立 action（不触发折叠）
-│   #project-x          │
-│   #refactor           │
-├───────────────────────┤
-│ ◯ local               │  ← 底部 footer（user 标识占位）
-└───────────────────────┘
-```
-
-- **Sidebar 仅在 NavRail = `chat` 时显示**。NavRail = `members` / `computers` 时，本列被相应的 MembersPanel / ComputersPanel 替换（仍占同样的 `--sidebar-width`，仍用 `--bg-channels-sidebar` 底色）。
-- 显隐是全局 layout preference：`silverhand:layout.workspace-sidebar-visible` / `silverhand:layout.channel-sidebar-visible`（task #171 改成 per-key 简单 `'1'/'0'`），不随 workspace 切换。titlebar 按钮和 `⌘⇧\` / `⌘\` 双向同步；隐藏时 splitter 也跟着卸载。
-- **Slide 动画**（task #171）：每个 sidebar 是 `.sidebar-slot`（layout/`flex-basis` + `width` 收缩到 0）+ 内层 `.sidebar-surface`（paint/`transform: translate3d` 滑出）的两层结构，240ms `cubic-bezier(0.32, 0.72, 0, 1)` apple-feel 缓动。状态机在 `useSidebarPane`：四态 `closed → opening → open → closing → closed`，open 走 `flushSync` + 双 rAF（保证从 -100% 起跑），close 走 setTimeout 240ms 后卸载 surface；rapid toggle 自动 cancel 旧 timer/rAF；reverse mid-closing 直接翻回 `open` 让 CSS 反向插值。隐藏的 surface 加 `inert` 属性 + `aria-hidden="true"`，移出 a11y 树并禁焦。`prefers-reduced-motion` 同时关 CSS transition 和 JS 状态机的延迟（短路到同步 mount/unmount）。
-- Saved 是**全局唯一入口**（不分 workspace），点击进入 §6 的 Saved List View。
-- 选中 Saved 时 ChannelsSidebar 隐藏或灰显（待定，倾向**整体改成 list 视图**，workspace sidebar 仍然显示让用户能切回去）。
+- **Sidebar 仅在 NavRail = `chat` 时显示**。NavRail = `members` / `computers` 时，本列被相应的 MembersPanel / ComputersPanel 替换（仍占同样宽度、同底色）。
+- 显隐是全局 layout preference，不随 workspace 切换；titlebar 按钮和键盘 chord 双向同步，隐藏时 splitter 也跟着卸载。
+- **Slide 动画**：sidebar 收起/展开走 apple-feel 缓动的两层结构（layout 层收缩 + paint 层 transform 滑出），rapid toggle 自动 cancel 旧动画、reverse mid-closing 直接翻回展开。隐藏的 surface 加 `inert` + `aria-hidden="true"`，移出 a11y 树并禁焦。**`prefers-reduced-motion` 同时关 CSS transition 和 JS 状态机的延迟**（短路到同步 mount/unmount）。
+- Saved 是**全局唯一入口**（不分 workspace），点击进入 §6 的 Saved List View；期间 workspace sidebar 仍显示让用户能切回去。
 - **Group header 整行可点击**（含 chevron + label + count），右侧的 `+` action 是独立按钮——避免点错触发折叠。
-
-**宽度持久化（PR6）**：
-
-- 新建 `apps/desktop/src/renderer/hooks/useResizableWidth.ts`
-- 宽度 localStorage key：`silverhand.layout.sidebar-width` / `silverhand.layout.channels-sidebar-width` / `silverhand.layout.split-ratio`
-- 显隐 localStorage key（task #171 收敛）：`silverhand:layout.workspace-sidebar-visible` / `silverhand:layout.channel-sidebar-visible`，每个独立的 `'1'`/`'0'`，global，不 per-workspace。
-- min/max：`Sidebar` 200–360；`ChannelsSidebar` 200–400；split ratio 0.25–0.75
-- splitter：4px 可点击区，hover 时变 `--accent`，drag 时整个文档加 `cursor: col-resize` + `user-select: none`。slot/surface 宽度通过 `var(--sidebar-width)` / `var(--channels-sidebar-width)` 引用，drag 期间 CSS var 改值不会触发 transition（CSS 规范），所以 resize 不需要额外抑制。
+- splitter 是窄可点击区，hover 变色，drag 期间整个文档加 col-resize + 禁选中。宽度经 CSS var 引用，drag 改值不触发 transition。
 
 ---
 
 ## 4. ChannelsSidebar（中列）
 
-**Status**: 现状基本可用；本节小改。
-
-变化：
-
-1. **顶部 workspace info block 删除**——内容已迁移到 titlebar（§2）。ChannelsSidebar 顶部只保留 `+` 新建会话按钮和（regular workspace）`Manage Members`。
-2. channel tree 当前实现保留：top-level + thread indent。thread 节点状态：`closed` 删除线 + 灰；`active` 绿点；`crashed` 红点。
-3. 选中 thread 时左侧高亮**也包括其 parent**（视觉提示"你正在看一对"）——split view 下两边各对应一个高亮节点。
-4. 显隐是全局 layout preference：`silverhand:layout.channel-sidebar-visible`（task #171 改成独立 key），titlebar 按钮和 `⌘\` 双向同步；隐藏过程走 §3 的 slot/surface slide 动画，结束后 splitter 卸载。workspace + channel 都隐藏时不做 hover 边缘弹出，NavRail 仍常驻。
+- 顶部只保留 `+` 新建会话按钮和（regular workspace）`Manage Members`；原 workspace info block 已迁到 titlebar（§2）。
+- channel 列表只展示 top-level channel-like（`channel` / `dm_channel`），**不含 thread 节点**——thread 是父 channel 里的 message reply-cluster、不是导航树节点（§7）。列表行按 pin / active / archived 归组，不做 thread 缩进层级。
+- 显隐是全局 layout preference，titlebar 按钮和键盘 chord 双向同步，隐藏走 §3 的 slide 动画、结束后卸载 splitter。workspace + channel 都隐藏时不做 hover 边缘弹出，NavRail 仍常驻。
 
 ---
 
 ## 4.5 Context menus
 
-**Status**: Done @ task #170
+右键菜单一律用 Radix context-menu，**不使用原生菜单**；所有菜单 token 收敛到单一共享组件（容器 / item / separator），并另导出一套共享 token 的 dropdown 供「点击打开」的 action menu（如 ChannelView header 的 more 菜单）复用。
 
-右键菜单使用 Radix `@radix-ui/react-context-menu`，不使用原生菜单。菜单 token 统一收敛到 `components/menus/AppContextMenu.tsx`：
-
-- 容器：`min-w-[180px] rounded-md border border-border bg-bg-floating p-1 text-xs text-text-primary shadow-lg`
-- item：左侧固定 `size-3.5` icon slot，label `flex-1 truncate`，hover 使用 `data-[highlighted]:bg-bg-hover`
-- separator：`my-1 h-px bg-border-subtle/60`
-
-同文件也导出 `AppDropdownMenu`，用于需要点击打开但应共享同一套 token 的 action menu，例如 ChannelView header 的 `MoreHorizontal`。
-
-### Workspace row
-
-所有 workspace 行一致，包括 regular workspace、DM workspace、archived workspace。DM workspace 也有 `workspace_path`（agent workspace path），不做 disabled 分支。
-
-| Item | Icon | 行为 |
-|---|---|---|
-| Open in Finder | `FolderOpen` | `window.agentHub.showItemInFolder(workspace_path)` |
-| Copy path | `Copy` | `navigator.clipboard.writeText(workspace_path)` + toast |
-
-### Channel row
-
-| Item | Icon | 行为 | 范围 |
-|---|---|---|---|
-| Pin / Unpin | `Pin` / `PinOff` | `pinChannel.mutate({ channelId, pinned: !pinned })` | top-level channel / dm_channel；thread 隐藏 |
-| Archive / Restore | `Archive` / `ArchiveRestore` | `archiveChannel.mutate({ channelId, archived: !archived })` | top-level channel-like：`channel`（regular workspace）或 `dm_channel`（agent_home/DM）；thread 隐藏（#task:1145） |
-| Copy name | `Copy` | `navigator.clipboard.writeText(channel.title)` + toast | channel / dm_channel / thread 全部可用 |
-
-Thread 行本批只提供 `Copy name`，不扩展 pin/archive 语义，保持 top-level-only 规则。
-
-### ChannelView header More
-
-ChannelView 头部的 `MoreHorizontal` 点击菜单继续保持 dropdown 交互，不改成右键；但样式迁到 `AppDropdownMenu` 同一套 token。条目为 Rename / Archive / Restore，组织行为按 channel-like 同构（`canRenameChannel` / `canToggleArchive`：top-level `channel` 或 `dm_channel`，只拒 thread；rename 另需「未 closed」）——DM channel 与 regular channel 走同一套入口（#task:1145）。
-
-归档当前主选 channel 时，主面板按 sidebar 顺序做 **neighbor-aware 兜底选择**：优先选下一条 active top-level，否则上一条，都没有则清空到 workspace 空态（纯函数 `lib/archive-fallback.ts#pickFallbackAfterArchive`，单测覆盖）。只有归档「主面板正在看的那条」才移动选择；secondary 面板归档 / restore 不抢主选（#task:1145）。
-
-### Archived Channels 面板
-
-全局 Archived 是跨 collection 的恢复索引（含 regular `channel` 与 agent_home `dm_channel`，#task:1144/#task:1145）。Workspace 过滤 dropdown 按 **Workspaces / DMs 两组**分组（镜像 Message Search 的 workspace filter）：regular 组用 `W` glyph，DM 组用 agent avatar（`dmWorkspaceIcon`，dropdown scope 图标专用）。列表行本身仍统一 `#` channel glyph（DM 是 channel-like，不另给图标），靠 "DM <agent>" 文字上下文区分。点击 archived DM 行经 `archivedRowOpenTarget` 跳到该 DM 的 agent_home workspace + dm_channel（不沿用当前 workspace 上下文）；`useArchivedChannelsForWorkspace` 对 regular / dm 都 enable，目标 workspace 才能加载 archived 列表并解析出会话（#task:1145）。
+- **Workspace row**：所有 workspace 行一致（regular / DM / archived 不做 disabled 分支）——Open in Finder、Copy path。DM workspace 也有 workspace_path。
+- **Channel row**：Pin/Unpin 与 Archive/Restore 对 top-level channel-like（`channel` / `dm_channel`）可用；Copy name 全部可用。（sidebar 只列 channel-like、无 thread 行——见 §4。）
+- **ChannelView header more**：保持 dropdown 交互（不改右键）。Rename / Archive / Restore 按 channel-like 同构（`channel` / `dm_channel`；rename 另需未 closed）——DM channel 与 regular channel 走同一套入口。
+- **归档兜底选择**：归档当前主选 channel 时，主面板按 sidebar 顺序做 **neighbor-aware 兜底**：优先下一条 active top-level，否则上一条，都没有则清空到 workspace 空态（纯函数 + 单测覆盖）。只有归档「主面板正在看的那条」才移动选择；secondary 面板归档 / restore 不抢主选。
+- **Archived Channels 面板**：全局 Archived 是跨 collection 的恢复索引（含 regular `channel` 与 agent_home `dm_channel`）。workspace 过滤 dropdown 按 Workspaces / DMs 两组分组（镜像 Message Search）；列表行统一用 `#` channel glyph（DM 是 channel-like），靠 "DM <agent>" 文字上下文区分。点击 archived DM 行跳到该 DM 的 agent_home workspace + dm_channel（不沿用当前 workspace 上下文）。
 
 ---
 
 ## 5. Message Rendering
 
-**Status**: Spec → PR1（含 markdown）+ PR2（onboarding metadata）
+### 5.1 Markdown 安全契约
 
-### 5.1 Markdown 渲染方案
+Markdown 渲染是**安全边界**，以下为不可回退的契约：
 
-- **`react-markdown` + `remark-gfm` + `rehype-highlight`**
-- `dayjs` + `dayjs/plugin/relativeTime` 用于时间显示
-- 安全：**不装 `rehype-raw`**，`react-markdown` 默认不渲染原始 HTML（`skipHtml` 行为）。Agent 输出包含 `<script>` 也只渲染为 escape 文本。
-- 链接：自定义 `a` 组件用 preload 暴露的 `shell.openExternal`，永远不在窗口内导航。
-- 代码：
-  - `inline code`：默认 `<code>` 样式（细灰底）
-  - 代码块：`<pre>` 包 `rehype-highlight` 高亮，右上角 hover 出现 `Copy` 按钮（写到 clipboard）
-  - 长代码块默认折叠到 `max-height: 320px` + 渐变蒙层 + `Show more` 按钮（v1 可不做，先全展开）
-
-```ts
-// components/chat/Markdown.tsx
-<ReactMarkdown
-  remarkPlugins={[remarkGfm]}
-  rehypePlugins={[rehypeHighlight]}
-  components={{ a, code, pre }}
-  skipHtml
->
-  {content}
-</ReactMarkdown>
-```
+- **绝不启用 raw-HTML 渲染**（不装 rehype-raw，默认 skip-HTML）。Agent 输出即使包含 `<script>` 也只渲染为 escape 文本，永远不作为实际 DOM 注入。
+- **链接经 `shell.openExternal` 打开，永远不在窗口内导航**（自定义 `a` 组件走 preload 暴露的能力，不产生 in-window navigation）。
+- 代码块支持高亮 + hover 出现 Copy 按钮。
 
 ### 5.2 三种消息形态
 
 #### A. user 消息
 
-- 右对齐气泡（保留现状）
-- header：`you` + 相对时间（hover 显完整时间）
-- body：markdown（user 输入也支持 markdown，方便贴代码）
-- hover：整行 bg = `--bg-hover`，外圈 1px `--border-subtle`，左下出现 `Thread` `Save`
+- 右对齐气泡；header `you` + 相对时间（hover 显完整时间）；body markdown（user 输入也支持 markdown，方便贴代码）。
+- hover：整行高亮 + 细边框，左下浮出 `Thread` `Save`。
 
 #### B. agent 消息
 
-- 左对齐气泡
-- header：`@<agent-name>` + 相对时间
-- body：markdown
-- hover：同 user
-- 头像：v1 不做（agent 还没有头像系统），用名字色块代替（首字母 + accent 色）
+- 左对齐气泡；header `@<agent-name>` + 相对时间；body markdown；hover 同 user。
+- 头像：v1 不做，用名字色块代替（首字母 + accent 色）。
 
 #### C. system 消息
 
-**关键变更**：从居中 italic 改成**左对齐 secondary**，根据 `metadata.subtype` 区分行为：
+**左对齐 secondary**（非居中 italic），无气泡、文字偏 muted，点击行任意位置切换展开。根据 `metadata.subtype` 区分行为：
 
 | subtype | 行为 |
 |---------|------|
-| `'onboarding'` | 默认显示 1 行（`line-clamp: 1`）+ ▸ icon；点击展开全部 |
+| `'onboarding'` | 默认 clamp 到 1 行 + ▸ icon；点击展开全部（展开后仍保留 secondary 色，区分普通 message） |
 | `'join'` / `'leave'` | 单行不可折叠（一般本来就一行） |
 | `'child_summary'` | 类似 onboarding，可折叠（summary 可能长） |
 | `null` / 其他 | 默认全显（保守） |
 
-- 左对齐，无气泡，文字 `--text-muted`（约一档 secondary）
-- 点击行任意位置切换展开
-- onboarding 展开后也保留 secondary 颜色，跟普通 message 区分
-
 ### 5.3 时间显示
 
-- 用 `dayjs(created_at).fromNow()` → "3 分钟前" / "刚刚" / "昨天"
-- `title` 属性挂完整 `YYYY-MM-DD HH:mm:ss`，hover 由浏览器原生 tooltip 显示
-- 列表里每分钟刷一次（轻量 setInterval + state version bump，或直接 `react-query` 的 `refetchInterval` 不适合这场景，自己 hook）
+相对时间（"3 分钟前" / "刚刚" / "昨天"），hover 显示完整绝对时间。
 
 ### 5.4 Thread / Save action bar
 
-- hover message 时绝对定位浮在左下（不挤压 layout）
-- icon button：`↩ Thread` / `★ Save`（save 后 icon 变实心 + active 色）
-- 点击外的空间不消费 hover 状态
+- hover message 时**绝对定位浮在左下，不挤压 layout**（无布局位移）。
+- icon button：`Thread` / `Save`；save 后 icon 变实心 + active 色（二次点击 = unsave）。
+- 点击 action 之外的空间不消费 hover 状态。
 
 ---
 
 ## 6. Save 功能
 
-**Status**: Spec → PR3（依赖 PR2 的 saved_messages 表）
+**数据模型取舍**：saved = 单一全局扁平列表，不分组、无 category 列（未来要 tag/category 再加新表，不污染主表）；唯一性 = 每个 user 对同一条 message 至多一条 saved 记录，二次点击 = unsave。
 
-### 6.1 数据模型（PR2）
-
-```sql
-CREATE TABLE saved_messages (
-  id          TEXT PRIMARY KEY,
-  message_id  TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-  channel_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  saved_at    INTEGER NOT NULL,
-  UNIQUE(message_id)
-);
-CREATE INDEX idx_saved_messages_saved_at ON saved_messages(saved_at DESC);
-```
-
-设计取舍：
-- **不加 category 列**——你的反馈是 saved 是单一全局列表，不分组；如未来要加 tag/category，再加新表 `saved_message_tags`，不污染主表。
-- **UNIQUE(message_id)**：同一条 message 只能 save 一次；二次点击 = unsave（DELETE）。
-- channel_id 和 workspace_id 冗余存以便 GET /saved 时一次 JOIN 拿全。
-
-### 6.2 后端 API
-
-```
-POST   /api/messages/:id/save     → 201 { saved: true }
-DELETE /api/messages/:id/save     → 204
-GET    /api/saved                 → SavedMessageDto[]
-                                    （含 message body、workspace name/id、channel name/id、sender name、saved_at）
-```
-
-### 6.3 前端：Saved List View
-
-进入条件：左 sidebar 顶部点 `★ Saved`。布局：
-
-```
-┌─ Saved (123) ─────────────────────────────────────────────────────┐
-│                                                                    │
-│  ┌────────────────────────────────────────────────────────────┐   │
-│  │ #project-x · @claude · 2 小时前                       ★ ✕ │   │  ← unsave 按钮
-│  │ ───────────────────────────────────────────────────────── │   │
-│  │ Markdown 渲染的消息内容...                                  │   │
-│  │ 跳转到对话 →                                                 │   │  ← 链接
-│  └────────────────────────────────────────────────────────────┘   │
-│                                                                    │
-│  ┌────────────────────────────────────────────────────────────┐   │
-│  │ @gpt · 昨天                                            ★ ✕ │   │
-│  │ ...                                                        │   │
-│  └────────────────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────────────────┘
-```
-
-- 平铺列表，最新的在上
-- 每条卡片显示：workspace · sender · 相对时间，body 用 markdown，底部 `跳转到对话` 链接
-- 点击跳转：切到该 channel（同时切 currentWorkspaceId/currentChannelId），并 scroll + flash highlight 到对应 message id
-- "跳转锚点"实现：MessageList 给每个 `<li>` 加 `id={'msg-' + m.id}`，跳转时 `document.getElementById(...)?.scrollIntoView({block: 'center'})`，再加 200ms `bg-warning/30` 闪烁
+**Saved List View**：左 sidebar 顶部点 `★ Saved` 进入，平铺列表最新在上。每条卡片显示 workspace · sender · 相对时间，body markdown，底部「跳转到对话」链接。点击跳转：切到该 channel（同时切 currentWorkspace/currentChannel），scroll + flash highlight 到对应 message——依赖 §9 的稳定 `msg-<id>` DOM 锚点。
 
 ---
 
 ## 7. Thread
 
-**Status**: Shipped as reply cluster.
+UI 概念叫 **Thread**：在某条消息下展开子讨论。**它不是 `kind='thread'` 的 child conversation**——thread reply 是父 channel 中的一条**普通 message**，靠 `messages.thread_root_id = <root message id>` 归属到某个 root。主 channel 列表只显示 main stream（`thread_root_id IS NULL`），root 消息带 reply 徽标；点开右侧 ThreadPanel 才按 root 过滤加载 replies。
 
-UI 概念仍叫 **Thread**：在某条消息下展开子讨论。它不再创建
-`kind='thread'` child conversation；thread reply 是父 channel 中的一条普通
-message，写入 `messages.thread_root_id = <root message id>`。
+**thread 永远只有一层**：reply 归一到 canonical root，不允许 reply 之上再 reply 成树。Channel sidebar 不展示 thread children，thread 不是导航树节点。
 
-### 7.1 后端 API
+旧 `kind='thread'` conversation 是只读 fossil（历史可读，写入 / 自动 spawn / agent thread create/close 已冻结）；需要隔离上下文或并行长任务时，创建新 channel，而不是 thread。
 
-- 主 channel 消息窗口：`GET /api/channels/:id/messages` 只返回 main stream
-  (`thread_root_id IS NULL`)；返回体带 `reply_counts_by_root` sidecar，用于根
-  message 的 reply 徽标。
-- Thread 面板消息窗口：
-  `GET /api/channels/:id/messages?thread_root_id=<root_message_id>`，返回根消息
-  + 该 root 下的 replies，复用 `ConversationMessagesDto`。
-- Human 在 thread 中回复：
-  `POST /api/channels/:id/messages` body 带
-  `reply_to_message_id: <root_or_reply_message_id>`。后端将 reply 归一到 canonical
-  root。
-- Agent CLI 对应：`silverhand message send --reply-to <message_id>`、
-  `message history --target thread:<root_message_id>`、
-  `thread follow|unfollow --root <root_message_id>`。
-
-旧 `kind='thread'` conversation 是只读 fossil：可通过 `/api/threads/:id/...`
-读取历史；写入、自动 spawn、agent `thread create/close` 已冻结/下线。若需要隔离
-上下文或并行长任务，创建新的 channel，而不是 thread。
-
-### 7.2 前端
-
-- Message row 的 reply count / Thread affordance 打开右侧 `ThreadPanel`
-  (`?cluster=<root_message_id>` 作为过渡期 URL 参数，避免和 legacy `/t/:threadId`
-  命名冲突)。
-- `ThreadPanel` 固定 pin 根消息，replies 列表读取
-  `?thread_root_id=<root>`，底部 composer 发送
-  `reply_to_message_id=<root>`。
-- 主 channel 列表不内联 thread replies；新 reply 通过 WS 更新根消息的
-  `reply_counts_by_root` 徽标，面板内按 root 过滤 append。
-- Channel sidebar 不展示 thread children；thread 不是导航树节点。
+> 领域模型（`messages.thread_root_id`、reply-to 归一、cluster 语义）的权威是 [`core-design.md`](./core-design.md)；本节只描述其 UI 呈现。
 
 ---
 
-## 8. Events Panel → 独立 Window（dev-only）
+## 9. 一致性约定（写代码时反复对照）
 
-**Status**: Spec → PR7
-
-### 8.1 动机
-
-普通用户不需要看 events——会冲淡 IM 心智，且 events 只有"接 backend event WebSocket 然后 dump JSON"这种 raw 价值，是开发/调试场景。
-
-### 8.2 实现
-
-- App.tsx 删 `<EventPanel />`
-- main 进程：
-  - `createEventsWindow()`：新建 BrowserWindow（标准 frame，size 480×720，`alwaysOnTop: false`）
-  - 加载 `events.html`（renderer 新建 entry：`apps/desktop/src/renderer/events/main.tsx`）
-  - 单例：已开就 focus，关了再开重新建
-- macOS 应用菜单（`Menu.setApplicationMenu`）：
-  ```
-  View
-  └─ Developer
-     ├─ Show Events Window     ⌥⌘E
-     └─ Pin Events Window      （checked toggle，调 win.setAlwaysOnTop）
-  ```
-- 冷启动默认关；窗口开/关状态不持久化
-- Events Window 内部：复用现有 `EventPanel.tsx` 内容（拆出 reusable 部分），消费 event WebSocket frame → 直接 render
-
-backend event bus / WebSocket 现状已经是订阅 + multicast，无需改动。
-
----
-
-## 9. 落地 PR 顺序
-
-| # | 名称 | 阻塞下一项 | 大致改动 |
-|---|------|-----------|---------|
-| 1 | 文档（本文 + progress） | — | docs only |
-| 2 | PR1 markdown + message UI | 是 | renderer chat 组件重写；新依赖 |
-| 3 | PR2 saved_messages migration + system metadata | 是 | shared/migrations + provision.ts |
-| 4 | PR3 Save 功能 | — | backend route + UI Saved view |
-| 5 | PR4 Thread / child session | — | backend provision + UI split + new endpoint |
-| 6 | PR5 Custom titlebar | — | main BrowserWindow + Titlebar.tsx |
-| 7 | PR6 Resizable sidebars | — | hook + Sidebar wrappers |
-| 8 | PR7 Events 独立窗口 | — | main + new renderer entry + menu |
-
-PR3 / 4 / 5 / 6 / 7 之间互相不阻塞，可以并行 review；按 PR# 顺序完成最稳。
-
----
-
-## 10. 一致性约定（写代码时反复对照）
-
-- **CSS color/spacing 永远走 token**，不写裸色值（`design-new-theme.md` §3）
-- **Markdown 容器最大宽度** 与现有气泡保持一致（`max-w-[75%]`），避免在宽屏 workspace 里横到 2000px 难读
-- **每条 message 必须有稳定 DOM id**（`msg-<id>`），用于 saved view 跳转 + 未来 anchor 复制
-- **thread 永远只有一层**（schema + UI 双重保险）；UI 在 Thread button 上根据 `parent_conversation_id != null` 隐藏
-- **dev-only feature 的入口** 只在 macOS 应用菜单 → Developer 子菜单下；不出现在用户视野中其他地方
-- **Header variant 只能"显隐 / 重排" chrome，绝不替换或新造主题化 identity 原语。** 同一个组件用 mode/variant prop 渲染不同密度的 header 时,凡带 `data-*` theme hook 的 identity/control 原语（channel `#` = `data-conversation-hash`、列表频道图标 = `data-channel-icon` 等）**必须复用 canonical header 的同一个 primitive**；variant 只决定「是否展示 / 布局 / action 集合」,**不替换、不新造**那段 DOM。理由:「同组件不同 mode」只保护两个 mode *共享的那段 markup*——某个 mode 自己新增/替换的元素逃出共享路径,就会绕过主题 hook，在带 sticker 配方的主题（forza6）下画成通用 glyph、像换了一套图标语言。**历史教训（概念已删、规则仍适用）:** #1227 的 `ChannelView.sourceViewer` docked 源面板初版用裸 lucide `Hash` 替掉 `#`,只在 forza6 暴露——该降级 chrome 已随 #1394 Activity-rail 重构**删除**（§1.1），但「header variant 是减法、不发明新视觉原语」这条规则对任何 header variant（thread panel header 等）仍然成立。mode 应是**减法**(gate 掉控件)或复用现有 themed 原语,不在分支里发明新视觉原语。data-hook 侧细则见 `design-new-theme.md`。
-- **每个 PR 完成后追加 `docs/progress.md`** 一段，记下：动机、关键决策、踩坑、验证（typecheck / test / 手测）
-
----
-
-## 11. Open questions（v1 之后再决定）
-
-- Saved 是否需要 search / filter？（v1: 不做；列表 < 50 条够用）
-- Thread 内的成员管理 UI 在哪？沿用 workspace-level Manage Members，还是 thread 自己一个？（v1: 不做"thread 内单独管理"，workspace 加成员自动出现在所有未关闭 channel 里——验证现状逻辑是否如此）
-- titlebar 在 Win/Linux 的窗控按钮（min/max/close）什么时候补？v1 **仅支持 macOS**，暂不为 Win/Linux 出窗控/自绘 titlebar；要支持时再开新分支统一处理（不要现在就加 `process.platform !== 'darwin'` 兼容代码污染主线）。
-- 多 thread 并发：spec 写"只允许一个 thread pane"，但 sidebar tree 仍然能切换不同 thread——这两个语义要对齐（建议：sidebar 切换 thread 等价于 `setOpenThreadId(targetId)`，永远只显示一个 pane）
+- **CSS color/spacing 永远走 token**，不写裸色值（`design-new-theme.md`）。
+- **Markdown 容器最大宽度** 受可读行宽约束、与消息气泡一致，不随窗口横铺满宽——宽屏 workspace 里超长行难读。
+- **每条 message 必须有稳定 DOM id（`msg-<id>`）**，用于 saved view 跳转 + 未来 anchor 复制——跨 message list 唯一且稳定，是这些跳转/锚点能力的统一依赖。
+- **thread 永远只有一层**（schema + UI 双重保险）；UI 在 Thread button 上按 thread-root 归属隐藏二次分层入口。
+- **Header variant 只能"显隐 / 重排" chrome，绝不替换或新造主题化 identity 原语。** 同一组件用 mode/variant prop 渲染不同密度的 header 时，凡带 `data-*` theme hook 的 identity/control 原语（channel `#` hash、列表频道图标等）**必须复用 canonical header 的同一个 primitive**；variant 只决定「是否展示 / 布局 / action 集合」，**不替换、不新造**那段 DOM。理由：「同组件不同 mode」只保护两个 mode *共享的那段 markup*——某个 mode 自己新增/替换的元素逃出共享路径，就会绕过主题 hook，在带 sticker 配方的主题下画成通用 glyph、像换了一套图标语言。mode 应是**减法**（gate 掉控件）或复用现有 themed 原语，不在分支里发明新视觉原语。data-hook 侧细则见 `design-new-theme.md`。

@@ -14,7 +14,7 @@ import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
 import { applyTaskChangedToTaskByNumberCache } from './useTaskByNumber';
 
 /**
- * Tasks live in /api/tasks (per docs/tasks-design.md §6.2). The list is
+ * Tasks live in /api/tasks (per docs/tasks-design.md). The list is
  * filterable by workspace / conversation / status; fetched once per filter
  * combination. Mutations invalidate this cache; workspace/global task views
  * also listen for WS `task_changed` events because agent-side updates can
