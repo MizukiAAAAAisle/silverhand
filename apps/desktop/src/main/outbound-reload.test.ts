@@ -59,6 +59,7 @@ function makeAttachment(overrides?: Partial<HostWsAttachment>): HostWsAttachment
     connectionId: 'conn-old',
     attachedAt: 1_700_000_000_000,
     hostname: null,
+    capabilities: [],
     ...overrides,
   };
 }

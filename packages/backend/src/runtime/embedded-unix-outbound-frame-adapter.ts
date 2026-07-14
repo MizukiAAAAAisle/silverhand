@@ -94,6 +94,10 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
   private socket: Socket | null = null;
   private connectionId: string | null = null;
   private attachedAt: number | null = null;
+  /** Capabilities advertised by the local daemon's `ready` frame (#task:1486).
+   *  Reset on disconnect so a replaced daemon generation re-declares its own;
+   *  empty before `ready`. */
+  private capabilities: readonly string[] = [];
   private connectionSeq = 0;
   private commandSeq = 0;
   private readBuffer = '';
@@ -179,6 +183,7 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
       connectionId: this.connectionId,
       attachedAt: this.attachedAt ?? 0,
       hostname: null,
+      capabilities: this.capabilities,
     };
   }
 
@@ -350,6 +355,11 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
     const event = OutboundDaemonToServerEventFrameSchema.safeParse(parsed);
     if (event.success) {
       if (this.connectionId) {
+        // Capture advertised capabilities from the ready frame onto this live
+        // connection (#task:1486); reset on disconnect keeps it generation-local.
+        if (event.data.kind === 'ready') {
+          this.capabilities = event.data.capabilities;
+        }
         this.onEvent?.(this.hostId, event.data, this.connectionId);
       }
       return true;
@@ -434,6 +444,7 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
     this.socket = null;
     this.connectionId = null;
     this.attachedAt = null;
+    this.capabilities = [];
     this.rejectAllPending(`host ${this.hostId} outbound socket disconnected (${reason})`);
     if (connectionId) {
       this.onDisconnect?.(this.hostId, connectionId);

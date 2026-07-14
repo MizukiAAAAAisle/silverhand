@@ -33,6 +33,7 @@ import {
 import { tmpdir } from 'node:os';
 
 import { Supervisor } from '../src/daemon/supervisor/index.js';
+import { CodexDriver } from '../src/drivers/codex.js';
 import type { Driver, DriverSpawnContext, ParsedEvent } from '../src/drivers/index.js';
 import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
 import type { EventFrame, RuntimeStartResult } from '../src/protocol.js';
@@ -152,12 +153,23 @@ function makeSupervisor(opts: {
   runtimePidRootDir?: string | null;
   runtimeStartResolveDeps?: ReturnType<typeof testRuntimeStartResolveDeps>;
   emitRawRuntimeOutput?: boolean;
+  /** Observe the DriverSpawnContext the supervisor hands to buildArgs. */
+  onSpawnCtx?: (ctx: DriverSpawnContext) => void;
 } = {}): {
   supervisor: Supervisor;
   events: EventFrame[];
 } {
   const spy = makeEmitSpy();
-  const driver = makeFakeDriver(opts.driverArgs);
+  const baseDriver = makeFakeDriver(opts.driverArgs);
+  const driver: Driver = opts.onSpawnCtx
+    ? {
+        ...baseDriver,
+        buildArgs: ctx => {
+          opts.onSpawnCtx!(ctx);
+          return baseDriver.buildArgs(ctx);
+        },
+      }
+    : baseDriver;
   // Node fixture is a .cjs file; invoke via the same node binary the
   // test runner uses so we don't depend on the fixture being chmod +x.
   const realSpawn = spawn;
@@ -5461,5 +5473,64 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     expect(h.consumedFor(7)).toHaveLength(1);
 
     await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+});
+
+describe('Supervisor #task:1486 — reasoning-effort is forwarded, not product-gated', () => {
+  // Regression lock for Cindy's P1: the daemon is NOT a product-legality
+  // authority. It does bounded structural wire validation and forwards the
+  // effort token; product validity lives in the backend write boundary, and
+  // Codex itself rejects an engine-unsupported effort. Re-introducing a static
+  // product allowlist here would defeat the open-token contract (an older
+  // daemon would `invalid_params` a future token a newer backend legitimately
+  // sends), so any product-model check on the spawn path must fail this test.
+  function codexStart(model: string, effort: string) {
+    const options = testStartOptions({
+      conversationId: 'c1',
+      agentId: 'a1',
+      agentName: 'tester',
+      runtime: 'codex',
+      model,
+    });
+    options.driver.reasoning_effort = effort;
+    return { conversation_id: 'c1', agent_id: 'a1', options };
+  }
+
+  it('baseline High spawns for any model (no host probe)', async () => {
+    const { supervisor } = makeSupervisor();
+    const res = await supervisor.start(codexStart('my-proxy-model', 'high'));
+    assertStarted(res);
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('Ultra on gpt-5.6-sol spawns (product table allows it upstream)', async () => {
+    const { supervisor } = makeSupervisor();
+    const res = await supervisor.start(codexStart('gpt-5.6-sol', 'ultra'));
+    assertStarted(res);
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('forwards a product-invalid effort through runtime_start to CodexDriver argv verbatim (open-token contract)', async () => {
+    // Cindy P1 acceptance: a token the closed product enum does not know
+    // (`giga`) must flow runtime_start → DriverSpawnContext → CodexDriver
+    // .buildArgs → argv unchanged, with NO daemon-side product gate. Re-adding
+    // a closed allowlist in the supervisor would either reject the start
+    // (assertStarted fails) or drop the token from the ctx (assertion below
+    // fails). protocol.test only proves Zod parses the token; this proves the
+    // execution plane forwards it. Product API still rejects `giga` upstream —
+    // that boundary lives in the backend, not here.
+    let captured: DriverSpawnContext | undefined;
+    const { supervisor } = makeSupervisor({
+      onSpawnCtx: ctx => {
+        captured = ctx;
+      },
+    });
+    const res = await supervisor.start(codexStart('gpt-5.6-sol', 'giga'));
+    assertStarted(res);
+    expect(captured?.reasoningEffort).toBe('giga');
+    // The real CodexDriver renders the forwarded token verbatim into argv.
+    const argv = new CodexDriver().buildArgs(captured!);
+    expect(argv[argv.indexOf('-c') + 1]).toBe('model_reasoning_effort="giga"');
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
   });
 });

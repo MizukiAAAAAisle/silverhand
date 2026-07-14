@@ -9,10 +9,12 @@ import {
 } from '@silverhand/host';
 import { getDriver } from '@silverhand/host/drivers';
 import type {
+  AgentDto,
   AgentRunState,
   AgentRunTerminalReason,
   RuntimeKind,
 } from '@silverhand/shared';
+import { isBaselineReasoningEffort } from '@silverhand/shared';
 import type { AgentTokenStore } from '../auth/agent-token-store.js';
 import type { BackendLogger, SilverhandCliLauncher } from '../context.js';
 import { systemSubtype } from '@silverhand/shared';
@@ -1010,6 +1012,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     }
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error(`agent ${agentId} not found`);
+    this.assertReasoningEffortSendable(hostId, agent);
     const sessionAgent = this.conversations.getAgent(conversationId, agentId);
     if (!sessionAgent) {
       throw new Error(
@@ -1027,6 +1030,32 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         this.opts.coLocatedHostId === hostId ? this.opts.silverhandCli : null,
       agentToken: this.opts.agentTokens.issue(conversationId, agentId),
     });
+  }
+
+  /**
+   * SEND preflight (#task:1486, Cindy P1). A non-baseline reasoning token (e.g.
+   * Codex `ultra`) may only ride `runtime_start` / `runtime_deliver`'s spawn arm
+   * to a daemon that advertised `runtime.codex.reasoning.v1` on its live
+   * connection — an older daemon's strict enum would reject the whole frame.
+   * We throw BEFORE dispatch (surfaced via the existing runtime-start error
+   * path — NO new wire result/error arm, since the capability is only
+   * daemon→backend and cannot negotiate a response shape) rather than silently
+   * coerce the effort to a default, which would run a semantically different
+   * task than the user chose. Baseline efforts always pass; the write gate is
+   * what prevents persisting an unsupported combo in the first place, and this
+   * is the belt for a host that changed under an already-persisted value.
+   */
+  private assertReasoningEffortSendable(hostId: string, agent: AgentDto): void {
+    const effort = agent.reasoning_effort;
+    if (!effort || agent.runtime !== 'codex') return;
+    if (isBaselineReasoningEffort('codex', effort)) return;
+    const capabilities =
+      this.opts.transport()?.getAttachment(hostId)?.capabilities ?? [];
+    if (!capabilities.includes('runtime.codex.reasoning.v1')) {
+      throw new Error(
+        `runtime_start blocked: reasoning_effort '${effort}' requires the target computer's daemon to advertise runtime.codex.reasoning.v1 — update the computer's Silverhand daemon or lower the effort`,
+      );
+    }
   }
 
   /**

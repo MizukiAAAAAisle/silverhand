@@ -140,7 +140,10 @@ export function draftIsDirty(
 
 /** True iff every visible field is filled (concrete value or explicit "Use
  *  driver default"). Same discipline as the old transition dialog:
- *  the system NEVER picks a default silently. */
+ *  the system NEVER picks a default silently.
+ *
+ *  Reasoning validity uses the static product table (`reasoningEffortValidForRuntime`),
+ *  which encodes the model-specific rules (e.g. Codex `ultra` only on sol). */
 export function canSaveRuntimeConfig(
   agent: AgentDto,
   draft: RuntimeConfigDraft,
@@ -324,6 +327,21 @@ export function RuntimeConfigEditor({
 
   const catalogEntry = runtimeCatalogEntry(draft.runtime);
 
+  // The host runtime catalog + availability are fetched HERE (the parent that
+  // owns Save/canSave) and passed to EditForm for the runtime install display.
+  // The probe LIFECYCLE is edit-only: a readonly profile view must never fetch
+  // — both are gated on `editing` (empty `hostIds` + `enabled: editing`), so
+  // opening a profile costs nothing; React Query dedups the shared query key.
+  const hostIds = useMemo(
+    () => (editing ? [agent.host_id] : []),
+    [editing, agent.host_id],
+  );
+  const { availabilityById, allSettled } = useHostAvailabilityMap(hostIds);
+  const hostAvailable = isComputerAvailable(availabilityById.get(agent.host_id));
+  const runtimeCatalog = useHostRuntimeCatalog(agent.host_id, {
+    enabled: editing && allSettled && hostAvailable,
+  });
+
   function cancel() {
     if (pending) return;
     setDraft(draftFromAgent(agent));
@@ -399,6 +417,9 @@ export function RuntimeConfigEditor({
           catalogEntry={catalogEntry}
           targets={targets}
           triggerRef={runtimeTriggerRef}
+          allSettled={allSettled}
+          hostAvailable={hostAvailable}
+          runtimeCatalog={runtimeCatalog}
         />
       ) : (
         <ReadOnlyGrid agent={agent} />
@@ -519,6 +540,9 @@ function EditForm({
   catalogEntry,
   targets,
   triggerRef,
+  allSettled,
+  hostAvailable,
+  runtimeCatalog,
 }: {
   agent: AgentDto;
   draft: RuntimeConfigDraft;
@@ -526,37 +550,15 @@ function EditForm({
   catalogEntry: ReturnType<typeof runtimeCatalogEntry>;
   targets: readonly { kind: RuntimeKind }[];
   triggerRef: React.Ref<HTMLButtonElement>;
+  // Availability + runtime catalog are lifted to the parent (which owns
+  // Save/canSave) so the picker and the Save gate read ONE source.
+  allSettled: boolean;
+  hostAvailable: boolean;
+  runtimeCatalog: ReturnType<typeof useHostRuntimeCatalog>;
 }): JSX.Element {
   const supportsReasoning = runtimeSupportsReasoningEffort(draft.runtime);
   const supportsFastMode = runtimeSupportsFastMode(draft.runtime);
-  const reasoningOptions = reasoningEffortOptionsForRuntime(
-    draft.runtime,
-    draft.modelChoice === 'specify' ? draft.modelValue : null,
-  );
 
-  // Runtime detection — same primitives as the New Agent dialog's
-  // RuntimePicker, so we don't grow a parallel availability path
-  // (Cindy round-7 scope). EditForm mounts only in edit mode, so the
-  // probes run only while the user is picking; leaving edit tears the
-  // hooks down (React Query cache still serves the next open).
-  //
-  // `allSettled` matters: the availability map's initial read returns
-  // `undefined` for any host until its first status probe lands. Without
-  // this gate the freshness gap collapses to `hostAvailable=false` and
-  // `deriveRuntimePickerMode` used to flash "offline" for ~50ms every
-  // edit-enter (Cindy round-7 HIGH). The pure core now takes the
-  // loading axis explicitly, so the ~50ms gap renders as "Detecting…"
-  // instead of a stale disconnect banner.
-  const hostIds = useMemo(() => [agent.host_id], [agent.host_id]);
-  const { availabilityById, allSettled } = useHostAvailabilityMap(hostIds);
-  const hostAvailable = isComputerAvailable(
-    availabilityById.get(agent.host_id),
-  );
-  const runtimeCatalog = useHostRuntimeCatalog(agent.host_id, {
-    // Enable the runtime probe only after availability is a fact AND the
-    // host is up — mirrors the "settled available" gate Cindy called out.
-    enabled: allSettled && hostAvailable,
-  });
   const runtimeStateByKind = useMemo(() => {
     const map = new Map<RuntimeKind, RuntimeAvailabilityState>();
     for (const info of runtimeCatalog.data?.runtimes ?? []) {
@@ -564,6 +566,25 @@ function EditForm({
     }
     return map;
   }, [runtimeCatalog.data]);
+  // Reasoning options come from the static product table (model-aware): the
+  // per-model allowlist encodes extensions like Codex Ultra (sol only). The
+  // open wire token + daemon capability keep this from bumping the protocol.
+  const reasoningModel =
+    draft.modelChoice === 'specify' ? draft.modelValue : null;
+  const reasoningOptions = reasoningEffortOptionsForRuntime(
+    draft.runtime,
+    reasoningModel,
+  );
+  // Re-add an already-selected value when it isn't in the current options — a
+  // legal persisted value must not vanish from the picker (e.g. after a model
+  // change the commit path clears it into a positive re-pick; this is the
+  // load-time guard so the stored value stays visible until then).
+  const reasoningDisplayOptions =
+    draft.reasoning !== '' &&
+    draft.reasoning !== '__default__' &&
+    !reasoningOptions.includes(draft.reasoning)
+      ? [...reasoningOptions, draft.reasoning]
+      : reasoningOptions;
   const mode = deriveRuntimePickerMode({
     // Agent always has a host — probing only skips when the host itself
     // is offline / probe errored (mode → 'offline' / 'probe-failed').
@@ -655,7 +676,7 @@ function EditForm({
               placeholder="Choose…"
               options={[
                 { value: '__default__', label: 'Use driver default' },
-                ...reasoningOptions.map(v => ({
+                ...reasoningDisplayOptions.map(v => ({
                   value: v,
                   label: reasoningEffortLabel(v),
                 })),
@@ -936,6 +957,10 @@ export function modelDraftAfterCommit(
   });
 }
 
+/** Clear an effort the newly-chosen model can no longer support per the static
+ *  product table (e.g. switching off a sol model clears Ultra), forcing a
+ *  positive re-pick instead of leaving a stale selection Save would reject. A
+ *  baseline value stays valid for any model. */
 function clearIncompatibleReasoning(
   draft: RuntimeConfigDraft,
 ): RuntimeConfigDraft {
@@ -946,8 +971,8 @@ function clearIncompatibleReasoning(
   if (reasoningEffortValidForRuntime(draft.runtime, draft.reasoning, model)) {
     return draft;
   }
-  // Force a positive re-pick instead of silently downgrading Ultra when the
-  // model changes to one that does not support it.
+  // Force a positive re-pick instead of silently downgrading (Ultra→…) when the
+  // model changes to one the product table excludes.
   return { ...draft, reasoning: '' };
 }
 

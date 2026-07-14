@@ -2447,6 +2447,7 @@ class FakeHostWsController implements HostWsServerController {
       connectionId: 'conn-1',
       attachedAt: 1_700_000_000_000,
       hostname: this.attachment.hostname,
+      capabilities: [],
     };
   }
 

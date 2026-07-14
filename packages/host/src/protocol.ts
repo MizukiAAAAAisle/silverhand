@@ -68,7 +68,7 @@ import {
   MemberDtoSchema,
   ParsedEventKindSchema,
   ParsedEventSchema,
-  ReasoningEffortSchema,
+  ReasoningEffortTokenSchema,
   RuntimeCatalogResponseSchema,
   RuntimeKindSchema,
   SendMessageTargetSchema,
@@ -140,19 +140,45 @@ import {
 // pair is semantically incompatible and must fail loud at hello. The external
 // outbound protocol bumps alongside (6→7).
 //
-// v9 (#task:1486): `ReasoningEffortSchema` gained `ultra`, which travels in
-// strict `runtime_start` driver options. A v8 daemon rejects that value, so a
-// new backend must not advertise / persist Ultra while attached to an old
-// daemon. Fail loud at hello; the outbound protocol bumps alongside (7→8).
+// NOT a bump — #task:1486 (Codex Ultra): adding a new reasoning-effort value is
+// deliberately NOT a protocol bump. The protocol epoch is reserved for
+// unsafe-to-parse framing / ordering / custody / security breaks that must fail
+// loud at hello; a new optional runtime-behavior value is neither. Two layers
+// carry it instead (see the two-layer note at KNOWN_CAPABILITIES_V1 below):
+// (1) the `runtime_start` reasoning token is an OPEN string on the wire
+// (`ReasoningEffortTokenSchema`), so a new daemon never strict-rejects a future
+// value; (2) the daemon advertises `runtime.codex.reasoning.v1` and the backend
+// only SENDS a non-baseline token to a daemon that advertised it — so an old
+// daemon (closed enum, no capability) is never handed a value it would reject.
+// Result: adding Ultra / any future effort value never disconnects any peer.
 
-export const HOST_PROTOCOL_VERSION = 9;
+export const HOST_PROTOCOL_VERSION = 8;
 
+// ── capability tokens ────────────────────────────────────────────────
+//
+// Two-layer compatibility (the pattern large wire protocols use — HTTP/2
+// SETTINGS, TLS extensions, SSH algorithm negotiation, Git protocol caps):
+//   • PROTOCOL EPOCH (`HOST_PROTOCOL_VERSION`) — breaking framing/ordering/
+//     custody/security changes. Rare. Mismatch fails the handshake.
+//   • FEATURE CAPABILITY (this list) — additive, OPTIONAL runtime-behavior
+//     flags. A peer that doesn't know a token MUST ignore it (the `capabilities`
+//     wire field is an open `string[]`, never an enum), so advertising a new
+//     token never breaks an old peer. Unadvertised = unsupported.
+//
+// `runtime.codex.reasoning.v1` means: this daemon's `runtime_start` accepts an
+// OPEN reasoning-effort token (`ReasoningEffortTokenSchema`) rather than a closed
+// enum, so the backend may safely send values beyond the historical baseline
+// (e.g. Codex `ultra`). A daemon binary predating this token has the closed
+// enum and would strict-reject such a value, so the backend must withhold
+// non-baseline tokens from it. Bump to `.v2` only if the token's *contract*
+// changes; adding a new effort VALUE does not.
 export const KNOWN_CAPABILITIES_V1 = [
   'runtime.claude',
   'runtime.codex',
   'runtime.cursor',
   'runtime.opencode',
   'runtime.qoder',
+  'runtime.codex.reasoning.v1',
   'transport.unix_socket',
   'fs.local',
   'proxy.env_inherit',
@@ -565,12 +591,22 @@ const RuntimeStartAgentRefSchema = z
   })
   .strict();
 
+/**
+ * Reasoning-effort as it travels on the `runtime_start` wire — the shared OPEN,
+ * length/charset-bounded token (`ReasoningEffortTokenSchema`), NOT the closed
+ * product enum. See its definition in `@silverhand/shared` for the full
+ * two-layer rationale; in short: a daemon must parse a token it has never heard
+ * of rather than strict-reject the whole `runtime_start`, so adding a new effort
+ * value never requires a protocol bump. The driver forwards this token verbatim,
+ * and the backend gates non-baseline tokens on `runtime.codex.reasoning.v1`
+ * before they ride here.
+ */
 const RuntimeStartDriverOptionsSchema = z
   .object({
     kind: RuntimeKindSchema,
     cli_session_id: z.string().min(1).nullable(),
     model: z.string().nullable(),
-    reasoning_effort: ReasoningEffortSchema.nullable(),
+    reasoning_effort: ReasoningEffortTokenSchema.nullable(),
     fast_mode: z.boolean().nullable(),
   })
   .strict();

@@ -37,7 +37,10 @@ import { WorkspaceRegistryBackfiller } from '../../src/runtime/workspace-registr
 import type { OutboundFrameAdapter } from '../../src/runtime/outbound-frame-adapter.js';
 import { RunStateCache } from '../../src/runtime/run-state-cache.js';
 import { DbRuntimeStatusProjector } from '../../src/runtime/status-projector.js';
-import type { HostWsServerController } from '../../src/ws/host-ws-server.js';
+import type {
+  HostWsAttachment,
+  HostWsServerController,
+} from '../../src/ws/host-ws-server.js';
 import { openTestDb } from '../utils/db.js';
 
 describe('OutboundRuntimeEventFanout', () => {
@@ -160,6 +163,68 @@ describe('OutboundRuntimeEventFanout', () => {
     } finally {
       fix.cleanup();
     }
+  });
+
+  // #task:1486 SEND-gate: a non-baseline reasoning token may only be dispatched
+  // to a daemon that advertised `runtime.codex.reasoning.v1` on its live
+  // connection; an old daemon (no capability) must be protected from receiving
+  // a token its strict enum would reject.
+  describe('#1486 reasoning-effort send gate', () => {
+    function codexUltraFixture() {
+      const fix = makeFixture({ runtime: 'codex' });
+      // Persist a product-valid non-baseline combo (ultra only on sol).
+      new AgentRepo(fix.db).update(fix.agentId, {
+        model: 'gpt-5.6-sol',
+        reasoning_effort: 'ultra',
+      });
+      return fix;
+    }
+
+    it('blocks dispatch when the live daemon lacks the capability (old daemon)', async () => {
+      const fix = codexUltraFixture();
+      fix.transport.attachmentCapabilities = []; // attached, but no capability
+      try {
+        await expect(
+          fix.fanout.start(fix.channelId, fix.agentId),
+        ).rejects.toThrow(/runtime\.codex\.reasoning\.v1/);
+        // Nothing was dispatched — the throw is BEFORE the wire.
+        expect(
+          fix.transport.calls.filter(c => c.kind === 'runtime_start'),
+        ).toEqual([]);
+      } finally {
+        fix.cleanup();
+      }
+    });
+
+    it('allows dispatch when the live daemon advertises the capability', async () => {
+      const fix = codexUltraFixture();
+      fix.transport.attachmentCapabilities = ['runtime.codex.reasoning.v1'];
+      try {
+        await fix.fanout.start(fix.channelId, fix.agentId);
+        expect(
+          fix.transport.calls.filter(c => c.kind === 'runtime_start'),
+        ).toHaveLength(1);
+      } finally {
+        fix.cleanup();
+      }
+    });
+
+    it('never blocks a baseline effort even without the capability', async () => {
+      const fix = makeFixture({ runtime: 'codex' });
+      new AgentRepo(fix.db).update(fix.agentId, {
+        model: 'gpt-5.6-sol',
+        reasoning_effort: 'high',
+      });
+      fix.transport.attachmentCapabilities = [];
+      try {
+        await fix.fanout.start(fix.channelId, fix.agentId);
+        expect(
+          fix.transport.calls.filter(c => c.kind === 'runtime_start'),
+        ).toHaveLength(1);
+      } finally {
+        fix.cleanup();
+      }
+    });
   });
 
   it('rehydrates from runtime_status on fresh ready after disconnect even for the same daemon pid', async () => {
@@ -2372,10 +2437,21 @@ class FakeTransport implements HostWsServerController {
     return this.connectionId;
   }
 
-  getAttachment(): null {
-    // Fanout-coordinator tests don't depend on boot-readiness wiring.
-    return null;
+  getAttachment(hostId: string): HostWsAttachment | null {
+    // Fanout-coordinator tests don't depend on boot-readiness wiring, so the
+    // default is null. A #task:1486 send-gate test sets `attachmentCapabilities`
+    // to model the live daemon's advertised capability set.
+    if (this.attachmentCapabilities === null) return null;
+    return {
+      hostId,
+      connectionId: this.connectionId,
+      attachedAt: 0,
+      hostname: null,
+      capabilities: this.attachmentCapabilities,
+    };
   }
+
+  attachmentCapabilities: readonly string[] | null = null;
 
   sendCommand<K extends OutboundServerCommandKind>(
     hostId: string,

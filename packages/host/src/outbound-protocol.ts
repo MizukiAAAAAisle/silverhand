@@ -194,11 +194,11 @@ const FrameIdSchema = z.string().min(1);
 // attach rather than appear compatible until first delivery. Bumps alongside
 // HOST_PROTOCOL_VERSION (7→8).
 //
-// v8 (#task:1486): shared runtime-start options gained the `ultra` reasoning
-// value. A v7 daemon strict-rejects it, so mixed peers fail at attach instead
-// of waiting for the first Ultra start. Bumps alongside
-// HOST_PROTOCOL_VERSION (8→9).
-export const OUTBOUND_PROTOCOL_VERSION = 8;
+// NOT a bump — #task:1486 (Codex Ultra): the reasoning-effort token on
+// `runtime_start` is now an OPEN string, and new effort values are negotiated
+// via the `runtime.codex.reasoning.v1` capability, so adding one no longer
+// touches the wire framing. See the two-layer note at HOST_PROTOCOL_VERSION.
+export const OUTBOUND_PROTOCOL_VERSION = 7;
 
 // ── server → daemon command catalogue ──────────────────────────────
 

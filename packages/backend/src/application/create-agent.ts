@@ -648,6 +648,17 @@ export async function createAgent(
     return { kind: 'hostAttachPending' };
   }
 
+  // Evidence-generation custody (P1-4): re-confirm the SAME generation is still
+  // attached before any write. The catalog round-trip can take up to 45s; if
+  // the daemon reconnected in that window the captured `connectionId` is stale,
+  // so we fail BEFORE reserving a row / materializing on a dead generation
+  // rather than committing a proof gathered on the old generation to the new
+  // one. `connectionId` is generation-unique, so equality is a true
+  // same-generation check.
+  if (controller.connectionIdForHost(resolvedHostId) !== connectionId) {
+    return { kind: 'hostAttachPending' };
+  }
+
   // ── L1 reserve ─────────────────────────────────────────────────
   let reservedRow: AgentRow;
   try {

@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-07-14 — Codex Ultra reasoning-effort：静态产品表 + 能力协商（#task:1486，未 push）
+
+原始 bug：ChatGPT Ultra 模式下选 silverhand `high` reasoning → Codex 400 `[reasoning.effort] [invalid_enum_value] Invalid value: 'ultra'`。shiki 核心痛点：**新增一个 reasoning 值不得 bump wire protocol**（bump → client↔server 断连）；且 Ultra 经验证只有 `gpt-5.6-sol` 支持。
+
+第一版曾把"daemon 上报 model/effort"实现成运行时动态目录（探测 `codex app-server model/list` + 缓存/单飞/连接代次 + UI/write/spawn 四层目录校验）。shiki/Cindy 复核后判定这是把单一 Codex 特化过度抽象成通用 host-truth 子系统，边界选错：**通用层只该解决跨版本兼容，Codex 特化留在产品/driver policy**。遂删除整条动态探测，收缩为下述最小模型。
+
+- **两层兼容分离** — PROTOCOL EPOCH（`HOST_PROTOCOL_VERSION`/`OUTBOUND_PROTOCOL_VERSION`，从早先误 bump **回退**）只留给破坏性变更；FEATURE CAPABILITY 协商（`runtime.codex.reasoning.v1`，加性/可忽略）承载本 feature。新增 effort 永不 bump protocol，靠 **开放 wire token** `ReasoningEffortTokenSchema`（有界开放串 `/^[a-z][a-z0-9_-]*$/`）：新 daemon 见未来 token 不 strict-reject，与闭合产品枚举 `ReasoningEffortSchema` 分离。
+- **静态产品表是唯一真相** — `runtime-catalog.ts` 的 `reasoningEffortOptionsByModel`（`gpt-5.6-sol → …ultra`，其余 model → 历史 baseline）由 shared `reasoningEffortValidForRuntime` 在**所有写边界**（create/update 的 schema superRefine、switch schema、`normalizeRuntimeTuning`）执行——**这就是产品合法性的唯一权威边界**；renderer picker 读同一张表做 UI 校验。model 始终可自由输入，preset 只是静态建议；Codex 出新 model/effort 时改这张表即可。
+- **能力协商（保留）** — 新 daemon 在 `ready` 硬编码声明 `runtime.codex.reasoning.v1`（generation-local，断连清空）；backend SEND gate 发非-baseline effort（如 Ultra）前查该 cap，旧 strict daemon 无 cap → 不发（否则旧 daemon 又会 400）。**该 cap 只证明 Silverhand daemon 的 parser/forwarder 版本，不证明用户装的 Codex binary 支持该 effort**（不做 model/list/version 探测的既定范围下，advertise 了 cap 的 daemon 仍可能把 `ultra` 转给过旧的 Codex → provider 400，属如实 runtime error）。daemon 对 effort token 只做**有界结构 wire 校验并原样透传**，产品合法性不在 execution plane 复制——Codex 引擎自己给最终裁决。
+- **删除（整条动态探测 + execution-plane 产品复核）** — `codex-reasoning-probe.ts`、`resolveCodexReasoningModels`/`peekCodexReasoningModels`/probe 缓存·单飞·代次、`RuntimeInfo.reasoning_models` + `ReasoningModelCapabilitySchema`、backend `reasoning-effort-write-gate.ts`（host round-trip / connection-generation custody）、renderer 对 host catalog 的 reasoning 依赖、daemon spawn 前的 catalog 探测。**并（Cindy P1）删除 daemon spawn 末线的静态产品表复核 `assertReasoningEffortSpawnable` + `ReasoningEffortUnsupportedError`**——它与开放 token contract 自相矛盾（旧 daemon 的静态表会拒掉新 backend 合法下发的未来 token，逼迫升 daemon，开放 token 形同失效），且在 execution plane 复制了产品 allowlist。硬门：全仓不再出现 `model/list` reasoning probe；任何 runtime_start（含首次 Ultra）都不为拿 model catalog 额外 spawn 子进程；daemon 不再对 effort 做产品级拒绝。
+- **验证** — `pnpm typecheck` 全绿；全测试 gate 通过。测试覆盖：shared 静态表（Ultra 仅 sol、其余/未列/默认 model → baseline、null 恒有效）、daemon 透传（baseline High 任意 model 放行、Ultra@sol 放行、**未来 token `giga` 经 runtime_start → DriverSpawnContext → CodexDriver argv `model_reasoning_effort="giga"` 原样透传、无 daemon 拒绝**）、codex 驱动 buildArgs（`ultra`/未来 `giga` 逐字透传）、protocol 开放 token（收未来 token 而旧闭枚举拒之=双向证明）、send-gate（无 cap→阻断、有 cap→放行、baseline 永不阻断）、frame-adapter 能力记录（`ready` 记录、断连/重连清空）。
+- **未涉** — CLI 命令/task 行为无变化，不动 `docs/cli-system.md` 与 platform prompt。`docs/multi-daemon-registry.md` §3.3 的 `runtime.codex.reasoning.v1` 描述已同步（去掉 `reasoning_models`，改为"接受并原样透传开放 effort token、无 daemon 侧产品复核；cap 只证 daemon 版本不证 Codex 支持"）。
+
+---
+
 ## 2026-07-10 — daemon：pre-init 异常退出并入 init-failure cooldown（#task:1460，#1459 修复，未 push）
 
 #1459:Claude 被 EDR 在 `session_init` 前反复 SIGKILL,daemon 10 分钟 spawn 1105 次。根因:现有 init-failure 计数器/cooldown **只在 init watchdog fire（`initTimedOut`）时记账**;child 在 `session_init` 前自己异常退出(死得比任何 watchdog tier 都快,或 `requires_first_message` 空 inbox 下 watchdog 根本没 arm)完全绕过它 → backend 拿着 pending inbox 行无限 re-drive。

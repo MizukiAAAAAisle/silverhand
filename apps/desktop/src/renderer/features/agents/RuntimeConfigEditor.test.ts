@@ -430,6 +430,58 @@ describe('modelDraftAfterCommit — unified Combobox commit mapping', () => {
   });
 });
 
+// #task:1486 — reasoning validity is decided by the STATIC product table
+// (Ultra only for gpt-5.6-sol). No host catalog is fetched; the pure helpers
+// gate Save and clear a now-invalid value on model commit from that table.
+describe('canSaveRuntimeConfig / modelDraftAfterCommit — static reasoning table (#task:1486)', () => {
+  it('Ultra opens Save on gpt-5.6-sol, blocks it on a non-sol model', () => {
+    const solUltra: RuntimeConfigDraft = {
+      runtime: 'codex',
+      modelChoice: 'specify',
+      modelValue: 'gpt-5.6-sol',
+      reasoning: 'ultra',
+      fastMode: 'true',
+    };
+    expect(canSaveRuntimeConfig(baseAgent, solUltra)).toBe(true);
+    expect(
+      canSaveRuntimeConfig(baseAgent, {
+        ...solUltra,
+        modelValue: 'gpt-5.6-terra',
+      }),
+    ).toBe(false);
+  });
+
+  it('model commit off a sol model clears a now-invalid Ultra', () => {
+    const ultra: RuntimeConfigDraft = {
+      runtime: 'codex',
+      modelChoice: 'specify',
+      modelValue: 'gpt-5.6-sol',
+      reasoning: 'ultra',
+      fastMode: 'true',
+    };
+    const committed = modelDraftAfterCommit(ultra, 'gpt-5.6-terra');
+    expect(committed.modelValue).toBe('gpt-5.6-terra');
+    expect(committed.reasoning).toBe('');
+  });
+
+  it('baseline High stays valid across a model commit', () => {
+    const committed = modelDraftAfterCommit(
+      draftFromAgent(baseAgent),
+      'gpt-5.6-terra',
+    );
+    expect(committed.reasoning).toBe('high');
+    expect(
+      canSaveRuntimeConfig(baseAgent, {
+        runtime: 'codex',
+        modelChoice: 'specify',
+        modelValue: 'gpt-5.6-terra',
+        reasoning: 'high',
+        fastMode: 'true',
+      }),
+    ).toBe(true);
+  });
+});
+
 // Source fence — the root editor <div> must own Escape at capture phase.
 // A bubble-phase handler is swallowed by Radix Select.Trigger before it
 // reaches the root, trapping Esc when focus sits on any Select.
@@ -493,5 +545,25 @@ describe('RuntimeConfigEditor source invariants', () => {
     expect(src).toMatch(
       /SwitchRuntimeConfirmDialog[\s\S]*?returnFocusRef=\{runtimeTriggerRef\}/,
     );
+  });
+
+  it('P1-2: catalog / availability probe LIFECYCLE is edit-only', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const path = await import('node:path');
+    const src = readFileSync(
+      path.join(
+        fileURLToPath(new URL('./RuntimeConfigEditor.tsx', import.meta.url)),
+      ),
+      'utf8',
+    );
+    // Save gates on the static product table via the pure helper (2-arg, no
+    // host catalog threaded in).
+    expect(src).toMatch(/disabled=\{!canSaveRuntimeConfig\(agent,\s*draft\)\}/);
+    // A readonly profile view must never fetch availability / the runtime
+    // catalog — both are gated on `editing` at the query `enabled` and the
+    // availability host list.
+    expect(src).toMatch(/enabled:\s*editing\s*&&\s*allSettled\s*&&\s*hostAvailable/);
+    expect(src).toMatch(/editing\s*\?\s*\[agent\.host_id\]\s*:\s*\[\]/);
   });
 });

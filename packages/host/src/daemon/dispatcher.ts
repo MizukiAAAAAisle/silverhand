@@ -710,7 +710,9 @@ export class IntentDispatcher {
       }
       case 'host_runtime_catalog': {
         const p = params as HostRuntimeCatalogParams;
-        return detectRuntimeCatalog({ force: p.force === true });
+        return detectRuntimeCatalog({
+          force: p.force === true,
+        });
       }
       case 'conversation_log_debug': {
         const p = params as ConversationLogDebugParams;

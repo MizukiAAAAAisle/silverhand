@@ -572,11 +572,11 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   {
     name: 'response/hello',
     description:
-      'v9 hello result — protocol_version + daemon identity + capabilities.',
+      'v8 hello result — protocol_version + daemon identity + capabilities.',
     frame: enc({
       id: 'req-hello',
       result: {
-        protocol_version: 9,
+        protocol_version: 8,
         daemon_version: '0.1.0',
         daemon_id: 'local',
         instance_id: 'inst-fixture',
@@ -2168,7 +2168,7 @@ const EVENTS: WireFixture[] = [
       'Daemon socket bound — handshake mirror. Carries the same identity fields as hello result plus socket_path / daemon_pid / started_at.',
     frame: enc({
       event: 'ready',
-      protocol_version: 9,
+      protocol_version: 8,
       daemon_version: '0.1.0',
       daemon_id: 'local',
       instance_id: 'inst-fixture',

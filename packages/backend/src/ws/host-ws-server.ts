@@ -57,6 +57,16 @@ export interface HostWsAttachment {
   /** Diagnostic-only daemon-reported name from the ready event. Never used for
    *  identity, routing, or dedupe. */
   hostname: string | null;
+  /**
+   * Feature capabilities the daemon advertised in its `ready`/hello frame
+   * (#task:1486). Belongs to THIS live connection generation only — a
+   * replacement connection re-reports its own, and disconnect drops the whole
+   * record, so a stale binary's capabilities can never be reused. Empty until
+   * the `ready` frame lands (before-ready = unsupported). Consumers treat an
+   * unknown token as absent; `runtime.codex.reasoning.v1` here is what lets the
+   * backend send a non-baseline reasoning token to this daemon.
+   */
+  capabilities: readonly string[];
 }
 
 export interface HostWsServerController {
@@ -238,12 +248,13 @@ export function installHostWebSocketServer(
         nextCommandId: () => `${commandIdPrefix}-${++commandSeq}`,
         eventSink: opts.eventSink,
         deploymentMode: ctx.deploymentMode,
-        updateAttachmentHostname: hostname => {
+        updateAttachmentReady: (hostname, capabilities) => {
           const current = attachmentsByHost.get(auth.host.hostId);
           if (!current || current.connectionId !== connectionId) return;
           attachmentsByHost.set(auth.host.hostId, {
             ...current,
             hostname,
+            capabilities,
           });
         },
       });
@@ -259,6 +270,7 @@ export function installHostWebSocketServer(
         connectionId,
         attachedAt,
         hostname: null,
+        capabilities: [],
       });
       new HostRepo(ctx.db).markActivated(auth.host.hostId, attachedAt);
       publishHostConnectionChanged(ctx, auth.host.userId, {
@@ -426,7 +438,10 @@ class HostWsConnection {
       nextCommandId: () => string;
       eventSink?: HostWsEventSink;
       deploymentMode: BackendDeploymentMode;
-      updateAttachmentHostname: (hostname: string) => void;
+      updateAttachmentReady: (
+        hostname: string,
+        capabilities: readonly string[],
+      ) => void;
     },
   ) {
     this.connectionId = opts.connectionId;
@@ -436,11 +451,14 @@ class HostWsConnection {
     this.nextCommandId = opts.nextCommandId;
     this.eventSink = opts.eventSink;
     this.deploymentMode = opts.deploymentMode;
-    this.updateAttachmentHostname = opts.updateAttachmentHostname;
+    this.updateAttachmentReady = opts.updateAttachmentReady;
   }
 
   private readonly eventSink?: HostWsEventSink;
-  private readonly updateAttachmentHostname: (hostname: string) => void;
+  private readonly updateAttachmentReady: (
+    hostname: string,
+    capabilities: readonly string[],
+  ) => void;
 
   start(): void {
     this.ws.on('message', data => this.handleMessage(data));
@@ -738,7 +756,14 @@ class HostWsConnection {
         'ready',
         `protocol_${frame.protocol_version}`,
       );
-      this.updateAttachmentHostname(frame.host_descriptor.name);
+      // Record the daemon's advertised capabilities on THIS live attachment
+      // (#task:1486). Replacement-safe via the connectionId guard in the
+      // callback; disconnect drops the whole record. Unknown tokens are kept
+      // verbatim (consumers match by exact token).
+      this.updateAttachmentReady(
+        frame.host_descriptor.name,
+        frame.capabilities,
+      );
     }
     if (this.shouldIgnoreEventSink()) {
       if (!this.loggedNoEventSink) {

@@ -81,6 +81,7 @@ function fakeAdapter(input: {
             connectionId: input.connectionId,
             attachedAt: 1_700_000_000_000,
             hostname: `${input.hostId}.local`,
+            capabilities: [],
           }
         : null,
     sendCommand: vi.fn(

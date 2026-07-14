@@ -161,6 +161,19 @@ describe('CodexDriver.buildArgs', () => {
     }
   });
 
+  it('passes a future token the product enum has never heard of, verbatim (#task:1486)', () => {
+    // The wire/spawn-ctx effort is an OPEN string, not the closed product
+    // enum. buildArgs must forward any value untouched so a new effort never
+    // needs a driver/daemon change — Codex owns the engine-level verdict.
+    const { ctx, cleanup } = makeSpawnCtx({ reasoningEffort: 'giga' });
+    try {
+      const kv = collectCArgs(new CodexDriver().buildArgs(ctx));
+      expect(kv.get('model_reasoning_effort')).toBe('"giga"');
+    } finally {
+      cleanup();
+    }
+  });
+
   it('omits fast_mode flags when fastMode is null', () => {
     const { ctx, cleanup } = makeSpawnCtx();
     try {

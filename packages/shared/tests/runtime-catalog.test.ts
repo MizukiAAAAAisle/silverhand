@@ -5,6 +5,7 @@ import {
   RUNTIME_ORDER_LIST,
   RuntimeKindSchema,
   ReasoningEffortSchema,
+  isBaselineReasoningEffort,
   reasoningEffortLabel,
   reasoningEffortOptionsForRuntime,
   reasoningEffortValidForRuntime,
@@ -179,5 +180,53 @@ describe('runtime catalog (shared source of truth)', () => {
     // claude has no reasoning control → only null is valid.
     expect(reasoningEffortValidForRuntime('claude', 'low')).toBe(false);
     expect(reasoningEffortValidForRuntime('claude', null)).toBe(true);
+  });
+
+  // ── #task:1486 static reasoning-effort product table ────────────────
+  //
+  // Reasoning validity is decided by the STATIC product table alone (no host
+  // probe). The table encodes model-specific rules: Codex Ultra is an extension
+  // offered only for gpt-5.6-sol; every other / unlisted / default model stays
+  // on the historical baseline. The daemon enforces the same table at spawn.
+  describe('#1486 static reasoning-effort product table', () => {
+    it('isBaselineReasoningEffort: historical baseline vs extension', () => {
+      expect(isBaselineReasoningEffort('codex', 'high')).toBe(true);
+      expect(isBaselineReasoningEffort('codex', 'xhigh')).toBe(true);
+      // Ultra is an extension even though it parses as a codex value.
+      expect(isBaselineReasoningEffort('codex', 'ultra')).toBe(false);
+    });
+
+    it('Ultra is offered + valid only for gpt-5.6-sol', () => {
+      expect(reasoningEffortOptionsForRuntime('codex', 'gpt-5.6-sol')).toContain(
+        'ultra',
+      );
+      expect(
+        reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-sol'),
+      ).toBe(true);
+    });
+
+    it('Ultra refused on other / unlisted / default models → baseline only', () => {
+      expect(reasoningEffortOptionsForRuntime('codex', 'gpt-5.6-terra')).toEqual(
+        ['low', 'medium', 'high', 'xhigh'],
+      );
+      expect(
+        reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-terra'),
+      ).toBe(false);
+      expect(
+        reasoningEffortValidForRuntime('codex', 'ultra', 'my-proxy-model'),
+      ).toBe(false);
+      expect(reasoningEffortValidForRuntime('codex', 'ultra', null)).toBe(false);
+      // Baseline High stays valid for any model.
+      expect(
+        reasoningEffortValidForRuntime('codex', 'high', 'gpt-5.6-terra'),
+      ).toBe(true);
+      expect(reasoningEffortValidForRuntime('codex', 'high', null)).toBe(true);
+    });
+
+    it('null effort is always valid (unset = driver default)', () => {
+      expect(reasoningEffortValidForRuntime('codex', null, 'gpt-5.6-sol')).toBe(
+        true,
+      );
+    });
   });
 });

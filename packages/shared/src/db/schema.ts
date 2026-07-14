@@ -32,6 +32,26 @@ export const ReasoningEffortSchema = z.enum([
 ]);
 export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
 
+// Reasoning effort as it travels on the daemon `runtime_start` wire — an OPEN,
+// length/charset-bounded token, NOT the closed
+// `ReasoningEffortSchema` product registry above. This is the receiver-future-
+// compat half of the two-layer capability model (#task:1486): a daemon must
+// accept a token it has never heard of rather than strict-reject the whole
+// `runtime_start`, so adding a new effort value never requires a wire-protocol
+// bump. Codex's own app-server protocol models per-model effort exactly this
+// way (a non-empty string). The bound stops a malformed value from reaching the
+// CLI as a config override; PRODUCT legality of a token stays with
+// `ReasoningEffortSchema` + the static product table
+// (`reasoningEffortOptionsByModel`), and the backend gates
+// non-baseline tokens on the daemon's `runtime.codex.reasoning.v1` capability
+// before one ever rides here.
+export const ReasoningEffortTokenSchema = z
+  .string()
+  .min(1)
+  .max(32)
+  .regex(/^[a-z][a-z0-9_-]*$/);
+export type ReasoningEffortToken = z.infer<typeof ReasoningEffortTokenSchema>;
+
 /** Tri-state fast_mode for the codex driver: NULL = use codex's own
  *  default (currently enabled by the catalog), true = `--enable
  *  fast_mode`, false = `--disable fast_mode`. */

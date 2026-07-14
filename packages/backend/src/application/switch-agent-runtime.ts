@@ -103,6 +103,10 @@ export async function switchAgentRuntime(
     );
   }
 
+  // Reasoning-effort product validity (incl. model-specific rules like Codex
+  // `ultra` only on sol) is enforced by `SwitchAgentRuntimeInputSchema`; the
+  // daemon's spawn last-line is the final guard. No host round-trip here.
+
   const transitionStartedAt = Date.now();
   const lock = deps.agents.beginRuntimeTransition(
     input.agentId,

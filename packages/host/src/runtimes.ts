@@ -386,7 +386,7 @@ async function detectRuntime(
   }
 }
 
-export async function detectRuntimeCatalog(
+async function buildRuntimeCatalog(
   options: RuntimeDetectionOptions = {},
 ): Promise<RuntimeCatalogResponse> {
   const now = options.now?.() ?? Date.now();
@@ -413,6 +413,12 @@ export async function detectRuntimeCatalog(
     };
   }
   return response;
+}
+
+export async function detectRuntimeCatalog(
+  options: RuntimeDetectionOptions = {},
+): Promise<RuntimeCatalogResponse> {
+  return buildRuntimeCatalog(options);
 }
 
 export async function detectRuntimes(

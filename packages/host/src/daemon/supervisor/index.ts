@@ -26,7 +26,10 @@ import {
 } from '@silverhand/shared';
 
 import { getDriver as getDefaultDriver, type Driver } from '../../drivers/index.js';
-import { detectRuntimes, platformBinaryCandidates } from '../../runtimes.js';
+import {
+  detectRuntimes,
+  platformBinaryCandidates,
+} from '../../runtimes.js';
 import {
   describeSpawnError,
   redactSpawnArgs,

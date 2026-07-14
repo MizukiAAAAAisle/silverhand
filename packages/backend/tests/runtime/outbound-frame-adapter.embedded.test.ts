@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { splitNdjson } from '@silverhand/host';
+import { OUTBOUND_PROTOCOL_VERSION } from '@silverhand/host';
 import { EmbeddedUnixOutboundFrameAdapter } from '../../src/runtime/embedded-unix-outbound-frame-adapter.js';
 import {
   runOutboundFrameAdapterContract,
@@ -196,6 +197,120 @@ describe('EmbeddedUnixOutboundFrameAdapter reconnect', () => {
       await expect(pending).resolves.toMatchObject({
         runtimes: [{ agent_id: 'a1' }],
       });
+    } finally {
+      await adapter.close();
+      for (const s of accepted) {
+        if (!s.destroyed) s.destroy();
+      }
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      try {
+        if (existsSync(socketPath)) unlinkSync(socketPath);
+      } catch {
+        /* best-effort */
+      }
+    }
+  });
+});
+
+// #task:1486 — the live connection's advertised capabilities are recorded from
+// the daemon's `ready` frame and MUST be generation-local: a replaced daemon
+// (reconnect) starts with an empty set until IT re-declares, so a stale
+// capability can never authorize a send to a daemon that no longer supports it.
+describe('EmbeddedUnixOutboundFrameAdapter capability recording', () => {
+  function readyFrame(capabilities: string[]): string {
+    return (
+      JSON.stringify({
+        direction: 'daemon_to_server',
+        type: 'event',
+        kind: 'ready',
+        protocol_version: OUTBOUND_PROTOCOL_VERSION,
+        daemon_version: 'test',
+        daemon_id: 'local',
+        instance_id: 'inst-1',
+        host_descriptor: { name: 'local', kind: 'local' },
+        capabilities,
+        daemon_pid: 4242,
+        started_at: 1717000000,
+      }) + '\n'
+    );
+  }
+
+  it('records ready capabilities and clears them on disconnect / reconnect', async () => {
+    const socketPath = join(
+      tmpdir(),
+      `sh-d5a-cap-${process.pid}-${++socketSeq}.sock`,
+    );
+    if (existsSync(socketPath)) unlinkSync(socketPath);
+
+    const accepted: Socket[] = [];
+    let pendingAccept: ((s: Socket) => void) | null = null;
+    const acceptQueue: Socket[] = [];
+    const server: NetServer = createServer(sock => {
+      accepted.push(sock);
+      if (pendingAccept) {
+        const resolve = pendingAccept;
+        pendingAccept = null;
+        resolve(sock);
+      } else {
+        acceptQueue.push(sock);
+      }
+    });
+    const nextAccepted = (): Promise<Socket> => {
+      const queued = acceptQueue.shift();
+      if (queued) return Promise.resolve(queued);
+      return new Promise(resolve => {
+        pendingAccept = resolve;
+      });
+    };
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(socketPath, () => {
+        server.off('error', reject);
+        resolve();
+      });
+    });
+
+    const hostId = 'local';
+    const adapter = new EmbeddedUnixOutboundFrameAdapter({
+      socketPath,
+      hostId,
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+    });
+
+    try {
+      const firstAccept = nextAccepted();
+      await adapter.connect();
+      const firstSocket = await firstAccept;
+
+      // Before ready: attached but no capabilities advertised yet.
+      expect(adapter.getAttachment(hostId)?.capabilities).toEqual([]);
+
+      firstSocket.write(readyFrame(['runtime.codex.reasoning.v1']));
+      await waitFor(
+        () =>
+          adapter
+            .getAttachment(hostId)
+            ?.capabilities.includes('runtime.codex.reasoning.v1') ?? false,
+      );
+
+      // Drop the connection: the replaced generation must NOT inherit the cap.
+      firstSocket.destroy();
+      const secondSocket = await nextAccepted();
+      await waitFor(() => {
+        const att = adapter.getAttachment(hostId);
+        return att !== null && !att.capabilities.includes('runtime.codex.reasoning.v1');
+      });
+      expect(adapter.getAttachment(hostId)?.capabilities).toEqual([]);
+      // The new generation re-declares its own — narrower — set.
+      secondSocket.write(readyFrame(['runtime.claude']));
+      await waitFor(
+        () =>
+          adapter.getAttachment(hostId)?.capabilities.includes('runtime.claude') ??
+          false,
+      );
+      expect(
+        adapter.getAttachment(hostId)?.capabilities.includes('runtime.codex.reasoning.v1'),
+      ).toBe(false);
     } finally {
       await adapter.close();
       for (const s of accepted) {

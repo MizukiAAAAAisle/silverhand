@@ -252,6 +252,19 @@ export function reasoningEffortValidForRuntime(
   return reasoningEffortOptionsForRuntime(kind, model).includes(value);
 }
 
+/** True when `value` is part of the runtime's HISTORICAL baseline — the set
+ *  every daemon (old or new) accepts without any capability proof. A
+ *  non-baseline value (e.g. Codex `ultra`) is an EXTENSION the backend only
+ *  sends when the target host's daemon advertises `runtime.codex.reasoning.v1`;
+ *  product validity (which model may use it) is enforced by the static product
+ *  table (`reasoningEffortOptionsByModel`). */
+export function isBaselineReasoningEffort(
+  kind: RuntimeKind,
+  value: ReasoningEffort,
+): boolean {
+  return CATALOG[kind].reasoningEffortOptions.includes(value);
+}
+
 /** Generic display label for a reasoning-effort value (title-cased):
  *  `xhigh` → "Xhigh", `none` → "None". Persistence + driver args use
  *  the raw lowercase token; this is display-only. */
