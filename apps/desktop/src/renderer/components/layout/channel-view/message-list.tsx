@@ -3,6 +3,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type ReactNode,
@@ -27,6 +28,8 @@ import {
   FIRST_ITEM_INDEX_START,
   getFollowOutputBehavior,
   getInitialTopMostItemIndex,
+  INITIAL_BOTTOM_ANCHOR_STATE,
+  reduceBottomAnchor,
   shouldRemountForJump,
   shouldRemountForWindowReplacement,
 } from '@/components/layout/messageListVirtualization';
@@ -226,6 +229,25 @@ export function MessageList({
   // start way above zero so we have headroom for many prepend rounds.
   const [firstItemIndex, setFirstItemIndex] = useState(FIRST_ITEM_INDEX_START);
   const [windowResetVersion, setWindowResetVersion] = useState(0);
+  // Back-to-bottom re-anchor version — deliberately SEPARATE from
+  // `windowResetVersion`. Both feed Virtuoso's `key` to force a remount,
+  // but only `windowResetVersion` / `jumpToMessageId` flow into
+  // `useMessageActionSurface` (below) as selection-clearing signals. A
+  // back-to-bottom must re-anchor the list WITHOUT wiping the user's
+  // message selection, so it bumps this instead. See the button onClick.
+  const [bottomAnchorVersion, setBottomAnchorVersion] = useState(0);
+  // Back-to-bottom anchor lifecycle (see `reduceBottomAnchor`). `intent` feeds
+  // `initialTopMostItemIndex` + the window-replacement remount decision so the
+  // next intended mount lands at the tail; the one-shot reverts it to
+  // 'default' the moment that mount lands, so later unrelated window churn
+  // does not re-drag the user down. A state machine (not a bare boolean)
+  // because the tail and reset branches consume on different signals and the
+  // reset's transient empty must be distinguished from the pre-reset window.
+  // NOT part of the Virtuoso `key` — it only influences the mount anchor.
+  const [bottomAnchor, dispatchBottomAnchor] = useReducer(
+    reduceBottomAnchor,
+    INITIAL_BOTTOM_ANCHOR_STATE,
+  );
   // Shared message action surface — selection state + copy / share /
   // export handlers, identical to the thread reply-cluster pane
   // (#task:1067), so the per-row action props can't drift apart. The
@@ -283,6 +305,13 @@ export function MessageList({
     firstItemIndexRef.current = FIRST_ITEM_INDEX_START;
     setFirstItemIndex(FIRST_ITEM_INDEX_START);
     setWindowResetVersion(0);
+    // Do NOT reset `bottomAnchorVersion` here: `channelId` is already in the
+    // Virtuoso key, so the channel switch remounts on its own. Bumping this
+    // version back to 0 would remount a SECOND time (extra cache discard /
+    // flicker on the hot channel-switch path). It has no cross-channel
+    // semantics — a monotonic counter is fine. Cancel any in-flight bottom
+    // request instead (not in the key, so this does not remount).
+    dispatchBottomAnchor({ type: 'cancel' });
     lastTopItemKeyRef.current = null;
     lastJumpRemountKeyRef.current = null;
     setIsAtBottom(true);
@@ -293,11 +322,22 @@ export function MessageList({
   // New jump attempt boundary — fires whenever `jumpToMessageId` flips
   // to a new non-null value. Clear any local flash from the previous
   // attempt; positioning is handled by remounting Virtuoso below.
-  useEffect(() => {
+  //
+  // MUST be a layout effect, not passive: the jump remount below (which
+  // bumps `windowResetVersion`) is a layout effect too. If this reset ran
+  // passively it would fire AFTER the remount render, so that render would
+  // still see a `'bottom'` intent from a prior back-to-bottom, force
+  // `preferBottom`, and land the fresh jump at the tail instead of centering
+  // on the target. Running here cancels the bottom request in the same layout
+  // phase, so the remount render sees the 'default' intent.
+  useLayoutEffect(() => {
     if (!jumpToMessageId) {
       lastJumpRemountKeyRef.current = null;
       return;
     }
+    // A fresh jump overrides any prior back-to-bottom request so the mount
+    // centers on the target.
+    dispatchBottomAnchor({ type: 'cancel' });
     setFlashedMessageId(null);
   }, [jumpToMessageId, channelId]);
 
@@ -350,6 +390,7 @@ export function MessageList({
           shouldRemountForWindowReplacement({
             hasJumpTarget: jumpToMessageId != null,
             jumpTargetIndex: jumpTargetIdx,
+            preferBottom: bottomAnchor.intent === 'bottom',
           })
         ) {
           setWindowResetVersion(v => v + 1);
@@ -357,7 +398,7 @@ export function MessageList({
       }
     }
     lastTopItemKeyRef.current = newTopKey;
-  }, [items, itemKey, jumpTargetIdx, jumpToMessageId]);
+  }, [items, itemKey, jumpTargetIdx, jumpToMessageId, bottomAnchor.intent]);
 
   // Treat every resolved jump as a fresh positioning request. This keeps
   // saved-message jumps on the same channel on the same path as
@@ -386,6 +427,35 @@ export function MessageList({
     setWindowResetVersion(v => v + 1);
   }, [channelId, items, itemKey, jumpTargetIdx, jumpToMessageId]);
 
+  // ── Back-to-bottom one-shot consumption ──────────────────────────────────
+  //
+  // The armed bottom intent must be spent by the mount it authorized, then
+  // revert to 'default' so later, unrelated window churn (a refetch after the
+  // user scrolled up to read history) doesn't drag them back to the tail.
+  // The two branches land on DIFFERENT signals, so they consume separately
+  // (see `reduceBottomAnchor`). Both dispatch AFTER commit, strictly later
+  // than the render that read `bottomAnchor.intent` for the mount anchor.
+  //
+  // Tail branch: the `bottomAnchorVersion` remount reads the armed intent
+  // during its render; this effect (its commit) then spends it. Bound to the
+  // version generation, not `isAtBottom` — a non-tail local bottom lies.
+  useLayoutEffect(() => {
+    dispatchBottomAnchor({ type: 'tail-shown' });
+  }, [bottomAnchorVersion]);
+
+  // Reset branch: `resetToLatest()`→`resetQueries` clears the cache to []
+  // first, so Virtuoso unmounts (loading/empty) and re-mounts naturally when
+  // the latest rows return — bumping no version. Consumption cannot key off a
+  // version, and cannot fire on the pre-reset stale window (also non-empty at
+  // click time). So track the actual rows-shown/hidden lifecycle: the reducer
+  // latches the transient empty (`rows-hidden`) and consumes only on the
+  // following real mount (`rows-shown`). `hasRenderedRows` mirrors exactly
+  // when Virtuoso is on screen with content.
+  const hasRenderedRows = !isLoading && items.length > 0;
+  useLayoutEffect(() => {
+    dispatchBottomAnchor({ type: hasRenderedRows ? 'rows-shown' : 'rows-hidden' });
+  }, [hasRenderedRows]);
+
   // Bottom button visibility tracks `isAtBottom`. Virtuoso fires
   // `atBottomStateChange` only when the boolean flips, so this stays
   // stable across rapid scroll events.
@@ -398,19 +468,26 @@ export function MessageList({
     onLoadEarlier();
   }, [hasMoreBefore, isFetchingEarlier, onLoadEarlier]);
 
-  const scrollToBottom = useCallback(() => {
-    virtuosoRef.current?.scrollToIndex({
-      index: 'LAST',
-      align: 'end',
-      behavior: 'smooth',
-    });
+  // Shared side-effects of the back-to-bottom command: cancel the in-flight
+  // jump and clear the local flash/button. The bottom INTENT itself is armed
+  // via `dispatchBottomAnchor` in the button onClick (tail vs reset), so the
+  // one-shot lifecycle owns it. Back-to-bottom is a cancel-jump boundary, so
+  // tear the jump down on both sides: `onJumped()` clears the parent's jump
+  // target, and clearing `flashedMessageId` cancels the local 3s flash timer +
+  // highlight (its effect cleanup fires) so a user scrolling back up within
+  // that window doesn't see the stale highlight of a jump they just cancelled.
+  // followOutput can then stick to the tail again.
+  const cancelJumpForBottom = useCallback(() => {
+    if (jumpToMessageId) onJumped?.();
+    setFlashedMessageId(null);
     setShowScrollBottom(false);
-  }, []);
+  }, [jumpToMessageId, onJumped]);
   const shouldResetToLatest = !isAtTail || hasNewerLiveGap;
   const initialTopMostItemIndex = getInitialTopMostItemIndex({
     jumpTargetIndex: jumpTargetIdx,
     hasJumpTarget: jumpToMessageId != null,
     itemCount: items.length,
+    preferBottom: bottomAnchor.intent === 'bottom',
   });
 
   // Jump-to-message completion gate. Actual positioning is declarative:
@@ -633,7 +710,9 @@ export function MessageList({
           // (latest ↔ around-message). Prepends keep the same key so
           // Virtuoso can preserve scroll position; disjoint windows get
           // a fresh size/scroll queue and can use `initialTopMostItemIndex`.
-          key={`${channelId}:${windowResetVersion}`}
+          // `bottomAnchorVersion` also forces a remount for back-to-bottom
+          // (declarative tail re-anchor) without clearing the selection.
+          key={`${channelId}:${windowResetVersion}:${bottomAnchorVersion}`}
           ref={virtuosoRef}
           data={items}
           firstItemIndex={firstItemIndex}
@@ -701,14 +780,31 @@ export function MessageList({
           aria-label={shouldResetToLatest ? '跳到最新消息' : '滚动到底部'}
           title={shouldResetToLatest ? '跳到最新消息' : '滚动到底部'}
           onClick={() => {
-            // `scrollToBottom` is local to the mounted window. After
-            // an around-message jump, newer rows can live outside that
-            // window, so the button must reset the query to latest.
+            // Back-to-bottom is ONE command: cancel the jump + arm the bottom
+            // intent first (both branches), then obtain the tail window. The
+            // two branches differ ONLY in how the tail is produced and which
+            // lifecycle signal spends the intent — never in state ownership.
+            // Not doing this split was the bug: the reset branch used to return
+            // early, so the fresh latest window mounted with no armed intent
+            // and stayed parked at the stale around-window position, far above
+            // the tail.
+            cancelJumpForBottom();
             if (shouldResetToLatest && onResetToLatest) {
+              // Window is behind the tail. Reset the query to the authoritative
+              // latest window; `resetQueries` empties the cache first, so
+              // Virtuoso re-mounts naturally when rows return and reads the
+              // armed intent. The reset request is spent by that rows-shown
+              // mount (after the transient rows-hidden). Selection clears with
+              // the discarded around-window, as any latest reset does.
+              dispatchBottomAnchor({ type: 'arm-reset' });
               onResetToLatest();
-              return;
+            } else {
+              // Tail already loaded: remount in place at the last item. This
+              // version is NOT a selection signal, so the message selection
+              // survives. The tail request is spent once this remount commits.
+              dispatchBottomAnchor({ type: 'arm-tail' });
+              setBottomAnchorVersion(v => v + 1);
             }
-            scrollToBottom();
           }}
           className="absolute bottom-4 left-1/2 z-20 flex size-9 -translate-x-1/2 items-center justify-center rounded-full bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
         >

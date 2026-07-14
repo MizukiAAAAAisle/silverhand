@@ -327,7 +327,8 @@ export function ThreadPanel({
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    // Instant — same back-to-bottom command semantics as the channel.
+    el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
     pinBottomRef.current = true;
     setShowScrollBottom(false);
   }, []);
