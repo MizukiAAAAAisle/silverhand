@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
+  classifyTopShift,
   getFollowOutputBehavior,
   getInitialTopMostItemIndex,
   INITIAL_BOTTOM_ANCHOR_STATE,
   reduceBottomAnchor,
+  resolveTopShiftAction,
   shouldRemountForJump,
   shouldRemountForWindowReplacement,
   type BottomAnchorState,
 } from './messageListVirtualization';
+
+// Build the itemKey sequence for a contiguous seq range [from, to].
+const range = (from: number, to: number): string[] =>
+  Array.from({ length: to - from + 1 }, (_, i) => String(from + i));
 
 describe('message list virtualization helpers', () => {
   describe('getInitialTopMostItemIndex', () => {
@@ -317,6 +323,107 @@ describe('message list virtualization helpers', () => {
       expect(
         reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, { type: 'cancel' }),
       ).toBe(INITIAL_BOTTOM_ANCHOR_STATE);
+    });
+  });
+
+  describe('classifyTopShift', () => {
+    it('reports no shift when the top key is unchanged', () => {
+      expect(classifyTopShift(range(1, 100), range(1, 100))).toEqual({
+        kind: 'none',
+      });
+    });
+
+    it('detects a prepend by the old top moving down', () => {
+      // Older rows loaded above: old top (4) now sits at index 3.
+      expect(classifyTopShift(range(4, 103), range(1, 103))).toEqual({
+        kind: 'prepend',
+        count: 3,
+      });
+    });
+
+    it('detects a head-trim: live-appended latest page refetched to fixed size (#1505)', () => {
+      // 100 rows → live-appended to 103 → invalidate re-fetches the latest 100,
+      // dropping the first 3 head rows. The new top (4) was at index 3 in the
+      // old window; the remaining window is contiguous.
+      expect(classifyTopShift(range(1, 103), range(4, 103))).toEqual({
+        kind: 'head-trim',
+        count: 3,
+      });
+    });
+
+    it('treats a disjoint window (latest ↔ around jump) as a replacement', () => {
+      expect(classifyTopShift(range(1, 100), range(500, 600))).toEqual({
+        kind: 'replace',
+      });
+    });
+
+    it('treats a first-ever window (no previous keys) as a no-op', () => {
+      // First data arrival / post-channel-switch: nothing to reconcile, and a
+      // spurious replace here would remount on every channel's first load.
+      expect(classifyTopShift([], range(1, 100))).toEqual({ kind: 'none' });
+    });
+  });
+
+  describe('resolveTopShiftAction', () => {
+    const noPositioning = {
+      userPositioning: false,
+      hasJumpTarget: false,
+      jumpTargetIndex: -1,
+      preferBottom: false,
+    };
+
+    it('shifts firstItemIndex down on a prepend without remounting', () => {
+      expect(
+        resolveTopShiftAction({ kind: 'prepend', count: 3 }, noPositioning),
+      ).toEqual({ firstItemIndex: 'delta', delta: -3, remount: false });
+    });
+
+    it('preserves the reader anchor on a non-user head-trim: shift UP, no remount (#1505)', () => {
+      // The core #1505 guarantee: a head-trim while the reader is scrolled up
+      // (no positioning command) must NOT bump windowResetVersion (remount) —
+      // that is what yanked the reader to the default bottom.
+      expect(
+        resolveTopShiftAction({ kind: 'head-trim', count: 3 }, noPositioning),
+      ).toEqual({ firstItemIndex: 'delta', delta: 3, remount: false });
+    });
+
+    it('lets a jump own a head-trim: falls through to replacement + remount', () => {
+      // A user positioning command in flight keeps the existing remount
+      // semantics (no #1504 regression).
+      expect(
+        resolveTopShiftAction(
+          { kind: 'head-trim', count: 3 },
+          {
+            userPositioning: true,
+            hasJumpTarget: true,
+            jumpTargetIndex: 42,
+            preferBottom: false,
+          },
+        ),
+      ).toEqual({ firstItemIndex: 'reset', remount: true });
+    });
+
+    it('resets and remounts on a disjoint replacement (no jump target)', () => {
+      expect(resolveTopShiftAction({ kind: 'replace' }, noPositioning)).toEqual({
+        firstItemIndex: 'reset',
+        remount: true,
+      });
+    });
+
+    it('resets without remounting while a jump target is still absent', () => {
+      // Matches shouldRemountForWindowReplacement: a pending-but-absent jump
+      // must not remount to the current window's local end.
+      expect(
+        resolveTopShiftAction(
+          { kind: 'replace' },
+          {
+            userPositioning: true,
+            hasJumpTarget: true,
+            jumpTargetIndex: -1,
+            preferBottom: false,
+          },
+        ),
+      ).toEqual({ firstItemIndex: 'reset', remount: false });
     });
   });
 });

@@ -25,13 +25,14 @@ import {
 } from '@/features/channels/pending-message';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import {
+  classifyTopShift,
   FIRST_ITEM_INDEX_START,
   getFollowOutputBehavior,
   getInitialTopMostItemIndex,
   INITIAL_BOTTOM_ANCHOR_STATE,
   reduceBottomAnchor,
+  resolveTopShiftAction,
   shouldRemountForJump,
-  shouldRemountForWindowReplacement,
 } from '@/components/layout/messageListVirtualization';
 
 // ── Message list ────────────────────────────────────────────────────────
@@ -281,7 +282,10 @@ export function MessageList({
     };
   }, [liveChannels, archivedChannels, channelId]);
   const firstItemIndexRef = useRef(FIRST_ITEM_INDEX_START);
-  const lastTopItemKeyRef = useRef<string | null>(null);
+  // Full key list of the previously observed window — lets us tell a head-trim
+  // (rows dropped from the top, anchor survives) from a disjoint window
+  // replacement by overlap (#task:1505). See the shift-classification effect.
+  const lastItemKeysRef = useRef<string[]>([]);
   const lastJumpRemountKeyRef = useRef<string | null>(null);
 
   const itemKey = useCallback((item: ReturnType<typeof groupMessages>[number]) => {
@@ -312,7 +316,7 @@ export function MessageList({
     // semantics — a monotonic counter is fine. Cancel any in-flight bottom
     // request instead (not in the key, so this does not remount).
     dispatchBottomAnchor({ type: 'cancel' });
-    lastTopItemKeyRef.current = null;
+    lastItemKeysRef.current = [];
     lastJumpRemountKeyRef.current = null;
     setIsAtBottom(true);
     setShowScrollBottom(false);
@@ -341,63 +345,56 @@ export function MessageList({
     setFlashedMessageId(null);
   }, [jumpToMessageId, channelId]);
 
-  // Detect prepend on the items array and decrement `firstItemIndex` by
-  // the number of newly inserted top-side items. We compare against the
-  // previously observed top key — if it now sits at index N, then N items
-  // were prepended.
+  // Keep `firstItemIndex` and the Virtuoso mount in sync with how the loaded
+  // window's HEAD moved between renders. Three shapes, told apart by old/new
+  // key overlap (`classifyTopShift`):
   //
-  // useLayoutEffect (not useEffect) — this MUST commit synchronously
-  // before any passive effect (especially the jump effect below) runs,
-  // otherwise scrollToIndex fires with stale firstItemIndex props
-  // queued, Virtuoso miscomputes the target offset, and the row never
-  // materialises.
+  //   • prepend   — older rows loaded above the old top (fetchPreviousPage):
+  //                 shift firstItemIndex DOWN so the visible index stays stable
+  //                 and Virtuoso holds scroll position.
+  //   • head-trim — rows dropped from the HEAD while the rest stays contiguous.
+  //                 This is #task:1505: the latest cache page was live-appended
+  //                 past the page limit, so a refetch re-fetches the fixed-size
+  //                 latest window and trims the surplus head rows. The old top
+  //                 vanishes but the reader's anchor (below the trim) survives —
+  //                 shift firstItemIndex UP and do NOT remount, so the reader is
+  //                 not yanked to the default bottom. A user positioning command
+  //                 (jump / back-to-bottom) in flight falls through to
+  //                 replacement semantics so it keeps owning the anchor.
+  //   • replace   — a disjoint window (latest ↔ around-message jump): reset the
+  //                 baseline and remount per `shouldRemountForWindowReplacement`.
+  //                 Without the reset Virtuoso's size cache stays anchored to the
+  //                 long-gone layout and any subsequent scrollToIndex misses.
   //
-  // Also handles the data-shrink case: when a query refetch evicts old
-  // pages (e.g. saved-jump on the same channel re-clicks
-  // markMessageChannelRead → invalidate → first page only), `prevTopKey` is no
-  // longer in items. We can't compute a delta, so reset the baseline
-  // from scratch — without this, Virtuoso's size cache stays anchored
-  // to the long-gone 788-item layout and any subsequent scrollToIndex
-  // misses badly.
+  // useLayoutEffect (not useEffect) — this MUST commit synchronously before any
+  // passive effect (especially the jump effect below) runs, otherwise
+  // scrollToIndex fires with stale firstItemIndex props queued, Virtuoso
+  // miscomputes the target offset, and the row never materialises.
   useLayoutEffect(() => {
     if (items.length === 0) {
-      lastTopItemKeyRef.current = null;
+      lastItemKeysRef.current = [];
       return;
     }
-    const top = items[0];
-    if (!top) return;
-    const newTopKey = itemKey(top);
-    const prevTopKey = lastTopItemKeyRef.current;
-    if (prevTopKey !== null && newTopKey !== prevTopKey) {
-      const idx = items.findIndex(it => itemKey(it) === prevTopKey);
-      if (idx > 0) {
-        // Pure prepend: anchor preserved, shift firstItemIndex down.
-        firstItemIndexRef.current -= idx;
-        setFirstItemIndex(firstItemIndexRef.current);
-      } else {
-        // Data shrunk / reset (prev top item no longer exists). Reset
-        // the baseline so Virtuoso re-anchors against the new dataset
-        // instead of tracking phantom offsets. This is a full window
-        // replacement (latest ↔ around-window), not a prepend. Remount
-        // only when the replacement is a valid landing window: normal
-        // latest reset (no jump target) or an around-window containing
-        // the target. If a jump target exists but is still absent,
-        // remounting would fall back to the current window's local end
-        // and reproduce the "stuck one hour ago" failure.
+    const keys = items.map(itemKey);
+    const shift = classifyTopShift(lastItemKeysRef.current, keys);
+    if (shift.kind !== 'none') {
+      const action = resolveTopShiftAction(shift, {
+        userPositioning:
+          jumpToMessageId != null || bottomAnchor.intent === 'bottom',
+        hasJumpTarget: jumpToMessageId != null,
+        jumpTargetIndex: jumpTargetIdx,
+        preferBottom: bottomAnchor.intent === 'bottom',
+      });
+      if (action.firstItemIndex === 'reset') {
         firstItemIndexRef.current = FIRST_ITEM_INDEX_START;
         setFirstItemIndex(FIRST_ITEM_INDEX_START);
-        if (
-          shouldRemountForWindowReplacement({
-            hasJumpTarget: jumpToMessageId != null,
-            jumpTargetIndex: jumpTargetIdx,
-            preferBottom: bottomAnchor.intent === 'bottom',
-          })
-        ) {
-          setWindowResetVersion(v => v + 1);
-        }
+        if (action.remount) setWindowResetVersion(v => v + 1);
+      } else if (action.delta !== 0) {
+        firstItemIndexRef.current += action.delta;
+        setFirstItemIndex(firstItemIndexRef.current);
       }
     }
-    lastTopItemKeyRef.current = newTopKey;
+    lastItemKeysRef.current = keys;
   }, [items, itemKey, jumpTargetIdx, jumpToMessageId, bottomAnchor.intent]);
 
   // Treat every resolved jump as a fresh positioning request. This keeps

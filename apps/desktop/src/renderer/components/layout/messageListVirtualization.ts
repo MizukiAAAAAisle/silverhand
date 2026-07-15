@@ -51,6 +51,95 @@ export function shouldRemountForWindowReplacement(args: {
   return !args.hasJumpTarget || args.jumpTargetIndex >= 0;
 }
 
+// ── Top-of-window shift classification (#task:1505) ──────────────────────
+//
+// When the loaded window's first row changes, we must tell three shapes apart
+// so Virtuoso keeps its scroll position instead of snapping to the default
+// bottom:
+//
+//   • prepend    — older rows loaded above the old top (fetchPreviousPage). The
+//                  old top is still present, deeper in the window.
+//   • head-trim  — rows dropped from the HEAD while the rest of the window stays
+//                  contiguous. This is the #1505 case: the latest cache page was
+//                  live-appended PAST the page limit, so a refetch re-fetches the
+//                  fixed-size latest window and trims the surplus head rows. The
+//                  old top vanishes, but the reader's visible anchor (below the
+//                  trimmed head) survives — so we must preserve position, NOT
+//                  treat it as a disjoint replacement.
+//   • replace    — a genuinely disjoint window (latest ↔ around-message jump):
+//                  no overlap with the previous window.
+//
+// Overlap decides the shape: if the old top still appears in the new window it
+// prepended; else if the new top still appears in the OLD window the head was
+// trimmed; else the windows are disjoint. Classification mirrors the trust level
+// of the existing prepend detection (index lookup, no full contiguity proof).
+export type TopShift =
+  | { kind: 'none' }
+  | { kind: 'prepend'; count: number }
+  | { kind: 'head-trim'; count: number }
+  | { kind: 'replace' };
+
+export function classifyTopShift(prevKeys: string[], keys: string[]): TopShift {
+  // Nothing observed yet (first data arrival / post-channel-switch): there is no
+  // prior anchor to reconcile. The mount itself owns initial positioning, so
+  // this must be a no-op — treating it as a replacement would remount spuriously.
+  if (keys.length === 0 || prevKeys.length === 0) return { kind: 'none' };
+  const prevTop = prevKeys[0]!;
+  const newTop = keys[0]!;
+  if (prevTop === newTop) return { kind: 'none' };
+  // Old top still below the new head → rows prepended above it.
+  const prevTopInNew = keys.indexOf(prevTop);
+  if (prevTopInNew > 0) return { kind: 'prepend', count: prevTopInNew };
+  // New top still inside the old window → the head was trimmed.
+  const newTopInPrev = prevKeys.indexOf(newTop);
+  if (newTopInPrev > 0) return { kind: 'head-trim', count: newTopInPrev };
+  return { kind: 'replace' };
+}
+
+// The `firstItemIndex` / remount action for a classified top shift.
+//   • prepend  → shift firstItemIndex DOWN by count (existing behavior).
+//   • head-trim (no user positioning) → shift firstItemIndex UP by count and do
+//     NOT remount: the remaining rows keep their absolute index, so Virtuoso
+//     holds the reader's scroll offset. This is the #1505 fix — the whole point
+//     is to avoid the default-bottom remount that yanked the reader down.
+//   • head-trim WHILE a user positioning command is active (jump / back-to-
+//     bottom) → fall through to replacement semantics so those commands keep
+//     owning the anchor (no #1504 regression).
+//   • replace  → reset firstItemIndex and remount per `shouldRemountForWindowReplacement`.
+export type TopShiftAction =
+  | { firstItemIndex: 'reset'; remount: boolean }
+  | { firstItemIndex: 'delta'; delta: number; remount: false };
+
+export function resolveTopShiftAction(
+  shift: TopShift,
+  ctx: {
+    userPositioning: boolean;
+    hasJumpTarget: boolean;
+    jumpTargetIndex: number;
+    preferBottom: boolean;
+  },
+): TopShiftAction {
+  const replace = (): TopShiftAction => ({
+    firstItemIndex: 'reset',
+    remount: shouldRemountForWindowReplacement({
+      hasJumpTarget: ctx.hasJumpTarget,
+      jumpTargetIndex: ctx.jumpTargetIndex,
+      preferBottom: ctx.preferBottom,
+    }),
+  });
+  switch (shift.kind) {
+    case 'none':
+      return { firstItemIndex: 'delta', delta: 0, remount: false };
+    case 'prepend':
+      return { firstItemIndex: 'delta', delta: -shift.count, remount: false };
+    case 'head-trim':
+      if (ctx.userPositioning) return replace();
+      return { firstItemIndex: 'delta', delta: shift.count, remount: false };
+    case 'replace':
+      return replace();
+  }
+}
+
 // Once the target is present, a jump should enter Virtuoso through a
 // fresh mount. Reusing an existing size/scroll queue and then issuing an
 // imperative scroll can land on the previous around-window's local
