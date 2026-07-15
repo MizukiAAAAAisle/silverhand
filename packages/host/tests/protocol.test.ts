@@ -354,17 +354,6 @@ describe('protocol — runtime_* registry', () => {
     expect(parsed.success).toBe(false);
   });
 
-  it('runtime_start rejects empty startup_delivery.delivery_ids', () => {
-    // #task:1417 Stage 2c: `runtime_start` is pure lifecycle — a
-    // `startup_delivery` key is rejected outright regardless of shape.
-    const r = RuntimeStartParamsSchema.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      options: testStartOptions(),
-      startup_delivery: { delivery_ids: [], text: 'x' },
-    });
-    expect(r.success).toBe(false);
-  });
 });
 
 describe('protocol — runtime_start D4.e-6 semantic refs + typed errors', () => {

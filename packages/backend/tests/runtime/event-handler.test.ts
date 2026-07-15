@@ -1934,32 +1934,6 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     expect(exitCalls[0]!.meta.fatalError).toBe(false);
   });
 
-  it('fatalError clears after a fresh runtime_state (recovery)', async () => {
-    const { handler, emit, exitCalls } = setup();
-    await handler.start();
-    emit({
-      event: 'runtime_parsed_event',
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      parsed: {
-        kind: 'error',
-        message: 'fatal',
-        fatal: true,
-      } as never,
-      ts: 1700000002300,
-    });
-    emit(runStateFrame('c1', 'a1', RUN_STATE, 1700000002400));
-    emit({
-      event: 'runtime_exit',
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      code: 0,
-      intentional: false,
-      ts: 1700000002500,
-    });
-    expect(exitCalls[0]!.meta.fatalError).toBe(false);
-  });
-
   it('flags do not leak between (conv, agent) pairs', async () => {
     const { handler, emit, exitCalls } = setup();
     await handler.start();

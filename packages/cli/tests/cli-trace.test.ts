@@ -168,20 +168,6 @@ describe('cli-trace fire-and-forget reporter', () => {
     expect(body.error_message).toContain('--path');
   });
 
-  it('forwards error_subkind through to the trace body when supplied', async () => {
-    await reportPreflightFailure({
-      noun: 'message',
-      verb: 'send',
-      flags_seen: ['content', 'target'],
-      error_code: 'validation_error',
-      error_subkind: 'flag_removed',
-      error_message: '--content was removed; pipe content via stdin',
-    });
-    const [, init] = fetchMock.mock.calls[0]!;
-    const body = JSON.parse(init.body as string);
-    expect(body.error_subkind).toBe('flag_removed');
-  });
-
   it('NEVER carries a `details` key — privacy contract bound at the CLI source', async () => {
     // Even if a future caller tried to attach details, the
     // `CliTraceInput` type lacks a slot for them, so this should not

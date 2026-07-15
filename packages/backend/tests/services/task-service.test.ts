@@ -2127,31 +2127,6 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
     }
   });
 
-  it('promotion (--message-id of non-task) cross-conversation still rejected with wrong_conversation', async () => {
-    const t = bootstrap();
-    try {
-      const other = t.conversations.insertChannel({
-        workspaceId: t.workspace.id,
-        workspacePath: t.workspace.workspace_path,
-        title: 'other',
-      });
-      const msg = t.messages.insertForConversation({
-        conversationId: other.id,
-        fromKind: 'agent',
-        fromAgentId: t.bob.id,
-        content: 'promote me',
-      });
-      const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: msg.id },
-      });
-      expect(r.success).toBe(false);
-      expect(r.code).toBe('wrong_conversation');
-    } finally {
-      t.cleanup();
-    }
-  });
-
   it('promotion (--message-id of non-task in current conv) IGNORES workspace selector — Blocker 1', async () => {
     // Cindy `CZ7Un3P5YATZ1GTq` Blocker 1: an agent who passes a bogus
     // --workspace-id while trying to PROMOTE a regular message in

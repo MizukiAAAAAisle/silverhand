@@ -311,38 +311,11 @@ describe('materializeAgent — §4.6 decision tree', () => {
     ).toBe(true);
   });
 
-  // Cindy D2 P1-3: fail-closed exclusive create. We seed the sentinel
-  // (or the system_prompt.md) BEFORE calling materializeAgent — that
-  // simulates a foreign-writer race winning the path between the
-  // empty-dir check and our write. With `renameSync` (the original
-  // implementation) the foreign content would be silently overwritten;
-  // with `linkSync` it must EEXIST → agent_dir_collision.
-  it('foreign content in agent_dir (race winner placed a file) → agent_dir_collision (no overwrite)', async () => {
-    const agentDir = computeAgentDir('aid_abc', homeDir);
-    // mkdir the parent path so we can drop a file in agent_dir AND
-    // keep `readdirSync(agentDir)` returning the foreign file rather
-    // than ENOENT (which would be the empty-dir case).
-    mkdirSync(agentDir, { recursive: true });
-    // Place the foreign file in the SAME spot as one of the template
-    // files. The empty-dir check inside materializeAgent will see a
-    // non-empty dir and reject with collision before ever writing.
-    writeFileSync(join(agentDir, 'system_prompt.md'), 'race-winner content');
-
-    await expect(materializeAgent(baseParams(), { homeDir })).rejects.toMatchObject({
-      name: 'AgentMaterializeError',
-      code: 'agent_dir_collision',
-    });
-    // Foreign content untouched.
-    expect(readFileSync(join(agentDir, 'system_prompt.md'), 'utf8')).toBe(
-      'race-winner content',
-    );
-  });
-
-  // Cindy D2 round-2 P1: the previous P1-3 test (above) only
-  // exercises the §4.6 empty-dir branch — `readdirSync(agentDir)`
-  // sees the foreign file FIRST and short-circuits the handler at
-  // collision detection, never reaching `seedTemplate` or
-  // `linkSync`. The actual race-window bug she identified is:
+  // Cindy D2 round-2 P1: the §4.6 empty-dir collision check only
+  // catches foreign content ALREADY present when `readdirSync(agentDir)`
+  // runs — it short-circuits before `seedTemplate` / `linkSync` (that
+  // case is covered above by 'foreign content in dir (no sentinel)').
+  // The actual race-window bug she identified is:
   //
   //   1. empty-dir check passes (dir really is empty)
   //   2. <interleave> foreign writer drops a non-colliding file
