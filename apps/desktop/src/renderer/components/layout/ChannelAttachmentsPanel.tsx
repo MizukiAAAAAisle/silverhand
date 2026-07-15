@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { GroupedVirtuoso } from 'react-virtuoso';
 import { toast } from 'sonner';
@@ -26,6 +26,10 @@ import type {
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
 import { CollectionItemCard } from '@/components/layout/collection-item-card';
+import {
+  INITIAL_ATTACHMENTS_WINDOW,
+  reduceAttachmentsWindow,
+} from '@/components/layout/attachmentsWindow';
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
@@ -122,6 +126,7 @@ export function ChannelAttachmentsPanel({
 
   const {
     items,
+    sessionKey,
     isLoading,
     isError,
     isFetchingNextPage,
@@ -155,6 +160,18 @@ export function ChannelAttachmentsPanel({
   );
   const groupCounts = useMemo(() => groups.map(g => g.items.length), [groups]);
   const flatItems = useMemo(() => groups.flatMap(g => g.items), [groups]);
+
+  // Keep the reader's scroll stable across two DISTINCT axes without conflating
+  // them (see `reduceAttachmentsWindow`): a query-session change (different
+  // dataset — reset baseline + remount, even when a cache hit skips the empty
+  // window and the IDs overlap) vs an in-session head shift (realtime top-insert
+  // or head-trim — preserve position by moving `firstItemIndex`). The reducer is
+  // the single decision point; the effect only feeds it the observed inputs.
+  const [attachWindow, setAttachWindow] = useState(INITIAL_ATTACHMENTS_WINDOW);
+  useLayoutEffect(() => {
+    const keys = flatItems.map(i => i.attachment.id);
+    setAttachWindow(prev => reduceAttachmentsWindow(prev, { sessionKey, keys }));
+  }, [flatItems, sessionKey]);
 
   const filterActive = isAttachmentFilterActive(filter);
   // Show the filter bar whenever there's something to filter or a filter is
@@ -267,15 +284,23 @@ export function ChannelAttachmentsPanel({
           )
         ) : (
           <GroupedVirtuoso
+            key={attachWindow.mountEpoch}
             style={{ height: '100%' }}
+            firstItemIndex={attachWindow.firstItemIndex}
             groupCounts={groupCounts}
             groupContent={index => (
               <div className="bg-[var(--bg-chat,var(--bg-app))] px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-text-muted">
                 {groups[index]?.label ?? ''}
               </div>
             )}
-            itemContent={(index, _groupIndex) => {
-              const item = flatItems[index];
+            itemContent={index => {
+              // `firstItemIndex` shifts the ITEM index Virtuoso passes here into
+              // absolute space (it starts at FIRST_ITEM_INDEX_START and moves as
+              // rows prepend/head-trim), so map back to the local `flatItems`
+              // index. Group indexes are NOT shifted, so `groupContent` above
+              // still reads `groups[index]` directly. Missing the offset made
+              // every row resolve to `undefined` → blank list.
+              const item = flatItems[index - attachWindow.firstItemIndex];
               if (!item) return null;
               const identity = resolveAttachmentSender(item.source, {
                 agentsById,

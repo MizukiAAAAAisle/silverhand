@@ -41,6 +41,7 @@ import {
   channelGateFor,
   type MembershipState,
 } from '@/features/channels/membership';
+import { classifyTopShift } from '@/components/layout/messageListVirtualization';
 
 interface ThreadPanelProps {
   /** Parent channel conversation. Replies live in this conversation with
@@ -255,26 +256,29 @@ export function ThreadPanel({
   }, [liveChannels, archivedChannels, channelId, parentTitle]);
 
   // Drop any active selection when the cluster WINDOW is replaced (not just
-  // grown by prepend/append). A disjoint replacement — reset-to-latest, an
-  // off-tail composer send rebuilding to a tail page, a reconnect
-  // invalidate, or an around-reply jump — leaves `selection.selected`
+  // grown by prepend/append or trimmed at the head). A disjoint replacement —
+  // reset-to-latest, an off-tail composer send rebuilding to a tail page, a
+  // reconnect invalidate, or an around-reply jump — leaves `selection.selected`
   // holding rows that are no longer in view. ChannelView gets this for free
   // from `useMessageSelection`'s `windowResetVersion`; the cluster needs the
-  // same signal. Detect replacement by the window's top-row identity vanishing
-  // from the new window. We deliberately do NOT update the ref across a
-  // transient empty window (`resetToLatest` clears the cache to [] before the
-  // tail refetch lands), so the pre-reset top is still remembered when the
-  // fresh window arrives.
-  const prevTopIdRef = useRef<string | null>(null);
+  // same signal. We classify the top-of-window shift with the shared helper so
+  // all three shapes are told apart:
+  //   • prepend / append — old rows still present, selection stays valid.
+  //   • head-trim — a live-appended latest page refetched to its fixed size
+  //     drops HEAD rows (the old top vanishes), but the selection below the
+  //     trimmed head survives, so it must NOT clear. The old "top-id gone =
+  //     disjoint" test wrongly cleared here.
+  //   • replace — genuinely disjoint window; the selection is stale → clear.
+  // We deliberately do NOT update the ref across a transient empty window
+  // (`resetToLatest` clears the cache to [] before the tail refetch lands), so
+  // the pre-reset window is still remembered when the fresh window arrives.
+  const prevKeysRef = useRef<string[]>([]);
   useEffect(() => {
-    const topId = messages[0]?.id ?? null;
-    if (topId == null) return; // keep prevTopIdRef across transient empties
-    const prevTop = prevTopIdRef.current;
-    prevTopIdRef.current = topId;
-    if (prevTop == null || prevTop === topId) return;
-    // Prepend/append keep the old top somewhere in the window; only a
-    // disjoint replacement makes it disappear entirely.
-    if (!messages.some(m => m.id === prevTop)) {
+    if (messages.length === 0) return; // keep prevKeysRef across transient empties
+    const keys = messages.map(m => m.id);
+    const prevKeys = prevKeysRef.current;
+    prevKeysRef.current = keys;
+    if (classifyTopShift(prevKeys, keys).kind === 'replace') {
       setSelectionResetKey(v => v + 1);
     }
   }, [messages]);

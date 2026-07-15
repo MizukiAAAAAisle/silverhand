@@ -213,6 +213,7 @@ export function useChannelAttachments(
   opts: { nowMs?: number } = {},
 ): {
   items: AttachmentListItem[];
+  sessionKey: string;
   isLoading: boolean;
   isError: boolean;
   isFetchingNextPage: boolean;
@@ -280,6 +281,11 @@ export function useChannelAttachments(
 
   return {
     items,
+    // A stable string identity for the resolved query SESSION (channel + sender
+    // + time filter + resolved cutoff). A change here means a genuinely
+    // different dataset — consumers use it to force a fresh list mount rather
+    // than mis-reading an overlapping-ID filter switch as an in-place shift.
+    sessionKey: JSON.stringify(key),
     isLoading: query.isLoading,
     isError: query.isError,
     isFetchingNextPage: query.isFetchingNextPage,

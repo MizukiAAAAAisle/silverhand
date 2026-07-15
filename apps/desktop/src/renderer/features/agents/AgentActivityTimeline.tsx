@@ -120,16 +120,17 @@ export function AgentActivityTimeline({
     };
   }, [cancelTailFrames]);
 
-  const onLoadEarlier = useCallback(async () => {
-    const el = scrollRef.current;
-    const prevHeight = el?.scrollHeight ?? 0;
-    await loadEarlier();
-    // Preserve the reading position: older rows are prepended, so shift
-    // scrollTop by the height delta to keep the same row under the eye.
-    requestAnimationFrame(() => {
-      const node = scrollRef.current;
-      if (node) node.scrollTop = node.scrollHeight - prevHeight;
-    });
+  const onLoadEarlier = useCallback(() => {
+    // Older rows prepend ABOVE the viewport. Rely on the browser's native
+    // scroll anchoring (`overflow-anchor`, default on this plain non-virtualized
+    // scroller) to hold the reading position, instead of manual scrollTop math:
+    // an in-viewport anchor node stays put as content grows above it. Accepted
+    // small error — Load earlier is low-frequency and merge-case precision is
+    // intentionally out of scope: when older same-kind events merge into the
+    // block currently under the reader its markdown re-renders and the position
+    // can shift slightly, and a concurrent tail-append is not isolated; neither
+    // is worth reintroducing manual compensation or a fragment anchor.
+    void loadEarlier();
   }, [loadEarlier]);
 
   const onScroll = useCallback(() => {
