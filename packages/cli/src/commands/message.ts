@@ -129,6 +129,29 @@ stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null
     const hasAttachments = (attachmentIds?.length ?? 0) > 0;
     let content = '';
 
+    // Validate ALL flags BEFORE touching stdin. `readAllStdin()` below
+    // blocks until the pipe closes; if an invalid flag (e.g. a bad
+    // --stale-resolution value) were only rejected afterwards, an
+    // inherited never-closing stdin pipe would hang the process forever
+    // instead of failing fast with a typed error.
+    const destination = parseSendDestination(
+      flagString(args, 'target'),
+      flagString(args, 'reply-to'),
+    );
+    const anyway = flagBool(args, 'anyway') ?? false;
+    const staleResolution = parseSendStaleResolution(
+      flagString(args, 'stale-resolution'),
+    );
+    if (anyway && staleResolution !== undefined) {
+      throw new CliError({
+        code: 'validation_error',
+        message:
+          '--anyway already records stale resolution as force_send; ' +
+          'do not also pass --stale-resolution',
+        retriable: false,
+      });
+    }
+
     // Pre-flight: a TTY on stdin means the agent forgot to pipe a body.
     // Failing fast (rather than blocking on a read that will never
     // arrive) keeps the agent's exit path predictable. Attachment-only
@@ -188,23 +211,6 @@ stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null
       }
     }
 
-    const destination = parseSendDestination(
-      flagString(args, 'target'),
-      flagString(args, 'reply-to'),
-    );
-    const anyway = flagBool(args, 'anyway') ?? false;
-    const staleResolution = parseSendStaleResolution(
-      flagString(args, 'stale-resolution'),
-    );
-    if (anyway && staleResolution !== undefined) {
-      throw new CliError({
-        code: 'validation_error',
-        message:
-          '--anyway already records stale resolution as force_send; ' +
-          'do not also pass --stale-resolution',
-        retriable: false,
-      });
-    }
     const daemonInput = {
       conversation_id: env.conversationId,
       agent_id: env.agentId,

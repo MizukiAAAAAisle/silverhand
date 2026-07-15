@@ -97,6 +97,10 @@ interface RunResult {
   code: number | null;
   stdout: string;
   stderr: string;
+  /** True when the watchdog had to SIGKILL a process that never exited
+   *  on its own — i.e. the CLI blocked on a read it should never have
+   *  reached (the stdin-hang failure mode). */
+  killedByWatchdog?: boolean;
 }
 
 function runSend(opts: {
@@ -105,6 +109,9 @@ function runSend(opts: {
   env?: Record<string, string>;
   /** Wrap with `script -q /dev/null` to fake a TTY on stdin. macOS only. */
   withTty?: boolean;
+  /** Leave stdin OPEN and non-TTY (never delivers EOF) — mimics an
+   *  inherited pipe. Arms a watchdog so a hang fails cleanly. */
+  keepStdinOpen?: boolean;
 }): Promise<RunResult> {
   return runMessage({
     noun: 'message',
@@ -121,6 +128,9 @@ function runMessage(opts: {
   env?: Record<string, string>;
   /** Wrap with `script -q /dev/null` to fake a TTY on stdin. macOS only. */
   withTty?: boolean;
+  /** Leave stdin OPEN and non-TTY (never delivers EOF) — mimics an
+   *  inherited pipe. Arms a watchdog so a hang fails cleanly. */
+  keepStdinOpen?: boolean;
 }): Promise<RunResult> {
   return new Promise((resolvePromise, reject) => {
     const argv = opts.argv ?? [];
@@ -156,12 +166,27 @@ function runMessage(opts: {
     });
     let stdout = '';
     let stderr = '';
+    let killedByWatchdog = false;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
     child.stdout!.on('data', chunk => (stdout += chunk.toString('utf8')));
     child.stderr!.on('data', chunk => (stderr += chunk.toString('utf8')));
     child.on('error', reject);
-    child.on('close', code => resolvePromise({ code, stdout, stderr }));
+    child.on('close', code => {
+      if (watchdog) clearTimeout(watchdog);
+      resolvePromise({ code, stdout, stderr, killedByWatchdog });
+    });
     if (!opts.withTty) {
-      if (opts.stdin !== null && opts.stdin !== undefined) {
+      if (opts.keepStdinOpen) {
+        // Intentionally leave stdin OPEN and non-TTY: the child inherits
+        // a pipe that never delivers EOF. A fail-fast CLI must reject a
+        // bad flag BEFORE blocking on this read. Arm a watchdog so a
+        // regression (infinite stdin block) surfaces as a clean assertion
+        // instead of leaking to the suite timeout.
+        watchdog = setTimeout(() => {
+          killedByWatchdog = true;
+          child.kill('SIGKILL');
+        }, 8000);
+      } else if (opts.stdin !== null && opts.stdin !== undefined) {
         const buf = Buffer.isBuffer(opts.stdin)
           ? opts.stdin
           : Buffer.from(opts.stdin, 'utf8');
@@ -533,4 +558,62 @@ describe('silverhand message send (stdin-only, real subprocess)', () => {
     expect(reqBody.stale_event_id).toBe('evt-obsolete');
     expect(reqBody.resolution_reason).toBe('obsolete');
   });
+
+  // Flag validation must precede the blocking stdin read. A bad
+  // --stale-resolution value (e.g. the `obsolete` that belongs to
+  // `message stale-resolve`, not `message send`) fed with an inherited
+  // never-closing stdin pipe must fail fast with a typed error — NOT
+  // hang forever on a read whose EOF never comes.
+  it('fails fast on an invalid --stale-resolution value even with an open, never-closing stdin pipe', async () => {
+    const r = await runSend({
+      argv: ['--stale-resolution', 'obsolete'],
+      keepStdinOpen: true,
+    });
+    expect(
+      r.killedByWatchdog,
+      'CLI blocked on stdin before validating --stale-resolution',
+    ).toBe(false);
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.code).toBe('validation_error');
+    expect(body.error.message).toContain('unaffected or revised');
+  }, 20_000);
+
+  // The mutual-exclusion check (parseSendDestination) is another throwing
+  // flag path ahead of the stdin read. Lock it against an open pipe too,
+  // so a future refactor can't quietly move only one validation back and
+  // reintroduce the hang for the other.
+  it('fails fast on mutually-exclusive --reply-to/--target even with an open, never-closing stdin pipe', async () => {
+    const r = await runSend({
+      argv: ['--reply-to', 'm-root', '--target', 'thread:m-other'],
+      keepStdinOpen: true,
+    });
+    expect(
+      r.killedByWatchdog,
+      'CLI blocked on stdin before validating --reply-to/--target',
+    ).toBe(false);
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.code).toBe('validation_error');
+    expect(body.error.subkind).toBe('mutually_exclusive');
+  }, 20_000);
+
+  // The third throwing path is the manual --anyway × --stale-resolution
+  // conflict guard that runs after both flags parse. Both values are
+  // individually valid, so only this combined check rejects — lock it
+  // against an open pipe so it can't be the one left after the stdin read.
+  it('fails fast on the --anyway + --stale-resolution conflict even with an open, never-closing stdin pipe', async () => {
+    const r = await runSend({
+      argv: ['--anyway', '--stale-resolution', 'unaffected'],
+      keepStdinOpen: true,
+    });
+    expect(
+      r.killedByWatchdog,
+      'CLI blocked on stdin before validating --anyway/--stale-resolution',
+    ).toBe(false);
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.code).toBe('validation_error');
+    expect(body.error.message).toContain('force_send');
+  }, 20_000);
 }, { timeout: 30_000 });
