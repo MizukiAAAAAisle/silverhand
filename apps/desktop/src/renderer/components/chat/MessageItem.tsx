@@ -373,11 +373,18 @@ export function MessageItem({
   // viewer follows.
   const threadUnreadCount = threadUnread?.unread_count ?? 0;
   const threadFirstUnreadId = threadUnread?.first_unread_message_id ?? null;
-  const replyBadgeTitle = enrichedReply
-    ? threadUnreadCount > 0
+  // Unread is the FIRST-priority title, independent of `enrichedReply` — the
+  // "N new" visual now renders in both the enriched and fallback branches, so
+  // the tooltip/aria-label must announce it in both too (else a fallback chip
+  // reads "2 Replies" to a screen reader while the eye sees "2 Replies · 1 new"
+  // — #task:1519 P2). Only when there's no unread does the label diverge: the
+  // enriched chip appends the last-reply time, the fallback stays bare.
+  const replyBadgeTitle =
+    threadUnreadCount > 0
       ? `${replyBadgeLabel} · ${threadUnreadCount} new — jump to first unread`
-      : `${replyBadgeLabel} · last reply ${replyRelativeTime}`
-    : replyBadgeLabel;
+      : enrichedReply
+        ? `${replyBadgeLabel} · last reply ${replyRelativeTime}`
+        : replyBadgeLabel;
   const renderReplierAvatar = (
     replier: { kind: 'agent' | 'human'; id: string },
     size: number,
@@ -488,6 +495,24 @@ export function MessageItem({
   // hue. Live-only: the export omits it (passes `null`). A bare inline element
   // — the shared bottom row (MessageRowContent) owns spacing + alignment so
   // task tag · replies · reactions share one line.
+  // Unread signal as a TEXT modifier, not a filled sticker. The chip is a
+  // LOCAL affordance (already a full click target); the loud filled square
+  // belongs to the GLOBAL pressure signals (sidebar badge / Threads list
+  // followed-row), so borrowing it here overspends the volume budget and
+  // crowds the `N replies` subject (shiki dogfood `dSjdBvz4`). Keep the single
+  // unread hue as INK (`text-accent` deep magenta, AA on light) + medium
+  // weight. Derived SOLELY from `threadUnreadCount` (the authoritative
+  // per-stream read-model), so it renders whether or not the enriched summary
+  // has loaded — the enriched read-model is a freshness surface, NOT the fact
+  // (§12.1#5). Gating it on `enrichedReply` previously made the "N new" chip
+  // vanish until the summary refetched (ghost-unread, #task:1519). Click still
+  // jumps to first unread.
+  const threadUnreadNode =
+    threadUnreadCount > 0 ? (
+      <span className="shrink-0 font-medium text-accent">
+        {threadUnreadCount > 99 ? '99+' : threadUnreadCount} new
+      </span>
+    ) : null;
   const trailingNode =
     threadReplyCount !== undefined && onStartThread ? (
       <button
@@ -512,20 +537,7 @@ export function MessageItem({
             </span>
             <span className="font-medium">{replyBadgeLabel}</span>
             <span className="text-text-muted">·</span>
-            {threadUnreadCount > 0 ? (
-              // Unread signal as a TEXT modifier, not a filled sticker. The
-              // chip is a LOCAL affordance (already a full click target); the
-              // loud filled square belongs to the GLOBAL pressure signals
-              // (sidebar badge / Threads list followed-row), so borrowing it
-              // here overspends the volume budget and crowds the `N replies`
-              // subject (shiki dogfood `dSjdBvz4` — sticker filled the 18px
-              // chip). Keep the single unread hue as INK (`text-accent` deep
-              // magenta, AA on light) + medium weight: pink identity preserved,
-              // chip height unchanged. Click still jumps to first unread.
-              <span className="shrink-0 font-medium text-accent">
-                {threadUnreadCount > 99 ? '99+' : threadUnreadCount} new
-              </span>
-            ) : (
+            {threadUnreadNode ?? (
               <span className="text-text-muted">{replyRelativeTime}</span>
             )}
           </>
@@ -533,6 +545,12 @@ export function MessageItem({
           <>
             <ThreadIcon className="size-3.5 shrink-0" />
             <span>{replyBadgeLabel}</span>
+            {threadUnreadNode ? (
+              <>
+                <span className="text-text-muted">·</span>
+                {threadUnreadNode}
+              </>
+            ) : null}
           </>
         )}
       </button>

@@ -931,6 +931,13 @@ function RegisteredAppShell(): JSX.Element {
       handleJumpToMessage({
         channelId: pointer.conversation_id,
         messageId: pointer.message_id,
+        // Carry the reply cluster's root when the newest unread is a thread
+        // reply — otherwise the jump anchors the reply id against the mainline
+        // stream (404) and never enters the thread observe/mark-read path, so
+        // the badge never clears (#task:1519). `handleSelectChannel` already
+        // threads its `threadRootId` through; the workspace-badge entry must
+        // match — every unread-pointer jump carries `thread_root_id`.
+        threadRootId: pointer.thread_root_id ?? undefined,
         workspaceId: id,
       });
       return;

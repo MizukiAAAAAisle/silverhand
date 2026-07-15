@@ -41,8 +41,16 @@ function isMessageUnreadUpdatedPayload(payload: unknown): boolean {
 export interface UnreadCounts {
   total: number;
   by_workspace: Record<string, number>;
-  /** Most-recent unread pointer per workspace/sidebar item — drives badge-click jump. */
-  latest_by_workspace: Record<string, { conversation_id: string; message_id: string }>;
+  /** Most-recent unread pointer per workspace/sidebar item — drives badge-click
+   *  jump. `thread_root_id` is non-null when the newest unread lives in a reply
+   *  cluster; the badge jump MUST carry it so the target opens inside its thread
+   *  (a reply id anchored against the mainline stream 404s → the jump never
+   *  reaches the thread observe path and unread never clears, #task:1519). The
+   *  backend `latestUnreadByWorkspace` already resolves it from the message row. */
+  latest_by_workspace: Record<
+    string,
+    { conversation_id: string; message_id: string; thread_root_id: string | null }
+  >;
 }
 
 /**

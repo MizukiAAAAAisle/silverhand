@@ -469,6 +469,14 @@ export function ThreadPanel({
   const markInflightSeqRef = useRef<MessageSeq | null>(null);
   const lastMarkedSeqRef = useRef<MessageSeq | null>(null);
   const liveMarkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The latest tail seq that PASSED the visible-live gate but has not been marked
+  // yet — the debounce may still be pending. Kept in sync with the gate by the
+  // visible-live effect (set to the gated seq, or null the moment the gate closes
+  // — scrolled up / backgrounded). Read only by the close/switch flush below, so a
+  // seen-but-not-yet-debounced reply still advances the cursor when the panel is
+  // closed within the 300ms window, WITHOUT ever swallowing a tail the user
+  // scrolled away from (that path already nulled this ref).
+  const liveGatedSeqRef = useRef<MessageSeq | null>(null);
   const isJumpOpenRef = useRef(false);
   const openKey = `${channelId}::${rootMessageId}`;
   if (openKeyRef.current !== openKey) {
@@ -600,6 +608,10 @@ export function ThreadPanel({
       maxVisibleSeq: maxLoadedSeq,
       lastMarkedSeq: lastMarkedSeqRef.current,
     });
+    // Track the gated seq for the close/switch flush. When the gate closes
+    // (scrolled up / backgrounded → seq null) this clears, so a later close can
+    // never flush a tail the user is no longer watching (no-swallow preserved).
+    liveGatedSeqRef.current = seq;
     if (seq === null) return;
     if (liveMarkTimerRef.current) clearTimeout(liveMarkTimerRef.current);
     liveMarkTimerRef.current = setTimeout(() => {
@@ -616,6 +628,25 @@ export function ThreadPanel({
       }
     };
   }, [pinnedAtTail, documentVisible, maxLoadedSeq, isAtTail, issueMarkRead]);
+
+  // Flush a SEEN-but-unmarked tail reply when THIS open ends — the panel closes
+  // (unmount) or switches to another thread — before the 300ms visible-live
+  // debounce fired. Without this, closing the panel within the debounce window
+  // clears the pending timer and the read cursor stays behind the reply the user
+  // already saw (the ghost-unread badge, #task:1519). Keyed on `issueMarkRead`,
+  // which is itself keyed on (channelId, rootMessageId) — so the cleanup runs on
+  // close (unmount) AND on switch-to-another-thread, but NOT on scroll/append.
+  // Those change the gate inputs (a different effect) and already keep
+  // `liveGatedSeqRef` truthful, so a tail the user scrolled away from is null here
+  // and not flushed. `issueMarkRead` is forward-only + in-flight-guarded, so this
+  // can only advance the cursor, never swallow the concurrent tail or double-mark.
+  useEffect(() => {
+    return () => {
+      const seq = liveGatedSeqRef.current;
+      liveGatedSeqRef.current = null;
+      if (seq !== null) issueMarkRead(seq);
+    };
+  }, [issueMarkRead]);
 
   // While pinned (initial open, or the user sitting at the tail), keep the
   // newest reply in view as the root loads / replies arrive. Instant jump
