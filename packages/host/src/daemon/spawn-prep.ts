@@ -1,6 +1,10 @@
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  SILVERHAND_DAEMON_SOCKET_ENV,
+  SILVERHAND_LAST_DELIVERED_SEQ_FILE_ENV,
+} from '@silverhand/shared';
 
 export interface SilverhandCliLauncher {
   command: string;
@@ -13,6 +17,13 @@ export interface SpawnPrepInput {
   agentId: string;
   systemPromptText: string;
   silverhandCli: SilverhandCliLauncher;
+  /**
+   * Per-spawn Silverhand CLI identity/control-plane env. This is written into
+   * the `silverhand` shim itself so CLI calls still work when a runtime's tool
+   * shell preserves PATH but scrubs the parent process env.
+   */
+  silverhandEnv: Record<string, string>;
+  daemonSocketPath?: string;
 }
 
 export interface SpawnPrepHandle {
@@ -37,7 +48,14 @@ export async function prepareSpawnFiles(
   const lastDeliveredSeqPath = join(dir, 'last-delivered-seq');
   const binDir = join(dir, 'bin');
   const silverhandShimPath = join(binDir, 'silverhand');
-  const shim = renderSilverhandShim(input.silverhandCli);
+  const shim = renderSilverhandShim(input.silverhandCli, {
+    ...(input.silverhandCli.env ?? {}),
+    ...input.silverhandEnv,
+    ...(input.daemonSocketPath
+      ? { [SILVERHAND_DAEMON_SOCKET_ENV]: input.daemonSocketPath }
+      : {}),
+    [SILVERHAND_LAST_DELIVERED_SEQ_FILE_ENV]: lastDeliveredSeqPath,
+  });
 
   await Promise.all([
     mkdir(binDir, { recursive: true }),
@@ -57,8 +75,11 @@ export async function prepareSpawnFiles(
   };
 }
 
-function renderSilverhandShim(launcher: SilverhandCliLauncher): string {
-  const envAssignments = Object.entries(launcher.env ?? {})
+function renderSilverhandShim(
+  launcher: SilverhandCliLauncher,
+  env: Record<string, string>,
+): string {
+  const envAssignments = Object.entries(env)
     .map(([key, value]) => `export ${shellName(key)}=${shellString(value)}`)
     .join('\n');
   const command = [launcher.command, ...launcher.args]

@@ -1296,6 +1296,12 @@ export class Supervisor implements SupervisorContract {
             : {}),
         }
       : null;
+    const controlPlaneServerUrl = this.controlPlaneServerUrl();
+    if (!controlPlaneServerUrl) {
+      throw new Error(
+        'runtime_start: no silverhand server URL supplied by server and no daemon-local control-plane URL is attached',
+      );
+    }
     const spawnPrep = await prepareSpawnFiles({
       conversationId: params.conversation_id,
       agentId: params.agent_id,
@@ -1304,6 +1310,14 @@ export class Supervisor implements SupervisorContract {
         serverLauncher: serverSilverhandCli,
         localLauncher: this.localSilverhandCliLauncher,
       }),
+      silverhandEnv: {
+        [SILVERHAND_CONVERSATION_ID_ENV]: params.conversation_id,
+        [SILVERHAND_AGENT_ID_ENV]: params.agent_id,
+        [SILVERHAND_SERVER_URL_ENV]: controlPlaneServerUrl,
+        [SILVERHAND_AUTH_TOKEN_ENV]:
+          startOptions.env_policy.silverhand.auth_token,
+      },
+      daemonSocketPath: this.daemonSocketPath ?? undefined,
     });
 
     const spawnCtx = {
@@ -1341,7 +1355,7 @@ export class Supervisor implements SupervisorContract {
       daemonSocketPath: this.daemonSocketPath ?? undefined,
       lastDeliveredSeqPath: spawnPrep.lastDeliveredSeqPath,
       binDir: spawnPrep.binDir,
-      controlPlaneServerUrl: this.controlPlaneServerUrl(),
+      controlPlaneServerUrl,
       proxyConfig: readDaemonProxyConfig(this.proxyConfigPath(), this.logger),
     });
     const env: NodeJS.ProcessEnv = {
