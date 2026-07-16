@@ -23,6 +23,10 @@ import {
   type ParsedEvent,
   ParsedEventSchema,
   type RuntimeKind,
+  SILVERHAND_AGENT_ID_ENV,
+  SILVERHAND_AUTH_TOKEN_ENV,
+  SILVERHAND_CONVERSATION_ID_ENV,
+  SILVERHAND_SERVER_URL_ENV,
 } from '@silverhand/shared';
 
 import { getDriver as getDefaultDriver, type Driver } from '../../drivers/index.js';
@@ -1329,21 +1333,28 @@ export class Supervisor implements SupervisorContract {
       logger: this.logger,
     });
     args.push(...(mcpSpawn.args ?? []));
-    const env = {
-      ...buildDaemonSpawnEnv({
-        driver,
-        options: startOptions,
-        conversationId: params.conversation_id,
-        agentId: params.agent_id,
-        daemonSocketPath: this.daemonSocketPath ?? undefined,
-        lastDeliveredSeqPath: spawnPrep.lastDeliveredSeqPath,
-        binDir: spawnPrep.binDir,
-        controlPlaneServerUrl: this.controlPlaneServerUrl(),
-        proxyConfig: readDaemonProxyConfig(this.proxyConfigPath(), this.logger),
-      }),
+    const daemonEnv = buildDaemonSpawnEnv({
+      driver,
+      options: startOptions,
+      conversationId: params.conversation_id,
+      agentId: params.agent_id,
+      daemonSocketPath: this.daemonSocketPath ?? undefined,
+      lastDeliveredSeqPath: spawnPrep.lastDeliveredSeqPath,
+      binDir: spawnPrep.binDir,
+      controlPlaneServerUrl: this.controlPlaneServerUrl(),
+      proxyConfig: readDaemonProxyConfig(this.proxyConfigPath(), this.logger),
+    });
+    const env: NodeJS.ProcessEnv = {
+      ...daemonEnv,
       // The profile-MCP env layer (opencode's OPENCODE_CONFIG_CONTENT) is
-      // authoritative for its own keys — spread last so it wins on conflict.
+      // authoritative for its own keys. The Silverhand identity/control-plane
+      // env is re-applied below because those four keys are the child CLI's
+      // integrity boundary and must not be shadowed by any additive layer.
       ...(mcpSpawn.env ?? {}),
+      [SILVERHAND_CONVERSATION_ID_ENV]: daemonEnv[SILVERHAND_CONVERSATION_ID_ENV],
+      [SILVERHAND_AGENT_ID_ENV]: daemonEnv[SILVERHAND_AGENT_ID_ENV],
+      [SILVERHAND_SERVER_URL_ENV]: daemonEnv[SILVERHAND_SERVER_URL_ENV],
+      [SILVERHAND_AUTH_TOKEN_ENV]: daemonEnv[SILVERHAND_AUTH_TOKEN_ENV],
     };
     const startedAt = this.now();
 

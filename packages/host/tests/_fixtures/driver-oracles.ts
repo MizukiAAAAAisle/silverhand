@@ -352,4 +352,32 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
       },
     ],
   },
+  {
+    id: 'codex-session-archived-is-fatal',
+    runtime: 'codex',
+    description: 'Codex archived resume target is a fatal session_archived error',
+    incident: 'restore after codex-side session archive',
+    steps: [
+      {
+        line: j({
+          jsonrpc: '2.0',
+          id: 100,
+          error: {
+            code: -32602,
+            message:
+              'session 019f3ba4-a772-7010-a52a-8cdac98ddfd5 is archived. Run codex unarchive 019f3ba4-a772-7010-a52a-8cdac98ddfd5 to unarchive it first.',
+          },
+        }),
+        expected: [
+          {
+            kind: 'error',
+            message:
+              'session 019f3ba4-a772-7010-a52a-8cdac98ddfd5 is archived. Run codex unarchive 019f3ba4-a772-7010-a52a-8cdac98ddfd5 to unarchive it first.',
+            code: 'session_archived',
+            fatal: true,
+          },
+        ],
+      },
+    ],
+  },
 ];

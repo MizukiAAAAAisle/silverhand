@@ -317,6 +317,38 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
     }
   });
 
+  it('clears cli_session_id when the exit is tied to a stale resume target', () => {
+    const fix = makeFixture({
+      initialStatus: 'active',
+      initialCliSessionId: 'sess-archived-1234',
+    });
+    try {
+      fix.projector.runtimeExit({
+        conversationId: fix.channelId,
+        agentId: fix.agentId,
+        intentional: false,
+        code: 1,
+        initTimedOut: false,
+        fatalError: true,
+        clearCliSessionId: true,
+        runState: null,
+      });
+      expect(fix.row().status).toBe('crashed');
+      expect(fix.row().cli_session_id).toBeNull();
+      expect(fix.events[0]).toMatchObject({
+        conv: fix.channelId,
+        kind: 'agent_status',
+        payload: {
+          agent_id: fix.agentId,
+          status: 'crashed',
+          cli_session_id: null,
+        },
+      });
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   it('forwards runState through to the SSE payload', () => {
     const fix = makeFixture({ initialStatus: 'active' });
     try {

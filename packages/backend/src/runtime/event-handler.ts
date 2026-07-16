@@ -228,6 +228,13 @@ const NOOP_LOGGER: RuntimeEventHandlerLogger = {
 const CONVERSATION_ACTIVITY_TEXT_BLOCK_MAX_CHARS = 16 * 1024;
 const CONVERSATION_ACTIVITY_TEXT_BLOCK_PUBLISH_INTERVAL_MS = 1_000;
 
+function shouldClearCliSessionAfterFatalError(event: ParsedEvent): boolean {
+  return (
+    event.kind === 'error' &&
+    (event.code === 'thread_not_found' || event.code === 'session_archived')
+  );
+}
+
 export interface RuntimeEventHandlerDeps {
   client: RuntimeEventSource;
   bridge: RuntimeStatusBridge;
@@ -366,6 +373,14 @@ export class RuntimeEventHandler {
    * runtime_exit (next runtime starts clean).
    */
   private readonly fatalErrorFlag = new Set<string>();
+  /**
+   * Fatal resume-target errors where preserving `cli_session_id` would
+   * poison every future start by resuming the same invalid Codex/CLI
+   * session. This is narrower than `fatalErrorFlag`: fatal affects
+   * crash/respawn behavior; this flag additionally clears the stored
+   * resume id on the matching runtime_exit.
+   */
+  private readonly clearCliSessionOnExitFlag = new Set<string>();
 
   constructor(deps: RuntimeEventHandlerDeps) {
     this.client = deps.client;
@@ -445,6 +460,7 @@ export class RuntimeEventHandler {
         // a clean gate.
         this.initFailureFlag.clear();
         this.fatalErrorFlag.clear();
+        this.clearCliSessionOnExitFlag.clear();
         this.logger.warn({ kind: 'daemon', reason: frame.reason }, 'daemon shutting down');
         return;
       case 'runtime_state': {
@@ -465,6 +481,7 @@ export class RuntimeEventHandler {
           this.lastTimeoutReason.delete(`${frame.conversation_id}|${frame.agent_id}`);
           this.initFailureFlag.delete(`${frame.conversation_id}|${frame.agent_id}`);
           this.fatalErrorFlag.delete(`${frame.conversation_id}|${frame.agent_id}`);
+          this.clearCliSessionOnExitFlag.delete(`${frame.conversation_id}|${frame.agent_id}`);
         }
         this.onRuntimeState(frame);
         return;
@@ -620,7 +637,11 @@ export class RuntimeEventHandler {
         // oneShot auto-respawn; non-fatal `error` events (e.g.
         // recoverable tool errors) leave the gate open.
         if (frame.parsed.kind === 'error' && frame.parsed.fatal === true) {
-          this.fatalErrorFlag.add(`${frame.conversation_id}|${frame.agent_id}`);
+          const flagKey = `${frame.conversation_id}|${frame.agent_id}`;
+          this.fatalErrorFlag.add(flagKey);
+          if (shouldClearCliSessionAfterFatalError(frame.parsed)) {
+            this.clearCliSessionOnExitFlag.add(flagKey);
+          }
         }
         // Forward the RAW parsed event to the coordinator (Cindy
         // `BYHZJI9ALSVmmlFr` pin b — busy tracker reads raw, not
@@ -1000,8 +1021,10 @@ export class RuntimeEventHandler {
     const flagKey = `${frame.conversation_id}|${frame.agent_id}`;
     const initTimedOut = this.initFailureFlag.has(flagKey);
     const fatalError = this.fatalErrorFlag.has(flagKey);
+    const clearCliSessionId = this.clearCliSessionOnExitFlag.has(flagKey);
     this.initFailureFlag.delete(flagKey);
     this.fatalErrorFlag.delete(flagKey);
+    this.clearCliSessionOnExitFlag.delete(flagKey);
     this.recordConversationActivity({
       conversationId: frame.conversation_id,
       agentId: frame.agent_id,
@@ -1038,6 +1061,7 @@ export class RuntimeEventHandler {
       code: frame.code,
       initTimedOut,
       fatalError,
+      ...(clearCliSessionId ? { clearCliSessionId: true } : {}),
       runState: entry?.runState ?? null,
     });
     // Forward to the coordinator AFTER cache+SSE updates, so the

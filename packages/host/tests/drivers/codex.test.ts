@@ -453,6 +453,42 @@ describe('CodexDriver JSON-RPC handshake', () => {
       },
     ]);
   });
+
+  it('marks archived resume session errors as fatal', async () => {
+    const built = makeSpawnCtx({
+      cliSessionId: '019f3ba4-a772-7010-a52a-8cdac98ddfd5',
+    });
+    cleanup = built.cleanup;
+    const io = makeIO(built.ctx);
+    const driver = new CodexDriver();
+
+    driver.bindIO(io);
+    await tick();
+    const init = JSON.parse(io.lines[0]!);
+    driver.parseLine(
+      JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }),
+    );
+
+    const resume = JSON.parse(io.lines[2]!);
+    expect(resume.method).toBe('thread/resume');
+    const message =
+      'session 019f3ba4-a772-7010-a52a-8cdac98ddfd5 is archived. Run codex unarchive 019f3ba4-a772-7010-a52a-8cdac98ddfd5 to unarchive it first.';
+    const events = driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: resume.id,
+        error: { code: -32602, message },
+      }),
+    );
+    expect(events).toEqual([
+      {
+        kind: 'error',
+        message,
+        code: 'session_archived',
+        fatal: true,
+      },
+    ]);
+  });
 });
 
 describe('CodexDriver.parseLine event mapping', () => {

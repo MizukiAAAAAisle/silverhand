@@ -88,6 +88,36 @@ describe('daemon spawn env', () => {
     expect(env.HTTPS_PROXY).toBeUndefined();
   });
 
+  it('re-applies Silverhand identity env after driver-specific env shaping', () => {
+    const driver = makeDriver(env => ({
+      ...env,
+      [SILVERHAND_CONVERSATION_ID_ENV]: 'wrong-conversation',
+      [SILVERHAND_AGENT_ID_ENV]: 'wrong-agent',
+      [SILVERHAND_SERVER_URL_ENV]: 'https://wrong.example.test',
+      [SILVERHAND_AUTH_TOKEN_ENV]: 'wrong-token',
+    }));
+    const options = testStartOptions({ runtime: 'codex' });
+    options.env_policy = {
+      ...options.env_policy,
+      silverhand: { auth_token: 'tok_expected' },
+    };
+
+    const env = buildDaemonSpawnEnv({
+      driver,
+      options,
+      conversationId: 'conv-expected',
+      agentId: 'agent-expected',
+      binDir: '/tmp/silverhand-spawn/bin',
+      controlPlaneServerUrl: 'https://remote.example.test',
+      baseProcessEnv: BASE_ENV,
+    });
+
+    expect(env[SILVERHAND_CONVERSATION_ID_ENV]).toBe('conv-expected');
+    expect(env[SILVERHAND_AGENT_ID_ENV]).toBe('agent-expected');
+    expect(env[SILVERHAND_SERVER_URL_ENV]).toBe('https://remote.example.test');
+    expect(env[SILVERHAND_AUTH_TOKEN_ENV]).toBe('tok_expected');
+  });
+
   it('fails loud when the daemon has no host-local control-plane URL', () => {
     const driver = makeDriver(env => ({ ...env }));
     const options = testStartOptions({ runtime: 'codex' });

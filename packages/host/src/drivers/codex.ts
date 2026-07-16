@@ -497,6 +497,9 @@ function classifyCodexError(message: string): { code?: string; fatal?: boolean }
   if (/thread not found/i.test(message)) {
     return { code: 'thread_not_found', fatal: true };
   }
+  if (/\bsession\s+[0-9a-f-]+\s+is\s+archived\b/i.test(message)) {
+    return { code: 'session_archived', fatal: true };
+  }
   return {};
 }
 

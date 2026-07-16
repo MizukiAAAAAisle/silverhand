@@ -2362,6 +2362,84 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
     expect(calls[0]!.input).not.toHaveProperty('status');
   });
 
+  it('runtime_exit clears cli_session_id after stale resume-target fatal errors', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({ runtimes: [] });
+    const { publisher } = makePublisher();
+    const { sink } = makeInboxAck();
+    const { projector, calls } = makeRecordingProjector();
+    const handler = new RuntimeEventHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+      statusProjector: projector,
+    });
+    await handler.start();
+
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: {
+        kind: 'error',
+        message: 'session sess-old is archived',
+        code: 'session_archived',
+        fatal: true,
+      },
+      ts: 1700000001000,
+    });
+    emit(exitFrame('c1', 'a1', false, 1, 1700000001100));
+
+    expect(calls.find(c => c.kind === 'runtimeExit')?.input).toMatchObject({
+      conversationId: 'c1',
+      agentId: 'a1',
+      fatalError: true,
+      clearCliSessionId: true,
+    });
+  });
+
+  it('runtime_exit preserves cli_session_id for other fatal runtime errors', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({ runtimes: [] });
+    const { publisher } = makePublisher();
+    const { sink } = makeInboxAck();
+    const { projector, calls } = makeRecordingProjector();
+    const handler = new RuntimeEventHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+      statusProjector: projector,
+    });
+    await handler.start();
+
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: {
+        kind: 'error',
+        message: 'provider rejected request',
+        code: 'provider_error',
+        fatal: true,
+      },
+      ts: 1700000001000,
+    });
+    emit(exitFrame('c1', 'a1', false, 1, 1700000001100));
+
+    expect(calls.find(c => c.kind === 'runtimeExit')?.input).toMatchObject({
+      fatalError: true,
+    });
+    expect(calls.find(c => c.kind === 'runtimeExit')?.input).not.toHaveProperty(
+      'clearCliSessionId',
+    );
+  });
+
   it('runtime_init_retrying → projector.initRetrying with retry_attempt + timeout_reason (re-joined)', async () => {
     const cache = new RunStateCache();
     const { client, emit } = makeFakeClient();

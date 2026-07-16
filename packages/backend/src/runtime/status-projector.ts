@@ -67,6 +67,7 @@ export interface RuntimeExitProjection {
   code: number | null;
   initTimedOut: boolean;
   fatalError: boolean;
+  clearCliSessionId?: boolean;
   runState: AgentRunState | null;
 }
 
@@ -167,9 +168,12 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
    * enum value here (rather than in the handler) means future status
    * adjustments don't have to grep every event branch.
    *
-   * `pid` is always cleared on exit. `cli_session_id` is deliberately
-   * NOT touched — the DB keeps the last session id so the next start
-   * can `--resume` (Cindy `BYHZJI9ALSVmmlFr`).
+   * `pid` is always cleared on exit. `cli_session_id` is normally
+   * preserved — the DB keeps the last session id so the next start
+   * can `--resume` (Cindy `BYHZJI9ALSVmmlFr`). The only exception is
+   * a driver-proven stale resume target (`thread_not_found`,
+   * `session_archived`): preserving that id would make every future
+   * start fail against the same invalid lower-level session.
    */
   runtimeExit({
     conversationId,
@@ -178,6 +182,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
     code,
     initTimedOut,
     fatalError,
+    clearCliSessionId,
     runState,
   }: RuntimeExitProjection): void {
     const status: 'idle' | 'crashed' =
@@ -189,6 +194,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
     this.conversations.updateAgentRuntime(conversationId, agentId, {
       status,
       pid: null,
+      ...(clearCliSessionId ? { cliSessionId: null } : {}),
     });
     this.events.publishSide(conversationId, {
       kind: 'agent_status',
@@ -198,6 +204,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
         exit_code: code,
         intentional,
         run_state: runState,
+        ...(clearCliSessionId ? { cli_session_id: null } : {}),
       },
     });
   }
