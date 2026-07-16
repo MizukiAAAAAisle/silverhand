@@ -48,6 +48,7 @@ import { AgentView } from '@/features/agents/AgentView';
 import { HumanView } from '@/features/me/HumanView';
 import { SideUnresolvedPlaceholder } from '@/components/layout/SideUnresolvedPlaceholder';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
+import type { ConversationVisibility } from '@silverhand/shared';
 import { useAgents } from '@/features/agents/hooks';
 import {
   useAppShellGlobalSync,
@@ -73,6 +74,8 @@ import {
   useStarChannel,
   useArchiveChannel,
   useRenameChannel,
+  useLeaveChannel,
+  useSetChannelVisibility,
   type ChannelListItem,
 } from '@/features/workspaces/hooks';
 import { useSavedMessages } from '@/features/saved/hooks';
@@ -336,7 +339,12 @@ function RegisteredAppShell(): JSX.Element {
   // still contains it (React Query invalidation hasn't refetched yet),
   // otherwise the clear is instantly undone (#task:1145). Cleared once the
   // active list no longer contains it.
-  const recentlyArchivedPrimaryRef = useRef<{
+  // A channel just removed from the PRIMARY pane's member view — archived, or
+  // self-left from a private channel — that cleared selection. Excluded from
+  // the auto-select effect's remembered + fallback branches until the list
+  // invalidation lands, so a stale list can't re-select the channel the user
+  // just left behind (#task:1145).
+  const recentlyRemovedPrimaryRef = useRef<{
     workspaceId: string;
     channelId: string;
   } | null>(null);
@@ -433,6 +441,8 @@ function RegisteredAppShell(): JSX.Element {
   const starChannel = useStarChannel(selectedWorkspaceId ?? null);
   const archiveChannel = useArchiveChannel(selectedWorkspaceId ?? null);
   const renameChannel = useRenameChannel(selectedWorkspaceId ?? null);
+  const leaveChannel = useLeaveChannel(selectedWorkspaceId ?? null);
+  const setChannelVisibility = useSetChannelVisibility(selectedWorkspaceId ?? null);
   // Shared cache with SavedListView and useToggleSave — invalidations
   // from save/unsave mutations propagate the count update here too.
   const { data: savedItems } = useSavedMessages();
@@ -589,14 +599,15 @@ function RegisteredAppShell(): JSX.Element {
     // The precedence (honored jump > remembered-channel open > default
     // fallback) lives in the pure `resolveRestoreNavigation`; this effect only
     // reads the current ref / place-memory / unread state and executes the
-    // returned action. A channel just archived from the primary pane that
-    // cleared selection is excluded from BOTH the remembered and fallback
-    // branch — the stale lists can still contain it until the query
-    // invalidation lands, and re-selecting it would undo the clear
-    // (#task:1145). Scoped to the same workspace the archive happened in.
+    // returned action. A channel just removed from the primary pane (archived,
+    // or self-left from a private channel) that cleared selection is excluded
+    // from BOTH the remembered and fallback branch — the stale lists can still
+    // contain it until the query invalidation lands, and re-selecting it would
+    // undo the clear (#task:1145). Scoped to the same workspace the
+    // removal happened in.
     const excludeId =
-      recentlyArchivedPrimaryRef.current?.workspaceId === selectedWorkspaceId
-        ? recentlyArchivedPrimaryRef.current.channelId
+      recentlyRemovedPrimaryRef.current?.workspaceId === selectedWorkspaceId
+        ? recentlyRemovedPrimaryRef.current.channelId
         : null;
     // On the restore path the remembered channel's unread pointer is consulted
     // best-effort — if the workspace's unread data hasn't loaded yet it
@@ -654,14 +665,14 @@ function RegisteredAppShell(): JSX.Element {
     nav.go,
   ]);
 
-  // Release the recently-archived exclusion once the active list no longer
-  // contains it (the archive invalidation has refetched) — from then on the
-  // id is genuinely gone and the auto-select effect needs no special-casing
+  // Release the recently-removed exclusion once the active list no longer
+  // contains it (the archive/leave invalidation has refetched) — from then on
+  // the id is genuinely gone and the auto-select effect needs no special-casing
   // (#task:1145).
   useEffect(() => {
-    const rec = recentlyArchivedPrimaryRef.current;
+    const rec = recentlyRemovedPrimaryRef.current;
     if (rec && !activeChannels.some(c => c.id === rec.channelId)) {
-      recentlyArchivedPrimaryRef.current = null;
+      recentlyRemovedPrimaryRef.current = null;
     }
   }, [activeChannels]);
 
@@ -1196,9 +1207,9 @@ function RegisteredAppShell(): JSX.Element {
                 // active/`channels` lists still contain the just-archived
                 // row: (1) drop the remembered channel so the auto-select
                 // effect's *remembered* branch can't restore it; (2) record
-                // it in `recentlyArchivedPrimaryRef` so the effect's
+                // it in `recentlyRemovedPrimaryRef` so the effect's
                 // *fallback* branch also excludes it (#task:1145).
-                recentlyArchivedPrimaryRef.current = {
+                recentlyRemovedPrimaryRef.current = {
                   workspaceId: wid,
                   channelId,
                 };
@@ -1231,6 +1242,59 @@ function RegisteredAppShell(): JSX.Element {
       });
     },
     [renameChannel, selectedWorkspaceId],
+  );
+
+  // Async so the settings dialog can await + surface the toggle error inline
+  // (rejects on 403 when the viewer isn't an admin, or a 400 same-value no-op
+  // never fires because the modal only submits the OTHER visibility).
+  const handleSetChannelVisibilityMutation = useCallback(
+    async (channelId: string, visibility: ConversationVisibility) => {
+      await setChannelVisibility.mutateAsync({
+        channelId,
+        visibility,
+        workspaceId: selectedWorkspaceId ?? undefined,
+      });
+    },
+    [setChannelVisibility, selectedWorkspaceId],
+  );
+
+  // Async so the settings dialog can await + surface a leave rejection inline.
+  // On success the mutation converges the workspace list in place; here we only
+  // move the primary pane when the just-left channel was PRIVATE (it drops from
+  // discovery, so staying would strand the pane). A PUBLIC leave keeps the
+  // channel readable — the view collapses to the Join bar in place, no nav.
+  const handleLeaveChannelMutation = useCallback(
+    async (channelId: string) => {
+      const res = await leaveChannel.mutateAsync(channelId);
+      const isPrivate =
+        res.channel.kind === 'channel' && res.channel.visibility === 'private';
+      if (!isPrivate || channelId !== selectedChannelId) return;
+      const wid = selectedWorkspaceId;
+      if (!wid) return;
+      // `memberActiveChannels` still includes the just-left channel (the list
+      // invalidation hasn't refetched yet) — the neighbor-aware picker needs it
+      // to find its siblings. Same fallback ladder as archive.
+      const fallbackId = pickFallbackAfterArchive(memberActiveChannels, channelId);
+      if (fallbackId) {
+        nav.toChannel(wid, fallbackId);
+        return;
+      }
+      // No active top-level channel remains → clear to the workspace empty
+      // state, excluding the just-left channel from the auto-select effect until
+      // the list refetch drops it (same two guards as archive).
+      recentlyRemovedPrimaryRef.current = { workspaceId: wid, channelId };
+      lastChannelByWorkspace.delete(wid);
+      persistLastChannel();
+      nav.toWorkspace(wid);
+    },
+    [
+      leaveChannel,
+      selectedChannelId,
+      selectedWorkspaceId,
+      memberActiveChannels,
+      nav.toChannel,
+      nav.toWorkspace,
+    ],
   );
 
   // Memoize the descriptor objects so ChannelView's `conversation` prop keeps a
@@ -1405,6 +1469,8 @@ function RegisteredAppShell(): JSX.Element {
       filesListActive={filesListMounted}
       onArchiveChannel={handleArchiveChannelMutation}
       onRenameChannel={handleRenameChannelMutation}
+      onSetChannelVisibility={handleSetChannelVisibilityMutation}
+      onLeaveChannel={handleLeaveChannelMutation}
       archivePending={archiveChannel.isPending}
       conversationRefsById={conversationRefsById}
       onOpenConversationRef={nav.openSide}

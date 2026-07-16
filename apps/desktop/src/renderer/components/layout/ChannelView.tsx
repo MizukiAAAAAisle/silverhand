@@ -42,7 +42,7 @@ import {
   useStopAgent,
 } from '@/features/channels/hooks';
 import { useChannelMembership } from '@/features/channels/use-channel-membership';
-import { useJoinChannel } from '@/features/workspaces/hooks';
+import { useChannelDetail, useJoinChannel } from '@/features/workspaces/hooks';
 import { lastCommittedSeq } from '@/features/channels/pending-message';
 import { nextTailReadMark, type TailReadMark } from '@/lib/channel-read';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
@@ -54,6 +54,7 @@ import {
   useInlineFindHotkey,
 } from '@/features/search/useInlineFind';
 import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
+import type { ConversationVisibility } from '@silverhand/shared';
 
 type WorkspaceUiKind = 'regular' | 'dm';
 
@@ -154,6 +155,18 @@ interface ChannelViewProps {
    *  save errors inline and stay open on failure. Only wired for
    *  top-level regular channels; absence hides the Rename entry. */
   onRenameChannel?: (channelId: string, title: string) => Promise<void>;
+  /** Toggle a top-level regular channel's visibility (private ↔ public).
+   *  Async (its own exactly-one-field PATCH, never bundled into rename). Only
+   *  wired for regular channels; the modal fail-closes the control unless the
+   *  carrier also says the viewer administers the workspace. */
+  onSetChannelVisibility?: (
+    channelId: string,
+    visibility: ConversationVisibility,
+  ) => Promise<void>;
+  /** Self-leave a top-level regular channel. Async. The modal disables Leave
+   *  and shows a reason when the carrier says the viewer can't (owner / last
+   *  human / archived). */
+  onLeaveChannel?: (channelId: string) => Promise<void>;
   /** Current-workspace top-level conversation id map for inline `#conv:<id>` refs. */
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
@@ -245,6 +258,8 @@ function ActiveChannelView({
   onArchiveChannel,
   archivePending = false,
   onRenameChannel,
+  onSetChannelVisibility,
+  onLeaveChannel,
   conversationRefsById,
   onOpenConversationRef,
   onOpenChannelRef,
@@ -353,7 +368,30 @@ function ActiveChannelView({
     isTopLevelChannelLike && !!onArchiveChannel && gate.allowMutations;
   const canRenameChannel =
     isTopLevelChannelLike && !closed && !!onRenameChannel && gate.allowMutations;
+  // Visibility toggle + self-leave are REGULAR-channel only (a `dm_channel` has
+  // neither a private/public axis nor a leave path — the backend guards
+  // `kind === 'channel'`).
+  const isRegularChannel = conversation.kind === 'channel';
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The visibility/leave capability carriers (`can_update_visibility`,
+  // `can_leave`, `leave_blocked_reason`) live only on the channel-detail
+  // envelope, and a member never fetches detail on the hot path. Fetch it only
+  // while the settings modal is open for a regular channel; a member hot path
+  // fires zero extra network until the gear is opened, and the modal
+  // fail-closes (control hidden / Leave disabled) until it resolves.
+  const settingsDetailEnabled = settingsOpen && isRegularChannel;
+  const { data: channelDetail } = useChannelDetail(
+    settingsDetailEnabled ? conversation.id : null,
+    settingsDetailEnabled,
+  );
+  const detailChannel = channelDetail?.channel;
+  const channelVisibility =
+    detailChannel && detailChannel.kind === 'channel'
+      ? detailChannel.visibility
+      : undefined;
+  const canUpdateVisibility = channelDetail?.can_update_visibility ?? false;
+  const canLeaveChannel = channelDetail?.can_leave ?? false;
+  const leaveBlockedReason = channelDetail?.leave_blocked_reason ?? null;
   const { data: viewer } = useViewerUser();
   // The channel roster is a member surface — the roster/agent
   // strip + the restart/stop controls it feeds are join-gated. Disable the
@@ -784,6 +822,21 @@ function ActiveChannelView({
               : undefined
           }
           archivePending={archivePending}
+          visibility={channelVisibility}
+          canUpdateVisibility={canUpdateVisibility}
+          onSetVisibility={
+            isRegularChannel && onSetChannelVisibility && gate.allowMutations
+              ? nextVisibility =>
+                  onSetChannelVisibility(conversation.id, nextVisibility)
+              : undefined
+          }
+          onLeave={
+            isRegularChannel && onLeaveChannel && gate.allowMutations
+              ? () => onLeaveChannel(conversation.id)
+              : undefined
+          }
+          canLeave={canLeaveChannel}
+          leaveBlockedReason={leaveBlockedReason}
         />
       ) : null}
 

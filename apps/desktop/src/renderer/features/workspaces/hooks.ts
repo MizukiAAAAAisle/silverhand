@@ -9,6 +9,7 @@ import type {
   ChannelConversationDto,
   ChannelDetailResponse,
   ChannelLikeDto,
+  ConversationVisibility,
   CreateConversationChannelInput,
   CreateWorkspaceInput,
   DmChannelDto,
@@ -1042,6 +1043,127 @@ export function useRenameChannel(workspaceId: string | null) {
         qc.invalidateQueries({ queryKey: archivedChannelsKey(targetWorkspaceId) });
       }
       qc.invalidateQueries({ queryKey: ['archived-channels'] });
+      qc.invalidateQueries({ queryKey: ['conversation-ref', channel.id] });
+    },
+  });
+}
+
+/**
+ * Self-LEAVE a channel: `POST /api/channels/:id/leave` (empty body — the caller
+ * always removes THEMSELVES, no forgeable target). The 200 returns the SAME
+ * channel-detail envelope as join/detail with the authoritative
+ * `is_member: false`; the cache handling forks on the just-left channel's
+ * visibility, and the current workspace list converges in place so the open
+ * view reacts without waiting for the refetch:
+ *   - PUBLIC → the row stays (still discoverable) with `is_member: false`, and
+ *     we backfill the detail cache from the authoritative envelope, so the open
+ *     ChannelView collapses to `ChannelJoinBar` (rejoin anytime).
+ *   - PRIVATE → the row drops from the discovery union AND we EVICT the detail
+ *     + conversation-ref cache entries — a private channel is invisible to a
+ *     non-member and must not stay resolvable on any read path (§12 read
+ *     authority); the primary pane is navigated away by the caller.
+ * Rejects on the typed 403/409 (`not_member` / `channel_archived` /
+ * `channel_owner` / `last_human_member`). The settings modal disables Leave from
+ * the carrier, so a rejection is defensive only; on failure the caches are
+ * untouched → the viewer stays a member.
+ */
+export function useLeaveChannel(workspaceId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (channelId: string) =>
+      api<ChannelDetailResponse>(apiPaths.channelLeave(channelId), { method: 'POST' }),
+    onSuccess: (res, channelId) => {
+      const visibility =
+        res.channel.kind === 'channel' ? res.channel.visibility : 'public';
+      if (visibility === 'private') {
+        // Private leave = "back to before you joined": the channel is invisible
+        // to a non-member and must NOT stay resolvable in any read-path cache
+        // (§12 read authority). EVICT the detail + conversation-ref entries
+        // rather than caching a `{ is_member:false }` object a detail/ref read
+        // could still surface as a non-member-visible channel.
+        qc.removeQueries({ queryKey: channelDetailKey(channelId) });
+        qc.removeQueries({ queryKey: ['conversation-ref', channelId] });
+      } else {
+        // Public leave: the channel stays browsable, so backfill the
+        // authoritative `is_member:false` detail — the open view collapses to
+        // the Join bar off the same envelope join/detail return.
+        qc.setQueryData(channelDetailKey(channelId), res);
+      }
+      if (workspaceId) {
+        qc.setQueryData<ChannelListPayload>(channelsKey(workspaceId), prev =>
+          applyChannelLeaveToList(prev, channelId, visibility),
+        );
+        void qc.invalidateQueries({ queryKey: channelsKey(workspaceId) });
+      }
+    },
+  });
+}
+
+/**
+ * Pure: converge ONE channel's list carrier after a successful self-leave. Kept
+ * pure (not inlined) so the two-visibility contract is unit-testable without a
+ * query client, and referentially stable when nothing changes (idempotent). A
+ * PRIVATE channel drops from the list (a non-member can't discover it); a PUBLIC
+ * channel keeps its row with `is_member: false` (browse-and-Join). Mirror of
+ * `applyChannelJoinToList`. Failure has no handler and never calls this.
+ */
+export function applyChannelLeaveToList(
+  payload: ChannelListPayload | undefined,
+  channelId: string,
+  visibility: ConversationVisibility,
+): ChannelListPayload | undefined {
+  if (!payload) return payload;
+  if (visibility === 'private') {
+    const items = payload.items.filter(item => item.id !== channelId);
+    return items.length === payload.items.length ? payload : { ...payload, items };
+  }
+  let changed = false;
+  const items = payload.items.map(item => {
+    if (item.id !== channelId || item.is_member === false) return item;
+    changed = true;
+    return { ...item, is_member: false };
+  });
+  return changed ? { ...payload, items } : payload;
+}
+
+/**
+ * Toggle a top-level channel's visibility (private ↔ public):
+ * `PATCH /api/channels/:id` with `{ visibility }` — the SAME endpoint as rename,
+ * but the v1 schema is exactly-one-field so visibility is its OWN mutation, never
+ * bundled into the rename Save (no half-committed title+visibility state).
+ * Admin/human governance is gated server-side; a same-value request is a no-op.
+ * A visibility change keeps the viewer a member, so — unlike leave — there is no
+ * membership convergence; we invalidate the read models that mirror the
+ * private/public glyph + discovery membership: the channel lists, the global
+ * archived index, the channel-detail carrier, and the conversation-ref cache
+ * (`#conv:` chips / secondary pane).
+ */
+export function useSetChannelVisibility(workspaceId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      channelId,
+      visibility,
+    }: {
+      channelId: string;
+      visibility: ConversationVisibility;
+      workspaceId?: string;
+    }) => {
+      const res = await api<{ channel: ChannelLikeDto }>(
+        apiPaths.conversationChannel(channelId),
+        { method: 'PATCH', body: JSON.stringify({ visibility }) },
+      );
+      return res.channel;
+    },
+    onSuccess: (channel, vars) => {
+      const targetWorkspaceId =
+        vars.workspaceId ?? channel.workspace_id ?? workspaceId;
+      if (targetWorkspaceId) {
+        qc.invalidateQueries({ queryKey: channelsKey(targetWorkspaceId) });
+        qc.invalidateQueries({ queryKey: archivedChannelsKey(targetWorkspaceId) });
+      }
+      qc.invalidateQueries({ queryKey: ['archived-channels'] });
+      qc.invalidateQueries({ queryKey: channelDetailKey(channel.id) });
       qc.invalidateQueries({ queryKey: ['conversation-ref', channel.id] });
     },
   });

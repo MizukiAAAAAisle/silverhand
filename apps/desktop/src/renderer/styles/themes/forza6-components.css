@@ -987,25 +987,53 @@
   background: transparent;
 }
 [data-theme='forza6'] [data-channel-actions] button,
-[data-theme='forza6'] [data-channel-settings-archive] {
+[data-theme='forza6'] [data-channel-settings-action] {
   background-color: var(--bg-floating);
   border: 2px solid #0A0A0A;
   border-radius: 0;
   /* Poster sticker drop (shiki `NBHpEtEc42PDCGFX`): promote the bordered
      box to a true sticker — hard ink shadow at rest, growing on the hover
      lift. Same offset family as `[data-channel-icon]` / `[data-collection-card]`.
-     `[data-channel-settings-archive]` is the wide Archive/Restore button
-     in the channel-settings modal, painted with the same recipe so the
-     forza6 surface reads as one sticker family. Other themes keep the
-     JSX defaults (icon buttons / outline button). */
+     `[data-channel-settings-action]` marks every button in the channel-settings
+     modal that should speak the forza6 poster language — the three full-width
+     action buttons (Visibility Make private/public, Archive/Restore, Leave
+     channel) AND the Leave confirm's Cancel / Leave buttons (which sit below the
+     warning note, not inside it) — so they all read as one sticker family. The
+     confirm's destructive intent shows in its red text; the ink border stays
+     poster-black. Other themes keep the JSX defaults. */
   box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
   transition: transform 150ms var(--ease, ease), box-shadow 150ms ease;
 }
 [data-theme='forza6'] [data-channel-actions] button:hover:not(:disabled),
-[data-theme='forza6'] [data-channel-settings-archive]:hover:not(:disabled) {
+[data-theme='forza6'] [data-channel-settings-action]:hover:not(:disabled) {
   background-color: var(--bg-floating);
   transform: translateY(-1px);
   box-shadow: 2.5px 2.5px 0 var(--forza6-ink);
+}
+/* The Rename Save button is the settings modal's single PRIMARY CTA. It keeps
+   the base `default` variant's brand fill + on-brand label (so it stays the
+   only solid primary), but wears the SAME poster frame + hard ink shadow as the
+   `[data-channel-settings-action]` group so it reads as one sticker family in
+   forza6 — primary by fill, not by a divergent shape. At REST no
+   `background-color` (that would flatten the primary fill to neutral). On HOVER
+   the fill is PINNED back to the resting `--bg-control-primary` to cancel the
+   base variant's `hover:bg-[--bg-control-primary-hover]` darken — hover reads as
+   a pure poster LIFT (shadow grows, box rises), the fill never shifts. Other
+   themes keep the JSX default. */
+[data-theme='forza6'] [data-channel-settings-save] {
+  border: 2px solid #0A0A0A;
+  border-radius: 0;
+  box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
+  transition: transform 150ms var(--ease, ease), box-shadow 150ms ease;
+}
+[data-theme='forza6'] [data-channel-settings-save]:hover:not(:disabled) {
+  background-color: var(--bg-control-primary);
+  transform: translateY(-1px);
+  box-shadow: 2.5px 2.5px 0 var(--forza6-ink);
+}
+[data-theme='forza6'] [data-channel-settings-save]:active:not(:disabled) {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0 var(--forza6-ink);
 }
 /* aria-pressed buttons in the cluster (conv-header Threads toggle, and
    the Thread-header follow/unfollow toggle) get NO forza6 active fill —
