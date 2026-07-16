@@ -62,9 +62,9 @@ normalization** — no BOM stripping, no CRLF→LF, no trim.
 
 Flags:
   --target channel|thread:<id>
-                        Optional explicit destination. Omit it to send to
-                        the stream that woke this turn. "channel" forces the
-                        current channel's main line. "thread:<id>" sends to
+                        Optional explicit destination. Omit it to post to
+                        the channel main line. "channel" is the same main
+                        line, stated explicitly. "thread:<id>" sends to
                         the reply cluster containing that message; a main-line
                         message id opens/targets its thread, and a reply id
                         joins the same thread (no nesting).

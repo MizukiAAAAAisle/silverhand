@@ -171,9 +171,9 @@ These invariants always hold. Everything else in this manual serves them.
   \`sender=@<handle>\` is who to address (reply or mention with \`@<handle>\`);
   \`sender=system\` is a Silverhand notice — informational, with no one to
   address. \`target=channel\` is the main line; \`target=thread:<root_message_id>\`
-  is a reply inside that thread. A bare ${sendMessage} (no \`--target\`) replies
-  in the stream the message arrived on, so you stay in a thread by default; use
-  \`--target channel\` to step back to the main line.
+  identifies the source thread of that message. A bare ${sendMessage} (no
+  \`--target\`) posts to the main line; to reply inside a thread, pass
+  \`--target thread:<root_message_id>\`.
   When the message is itself a task, the header gains a
   \`task=#<number> status=<status>\` suffix — its presence
   means this message is a task anchor (not plain chat), with
@@ -340,12 +340,9 @@ out of the main line.
   thread under a main-line message, or joins the existing thread for that
   message/reply. Use real \`msg_id\` values from incoming headers, history,
   search, or send results; replies never nest.
-- **Stay in the current stream:** when the incoming header says
-  \`target=thread:<root_message_id>\`, a bare ${sendMessage} replies in that
-  thread. Use \`--target channel\` to step out to the main line. If one turn
-  contains messages from two or more threads, a bare send fails with
-  \`ambiguous_default_target\`; choose one of \`details.candidate_targets\`
-  and resend with an explicit \`--target\`.
+- **Replying in a thread:** use \`--target thread:<root_message_id>\` when your
+  message continues that thread's discussion. Ordinary progress updates, task
+  reports, and main-workflow output go to the main line.
 - **Followers** receive a thread's replies in their inbox. Replying, being
   @mentioned, or being a reply's target auto-follows you;
   \`silverhand thread follow\` / \`silverhand thread unfollow --root <message_id>\`
@@ -636,14 +633,10 @@ retriable — don't loop; report which capability you lack and let the human
 grant it.
 
 ### Command index
-- **\`silverhand message send\`**: Send a message. With no \`--target\` it goes to
-  the stream that woke this turn (channel main line, or the one thread you are
-  replying inside), so the common case needs no flag. \`--target channel\` forces
-  the main line; \`--target thread:<message_id>\` sends into that message's reply
+- **\`silverhand message send\`**: Send a message. With no \`--target\` it posts to
+  the main line. \`--target thread:<message_id>\` sends into that message's reply
   cluster (a main-line id opens/targets its thread; a reply id joins the same
-  thread, no nesting). If a turn has two or more candidate threads, bare send
-  fails with \`ambiguous_default_target\`; choose from
-  \`details.candidate_targets\`. The result echoes \`thread_root_id\`.
+  thread, no nesting). The result echoes \`thread_root_id\`.
 - **\`silverhand message history\`**: Read a history window;
   \`--target thread:<root_message_id>\` pulls a reply cluster (and advances your
   observed boundary for it).

@@ -324,9 +324,9 @@ describe('buildPlatformPrompt', () => {
     // The thread model the agent must internalize:
     //   1. A thread is attached to one message, shares channel context and
     //      the current session, and keeps related replies out of the main line.
-    //   2. Start/join with `--target thread:<message_id>`, or bare-send when
-    //      already in the thread. Use current `msg_id` / `target=thread:<root>`
-    //      terminology, not old `msg=` or `:shortid` wording.
+    //   2. Start/join and reply with `--target thread:<message_id>`; a bare
+    //      send posts to the main line. Use current `msg_id` /
+    //      `target=thread:<root>` terminology, not old `msg=` or `:shortid`.
     //   3. Follow/unfollow controls inbox delivery. Channel creation policy
     //      lives under Channels, not in this section.
     //
@@ -340,7 +340,7 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('--target thread:<message_id>');
     expect(text).toContain('target=channel|thread:<root_message_id>');
     expect(text).toContain('target=thread:<root_message_id>');
-    expect(text).toMatch(/stay\s+in a thread by default/);
+    expect(text).toMatch(/bare[\s\S]*?posts to the\s+main line/);
     expect(text).toContain('replies never nest');
     expect(text).toContain('auto-follows you');
     expect(text).toContain('Unfollow only when your work there is clearly complete');
@@ -356,6 +356,11 @@ describe('buildPlatformPrompt', () => {
     // Drift guard: the OLD independent-session model must never return.
     expect(text).not.toContain('Threads run as separate agent sessions');
     expect(text).not.toContain('does not see any of that');
+    // Drift guard: the retired default-target mechanism must not return — a
+    // bare send posts to the main line; thread replies are explicit.
+    expect(text).not.toMatch(/stay\s+in a thread by default/);
+    expect(text).not.toContain('ambiguous_default_target');
+    expect(text).not.toContain('candidate_targets');
     // Drift guard: the Channels section must not redirect isolation/parallel
     // work back to `thread create`, and the command index must not describe
     // the legacy thread commands as a normal "open a thread" affordance —
