@@ -32,11 +32,12 @@ import {
  *   NOT every regular row on the host. A bad/unbindable legacy row that the
  *   current agent can't even see must never fail-close that agent's list. The
  *   "read fail-closed" granularity is per-requested-id, not per-host.
- * - Per-(host,id,connection) in-flight guard collapses concurrent callers onto
- *   one dispatch per row. A successfully-bound (host,id) is memoized ONLY for
- *   the daemon connection that acknowledged it. A reconnect may attach a fresh
- *   registry namespace, so the next connection must provision again. A failed
- *   id is NOT memoized — backfill is not one-shot.
+ * - Per-(host,id) in-flight guard collapses concurrent callers onto one
+ *   dispatch per row. The registry namespace is owned by the stable
+ *   (server_origin, host_id) binding, not by a websocket connection or daemon
+ *   process. A successfully-bound (host,id) therefore survives transport and
+ *   process reconnects within this backend lifetime. A failed id is NOT
+ *   memoized — backfill is not one-shot.
  */
 
 export interface WorkspaceRegistryBackfillRow {
@@ -81,35 +82,25 @@ type PerIdOutcome =
   | { kind: 'failed'; failure: WorkspaceRegistryBackfillFailure };
 
 export class WorkspaceRegistryBackfiller {
-  /** Per-(host,id,connection) provision — concurrent callers collapse. */
+  /** Per-(host,id) provision — concurrent callers collapse. */
   private readonly inFlight = new Map<string, Promise<PerIdOutcome>>();
-  /** Latest connection that acknowledged each (host,id) binding. */
-  private readonly settledConnection = new Map<string, string>();
+  /** Bindings already confirmed in this backend's stable registry namespace. */
+  private readonly settled = new Set<string>();
 
   constructor(private readonly deps: WorkspaceRegistryBackfillerDeps) {}
 
-  /** Plain-text composite keys. JSON encoding prevents separator collisions. */
-  private workspaceKey(hostId: string, id: string): string {
+  /** Plain-text composite key. JSON encoding prevents separator collisions. */
+  private key(hostId: string, id: string): string {
     return JSON.stringify([hostId, id]);
-  }
-
-  private connectionKey(
-    hostId: string,
-    id: string,
-    connectionId: string,
-  ): string {
-    return JSON.stringify([hostId, id, connectionId]);
   }
 
   /**
    * Ensure every passed `rows` workspace is bound in `hostId`'s daemon
    * registry. Idempotent + concurrency-safe: a memoized (host,id) returns
-   * immediately within the SAME daemon connection, an in-flight dispatch for
-   * the same row + connection is shared, and a failed id is left un-memoized
-   * so the next call retries. A new connection always re-provisions because
-   * reconnecting can change the daemon's registry binding/namespace. Only the
-   * rows the caller passes are touched — an unrelated host row never enters
-   * here.
+   * immediately, an in-flight dispatch for the same row is shared, and a
+   * failed id is left un-memoized so the next call retries. Reconnecting the
+   * same host does not change its persistent registry namespace. Only the rows
+   * the caller passes are touched — an unrelated host row never enters here.
    */
   async ensure(
     hostId: string,
@@ -144,12 +135,29 @@ export class WorkspaceRegistryBackfiller {
     hostId: string,
     row: WorkspaceRegistryBackfillRow,
   ): Promise<PerIdOutcome> {
+    const key = this.key(hostId, row.id);
+    if (this.settled.has(key)) {
+      return Promise.resolve({ kind: 'alreadyBound' });
+    }
+    const running = this.inFlight.get(key);
+    if (running) return running;
+    const run = this.provisionOne(hostId, row).finally(() => {
+      this.inFlight.delete(key);
+    });
+    this.inFlight.set(key, run);
+    return run;
+  }
+
+  private async provisionOne(
+    hostId: string,
+    row: WorkspaceRegistryBackfillRow,
+  ): Promise<PerIdOutcome> {
     const outbound = resolveOutboundForHost(
       this.deps.outboundFrameAdapter(),
       hostId,
     );
     if (outbound.kind === 'failed') {
-      return Promise.resolve({
+      return {
         kind: 'failed',
         failure: {
           id: row.id,
@@ -157,35 +165,8 @@ export class WorkspaceRegistryBackfiller {
           message: outbound.message,
           retriable: outbound.retriable,
         },
-      });
+      };
     }
-
-    const workspaceKey = this.workspaceKey(hostId, row.id);
-    if (this.settledConnection.get(workspaceKey) === outbound.connectionId) {
-      return Promise.resolve({ kind: 'alreadyBound' });
-    }
-    const connectionKey = this.connectionKey(
-      hostId,
-      row.id,
-      outbound.connectionId,
-    );
-    const running = this.inFlight.get(connectionKey);
-    if (running) return running;
-    const run = this.provisionOne(hostId, row, outbound).finally(() => {
-      this.inFlight.delete(connectionKey);
-    });
-    this.inFlight.set(connectionKey, run);
-    return run;
-  }
-
-  private async provisionOne(
-    hostId: string,
-    row: WorkspaceRegistryBackfillRow,
-    outbound: Extract<
-      ReturnType<typeof resolveOutboundForHost>,
-      { kind: 'ok' }
-    >,
-  ): Promise<PerIdOutcome> {
     const provision = await dispatchWorkspaceProvision(
       outbound.adapter,
       hostId,
@@ -214,10 +195,7 @@ export class WorkspaceRegistryBackfiller {
       row.id,
       provision.result.bound_workspace_path,
     );
-    this.settledConnection.set(
-      this.workspaceKey(hostId, row.id),
-      outbound.connectionId,
-    );
+    this.settled.add(this.key(hostId, row.id));
     return provision.result.provisioned
       ? { kind: 'provisioned' }
       : { kind: 'alreadyBound' };
