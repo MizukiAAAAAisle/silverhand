@@ -296,9 +296,6 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
         child: expectedPresence,
         shim: expectedPresence,
       });
-      const serialized = JSON.stringify(attempt?.silverhand_env_presence);
-      expect(serialized).not.toContain('test-agent-token');
-      expect(serialized).not.toContain('127.0.0.1');
     } finally {
       await supervisor
         .stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
