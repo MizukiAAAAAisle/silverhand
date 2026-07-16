@@ -5,6 +5,10 @@ import {
   SILVERHAND_DAEMON_SOCKET_ENV,
   SILVERHAND_LAST_DELIVERED_SEQ_FILE_ENV,
 } from '@silverhand/shared';
+import {
+  summarizeSilverhandEnvPresence,
+  type SilverhandEnvPresenceSummary,
+} from './spawn-diagnostics.js';
 
 export interface SilverhandCliLauncher {
   command: string;
@@ -30,6 +34,8 @@ export interface SpawnPrepHandle {
   systemPromptPath: string;
   lastDeliveredSeqPath: string;
   binDir: string;
+  /** Secret-free proof of which required Silverhand env keys were embedded. */
+  silverhandShimEnvPresence: SilverhandEnvPresenceSummary;
   /** The per-spawn temp dir (mkdtemp root). Other spawn-time generated
    *  files (e.g. the profile MCP config handed to a runtime) are written
    *  under here so they're cleaned up together. */
@@ -48,14 +54,15 @@ export async function prepareSpawnFiles(
   const lastDeliveredSeqPath = join(dir, 'last-delivered-seq');
   const binDir = join(dir, 'bin');
   const silverhandShimPath = join(binDir, 'silverhand');
-  const shim = renderSilverhandShim(input.silverhandCli, {
+  const shimEnv = {
     ...(input.silverhandCli.env ?? {}),
     ...input.silverhandEnv,
     ...(input.daemonSocketPath
       ? { [SILVERHAND_DAEMON_SOCKET_ENV]: input.daemonSocketPath }
       : {}),
     [SILVERHAND_LAST_DELIVERED_SEQ_FILE_ENV]: lastDeliveredSeqPath,
-  });
+  };
+  const shim = renderSilverhandShim(input.silverhandCli, shimEnv);
 
   await Promise.all([
     mkdir(binDir, { recursive: true }),
@@ -68,6 +75,7 @@ export async function prepareSpawnFiles(
     systemPromptPath,
     lastDeliveredSeqPath,
     binDir,
+    silverhandShimEnvPresence: summarizeSilverhandEnvPresence(shimEnv),
     dir,
     cleanup: async () => {
       await rm(dir, { recursive: true, force: true }).catch(() => {});

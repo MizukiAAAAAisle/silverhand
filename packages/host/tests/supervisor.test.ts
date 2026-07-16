@@ -153,6 +153,7 @@ function makeSupervisor(opts: {
   runtimePidRootDir?: string | null;
   runtimeStartResolveDeps?: ReturnType<typeof testRuntimeStartResolveDeps>;
   emitRawRuntimeOutput?: boolean;
+  logger?: DaemonLogger;
   /** Observe the DriverSpawnContext the supervisor hands to buildArgs. */
   onSpawnCtx?: (ctx: DriverSpawnContext) => void;
 } = {}): {
@@ -178,7 +179,7 @@ function makeSupervisor(opts: {
     ((bin, args, options) => realSpawn(execPath, [bin, ...args.slice(1)], options));
   const supervisor = new Supervisor({
     emit: spy.emit,
-    logger: silentLogger(),
+    logger: opts.logger ?? silentLogger(),
     driverFor: () => driver,
     resolveBinary: async (_kind, fallback) => fallback,
     spawnFn,
@@ -256,6 +257,55 @@ async function waitForRuntimeReady(events: EventFrame[]): Promise<void> {
 }
 
 describe('Supervisor 3a — spawn / status / phase emit', () => {
+  it('logs required Silverhand env presence for both child and CLI shim without values', async () => {
+    const infoRecords: unknown[] = [];
+    const logger: DaemonLogger = {
+      ...silentLogger(),
+      info: obj => infoRecords.push(obj),
+    };
+    const { supervisor } = makeSupervisor({ logger });
+
+    try {
+      const res = await supervisor.start(baseStartParams);
+      assertStarted(res);
+      const attempt = infoRecords.find(
+        record =>
+          typeof record === 'object' &&
+          record !== null &&
+          (record as { action?: unknown }).action === 'runtime_spawn_attempt',
+      ) as
+        | {
+            silverhand_env_presence?: {
+              child: unknown;
+              shim: unknown;
+            };
+          }
+        | undefined;
+
+      const expectedPresence = {
+        all_present: true,
+        present_keys: [
+          'SILVERHAND_CONVERSATION_ID',
+          'SILVERHAND_AGENT_ID',
+          'SILVERHAND_SERVER_URL',
+          'SILVERHAND_AUTH_TOKEN',
+        ],
+        missing_keys: [],
+      };
+      expect(attempt?.silverhand_env_presence).toEqual({
+        child: expectedPresence,
+        shim: expectedPresence,
+      });
+      const serialized = JSON.stringify(attempt?.silverhand_env_presence);
+      expect(serialized).not.toContain('test-agent-token');
+      expect(serialized).not.toContain('127.0.0.1');
+    } finally {
+      await supervisor
+        .stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+        .catch(() => {});
+    }
+  });
+
   it('fails typed before spawn when the resolved workspace path is missing', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'silverhand-missing-cwd-'));
     const missingPath = join(parent, 'gone');

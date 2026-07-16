@@ -74,5 +74,15 @@ describe('prepareSpawnFiles', () => {
       [SILVERHAND_LAST_DELIVERED_SEQ_FILE_ENV]: handle.lastDeliveredSeqPath,
       PATH: '/launcher/path',
     });
+    expect(handle.silverhandShimEnvPresence).toEqual({
+      all_present: true,
+      present_keys: [
+        SILVERHAND_CONVERSATION_ID_ENV,
+        SILVERHAND_AGENT_ID_ENV,
+        SILVERHAND_SERVER_URL_ENV,
+        SILVERHAND_AUTH_TOKEN_ENV,
+      ],
+      missing_keys: [],
+    });
   });
 });

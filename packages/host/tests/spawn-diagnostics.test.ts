@@ -4,6 +4,7 @@ import {
   redactSpawnArgs,
   summarizeSpawnEnv,
   summarizeSpawnPath,
+  summarizeSilverhandEnvPresence,
 } from '../src/daemon/spawn-diagnostics.js';
 
 describe('redactSpawnArgs', () => {
@@ -192,6 +193,50 @@ describe('summarizeSpawnEnv', () => {
     const serialized = JSON.stringify(summary);
     expect(serialized).not.toContain('/opt/tool');
     expect(serialized).not.toContain('registry.example');
+  });
+});
+
+describe('summarizeSilverhandEnvPresence', () => {
+  it('reports required key presence without returning any values', () => {
+    const summary = summarizeSilverhandEnvPresence({
+      SILVERHAND_CONVERSATION_ID: 'conversation-secret-ish',
+      SILVERHAND_AGENT_ID: 'agent-secret-ish',
+      SILVERHAND_SERVER_URL: 'https://internal.example.test',
+      SILVERHAND_AUTH_TOKEN: 'tok-must-never-leak',
+    });
+
+    expect(summary).toEqual({
+      all_present: true,
+      present_keys: [
+        'SILVERHAND_CONVERSATION_ID',
+        'SILVERHAND_AGENT_ID',
+        'SILVERHAND_SERVER_URL',
+        'SILVERHAND_AUTH_TOKEN',
+      ],
+      missing_keys: [],
+    });
+    const serialized = JSON.stringify(summary);
+    expect(serialized).not.toContain('conversation-secret-ish');
+    expect(serialized).not.toContain('agent-secret-ish');
+    expect(serialized).not.toContain('internal.example.test');
+    expect(serialized).not.toContain('tok-must-never-leak');
+  });
+
+  it('treats missing and empty values as absent', () => {
+    expect(
+      summarizeSilverhandEnvPresence({
+        SILVERHAND_CONVERSATION_ID: 'conv',
+        SILVERHAND_AGENT_ID: '',
+      }),
+    ).toEqual({
+      all_present: false,
+      present_keys: ['SILVERHAND_CONVERSATION_ID'],
+      missing_keys: [
+        'SILVERHAND_AGENT_ID',
+        'SILVERHAND_SERVER_URL',
+        'SILVERHAND_AUTH_TOKEN',
+      ],
+    });
   });
 });
 

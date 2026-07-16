@@ -39,6 +39,7 @@ import {
   redactSpawnArgs,
   summarizeSpawnEnv,
   summarizeSpawnPath,
+  summarizeSilverhandEnvPresence,
 } from '../spawn-diagnostics.js';
 import {
   encodeFrame,
@@ -1393,6 +1394,10 @@ export class Supervisor implements SupervisorContract {
         cwd: spawnCtx.workspacePath,
         path_summary: summarizeSpawnPath(env.PATH),
         env_summary: summarizeSpawnEnv(env),
+        silverhand_env_presence: {
+          child: summarizeSilverhandEnvPresence(env),
+          shim: spawnPrep.silverhandShimEnvPresence,
+        },
       },
       'spawning runtime child',
     );

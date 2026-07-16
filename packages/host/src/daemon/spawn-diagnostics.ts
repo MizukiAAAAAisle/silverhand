@@ -1,5 +1,11 @@
 import { existsSync } from 'node:fs';
 import { delimiter } from 'node:path';
+import {
+  SILVERHAND_AGENT_ID_ENV,
+  SILVERHAND_AUTH_TOKEN_ENV,
+  SILVERHAND_CONVERSATION_ID_ENV,
+  SILVERHAND_SERVER_URL_ENV,
+} from '@silverhand/shared';
 
 /**
  * Secret-safe diagnostics for runtime child spawns.
@@ -154,6 +160,44 @@ export interface SpawnEnvSummary {
   sensitive_keys_redacted: string[];
   /** Names of every other key present, values omitted — full key-set visibility. */
   other_keys: string[];
+}
+
+const REQUIRED_SILVERHAND_ENV_KEYS = [
+  SILVERHAND_CONVERSATION_ID_ENV,
+  SILVERHAND_AGENT_ID_ENV,
+  SILVERHAND_SERVER_URL_ENV,
+  SILVERHAND_AUTH_TOKEN_ENV,
+] as const;
+
+export interface SilverhandEnvPresenceSummary {
+  all_present: boolean;
+  present_keys: string[];
+  missing_keys: string[];
+}
+
+/**
+ * Report only whether the runtime identity/control-plane env exists. Values
+ * are deliberately never returned: in particular, AUTH_TOKEN and SERVER_URL
+ * must not become log payloads merely to prove that wiring is present.
+ */
+export function summarizeSilverhandEnvPresence(
+  env: Readonly<Record<string, string | undefined>>,
+): SilverhandEnvPresenceSummary {
+  const presentKeys: string[] = [];
+  const missingKeys: string[] = [];
+  for (const key of REQUIRED_SILVERHAND_ENV_KEYS) {
+    const value = env[key];
+    if (typeof value === 'string' && value.length > 0) {
+      presentKeys.push(key);
+    } else {
+      missingKeys.push(key);
+    }
+  }
+  return {
+    all_present: missingKeys.length === 0,
+    present_keys: presentKeys,
+    missing_keys: missingKeys,
+  };
 }
 
 function maskProxyValue(value: string): string {
