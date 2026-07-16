@@ -485,6 +485,27 @@ export class ConversationRepo {
     return row ? assertChannelLike(row) : null;
   }
 
+  /** Set a channel's visibility (`private | public`). Gated to `kind='channel'`
+   *  in the WHERE clause — a `dm_channel` / thread id matches nothing and
+   *  returns null (the DB CHECK also forbids non-channel `public`), which the
+   *  service turns into a typed `not_found`. */
+  setVisibility(
+    id: string,
+    visibility: ConversationVisibility,
+  ): ChannelConversationDto | null {
+    const now = Date.now();
+    const result = this.db
+      .prepare(
+        `UPDATE conversations
+         SET visibility = ?, updated_at = ?
+         WHERE id = ? AND kind = 'channel'`,
+      )
+      .run(visibility, now, id);
+    if (result.changes === 0) return null;
+    const row = this.getRaw(id);
+    return row ? rowToChannel(row) : null;
+  }
+
   close(id: string, summary: string): ConversationDto | null {
     const now = Date.now();
     this.db

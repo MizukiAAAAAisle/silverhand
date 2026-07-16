@@ -168,6 +168,11 @@ export const NON_GOVERNANCE_MUTATING_ROUTES: readonly NonGovernanceRouteDecl[] =
     reason: 'self-join a public channel — public-target admission gate (canJoinPublicChannel), caller joins only themselves, not workspace governance',
   },
   {
+    method: 'POST',
+    path: '/api/channels/:id/leave',
+    reason: 'self-leave a channel — member-only self-service (removes only the caller), eligibility guarded by evaluateChannelLeaveEligibility, not workspace governance',
+  },
+  {
     method: 'PUT',
     path: '/api/conversations/:id/attention-preference',
     reason: 'per-viewer ambient attention preference (#task:1227) — personal view state, conversation membership gate (canViewConversation), not governance',

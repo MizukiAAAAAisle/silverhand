@@ -48,6 +48,7 @@ import {
 import { timedRouteSpan } from '../observability/route-span.js';
 import { AnchorMessageNotInConversationError, InvalidThreadsCursorError } from '../repos/message-repo.js';
 import { addReaction, removeReaction } from '../application/react-message.js';
+import { buildChannelDetailResponse } from '../application/conversation-member.js';
 import { loadReactionAggregates, loadReactionDetail } from '../read-model/message-reactions.js';
 import {
   channelServiceErrorResponse,
@@ -321,11 +322,13 @@ export function createConversationReadApp(
     if (!canReadConversation(ctx, principal, channel.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    // Authoritative per-viewer membership. A public-channel non-member reads
-    // detail with `is_member: false` (renderer shows Join, not the composer);
-    // the renderer must NOT reverse-infer membership from the read succeeding.
-    const isMember = conversations.getUser(channel.id, principal.userId) !== null;
-    return c.json({ channel, is_member: isMember });
+    // Authoritative per-viewer membership + settings-modal capability carriers.
+    // A public-channel non-member reads detail with `is_member: false` (renderer
+    // shows Join, not the composer); the renderer must NOT reverse-infer
+    // membership from the read succeeding. `can_leave` / `leave_blocked_reason`
+    // / `can_update_visibility` are advisory display for the settings modal —
+    // the write paths stay authoritative (§12.1#5).
+    return c.json(buildChannelDetailResponse(ctx, conversations, principal, channel));
   });
 
   /**
@@ -602,16 +605,19 @@ export function createConversationMessagingApp(
     }
   });
 
-  // Rename a top-level channel. Mirrors the archive handler's gate
-  // (workspace `admin`) and error mapping; the service owns the title
-  // write + `rename` system-message broadcast + delivery + the
-  // `workspace_channels_changed` publish.
+  // Update a top-level channel's title OR visibility (EXACTLY ONE per request —
+  // the schema rejects both/neither). Both mutations share the workspace `admin`
+  // gate (agents fail `canGovernWorkspace`, so `public` stays human-only) and
+  // the same error mapping; the service owns each write + its post-commit
+  // broadcast. Splitting the dispatch here (not a combined service call) keeps
+  // each mutation atomic — there is no half-committed title+visibility state.
   app.patch(apiPaths.conversationChannel(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const conversation = conversations.get(id);
     if (!conversation) return c.json({ error: 'channel not found' }, 404);
-    if (!canGovernWorkspace(ctx, getUserPrincipal(c), conversation.workspace_id, 'admin')) {
+    const principal = getUserPrincipal(c);
+    if (!canGovernWorkspace(ctx, principal, conversation.workspace_id, 'admin')) {
       return c.json({ error: 'forbidden' }, 403);
     }
     const body = await c.req.json().catch(() => ({}));
@@ -620,10 +626,18 @@ export function createConversationMessagingApp(
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     try {
-      const result = await ctx.channelService.renameChannel({
-        channelId: id,
-        title: parsed.data.title,
-      });
+      const result = parsed.data.visibility !== undefined
+        ? await ctx.channelService.setChannelVisibility({
+            channelId: id,
+            visibility: parsed.data.visibility,
+            actor: principal,
+          })
+        : await ctx.channelService.renameChannel({
+            channelId: id,
+            // `title` is present whenever `visibility` is absent (schema
+            // exactly-one refinement).
+            title: parsed.data.title as string,
+          });
       return c.json({ channel: result.channel });
     } catch (err) {
       const mapped = channelServiceErrorResponse(c, err);

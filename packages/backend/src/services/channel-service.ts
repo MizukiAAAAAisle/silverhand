@@ -597,6 +597,67 @@ export class ChannelService {
     return { channel: updated };
   }
 
+  /**
+   * Toggle a channel's visibility (`private ↔ public`). Mirrors
+   * {@link setArchived}'s shape: a single-column repo write plus the
+   * post-commit `workspace_channels_changed` publish that drives every
+   * viewer's discovery-union list to refetch.
+   *
+   * `public → private` is a viewer-scoped visibility LOSS for non-members: the
+   * `workspace_channels_changed` fan-out drops the channel from their
+   * discovery-union list, and `canReadConversation` denies them immediately so
+   * an open non-member view is ejected by read-path validation
+   * (docs/architecture-principles.md §12). Members are unaffected (the
+   * membership branch of the read gate ignores visibility). `private → public`
+   * is additive (the channel enters others' discovery union). A same-value
+   * request is a no-op 200 (no write, no event).
+   *
+   * `public` is a human product concept — this re-asserts the create-time
+   * actor-kind guard (defense in depth beyond the route's `canGovernWorkspace`
+   * admin gate, which already rejects agents): a non-user actor requesting
+   * `public` throws `agent_cannot_create_public`. Visibility applies to regular
+   * channels only; a `dm_channel` / thread id is a typed `not_found`.
+   */
+  async setChannelVisibility(input: {
+    channelId: string;
+    visibility: ConversationVisibility;
+    actor: ChannelActor;
+  }): Promise<{ channel: ChannelConversationDto }> {
+    const existing = this.conversations.get(input.channelId);
+    if (!existing || existing.kind !== 'channel') {
+      throw repoError('not_found', 'channel not found');
+    }
+    if (input.visibility === 'public' && input.actor.kind !== 'user') {
+      throw new ActorError(
+        'agent_cannot_create_public',
+        'public channel requires a human actor',
+      );
+    }
+    // Same-value no-op: nothing changed, so emit nothing.
+    if (existing.visibility === input.visibility) {
+      const channel = this.conversations.getChannelLike(input.channelId);
+      if (!channel || channel.kind !== 'channel') {
+        throw repoError('not_found', 'channel not found');
+      }
+      return { channel };
+    }
+    const updated = this.conversations.setVisibility(input.channelId, input.visibility);
+    if (!updated) {
+      throw repoError('not_found', 'channel not found');
+    }
+    this.publishWorkspaceChannelsChanged(updated.workspace_id, updated.id);
+    this.logger.info(
+      {
+        conversationId: updated.id,
+        workspaceId: updated.workspace_id,
+        visibility: input.visibility,
+        actorKind: input.actor.kind,
+      },
+      'channel-service: visibility updated',
+    );
+    return { channel: updated };
+  }
+
   private publishWorkspaceChannelsChanged(workspaceId: string, channelId: string): void {
     this.events.publishToScope(`workspace:${workspaceId}`, 'workspace_channels_changed', {
       workspace_id: workspaceId,

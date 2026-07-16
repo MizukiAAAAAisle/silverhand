@@ -9,6 +9,7 @@ import {
 } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
@@ -2041,6 +2042,458 @@ describe('POST /api/channels/:id/join — self-join public channel', () => {
     expect(events).not.toContain('message');
     // Joining a channel is not a workspace-membership change.
     expect(viewerEvents).not.toContain('viewer_workspaces_changed');
+  });
+});
+
+// Self-leave a channel + private/public visibility toggle, plus the
+// settings-modal capability carriers on channel detail. The membership
+// mutations are additive onto the existing visibility model (v58 column + the
+// three permission gates + `conversation_users` + self-join); leave is the
+// symmetric counterpart of /join. These suites prove: member-only leave, the
+// archived + last-human-of-private guards, the §12 projection convergence
+// (leaver drops from the membership-scoped unread rollup while a PUBLIC channel
+// stays in the discovery union), the admin/human visibility gate + non-member
+// eject on public→private, exactly-one PATCH, and the carrier values.
+describe('POST /api/channels/:id/leave — self-leave a channel', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  const asUser = (app: TestApp, user: string) =>
+    http(app, { [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader(user) });
+
+  function isMemberRow(app: TestApp, channelId: string, userId: string): boolean {
+    return (
+      app.ctx.db
+        .prepare('SELECT 1 AS hit FROM conversation_users WHERE conversation_id = ? AND user_id = ?')
+        .get(channelId, userId) !== undefined
+    );
+  }
+
+  /** Workspace (creator `local` = owner) + `teammate` as a workspace member who
+   *  is ALSO made a channel member (via the repo) of one public + one private
+   *  channel — the leave preconditions. The private channel keeps `local` as a
+   *  second human so a `teammate` leave is not the last-human orphan case. */
+  async function setup(): Promise<{
+    workspaceId: string;
+    publicId: string;
+    privateId: string;
+  }> {
+    const agentId = await makeAgent(t!, 'alice');
+    const ws = (await (
+      await http(t!).post('/api/workspaces', { name: 'eng', member_agent_ids: [agentId] })
+    ).json()) as any;
+    const workspaceId = ws.workspace.id as string;
+    t!.ctx.db
+      .prepare(
+        `INSERT OR IGNORE INTO workspace_users (workspace_id, user_id, joined_at, role)
+         VALUES (?, ?, ?, 'member')`,
+      )
+      .run(workspaceId, 'teammate', Date.now());
+    const pub = (await (
+      await http(t!).post(`/api/workspaces/${workspaceId}/channels`, {
+        title: 'public-room',
+        member_agent_ids: [],
+        visibility: 'public',
+      })
+    ).json()) as any;
+    const priv = (await (
+      await http(t!).post(`/api/workspaces/${workspaceId}/channels`, {
+        title: 'private-room',
+        member_agent_ids: [],
+      })
+    ).json()) as any;
+    const conversations = new ConversationRepo(t!.ctx.db);
+    conversations.addUser(pub.channel.id, 'teammate');
+    conversations.addUser(priv.channel.id, 'teammate');
+    return {
+      workspaceId,
+      publicId: pub.channel.id as string,
+      privateId: priv.channel.id as string,
+    };
+  }
+
+  it('member leaves a PUBLIC channel → 200 is_member:false, edge gone, channel stays in discovery union', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { workspaceId, publicId } = await setup();
+    expect(isMemberRow(t, publicId, 'teammate')).toBe(true);
+
+    const res = await asUser(t, 'teammate').post(`/api/channels/${publicId}/leave`, {});
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.channel.id).toBe(publicId);
+    expect(body.is_member).toBe(false);
+    expect(isMemberRow(t, publicId, 'teammate')).toBe(false);
+
+    // Public → still discoverable + joinable for the now-non-member (is_member:false).
+    const list = (await (
+      await asUser(t, 'teammate').get(`/api/workspaces/${workspaceId}/channels`)
+    ).json()) as any;
+    const item = list.channels.find((c: any) => c.id === publicId);
+    expect(item).toBeTruthy();
+    expect(item.is_member).toBe(false);
+  });
+
+  it('member leaves a PRIVATE channel → 200, drops from discovery + detail 403 (visibility loss)', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { workspaceId, privateId } = await setup();
+    const res = await asUser(t, 'teammate').post(`/api/channels/${privateId}/leave`, {});
+    expect(res.status).toBe(200);
+    expect(isMemberRow(t, privateId, 'teammate')).toBe(false);
+
+    // Private → the ex-member can no longer resolve detail (read-path validation).
+    expect((await asUser(t, 'teammate').get(`/api/channels/${privateId}`)).status).toBe(403);
+    // …and it is absent from their discovery union.
+    const list = (await (
+      await asUser(t, 'teammate').get(`/api/workspaces/${workspaceId}/channels`)
+    ).json()) as any;
+    expect(list.channels.find((c: any) => c.id === privateId)).toBeUndefined();
+  });
+
+  it('§12 convergence: after leaving, the channel drops from the membership-scoped unread rollup', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { workspaceId, publicId } = await setup();
+    // A message teammate has not read → unread while a member (no baseline cursor
+    // from a raw addUser).
+    new MessageRepo(t.ctx.db).insertForConversation({
+      conversationId: publicId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'unread for teammate',
+    });
+    const reads = new ConversationReadRepo(t.ctx.db);
+    const before = reads.unreadCountsByConversationForWorkspace(workspaceId, 'teammate');
+    expect(before.by_conversation[publicId]).toBeGreaterThan(0);
+
+    expect((await asUser(t, 'teammate').post(`/api/channels/${publicId}/leave`, {})).status).toBe(200);
+
+    // Membership-scoped rollup INNER-joins conversation_users → the leaver is
+    // excluded the instant the edge is gone (no per-projection cleanup needed).
+    const after = reads.unreadCountsByConversationForWorkspace(workspaceId, 'teammate');
+    expect(after.by_conversation[publicId]).toBeUndefined();
+  });
+
+  it('non-member leave → 403 not_member (member-only; idempotency must not outrank permission)', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { publicId } = await setup();
+    // `other` is not a workspace/channel member.
+    const res = await asUser(t, 'other').post(`/api/channels/${publicId}/leave`, {});
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as any).code).toBe('not_member');
+  });
+
+  it('a second leave after leaving → 403 not_member (leave is member-only, no 200 no-op)', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { publicId } = await setup();
+    expect((await asUser(t, 'teammate').post(`/api/channels/${publicId}/leave`, {})).status).toBe(200);
+    const second = await asUser(t, 'teammate').post(`/api/channels/${publicId}/leave`, {});
+    expect(second.status).toBe(403);
+    expect(((await second.json()) as any).code).toBe('not_member');
+  });
+
+  it('leaving an ARCHIVED channel → 409 channel_archived (archived is frozen in v1)', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { publicId } = await setup();
+    expect((await http(t).patch(`/api/channels/${publicId}/archive`, { archived: true })).status).toBe(200);
+    const res = await asUser(t, 'teammate').post(`/api/channels/${publicId}/leave`, {});
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as any).code).toBe('channel_archived');
+    expect(isMemberRow(t, publicId, 'teammate')).toBe(true);
+  });
+
+  it('last HUMAN member of a PRIVATE channel → 409 last_human_member (orphan guard)', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { privateId } = await setup();
+    // Make `teammate` the SOLE human member of the private channel.
+    new ConversationRepo(t.ctx.db).removeUser(privateId, 'local');
+    const res = await asUser(t, 'teammate').post(`/api/channels/${privateId}/leave`, {});
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as any).code).toBe('last_human_member');
+    expect(isMemberRow(t, privateId, 'teammate')).toBe(true);
+  });
+
+  it('OWNER of a PRIVATE channel cannot leave even with other humans present → 409 channel_owner', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { privateId } = await setup();
+    // `local` is the workspace OWNER and a member of the private channel;
+    // `teammate` is also a member, so this is NOT the last-human case — the
+    // block is the owner-bound governance guard, not the orphan guard.
+    expect(isMemberRow(t, privateId, 'teammate')).toBe(true);
+    const res = await http(t).post(`/api/channels/${privateId}/leave`, {});
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as any).code).toBe('channel_owner');
+    expect(isMemberRow(t, privateId, 'local')).toBe(true);
+  });
+
+  it('OWNER MAY leave a PUBLIC channel (owner guard is private-only)', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { publicId } = await setup();
+    const res = await http(t).post(`/api/channels/${publicId}/leave`, {});
+    expect(res.status).toBe(200);
+    expect(isMemberRow(t, publicId, 'local')).toBe(false);
+  });
+
+  it('owner-of-private guard outranks last_human_member when the owner is the sole human → channel_owner', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { privateId } = await setup();
+    // Make the OWNER (`local`) the sole human of the private channel: both the
+    // owner guard AND the last-human guard now apply; the more-specific owner
+    // reason must win (it is checked first).
+    new ConversationRepo(t.ctx.db).removeUser(privateId, 'teammate');
+    const res = await http(t).post(`/api/channels/${privateId}/leave`, {});
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as any).code).toBe('channel_owner');
+    expect(isMemberRow(t, privateId, 'local')).toBe(true);
+  });
+
+  it('a non-owner ADMIN MAY leave a PRIVATE channel while the owner remains (guard is owner-only, not admin)', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { workspaceId, privateId } = await setup();
+    // Promote `teammate` to admin — governance authority, but still NOT owner.
+    t.ctx.db
+      .prepare(`UPDATE workspace_users SET role = 'admin' WHERE workspace_id = ? AND user_id = ?`)
+      .run(workspaceId, 'teammate');
+    const res = await asUser(t, 'teammate').post(`/api/channels/${privateId}/leave`, {});
+    expect(res.status).toBe(200);
+    expect(isMemberRow(t, privateId, 'teammate')).toBe(false);
+    // Owner `local` remains → the channel is not stranded.
+    expect(isMemberRow(t, privateId, 'local')).toBe(true);
+  });
+
+  it('active PUBLIC channel has NO orphan guard: the last human may leave (drop to 0 humans)', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { publicId } = await setup();
+    new ConversationRepo(t.ctx.db).removeUser(publicId, 'local');
+    const res = await asUser(t, 'teammate').post(`/api/channels/${publicId}/leave`, {});
+    expect(res.status).toBe(200);
+    expect(isMemberRow(t, publicId, 'teammate')).toBe(false);
+  });
+
+  it('leave fires conversation_members_changed + workspace_channels_changed, no message, no viewer_workspaces_changed', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { workspaceId, publicId } = await setup();
+    const events: string[] = [];
+    const unsubSide = t.ctx.events.subscribeScope(conversationSideScope(publicId), e => events.push(e.kind));
+    const unsubWs = t.ctx.events.subscribeScope(`workspace:${workspaceId}`, e => events.push(e.kind));
+    const unsubMain = t.ctx.events.subscribe(publicId, e => events.push(e.kind));
+    const viewerEvents: string[] = [];
+    const unsubViewer = t.ctx.events.subscribeScope('viewer:teammate', e => viewerEvents.push(e.kind));
+
+    expect((await asUser(t, 'teammate').post(`/api/channels/${publicId}/leave`, {})).status).toBe(200);
+
+    unsubSide();
+    unsubWs();
+    unsubMain();
+    unsubViewer();
+    expect(events).toContain('conversation_members_changed');
+    expect(events).toContain('workspace_channels_changed');
+    expect(events).not.toContain('message'); // v1 silent, no system message
+    expect(viewerEvents).not.toContain('viewer_workspaces_changed'); // workspace membership unchanged
+  });
+
+  it('leaving a dm_channel / unknown id → 404 (leave is regular-channel only)', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    await makeAgent(t, 'alice');
+    const dm = new ConversationRepo(t.ctx.db).listDmChannels()[0];
+    expect(dm).toBeTruthy();
+    t.ctx.db
+      .prepare(
+        `INSERT OR IGNORE INTO workspace_users (workspace_id, user_id, joined_at, role)
+         VALUES (?, ?, ?, 'member')`,
+      )
+      .run(dm!.workspace_id, 'teammate', Date.now());
+    expect((await asUser(t, 'teammate').post(`/api/channels/${dm!.id}/leave`, {})).status).toBe(404);
+    expect((await asUser(t, 'teammate').post('/api/channels/does-not-exist/leave', {})).status).toBe(404);
+  });
+});
+
+describe('PATCH /api/channels/:id — private/public visibility toggle', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  const asUser = (app: TestApp, user: string) =>
+    http(app, { [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader(user) });
+
+  async function setup(): Promise<{ workspaceId: string; publicId: string; privateId: string }> {
+    const agentId = await makeAgent(t!, 'alice');
+    const ws = (await (
+      await http(t!).post('/api/workspaces', { name: 'eng', member_agent_ids: [agentId] })
+    ).json()) as any;
+    const workspaceId = ws.workspace.id as string;
+    t!.ctx.db
+      .prepare(
+        `INSERT OR IGNORE INTO workspace_users (workspace_id, user_id, joined_at, role)
+         VALUES (?, ?, ?, 'member')`,
+      )
+      .run(workspaceId, 'teammate', Date.now());
+    const pub = (await (
+      await http(t!).post(`/api/workspaces/${workspaceId}/channels`, {
+        title: 'public-room', member_agent_ids: [], visibility: 'public',
+      })
+    ).json()) as any;
+    const priv = (await (
+      await http(t!).post(`/api/workspaces/${workspaceId}/channels`, {
+        title: 'private-room', member_agent_ids: [],
+      })
+    ).json()) as any;
+    return { workspaceId, publicId: pub.channel.id as string, privateId: priv.channel.id as string };
+  }
+
+  it('admin private→public → 200; the channel enters a non-member’s discovery union', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { workspaceId, privateId } = await setup();
+    // Before: teammate (non-member) cannot see the private channel.
+    let list = (await (await asUser(t, 'teammate').get(`/api/workspaces/${workspaceId}/channels`)).json()) as any;
+    expect(list.channels.find((c: any) => c.id === privateId)).toBeUndefined();
+
+    const res = await http(t).patch(`/api/channels/${privateId}`, { visibility: 'public' });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).channel.visibility).toBe('public');
+
+    // After: the browse-and-join surface shows it as is_member:false.
+    list = (await (await asUser(t, 'teammate').get(`/api/workspaces/${workspaceId}/channels`)).json()) as any;
+    const item = list.channels.find((c: any) => c.id === privateId);
+    expect(item).toBeTruthy();
+    expect(item.is_member).toBe(false);
+  });
+
+  it('admin public→private → 200; a non-member is ejected (detail 403, drops from discovery)', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { workspaceId, publicId } = await setup();
+    // teammate can read the public channel as a non-member beforehand.
+    expect((await asUser(t, 'teammate').get(`/api/channels/${publicId}`)).status).toBe(200);
+
+    const res = await http(t).patch(`/api/channels/${publicId}`, { visibility: 'private' });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).channel.visibility).toBe('private');
+
+    // Non-member read-path validation now denies (visibility loss) + discovery drops it.
+    expect((await asUser(t, 'teammate').get(`/api/channels/${publicId}`)).status).toBe(403);
+    const list = (await (await asUser(t, 'teammate').get(`/api/workspaces/${workspaceId}/channels`)).json()) as any;
+    expect(list.channels.find((c: any) => c.id === publicId)).toBeUndefined();
+  });
+
+  it('same-value toggle → 200 no-op, no workspace_channels_changed emitted', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { workspaceId, privateId } = await setup();
+    const events: string[] = [];
+    const unsub = t.ctx.events.subscribeScope(`workspace:${workspaceId}`, e => events.push(e.kind));
+    const res = await http(t).patch(`/api/channels/${privateId}`, { visibility: 'private' });
+    expect(res.status).toBe(200);
+    unsub();
+    expect(events).not.toContain('workspace_channels_changed');
+  });
+
+  it('a non-admin workspace member cannot toggle visibility → 403', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { privateId } = await setup();
+    const res = await asUser(t, 'teammate').patch(`/api/channels/${privateId}`, { visibility: 'public' });
+    expect(res.status).toBe(403);
+  });
+
+  it('exactly-one mutation: title+visibility together → 400; neither → 400', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { privateId } = await setup();
+    expect((await http(t).patch(`/api/channels/${privateId}`, { title: 'x', visibility: 'public' })).status).toBe(400);
+    expect((await http(t).patch(`/api/channels/${privateId}`, {})).status).toBe(400);
+    // A lone title still works (rename path unchanged).
+    expect((await http(t).patch(`/api/channels/${privateId}`, { title: 'renamed' })).status).toBe(200);
+  });
+});
+
+describe('GET /api/channels/:id — settings-modal capability carriers', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  const asUser = (app: TestApp, user: string) =>
+    http(app, { [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader(user) });
+
+  async function setup(): Promise<{ workspaceId: string; publicId: string; privateId: string }> {
+    const agentId = await makeAgent(t!, 'alice');
+    const ws = (await (
+      await http(t!).post('/api/workspaces', { name: 'eng', member_agent_ids: [agentId] })
+    ).json()) as any;
+    const workspaceId = ws.workspace.id as string;
+    t!.ctx.db
+      .prepare(
+        `INSERT OR IGNORE INTO workspace_users (workspace_id, user_id, joined_at, role)
+         VALUES (?, ?, ?, 'member')`,
+      )
+      .run(workspaceId, 'teammate', Date.now());
+    const pub = (await (
+      await http(t!).post(`/api/workspaces/${workspaceId}/channels`, {
+        title: 'public-room', member_agent_ids: [], visibility: 'public',
+      })
+    ).json()) as any;
+    const priv = (await (
+      await http(t!).post(`/api/workspaces/${workspaceId}/channels`, {
+        title: 'private-room', member_agent_ids: [],
+      })
+    ).json()) as any;
+    return { workspaceId, publicId: pub.channel.id as string, privateId: priv.channel.id as string };
+  }
+
+  it('admin member of a public channel: can_leave true, can_update_visibility true', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { publicId } = await setup();
+    const body = (await (await http(t).get(`/api/channels/${publicId}`)).json()) as any;
+    expect(body.is_member).toBe(true);
+    expect(body.can_leave).toBe(true);
+    expect(body.leave_blocked_reason).toBeNull();
+    expect(body.can_update_visibility).toBe(true);
+  });
+
+  it('public non-member: is_member false, can_leave false reason not_member, cannot govern', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { publicId } = await setup();
+    const body = (await (await asUser(t, 'teammate').get(`/api/channels/${publicId}`)).json()) as any;
+    expect(body.is_member).toBe(false);
+    expect(body.can_leave).toBe(false);
+    expect(body.leave_blocked_reason).toBe('not_member');
+    expect(body.can_update_visibility).toBe(false); // teammate is a plain member
+  });
+
+  it('OWNER of a private channel: can_leave false reason channel_owner (even with other humans)', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { privateId } = await setup();
+    // `local` is the workspace owner + creator-member; add `teammate` so the
+    // block is the owner guard, not the last-human orphan guard.
+    new ConversationRepo(t.ctx.db).addUser(privateId, 'teammate');
+    const body = (await (await http(t).get(`/api/channels/${privateId}`)).json()) as any;
+    expect(body.is_member).toBe(true);
+    expect(body.can_leave).toBe(false);
+    expect(body.leave_blocked_reason).toBe('channel_owner');
+  });
+
+  it('last human of a private channel (non-owner): can_leave false reason last_human_member', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { privateId } = await setup();
+    // Make plain-member `teammate` the SOLE human (owner `local` removed) so the
+    // owner guard does not fire and last_human_member is the surviving reason.
+    const conversations = new ConversationRepo(t.ctx.db);
+    conversations.addUser(privateId, 'teammate');
+    conversations.removeUser(privateId, 'local');
+    const body = (await (await asUser(t, 'teammate').get(`/api/channels/${privateId}`)).json()) as any;
+    expect(body.is_member).toBe(true);
+    expect(body.can_leave).toBe(false);
+    expect(body.leave_blocked_reason).toBe('last_human_member');
+  });
+
+  it('archived channel member: can_leave false reason channel_archived', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { publicId } = await setup();
+    expect((await http(t).patch(`/api/channels/${publicId}/archive`, { archived: true })).status).toBe(200);
+    const body = (await (await http(t).get(`/api/channels/${publicId}`)).json()) as any;
+    expect(body.can_leave).toBe(false);
+    expect(body.leave_blocked_reason).toBe('channel_archived');
   });
 });
 

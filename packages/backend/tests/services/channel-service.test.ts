@@ -632,3 +632,74 @@ describe('ChannelService.setArchived', () => {
     }
   });
 });
+
+describe('ChannelService.setChannelVisibility', () => {
+  it('toggles private↔public with a workspace publish, and no-ops on same value', async () => {
+    const t = bootstrap();
+    try {
+      const events: string[] = [];
+      const unsub = t.events.subscribeScope(`workspace:${t.workspace.id}`, e => events.push(e.kind));
+
+      // source is created private → make it public.
+      const pub = await t.service.setChannelVisibility({
+        channelId: t.source.id,
+        visibility: 'public',
+        actor: { kind: 'user', userId: 'local' },
+      });
+      expect(pub.channel.visibility).toBe('public');
+      expect(t.conversations.get(t.source.id)?.visibility).toBe('public');
+
+      // Same-value request → no-op (no second publish).
+      await t.service.setChannelVisibility({
+        channelId: t.source.id,
+        visibility: 'public',
+        actor: { kind: 'user', userId: 'local' },
+      });
+
+      // Back to private.
+      const priv = await t.service.setChannelVisibility({
+        channelId: t.source.id,
+        visibility: 'private',
+        actor: { kind: 'user', userId: 'local' },
+      });
+      unsub();
+      expect(priv.channel.visibility).toBe('private');
+      // Exactly two publishes: the two real changes, not the same-value no-op.
+      expect(events).toEqual(['workspace_channels_changed', 'workspace_channels_changed']);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('rejects a NON-user actor requesting public (defense in depth beyond the route admin gate)', async () => {
+    const t = bootstrap();
+    try {
+      await expect(
+        t.service.setChannelVisibility({
+          channelId: t.source.id,
+          visibility: 'public',
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.source.id },
+        }),
+      ).rejects.toMatchObject({ code: 'agent_cannot_create_public' });
+      // No write happened.
+      expect(t.conversations.get(t.source.id)?.visibility).toBe('private');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('rejects a missing channel with not_found', async () => {
+    const t = bootstrap();
+    try {
+      await expect(
+        t.service.setChannelVisibility({
+          channelId: 'missing',
+          visibility: 'public',
+          actor: { kind: 'user', userId: 'local' },
+        }),
+      ).rejects.toMatchObject({ code: 'not_found' });
+    } finally {
+      t.cleanup();
+    }
+  });
+});

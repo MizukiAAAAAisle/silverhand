@@ -1,5 +1,10 @@
 import {
   type AddConversationMemberInput,
+  type ChannelDetailResponse,
+  type ChannelLeaveBlockedReason,
+  type ChannelLikeDto,
+  type ConversationKind,
+  type ConversationVisibility,
   type UserDto,
   type WorkspaceRoleDto,
   systemSubtype,
@@ -452,6 +457,204 @@ function publishSelfJoined(
       channel_id: conversation.id,
     },
   );
+}
+
+// ── leaveChannel ──
+
+export type LeaveChannelDeps = {
+  ctx: BackendContext;
+  conversations: ConversationRepo;
+};
+
+export type LeaveChannelResult =
+  | { ok: true }
+  | {
+      ok: false;
+      error:
+        | { code: 'channel_not_found' }
+        | { code: ChannelLeaveBlockedReason };
+    };
+
+/**
+ * The SINGLE leave-eligibility rule, shared by the {@link leaveChannel} write
+ * path (authoritative) and the channel-detail carrier (advisory display). It is
+ * a pure predicate over the viewer + channel row — returns `can_leave` plus the
+ * stable {@link ChannelLeaveBlockedReason} when blocked. Because both the
+ * carrier and the write call THIS, the disabled-Leave hint the modal shows can
+ * never disagree with what the POST enforces (advisory ≠ correctness, but same
+ * source — docs/architecture-principles.md §12.1#5).
+ *
+ * Ordered so the most specific block wins:
+ *  1. `not_member` — leave is member-only; a non-member's only channel mutation
+ *     is Join (idempotency must not outrank the permission model).
+ *  2. `channel_archived` — v1 freezes archived channels; restore before leaving
+ *     (an archived channel is deliberately NOT folded into the public 0-human
+ *     exception).
+ *  3. `channel_owner` — the workspace OWNER of a PRIVATE channel anchors the
+ *     owner-bound governance chain; leaving would make the channel invisible to
+ *     them (private + non-member) and sever the chain from the resource even
+ *     with other humans present. Authoritative `workspace_users.role='owner'`
+ *     (`canGovernWorkspace(..,'owner')`) — the model has NO per-channel creator,
+ *     so this never guesses from row order / first member. Public channels are
+ *     exempt (owner re-browses + re-joins freely).
+ *  4. `last_human_member` — leaving as the last HUMAN of a PRIVATE channel would
+ *     strand it (no human, incl. admins, can see or re-join a private channel).
+ *     `conversation_users` IS the human-membership table, so its row count is
+ *     the human count. Active PUBLIC channels are exempt (0 humans stays
+ *     discoverable + joinable).
+ */
+export function evaluateChannelLeaveEligibility(
+  deps: { ctx: BackendContext; conversations: ConversationRepo },
+  principal: UserPrincipal,
+  conversation: {
+    id: string;
+    kind: ConversationKind;
+    workspace_id: string;
+    visibility: ConversationVisibility;
+    archived_at: number | null;
+  },
+): { can_leave: boolean; reason: ChannelLeaveBlockedReason | null } {
+  if (conversation.kind !== 'channel') {
+    return { can_leave: false, reason: 'not_member' };
+  }
+  if (deps.conversations.getUser(conversation.id, principal.userId) === null) {
+    return { can_leave: false, reason: 'not_member' };
+  }
+  if (conversation.archived_at !== null) {
+    return { can_leave: false, reason: 'channel_archived' };
+  }
+  // Owner-bound governance guard (private only): the workspace owner anchors
+  // the governance chain. Leaving a PRIVATE channel would make it invisible to
+  // them (private + non-member = no view / no re-join), severing the chain from
+  // the resource even when other humans remain. Authoritative owner relation
+  // (`workspace_users.role='owner'`) via canGovernWorkspace — never a
+  // first-member/display-name guess (no per-channel creator is modeled).
+  // Checked ABOVE last_human_member so the owner-specific reason wins when both
+  // apply. Public channels are exempt (owner can re-browse + re-join).
+  if (
+    conversation.visibility === 'private'
+    && canGovernWorkspace(deps.ctx, principal, conversation.workspace_id, 'owner')
+  ) {
+    return { can_leave: false, reason: 'channel_owner' };
+  }
+  if (
+    conversation.visibility === 'private'
+    && deps.conversations.listUsers(conversation.id).length <= 1
+  ) {
+    return { can_leave: false, reason: 'last_human_member' };
+  }
+  return { can_leave: true, reason: null };
+}
+
+/**
+ * Self-leave a channel — the symmetric counterpart of {@link joinPublicChannel}.
+ * A human member removes THEMSELVES; the route takes no body, so there is no
+ * target on the wire to forge. Eligibility runs through the shared
+ * {@link evaluateChannelLeaveEligibility} so the block reasons match the
+ * detail-carrier hint exactly.
+ *
+ * Teardown deletes ONLY the `conversation_users` edge — the read cursors and
+ * attention preference are intentionally KEPT (the seed contract advances the
+ * cursor to the re-join head via monotonic `markRead`, and the attention pref is
+ * insert-only across remove-then-re-add). Membership-scoped projections
+ * (unread rollup, favorites, Activity, restore/default-selection) all INNER-join
+ * `conversation_users`, so the leaver drops out of them the instant the edge is
+ * gone — no per-projection cleanup here (§12: one domain fact → the viewer-local
+ * consumers converge on it).
+ *
+ * Post-commit fires the SAME two signals as self-join —
+ * `conversation_members_changed` (roster) + `workspace_channels_changed`
+ * (discovery/list) — and NO new event type, NO `viewer_workspaces_changed`
+ * (workspace membership is unchanged), NO system message (v1 silent, mirroring
+ * self-join). The renderer's single viewer-local cleanup handler keys off these
+ * to re-derive the leaver's projections and route away if they were viewing a
+ * now-invisible private channel.
+ */
+export async function leaveChannel(
+  deps: LeaveChannelDeps,
+  input: { conversationId: string; principal: UserPrincipal },
+): Promise<LeaveChannelResult> {
+  const conversation = deps.conversations.get(input.conversationId);
+  if (!conversation || conversation.kind !== 'channel') {
+    return { ok: false, error: { code: 'channel_not_found' } };
+  }
+  const eligibility = evaluateChannelLeaveEligibility(
+    { ctx: deps.ctx, conversations: deps.conversations },
+    input.principal,
+    conversation,
+  );
+  if (!eligibility.can_leave) {
+    // reason is non-null whenever can_leave is false.
+    return { ok: false, error: { code: eligibility.reason as ChannelLeaveBlockedReason } };
+  }
+  deps.ctx.db.transaction(() => {
+    deps.conversations.removeUser(conversation.id, input.principal.userId);
+  })();
+  await runPostCommitEffects(
+    [() => publishSelfLeft(deps.ctx, conversation)],
+    deps.ctx.logger,
+  );
+  return { ok: true };
+}
+
+/**
+ * Post-commit publish for a SELF-LEAVE. Identical event choice to
+ * {@link publishSelfJoined} — the two channel-membership invalidation signals,
+ * no system message, no `viewer_workspaces_changed`. Kept as a named sibling
+ * (not a call to `publishSelfJoined`) so the leave semantics read at the call
+ * site; the event set is deliberately the same domain fact ("this viewer's
+ * channel membership changed").
+ */
+function publishSelfLeft(
+  ctx: BackendContext,
+  conversation: { id: string; workspace_id: string },
+): void {
+  ctx.events.publishSide(conversation.id, {
+    kind: 'conversation_members_changed',
+    payload: {
+      conversation_id: conversation.id,
+      workspace_id: conversation.workspace_id,
+    },
+  });
+  ctx.events.publishToScope(
+    `workspace:${conversation.workspace_id}`,
+    'workspace_channels_changed',
+    {
+      workspace_id: conversation.workspace_id,
+      channel_id: conversation.id,
+    },
+  );
+}
+
+/**
+ * Build the `GET /api/channels/:id` detail envelope — the per-viewer channel
+ * identity + capability carriers. SHARED by the detail route and the self-join
+ * route so both return an IDENTICAL shape (the client backfills its cache
+ * uniformly). All fields are viewer-scoped route projections, never on the
+ * identity DTO:
+ *  - `is_member` — authoritative membership (a public non-member reads `false`);
+ *  - `can_leave` / `leave_blocked_reason` — from the shared leave evaluator;
+ *  - `can_update_visibility` — workspace-admin governance on a regular channel
+ *    (agents never govern), fail-closed.
+ * These carriers are advisory display; the write paths remain authoritative
+ * (§12.1#5 advisory ≠ correctness).
+ */
+export function buildChannelDetailResponse(
+  ctx: BackendContext,
+  conversations: ConversationRepo,
+  principal: UserPrincipal,
+  channel: ChannelLikeDto,
+): ChannelDetailResponse {
+  const leave = evaluateChannelLeaveEligibility({ ctx, conversations }, principal, channel);
+  return {
+    channel,
+    is_member: conversations.getUser(channel.id, principal.userId) !== null,
+    can_leave: leave.can_leave,
+    leave_blocked_reason: leave.reason,
+    can_update_visibility:
+      channel.kind === 'channel'
+      && canGovernWorkspace(ctx, principal, channel.workspace_id, 'admin'),
+  };
 }
 
 // ── removeConversationMember (P6) ──

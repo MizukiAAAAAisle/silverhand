@@ -46,6 +46,7 @@ import { MembershipService } from '../services/membership-service.js';
 import { addWorkspaceAgentMember } from '../application/add-workspace-agent-member.js';
 import {
   addConversationMember,
+  buildChannelDetailResponse,
   conversationMemberAddedActorSnapshot,
   conversationMemberAddedAgentSnapshot,
   conversationMemberAddedHumanSnapshot,
@@ -54,6 +55,7 @@ import {
   conversationMemberRemovedContent,
   conversationMemberRemovedMetadata,
   joinPublicChannel,
+  leaveChannel,
   publishMemberRemoved,
   removeConversationMember,
 } from '../application/conversation-member.js';
@@ -627,9 +629,10 @@ export function createConversationMembershipApp(
   app.post(apiPaths.channelJoin(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
+    const principal = getUserPrincipal(c);
     const result = await joinPublicChannel(
       { ctx, conversations, messages, channelAttentionPrefs },
-      { conversationId: id, principal: getUserPrincipal(c) },
+      { conversationId: id, principal },
     );
     if (!result.ok) {
       switch (result.error.code) {
@@ -641,7 +644,59 @@ export function createConversationMembershipApp(
     }
     const channel = conversations.getChannelLike(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
-    return c.json({ channel, is_member: true });
+    // Same envelope as GET channel detail (incl. the capability carriers) so the
+    // client backfills its cache uniformly on first join / idempotent retry.
+    return c.json(buildChannelDetailResponse(ctx, conversations, principal, channel));
+  });
+
+  // Self-LEAVE a channel — the symmetric counterpart of `/join`. A human member
+  // removes THEMSELVES (empty body, no forgeable target). Member-only + the
+  // archived / owner-of-private / last-human-of-private guards live in the
+  // `leaveChannel` use case;
+  // the handler maps the typed reason to a status and returns the SAME
+  // channel-detail envelope so the client backfills `is_member: false` (public →
+  // renderer collapses to Join; private → the channel drops from discovery and
+  // detail 403s, so the client routes away via read-path validation).
+  app.post(apiPaths.channelLeave(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'channel id required' }, 400);
+    const principal = getUserPrincipal(c);
+    const result = await leaveChannel(
+      { ctx, conversations },
+      { conversationId: id, principal },
+    );
+    if (!result.ok) {
+      switch (result.error.code) {
+        case 'channel_not_found':
+          return c.json({ error: 'channel not found' }, 404);
+        case 'not_member':
+          return c.json({ error: 'not a member of this channel', code: 'not_member' }, 403);
+        case 'channel_archived':
+          return c.json(
+            { error: 'cannot leave an archived channel', code: 'channel_archived' },
+            409,
+          );
+        case 'channel_owner':
+          return c.json(
+            {
+              error: 'cannot leave as the owner of a private channel',
+              code: 'channel_owner',
+            },
+            409,
+          );
+        case 'last_human_member':
+          return c.json(
+            {
+              error: 'cannot leave as the last member of a private channel',
+              code: 'last_human_member',
+            },
+            409,
+          );
+      }
+    }
+    const channel = conversations.getChannelLike(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    return c.json(buildChannelDetailResponse(ctx, conversations, principal, channel));
   });
 
   app.delete(apiPaths.conversationAgentMember(':id', ':agentId'), async c => {

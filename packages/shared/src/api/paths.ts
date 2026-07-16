@@ -187,6 +187,11 @@ export const apiPaths = {
    *  archived target is rejected. Returns the same `{channel, is_member:true}`
    *  envelope as channel detail so the client can backfill its cache. */
   channelJoin: (id: string) => `/api/channels/${id}/join`,
+  /** Self-LEAVE a channel — the symmetric counterpart of `channelJoin`. A human
+   *  member removes THEMSELVES (empty body, no forgeable target). Member-only
+   *  (a non-member's only mutation is Join); an archived channel or the last
+   *  human of a private channel is rejected with a typed reason. */
+  channelLeave: (id: string) => `/api/channels/${id}/leave`,
   conversationChannel: (id: string) => `/api/channels/${id}`,
   conversationChannelMessages: (id: string) => `/api/channels/${id}/messages`,
   conversationChannelAgents: (id: string) => `/api/channels/${id}/agents`,

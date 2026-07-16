@@ -231,17 +231,66 @@ export const ChannelLikeDtoSchema = z.union([
 ]);
 export type ChannelLikeDto = z.infer<typeof ChannelLikeDtoSchema>;
 
+/** Stable reason codes for why the viewer may NOT leave a channel
+ *  (`ChannelDetailResponse.leave_blocked_reason`). The backend emits ONLY the
+ *  code; the renderer owns the human copy (UI text is never outsourced to the
+ *  backend). `null` when `can_leave` is `true`.
+ *   - `not_member`      — the viewer is not a `conversation_users` member (a
+ *                         non-member's only channel mutation is Join; defensive,
+ *                         a non-member normally sees Join, not a Leave control).
+ *   - `channel_archived`— an archived channel is frozen in v1: restore first.
+ *   - `channel_owner`   — the viewer is the workspace OWNER of a PRIVATE
+ *                         channel. The owner anchors the owner-bound
+ *                         governance chain; letting them leave would sever the
+ *                         chain from the resource (a private channel is
+ *                         invisible to a non-member, so the owner could no
+ *                         longer see or re-govern it) — a half-orphan even with
+ *                         other humans present. NOT a literal "creator": the
+ *                         model tracks no per-channel creator, so this is the
+ *                         authoritative `workspace_users.role='owner'` relation
+ *                         (`canGovernWorkspace(..,'owner')`), never a first-member
+ *                         guess. Public channels are exempt (owner can re-browse
+ *                         + re-join freely). Priority ABOVE `last_human_member`.
+ *   - `last_human_member` — the viewer is the last HUMAN member of a PRIVATE
+ *                         channel; leaving would strand it (no human, incl.
+ *                         admins, can see or re-join a private channel).
+ *                         Active public channels are exempt (0 humans is fine —
+ *                         still discoverable + joinable). */
+export const ChannelLeaveBlockedReasonSchema = z.enum([
+  'not_member',
+  'channel_archived',
+  'channel_owner',
+  'last_human_member',
+]);
+export type ChannelLeaveBlockedReason = z.infer<
+  typeof ChannelLeaveBlockedReasonSchema
+>;
+
 /** Response for `GET /api/channels/:id`. Carries the channel identity plus the
- *  route-computed, per-viewer `is_member` — membership is viewer-scoped, so it
- *  lives on the response envelope, NOT on `ConversationDto` identity (see the
+ *  route-computed, per-viewer capability carriers — all viewer-scoped, so they
+ *  live on the response envelope, NOT on `ConversationDto` identity (see the
  *  note on `ConversationDtoSchema.visibility`). A public-channel non-member now
  *  reads channel detail with `is_member: false` (the renderer shows a Join
  *  affordance instead of the composer); an actual member gets `true`. For a
  *  `dm_channel` or a private channel only members can reach this route at all,
- *  so `is_member` is always `true` there. */
+ *  so `is_member` is always `true` there.
+ *
+ *  The settings-modal capability carriers are advisory display only — the
+ *  authoritative enforcement stays on the write paths (`POST .../leave` returns
+ *  the typed error; `PATCH .../:id` gates visibility on `canGovernWorkspace`).
+ *  The renderer treats a missing carrier as fail-closed (hide the visibility
+ *  control, disable Leave). See docs/architecture-principles.md §12.1#5
+ *  (advisory ≠ correctness).
+ *   - `can_leave` / `leave_blocked_reason` — whether the viewer may leave, and
+ *     if not, the stable reason code (renderer writes the copy).
+ *   - `can_update_visibility` — whether the viewer may toggle private/public
+ *     (workspace admin governance on a regular channel; agents never). */
 export const ChannelDetailResponseSchema = z.object({
   channel: ChannelLikeDtoSchema,
   is_member: z.boolean(),
+  can_leave: z.boolean(),
+  leave_blocked_reason: ChannelLeaveBlockedReasonSchema.nullable(),
+  can_update_visibility: z.boolean(),
 });
 export type ChannelDetailResponse = z.infer<typeof ChannelDetailResponseSchema>;
 
@@ -287,13 +336,25 @@ export const ArchiveChannelInputSchema = z.object({
 });
 export type ArchiveChannelInput = z.infer<typeof ArchiveChannelInputSchema>;
 
-/** Body for `PATCH /api/channels/:id` — rename a top-level channel.
- *  Reuses `ChannelTitleSchema` (trimmed, 1–128) so rename and create
- *  validate titles identically. Only the title is mutable here;
- *  archive / pin have their own dedicated routes. */
-export const UpdateChannelInputSchema = z.object({
-  title: ChannelTitleSchema,
-});
+/** Body for `PATCH /api/channels/:id` — mutate a top-level channel's title OR
+ *  visibility. EXACTLY ONE field per request (v1): the settings modal submits
+ *  each mutation independently (rename vs private/public toggle are separate
+ *  actions), so the handler dispatches to a single service call and there is no
+ *  half-committed title+visibility state. `title` reuses `ChannelTitleSchema`
+ *  (trimmed, 1–128) so rename and create validate titles identically; setting
+ *  both (or neither) is a 400. Archive / pin have their own dedicated routes. */
+export const UpdateChannelInputSchema = z
+  .object({
+    title: ChannelTitleSchema.optional(),
+    visibility: ConversationVisibilitySchema.optional(),
+  })
+  .refine(
+    input =>
+      (input.title !== undefined ? 1 : 0)
+        + (input.visibility !== undefined ? 1 : 0)
+      === 1,
+    { message: 'exactly one of `title` or `visibility` must be provided' },
+  );
 export type UpdateChannelInput = z.infer<typeof UpdateChannelInputSchema>;
 
 /** Query for `GET /api/archived-channels`. `since` is epoch ms (inclusive
