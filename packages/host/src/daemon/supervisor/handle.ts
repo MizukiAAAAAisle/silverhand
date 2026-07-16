@@ -114,6 +114,10 @@ export interface PendingStaleEvent {
   currentSeq: number;
 }
 
+/** Gated legacy default-reply-target inference shape (see
+ *  DEFAULT_REPLY_TARGET_INFERENCE_ENABLED). Active bare sends resolve to the
+ *  channel main line and never construct this; remove with the gated
+ *  inference once dogfood comparison is done. */
 export type DefaultReplyTarget =
   | { readonly kind: 'channel' }
   | {
@@ -160,16 +164,18 @@ export interface RuntimeHandle {
    *  agent's own sends resolve. A reply target absent from this map is
    *  "unknown" — the send omits seen+stream_key (Case A loose). */
   replyTargetStreamByMessageId: Map<string, string>;
-  /** Default stream for a bare `message send` in the CURRENT model turn.
-   *  Main line, one thread, and ambiguous multi-thread state are distinct:
-   *  `null` must never carry both "main" and "ambiguous" because ambiguous
-   *  bare sends must fail loud instead of silently falling back to main. */
+  /** Gated legacy comparator ONLY. The active bare `message send` resolves to
+   *  the channel main line (see DEFAULT_REPLY_TARGET_INFERENCE_ENABLED); this
+   *  per-turn inferred default is written and read solely while that gate is
+   *  on. When on it keeps main / one-thread / ambiguous multi-thread distinct
+   *  so an ambiguous bare send fails loud instead of falling back to main.
+   *  Remove with the gated inference once dogfood comparison is done. */
   defaultReplyTarget: DefaultReplyTarget;
-  /** Same default inference for deliveries written mid-turn but not yet
+  /** Gated legacy comparator ONLY (paired with {@link defaultReplyTarget}):
+   *  the same inferred default for deliveries written mid-turn but not yet
    *  admitted as precedent. `undefined` means no pending turn delivery has
-   *  contributed a default. A pending thread may be used by a same-turn bare
-   *  send as its target, but seq admission still waits until either that send
-   *  anchors the target stream or the next turn boundary promotes it. */
+   *  contributed one. Meaningful only while the inference gate is on; remove
+   *  with it. */
   pendingDefaultReplyTarget: DefaultReplyTarget | undefined;
   /** True once an admitted input batch is expected to be driving the
    *  current model action. Cleared on turn_end/runtime resolution.

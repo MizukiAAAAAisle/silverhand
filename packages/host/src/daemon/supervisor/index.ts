@@ -343,6 +343,16 @@ type EffectiveMessageTarget =
 const CHANNEL_DEFAULT_REPLY_TARGET: DefaultReplyTarget = { kind: 'channel' };
 
 /**
+ * Gates the legacy per-turn default-reply-target inference. While `false`, a
+ * bare `message send` (no `--target`/`--reply-to`) always resolves to the
+ * channel main line and the inference below is retained but never consulted;
+ * `--reply-to` resolution and per-stream freshness are independent of this
+ * flag. Physically remove the gated legacy inference once dogfood comparison
+ * confirms the main-line default.
+ */
+const DEFAULT_REPLY_TARGET_INFERENCE_ENABLED = false;
+
+/**
  * Internal spawn input for {@link Supervisor.startUnlocked}. Stage 2c made the
  * wire `runtime_start` command pure lifecycle ({@link RuntimeStartParams} — no
  * delivery), so the ONLY source of a spawn-time startup batch is
@@ -641,6 +651,8 @@ export class Supervisor implements SupervisorContract {
         this.advanceObservedStream(handle, streamKey, seq, source);
       }
     }
+    // Legacy comparator upkeep: dormant while the inference gate is off, since
+    // pendingDefaultReplyTarget is only ever populated under the gate.
     if (handle.pendingDefaultReplyTarget !== undefined) {
       handle.defaultReplyTarget = handle.pendingDefaultReplyTarget;
       handle.pendingDefaultReplyTarget = undefined;
@@ -664,6 +676,12 @@ export class Supervisor implements SupervisorContract {
     }
   }
 
+  /** Gated legacy comparator ONLY (see DEFAULT_REPLY_TARGET_INFERENCE_ENABLED).
+   *  Infers a per-turn bare-send default from a wake batch: no thread turn →
+   *  main, one thread → that thread, multiple threads → ambiguous. The active
+   *  path never calls this — bare sends resolve to main; the paired helpers
+   *  ({@link mergePendingDefaultReplyTarget}, `ambiguousDefaultTargetErrorBody`)
+   *  are likewise gate-only. Remove the cluster with the gated inference. */
   private inferDefaultReplyTarget(
     deliveries: readonly RuntimeDelivery[] | undefined,
   ): DefaultReplyTarget | undefined {
@@ -746,6 +764,11 @@ export class Supervisor implements SupervisorContract {
         : { kind: 'channel' };
     }
     if (target !== undefined) return { kind: 'legacy', target };
+    // Bare send (no --target/--reply-to) resolves to the channel main line.
+    // The legacy per-turn inference below is consulted only when gated on.
+    if (!DEFAULT_REPLY_TARGET_INFERENCE_ENABLED) {
+      return { kind: 'channel' };
+    }
     if (handle.pendingDefaultReplyTarget) {
       if (handle.pendingDefaultReplyTarget.kind === 'ambiguous') {
         return {
@@ -791,12 +814,16 @@ export class Supervisor implements SupervisorContract {
     admitNow: boolean,
     source: string,
   ): void {
-    const inferredDefault = this.inferDefaultReplyTarget(deliveries);
-    if (admitNow) {
-      handle.defaultReplyTarget = inferredDefault ?? CHANNEL_DEFAULT_REPLY_TARGET;
-      handle.pendingDefaultReplyTarget = undefined;
-    } else {
-      this.mergePendingDefaultReplyTarget(handle, inferredDefault);
+    // Legacy default-reply-target inference: maintained only while gated on.
+    // Freshness admission and the reply-target cache below are unconditional.
+    if (DEFAULT_REPLY_TARGET_INFERENCE_ENABLED) {
+      const inferredDefault = this.inferDefaultReplyTarget(deliveries);
+      if (admitNow) {
+        handle.defaultReplyTarget = inferredDefault ?? CHANNEL_DEFAULT_REPLY_TARGET;
+        handle.pendingDefaultReplyTarget = undefined;
+      } else {
+        this.mergePendingDefaultReplyTarget(handle, inferredDefault);
+      }
     }
     if (deliveries && deliveries.length > 0) {
       for (const delivery of deliveries) {
@@ -917,14 +944,16 @@ export class Supervisor implements SupervisorContract {
     // (reply-cluster §6.4):
     //  - explicit target        → explicit stream (`channel` or
     //    `thread:<messageId>`; legacy target shapes remain adapter-only).
-    //  - no explicit target     → default to an unambiguous thread delivery
-    //    written mid-turn, or otherwise the stream admitted for this turn;
-    //    fall back to main when neither gives a thread.
+    //  - no explicit target     → the channel main line. A bare send never
+    //    inherits a thread; the per-turn thread/ambiguous fallback below is
+    //    reachable only while the legacy inference gate is on.
     //  - reply target we saw    → that cluster's stream (known).
     //  - reply target we did NOT see → unknown (Case A loose, Q1=A): omit
     //    seen+stream_key so the backend skips freshness for this first-touch
     //    send instead of falsely stale-ing it.
     const effectiveTarget = this.effectiveMessageTarget(handle, params);
+    // Legacy-gate-only: the active bare-send path resolves to main and never
+    // yields an ambiguous default.
     if (effectiveTarget.kind === 'ambiguous') {
       return {
         ok: false,

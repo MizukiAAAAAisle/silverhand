@@ -4078,7 +4078,7 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
 });
 
 describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', () => {
-  it('defaults a bare send to the single thread stream that admitted this turn', async () => {
+  it('sends a bare reply to the channel main line even after a thread-only wake', async () => {
     const { supervisor, events } = makeSupervisor();
     const postedBodies: Record<string, unknown>[] = [];
     vi.stubGlobal(
@@ -4090,7 +4090,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
           JSON.stringify({
             message_id: 'm54',
             message_seq: 54,
-            thread_root_id: 'mRoot',
+            thread_root_id: null,
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
@@ -4129,14 +4129,17 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       const result = await supervisor.agentMessageSend({
         conversation_id: 'c1',
         agent_id: 'a1',
-        content: 'plain reply should stay in thread',
+        content: 'plain reply defaults to the channel main line',
       });
 
+      // A thread-only wake no longer captures the reply target: a bare send
+      // resolves to the channel main line. Main was never observed in this
+      // session, so it is a first-touch send with no per-stream freshness.
       expect(result).toMatchObject({ ok: true, message_id: 'm54' });
-      expect(postedBodies[0]?.['target']).toEqual({ kind: 'thread', message_id: 'm53' });
+      expect(postedBodies[0]?.['target']).toEqual({ kind: 'channel' });
       expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
-      expect(postedBodies[0]?.['stream_key']).toBe('thread:mRoot');
-      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(53);
+      expect(postedBodies[0]).not.toHaveProperty('stream_key');
+      expect(postedBodies[0]).not.toHaveProperty('seen_up_to_seq');
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
@@ -4147,7 +4150,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     }
   });
 
-  it('lets an explicit main-line target override the current thread default', async () => {
+  it('sends an explicit main-line target to the channel even after a thread-only wake', async () => {
     const { supervisor } = makeSupervisor();
     const postedBodies: Record<string, unknown>[] = [];
     vi.stubGlobal(
@@ -4262,7 +4265,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     }
   });
 
-  it('bare send resolver uses the same delivery stream as the rendered target header', async () => {
+  it('defaults a bare send to the channel main line across mixed and observe-only wakes', async () => {
     const { supervisor, events } = makeSupervisor();
     const postedBodies: Record<string, unknown>[] = [];
     vi.stubGlobal(
@@ -4320,12 +4323,15 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       await supervisor.agentMessageSend({
         conversation_id: 'c1',
         agent_id: 'a1',
-        content: 'mixed batch uses the single thread header target',
+        content: 'mixed batch still defaults to the channel main line',
       });
+      // The thread member of a mixed wake no longer captures the default; the
+      // bare send goes to the main line, carrying the main boundary this batch
+      // observed (seq 50).
       expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
-      expect(postedBodies[0]?.['target']).toEqual({ kind: 'thread', message_id: 'm51' });
-      expect(postedBodies[0]?.['stream_key']).toBe('thread:mRoot');
-      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(51);
+      expect(postedBodies[0]?.['target']).toEqual({ kind: 'channel' });
+      expect(postedBodies[0]?.['stream_key']).toBe('main');
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(50);
 
       await supervisor.stop({
         conversation_id: 'c1',
@@ -4380,7 +4386,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     }
   });
 
-  it('fails loud for a bare send when one turn receives two thread streams', async () => {
+  it('sends a bare reply to the channel main line even when the turn received multiple thread streams', async () => {
     const { supervisor, events } = makeSupervisor();
     const postedBodies: Record<string, unknown>[] = [];
     vi.stubGlobal(
@@ -4388,7 +4394,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       vi.fn(async (_url: string, init?: RequestInit) => {
         postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
         return new Response(
-          JSON.stringify({ message_id: 'unexpected', message_seq: 90 }),
+          JSON.stringify({ message_id: 'm83', message_seq: 83, thread_root_id: null }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
       }),
@@ -4430,36 +4436,19 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       }, { owner: 'test-owner' });
 
       await waitForDeliveryConsumed(events, 82);
+      // Multiple thread streams in one turn no longer make a bare send
+      // ambiguous: it resolves to the channel main line and carries the main
+      // boundary this batch observed (seq 80). No 422 / candidate_targets.
       const result = await supervisor.agentMessageSend({
         conversation_id: 'c1',
         agent_id: 'a1',
-        content: 'bare reply needs an explicit target',
+        content: 'bare reply defaults to the channel main line',
       });
 
-      expect(result).toMatchObject({ ok: false, status: 422 });
-      expect(postedBodies).toHaveLength(0);
-      if (!result.ok) {
-        const parsed = JSON.parse(result.body_text) as {
-          error?: { code?: string; message?: string; details?: Record<string, unknown> };
-        };
-        expect(parsed.error?.code).toBe('validation_error');
-        expect(parsed.error?.message).toContain('ambiguous default target');
-        expect(parsed.error?.details?.['subkind']).toBe('ambiguous_default_target');
-        expect(parsed.error?.details?.['candidate_targets']).toEqual([
-          'thread:rootA',
-          'thread:rootB',
-          'channel',
-        ]);
-      }
-
-      await supervisor.agentMessageSend({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        content: 'explicit main-line escape hatch',
-        target: { kind: 'channel' },
-      });
+      expect(result).toMatchObject({ ok: true, message_id: 'm83' });
       expect(postedBodies).toHaveLength(1);
       expect(postedBodies[0]?.['target']).toEqual({ kind: 'channel' });
+      expect(postedBodies[0]).not.toHaveProperty('reply_to_message_id');
       expect(postedBodies[0]?.['stream_key']).toBe('main');
       expect(postedBodies[0]?.['seen_up_to_seq']).toBe(80);
     } finally {
