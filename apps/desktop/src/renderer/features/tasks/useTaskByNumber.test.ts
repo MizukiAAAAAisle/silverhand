@@ -49,7 +49,7 @@ function taskSummary(
   overrides: Partial<TaskSummaryDto> = {},
 ): TaskSummaryDto {
   return {
-    message_id: 'msg-task-42',
+    id: 'task-42',
     task_number: 42,
     workspace_id: 'workspace-1',
     workspace_name: 'Workspace',
@@ -77,7 +77,8 @@ function taskChanged(
     thread_root_id: null,
     conversation_id: 'channel-1',
     task_number: 42,
-    message_id: 'msg-task-42',
+    task_id: 'task-42',
+    source_message_id: 'msg-task-42',
     status: 'done',
     assignee: null,
     title: 'Task title',

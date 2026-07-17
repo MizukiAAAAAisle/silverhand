@@ -127,6 +127,7 @@ export {
   applyTaskChangedToMessage,
   applyReactionToMessage,
   patchMessageInActiveProjections,
+  patchWarmInactiveMessageRow,
   setMainlineLiveGap,
   hasActiveMainlineReader,
   applyMainlineMessageToChannelCaches,
@@ -892,10 +893,6 @@ export interface SendMessageInput {
    *  file entered the composer, sent verbatim so the agent sees the same
    *  reference the user typed (#task:1324). */
   attachments?: Array<AttachmentDto & { label?: string }>;
-  /** When true, promote this send into an open `todo` task in the same
-   *  request (#task:1125). Maps to `as_task` on the wire; the backend
-   *  derives the task title from the first line and leaves it unassigned. */
-  asTask?: boolean;
 }
 
 export function useSendMessage(
@@ -924,7 +921,6 @@ export function useSendMessage(
         content: string;
         attachment_ids?: Array<string | AttachmentRefInput>;
         reply_to_message_id?: string;
-        as_task?: boolean;
       } = {
         content: input.content,
       };
@@ -939,9 +935,6 @@ export function useSendMessage(
       }
       if (threadRootId) {
         body.reply_to_message_id = threadRootId;
-      }
-      if (input.asTask) {
-        body.as_task = true;
       }
       const res = await api<{ message: MessageDto }>(
         path,
@@ -1014,12 +1007,7 @@ export function useSendMessage(
         // row timestamp — never ordered against a real MessageSeq (§3.3).
         created_at: Date.now(),
         thread_root_id: threadRootId ?? null,
-        task_number: null,
-        task_status: null,
-        task_assignee: null,
-        task_title: null,
-        task_workspace_id: null,
-        task_closed_at: null,
+        linked_task: null,
         reactions: null,
         pending: true,
       };

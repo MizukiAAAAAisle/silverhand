@@ -30,12 +30,7 @@ function makeSystemMessage(
     seq: decodeMessageSeq(seq ?? 1),
     created_at: 0,
     thread_root_id: null,
-    task_number: null,
-    task_status: null,
-    task_title: null,
-    task_workspace_id: null,
-    task_closed_at: null,
-    task_assignee: null,
+    linked_task: null,
     reactions: null,
     ...rest,
   };
@@ -43,7 +38,7 @@ function makeSystemMessage(
 
 function seededTask(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
   return {
-    message_id: 'msg-task-x',
+    id: 'task-42',
     task_number: 42,
     workspace_id: 'ws-1',
     workspace_name: 'silverhand',
@@ -92,6 +87,7 @@ const fullTaskMeta = (
 ): Record<string, unknown> => ({
   task_number: 42,
   task_status: 'todo',
+  task_id: 'task-42',
   task_message_id: 'msg-task-42',
   task_title: 'wire registry',
   task_assignee: null,

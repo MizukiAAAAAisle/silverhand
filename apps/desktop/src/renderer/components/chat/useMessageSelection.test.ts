@@ -34,12 +34,7 @@ function msg(id: string, seq: number, content = `body-${id}`): MessageDto {
     seq: decodeMessageSeq(seq),
     created_at: 1_700_000_000_000 + seq * 1000,
     thread_root_id: null,
-    task_number: null,
-    task_status: null,
-    task_title: null,
-    task_workspace_id: null,
-    task_closed_at: null,
-    task_assignee: null,
+    linked_task: null,
     reactions: null,
   };
 }

@@ -26,6 +26,7 @@ import {
 } from '@/components/tasks/TaskStatusBadge';
 import { TaskDropPlaceholder } from '@/components/tasks/TaskDropPlaceholder';
 import { TaskFilterBar } from '@/components/tasks/TaskFilterBar';
+import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
 
 /**
  * NavRail "Tasks" section — global aggregate view across every channel
@@ -53,19 +54,23 @@ export const TasksSection = memo(function TasksSection({
   onJump,
 }: TasksSectionProps): JSX.Element {
   const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
+  // Card click opens the detail modal (read full body / edit) rather than
+  // jumping straight to the source message; "View in conversation" inside
+  // the modal is the explicit jump.
+  const [detailTask, setDetailTask] = useState<TaskSummaryDto | null>(null);
   const updateStatus = useUpdateTaskStatus();
   // Workspace + channel options + scope ids come from the SAME hook the
   // drawer uses (#task:1165) so the two surfaces' dropdowns can't drift — DM +
   // regular workspace channels, grouped by data source; regular workspaces for
   // the upstream cascade axis (#task:1387).
-  const { workspaceOptions, channelOptions, workspaceScopeIds } =
-    useTaskFilterOptions();
+  const { workspaceOptions, channelOptions } = useTaskFilterOptions();
 
   // Fetch broadly across every workspace scope (all statuses, incl.
   // closed — it's just the 5th column). Channel / assignee / creator are
   // sliced client-side (no pagination, dto carries the fields) — see
-  // features/tasks/taskFilters.ts.
-  const { data: allTasks = [] } = useTasks({}, { workspaceScopeIds });
+  // features/tasks/taskFilters.ts. Live refresh rides the viewer scope
+  // (see `useTasks`).
+  const { data: allTasks = [] } = useTasks({});
 
   const tasks = useMemo(
     () =>
@@ -155,22 +160,21 @@ export const TasksSection = memo(function TasksSection({
             icon={col.icon}
             iconClass={col.iconClass}
             tasks={grouped[col.status]}
-            onCardClick={t =>
-              onJump({
-                workspaceId: t.workspace_id,
-                channelId: t.channel_id,
-                // New reply-cluster tasks carry `thread_root_id`; the cluster
-                // pane opens to it.
-                threadRootId: t.thread_root_id,
-                messageId: t.message_id,
-              })
-            }
-            onStatusChange={(messageId, next) =>
-              updateStatus.mutate({ messageId, status: next })
+            onCardClick={t => setDetailTask(t)}
+            onStatusChange={(taskId, next) =>
+              updateStatus.mutate({ taskId, status: next })
             }
           />
         ))}
       </div>
+
+      <TaskDetailDialog
+        task={detailTask}
+        onOpenChange={open => {
+          if (!open) setDetailTask(null);
+        }}
+        onJump={onJump}
+      />
     </main>
   );
 });
@@ -256,7 +260,7 @@ function KanbanColumn({
   iconClass: string;
   tasks: TaskSummaryDto[];
   onCardClick: (t: TaskSummaryDto) => void;
-  onStatusChange: (messageId: string, next: TaskStatus) => void;
+  onStatusChange: (taskId: string, next: TaskStatus) => void;
 }): JSX.Element {
   // Drag-over affordance (#task:779). Any task drag entering the column
   // arms it (accent edge + soft wash) and shows a "Drop here" slot. The
@@ -295,7 +299,7 @@ function KanbanColumn({
         // Drop onto the same status = no-op (Cindy review: no meaningless
         // mutation).
         if (payload.from === status) return;
-        onStatusChange(payload.messageId, status);
+        onStatusChange(payload.taskId, status);
       }}
       className={cn(
         // Each column hugs its own content height (cross-axis auto via
@@ -350,11 +354,11 @@ function KanbanColumn({
             <ul className="space-y-1.5">
               {dragOver ? <TaskDropPlaceholder /> : null}
               {tasks.map(t => (
-                <li key={t.message_id}>
+                <li key={t.id}>
                   <TaskCard
                     task={t}
                     onClick={() => onCardClick(t)}
-                    onStatusChange={next => onStatusChange(t.message_id, next)}
+                    onStatusChange={next => onStatusChange(t.id, next)}
                   />
                 </li>
               ))}
@@ -385,7 +389,7 @@ function TaskCard({
         data-task-number={task.task_number}
         draggable
         onDragStart={e => {
-          writeTaskDrag(e.dataTransfer, { messageId: task.message_id, from: task.status });
+          writeTaskDrag(e.dataTransfer, { taskId: task.id, from: task.status });
           setDragging(true);
         }}
         onDragEnd={() => setDragging(false)}
@@ -402,7 +406,7 @@ function TaskCard({
         type="button"
         draggable={false}
         onClick={onClick}
-        aria-label="跳转到消息"
+        aria-label="Open task detail"
         className="absolute inset-0 z-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       />
       <div className="pointer-events-none relative z-10 min-w-0 p-2">

@@ -27,6 +27,7 @@ import {
   type TaskFilters,
 } from '@/features/tasks/taskFilters';
 import { isTaskDrag, readTaskDrag, writeTaskDrag } from '@/features/tasks/taskDnd';
+import { drawerShouldCloseOnEscape } from '@/features/tasks/taskDetail';
 import { useRelativeTime } from '@/components/chat/useRelativeTime';
 import {
   TaskStatusBadge,
@@ -35,6 +36,7 @@ import {
 } from '@/components/tasks/TaskStatusBadge';
 import { TaskDropPlaceholder } from '@/components/tasks/TaskDropPlaceholder';
 import { TaskFilterBar } from '@/components/tasks/TaskFilterBar';
+import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
 
 /**
  * Workspace-wide tasks panel — a floating right-side drawer that overlays
@@ -233,6 +235,10 @@ export function WorkspaceTasksDrawer({
     [workspaceId, defaultConversationId],
   );
   const [filters, setFilters] = useState<TaskFilters>(baselineFilters);
+  // Card click opens the detail modal (over the drawer) rather than jumping
+  // straight to the source message; declared here (above the Escape effect)
+  // so that handler can defer to an open modal.
+  const [detailTask, setDetailTask] = useState<TaskSummaryDto | null>(null);
   // Re-sync every time the drawer opens. When a `?task=<n>` focus is in
   // flight, widen BOTH workspace and channel → All so the focused row is
   // in the rendered tree (the target task may live in another
@@ -259,23 +265,26 @@ export function WorkspaceTasksDrawer({
     [onOpenChange],
   );
 
-  // Close on Escape.
+  // Close on Escape — but defer to an open detail modal, which owns Escape
+  // while it is up (Radix closes the modal; the drawer stays open). One
+  // Escape closes one layer, top-down.
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') closeDrawer();
+      if (e.key === 'Escape' && drawerShouldCloseOnEscape(detailTask !== null)) {
+        closeDrawer();
+      }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [open, closeDrawer]);
+  }, [open, closeDrawer, detailTask]);
 
   // Workspace + channel options + scope ids come from the SAME hook the global
   // Tasks pane uses (#task:1165), so both surfaces' dropdowns list the
   // identical set and can't drift. The drawer is the same board, just
   // pre-focused on the current workspace + channel via the baseline above
   // (#task:1432); both filters stay switchable to All.
-  const { workspaceOptions, channelOptions, workspaceScopeIds } =
-    useTaskFilterOptions();
+  const { workspaceOptions, channelOptions } = useTaskFilterOptions();
 
   // Fetch the cross-workspace list (all statuses, incl. closed — it's just
   // the 5th column). The drawer is now the global board with a default
@@ -284,11 +293,9 @@ export function WorkspaceTasksDrawer({
   // empty list. Channel / assignee / creator are sliced client-side via
   // applyTaskFilters (channel match spans a channel + its threads, which
   // the API's single `conversation_id` filter can't express — see #214).
-  // Shares React Query cache with the pane's identical `useTasks({})` call.
-  const { data: allTasks = [], isLoading } = useTasks(
-    {},
-    { workspaceScopeIds },
-  );
+  // Shares React Query cache with the pane's identical `useTasks({})` call;
+  // live refresh rides the viewer scope (see `useTasks`).
+  const { data: allTasks = [], isLoading } = useTasks({});
 
   const tasks = useMemo(
     () =>
@@ -309,16 +316,10 @@ export function WorkspaceTasksDrawer({
 
   const grouped = useMemo(() => groupByStatus(tasks), [tasks]);
 
+  // "View in conversation" inside the modal is the explicit jump (and closes
+  // the drawer with it); a plain card click only opens the detail modal.
   const handleCardClick = (t: TaskSummaryDto): void => {
-    onJumpToMessage?.({
-      workspaceId: t.workspace_id,
-      channelId: t.channel_id,
-      // New reply-cluster tasks carry `thread_root_id`; the cluster pane
-      // opens to it.
-      threadRootId: t.thread_root_id,
-      messageId: t.message_id,
-    });
-    onOpenChange(false);
+    setDetailTask(t);
   };
 
   // Focus trap: keep focus inside drawer while open.
@@ -327,22 +328,22 @@ export function WorkspaceTasksDrawer({
   // Resolve the `?task=<n>` focus (workspace-scoped) to a UNIQUE task. Now
   // that the drawer holds cross-workspace data, a bare task_number can
   // collide across workspaces — so we disambiguate by (workspaceId,
-  // task_number) and key the scroll + highlight on the resulting
-  // message_id, which is globally unique. (#task:1165)
-  const focusedMessageId = useMemo(() => {
+  // task_number) and key the scroll + highlight on the resulting task
+  // id, which is globally unique. (#task:1165)
+  const focusedTaskId = useMemo(() => {
     if (focusedTaskNumber == null) return null;
     const match = allTasks.find(
       t => t.workspace_id === workspaceId && t.task_number === focusedTaskNumber,
     );
-    return match?.message_id ?? null;
+    return match?.id ?? null;
   }, [allTasks, workspaceId, focusedTaskNumber]);
 
-  // Visual highlight for the focused-task row, keyed by message_id (unique
+  // Visual highlight for the focused-task row, keyed by task id (unique
   // across workspaces). Distinct from `focusedTaskNumber` (the URL-driven
   // *intent* — "scroll me here"): once delivered we clear the URL pointer
   // via `onClearFocus` but keep the highlight on for ~1.4s so a quick
   // second click on the same chip still produces a perceptible flash.
-  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(
+  const [highlightedTaskId, setHighlightedTaskId] = useState<string | null>(
     null,
   );
   // Scroll-and-highlight on focused-task arrival. We wait one
@@ -351,13 +352,13 @@ export function WorkspaceTasksDrawer({
   // appeared in the DOM. Once we find the element we scroll it into
   // view and immediately call `onClearFocus` so the URL drops the
   // pointer; the highlight outlives the URL state via
-  // `highlightedMessageId` to keep visual feedback uncoupled from
+  // `highlightedTaskId` to keep visual feedback uncoupled from
   // navigation.
   useEffect(() => {
     if (!open) return;
     if (focusedTaskNumber == null) return;
     if (isLoading) return; // tasks list not ready yet — wait for fetch
-    if (focusedMessageId == null) {
+    if (focusedTaskId == null) {
       // The number didn't resolve to a task in this workspace — drop the
       // URL pointer so we don't keep retrying a phantom focus.
       onClearFocus?.();
@@ -369,11 +370,11 @@ export function WorkspaceTasksDrawer({
       const root = drawerRef.current;
       if (!root) return;
       const el = root.querySelector<HTMLElement>(
-        `[data-task-message-id="${focusedMessageId}"]`,
+        `[data-task-id="${focusedTaskId}"]`,
       );
       if (el) {
         el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-        setHighlightedMessageId(focusedMessageId);
+        setHighlightedTaskId(focusedTaskId);
       }
       onClearFocus?.();
     });
@@ -381,17 +382,17 @@ export function WorkspaceTasksDrawer({
       cancelled = true;
       cancelAnimationFrame(handle);
     };
-  }, [open, focusedTaskNumber, focusedMessageId, isLoading, onClearFocus]);
+  }, [open, focusedTaskNumber, focusedTaskId, isLoading, onClearFocus]);
 
   // Auto-clear the highlight ring after a short pulse so the row
   // settles back into the column visually. Independent of the URL —
   // re-clicking the same chip refreshes `focusedTaskNumber` (no-op if
   // unchanged), so the effect above re-arms the highlight.
   useEffect(() => {
-    if (highlightedMessageId == null) return;
-    const t = setTimeout(() => setHighlightedMessageId(null), 1400);
+    if (highlightedTaskId == null) return;
+    const t = setTimeout(() => setHighlightedTaskId(null), 1400);
     return () => clearTimeout(t);
-  }, [highlightedMessageId]);
+  }, [highlightedTaskId]);
 
   return (
     <>
@@ -505,15 +506,28 @@ export function WorkspaceTasksDrawer({
                 tasks={grouped[col.status]}
                 isLoading={isLoading}
                 onCardClick={handleCardClick}
-                onStatusChange={(messageId, status) =>
-                  updateStatus.mutate({ messageId, status })
+                onStatusChange={(taskId, status) =>
+                  updateStatus.mutate({ taskId, status })
                 }
-                highlightedMessageId={highlightedMessageId}
+                highlightedTaskId={highlightedTaskId}
               />
             ))}
           </div>
         </div>
       </div>
+
+      <TaskDetailDialog
+        task={detailTask}
+        onOpenChange={open => {
+          if (!open) setDetailTask(null);
+        }}
+        onJump={target => {
+          onJumpToMessage?.(target);
+          // Navigating away from a task closes the drawer too, matching the
+          // pre-modal card-jump behavior.
+          onOpenChange(false);
+        }}
+      />
     </>
   );
 }
@@ -587,7 +601,7 @@ function KanbanColumn({
   isLoading,
   onCardClick,
   onStatusChange,
-  highlightedMessageId,
+  highlightedTaskId,
 }: {
   title: string;
   status: TaskStatus;
@@ -596,8 +610,8 @@ function KanbanColumn({
   tasks: TaskSummaryDto[];
   isLoading: boolean;
   onCardClick: (t: TaskSummaryDto) => void;
-  onStatusChange: (messageId: string, next: TaskStatus) => void;
-  highlightedMessageId: string | null;
+  onStatusChange: (taskId: string, next: TaskStatus) => void;
+  highlightedTaskId: string | null;
 }): JSX.Element {
   // Drag-over highlight (#task:779) — mirrors TasksSection.
   const [dragOver, setDragOver] = useState(false);
@@ -627,7 +641,7 @@ function KanbanColumn({
         if (!payload) return;
         e.preventDefault();
         if (payload.from === status) return; // same-column drop = no-op
-        onStatusChange(payload.messageId, status);
+        onStatusChange(payload.taskId, status);
       }}
       className={cn(
         // Mirrors TasksSection — column hugs content height with a
@@ -677,12 +691,12 @@ function KanbanColumn({
             <ul className="space-y-1.5">
               {dragOver ? <TaskDropPlaceholder /> : null}
               {tasks.map(t => (
-                <li key={t.message_id}>
+                <li key={t.id}>
                   <TaskCard
                     task={t}
-                    highlighted={highlightedMessageId === t.message_id}
+                    highlighted={highlightedTaskId === t.id}
                     onClick={() => onCardClick(t)}
-                    onStatusChange={next => onStatusChange(t.message_id, next)}
+                    onStatusChange={next => onStatusChange(t.id, next)}
                   />
                 </li>
               ))}
@@ -713,10 +727,10 @@ function TaskCard({
     <TaskCardContextMenu status={task.status} onStatusChange={onStatusChange}>
       <div
         data-task-number={task.task_number}
-        data-task-message-id={task.message_id}
+        data-task-id={task.id}
         draggable
         onDragStart={e => {
-          writeTaskDrag(e.dataTransfer, { messageId: task.message_id, from: task.status });
+          writeTaskDrag(e.dataTransfer, { taskId: task.id, from: task.status });
           setDragging(true);
         }}
         onDragEnd={() => setDragging(false)}
@@ -739,7 +753,7 @@ function TaskCard({
         type="button"
         draggable={false}
         onClick={onClick}
-        aria-label="跳转到消息"
+        aria-label="Open task detail"
         className="absolute inset-0 z-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       />
       {/* Content layer. `pointer-events-none` so text clicks fall

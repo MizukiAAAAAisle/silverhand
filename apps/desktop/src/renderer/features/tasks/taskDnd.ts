@@ -14,7 +14,7 @@ import type { TaskStatus } from '@silverhand/shared';
 export const TASK_DND_MIME = 'application/x-silverhand-task';
 
 export interface TaskDragPayload {
-  messageId: string;
+  taskId: string;
   /** Status the card was dragged FROM — lets a column drop short-circuit
    *  to a no-op when the source and target status match (Cindy review:
    *  don't fire a meaningless status mutation). */
@@ -36,8 +36,8 @@ export function readTaskDrag(dataTransfer: DataTransfer): TaskDragPayload | null
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as Partial<TaskDragPayload>;
-    if (typeof parsed.messageId === 'string' && typeof parsed.from === 'string') {
-      return { messageId: parsed.messageId, from: parsed.from as TaskStatus };
+    if (typeof parsed.taskId === 'string' && typeof parsed.from === 'string') {
+      return { taskId: parsed.taskId, from: parsed.from as TaskStatus };
     }
   } catch {
     // malformed — fall through to null

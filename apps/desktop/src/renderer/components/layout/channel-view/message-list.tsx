@@ -64,6 +64,7 @@ export function MessageList({
   canReact,
   canSave = true,
   canParticipate = true,
+  canMutateLinkedTask = false,
   searchQuery,
   searchActiveMessageId,
 }: {
@@ -136,6 +137,11 @@ export function MessageList({
    *  also gates the @human-mention roster fetch (`useConversationMembers`) —
    *  the roster is a member surface. */
   canParticipate?: boolean;
+  /** Whether the viewer may write a linked task's status from its inline chip.
+   *  The write axis (member of an open channel); defaults to `false`
+   *  (fail-closed). Threaded down to each MessageItem so a non-member sees the
+   *  chip read-only. */
+  canMutateLinkedTask?: boolean;
   /** In-conversation header find (#task:1335). The active term — highlighted
    *  inside every rendered row's body via `MessageItem`→`Markdown`. */
   searchQuery?: string;
@@ -613,6 +619,7 @@ export function MessageList({
           conversationId={channelId}
           canReact={canReact}
           canParticipate={canParticipate}
+          canMutateLinkedTask={canMutateLinkedTask}
           agentsById={agentsById}
           agentsByName={agentsByName}
           humansByName={humansByName}

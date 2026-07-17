@@ -853,6 +853,7 @@ function ActiveChannelView({
             canReact={!closed && !isArchived && gate.allowMutations}
             canSave={gate.allowMutations}
             canParticipate={gate.allowMemberEffects}
+            canMutateLinkedTask={!closed && !isArchived && gate.allowMutations}
             isLoading={isLoading}
             hasMoreBefore={!!hasPreviousPage}
             isFetchingEarlier={isFetchingPreviousPage}

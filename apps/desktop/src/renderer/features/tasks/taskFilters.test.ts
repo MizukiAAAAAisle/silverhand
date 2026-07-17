@@ -12,7 +12,7 @@ import {
 
 function task(overrides: Partial<TaskSummaryDto>): TaskSummaryDto {
   return {
-    message_id: 'm1',
+    id: 'm1',
     task_number: 1,
     workspace_id: 'ws1',
     workspace_name: 'ws',
@@ -34,10 +34,10 @@ const byWorkspace = (t: TaskSummaryDto, id: string): boolean => t.workspace_id =
 
 describe('applyTaskFilters', () => {
   const tasks = [
-    task({ message_id: 'a', workspace_id: 'ws1' }),
-    task({ message_id: 'b', workspace_id: 'ws2' }),
+    task({ id: 'a', workspace_id: 'ws1' }),
+    task({ id: 'b', workspace_id: 'ws2' }),
     task({
-      message_id: 'c',
+      id: 'c',
       workspace_id: 'ws1',
       assignee: { type: 'agent', id: 'ag1', name: 'Alice' },
     }),
@@ -49,7 +49,7 @@ describe('applyTaskFilters', () => {
 
   it('filters by channel via the supplied predicate', () => {
     const f: TaskFilters = { ...DEFAULT_TASK_FILTERS, channelId: 'ws1' };
-    expect(applyTaskFilters(tasks, f, byWorkspace).map(t => t.message_id)).toEqual([
+    expect(applyTaskFilters(tasks, f, byWorkspace).map(t => t.id)).toEqual([
       'a',
       'c',
     ]);
@@ -57,7 +57,7 @@ describe('applyTaskFilters', () => {
 
   it('filters by workspace directly on task.workspace_id (#task:1387)', () => {
     const f: TaskFilters = { ...DEFAULT_TASK_FILTERS, workspaceId: 'ws2' };
-    expect(applyTaskFilters(tasks, f, byWorkspace).map(t => t.message_id)).toEqual([
+    expect(applyTaskFilters(tasks, f, byWorkspace).map(t => t.id)).toEqual([
       'b',
     ]);
   });
@@ -67,7 +67,7 @@ describe('applyTaskFilters', () => {
       ...DEFAULT_TASK_FILTERS,
       assignee: { kind: 'unassigned' },
     };
-    expect(applyTaskFilters(tasks, unassigned, byWorkspace).map(t => t.message_id)).toEqual([
+    expect(applyTaskFilters(tasks, unassigned, byWorkspace).map(t => t.id)).toEqual([
       'a',
       'b',
     ]);
@@ -76,21 +76,21 @@ describe('applyTaskFilters', () => {
       ...DEFAULT_TASK_FILTERS,
       assignee: { kind: 'person', person: { type: 'agent', id: 'ag1' } },
     };
-    expect(applyTaskFilters(tasks, person, byWorkspace).map(t => t.message_id)).toEqual([
+    expect(applyTaskFilters(tasks, person, byWorkspace).map(t => t.id)).toEqual([
       'c',
     ]);
   });
 
   it('keys person filters by {type,id} so agent/user ids do not collide', () => {
     const collide = [
-      task({ message_id: 'x', creator: { type: 'agent', id: 'shared', name: 'A' } }),
-      task({ message_id: 'y', creator: { type: 'user', id: 'shared', name: 'U' } }),
+      task({ id: 'x', creator: { type: 'agent', id: 'shared', name: 'A' } }),
+      task({ id: 'y', creator: { type: 'user', id: 'shared', name: 'U' } }),
     ];
     const f: TaskFilters = {
       ...DEFAULT_TASK_FILTERS,
       creator: { kind: 'person', person: { type: 'user', id: 'shared' } },
     };
-    expect(applyTaskFilters(collide, f, byWorkspace).map(t => t.message_id)).toEqual(['y']);
+    expect(applyTaskFilters(collide, f, byWorkspace).map(t => t.id)).toEqual(['y']);
   });
 });
 

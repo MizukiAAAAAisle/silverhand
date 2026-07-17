@@ -42,10 +42,6 @@ export interface TaskFilterOptions {
   /** Upstream cascade axis — regular workspaces and DMs, sorted by name. */
   workspaceOptions: WorkspaceOption[];
   channelOptions: ChannelOption[];
-  /** Union of every member workspace's scope ids — feeds `useTasks`'
-   *  workspace-level SSE subscription so the cross-workspace board
-   *  refreshes without polling. */
-  workspaceScopeIds: string[];
 }
 
 /** Minimal conversation shape the candidate mapper reads. */
@@ -94,11 +90,6 @@ export function useTaskFilterOptions(): TaskFilterOptions {
     useMemo(() => workspaces.map(w => w.id), [workspaces]),
   );
 
-  const workspaceScopeIds = useMemo(
-    () => [...new Set(workspaces.flatMap(w => w.workspace_scope_ids))],
-    [workspaces],
-  );
-
   // Workspace filter offers BOTH regular workspaces and DMs — the upstream
   // cascade axis (shiki #task:1387 review: match the message-search workspace
   // filter, which lists DMs too). Each option carries `kind` + `dmAgentId` so
@@ -145,5 +136,5 @@ export function useTaskFilterOptions(): TaskFilterOptions {
     });
   }, [workspaces, channelLists]);
 
-  return { workspaceOptions, channelOptions, workspaceScopeIds };
+  return { workspaceOptions, channelOptions };
 }

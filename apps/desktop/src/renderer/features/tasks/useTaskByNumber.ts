@@ -59,7 +59,7 @@ export function applyTaskChangedToTaskByNumberCache(
     if (!prev) return prev;
     return {
       ...prev,
-      message_id: task.message_id,
+      id: task.task_id,
       workspace_id: task.workspace_id,
       channel_id: task.channel_id,
       // Keep the navigation anchor fresh from the realtime event so

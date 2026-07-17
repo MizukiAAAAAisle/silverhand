@@ -246,7 +246,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
         <TaskPopoverBody
           task={task}
           onStatusChange={next =>
-            updateStatus.mutate({ messageId: task.message_id, status: next })
+            updateStatus.mutate({ taskId: task.id, status: next })
           }
           onPickerOpenChange={setPickerOpen}
         />

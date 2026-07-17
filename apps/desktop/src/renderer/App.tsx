@@ -534,10 +534,7 @@ function RegisteredAppShell(): JSX.Element {
   // workspace-aggregate to match where the entry lives).
   const { data: workspaceTasks = [] } = useTasks(
     selectedWorkspaceId ? { workspace_id: selectedWorkspaceId } : {},
-    {
-      enabled: !!selectedWorkspaceId,
-      workspaceScopeIds: selectedWorkspace?.workspace_scope_ids,
-    },
+    { enabled: !!selectedWorkspaceId },
   );
   // Exclude both terminal statuses: `done` (completed) and `closed`
   // (shelved). After the closed-as-status cutover `closed` is the 5th

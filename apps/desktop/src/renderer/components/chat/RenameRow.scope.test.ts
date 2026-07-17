@@ -21,12 +21,7 @@ function renameMessage(meta: Record<string, unknown>): MessageDto {
     seq: decodeMessageSeq(1),
     created_at: 0,
     thread_root_id: null,
-    task_number: null,
-    task_status: null,
-    task_title: null,
-    task_workspace_id: null,
-    task_closed_at: null,
-    task_assignee: null,
+    linked_task: null,
     reactions: null,
   };
 }

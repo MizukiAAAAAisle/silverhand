@@ -168,19 +168,24 @@ describe('applyMainlineMessageToChannelCaches — reply (thread_root_id set), #1
 });
 
 describe('applyTaskChangedToMessage (the one task-chip merge helper)', () => {
-  it('sets the task-chip fields absolute from the event', () => {
+  it('sets an absolute linked_task snapshot on the source message from the event', () => {
     // The projection fan-out that used to live in `applyTaskChangedToChannelCaches`
     // / `applyClusterTaskChangedToCaches` moved into the message-row patch seam
     // (`patchMessageInActiveProjections`, #task:1270); its event×projection×reader
     // coverage lives in the ingestor's "message-row patch seam" matrix. This keeps
-    // the ONE merge helper the seam carries as its `patchRow`.
+    // the ONE merge helper the seam carries as its `patchRow`. The snapshot is
+    // ABSOLUTE (build-from-null, replay-idempotent), not a delta over the prior chip.
     const out = applyTaskChangedToMessage(
       message({
         id: 't1',
         seq: 1,
-        task_number: 7,
-        task_status: 'todo',
-        task_title: 'old',
+        linked_task: {
+          task_id: 'task-7',
+          task_number: 7,
+          title: 'old',
+          status: 'todo',
+          assignee: null,
+        },
       }),
       {
         kind: 'status',
@@ -189,16 +194,21 @@ describe('applyTaskChangedToMessage (the one task-chip merge helper)', () => {
         thread_root_id: null,
         conversation_id: 'c1',
         task_number: 7,
-        message_id: 't1',
+        task_id: 'task-7',
+        source_message_id: 't1',
         status: 'in_progress',
         assignee: null,
         title: 'do the thing',
         closed_at: null,
       },
     );
-    expect(out.task_status).toBe('in_progress');
-    expect(out.task_title).toBe('do the thing');
-    expect(out.task_number).toBe(7);
+    expect(out.linked_task).toEqual({
+      task_id: 'task-7',
+      task_number: 7,
+      title: 'do the thing',
+      status: 'in_progress',
+      assignee: null,
+    });
   });
 });
 
@@ -229,12 +239,7 @@ function message(
     seq: decodeMessageSeq(seq ?? 1),
     created_at: 0,
     thread_root_id: null,
-    task_number: null,
-    task_status: null,
-    task_title: null,
-    task_workspace_id: null,
-    task_closed_at: null,
-    task_assignee: null,
+    linked_task: null,
     reactions: null,
     ...rest,
   };

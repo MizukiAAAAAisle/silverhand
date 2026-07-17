@@ -148,12 +148,7 @@ describe('SystemMessage channel refs', () => {
       seq: decodeMessageSeq(1),
       created_at: 0,
       thread_root_id: null,
-      task_number: null,
-      task_status: null,
-      task_title: null,
-      task_workspace_id: null,
-      task_closed_at: null,
-      task_assignee: null,
+      linked_task: null,
       reactions: null,
     };
   }
@@ -677,6 +672,7 @@ describe('SystemMessage channel refs', () => {
       ['task_create', {
         task_number: 1,
         task_status: 'todo',
+        task_id: 'task-1',
         task_message_id: 'mt',
         task_title: 't',
         task_assignee: null,
@@ -718,12 +714,7 @@ describe('SystemMessage task event rows (PR-2)', () => {
       seq: decodeMessageSeq(1),
       created_at: 0,
       thread_root_id: null,
-      task_number: null,
-      task_status: null,
-      task_title: null,
-      task_workspace_id: null,
-      task_closed_at: null,
-      task_assignee: null,
+      linked_task: null,
       reactions: null,
     };
   }
@@ -765,7 +756,7 @@ describe('SystemMessage task event rows (PR-2)', () => {
 
   function seededTask(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
     return {
-      message_id: 'msg-task-x',
+      id: 'task-42',
       task_number: 42,
       workspace_id: 'ws-1',
       workspace_name: 'silverhand',
@@ -786,6 +777,7 @@ describe('SystemMessage task event rows (PR-2)', () => {
   const fullMeta = (overrides: Record<string, unknown>): Record<string, unknown> => ({
     task_number: 42,
     task_status: 'todo',
+    task_id: 'task-42',
     task_message_id: 'msg-task-42',
     task_title: 'wire registry',
     task_assignee: null,
@@ -1365,7 +1357,7 @@ describe('Markdown task refs', () => {
 describe('Markdown bare task refs (#task:1430)', () => {
   function bareTask(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
     return {
-      message_id: 'msg-bare',
+      id: 'task-bare',
       task_number: 42,
       workspace_id: 'w-eng',
       workspace_name: 'silverhand',

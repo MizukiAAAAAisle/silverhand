@@ -5,9 +5,9 @@ import { Bookmark, Check, Download, FileText, SmilePlus, User } from 'lucide-rea
 import type {
   AgentDto,
   AttachmentSnapshot,
-  MessageDto,
   ReplyBadgeSummary,
   StreamUnreadDto,
+  TaskAssigneeDto,
   UserDto,
 } from '@silverhand/shared';
 import { resolveAttachmentLabels } from '@silverhand/shared';
@@ -110,6 +110,14 @@ export interface MessageItemProps {
    *  those are reads. Save/unsave is gated separately via `onSave` (undefined
    *  hides it). */
   canParticipate?: boolean;
+  /** Whether the viewer may WRITE the linked task's status from its inline
+   *  chip (the "Move to" picker). The write axis, mirroring `canReact`:
+   *  `true` only for a member of an open channel. Defaults to `false`
+   *  (fail-closed) — a non-member browsing a public channel, or any read-only
+   *  surface (screenshot / saved / search preview), still SEES the chip with
+   *  identical look + content, but the status picker is inert. Reading the
+   *  task's state is public; only the mutation entry is member-gated. */
+  canMutateLinkedTask?: boolean;
   /** Object URL pointing at the current viewer's avatar blob (or null
    *  if the viewer has no avatar / isn't loaded yet). Lifted into the
    *  parent pane so a single fetch drives every message render in the
@@ -224,6 +232,7 @@ export function MessageItem({
   saved = false,
   canReact = true,
   canParticipate = true,
+  canMutateLinkedTask = false,
   highlighted = false,
   jumpFlash = false,
   viewerAvatarObjectUrl = null,
@@ -306,11 +315,12 @@ export function MessageItem({
     [toMembersUser],
   );
   const taskTag =
-    message.task_number !== null && message.task_status !== null ? (
+    message.linked_task !== null ? (
       <MessageTaskTag
         message={message}
         agentsById={agentsById}
         userResolver={userResolver}
+        canMutate={canMutateLinkedTask}
       />
     ) : null;
   const [hover, setHover] = useState(false);
@@ -731,7 +741,7 @@ export function MessageItem({
 }
 
 /**
- * Task tag for a message that has been claimed/promoted as a task.
+ * Task tag for a message linked to a task.
  *
  * Lives at the message's BOTTOM edge — its own row ahead of reactions and
  * the thread-reply badge (shiki #task:1185), aligned to the message's
@@ -744,39 +754,87 @@ export function MessageItem({
  * status chip per theme — incl. forza6's poster caps / 0-radius). The status
  * is carried by the leading glyph (from the shared `TASK_STATUS_ICON` source,
  * so it tracks the kanban board) + the fill colour — no redundant status
- * text. Clicking anywhere on the tag opens the "Move to" picker, which drives
- * `useUpdateTaskStatus` (`POST /api/tasks/:id/status`) — the same any→any path
- * the inline `#task:N` reference uses. The task title lives in the tooltip.
+ * text. For a member of an open channel (`canMutate`), clicking anywhere on the
+ * tag opens the "Move to" picker, which drives `useUpdateTaskStatus`
+ * (`POST /api/tasks/:id/status`) — the same any→any path the inline `#task:N`
+ * reference uses. For a non-member (public channel = read-only) or any
+ * read-only surface, the chip renders identically — same glyph, colour, number,
+ * assignee — but as an inert `<span>`: the status is public to read, only the
+ * mutation entry is member-gated. The task title lives in the tooltip.
  *
- * Renders nothing for a non-task message.
+ * Renders nothing when the message has no linked task.
  */
 function MessageTaskTag({
   message,
   agentsById,
   userResolver,
+  canMutate,
 }: {
   message: CachedMessage;
   agentsById: Map<string, AgentDto>;
   userResolver?: UserNameResolver;
+  canMutate: boolean;
 }): JSX.Element | null {
   const updateStatus = useUpdateTaskStatus();
-  if (message.task_number === null || message.task_status === null) return null;
+  const linkedTask = message.linked_task;
+  if (linkedTask === null) return null;
 
-  const status = message.task_status;
+  const status = linkedTask.status;
   const label = taskStatusLabel(status);
   const StatusIcon = TASK_STATUS_ICON[status];
-  const assignee = message.task_assignee
-    ? formatTaskAssignee(message.task_assignee, agentsById, userResolver)
+  const assignee = linkedTask.assignee
+    ? formatTaskAssignee(linkedTask.assignee, agentsById, userResolver)
     : null;
-  const title = [`Task #${message.task_number}`, label, assignee, message.task_title]
+  const title = [`Task #${linkedTask.task_number}`, label, assignee, linkedTask.title]
     .filter(Boolean)
     .join(' · ');
+
+  // Shared chip body — identical glyph / number / assignee across both the
+  // interactive and read-only forms, so a non-member reads the exact same
+  // task state a member does.
+  const body = (
+    <>
+      {/* Status glyph from the shared TASK_STATUS_ICON source (kanban /
+          drawer use the same), so a future icon swap updates everywhere. */}
+      <StatusIcon className="size-3 shrink-0" aria-hidden />
+      {/* ASCII sigil (`#NNN`) in mono so the number reads as a task
+          reference; forza6 swaps it to poster display caps via the
+          `[data-task-status]` font rule, which is on-theme there. */}
+      <span className="font-mono shrink-0">#{linkedTask.task_number}</span>
+      {assignee ? (
+        <span className="min-w-0 truncate font-normal">· {assignee}</span>
+      ) : null}
+    </>
+  );
+
+  // Read-only chip (non-member / read-only surface): same look + content, no
+  // picker, no mutation, no interactive affordances. The click falls through
+  // to the row's normal selection/jump behaviour.
+  if (!canMutate) {
+    return (
+      <span
+        data-message-task-tag
+        // Same `[data-task-status]` token contract as the interactive form —
+        // fill / border / radius stay in lockstep with the board chips.
+        data-task-status={status}
+        title={title}
+        className="inline-flex h-[18px] max-w-[220px] cursor-default items-center gap-1.5 whitespace-nowrap rounded-[var(--chip-radius)] px-2 text-[11px] font-medium leading-none"
+      >
+        {/* The status glyph is aria-hidden and the fill colour is visual-only,
+            and a generic span's aria-label is not reliably exposed — so carry
+            the status name as real screen-reader text. The #number + assignee
+            are already read from the body's visible text nodes. */}
+        <span className="sr-only">{label}</span>
+        {body}
+      </span>
+    );
+  }
 
   return (
     <StatusPicker
       current={status}
       onChange={next =>
-        updateStatus.mutate({ messageId: message.id, status: next })
+        updateStatus.mutate({ taskId: linkedTask.task_id, status: next })
       }
     >
       <button
@@ -788,28 +846,19 @@ function MessageTaskTag({
         // border / colour utilities here — they would fight the tokens.
         data-task-status={status}
         title={title}
-        aria-label={`Task #${message.task_number}（${label}）— 点击更改状态`}
+        aria-label={`Task #${linkedTask.task_number}（${label}）— 点击更改状态`}
         // Stop the click from reaching the row's selection/jump capture.
         onClick={e => e.stopPropagation()}
         className="inline-flex h-[18px] max-w-[220px] cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-[var(--chip-radius)] px-2 text-[11px] font-medium leading-none transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
       >
-        {/* Status glyph from the shared TASK_STATUS_ICON source (kanban /
-            drawer use the same), so a future icon swap updates everywhere. */}
-        <StatusIcon className="size-3 shrink-0" aria-hidden />
-        {/* ASCII sigil (`#NNN`) in mono so the number reads as a task
-            reference; forza6 swaps it to poster display caps via the
-            `[data-task-status]` font rule, which is on-theme there. */}
-        <span className="font-mono shrink-0">#{message.task_number}</span>
-        {assignee ? (
-          <span className="min-w-0 truncate font-normal">· {assignee}</span>
-        ) : null}
+        {body}
       </button>
     </StatusPicker>
   );
 }
 
 function formatTaskAssignee(
-  assignee: NonNullable<MessageDto['task_assignee']>,
+  assignee: TaskAssigneeDto,
   agentsById: Map<string, AgentDto>,
   userResolver?: UserNameResolver,
 ): string {

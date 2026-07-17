@@ -733,6 +733,7 @@ export function ThreadPanel({
         conversationId={channelId}
         canReact={!closed && !archived && canParticipate}
         canParticipate={canParticipate}
+        canMutateLinkedTask={!closed && !archived && gate.allowMutations}
         agentsById={agentsById}
         agentsByName={agentsByName}
         humansByName={humansByName}

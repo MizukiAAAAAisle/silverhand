@@ -53,6 +53,7 @@ import {
   openThreadFollowerReaderRoots,
   openThreadRootReaderRoots,
   patchMessageInActiveProjections,
+  patchWarmInactiveMessageRow,
   reconcileChannelAgentsOnSnapshotRequired,
   reconcileChannelMainlineOnSnapshotRequired,
   reconcileClusterOnSnapshotRequired,
@@ -64,6 +65,7 @@ import {
 import type { ConversationAgentStatusPatch } from '@/features/channels/hooks';
 import { messageReactorsKey } from '@/features/channels/reaction-hooks';
 import { applyTaskChangedToTaskByNumberCache } from '@/features/tasks/useTaskByNumber';
+import { taskDetailKey } from '@/features/tasks/taskDetail';
 import {
   dispositionSettle,
   ingestMessageProjections,
@@ -142,7 +144,8 @@ export const REPLAY_SAFETY_CONTRACTS = {
   task_message_patch: {
     cursor: 'content-apply',
     recovery: 'idempotent',
-    summary: 'task chip patch sets fields by message id',
+    summary:
+      'task chip sets an absolute linked_task snapshot on the SOURCE message row (by source_message_id) across active AND warm-inactive caches; a source-backed frame ALWAYS satisfies the floor (displayed/warm → patched, absent row → authoritative-on-paginate vacuous-satisfy), a source-less task is vacuously satisfied',
   },
   reaction_message_patch: {
     cursor: 'content-apply',
@@ -289,10 +292,13 @@ function asSideKind(kind: string): SideKind | null {
  * warm cache — the #1251 hole needs a warm DISPLAYABLE cache, which cold-absent
  * lacks. A readerless-but-WARM window is instead removed (never vacuously
  * satisfied — that would serve post-advance stale rows, Cindy B1). So the reader
- * gate governs cache-writes, not the floor. (`task_changed` / `reaction` are the
- * one carve-out — pure idempotent patches with no derived-invalidate, so they
- * keep the synchronous content-apply gate; their satisfaction-model unification is
- * a possible fast-follow.) The `markSatisfied` / `commitSnapshotBaseline` water-
+ * gate governs cache-writes, not the floor. (`reaction` is the one carve-out —
+ * a pure idempotent by-id patch with no derived-invalidate, so it keeps the
+ * synchronous content-apply gate. `task_changed` is also a by-id patch but writes
+ * its ABSOLUTE chip snapshot to active AND warm-inactive caches and then always
+ * satisfies for a source-backed frame — displayed/warm patched, off-window
+ * vacuous-satisfy — so it leaves no stale warm cache and never pins the floor on
+ * an out-of-window source row.) The `markSatisfied` / `commitSnapshotBaseline` water-
  * mark WRITERS live in Alice's transport seam (`ws-client.ts`, step-4); this
  * ingestor is their sole content-driven CALLER — it fires `markSatisfied` off the
  * per-frame `Promise.allSettled` satisfaction join and drives
@@ -510,22 +516,42 @@ function ingestTaskChanged(
   // it unconditionally (not behind the mainline gate) drops an incidental
   // coupling: task detail must update even when the mainline isn't open.
   applyTaskChangedToTaskByNumberCache(qc, task);
-  // The message-row chip (task_number/status/title/…) is a message-scoped row
-  // patch → the seam fans it to every displayed projection holding the row
-  // (mainline / open clusters / open thread-root), closing the coverage the
-  // old hand-enumerated handler missed for thread-root task rows.
-  return contentEffectApplied(
-    'task_message_patch',
-    patchMessageInActiveProjections(
-      qc,
-      {
-        channelId,
-        messageId: task.message_id,
-        threadRootId: task.thread_root_id,
-      },
-      message => applyTaskChangedToMessage(message, task),
-    ),
-  );
+  // Same authoritative-on-open class: an open task detail modal reads a
+  // separate `['task-detail', task_id]` projection. Invalidate it so a
+  // remote edit refreshes the open body; no-op when that cache is
+  // absent (nothing open). Body stays out of the thin event — detail
+  // refetches, matching the existing contract.
+  void qc.invalidateQueries({ queryKey: taskDetailKey(task.task_id), exact: true });
+  // The inline task chip lives on the SOURCE message (the one the task was
+  // created from) — a first-class task is no longer a message row of its own.
+  // A source-less task therefore has NO message-stream row to patch: its only
+  // effects are the authoritative-on-open caches above, so the frame is
+  // vacuously satisfied (like a cold-absent `message` frame) — return true so
+  // the resume floor advances instead of pinning on a patch that can never land.
+  if (task.source_message_id === null) return true;
+  // Source-backed: write the absolute `linked_task` snapshot to the source row
+  // WHEREVER it is cached, then satisfy the floor unconditionally. Three states
+  // (Cindy gate) — the chip snapshot is ABSOLUTE (a by-id field SET, not an
+  // APPEND), so an in-place patch is authoritative in every one:
+  //   1. displayed projection holds it → seam patches → satisfy;
+  //   2. only a warm-INACTIVE cache holds it → warm-patch in place (never leave a
+  //      displayable stale chip — ws-client forbids satisfying past one) → satisfy;
+  //   3. no cache holds it → a future paginate fetches it authoritatively →
+  //      VACUOUS satisfy.
+  // Old behaviour pinned the floor on an off-window no-op ("harmless") — wrong:
+  // a task source commonly sits >1 window back, and pinning strands that seq out
+  // of the contiguous satisfied set (ws-client authoritative-on-paginate). We do
+  // NOT copy reaction's active-only contract here (its scope is unchanged).
+  const patchRow = (message: MessageDto): MessageDto =>
+    applyTaskChangedToMessage(message, task);
+  const target = {
+    channelId,
+    messageId: task.source_message_id,
+    threadRootId: task.thread_root_id,
+  };
+  patchMessageInActiveProjections(qc, target, patchRow);
+  patchWarmInactiveMessageRow(qc, channelId, task.source_message_id, patchRow);
+  return contentEffectApplied('task_message_patch', true);
 }
 
 function ingestReaction(
@@ -652,9 +678,17 @@ function ingestSideSnapshotRequired(qc: QueryClient, channelId: string): void {
  *    all-fulfilled, `markSatisfied(scope, seq, epoch)` once (#1261: content applies
  *    + committed derived-invalidates + warm-removes + cold-absent vacuous all
  *    satisfy; a rejected refetch pins the floor);
- *  - a `task_changed` / `reaction` `event` → a pure idempotent content patch, so
- *    the synchronous `applied` gate stands: a real patch → `markSatisfied` once, a
+ *  - a `reaction` `event` → a pure idempotent content patch, so the synchronous
+ *    `applied` gate stands: a real patch → `markSatisfied` once, an off-window
  *    no-op → none (false-positive forbidden, §4.1);
+ *  - a `task_changed` `event` → an ABSOLUTE by-id chip snapshot written to the
+ *    source row across active AND warm-inactive caches, then satisfy
+ *    UNCONDITIONALLY for a source-backed frame: displayed/warm → patched;
+ *    off-window (no cache holds it) → authoritative-on-paginate VACUOUS satisfy
+ *    (never pin the floor on a source row that legitimately sits windows back);
+ *    a source-less task is vacuously satisfied too. Unlike reaction it does NOT
+ *    keep the active-only no-op-pins gate — an absolute patch leaves no stale
+ *    warm cache, so satisfying is safe (ws-client displayable-stale invariant);
  *  - `snapshot_required` → collect the reconcile settle Promises and, once the
  *    `Promise.allSettled` join is all-fulfilled, `commitSnapshotBaseline(scope,
  *    epoch)` once (apply-gated commit, §6). A rejected settle leaves the floor
@@ -696,11 +730,16 @@ export function ingestConversationFrame(
   //    `markSatisfied` on a per-frame `Promise.allSettled` — all-fulfilled advances
   //    the floor once (after any refetch COMMITS); a rejected refetch pins it; a
   //    cold-absent frame satisfies vacuously (allSettled([]) is all-fulfilled).
-  //  - `task_changed` / `reaction` are pure idempotent content patches (set-by-id,
-  //    replay-safe) with no derived-invalidate effect, so they keep the synchronous
-  //    `applied` gate: a real patch advances the floor, a no-op pins it (harmless
-  //    on idempotent replay). Their #1261 satisfaction-model unification is a
-  //    possible fast-follow, out of #1263's reply-count scope.
+  //  - `reaction` is a pure idempotent content patch (set-by-id, replay-safe)
+  //    with no derived-invalidate effect, so it keeps the synchronous `applied`
+  //    gate: a real patch advances the floor, an off-window no-op pins it
+  //    (harmless on idempotent replay).
+  //  - `task_changed` is an ABSOLUTE by-id chip patch written to active AND
+  //    warm-inactive caches; a source-backed frame ALWAYS satisfies (displayed/
+  //    warm → patched, off-window → authoritative-on-paginate vacuous-satisfy),
+  //    so it never pins the floor on a source row that sits windows back. It does
+  //    NOT share reaction's no-op-pins gate (an absolute patch leaves no stale
+  //    warm cache).
   if (messageStreamId) {
     const kind = asMessageStreamKind(frame.kind);
     if (kind === 'message') {
@@ -725,7 +764,7 @@ export function ingestConversationFrame(
     let applied = false;
     if (kind === 'task_changed') {
       const task = frame.payload as TaskChangedEvent | undefined;
-      if (task?.message_id) applied = ingestTaskChanged(qc, messageStreamId, task);
+      if (task?.task_id) applied = ingestTaskChanged(qc, messageStreamId, task);
     } else if (kind === MESSAGE_REACTION_CHANGED_EVENT) {
       const ev = frame.payload as MessageReactionChangedEvent | undefined;
       if (ev?.message_id) applied = ingestReaction(qc, messageStreamId, ev);

@@ -27,25 +27,28 @@ import {
   appendMessageToCache,
 } from '@/features/channels/message-cache-core';
 
-/** Apply a `task_changed` frame to a SINGLE message row — the one place the
- *  task-chip merge lives so the mainline window, reply-cluster window, and the
- *  thread-pane root row all stay consistent (mirrors {@link applyReactionToMessage},
- *  and the reason the projection-fan-out {@link patchMessageInActiveProjections}
- *  seam can carry it as an opaque `patchRow`). Idempotent: SETS the task fields
- *  absolute from the event, so replay is a no-op. The caller matches
- *  `message.id === task.message_id`. */
+/** Apply a `task_changed` frame to a SINGLE message row — the source message
+ *  the task was created from, which carries the inline task chip. This is the
+ *  one place the source-chip merge lives so the mainline window, reply-cluster
+ *  window, and the thread-pane root row all stay consistent (mirrors {@link
+ *  applyReactionToMessage}, and the reason the projection-fan-out {@link
+ *  patchMessageInActiveProjections} seam can carry it as an opaque `patchRow`).
+ *  Idempotent: SETS `linked_task` as an ABSOLUTE snapshot from the event (not a
+ *  delta/merge over any prior chip), so a first sighting builds it from null and
+ *  replay is a no-op. The caller matches `message.id === task.source_message_id`. */
 export function applyTaskChangedToMessage(
   message: MessageDto,
   task: TaskChangedEvent,
 ): MessageDto {
   return {
     ...message,
-    task_number: task.task_number,
-    task_status: task.status,
-    task_title: task.title,
-    task_workspace_id: task.workspace_id,
-    task_closed_at: task.closed_at,
-    task_assignee: task.assignee,
+    linked_task: {
+      task_id: task.task_id,
+      task_number: task.task_number,
+      title: task.title,
+      status: task.status,
+      assignee: task.assignee,
+    },
   };
 }
 
@@ -248,9 +251,68 @@ export function patchMessageInActiveProjections(
   return applied;
 }
 
-/** Set/clear the mainline live-gap affordance. Single shared writer: the
- *  ingestor sets `true` on a gapped live message; the reader view clears `false`
- *  on channel switch / reached tail / reset (#task:1255 P1a). */
+/** Patch the source-message row in WARM-INACTIVE caches — a warm cache with NO
+ *  live reader, which React Query still serves on a remount within `staleTime`,
+ *  so it is still DISPLAYABLE. Companion to {@link patchMessageInActiveProjections}
+ *  for the task-chip convergence: a task's source message can sit many windows
+ *  back, held only by a warm cache; leaving it unpatched would (a) surface a
+ *  stale chip on paginate-back and (b) — per the ws-client resume-floor
+ *  invariant — forbid satisfying the floor at all. Because the task chip snapshot
+ *  is ABSOLUTE (a by-id field SET, not an APPEND), an in-place warm patch is
+ *  authoritative and cheap — unlike a message append, which must cold-start via
+ *  §6 warm-remove. A no-op when no warm cache holds the row. NOT used by reaction
+ *  (whose active-only scope is intentionally unchanged this task). Returns
+ *  whether any warm row was written (for tests; the caller satisfies the floor
+ *  regardless, since an absent row is authoritative-on-paginate). */
+export function patchWarmInactiveMessageRow(
+  qc: QueryClient,
+  channelId: string,
+  messageId: string,
+  patchRow: (message: MessageDto) => MessageDto,
+): boolean {
+  let patched = false;
+  // Warm-inactive mainline window.
+  if (
+    hasWarmInactiveMainline(qc, channelId) &&
+    mapMessageRowInWindow(qc, messagesKey(channelId), messageId, patchRow)
+  ) {
+    patched = true;
+  }
+  // Warm-inactive reply-cluster windows.
+  for (const rootId of warmInactiveClusterRoots(qc, channelId)) {
+    if (
+      mapMessageRowInWindow(
+        qc,
+        clusterMessagesKey(channelId, rootId),
+        messageId,
+        patchRow,
+      )
+    ) {
+      patched = true;
+    }
+  }
+  // Warm-inactive thread-pane root rows (single-row cache; no-op unless this
+  // closed-but-warm root IS the source message).
+  for (const rootId of warmInactiveThreadRootRoots(qc, channelId)) {
+    if (mapMessageRowInThreadRoot(qc, channelId, rootId, messageId, patchRow)) {
+      patched = true;
+    }
+  }
+  return patched;
+}
+
+/** Roots of WARM-INACTIVE thread-root rows (warm cache, zero observers) —
+ *  the thread-root sibling of {@link warmInactiveClusterRoots}. */
+function warmInactiveThreadRootRoots(
+  qc: QueryClient,
+  channelId: string,
+): string[] {
+  return qc
+    .getQueryCache()
+    .findAll({ queryKey: ['channels', channelId, 'thread-root'] })
+    .filter(q => q.getObserversCount() === 0 && q.state.data !== undefined)
+    .map(q => (q.queryKey as readonly unknown[])[3] as string);
+}
 export function setMainlineLiveGap(
   qc: QueryClient,
   channelId: string,

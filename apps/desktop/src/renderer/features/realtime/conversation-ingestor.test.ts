@@ -617,12 +617,7 @@ function message(
     seq: decodeMessageSeq(seq ?? 1),
     created_at: 0,
     thread_root_id: null,
-    task_number: null,
-    task_status: null,
-    task_title: null,
-    task_workspace_id: null,
-    task_closed_at: null,
-    task_assignee: null,
+    linked_task: null,
     reactions: null,
     ...rest,
   };
@@ -922,7 +917,7 @@ describe('ingestConversationFrame — per-event satisfaction disposition (#task:
     unsub();
   });
 
-  it('task_changed keeps the SYNCHRONOUS content-apply gate (hybrid: not the message allSettled path)', () => {
+  it('task_changed satisfies the floor via the SYNCHRONOUS satisfaction path (hybrid: not the message allSettled path)', () => {
     const qc = new QueryClient();
     const unsub = mountMainlineReader(qc, 'c1');
     // Seed the row the chip patches so the patch lands (applied=true).
@@ -930,7 +925,7 @@ describe('ingestConversationFrame — per-event satisfaction disposition (#task:
       pages: [
         {
           messages: [
-            message({ id: 't1', seq: 5, task_number: 7, task_status: 'todo' }),
+            message({ id: 't1', seq: 5 }),
           ],
           reply_counts_by_root: {},
           has_more_before: false,
@@ -942,7 +937,7 @@ describe('ingestConversationFrame — per-event satisfaction disposition (#task:
     });
     ingestConversationFrame(qc, taskChangedFrame('c1', 't1', 6));
     // Synchronous (no await) — task/reaction are pure idempotent patches, so they
-    // keep the boolean content-apply gate rather than the message allSettled path.
+    // satisfy the floor synchronously rather than via the message allSettled path.
     expect(markSatisfied).toHaveBeenCalledTimes(1);
     expect(markSatisfied).toHaveBeenCalledWith(conversationScope('c1'), 6, 'epoch-1');
     unsub();
@@ -1403,7 +1398,7 @@ describe('ingestConversationFrame — S1 threads_list_entry projection merge (#t
 // surface (mainline / cluster / thread-root / multi-open / no-reader) × {reaction,
 // task}. The `applied` boolean is the synchronous floor signal, so a spied
 // `markSatisfied` doubles as the applied assertion (reaction/task keep the
-// synchronous content-apply gate — #1263 hybrid boundary).
+// synchronous satisfaction path — #1263 hybrid boundary).
 describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)', () => {
   let markSatisfied: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
@@ -1479,19 +1474,23 @@ describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)
           id,
           seq: 5,
           thread_root_id: rootId,
-          task_number: 7,
-          task_status: 'todo',
-          task_title: 'old',
+          linked_task: {
+            task_id: 'task-7',
+            task_number: 7,
+            title: 'old',
+            status: 'todo',
+            assignee: null,
+          },
         }),
       fire: (qc: QueryClient, channelId: string, id: string) =>
         ingestConversationFrame(qc, taskChangedFrame(channelId, id, 6)),
       assertPatched: (row: MessageDto | undefined) => {
-        expect(row?.task_status).toBe('in_progress');
-        expect(row?.task_title).toBe('do the thing');
+        expect(row?.linked_task?.status).toBe('in_progress');
+        expect(row?.linked_task?.title).toBe('do the thing');
       },
       assertUnpatched: (row: MessageDto | undefined) => {
-        expect(row?.task_status).toBe('todo');
-        expect(row?.task_title).toBe('old');
+        expect(row?.linked_task?.status).toBe('todo');
+        expect(row?.linked_task?.title).toBe('old');
       },
     },
   ] as const;
@@ -1577,11 +1576,9 @@ describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)
         unsubR();
       });
 
-      it('no reader (warm caches, zero observers): patches nothing + markSatisfied NOT called', () => {
+      it('no reader (warm caches, zero observers): task warm-patches + satisfies; reaction skips', () => {
         const qc = new QueryClient();
-        // Warm caches exist but nothing observes them → not DISPLAYED, so the
-        // membership gate skips every projection (never resurrect a background
-        // cache off a live frame).
+        // Warm caches exist but nothing observes them → not DISPLAYED.
         qc.setQueryData(messagesKey('c1'), windowCache([ev.seedRow('m1')]));
         qc.setQueryData(
           clusterMessagesKey('c1', 'root1'),
@@ -1590,17 +1587,24 @@ describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)
 
         ev.fire(qc, 'c1', 'm1');
 
-        ev.assertUnpatched(rowInWindow(qc, messagesKey('c1'), 'm1'));
-        ev.assertUnpatched(
-          rowInWindow(qc, clusterMessagesKey('c1', 'root1'), 'r1'),
-        );
-        expect(markSatisfied).not.toHaveBeenCalled();
+        if (ev.kind === 'task') {
+          // Task chip is an ABSOLUTE by-id patch: a warm-inactive cache holding
+          // the source row MUST be patched (ws-client forbids satisfying past a
+          // displayable-stale cache), then the floor satisfies.
+          ev.assertPatched(rowInWindow(qc, messagesKey('c1'), 'm1'));
+          expect(markSatisfied).toHaveBeenCalledTimes(1);
+        } else {
+          // Reaction keeps the active-only behavior (scope not expanded this task):
+          // no displayed reader → not applied → floor not advanced.
+          ev.assertUnpatched(rowInWindow(qc, messagesKey('c1'), 'm1'));
+          expect(markSatisfied).not.toHaveBeenCalled();
+        }
       });
 
-      it('membership-gated: an OPEN reader whose window does NOT hold the row is a no-op (not applied)', () => {
+      it('membership-gated: an OPEN reader whose window does NOT hold the row — reaction no-ops; task vacuously satisfies (authoritative-on-paginate)', () => {
         const qc = new QueryClient();
-        // Mainline reader open, but its window holds a DIFFERENT row → the patch
-        // must not apply (id membership, not just reader presence).
+        // Mainline reader open, but its window holds a DIFFERENT row, and no warm
+        // cache holds the target → the source row is absent everywhere.
         const unsub = mountMainlineReader(qc, 'c1');
         qc.setQueryData(
           messagesKey('c1'),
@@ -1611,7 +1615,14 @@ describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)
 
         expect(rowInWindow(qc, messagesKey('c1'), 'm1')).toBeUndefined();
         ev.assertUnpatched(rowInWindow(qc, messagesKey('c1'), 'other'));
-        expect(markSatisfied).not.toHaveBeenCalled();
+        if (ev.kind === 'task') {
+          // No cache holds the source row → a future paginate fetches it
+          // authoritatively → VACUOUS satisfy (never pin the floor on an
+          // off-window source row; ws-client pending-satisfaction queue absorbs it).
+          expect(markSatisfied).toHaveBeenCalledTimes(1);
+        } else {
+          expect(markSatisfied).not.toHaveBeenCalled();
+        }
         unsub();
       });
     });
@@ -1620,12 +1631,15 @@ describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)
   // Alice's decoupling regression: the task-by-number DETAIL projection (inline
   // `#task:<n>` hover/detail) is a SEPARATE projection — authoritative-on-open,
   // fired OUTSIDE the row-patch seam, membership-gated by its OWN cache, and NOT
-  // counted in `applied`. Same class as reaction's reactors-list refresh. This
-  // locks: it still refreshes when the mainline is closed, it never bootstraps
-  // when absent, and it never advances the resume floor.
+  // counted as the floor signal. Same class as reaction's reactors-list refresh.
+  // This locks: it still refreshes when the mainline is closed and never
+  // bootstraps when absent. (The FLOOR itself advances for a source-backed frame
+  // via the source-row disposition — displayed/warm patch, else off-window
+  // vacuous-satisfy — which is orthogonal to this detail refresh; the detail
+  // refresh is not what triggers markSatisfied.)
   describe('task-by-number detail projection rides OUTSIDE the floor seam (Alice)', () => {
     const taskSummary = (): TaskSummaryDto => ({
-      message_id: 't1',
+      id: 't1',
       task_number: 7,
       workspace_id: 'w1',
       workspace_name: 'WS',
@@ -1641,7 +1655,7 @@ describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)
       closed_at: null,
     });
 
-    it('refreshes the detail cache when the mainline is CLOSED — and does NOT markSatisfied', () => {
+    it('refreshes the detail cache when the mainline is CLOSED (decoupled from the floor)', () => {
       const qc = new QueryClient();
       qc.setQueryData(taskByNumberKey('w1', 7), taskSummary());
       // No mainline / cluster / thread-root reader → the row seam applies nothing.
@@ -1651,17 +1665,21 @@ describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)
       const detail = qc.getQueryData<TaskSummaryDto>(taskByNumberKey('w1', 7));
       expect(detail?.status).toBe('in_progress');
       expect(detail?.title).toBe('do the thing');
-      // Decoupled: the detail refresh is NOT a floor-bearing content apply.
-      expect(markSatisfied).not.toHaveBeenCalled();
+      // The floor advance here is the SOURCE-ROW disposition (source 't1' is in no
+      // message cache → off-window vacuous-satisfy), NOT the detail refresh — the
+      // detail refresh is authoritative-on-open and never the floor signal.
+      expect(markSatisfied).toHaveBeenCalledTimes(1);
     });
 
-    it('is a no-op when the detail cache is absent (no bootstrap, no throw, no floor advance)', () => {
+    it('does not bootstrap an absent detail cache (no throw); source row still vacuously satisfies', () => {
       const qc = new QueryClient();
 
       ingestConversationFrame(qc, taskChangedFrame('c1', 't1', 6));
 
       expect(qc.getQueryData(taskByNumberKey('w1', 7))).toBeUndefined();
-      expect(markSatisfied).not.toHaveBeenCalled();
+      // No detail bootstrap, but the source-row disposition (source 't1' in no
+      // message cache → off-window vacuous-satisfy) still advances the floor once.
+      expect(markSatisfied).toHaveBeenCalledTimes(1);
     });
   });
 });
@@ -1718,7 +1736,7 @@ describe('message-row patch handlers — route through the seam, never hand-pick
 
 function taskChangedFrame(
   channelId: string,
-  messageId: string,
+  sourceMessageId: string,
   seq: number,
 ): ServerFrame {
   return {
@@ -1734,7 +1752,8 @@ function taskChangedFrame(
       thread_root_id: null,
       conversation_id: channelId,
       task_number: 7,
-      message_id: messageId,
+      task_id: 'task-7',
+      source_message_id: sourceMessageId,
       status: 'in_progress',
       assignee: null,
       title: 'do the thing',

@@ -160,8 +160,10 @@ export function removeWorkspaceFromActivity(
  *   - directed notifications (@me / agent-fail) → viewer-scoped `notification`
  *
  * `kind=task` is intentionally OUT of Activity v1 (#task:1227: a status mirror,
- * not an event), so there is NO `task_changed` subscription: one `viewer:<id>`
- * subscription covers both live sources. Task re-enters in v2 only via a
+ * not an event), so THIS hook adds no `task_changed` subscription — one
+ * `viewer:<id>` subscription covers both Activity live sources. (The task
+ * board's own `useTasks` does subscribe `task_changed` on the same viewer
+ * scope; that is a separate consumer.) Task re-enters Activity in v2 only via a
  * notification-backed `task_needs_review`, which already rides the
  * `notification` source above.
  */

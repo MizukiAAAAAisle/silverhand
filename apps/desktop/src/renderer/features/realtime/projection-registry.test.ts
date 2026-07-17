@@ -25,12 +25,7 @@ function replyMsg(rootId: string): MessageDto {
     seq: decodeMessageSeq(6),
     created_at: 0,
     thread_root_id: rootId,
-    task_number: null,
-    task_status: null,
-    task_title: null,
-    task_workspace_id: null,
-    task_closed_at: null,
-    task_assignee: null,
+    linked_task: null,
     reactions: null,
   };
 }
