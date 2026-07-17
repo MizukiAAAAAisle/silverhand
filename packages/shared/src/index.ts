@@ -3,6 +3,7 @@ export * from './agent-home-workspace.js';
 export * from './bind-address-scope.js';
 export * from './db/schema.js';
 export * from './driver/index.js';
+export * from './client-telemetry.js';
 export * from './config.js';
 export * from './connect-command.js';
 export * from './host-diagnostics.js';

@@ -11,6 +11,8 @@ coverage
 # Electron
 release/
 release-remote-server/
+# #task:1530 — remote-only manifest generated at build time from the version SoT
+apps/desktop/package.remote-only.generated.json
 
 # Local data
 .claude/worktrees/*

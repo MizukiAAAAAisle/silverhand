@@ -279,6 +279,23 @@ stage_dmgbuild_bundle() {
 }
 
 echo "[package] building workspace packages"
+
+# #task:1530 — desktop release telemetry: single version SoT + build metadata.
+# `apps/desktop/package.json.version` is the SOLE desktop release-version source.
+# The remote-only variant ships a build-generated manifest (see the remote-only
+# config block below) rather than a second hand-maintained version. The commit
+# sha + dirty flag are exported BEFORE the build so the electron-vite `main`
+# define bakes them into the bundle for the WS telemetry.
+CANONICAL_VERSION="$(node -p "require('./apps/desktop/package.json').version")"
+SILVERHAND_BUILD_COMMIT="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || echo dev)"
+if [[ -n "$(git -C "$ROOT_DIR" status --porcelain 2>/dev/null)" ]]; then
+  SILVERHAND_BUILD_DIRTY=1
+else
+  SILVERHAND_BUILD_DIRTY=0
+fi
+export SILVERHAND_BUILD_COMMIT SILVERHAND_BUILD_DIRTY
+echo "[package] desktop release $CANONICAL_VERSION @ ${SILVERHAND_BUILD_COMMIT:0:12} (dirty=$SILVERHAND_BUILD_DIRTY)"
+
 pnpm -r build
 pnpm --filter @silverhand/desktop build
 
@@ -310,6 +327,27 @@ ARTIFACT_OUTPUT_DIR="release"
 if [[ "$REMOTE_ONLY" == "1" ]]; then
   BUILDER_CONFIG="electron-builder.remote-only.yml"
   ARTIFACT_OUTPUT_DIR="release-remote-server"
+
+  # #task:1530 — the remote-only manifest ships via a `from: package.json` rename-
+  # copy that electron-builder's extraMetadata does NOT rewrite (it only touches
+  # the main apps/desktop/package.json). So the ONLY way the remote-only runtime
+  # app.getVersion() reads the canonical release version is to inject it here, at
+  # build time, into a generated manifest. The tracked template carries no version
+  # (single SoT); the generated file is git-ignored.
+  node -e '
+    const fs = require("fs");
+    const template = JSON.parse(fs.readFileSync("apps/desktop/package.remote-only.json", "utf8"));
+    if ("version" in template) {
+      console.error("[package] package.remote-only.json must NOT carry a version (single SoT)");
+      process.exit(1);
+    }
+    const generated = { ...template, version: process.argv[1] };
+    fs.writeFileSync(
+      "apps/desktop/package.remote-only.generated.json",
+      JSON.stringify(generated, null, 2) + "\n",
+    );
+  ' "$CANONICAL_VERSION"
+  echo "[package] generated remote-only manifest @ version $CANONICAL_VERSION"
 fi
 
 if [[ "$DIR_ONLY" == "1" ]]; then
@@ -376,6 +414,65 @@ verify_packaged_daemon() {
   echo "[package] packaged daemon matches @silverhand-ai/daemon@$expected_version"
 }
 
+# #task:1530 — prove the shipped artifact carries the canonical release version
+# (embedded AND remote-only must agree, since each is asserted == CANONICAL) and
+# that the build_commit was baked into the main bundle for WS telemetry. We check
+# TWO independent version surfaces:
+#   1. Info.plist CFBundleShortVersionString — the OS-facing app version.
+#   2. app.asar/package.json version — what `app.getVersion()` reads at RUNTIME,
+#      i.e. the exact value the client-info telemetry header reports. For the
+#      remote-only variant this is the generated rename-copy, so it is the real
+#      guard that the single-SoT injection reached the shipped app.
+verify_packaged_app_version() {
+  local app_path="$1"
+  local expected="$2"
+  local info_plist="$app_path/Contents/Info.plist"
+  if [[ ! -f "$info_plist" ]]; then
+    echo "[package] packaged Info.plist missing for version smoke: $info_plist" >&2
+    return 1
+  fi
+  local packaged_version
+  packaged_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist" 2>/dev/null || true)"
+  if [[ "$packaged_version" != "$expected" ]]; then
+    echo "[package] packaged Info.plist version '$packaged_version' != release SoT '$expected' (embedded/remote-only must not drift)" >&2
+    return 1
+  fi
+  echo "[package] packaged Info.plist version matches release SoT $expected"
+
+  # app.getVersion() reads app.asar/package.json.version at runtime — extract it
+  # via @electron/asar (resolved through electron-builder, a transitive dep under
+  # pnpm's strict layout) and assert it equals the canonical release version.
+  local app_asar="$app_path/Contents/Resources/app.asar"
+  if [[ ! -f "$app_asar" ]]; then
+    echo "[package] packaged app.asar missing for runtime-version smoke: $app_asar" >&2
+    return 1
+  fi
+  local asar_version
+  asar_version="$(cd "$ROOT_DIR/apps/desktop" && node -e '
+    const { createRequire } = require("module");
+    const path = require("path");
+    const reqDesktop = createRequire(path.join(process.cwd(), "package.json"));
+    const reqEb = createRequire(reqDesktop.resolve("electron-builder/package.json"));
+    const asar = reqEb("@electron/asar");
+    const pkg = JSON.parse(asar.extractFile(process.argv[1], "package.json").toString("utf8"));
+    process.stdout.write(String(pkg.version ?? ""));
+  ' "$app_asar" 2>/dev/null || true)"
+  if [[ "$asar_version" != "$expected" ]]; then
+    echo "[package] packaged app.asar/package.json version '$asar_version' != release SoT '$expected' (app.getVersion drift → wrong telemetry)" >&2
+    return 1
+  fi
+  echo "[package] packaged app.getVersion() source matches release SoT $expected"
+
+  if [[ "$SILVERHAND_BUILD_COMMIT" != "dev" ]]; then
+    if grep -aFq "$SILVERHAND_BUILD_COMMIT" "$app_asar"; then
+      echo "[package] packaged main bundle carries build_commit ${SILVERHAND_BUILD_COMMIT:0:12}"
+    else
+      echo "[package] packaged main bundle missing build_commit $SILVERHAND_BUILD_COMMIT" >&2
+      return 1
+    fi
+  fi
+}
+
 PACKAGED_APP_NAME="Silverhand.app"
 EXPECTED_DAEMON_BUNDLE="$ROOT_DIR/packages/host/dist/daemon.js"
 EXPECTED_DAEMON_VERSION="0.0.0-dev"
@@ -389,6 +486,8 @@ verify_packaged_daemon \
   "$PACKAGED_APP_PATH" \
   "$EXPECTED_DAEMON_BUNDLE" \
   "$EXPECTED_DAEMON_VERSION"
+
+verify_packaged_app_version "$PACKAGED_APP_PATH" "$CANONICAL_VERSION"
 
 if [[ "$REMOTE_ONLY" != "1" ]]; then
   verify_packaged_better_sqlite3 "$PACKAGED_APP_PATH" "$ELECTRON_ABI"

@@ -55,6 +55,14 @@ export default defineConfig({
       __SILVERHAND_DESKTOP_DEFAULT_SERVER_URL__: JSON.stringify(
         packagedDefaultServerUrl,
       ),
+      // #task:1530 — desktop release telemetry build metadata. Injected from env
+      // set by scripts/package.sh before build. MAIN ONLY — not preload/renderer.
+      __SILVERHAND_BUILD_COMMIT__: JSON.stringify(
+        process.env.SILVERHAND_BUILD_COMMIT ?? '',
+      ),
+      __SILVERHAND_BUILD_DIRTY__: JSON.stringify(
+        process.env.SILVERHAND_BUILD_DIRTY === '1',
+      ),
     },
     resolve: {
       alias: remoteOnly

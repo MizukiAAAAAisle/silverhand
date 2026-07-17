@@ -2,7 +2,7 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { apiPaths, EVENT_WS_SESSION_COOKIE } from '@silverhand/shared';
+import { apiPaths, CLIENT_INFO_HEADER, EVENT_WS_SESSION_COOKIE, parseClientInfoHeader } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
 import { EventWsConnection, type EventWsConnectionOptions } from './ws-connection.js';
 
@@ -64,6 +64,7 @@ export function installEventWebSocketServer(
       });
       connections.set(ws, connection);
       ctx.presence.onConnect(viewerUserId, connectionId);
+      logDesktopClientConnected(ctx, req, viewerUserId, connectionId);
       ws.on('close', () => {
         connections.delete(ws);
         ctx.presence.onDisconnect(viewerUserId, connectionId);
@@ -133,6 +134,47 @@ function resolveViewerUserIdFromCookie(
   if (!token) return null;
   const session = ctx.authSessions.validateSessionToken(token);
   return session.ok ? session.session.user_id : null;
+}
+
+/**
+ * #task:1530 — emit ONE structured release-telemetry line per authenticated
+ * event-WS connect, for fleet version-rollout observability (ECS JSONL log).
+ *
+ * Called only AFTER the upgrade is authenticated (viewer + connection resolved),
+ * so no unauthenticated connect is logged. The client-info header is untrusted:
+ * bounded-parsed to `valid | missing | invalid`, and only a `valid` payload
+ * contributes normalized fields. `missing` is still logged (observe old desktops
+ * that never send the header); `invalid` logs only the status — never the raw
+ * header. Telemetry is fail-open: this never rejects or affects the upgrade.
+ */
+function logDesktopClientConnected(
+  ctx: BackendContext,
+  req: IncomingMessage,
+  viewerUserId: string,
+  connectionId: string,
+): void {
+  const clientInfo = parseClientInfoHeader(req.headers[CLIENT_INFO_HEADER]);
+  ctx.logger.info(
+    {
+      action: 'desktop_client_connected',
+      user_id: viewerUserId,
+      connection_id: connectionId,
+      client_info_status: clientInfo.status,
+      ...(clientInfo.status === 'valid'
+        ? {
+            client_surface: clientInfo.value.client_surface,
+            deployment: clientInfo.value.deployment,
+            app_version: clientInfo.value.app_version,
+            build_commit: clientInfo.value.build_commit,
+            build_dirty: clientInfo.value.build_dirty,
+            platform: clientInfo.value.platform,
+            arch: clientInfo.value.arch,
+            installation_id: clientInfo.value.installation_id,
+          }
+        : {}),
+    },
+    'desktop client connected',
+  );
 }
 
 function parseCookie(header: string): Record<string, string> {

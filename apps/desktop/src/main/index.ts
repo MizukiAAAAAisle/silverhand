@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import {
   AuthSessionResponseSchema,
+  CLIENT_INFO_HEADER,
   EMBEDDED_BOOTSTRAP_FILENAME,
   EVENT_WS_SESSION_COOKIE,
   HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE,
@@ -57,6 +58,7 @@ import {
   writeServerConfig,
 } from './config.js';
 import { resolveEffectiveBootProfile } from './desktop-build-config.js';
+import { desktopClientInfoHeaderValue } from './client-info.js';
 import { waitForDaemonGeneration } from './daemon-generation-attach.js';
 import { applyFatalExitToClaim } from './local-host-failure.js';
 import {
@@ -646,6 +648,9 @@ function installBackendEventWsOriginOverride(): void {
   const expectedOrigin = backendOrigin();
   const expectedUrl = new URL(apiPaths.eventWebSocket, requireBackendUrl());
   expectedUrl.protocol = expectedUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+  // #task:1530 — release telemetry. Assembled once (memoized), fail-open: null
+  // means "omit the header", never break the upgrade.
+  const clientInfoHeader = desktopClientInfoHeaderValue(silverhandDir(), logger);
   electronSession.defaultSession.webRequest.onBeforeSendHeaders(
     { urls: [`${expectedUrl.protocol}//${expectedUrl.host}${apiPaths.eventWebSocket}`] },
     (details, callback) => {
@@ -659,6 +664,9 @@ function installBackendEventWsOriginOverride(): void {
             `${EVENT_WS_SESSION_COOKIE}=${encodeURIComponent(userSessionToken)}`;
         } else {
           delete details.requestHeaders.Cookie;
+        }
+        if (clientInfoHeader) {
+          details.requestHeaders[CLIENT_INFO_HEADER] = clientInfoHeader;
         }
       }
       callback({ requestHeaders: details.requestHeaders });

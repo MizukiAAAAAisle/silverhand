@@ -19,7 +19,13 @@ afterPack: scripts/afterPack.cjs
 
 files:
   - out/**/*
-  - from: package.remote-only.json
+  # #task:1530 — the shipped manifest is generated at build time from the single
+  # release-version SoT (apps/desktop/package.json) by scripts/package.sh; the
+  # tracked package.remote-only.json intentionally carries NO version so there is
+  # no second hand-maintained release version. extraMetadata does NOT rewrite this
+  # rename-copy (it only touches the main package.json), so injection is why the
+  # remote-only runtime app.getVersion() stays == canonical.
+  - from: package.remote-only.generated.json
     to: package.json
   - "!node_modules/@silverhand"
   - "!node_modules/@silverhand/**"
