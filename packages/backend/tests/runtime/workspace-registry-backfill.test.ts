@@ -33,7 +33,7 @@ import {
   HostWsCommandTransportError,
 } from '../../src/ws/host-ws-server.js';
 import type { OutboundFrameAdapter } from '../../src/runtime/outbound-frame-adapter.js';
-import { WorkspaceRegistryBackfiller } from '../../src/runtime/workspace-registry-backfill.js';
+import { WorkspaceRegistryBackfiller, summarizeMigrationAudit } from '../../src/runtime/workspace-registry-backfill.js';
 
 type ProvisionCall = { workspace_id: string; requested_path?: string };
 
@@ -369,5 +369,67 @@ describe('WorkspaceRegistryBackfiller', () => {
     expect(res.status).toBe('failed');
     expect(res.failed[0]!.code).toBe('daemon_timeout');
     expect(res.failed[0]!.retriable).toBe(true);
+  });
+});
+
+describe('summarizeMigrationAudit (#1529 hydrate-time audit summary)', () => {
+  it('maps a clean result to a complete, redacted summary (counts only)', () => {
+    const summary = summarizeMigrationAudit({
+      hostId: 'local',
+      status: 'ok',
+      provisioned: ['ws_a'],
+      alreadyBound: ['ws_b', 'ws_c'],
+      failed: [],
+    });
+    expect(summary).toEqual({
+      workspace_count: 3,
+      provisioned_count: 1,
+      already_bound_count: 2,
+      failed_count: 0,
+      failure_codes: [],
+      migration_complete: true,
+    });
+  });
+
+  it('marks incomplete and dedups + sorts failure codes when a row failed', () => {
+    const summary = summarizeMigrationAudit({
+      hostId: 'local',
+      status: 'partial',
+      provisioned: ['ws_a'],
+      alreadyBound: [],
+      failed: [
+        { id: 'ws_x', code: 'invalid_workspace_path', message: 'm', retriable: false },
+        { id: 'ws_y', code: 'fs_unavailable', message: 'm', retriable: true },
+        { id: 'ws_z', code: 'fs_unavailable', message: 'm', retriable: true },
+      ],
+    });
+    expect(summary.workspace_count).toBe(4);
+    expect(summary.provisioned_count).toBe(1);
+    expect(summary.failed_count).toBe(3);
+    // distinct + stably sorted for aggregation.
+    expect(summary.failure_codes).toEqual([
+      'fs_unavailable',
+      'invalid_workspace_path',
+    ]);
+    expect(summary.migration_complete).toBe(false);
+  });
+
+  it('an empty host is trivially complete', () => {
+    expect(
+      summarizeMigrationAudit({
+        hostId: 'local',
+        status: 'noop',
+        provisioned: [],
+        alreadyBound: [],
+        failed: [],
+      }),
+    ).toEqual({
+      workspace_count: 0,
+      provisioned_count: 0,
+      already_bound_count: 0,
+      failed_count: 0,
+      failure_codes: [],
+      migration_complete: true,
+    });
   });
 });

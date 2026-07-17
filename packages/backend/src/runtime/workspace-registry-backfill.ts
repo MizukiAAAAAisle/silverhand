@@ -76,6 +76,51 @@ export interface WorkspaceRegistryBackfillerDeps {
   outboundFrameAdapter: () => OutboundFrameAdapter | null;
 }
 
+/**
+ * #task:1529 — the redacted server-log summary the hydrate-time migration
+ * AUDIT emits (no paths / names — only counts + the distinct failure codes).
+ * `migration_complete` is the per-host migration-complete evidence the fleet
+ * delete decision reads: the delete gate is "every supported, attached host
+ * shows migration_complete=true at least once", NOT a provisioned_count decay.
+ */
+export interface WorkspaceRegistryMigrationAuditSummary {
+  workspace_count: number;
+  /** Rows the daemon bound for the FIRST time this run. Informational only —
+   *  NOT the delete signal: a warm audit memoizes prior daemon ACKs so this
+   *  reads 0 regardless of hot-path use. `migration_complete` is the evidence. */
+  provisioned_count: number;
+  already_bound_count: number;
+  failed_count: number;
+  /** Distinct failure codes, sorted for stable aggregation. */
+  failure_codes: DataPlaneFailureCode[];
+  /** True iff every enumerated workspace bound (freshly or from a prior daemon
+   *  ACK this backend lifetime) — no failure left. The per-host completion. */
+  migration_complete: boolean;
+}
+
+/**
+ * Reduce a backfill `ensure()` result to the audit summary. Pure: every row
+ * lands in exactly one of provisioned / alreadyBound / failed, so their sum is
+ * the candidate count. `migration_complete` is a clean `failed === 0`, matching
+ * `ensure()`'s `ok` / `noop` statuses.
+ */
+export function summarizeMigrationAudit(
+  result: WorkspaceRegistryBackfillResult,
+): WorkspaceRegistryMigrationAuditSummary {
+  return {
+    workspace_count:
+      result.provisioned.length +
+      result.alreadyBound.length +
+      result.failed.length,
+    provisioned_count: result.provisioned.length,
+    already_bound_count: result.alreadyBound.length,
+    failed_count: result.failed.length,
+    failure_codes: [...new Set(result.failed.map(f => f.code))].sort(),
+    migration_complete: result.failed.length === 0,
+  };
+}
+
+
 type PerIdOutcome =
   | { kind: 'provisioned' }
   | { kind: 'alreadyBound' }

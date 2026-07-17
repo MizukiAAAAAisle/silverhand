@@ -63,7 +63,10 @@ import { DbRuntimeStatusProjector } from './status-projector.js';
 import {
   buildRuntimeStartOptions,
 } from './runtime-start-options.js';
-import type { WorkspaceRegistryBackfiller } from './workspace-registry-backfill.js';
+import {
+  summarizeMigrationAudit,
+  type WorkspaceRegistryBackfiller,
+} from './workspace-registry-backfill.js';
 import { EventPerimeterGuard } from './event-perimeter.js';
 import { ClearSessionWaiterRegistry } from './clear-session-registry.js';
 
@@ -1148,6 +1151,39 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     return false;
   }
 
+  /**
+   * #task:1529 — hydrate-time observability audit of the daemon workspace
+   * registry migration. Reuses the existing lazy `WorkspaceRegistryBackfiller`
+   * (idempotent `workspace_provision`, in-flight-collapsed + memoized) to
+   * re-bind every regular workspace on the host after a daemon attach, then
+   * emits ONE redacted structured summary. `migration_complete` — every
+   * enumerated workspace ACKed, freshly or from a prior daemon ACK this backend
+   * lifetime — is the per-host migration-complete evidence the fleet delete
+   * decision reads.
+   *
+   * A registry binding belongs to the STABLE `(server_origin, host_id)`
+   * namespace, NOT a transport generation, so the audit takes only `hostId` and
+   * is deliberately NOT pinned to a connection: `ensure()` resolves the current
+   * outbound per row, and a mid-audit disconnect surfaces as a structured
+   * failure in the summary while the next hydrate re-audits. It does NOT gate
+   * runtime and NEVER spawns (only `workspace_provision`).
+   */
+  private async auditWorkspaceRegistryMigration(hostId: string): Promise<void> {
+    const backfiller = this.opts.workspaceRegistryBackfiller;
+    if (!backfiller) return;
+    const rows = this.workspaces.listRegularForHost(hostId);
+    const audit = await backfiller.ensure(hostId, rows);
+    this.opts.logger.info(
+      {
+        kind: 'inbox',
+        action: 'workspace_registry_migration_audit',
+        hostId,
+        ...summarizeMigrationAudit(audit),
+      },
+      'workspace registry migration audit',
+    );
+  }
+
   getAgentRunStates(conversationId: string): AgentRunState[] {
     const states: AgentRunState[] = [];
     for (const state of this.states.values()) {
@@ -1451,6 +1487,18 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
             this.opts.logger.warn(
               { hostId, connectionId, err },
               'outbound replay-on-reattach failed (host-level catch)',
+            );
+          });
+        });
+        // #task:1529 — observability audit of the daemon workspace-registry
+        // migration. Its own microtask so a slow provision round-trip never
+        // couples to the pending replay above; it NEVER spawns a runtime, so
+        // it is not subject to the boot-herd concern replay guards against.
+        queueMicrotask(() => {
+          this.auditWorkspaceRegistryMigration(hostId).catch(err => {
+            this.opts.logger.warn(
+              { hostId, connectionId, err },
+              'workspace registry migration audit failed (host-level catch)',
             );
           });
         });

@@ -1361,6 +1361,102 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  it('#task:1529 — on daemon hydrate, actively audits the host and logs a redacted migration summary WITHOUT spawning', async () => {
+    const infos: Record<string, unknown>[] = [];
+    const fix = makeFixture({
+      runtime: 'codex',
+      logger: {
+        info: (obj: unknown) => infos.push(obj as Record<string, unknown>),
+        warn: () => {},
+        error: () => {},
+      },
+      workspaceRegistryBackfiller: ({ transport, workspaces }) =>
+        new WorkspaceRegistryBackfiller({
+          workspaces,
+          outboundFrameAdapter: () =>
+            transport as unknown as OutboundFrameAdapter,
+        }),
+    });
+    try {
+      await hydrateRuntime(fix, 'ready', {});
+      await waitFor(() =>
+        infos.some(o => o.action === 'workspace_registry_migration_audit'),
+      );
+      const audit = infos.find(
+        o => o.action === 'workspace_registry_migration_audit',
+      )!;
+      // The host's single legacy regular workspace is audited: one candidate,
+      // no failures, migration reported complete. (FakeTransport provisions it
+      // with provisioned:true, so it lands as a fresh bind this run.)
+      expect(audit).toMatchObject({
+        hostId: fix.hostId,
+        workspace_count: 1,
+        failed_count: 0,
+        failure_codes: [],
+        migration_complete: true,
+      });
+      expect(
+        (audit.provisioned_count as number) +
+          (audit.already_bound_count as number),
+      ).toBe(1);
+      // The audit only re-binds the registry — it must never drive a spawn.
+      const kinds = fix.transport.calls.map(c => c.kind);
+      expect(kinds).toContain('workspace_provision');
+      expect(kinds).not.toContain('runtime_start');
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('#task:1529 — a failed provision surfaces as migration_complete:false + failure code in the audit (still no spawn)', async () => {
+    const infos: Record<string, unknown>[] = [];
+    const fix = makeFixture({
+      runtime: 'codex',
+      logger: {
+        info: (obj: unknown) => infos.push(obj as Record<string, unknown>),
+        warn: () => {},
+        error: () => {},
+      },
+      workspaceRegistryBackfiller: () =>
+        ({
+          ensure: (
+            hostId: string,
+            rows: { id: string; workspace_path: string }[],
+          ) =>
+            Promise.resolve({
+              hostId,
+              status: 'failed' as const,
+              provisioned: [],
+              alreadyBound: [],
+              failed: rows.map(r => ({
+                id: r.id,
+                code: 'invalid_workspace_path' as const,
+                message: 'bad path',
+                retriable: false,
+              })),
+            }),
+        }) as unknown as WorkspaceRegistryBackfiller,
+    });
+    try {
+      await hydrateRuntime(fix, 'ready', {});
+      await waitFor(() =>
+        infos.some(o => o.action === 'workspace_registry_migration_audit'),
+      );
+      const audit = infos.find(
+        o => o.action === 'workspace_registry_migration_audit',
+      )!;
+      expect(audit).toMatchObject({
+        migration_complete: false,
+        failed_count: 1,
+        failure_codes: ['invalid_workspace_path'],
+      });
+      // A workspace-scoped provision failure must never escalate into a spawn.
+      expect(fix.transport.calls.map(c => c.kind)).not.toContain('runtime_start');
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   it('fails before wire when the agent host is revoked', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
